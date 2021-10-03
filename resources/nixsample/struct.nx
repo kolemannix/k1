@@ -1,0 +1,6 @@
+data {
+  id: i64;
+  mut count: usize;
+  // ? Way around lifetimes
+  byte_slice: &u8[];
+}
