@@ -2,15 +2,24 @@ use std::slice::Iter;
 use std::str::Chars;
 
 pub const EOF_CHAR: char = '\0';
-pub const EOF_TOKEN: Token = Token::make(TokenKind::EOF, 0, 0, 0);
+pub const EOF_TOKEN: Token = Token {
+    start: 0,
+    len: 0,
+    line_num: 0,
+    kind: TokenKind::EOF,
+};
 
-pub struct Tokens<'a> {
+pub struct Tokens<'a, 'b> {
+    source: &'b str,
     iter: Iter<'a, Token>,
 }
 
-impl Tokens<'_> {
-    pub fn make(data: &[Token]) -> Tokens {
-        Tokens { iter: data.iter() }
+impl<'a, 'b> Tokens<'a, 'b> {
+    pub fn chars_at(&self, pos_start: usize, len: usize) -> &str {
+        &self.source[pos_start..pos_start + len]
+    }
+    pub fn make(source: &'b str, data: &'a [Token]) -> Tokens<'a, 'b> {
+        Tokens { iter: data.iter(), source }
     }
     pub fn next(&mut self) -> &Token {
         self.iter.next().unwrap_or(&EOF_TOKEN)
@@ -37,7 +46,12 @@ pub enum Keyword {
 pub enum TokenKind {
     Text,
     Literal,
-    Keyword,
+
+    KeywordFn,
+    KeywordReturn,
+    KeywordVal,
+    KeywordMut,
+
     LineComment,
     OpenParen,
     CloseParen,
@@ -51,7 +65,7 @@ pub enum TokenKind {
     Dot,
 
     /// Not really a token but allows us to avoid Option<Token> everywhere
-    EOF
+    EOF,
 }
 
 impl TokenKind {
@@ -71,10 +85,10 @@ impl TokenKind {
     }
     pub fn keyword_from_str(str: &str) -> Option<TokenKind> {
         match str {
-            "fn" => Some(TokenKind::Keyword(Keyword::Fn)),
-            "return" => Some(TokenKind::Keyword(Keyword::Return)),
-            "val" => Some(TokenKind::Keyword(Keyword::Val)),
-            "mut" => Some(TokenKind::Keyword(Keyword::Mut)),
+            "fn" => Some(TokenKind::KeywordFn),
+            "return" => Some(TokenKind::KeywordReturn),
+            "val" => Some(TokenKind::KeywordVal),
+            "mut" => Some(TokenKind::KeywordMut),
             _ => None
         }
     }
@@ -89,9 +103,6 @@ pub struct Token {
 }
 
 impl Token {
-    pub fn make_text(s: String, line_num: usize, n: usize) -> Token {
-        Token::make(TokenKind::Text(s), line_num, n - s.len(), s.len())
-    }
     pub fn make(kind: TokenKind, line_num: usize, start: usize, len: usize) -> Token {
         Token {
             start,
@@ -104,19 +115,29 @@ impl Token {
 
 pub struct Lexer<'a> {
     content: Chars<'a>,
-    pos: usize,
+    pub line_index: usize,
+    pub pos: usize,
 }
 
 impl Lexer<'_> {
     pub fn make(input: &str) -> Lexer {
         Lexer {
             content: input.chars(),
+            line_index: 0,
             pos: 0,
         }
     }
     pub fn next(&mut self) -> char {
         self.pos += 1;
-        self.content.next().unwrap_or(EOF_CHAR)
+        let c = self.content.next().unwrap_or(EOF_CHAR);
+        if c == '\n' {
+            self.line_index += 1;
+        }
+        if c == '\r' && self.peek() == '\n' {
+            self.content.next();
+            self.pos += 1;
+        }
+        c
     }
     pub fn next_with_pos(&mut self) -> (char, usize) {
         let old_pos = self.pos;
@@ -142,8 +163,13 @@ fn is_ident_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 
+fn is_ident_start(c: char) -> bool {
+    c.is_alphabetic() || c == '_'
+}
+
 fn eat_token(lexer: &mut Lexer) -> Option<Token> {
     let mut tok_buf = String::new();
+    let mut tok_len = 0;
     loop {
         let (c, n) = lexer.peek_with_pos();
         if c == EOF_CHAR {
@@ -151,23 +177,27 @@ fn eat_token(lexer: &mut Lexer) -> Option<Token> {
         }
         if let Some(single_char_tok) = TokenKind::from_char(c) {
             if !tok_buf.is_empty() {
-                break Some(Token::make_text(tok_buf, 0, n));
+                break Some(Token::make(TokenKind::Text, lexer.line_index, n - tok_len, tok_len));
             } else {
                 lexer.advance();
-                break Some(Token::make(single_char_tok, 0, n, 1));
+                break Some(Token::make(single_char_tok, lexer.line_index, n, 1));
             }
         }
         if c.is_whitespace() {
             if !tok_buf.is_empty() {
-                break Some(Token::make_text(tok_buf, 0, n));
+                break Some(Token::make(TokenKind::Text, lexer.line_index, n - tok_len, tok_len));
             }
         }
         if is_ident_char(c) {
             println!("{} {}", n, c);
-            tok_buf.push(c);
+            if (tok_buf.is_empty() && is_ident_start(c)) || is_ident_char(c) {
+                lexer.advance();
+                tok_len += 1;
+                tok_buf.push(c);
+            }
             if let Some(tok) = TokenKind::keyword_from_str(&tok_buf) {
                 lexer.advance();
-                break Some(Token::make(tok, 0, n - tok_buf.len(), tok_buf.len()));
+                break Some(Token::make(tok, lexer.line_index, n - tok_buf.len(), tok_buf.len()));
             }
         }
         lexer.advance();

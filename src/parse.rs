@@ -18,27 +18,24 @@ fn check_eat_token(tokens: &mut Tokens, target_token: TokenKind) -> bool {
 }
 
 fn check_eat_ident(tokens: &mut Tokens) -> Option<String> {
-    let ident;
-    let mut found = false;
-    if let TokenKind::Text(s) = &tokens.peek.kind {
-       ident = s.clone();
-       found = true;
-    }
-    if found {
-        tokens.advance();
-        Some(ident)
-    }
-    if let TokenKind::Text(s) = &tokens.peek().kind {
-        tokens.advance();
-        Some(s.clone())
+    let tok = tokens.peek();
+    let res = if TokenKind::Text == tok.kind {
+        let ident = tokens.chars_at(tok.start, tok.len);
+        Some(String::from(ident))
     } else {
         None
+    };
+    if res.is_some() {
+        tokens.advance();
     }
+    res
 }
 
 fn eat_type_expression(tokens: &mut Tokens) -> Option<TypeExpression> {
-    if let TokenKind::Text(t) = &tokens.peek().kind {
-        if t == "i32" {
+    let tok = tokens.peek();
+    if let TokenKind::Text = tok.kind {
+        let ident = tokens.chars_at(tok.start, tok.len);
+        if ident == "i32" {
             tokens.next();
             Some(TypeExpression::Primitive(TypePrimitive::I32))
         } else {
@@ -50,7 +47,7 @@ fn eat_type_expression(tokens: &mut Tokens) -> Option<TypeExpression> {
 }
 
 fn eat_val(tokens: &mut Tokens) -> Option<ValDef> {
-    let _val = if !check_eat_token(tokens, TokenKind::Keyword(Keyword::Val)) { return None; };
+    let _val = if !check_eat_token(tokens, TokenKind::KeywordVal) { return None; };
     let ident = check_eat_ident(tokens)?;
     let _colon = if !check_eat_token(tokens, TokenKind::Colon) { return None; };
     let typ = eat_type_expression(tokens)?;
@@ -85,11 +82,10 @@ fn eat_definition(tokens: &mut Tokens) -> Result<Definition, String> {
 /// Rough Grammar
 /// module -> definition *
 /// definition -> const | fn | struct
-fn parse_module(tokens: &[Token]) -> Result<Module, String> {
+fn parse_module(tokens: &mut Tokens) -> Result<Module, String> {
     let mut defs: Vec<Definition> = vec![];
 
-    let mut tok_iter: Tokens = Tokens::make(tokens);
-    while let Ok(def) = eat_definition(&mut tok_iter) {
+    while let Ok(def) = eat_definition(tokens) {
         defs.push(def)
     }
     Ok(Module {
@@ -105,10 +101,12 @@ pub fn parse_file(path: &str) -> Result<Module, String> {
     buf_read.read_to_string(&mut content);
     let mut lexer = Lexer::make(&content);
 
-    let tokens = tokenize(&mut lexer);
-    println!("toks {:?}", &tokens);
+    let token_vec = tokenize(&mut lexer);
+    println!("toks {:?}", &token_vec);
 
-    let module = parse_module(&tokens);
+    let mut tokens: Tokens = Tokens::make(&content, &token_vec);
+
+    let module = parse_module(&mut tokens);
 
     module
 }
