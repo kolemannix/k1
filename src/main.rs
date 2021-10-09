@@ -4,10 +4,11 @@ use ast::*;
 mod parse;
 mod ast;
 mod lex;
+mod log;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    println!("NixLang Compiler v0.1.0");
+    log::normal("NexLang Compiler v0.1.0");
     let src_dir = &args[1];
-    println!("src_dir: {}", src_dir);
+    log::normal(&format!("src_dir: {}", src_dir));
 }

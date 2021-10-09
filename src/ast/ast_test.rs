@@ -7,7 +7,7 @@ fn example() {
         defs: vec![Definition::FnDef(FnDef {
             name: Ident("foo".to_string()),
             args: vec![],
-            ret_type: TypeExpression::Primitive(TypePrimitive::I32),
+            ret_type: Some(TypeExpression::Primitive(TypePrimitive::I32)),
             type_args: None,
             block: Block { exprs: vec![] }
         })],

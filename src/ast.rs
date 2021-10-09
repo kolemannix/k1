@@ -8,14 +8,14 @@ pub struct Ident(pub String);
 
 #[derive(Debug)]
 pub struct FnArg {
-    name: Option<String>,
-    value: Expression,
+    pub name: Option<String>,
+    pub value: Expression,
 }
 
 #[derive(Debug)]
 pub struct FnCall {
-    name: Ident,
-    args: Vec<FnArg>,
+    pub name: Ident,
+    pub args: Vec<FnArg>,
 }
 
 #[derive(Debug)]
@@ -37,13 +37,22 @@ pub enum Expression {
     Literal(Literal),
     FnCall(FnCall),
     Variable(Ident),
-    Deref(Ident),
-    Block(Block)
+    // Block(Block),
+}
+
+#[derive(Debug)]
+pub enum Statement {
+    MutDef(MutDef),
+    ValDef(ValDef),
+    Assignment { ident: Ident, expr: Expression },
+    ReturnStmt(Expression),
+    LoneExpression(Expression),
+    If(Expression, Expression, Option<Expression>)
 }
 
 #[derive(Debug)]
 pub struct Block {
-    exprs: Vec<Expression>
+    pub exprs: Vec<Statement>,
 }
 
 #[derive(Debug)]
@@ -62,24 +71,24 @@ pub enum TypeExpression {
 
 #[derive(Debug)]
 pub struct FnDef {
-    name: Ident,
-    args: Vec<FnArgDef>,
-    ret_type: TypeExpression,
-    type_args: Option<Vec<()>>,
-    block: Block
+    pub name: Ident,
+    pub args: Vec<FnArgDef>,
+    pub ret_type: Option<TypeExpression>,
+    pub type_args: Option<Vec<()>>,
+    pub block: Block,
 }
 
 #[derive(Debug)]
 pub struct FnArgDef {
-    name: Ident,
-    typ: TypeExpression,
-    default: Option<Expression>,
+    pub name: Ident,
+    pub typ: TypeExpression,
+    pub default: Option<Expression>,
 }
 
 #[derive(Debug)]
 pub enum Definition {
     FnDef(FnDef),
-    ValDef(ValDef)
+    ValDef(ValDef),
 }
 
 // trait TopLevelDecl {}
@@ -91,9 +100,7 @@ pub struct Module {
     pub defs: Vec<Definition>,
 }
 
-impl Module {
-
-}
+impl Module {}
 
 #[cfg(test)]
 mod ast_test;

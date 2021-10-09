@@ -1,5 +1,10 @@
 use std::slice::Iter;
 use std::str::Chars;
+use std::fmt;
+use std::fmt::Write;
+use TokenKind::*;
+use crate::log;
+use std::vec::IntoIter;
 
 pub const EOF_CHAR: char = '\0';
 pub const EOF_TOKEN: Token = Token {
@@ -9,43 +14,36 @@ pub const EOF_TOKEN: Token = Token {
     kind: TokenKind::EOF,
 };
 
-pub struct Tokens<'a, 'b> {
-    source: &'b str,
-    iter: Iter<'a, Token>,
+pub struct Tokens {
+    iter: IntoIter<Token>,
 }
 
-impl<'a, 'b> Tokens<'a, 'b> {
-    pub fn chars_at(&self, pos_start: usize, len: usize) -> &str {
-        &self.source[pos_start..pos_start + len]
+impl Tokens {
+    pub fn make(data: Vec<Token>) -> Tokens {
+        Tokens { iter: data.into_iter() }
     }
-    pub fn make(source: &'b str, data: &'a [Token]) -> Tokens<'a, 'b> {
-        Tokens { iter: data.iter(), source }
-    }
-    pub fn next(&mut self) -> &Token {
-        self.iter.next().unwrap_or(&EOF_TOKEN)
+    pub fn next(&mut self) -> Token {
+        self.iter.next().unwrap_or(EOF_TOKEN)
     }
     pub fn advance(&mut self) -> () {
         self.next();
         ()
     }
-    pub fn peek(&self) -> &Token {
+    pub fn peek(&self) -> Token {
         let peeked = self.iter.clone().next();
-        peeked.unwrap_or(&EOF_TOKEN)
+        peeked.unwrap_or(EOF_TOKEN)
+    }
+    pub fn peek_two(&self) -> (Token, Token) {
+        let mut peek_iter = self.iter.clone();
+        let p1 = peek_iter.next().unwrap_or(EOF_TOKEN);
+        let p2 = peek_iter.next().unwrap_or(EOF_TOKEN);
+        (p1, p2)
     }
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
-pub enum Keyword {
-    Fn,
-    Return,
-    Val,
-    Mut,
-}
-
-#[derive(Debug, Eq, PartialEq)]
 pub enum TokenKind {
     Text,
-    Literal,
 
     KeywordFn,
     KeywordReturn,
@@ -53,6 +51,7 @@ pub enum TokenKind {
     KeywordMut,
 
     LineComment,
+
     OpenParen,
     CloseParen,
     OpenBracket,
@@ -63,38 +62,73 @@ pub enum TokenKind {
     Semicolon,
     Equals,
     Dot,
+    Comma,
 
     /// Not really a token but allows us to avoid Option<Token> everywhere
     EOF,
 }
 
+impl fmt::Display for TokenKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.get_repr().unwrap_or("<ident>"))
+    }
+}
+
 impl TokenKind {
+    pub fn get_repr(&self) -> Option<&'static str> {
+        match self {
+            KeywordFn => Some("fn"),
+            KeywordReturn => Some("return"),
+            KeywordVal => Some("val"),
+            KeywordMut => Some("mut"),
+
+            OpenParen => Some("("),
+            CloseParen => Some(")"),
+            OpenBracket => Some("["),
+            CloseBracket => Some("]"),
+            OpenBrace => Some("{"),
+            CloseBrace => Some("}"),
+            Colon => Some(":"),
+            Semicolon => Some(";"),
+            Equals => Some("="),
+            Dot => Some("."),
+            Comma => Some(","),
+
+            Text => None,
+
+            LineComment => None,
+
+            EOF => Some("<EOF>"),
+        }
+    }
     pub fn from_char(c: char) -> Option<TokenKind> {
         match c {
-            '(' => Some(TokenKind::OpenParen),
-            ')' => Some(TokenKind::CloseParen),
-            '[' => Some(TokenKind::OpenBracket),
-            ']' => Some(TokenKind::CloseBracket),
-            '{' => Some(TokenKind::OpenBrace),
-            '}' => Some(TokenKind::CloseBrace),
-            ':' => Some(TokenKind::Colon),
-            ';' => Some(TokenKind::Semicolon),
-            '=' => Some(TokenKind::Equals),
+            '(' => Some(OpenParen),
+            ')' => Some(CloseParen),
+            '[' => Some(OpenBracket),
+            ']' => Some(CloseBracket),
+            '{' => Some(OpenBrace),
+            '}' => Some(CloseBrace),
+            ':' => Some(Colon),
+            ';' => Some(Semicolon),
+            '=' => Some(Equals),
+            '.' => Some(Dot),
+            ',' => Some(Comma),
             _ => None
         }
     }
     pub fn keyword_from_str(str: &str) -> Option<TokenKind> {
         match str {
-            "fn" => Some(TokenKind::KeywordFn),
-            "return" => Some(TokenKind::KeywordReturn),
-            "val" => Some(TokenKind::KeywordVal),
-            "mut" => Some(TokenKind::KeywordMut),
+            "fn" => Some(KeywordFn),
+            "return" => Some(KeywordReturn),
+            "val" => Some(KeywordVal),
+            "mut" => Some(KeywordMut),
             _ => None
         }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub struct Token {
     pub start: usize,
     pub len: usize,
@@ -172,6 +206,7 @@ fn eat_token(lexer: &mut Lexer) -> Option<Token> {
     let mut tok_len = 0;
     loop {
         let (c, n) = lexer.peek_with_pos();
+        log::verbose(&format!("LEX {} {} {}", lexer.line_index, n, c));
         if c == EOF_CHAR {
             break None;
         }
@@ -185,23 +220,22 @@ fn eat_token(lexer: &mut Lexer) -> Option<Token> {
         }
         if c.is_whitespace() {
             if !tok_buf.is_empty() {
-                break Some(Token::make(TokenKind::Text, lexer.line_index, n - tok_len, tok_len));
+                lexer.advance();
+                if let Some(tok) = TokenKind::keyword_from_str(&tok_buf) {
+                    break Some(Token::make(tok, lexer.line_index, n - tok_len, tok_len));
+                } else {
+                    break Some(Token::make(TokenKind::Text, lexer.line_index, n - tok_len, tok_len));
+                }
             }
         }
-        if is_ident_char(c) {
-            println!("{} {}", n, c);
-            if (tok_buf.is_empty() && is_ident_start(c)) || is_ident_char(c) {
-                lexer.advance();
-                tok_len += 1;
-                tok_buf.push(c);
-            }
-            if let Some(tok) = TokenKind::keyword_from_str(&tok_buf) {
-                lexer.advance();
-                break Some(Token::make(tok, lexer.line_index, n - tok_buf.len(), tok_buf.len()));
-            }
+        if (tok_buf.is_empty() && is_ident_start(c)) || is_ident_char(c) {
+            tok_len += 1;
+            tok_buf.push(c);
+        } else if let Some(tok) = TokenKind::keyword_from_str(&tok_buf) {
+            lexer.advance();
+            break Some(Token::make(tok, lexer.line_index, n - tok_len, tok_len));
         }
         lexer.advance();
-        println!("Skipping {} {}", n, c);
     }
 }
 
