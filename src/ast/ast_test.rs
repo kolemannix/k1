@@ -9,7 +9,7 @@ fn example() {
             args: vec![],
             ret_type: Some(TypeExpression::Primitive(TypePrimitive::I32)),
             type_args: None,
-            block: Block { exprs: vec![] }
+            block: Block { stmts: vec![] }
         })],
     };
     println!("{:?}", m);

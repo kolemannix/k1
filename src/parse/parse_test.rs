@@ -15,8 +15,10 @@ fn basic_fn() -> Result<(), String> {
   let Module { name, defs } = parse_file("resources/nixsample/basic_fn.nx")?;
   assert_eq!(name.0, "module1".to_string());
   if let Some(Definition::FnDef(fndef)) = defs.first() {
+    println!("{:?}", fndef);
     assert_eq!(fndef.name.0, "basic")
   } else {
+    println!("{:?}", defs);
     panic!("fail")
   }
   Ok(())

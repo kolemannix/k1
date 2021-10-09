@@ -1,3 +1,7 @@
 fn basic(x: i32, y: i32): i32 {
-  return x;
+  println(1, 2, 3);
+  val x: i32 := 0;
+  mut y: i32 := 1;
+  y      := y + 1;
+  0
 }

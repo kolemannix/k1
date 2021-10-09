@@ -1,10 +1,12 @@
-use std::slice::Iter;
-use std::str::Chars;
 use std::fmt;
 use std::fmt::Write;
-use TokenKind::*;
-use crate::log;
+use std::slice::Iter;
+use std::str::Chars;
 use std::vec::IntoIter;
+
+use TokenKind::*;
+
+use crate::log;
 
 pub const EOF_CHAR: char = '\0';
 pub const EOF_TOKEN: Token = Token {
@@ -124,6 +126,15 @@ impl TokenKind {
             "val" => Some(KeywordVal),
             "mut" => Some(KeywordMut),
             _ => None
+        }
+    }
+    pub fn is_keyword(&self) -> bool {
+        match self {
+            KeywordFn => true,
+            KeywordReturn => true,
+            KeywordVal => true,
+            KeywordMut => true,
+            _ => false
         }
     }
 }

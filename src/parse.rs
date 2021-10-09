@@ -18,27 +18,11 @@ fn parse_literal(text: &str) -> Option<Literal> {
     }
 }
 
-fn eat_fn_arg(parser: &mut Parser) -> Option<FnArg> {
-    let (one, two) = parser.tokens.peek_two();
-    if one.kind == Text && two.kind == Equals {
-        parser.tokens.advance();
-        parser.tokens.advance();
-        if let Some(expr) = parser.eat_expression() {
-            Some(FnArg { name: Some(parser.tok_chars(one).to_string()), value: expr })
-        } else {
-            None
-        }
-    } else if let Some(expr) = parser.eat_expression() {
-        Some(FnArg { name: None, value: expr })
-    } else {
-        None
-    }
-}
-
 struct Parser<'a> {
     tokens: Tokens,
     source: &'a str,
 }
+
 impl<'a> Parser<'a> {
     fn make(tokens: Tokens, source: &'a str) -> Parser<'a> {
         Parser { tokens, source }
@@ -129,7 +113,7 @@ impl<'a> Parser<'a> {
                 // FnCall
                 if next.kind == OpenParen {
                     log::verbose("eat_expression FnCall");
-                    if let Some(args) = self.eat_delimited(Comma, eat_fn_arg) {
+                    if let Some(args) = self.eat_delimited(Comma, CloseParen, |p| Parser::eat_fn_arg(p)) {
                         Some(Expression::FnCall(FnCall {
                             name: Ident(self.tok_chars(tok).to_string()),
                             args: args,
@@ -147,6 +131,19 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn eat_mut(&mut self) -> Option<MutDef> {
+        let _val = self.check_eat_token(KeywordMut)?;
+        let ident = self.check_eat_ident()?;
+        let _colon = self.check_eat_token(Colon)?;
+        let typ = self.eat_type_expression()?;
+        let value = self.eat_expression()?;
+        return Some(MutDef {
+            name: Ident(ident),
+            typ: Some(typ),
+            value: value,
+        });
+    }
+
     fn eat_val(&mut self) -> Option<ValDef> {
         let _val = self.check_eat_token(KeywordVal)?;
         let ident = self.check_eat_ident()?;
@@ -158,6 +155,14 @@ impl<'a> Parser<'a> {
             typ: Some(typ),
             value: value,
         });
+    }
+
+    fn eat_assignment(&mut self) -> Option<Assignment> {
+        let ident = self.check_eat_ident()?;
+        let _col = self.check_eat_token(Colon)?;
+        let _eq = self.check_eat_token(Equals)?;
+        let value = self.eat_expression()?;
+        Some(Assignment { ident: Ident(ident), expr: value })
     }
 
     fn eat_fn_arg_def(&mut self) -> Option<FnArgDef> {
@@ -172,10 +177,10 @@ impl<'a> Parser<'a> {
     }
 
     fn eat_fndef_args(&mut self) -> Option<Vec<FnArgDef>> {
-        self.eat_delimited(Comma, |p| Parser::eat_fn_arg_def(p))
+        self.eat_delimited(Comma, CloseParen, |p| Parser::eat_fn_arg_def(p))
     }
 
-    fn eat_delimited<T, F>(&mut self, delim: TokenKind, parse: F) -> Option<Vec<T>>
+    fn eat_delimited<T, F>(&mut self, delim: TokenKind, terminator: TokenKind, parse: F) -> Option<Vec<T>>
         where F: Fn(&mut Parser) -> Option<T> {
         if let Some(first) = parse(self) {
             // TODO @Allocation Need to figure out how we use all the small vecs without allocating all the time wastefully
@@ -183,7 +188,7 @@ impl<'a> Parser<'a> {
             v.push(first);
             while let Some(parsed) = parse(self) {
                 v.push(parsed);
-                if self.check_eat_token(CloseParen).is_some() {
+                if self.check_eat_token(terminator).is_some() {
                     break;
                 } else {
                     let found_delim = self.check_eat_token(delim);
@@ -199,8 +204,47 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn eat_block(&mut self) -> Block {
-        Block { exprs: Vec::new() }
+    fn eat_if_expr(&mut self) -> Option<IfExpr> {
+        None
+    }
+
+    fn eat_statement(&mut self) -> Option<BlockStmt> {
+        /*
+        Parse order
+          mut
+          val
+          assgn
+          return
+          lone expression
+          if/else
+         */
+        if let Some(mut_def) = self.eat_mut() {
+            Some(BlockStmt::MutDef(mut_def))
+        } else if let Some(val_def) = self.eat_val() {
+            Some(BlockStmt::ValDef(val_def))
+        } else if let Some(assgn) = self.eat_assignment() {
+            Some(BlockStmt::Assignment(assgn))
+        } else if self.check_eat_token(KeywordReturn).is_some() {
+            if let Some(ret_val) = self.eat_expression() {
+                Some(BlockStmt::ReturnStmt(ret_val))
+            } else {
+                None
+            }
+        } else if let Some(if_expr) = self.eat_if_expr() {
+            Some(BlockStmt::If(if_expr))
+        } else if let Some(expr) = self.eat_expression() {
+            Some(BlockStmt::LoneExpression(expr))
+        } else {
+            None
+        }
+    }
+
+    fn eat_block(&mut self) -> Option<Block> {
+        if let Some(stmts) = self.eat_delimited(Semicolon, CloseBrace, |p| Parser::eat_statement(p)) {
+            Some(Block { stmts: stmts })
+        } else {
+            None
+        }
     }
 
     fn check_eat_fndef(&mut self) -> Option<FnDef> {
@@ -208,9 +252,10 @@ impl<'a> Parser<'a> {
         let ident = self.check_eat_ident()?;
         let _open_paren = self.check_eat_token(OpenParen)?;
         let args = self.eat_fndef_args()?;
-        let _colon = self.check_eat_token(Colon);
+        let _colon = self.check_eat_token(Colon)?;
         let ret_type = self.eat_type_expression();
-        let block = self.eat_block();
+        // let block = self.eat_block()?;
+        let block = Some(Block { stmts: vec![] })?;
         Some(FnDef {
             name: Ident(ident),
             args,
@@ -229,7 +274,6 @@ impl<'a> Parser<'a> {
         } else {
             Err("Expected Const or FnDef; got somethin' else".to_string())
         }
-
     }
 
     fn eat_module(&mut self) -> Result<Module, String> {
@@ -245,15 +289,22 @@ impl<'a> Parser<'a> {
     }
 }
 
-fn print_tokens(tokens: &[Token]) {
-    let mut line_num = 1;
+fn print_tokens(content: &str, tokens: &[Token]) {
+    let mut line_idx = 0;
     for tok in tokens.iter() {
-        if tok.line_num > line_num {
-            line_num += 1;
+        if tok.line_num > line_idx {
+            line_idx += 1;
             println!()
         }
-        print!("{} [{}-{}]", tok.kind, tok.start, tok.start + tok.len);
+        if tok.kind == Text {
+            print!("{}", &content[tok.start..tok.start + tok.len]);
+        } else if tok.kind.is_keyword() {
+            print!("{} ", tok.kind);
+        } else {
+            print!("{}", tok.kind);
+        }
     }
+    println!()
 }
 
 pub fn parse_file(path: &str) -> Result<Module, String> {
@@ -264,7 +315,7 @@ pub fn parse_file(path: &str) -> Result<Module, String> {
     let mut lexer = Lexer::make(&content);
 
     let token_vec = tokenize(&mut lexer);
-    print_tokens(&token_vec);
+    print_tokens(&content, &token_vec);
 
     // TODO @Clone: Just RC the original tokens so everything can look at them
     let mut tokens: Tokens = Tokens::make(token_vec.clone());

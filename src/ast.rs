@@ -41,18 +41,32 @@ pub enum Expression {
 }
 
 #[derive(Debug)]
-pub enum Statement {
+pub struct Assignment {
+    pub ident: Ident,
+    pub expr: Expression,
+}
+
+#[derive(Debug)]
+pub struct IfExpr {
+    pub cond: Expression,
+    pub a: Expression,
+    pub b: Option<Expression>
+}
+
+#[derive(Debug)]
+pub enum BlockStmt {
     MutDef(MutDef),
     ValDef(ValDef),
-    Assignment { ident: Ident, expr: Expression },
+    Assignment(Assignment),
+    /// return keyword will only be allowed to denote explicit early returns
     ReturnStmt(Expression),
+    If(IfExpr),
     LoneExpression(Expression),
-    If(Expression, Expression, Option<Expression>)
 }
 
 #[derive(Debug)]
 pub struct Block {
-    pub exprs: Vec<Statement>,
+    pub stmts: Vec<BlockStmt>,
 }
 
 #[derive(Debug)]
