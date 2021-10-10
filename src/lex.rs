@@ -217,7 +217,7 @@ fn eat_token(lexer: &mut Lexer) -> Option<Token> {
     let mut tok_len = 0;
     loop {
         let (c, n) = lexer.peek_with_pos();
-        log::verbose(&format!("LEX {} {} {}", lexer.line_index, n, c));
+        log::verbose(&format!("LEX line={} char={} '{}'", lexer.line_index, n, c));
         if c == EOF_CHAR {
             break None;
         }

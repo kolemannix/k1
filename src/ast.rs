@@ -57,10 +57,10 @@ pub struct IfExpr {
 pub enum BlockStmt {
     MutDef(MutDef),
     ValDef(ValDef),
-    Assignment(Assignment),
     /// return keyword will only be allowed to denote explicit early returns
     ReturnStmt(Expression),
     If(IfExpr),
+    Assignment(Assignment),
     LoneExpression(Expression),
 }
 

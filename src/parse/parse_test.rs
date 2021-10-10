@@ -23,3 +23,21 @@ fn basic_fn() -> Result<(), String> {
   }
   Ok(())
 }
+
+#[test]
+fn fn_args_recurse() -> Result<(), String> {
+  let input = "f(42,42,42)";
+  let mut lexer = Lexer::make(&input);
+  let token_vec = crate::lex::tokenize(&mut lexer);
+  let tokens = Tokens::make(token_vec);
+  let mut parser = Parser::make(tokens, input);
+  let result = parser.eat_expression();
+  if let Some(Expression::FnCall(FnCall{ name, args })) = result {
+    assert_eq!(name.0, "f");
+    assert_eq!(args.len(), 3);
+  } else {
+    panic!("fail")
+  }
+
+  Ok(())
+}
