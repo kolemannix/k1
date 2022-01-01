@@ -1,14 +1,12 @@
 use std::env;
-use ast::*;
 
-mod parse;
 mod ast;
 mod lex;
-mod log;
+mod parse;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    log::normal("NexLang Compiler v0.1.0");
+    println!("NexLang Compiler v0.1.0");
     let src_dir = &args[1];
-    log::normal(&format!("src_dir: {}", src_dir));
+    println!("src_dir: {}", src_dir);
 }

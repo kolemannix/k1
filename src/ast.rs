@@ -37,7 +37,7 @@ pub enum Expression {
     Literal(Literal),
     FnCall(FnCall),
     Variable(Ident),
-    // Block(Block),
+    Block(Block),
 }
 
 #[derive(Debug)]
@@ -49,8 +49,8 @@ pub struct Assignment {
 #[derive(Debug)]
 pub struct IfExpr {
     pub cond: Expression,
-    pub a: Expression,
-    pub b: Option<Expression>
+    pub a: Block,
+    pub b: Option<Block>,
 }
 
 #[derive(Debug)]
@@ -80,7 +80,7 @@ pub enum TypePrimitive {
 
 #[derive(Debug)]
 pub enum TypeExpression {
-    Primitive(TypePrimitive)
+    Primitive(TypePrimitive),
 }
 
 #[derive(Debug)]
@@ -89,7 +89,7 @@ pub struct FnDef {
     pub args: Vec<FnArgDef>,
     pub ret_type: Option<TypeExpression>,
     pub type_args: Option<Vec<()>>,
-    pub block: Block,
+    pub block: Option<Block>,
 }
 
 #[derive(Debug)]

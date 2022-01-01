@@ -1,12 +1,8 @@
 use std::fmt;
-use std::fmt::Write;
-use std::slice::Iter;
 use std::str::Chars;
 use std::vec::IntoIter;
 
 use TokenKind::*;
-
-use crate::log;
 
 pub const EOF_CHAR: char = '\0';
 pub const EOF_TOKEN: Token = Token {
@@ -22,7 +18,9 @@ pub struct Tokens {
 
 impl Tokens {
     pub fn make(data: Vec<Token>) -> Tokens {
-        Tokens { iter: data.into_iter() }
+        Tokens {
+            iter: data.into_iter(),
+        }
     }
     pub fn next(&mut self) -> Token {
         self.iter.next().unwrap_or(EOF_TOKEN)
@@ -40,6 +38,13 @@ impl Tokens {
         let p1 = peek_iter.next().unwrap_or(EOF_TOKEN);
         let p2 = peek_iter.next().unwrap_or(EOF_TOKEN);
         (p1, p2)
+    }
+    pub fn peek_three(&self) -> (Token, Token, Token) {
+        let mut peek_iter = self.iter.clone();
+        let p1 = peek_iter.next().unwrap_or(EOF_TOKEN);
+        let p2 = peek_iter.next().unwrap_or(EOF_TOKEN);
+        let p3 = peek_iter.next().unwrap_or(EOF_TOKEN);
+        (p1, p2, p3)
     }
 }
 
@@ -116,7 +121,7 @@ impl TokenKind {
             '=' => Some(Equals),
             '.' => Some(Dot),
             ',' => Some(Comma),
-            _ => None
+            _ => None,
         }
     }
     pub fn keyword_from_str(str: &str) -> Option<TokenKind> {
@@ -125,7 +130,7 @@ impl TokenKind {
             "return" => Some(KeywordReturn),
             "val" => Some(KeywordVal),
             "mut" => Some(KeywordMut),
-            _ => None
+            _ => None,
         }
     }
     pub fn is_keyword(&self) -> bool {
@@ -134,7 +139,7 @@ impl TokenKind {
             KeywordReturn => true,
             KeywordVal => true,
             KeywordMut => true,
-            _ => false
+            _ => false,
         }
     }
 }
@@ -193,7 +198,10 @@ impl Lexer<'_> {
     }
     pub fn peek_two(&self) -> (char, char) {
         let mut peek_iter = self.content.clone();
-        (peek_iter.next().unwrap_or(EOF_CHAR), peek_iter.next().unwrap_or(EOF_CHAR))
+        (
+            peek_iter.next().unwrap_or(EOF_CHAR),
+            peek_iter.next().unwrap_or(EOF_CHAR),
+        )
     }
     pub fn peek_with_pos(&self) -> (char, usize) {
         (self.peek(), self.pos)
@@ -217,13 +225,18 @@ fn eat_token(lexer: &mut Lexer) -> Option<Token> {
     let mut tok_len = 0;
     loop {
         let (c, n) = lexer.peek_with_pos();
-        log::verbose(&format!("LEX line={} char={} '{}'", lexer.line_index, n, c));
+        log::debug!("LEX line={} char={} '{}'", lexer.line_index, n, c);
         if c == EOF_CHAR {
             break None;
         }
         if let Some(single_char_tok) = TokenKind::from_char(c) {
             if !tok_buf.is_empty() {
-                break Some(Token::make(TokenKind::Text, lexer.line_index, n - tok_len, tok_len));
+                break Some(Token::make(
+                    TokenKind::Text,
+                    lexer.line_index,
+                    n - tok_len,
+                    tok_len,
+                ));
             } else {
                 lexer.advance();
                 break Some(Token::make(single_char_tok, lexer.line_index, n, 1));
@@ -235,7 +248,12 @@ fn eat_token(lexer: &mut Lexer) -> Option<Token> {
                 if let Some(tok) = TokenKind::keyword_from_str(&tok_buf) {
                     break Some(Token::make(tok, lexer.line_index, n - tok_len, tok_len));
                 } else {
-                    break Some(Token::make(TokenKind::Text, lexer.line_index, n - tok_len, tok_len));
+                    break Some(Token::make(
+                        TokenKind::Text,
+                        lexer.line_index,
+                        n - tok_len,
+                        tok_len,
+                    ));
                 }
             }
         }

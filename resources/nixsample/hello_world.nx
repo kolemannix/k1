@@ -1,9 +1,9 @@
-val max_bound: i32 := 42;
+val max_bound: Int := 42;
 
-fn main(args: List[String]): Result[i32] {
+fn main(args: List[String]): Result[Int] {
   println("Hello, World!");
-  val x: i32 := 0;
-  mut y: i32 := 1;
+  val x: Int := 0;
+  mut y: Int := 1;
   y      := y + 1;
   return 0;
 }

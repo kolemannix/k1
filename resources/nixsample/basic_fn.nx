@@ -1,7 +1,6 @@
-fn basic(x: i32, y: i32): i32 {
-  println(1, 2, 3);
-  val x: i32 := 0;
-  mut y: i32 := 1;
-  y      := y + 1;
-  0
+fn basic(x: Int, y: Int): Int {
+  println(42, 42, 42);
+  val x: Int := 0;
+  mut y: Int := 1;
+  y          := 1;
 }

@@ -1,104 +1,150 @@
 use std::cell::RefCell;
 use std::fs::File;
 use std::io::{BufReader, Read};
-use std::thread::sleep;
-use std::time::Duration;
 
 use TokenKind::*;
 
 use crate::ast::*;
 use crate::lex::*;
-use crate::log;
 
 #[cfg(test)]
 mod parse_test;
 
-//enum ParseResult<A> {
-//    /// Invalid means we may have moved the iterator and encounter unquestionably bad syntax.
-//    /// We can abort parsing
-//    Invalid,
-//    /// Miss simply means the thing we were looking for didn't match at all after peeking.
-//    Miss,
-//    /// Successful result
-//    Ok(A)
-//}
+const TRACE: bool = true;
+
+#[macro_export]
+macro_rules! trace {
+    () => (println!("\n"));
+    ($($arg:tt)*) => ({
+        if (TRACE) {
+          println!($($arg)*);
+        }
+    })
+}
+
+pub type ParseResult<A> = Result<A, ParseError>;
+
+#[derive(Debug)]
+pub enum ParseError {
+    ExpectedToken(TokenKind, Token, Option<Box<ParseError>>),
+    ExpectedNode(String, Token, Option<Box<ParseError>>),
+    Msg(String, Token),
+}
 
 fn parse_literal(text: &str) -> Option<Literal> {
-    if text == "42" {
-        Some(Literal::I32(42))
-    } else {
-        None
-    }
+    let num = text.parse::<i32>().ok()?;
+    Some(Literal::I32(num))
 }
 
 struct Parser<'a> {
-    // parse_stack: RefCell<Vec<&'static str>>,
+    parse_stack: RefCell<Vec<&'static str>>,
     tokens: Tokens,
     source: &'a str,
 }
 
 impl<'a> Parser<'a> {
-    // fn push(&self, step: &'static str) {
-    //     self.parse_stack.borrow_mut().push(step);
-    // }
-    // fn pop(&self) {
-    //     self.parse_stack.borrow_mut().pop();
-    // }
+    fn check<A>(value: Option<A>) -> ParseResult<Option<A>> {
+        match value {
+            None => Result::Ok(None),
+            Some(a) => Result::Ok(Some(a)),
+        }
+    }
+    fn expect<A>(what: &str, current: Token, value: ParseResult<Option<A>>) -> ParseResult<A> {
+        match value {
+            Ok(None) => Err(ParseError::ExpectedNode(what.to_string(), current, None)),
+            Ok(Some(a)) => Ok(a),
+            Err(e) => Err(e),
+        }
+    }
+}
+
+impl<'a> Parser<'a> {
+    fn peek(&self) -> Token {
+        self.tokens.peek()
+    }
     fn make(tokens: Tokens, source: &'a str) -> Parser<'a> {
-        Parser { tokens, source }
+        Parser {
+            tokens,
+            source,
+            parse_stack: RefCell::new(Vec::new()),
+        }
     }
     fn chars_at(&self, start: usize, end: usize) -> &str {
         &self.source[start..end]
     }
     fn tok_chars(&self, tok: Token) -> &str {
         let s = self.chars_at(tok.start, tok.start + tok.len);
-        log::verbose(&format!("tok chars {} '{}'", tok.kind, s));
+        trace!("tok chars {} '{}'", tok.kind, s);
         s
     }
 
-    fn check_eat_token(&mut self, target_token: TokenKind) -> Option<()> {
-        let tok = self.tokens.peek();
+    fn eat_token(&mut self, target_token: TokenKind) -> Option<()> {
+        let tok = self.peek();
         if tok.kind == target_token {
             self.tokens.advance();
-            log::verbose(&format!("check_eat_token SUCCESS '{}'", target_token));
+            trace!("eat_token SUCCESS '{}'", target_token);
             Some(())
         } else {
-            log::verbose(&format!("check_eat_token MISS '{}'", target_token));
+            trace!("eat_token MISS '{}'", target_token);
             None
         }
     }
 
-    fn check_eat_ident(&mut self) -> Option<String> {
-        let tok = self.tokens.peek();
-        let res = if Text == tok.kind {
+    fn expect_eat_token(&mut self, target_token: TokenKind) -> Result<(), ParseError> {
+        let result = self.eat_token(target_token);
+        match result {
+            None => {
+                // We don't mind doing a repetitive `peek` in the error flow
+                let actual = self.peek();
+                Err(ParseError::ExpectedToken(target_token, actual, None))
+            }
+            Some(_) => Ok(()),
+        }
+    }
+
+    fn eat_ident(&mut self) -> Option<String> {
+        let tok = self.peek();
+        if Text == tok.kind {
+            self.tokens.advance();
             let ident = self.tok_chars(tok);
             Some(String::from(ident))
         } else {
             None
-        };
-        if res.is_some() {
-            self.tokens.advance();
         }
-        res
     }
 
-    fn eat_type_expression(&mut self) -> Option<TypeExpression> {
-        let tok = self.tokens.peek();
+    fn expect_eat_ident(&mut self) -> Result<String, ParseError> {
+        let result = self.eat_ident();
+        match result {
+            None => {
+                // We don't mind doing a repetitive `peek` in the error flow
+                let actual = self.peek();
+                Err(ParseError::ExpectedToken(TokenKind::Text, actual, None))
+            }
+            Some(ident) => Ok(ident),
+        }
+    }
+
+    fn parse_type_expression(&mut self) -> Result<Option<TypeExpression>, ParseError> {
+        let tok = self.peek();
         if let Text = tok.kind {
             let ident = self.tok_chars(tok);
-            if ident == "i32" {
+            if ident == "Int" {
                 self.tokens.next();
-                Some(TypeExpression::Primitive(TypePrimitive::I32))
+                Ok(Some(TypeExpression::Primitive(TypePrimitive::I32)))
             } else {
-                None
+                Err(ParseError::Msg(
+                    format!("Unimplemented eat_type_expression; got {}", ident).to_string(),
+                    tok,
+                ))
             }
         } else {
-            None
+            Ok(None)
         }
     }
 
     fn check_eat_literal(&mut self) -> Option<Literal> {
-        let tok = self.tokens.peek();
+        let tok = self.peek();
         if let Text = tok.kind {
             let text = self.tok_chars(tok);
             parse_literal(text)
@@ -107,213 +153,287 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn eat_fn_arg(&mut self) -> Option<FnArg> {
+    fn parse_fn_arg(&mut self) -> ParseResult<Option<FnArg>> {
         let (one, two) = self.tokens.peek_two();
+        let named;
         if one.kind == Text && two.kind == Equals {
             self.tokens.advance();
             self.tokens.advance();
-            if let Some(expr) = self.eat_expression() {
-                Some(FnArg { name: Some(self.tok_chars(one).to_string()), value: expr })
-            } else {
-                None
-            }
-        } else if let Some(expr) = self.eat_expression() {
-            Some(FnArg { name: None, value: expr })
+            named = true;
         } else {
-            None
+            named = false;
+        }
+        match self.parse_expression() {
+            Ok(Some(expr)) => Ok(Some(FnArg {
+                name: Some(self.tok_chars(one).to_string()),
+                value: expr,
+            })),
+            Ok(None) if !named => Ok(None),
+            Ok(None) => Err(ParseError::Msg(
+                "expected expression".to_string(),
+                self.peek(),
+            )),
+            Err(e) => Err(e),
         }
     }
 
-    fn eat_expression(&mut self) -> Option<Expression> {
+    fn expect_fn_arg(&mut self) -> ParseResult<FnArg> {
+        let res = self.parse_fn_arg();
+        Parser::expect("fn_arg", self.peek(), res)
+    }
+
+    fn parse_expression(&mut self) -> ParseResult<Option<Expression>> {
         let (tok, next) = self.tokens.peek_two();
-        log::verbose(&format!("eat_expression {} {}", tok.kind, next.kind));
+        trace!("eat_expression {} {}", tok.kind, next.kind);
         if let Text = tok.kind {
-            // Literal
             if let Some(lit) = parse_literal(self.tok_chars(tok)) {
                 self.tokens.advance();
-                Some(Expression::Literal(lit))
+                Ok(Some(Expression::Literal(lit)))
             } else {
                 // FnCall
                 if next.kind == OpenParen {
-                    log::verbose("eat_expression FnCall");
+                    trace!("eat_expression FnCall");
+                    self.tokens.advance();
                     // Eat the OpenParen
                     self.tokens.advance();
-                    self.tokens.advance();
-                    if let Some(args) = self.eat_delimited(Comma, CloseParen, |p| Parser::eat_fn_arg(p)) {
-                        Some(Expression::FnCall(FnCall {
+                    match self.eat_delimited(Comma, CloseParen, |p| Parser::expect_fn_arg(p)) {
+                        Ok(args) => Ok(Some(Expression::FnCall(FnCall {
                             name: Ident(self.tok_chars(tok).to_string()),
                             args: args,
-                        }))
-                    } else {
-                        None
+                        }))),
+                        Err(e) => Err(ParseError::ExpectedNode(
+                            "function arguments".to_string(),
+                            self.peek(),
+                            Some(Box::new(e)),
+                        )),
                     }
                 } else {
                     // Plain Reference
                     self.tokens.advance();
-                    Some(Expression::Variable(Ident(self.tok_chars(tok).to_string())))
+                    Ok(Some(Expression::Variable(Ident(
+                        self.tok_chars(tok).to_string(),
+                    ))))
                 }
             }
+        } else if tok.kind == OpenBrace {
+            match self.parse_block()? {
+                None => Err(ParseError::ExpectedNode(
+                    "block".to_string(),
+                    self.peek(),
+                    None,
+                )),
+                Some(block) => Ok(Some(Expression::Block(block))),
+            }
         } else {
-            None
+            // TODO: Tuples
+            Ok(None)
         }
     }
 
-    fn eat_mut(&mut self) -> Option<MutDef> {
-        let _val = self.check_eat_token(KeywordMut)?;
-        let ident = self.check_eat_ident()?;
-        let _colon = self.check_eat_token(Colon)?;
-        let typ = self.eat_type_expression()?;
-        let value = self.eat_expression()?;
-        return Some(MutDef {
+    fn parse_mut(&mut self) -> ParseResult<Option<MutDef>> {
+        // mut foo[: Int] := 42
+        let is_mut = Parser::check(self.eat_token(KeywordMut))?;
+        if is_mut.is_none() {
+            return Ok(None);
+        }
+        let ident = self.expect_eat_ident()?;
+        let typ = match self.eat_token(Colon) {
+            None => Ok(None),
+            Some(_) => self.parse_type_expression(),
+        }?;
+        let _col_eq = self.expect_eat_token(Colon)?;
+        let _col_eq = self.expect_eat_token(Equals)?;
+        let value = Parser::expect("expression", self.peek(), self.parse_expression())?;
+        return Ok(Some(MutDef {
             name: Ident(ident),
-            typ: Some(typ),
+            typ: typ,
             value: value,
-        });
+        }));
     }
 
-    fn eat_val(&mut self) -> Option<ValDef> {
-        let _val = self.check_eat_token(KeywordVal)?;
-        let ident = self.check_eat_ident()?;
-        let _colon = self.check_eat_token(Colon)?;
-        let typ = self.eat_type_expression()?;
-        let value = self.eat_expression()?;
-        return Some(ValDef {
+    fn parse_val(&mut self) -> ParseResult<Option<ValDef>> {
+        trace!("parse_val");
+        let val = self.eat_token(KeywordVal);
+        if val.is_none() {
+            return Ok(None);
+        }
+
+        let ident = self.expect_eat_ident()?;
+        let typ = match self.eat_token(Colon) {
+            None => Ok(None),
+            Some(_) => self.parse_type_expression(),
+        }?;
+        let _col_eq = self.expect_eat_token(Colon)?;
+        let _col_eq = self.expect_eat_token(Equals)?;
+        let value = Parser::expect("expression", self.peek(), self.parse_expression())?;
+        return ParseResult::Ok(Some(ValDef {
             name: Ident(ident),
-            typ: Some(typ),
+            typ: typ,
             value: value,
-        });
+        }));
     }
 
-    fn eat_assignment(&mut self) -> Option<Assignment> {
-        log::verbose("eat_assignment");
-        let ident = self.check_eat_ident()?;
-        let _col = self.check_eat_token(Colon)?;
-        let _eq = self.check_eat_token(Equals)?;
-        let value = self.eat_expression()?;
-        Some(Assignment { ident: Ident(ident), expr: value })
+    fn parse_assignment(&mut self) -> ParseResult<Option<Assignment>> {
+        let (ident, col, eq) = self.tokens.peek_three();
+        trace!("parse_assignment {} {} {}", ident.kind, col.kind, eq.kind);
+        let is_assignment = ident.kind == Text && col.kind == Colon && eq.kind == Equals;
+        if !is_assignment {
+            return Ok(None);
+        }
+        self.tokens.advance();
+        self.tokens.advance();
+        self.tokens.advance();
+        let ident = self.tok_chars(ident).to_string();
+        let expr_result = Parser::expect(
+            "assignment RHS expected an expression",
+            self.peek(),
+            self.parse_expression(),
+        );
+        expr_result.map(|expr| {
+            Some(Assignment {
+                ident: Ident(ident.to_string()),
+                expr: expr,
+            })
+        })
     }
 
-    fn eat_fn_arg_def(&mut self) -> Option<FnArgDef> {
-        log::verbose("eat_fn_arg_def");
-        let ident = self.check_eat_ident()?;
-        let _colon = self.check_eat_token(Colon)?;
-        let typ = self.eat_type_expression()?;
-        return Some(FnArgDef {
+    fn eat_fn_arg_def(&mut self) -> ParseResult<FnArgDef> {
+        trace!("eat_fn_arg_def");
+        let ident = self.expect_eat_ident()?;
+        let _colon = self.expect_eat_token(Colon)?;
+        let typ = Parser::expect("type_expression", self.peek(), self.parse_type_expression())?;
+        return Ok(FnArgDef {
             name: Ident(ident),
             typ: typ,
             default: None,
         });
     }
 
-    fn eat_fndef_args(&mut self) -> Option<Vec<FnArgDef>> {
+    fn eat_fndef_args(&mut self) -> ParseResult<Vec<FnArgDef>> {
         self.eat_delimited(Comma, CloseParen, |p| Parser::eat_fn_arg_def(p))
     }
 
-    fn eat_delimited<T, F>(&mut self, delim: TokenKind, terminator: TokenKind, parse: F) -> Option<Vec<T>>
-        where F: Fn(&mut Parser) -> Option<T> {
-        log::verbose(&format!("eat_delimited delim='{}' terminator='{}'", delim, terminator));
+    fn eat_delimited<T, F>(
+        &mut self,
+        delim: TokenKind,
+        terminator: TokenKind,
+        parse: F,
+    ) -> ParseResult<Vec<T>>
+    where
+        F: Fn(&mut Parser) -> ParseResult<T>,
+    {
+        trace!(
+            "eat_delimited delim='{}' terminator='{}'",
+            delim,
+            terminator
+        );
         // TODO @Allocation Need to figure out how we use all the small vecs without allocating all the time wastefully
         let mut v = Vec::with_capacity(32);
         loop {
-            if self.check_eat_token(terminator).is_some() {
-                log::verbose(&format!("eat_delimited found terminator immediately."));
-                break Some(v);
+            if self.eat_token(terminator).is_some() {
+                trace!("eat_delimited found terminator after {} results.", v.len());
+                break Ok(v);
             }
-            if let Some(parsed) = parse(self) {
-                v.push(parsed);
-                log::verbose(&format!("eat_delimited got result {}", v.len()));
-                if self.check_eat_token(terminator).is_some() {
-                    log::verbose(&format!("eat_delimited found terminator after {} results.", v.len()));
-                    break Some(v);
+            match parse(self) {
+                Ok(parsed) => {
+                    v.push(parsed);
+                    trace!("eat_delimited got result {}", v.len());
+                    if self.eat_token(terminator).is_some() {
+                        trace!("eat_delimited found terminator after {} results.", v.len());
+                        break Ok(v);
+                    }
+                    let found_delim = self.eat_token(delim);
+                    if found_delim.is_none() {
+                        trace!("eat_delimited missing delimiter.");
+                        break Err(ParseError::ExpectedToken(delim, self.peek(), None));
+                    }
                 }
-                let found_delim = self.check_eat_token(delim);
-                if found_delim.is_none() {
-                    log::normal("eat_delimited did not find delimiter after 'parse'.");
-                    break None;
+                Err(e) => {
+                    // trace!("eat_delimited got err from 'parse': {}", e);
+                    break Err(ParseError::ExpectedNode(
+                        "eat_delimited encountered error parsing element".to_string(),
+                        self.peek(),
+                        Some(Box::new(e)),
+                    ));
                 }
-            } else {
-                break None;
             }
         }
     }
 
-    fn eat_if_expr(&mut self) -> Option<IfExpr> {
-        None
+    fn eat_if_expr(&mut self) -> ParseResult<Option<IfExpr>> {
+        Ok(None)
     }
 
-    fn eat_statement(&mut self) -> Option<BlockStmt> {
-        /*
-        Parse order
-          mut
-          val
-          return
-          lone expression
-          if/else
-          assgn
-         */
-        log::verbose("eat_statement");
-        if let Some(mut_def) = self.eat_mut() {
-            Some(BlockStmt::MutDef(mut_def))
-        } else if let Some(val_def) = self.eat_val() {
-            Some(BlockStmt::ValDef(val_def))
-        } else if self.check_eat_token(KeywordReturn).is_some() {
-            if let Some(ret_val) = self.eat_expression() {
-                Some(BlockStmt::ReturnStmt(ret_val))
+    fn parse_statement(&mut self) -> ParseResult<Option<BlockStmt>> {
+        trace!("eat_statement");
+        if let Some(mut_def) = self.parse_mut()? {
+            Ok(Some(BlockStmt::MutDef(mut_def)))
+        } else if let Some(val_def) = self.parse_val()? {
+            Ok(Some(BlockStmt::ValDef(val_def)))
+        } else if self.eat_token(KeywordReturn).is_some() {
+            if let Some(ret_val) = self.parse_expression()? {
+                Ok(Some(BlockStmt::ReturnStmt(ret_val)))
             } else {
-                None
+                Err(ParseError::ExpectedNode(
+                    "return statement".to_string(),
+                    self.tokens.next(),
+                    None,
+                ))
             }
-        } else if let Some(if_expr) = self.eat_if_expr() {
-            Some(BlockStmt::If(if_expr))
-        } else if let Some(assgn) = self.eat_assignment() {
-            Some(BlockStmt::Assignment(assgn))
-        } else if let Some(expr) = self.eat_expression() {
-            Some(BlockStmt::LoneExpression(expr))
+        } else if let Some(if_expr) = self.eat_if_expr()? {
+            Ok(Some(BlockStmt::If(if_expr)))
+        } else if let Some(assgn) = self.parse_assignment()? {
+            Ok(Some(BlockStmt::Assignment(assgn)))
+        } else if let Some(expr) = self.parse_expression()? {
+            Ok(Some(BlockStmt::LoneExpression(expr)))
         } else {
-            None
+            Ok(None)
         }
     }
 
-    fn eat_block(&mut self) -> Option<Block> {
-        if let Some(stmts) = self.eat_delimited(Semicolon, CloseBrace, |p| Parser::eat_statement(p)) {
-            Some(Block { stmts: stmts })
-        } else {
-            None
-        }
+    fn parse_block(&mut self) -> ParseResult<Option<Block>> {
+        let _block_start = Parser::check(self.eat_token(OpenBrace))?;
+        let closure =
+            |p: &mut Parser| Parser::expect("statement", p.peek(), Parser::parse_statement(p));
+        let block_statements = self.eat_delimited(Semicolon, CloseBrace, closure)?;
+        Ok(Some(Block {
+            stmts: block_statements,
+        }))
     }
 
-    fn check_eat_fndef(&mut self) -> Option<FnDef> {
-        let _fn = self.check_eat_token(KeywordFn)?;
-        let ident = self.check_eat_ident()?;
-        let _open_paren = self.check_eat_token(OpenParen)?;
+    fn parse_fndef(&mut self) -> ParseResult<Option<FnDef>> {
+        trace!("parse_fndef");
+        let _fn = Parser::check(self.eat_token(KeywordFn))?;
+        let ident = self.expect_eat_ident()?;
+        let _open_paren = self.expect_eat_token(OpenParen)?;
         let args = self.eat_fndef_args()?;
-        let _colon = self.check_eat_token(Colon)?;
-        let ret_type = self.eat_type_expression();
-        let _block_begin = self.check_eat_token(OpenBrace)?;
-        let block = self.eat_block()?;
-        // let block = Some(Block { stmts: vec![] })?;
-        Some(FnDef {
+        let _colon = self.expect_eat_token(Colon)?;
+        let ret_type = self.parse_type_expression()?;
+        let block = self.parse_block()?;
+        Ok(Some(FnDef {
             name: Ident(ident),
             args,
             ret_type: ret_type,
             type_args: None,
             block: block,
-        })
+        }))
     }
 
-    fn eat_definition(&mut self) -> Result<Definition, String> {
-        if let Some(val_def) = self.eat_val() {
-            Ok(Definition::ValDef(val_def))
-        } else if let Some(fn_def) = self.check_eat_fndef() {
-            Ok(Definition::FnDef(fn_def))
+    fn parse_definition(&mut self) -> Result<Option<Definition>, ParseError> {
+        let val_result = self.parse_val();
+        if let Some(val_def) = val_result? {
+            Ok(Some(Definition::ValDef(val_def)))
+        } else if let Some(fn_def) = self.parse_fndef()? {
+            Ok(Some(Definition::FnDef(fn_def)))
         } else {
-            Err("Expected Const or FnDef; got somethin' else".to_string())
+            Ok(None)
         }
     }
 
     fn eat_module(&mut self) -> Result<Module, String> {
         let mut defs: Vec<Definition> = vec![];
 
-        while let Ok(def) = self.eat_definition() {
+        while let Ok(Some(def)) = self.parse_definition() {
             defs.push(def)
         }
         Ok(Module {
@@ -347,7 +467,7 @@ pub fn parse_text(text: &str) -> Result<Module, String> {
     let token_vec = tokenize(&mut lexer);
     print_tokens(&text, &token_vec);
 
-    // TODO @Clone: Just RC the original tokens so everything can look at them
+    // TODO @Allocation: Just RC the original tokens so everything can look at them
     let tokens: Tokens = Tokens::make(token_vec.clone());
 
     let mut parser = Parser::make(tokens, &text);
