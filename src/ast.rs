@@ -1,6 +1,6 @@
 #[derive(Debug)]
 pub enum Literal {
-    I32(i32),
+    Numeric(Ident),
 }
 
 #[derive(Debug)]
@@ -71,11 +71,7 @@ pub struct Block {
 
 #[derive(Debug)]
 pub enum TypePrimitive {
-    I32,
-    I64,
-    F32,
-    F64,
-    Char,
+    Int,
 }
 
 #[derive(Debug)]
@@ -100,9 +96,16 @@ pub struct FnArgDef {
 }
 
 #[derive(Debug)]
+pub struct ConstVal {
+    pub name: Ident,
+    pub typ: TypeExpression,
+    pub value: Expression,
+}
+
+#[derive(Debug)]
 pub enum Definition {
     FnDef(FnDef),
-    ValDef(ValDef),
+    Const(ConstVal),
 }
 
 // trait TopLevelDecl {}
@@ -113,8 +116,6 @@ pub struct Module {
     pub name: Ident,
     pub defs: Vec<Definition>,
 }
-
-impl Module {}
 
 #[cfg(test)]
 mod ast_test;

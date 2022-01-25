@@ -1,4 +1,3 @@
-use std::cell::RefCell;
 use std::fs::File;
 use std::io::{BufReader, Read};
 
@@ -6,21 +5,10 @@ use TokenKind::*;
 
 use crate::ast::*;
 use crate::lex::*;
+use crate::trace;
 
 #[cfg(test)]
 mod parse_test;
-
-const TRACE: bool = true;
-
-#[macro_export]
-macro_rules! trace {
-    () => (println!("\n"));
-    ($($arg:tt)*) => ({
-        if (TRACE) {
-          println!($($arg)*);
-        }
-    })
-}
 
 pub type ParseResult<A> = Result<A, ParseError>;
 
@@ -32,14 +20,26 @@ pub enum ParseError {
 }
 
 fn parse_literal(text: &str) -> Option<Literal> {
-    let num = text.parse::<i32>().ok()?;
-    Some(Literal::I32(num))
+    if text.chars().next().map(|x| x.is_numeric()).unwrap_or(false) {
+        Some(Literal::Numeric(Ident(text.to_string())))
+    } else {
+        None
+    }
+}
+
+pub struct Source<'a> {
+    content: &'a str,
+    lines: Vec<&'a str>,
+}
+impl<'a> Source<'a> {
+    fn line(&self, num: usize) -> &'a str {
+        &self.lines[num]
+    }
 }
 
 struct Parser<'a> {
-    parse_stack: RefCell<Vec<&'static str>>,
     tokens: Tokens,
-    source: &'a str,
+    source: Source<'a>,
 }
 
 impl<'a> Parser<'a> {
@@ -63,14 +63,15 @@ impl<'a> Parser<'a> {
         self.tokens.peek()
     }
     fn make(tokens: Tokens, source: &'a str) -> Parser<'a> {
-        Parser {
-            tokens,
-            source,
-            parse_stack: RefCell::new(Vec::new()),
-        }
+        let lines = source.lines().collect();
+        Parser { tokens, source: Source { content: source, lines: lines } }
+    }
+    fn current_line(&self) -> &str {
+        let line = self.peek().line_num;
+        self.source.line(line)
     }
     fn chars_at(&self, start: usize, end: usize) -> &str {
-        &self.source[start..end]
+        &self.source.content[start..end]
     }
     fn tok_chars(&self, tok: Token) -> &str {
         let s = self.chars_at(tok.start, tok.start + tok.len);
@@ -131,12 +132,9 @@ impl<'a> Parser<'a> {
             let ident = self.tok_chars(tok);
             if ident == "Int" {
                 self.tokens.next();
-                Ok(Some(TypeExpression::Primitive(TypePrimitive::I32)))
+                Ok(Some(TypeExpression::Primitive(TypePrimitive::Int)))
             } else {
-                Err(ParseError::Msg(
-                    format!("Unimplemented eat_type_expression; got {}", ident).to_string(),
-                    tok,
-                ))
+                Err(ParseError::Msg(format!("Unimplemented eat_type_expression; got {}", ident).to_string(), tok))
             }
         } else {
             Ok(None)
@@ -164,15 +162,9 @@ impl<'a> Parser<'a> {
             named = false;
         }
         match self.parse_expression() {
-            Ok(Some(expr)) => Ok(Some(FnArg {
-                name: Some(self.tok_chars(one).to_string()),
-                value: expr,
-            })),
+            Ok(Some(expr)) => Ok(Some(FnArg { name: Some(self.tok_chars(one).to_string()), value: expr })),
             Ok(None) if !named => Ok(None),
-            Ok(None) => Err(ParseError::Msg(
-                "expected expression".to_string(),
-                self.peek(),
-            )),
+            Ok(None) => Err(ParseError::Msg("expected expression".to_string(), self.peek())),
             Err(e) => Err(e),
         }
     }
@@ -210,18 +202,12 @@ impl<'a> Parser<'a> {
                 } else {
                     // Plain Reference
                     self.tokens.advance();
-                    Ok(Some(Expression::Variable(Ident(
-                        self.tok_chars(tok).to_string(),
-                    ))))
+                    Ok(Some(Expression::Variable(Ident(self.tok_chars(tok).to_string()))))
                 }
             }
         } else if tok.kind == OpenBrace {
             match self.parse_block()? {
-                None => Err(ParseError::ExpectedNode(
-                    "block".to_string(),
-                    self.peek(),
-                    None,
-                )),
+                None => Err(ParseError::ExpectedNode("block".to_string(), self.peek(), None)),
                 Some(block) => Ok(Some(Expression::Block(block))),
             }
         } else {
@@ -244,11 +230,7 @@ impl<'a> Parser<'a> {
         let _col_eq = self.expect_eat_token(Colon)?;
         let _col_eq = self.expect_eat_token(Equals)?;
         let value = Parser::expect("expression", self.peek(), self.parse_expression())?;
-        return Ok(Some(MutDef {
-            name: Ident(ident),
-            typ: typ,
-            value: value,
-        }));
+        return Ok(Some(MutDef { name: Ident(ident), typ: typ, value: value }));
     }
 
     fn parse_val(&mut self) -> ParseResult<Option<ValDef>> {
@@ -266,11 +248,23 @@ impl<'a> Parser<'a> {
         let _col_eq = self.expect_eat_token(Colon)?;
         let _col_eq = self.expect_eat_token(Equals)?;
         let value = Parser::expect("expression", self.peek(), self.parse_expression())?;
-        return ParseResult::Ok(Some(ValDef {
-            name: Ident(ident),
-            typ: typ,
-            value: value,
-        }));
+        return ParseResult::Ok(Some(ValDef { name: Ident(ident), typ: typ, value: value }));
+    }
+
+    fn parse_const(&mut self) -> ParseResult<Option<ConstVal>> {
+        trace!("parse_const");
+        let val = self.eat_token(KeywordVal);
+        if val.is_none() {
+            return Ok(None);
+        }
+
+        let ident = self.expect_eat_ident()?;
+        let _colon = self.expect_eat_token(Colon);
+        let typ = Parser::expect("type_expression", self.peek(), self.parse_type_expression())?;
+        let _col_eq = self.expect_eat_token(Colon)?;
+        let _col_eq = self.expect_eat_token(Equals)?;
+        let value = Parser::expect("expression", self.peek(), self.parse_expression())?;
+        return ParseResult::Ok(Some(ConstVal { name: Ident(ident), typ: typ, value: value }));
     }
 
     fn parse_assignment(&mut self) -> ParseResult<Option<Assignment>> {
@@ -284,17 +278,8 @@ impl<'a> Parser<'a> {
         self.tokens.advance();
         self.tokens.advance();
         let ident = self.tok_chars(ident).to_string();
-        let expr_result = Parser::expect(
-            "assignment RHS expected an expression",
-            self.peek(),
-            self.parse_expression(),
-        );
-        expr_result.map(|expr| {
-            Some(Assignment {
-                ident: Ident(ident.to_string()),
-                expr: expr,
-            })
-        })
+        let expr_result = Parser::expect("assignment RHS expected an expression", self.peek(), self.parse_expression());
+        expr_result.map(|expr| Some(Assignment { ident: Ident(ident.to_string()), expr: expr }))
     }
 
     fn eat_fn_arg_def(&mut self) -> ParseResult<FnArgDef> {
@@ -302,31 +287,18 @@ impl<'a> Parser<'a> {
         let ident = self.expect_eat_ident()?;
         let _colon = self.expect_eat_token(Colon)?;
         let typ = Parser::expect("type_expression", self.peek(), self.parse_type_expression())?;
-        return Ok(FnArgDef {
-            name: Ident(ident),
-            typ: typ,
-            default: None,
-        });
+        return Ok(FnArgDef { name: Ident(ident), typ: typ, default: None });
     }
 
     fn eat_fndef_args(&mut self) -> ParseResult<Vec<FnArgDef>> {
         self.eat_delimited(Comma, CloseParen, |p| Parser::eat_fn_arg_def(p))
     }
 
-    fn eat_delimited<T, F>(
-        &mut self,
-        delim: TokenKind,
-        terminator: TokenKind,
-        parse: F,
-    ) -> ParseResult<Vec<T>>
+    fn eat_delimited<T, F>(&mut self, delim: TokenKind, terminator: TokenKind, parse: F) -> ParseResult<Vec<T>>
     where
         F: Fn(&mut Parser) -> ParseResult<T>,
     {
-        trace!(
-            "eat_delimited delim='{}' terminator='{}'",
-            delim,
-            terminator
-        );
+        trace!("eat_delimited delim='{}' terminator='{}'", delim, terminator);
         // TODO @Allocation Need to figure out how we use all the small vecs without allocating all the time wastefully
         let mut v = Vec::with_capacity(32);
         loop {
@@ -374,11 +346,7 @@ impl<'a> Parser<'a> {
             if let Some(ret_val) = self.parse_expression()? {
                 Ok(Some(BlockStmt::ReturnStmt(ret_val)))
             } else {
-                Err(ParseError::ExpectedNode(
-                    "return statement".to_string(),
-                    self.tokens.next(),
-                    None,
-                ))
+                Err(ParseError::ExpectedNode("return statement".to_string(), self.tokens.next(), None))
             }
         } else if let Some(if_expr) = self.eat_if_expr()? {
             Ok(Some(BlockStmt::If(if_expr)))
@@ -393,36 +361,33 @@ impl<'a> Parser<'a> {
 
     fn parse_block(&mut self) -> ParseResult<Option<Block>> {
         let _block_start = Parser::check(self.eat_token(OpenBrace))?;
-        let closure =
-            |p: &mut Parser| Parser::expect("statement", p.peek(), Parser::parse_statement(p));
+        let closure = |p: &mut Parser| Parser::expect("statement", p.peek(), Parser::parse_statement(p));
         let block_statements = self.eat_delimited(Semicolon, CloseBrace, closure)?;
-        Ok(Some(Block {
-            stmts: block_statements,
-        }))
+        Ok(Some(Block { stmts: block_statements }))
     }
 
     fn parse_fndef(&mut self) -> ParseResult<Option<FnDef>> {
         trace!("parse_fndef");
-        let _fn = Parser::check(self.eat_token(KeywordFn))?;
+        let is_fn = Parser::check(self.eat_token(KeywordFn))?;
+        if is_fn.is_none() {
+            return Ok(None);
+        }
         let ident = self.expect_eat_ident()?;
         let _open_paren = self.expect_eat_token(OpenParen)?;
         let args = self.eat_fndef_args()?;
         let _colon = self.expect_eat_token(Colon)?;
         let ret_type = self.parse_type_expression()?;
         let block = self.parse_block()?;
-        Ok(Some(FnDef {
-            name: Ident(ident),
-            args,
-            ret_type: ret_type,
-            type_args: None,
-            block: block,
-        }))
+        Ok(Some(FnDef { name: Ident(ident), args, ret_type: ret_type, type_args: None, block: block }))
     }
 
-    fn parse_definition(&mut self) -> Result<Option<Definition>, ParseError> {
-        let val_result = self.parse_val();
-        if let Some(val_def) = val_result? {
-            Ok(Some(Definition::ValDef(val_def)))
+    fn parse_definition(&mut self) -> ParseResult<Option<Definition>> {
+        if let Some(const_def) = self.parse_const()? {
+            let sem = self.eat_token(Semicolon);
+            if sem.is_none() {
+                return Err(ParseError::ExpectedToken(Semicolon, self.peek(), None));
+            }
+            Ok(Some(Definition::Const(const_def)))
         } else if let Some(fn_def) = self.parse_fndef()? {
             Ok(Some(Definition::FnDef(fn_def)))
         } else {
@@ -430,16 +395,13 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn eat_module(&mut self) -> Result<Module, String> {
+    fn eat_module(&mut self, filename: &str) -> ParseResult<Module> {
         let mut defs: Vec<Definition> = vec![];
 
-        while let Ok(Some(def)) = self.parse_definition() {
+        while let Some(def) = self.parse_definition()? {
             defs.push(def)
         }
-        Ok(Module {
-            name: Ident("module1".to_string()),
-            defs: defs,
-        })
+        Ok(Module { name: Ident(filename.to_string()), defs: defs })
     }
 }
 
@@ -461,26 +423,25 @@ fn print_tokens(content: &str, tokens: &[Token]) {
     println!()
 }
 
-pub fn parse_text(text: &str) -> Result<Module, String> {
+pub fn parse_text(text: &str, filename: &str) -> ParseResult<Module> {
     let mut lexer = Lexer::make(&text);
 
     let token_vec = tokenize(&mut lexer);
     print_tokens(&text, &token_vec);
 
-    // TODO @Allocation: Just RC the original tokens so everything can look at them
-    let tokens: Tokens = Tokens::make(token_vec.clone());
+    let tokens: Tokens = Tokens::make(token_vec);
 
     let mut parser = Parser::make(tokens, &text);
 
-    let module = parser.eat_module();
+    let module = parser.eat_module(filename);
 
     module
 }
 
-pub fn parse_file(path: &str) -> Result<Module, String> {
+pub fn parse_file(path: &str) -> ParseResult<Module> {
     let file = File::open(path).expect(&format!("file not found {}", path));
     let mut buf_read = BufReader::new(file);
     let mut content = String::new();
     buf_read.read_to_string(&mut content).expect("read failed");
-    parse_text(&content)
+    parse_text(&content, path)
 }

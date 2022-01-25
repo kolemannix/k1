@@ -1,14 +1,18 @@
+interface Show {
+  fn show(self): String
+}
+
 fn main(args: Vec[String]): Program[i32] {
-  let parse_num: Program[f32] = args[0].to_f32;
+  val parse_num: Program[f32] = args[0].to_f32;
 
   // Once we use .run, we're agreeing to return a `Fail` if they fail, like Rusts ? or await
-  let num: f32 = parse_num.run;
-  let denom: f32 = args[1].toInt.run;
+  val num: f32 = parse_num.run;
+  val denom: f32 = args[1].toInt.run;
 
-  let result: Program[ArithmeticError, f32] = divide(num, denom);
-  let result: Program[f32] = result.catchError(arithmeticError => 1);
+  val result: Program[ArithmeticError, f32] = divide(num, denom);
+  val result: Program[f32] = result.catchError(arithmeticError => 1);
 
-  let dividend: f32 = result.run;
+  val dividend: f32 = result.run;
   println("answer was {dividend}")
   0
 }

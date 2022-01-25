@@ -2,15 +2,11 @@ use std::fmt;
 use std::str::Chars;
 use std::vec::IntoIter;
 
+use crate::trace;
 use TokenKind::*;
 
 pub const EOF_CHAR: char = '\0';
-pub const EOF_TOKEN: Token = Token {
-    start: 0,
-    len: 0,
-    line_num: 0,
-    kind: TokenKind::EOF,
-};
+pub const EOF_TOKEN: Token = Token { start: 0, len: 0, line_num: 0, kind: TokenKind::EOF };
 
 pub struct Tokens {
     iter: IntoIter<Token>,
@@ -18,9 +14,7 @@ pub struct Tokens {
 
 impl Tokens {
     pub fn make(data: Vec<Token>) -> Tokens {
-        Tokens {
-            iter: data.into_iter(),
-        }
+        Tokens { iter: data.into_iter() }
     }
     pub fn next(&mut self) -> Token {
         self.iter.next().unwrap_or(EOF_TOKEN)
@@ -153,13 +147,8 @@ pub struct Token {
 }
 
 impl Token {
-    pub fn make(kind: TokenKind, line_num: usize, start: usize, len: usize) -> Token {
-        Token {
-            start,
-            len,
-            line_num,
-            kind,
-        }
+    pub fn make(kind: TokenKind, line_index: usize, start: usize, len: usize) -> Token {
+        Token { start, len, line_num: line_index, kind }
     }
 }
 
@@ -171,11 +160,7 @@ pub struct Lexer<'a> {
 
 impl Lexer<'_> {
     pub fn make(input: &str) -> Lexer {
-        Lexer {
-            content: input.chars(),
-            line_index: 0,
-            pos: 0,
-        }
+        Lexer { content: input.chars(), line_index: 0, pos: 0 }
     }
     pub fn next(&mut self) -> char {
         self.pos += 1;
@@ -198,10 +183,7 @@ impl Lexer<'_> {
     }
     pub fn peek_two(&self) -> (char, char) {
         let mut peek_iter = self.content.clone();
-        (
-            peek_iter.next().unwrap_or(EOF_CHAR),
-            peek_iter.next().unwrap_or(EOF_CHAR),
-        )
+        (peek_iter.next().unwrap_or(EOF_CHAR), peek_iter.next().unwrap_or(EOF_CHAR))
     }
     pub fn peek_with_pos(&self) -> (char, usize) {
         (self.peek(), self.pos)
@@ -213,7 +195,7 @@ impl Lexer<'_> {
 }
 
 fn is_ident_char(c: char) -> bool {
-    c.is_alphanumeric() || c == '_'
+    c.is_alphanumeric() || c == '_' || c == '.'
 }
 
 fn is_ident_start(c: char) -> bool {
@@ -225,18 +207,13 @@ fn eat_token(lexer: &mut Lexer) -> Option<Token> {
     let mut tok_len = 0;
     loop {
         let (c, n) = lexer.peek_with_pos();
-        log::debug!("LEX line={} char={} '{}'", lexer.line_index, n, c);
+        trace!("LEX line={} char={} '{}'", lexer.line_index, n, c);
         if c == EOF_CHAR {
             break None;
         }
         if let Some(single_char_tok) = TokenKind::from_char(c) {
             if !tok_buf.is_empty() {
-                break Some(Token::make(
-                    TokenKind::Text,
-                    lexer.line_index,
-                    n - tok_len,
-                    tok_len,
-                ));
+                break Some(Token::make(TokenKind::Text, lexer.line_index, n - tok_len, tok_len));
             } else {
                 lexer.advance();
                 break Some(Token::make(single_char_tok, lexer.line_index, n, 1));
@@ -248,12 +225,7 @@ fn eat_token(lexer: &mut Lexer) -> Option<Token> {
                 if let Some(tok) = TokenKind::keyword_from_str(&tok_buf) {
                     break Some(Token::make(tok, lexer.line_index, n - tok_len, tok_len));
                 } else {
-                    break Some(Token::make(
-                        TokenKind::Text,
-                        lexer.line_index,
-                        n - tok_len,
-                        tok_len,
-                    ));
+                    break Some(Token::make(TokenKind::Text, lexer.line_index, n - tok_len, tok_len));
                 }
             }
         }
