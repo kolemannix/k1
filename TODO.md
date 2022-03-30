@@ -2,8 +2,8 @@
 - [ ] dot syntax
 - [ ] Binary infix operations
 - [ ] Type Params
-- [ ] Tuples
 - [ ] Structs
+- [ ] Tuples
 - [ ] Floating point literals
 - [ ] Unicode source
 - [ ] Block-as-single-arg syntax (xs.map { y => } )
@@ -17,3 +17,6 @@
 - [ ] Arithmetic
 - [ ] Define IR
 - [ ] Structs
+
+# Milestones
+1. [ ] 

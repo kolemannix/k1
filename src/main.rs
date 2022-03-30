@@ -3,11 +3,12 @@ use std::env;
 mod ast;
 mod codegen;
 mod lex;
+mod nir;
 mod output;
 mod parse;
 use std::fs;
 use std::fs::File;
-use std::io::{BufReader, Read};
+use std::io::{BufReader, Read, Write};
 
 use crate::codegen::CodeGen;
 
@@ -24,6 +25,8 @@ fn main() {
     let ctx = codegen::init_context();
     let mut codegen = CodeGen::create(&ctx);
     let result = codegen.codegen_module(&parsed);
+    let mut f = File::create("llvm_out.ll").expect("make llvm_ir");
+    f.write_all(result.as_bytes()).unwrap();
     println!("{}", result);
     // for path in paths {
     //     let path = path.expect("Error reading dir entry");
