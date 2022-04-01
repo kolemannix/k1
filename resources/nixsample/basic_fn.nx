@@ -1,7 +1,0 @@
-fn basic(x: Int, y: Int): Int {
-  println(42, 42, 42);
-  val x: Int := 0;
-  mut y: Int := 1;
-  y          := { 1; 2; 3 };
-  y := add(42, 42);
-}

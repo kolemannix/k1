@@ -1,4 +1,4 @@
-val max_bound: Int := 42;
+val max_bound: Int = 42;
 
 type Point = struct {
   x: Int,
@@ -7,8 +7,8 @@ type Point = struct {
 
 fn main(args: List[String]): Result[Int] {
   println("Hello, World!");
-  val x: Int := 0;
-  mut y: Int := 1;
-  y      := y + max_bound;
+  val x: Int = 0;
+  mut y: Int = 1;
+  y      = y + max_bound;
   return 0;
 }

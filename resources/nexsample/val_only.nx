@@ -1,0 +1,2 @@
+val foo: Int = 42;
+val bar: Int = 42;

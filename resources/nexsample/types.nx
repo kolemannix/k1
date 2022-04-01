@@ -1,0 +1,56 @@
+type Id = opaque String;
+
+type MyUnion = Id or Int;
+
+type Foo = struct {
+  count: Int,
+  bytes: Array[Byte]
+} + Identified;
+
+type Password = opaque String;
+type UserRow = struct {
+  id: Long,
+  name: String,
+  password: Password
+};
+
+type Animal = oneof {
+  Dog = struct { breed: String },
+  Cat = struct { isOrange: bool }
+};
+// Unlike in Rust, Animal.Dog is a proper type of its own.
+val tucker = Dog { breed: "Brittany" };
+
+type UserView = UserRow - ['password]
+
+type Foo = struct {
+  count: usize,
+  bytes: u8[]
+} + struct { id: Id };
+
+val anon_struct = { x: 5, y: 10 };
+
+val anon_type: Type = typeOf(anon_struct);
+typeOf only works if the type is known at compile-time, it is not runtime reflection
+// This works since Type is an enum so there's a variant field to branch on at runtime
+if (anon_type: Type.Struct) {
+  // Narrowing rules let us treat anon_type as if it were declared as a Struct here
+  // i.e., anon_type: Type.Struct
+  anon_type.fields
+}
+val fooJsonWriter = impl JsonWriter[Foo] {
+  fn write(value: Foo) = {
+    mut buffer = JsonObject::empty();
+    val fields = Foo.fields.map { f =>
+      buffer.append(toJsType(f.type), toJsValue(value.getField(f));
+    }
+  }
+}
+val anonJsonWriter = impl JsonWriter[anon_type] {
+  fn write(a: anon_type)
+}
+anon_type.fields.map(f => println(f.name));
+
+type Identified = struct {
+  id: Id;
+}

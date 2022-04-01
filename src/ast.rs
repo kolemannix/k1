@@ -1,6 +1,7 @@
 #[derive(Debug)]
 pub enum Literal {
-    Numeric(Ident),
+    Numeric(String),
+    String(String),
 }
 
 #[derive(Debug)]

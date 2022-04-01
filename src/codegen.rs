@@ -41,8 +41,8 @@ impl<'ctx> CodeGen<'ctx> {
             }
             Some(TypeExpression::Primitive(TypePrimitive::Int)) => {
                 let ptr = self.builder.build_alloca(self.context.i32_type(), &val.name.0);
-                if let Expression::Literal(Literal::Numeric(ident)) = &val.value {
-                    if let Some(v) = self.context.i32_type().const_int_from_string(&ident.0, StringRadix::Decimal) {
+                if let Expression::Literal(Literal::Numeric(s)) = &val.value {
+                    if let Some(v) = self.context.i32_type().const_int_from_string(&s, StringRadix::Decimal) {
                         self.builder.build_store(ptr, v);
                     }
                 }
@@ -69,7 +69,7 @@ impl<'ctx> CodeGen<'ctx> {
                                 let llvm_val = module.add_global(llvm_ty, Some(AddressSpace::Const), &name.0);
                                 llvm_val.set_constant(true);
                                 llvm_val.set_initializer(
-                                    &llvm_ty.const_int_from_string(&const_ident.0, StringRadix::Decimal).unwrap(),
+                                    &llvm_ty.const_int_from_string(&const_ident, StringRadix::Decimal).unwrap(),
                                 );
                             }
                         }
@@ -111,7 +111,7 @@ impl<'ctx> CodeGen<'ctx> {
                                     let printf_fn = module.add_function("printf", printf_type, Some(Linkage::External));
                                     let first_arg =
                                         if let Expression::Literal(Literal::Numeric(num)) = &fn_call.args[0].value {
-                                            num.0.as_ref()
+                                            num.as_ref()
                                         } else {
                                             ""
                                         };

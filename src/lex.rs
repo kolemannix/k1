@@ -65,6 +65,9 @@ pub enum TokenKind {
     Dot,
     Comma,
 
+    DoubleQuote,
+    SingleQuote,
+
     /// Not really a token but allows us to avoid Option<Token> everywhere
     EOF,
 }
@@ -95,6 +98,9 @@ impl TokenKind {
             Dot => Some("."),
             Comma => Some(","),
 
+            DoubleQuote => Some("\""),
+            SingleQuote => Some("'"),
+
             Text => None,
 
             LineComment => None,
@@ -115,6 +121,8 @@ impl TokenKind {
             '=' => Some(Equals),
             '.' => Some(Dot),
             ',' => Some(Comma),
+            '"' => Some(DoubleQuote),
+            '\'' => Some(SingleQuote),
             _ => None,
         }
     }
@@ -140,22 +148,22 @@ impl TokenKind {
 
 #[derive(Debug, Copy, Clone)]
 pub struct Token {
-    pub start: usize,
-    pub len: usize,
-    pub line_num: usize,
+    pub start: u32,
+    pub len: u32,
+    pub line_num: u32,
     pub kind: TokenKind,
 }
 
 impl Token {
-    pub fn make(kind: TokenKind, line_index: usize, start: usize, len: usize) -> Token {
+    pub fn make(kind: TokenKind, line_index: u32, start: u32, len: u32) -> Token {
         Token { start, len, line_num: line_index, kind }
     }
 }
 
 pub struct Lexer<'a> {
     content: Chars<'a>,
-    pub line_index: usize,
-    pub pos: usize,
+    pub line_index: u32,
+    pub pos: u32,
 }
 
 impl Lexer<'_> {
@@ -174,7 +182,7 @@ impl Lexer<'_> {
         }
         c
     }
-    pub fn next_with_pos(&mut self) -> (char, usize) {
+    pub fn next_with_pos(&mut self) -> (char, u32) {
         let old_pos = self.pos;
         (self.next(), old_pos)
     }
@@ -185,7 +193,7 @@ impl Lexer<'_> {
         let mut peek_iter = self.content.clone();
         (peek_iter.next().unwrap_or(EOF_CHAR), peek_iter.next().unwrap_or(EOF_CHAR))
     }
-    pub fn peek_with_pos(&self) -> (char, usize) {
+    pub fn peek_with_pos(&self) -> (char, u32) {
         (self.peek(), self.pos)
     }
     pub fn advance(&mut self) -> () {
@@ -246,4 +254,26 @@ pub fn tokenize(lexer: &mut Lexer) -> Vec<Token> {
         tokens.push(tok);
     }
     tokens
+}
+
+#[cfg(test)]
+mod test {
+    use crate::lex::TokenKind::*;
+    use crate::lex::{tokenize, Lexer, TokenKind};
+
+    #[test]
+    fn case1() {
+        let input = "val x = println(4)";
+        let mut lexer = Lexer::make(&input);
+        let result: Vec<TokenKind> = tokenize(&mut lexer).iter().map(|t| t.kind).collect();
+        assert_eq!(result, vec![KeywordVal, Text, Equals, Text, OpenParen, Text, CloseParen])
+    }
+
+    #[test]
+    fn literal_string() {
+        let input = "val x = println(\"foobear\")";
+        let mut lexer = Lexer::make(&input);
+        let result: Vec<TokenKind> = tokenize(&mut lexer).iter().map(|t| t.kind).collect();
+        assert_eq!(result, vec![KeywordVal, Text, Equals, Text, OpenParen, DoubleQuote, Text, DoubleQuote, CloseParen])
+    }
 }

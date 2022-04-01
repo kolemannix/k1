@@ -19,21 +19,13 @@ pub enum ParseError {
     Msg(String, Token),
 }
 
-fn parse_literal(text: &str) -> Option<Literal> {
-    if text.chars().next().map(|x| x.is_numeric()).unwrap_or(false) {
-        Some(Literal::Numeric(Ident(text.to_string())))
-    } else {
-        None
-    }
-}
-
 pub struct Source<'a> {
     content: &'a str,
     lines: Vec<&'a str>,
 }
 impl<'a> Source<'a> {
-    fn line(&self, num: usize) -> &'a str {
-        &self.lines[num]
+    fn line(&self, num: u32) -> &'a str {
+        &self.lines[num as usize]
     }
 }
 
@@ -70,10 +62,10 @@ impl<'a> Parser<'a> {
         let line = self.peek().line_num;
         self.source.line(line)
     }
-    fn chars_at(&self, start: usize, end: usize) -> &str {
-        &self.source.content[start..end]
+    fn chars_at(&self, start: u32, end: u32) -> &'a str {
+        &self.source.content[start as usize..end as usize]
     }
-    fn tok_chars(&self, tok: Token) -> &str {
+    fn tok_chars(&self, tok: Token) -> &'a str {
         let s = self.chars_at(tok.start, tok.start + tok.len);
         trace!("tok chars {} '{}'", tok.kind, s);
         s
@@ -126,6 +118,41 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_literal(&mut self) -> ParseResult<Option<Literal>> {
+        let (first, second) = self.tokens.peek_two();
+        trace!("parse_literal {} {}", first.kind, second.kind);
+        return match (first.kind, second.kind) {
+            (DoubleQuote, Text) => {
+                trace!("parse_literal string");
+                self.tokens.advance();
+                self.tokens.advance();
+                let close = self.tokens.peek();
+                if close.kind == DoubleQuote {
+                    self.tokens.advance();
+                    let text = self.tok_chars(second);
+                    Ok(Some(Literal::String(text.to_string())))
+                } else {
+                    Err(ParseError::ExpectedToken(DoubleQuote, close, None))
+                }
+            }
+            (Text, _) => {
+                let text = self.tok_chars(first);
+                match text.chars().next() {
+                    Some(c) if c.is_numeric() => {
+                        let s = text.to_string();
+                        self.tokens.advance();
+                        Ok(Some(Literal::Numeric(s)))
+                    }
+                    _ => {
+                        eprintln!("Possible unsupported literal: {:?}, {}", first, text);
+                        Ok(None)
+                    }
+                }
+            }
+            _ => Ok(None),
+        };
+    }
+
     fn parse_type_expression(&mut self) -> Result<Option<TypeExpression>, ParseError> {
         let tok = self.peek();
         if let Text = tok.kind {
@@ -141,16 +168,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn check_eat_literal(&mut self) -> Option<Literal> {
-        let tok = self.peek();
-        if let Text = tok.kind {
-            let text = self.tok_chars(tok);
-            parse_literal(text)
-        } else {
-            None
-        }
-    }
-
     fn parse_fn_arg(&mut self) -> ParseResult<Option<FnArg>> {
         let (one, two) = self.tokens.peek_two();
         let named;
@@ -162,9 +179,17 @@ impl<'a> Parser<'a> {
             named = false;
         }
         match self.parse_expression() {
-            Ok(Some(expr)) => Ok(Some(FnArg { name: Some(self.tok_chars(one).to_string()), value: expr })),
-            Ok(None) if !named => Ok(None),
-            Ok(None) => Err(ParseError::Msg("expected expression".to_string(), self.peek())),
+            Ok(Some(expr)) => {
+                let name = if named { Some(self.tok_chars(one).to_string()) } else { None };
+                Ok(Some(FnArg { name: name, value: expr }))
+            }
+            Ok(None) => {
+                if named {
+                    Err(ParseError::Msg("expected expression".to_string(), self.peek()))
+                } else {
+                    Ok(None)
+                }
+            }
             Err(e) => Err(e),
         }
     }
@@ -177,33 +202,28 @@ impl<'a> Parser<'a> {
     fn parse_expression(&mut self) -> ParseResult<Option<Expression>> {
         let (tok, next) = self.tokens.peek_two();
         trace!("eat_expression {} {}", tok.kind, next.kind);
-        if let Text = tok.kind {
-            if let Some(lit) = parse_literal(self.tok_chars(tok)) {
+        if let Some(lit) = self.parse_literal()? {
+            Ok(Some(Expression::Literal(lit)))
+        } else if let Text = tok.kind {
+            // FnCall
+            if next.kind == OpenParen {
+                trace!("eat_expression FnCall");
                 self.tokens.advance();
-                Ok(Some(Expression::Literal(lit)))
-            } else {
-                // FnCall
-                if next.kind == OpenParen {
-                    trace!("eat_expression FnCall");
-                    self.tokens.advance();
-                    // Eat the OpenParen
-                    self.tokens.advance();
-                    match self.eat_delimited(Comma, CloseParen, |p| Parser::expect_fn_arg(p)) {
-                        Ok(args) => Ok(Some(Expression::FnCall(FnCall {
-                            name: Ident(self.tok_chars(tok).to_string()),
-                            args: args,
-                        }))),
-                        Err(e) => Err(ParseError::ExpectedNode(
-                            "function arguments".to_string(),
-                            self.peek(),
-                            Some(Box::new(e)),
-                        )),
+                // Eat the OpenParen
+                self.tokens.advance();
+                match self.eat_delimited(Comma, CloseParen, |p| Parser::expect_fn_arg(p)) {
+                    Ok(args) => Ok(Some(Expression::FnCall(FnCall {
+                        name: Ident(self.tok_chars(tok).to_string()),
+                        args: args,
+                    }))),
+                    Err(e) => {
+                        Err(ParseError::ExpectedNode("function arguments".to_string(), self.peek(), Some(Box::new(e))))
                     }
-                } else {
-                    // Plain Reference
-                    self.tokens.advance();
-                    Ok(Some(Expression::Variable(Ident(self.tok_chars(tok).to_string()))))
                 }
+            } else {
+                // Plain Reference
+                self.tokens.advance();
+                Ok(Some(Expression::Variable(Ident(self.tok_chars(tok).to_string()))))
             }
         } else if tok.kind == OpenBrace {
             match self.parse_block()? {
@@ -211,7 +231,7 @@ impl<'a> Parser<'a> {
                 Some(block) => Ok(Some(Expression::Block(block))),
             }
         } else {
-            // TODO: Tuples
+            // TODO: Structs and Tuples
             Ok(None)
         }
     }
@@ -227,8 +247,7 @@ impl<'a> Parser<'a> {
             None => Ok(None),
             Some(_) => self.parse_type_expression(),
         }?;
-        let _col_eq = self.expect_eat_token(Colon)?;
-        let _col_eq = self.expect_eat_token(Equals)?;
+        let _eq = self.expect_eat_token(Equals)?;
         let value = Parser::expect("expression", self.peek(), self.parse_expression())?;
         return Ok(Some(MutDef { name: Ident(ident), typ: typ, value: value }));
     }
@@ -245,8 +264,7 @@ impl<'a> Parser<'a> {
             None => Ok(None),
             Some(_) => self.parse_type_expression(),
         }?;
-        let _col_eq = self.expect_eat_token(Colon)?;
-        let _col_eq = self.expect_eat_token(Equals)?;
+        let _eq = self.expect_eat_token(Equals)?;
         let value = Parser::expect("expression", self.peek(), self.parse_expression())?;
         return ParseResult::Ok(Some(ValDef { name: Ident(ident), typ: typ, value: value }));
     }
@@ -261,20 +279,18 @@ impl<'a> Parser<'a> {
         let ident = self.expect_eat_ident()?;
         let _colon = self.expect_eat_token(Colon);
         let typ = Parser::expect("type_expression", self.peek(), self.parse_type_expression())?;
-        let _col_eq = self.expect_eat_token(Colon)?;
-        let _col_eq = self.expect_eat_token(Equals)?;
+        let _eq = self.expect_eat_token(Equals)?;
         let value = Parser::expect("expression", self.peek(), self.parse_expression())?;
         return ParseResult::Ok(Some(ConstVal { name: Ident(ident), typ: typ, value: value }));
     }
 
     fn parse_assignment(&mut self) -> ParseResult<Option<Assignment>> {
-        let (ident, col, eq) = self.tokens.peek_three();
-        trace!("parse_assignment {} {} {}", ident.kind, col.kind, eq.kind);
-        let is_assignment = ident.kind == Text && col.kind == Colon && eq.kind == Equals;
+        let (ident, eq) = self.tokens.peek_two();
+        trace!("parse_assignment {} {}", ident.kind, eq.kind);
+        let is_assignment = ident.kind == Text && eq.kind == Equals;
         if !is_assignment {
             return Ok(None);
         }
-        self.tokens.advance();
         self.tokens.advance();
         self.tokens.advance();
         let ident = self.tok_chars(ident).to_string();
@@ -413,7 +429,7 @@ fn print_tokens(content: &str, tokens: &[Token]) {
             println!()
         }
         if tok.kind == Text {
-            print!("{}", &content[tok.start..tok.start + tok.len]);
+            print!("{}", &content[tok.start as usize..(tok.start + tok.len) as usize]);
         } else if tok.kind.is_keyword() {
             print!("{} ", tok.kind);
         } else {
