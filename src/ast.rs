@@ -1,3 +1,5 @@
+use crate::lex::TokenKind;
+
 #[derive(Debug)]
 pub enum Literal {
     Numeric(String),
@@ -33,12 +35,46 @@ pub struct MutDef {
     pub value: Expression,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub enum InfixOpKind {
+    Add,
+    Mult,
+}
+
+impl InfixOpKind {
+    pub fn from_tokenkind(kind: TokenKind) -> Option<InfixOpKind> {
+        match kind {
+            TokenKind::Plus => Some(InfixOpKind::Add),
+            TokenKind::Asterisk => Some(InfixOpKind::Mult),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct InfixOp {
+    pub operation: InfixOpKind,
+    pub operand1: Box<Expression>,
+    pub operand2: Box<Expression>,
+}
+
 #[derive(Debug)]
 pub enum Expression {
+    InfixOp(InfixOp),
     Literal(Literal),
     FnCall(FnCall),
     Variable(Ident),
     Block(Block),
+}
+
+impl Expression {
+    pub fn is_literal(e: &Expression) -> bool {
+        if let Expression::Literal(_) = e {
+            true
+        } else {
+            false
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -50,8 +86,9 @@ pub struct Assignment {
 #[derive(Debug)]
 pub struct IfExpr {
     pub cond: Expression,
-    pub a: Block,
-    pub b: Option<Block>,
+    // TODO: Add var binding; cons is more like a lambda syntactically
+    pub cons: Block,
+    pub alt: Option<Block>,
 }
 
 #[derive(Debug)]
@@ -117,6 +154,3 @@ pub struct Module {
     pub name: Ident,
     pub defs: Vec<Definition>,
 }
-
-#[cfg(test)]
-mod ast_test;

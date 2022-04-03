@@ -1,22 +1,19 @@
-# Parsing / Syntax
-- [ ] dot syntax
-- [ ] Binary infix operations
-- [ ] Type Params
-- [ ] Structs
-- [ ] Tuples
-- [ ] Floating point literals
-- [ ] Unicode source
-- [ ] Block-as-single-arg syntax (xs.map { y => } )
-- [ ] Currying
-
-#  Features
-- [ ] "Builtin" functions?
+# Features
 - [ ] main function
-- [ ] Conditionals
-- [ ] Loops
-- [ ] Arithmetic
-- [ ] Define IR
+- [ ] Binary infix operations
 - [ ] Structs
+- [ ] Implement if
+- [ ] Loops
+- [ ] Type Params
+- [ ] Tuples
+
+- [ ] Floating point literals
+- [ ] Currying
+- [ ] Block-as-single-arg syntax (xs.map { y => } )
+- [ ] Unicode source
+
+- [ ] Define IR
+- [ ] IR interpreter
 
 # Milestones
 1. [ ] 

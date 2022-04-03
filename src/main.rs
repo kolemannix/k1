@@ -13,6 +13,10 @@ use std::io::{BufReader, Read, Write};
 use crate::codegen::CodeGen;
 
 fn main() {
+    println!("Size of ast::Definition: {}", std::mem::size_of::<ast::Definition>());
+    println!("Size of ast::BlockStmt: {}", std::mem::size_of::<ast::BlockStmt>());
+    println!("Size of ast::Expression: {}", std::mem::size_of::<ast::Expression>());
+
     let args: Vec<String> = env::args().collect();
     println!("NexLang Compiler v0.1.0");
     let src_path = &args[1];

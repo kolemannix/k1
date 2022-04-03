@@ -1,0 +1,27 @@
+// Interfaces are just function stubs
+// No need for values as simple getters will hopefully be inlined?
+interface {
+  fn speed(self): Float
+}
+
+// Interfaces are really type classes, you can implement them for foreign types
+interface Monoid<A> {
+  fn zero(): A
+  fn one(): A
+  fn add(a: A, b: A): A
+
+  extension (self: A) fn @plus(b: A) = add(a, b)
+
+}
+
+val monoidInt: Monoid[Int] = Monoid {
+  fn zero(): Int = 0
+  fn one(): Int = 1
+  fn add(a: Int, b: Int): Int = a + b
+}
+
+// Typeclass instances have to be imported
+// To bring monoidInt in scope, you'd have to import this module
+
+// No coherence, no orphan rules. Anything goes, compiler will reject ambiguous implementations
+// Compiler searches for instances in module where the interface is defined, and the module where the first type param is defined

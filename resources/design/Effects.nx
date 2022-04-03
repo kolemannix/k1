@@ -1,0 +1,50 @@
+//3 built-in effects
+//- Optionality
+//- Fallibility
+//- IO
+//Standard library defines Error interface and/or default?
+
+interface Error {
+  fn toString: string
+}
+
+struct FileError implements Error {
+  message: string;
+
+  fn toString(self): string = self.message
+}
+
+
+// Builtin
+type Async[E: Type, A: Type]
+
+// Type parameters can are named and can be passed by name
+type FileOp[A] = Async[E = FileError, A = A]
+
+// Asyncs are VALUES and are lazy. They can be manipulated, composed, etc prior to execution
+// a.retry() a.catchSome(), a.andthen(), a.then()
+
+// Unit is the default which is how you express an infallible async effect
+fn unsafe_load(path: string): Async[(), Array[Byte]]  {
+  return "abc123".to[Array[Byte]]();
+  return "abc123".to();
+}
+
+fn load(path: string): FileOp[Array[Byte]] {
+  val result: Try[IOError, Array[Byte]] = await FS.load(path).retryN(3);
+  // if can be used only on Try and Option, (and boolean of course), not on data!
+  // though I suppose if it were powered by a 2-branch interface you could write your own
+  if (result) { bytes =>
+    // auto shadow narrowing result: Array[Byte]
+    println("yay: ${bytes.len}");
+    // return Ok(bytes);
+    succeed bytes;
+  } else { err =>
+    // result: IOError
+    // return Err(err);
+    fail err;
+  }
+  // Or...
+  return FS.load(path).retryN(3)
+}
+

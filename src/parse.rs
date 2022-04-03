@@ -67,7 +67,7 @@ impl<'a> Parser<'a> {
     }
     fn tok_chars(&self, tok: Token) -> &'a str {
         let s = self.chars_at(tok.start, tok.start + tok.len);
-        trace!("tok chars {} '{}'", tok.kind, s);
+        trace!("{} chars '{}'", tok.kind, s);
         s
     }
 
@@ -143,10 +143,7 @@ impl<'a> Parser<'a> {
                         self.tokens.advance();
                         Ok(Some(Literal::Numeric(s)))
                     }
-                    _ => {
-                        eprintln!("Possible unsupported literal: {:?}, {}", first, text);
-                        Ok(None)
-                    }
+                    _ => Ok(None),
                 }
             }
             _ => Ok(None),
@@ -200,20 +197,20 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_expression(&mut self) -> ParseResult<Option<Expression>> {
-        let (tok, next) = self.tokens.peek_two();
-        trace!("eat_expression {} {}", tok.kind, next.kind);
-        if let Some(lit) = self.parse_literal()? {
+        let (first, second) = self.tokens.peek_two();
+        trace!("parse_expression {} {}", first.kind, second.kind);
+        let single_result = if let Some(lit) = self.parse_literal()? {
             Ok(Some(Expression::Literal(lit)))
-        } else if let Text = tok.kind {
+        } else if let Text = first.kind {
             // FnCall
-            if next.kind == OpenParen {
-                trace!("eat_expression FnCall");
+            if second.kind == OpenParen {
+                trace!("parse_expression FnCall");
                 self.tokens.advance();
                 // Eat the OpenParen
                 self.tokens.advance();
                 match self.eat_delimited(Comma, CloseParen, |p| Parser::expect_fn_arg(p)) {
                     Ok(args) => Ok(Some(Expression::FnCall(FnCall {
-                        name: Ident(self.tok_chars(tok).to_string()),
+                        name: Ident(self.tok_chars(first).to_string()),
                         args: args,
                     }))),
                     Err(e) => {
@@ -223,9 +220,9 @@ impl<'a> Parser<'a> {
             } else {
                 // Plain Reference
                 self.tokens.advance();
-                Ok(Some(Expression::Variable(Ident(self.tok_chars(tok).to_string()))))
+                Ok(Some(Expression::Variable(Ident(self.tok_chars(first).to_string()))))
             }
-        } else if tok.kind == OpenBrace {
+        } else if first.kind == OpenBrace {
             match self.parse_block()? {
                 None => Err(ParseError::ExpectedNode("block".to_string(), self.peek(), None)),
                 Some(block) => Ok(Some(Expression::Block(block))),
@@ -233,7 +230,27 @@ impl<'a> Parser<'a> {
         } else {
             // TODO: Structs and Tuples
             Ok(None)
-        }
+        }?;
+        if let Some(expr) = single_result {
+            return if self.peek().kind.is_infix_operator() {
+                let op_token = self.tokens.next();
+                let op_kind = InfixOpKind::from_tokenkind(op_token.kind);
+                match op_kind {
+                    None => Err(ParseError::ExpectedNode("Infix Operator".to_string(), op_token, None)),
+                    Some(op_kind) => {
+                        let operand2 = Parser::expect("rhs of infix op", self.peek(), self.parse_expression())?;
+                        return Ok(Some(Expression::InfixOp(InfixOp {
+                            operation: op_kind,
+                            operand1: Box::new(expr),
+                            operand2: Box::new(operand2),
+                        })));
+                    }
+                }
+            } else {
+                Ok(Some(expr))
+            };
+        };
+        return Ok(single_result);
     }
 
     fn parse_mut(&mut self) -> ParseResult<Option<MutDef>> {
@@ -439,17 +456,17 @@ fn print_tokens(content: &str, tokens: &[Token]) {
     println!()
 }
 
-pub fn parse_text(text: &str, filename: &str) -> ParseResult<Module> {
+pub fn parse_text(text: &str, module_name: &str) -> ParseResult<Module> {
     let mut lexer = Lexer::make(&text);
 
-    let token_vec = tokenize(&mut lexer);
+    let token_vec = lexer.run();
     print_tokens(&text, &token_vec);
 
     let tokens: Tokens = Tokens::make(token_vec);
 
     let mut parser = Parser::make(tokens, &text);
 
-    let module = parser.eat_module(filename);
+    let module = parser.eat_module(module_name);
 
     module
 }
