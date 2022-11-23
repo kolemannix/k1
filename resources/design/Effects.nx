@@ -35,7 +35,6 @@ fn load(path: string): FileOp[Array[Byte]] {
   // if can be used only on Try and Option, (and boolean of course), not on data!
   // though I suppose if it were powered by a 2-branch interface you could write your own
   if (result) { bytes =>
-    // auto shadow narrowing result: Array[Byte]
     println("yay: ${bytes.len}");
     // return Ok(bytes);
     succeed bytes;
