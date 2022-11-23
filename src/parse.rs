@@ -1,3 +1,4 @@
+use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::io::{BufReader, Read};
 
@@ -18,6 +19,13 @@ pub enum ParseError {
     ExpectedNode(String, Token, Option<Box<ParseError>>),
     Msg(String, Token),
 }
+
+impl Display for ParseError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("{:?}", self))
+    }
+}
+impl std::error::Error for ParseError {}
 
 pub struct Source<'a> {
     content: &'a str,

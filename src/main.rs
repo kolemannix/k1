@@ -2,8 +2,8 @@ use std::env;
 
 mod ast;
 mod codegen;
+mod ir;
 mod lex;
-mod nir;
 mod output;
 mod parse;
 use std::fs;
