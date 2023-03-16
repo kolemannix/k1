@@ -1,8 +1,9 @@
 [package]
 name = "nexlang"
 version = "0.1.0"
-edition = "2018"
+edition = "2021"
 
 [dependencies]
+anyhow = "1.0.69"
 colored = "2"
 inkwell = { git = "https://github.com/TheDan64/inkwell", branch = "master", features = ["llvm12-0"] }

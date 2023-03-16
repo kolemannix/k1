@@ -1,0 +1,32 @@
+:0 Func { "main" int
+:1   param x int
+:2   param y int
+}
+:3 Block { len: ?, type: Int }
+:4 int "b"
+
+:5 int 1
+:8 Add { 3, 4 }: ()
+:9 ret :8 int
+
+--------------------------------------------------------
+
+:0 Func, main,
+
+fn main(x: Int, y: Int): Int {
+  val b: Int = x + 1;
+  return b + y;
+}
+
+
+pub enum Instr {
+    // A string literal, stored directly in the IR. One day in the strings array
+    Str(String),
+    // An integer literal
+    Int(u64),
+    Add(IRType, Ref, Ref),
+    Block(IRBlock),
+    Func { name: String, params: Vec<FuncParam>, body: Index, ret_type: IRType },
+    Call { callee: Index, args: Index },
+    Ret(Ref),
+}

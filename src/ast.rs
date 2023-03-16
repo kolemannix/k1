@@ -69,11 +69,7 @@ pub enum Expression {
 
 impl Expression {
     pub fn is_literal(e: &Expression) -> bool {
-        if let Expression::Literal(_) = e {
-            true
-        } else {
-            false
-        }
+        matches!(e, Expression::Literal(_))
     }
 }
 
@@ -93,8 +89,8 @@ pub struct IfExpr {
 
 #[derive(Debug)]
 pub enum BlockStmt {
-    MutDef(MutDef),
     ValDef(ValDef),
+    MutDef(MutDef),
     /// return keyword will only be allowed to denote explicit early returns
     ReturnStmt(Expression),
     If(IfExpr),
@@ -122,7 +118,6 @@ pub struct FnDef {
     pub name: Ident,
     pub args: Vec<FnArgDef>,
     pub ret_type: Option<TypeExpression>,
-    pub type_args: Option<Vec<()>>,
     pub block: Option<Block>,
 }
 
@@ -130,7 +125,6 @@ pub struct FnDef {
 pub struct FnArgDef {
     pub name: Ident,
     pub typ: TypeExpression,
-    pub default: Option<Expression>,
 }
 
 #[derive(Debug)]
