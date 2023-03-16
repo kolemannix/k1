@@ -6,32 +6,53 @@ mod ir;
 mod lex;
 mod output;
 mod parse;
+use std::error::Error;
 use std::fs;
 use std::fs::File;
 use std::io::{BufReader, Read, Write};
 
 use crate::codegen::CodeGen;
 
-fn main() {
+/// Type size assertion. The first argument is a type and the second argument is its expected size.
+/// Cool trick from rustc.
+#[macro_export]
+macro_rules! static_assert_size {
+    ($ty:ty, $size:expr) => {
+        const _: [(); $size] = [(); ::std::mem::size_of::<$ty>()];
+    };
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    static_assert_size!(ast::Definition, 88);
     println!("Size of ast::Definition: {}", std::mem::size_of::<ast::Definition>());
     println!("Size of ast::BlockStmt: {}", std::mem::size_of::<ast::BlockStmt>());
     println!("Size of ast::Expression: {}", std::mem::size_of::<ast::Expression>());
+    println!("Size of ir::IrNode: {}", std::mem::size_of::<ir::IrNode>());
+    println!("Size of ir::Instr: {}", std::mem::size_of::<ir::Instr>());
 
     let args: Vec<String> = env::args().collect();
     println!("NexLang Compiler v0.1.0");
     let src_path = &args[1];
     println!("src_dir: {}", src_path);
     let src = fs::read_to_string(src_path).expect("could not read source directory");
-    let parsed = parse::parse_text(&src, src_path).unwrap_or_else(|e| {
+    let ast = parse::parse_text(&src, src_path).unwrap_or_else(|e| {
         eprintln!("Encountered ParseError on file '{}': {:?}", src_path, e);
         panic!("parse error");
     });
     let ctx = codegen::init_context();
     let mut codegen = CodeGen::create(&ctx);
-    let result = codegen.codegen_module(&parsed);
+    let mut irgen = ir::IRGen::new(&ast);
+    if let Err(e) = irgen.run() {
+        eprintln!("{}", e);
+        println!("{irgen}")
+    } else {
+        println!("{irgen}");
+    }
+    let result = codegen.codegen_module(&ast);
     let mut f = File::create("llvm_out.ll").expect("make llvm_ir");
     f.write_all(result.as_bytes()).unwrap();
     println!("{}", result);
+    Ok(())
     // for path in paths {
     //     let path = path.expect("Error reading dir entry");
     //     let file = File::open(path.path()).unwrap();

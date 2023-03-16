@@ -1,6 +1,4 @@
 fn main(x: Int, y: Int): Int {
-  val a: Int := 0;
-  val b: Int := 1;
-  println(123456789);
-  return a;
+  val b: Int = x + 1;
+  return b + y;
 }

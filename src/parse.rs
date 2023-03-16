@@ -64,7 +64,7 @@ impl<'a> Parser<'a> {
     }
     fn make(tokens: Tokens, source: &'a str) -> Parser<'a> {
         let lines = source.lines().collect();
-        Parser { tokens, source: Source { content: source, lines: lines } }
+        Parser { tokens, source: Source { content: source, lines } }
     }
     fn current_line(&self) -> &str {
         let line = self.peek().line_num;
@@ -186,7 +186,7 @@ impl<'a> Parser<'a> {
         match self.parse_expression() {
             Ok(Some(expr)) => {
                 let name = if named { Some(self.tok_chars(one).to_string()) } else { None };
-                Ok(Some(FnArg { name: name, value: expr }))
+                Ok(Some(FnArg { name, value: expr }))
             }
             Ok(None) => {
                 if named {
@@ -217,10 +217,9 @@ impl<'a> Parser<'a> {
                 // Eat the OpenParen
                 self.tokens.advance();
                 match self.eat_delimited(Comma, CloseParen, |p| Parser::expect_fn_arg(p)) {
-                    Ok(args) => Ok(Some(Expression::FnCall(FnCall {
-                        name: Ident(self.tok_chars(first).to_string()),
-                        args: args,
-                    }))),
+                    Ok(args) => {
+                        Ok(Some(Expression::FnCall(FnCall { name: Ident(self.tok_chars(first).to_string()), args })))
+                    }
                     Err(e) => {
                         Err(ParseError::ExpectedNode("function arguments".to_string(), self.peek(), Some(Box::new(e))))
                     }
@@ -274,7 +273,7 @@ impl<'a> Parser<'a> {
         }?;
         let _eq = self.expect_eat_token(Equals)?;
         let value = Parser::expect("expression", self.peek(), self.parse_expression())?;
-        return Ok(Some(MutDef { name: Ident(ident), typ: typ, value: value }));
+        return Ok(Some(MutDef { name: Ident(ident), typ, value }));
     }
 
     fn parse_val(&mut self) -> ParseResult<Option<ValDef>> {
@@ -291,7 +290,7 @@ impl<'a> Parser<'a> {
         }?;
         let _eq = self.expect_eat_token(Equals)?;
         let value = Parser::expect("expression", self.peek(), self.parse_expression())?;
-        return ParseResult::Ok(Some(ValDef { name: Ident(ident), typ: typ, value: value }));
+        return ParseResult::Ok(Some(ValDef { name: Ident(ident), typ, value }));
     }
 
     fn parse_const(&mut self) -> ParseResult<Option<ConstVal>> {
@@ -306,7 +305,7 @@ impl<'a> Parser<'a> {
         let typ = Parser::expect("type_expression", self.peek(), self.parse_type_expression())?;
         let _eq = self.expect_eat_token(Equals)?;
         let value = Parser::expect("expression", self.peek(), self.parse_expression())?;
-        return ParseResult::Ok(Some(ConstVal { name: Ident(ident), typ: typ, value: value }));
+        ParseResult::Ok(Some(ConstVal { name: Ident(ident), typ, value }))
     }
 
     fn parse_assignment(&mut self) -> ParseResult<Option<Assignment>> {
@@ -320,15 +319,15 @@ impl<'a> Parser<'a> {
         self.tokens.advance();
         let ident = self.tok_chars(ident).to_string();
         let expr_result = Parser::expect("assignment RHS expected an expression", self.peek(), self.parse_expression());
-        expr_result.map(|expr| Some(Assignment { ident: Ident(ident.to_string()), expr: expr }))
+        expr_result.map(|expr| Some(Assignment { ident: Ident(ident.to_string()), expr }))
     }
 
     fn eat_fn_arg_def(&mut self) -> ParseResult<FnArgDef> {
         trace!("eat_fn_arg_def");
         let ident = self.expect_eat_ident()?;
-        let _colon = self.expect_eat_token(Colon)?;
+        self.expect_eat_token(Colon)?;
         let typ = Parser::expect("type_expression", self.peek(), self.parse_type_expression())?;
-        return Ok(FnArgDef { name: Ident(ident), typ: typ, default: None });
+        Ok(FnArgDef { name: Ident(ident), typ })
     }
 
     fn eat_fndef_args(&mut self) -> ParseResult<Vec<FnArgDef>> {
@@ -419,7 +418,7 @@ impl<'a> Parser<'a> {
         let _colon = self.expect_eat_token(Colon)?;
         let ret_type = self.parse_type_expression()?;
         let block = self.parse_block()?;
-        Ok(Some(FnDef { name: Ident(ident), args, ret_type: ret_type, type_args: None, block: block }))
+        Ok(Some(FnDef { name: Ident(ident), args, ret_type, block }))
     }
 
     fn parse_definition(&mut self) -> ParseResult<Option<Definition>> {
@@ -442,7 +441,7 @@ impl<'a> Parser<'a> {
         while let Some(def) = self.parse_definition()? {
             defs.push(def)
         }
-        Ok(Module { name: Ident(filename.to_string()), defs: defs })
+        Ok(Module { name: Ident(filename.to_string()), defs })
     }
 }
 

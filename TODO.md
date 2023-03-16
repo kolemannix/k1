@@ -1,4 +1,7 @@
-# Features
+# Back to working
+- [ ] Implement typed IR
+
+# Tier 1
 - [ ] main function
 - [ ] Binary infix operations
 - [ ] Structs
@@ -6,14 +9,14 @@
 - [ ] Loops
 - [ ] Type Params
 - [ ] Tuples
+- [ ] Track spans
 
-- [ ] Floating point literals
-- [ ] Currying
+
+# Tier 2
 - [ ] Block-as-single-arg syntax (xs.map { y => } )
 - [ ] Unicode source
-
-- [ ] Define IR
-- [ ] IR interpreter
+- [ ] Currying
+- [ ] Floating point literals
 
 # Milestones
 1. [ ] 
