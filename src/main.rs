@@ -2,10 +2,12 @@ use std::env;
 
 mod ast;
 mod codegen;
+mod codegen_ir;
 mod ir;
 mod lex;
 mod output;
 mod parse;
+
 use std::error::Error;
 use std::fs;
 use std::fs::File;
@@ -28,7 +30,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("Size of ast::BlockStmt: {}", std::mem::size_of::<ast::BlockStmt>());
     println!("Size of ast::Expression: {}", std::mem::size_of::<ast::Expression>());
     println!("Size of ir::IrNode: {}", std::mem::size_of::<ir::IrNode>());
-    println!("Size of ir::Instr: {}", std::mem::size_of::<ir::Instr>());
+    println!("Size of ir::Instr: {}", std::mem::size_of::<ir::IrExpr>());
 
     let args: Vec<String> = env::args().collect();
     println!("NexLang Compiler v0.1.0");
