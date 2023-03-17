@@ -1,16 +1,22 @@
 # Back to working
 - [ ] Implement typed IR
+- [ ] Implement FnCall
+- [ ] Implement Mult
+- [ ] Implement IF
 
 # Tier 1
 - [ ] main function
 - [ ] Binary infix operations
 - [ ] Structs
-- [ ] Implement if
 - [ ] Loops
 - [ ] Type Params
 - [ ] Tuples
-- [ ] Track spans
+- [ ] lexical scoping
 
+# Dev ex
+- Pretty-print AST
+- Error Spans
+- fancy output COLORS
 
 # Tier 2
 - [ ] Block-as-single-arg syntax (xs.map { y => } )

@@ -35,7 +35,6 @@ pub enum IRType {
 
 #[derive(Debug, Clone)]
 pub struct IRBlock {
-    instrs_len: usize,
     ret_type: IRType,
 }
 
@@ -47,7 +46,7 @@ struct FuncParam {
 
 #[derive(Debug, Clone)]
 pub enum IrNode {
-    Expr(Instr),
+    Expr(IrExpr),
     Item(IrItem),
 }
 
@@ -58,10 +57,9 @@ pub enum IrItem {
 }
 
 #[derive(Debug, Clone)]
-pub enum Instr {
+pub enum IrExpr {
     Str(String),
     Int(u64),
-    Variable { ir_type: IRType, index: Index },
     ValDef { name: String, ir_type: IRType },
     Assign { dest: Index, ir_type: IRType, value: Index },
     Add(IRType, Index, Index),
@@ -70,18 +68,17 @@ pub enum Instr {
     Ret { index: Index, ret_type: IRType },
 }
 
-impl Instr {
+impl IrExpr {
     fn get_type(&self) -> IRType {
         match self {
-            Instr::Str(_) => IRType::String,
-            Instr::Int(_) => IRType::Int,
-            Instr::Variable { ir_type, .. } => *ir_type,
-            Instr::ValDef { .. } => IRType::Unit,
-            Instr::Assign { .. } => IRType::Unit,
-            Instr::Add(typ, _, _) => *typ,
-            Instr::Block(b) => b.ret_type,
-            Instr::Call { ret_type, .. } => *ret_type,
-            Instr::Ret { ret_type, .. } => *ret_type,
+            IrExpr::Str(_) => IRType::String,
+            IrExpr::Int(_) => IRType::Int,
+            IrExpr::ValDef { .. } => IRType::Unit,
+            IrExpr::Assign { .. } => IRType::Unit,
+            IrExpr::Add(typ, _, _) => *typ,
+            IrExpr::Block(b) => b.ret_type,
+            IrExpr::Call { ret_type, .. } => *ret_type,
+            IrExpr::Ret { ret_type, .. } => *ret_type,
         }
     }
 }
@@ -109,9 +106,9 @@ impl From<&str> for IRGenError {
 pub type IrGenResult<A> = Result<A, Box<dyn Error>>;
 
 pub struct IRGen<'a> {
-    ast: &'a Module,
+    pub ast: &'a Module,
     src: String,
-    nodes: Vec<IrNode>,
+    pub nodes: Vec<IrNode>,
     top_scope: Scope,
 }
 
@@ -148,26 +145,32 @@ fn simple_fail<A, T: AsRef<str>>(s: T) -> IrGenResult<A> {
 
 impl<'a> IRGen<'a> {
     pub fn new(module: &Module) -> IRGen {
-        return IRGen {
+        IRGen {
             ast: module,
             src: String::new(),
             nodes: Vec::new(),
             top_scope: Scope { members: Vec::new(), parent: None },
-        };
+        }
     }
 
-    fn get_instr_type(&self, instr: &Instr) -> IRType {
-        instr.get_type()
+    fn get_expr_type(&self, expr: &IrExpr) -> IRType {
+        expr.get_type()
     }
 
     fn get_node(&self, idx: Index) -> &IrNode {
         &self.nodes[idx as usize]
     }
 
-    fn get_instr(&self, idx: Index) -> IrGenResult<&Instr> {
+    fn get_expr(&self, idx: Index) -> IrGenResult<&IrExpr> {
         match &self.nodes[idx as usize] {
             IrNode::Expr(expr) => Ok(expr),
-            _ => simple_fail(format!("get_instr failed {idx}")),
+            _ => simple_fail(format!("get_expr failed {idx}")),
+        }
+    }
+    fn get_expr_mut(&mut self, idx: Index) -> IrGenResult<&mut IrExpr> {
+        match &mut self.nodes[idx as usize] {
+            IrNode::Expr(expr) => Ok(expr),
+            _ => simple_fail(format!("get_expr failed {idx}")),
         }
     }
     fn get_item_mut(&mut self, idx: Index) -> IrGenResult<&mut IrItem> {
@@ -181,8 +184,8 @@ impl<'a> IRGen<'a> {
             TypeExpression::Primitive(TypePrimitive::Int) => Ok(IRType::Int),
         }
     }
-    fn push_expr_node(&mut self, instr: Instr) -> Index {
-        self.nodes.push(IrNode::Expr(instr));
+    fn push_expr_node(&mut self, expr: IrExpr) -> Index {
+        self.nodes.push(IrNode::Expr(expr));
         let index = self.nodes.len() - 1;
         index as u32
     }
@@ -195,15 +198,15 @@ impl<'a> IRGen<'a> {
         match expr {
             Expression::Literal(lit) => match lit {
                 Literal::String(s) => {
-                    let instr = Instr::Str(s.clone());
-                    let index = self.push_expr_node(instr);
+                    let expr = IrExpr::Str(s.clone());
+                    let index = self.push_expr_node(expr);
                     Ok(index)
                 }
                 Literal::Numeric(s) => match u64::from_str(s) {
                     Err(e) => Err(Box::new(IRGenError { msg: e.to_string() })),
                     Ok(u) => {
-                        let instr = Instr::Int(u);
-                        let index = self.push_expr_node(instr);
+                        let expr = IrExpr::Int(u);
+                        let index = self.push_expr_node(expr);
                         Ok(index)
                     }
                 },
@@ -211,53 +214,46 @@ impl<'a> IRGen<'a> {
             _ => simple_fail("Only Literals are supported in const expressions"),
         }
     }
-    fn eval_expr(&mut self, expr: &Expression, scope: usize) -> IrGenResult<(Instr, Index)> {
+    fn eval_expr(&mut self, expr: &Expression, scope: usize) -> IrGenResult<(IRType, Index)> {
         match expr {
             Expression::InfixOp(infix_op) => {
                 // Infer expected type to be type of operand1
-                let (lhs_instr, lhs_idx) = self.eval_expr(&infix_op.operand1, scope)?;
-                let (rhs_instr, rhs_idx) = self.eval_expr(&infix_op.operand2, scope)?;
+                let (lhs_type, lhs_idx) = self.eval_expr(&infix_op.operand1, scope)?;
+                let (rhs_type, rhs_idx) = self.eval_expr(&infix_op.operand2, scope)?;
 
-                let typ = self.get_instr_type(&lhs_instr);
-                let typ2 = self.get_instr_type(&rhs_instr);
-                if typ != typ2 {
+                if lhs_type != rhs_type {
                     return simple_fail("operand types did not match");
                 }
 
-                let instr = match infix_op.operation {
-                    ast::InfixOpKind::Add => Instr::Add(typ, lhs_idx, rhs_idx),
+                let expr = match infix_op.operation {
+                    ast::InfixOpKind::Add => IrExpr::Add(lhs_type, lhs_idx, rhs_idx),
                     ast::InfixOpKind::Mult => return simple_fail("Mult is unimplemented"),
                 };
-                let result_idx = self.push_expr_node(instr.clone());
-                Ok((instr, result_idx))
+                let result_idx = self.push_expr_node(expr.clone());
+                Ok((lhs_type, result_idx))
             }
             Expression::Literal(Literal::Numeric(s)) => {
                 let value_u64: u64 = s.parse()?;
-                let instr = Instr::Int(value_u64);
-                let index = self.push_expr_node(instr.clone());
-                Ok((instr, index))
+                let expr = IrExpr::Int(value_u64);
+                let index = self.push_expr_node(expr.clone());
+                Ok((IRType::Int, index))
             }
             Expression::Literal(Literal::String(s)) => {
-                let instr = Instr::Str(s.clone());
-                let index = self.push_expr_node(instr.clone());
-                Ok((instr, index))
+                let expr = IrExpr::Str(s.clone());
+                let index = self.push_expr_node(expr.clone());
+                Ok((IRType::String, index))
             }
             Expression::Variable(ident) => {
                 let node_index = self
                     .top_scope
                     .find_local(&ident.0)
                     .ok_or(simple_err(format!("Identifier not found: {}", ident.0)))?;
-                let instr = match self.get_node(node_index) {
-                    IrNode::Item(IrItem::FuncParam { ir_type, .. }) => {
-                        Instr::Variable { ir_type: *ir_type, index: node_index }
-                    }
-                    IrNode::Expr(Instr::ValDef { ir_type, .. }) => {
-                        Instr::Variable { ir_type: *ir_type, index: node_index }
-                    }
+                let ir_type = match self.get_node(node_index) {
+                    IrNode::Item(IrItem::FuncParam { ir_type, .. }) => ir_type,
+                    IrNode::Expr(IrExpr::ValDef { ir_type, .. }) => ir_type,
                     other => panic!("Variable pointed to unsupprted ir node: {:?}", other),
                 };
-                let index = self.push_expr_node(instr.clone());
-                Ok((instr, index))
+                Ok((*ir_type, node_index))
             }
             Expression::Block(_) => unimplemented!("eval_expr Block"),
             Expression::FnCall(_) => unimplemented!("eval_expr FnCall"),
@@ -266,60 +262,61 @@ impl<'a> IRGen<'a> {
     fn eval_block_stmt(&mut self, stmt: &BlockStmt, scope: usize) -> IrGenResult<Index> {
         match stmt {
             BlockStmt::ReturnStmt(expr) => {
-                let (ret_val, idx) = self.eval_expr(expr, scope)?;
-                let ret_inst = Instr::Ret { index: idx, ret_type: ret_val.get_type() };
+                let (ret_type, idx) = self.eval_expr(expr, scope)?;
+                let ret_inst = IrExpr::Ret { index: idx, ret_type };
                 let ret_idx = self.push_expr_node(ret_inst);
                 Ok(ret_idx)
             }
             BlockStmt::ValDef(val_def) => {
-                let (value_instr, idx) = self.eval_expr(&val_def.value, scope)?;
+                let (value_type, value_idx) = self.eval_expr(&val_def.value, scope)?;
                 let provided_type = val_def.typ.as_ref().expect("Type inference not supported on vals yet!");
                 let ir_type = self.eval_type_expr(provided_type, scope)?;
-                let val_def_instr = Instr::ValDef { ir_type, name: val_def.name.0.clone() };
-                let idx = self.push_expr_node(val_def_instr);
-                self.top_scope.add(val_def.name.0.clone(), idx);
-                Ok(idx)
+                let val_def_expr = IrExpr::ValDef { ir_type, name: val_def.name.0.clone() };
+                let val_def_idx = self.push_expr_node(val_def_expr);
+                if value_type != ir_type {
+                    return simple_fail("TYPECHECK error: value type ascription did not match initializer");
+                }
+                let assign_expr = IrExpr::Assign { ir_type, dest: val_def_idx, value: value_idx };
+                self.push_expr_node(assign_expr);
+                self.top_scope.add(val_def.name.0.clone(), val_def_idx);
+                Ok(val_def_idx)
             }
             BlockStmt::MutDef(_) => simple_fail("Mutable variables are unimplemented"),
             BlockStmt::If(_) => simple_fail("IF expressions are unimplemented"),
             BlockStmt::Assignment(assignment) => {
-                let (value_instr, idx) = self.eval_expr(&assignment.expr, scope)?;
+                let (value_type, idx) = self.eval_expr(&assignment.expr, scope)?;
                 let dest = self
                     .top_scope
                     .find(&assignment.ident.0)
                     .ok_or(simple_err(format!("Identifier not found: {}", &assignment.ident.0)))?;
-                let instr = Instr::Assign { value: idx, ir_type: self.get_instr_type(&value_instr), dest };
-                let idx = self.push_expr_node(instr);
+                let expr = IrExpr::Assign { value: idx, ir_type: value_type, dest };
+                let idx = self.push_expr_node(expr);
                 Ok(idx)
             }
             BlockStmt::LoneExpression(expression) => {
-                let (value_instr, idx) = self.eval_expr(expression, scope)?;
+                let (value_expr, idx) = self.eval_expr(expression, scope)?;
                 Ok(idx)
             }
         }
     }
     fn eval_block(&mut self, block: &Block, scope: usize) -> IrGenResult<Index> {
-        let start_idx = self.nodes.len();
+        let index = self.push_expr_node(IrExpr::Block(IRBlock { ret_type: IRType::Unset }));
         for stmt in &block.stmts {
             self.eval_block_stmt(stmt, scope)?;
         }
         // TODO: length is prob wrong here; need a better way to know how many
         // nodes are in the block
-        let last_index = self.nodes.len();
-        let instr_count = last_index - start_idx;
+        // TODO: The return type of a block is actually an interesting problem, need to think about
+        // branching, early returns, etc!
         // For now return type is inferred to be the return type of the last instruction
         let ret_type =
-            if let Some(IrNode::Expr(inst)) = self.nodes.last() { self.get_instr_type(inst) } else { IRType::Unit };
-
-        let index = self.push_expr_node(Instr::Block(IRBlock { ret_type, instrs_len: instr_count }));
+            if let Some(IrNode::Expr(inst)) = self.nodes.last() { self.get_expr_type(inst) } else { IRType::Unit };
+        if let IrExpr::Block(b) = self.get_expr_mut(index)? {
+            b.ret_type = ret_type;
+        }
         Ok(index)
     }
     fn eval_function_definition(&mut self, fn_def: &FnDef, scope: usize) -> IrGenResult<Index> {
-        for fn_arg in &fn_def.args {
-            let ir_type = self.eval_type_expr(&fn_arg.typ, scope)?;
-            let index = self.push_node(IrNode::Item(IrItem::FuncParam { name: fn_arg.name.0.clone(), ir_type }));
-            self.top_scope.add(fn_arg.name.0.clone(), index);
-        }
         let fn_item = IrItem::Func {
             name: fn_def.name.0.clone(),
             ret_type: IRType::Unset,
@@ -327,24 +324,29 @@ impl<'a> IRGen<'a> {
             body: 0,
         };
         let fn_index = self.push_node(IrNode::Item(fn_item));
+        for fn_arg in &fn_def.args {
+            let ir_type = self.eval_type_expr(&fn_arg.typ, scope)?;
+            let index = self.push_node(IrNode::Item(IrItem::FuncParam { name: fn_arg.name.0.clone(), ir_type }));
+            self.top_scope.add(fn_arg.name.0.clone(), index);
+        }
         let body_block =
             fn_def.block.as_ref().ok_or(IRGenError::from("Top-level function definitions must have a body"))?;
-        // I need to push the block instrs into `instrs`, and push the actual block too to get its
-        // index, so I can put its index in the Instr::Func
+        // I need to push the block exprs into `exprs`, and push the actual block too to get its
+        // index, so I can put its index in the Expr::Func
         let body_index = self.eval_block(body_block, scope)?;
-        let body_instr = self.get_instr(body_index)?;
-        // let param_block_instr = self.eval_param_block(&fn_def.args, scope)?;
+        let body_expr = self.get_expr(body_index)?;
+        // let param_block_expr = self.eval_param_block(&fn_def.args, scope)?;
         // If a return type was given in the AST, we need to typecheck it
         let fn_ret_type: IRType = match &fn_def.ret_type {
-            None => self.get_instr_type(body_instr),
+            None => self.get_expr_type(body_expr),
             Some(given_ret_type) => {
                 let given_ir_type = self.eval_type_expr(given_ret_type, scope)?;
-                if given_ir_type != self.get_instr_type(body_instr) {
+                if given_ir_type != self.get_expr_type(body_expr) {
                     return simple_fail(format!(
                         "Function {} ret type mismatch: {:?} {:?}",
                         &fn_def.name.0,
                         given_ir_type,
-                        self.get_instr_type(body_instr)
+                        self.get_expr_type(body_expr)
                     ));
                 }
                 given_ir_type
@@ -362,8 +364,8 @@ impl<'a> IRGen<'a> {
             Definition::Const(const_val) => {
                 let typ = self.eval_type_expr(&const_val.typ, 0)?;
                 let value: Index = self.eval_const_expr(&const_val.value)?;
-                let instr = self.get_instr(value)?;
-                let typecheck = instr.get_type() == typ;
+                let expr = self.get_expr(value)?;
+                let typecheck = expr.get_type() == typ;
                 if !typecheck {
                     return simple_fail("failed typecheck of const, i have no source location");
                 }
@@ -389,8 +391,8 @@ impl<'a> Display for IRGen<'a> {
         f.write_str("Module ")?;
         f.write_str(&self.ast.name.0)?;
         f.write_str(": \n")?;
-        for (idx, instr) in self.nodes.iter().enumerate() {
-            f.write_fmt(format_args!(":{idx:02} {instr:?}\n"))?;
+        for (idx, expr) in self.nodes.iter().enumerate() {
+            f.write_fmt(format_args!(":{idx:02} {expr:?}\n"))?;
         }
         Ok(())
     }
@@ -409,7 +411,7 @@ mod test {
         let mut ir = IRGen::new(&module);
         ir.run()?;
         let i1 = &ir.nodes[0];
-        if let IrNode::Expr(Instr::Int(i)) = *i1 {
+        if let IrNode::Expr(IrExpr::Int(i)) = *i1 {
             assert_eq!(i, 420);
             Ok(())
         } else {
