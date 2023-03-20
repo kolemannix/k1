@@ -7,3 +7,4 @@ edition = "2021"
 anyhow = "1.0.69"
 colored = "2"
 inkwell = { git = "https://github.com/TheDan64/inkwell", branch = "master", features = ["llvm12-0"] }
+smallvec = "1.10.0"

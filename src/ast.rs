@@ -9,6 +9,12 @@ pub enum Literal {
 #[derive(Debug)]
 pub struct Ident(pub String);
 
+impl AsRef<str> for Ident {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
 #[derive(Debug)]
 pub struct FnArg {
     pub name: Option<String>,
