@@ -21,8 +21,6 @@
 # Tier 2
 - [ ] Block-as-single-arg syntax (xs.map { y => } )
 - [ ] Unicode source
-- [ ] Currying
-- [ ] Floating point literals
 
 # Milestones
 1. [ ] 

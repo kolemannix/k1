@@ -1,6 +1,6 @@
-:0 Func { "main" int
-:1   param x int
-:2   param y int
+Func { "main" int
+   param x int
+   param y int
 }
 :3 Block { len: ?, type: Int }
 :4 int "b"
