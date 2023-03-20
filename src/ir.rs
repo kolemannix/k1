@@ -125,11 +125,19 @@ pub struct Variable {
     is_mutable: bool,
 }
 
+#[derive(Debug)]
+pub struct Constant {
+    variable_id: Index,
+    expr: IrExpr,
+    ir_type: IrType,
+}
+
 pub struct IRModule<'a> {
     pub ast: &'a Module,
     src: String,
     pub functions: Vec<Function>,
     pub variables: Vec<Variable>,
+    pub constants: Vec<Constant>,
     pub scopes: Vec<Scope>,
 }
 
@@ -168,17 +176,39 @@ impl<'a> IRModule<'a> {
             src: String::new(),
             functions: Vec::new(),
             variables: Vec::new(),
+            constants: Vec::new(),
             scopes: vec![Scope::default()],
         }
-    }
-
-    fn get_expr_type(&self, expr: &IrExpr) -> IrType {
-        expr.get_type()
     }
 
     fn eval_type_expr(&self, expr: &TypeExpression, scope_id: usize) -> IrGenResult<IrType> {
         match expr {
             TypeExpression::Primitive(TypePrimitive::Int) => Ok(IrType::Int),
+        }
+    }
+
+    /// Eventually this will be more restrictive than its sibling eval_type_expr
+    fn eval_const_type_expr(&self, expr: &TypeExpression, scope_id: usize) -> IrGenResult<IrType> {
+        match expr {
+            TypeExpression::Primitive(TypePrimitive::Int) => Ok(IrType::Int),
+        }
+    }
+
+    fn eval_const(&mut self, const_expr: &ast::ConstVal) -> IrGenResult<Index> {
+        let scope_id = 0;
+        match const_expr {
+            ast::ConstVal { name, typ, value } => {
+                let ir_type = self.eval_const_type_expr(&typ, scope_id)?;
+                let expr = match value {
+                    Expression::Literal(Literal::Numeric(n)) => self.parse_numeric(n)?,
+                    other => return simple_fail("Only literals are currently supported as constants"),
+                };
+                // TODO: Store expr somewhere?
+                let variable_id = self.add_variable(Variable { name: name.0.clone(), ir_type, is_mutable: false });
+                self.constants.push(Constant { variable_id, expr, ir_type });
+                self.scopes[scope_id].add_variable(name.0.clone(), variable_id);
+                Ok(variable_id)
+            }
         }
     }
 
@@ -206,6 +236,13 @@ impl<'a> IRModule<'a> {
         id as u32
     }
 
+    fn parse_numeric(&self, s: &str) -> IrGenResult<IrExpr> {
+        // Eventually we need to find out what type of number literal this is.
+        // For now we only support u64
+        let num: u64 = s.parse().map_err(|e| simple_err("Failed to parse numeric literal"))?;
+        Ok(IrExpr::Int(num))
+    }
+
     fn eval_expr(&mut self, expr: &Expression, scope: usize) -> IrGenResult<IrExpr> {
         match expr {
             Expression::InfixOp(infix_op) => {
@@ -224,8 +261,7 @@ impl<'a> IRModule<'a> {
                 Ok(expr)
             }
             Expression::Literal(Literal::Numeric(s)) => {
-                let value_u64: u64 = s.parse()?;
-                let expr = IrExpr::Int(value_u64);
+                let expr = self.parse_numeric(&s)?;
                 Ok(expr)
             }
             Expression::Literal(Literal::String(s)) => {
@@ -330,23 +366,16 @@ impl<'a> IRModule<'a> {
         let function_id = self.add_function(function);
         Ok(function_id)
     }
-    fn eval_definition(&mut self, def: &Definition) -> IrGenResult<Index> {
+    fn eval_definition(&mut self, def: &Definition) -> IrGenResult<()> {
         match def {
             Definition::Const(const_val) => {
-                unimplemented!("TODO: Reimplement consts");
-                //     let typ = self.eval_type_expr(&const_val.typ, 0)?;
-                //     let value: Index = self.eval_const_expr(&const_val.value)?;
-                //     let expr = self.get_expr(value)?;
-                //     let typecheck = expr.get_type() == typ;
-                //     if !typecheck {
-                //         return simple_fail("failed typecheck of const, i have no source location");
-                //     }
-                //     self.scopes[0].add_variable(const_val.name.0.clone(), value);
-                //     Ok(value)
+                let variable_id: Index = self.eval_const(const_val)?;
+                Ok(())
             }
             Definition::FnDef(fn_def) => {
                 let scope_index = 0;
-                self.eval_function(fn_def, scope_index)
+                self.eval_function(fn_def, scope_index)?;
+                Ok(())
             }
         }
     }

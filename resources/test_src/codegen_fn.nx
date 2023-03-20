@@ -1,4 +1,7 @@
+val z: Int = 1337;
+
 fn main(x: Int, y: Int): Int {
   val b: Int = x + 1;
-  return b + y;
+  val foo: Int = b + z;
+  return foo + y;
 }

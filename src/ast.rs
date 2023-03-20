@@ -146,9 +146,6 @@ pub enum Definition {
     Const(ConstVal),
 }
 
-// trait TopLevelDecl {}
-// impl TopLevelDecl for FnDef {}
-
 #[derive(Debug)]
 pub struct Module {
     pub name: Ident,
