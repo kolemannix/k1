@@ -7,23 +7,9 @@ use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
 type ScopeId = u32;
+type FunctionId = u32;
+type VariableId = u32;
 type Index = u32;
-
-/// TODO: Add Ref, an optimization that allows the compiler
-/// to know about certain values, like 0, 1, 2, false, true
-/// and many others in order to enable a lot of fun compile time
-/// execution and stuff.
-///
-/// The idea is that instead of always being a reference to an
-/// instantiated instruction,
-/// a Ref can also be an actual compiler-internal Value, like Zero or false.
-// #[derive(Debug, Clone, Copy)]
-// #[allow(dead_code)]
-// pub enum Ref {
-//     Zero,
-//     One,
-//     Instr(Index),
-// }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
@@ -44,6 +30,7 @@ pub struct IRBlock {
 #[derive(Debug, Clone)]
 struct FuncParam {
     name: String,
+    position: usize,
     ir_type: IrType,
 }
 
@@ -66,7 +53,7 @@ pub enum IrExpr {
     Variable { variable_id: Index, ir_type: IrType },
     Add(IrType, Box<IrExpr>, Box<IrExpr>),
     Block(IRBlock),
-    Call { callee: Index, args: Index, ret_type: IrType },
+    Call { callee: Index, args: Vec<IrExpr>, ret_type: IrType },
 }
 
 #[derive(Debug, Clone)]
@@ -143,7 +130,8 @@ pub struct IRModule<'a> {
 
 #[derive(Default)]
 pub struct Scope {
-    variables: HashMap<String, Index>,
+    variables: HashMap<String, VariableId>,
+    functions: HashMap<String, FunctionId>,
     parent: Option<Box<Scope>>,
 }
 impl Scope {
@@ -158,6 +146,14 @@ impl Scope {
     }
     fn add_variable(&mut self, name: String, value: Index) {
         self.variables.insert(name, value);
+    }
+
+    fn add_function(&mut self, name: String, function_id: Index) {
+        self.functions.insert(name, function_id);
+    }
+
+    fn find_function(&self, name: impl AsRef<str>) -> Option<Index> {
+        self.functions.get(name.as_ref()).copied()
     }
 }
 
@@ -245,7 +241,7 @@ impl<'a> IRModule<'a> {
 
     fn eval_expr(&mut self, expr: &Expression, scope: usize) -> IrGenResult<IrExpr> {
         match expr {
-            Expression::InfixOp(infix_op) => {
+            Expression::BinaryOp(infix_op) => {
                 // Infer expected type to be type of operand1
                 let lhs = self.eval_expr(&infix_op.operand1, scope)?;
                 let rhs = self.eval_expr(&infix_op.operand2, scope)?;
@@ -255,8 +251,8 @@ impl<'a> IRModule<'a> {
                 }
 
                 let expr = match infix_op.operation {
-                    ast::InfixOpKind::Add => IrExpr::Add(lhs.get_type(), Box::new(lhs), Box::new(rhs)),
-                    ast::InfixOpKind::Mult => return simple_fail("Mult is unimplemented"),
+                    ast::BinaryOpKind::Add => IrExpr::Add(lhs.get_type(), Box::new(lhs), Box::new(rhs)),
+                    ast::BinaryOpKind::Mult => return simple_fail("Mult is unimplemented"),
                 };
                 Ok(expr)
             }
@@ -276,8 +272,32 @@ impl<'a> IRModule<'a> {
                 let expr = IrExpr::Variable { ir_type: v.ir_type, variable_id: var_index };
                 Ok(expr)
             }
-            Expression::Block(_) => unimplemented!("eval_expr Block"),
-            Expression::FnCall(_) => unimplemented!("eval_expr FnCall"),
+            Expression::Block(block) => {
+                let block = self.eval_block(block, scope)?;
+                Ok(IrExpr::Block(block))
+            }
+            Expression::FnCall(fn_call) => {
+                let function_id = self.scopes[scope]
+                    .find_function(&fn_call.name)
+                    .ok_or(simple_err(format!("Function not found: {}", fn_call.name.as_ref())))?;
+                // TODO: cloning a function
+                // Not sure if RC or clone is lighter-weight here... it does clone a vec
+                let function = self.functions[function_id as usize].clone();
+                let mut fn_args: Vec<IrExpr> = Vec::new();
+                for fn_param in &function.params {
+                    let matching_param_by_name =
+                        fn_call.args.iter().find(|arg| arg.name.as_ref() == Some(&fn_param.name));
+                    let matching_param = matching_param_by_name.or(fn_call.args.get(fn_param.position));
+                    if let Some(param) = matching_param {
+                        let param_expr = self.eval_expr(&param.value, scope)?;
+                        fn_args.push(param_expr);
+                    } else {
+                        return simple_fail("Could not find match for parameter {fn_param.name}");
+                    }
+                }
+                let call = IrExpr::Call { callee: function_id, args: fn_args, ret_type: function.ret_type };
+                Ok(call)
+            }
         }
     }
     fn eval_block_stmt(&mut self, stmt: &BlockStmt, scope_id: usize) -> IrGenResult<IrStmt> {
@@ -291,13 +311,15 @@ impl<'a> IRModule<'a> {
                 let value_expr = self.eval_expr(&val_def.value, scope_id)?;
                 let provided_type = val_def.typ.as_ref().expect("Type inference not supported on vals yet!");
                 let ir_type = self.eval_type_expr(provided_type, scope_id)?;
-                let variable_id =
-                    self.add_variable(Variable { is_mutable: false, name: val_def.name.0.clone(), ir_type });
+                let variable_id = self.add_variable(Variable {
+                    is_mutable: val_def.is_mutable,
+                    name: val_def.name.0.clone(),
+                    ir_type,
+                });
                 let val_def_expr = IrStmt::ValDef { ir_type, variable_id, initial_value: value_expr };
                 self.scopes[scope_id].add_variable(val_def.name.0.clone(), variable_id);
                 Ok(val_def_expr)
             }
-            BlockStmt::MutDef(_) => simple_fail("Mutable variables are unimplemented"),
             BlockStmt::If(_) => simple_fail("IF expressions are unimplemented"),
             BlockStmt::Assignment(assignment) => {
                 let expr = self.eval_expr(&assignment.expr, scope_id)?;
@@ -336,11 +358,11 @@ impl<'a> IRModule<'a> {
     }
     fn eval_function(&mut self, fn_def: &FnDef, scope_id: usize) -> IrGenResult<Index> {
         let mut params = Vec::new();
-        for fn_arg in &fn_def.args {
+        for (idx, fn_arg) in fn_def.args.iter().enumerate() {
             let ir_type = self.eval_type_expr(&fn_arg.typ, scope_id)?;
             let variable = Variable { name: fn_arg.name.0.clone(), ir_type, is_mutable: false };
             let variable_id = self.add_variable(variable);
-            params.push(FuncParam { name: fn_arg.name.0.clone(), ir_type });
+            params.push(FuncParam { name: fn_arg.name.0.clone(), position: idx, ir_type });
             self.scopes[scope_id].add_variable(fn_arg.name.0.clone(), variable_id);
         }
         let body_block =
@@ -364,6 +386,7 @@ impl<'a> IRModule<'a> {
         };
         let function = Function { name: fn_def.name.0.clone(), ret_type, params, block: body_block };
         let function_id = self.add_function(function);
+        self.scopes[scope_id].add_function(fn_def.name.0.clone(), function_id);
         Ok(function_id)
     }
     fn eval_definition(&mut self, def: &Definition) -> IrGenResult<()> {
@@ -427,13 +450,14 @@ mod test {
     #[test]
     fn fn_definition_1() -> IrGenResult<()> {
         let src = r#"
+        fn foo(): Int {
+          return 1;
+        }
         fn basic(x: Int, y: Int): Int {
-          println(42, 42, 42);
-          val x: Int = 0;
-          mut y: Int = 1;
+          val x: Int = 0; mut y: Int = 1;
           y = { 1; 2; 3 };
-          y = add(42, 42);
-          return add(x, y);
+          y = 42 + 42;
+          return foo();
         }"#;
         let module = parse_text(src, "basic_fn.nx")?;
         let mut ir = IRModule::new(&module);

@@ -45,7 +45,10 @@ fn infix1() -> Result<(), ParseError> {
     println!("{:?}", result);
     assert!(matches!(
         result,
-        Some(BlockStmt::ValDef(ValDef { value: Expression::InfixOp(InfixOp { operation: InfixOpKind::Add, .. }), .. }))
+        Some(BlockStmt::ValDef(ValDef {
+            value: Expression::BinaryOp(BinaryOp { operation: BinaryOpKind::Add, .. }),
+            ..
+        }))
     ));
     Ok(())
 }
@@ -55,11 +58,11 @@ fn infix2() -> Result<(), ParseError> {
     let mut parser = setup("val x = a + b * doStuff(1, 2)");
     let result = parser.parse_statement()?;
     println!("{:?}", result);
-    if let Some(BlockStmt::ValDef(ValDef { value: Expression::InfixOp(op), .. })) = &result {
-        assert_eq!(op.operation, InfixOpKind::Add);
+    if let Some(BlockStmt::ValDef(ValDef { value: Expression::BinaryOp(op), .. })) = &result {
+        assert_eq!(op.operation, BinaryOpKind::Add);
         assert!(matches!(*op.operand1, Expression::Variable(Ident(_))));
-        if let Expression::InfixOp(InfixOp { operation, operand1, operand2 }) = &*op.operand2 {
-            assert_eq!(*operation, InfixOpKind::Mult);
+        if let Expression::BinaryOp(BinaryOp { operation, operand1, operand2 }) = &*op.operand2 {
+            assert_eq!(*operation, BinaryOpKind::Mult);
             assert!(matches!(**operand1, Expression::Variable(Ident(_))));
             assert!(matches!(**operand2, Expression::FnCall(_)));
         } else {

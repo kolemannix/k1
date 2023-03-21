@@ -166,7 +166,7 @@ impl TokenKind {
             _ => false,
         }
     }
-    pub fn is_infix_operator(&self) -> bool {
+    pub fn is_binary_operator(&self) -> bool {
         match self {
             Plus => true,
             Asterisk => true,

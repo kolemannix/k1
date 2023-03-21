@@ -30,6 +30,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("Size of ast::Expression: {}", std::mem::size_of::<ast::Expression>());
     println!("Size of ir::IrExpr: {}", std::mem::size_of::<ir::IrExpr>());
     println!("Size of ir::IrStmt: {}", std::mem::size_of::<ir::IrStmt>());
+    
 
     let args: Vec<String> = env::args().collect();
     println!("NexLang Compiler v0.1.0");
