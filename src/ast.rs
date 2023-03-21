@@ -32,41 +32,35 @@ pub struct ValDef {
     pub name: Ident,
     pub typ: Option<TypeExpression>,
     pub value: Expression,
-}
-
-#[derive(Debug)]
-pub struct MutDef {
-    pub name: Ident,
-    pub typ: Option<TypeExpression>,
-    pub value: Expression,
+    pub is_mutable: bool,
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub enum InfixOpKind {
+pub enum BinaryOpKind {
     Add,
     Mult,
 }
 
-impl InfixOpKind {
-    pub fn from_tokenkind(kind: TokenKind) -> Option<InfixOpKind> {
+impl BinaryOpKind {
+    pub fn from_tokenkind(kind: TokenKind) -> Option<BinaryOpKind> {
         match kind {
-            TokenKind::Plus => Some(InfixOpKind::Add),
-            TokenKind::Asterisk => Some(InfixOpKind::Mult),
+            TokenKind::Plus => Some(BinaryOpKind::Add),
+            TokenKind::Asterisk => Some(BinaryOpKind::Mult),
             _ => None,
         }
     }
 }
 
 #[derive(Debug)]
-pub struct InfixOp {
-    pub operation: InfixOpKind,
+pub struct BinaryOp {
+    pub operation: BinaryOpKind,
     pub operand1: Box<Expression>,
     pub operand2: Box<Expression>,
 }
 
 #[derive(Debug)]
 pub enum Expression {
-    InfixOp(InfixOp),
+    BinaryOp(BinaryOp),
     Literal(Literal),
     FnCall(FnCall),
     Variable(Ident),
@@ -89,14 +83,13 @@ pub struct Assignment {
 pub struct IfExpr {
     pub cond: Expression,
     // TODO: Add var binding; cons is more like a lambda syntactically
-    pub cons: Block,
-    pub alt: Option<Block>,
+    pub cons: Expression,
+    pub alt: Option<Expression>,
 }
 
 #[derive(Debug)]
 pub enum BlockStmt {
     ValDef(ValDef),
-    MutDef(MutDef),
     /// return keyword will only be allowed to denote explicit early returns
     ReturnStmt(Expression),
     If(IfExpr),

@@ -239,14 +239,14 @@ impl<'a> Parser<'a> {
             Ok(None)
         }?;
         if let Some(expr) = single_result {
-            return if self.peek().kind.is_infix_operator() {
+            return if self.peek().kind.is_binary_operator() {
                 let op_token = self.tokens.next();
-                let op_kind = InfixOpKind::from_tokenkind(op_token.kind);
+                let op_kind = BinaryOpKind::from_tokenkind(op_token.kind);
                 match op_kind {
-                    None => Err(ParseError::ExpectedNode("Infix Operator".to_string(), op_token, None)),
+                    None => Err(ParseError::ExpectedNode("Binary Operator".to_string(), op_token, None)),
                     Some(op_kind) => {
-                        let operand2 = Parser::expect("rhs of infix op", self.peek(), self.parse_expression())?;
-                        return Ok(Some(Expression::InfixOp(InfixOp {
+                        let operand2 = Parser::expect("rhs of binary op", self.peek(), self.parse_expression())?;
+                        return Ok(Some(Expression::BinaryOp(BinaryOp {
                             operation: op_kind,
                             operand1: Box::new(expr),
                             operand2: Box::new(operand2),
@@ -260,7 +260,7 @@ impl<'a> Parser<'a> {
         return Ok(single_result);
     }
 
-    fn parse_mut(&mut self) -> ParseResult<Option<MutDef>> {
+    fn parse_mut(&mut self) -> ParseResult<Option<ValDef>> {
         // mut foo[: Int] := 42
         let is_mut = Parser::check(self.eat_token(KeywordMut))?;
         if is_mut.is_none() {
@@ -273,7 +273,7 @@ impl<'a> Parser<'a> {
         }?;
         let _eq = self.expect_eat_token(Equals)?;
         let value = Parser::expect("expression", self.peek(), self.parse_expression())?;
-        return Ok(Some(MutDef { name: Ident(ident), typ, value }));
+        return Ok(Some(ValDef { name: Ident(ident), typ, value, is_mutable: true }));
     }
 
     fn parse_val(&mut self) -> ParseResult<Option<ValDef>> {
@@ -290,7 +290,7 @@ impl<'a> Parser<'a> {
         }?;
         let _eq = self.expect_eat_token(Equals)?;
         let value = Parser::expect("expression", self.peek(), self.parse_expression())?;
-        return ParseResult::Ok(Some(ValDef { name: Ident(ident), typ, value }));
+        return ParseResult::Ok(Some(ValDef { name: Ident(ident), typ, value, is_mutable: false }));
     }
 
     fn parse_const(&mut self) -> ParseResult<Option<ConstVal>> {
@@ -379,7 +379,7 @@ impl<'a> Parser<'a> {
     fn parse_statement(&mut self) -> ParseResult<Option<BlockStmt>> {
         trace!("eat_statement");
         if let Some(mut_def) = self.parse_mut()? {
-            Ok(Some(BlockStmt::MutDef(mut_def)))
+            Ok(Some(BlockStmt::ValDef(mut_def)))
         } else if let Some(val_def) = self.parse_val()? {
             Ok(Some(BlockStmt::ValDef(val_def)))
         } else if self.eat_token(KeywordReturn).is_some() {
@@ -464,18 +464,16 @@ fn print_tokens(content: &str, tokens: &[Token]) {
 }
 
 pub fn parse_text(text: &str, module_name: &str) -> ParseResult<Module> {
-    let mut lexer = Lexer::make(&text);
+    let mut lexer = Lexer::make(text);
 
     let token_vec = lexer.run();
-    print_tokens(&text, &token_vec);
+    print_tokens(text, &token_vec);
 
     let tokens: Tokens = Tokens::make(token_vec);
 
-    let mut parser = Parser::make(tokens, &text);
+    let mut parser = Parser::make(tokens, text);
 
-    let module = parser.eat_module(module_name);
-
-    module
+    parser.eat_module(module_name)
 }
 
 pub fn parse_file(path: &str) -> ParseResult<Module> {

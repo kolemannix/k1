@@ -3,6 +3,7 @@
 - [ ] Implement FnCall
 - [ ] Implement Mult
 - [ ] Implement IF
+- [ ] Ditch semicolons
 
 # Tier 1
 - [ ] main function
