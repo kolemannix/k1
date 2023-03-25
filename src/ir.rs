@@ -1,15 +1,16 @@
 use crate::ast::{
-    self, Block, BlockStmt, Definition, Expression, FnDef, Literal, Module, TypeExpression, TypePrimitive,
+    self, Block, BlockStmt, Definition, Expression, FnDef, Literal, Module, TypeExpression,
+    TypePrimitive,
 };
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
-type ScopeId = u32;
-type FunctionId = u32;
-type VariableId = u32;
-type Index = u32;
+pub type ScopeId = u32;
+pub type FunctionId = u32;
+pub type VariableId = u32;
+pub type Index = u32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
@@ -22,24 +23,50 @@ pub enum IrType {
 
 #[derive(Debug, Clone)]
 pub struct IRBlock {
-    ret_type: IrType,
-    scope_id: ScopeId,
+    pub ret_type: IrType,
+    pub scope_id: ScopeId,
     pub statements: Vec<IrStmt>,
 }
 
 #[derive(Debug, Clone)]
-struct FuncParam {
-    name: String,
-    position: usize,
-    ir_type: IrType,
+pub struct FuncParam {
+    pub name: String,
+    pub position: usize,
+    pub ir_type: IrType,
 }
 
 #[derive(Debug, Clone)]
 pub struct Function {
-    name: String,
-    ret_type: IrType,
-    params: Vec<FuncParam>,
-    block: IRBlock,
+    pub name: String,
+    pub ret_type: IrType,
+    pub params: Vec<FuncParam>,
+    pub block: IRBlock,
+}
+
+#[derive(Debug, Clone)]
+pub struct VariableExpr {
+    pub variable_id: Index,
+    pub ir_type: IrType,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BinaryOpKind {
+    Add,
+}
+
+#[derive(Debug, Clone)]
+pub struct BinaryOp {
+    pub kind: BinaryOpKind,
+    pub ir_type: IrType,
+    pub lhs: Box<IrExpr>,
+    pub rhs: Box<IrExpr>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FunctionCall {
+    pub callee: FunctionId,
+    pub args: Vec<IrExpr>,
+    pub ret_type: IrType,
 }
 
 // LLVM
@@ -49,20 +76,38 @@ pub struct Function {
 #[derive(Debug, Clone)]
 pub enum IrExpr {
     Str(String),
-    Int(u64),
-    Variable { variable_id: Index, ir_type: IrType },
-    Add(IrType, Box<IrExpr>, Box<IrExpr>),
+    Int(i64),
+    Variable(VariableExpr),
+    BinaryOp(BinaryOp),
     Block(IRBlock),
-    Call { callee: Index, args: Vec<IrExpr>, ret_type: IrType },
+    FunctionCall(FunctionCall),
+}
+
+#[derive(Debug, Clone)]
+pub struct ValDef {
+    pub variable_id: VariableId,
+    pub ir_type: IrType,
+    pub initializer: IrExpr,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReturnStmt {
+    pub expr: IrExpr,
+}
+
+#[derive(Debug, Clone)]
+pub struct Assignment {
+    dest: VariableId,
+    value: IrExpr,
 }
 
 #[derive(Debug, Clone)]
 pub enum IrStmt {
     // TODO: Should we just Box the Exprs since they are big?
     Expr(IrExpr),
-    ValDef { variable_id: Index, ir_type: IrType, initial_value: IrExpr },
-    Ret { expr: IrExpr },
-    Assign { dest: Index, value: IrExpr },
+    ValDef(ValDef),
+    ReturnStmt(ReturnStmt),
+    Assignment(Assignment),
 }
 
 impl IrExpr {
@@ -70,10 +115,10 @@ impl IrExpr {
         match self {
             IrExpr::Str(_) => IrType::String,
             IrExpr::Int(_) => IrType::Int,
-            IrExpr::Variable { ir_type, .. } => *ir_type,
-            IrExpr::Add(typ, _, _) => *typ,
+            IrExpr::Variable(var) => var.ir_type,
+            IrExpr::BinaryOp(binary_op) => binary_op.ir_type,
             IrExpr::Block(b) => b.ret_type,
-            IrExpr::Call { ret_type, .. } => *ret_type,
+            IrExpr::FunctionCall(call) => call.ret_type,
         }
     }
 }
@@ -119,7 +164,7 @@ pub struct Constant {
     ir_type: IrType,
 }
 
-pub struct IRModule<'a> {
+pub struct IrModule<'a> {
     pub ast: &'a Module,
     src: String,
     pub functions: Vec<Function>,
@@ -165,9 +210,9 @@ fn simple_fail<A, T: AsRef<str>>(s: T) -> IrGenResult<A> {
     Err(Box::new(IRGenError::from(s.as_ref())))
 }
 
-impl<'a> IRModule<'a> {
-    pub fn new(module: &Module) -> IRModule {
-        IRModule {
+impl<'a> IrModule<'a> {
+    pub fn new(module: &Module) -> IrModule {
+        IrModule {
             ast: module,
             src: String::new(),
             functions: Vec::new(),
@@ -190,17 +235,23 @@ impl<'a> IRModule<'a> {
         }
     }
 
-    fn eval_const(&mut self, const_expr: &ast::ConstVal) -> IrGenResult<Index> {
+    fn eval_const(&mut self, const_expr: &ast::ConstVal) -> IrGenResult<VariableId> {
         let scope_id = 0;
         match const_expr {
             ast::ConstVal { name, typ, value } => {
                 let ir_type = self.eval_const_type_expr(&typ, scope_id)?;
                 let expr = match value {
                     Expression::Literal(Literal::Numeric(n)) => self.parse_numeric(n)?,
-                    other => return simple_fail("Only literals are currently supported as constants"),
+                    other => {
+                        return simple_fail("Only literals are currently supported as constants")
+                    }
                 };
                 // TODO: Store expr somewhere?
-                let variable_id = self.add_variable(Variable { name: name.0.clone(), ir_type, is_mutable: false });
+                let variable_id = self.add_variable(Variable {
+                    name: name.0.clone(),
+                    ir_type,
+                    is_mutable: false,
+                });
                 self.constants.push(Constant { variable_id, expr, ir_type });
                 self.scopes[scope_id].add_variable(name.0.clone(), variable_id);
                 Ok(variable_id)
@@ -211,7 +262,7 @@ impl<'a> IRModule<'a> {
     fn get_stmt_return_type(&self, stmt: &IrStmt) -> Option<IrType> {
         match stmt {
             IrStmt::Expr(expr) => Some(expr.get_type()),
-            IrStmt::Ret { expr } => Some(expr.get_type()),
+            IrStmt::ReturnStmt(ret) => Some(ret.expr.get_type()),
             _ => None,
         }
     }
@@ -222,7 +273,7 @@ impl<'a> IRModule<'a> {
         id as u32
     }
 
-    fn get_variable(&self, index: u32) -> &Variable {
+    pub fn get_variable(&self, index: u32) -> &Variable {
         &self.variables[index as usize]
     }
 
@@ -232,10 +283,15 @@ impl<'a> IRModule<'a> {
         id as u32
     }
 
+    pub fn get_function(&self, function_id: FunctionId) -> &Function {
+        &self.functions[function_id as usize]
+    }
+
     fn parse_numeric(&self, s: &str) -> IrGenResult<IrExpr> {
         // Eventually we need to find out what type of number literal this is.
         // For now we only support u64
-        let num: u64 = s.parse().map_err(|e| simple_err("Failed to parse numeric literal"))?;
+        let num: i64 =
+            s.parse().map_err(|e| simple_err("Failed to parse signed numeric literal"))?;
         Ok(IrExpr::Int(num))
     }
 
@@ -251,7 +307,12 @@ impl<'a> IRModule<'a> {
                 }
 
                 let expr = match infix_op.operation {
-                    ast::BinaryOpKind::Add => IrExpr::Add(lhs.get_type(), Box::new(lhs), Box::new(rhs)),
+                    ast::BinaryOpKind::Add => IrExpr::BinaryOp(BinaryOp {
+                        kind: BinaryOpKind::Add,
+                        ir_type: lhs.get_type(),
+                        lhs: Box::new(lhs),
+                        rhs: Box::new(rhs),
+                    }),
                     ast::BinaryOpKind::Mult => return simple_fail("Mult is unimplemented"),
                 };
                 Ok(expr)
@@ -269,7 +330,8 @@ impl<'a> IRModule<'a> {
                     .find_variable(&ident.0)
                     .ok_or(simple_err(format!("Identifier not found: {}", ident.0)))?;
                 let v = self.get_variable(var_index);
-                let expr = IrExpr::Variable { ir_type: v.ir_type, variable_id: var_index };
+                let expr =
+                    IrExpr::Variable(VariableExpr { ir_type: v.ir_type, variable_id: var_index });
                 Ok(expr)
             }
             Expression::Block(block) => {
@@ -287,7 +349,8 @@ impl<'a> IRModule<'a> {
                 for fn_param in &function.params {
                     let matching_param_by_name =
                         fn_call.args.iter().find(|arg| arg.name.as_ref() == Some(&fn_param.name));
-                    let matching_param = matching_param_by_name.or(fn_call.args.get(fn_param.position));
+                    let matching_param =
+                        matching_param_by_name.or(fn_call.args.get(fn_param.position));
                     if let Some(param) = matching_param {
                         let param_expr = self.eval_expr(&param.value, scope)?;
                         fn_args.push(param_expr);
@@ -295,7 +358,11 @@ impl<'a> IRModule<'a> {
                         return simple_fail("Could not find match for parameter {fn_param.name}");
                     }
                 }
-                let call = IrExpr::Call { callee: function_id, args: fn_args, ret_type: function.ret_type };
+                let call = IrExpr::FunctionCall(FunctionCall {
+                    callee: function_id,
+                    args: fn_args,
+                    ret_type: function.ret_type,
+                });
                 Ok(call)
             }
         }
@@ -304,19 +371,21 @@ impl<'a> IRModule<'a> {
         match stmt {
             BlockStmt::ReturnStmt(expr) => {
                 let expr = self.eval_expr(expr, scope_id)?;
-                let ret_inst = IrStmt::Ret { expr };
+                let ret_inst = IrStmt::ReturnStmt(ReturnStmt { expr });
                 Ok(ret_inst)
             }
             BlockStmt::ValDef(val_def) => {
                 let value_expr = self.eval_expr(&val_def.value, scope_id)?;
-                let provided_type = val_def.typ.as_ref().expect("Type inference not supported on vals yet!");
+                let provided_type =
+                    val_def.typ.as_ref().expect("Type inference not supported on vals yet!");
                 let ir_type = self.eval_type_expr(provided_type, scope_id)?;
                 let variable_id = self.add_variable(Variable {
                     is_mutable: val_def.is_mutable,
                     name: val_def.name.0.clone(),
                     ir_type,
                 });
-                let val_def_expr = IrStmt::ValDef { ir_type, variable_id, initial_value: value_expr };
+                let val_def_expr =
+                    IrStmt::ValDef(ValDef { ir_type, variable_id, initializer: value_expr });
                 self.scopes[scope_id].add_variable(val_def.name.0.clone(), variable_id);
                 Ok(val_def_expr)
             }
@@ -330,7 +399,7 @@ impl<'a> IRModule<'a> {
                 if var.ir_type != expr.get_type() {
                     return simple_fail("Typecheck of assignment failed");
                 }
-                let expr = IrStmt::Assign { value: expr, dest };
+                let expr = IrStmt::Assignment(Assignment { value: expr, dest });
                 Ok(expr)
             }
             BlockStmt::LoneExpression(expression) => {
@@ -365,8 +434,10 @@ impl<'a> IRModule<'a> {
             params.push(FuncParam { name: fn_arg.name.0.clone(), position: idx, ir_type });
             self.scopes[scope_id].add_variable(fn_arg.name.0.clone(), variable_id);
         }
-        let body_block =
-            fn_def.block.as_ref().ok_or(IRGenError::from("Top-level function definitions must have a body"))?;
+        let body_block = fn_def
+            .block
+            .as_ref()
+            .ok_or(IRGenError::from("Top-level function definitions must have a body"))?;
         // I need to push the block exprs into `exprs`, and push the actual block too to get its
         // index, so I can put its index in the Expr::Func
         let body_block = self.eval_block(body_block, scope_id)?;
@@ -384,7 +455,8 @@ impl<'a> IRModule<'a> {
                 given_ir_type
             }
         };
-        let function = Function { name: fn_def.name.0.clone(), ret_type, params, block: body_block };
+        let function =
+            Function { name: fn_def.name.0.clone(), ret_type, params, block: body_block };
         let function_id = self.add_function(function);
         self.scopes[scope_id].add_function(fn_def.name.0.clone(), function_id);
         Ok(function_id)
@@ -392,7 +464,7 @@ impl<'a> IRModule<'a> {
     fn eval_definition(&mut self, def: &Definition) -> IrGenResult<()> {
         match def {
             Definition::Const(const_val) => {
-                let variable_id: Index = self.eval_const(const_val)?;
+                let variable_id: VariableId = self.eval_const(const_val)?;
                 Ok(())
             }
             Definition::FnDef(fn_def) => {
@@ -410,7 +482,7 @@ impl<'a> IRModule<'a> {
     }
 }
 
-impl<'a> Display for IRModule<'a> {
+impl<'a> Display for IrModule<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str("Module ")?;
         f.write_str(&self.ast.name.0)?;
@@ -460,7 +532,7 @@ mod test {
           return foo();
         }"#;
         let module = parse_text(src, "basic_fn.nx")?;
-        let mut ir = IRModule::new(&module);
+        let mut ir = IrModule::new(&module);
         ir.run()?;
         println!("{:?}", ir.functions);
         Ok(())

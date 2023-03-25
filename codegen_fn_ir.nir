@@ -1,32 +1,58 @@
-Func { "main" int
-   param x int
-   param y int
+TODO: Paste in the current IR Tree and do the LLVM codegen by-hand
+%b = alloca i32, align 4
+
+id=00 Variable { name: "z", ir_type: Int, is_mutable: false, }
+id=01 Variable { name: "x", ir_type: Int, is_mutable: false, }
+id=02 Variable { name: "y", ir_type: Int, is_mutable: false, }
+id=03 Variable { name: "b", ir_type: Int, is_mutable: false, }
+id=04 Variable { name: "foo", ir_type: Int, is_mutable: false, }
+
+define i64 main(i64 %x, i64 %y) {
+entry:
+  %3 = alloca i64, align 8
+  %3_init_lhs = %x
+  %3_init_rhs = i64 1
+  %3_init = add i64 %3_init_lhs %3_init_rhs 
+  store i64* %3 %3_init
+  %4 = alloca i64, align 8
+  %4_init_lhs = i64 3
+  %4_init_rhs = i64 %z
+  %4_init = add i64 %4_init_lhs %4_init_rhs
+  %ret_val_lhs = %4
+  %ret_val_rhs = %y
+  %ret_val = add i64 %ret_val_lhs %ret_val_rhs
+  return i64 %ret_val
 }
-:3 Block { len: ?, type: Int }
-:4 int "b"
 
-:5 int 1
-:8 Add { 3, 4 }: ()
-:9 ret :8 int
-
---------------------------------------------------------
-
-:0 Func, main,
-
-fn main(x: Int, y: Int): Int {
-  val b: Int = x + 1;
-  return b + y;
-}
-
-
-pub enum Instr {
-    // A string literal, stored directly in the IR. One day in the strings array
-    Str(String),
-    // An integer literal
-    Int(u64),
-    Add(IRType, Ref, Ref),
-    Block(IRBlock),
-    Func { name: String, params: Vec<FuncParam>, body: Index, ret_type: IRType },
-    Call { callee: Index, args: Index },
-    Ret(Ref),
+id=00 Function {
+    name: "main",
+    ret_type: Int,
+    block: IRBlock {
+        ret_type: Int,
+        scope_id: 0,
+        statements: [
+            ReturnStmt(
+                ReturnStmt {
+                    expr: BinaryOp(
+                        BinaryOp {
+                            kind: Add,
+                            ir_type: Int,
+                            lhs: Variable(
+                                VariableExpr {
+                                    variable_id: 4,
+                                    ir_type: Int,
+                                },
+                            ),
+                            rhs: Variable(
+                                VariableExpr {
+                                    variable_id: 2,
+                                    ir_type: Int,
+                                },
+                            ),
+                        },
+                    ),
+                },
+            ),
+        ],
+    },
 }

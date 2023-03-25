@@ -2,6 +2,7 @@ use std::env;
 
 mod ast;
 mod codegen;
+mod codegen_ir;
 mod ir;
 mod lex;
 mod output;
@@ -30,7 +31,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("Size of ast::Expression: {}", std::mem::size_of::<ast::Expression>());
     println!("Size of ir::IrExpr: {}", std::mem::size_of::<ir::IrExpr>());
     println!("Size of ir::IrStmt: {}", std::mem::size_of::<ir::IrStmt>());
-    
 
     let args: Vec<String> = env::args().collect();
     println!("NexLang Compiler v0.1.0");
@@ -43,7 +43,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     });
     let ctx = codegen::init_context();
     let mut codegen = CodeGen::create(&ctx);
-    let mut irgen = ir::IRModule::new(&ast);
+    let mut irgen = ir::IrModule::new(&ast);
     if let Err(e) = irgen.run() {
         eprintln!("{}", e);
         println!("{irgen}")
