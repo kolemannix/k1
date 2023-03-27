@@ -13,7 +13,7 @@ use std::fs;
 use std::fs::File;
 use std::io::{BufReader, Read, Write};
 
-use crate::codegen::CodeGen;
+use crate::codegen_ir::CodeGen;
 
 /// Type size assertion. The first argument is a type and the second argument is its expected size.
 /// Cool trick from rustc.
@@ -42,18 +42,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         panic!("parse error");
     });
     let ctx = codegen::init_context();
-    let mut codegen = CodeGen::create(&ctx);
     let mut irgen = ir::IrModule::new(&ast);
-    if let Err(e) = irgen.run() {
-        eprintln!("{}", e);
-        println!("{irgen}")
-    } else {
-        println!("{irgen}");
-    }
-    let result = codegen.codegen_module(&ast);
-    let mut f = File::create("llvm_out.ll").expect("make llvm_ir");
-    f.write_all(result.as_bytes()).unwrap();
-    println!("{}", result);
+    irgen.run()?;
+    println!("{irgen}");
+    let mut codegen = CodeGen::create(&ctx, &irgen);
+    codegen.codegen_module();
+    let mut f = File::create("llvm_out.ll")?;
+    let llvm_text = codegen.output_llvm_ir_text();
+    f.write_all(llvm_text.as_bytes()).unwrap();
+    codegen.optimize()?;
+    println!("{}", llvm_text);
     Ok(())
     // for path in paths {
     //     let path = path.expect("Error reading dir entry");
