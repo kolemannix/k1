@@ -22,7 +22,7 @@ pub enum IrType {
 }
 
 #[derive(Debug, Clone)]
-pub struct IRBlock {
+pub struct IrBlock {
     pub ret_type: IrType,
     pub scope_id: ScopeId,
     pub statements: Vec<IrStmt>,
@@ -31,6 +31,7 @@ pub struct IRBlock {
 #[derive(Debug, Clone)]
 pub struct FuncParam {
     pub name: String,
+    pub variable_id: VariableId,
     pub position: usize,
     pub ir_type: IrType,
 }
@@ -40,7 +41,8 @@ pub struct Function {
     pub name: String,
     pub ret_type: IrType,
     pub params: Vec<FuncParam>,
-    pub block: IRBlock,
+    pub block: IrBlock,
+    pub is_intrinsic: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -64,7 +66,7 @@ pub struct BinaryOp {
 
 #[derive(Debug, Clone)]
 pub struct FunctionCall {
-    pub callee: FunctionId,
+    pub callee_function_id: FunctionId,
     pub args: Vec<IrExpr>,
     pub ret_type: IrType,
 }
@@ -79,7 +81,7 @@ pub enum IrExpr {
     Int(i64),
     Variable(VariableExpr),
     BinaryOp(BinaryOp),
-    Block(IRBlock),
+    Block(IrBlock),
     FunctionCall(FunctionCall),
 }
 
@@ -152,16 +154,17 @@ pub type IrGenResult<A> = Result<A, Box<dyn Error>>;
 
 #[derive(Debug)]
 pub struct Variable {
-    name: String,
-    ir_type: IrType,
-    is_mutable: bool,
+    pub name: String,
+    pub ir_type: IrType,
+    pub is_mutable: bool,
+    pub owner_scope: Option<ScopeId>,
 }
 
 #[derive(Debug)]
 pub struct Constant {
-    variable_id: Index,
-    expr: IrExpr,
-    ir_type: IrType,
+    pub variable_id: Index,
+    pub expr: IrExpr,
+    pub ir_type: IrType,
 }
 
 pub struct IrModule<'a> {
@@ -212,24 +215,71 @@ fn simple_fail<A, T: AsRef<str>>(s: T) -> IrGenResult<A> {
 
 impl<'a> IrModule<'a> {
     pub fn new(module: &Module) -> IrModule {
-        IrModule {
+        let mut module = IrModule {
             ast: module,
             src: String::new(),
             functions: Vec::new(),
             variables: Vec::new(),
             constants: Vec::new(),
             scopes: vec![Scope::default()],
+        };
+        // TODO: Would be much better to write a prelude file
+        // in the source lang with some "extern" function definitions
+        let println_arg = Variable {
+            name: "println_value".to_string(),
+            ir_type: IrType::Int,
+            is_mutable: false,
+            owner_scope: Some(0),
+        };
+        let println_arg_id = module.add_variable(println_arg);
+        let intrinic_functions = vec![Function {
+            name: "println".to_string(),
+            ret_type: IrType::Unit,
+            params: vec![FuncParam {
+                name: "value".to_string(),
+                variable_id: println_arg_id,
+                position: 0,
+                ir_type: IrType::Int,
+            }],
+            block: IrBlock {
+                ret_type: IrType::Unit,
+                scope_id: 0,
+                statements: Vec::with_capacity(0),
+            },
+            is_intrinsic: true,
+        }];
+        for function in intrinic_functions {
+            let name = function.name.clone();
+            let function_id = module.add_function(function);
+            module.scopes[0].add_function(name, function_id);
         }
+        module
     }
 
-    fn eval_type_expr(&self, expr: &TypeExpression, scope_id: usize) -> IrGenResult<IrType> {
+    pub fn name(&self) -> &str {
+        &self.ast.name.0
+    }
+
+    fn add_variable_to_scope(&mut self, scope_id: ScopeId, name: String, variable_id: VariableId) {
+        self.scopes[scope_id as usize].add_variable(name, variable_id);
+    }
+
+    fn find_variable_in_scope(&self, scope_id: u32, name: impl AsRef<str>) -> Option<VariableId> {
+        self.scopes[scope_id as usize].find_variable(name)
+    }
+
+    fn eval_type_expr(&self, expr: &TypeExpression, scope_id: ScopeId) -> IrGenResult<IrType> {
         match expr {
             TypeExpression::Primitive(TypePrimitive::Int) => Ok(IrType::Int),
         }
     }
 
     /// Eventually this will be more restrictive than its sibling eval_type_expr
-    fn eval_const_type_expr(&self, expr: &TypeExpression, scope_id: usize) -> IrGenResult<IrType> {
+    fn eval_const_type_expr(
+        &self,
+        expr: &TypeExpression,
+        scope_id: ScopeId,
+    ) -> IrGenResult<IrType> {
         match expr {
             TypeExpression::Primitive(TypePrimitive::Int) => Ok(IrType::Int),
         }
@@ -246,14 +296,14 @@ impl<'a> IrModule<'a> {
                         return simple_fail("Only literals are currently supported as constants")
                     }
                 };
-                // TODO: Store expr somewhere?
                 let variable_id = self.add_variable(Variable {
                     name: name.0.clone(),
                     ir_type,
                     is_mutable: false,
+                    owner_scope: None,
                 });
                 self.constants.push(Constant { variable_id, expr, ir_type });
-                self.scopes[scope_id].add_variable(name.0.clone(), variable_id);
+                self.add_variable_to_scope(scope_id, name.0.clone(), variable_id);
                 Ok(variable_id)
             }
         }
@@ -267,7 +317,7 @@ impl<'a> IrModule<'a> {
         }
     }
 
-    fn add_variable(&mut self, variable: Variable) -> Index {
+    fn add_variable(&mut self, variable: Variable) -> VariableId {
         let id = self.variables.len();
         self.variables.push(variable);
         id as u32
@@ -277,7 +327,7 @@ impl<'a> IrModule<'a> {
         &self.variables[index as usize]
     }
 
-    fn add_function(&mut self, function: Function) -> Index {
+    fn add_function(&mut self, function: Function) -> FunctionId {
         let id = self.functions.len();
         self.functions.push(function);
         id as u32
@@ -295,12 +345,12 @@ impl<'a> IrModule<'a> {
         Ok(IrExpr::Int(num))
     }
 
-    fn eval_expr(&mut self, expr: &Expression, scope: usize) -> IrGenResult<IrExpr> {
+    fn eval_expr(&mut self, expr: &Expression, scope_id: ScopeId) -> IrGenResult<IrExpr> {
         match expr {
             Expression::BinaryOp(infix_op) => {
                 // Infer expected type to be type of operand1
-                let lhs = self.eval_expr(&infix_op.operand1, scope)?;
-                let rhs = self.eval_expr(&infix_op.operand2, scope)?;
+                let lhs = self.eval_expr(&infix_op.operand1, scope_id)?;
+                let rhs = self.eval_expr(&infix_op.operand2, scope_id)?;
 
                 if lhs.get_type() != rhs.get_type() {
                     return simple_fail("operand types did not match");
@@ -326,8 +376,8 @@ impl<'a> IrModule<'a> {
                 Ok(expr)
             }
             Expression::Variable(ident) => {
-                let var_index = self.scopes[scope]
-                    .find_variable(&ident.0)
+                let var_index = self
+                    .find_variable_in_scope(scope_id, ident)
                     .ok_or(simple_err(format!("Identifier not found: {}", ident.0)))?;
                 let v = self.get_variable(var_index);
                 let expr =
@@ -335,11 +385,11 @@ impl<'a> IrModule<'a> {
                 Ok(expr)
             }
             Expression::Block(block) => {
-                let block = self.eval_block(block, scope)?;
+                let block = self.eval_block(block, scope_id)?;
                 Ok(IrExpr::Block(block))
             }
             Expression::FnCall(fn_call) => {
-                let function_id = self.scopes[scope]
+                let function_id = self.scopes[scope_id as usize]
                     .find_function(&fn_call.name)
                     .ok_or(simple_err(format!("Function not found: {}", fn_call.name.as_ref())))?;
                 // TODO: cloning a function
@@ -352,14 +402,14 @@ impl<'a> IrModule<'a> {
                     let matching_param =
                         matching_param_by_name.or(fn_call.args.get(fn_param.position));
                     if let Some(param) = matching_param {
-                        let param_expr = self.eval_expr(&param.value, scope)?;
+                        let param_expr = self.eval_expr(&param.value, scope_id)?;
                         fn_args.push(param_expr);
                     } else {
                         return simple_fail("Could not find match for parameter {fn_param.name}");
                     }
                 }
                 let call = IrExpr::FunctionCall(FunctionCall {
-                    callee: function_id,
+                    callee_function_id: function_id,
                     args: fn_args,
                     ret_type: function.ret_type,
                 });
@@ -367,7 +417,7 @@ impl<'a> IrModule<'a> {
             }
         }
     }
-    fn eval_block_stmt(&mut self, stmt: &BlockStmt, scope_id: usize) -> IrGenResult<IrStmt> {
+    fn eval_block_stmt(&mut self, stmt: &BlockStmt, scope_id: ScopeId) -> IrGenResult<IrStmt> {
         match stmt {
             BlockStmt::ReturnStmt(expr) => {
                 let expr = self.eval_expr(expr, scope_id)?;
@@ -383,18 +433,22 @@ impl<'a> IrModule<'a> {
                     is_mutable: val_def.is_mutable,
                     name: val_def.name.0.clone(),
                     ir_type,
+                    owner_scope: Some(scope_id),
                 });
                 let val_def_expr =
                     IrStmt::ValDef(ValDef { ir_type, variable_id, initializer: value_expr });
-                self.scopes[scope_id].add_variable(val_def.name.0.clone(), variable_id);
+                self.add_variable_to_scope(scope_id, val_def.name.0.clone(), variable_id);
                 Ok(val_def_expr)
             }
             BlockStmt::If(_) => simple_fail("IF expressions are unimplemented"),
             BlockStmt::Assignment(assignment) => {
                 let expr = self.eval_expr(&assignment.expr, scope_id)?;
-                let dest = self.scopes[scope_id]
-                    .find_recursive(&assignment.ident)
-                    .ok_or(simple_err(format!("Identifier not found: {}", &assignment.ident.0)))?;
+                let dest = self.find_variable_in_scope(scope_id, &assignment.ident).ok_or(
+                    simple_err(&format!(
+                        "Variable {} not found in scope {}",
+                        &assignment.ident.0, scope_id
+                    )),
+                )?;
                 let var = self.get_variable(dest);
                 if var.ir_type != expr.get_type() {
                     return simple_fail("Typecheck of assignment failed");
@@ -408,10 +462,10 @@ impl<'a> IrModule<'a> {
             }
         }
     }
-    fn eval_block(&mut self, block: &Block, scope: usize) -> IrGenResult<IRBlock> {
+    fn eval_block(&mut self, block: &Block, scope_id: ScopeId) -> IrGenResult<IrBlock> {
         let mut statements = Vec::new();
         for stmt in &block.stmts {
-            let stmt = self.eval_block_stmt(stmt, scope)?;
+            let stmt = self.eval_block_stmt(stmt, scope_id)?;
             statements.push(stmt);
         }
         // TODO: The return type of a block is actually an interesting problem, need to think about
@@ -422,17 +476,27 @@ impl<'a> IrModule<'a> {
         } else {
             IrType::Unit
         };
-        let ir_block = IRBlock { ret_type, scope_id: 0, statements };
+        let ir_block = IrBlock { ret_type, scope_id: 0, statements };
         Ok(ir_block)
     }
-    fn eval_function(&mut self, fn_def: &FnDef, scope_id: usize) -> IrGenResult<Index> {
+    fn eval_function(&mut self, fn_def: &FnDef, scope_id: ScopeId) -> IrGenResult<Index> {
         let mut params = Vec::new();
         for (idx, fn_arg) in fn_def.args.iter().enumerate() {
             let ir_type = self.eval_type_expr(&fn_arg.typ, scope_id)?;
-            let variable = Variable { name: fn_arg.name.0.clone(), ir_type, is_mutable: false };
+            let variable = Variable {
+                name: fn_arg.name.0.clone(),
+                ir_type,
+                is_mutable: false,
+                owner_scope: Some(scope_id),
+            };
             let variable_id = self.add_variable(variable);
-            params.push(FuncParam { name: fn_arg.name.0.clone(), position: idx, ir_type });
-            self.scopes[scope_id].add_variable(fn_arg.name.0.clone(), variable_id);
+            params.push(FuncParam {
+                name: fn_arg.name.0.clone(),
+                variable_id,
+                position: idx,
+                ir_type,
+            });
+            self.add_variable_to_scope(scope_id, fn_arg.name.0.clone(), variable_id);
         }
         let body_block = fn_def
             .block
@@ -455,10 +519,15 @@ impl<'a> IrModule<'a> {
                 given_ir_type
             }
         };
-        let function =
-            Function { name: fn_def.name.0.clone(), ret_type, params, block: body_block };
+        let function = Function {
+            name: fn_def.name.0.clone(),
+            ret_type,
+            params,
+            block: body_block,
+            is_intrinsic: false,
+        };
         let function_id = self.add_function(function);
-        self.scopes[scope_id].add_function(fn_def.name.0.clone(), function_id);
+        self.scopes[scope_id as usize].add_function(fn_def.name.0.clone(), function_id);
         Ok(function_id)
     }
     fn eval_definition(&mut self, def: &Definition) -> IrGenResult<()> {

@@ -14,6 +14,9 @@
 - [ ] Tuples
 - [ ] lexical scoping
 
+Symbols like lisp or Clojure keywords would be really great; or just have string literal types?
+Symbols are always interned and very fast. Also signals intent to use a symbol vs use strings
+
 # Dev ex
 - Pretty-print AST
 - Error Spans
