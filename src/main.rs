@@ -1,7 +1,7 @@
 use std::env;
 
 mod ast;
-mod codegen;
+//mod codegen;
 mod codegen_ir;
 mod ir;
 mod lex;
@@ -41,35 +41,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         eprintln!("Encountered ParseError on file '{}': {:?}", src_path, e);
         panic!("parse error");
     });
-    let ctx = codegen::init_context();
+    let ctx = codegen_ir::init_context();
     let mut irgen = ir::IrModule::new(&ast);
     irgen.run()?;
     println!("{irgen}");
     let mut codegen = CodeGen::create(&ctx, &irgen);
     codegen.codegen_module();
+    codegen.optimize()?;
     let mut f = File::create("llvm_out.ll")?;
     let llvm_text = codegen.output_llvm_ir_text();
     f.write_all(llvm_text.as_bytes()).unwrap();
-    codegen.optimize()?;
     println!("{}", llvm_text);
     Ok(())
-    // for path in paths {
-    //     let path = path.expect("Error reading dir entry");
-    //     let file = File::open(path.path()).unwrap();
-    //     let mut buf_read = BufReader::new(file);
-    //     let mut content = String::new();
-    //     buf_read.read_to_string(&mut content).expect("read failed");
-    //     let parsed = parse::parse_text(&content);
-    //     let ctx = codegen::init_context();
-    //     match parsed {
-    //         Err(parse_error) => {
-    //
-    //         }
-    //         Ok(module) => {
-    //             let mut codegen = CodeGen::create(&ctx);
-    //             let result = codegen.codegen_module(&module);
-    //             println!("{}", result);
-    //         }
-    //     }
-    // }
 }

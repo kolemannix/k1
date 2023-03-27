@@ -113,7 +113,7 @@ pub enum IrStmt {
 }
 
 impl IrExpr {
-    fn get_type(&self) -> IrType {
+    pub fn get_type(&self) -> IrType {
         match self {
             IrExpr::Str(_) => IrType::String,
             IrExpr::Int(_) => IrType::Int,

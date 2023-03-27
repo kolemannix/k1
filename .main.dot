@@ -1,0 +1,5 @@
+digraph "CFG for 'main' function" {
+	label="CFG for 'main' function";
+
+	Node0x600002fd4cc0 [shape=record,color="#b70d28ff", style=filled, fillcolor="#b70d2870",label="{entry:\l  %b = alloca i64, align 8\l  %b_init = add i64 %x, 1\l  store i64 %b_init, i64* %b, align 4\l  %foo = alloca i64, align 8\l  %z_val = load i64, i64* @z, align 4\l  %foo_init = add i64 3, %z_val\l  store i64 %foo_init, i64* %foo, align 4\l  %ret_val_lhs = load i64, i64* %foo, align 4\l  %ret_val = add i64 %ret_val_lhs, %y\l  ret i64 %ret_val\l}"];
+}
