@@ -2,10 +2,10 @@ use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::{Linkage, Module as LLVMModule};
+use inkwell::passes::{PassManager, PassManagerBuilder};
 use inkwell::targets::{InitializationConfig, Target, TargetMachine, TargetTriple};
 use inkwell::types::{
-    AnyType, AnyTypeEnum, BasicMetadataTypeEnum, BasicType, BasicTypeEnum, IntType, PointerType,
-    StringRadix, StructType,
+    BasicMetadataTypeEnum, BasicType, BasicTypeEnum, IntType, PointerType, StringRadix, StructType,
 };
 use inkwell::values::{
     AnyValueEnum, ArrayValue, BasicMetadataValueEnum, BasicValue, BasicValueEnum, CallSiteValue,
@@ -13,7 +13,6 @@ use inkwell::values::{
 };
 use inkwell::{AddressSpace, OptimizationLevel};
 use std::collections::HashMap;
-use std::fmt::format;
 use std::path::Path;
 
 use crate::ir::*;
@@ -56,10 +55,10 @@ impl<'ast, 'ctx> CodeGen<'ast, 'ctx> {
         let llvm_module = ctx.create_module(&module.ast.name.0);
         let pointers = HashMap::new();
         let format_str = {
-            let global = llvm_module.add_global(ctx.i8_type().array_type(2), None, "formatString");
+            let global = llvm_module.add_global(ctx.i8_type().array_type(3), None, "formatString");
             global.set_constant(true);
             global.set_unnamed_addr(true);
-            global.set_initializer(&i8_array_from_str(ctx, "%i"));
+            global.set_initializer(&i8_array_from_str(ctx, "%i\n"));
             global
         };
         let globals = HashMap::new();
@@ -82,7 +81,7 @@ impl<'ast, 'ctx> CodeGen<'ast, 'ctx> {
                 string: ctx.struct_type(
                     &[
                         BasicTypeEnum::IntType(ctx.i64_type()),
-                        BasicTypeEnum::PointerType(char_type.ptr_type(AddressSpace::Generic)),
+                        BasicTypeEnum::PointerType(char_type.ptr_type(AddressSpace::default())),
                     ],
                     false,
                 ),
@@ -90,7 +89,7 @@ impl<'ast, 'ctx> CodeGen<'ast, 'ctx> {
         }
     }
     fn build_printf_call(&self, call: &FunctionCall) -> BasicValueEnum<'ctx> {
-        let c_str_type = self.ctx.i8_type().ptr_type(AddressSpace::Generic);
+        let c_str_type = self.ctx.i8_type().ptr_type(AddressSpace::default());
         let printf_type = self.ctx.i32_type().fn_type(&[c_str_type.into()], true);
         let printf_fn =
             self.llvm_module.add_function("printf", printf_type, Some(Linkage::External));
@@ -120,7 +119,7 @@ impl<'ast, 'ctx> CodeGen<'ast, 'ctx> {
         match ir_type {
             IrType::Int => BasicMetadataTypeEnum::IntType(self.ctx.i64_type()),
             IrType::String => BasicMetadataTypeEnum::PointerType(
-                self.ctx.i8_type().ptr_type(AddressSpace::Generic),
+                self.ctx.i8_type().ptr_type(AddressSpace::default()),
             ),
             // TODO: Representing Unit as just the boolean false for now, maybe some const ptr is
             // better, idk
@@ -231,7 +230,9 @@ impl<'ast, 'ctx> CodeGen<'ast, 'ctx> {
                     self.pointers.insert(val_def.variable_id, ptr);
                 }
                 IrStmt::ReturnStmt(return_stmt) => {
-                    let ptr = self.codegen_expr(&return_stmt.expr);
+                    let return_expr = &return_stmt.expr;
+                    let ptr = self.codegen_expr(&return_expr);
+                    let typ = self.eval_type(return_expr.get_type());
                     let pointee = self.builder.build_load(ptr, "ret_val");
                     self.builder.build_return(Some(&pointee));
                 }
@@ -247,7 +248,7 @@ impl<'ast, 'ctx> CodeGen<'ast, 'ctx> {
                     let llvm_ty = self.builtin_types.i64;
                     let llvm_val = self.llvm_module.add_global(
                         llvm_ty,
-                        Some(AddressSpace::Const),
+                        Some(AddressSpace::default()),
                         &variable.name,
                     );
                     llvm_val.set_constant(true);
@@ -281,6 +282,7 @@ impl<'ast, 'ctx> CodeGen<'ast, 'ctx> {
                 param.set_name(&ir_param.name);
                 let ptr =
                     self.builder.build_alloca(self.eval_type(ir_param.ir_type), &ir_param.name);
+                self.builder.build_store(ptr, param);
                 self.pointers.insert(ir_param.variable_id, ptr);
             }
             self.codegen_block(&function.block);
@@ -309,6 +311,26 @@ impl<'ast, 'ctx> CodeGen<'ast, 'ctx> {
             )
             .unwrap();
 
+        let pass_manager_b = PassManagerBuilder::create();
+        pass_manager_b.set_optimization_level(OptimizationLevel::Aggressive);
+        // pass_manager_b.populate_function_pass_manager(&function_pass_manager);
+        // pass_manager_b.populate_module_pass_manager(&module_pass_manager);
+        // The PassManager::create function works for Module and Function. If module,
+        // the expected input is (). If function, the expected input is a Module
+        // add_verifier_pass
+        // let function_pass_manager: PassManager<FunctionValue<'ctx>> =
+        //     PassManager::create(&self.llvm_module);
+        // function_pass_manager.add_verifier_pass();
+
+        let module_pass_manager: PassManager<inkwell::module::Module<'ctx>> =
+            PassManager::create(());
+        module_pass_manager.add_verifier_pass();
+        module_pass_manager.add_promote_memory_to_register_pass();
+        module_pass_manager.add_function_attrs_pass();
+
+        module_pass_manager.run_on(&self.llvm_module);
+
+        machine.add_analysis_passes(&module_pass_manager);
         let filename = format!("{}.out", self.name());
         println!("Outputting object file to {filename}");
         self.llvm_module.set_data_layout(&machine.get_target_data().get_data_layout());
