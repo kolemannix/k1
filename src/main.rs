@@ -13,7 +13,7 @@ use std::fs;
 use std::fs::File;
 use std::io::{BufReader, Read, Write};
 
-use crate::codegen_ir::CodeGen;
+use crate::codegen_ir::Codegen;
 
 /// Type size assertion. The first argument is a type and the second argument is its expected size.
 /// Cool trick from rustc.
@@ -45,7 +45,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut irgen = ir::IrModule::new(&ast);
     irgen.run()?;
     println!("{irgen}");
-    let mut codegen = CodeGen::create(&ctx, &irgen);
+    let mut codegen = Codegen::create(&ctx, &irgen);
     codegen.codegen_module();
     codegen.optimize()?;
     let mut f = File::create("llvm_out.ll")?;

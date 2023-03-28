@@ -1,3 +1,4 @@
+use anyhow::Result;
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -25,7 +26,7 @@ struct BuiltinTypes<'ctx> {
     string: StructType<'ctx>,
 }
 
-pub struct CodeGen<'ast, 'ctx> {
+pub struct Codegen<'ast, 'ctx> {
     ctx: &'ctx Context,
     module: &'ctx IrModule<'ast>,
     llvm_module: inkwell::module::Module<'ctx>,
@@ -42,14 +43,16 @@ pub fn init_context() -> Context {
     Context::create()
 }
 
+type CodegenResult<T> = anyhow::Result<T>;
+
 fn i8_array_from_str<'ctx>(ctx: &'ctx Context, value: &str) -> ArrayValue<'ctx> {
     let chars =
         value.bytes().map(|b| ctx.i8_type().const_int(b as u64, false)).collect::<Vec<IntValue>>();
     ctx.i8_type().const_array(&chars)
 }
 
-impl<'ast, 'ctx> CodeGen<'ast, 'ctx> {
-    pub fn create(ctx: &'ctx Context, module: &'ctx IrModule<'ast>) -> CodeGen<'ast, 'ctx> {
+impl<'ast, 'ctx> Codegen<'ast, 'ctx> {
+    pub fn create(ctx: &'ctx Context, module: &'ctx IrModule<'ast>) -> Codegen<'ast, 'ctx> {
         let builder = ctx.create_builder();
         let char_type = ctx.i8_type();
         let llvm_module = ctx.create_module(&module.ast.name.0);
@@ -64,7 +67,7 @@ impl<'ast, 'ctx> CodeGen<'ast, 'ctx> {
         let globals = HashMap::new();
         let mut builtin_globals: HashMap<String, GlobalValue<'ctx>> = HashMap::new();
         builtin_globals.insert("formatString".to_string(), format_str);
-        CodeGen {
+        Codegen {
             ctx,
             module,
             llvm_module,
@@ -88,20 +91,37 @@ impl<'ast, 'ctx> CodeGen<'ast, 'ctx> {
             },
         }
     }
-    fn build_printf_call(&self, call: &FunctionCall) -> BasicValueEnum<'ctx> {
-        let c_str_type = self.ctx.i8_type().ptr_type(AddressSpace::default());
+
+    fn loaded_int_value_from_enum(&mut self, value: BasicValueEnum<'ctx>) -> IntValue<'ctx> {
+        match value {
+            BasicValueEnum::IntValue(int_value) => int_value,
+            BasicValueEnum::PointerValue(int_ptr) => {
+                let loaded = self.builder.build_load(int_ptr, "binop_lhs");
+                loaded.into_int_value()
+            }
+            other => {
+                panic!("Could not coerce {other:?} value to Int")
+            }
+        }
+    }
+
+    fn build_printf_call(&mut self, call: &FunctionCall) -> BasicValueEnum<'ctx> {
+        let c_str_type = self.builtin_types.char.ptr_type(AddressSpace::default());
         let printf_type = self.ctx.i32_type().fn_type(&[c_str_type.into()], true);
         let printf_fn =
             self.llvm_module.add_function("printf", printf_type, Some(Linkage::External));
         // Assume the arg is an int since that's what the intrinsic typechecks for
         let first_arg = self.codegen_expr(&call.args[0]);
-        let first_arg_value = self.builder.build_load(first_arg, "println_arg").into_int_value();
+        // Coerce the arg to an int ptr
+        let first_arg_loaded = self.loaded_int_value_from_enum(first_arg);
+        dbg!(first_arg_loaded);
+
         let format_str = self.builtin_globals.get("formatString").unwrap();
         let format_str_ptr =
             self.builder.build_bitcast(format_str.as_pointer_value(), c_str_type, "fmt_str");
         let call = self
             .builder
-            .build_call(printf_fn, &[format_str_ptr.into(), first_arg_value.into()], "printf")
+            .build_call(printf_fn, &[format_str_ptr.into(), first_arg_loaded.into()], "printf")
             .try_as_basic_value()
             .left()
             .unwrap();
@@ -126,55 +146,42 @@ impl<'ast, 'ctx> CodeGen<'ast, 'ctx> {
             IrType::Unit => BasicMetadataTypeEnum::IntType(self.ctx.bool_type()),
         }
     }
-    fn codegen_val(&self, val: &ValDef) -> inkwell::values::PointerValue<'ctx> {
+    fn codegen_val(&mut self, val: &ValDef) -> inkwell::values::BasicValueEnum<'ctx> {
         let value = self.codegen_expr(&val.initializer);
         value
     }
     // We alloca everything with no guilt because even clang does that apparently
-    fn codegen_expr(&self, expr: &IrExpr) -> inkwell::values::PointerValue<'ctx> {
+    fn codegen_expr(&mut self, expr: &IrExpr) -> inkwell::values::BasicValueEnum<'ctx> {
         match expr {
             IrExpr::Int(int_value) => {
-                let ptr = self.builder.build_alloca(self.builtin_types.i64, "");
                 // LLVM only has unsigned values, the instructions are what provide the semantics
                 // of signed vs unsigned
-                self.builder
-                    .build_store(ptr, self.builtin_types.i64.const_int(*int_value as u64, false));
-                ptr
+                let value = self.builtin_types.i64.const_int(*int_value as u64, false);
+                value.as_basic_value_enum()
             }
             IrExpr::Str(_) => {
                 todo!("Strings!")
             }
             IrExpr::Variable(ir_var) => {
                 if let Some(ptr) = self.pointers.get(&ir_var.variable_id) {
-                    *ptr
+                    ptr.as_basic_value_enum()
                 } else if let Some(global) = self.globals.get(&ir_var.variable_id) {
                     let value = global.get_initializer().unwrap();
-                    let ptr = self.builder.build_alloca(value.get_type(), "global_ptr");
-                    self.builder.build_store(ptr, value);
-                    ptr
+                    value
                 } else {
                     panic!("No pointer or global found for variable {:?}", ir_var)
                 }
             }
-            IrExpr::BinaryOp(bin_op) => {
-                let lhs_ptr = self.codegen_expr(&bin_op.lhs);
-                let rhs_ptr = self.codegen_expr(&bin_op.rhs);
-                match bin_op.kind {
-                    BinaryOpKind::Add => {
-                        let lhs_loaded =
-                            self.builder.build_load(lhs_ptr, "load_lhs").into_int_value();
-                        let rhs_loaded =
-                            self.builder.build_load(rhs_ptr, "load_rhs").into_int_value();
-                        let add_res = self.builder.build_int_add(lhs_loaded, rhs_loaded, "add");
-                        let add_res_ptr = self.builder.build_alloca(
-                            self.eval_type(bin_op.ir_type).as_basic_type_enum(),
-                            "add_res_ptr",
-                        );
-                        self.builder.build_store(add_res_ptr, add_res);
-                        add_res_ptr
-                    }
+            IrExpr::BinaryOp(bin_op) => match bin_op.kind {
+                BinaryOpKind::Add => {
+                    let lhs_value = self.codegen_expr(&bin_op.lhs);
+                    let rhs_value = self.codegen_expr(&bin_op.rhs);
+                    let lhs_int = self.loaded_int_value_from_enum(lhs_value);
+                    let rhs_int = self.loaded_int_value_from_enum(rhs_value);
+                    let add_res = self.builder.build_int_add(lhs_int, rhs_int, "add");
+                    add_res.as_basic_value_enum()
                 }
-            }
+            },
             IrExpr::Block(block) => {
                 // This is just a lexical scoping block, not a control-flow block, so doesn't need
                 // to correspond to an LLVM basic block
@@ -182,8 +189,6 @@ impl<'ast, 'ctx> CodeGen<'ast, 'ctx> {
                 todo!("codegen block")
             }
             IrExpr::FunctionCall(call) => {
-                // TODO: This is our first 'intrinsic'
-                // Support intrinsics properly in the IR
                 let callee = self.module.get_function(call.callee_function_id);
                 if !&callee.is_intrinsic {
                     let function_value: FunctionValue = self
@@ -194,9 +199,8 @@ impl<'ast, 'ctx> CodeGen<'ast, 'ctx> {
                         .args
                         .iter()
                         .map(|arg_expr| {
-                            let ptr = self.codegen_expr(arg_expr);
-                            let loaded = self.builder.build_load(ptr, "fn_arg");
-                            BasicMetadataValueEnum::from(loaded)
+                            let basic_value = self.codegen_expr(arg_expr);
+                            BasicMetadataValueEnum::from(basic_value)
                         })
                         .collect();
                     let callsite_value =
@@ -204,15 +208,15 @@ impl<'ast, 'ctx> CodeGen<'ast, 'ctx> {
                     // Call return Right for void, and Left for values
                     let result_value =
                         callsite_value.try_as_basic_value().left().expect("function returned void");
-                    let ptr = self.builder.build_alloca(result_value.get_type(), "call_result_ptr");
-                    self.builder.build_store(ptr, result_value);
-                    ptr
+                    result_value
                 } else if callee.name == "println" {
+                    // TODO: This is our first 'intrinsic'
+                    // Support intrinsics properly in the IR
                     self.build_printf_call(call);
                     println!("println call returned {:?}", call);
                     let ptr = self.builder.build_alloca(self.builtin_types.unit, "println_res_ptr");
                     self.builder.build_store(ptr, self.builtin_types.unit.const_int(0, false));
-                    ptr
+                    self.builtin_types.unit.const_int(0, false).as_basic_value_enum()
                 } else {
                     todo!("Unexpected instrinic: {}", callee.name);
                 }
@@ -226,15 +230,16 @@ impl<'ast, 'ctx> CodeGen<'ast, 'ctx> {
                     self.codegen_expr(expr);
                 }
                 IrStmt::ValDef(val_def) => {
-                    let ptr = self.codegen_val(val_def);
+                    let typ = self.eval_type(val_def.ir_type);
+                    let ptr =
+                        self.builder.build_alloca(typ, &format!("val_{}", val_def.variable_id));
+                    let value = self.codegen_val(val_def);
+                    self.builder.build_store(ptr, value);
                     self.pointers.insert(val_def.variable_id, ptr);
                 }
                 IrStmt::ReturnStmt(return_stmt) => {
-                    let return_expr = &return_stmt.expr;
-                    let ptr = self.codegen_expr(&return_expr);
-                    let typ = self.eval_type(return_expr.get_type());
-                    let pointee = self.builder.build_load(ptr, "ret_val");
-                    self.builder.build_return(Some(&pointee));
+                    let value = self.codegen_expr(&return_stmt.expr);
+                    self.builder.build_return(Some(&value));
                 }
                 IrStmt::Assignment(_) => todo!("assignment codegen"),
             }
