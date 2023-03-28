@@ -10,9 +10,9 @@ target triple = "arm64-apple-darwin22.3.0"
 define i64 @add(i64 %x, i64 %y) #0 {
 entry:
   %add = add i64 %x, 1
-  %add5 = add i64 %add, 1337
-  %add9 = add i64 %add5, %y
-  ret i64 %add9
+  %add4 = add i64 %add, 1337
+  %add7 = add i64 %add4, %y
+  ret i64 %add7
 }
 
 define i64 @main(i64 %x) {
