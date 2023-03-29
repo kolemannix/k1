@@ -2,8 +2,9 @@
 - [x] Implement typed IR
 - [x] Implement FnCall
 - [x] Implement Add
+- [x] Implement Multiply
 - [x] Use basicvalue not pointervalue as main IR type
-- [ ] Add booleans
+- [x] Add booleans
 - [ ] Parse comments
 - [ ] Ditch semicolons
 - [ ] Implement IF

@@ -19,9 +19,8 @@ impl Tokens {
     pub fn next(&mut self) -> Token {
         self.iter.next().unwrap_or(EOF_TOKEN)
     }
-    pub fn advance(&mut self) -> () {
+    pub fn advance(&mut self) {
         self.next();
-        ()
     }
     pub fn peek(&self) -> Token {
         let peeked = self.iter.clone().next();
@@ -175,7 +174,7 @@ impl TokenKind {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct Token {
     pub start: u32,
     pub len: u32,
@@ -215,14 +214,24 @@ impl Lexer<'_> {
             trace!("LEX line={} char={} '{}' buf={}", self.line_index, n, c, tok_buf);
             if c == EOF_CHAR {
                 if !tok_buf.is_empty() {
-                    break Some(Token::make(TokenKind::Text, self.line_index, n - tok_len, tok_len));
+                    break Some(Token::make(
+                        TokenKind::Text,
+                        self.line_index,
+                        n - tok_len,
+                        tok_len,
+                    ));
                 } else {
                     break None;
                 }
             }
             if let Some(single_char_tok) = TokenKind::from_char(c) {
                 if !tok_buf.is_empty() {
-                    break Some(Token::make(TokenKind::Text, self.line_index, n - tok_len, tok_len));
+                    break Some(Token::make(
+                        TokenKind::Text,
+                        self.line_index,
+                        n - tok_len,
+                        tok_len,
+                    ));
                 } else {
                     self.advance();
                     break Some(Token::make(single_char_tok, self.line_index, n, 1));
@@ -234,7 +243,12 @@ impl Lexer<'_> {
                     if let Some(tok) = TokenKind::keyword_from_str(&tok_buf) {
                         break Some(Token::make(tok, self.line_index, n - tok_len, tok_len));
                     } else {
-                        break Some(Token::make(TokenKind::Text, self.line_index, n - tok_len, tok_len));
+                        break Some(Token::make(
+                            TokenKind::Text,
+                            self.line_index,
+                            n - tok_len,
+                            tok_len,
+                        ));
                     }
                 }
             }
@@ -275,9 +289,8 @@ impl Lexer<'_> {
     fn peek_with_pos(&self) -> (char, u32) {
         (self.peek(), self.pos)
     }
-    fn advance(&mut self) -> () {
+    fn advance(&mut self) {
         self.next();
-        ()
     }
 }
 
@@ -307,7 +320,20 @@ mod test {
         let input = "val x = println(\"foobear\")";
         let result = Lexer::make(&input).run();
         let kinds: Vec<TokenKind> = result.iter().map(|t| t.kind).collect();
-        assert_eq!(kinds, vec![KeywordVal, Text, Equals, Text, OpenParen, DoubleQuote, Text, DoubleQuote, CloseParen])
+        assert_eq!(
+            kinds,
+            vec![
+                KeywordVal,
+                Text,
+                Equals,
+                Text,
+                OpenParen,
+                DoubleQuote,
+                Text,
+                DoubleQuote,
+                CloseParen
+            ]
+        )
     }
 
     #[test]

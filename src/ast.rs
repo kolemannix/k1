@@ -3,6 +3,7 @@ use crate::lex::TokenKind;
 #[derive(Debug)]
 pub enum Literal {
     Numeric(String),
+    Bool(bool),
     String(String),
 }
 
@@ -102,9 +103,10 @@ pub struct Block {
     pub stmts: Vec<BlockStmt>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum TypePrimitive {
     Int,
+    Bool,
 }
 
 #[derive(Debug)]

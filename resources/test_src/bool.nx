@@ -1,0 +1,7 @@
+fn main(x: Int): Int {
+  val t: Bool = true;
+  val f: Bool = false;
+  println(t);
+  println(f);
+  return 0;
+}

@@ -12,6 +12,7 @@ use std::error::Error;
 use std::fs;
 use std::fs::File;
 use std::io::{BufReader, Read, Write};
+use std::path::Path;
 
 use crate::codegen_ir::Codegen;
 
@@ -25,7 +26,7 @@ macro_rules! static_assert_size {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    static_assert_size!(ast::Definition, 88);
+    static_assert_size!(ast::Definition, 96);
     println!("Size of ast::Definition: {}", std::mem::size_of::<ast::Definition>());
     println!("Size of ast::BlockStmt: {}", std::mem::size_of::<ast::BlockStmt>());
     println!("Size of ast::Expression: {}", std::mem::size_of::<ast::Expression>());
@@ -37,7 +38,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let src_path = &args[1];
     println!("src_dir: {}", src_path);
     let src = fs::read_to_string(src_path).expect("could not read source directory");
-    let ast = parse::parse_text(&src, src_path).unwrap_or_else(|e| {
+    let path = Path::new(&src_path);
+    let filename = path.file_name().unwrap().to_str().unwrap();
+    let ast = parse::parse_text(&src, filename).unwrap_or_else(|e| {
         eprintln!("Encountered ParseError on file '{}': {:?}", src_path, e);
         panic!("parse error");
     });
@@ -48,7 +51,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut codegen = Codegen::create(&ctx, &irgen);
     codegen.codegen_module();
     codegen.optimize()?;
-    let mut f = File::create("llvm_out.ll")?;
+    let mut f = File::create(format!("{}_llvm_out.ll", filename))?;
     let llvm_text = codegen.output_llvm_ir_text();
     f.write_all(llvm_text.as_bytes()).unwrap();
     println!("{}", llvm_text);
