@@ -17,6 +17,7 @@ pub type Index = u32;
 pub enum IrType {
     Unit,
     Int,
+    Bool,
     String,
     // TypeExpr(Index)
 }
@@ -54,6 +55,7 @@ pub struct VariableExpr {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryOpKind {
     Add,
+    Multiply,
 }
 
 #[derive(Debug, Clone)]
@@ -79,6 +81,7 @@ pub struct FunctionCall {
 pub enum IrExpr {
     Str(String),
     Int(i64),
+    Bool(bool),
     Variable(VariableExpr),
     BinaryOp(BinaryOp),
     Block(IrBlock),
@@ -117,6 +120,7 @@ impl IrExpr {
         match self {
             IrExpr::Str(_) => IrType::String,
             IrExpr::Int(_) => IrType::Int,
+            IrExpr::Bool(_) => IrType::Bool,
             IrExpr::Variable(var) => var.ir_type,
             IrExpr::BinaryOp(binary_op) => binary_op.ir_type,
             IrExpr::Block(b) => b.ret_type,
@@ -271,6 +275,7 @@ impl<'a> IrModule<'a> {
     fn eval_type_expr(&self, expr: &TypeExpression, scope_id: ScopeId) -> IrGenResult<IrType> {
         match expr {
             TypeExpression::Primitive(TypePrimitive::Int) => Ok(IrType::Int),
+            TypeExpression::Primitive(TypePrimitive::Bool) => Ok(IrType::Bool),
         }
     }
 
@@ -282,6 +287,7 @@ impl<'a> IrModule<'a> {
     ) -> IrGenResult<IrType> {
         match expr {
             TypeExpression::Primitive(TypePrimitive::Int) => Ok(IrType::Int),
+            TypeExpression::Primitive(TypePrimitive::Bool) => Ok(IrType::Bool),
         }
     }
 
@@ -363,12 +369,21 @@ impl<'a> IrModule<'a> {
                         lhs: Box::new(lhs),
                         rhs: Box::new(rhs),
                     }),
-                    ast::BinaryOpKind::Mult => return simple_fail("Mult is unimplemented"),
+                    ast::BinaryOpKind::Mult => IrExpr::BinaryOp(BinaryOp {
+                        kind: BinaryOpKind::Multiply,
+                        ir_type: lhs.get_type(),
+                        lhs: Box::new(lhs),
+                        rhs: Box::new(rhs),
+                    }),
                 };
                 Ok(expr)
             }
             Expression::Literal(Literal::Numeric(s)) => {
                 let expr = self.parse_numeric(&s)?;
+                Ok(expr)
+            }
+            Expression::Literal(Literal::Bool(b)) => {
+                let expr = IrExpr::Bool(*b);
                 Ok(expr)
             }
             Expression::Literal(Literal::String(s)) => {

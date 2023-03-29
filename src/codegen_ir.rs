@@ -23,7 +23,12 @@ struct BuiltinTypes<'ctx> {
     unit: IntType<'ctx>,
     boolean: IntType<'ctx>,
     char: IntType<'ctx>,
+    c_str: PointerType<'ctx>,
     string: StructType<'ctx>,
+}
+
+struct BuiltinFunctions<'ctx> {
+    printf: FunctionValue<'ctx>,
 }
 
 pub struct Codegen<'ast, 'ctx> {
@@ -35,6 +40,7 @@ pub struct Codegen<'ast, 'ctx> {
     // TODO: pointers should be by scope or something
     pointers: HashMap<VariableId, PointerValue<'ctx>>,
     globals: HashMap<VariableId, GlobalValue<'ctx>>,
+    builtin_functions: BuiltinFunctions<'ctx>,
     builtin_globals: HashMap<String, GlobalValue<'ctx>>,
     builtin_types: BuiltinTypes<'ctx>,
 }
@@ -67,6 +73,24 @@ impl<'ast, 'ctx> Codegen<'ast, 'ctx> {
         let globals = HashMap::new();
         let mut builtin_globals: HashMap<String, GlobalValue<'ctx>> = HashMap::new();
         builtin_globals.insert("formatString".to_string(), format_str);
+
+        let builtin_types = BuiltinTypes {
+            i64: ctx.i64_type(),
+            unit: ctx.bool_type(),
+            boolean: ctx.bool_type(),
+            char: char_type,
+            c_str: char_type.ptr_type(AddressSpace::default()),
+            string: ctx.struct_type(
+                &[
+                    BasicTypeEnum::IntType(ctx.i64_type()),
+                    BasicTypeEnum::PointerType(char_type.ptr_type(AddressSpace::default())),
+                ],
+                false,
+            ),
+        };
+
+        let printf_type = ctx.i32_type().fn_type(&[builtin_types.c_str.into()], true);
+        let printf = llvm_module.add_function("printf", printf_type, Some(Linkage::External));
         Codegen {
             ctx,
             module,
@@ -75,20 +99,9 @@ impl<'ast, 'ctx> Codegen<'ast, 'ctx> {
             pointers,
             globals,
             llvm_functions: HashMap::new(),
+            builtin_functions: BuiltinFunctions { printf },
             builtin_globals,
-            builtin_types: BuiltinTypes {
-                i64: ctx.i64_type(),
-                unit: ctx.bool_type(),
-                boolean: ctx.bool_type(),
-                char: char_type,
-                string: ctx.struct_type(
-                    &[
-                        BasicTypeEnum::IntType(ctx.i64_type()),
-                        BasicTypeEnum::PointerType(char_type.ptr_type(AddressSpace::default())),
-                    ],
-                    false,
-                ),
-            },
+            builtin_types,
         }
     }
 
@@ -106,10 +119,6 @@ impl<'ast, 'ctx> Codegen<'ast, 'ctx> {
     }
 
     fn build_printf_call(&mut self, call: &FunctionCall) -> BasicValueEnum<'ctx> {
-        let c_str_type = self.builtin_types.char.ptr_type(AddressSpace::default());
-        let printf_type = self.ctx.i32_type().fn_type(&[c_str_type.into()], true);
-        let printf_fn =
-            self.llvm_module.add_function("printf", printf_type, Some(Linkage::External));
         // Assume the arg is an int since that's what the intrinsic typechecks for
         let first_arg = self.codegen_expr(&call.args[0]);
         // Coerce the arg to an int ptr
@@ -117,11 +126,18 @@ impl<'ast, 'ctx> Codegen<'ast, 'ctx> {
         dbg!(first_arg_loaded);
 
         let format_str = self.builtin_globals.get("formatString").unwrap();
-        let format_str_ptr =
-            self.builder.build_bitcast(format_str.as_pointer_value(), c_str_type, "fmt_str");
+        let format_str_ptr = self.builder.build_bitcast(
+            format_str.as_pointer_value(),
+            self.builtin_types.c_str,
+            "fmt_str",
+        );
         let call = self
             .builder
-            .build_call(printf_fn, &[format_str_ptr.into(), first_arg_loaded.into()], "printf")
+            .build_call(
+                self.builtin_functions.printf,
+                &[format_str_ptr.into(), first_arg_loaded.into()],
+                "printf",
+            )
             .try_as_basic_value()
             .left()
             .unwrap();
@@ -131,20 +147,13 @@ impl<'ast, 'ctx> Codegen<'ast, 'ctx> {
     fn eval_type(&self, expr: IrType) -> BasicTypeEnum<'ctx> {
         match expr {
             IrType::Int => self.builtin_types.i64.as_basic_type_enum(),
+            IrType::Bool => self.builtin_types.boolean.as_basic_type_enum(),
             IrType::String => self.builtin_types.string.as_basic_type_enum(),
             IrType::Unit => self.builtin_types.unit.as_basic_type_enum(),
         }
     }
     fn eval_basic_metadata_ty(&self, ir_type: IrType) -> BasicMetadataTypeEnum<'ctx> {
-        match ir_type {
-            IrType::Int => BasicMetadataTypeEnum::IntType(self.ctx.i64_type()),
-            IrType::String => BasicMetadataTypeEnum::PointerType(
-                self.ctx.i8_type().ptr_type(AddressSpace::default()),
-            ),
-            // TODO: Representing Unit as just the boolean false for now, maybe some const ptr is
-            // better, idk
-            IrType::Unit => BasicMetadataTypeEnum::IntType(self.ctx.bool_type()),
-        }
+        self.eval_type(ir_type).as_basic_type_enum().into()
     }
     fn codegen_val(&mut self, val: &ValDef) -> inkwell::values::BasicValueEnum<'ctx> {
         let value = self.codegen_expr(&val.initializer);
@@ -153,14 +162,18 @@ impl<'ast, 'ctx> Codegen<'ast, 'ctx> {
     // We alloca everything with no guilt because even clang does that apparently
     fn codegen_expr(&mut self, expr: &IrExpr) -> inkwell::values::BasicValueEnum<'ctx> {
         match expr {
+            IrExpr::Str(_) => {
+                todo!("Strings!")
+            }
             IrExpr::Int(int_value) => {
                 // LLVM only has unsigned values, the instructions are what provide the semantics
                 // of signed vs unsigned
                 let value = self.builtin_types.i64.const_int(*int_value as u64, false);
                 value.as_basic_value_enum()
             }
-            IrExpr::Str(_) => {
-                todo!("Strings!")
+            IrExpr::Bool(b) => {
+                let value = self.builtin_types.boolean.const_int(*b as u64, true);
+                value.as_basic_value_enum()
             }
             IrExpr::Variable(ir_var) => {
                 if let Some(ptr) = self.pointers.get(&ir_var.variable_id) {
@@ -180,6 +193,14 @@ impl<'ast, 'ctx> Codegen<'ast, 'ctx> {
                     let rhs_int = self.loaded_int_value_from_enum(rhs_value);
                     let add_res = self.builder.build_int_add(lhs_int, rhs_int, "add");
                     add_res.as_basic_value_enum()
+                }
+                BinaryOpKind::Multiply => {
+                    let lhs_value = self.codegen_expr(&bin_op.lhs);
+                    let rhs_value = self.codegen_expr(&bin_op.rhs);
+                    let lhs_int = self.loaded_int_value_from_enum(lhs_value);
+                    let rhs_int = self.loaded_int_value_from_enum(rhs_value);
+                    let mul_res = self.builder.build_int_mul(lhs_int, rhs_int, "mul");
+                    mul_res.as_basic_value_enum()
                 }
             },
             IrExpr::Block(block) => {
@@ -332,11 +353,13 @@ impl<'ast, 'ctx> Codegen<'ast, 'ctx> {
         module_pass_manager.add_verifier_pass();
         module_pass_manager.add_promote_memory_to_register_pass();
         module_pass_manager.add_function_attrs_pass();
+        module_pass_manager.add_instruction_combining_pass();
+        module_pass_manager.add_function_inlining_pass();
 
         module_pass_manager.run_on(&self.llvm_module);
 
         machine.add_analysis_passes(&module_pass_manager);
-        let filename = format!("{}.out", self.name());
+        let filename = format!("{}.o", self.name());
         println!("Outputting object file to {filename}");
         self.llvm_module.set_data_layout(&machine.get_target_data().get_data_layout());
         self.llvm_module.set_triple(&triple);

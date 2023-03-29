@@ -1,0 +1,9 @@
+fn mult(x: Int, y: Int): Int {
+  return x * y;
+}
+
+fn main(x: Int): Int {
+  val result: Int = mult(55, 2 + 3 + 3);
+  println(result);
+  return 0;
+}

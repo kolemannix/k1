@@ -91,11 +91,10 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn expect_eat_token(&mut self, target_token: TokenKind) -> Result<(), ParseError> {
+    fn expect_eat_token(&mut self, target_token: TokenKind) -> ParseResult<()> {
         let result = self.eat_token(target_token);
         match result {
             None => {
-                // We don't mind doing a repetitive `peek` in the error flow
                 let actual = self.peek();
                 Err(ParseError::ExpectedToken(target_token, actual, None))
             }
@@ -114,11 +113,10 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn expect_eat_ident(&mut self) -> Result<String, ParseError> {
+    fn expect_eat_ident(&mut self) -> ParseResult<String> {
         let result = self.eat_ident();
         match result {
             None => {
-                // We don't mind doing a repetitive `peek` in the error flow
                 let actual = self.peek();
                 Err(ParseError::ExpectedToken(TokenKind::Text, actual, None))
             }
@@ -145,28 +143,42 @@ impl<'a> Parser<'a> {
             }
             (Text, _) => {
                 let text = self.tok_chars(first);
-                match text.chars().next() {
-                    Some(c) if c.is_numeric() => {
-                        let s = text.to_string();
-                        self.tokens.advance();
-                        Ok(Some(Literal::Numeric(s)))
+                if text == "true" {
+                    self.tokens.advance();
+                    Ok(Some(Literal::Bool(true)))
+                } else if text == "false" {
+                    self.tokens.advance();
+                    Ok(Some(Literal::Bool(false)))
+                } else {
+                    match text.chars().next() {
+                        Some(c) if c.is_numeric() => {
+                            let s = text.to_string();
+                            self.tokens.advance();
+                            Ok(Some(Literal::Numeric(s)))
+                        }
+                        _ => Ok(None),
                     }
-                    _ => Ok(None),
                 }
             }
             _ => Ok(None),
         };
     }
 
-    fn parse_type_expression(&mut self) -> Result<Option<TypeExpression>, ParseError> {
+    fn parse_type_expression(&mut self) -> ParseResult<Option<TypeExpression>> {
         let tok = self.peek();
         if let Text = tok.kind {
             let ident = self.tok_chars(tok);
             if ident == "Int" {
                 self.tokens.next();
                 Ok(Some(TypeExpression::Primitive(TypePrimitive::Int)))
+            } else if ident == "Bool" {
+                self.tokens.next();
+                Ok(Some(TypeExpression::Primitive(TypePrimitive::Bool)))
             } else {
-                Err(ParseError::Msg(format!("Unimplemented eat_type_expression; got {}", ident).to_string(), tok))
+                Err(ParseError::Msg(
+                    format!("Unimplemented eat_type_expression; got {}", ident),
+                    tok,
+                ))
             }
         } else {
             Ok(None)
@@ -175,14 +187,13 @@ impl<'a> Parser<'a> {
 
     fn parse_fn_arg(&mut self) -> ParseResult<Option<FnArg>> {
         let (one, two) = self.tokens.peek_two();
-        let named;
-        if one.kind == Text && two.kind == Equals {
+        let named = if one.kind == Text && two.kind == Equals {
             self.tokens.advance();
             self.tokens.advance();
-            named = true;
+            true
         } else {
-            named = false;
-        }
+            false
+        };
         match self.parse_expression() {
             Ok(Some(expr)) => {
                 let name = if named { Some(self.tok_chars(one).to_string()) } else { None };
@@ -217,12 +228,15 @@ impl<'a> Parser<'a> {
                 // Eat the OpenParen
                 self.tokens.advance();
                 match self.eat_delimited(Comma, CloseParen, |p| Parser::expect_fn_arg(p)) {
-                    Ok(args) => {
-                        Ok(Some(Expression::FnCall(FnCall { name: Ident(self.tok_chars(first).to_string()), args })))
-                    }
-                    Err(e) => {
-                        Err(ParseError::ExpectedNode("function arguments".to_string(), self.peek(), Some(Box::new(e))))
-                    }
+                    Ok(args) => Ok(Some(Expression::FnCall(FnCall {
+                        name: Ident(self.tok_chars(first).to_string()),
+                        args,
+                    }))),
+                    Err(e) => Err(ParseError::ExpectedNode(
+                        "function arguments".to_string(),
+                        self.peek(),
+                        Some(Box::new(e)),
+                    )),
                 }
             } else {
                 // Plain Reference
@@ -243,9 +257,15 @@ impl<'a> Parser<'a> {
                 let op_token = self.tokens.next();
                 let op_kind = BinaryOpKind::from_tokenkind(op_token.kind);
                 match op_kind {
-                    None => Err(ParseError::ExpectedNode("Binary Operator".to_string(), op_token, None)),
+                    None => {
+                        Err(ParseError::ExpectedNode("Binary Operator".to_string(), op_token, None))
+                    }
                     Some(op_kind) => {
-                        let operand2 = Parser::expect("rhs of binary op", self.peek(), self.parse_expression())?;
+                        let operand2 = Parser::expect(
+                            "rhs of binary op",
+                            self.peek(),
+                            self.parse_expression(),
+                        )?;
                         return Ok(Some(Expression::BinaryOp(BinaryOp {
                             operation: op_kind,
                             operand1: Box::new(expr),
@@ -318,7 +338,11 @@ impl<'a> Parser<'a> {
         self.tokens.advance();
         self.tokens.advance();
         let ident = self.tok_chars(ident).to_string();
-        let expr_result = Parser::expect("assignment RHS expected an expression", self.peek(), self.parse_expression());
+        let expr_result = Parser::expect(
+            "assignment RHS expected an expression",
+            self.peek(),
+            self.parse_expression(),
+        );
         expr_result.map(|expr| Some(Assignment { ident: Ident(ident.to_string()), expr }))
     }
 
@@ -334,7 +358,12 @@ impl<'a> Parser<'a> {
         self.eat_delimited(Comma, CloseParen, |p| Parser::eat_fn_arg_def(p))
     }
 
-    fn eat_delimited<T, F>(&mut self, delim: TokenKind, terminator: TokenKind, parse: F) -> ParseResult<Vec<T>>
+    fn eat_delimited<T, F>(
+        &mut self,
+        delim: TokenKind,
+        terminator: TokenKind,
+        parse: F,
+    ) -> ParseResult<Vec<T>>
     where
         F: Fn(&mut Parser) -> ParseResult<T>,
     {
@@ -386,7 +415,11 @@ impl<'a> Parser<'a> {
             if let Some(ret_val) = self.parse_expression()? {
                 Ok(Some(BlockStmt::ReturnStmt(ret_val)))
             } else {
-                Err(ParseError::ExpectedNode("return statement".to_string(), self.tokens.next(), None))
+                Err(ParseError::ExpectedNode(
+                    "return statement".to_string(),
+                    self.tokens.next(),
+                    None,
+                ))
             }
         } else if let Some(if_expr) = self.eat_if_expr()? {
             Ok(Some(BlockStmt::If(if_expr)))
@@ -401,7 +434,8 @@ impl<'a> Parser<'a> {
 
     fn parse_block(&mut self) -> ParseResult<Option<Block>> {
         let _block_start = Parser::check(self.eat_token(OpenBrace))?;
-        let closure = |p: &mut Parser| Parser::expect("statement", p.peek(), Parser::parse_statement(p));
+        let closure =
+            |p: &mut Parser| Parser::expect("statement", p.peek(), Parser::parse_statement(p));
         let block_statements = self.eat_delimited(Semicolon, CloseBrace, closure)?;
         Ok(Some(Block { stmts: block_statements }))
     }
