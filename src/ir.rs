@@ -56,6 +56,25 @@ pub struct VariableExpr {
 pub enum BinaryOpKind {
     Add,
     Multiply,
+    And,
+    Or,
+}
+
+impl BinaryOpKind {
+    pub fn is_integer_op(&self) -> bool {
+        match self {
+            BinaryOpKind::Add => true,
+            BinaryOpKind::Multiply => true,
+            BinaryOpKind::Or | BinaryOpKind::And => true,
+            _ => false,
+        }
+    }
+    pub fn is_boolean_op(&self) -> bool {
+        match self {
+            BinaryOpKind::Or | BinaryOpKind::And => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -362,20 +381,18 @@ impl<'a> IrModule<'a> {
                     return simple_fail("operand types did not match");
                 }
 
-                let expr = match infix_op.operation {
-                    ast::BinaryOpKind::Add => IrExpr::BinaryOp(BinaryOp {
-                        kind: BinaryOpKind::Add,
-                        ir_type: lhs.get_type(),
-                        lhs: Box::new(lhs),
-                        rhs: Box::new(rhs),
-                    }),
-                    ast::BinaryOpKind::Mult => IrExpr::BinaryOp(BinaryOp {
-                        kind: BinaryOpKind::Multiply,
-                        ir_type: lhs.get_type(),
-                        lhs: Box::new(lhs),
-                        rhs: Box::new(rhs),
-                    }),
+                let kind = match infix_op.operation {
+                    ast::BinaryOpKind::Add => BinaryOpKind::Add,
+                    ast::BinaryOpKind::Multiply => BinaryOpKind::Multiply,
+                    ast::BinaryOpKind::And => BinaryOpKind::And,
+                    ast::BinaryOpKind::Or => BinaryOpKind::Or,
                 };
+                let expr = IrExpr::BinaryOp(BinaryOp {
+                    kind,
+                    ir_type: lhs.get_type(),
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                });
                 Ok(expr)
             }
             Expression::Literal(Literal::Numeric(s)) => {

@@ -1,16 +1,15 @@
 use anyhow::Result;
-use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
-use inkwell::module::{Linkage, Module as LLVMModule};
+use inkwell::module::Linkage;
 use inkwell::passes::{PassManager, PassManagerBuilder};
-use inkwell::targets::{InitializationConfig, Target, TargetMachine, TargetTriple};
+use inkwell::targets::{InitializationConfig, Target, TargetMachine};
 use inkwell::types::{
     BasicMetadataTypeEnum, BasicType, BasicTypeEnum, IntType, PointerType, StringRadix, StructType,
 };
 use inkwell::values::{
-    AnyValueEnum, ArrayValue, BasicMetadataValueEnum, BasicValue, BasicValueEnum, CallSiteValue,
-    FunctionValue, GlobalValue, InstructionValue, IntValue, PointerValue,
+    ArrayValue, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue,
+    IntValue, PointerValue,
 };
 use inkwell::{AddressSpace, OptimizationLevel};
 use std::collections::HashMap;
@@ -185,23 +184,47 @@ impl<'ast, 'ctx> Codegen<'ast, 'ctx> {
                     panic!("No pointer or global found for variable {:?}", ir_var)
                 }
             }
-            IrExpr::BinaryOp(bin_op) => match bin_op.kind {
-                BinaryOpKind::Add => {
-                    let lhs_value = self.codegen_expr(&bin_op.lhs);
-                    let rhs_value = self.codegen_expr(&bin_op.rhs);
-                    let lhs_int = self.loaded_int_value_from_enum(lhs_value);
-                    let rhs_int = self.loaded_int_value_from_enum(rhs_value);
-                    let add_res = self.builder.build_int_add(lhs_int, rhs_int, "add");
-                    add_res.as_basic_value_enum()
+            IrExpr::BinaryOp(bin_op) => match bin_op.ir_type {
+                IrType::Int => {
+                    if bin_op.kind.is_integer_op() {
+                        let lhs_value = self.codegen_expr(&bin_op.lhs);
+                        let rhs_value = self.codegen_expr(&bin_op.rhs);
+                        let lhs_int = self.loaded_int_value_from_enum(lhs_value);
+                        let rhs_int = self.loaded_int_value_from_enum(rhs_value);
+                        let op_res = match bin_op.kind {
+                            BinaryOpKind::Add => {
+                                self.builder.build_int_add(lhs_int, rhs_int, "add")
+                            }
+                            BinaryOpKind::Multiply => {
+                                self.builder.build_int_mul(lhs_int, rhs_int, "mul")
+                            }
+                            BinaryOpKind::And => self.builder.build_and(lhs_int, rhs_int, "and"),
+                            BinaryOpKind::Or => self.builder.build_or(lhs_int, rhs_int, "or"),
+                        };
+                        op_res.as_basic_value_enum()
+                    } else {
+                        panic!("Unsupported binary operation {:?} on Int", bin_op.kind)
+                    }
                 }
-                BinaryOpKind::Multiply => {
-                    let lhs_value = self.codegen_expr(&bin_op.lhs);
-                    let rhs_value = self.codegen_expr(&bin_op.rhs);
-                    let lhs_int = self.loaded_int_value_from_enum(lhs_value);
-                    let rhs_int = self.loaded_int_value_from_enum(rhs_value);
-                    let mul_res = self.builder.build_int_mul(lhs_int, rhs_int, "mul");
-                    mul_res.as_basic_value_enum()
-                }
+                IrType::Bool => match bin_op.kind {
+                    BinaryOpKind::And | BinaryOpKind::Or => {
+                        let lhs = self.codegen_expr(&bin_op.lhs);
+                        let rhs = self.codegen_expr(&bin_op.rhs);
+                        let lhs_int = self.loaded_int_value_from_enum(lhs);
+                        let rhs_int = self.loaded_int_value_from_enum(rhs);
+                        let op = match bin_op.kind {
+                            BinaryOpKind::And => {
+                                self.builder.build_and(lhs_int, rhs_int, "bool_and")
+                            }
+                            BinaryOpKind::Or => self.builder.build_or(lhs_int, rhs_int, "bool_or"),
+                            _ => panic!(),
+                        };
+                        op.as_basic_value_enum()
+                    }
+                    other => panic!("Unsupported binary operation {other:?} on Bool"),
+                },
+                IrType::String => panic!("No string binary ops yet"),
+                IrType::Unit => panic!("No unit binary ops"),
             },
             IrExpr::Block(block) => {
                 // This is just a lexical scoping block, not a control-flow block, so doesn't need
