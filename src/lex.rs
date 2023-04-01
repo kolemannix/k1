@@ -2,6 +2,7 @@ use std::fmt;
 use std::str::Chars;
 use std::vec::IntoIter;
 
+use crate::ast::BinaryOpKind;
 use crate::trace;
 use TokenKind::*;
 
@@ -166,11 +167,7 @@ impl TokenKind {
         }
     }
     pub fn is_binary_operator(&self) -> bool {
-        match self {
-            Plus => true,
-            Asterisk => true,
-            _ => false,
-        }
+        BinaryOpKind::from_tokenkind(*self).is_some()
     }
 }
 

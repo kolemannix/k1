@@ -2,6 +2,11 @@ type Id = opaque String;
 
 type MyUnion = Id or Int;
 
+type Identified = struct {
+  id: Id;
+}
+
+// Structs compose (statically)
 type Foo = struct {
   count: Int,
   bytes: Array[Byte]
@@ -14,6 +19,7 @@ type UserRow = struct {
   password: Password
 };
 
+// oneof is easier to understand than enum, and more accurate for ADTs
 type Animal = oneof {
   Dog = struct { breed: String },
   Cat = struct { isOrange: bool }
@@ -51,6 +57,3 @@ val anonJsonWriter = impl JsonWriter[anon_type] {
 }
 anon_type.fields.map(f => println(f.name));
 
-type Identified = struct {
-  id: Id;
-}

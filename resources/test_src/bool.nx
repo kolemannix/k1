@@ -1,7 +1,8 @@
 fn main(x: Int): Int {
   val t: Bool = true;
   val f: Bool = false;
-  println(t);
-  println(f);
+  val res: Bool = t or f;
+  println(t or f);
+  println(t and f);
   return 0;
 }

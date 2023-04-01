@@ -5,7 +5,7 @@ interface {
 }
 
 // Interfaces are really type classes, you can implement them for foreign types
-interface Monoid<A> {
+interface Monoid[A] {
   fn zero(): A
   fn one(): A
   fn add(a: A, b: A): A

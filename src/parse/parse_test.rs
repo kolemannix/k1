@@ -62,7 +62,7 @@ fn infix2() -> Result<(), ParseError> {
         assert_eq!(op.operation, BinaryOpKind::Add);
         assert!(matches!(*op.operand1, Expression::Variable(Ident(_))));
         if let Expression::BinaryOp(BinaryOp { operation, operand1, operand2 }) = &*op.operand2 {
-            assert_eq!(*operation, BinaryOpKind::Mult);
+            assert_eq!(*operation, BinaryOpKind::Multiply);
             assert!(matches!(**operand1, Expression::Variable(Ident(_))));
             assert!(matches!(**operand2, Expression::FnCall(_)));
         } else {

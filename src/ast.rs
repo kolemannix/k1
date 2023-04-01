@@ -1,4 +1,4 @@
-use crate::lex::TokenKind;
+use crate::{ir::IrType, lex::TokenKind};
 
 #[derive(Debug)]
 pub enum Literal {
@@ -39,14 +39,18 @@ pub struct ValDef {
 #[derive(Debug, Eq, PartialEq)]
 pub enum BinaryOpKind {
     Add,
-    Mult,
+    Multiply,
+    And,
+    Or,
 }
 
 impl BinaryOpKind {
     pub fn from_tokenkind(kind: TokenKind) -> Option<BinaryOpKind> {
         match kind {
             TokenKind::Plus => Some(BinaryOpKind::Add),
-            TokenKind::Asterisk => Some(BinaryOpKind::Mult),
+            TokenKind::Asterisk => Some(BinaryOpKind::Multiply),
+            TokenKind::KeywordAnd => Some(BinaryOpKind::And),
+            TokenKind::KeywordOr => Some(BinaryOpKind::Or),
             _ => None,
         }
     }

@@ -5,13 +5,14 @@
 - [x] Implement Multiply
 - [x] Use basicvalue not pointervalue as main IR type
 - [x] Add booleans
-- [ ] Parse comments
+- [x] Add boolean AND and OR
+- [ ] Parse line comments and implement "expected output" for test sources
 - [ ] Ditch semicolons
-- [ ] Implement IF
+- [ ] Implement IF expressions
 
 # Tier 1
 - [ ] main function
-- [ ] Binary infix operations
+- [x] Binary infix operations
 - [ ] Structs
 - [ ] Loops
 - [ ] Type Params
