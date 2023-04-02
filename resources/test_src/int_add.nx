@@ -9,5 +9,7 @@ fn add_stuff(x: Int, y: Int): Int {
 fn main(x: Int): Int {
   val result: Int = add_stuff(y = 2, x = 1);
   println(result);
-  return 0;
+  return 1341;
 }
+// <expected output>
+// 1341

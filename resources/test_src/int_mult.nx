@@ -3,7 +3,10 @@ fn mult(x: Int, y: Int): Int {
 }
 
 fn main(x: Int): Int {
-  val result: Int = mult(55, 2 + 3 + 3);
-  println(result);
-  return 0;
+  val result: Int = mult(
+    55, 
+    2 + 3 + 3,
+  );
+  return result;
 }
+// 440

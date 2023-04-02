@@ -15,12 +15,12 @@ struct FileError implements Error {
 }
 
 
-// Builtin
-type Async[E: Type, A: Type]
 
 // Type parameters can are named and can be passed by name
 type FileOp[A] = Async[E = FileError, A = A]
 
+// Builtin
+type Async[E: Type, A: Type]
 // Asyncs are VALUES and are lazy. They can be manipulated, composed, etc prior to execution
 // a.retry() a.catchSome(), a.andthen(), a.then()
 
