@@ -38,7 +38,7 @@ impl<'a> Source<'a> {
 }
 
 struct Parser<'a> {
-    tokens: Tokens,
+    tokens: TokenIter,
     source: Source<'a>,
 }
 
@@ -62,29 +62,35 @@ impl<'a> Parser<'a> {
     fn peek(&self) -> Token {
         self.tokens.peek()
     }
-    fn make(tokens: Tokens, source: &'a str) -> Parser<'a> {
+    fn make(tokens: TokenIter, source: &'a str) -> Parser<'a> {
         let lines = source.lines().collect();
         Parser { tokens, source: Source { content: source, lines } }
     }
     fn current_line(&self) -> &str {
-        let line = self.peek().line_num;
-        self.source.line(line)
+        let span = self.peek().span;
+        self.source.line(span.line)
     }
     fn chars_at(&self, start: u32, end: u32) -> &'a str {
         &self.source.content[start as usize..end as usize]
     }
+    fn chars_at_span(&self, span: Span) -> &'a str {
+        self.chars_at(span.start, span.end)
+    }
     fn tok_chars(&self, tok: Token) -> &'a str {
-        let s = self.chars_at(tok.start, tok.start + tok.len);
+        let s = self.chars_at_span(tok.span);
         trace!("{} chars '{}'", tok.kind, s);
         s
     }
 
-    fn eat_token(&mut self, target_token: TokenKind) -> Option<()> {
+    fn eat_token(&mut self, target_token: TokenKind) -> Option<Token> {
         let tok = self.peek();
-        if tok.kind == target_token {
+        if tok.kind == LineComment {
+            self.tokens.advance();
+            self.eat_token(target_token)
+        } else if tok.kind == target_token {
             self.tokens.advance();
             trace!("eat_token SUCCESS '{}'", target_token);
-            Some(())
+            Some(tok)
         } else {
             trace!("eat_token MISS '{}'", target_token);
             None
@@ -103,11 +109,9 @@ impl<'a> Parser<'a> {
     }
 
     fn eat_ident(&mut self) -> Option<String> {
-        let tok = self.peek();
-        if Text == tok.kind {
-            self.tokens.advance();
-            let ident = self.tok_chars(tok);
-            Some(String::from(ident))
+        if let Some(t) = self.eat_token(Text) {
+            let ident_slice = self.tok_chars(t);
+            Some(ident_slice.to_string())
         } else {
             None
         }
@@ -136,7 +140,9 @@ impl<'a> Parser<'a> {
                 if close.kind == DoubleQuote {
                     self.tokens.advance();
                     let text = self.tok_chars(second);
-                    Ok(Some(Literal::String(text.to_string())))
+                    let mut span = first.span;
+                    span.end = close.span.end;
+                    Ok(Some(Literal::String(text.to_string(), span)))
                 } else {
                     Err(ParseError::ExpectedToken(DoubleQuote, close, None))
                 }
@@ -145,16 +151,16 @@ impl<'a> Parser<'a> {
                 let text = self.tok_chars(first);
                 if text == "true" {
                     self.tokens.advance();
-                    Ok(Some(Literal::Bool(true)))
+                    Ok(Some(Literal::Bool(true, first.span)))
                 } else if text == "false" {
                     self.tokens.advance();
-                    Ok(Some(Literal::Bool(false)))
+                    Ok(Some(Literal::Bool(false, first.span)))
                 } else {
                     match text.chars().next() {
                         Some(c) if c.is_numeric() => {
                             let s = text.to_string();
                             self.tokens.advance();
-                            Ok(Some(Literal::Numeric(s)))
+                            Ok(Some(Literal::Numeric(s, first.span)))
                         }
                         _ => Ok(None),
                     }
@@ -228,10 +234,15 @@ impl<'a> Parser<'a> {
                 // Eat the OpenParen
                 self.tokens.advance();
                 match self.eat_delimited(Comma, CloseParen, |p| Parser::expect_fn_arg(p)) {
-                    Ok(args) => Ok(Some(Expression::FnCall(FnCall {
-                        name: Ident(self.tok_chars(first).to_string()),
-                        args,
-                    }))),
+                    Ok((args, args_span)) => {
+                        let mut span = first.span;
+                        span.end = args_span.end + 1;
+                        Ok(Some(Expression::FnCall(FnCall {
+                            name: Ident(self.tok_chars(first).to_string()),
+                            args,
+                            span,
+                        })))
+                    }
                     Err(e) => Err(ParseError::ExpectedNode(
                         "function arguments".to_string(),
                         self.peek(),
@@ -239,9 +250,12 @@ impl<'a> Parser<'a> {
                     )),
                 }
             } else {
-                // Plain Reference
+                // The last thing it can be is a simple variable reference expression
                 self.tokens.advance();
-                Ok(Some(Expression::Variable(Ident(self.tok_chars(first).to_string()))))
+                Ok(Some(Expression::Variable(Variable {
+                    ident: Ident(self.tok_chars(first).to_string()),
+                    span: first.span,
+                })))
             }
         } else if first.kind == OpenBrace {
             match self.parse_block()? {
@@ -266,10 +280,13 @@ impl<'a> Parser<'a> {
                             self.peek(),
                             self.parse_expression(),
                         )?;
+                        let mut span = expr.get_span();
+                        span.end = operand2.get_span().end;
                         return Ok(Some(Expression::BinaryOp(BinaryOp {
                             operation: op_kind,
                             operand1: Box::new(expr),
                             operand2: Box::new(operand2),
+                            span,
                         })));
                     }
                 }
@@ -277,40 +294,37 @@ impl<'a> Parser<'a> {
                 Ok(Some(expr))
             };
         };
-        return Ok(single_result);
+        Ok(single_result)
     }
 
     fn parse_mut(&mut self) -> ParseResult<Option<ValDef>> {
-        // mut foo[: Int] := 42
-        let is_mut = Parser::check(self.eat_token(KeywordMut))?;
-        if is_mut.is_none() {
-            return Ok(None);
-        }
-        let ident = self.expect_eat_ident()?;
-        let typ = match self.eat_token(Colon) {
-            None => Ok(None),
-            Some(_) => self.parse_type_expression(),
-        }?;
-        let _eq = self.expect_eat_token(Equals)?;
-        let value = Parser::expect("expression", self.peek(), self.parse_expression())?;
-        return Ok(Some(ValDef { name: Ident(ident), typ, value, is_mutable: true }));
+        self.parse_val(true)
     }
 
-    fn parse_val(&mut self) -> ParseResult<Option<ValDef>> {
+    fn parse_val(&mut self, mutable: bool) -> ParseResult<Option<ValDef>> {
         trace!("parse_val");
-        let val = self.eat_token(KeywordVal);
-        if val.is_none() {
-            return Ok(None);
+        let keyword = if mutable { KeywordMut } else { KeywordVal };
+        if let Some(eaten_keyword) = self.eat_token(keyword) {
+            let ident = self.expect_eat_ident()?;
+            let typ = match self.eat_token(Colon) {
+                None => Ok(None),
+                Some(_) => self.parse_type_expression(),
+            }?;
+            self.expect_eat_token(Equals)?;
+            let initializer_expression =
+                Parser::expect("expression", self.peek(), self.parse_expression())?;
+            let mut span = eaten_keyword.span;
+            span.end = initializer_expression.get_span().end;
+            ParseResult::Ok(Some(ValDef {
+                name: Ident(ident),
+                typ,
+                value: initializer_expression,
+                is_mutable: mutable,
+                span,
+            }))
+        } else {
+            Ok(None)
         }
-
-        let ident = self.expect_eat_ident()?;
-        let typ = match self.eat_token(Colon) {
-            None => Ok(None),
-            Some(_) => self.parse_type_expression(),
-        }?;
-        let _eq = self.expect_eat_token(Equals)?;
-        let value = Parser::expect("expression", self.peek(), self.parse_expression())?;
-        return ParseResult::Ok(Some(ValDef { name: Ident(ident), typ, value, is_mutable: false }));
     }
 
     fn parse_const(&mut self) -> ParseResult<Option<ConstVal>> {
@@ -323,27 +337,29 @@ impl<'a> Parser<'a> {
         let ident = self.expect_eat_ident()?;
         let _colon = self.expect_eat_token(Colon);
         let typ = Parser::expect("type_expression", self.peek(), self.parse_type_expression())?;
-        let _eq = self.expect_eat_token(Equals)?;
+        self.expect_eat_token(Equals)?;
         let value = Parser::expect("expression", self.peek(), self.parse_expression())?;
         ParseResult::Ok(Some(ConstVal { name: Ident(ident), typ, value }))
     }
 
     fn parse_assignment(&mut self) -> ParseResult<Option<Assignment>> {
-        let (ident, eq) = self.tokens.peek_two();
-        trace!("parse_assignment {} {}", ident.kind, eq.kind);
-        let is_assignment = ident.kind == Text && eq.kind == Equals;
+        let (ident_token, eq) = self.tokens.peek_two();
+        trace!("parse_assignment {} {}", ident_token.kind, eq.kind);
+        let is_assignment = ident_token.kind == Text && eq.kind == Equals;
         if !is_assignment {
             return Ok(None);
         }
         self.tokens.advance();
         self.tokens.advance();
-        let ident = self.tok_chars(ident).to_string();
-        let expr_result = Parser::expect(
+        let expr = Parser::expect(
             "assignment RHS expected an expression",
             self.peek(),
             self.parse_expression(),
-        );
-        expr_result.map(|expr| Some(Assignment { ident: Ident(ident.to_string()), expr }))
+        )?;
+        let mut span = ident_token.span;
+        span.end = expr.get_span().end;
+        let ident = self.tok_chars(ident_token).to_string();
+        Ok(Some(Assignment { ident: Ident(ident), expr, span }))
     }
 
     fn eat_fn_arg_def(&mut self) -> ParseResult<FnArgDef> {
@@ -354,7 +370,7 @@ impl<'a> Parser<'a> {
         Ok(FnArgDef { name: Ident(ident), typ })
     }
 
-    fn eat_fndef_args(&mut self) -> ParseResult<Vec<FnArgDef>> {
+    fn eat_fndef_args(&mut self) -> ParseResult<(Vec<FnArgDef>, Span)> {
         self.eat_delimited(Comma, CloseParen, |p| Parser::eat_fn_arg_def(p))
     }
 
@@ -363,25 +379,29 @@ impl<'a> Parser<'a> {
         delim: TokenKind,
         terminator: TokenKind,
         parse: F,
-    ) -> ParseResult<Vec<T>>
+    ) -> ParseResult<(Vec<T>, Span)>
     where
         F: Fn(&mut Parser) -> ParseResult<T>,
     {
         trace!("eat_delimited delim='{}' terminator='{}'", delim, terminator);
-        // TODO @Allocation Need to figure out how we use all the small vecs without allocating all the time wastefully
+        // TODO @Allocation Use smallvec
         let mut v = Vec::with_capacity(32);
+        let mut span = self.peek().span;
+
         loop {
-            if self.eat_token(terminator).is_some() {
+            if let Some(terminator) = self.eat_token(terminator) {
                 trace!("eat_delimited found terminator after {} results.", v.len());
-                break Ok(v);
+                span.end = terminator.span.end;
+                break Ok((v, span));
             }
             match parse(self) {
                 Ok(parsed) => {
                     v.push(parsed);
                     trace!("eat_delimited got result {}", v.len());
-                    if self.eat_token(terminator).is_some() {
+                    if let Some(terminator) = self.eat_token(terminator) {
                         trace!("eat_delimited found terminator after {} results.", v.len());
-                        break Ok(v);
+                        span.end = terminator.span.end;
+                        break Ok((v, span));
                     }
                     let found_delim = self.eat_token(delim);
                     if found_delim.is_none() {
@@ -409,11 +429,14 @@ impl<'a> Parser<'a> {
         trace!("eat_statement");
         if let Some(mut_def) = self.parse_mut()? {
             Ok(Some(BlockStmt::ValDef(mut_def)))
-        } else if let Some(val_def) = self.parse_val()? {
+        } else if let Some(val_def) = self.parse_val(false)? {
             Ok(Some(BlockStmt::ValDef(val_def)))
-        } else if self.eat_token(KeywordReturn).is_some() {
+        } else if let Some(return_token) = self.eat_token(KeywordReturn) {
             if let Some(ret_val) = self.parse_expression()? {
-                Ok(Some(BlockStmt::ReturnStmt(ret_val)))
+                let mut span = return_token.span;
+                span.end = ret_val.get_span().end;
+                let return_stmt = ReturnStmt { expr: ret_val, span };
+                Ok(Some(BlockStmt::ReturnStmt(return_stmt)))
             } else {
                 Err(ParseError::ExpectedNode(
                     "return statement".to_string(),
@@ -433,26 +456,34 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_block(&mut self) -> ParseResult<Option<Block>> {
-        let _block_start = Parser::check(self.eat_token(OpenBrace))?;
-        let closure =
-            |p: &mut Parser| Parser::expect("statement", p.peek(), Parser::parse_statement(p));
-        let block_statements = self.eat_delimited(Semicolon, CloseBrace, closure)?;
-        Ok(Some(Block { stmts: block_statements }))
+        if let Some(block_start) = Parser::check(self.eat_token(OpenBrace))? {
+            let closure =
+                |p: &mut Parser| Parser::expect("statement", p.peek(), Parser::parse_statement(p));
+            let (block_statements, _statements_span) =
+                self.eat_delimited(Semicolon, CloseBrace, closure)?;
+            let mut span = block_start.span;
+            span.end = _statements_span.end;
+            Ok(Some(Block { stmts: block_statements, span }))
+        } else {
+            Ok(None)
+        }
     }
 
     fn parse_fndef(&mut self) -> ParseResult<Option<FnDef>> {
         trace!("parse_fndef");
-        let is_fn = Parser::check(self.eat_token(KeywordFn))?;
-        if is_fn.is_none() {
-            return Ok(None);
+        if let Some(fn_keyword) = Parser::check(self.eat_token(KeywordFn))? {
+            let ident = self.expect_eat_ident()?;
+            self.expect_eat_token(OpenParen)?;
+            let (args, args_span) = self.eat_fndef_args()?;
+            self.expect_eat_token(Colon)?;
+            let ret_type = self.parse_type_expression()?;
+            let block = self.parse_block()?;
+            let mut span = fn_keyword.span;
+            span.end = block.as_ref().map(|b| b.span.end).unwrap_or(args_span.end);
+            Ok(Some(FnDef { name: Ident(ident), args, ret_type, block, span }))
+        } else {
+            Ok(None)
         }
-        let ident = self.expect_eat_ident()?;
-        let _open_paren = self.expect_eat_token(OpenParen)?;
-        let args = self.eat_fndef_args()?;
-        let _colon = self.expect_eat_token(Colon)?;
-        let ret_type = self.parse_type_expression()?;
-        let block = self.parse_block()?;
-        Ok(Some(FnDef { name: Ident(ident), args, ret_type, block }))
     }
 
     fn parse_definition(&mut self) -> ParseResult<Option<Definition>> {
@@ -482,12 +513,12 @@ impl<'a> Parser<'a> {
 fn print_tokens(content: &str, tokens: &[Token]) {
     let mut line_idx = 0;
     for tok in tokens.iter() {
-        if tok.line_num > line_idx {
+        if tok.span.line > line_idx {
             line_idx += 1;
             println!()
         }
         if tok.kind == Text {
-            print!("{}", &content[tok.start as usize..(tok.start + tok.len) as usize]);
+            print!("{}", &content[tok.span.start as usize..tok.span.end as usize]);
         } else if tok.kind.is_keyword() {
             print!("{} ", tok.kind);
         } else {
@@ -497,13 +528,14 @@ fn print_tokens(content: &str, tokens: &[Token]) {
     println!()
 }
 
+// Eventually I want to keep the tokens around, and return them from here somehow, either in the
+// ast::Module or just separately
 pub fn parse_text(text: &str, module_name: &str) -> ParseResult<Module> {
     let mut lexer = Lexer::make(text);
 
     let token_vec = lexer.run();
-    print_tokens(text, &token_vec);
 
-    let tokens: Tokens = Tokens::make(token_vec);
+    let tokens: TokenIter = TokenIter::make(token_vec);
 
     let mut parser = Parser::make(tokens, text);
 
@@ -511,7 +543,7 @@ pub fn parse_text(text: &str, module_name: &str) -> ParseResult<Module> {
 }
 
 pub fn parse_file(path: &str) -> ParseResult<Module> {
-    let file = File::open(path).expect(&format!("file not found {}", path));
+    let file = File::open(path).unwrap_or_else(|_| panic!("file not found {}", path));
     let mut buf_read = BufReader::new(file);
     let mut content = String::new();
     buf_read.read_to_string(&mut content).expect("read failed");

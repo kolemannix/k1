@@ -1,21 +1,22 @@
 use std::fmt;
 use std::str::Chars;
-use std::vec::IntoIter;
 
 use crate::ast::BinaryOpKind;
 use crate::trace;
 use TokenKind::*;
 
 pub const EOF_CHAR: char = '\0';
-pub const EOF_TOKEN: Token = Token { start: 0, len: 0, line_num: 0, kind: TokenKind::EOF };
+pub const EOF_TOKEN: Token =
+    Token { span: Span { file_id: 0, start: 0, end: 0, line: 0 }, kind: TokenKind::EOF };
 
-pub struct Tokens {
-    iter: IntoIter<Token>,
+// TODO Take any iterator of Tokens, not just one that came from a Vec
+pub struct TokenIter {
+    iter: std::vec::IntoIter<Token>,
 }
 
-impl Tokens {
-    pub fn make(data: Vec<Token>) -> Tokens {
-        Tokens { iter: data.into_iter() }
+impl TokenIter {
+    pub fn make(data: Vec<Token>) -> TokenIter {
+        TokenIter { iter: data.into_iter() }
     }
     pub fn next(&mut self) -> Token {
         self.iter.next().unwrap_or(EOF_TOKEN)
@@ -55,6 +56,7 @@ pub enum TokenKind {
     KeywordOr,
     KeywordIf,
 
+    Slash,
     LineComment,
 
     OpenParen,
@@ -97,6 +99,9 @@ impl TokenKind {
             KeywordOr => Some("or"),
             KeywordIf => Some("if"),
 
+            Slash => Some("/"),
+            LineComment => Some("//"),
+
             OpenParen => Some("("),
             CloseParen => Some(")"),
             OpenBracket => Some("["),
@@ -116,8 +121,6 @@ impl TokenKind {
             SingleQuote => Some("'"),
 
             Text => None,
-
-            LineComment => None,
 
             EOF => Some("<EOF>"),
         }
@@ -139,6 +142,7 @@ impl TokenKind {
             '\'' => Some(SingleQuote),
             '+' => Some(Plus),
             '*' => Some(Asterisk),
+            '/' => Some(Slash),
             _ => None,
         }
     }
@@ -171,17 +175,26 @@ impl TokenKind {
     }
 }
 
+///
+/// https://www.forrestthewoods.com/blog/should-small-rust-structs-be-passed-by-copy-or-by-borrow/
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Span {
+    pub file_id: u32,
+    pub start: u32,
+    pub end: u32,
+    pub line: u32,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Token {
-    pub start: u32,
-    pub len: u32,
-    pub line_num: u32,
+    pub span: Span,
     pub kind: TokenKind,
 }
 
 impl Token {
     pub fn make(kind: TokenKind, line_index: u32, start: u32, len: u32) -> Token {
-        Token { start, len, line_num: line_index, kind }
+        let span = Span { start, end: start + len, line: line_index, file_id: 0 };
+        Token { span, kind }
     }
 }
 
@@ -206,9 +219,27 @@ impl Lexer<'_> {
     fn eat_token(&mut self) -> Option<Token> {
         let mut tok_buf = String::new();
         let mut tok_len = 0;
+        let mut is_line_comment = false;
+        let mut line_comment_start = 0;
         loop {
             let (c, n) = self.peek_with_pos();
             trace!("LEX line={} char={} '{}' buf={}", self.line_index, n, c, tok_buf);
+            if is_line_comment {
+                if c == '\n' || c == EOF_CHAR {
+                    let len = n - line_comment_start - 1;
+                    let comment_tok = Token::make(
+                        TokenKind::LineComment,
+                        self.line_index,
+                        line_comment_start,
+                        len,
+                    );
+                    self.advance();
+                    break Some(comment_tok);
+                } else {
+                    self.advance();
+                    continue;
+                }
+            }
             if c == EOF_CHAR {
                 if !tok_buf.is_empty() {
                     break Some(Token::make(
@@ -223,12 +254,19 @@ impl Lexer<'_> {
             }
             if let Some(single_char_tok) = TokenKind::from_char(c) {
                 if !tok_buf.is_empty() {
+                    // Break without advancing; we'll have a clear buffer next time
+                    // and will advance
                     break Some(Token::make(
                         TokenKind::Text,
                         self.line_index,
                         n - tok_len,
                         tok_len,
                     ));
+                } else if single_char_tok == TokenKind::Slash && self.peek() == '/' {
+                    is_line_comment = true;
+                    line_comment_start = n;
+                    self.advance();
+                    self.advance();
                 } else {
                     self.advance();
                     break Some(Token::make(single_char_tok, self.line_index, n, 1));
@@ -301,8 +339,8 @@ fn is_ident_start(c: char) -> bool {
 
 #[cfg(test)]
 mod test {
-    use crate::lex::TokenKind::*;
-    use crate::lex::{Lexer, TokenKind};
+    use crate::lex::{Lexer, Span, TokenKind};
+    use crate::lex::{TokenIter, TokenKind::*};
 
     #[test]
     fn case1() {
@@ -339,5 +377,35 @@ mod test {
         let result = Lexer::make(&input).run();
         let kinds: Vec<TokenKind> = result.iter().map(|t| t.kind).collect();
         assert_eq!(kinds, vec![KeywordVal, Text, Equals, Text, Plus, Text])
+    }
+
+    #[test]
+    fn line_comment() {
+        let input = r#"// Hello, world
+        val foo: Int = 74;
+        // <test harness> expected output
+        //
+        "#;
+        let mut lexer = Lexer::make(input);
+        let result = lexer.run();
+        let token_iter = TokenIter::make(result.clone());
+        let kinds: Vec<TokenKind> = result.iter().map(|t| t.kind).collect();
+        assert_eq!(result[0].span, Span { start: 0, end: 14, line: 0, file_id: 0 });
+        assert_eq!(&input[0..5], "// He");
+        assert_eq!(
+            vec![
+                LineComment,
+                KeywordVal,
+                Text,
+                Colon,
+                Text,
+                Equals,
+                Text,
+                Semicolon,
+                LineComment,
+                LineComment
+            ],
+            kinds
+        )
     }
 }

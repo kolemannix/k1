@@ -1,2 +1,7 @@
 val foo: Int = 42;
 val bar: Int = 31;
+
+fn main(): Int {
+  return foo;
+}
+// 42

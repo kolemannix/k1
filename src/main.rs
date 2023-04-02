@@ -1,4 +1,5 @@
 use std::env;
+use std::rc::Rc;
 
 mod ast;
 //mod codegen;
@@ -7,7 +8,11 @@ mod ir;
 mod lex;
 mod output;
 mod parse;
+#[cfg(test)]
+mod test_suite;
 
+use anyhow::Result;
+use inkwell::context::Context;
 use std::error::Error;
 use std::fs;
 use std::fs::File;
@@ -25,8 +30,28 @@ macro_rules! static_assert_size {
     };
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
-    static_assert_size!(ast::Definition, 96);
+pub fn compile_single_file_program<'ctx>(
+    ctx: &'ctx Context,
+    filename: &str,
+    source: &String,
+) -> Result<Codegen<'ctx>> {
+    let ast = parse::parse_text(&source, filename).unwrap_or_else(|e| {
+        eprintln!("Encountered ParseError on file '{}': {:?}", filename, e);
+        panic!("parse error");
+    });
+    let ast = Rc::new(ast);
+    let mut irgen = ir::IrModule::new(ast);
+    irgen.run()?;
+    let irgen = Rc::new(irgen);
+    // println!("{irgen}");
+    let mut codegen: Codegen<'ctx> = Codegen::create(ctx, irgen);
+    codegen.codegen_module();
+    codegen.optimize()?;
+    Ok(codegen)
+}
+
+fn main() -> Result<()> {
+    static_assert_size!(ast::Definition, 112);
     println!("Size of ast::Definition: {}", std::mem::size_of::<ast::Definition>());
     println!("Size of ast::BlockStmt: {}", std::mem::size_of::<ast::BlockStmt>());
     println!("Size of ast::Expression: {}", std::mem::size_of::<ast::Expression>());
@@ -37,23 +62,18 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("NexLang Compiler v0.1.0");
     let src_path = &args[1];
     println!("src_dir: {}", src_path);
+
+    let ctx = Context::create();
+    let filename = Path::new(&src_path).file_name().unwrap().to_str().unwrap();
     let src = fs::read_to_string(src_path).expect("could not read source directory");
-    let path = Path::new(&src_path);
-    let filename = path.file_name().unwrap().to_str().unwrap();
-    let ast = parse::parse_text(&src, filename).unwrap_or_else(|e| {
-        eprintln!("Encountered ParseError on file '{}': {:?}", src_path, e);
-        panic!("parse error");
-    });
-    let ctx = codegen_ir::init_context();
-    let mut irgen = ir::IrModule::new(&ast);
-    irgen.run()?;
-    println!("{irgen}");
-    let mut codegen = Codegen::create(&ctx, &irgen);
-    codegen.codegen_module();
-    codegen.optimize()?;
-    let mut f = File::create(format!("{}_llvm_out.ll", filename))?;
+    let codegen = compile_single_file_program(&ctx, filename, &src)?;
+
+    codegen.emit_object_file()?;
+    let result = codegen.interpret_module()?;
+    println!("Interp result: {}", result);
+    let mut f = File::create(format!("./artifacts/{}.ll", filename))?;
     let llvm_text = codegen.output_llvm_ir_text();
     f.write_all(llvm_text.as_bytes()).unwrap();
-    println!("{}", llvm_text);
+    // println!("{}", llvm_text);
     Ok(())
 }

@@ -1,4 +1,0 @@
-pub val cat := "cat"
-fn main(): Int {
-  val dog := "dog"
-}

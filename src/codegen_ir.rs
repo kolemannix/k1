@@ -1,6 +1,7 @@
 use anyhow::Result;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
+use inkwell::execution_engine::ExecutionEngine;
 use inkwell::module::Linkage;
 use inkwell::passes::{PassManager, PassManagerBuilder};
 use inkwell::targets::{InitializationConfig, Target, TargetMachine};
@@ -14,6 +15,7 @@ use inkwell::values::{
 use inkwell::{AddressSpace, OptimizationLevel};
 use std::collections::HashMap;
 use std::path::Path;
+use std::rc::Rc;
 
 use crate::ir::*;
 
@@ -30,10 +32,11 @@ struct BuiltinFunctions<'ctx> {
     printf: FunctionValue<'ctx>,
 }
 
-pub struct Codegen<'ast, 'ctx> {
+pub struct Codegen<'ctx> {
     ctx: &'ctx Context,
-    module: &'ctx IrModule<'ast>,
+    pub module: Rc<IrModule>,
     llvm_module: inkwell::module::Module<'ctx>,
+    llvm_machine: Option<TargetMachine>,
     builder: Builder<'ctx>,
     llvm_functions: HashMap<FunctionId, FunctionValue<'ctx>>,
     // TODO: pointers should be by scope or something
@@ -56,8 +59,8 @@ fn i8_array_from_str<'ctx>(ctx: &'ctx Context, value: &str) -> ArrayValue<'ctx> 
     ctx.i8_type().const_array(&chars)
 }
 
-impl<'ast, 'ctx> Codegen<'ast, 'ctx> {
-    pub fn create(ctx: &'ctx Context, module: &'ctx IrModule<'ast>) -> Codegen<'ast, 'ctx> {
+impl<'ctx> Codegen<'ctx> {
+    pub fn create(ctx: &'ctx Context, module: Rc<IrModule>) -> Codegen<'ctx> {
         let builder = ctx.create_builder();
         let char_type = ctx.i8_type();
         let llvm_module = ctx.create_module(&module.ast.name.0);
@@ -94,6 +97,7 @@ impl<'ast, 'ctx> Codegen<'ast, 'ctx> {
             ctx,
             module,
             llvm_module,
+            llvm_machine: None,
             builder,
             pointers,
             globals,
@@ -101,6 +105,16 @@ impl<'ast, 'ctx> Codegen<'ast, 'ctx> {
             builtin_functions: BuiltinFunctions { printf },
             builtin_globals,
             builtin_types,
+        }
+    }
+
+    fn loaded_value_from_enum(&mut self, value: BasicValueEnum<'ctx>) -> BasicValueEnum<'ctx> {
+        match value {
+            BasicValueEnum::PointerValue(ptr) => {
+                let loaded = self.builder.build_load(ptr, "");
+                loaded
+            }
+            other_value => other_value,
         }
     }
 
@@ -122,7 +136,6 @@ impl<'ast, 'ctx> Codegen<'ast, 'ctx> {
         let first_arg = self.codegen_expr(&call.args[0]);
         // Coerce the arg to an int ptr
         let first_arg_loaded = self.loaded_int_value_from_enum(first_arg);
-        dbg!(first_arg_loaded);
 
         let format_str = self.builtin_globals.get("formatString").unwrap();
         let format_str_ptr = self.builder.build_bitcast(
@@ -233,7 +246,8 @@ impl<'ast, 'ctx> Codegen<'ast, 'ctx> {
                 todo!("codegen block")
             }
             IrExpr::FunctionCall(call) => {
-                let callee = self.module.get_function(call.callee_function_id);
+                let ir_module = self.module.clone();
+                let callee = ir_module.get_function(call.callee_function_id);
                 if !&callee.is_intrinsic {
                     let function_value: FunctionValue = self
                         .llvm_module
@@ -257,7 +271,6 @@ impl<'ast, 'ctx> Codegen<'ast, 'ctx> {
                     // TODO: This is our first 'intrinsic'
                     // Support intrinsics properly in the IR
                     self.build_printf_call(call);
-                    println!("println call returned {:?}", call);
                     let ptr = self.builder.build_alloca(self.builtin_types.unit, "println_res_ptr");
                     self.builder.build_store(ptr, self.builtin_types.unit.const_int(0, false));
                     self.builtin_types.unit.const_int(0, false).as_basic_value_enum()
@@ -283,7 +296,8 @@ impl<'ast, 'ctx> Codegen<'ast, 'ctx> {
                 }
                 IrStmt::ReturnStmt(return_stmt) => {
                     let value = self.codegen_expr(&return_stmt.expr);
-                    self.builder.build_return(Some(&value));
+                    let loaded = self.loaded_value_from_enum(value);
+                    self.builder.build_return(Some(&loaded));
                 }
                 IrStmt::Assignment(_) => todo!("assignment codegen"),
             }
@@ -307,8 +321,7 @@ impl<'ast, 'ctx> Codegen<'ast, 'ctx> {
                 _ => panic!("constant must be int"),
             }
         }
-        for function in &self.module.functions {
-            println!("codegen for Function {}", function.name);
+        for function in &self.module.clone().functions {
             if function.is_intrinsic {
                 continue;
             }
@@ -342,13 +355,14 @@ impl<'ast, 'ctx> Codegen<'ast, 'ctx> {
         self.module.name()
     }
 
-    pub fn optimize(&self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn optimize(&mut self) -> CodegenResult<()> {
         Target::initialize_aarch64(&InitializationConfig::default());
         let triple = TargetMachine::get_default_triple();
         // let triple = TargetTriple::create("arm64-apple-darwin");
-        println!("Using triple: {}", triple);
-        let target = Target::from_triple(&triple)?;
-        self.llvm_module.verify()?;
+        let target = Target::from_triple(&triple).unwrap();
+        self.llvm_module.verify().map_err(|err| {
+            anyhow::anyhow!("Module '{}' failed validation: {}", self.name(), err.to_string_lossy())
+        })?;
         let machine = target
             .create_target_machine(
                 &triple,
@@ -360,6 +374,8 @@ impl<'ast, 'ctx> Codegen<'ast, 'ctx> {
             )
             .unwrap();
 
+        self.llvm_module.set_data_layout(&machine.get_target_data().get_data_layout());
+        self.llvm_module.set_triple(&triple);
         let pass_manager_b = PassManagerBuilder::create();
         pass_manager_b.set_optimization_level(OptimizationLevel::Aggressive);
         // pass_manager_b.populate_function_pass_manager(&function_pass_manager);
@@ -382,19 +398,33 @@ impl<'ast, 'ctx> Codegen<'ast, 'ctx> {
         module_pass_manager.run_on(&self.llvm_module);
 
         machine.add_analysis_passes(&module_pass_manager);
+
+        self.llvm_machine = Some(machine);
+
+        Ok(())
+    }
+
+    pub fn emit_object_file(&self) -> Result<()> {
         let filename = format!("{}.o", self.name());
         println!("Outputting object file to {filename}");
-        self.llvm_module.set_data_layout(&machine.get_target_data().get_data_layout());
-        self.llvm_module.set_triple(&triple);
-        machine.write_to_file(
-            &self.llvm_module,
-            inkwell::targets::FileType::Object,
-            Path::new(&filename),
-        )?;
+        let machine =
+            self.llvm_machine.as_ref().expect("Cannot emit object file before optimizing");
+        let path = Path::new("./artifacts").join(Path::new(&filename));
+        machine
+            .write_to_file(&self.llvm_module, inkwell::targets::FileType::Object, &path)
+            .unwrap();
         Ok(())
     }
 
     pub fn output_llvm_ir_text(&self) -> String {
         self.llvm_module.print_to_string().to_string()
+    }
+
+    pub fn interpret_module(&self) -> Result<u64> {
+        let engine = self.llvm_module.create_jit_execution_engine(OptimizationLevel::None).unwrap();
+        let return_value =
+            unsafe { engine.run_function(self.llvm_module.get_last_function().unwrap(), &[]) };
+        let res: u64 = return_value.as_int(true);
+        Ok(res)
     }
 }

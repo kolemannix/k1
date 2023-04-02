@@ -2,10 +2,11 @@ use crate::ast::{
     self, Block, BlockStmt, Definition, Expression, FnDef, Literal, Module, TypeExpression,
     TypePrimitive,
 };
+use anyhow::Result;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::str::FromStr;
+use std::rc::Rc;
 
 pub type ScopeId = u32;
 pub type FunctionId = u32;
@@ -168,7 +169,7 @@ impl From<&str> for IRGenError {
     }
 }
 
-pub type IrGenResult<A> = Result<A, Box<dyn Error>>;
+pub type IrGenResult<A> = anyhow::Result<A>;
 // expressions dont have ids
 // statements dont have ids
 // scopes have ids
@@ -190,8 +191,8 @@ pub struct Constant {
     pub ir_type: IrType,
 }
 
-pub struct IrModule<'a> {
-    pub ast: &'a Module,
+pub struct IrModule {
+    pub ast: Rc<Module>,
     src: String,
     pub functions: Vec<Function>,
     pub variables: Vec<Variable>,
@@ -228,16 +229,16 @@ impl Scope {
     }
 }
 
-fn simple_err<T: AsRef<str>>(s: T) -> Box<dyn Error> {
-    Box::new(IRGenError::from(s.as_ref()))
+fn simple_err<T: AsRef<str>>(s: T) -> anyhow::Error {
+    IRGenError::from(s.as_ref()).into()
 }
 
 fn simple_fail<A, T: AsRef<str>>(s: T) -> IrGenResult<A> {
-    Err(Box::new(IRGenError::from(s.as_ref())))
+    Err(Box::new(IRGenError::from(s.as_ref())).into())
 }
 
-impl<'a> IrModule<'a> {
-    pub fn new(module: &Module) -> IrModule {
+impl IrModule {
+    pub fn new(module: Rc<Module>) -> IrModule {
         let mut module = IrModule {
             ast: module,
             src: String::new(),
@@ -316,7 +317,7 @@ impl<'a> IrModule<'a> {
             ast::ConstVal { name, typ, value } => {
                 let ir_type = self.eval_const_type_expr(&typ, scope_id)?;
                 let expr = match value {
-                    Expression::Literal(Literal::Numeric(n)) => self.parse_numeric(n)?,
+                    Expression::Literal(Literal::Numeric(n, _span)) => self.parse_numeric(n)?,
                     other => {
                         return simple_fail("Only literals are currently supported as constants")
                     }
@@ -395,22 +396,22 @@ impl<'a> IrModule<'a> {
                 });
                 Ok(expr)
             }
-            Expression::Literal(Literal::Numeric(s)) => {
+            Expression::Literal(Literal::Numeric(s, _)) => {
                 let expr = self.parse_numeric(&s)?;
                 Ok(expr)
             }
-            Expression::Literal(Literal::Bool(b)) => {
+            Expression::Literal(Literal::Bool(b, _)) => {
                 let expr = IrExpr::Bool(*b);
                 Ok(expr)
             }
-            Expression::Literal(Literal::String(s)) => {
+            Expression::Literal(Literal::String(s, _)) => {
                 let expr = IrExpr::Str(s.clone());
                 Ok(expr)
             }
-            Expression::Variable(ident) => {
+            Expression::Variable(variable) => {
                 let var_index = self
-                    .find_variable_in_scope(scope_id, ident)
-                    .ok_or(simple_err(format!("Identifier not found: {}", ident.0)))?;
+                    .find_variable_in_scope(scope_id, &variable.ident)
+                    .ok_or(simple_err(format!("Identifier not found: {}", variable.ident.0)))?;
                 let v = self.get_variable(var_index);
                 let expr =
                     IrExpr::Variable(VariableExpr { ir_type: v.ir_type, variable_id: var_index });
@@ -451,8 +452,8 @@ impl<'a> IrModule<'a> {
     }
     fn eval_block_stmt(&mut self, stmt: &BlockStmt, scope_id: ScopeId) -> IrGenResult<IrStmt> {
         match stmt {
-            BlockStmt::ReturnStmt(expr) => {
-                let expr = self.eval_expr(expr, scope_id)?;
+            BlockStmt::ReturnStmt(return_stmt) => {
+                let expr = self.eval_expr(&return_stmt.expr, scope_id)?;
                 let ret_inst = IrStmt::ReturnStmt(ReturnStmt { expr });
                 Ok(ret_inst)
             }
@@ -575,15 +576,15 @@ impl<'a> IrModule<'a> {
             }
         }
     }
-    pub fn run(&mut self) -> Result<(), Box<dyn Error>> {
-        for def in &self.ast.defs {
+    pub fn run(&mut self) -> Result<()> {
+        for def in &self.ast.clone().defs {
             self.eval_definition(def)?;
         }
         Ok(())
     }
 }
 
-impl<'a> Display for IrModule<'a> {
+impl Display for IrModule {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str("Module ")?;
         f.write_str(&self.ast.name.0)?;
@@ -633,7 +634,7 @@ mod test {
           return foo();
         }"#;
         let module = parse_text(src, "basic_fn.nx")?;
-        let mut ir = IrModule::new(&module);
+        let mut ir = IrModule::new(Rc::new(module));
         ir.run()?;
         println!("{:?}", ir.functions);
         Ok(())

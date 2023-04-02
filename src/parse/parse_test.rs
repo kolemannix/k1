@@ -12,7 +12,7 @@ fn setup(input: &str) -> Parser {
     let mut lexer = Lexer::make(&input);
     let token_vec = lexer.run();
     print_tokens(input, &token_vec[..]);
-    let tokens = Tokens::make(token_vec);
+    let tokens = TokenIter::make(token_vec);
     Parser::make(tokens, input)
 }
 
@@ -60,10 +60,11 @@ fn infix2() -> Result<(), ParseError> {
     println!("{:?}", result);
     if let Some(BlockStmt::ValDef(ValDef { value: Expression::BinaryOp(op), .. })) = &result {
         assert_eq!(op.operation, BinaryOpKind::Add);
-        assert!(matches!(*op.operand1, Expression::Variable(Ident(_))));
-        if let Expression::BinaryOp(BinaryOp { operation, operand1, operand2 }) = &*op.operand2 {
+        assert!(matches!(*op.operand1, Expression::Variable(_)));
+        if let Expression::BinaryOp(BinaryOp { operation, operand1, operand2, .. }) = &*op.operand2
+        {
             assert_eq!(*operation, BinaryOpKind::Multiply);
-            assert!(matches!(**operand1, Expression::Variable(Ident(_))));
+            assert!(matches!(**operand1, Expression::Variable(_)));
             assert!(matches!(**operand2, Expression::FnCall(_)));
         } else {
             panic!("Expected nested infix ops; got {:?}", result);
@@ -86,13 +87,13 @@ fn parse_eof() -> Result<(), ParseError> {
 #[test]
 fn fn_args_literal() -> Result<(), String> {
     let input = "f(myarg = 42,42,\"abc\")";
-    let mut lexer = Lexer::make(&input);
+    let mut lexer = Lexer::make(input);
     let token_vec = lexer.run();
-    let tokens = Tokens::make(token_vec);
+    let tokens = TokenIter::make(token_vec);
     let mut parser = Parser::make(tokens, input);
     let result = parser.parse_expression();
-    if let Ok(Some(Expression::FnCall(FnCall { name, args }))) = result {
-        println!("Parsed: {}, {:?}", name.0, args);
+    if let Ok(Some(Expression::FnCall(FnCall { name, args, span }))) = result {
+        println!("Parsed: {}, {:?}, {:?}", name.0, args, span);
         assert_eq!(name.0, "f");
         assert_eq!(args[0].name.as_deref(), Some("myarg"));
         assert!(Expression::is_literal(&args[0].value));
