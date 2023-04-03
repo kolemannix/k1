@@ -1,15 +1,7 @@
 use crate::parse::*;
 
-// #[test]
-// fn hello_world() -> Result<(), ParseError> {
-//     let parse_result = parse_file("resources/test_src/hello_world.nx")?;
-//     println!("{:?}", parse_result);
-//     assert_eq!(parse_result.name.0, "resources/test_src/hello_world.nx".to_string());
-//     Ok(())
-// }
-
 fn setup(input: &str) -> Parser {
-    let mut lexer = Lexer::make(&input);
+    let mut lexer = Lexer::make(input);
     let token_vec = lexer.run();
     print_tokens(input, &token_vec[..]);
     let tokens = TokenIter::make(token_vec);
@@ -42,7 +34,6 @@ fn basic_fn() -> Result<(), ParseError> {
 fn infix1() -> Result<(), ParseError> {
     let mut parser = setup("val x = a + b");
     let result = parser.parse_statement()?;
-    println!("{:?}", result);
     assert!(matches!(
         result,
         Some(BlockStmt::ValDef(ValDef {
@@ -57,7 +48,6 @@ fn infix1() -> Result<(), ParseError> {
 fn infix2() -> Result<(), ParseError> {
     let mut parser = setup("val x = a + b * doStuff(1, 2)");
     let result = parser.parse_statement()?;
-    println!("{:?}", result);
     if let Some(BlockStmt::ValDef(ValDef { value: Expression::BinaryOp(op), .. })) = &result {
         assert_eq!(op.operation, BinaryOpKind::Add);
         assert!(matches!(*op.operand1, Expression::Variable(_)));
@@ -79,7 +69,6 @@ fn infix2() -> Result<(), ParseError> {
 fn parse_eof() -> Result<(), ParseError> {
     let mut parser = setup("");
     let result = parser.parse_expression()?;
-    println!("{:?}", result);
     assert!(matches!(result, None));
     Ok(())
 }
@@ -87,13 +76,9 @@ fn parse_eof() -> Result<(), ParseError> {
 #[test]
 fn fn_args_literal() -> Result<(), String> {
     let input = "f(myarg = 42,42,\"abc\")";
-    let mut lexer = Lexer::make(input);
-    let token_vec = lexer.run();
-    let tokens = TokenIter::make(token_vec);
-    let mut parser = Parser::make(tokens, input);
+    let mut parser = setup(input);
     let result = parser.parse_expression();
     if let Ok(Some(Expression::FnCall(FnCall { name, args, span }))) = result {
-        println!("Parsed: {}, {:?}, {:?}", name.0, args, span);
         assert_eq!(name.0, "f");
         assert_eq!(args[0].name.as_deref(), Some("myarg"));
         assert!(Expression::is_literal(&args[0].value));
@@ -104,5 +89,14 @@ fn fn_args_literal() -> Result<(), String> {
         panic!("fail");
     }
 
+    Ok(())
+}
+
+#[test]
+fn if_no_else() -> ParseResult<()> {
+    let input = "if x a";
+    let mut parser = setup(input);
+    let result = parser.parse_expression()?.unwrap();
+    println!("{result:?}");
     Ok(())
 }

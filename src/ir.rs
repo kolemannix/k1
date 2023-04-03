@@ -408,6 +408,9 @@ impl IrModule {
 
     fn eval_expr(&mut self, expr: &Expression, scope_id: ScopeId) -> IrGenResult<IrExpr> {
         match expr {
+            Expression::If(if_expr) => {
+                todo!("ir if expr")
+            }
             Expression::BinaryOp(binary_op) => {
                 // Infer expected type to be type of operand1
                 let lhs = self.eval_expr(&binary_op.operand1, scope_id)?;

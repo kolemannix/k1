@@ -262,6 +262,9 @@ impl<'a> Parser<'a> {
                 None => Err(ParseError::ExpectedNode("block".to_string(), self.peek(), None)),
                 Some(block) => Ok(Some(Expression::Block(block))),
             }
+        } else if first.kind == KeywordIf {
+            let if_expr = Parser::expect("If Expression", first, self.parse_if_expr())?;
+            Ok(Some(Expression::If(if_expr)))
         } else {
             // TODO: Structs and Tuples
             Ok(None)
@@ -422,8 +425,25 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn eat_if_expr(&mut self) -> ParseResult<Option<IfExpr>> {
-        Ok(None)
+    fn parse_if_expr(&mut self) -> ParseResult<Option<IfExpr>> {
+        if let Some(if_keyword) = self.eat_token(TokenKind::KeywordIf) {
+            let condition_expr =
+                Parser::expect("conditional expression", if_keyword, self.parse_expression())?;
+            let consequent_expr =
+                Parser::expect("block following condition", if_keyword, self.parse_expression())?;
+            // TODO: Support 'else'
+            let mut span = if_keyword.span;
+            span.end = consequent_expr.get_span().end;
+            let if_expr = IfExpr {
+                cond: condition_expr.into(),
+                cons: consequent_expr.into(),
+                alt: None,
+                span,
+            };
+            Ok(Some(if_expr))
+        } else {
+            Ok(None)
+        }
     }
 
     fn parse_statement(&mut self) -> ParseResult<Option<BlockStmt>> {
@@ -445,8 +465,6 @@ impl<'a> Parser<'a> {
                     None,
                 ))
             }
-        } else if let Some(if_expr) = self.eat_if_expr()? {
-            Ok(Some(BlockStmt::If(if_expr)))
         } else if let Some(assgn) = self.parse_assignment()? {
             Ok(Some(BlockStmt::Assignment(assgn)))
         } else if let Some(expr) = self.parse_expression()? {

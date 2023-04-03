@@ -92,6 +92,7 @@ pub enum Expression {
     FnCall(FnCall),
     Variable(Variable),
     Block(Block),
+    If(IfExpr),
 }
 
 impl Expression {
@@ -105,6 +106,7 @@ impl Expression {
             Expression::FnCall(call) => call.span,
             Expression::Variable(var) => var.span,
             Expression::Block(block) => block.span,
+            Expression::If(if_expr) => if_expr.span,
         }
     }
 }
@@ -118,10 +120,12 @@ pub struct Assignment {
 
 #[derive(Debug)]
 pub struct IfExpr {
-    pub cond: Expression,
-    // TODO: Add var binding; cons is more like a lambda syntactically
-    pub cons: Expression,
-    pub alt: Option<Expression>,
+    pub cond: Box<Expression>,
+    pub cons: Box<Expression>,
+    // TODO: Add 'binding' Ifs, for optionals and failures
+    // if some_optional { value => }
+    // if get_file() { result => }
+    pub alt: Option<Box<Expression>>,
     pub span: Span,
 }
 
