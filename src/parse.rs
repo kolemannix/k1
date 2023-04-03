@@ -329,17 +329,18 @@ impl<'a> Parser<'a> {
 
     fn parse_const(&mut self) -> ParseResult<Option<ConstVal>> {
         trace!("parse_const");
-        let val = self.eat_token(KeywordVal);
-        if val.is_none() {
-            return Ok(None);
+        if let Some(keyword_val_token) = self.eat_token(KeywordVal) {
+            let ident = self.expect_eat_ident()?;
+            let _colon = self.expect_eat_token(Colon);
+            let typ = Parser::expect("type_expression", self.peek(), self.parse_type_expression())?;
+            self.expect_eat_token(Equals)?;
+            let value_expr = Parser::expect("expression", self.peek(), self.parse_expression())?;
+            let mut span = keyword_val_token.span;
+            span.end = value_expr.get_span().end;
+            ParseResult::Ok(Some(ConstVal { name: Ident(ident), typ, value_expr, span }))
+        } else {
+            Ok(None)
         }
-
-        let ident = self.expect_eat_ident()?;
-        let _colon = self.expect_eat_token(Colon);
-        let typ = Parser::expect("type_expression", self.peek(), self.parse_type_expression())?;
-        self.expect_eat_token(Equals)?;
-        let value = Parser::expect("expression", self.peek(), self.parse_expression())?;
-        ParseResult::Ok(Some(ConstVal { name: Ident(ident), typ, value }))
     }
 
     fn parse_assignment(&mut self) -> ParseResult<Option<Assignment>> {

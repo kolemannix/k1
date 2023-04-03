@@ -9,17 +9,19 @@
 - [x] Parse line comments 
 - [x] implement "expected output" for test sources
 - [x] Add spans to AST
-- [ ] Add spans to IR
-- [ ] Ditch semicolons (this technically introduces significant whitespace)
+- [x] Add spans to IR
 - [ ] Implement IF expressions
 
 # Up next maybe
+- [ ] Ditch semicolons? (this technically introduces significant whitespace)
 - [x] Binary infix operations
+- [ ] basic error reporting using spans
 - [ ] Structs
 - [ ] Loops
 - [ ] Type Params
 - [ ] Heap memory
 - [ ] Tuples
+- [ ] REPL would be cool; can I just swap a function out for another one for a Clojure-like cider-repl experience? Interactive live sessions
 
 # Hacks to fix
 - [ ] main function / detect entrypoint properly. Typing of main? How to get main args?

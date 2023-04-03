@@ -2,6 +2,7 @@ use crate::ast::{
     self, Block, BlockStmt, Definition, Expression, FnDef, Literal, Module, TypeExpression,
     TypePrimitive,
 };
+use crate::lex::Span;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::error::Error;
@@ -28,6 +29,7 @@ pub struct IrBlock {
     pub ret_type: IrType,
     pub scope_id: ScopeId,
     pub statements: Vec<IrStmt>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -51,6 +53,7 @@ pub struct Function {
 pub struct VariableExpr {
     pub variable_id: Index,
     pub ir_type: IrType,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,6 +87,7 @@ pub struct BinaryOp {
     pub ir_type: IrType,
     pub lhs: Box<IrExpr>,
     pub rhs: Box<IrExpr>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -91,6 +95,24 @@ pub struct FunctionCall {
     pub callee_function_id: FunctionId,
     pub args: Vec<IrExpr>,
     pub ret_type: IrType,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub enum IrLiteral {
+    Str(String, Span),
+    Int(i64, Span),
+    Bool(bool, Span),
+}
+
+impl IrLiteral {
+    pub fn get_span(&self) -> Span {
+        match self {
+            IrLiteral::Str(_, span) => *span,
+            IrLiteral::Int(_, span) => *span,
+            IrLiteral::Bool(_, span) => *span,
+        }
+    }
 }
 
 // LLVM
@@ -99,9 +121,7 @@ pub struct FunctionCall {
 // functions have a scope id, and an owner scope id (optional?)
 #[derive(Debug, Clone)]
 pub enum IrExpr {
-    Str(String),
-    Int(i64),
-    Bool(bool),
+    Literal(IrLiteral),
     Variable(VariableExpr),
     BinaryOp(BinaryOp),
     Block(IrBlock),
@@ -113,17 +133,20 @@ pub struct ValDef {
     pub variable_id: VariableId,
     pub ir_type: IrType,
     pub initializer: IrExpr,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
 pub struct ReturnStmt {
     pub expr: IrExpr,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
 pub struct Assignment {
-    dest: VariableId,
-    value: IrExpr,
+    pub dest: VariableId,
+    pub value: IrExpr,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -138,13 +161,22 @@ pub enum IrStmt {
 impl IrExpr {
     pub fn get_type(&self) -> IrType {
         match self {
-            IrExpr::Str(_) => IrType::String,
-            IrExpr::Int(_) => IrType::Int,
-            IrExpr::Bool(_) => IrType::Bool,
+            IrExpr::Literal(IrLiteral::Str(_, _)) => IrType::String,
+            IrExpr::Literal(IrLiteral::Int(_, _)) => IrType::Int,
+            IrExpr::Literal(IrLiteral::Bool(_, _)) => IrType::Bool,
             IrExpr::Variable(var) => var.ir_type,
             IrExpr::BinaryOp(binary_op) => binary_op.ir_type,
             IrExpr::Block(b) => b.ret_type,
             IrExpr::FunctionCall(call) => call.ret_type,
+        }
+    }
+    pub fn get_span(&self) -> Span {
+        match self {
+            IrExpr::Literal(lit) => lit.get_span(),
+            IrExpr::Variable(var) => var.span,
+            IrExpr::BinaryOp(binary_op) => binary_op.span,
+            IrExpr::Block(b) => b.span,
+            IrExpr::FunctionCall(call) => call.span,
         }
     }
 }
@@ -189,6 +221,7 @@ pub struct Constant {
     pub variable_id: Index,
     pub expr: IrExpr,
     pub ir_type: IrType,
+    pub span: Span,
 }
 
 pub struct IrModule {
@@ -256,7 +289,7 @@ impl IrModule {
             owner_scope: Some(0),
         };
         let println_arg_id = module.add_variable(println_arg);
-        let intrinic_functions = vec![Function {
+        let intrinsic_functions = vec![Function {
             name: "println".to_string(),
             ret_type: IrType::Unit,
             params: vec![FuncParam {
@@ -269,10 +302,11 @@ impl IrModule {
                 ret_type: IrType::Unit,
                 scope_id: 0,
                 statements: Vec::with_capacity(0),
+                span: Span::NONE,
             },
             is_intrinsic: true,
         }];
-        for function in intrinic_functions {
+        for function in intrinsic_functions {
             let name = function.name.clone();
             let function_id = module.add_function(function);
             module.scopes[0].add_function(name, function_id);
@@ -314,21 +348,22 @@ impl IrModule {
     fn eval_const(&mut self, const_expr: &ast::ConstVal) -> IrGenResult<VariableId> {
         let scope_id = 0;
         match const_expr {
-            ast::ConstVal { name, typ, value } => {
+            ast::ConstVal { name, typ, value_expr: value, span } => {
                 let ir_type = self.eval_const_type_expr(&typ, scope_id)?;
-                let expr = match value {
+                let num = match value {
                     Expression::Literal(Literal::Numeric(n, _span)) => self.parse_numeric(n)?,
                     other => {
                         return simple_fail("Only literals are currently supported as constants")
                     }
                 };
+                let expr = IrExpr::Literal(IrLiteral::Int(num, *span));
                 let variable_id = self.add_variable(Variable {
                     name: name.0.clone(),
                     ir_type,
                     is_mutable: false,
                     owner_scope: None,
                 });
-                self.constants.push(Constant { variable_id, expr, ir_type });
+                self.constants.push(Constant { variable_id, expr, ir_type, span: *span });
                 self.add_variable_to_scope(scope_id, name.0.clone(), variable_id);
                 Ok(variable_id)
             }
@@ -363,26 +398,26 @@ impl IrModule {
         &self.functions[function_id as usize]
     }
 
-    fn parse_numeric(&self, s: &str) -> IrGenResult<IrExpr> {
+    fn parse_numeric(&self, s: &str) -> IrGenResult<i64> {
         // Eventually we need to find out what type of number literal this is.
         // For now we only support u64
         let num: i64 =
             s.parse().map_err(|e| simple_err("Failed to parse signed numeric literal"))?;
-        Ok(IrExpr::Int(num))
+        Ok(num)
     }
 
     fn eval_expr(&mut self, expr: &Expression, scope_id: ScopeId) -> IrGenResult<IrExpr> {
         match expr {
-            Expression::BinaryOp(infix_op) => {
+            Expression::BinaryOp(binary_op) => {
                 // Infer expected type to be type of operand1
-                let lhs = self.eval_expr(&infix_op.operand1, scope_id)?;
-                let rhs = self.eval_expr(&infix_op.operand2, scope_id)?;
+                let lhs = self.eval_expr(&binary_op.operand1, scope_id)?;
+                let rhs = self.eval_expr(&binary_op.operand2, scope_id)?;
 
                 if lhs.get_type() != rhs.get_type() {
                     return simple_fail("operand types did not match");
                 }
 
-                let kind = match infix_op.operation {
+                let kind = match binary_op.operation {
                     ast::BinaryOpKind::Add => BinaryOpKind::Add,
                     ast::BinaryOpKind::Multiply => BinaryOpKind::Multiply,
                     ast::BinaryOpKind::And => BinaryOpKind::And,
@@ -393,19 +428,20 @@ impl IrModule {
                     ir_type: lhs.get_type(),
                     lhs: Box::new(lhs),
                     rhs: Box::new(rhs),
+                    span: binary_op.span,
                 });
                 Ok(expr)
             }
-            Expression::Literal(Literal::Numeric(s, _)) => {
-                let expr = self.parse_numeric(&s)?;
+            Expression::Literal(Literal::Numeric(s, span)) => {
+                let num = self.parse_numeric(&s)?;
+                Ok(IrExpr::Literal(IrLiteral::Int(num, *span)))
+            }
+            Expression::Literal(Literal::Bool(b, span)) => {
+                let expr = IrExpr::Literal(IrLiteral::Bool(*b, *span));
                 Ok(expr)
             }
-            Expression::Literal(Literal::Bool(b, _)) => {
-                let expr = IrExpr::Bool(*b);
-                Ok(expr)
-            }
-            Expression::Literal(Literal::String(s, _)) => {
-                let expr = IrExpr::Str(s.clone());
+            Expression::Literal(Literal::String(s, span)) => {
+                let expr = IrExpr::Literal(IrLiteral::Str(s.clone(), *span));
                 Ok(expr)
             }
             Expression::Variable(variable) => {
@@ -413,8 +449,11 @@ impl IrModule {
                     .find_variable_in_scope(scope_id, &variable.ident)
                     .ok_or(simple_err(format!("Identifier not found: {}", variable.ident.0)))?;
                 let v = self.get_variable(var_index);
-                let expr =
-                    IrExpr::Variable(VariableExpr { ir_type: v.ir_type, variable_id: var_index });
+                let expr = IrExpr::Variable(VariableExpr {
+                    ir_type: v.ir_type,
+                    variable_id: var_index,
+                    span: variable.span,
+                });
                 Ok(expr)
             }
             Expression::Block(block) => {
@@ -445,6 +484,7 @@ impl IrModule {
                     callee_function_id: function_id,
                     args: fn_args,
                     ret_type: function.ret_type,
+                    span: fn_call.span,
                 });
                 Ok(call)
             }
@@ -454,7 +494,7 @@ impl IrModule {
         match stmt {
             BlockStmt::ReturnStmt(return_stmt) => {
                 let expr = self.eval_expr(&return_stmt.expr, scope_id)?;
-                let ret_inst = IrStmt::ReturnStmt(ReturnStmt { expr });
+                let ret_inst = IrStmt::ReturnStmt(ReturnStmt { expr, span: return_stmt.span });
                 Ok(ret_inst)
             }
             BlockStmt::ValDef(val_def) => {
@@ -468,8 +508,12 @@ impl IrModule {
                     ir_type,
                     owner_scope: Some(scope_id),
                 });
-                let val_def_expr =
-                    IrStmt::ValDef(ValDef { ir_type, variable_id, initializer: value_expr });
+                let val_def_expr = IrStmt::ValDef(ValDef {
+                    ir_type,
+                    variable_id,
+                    initializer: value_expr,
+                    span: val_def.span,
+                });
                 self.add_variable_to_scope(scope_id, val_def.name.0.clone(), variable_id);
                 Ok(val_def_expr)
             }
@@ -486,7 +530,8 @@ impl IrModule {
                 if var.ir_type != expr.get_type() {
                     return simple_fail("Typecheck of assignment failed");
                 }
-                let expr = IrStmt::Assignment(Assignment { value: expr, dest });
+                let expr =
+                    IrStmt::Assignment(Assignment { value: expr, dest, span: assignment.span });
                 Ok(expr)
             }
             BlockStmt::LoneExpression(expression) => {
@@ -509,7 +554,7 @@ impl IrModule {
         } else {
             IrType::Unit
         };
-        let ir_block = IrBlock { ret_type, scope_id: 0, statements };
+        let ir_block = IrBlock { ret_type, scope_id: 0, statements, span: block.span };
         Ok(ir_block)
     }
     fn eval_function(&mut self, fn_def: &FnDef, scope_id: ScopeId) -> IrGenResult<Index> {
@@ -605,21 +650,22 @@ mod test {
     use crate::ir::*;
     use crate::parse::parse_text;
 
-    // #[test]
-    // fn const_definition_1() -> Result<(), Box<dyn Error>> {
-    //     let src = r#"
-    //     val x: Int = 420;"#;
-    //     let module = parse_text(src, "basic_fn.nx")?;
-    //     let mut ir = IRModule::new(&module);
-    //     ir.run()?;
-    //     let i1 = &ir.nodes[0];
-    //     if let IrNode::Expr(IrExpr::Int(i)) = *i1 {
-    //         assert_eq!(i, 420);
-    //         Ok(())
-    //     } else {
-    //         panic!("{i1:?} was not an int")
-    //     }
-    // }
+    #[test]
+    fn const_definition_1() -> Result<(), Box<dyn Error>> {
+        let src = r"val x: Int = 420;";
+        let module = parse_text(src, "basic_fn.nx")?;
+        let mut ir = IrModule::new(Rc::new(module));
+        ir.run()?;
+        let i1 = &ir.constants[0];
+        if let IrExpr::Literal(IrLiteral::Int(i, span)) = i1.expr {
+            assert_eq!(i, 420);
+            assert_eq!(span.end, 16);
+            assert_eq!(span.start, 0);
+            Ok(())
+        } else {
+            panic!("{i1:?} was not an int")
+        }
+    }
 
     #[test]
     fn fn_definition_1() -> IrGenResult<()> {

@@ -171,22 +171,25 @@ impl<'ctx> Codegen<'ctx> {
         let value = self.codegen_expr(&val.initializer);
         value
     }
-    // We alloca everything with no guilt because even clang does that apparently
-    fn codegen_expr(&mut self, expr: &IrExpr) -> inkwell::values::BasicValueEnum<'ctx> {
-        match expr {
-            IrExpr::Str(_) => {
-                todo!("Strings!")
-            }
-            IrExpr::Int(int_value) => {
+    fn codegen_literal(&mut self, literal: &IrLiteral) -> BasicValueEnum<'ctx> {
+        match literal {
+            IrLiteral::Int(int_value, _) => {
                 // LLVM only has unsigned values, the instructions are what provide the semantics
                 // of signed vs unsigned
                 let value = self.builtin_types.i64.const_int(*int_value as u64, false);
                 value.as_basic_value_enum()
             }
-            IrExpr::Bool(b) => {
+            IrLiteral::Bool(b, _) => {
                 let value = self.builtin_types.boolean.const_int(*b as u64, true);
                 value.as_basic_value_enum()
             }
+            IrLiteral::Str(_, _) => todo!("codegen String"),
+        }
+    }
+    // We can alloca everything with no guilt because even clang does that apparently
+    fn codegen_expr(&mut self, expr: &IrExpr) -> inkwell::values::BasicValueEnum<'ctx> {
+        match expr {
+            IrExpr::Literal(literal) => self.codegen_literal(literal),
             IrExpr::Variable(ir_var) => {
                 if let Some(ptr) = self.pointers.get(&ir_var.variable_id) {
                     ptr.as_basic_value_enum()
@@ -307,7 +310,7 @@ impl<'ctx> Codegen<'ctx> {
         for constant in &self.module.constants {
             let variable = self.module.get_variable(constant.variable_id);
             match constant.expr {
-                IrExpr::Int(i64) => {
+                IrExpr::Literal(IrLiteral::Int(i64, _)) => {
                     let llvm_ty = self.builtin_types.i64;
                     let llvm_val = self.llvm_module.add_global(
                         llvm_ty,
@@ -318,7 +321,7 @@ impl<'ctx> Codegen<'ctx> {
                     llvm_val.set_initializer(&llvm_ty.const_int(i64 as u64, false));
                     self.globals.insert(constant.variable_id, llvm_val);
                 }
-                _ => panic!("constant must be int"),
+                _ => todo!("constant must be int"),
             }
         }
         for function in &self.module.clone().functions {
