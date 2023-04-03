@@ -177,12 +177,16 @@ impl TokenKind {
 
 ///
 /// https://www.forrestthewoods.com/blog/should-small-rust-structs-be-passed-by-copy-or-by-borrow/
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Span {
     pub file_id: u32,
     pub start: u32,
     pub end: u32,
     pub line: u32,
+}
+
+impl Span {
+    pub const NONE: Span = Span { file_id: 0, start: 0, end: 0, line: 0 };
 }
 
 #[derive(Debug, Clone, Copy)]

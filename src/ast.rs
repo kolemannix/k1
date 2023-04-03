@@ -177,7 +177,8 @@ pub struct FnArgDef {
 pub struct ConstVal {
     pub name: Ident,
     pub typ: TypeExpression,
-    pub value: Expression,
+    pub value_expr: Expression,
+    pub span: Span,
 }
 
 #[derive(Debug)]
