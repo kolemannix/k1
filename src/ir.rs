@@ -115,10 +115,15 @@ impl IrLiteral {
     }
 }
 
-// LLVM
-// Global identifiers (functions, global variables) begin with the '@' character.
-// Local identifiers (register names, types) begin with the '%' character
-// functions have a scope id, and an owner scope id (optional?)
+#[derive(Debug, Clone)]
+pub struct IrIf {
+    pub condition: IrExpr,
+    pub consequent: IrExpr,
+    pub alternate: Option<IrExpr>,
+    pub ir_type: IrType,
+    pub span: Span,
+}
+
 #[derive(Debug, Clone)]
 pub enum IrExpr {
     Literal(IrLiteral),
@@ -126,6 +131,7 @@ pub enum IrExpr {
     BinaryOp(BinaryOp),
     Block(IrBlock),
     FunctionCall(FunctionCall),
+    If(Box<IrIf>),
 }
 
 #[derive(Debug, Clone)]
@@ -168,6 +174,7 @@ impl IrExpr {
             IrExpr::BinaryOp(binary_op) => binary_op.ir_type,
             IrExpr::Block(b) => b.ret_type,
             IrExpr::FunctionCall(call) => call.ret_type,
+            IrExpr::If(ir_if) => ir_if.ir_type,
         }
     }
     pub fn get_span(&self) -> Span {
@@ -177,6 +184,7 @@ impl IrExpr {
             IrExpr::BinaryOp(binary_op) => binary_op.span,
             IrExpr::Block(b) => b.span,
             IrExpr::FunctionCall(call) => call.span,
+            IrExpr::If(ir_if) => ir_if.span,
         }
     }
 }
@@ -409,7 +417,28 @@ impl IrModule {
     fn eval_expr(&mut self, expr: &Expression, scope_id: ScopeId) -> IrGenResult<IrExpr> {
         match expr {
             Expression::If(if_expr) => {
-                todo!("ir if expr")
+                // Ensure boolean condition (or optional which isn't built yet)
+                let condition = self.eval_expr(&if_expr.cond, scope_id)?;
+                if condition.get_type() != IrType::Bool {
+                    anyhow::bail!(
+                        "If condition must be of type Boolean; but got {:?}",
+                        condition.get_type()
+                    );
+                }
+                let consequent = self.eval_expr(&if_expr.cons, scope_id)?;
+                let alternate = if let Some(alt) = &if_expr.alt {
+                    Some(self.eval_expr(alt, scope_id)?)
+                } else {
+                    None
+                };
+                let overall_type = consequent.get_type();
+                Ok(IrExpr::If(Box::new(IrIf {
+                    condition,
+                    consequent,
+                    alternate,
+                    ir_type: overall_type,
+                    span: if_expr.span,
+                })))
             }
             Expression::BinaryOp(binary_op) => {
                 // Infer expected type to be type of operand1
@@ -436,7 +465,7 @@ impl IrModule {
                 Ok(expr)
             }
             Expression::Literal(Literal::Numeric(s, span)) => {
-                let num = self.parse_numeric(&s)?;
+                let num = self.parse_numeric(s)?;
                 Ok(IrExpr::Literal(IrLiteral::Int(num, *span)))
             }
             Expression::Literal(Literal::Bool(b, span)) => {

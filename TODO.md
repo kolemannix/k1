@@ -27,6 +27,7 @@
 - [ ] main function / detect entrypoint properly. Typing of main? How to get main args?
 - [ ] Proper println implementation. Fine to use printf internally for now but we should define our own func around it
 - [ ] Scoping is basically non-existent right now
+- [ ] Implement Display instead of relying on Debug
 
 Design for 
 - optionality
