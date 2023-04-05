@@ -1,5 +1,7 @@
 fn main(): Int {
-  if true println(42);
-  if false println(1337);
+  val cond: Bool = false;
+  val result: Int = if cond 42 else 1337;
+  println(result);
   return 0;
 }
+// 1337
