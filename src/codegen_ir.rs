@@ -219,6 +219,9 @@ impl<'ctx> Codegen<'ctx> {
                 self.builder.build_unconditional_branch(merge_block);
 
                 // Alternate block
+                // TODO: Fix the alternate block.
+                // If there's no 'else' clause,
+                // the PHI node types dont match
                 self.builder.position_at_end(alternate_block);
                 let alternate_expr = if let Some(alt) = &ir_if.alternate {
                     let alternate_expr = self.codegen_expr(alt);

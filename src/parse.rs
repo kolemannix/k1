@@ -431,15 +431,20 @@ impl<'a> Parser<'a> {
                 Parser::expect("conditional expression", if_keyword, self.parse_expression())?;
             let consequent_expr =
                 Parser::expect("block following condition", if_keyword, self.parse_expression())?;
-            // TODO: Support 'else'
-            let mut span = if_keyword.span;
-            span.end = consequent_expr.get_span().end;
-            let if_expr = IfExpr {
-                cond: condition_expr.into(),
-                cons: consequent_expr.into(),
-                alt: None,
-                span,
+            let else_peek = self.peek();
+            let alt = if else_peek.kind == KeywordElse {
+                self.tokens.advance();
+                let alt_result = Parser::expect("else block", else_peek, self.parse_expression())?;
+                Some(Box::new(alt_result))
+            } else {
+                println!("no");
+                None
             };
+            let mut span = if_keyword.span;
+            span.end =
+                alt.as_ref().map(|a| a.get_span().end).unwrap_or(consequent_expr.get_span().end);
+            let if_expr =
+                IfExpr { cond: condition_expr.into(), cons: consequent_expr.into(), alt, span };
             Ok(Some(if_expr))
         } else {
             Ok(None)
