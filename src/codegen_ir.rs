@@ -200,6 +200,43 @@ impl<'ctx> Codegen<'ctx> {
                     panic!("No pointer or global found for variable {:?}", ir_var)
                 }
             }
+            IrExpr::If(ir_if) => {
+                let condition = self.codegen_expr(&ir_if.condition);
+                let condition_value = self.loaded_value_from_enum(condition).into_int_value();
+                let typ = self.eval_type(ir_if.ir_type);
+                let start_block = self.builder.get_insert_block().unwrap();
+                let current_fn = start_block.get_parent().unwrap();
+                let consequent_block = self.ctx.append_basic_block(current_fn, "if_cons");
+                let alternate_block = self.ctx.append_basic_block(current_fn, "if_alt");
+                let merge_block = self.ctx.append_basic_block(current_fn, "if_merge");
+                self.builder.build_conditional_branch(
+                    condition_value,
+                    consequent_block,
+                    alternate_block,
+                );
+                self.builder.position_at_end(consequent_block);
+                let consequent_expr = self.codegen_expr(&ir_if.consequent);
+                self.builder.build_unconditional_branch(merge_block);
+
+                // Alternate block
+                self.builder.position_at_end(alternate_block);
+                let alternate_expr = if let Some(alt) = &ir_if.alternate {
+                    let alternate_expr = self.codegen_expr(alt);
+                    alternate_expr
+                } else {
+                    self.builtin_types.unit.const_zero().as_basic_value_enum()
+                };
+                self.builder.build_unconditional_branch(merge_block);
+
+                // Merge block
+                self.builder.position_at_end(merge_block);
+                let phi_value = self.builder.build_phi(typ, "if_phi");
+                phi_value.add_incoming(&[
+                    (&consequent_expr, consequent_block),
+                    (&alternate_expr, alternate_block),
+                ]);
+                phi_value.as_basic_value()
+            }
             IrExpr::BinaryOp(bin_op) => match bin_op.ir_type {
                 IrType::Int => {
                     if bin_op.kind.is_integer_op() {
