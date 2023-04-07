@@ -1,7 +1,4 @@
-use crate::{
-    ir::IrType,
-    lex::{Span, TokenKind},
-};
+use crate::lex::{Span, TokenKind};
 
 #[derive(Debug)]
 pub enum Literal {
@@ -140,7 +137,6 @@ pub enum BlockStmt {
     ValDef(ValDef),
     /// return keyword will only be allowed to denote explicit early returns
     ReturnStmt(ReturnStmt),
-    If(IfExpr),
     Assignment(Assignment),
     LoneExpression(Expression),
 }

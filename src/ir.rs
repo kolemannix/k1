@@ -100,14 +100,17 @@ pub struct FunctionCall {
 
 #[derive(Debug, Clone)]
 pub enum IrLiteral {
+    Unit(Span),
     Str(String, Span),
     Int(i64, Span),
     Bool(bool, Span),
 }
 
 impl IrLiteral {
+    #[inline]
     pub fn get_span(&self) -> Span {
         match self {
+            IrLiteral::Unit(span) => *span,
             IrLiteral::Str(_, span) => *span,
             IrLiteral::Int(_, span) => *span,
             IrLiteral::Bool(_, span) => *span,
@@ -118,8 +121,8 @@ impl IrLiteral {
 #[derive(Debug, Clone)]
 pub struct IrIf {
     pub condition: IrExpr,
-    pub consequent: IrExpr,
-    pub alternate: Option<IrExpr>,
+    pub consequent: IrBlock,
+    pub alternate: IrBlock,
     pub ir_type: IrType,
     pub span: Span,
 }
@@ -132,6 +135,38 @@ pub enum IrExpr {
     Block(IrBlock),
     FunctionCall(FunctionCall),
     If(Box<IrIf>),
+}
+
+impl IrExpr {
+    pub fn unit_literal(span: Span) -> IrExpr {
+        IrExpr::Literal(IrLiteral::Unit(span))
+    }
+
+    #[inline]
+    pub fn get_type(&self) -> IrType {
+        match self {
+            IrExpr::Literal(IrLiteral::Unit(_)) => IrType::Unit,
+            IrExpr::Literal(IrLiteral::Str(_, _)) => IrType::String,
+            IrExpr::Literal(IrLiteral::Int(_, _)) => IrType::Int,
+            IrExpr::Literal(IrLiteral::Bool(_, _)) => IrType::Bool,
+            IrExpr::Variable(var) => var.ir_type,
+            IrExpr::BinaryOp(binary_op) => binary_op.ir_type,
+            IrExpr::Block(b) => b.ret_type,
+            IrExpr::FunctionCall(call) => call.ret_type,
+            IrExpr::If(ir_if) => ir_if.ir_type,
+        }
+    }
+    #[inline]
+    pub fn get_span(&self) -> Span {
+        match self {
+            IrExpr::Literal(lit) => lit.get_span(),
+            IrExpr::Variable(var) => var.span,
+            IrExpr::BinaryOp(binary_op) => binary_op.span,
+            IrExpr::Block(b) => b.span,
+            IrExpr::FunctionCall(call) => call.span,
+            IrExpr::If(ir_if) => ir_if.span,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -164,27 +199,14 @@ pub enum IrStmt {
     Assignment(Assignment),
 }
 
-impl IrExpr {
-    pub fn get_type(&self) -> IrType {
-        match self {
-            IrExpr::Literal(IrLiteral::Str(_, _)) => IrType::String,
-            IrExpr::Literal(IrLiteral::Int(_, _)) => IrType::Int,
-            IrExpr::Literal(IrLiteral::Bool(_, _)) => IrType::Bool,
-            IrExpr::Variable(var) => var.ir_type,
-            IrExpr::BinaryOp(binary_op) => binary_op.ir_type,
-            IrExpr::Block(b) => b.ret_type,
-            IrExpr::FunctionCall(call) => call.ret_type,
-            IrExpr::If(ir_if) => ir_if.ir_type,
-        }
-    }
+impl IrStmt {
+    #[inline]
     pub fn get_span(&self) -> Span {
         match self {
-            IrExpr::Literal(lit) => lit.get_span(),
-            IrExpr::Variable(var) => var.span,
-            IrExpr::BinaryOp(binary_op) => binary_op.span,
-            IrExpr::Block(b) => b.span,
-            IrExpr::FunctionCall(call) => call.span,
-            IrExpr::If(ir_if) => ir_if.span,
+            IrStmt::Expr(e) => e.get_span(),
+            IrStmt::ValDef(v) => v.span,
+            IrStmt::ReturnStmt(ret) => ret.span,
+            IrStmt::Assignment(ass) => ass.span,
         }
     }
 }
@@ -353,6 +375,13 @@ impl IrModule {
         }
     }
 
+    fn is_valid_type(&self, source: IrType, destination: IrType) -> bool {
+        // Eventually, types can be compatible without being equal
+        // While we won't have full-blown inheritance, there will be some shallow subtyping
+        // and interfaces
+        source == destination
+    }
+
     fn eval_const(&mut self, const_expr: &ast::ConstVal) -> IrGenResult<VariableId> {
         let scope_id = 0;
         match const_expr {
@@ -408,10 +437,33 @@ impl IrModule {
 
     fn parse_numeric(&self, s: &str) -> IrGenResult<i64> {
         // Eventually we need to find out what type of number literal this is.
-        // For now we only support u64
+        // For now we only support i64
         let num: i64 =
             s.parse().map_err(|e| simple_err("Failed to parse signed numeric literal"))?;
         Ok(num)
+    }
+
+    fn transform_expr_to_block(&mut self, expr: IrExpr) -> IrBlock {
+        match expr {
+            IrExpr::Block(b) => b,
+            expr => {
+                // TODO: Call create scope, do the right stuff
+                let block_scope_id = 0;
+                let ret_type = expr.get_type();
+                let span = expr.get_span();
+                let statement = IrStmt::Expr(expr);
+                let statements = vec![statement];
+
+                IrBlock { ret_type, scope_id: block_scope_id, statements, span }
+            }
+        }
+    }
+
+    fn coerce_block_to_unit_block(&mut self, block: &mut IrBlock) -> () {
+        let span = block.statements.last().map(|s| s.get_span()).unwrap_or(block.span);
+        let unit_literal = IrExpr::unit_literal(span);
+        block.statements.push(IrStmt::Expr(unit_literal));
+        block.ret_type = IrType::Unit;
     }
 
     fn eval_expr(&mut self, expr: &Expression, scope_id: ScopeId) -> IrGenResult<IrExpr> {
@@ -419,19 +471,42 @@ impl IrModule {
             Expression::If(if_expr) => {
                 // Ensure boolean condition (or optional which isn't built yet)
                 let condition = self.eval_expr(&if_expr.cond, scope_id)?;
-                if condition.get_type() != IrType::Bool {
+                if !self.is_valid_type(condition.get_type(), IrType::Bool) {
                     anyhow::bail!(
                         "If condition must be of type Boolean; but got {:?}",
                         condition.get_type()
                     );
                 }
-                let consequent = self.eval_expr(&if_expr.cons, scope_id)?;
-                let alternate = if let Some(alt) = &if_expr.alt {
-                    Some(self.eval_expr(alt, scope_id)?)
+                let consequent_expr = self.eval_expr(&if_expr.cons, scope_id)?;
+                // De-sugar if without else:
+                // If there is no alternate, we coerce the consequent to return Unit, so both
+                // branches have a matching type, making codegen simple and branchless
+                let consequent = if if_expr.alt.is_none() {
+                    let mut block = self.transform_expr_to_block(consequent_expr);
+                    self.coerce_block_to_unit_block(&mut block);
+                    block
                 } else {
-                    None
+                    self.transform_expr_to_block(consequent_expr)
                 };
-                let overall_type = consequent.get_type();
+                let alternate = if let Some(alt) = &if_expr.alt {
+                    let expr = self.eval_expr(alt, scope_id)?;
+                    self.transform_expr_to_block(expr)
+                } else {
+                    IrBlock {
+                        ret_type: IrType::Unit,
+                        scope_id,
+                        statements: vec![IrStmt::Expr(IrExpr::unit_literal(if_expr.span))],
+                        span: if_expr.span,
+                    }
+                };
+                if !self.is_valid_type(consequent.ret_type, alternate.ret_type) {
+                    anyhow::bail!(
+                        "else branch type {:?} did not match then branch type {:?}",
+                        consequent.ret_type,
+                        alternate.ret_type
+                    );
+                }
+                let overall_type = consequent.ret_type;
                 Ok(IrExpr::If(Box::new(IrIf {
                     condition,
                     consequent,
@@ -445,7 +520,7 @@ impl IrModule {
                 let lhs = self.eval_expr(&binary_op.operand1, scope_id)?;
                 let rhs = self.eval_expr(&binary_op.operand2, scope_id)?;
 
-                if lhs.get_type() != rhs.get_type() {
+                if !self.is_valid_type(lhs.get_type(), rhs.get_type()) {
                     return simple_fail("operand types did not match");
                 }
 
@@ -549,17 +624,14 @@ impl IrModule {
                 self.add_variable_to_scope(scope_id, val_def.name.0.clone(), variable_id);
                 Ok(val_def_expr)
             }
-            BlockStmt::If(_) => simple_fail("IF expressions are unimplemented"),
             BlockStmt::Assignment(assignment) => {
                 let expr = self.eval_expr(&assignment.expr, scope_id)?;
-                let dest = self.find_variable_in_scope(scope_id, &assignment.ident).ok_or(
-                    simple_err(&format!(
-                        "Variable {} not found in scope {}",
-                        &assignment.ident.0, scope_id
-                    )),
-                )?;
+                let dest =
+                    self.find_variable_in_scope(scope_id, &assignment.ident).ok_or(simple_err(
+                        format!("Variable {} not found in scope {}", assignment.ident.0, scope_id),
+                    ))?;
                 let var = self.get_variable(dest);
-                if var.ir_type != expr.get_type() {
+                if !self.is_valid_type(var.ir_type, expr.get_type()) {
                     return simple_fail("Typecheck of assignment failed");
                 }
                 let expr =
@@ -581,6 +653,7 @@ impl IrModule {
         // TODO: The return type of a block is actually an interesting problem, need to think about
         // branching, early returns, etc!
         // For now return type is inferred to be the return type of the last instruction
+        // note: This came up again when implementing if/else (return is special!)
         let ret_type = if let Some(stmt) = statements.last() {
             self.get_stmt_return_type(stmt).expect("last block statement should have a return type")
         } else {
@@ -620,7 +693,7 @@ impl IrModule {
             None => body_block.ret_type,
             Some(given_ret_type) => {
                 let given_ir_type = self.eval_type_expr(given_ret_type, scope_id)?;
-                if given_ir_type != body_block.ret_type {
+                if !self.is_valid_type(given_ir_type, body_block.ret_type) {
                     return simple_fail(format!(
                         "Function {} ret type mismatch: {:?} {:?}",
                         &fn_def.name.0, given_ir_type, body_block.ret_type
