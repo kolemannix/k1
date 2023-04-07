@@ -354,7 +354,15 @@ impl<'ctx> Codegen<'ctx> {
                     self.builder.build_return(Some(&loaded));
                     return None;
                 }
-                IrStmt::Assignment(_) => todo!("assignment codegen"),
+                IrStmt::Assignment(assignment) => {
+                    let variable_id = &assignment.destination_variable;
+                    let destination_ptr =
+                        *self.pointers.get(variable_id).expect("Missing variable");
+                    let initializer = self.codegen_expr(&assignment.value);
+                    let store = self.builder.build_store(destination_ptr, initializer);
+                    let unit = self.builtin_types.unit.const_zero();
+                    last = Some(unit.as_basic_value_enum())
+                }
             }
         }
         last

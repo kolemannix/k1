@@ -185,7 +185,7 @@ pub struct ReturnStmt {
 
 #[derive(Debug, Clone)]
 pub struct Assignment {
-    pub dest: VariableId,
+    pub destination_variable: VariableId,
     pub value: IrExpr,
     pub span: Span,
 }
@@ -410,8 +410,11 @@ impl IrModule {
     fn get_stmt_return_type(&self, stmt: &IrStmt) -> Option<IrType> {
         match stmt {
             IrStmt::Expr(expr) => Some(expr.get_type()),
+            IrStmt::ValDef(_) => Some(IrType::Unit),
+            // FIXME: This is not quite right; a return statement
+            // is different; should probably be None or 'never'
             IrStmt::ReturnStmt(ret) => Some(ret.expr.get_type()),
-            _ => None,
+            IrStmt::Assignment(_) => Some(IrType::Unit),
         }
     }
 
@@ -634,8 +637,11 @@ impl IrModule {
                 if !self.is_valid_type(var.ir_type, expr.get_type()) {
                     return simple_fail("Typecheck of assignment failed");
                 }
-                let expr =
-                    IrStmt::Assignment(Assignment { value: expr, dest, span: assignment.span });
+                let expr = IrStmt::Assignment(Assignment {
+                    value: expr,
+                    destination_variable: dest,
+                    span: assignment.span,
+                });
                 Ok(expr)
             }
             BlockStmt::LoneExpression(expression) => {
