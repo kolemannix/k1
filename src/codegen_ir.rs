@@ -167,12 +167,16 @@ impl<'ctx> Codegen<'ctx> {
     fn eval_basic_metadata_ty(&self, ir_type: IrType) -> BasicMetadataTypeEnum<'ctx> {
         self.eval_type(ir_type).as_basic_type_enum().into()
     }
-    fn codegen_val(&mut self, val: &ValDef) -> inkwell::values::BasicValueEnum<'ctx> {
+    fn codegen_val(&mut self, val: &ValDef) -> BasicValueEnum<'ctx> {
         let value = self.codegen_expr(&val.initializer);
         value
     }
     fn codegen_literal(&mut self, literal: &IrLiteral) -> BasicValueEnum<'ctx> {
         match literal {
+            IrLiteral::Unit(_) => {
+                let value = self.builtin_types.unit.const_zero();
+                value.as_basic_value_enum()
+            }
             IrLiteral::Int(int_value, _) => {
                 // LLVM only has unsigned values, the instructions are what provide the semantics
                 // of signed vs unsigned
@@ -186,8 +190,46 @@ impl<'ctx> Codegen<'ctx> {
             IrLiteral::Str(_, _) => todo!("codegen String"),
         }
     }
+    fn codegen_if_else(&mut self, ir_if: &IrIf) -> BasicValueEnum<'ctx> {
+        let typ = self.eval_type(ir_if.ir_type);
+        let start_block = self.builder.get_insert_block().unwrap();
+        let current_fn = start_block.get_parent().unwrap();
+        let consequent_block = self.ctx.append_basic_block(current_fn, "if_cons");
+        let alternate_block = self.ctx.append_basic_block(current_fn, "if_alt");
+        let merge_block = self.ctx.append_basic_block(current_fn, "if_merge");
+
+        // Entry block
+        let condition = self.codegen_expr(&ir_if.condition);
+        let condition_value = self.loaded_value_from_enum(condition).into_int_value();
+        self.builder.build_conditional_branch(condition_value, consequent_block, alternate_block);
+
+        // Consequent Block
+        // If any of these blocks have an early return, they'll return None, and we'll panic for
+        // now
+        self.builder.position_at_end(consequent_block);
+        let consequent_expr = self
+            .codegen_block(&ir_if.consequent)
+            .expect("Expected IF branch block to return something");
+        self.builder.build_unconditional_branch(merge_block);
+
+        // Alternate Block
+        self.builder.position_at_end(alternate_block);
+        let alternate_expr = self
+            .codegen_block(&ir_if.alternate)
+            .expect("Expected IF branch block to return something");
+        self.builder.build_unconditional_branch(merge_block);
+
+        // Merge block
+        self.builder.position_at_end(merge_block);
+        let phi_value = self.builder.build_phi(typ, "if_phi");
+        phi_value.add_incoming(&[
+            (&consequent_expr, consequent_block),
+            (&alternate_expr, alternate_block),
+        ]);
+        phi_value.as_basic_value()
+    }
     // We can alloca everything with no guilt because even clang does that apparently
-    fn codegen_expr(&mut self, expr: &IrExpr) -> inkwell::values::BasicValueEnum<'ctx> {
+    fn codegen_expr(&mut self, expr: &IrExpr) -> BasicValueEnum<'ctx> {
         match expr {
             IrExpr::Literal(literal) => self.codegen_literal(literal),
             IrExpr::Variable(ir_var) => {
@@ -200,46 +242,7 @@ impl<'ctx> Codegen<'ctx> {
                     panic!("No pointer or global found for variable {:?}", ir_var)
                 }
             }
-            IrExpr::If(ir_if) => {
-                let condition = self.codegen_expr(&ir_if.condition);
-                let condition_value = self.loaded_value_from_enum(condition).into_int_value();
-                let typ = self.eval_type(ir_if.ir_type);
-                let start_block = self.builder.get_insert_block().unwrap();
-                let current_fn = start_block.get_parent().unwrap();
-                let consequent_block = self.ctx.append_basic_block(current_fn, "if_cons");
-                let alternate_block = self.ctx.append_basic_block(current_fn, "if_alt");
-                let merge_block = self.ctx.append_basic_block(current_fn, "if_merge");
-                self.builder.build_conditional_branch(
-                    condition_value,
-                    consequent_block,
-                    alternate_block,
-                );
-                self.builder.position_at_end(consequent_block);
-                let consequent_expr = self.codegen_expr(&ir_if.consequent);
-                self.builder.build_unconditional_branch(merge_block);
-
-                // Alternate block
-                // TODO: Fix the alternate block.
-                // If there's no 'else' clause,
-                // the PHI node types dont match
-                self.builder.position_at_end(alternate_block);
-                let alternate_expr = if let Some(alt) = &ir_if.alternate {
-                    let alternate_expr = self.codegen_expr(alt);
-                    alternate_expr
-                } else {
-                    self.builtin_types.unit.const_zero().as_basic_value_enum()
-                };
-                self.builder.build_unconditional_branch(merge_block);
-
-                // Merge block
-                self.builder.position_at_end(merge_block);
-                let phi_value = self.builder.build_phi(typ, "if_phi");
-                phi_value.add_incoming(&[
-                    (&consequent_expr, consequent_block),
-                    (&alternate_expr, alternate_block),
-                ]);
-                phi_value.as_basic_value()
-            }
+            IrExpr::If(ir_if) => self.codegen_if_else(&ir_if),
             IrExpr::BinaryOp(bin_op) => match bin_op.ir_type {
                 IrType::Int => {
                     if bin_op.kind.is_integer_op() {
@@ -318,17 +321,24 @@ impl<'ctx> Codegen<'ctx> {
                     self.builder.build_store(ptr, self.builtin_types.unit.const_int(0, false));
                     self.builtin_types.unit.const_int(0, false).as_basic_value_enum()
                 } else {
-                    todo!("Unexpected instrinic: {}", callee.name);
+                    todo!("Unexpected intrinic: {}", callee.name);
                 }
             }
         }
     }
-    fn codegen_block(&mut self, block: &IrBlock) {
+    // This needs to return either a basic value or an instruction value (in the case of early return)
+    // Actually, early return is a big rabbit hole. We need to typecheck it in ir gen, and probably
+    // store it on the block
+    //
+    // For now, I'm going to return an Option. If the block has an early return, we just return
+    // None. We'll fix it when implementing early returns
+    // Maybe we rename ReturnStmt to Early Return to separate it from tail returns, which have
+    // pretty different semantics and implications for codegen, I am realizing
+    fn codegen_block(&mut self, block: &IrBlock) -> Option<BasicValueEnum<'ctx>> {
+        let mut last: Option<BasicValueEnum<'ctx>> = None;
         for stmt in &block.statements {
             match stmt {
-                IrStmt::Expr(expr) => {
-                    self.codegen_expr(expr);
-                }
+                IrStmt::Expr(expr) => last = Some(self.codegen_expr(expr).as_basic_value_enum()),
                 IrStmt::ValDef(val_def) => {
                     let typ = self.eval_type(val_def.ir_type);
                     let ptr =
@@ -336,15 +346,18 @@ impl<'ctx> Codegen<'ctx> {
                     let value = self.codegen_val(val_def);
                     self.builder.build_store(ptr, value);
                     self.pointers.insert(val_def.variable_id, ptr);
+                    last = Some(ptr.as_basic_value_enum())
                 }
                 IrStmt::ReturnStmt(return_stmt) => {
                     let value = self.codegen_expr(&return_stmt.expr);
                     let loaded = self.loaded_value_from_enum(value);
                     self.builder.build_return(Some(&loaded));
+                    return None;
                 }
                 IrStmt::Assignment(_) => todo!("assignment codegen"),
             }
         }
+        last
     }
     pub fn codegen_module(&mut self) {
         for constant in &self.module.constants {

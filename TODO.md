@@ -10,7 +10,7 @@
 - [x] implement "expected output" for test sources
 - [x] Add spans to AST
 - [x] Add spans to IR
-- [ ] Implement IF expressions
+- [x] Implement IF expressions
 
 # Up next maybe
 - [ ] Ditch semicolons? (this technically introduces significant whitespace)
@@ -22,6 +22,17 @@
 - [ ] Heap memory
 - [ ] Tuples
 - [ ] REPL would be cool; can I just swap a function out for another one for a Clojure-like cider-repl experience? Interactive live sessions
+- [ ] Control-Flow: proper codegen for early returns:
+    // This needs to return either a basic value or an instruction value (in the case of early return)
+    // Actually, early return is a big rabbit hole. We need to typecheck it in ir gen, and probably
+    // store it on the block
+    //
+    // For now, I'm going to return an Option. If the block has an early return, we just return
+    // None. We'll fix it when implementing early returns
+    // Maybe we rename ReturnStmt to Early Return to separate it from tail returns, which have
+    // pretty different semantics and implications for codegen, I am realizing
+    fn codegen_block(&mut self, block: &IrBlock) -> Option<BasicValueEnum<'ctx>> {
+
 
 # Hacks to fix
 - [ ] main function / detect entrypoint properly. Typing of main? How to get main args?
