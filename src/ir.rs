@@ -634,6 +634,9 @@ impl IrModule {
                         format!("Variable {} not found in scope {}", assignment.ident.0, scope_id),
                     ))?;
                 let var = self.get_variable(dest);
+                if !var.is_mutable {
+                    anyhow::bail!("Cannot assign to immutable variable {}", assignment.ident.0)
+                }
                 if !self.is_valid_type(var.ir_type, expr.get_type()) {
                     return simple_fail("Typecheck of assignment failed");
                 }

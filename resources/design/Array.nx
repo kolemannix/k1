@@ -1,0 +1,22 @@
+
+// Special syntax or regular parameterized types:
+Int[] [Int] []Int
+or
+Array[item = Int]
+Slice[Int, 4]
+Dict[K,V]
+// I think regular parameterized types, with named
+// type parameters
+Dict[key = Int, value = String]
+
+
+type Point = struct { ... }
+fn sort = [T](x: Array[T]): () {
+
+}
+
+
+fn main(): Int {
+  val leet: Array[Int] = [1, 3, 3, 7];
+  leet[3]
+}
