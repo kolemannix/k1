@@ -1,12 +1,25 @@
+# nexlang
+
+Just learning lang dev by implementing a toy language. The goal is to implement all the basics, but maybe
+with a few syntactic insights or pet ideas that I like. I am trying not to have any aspirations for this project
+except to explore the problem space of compiler development, and maybe to be able to do some of advent of code 2023
+in this language
+
 # Up next maybe
+- [-] Records
+  - [x] Syntax decision ({} vs .{} vs Point {})
+  - [x] Parsing
+  - [-] Typechecking
+  - [ ] codegen static as LLVM structs
+  - [ ] codegen dynamic as standard library Maps (long way off)
 - [ ] Arrays
 - [ ] Ditch semicolons? (this technically introduces significant whitespace)
 - [x] Binary infix operations
 - [ ] basic error reporting using spans
-- [ ] Structs
+- [ ] oneofs (tagged unions)
 - [ ] Loops
 - [ ] Heap memory
-- [ ] Tuples (are we anti-tuple for performance reasons?)
+- [ ] Tuples
 - [ ] REPL would be cool; can I just swap a function out for another one for a Clojure-like cider-repl experience? Interactive live sessions
 - [ ] Control-Flow: proper codegen for early returns:
     // This needs to return either a basic value or an instruction value (in the case of early return)

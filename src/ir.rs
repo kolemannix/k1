@@ -1,9 +1,8 @@
-use crate::ast::{
-    self, Block, BlockStmt, Definition, Expression, FnDef, Literal, Module, TypeExpression,
-    TypePrimitive,
-};
+use crate::ast::{self, Block, BlockStmt, Definition, Expression, FnDef, Literal, Module};
 use crate::lex::Span;
-use anyhow::Result;
+use crate::trace;
+use anyhow::{anyhow, bail, Result};
+use std::any::Any;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -13,20 +12,43 @@ pub type ScopeId = u32;
 pub type FunctionId = u32;
 pub type VariableId = u32;
 pub type Index = u32;
+pub type TypeId = u32;
+
+#[derive(Debug, Clone)]
+pub struct RecordDefnField {
+    pub name: String,
+    pub typ: TypeRef,
+}
+
+#[derive(Debug, Clone)]
+pub struct RecordDefn {
+    pub fields: Vec<RecordDefnField>,
+    pub span: Span,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
-pub enum IrType {
+pub enum TypeRef {
     Unit,
     Int,
     Bool,
     String,
-    // TypeExpr(Index)
+    TypeId(TypeId),
+}
+
+#[derive(Debug, Clone)]
+pub struct TypeExpression {
+    pub ty: TypeRef,
+    pub span: Span,
+}
+
+pub enum Type {
+    Record(RecordDefn),
 }
 
 #[derive(Debug, Clone)]
 pub struct IrBlock {
-    pub ret_type: IrType,
+    pub ret_type: TypeRef,
     pub scope_id: ScopeId,
     pub statements: Vec<IrStmt>,
     pub span: Span,
@@ -37,13 +59,13 @@ pub struct FuncParam {
     pub name: String,
     pub variable_id: VariableId,
     pub position: usize,
-    pub ir_type: IrType,
+    pub ir_type: TypeRef,
 }
 
 #[derive(Debug, Clone)]
 pub struct Function {
     pub name: String,
-    pub ret_type: IrType,
+    pub ret_type: TypeRef,
     pub params: Vec<FuncParam>,
     pub block: IrBlock,
     pub is_intrinsic: bool,
@@ -52,7 +74,7 @@ pub struct Function {
 #[derive(Debug, Clone)]
 pub struct VariableExpr {
     pub variable_id: Index,
-    pub ir_type: IrType,
+    pub ir_type: TypeRef,
     pub span: Span,
 }
 
@@ -84,7 +106,7 @@ impl BinaryOpKind {
 #[derive(Debug, Clone)]
 pub struct BinaryOp {
     pub kind: BinaryOpKind,
-    pub ir_type: IrType,
+    pub ir_type: TypeRef,
     pub lhs: Box<IrExpr>,
     pub rhs: Box<IrExpr>,
     pub span: Span,
@@ -94,8 +116,21 @@ pub struct BinaryOp {
 pub struct FunctionCall {
     pub callee_function_id: FunctionId,
     pub args: Vec<IrExpr>,
-    pub ret_type: IrType,
+    pub ret_type: TypeRef,
     pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct RecordField {
+    pub name: String,
+    pub expr: IrExpr,
+}
+
+#[derive(Debug, Clone)]
+pub struct Record {
+    pub fields: Vec<RecordField>,
+    pub span: Span,
+    pub type_id: TypeId,
 }
 
 #[derive(Debug, Clone)]
@@ -104,6 +139,7 @@ pub enum IrLiteral {
     Str(String, Span),
     Int(i64, Span),
     Bool(bool, Span),
+    Record(Record),
 }
 
 impl IrLiteral {
@@ -114,6 +150,7 @@ impl IrLiteral {
             IrLiteral::Str(_, span) => *span,
             IrLiteral::Int(_, span) => *span,
             IrLiteral::Bool(_, span) => *span,
+            IrLiteral::Record(record) => record.span,
         }
     }
 }
@@ -123,7 +160,7 @@ pub struct IrIf {
     pub condition: IrExpr,
     pub consequent: IrBlock,
     pub alternate: IrBlock,
-    pub ir_type: IrType,
+    pub ir_type: TypeRef,
     pub span: Span,
 }
 
@@ -143,12 +180,13 @@ impl IrExpr {
     }
 
     #[inline]
-    pub fn get_type(&self) -> IrType {
+    pub fn get_type(&self) -> TypeRef {
         match self {
-            IrExpr::Literal(IrLiteral::Unit(_)) => IrType::Unit,
-            IrExpr::Literal(IrLiteral::Str(_, _)) => IrType::String,
-            IrExpr::Literal(IrLiteral::Int(_, _)) => IrType::Int,
-            IrExpr::Literal(IrLiteral::Bool(_, _)) => IrType::Bool,
+            IrExpr::Literal(IrLiteral::Unit(_)) => TypeRef::Unit,
+            IrExpr::Literal(IrLiteral::Str(_, _)) => TypeRef::String,
+            IrExpr::Literal(IrLiteral::Int(_, _)) => TypeRef::Int,
+            IrExpr::Literal(IrLiteral::Bool(_, _)) => TypeRef::Bool,
+            IrExpr::Literal(IrLiteral::Record(record)) => TypeRef::TypeId(record.type_id),
             IrExpr::Variable(var) => var.ir_type,
             IrExpr::BinaryOp(binary_op) => binary_op.ir_type,
             IrExpr::Block(b) => b.ret_type,
@@ -172,7 +210,7 @@ impl IrExpr {
 #[derive(Debug, Clone)]
 pub struct ValDef {
     pub variable_id: VariableId,
-    pub ir_type: IrType,
+    pub ir_type: TypeRef,
     pub initializer: IrExpr,
     pub span: Span,
 }
@@ -241,7 +279,7 @@ pub type IrGenResult<A> = anyhow::Result<A>;
 #[derive(Debug)]
 pub struct Variable {
     pub name: String,
-    pub ir_type: IrType,
+    pub ir_type: TypeRef,
     pub is_mutable: bool,
     pub owner_scope: Option<ScopeId>,
 }
@@ -250,7 +288,7 @@ pub struct Variable {
 pub struct Constant {
     pub variable_id: Index,
     pub expr: IrExpr,
-    pub ir_type: IrType,
+    pub ir_type: TypeRef,
     pub span: Span,
 }
 
@@ -259,6 +297,7 @@ pub struct IrModule {
     src: String,
     pub functions: Vec<Function>,
     pub variables: Vec<Variable>,
+    pub types: Vec<Type>,
     pub constants: Vec<Constant>,
     pub scopes: Vec<Scope>,
 }
@@ -267,6 +306,7 @@ pub struct IrModule {
 pub struct Scope {
     variables: HashMap<String, VariableId>,
     functions: HashMap<String, FunctionId>,
+    types: HashMap<String, TypeRef>,
     parent: Option<Box<Scope>>,
 }
 impl Scope {
@@ -276,18 +316,26 @@ impl Scope {
             None => self.parent.as_ref().and_then(|p| p.find_recursive(name)),
         }
     }
-    fn find_variable(&self, name: impl AsRef<str>) -> Option<Index> {
+    fn find_variable(&self, name: impl AsRef<str>) -> Option<VariableId> {
         self.variables.get(name.as_ref()).copied()
     }
-    fn add_variable(&mut self, name: String, value: Index) {
+    fn add_variable(&mut self, name: String, value: VariableId) {
         self.variables.insert(name, value);
     }
 
-    fn add_function(&mut self, name: String, function_id: Index) {
+    fn add_type(&mut self, name: String, ty: TypeRef) {
+        self.types.insert(name, ty);
+    }
+
+    fn find_type(&self, name: impl AsRef<str>) -> Option<TypeRef> {
+        self.types.get(name.as_ref()).copied()
+    }
+
+    fn add_function(&mut self, name: String, function_id: FunctionId) {
         self.functions.insert(name, function_id);
     }
 
-    fn find_function(&self, name: impl AsRef<str>) -> Option<Index> {
+    fn find_function(&self, name: impl AsRef<str>) -> Option<FunctionId> {
         self.functions.get(name.as_ref()).copied()
     }
 }
@@ -307,6 +355,7 @@ impl IrModule {
             src: String::new(),
             functions: Vec::new(),
             variables: Vec::new(),
+            types: Vec::new(),
             constants: Vec::new(),
             scopes: vec![Scope::default()],
         };
@@ -314,22 +363,22 @@ impl IrModule {
         // in the source lang with some "extern" function definitions
         let println_arg = Variable {
             name: "println_value".to_string(),
-            ir_type: IrType::Int,
+            ir_type: TypeRef::Int,
             is_mutable: false,
             owner_scope: Some(0),
         };
         let println_arg_id = module.add_variable(println_arg);
         let intrinsic_functions = vec![Function {
             name: "println".to_string(),
-            ret_type: IrType::Unit,
+            ret_type: TypeRef::Unit,
             params: vec![FuncParam {
                 name: "value".to_string(),
                 variable_id: println_arg_id,
                 position: 0,
-                ir_type: IrType::Int,
+                ir_type: TypeRef::Int,
             }],
             block: IrBlock {
-                ret_type: IrType::Unit,
+                ret_type: TypeRef::Unit,
                 scope_id: 0,
                 statements: Vec::with_capacity(0),
                 span: Span::NONE,
@@ -348,38 +397,105 @@ impl IrModule {
         &self.ast.name.0
     }
 
+    fn add_type(&mut self, typ: Type) -> TypeId {
+        let id = self.types.len();
+        self.types.push(typ);
+        id as u32
+    }
+
+    fn get_type(&self, type_id: TypeId) -> &Type {
+        &self.types[type_id as usize]
+    }
+
     fn add_variable_to_scope(&mut self, scope_id: ScopeId, name: String, variable_id: VariableId) {
         self.scopes[scope_id as usize].add_variable(name, variable_id);
     }
 
-    fn find_variable_in_scope(&self, scope_id: u32, name: impl AsRef<str>) -> Option<VariableId> {
+    fn find_variable_in_scope(
+        &self,
+        scope_id: ScopeId,
+        name: impl AsRef<str>,
+    ) -> Option<VariableId> {
         self.scopes[scope_id as usize].find_variable(name)
     }
 
-    fn eval_type_expr(&self, expr: &TypeExpression, scope_id: ScopeId) -> IrGenResult<IrType> {
+    fn add_type_to_scope(&mut self, scope_id: ScopeId, name: String, ty: TypeRef) {
+        self.scopes[scope_id as usize].add_type(name, ty);
+    }
+
+    fn find_type_in_scope(&self, scope_id: ScopeId, name: impl AsRef<str>) -> Option<TypeRef> {
+        self.scopes[scope_id as usize].find_type(name)
+    }
+
+    fn eval_type_expr(
+        &mut self,
+        expr: &ast::TypeExpression,
+        scope_id: ScopeId,
+    ) -> IrGenResult<TypeRef> {
         match expr {
-            TypeExpression::Primitive(TypePrimitive::Int) => Ok(IrType::Int),
-            TypeExpression::Primitive(TypePrimitive::Bool) => Ok(IrType::Bool),
+            ast::TypeExpression::Int(_) => Ok(TypeRef::Int),
+            ast::TypeExpression::Bool(_) => Ok(TypeRef::Bool),
+            ast::TypeExpression::Record(record_defn) => {
+                let mut fields: Vec<RecordDefnField> = Vec::new();
+                for ast_field in &record_defn.fields {
+                    let name = ast_field.name.0.clone();
+                    let typ = self.eval_type_expr(&ast_field.typ, scope_id)?;
+                    fields.push(RecordDefnField { name, typ })
+                }
+                let record_defn = RecordDefn { fields, span: record_defn.span };
+                let type_id = self.add_type(Type::Record(record_defn));
+                Ok(TypeRef::TypeId(type_id))
+            }
+            ast::TypeExpression::Name(ident, span) => {
+                let ty_ref = self.find_type_in_scope(scope_id, &ident);
+                ty_ref.ok_or(anyhow!("could not find type for identifier {:?}", ident))
+            }
         }
     }
 
     /// Eventually this will be more restrictive than its sibling eval_type_expr
     fn eval_const_type_expr(
         &self,
-        expr: &TypeExpression,
+        expr: &ast::TypeExpression,
         scope_id: ScopeId,
-    ) -> IrGenResult<IrType> {
+    ) -> IrGenResult<TypeRef> {
         match expr {
-            TypeExpression::Primitive(TypePrimitive::Int) => Ok(IrType::Int),
-            TypeExpression::Primitive(TypePrimitive::Bool) => Ok(IrType::Bool),
+            ast::TypeExpression::Int(_) => Ok(TypeRef::Int),
+            ast::TypeExpression::Bool(_) => Ok(TypeRef::Bool),
+            ast::TypeExpression::Record(_) => simple_fail("No const records yet"),
+            ast::TypeExpression::Name(_, _) => simple_fail("No references allowed in constants"),
         }
     }
 
-    fn is_valid_type(&self, source: IrType, destination: IrType) -> bool {
+    fn typecheck_record(&self, expected: &RecordDefn, actual: &RecordDefn) -> IrGenResult<()> {
+        for expected_field in &expected.fields {
+            trace!("typechecking record field {:?}", expected_field);
+            let Some(matching_field) = actual.fields.iter().find(|f| f.name == expected_field.name) else {
+                bail!("expected field {}", expected_field.name)
+            };
+            self.typecheck_types(matching_field.typ, expected_field.typ)?;
+        }
+        Ok(())
+    }
+
+    fn typecheck_types(&self, expected: TypeRef, actual: TypeRef) -> IrGenResult<()> {
         // Eventually, types can be compatible without being equal
         // While we won't have full-blown inheritance, there will be some shallow subtyping
         // and interfaces
-        source == destination
+        if expected == actual {
+            Ok(())
+        } else {
+            match (expected, actual) {
+                (TypeRef::TypeId(id1), TypeRef::TypeId(id2)) => {
+                    let ty1 = self.get_type(id1);
+                    let ty2 = self.get_type(id2);
+                    match (ty1, ty2) {
+                        (Type::Record(r1), Type::Record(r2)) => self.typecheck_record(r1, r2),
+                    }
+                }
+                _ => bail!("Unrelated types failed typecheck"),
+            }
+        }
     }
 
     fn eval_const(&mut self, const_expr: &ast::ConstVal) -> IrGenResult<VariableId> {
@@ -407,14 +523,14 @@ impl IrModule {
         }
     }
 
-    fn get_stmt_return_type(&self, stmt: &IrStmt) -> Option<IrType> {
+    fn get_stmt_return_type(&self, stmt: &IrStmt) -> Option<TypeRef> {
         match stmt {
             IrStmt::Expr(expr) => Some(expr.get_type()),
-            IrStmt::ValDef(_) => Some(IrType::Unit),
+            IrStmt::ValDef(_) => Some(TypeRef::Unit),
             // FIXME: This is not quite right; a return statement
             // is different; should probably be None or 'never'
             IrStmt::ReturnStmt(ret) => Some(ret.expr.get_type()),
-            IrStmt::Assignment(_) => Some(IrType::Unit),
+            IrStmt::Assignment(_) => Some(TypeRef::Unit),
         }
     }
 
@@ -466,15 +582,32 @@ impl IrModule {
         let span = block.statements.last().map(|s| s.get_span()).unwrap_or(block.span);
         let unit_literal = IrExpr::unit_literal(span);
         block.statements.push(IrStmt::Expr(unit_literal));
-        block.ret_type = IrType::Unit;
+        block.ret_type = TypeRef::Unit;
     }
 
+    // Maybe, pass in expected type for smarter stuff
     fn eval_expr(&mut self, expr: &Expression, scope_id: ScopeId) -> IrGenResult<IrExpr> {
         match expr {
+            Expression::Record(ast_record) => {
+                let mut fields = Vec::new();
+                let mut field_types = Vec::new();
+                for ast_field in &ast_record.fields {
+                    let expr = self.eval_expr(&ast_field.expr, scope_id)?;
+                    field_types.push(RecordDefnField {
+                        name: ast_field.name.0.clone(),
+                        typ: expr.get_type(),
+                    });
+                    fields.push(RecordField { name: ast_field.name.0.clone(), expr });
+                }
+                let record_type = RecordDefn { fields: field_types, span: ast_record.span };
+                let record_ty = self.add_type(Type::Record(record_type));
+                let ir_record = Record { fields, span: ast_record.span, type_id: record_ty };
+                Ok(IrExpr::Literal(IrLiteral::Record(ir_record)))
+            }
             Expression::If(if_expr) => {
                 // Ensure boolean condition (or optional which isn't built yet)
                 let condition = self.eval_expr(&if_expr.cond, scope_id)?;
-                if !self.is_valid_type(condition.get_type(), IrType::Bool) {
+                if self.typecheck_types(TypeRef::Bool, condition.get_type()).is_err() {
                     anyhow::bail!(
                         "If condition must be of type Boolean; but got {:?}",
                         condition.get_type()
@@ -496,13 +629,13 @@ impl IrModule {
                     self.transform_expr_to_block(expr)
                 } else {
                     IrBlock {
-                        ret_type: IrType::Unit,
+                        ret_type: TypeRef::Unit,
                         scope_id,
                         statements: vec![IrStmt::Expr(IrExpr::unit_literal(if_expr.span))],
                         span: if_expr.span,
                     }
                 };
-                if !self.is_valid_type(consequent.ret_type, alternate.ret_type) {
+                if self.typecheck_types(consequent.ret_type, alternate.ret_type).is_err() {
                     anyhow::bail!(
                         "else branch type {:?} did not match then branch type {:?}",
                         consequent.ret_type,
@@ -523,7 +656,7 @@ impl IrModule {
                 let lhs = self.eval_expr(&binary_op.operand1, scope_id)?;
                 let rhs = self.eval_expr(&binary_op.operand2, scope_id)?;
 
-                if !self.is_valid_type(lhs.get_type(), rhs.get_type()) {
+                if self.typecheck_types(lhs.get_type(), rhs.get_type()).is_err() {
                     return simple_fail("operand types did not match");
                 }
 
@@ -618,6 +751,9 @@ impl IrModule {
                     ir_type,
                     owner_scope: Some(scope_id),
                 });
+                if let Err(e) = self.typecheck_types(ir_type, value_expr.get_type()) {
+                    anyhow::bail!("local type mismatch: {e}",);
+                }
                 let val_def_expr = IrStmt::ValDef(ValDef {
                     ir_type,
                     variable_id,
@@ -637,7 +773,7 @@ impl IrModule {
                 if !var.is_mutable {
                     anyhow::bail!("Cannot assign to immutable variable {}", assignment.ident.0)
                 }
-                if !self.is_valid_type(var.ir_type, expr.get_type()) {
+                if self.typecheck_types(var.ir_type, expr.get_type()).is_err() {
                     return simple_fail("Typecheck of assignment failed");
                 }
                 let expr = IrStmt::Assignment(Assignment {
@@ -666,7 +802,7 @@ impl IrModule {
         let ret_type = if let Some(stmt) = statements.last() {
             self.get_stmt_return_type(stmt).expect("last block statement should have a return type")
         } else {
-            IrType::Unit
+            TypeRef::Unit
         };
         let ir_block = IrBlock { ret_type, scope_id: 0, statements, span: block.span };
         Ok(ir_block)
@@ -698,11 +834,11 @@ impl IrModule {
         // index, so I can put its index in the Expr::Func
         let body_block = self.eval_block(body_block, scope_id)?;
         // If a return type was given in the AST, we need to typecheck it
-        let ret_type: IrType = match &fn_def.ret_type {
+        let ret_type: TypeRef = match &fn_def.ret_type {
             None => body_block.ret_type,
             Some(given_ret_type) => {
                 let given_ir_type = self.eval_type_expr(given_ret_type, scope_id)?;
-                if !self.is_valid_type(given_ir_type, body_block.ret_type) {
+                if self.typecheck_types(given_ir_type, body_block.ret_type).is_err() {
                     return simple_fail(format!(
                         "Function {} ret type mismatch: {:?} {:?}",
                         &fn_def.name.0, given_ir_type, body_block.ret_type
@@ -725,12 +861,18 @@ impl IrModule {
     fn eval_definition(&mut self, def: &Definition) -> IrGenResult<()> {
         match def {
             Definition::Const(const_val) => {
-                let variable_id: VariableId = self.eval_const(const_val)?;
+                let _variable_id: VariableId = self.eval_const(const_val)?;
                 Ok(())
             }
             Definition::FnDef(fn_def) => {
                 let scope_index = 0;
                 self.eval_function(fn_def, scope_index)?;
+                Ok(())
+            }
+            Definition::Type(type_defn) => {
+                let scope_id = 0;
+                let typ = self.eval_type_expr(&type_defn.value_expr, scope_id)?;
+                self.add_type_to_scope(scope_id, type_defn.name.0.clone(), typ);
                 Ok(())
             }
         }

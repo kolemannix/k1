@@ -1,0 +1,12 @@
+type Point = {
+  x: Int,
+  y: Int,
+  z: Int
+}
+
+fn main(): Int {
+  val zero: Point = {
+    x: 0, y: 0, z: 42
+  };
+  return 0;
+}

@@ -1,4 +1,4 @@
-pub const TRACE: bool = false;
+pub const TRACE: bool = true;
 
 #[macro_export]
 macro_rules! trace {
