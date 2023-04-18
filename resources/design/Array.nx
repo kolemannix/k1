@@ -9,8 +9,6 @@ Dict[K,V]
 // type parameters
 Dict[key = Int, value = String]
 
-
-type Point = struct { ... }
 fn sort = [T](x: Array[T]): () {
 
 }

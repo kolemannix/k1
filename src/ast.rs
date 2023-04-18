@@ -83,6 +83,18 @@ pub struct Variable {
 }
 
 #[derive(Debug)]
+pub struct RecordField {
+    pub name: Ident,
+    pub expr: Expression,
+}
+
+#[derive(Debug)]
+pub struct Record {
+    pub fields: Vec<RecordField>,
+    pub span: Span,
+}
+
+#[derive(Debug)]
 pub enum Expression {
     BinaryOp(BinaryOp),
     Literal(Literal),
@@ -90,6 +102,7 @@ pub enum Expression {
     Variable(Variable),
     Block(Block),
     If(IfExpr),
+    Record(Record),
 }
 
 impl Expression {
@@ -104,6 +117,7 @@ impl Expression {
             Expression::Variable(var) => var.span,
             Expression::Block(block) => block.span,
             Expression::If(if_expr) => if_expr.span,
+            Expression::Record(record) => record.span,
         }
     }
 }
@@ -147,15 +161,36 @@ pub struct Block {
     pub span: Span,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum TypePrimitive {
-    Int,
-    Bool,
+#[derive(Debug)]
+pub struct RecordTypeField {
+    pub name: Ident,
+    pub typ: TypeExpression,
+}
+
+#[derive(Debug)]
+pub struct RecordType {
+    pub fields: Vec<RecordTypeField>,
+    pub span: Span,
 }
 
 #[derive(Debug)]
 pub enum TypeExpression {
-    Primitive(TypePrimitive),
+    Int(Span),
+    Bool(Span),
+    Record(RecordType),
+    Name(Ident, Span),
+}
+
+impl TypeExpression {
+    #[inline]
+    pub fn get_span(&self) -> Span {
+        match self {
+            TypeExpression::Int(span) => *span,
+            TypeExpression::Bool(span) => *span,
+            TypeExpression::Record(record) => record.span,
+            TypeExpression::Name(_, span) => *span,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -182,9 +217,17 @@ pub struct ConstVal {
 }
 
 #[derive(Debug)]
+pub struct TypeDefn {
+    pub name: Ident,
+    pub value_expr: TypeExpression,
+    pub span: Span,
+}
+
+#[derive(Debug)]
 pub enum Definition {
     FnDef(FnDef),
     Const(ConstVal),
+    Type(TypeDefn),
 }
 
 #[derive(Debug)]

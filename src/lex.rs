@@ -56,6 +56,8 @@ pub enum TokenKind {
     KeywordOr,
     KeywordIf,
     KeywordElse,
+    KeywordRecord,
+    KeywordType,
 
     Slash,
     LineComment,
@@ -100,6 +102,8 @@ impl TokenKind {
             KeywordOr => Some("or"),
             KeywordIf => Some("if"),
             KeywordElse => Some("else"),
+            KeywordType => Some("type"),
+            KeywordRecord => Some("record"),
 
             Slash => Some("/"),
             LineComment => Some("//"),
@@ -158,6 +162,8 @@ impl TokenKind {
             "or" => Some(KeywordOr),
             "if" => Some(KeywordIf),
             "else" => Some(KeywordElse),
+            "type" => Some(KeywordType),
+            "record" => Some(KeywordRecord),
             _ => None,
         }
     }

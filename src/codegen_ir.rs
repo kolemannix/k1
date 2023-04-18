@@ -39,6 +39,7 @@ pub struct Codegen<'ctx> {
     llvm_machine: Option<TargetMachine>,
     builder: Builder<'ctx>,
     llvm_functions: HashMap<FunctionId, FunctionValue<'ctx>>,
+    llvm_types: HashMap<TypeId, BasicTypeEnum<'ctx>>,
     // TODO: pointers should be by scope or something
     pointers: HashMap<VariableId, PointerValue<'ctx>>,
     globals: HashMap<VariableId, GlobalValue<'ctx>>,
@@ -102,6 +103,7 @@ impl<'ctx> Codegen<'ctx> {
             pointers,
             globals,
             llvm_functions: HashMap::new(),
+            llvm_types: HashMap::new(),
             builtin_functions: BuiltinFunctions { printf },
             builtin_globals,
             builtin_types,
@@ -156,16 +158,17 @@ impl<'ctx> Codegen<'ctx> {
         call.set_name("println_res");
         call
     }
-    fn eval_type(&self, expr: IrType) -> BasicTypeEnum<'ctx> {
+    fn codegen_type(&self, expr: TypeRef) -> BasicTypeEnum<'ctx> {
         match expr {
-            IrType::Int => self.builtin_types.i64.as_basic_type_enum(),
-            IrType::Bool => self.builtin_types.boolean.as_basic_type_enum(),
-            IrType::String => self.builtin_types.string.as_basic_type_enum(),
-            IrType::Unit => self.builtin_types.unit.as_basic_type_enum(),
+            TypeRef::Int => self.builtin_types.i64.as_basic_type_enum(),
+            TypeRef::Bool => self.builtin_types.boolean.as_basic_type_enum(),
+            TypeRef::String => self.builtin_types.string.as_basic_type_enum(),
+            TypeRef::Unit => self.builtin_types.unit.as_basic_type_enum(),
+            TypeRef::TypeId(type_id) => *self.llvm_types.get(&type_id).unwrap(),
         }
     }
-    fn eval_basic_metadata_ty(&self, ir_type: IrType) -> BasicMetadataTypeEnum<'ctx> {
-        self.eval_type(ir_type).as_basic_type_enum().into()
+    fn eval_basic_metadata_ty(&self, ir_type: TypeRef) -> BasicMetadataTypeEnum<'ctx> {
+        self.codegen_type(ir_type).as_basic_type_enum().into()
     }
     fn codegen_val(&mut self, val: &ValDef) -> BasicValueEnum<'ctx> {
         let value = self.codegen_expr(&val.initializer);
@@ -173,6 +176,14 @@ impl<'ctx> Codegen<'ctx> {
     }
     fn codegen_literal(&mut self, literal: &IrLiteral) -> BasicValueEnum<'ctx> {
         match literal {
+            IrLiteral::Record(record) => {
+                // Steps
+                // Ensure the identified struct type exists in LLVM
+                // For each field, evaluate the expression and perform a load into a GEP'd ptr for that field
+                let ty = self.get_or_codegen_type(record.type_id);
+                let llvm_ty = self.ctx.struct_type(field_types, false);
+                todo!("record codegen")
+            }
             IrLiteral::Unit(_) => {
                 let value = self.builtin_types.unit.const_zero();
                 value.as_basic_value_enum()
@@ -191,7 +202,7 @@ impl<'ctx> Codegen<'ctx> {
         }
     }
     fn codegen_if_else(&mut self, ir_if: &IrIf) -> BasicValueEnum<'ctx> {
-        let typ = self.eval_type(ir_if.ir_type);
+        let typ = self.codegen_type(ir_if.ir_type);
         let start_block = self.builder.get_insert_block().unwrap();
         let current_fn = start_block.get_parent().unwrap();
         let consequent_block = self.ctx.append_basic_block(current_fn, "if_cons");
@@ -244,7 +255,7 @@ impl<'ctx> Codegen<'ctx> {
             }
             IrExpr::If(ir_if) => self.codegen_if_else(&ir_if),
             IrExpr::BinaryOp(bin_op) => match bin_op.ir_type {
-                IrType::Int => {
+                TypeRef::Int => {
                     if bin_op.kind.is_integer_op() {
                         let lhs_value = self.codegen_expr(&bin_op.lhs);
                         let rhs_value = self.codegen_expr(&bin_op.rhs);
@@ -265,7 +276,7 @@ impl<'ctx> Codegen<'ctx> {
                         panic!("Unsupported binary operation {:?} on Int", bin_op.kind)
                     }
                 }
-                IrType::Bool => match bin_op.kind {
+                TypeRef::Bool => match bin_op.kind {
                     BinaryOpKind::And | BinaryOpKind::Or => {
                         let lhs = self.codegen_expr(&bin_op.lhs);
                         let rhs = self.codegen_expr(&bin_op.rhs);
@@ -282,8 +293,9 @@ impl<'ctx> Codegen<'ctx> {
                     }
                     other => panic!("Unsupported binary operation {other:?} on Bool"),
                 },
-                IrType::String => panic!("No string binary ops yet"),
-                IrType::Unit => panic!("No unit binary ops"),
+                TypeRef::String => panic!("No string binary ops yet"),
+                TypeRef::Unit => panic!("No unit binary ops"),
+                TypeRef::TypeId(_) => todo!("codegen for binary ops on user-defined types"),
             },
             IrExpr::Block(block) => {
                 // This is just a lexical scoping block, not a control-flow block, so doesn't need
@@ -340,7 +352,7 @@ impl<'ctx> Codegen<'ctx> {
             match stmt {
                 IrStmt::Expr(expr) => last = Some(self.codegen_expr(expr).as_basic_value_enum()),
                 IrStmt::ValDef(val_def) => {
-                    let typ = self.eval_type(val_def.ir_type);
+                    let typ = self.codegen_type(val_def.ir_type);
                     let ptr =
                         self.builder.build_alloca(typ, &format!("val_{}", val_def.variable_id));
                     let value = self.codegen_val(val_def);
@@ -407,7 +419,7 @@ impl<'ctx> Codegen<'ctx> {
                 let ir_param = &function.params[i];
                 param.set_name(&ir_param.name);
                 let ptr =
-                    self.builder.build_alloca(self.eval_type(ir_param.ir_type), &ir_param.name);
+                    self.builder.build_alloca(self.codegen_type(ir_param.ir_type), &ir_param.name);
                 self.builder.build_store(ptr, param);
                 self.pointers.insert(ir_param.variable_id, ptr);
             }
