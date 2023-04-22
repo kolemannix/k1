@@ -1,8 +1,8 @@
-use crate::ast::{self, Block, BlockStmt, Definition, Expression, FnDef, Literal, Module};
 use crate::lex::Span;
+use crate::parse;
+use crate::parse::{Block, BlockStmt, Definition, Expression, FnDef, Ident, Literal, Module};
 use crate::trace;
 use anyhow::{anyhow, bail, Result};
-use std::any::Any;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -17,13 +17,20 @@ pub type TypeId = u32;
 #[derive(Debug, Clone)]
 pub struct RecordDefnField {
     pub name: String,
-    pub typ: TypeRef,
+    pub ty: TypeRef,
+    pub index: usize,
 }
 
 #[derive(Debug, Clone)]
 pub struct RecordDefn {
     pub fields: Vec<RecordDefnField>,
     pub span: Span,
+}
+
+impl RecordDefn {
+    pub fn find_field(&self, field_name: &Ident) -> Option<RecordDefnField> {
+        self.fields.iter().find(|field| field.name == field_name.0).cloned()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,6 +51,7 @@ pub struct TypeExpression {
 
 pub enum Type {
     Record(RecordDefn),
+    OpaqueAlias(TypeRef),
 }
 
 #[derive(Debug, Clone)]
@@ -165,9 +173,17 @@ pub struct IrIf {
 }
 
 #[derive(Debug, Clone)]
+pub struct FieldAccess {
+    pub base: Box<IrExpr>,
+    pub target_field: RecordDefnField,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
 pub enum IrExpr {
     Literal(IrLiteral),
     Variable(VariableExpr),
+    FieldAccess(FieldAccess),
     BinaryOp(BinaryOp),
     Block(IrBlock),
     FunctionCall(FunctionCall),
@@ -188,6 +204,7 @@ impl IrExpr {
             IrExpr::Literal(IrLiteral::Bool(_, _)) => TypeRef::Bool,
             IrExpr::Literal(IrLiteral::Record(record)) => TypeRef::TypeId(record.type_id),
             IrExpr::Variable(var) => var.ir_type,
+            IrExpr::FieldAccess(field_access) => field_access.target_field.ty,
             IrExpr::BinaryOp(binary_op) => binary_op.ir_type,
             IrExpr::Block(b) => b.ret_type,
             IrExpr::FunctionCall(call) => call.ret_type,
@@ -199,6 +216,7 @@ impl IrExpr {
         match self {
             IrExpr::Literal(lit) => lit.get_span(),
             IrExpr::Variable(var) => var.span,
+            IrExpr::FieldAccess(field_access) => field_access.span,
             IrExpr::BinaryOp(binary_op) => binary_op.span,
             IrExpr::Block(b) => b.span,
             IrExpr::FunctionCall(call) => call.span,
@@ -403,7 +421,7 @@ impl IrModule {
         id as u32
     }
 
-    fn get_type(&self, type_id: TypeId) -> &Type {
+    pub fn get_type(&self, type_id: TypeId) -> &Type {
         &self.types[type_id as usize]
     }
 
@@ -429,24 +447,24 @@ impl IrModule {
 
     fn eval_type_expr(
         &mut self,
-        expr: &ast::TypeExpression,
+        expr: &parse::TypeExpression,
         scope_id: ScopeId,
     ) -> IrGenResult<TypeRef> {
         match expr {
-            ast::TypeExpression::Int(_) => Ok(TypeRef::Int),
-            ast::TypeExpression::Bool(_) => Ok(TypeRef::Bool),
-            ast::TypeExpression::Record(record_defn) => {
+            parse::TypeExpression::Int(_) => Ok(TypeRef::Int),
+            parse::TypeExpression::Bool(_) => Ok(TypeRef::Bool),
+            parse::TypeExpression::Record(record_defn) => {
                 let mut fields: Vec<RecordDefnField> = Vec::new();
-                for ast_field in &record_defn.fields {
+                for (index, ast_field) in record_defn.fields.iter().enumerate() {
                     let name = ast_field.name.0.clone();
-                    let typ = self.eval_type_expr(&ast_field.typ, scope_id)?;
-                    fields.push(RecordDefnField { name, typ })
+                    let ty = self.eval_type_expr(&ast_field.ty, scope_id)?;
+                    fields.push(RecordDefnField { name, ty, index })
                 }
                 let record_defn = RecordDefn { fields, span: record_defn.span };
                 let type_id = self.add_type(Type::Record(record_defn));
                 Ok(TypeRef::TypeId(type_id))
             }
-            ast::TypeExpression::Name(ident, span) => {
+            parse::TypeExpression::Name(ident, span) => {
                 let ty_ref = self.find_type_in_scope(scope_id, &ident);
                 ty_ref.ok_or(anyhow!("could not find type for identifier {:?}", ident))
             }
@@ -456,14 +474,14 @@ impl IrModule {
     /// Eventually this will be more restrictive than its sibling eval_type_expr
     fn eval_const_type_expr(
         &self,
-        expr: &ast::TypeExpression,
+        expr: &parse::TypeExpression,
         scope_id: ScopeId,
     ) -> IrGenResult<TypeRef> {
         match expr {
-            ast::TypeExpression::Int(_) => Ok(TypeRef::Int),
-            ast::TypeExpression::Bool(_) => Ok(TypeRef::Bool),
-            ast::TypeExpression::Record(_) => simple_fail("No const records yet"),
-            ast::TypeExpression::Name(_, _) => simple_fail("No references allowed in constants"),
+            parse::TypeExpression::Int(_) => Ok(TypeRef::Int),
+            parse::TypeExpression::Bool(_) => Ok(TypeRef::Bool),
+            parse::TypeExpression::Record(_) => simple_fail("No const records yet"),
+            parse::TypeExpression::Name(_, _) => simple_fail("No references allowed in constants"),
         }
     }
 
@@ -473,7 +491,7 @@ impl IrModule {
             let Some(matching_field) = actual.fields.iter().find(|f| f.name == expected_field.name) else {
                 bail!("expected field {}", expected_field.name)
             };
-            self.typecheck_types(matching_field.typ, expected_field.typ)?;
+            self.typecheck_types(matching_field.ty, expected_field.ty)?;
         }
         Ok(())
     }
@@ -491,6 +509,7 @@ impl IrModule {
                     let ty2 = self.get_type(id2);
                     match (ty1, ty2) {
                         (Type::Record(r1), Type::Record(r2)) => self.typecheck_record(r1, r2),
+                        _ => todo!("typecheck_types: other types"),
                     }
                 }
                 _ => bail!("Unrelated types failed typecheck"),
@@ -498,10 +517,10 @@ impl IrModule {
         }
     }
 
-    fn eval_const(&mut self, const_expr: &ast::ConstVal) -> IrGenResult<VariableId> {
+    fn eval_const(&mut self, const_expr: &parse::ConstVal) -> IrGenResult<VariableId> {
         let scope_id = 0;
         match const_expr {
-            ast::ConstVal { name, typ, value_expr: value, span } => {
+            parse::ConstVal { name, ty: typ, value_expr: value, span } => {
                 let ir_type = self.eval_const_type_expr(&typ, scope_id)?;
                 let num = match value {
                     Expression::Literal(Literal::Numeric(n, _span)) => self.parse_numeric(n)?,
@@ -591,11 +610,12 @@ impl IrModule {
             Expression::Record(ast_record) => {
                 let mut fields = Vec::new();
                 let mut field_types = Vec::new();
-                for ast_field in &ast_record.fields {
+                for (index, ast_field) in ast_record.fields.iter().enumerate() {
                     let expr = self.eval_expr(&ast_field.expr, scope_id)?;
                     field_types.push(RecordDefnField {
                         name: ast_field.name.0.clone(),
-                        typ: expr.get_type(),
+                        ty: expr.get_type(),
+                        index,
                     });
                     fields.push(RecordField { name: ast_field.name.0.clone(), expr });
                 }
@@ -661,10 +681,10 @@ impl IrModule {
                 }
 
                 let kind = match binary_op.operation {
-                    ast::BinaryOpKind::Add => BinaryOpKind::Add,
-                    ast::BinaryOpKind::Multiply => BinaryOpKind::Multiply,
-                    ast::BinaryOpKind::And => BinaryOpKind::And,
-                    ast::BinaryOpKind::Or => BinaryOpKind::Or,
+                    parse::BinaryOpKind::Add => BinaryOpKind::Add,
+                    parse::BinaryOpKind::Multiply => BinaryOpKind::Multiply,
+                    parse::BinaryOpKind::And => BinaryOpKind::And,
+                    parse::BinaryOpKind::Or => BinaryOpKind::Or,
                 };
                 let expr = IrExpr::BinaryOp(BinaryOp {
                     kind,
@@ -698,6 +718,23 @@ impl IrModule {
                     span: variable.span,
                 });
                 Ok(expr)
+            }
+            Expression::FieldAccess(field_access) => {
+                let base_expr = self.eval_expr(&field_access.base, scope_id)?;
+                let TypeRef::TypeId(type_id) = base_expr.get_type() else {
+                    bail!("Cannot access field {} on non-record type", field_access.target.0);
+                };
+                let Type::Record(record_type) = self.get_type(type_id) else {
+                    bail!("Cannot access field {} on non-record type", field_access.target.0);
+                };
+                let target_field = record_type.find_field(&field_access.target).ok_or(
+                    simple_err(format!("Field {} not found on record type", field_access.target.0)),
+                )?;
+                Ok(IrExpr::FieldAccess(FieldAccess {
+                    base: Box::new(base_expr),
+                    target_field,
+                    span: field_access.span,
+                }))
             }
             Expression::Block(block) => {
                 let block = self.eval_block(block, scope_id)?;
@@ -743,7 +780,7 @@ impl IrModule {
             BlockStmt::ValDef(val_def) => {
                 let value_expr = self.eval_expr(&val_def.value, scope_id)?;
                 let provided_type =
-                    val_def.typ.as_ref().expect("Type inference not supported on vals yet!");
+                    val_def.ty.as_ref().expect("Type inference not supported on vals yet!");
                 let ir_type = self.eval_type_expr(provided_type, scope_id)?;
                 let variable_id = self.add_variable(Variable {
                     is_mutable: val_def.is_mutable,
@@ -752,7 +789,7 @@ impl IrModule {
                     owner_scope: Some(scope_id),
                 });
                 if let Err(e) = self.typecheck_types(ir_type, value_expr.get_type()) {
-                    anyhow::bail!("local type mismatch: {e}",);
+                    bail!("local type mismatch: {e}",);
                 }
                 let val_def_expr = IrStmt::ValDef(ValDef {
                     ir_type,
@@ -810,7 +847,7 @@ impl IrModule {
     fn eval_function(&mut self, fn_def: &FnDef, scope_id: ScopeId) -> IrGenResult<Index> {
         let mut params = Vec::new();
         for (idx, fn_arg) in fn_def.args.iter().enumerate() {
-            let ir_type = self.eval_type_expr(&fn_arg.typ, scope_id)?;
+            let ir_type = self.eval_type_expr(&fn_arg.ty, scope_id)?;
             let variable = Variable {
                 name: fn_arg.name.0.clone(),
                 ir_type,

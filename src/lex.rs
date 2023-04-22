@@ -1,13 +1,13 @@
 use std::fmt;
 use std::str::Chars;
 
-use crate::ast::BinaryOpKind;
+use crate::parse::BinaryOpKind;
 use crate::trace;
 use TokenKind::*;
 
 pub const EOF_CHAR: char = '\0';
 pub const EOF_TOKEN: Token =
-    Token { span: Span { file_id: 0, start: 0, end: 0, line: 0 }, kind: TokenKind::EOF };
+    Token { span: Span { file_id: 0, start: 0, end: 0, line: 0 }, kind: TokenKind::Eof };
 
 // TODO Take any iterator of Tokens, not just one that came from a Vec
 pub struct TokenIter {
@@ -82,7 +82,7 @@ pub enum TokenKind {
     Asterisk,
 
     /// Not really a token but allows us to avoid Option<Token> everywhere
-    EOF,
+    Eof,
 }
 
 impl fmt::Display for TokenKind {
@@ -128,7 +128,7 @@ impl TokenKind {
 
             Text => None,
 
-            EOF => Some("<EOF>"),
+            Eof => Some("<EOF>"),
         }
     }
     pub fn from_char(c: char) -> Option<TokenKind> {
@@ -182,6 +182,12 @@ impl TokenKind {
     pub fn is_binary_operator(&self) -> bool {
         BinaryOpKind::from_tokenkind(*self).is_some()
     }
+    pub fn is_postfix_operator(&self) -> bool {
+        match self {
+            Dot => true,
+            _ => false,
+        }
+    }
 }
 
 ///
@@ -196,6 +202,12 @@ pub struct Span {
 
 impl Span {
     pub const NONE: Span = Span { file_id: 0, start: 0, end: 0, line: 0 };
+
+    pub fn extended(&self, other: &Span) -> Span {
+        let mut copied = *self;
+        copied.end = other.end;
+        return copied;
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

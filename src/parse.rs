@@ -4,12 +4,256 @@ use std::io::{BufReader, Read};
 
 use TokenKind::*;
 
-use crate::ast::*;
 use crate::lex::*;
 use crate::trace;
 
 #[cfg(test)]
 mod parse_test;
+
+#[derive(Debug)]
+pub enum Literal {
+    Numeric(String, Span),
+    Bool(bool, Span),
+    String(String, Span),
+}
+
+impl Literal {
+    pub fn get_span(&self) -> Span {
+        match self {
+            Literal::Numeric(_, span) => *span,
+            Literal::Bool(_, span) => *span,
+            Literal::String(_, span) => *span,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Ident(pub String);
+
+impl AsRef<str> for Ident {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Debug)]
+pub struct FnArg {
+    pub name: Option<String>,
+    pub value: Expression,
+}
+
+#[derive(Debug)]
+pub struct FnCall {
+    pub name: Ident,
+    pub args: Vec<FnArg>,
+    pub span: Span,
+}
+
+#[derive(Debug)]
+pub struct ValDef {
+    pub name: Ident,
+    pub ty: Option<TypeExpression>,
+    pub value: Expression,
+    pub is_mutable: bool,
+    pub span: Span,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum BinaryOpKind {
+    Add,
+    Multiply,
+    And,
+    Or,
+}
+
+impl BinaryOpKind {
+    pub fn from_tokenkind(kind: TokenKind) -> Option<BinaryOpKind> {
+        match kind {
+            TokenKind::Plus => Some(BinaryOpKind::Add),
+            TokenKind::Asterisk => Some(BinaryOpKind::Multiply),
+            TokenKind::KeywordAnd => Some(BinaryOpKind::And),
+            TokenKind::KeywordOr => Some(BinaryOpKind::Or),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct BinaryOp {
+    pub operation: BinaryOpKind,
+    pub operand1: Box<Expression>,
+    pub operand2: Box<Expression>,
+    pub span: Span,
+}
+
+#[derive(Debug)]
+pub struct Variable {
+    pub ident: Ident,
+    pub span: Span,
+}
+
+#[derive(Debug)]
+pub struct FieldAccess {
+    pub base: Box<Expression>,
+    pub target: Ident,
+    pub span: Span,
+}
+
+#[derive(Debug)]
+pub struct RecordField {
+    pub name: Ident,
+    pub expr: Expression,
+}
+
+#[derive(Debug)]
+pub struct Record {
+    pub fields: Vec<RecordField>,
+    pub span: Span,
+}
+
+#[derive(Debug)]
+pub enum Expression {
+    BinaryOp(BinaryOp),
+    Literal(Literal),
+    FnCall(FnCall),
+    Variable(Variable),
+    FieldAccess(FieldAccess),
+    Block(Block),
+    If(IfExpr),
+    Record(Record),
+}
+
+impl Expression {
+    pub fn is_literal(e: &Expression) -> bool {
+        matches!(e, Expression::Literal(_))
+    }
+    pub fn get_span(&self) -> Span {
+        match self {
+            Expression::BinaryOp(op) => op.span,
+            Expression::Literal(lit) => lit.get_span(),
+            Expression::FnCall(call) => call.span,
+            Expression::Variable(var) => var.span,
+            Expression::FieldAccess(acc) => acc.span,
+            Expression::Block(block) => block.span,
+            Expression::If(if_expr) => if_expr.span,
+            Expression::Record(record) => record.span,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Assignment {
+    pub ident: Ident,
+    pub expr: Expression,
+    pub span: Span,
+}
+
+#[derive(Debug)]
+pub struct IfExpr {
+    pub cond: Box<Expression>,
+    pub cons: Box<Expression>,
+    // TODO: Add 'binding' Ifs, for optionals and failures
+    // if some_optional { value => }
+    // if get_file() { result => }
+    pub alt: Option<Box<Expression>>,
+    pub span: Span,
+}
+
+#[derive(Debug)]
+pub struct ReturnStmt {
+    pub expr: Expression,
+    pub span: Span,
+}
+
+#[derive(Debug)]
+pub enum BlockStmt {
+    ValDef(ValDef),
+    /// return keyword will only be allowed to denote explicit early returns
+    ReturnStmt(ReturnStmt),
+    Assignment(Assignment),
+    LoneExpression(Expression),
+}
+
+#[derive(Debug)]
+pub struct Block {
+    pub stmts: Vec<BlockStmt>,
+    pub span: Span,
+}
+
+#[derive(Debug)]
+pub struct RecordTypeField {
+    pub name: Ident,
+    pub ty: TypeExpression,
+}
+
+#[derive(Debug)]
+pub struct RecordType {
+    pub fields: Vec<RecordTypeField>,
+    pub span: Span,
+}
+
+#[derive(Debug)]
+pub enum TypeExpression {
+    Int(Span),
+    Bool(Span),
+    Record(RecordType),
+    Name(Ident, Span),
+}
+
+impl TypeExpression {
+    #[inline]
+    pub fn get_span(&self) -> Span {
+        match self {
+            TypeExpression::Int(span) => *span,
+            TypeExpression::Bool(span) => *span,
+            TypeExpression::Record(record) => record.span,
+            TypeExpression::Name(_, span) => *span,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct FnDef {
+    pub name: Ident,
+    pub args: Vec<FnArgDef>,
+    pub ret_type: Option<TypeExpression>,
+    pub block: Option<Block>,
+    pub span: Span,
+}
+
+#[derive(Debug)]
+pub struct FnArgDef {
+    pub name: Ident,
+    pub ty: TypeExpression,
+}
+
+#[derive(Debug)]
+pub struct ConstVal {
+    pub name: Ident,
+    pub ty: TypeExpression,
+    pub value_expr: Expression,
+    pub span: Span,
+}
+
+#[derive(Debug)]
+pub struct TypeDefn {
+    pub name: Ident,
+    pub value_expr: TypeExpression,
+    pub span: Span,
+}
+
+#[derive(Debug)]
+pub enum Definition {
+    FnDef(FnDef),
+    Const(ConstVal),
+    Type(TypeDefn),
+}
+
+#[derive(Debug)]
+pub struct Module {
+    pub name: Ident,
+    pub defs: Vec<Definition>,
+}
 
 pub type ParseResult<A> = Result<A, ParseError>;
 
@@ -181,7 +425,7 @@ impl<'a> Parser<'a> {
         self.expect_eat_token(Colon);
         let typ_expr =
             Parser::expect("Type expression", self.peek(), self.parse_type_expression())?;
-        Ok(Some(RecordTypeField { name: Ident(ident), typ: typ_expr }))
+        Ok(Some(RecordTypeField { name: Ident(ident), ty: typ_expr }))
     }
 
     fn parse_type_expression(&mut self) -> ParseResult<Option<TypeExpression>> {
@@ -258,12 +502,67 @@ impl<'a> Parser<'a> {
         Ok(Some(Record { fields, span }))
     }
 
+    fn parse_expression_postfix_op(&mut self, expr: Expression) -> ParseResult<Expression> {
+        let mut result = expr;
+        // Looping for postfix ops inspired by Jakt's parser
+        loop {
+            let next = self.peek();
+            if next.kind.is_postfix_operator() {
+                if next.kind == Dot {
+                    // Field access syntax; a.b
+                    self.tokens.advance();
+                    let target_ident = self.expect_eat_ident()?;
+                    let next = self.peek();
+                    if next.kind == OpenParen {
+                        // Method call
+                        todo!("method call parsing")
+                    } else {
+                        let span = result.get_span().extended(&next.span);
+                        result = Expression::FieldAccess(FieldAccess {
+                            base: Box::new(result),
+                            target: Ident(target_ident),
+                            span,
+                        })
+                    }
+                }
+            } else {
+                return Ok(result);
+            }
+        }
+    }
+
+    fn parse_expression_binary_op(&mut self, expr: Expression) -> ParseResult<Expression> {
+        if self.peek().kind.is_binary_operator() {
+            let op_token = self.tokens.next();
+            let op_kind = BinaryOpKind::from_tokenkind(op_token.kind);
+            match op_kind {
+                None => {
+                    Err(ParseError::ExpectedNode("Binary Operator".to_string(), op_token, None))
+                }
+                Some(op_kind) => {
+                    let operand2 =
+                        Parser::expect("rhs of binary op", self.peek(), self.parse_expression())?;
+                    let mut span = expr.get_span();
+                    span.end = operand2.get_span().end;
+                    return Ok(Expression::BinaryOp(BinaryOp {
+                        operation: op_kind,
+                        operand1: Box::new(expr),
+                        operand2: Box::new(operand2),
+                        span,
+                    }));
+                }
+            }
+        } else {
+            Ok(expr)
+        }
+    }
+
     fn parse_expression(&mut self) -> ParseResult<Option<Expression>> {
-        let (first, second) = self.tokens.peek_two();
+        let (first, second, third) = self.tokens.peek_three();
         trace!("parse_expression {} {}", first.kind, second.kind);
-        let single_result = if let Some(lit) = self.parse_literal()? {
+        let parsed_expression = if let Some(lit) = self.parse_literal()? {
             Ok(Some(Expression::Literal(lit)))
-        } else if let Text = first.kind {
+        } else if first.kind == Text {
             // FnCall
             if second.kind == OpenParen {
                 trace!("parse_expression FnCall");
@@ -297,7 +596,6 @@ impl<'a> Parser<'a> {
         } else if first.kind == OpenBrace {
             // The syntax {} means empty record, not empty block
             // If you want a void or empty block, the required syntax is { () }
-            let (_, _, third) = self.tokens.peek_three();
             trace!("parse_expr {:?} {:?} {:?}", first, second, third);
             if second.kind == CloseBrace {
                 let mut span = first.span;
@@ -319,33 +617,11 @@ impl<'a> Parser<'a> {
             // More expression types
             Ok(None)
         }?;
-        if let Some(expr) = single_result {
-            if self.peek().kind.is_binary_operator() {
-                let op_token = self.tokens.next();
-                let op_kind = BinaryOpKind::from_tokenkind(op_token.kind);
-                match op_kind {
-                    None => {
-                        Err(ParseError::ExpectedNode("Binary Operator".to_string(), op_token, None))
-                    }
-                    Some(op_kind) => {
-                        let operand2 = Parser::expect(
-                            "rhs of binary op",
-                            self.peek(),
-                            self.parse_expression(),
-                        )?;
-                        let mut span = expr.get_span();
-                        span.end = operand2.get_span().end;
-                        return Ok(Some(Expression::BinaryOp(BinaryOp {
-                            operation: op_kind,
-                            operand1: Box::new(expr),
-                            operand2: Box::new(operand2),
-                            span,
-                        })));
-                    }
-                }
-            } else {
-                Ok(Some(expr))
-            }
+        // Forward search for binary and postfix ops
+        if let Some(expr) = parsed_expression {
+            let result = self.parse_expression_postfix_op(expr)?;
+            let result = self.parse_expression_binary_op(result)?;
+            Ok(Some(result))
         } else {
             Ok(None)
         }
@@ -371,9 +647,9 @@ impl<'a> Parser<'a> {
             Parser::expect("expression", self.peek(), self.parse_expression())?;
         let mut span = eaten_keyword.span;
         span.end = initializer_expression.get_span().end;
-        ParseResult::Ok(Some(ValDef {
+        Ok(Some(ValDef {
             name: Ident(ident),
-            typ,
+            ty: typ,
             value: initializer_expression,
             is_mutable: mutable,
             span,
@@ -392,7 +668,7 @@ impl<'a> Parser<'a> {
         let value_expr = Parser::expect("expression", self.peek(), self.parse_expression())?;
         let mut span = keyword_val_token.span;
         span.end = value_expr.get_span().end;
-        ParseResult::Ok(Some(ConstVal { name: Ident(ident), typ, value_expr, span }))
+        ParseResult::Ok(Some(ConstVal { name: Ident(ident), ty: typ, value_expr, span }))
     }
 
     fn parse_assignment(&mut self) -> ParseResult<Option<Assignment>> {
@@ -420,7 +696,7 @@ impl<'a> Parser<'a> {
         let ident = self.expect_eat_ident()?;
         self.expect_eat_token(Colon)?;
         let typ = Parser::expect("type_expression", self.peek(), self.parse_type_expression())?;
-        Ok(FnArgDef { name: Ident(ident), typ })
+        Ok(FnArgDef { name: Ident(ident), ty: typ })
     }
 
     fn eat_fndef_args(&mut self) -> ParseResult<(Vec<FnArgDef>, Span)> {
@@ -486,7 +762,6 @@ impl<'a> Parser<'a> {
                 let alt_result = Parser::expect("else block", else_peek, self.parse_expression())?;
                 Some(Box::new(alt_result))
             } else {
-                println!("no");
                 None
             };
             let mut span = if_keyword.span;
@@ -501,7 +776,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_statement(&mut self) -> ParseResult<Option<BlockStmt>> {
-        trace!("eat_statement");
+        trace!("eat_statement {:?}", self.peek());
         if let Some(mut_def) = self.parse_mut()? {
             Ok(Some(BlockStmt::ValDef(mut_def)))
         } else if let Some(val_def) = self.parse_val(false)? {
