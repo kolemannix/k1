@@ -9,8 +9,11 @@ in this language
 - [-] Records
   - [x] Syntax decision ({} vs .{} vs Point {})
   - [x] Parsing
-  - [-] Typechecking
-  - [ ] codegen static as LLVM structs
+  - [x] Typechecking
+  - [x] codegen static as LLVM structs
+  - [ ] Accessor syntax
+  - [ ] Accessor ir
+  - [ ] Accessor codegen
   - [ ] codegen dynamic as standard library Maps (long way off)
 - [ ] Arrays
 - [ ] Ditch semicolons? (this technically introduces significant whitespace)
@@ -20,7 +23,6 @@ in this language
 - [ ] Loops
 - [ ] Heap memory
 - [ ] Tuples
-- [ ] REPL would be cool; can I just swap a function out for another one for a Clojure-like cider-repl experience? Interactive live sessions
 - [ ] Control-Flow: proper codegen for early returns:
     // This needs to return either a basic value or an instruction value (in the case of early return)
     // Actually, early return is a big rabbit hole. We need to typecheck it in ir gen, and probably
@@ -34,6 +36,7 @@ in this language
 
 # Hacks to fix
 - [ ] main function / detect entrypoint properly. Typing of main? How to get main args?
+- [ ] Replace all vectors with smallvec where appropriate
 - [ ] Proper println implementation. Fine to use printf internally for now but we should define our own func around it
 - [ ] Scoping is basically non-existent right now
 - [ ] Implement Display instead of relying on Debug

@@ -9,7 +9,9 @@ Dict[K,V]
 // type parameters
 Dict[key = Int, value = String]
 
-fn sort = [T](x: Array[T]): () {
+// Jakt has both [T] and Array[T]
+
+fn sort = [T](x: Array[T]): () fails String {
 
 }
 

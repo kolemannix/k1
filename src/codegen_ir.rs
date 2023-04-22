@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
 
-use crate::ir::*;
+use crate::{ir::*, trace};
 
 struct BuiltinTypes<'ctx> {
     i64: IntType<'ctx>,
@@ -158,16 +158,39 @@ impl<'ctx> Codegen<'ctx> {
         call.set_name("println_res");
         call
     }
-    fn codegen_type(&self, expr: TypeRef) -> BasicTypeEnum<'ctx> {
-        match expr {
+    fn codegen_type(&mut self, type_ref: TypeRef) -> BasicTypeEnum<'ctx> {
+        trace!("typechecking {type_ref:?}");
+        match type_ref {
             TypeRef::Int => self.builtin_types.i64.as_basic_type_enum(),
             TypeRef::Bool => self.builtin_types.boolean.as_basic_type_enum(),
             TypeRef::String => self.builtin_types.string.as_basic_type_enum(),
             TypeRef::Unit => self.builtin_types.unit.as_basic_type_enum(),
-            TypeRef::TypeId(type_id) => *self.llvm_types.get(&type_id).unwrap(),
+            TypeRef::TypeId(type_id) => {
+                match self.llvm_types.get(&type_id) {
+                    None => {
+                        // Generate and store the type in here
+                        let module = &self.module.clone();
+                        let ty = module.get_type(type_id);
+                        match ty {
+                            Type::Record(record) => {
+                                trace!("generating llvm type for record type {type_id}");
+                                let field_types: Vec<_> =
+                                    record.fields.iter().map(|f| self.codegen_type(f.ty)).collect();
+                                let struct_type = self.ctx.struct_type(&field_types, false);
+                                self.llvm_types.insert(type_id, struct_type.as_basic_type_enum());
+                                struct_type.as_basic_type_enum()
+                            }
+                            Type::OpaqueAlias(alias) => {
+                                todo!("opaque alias")
+                            }
+                        }
+                    }
+                    Some(basic_ty) => *basic_ty,
+                }
+            }
         }
     }
-    fn eval_basic_metadata_ty(&self, ir_type: TypeRef) -> BasicMetadataTypeEnum<'ctx> {
+    fn eval_basic_metadata_ty(&mut self, ir_type: TypeRef) -> BasicMetadataTypeEnum<'ctx> {
         self.codegen_type(ir_type).as_basic_type_enum().into()
     }
     fn codegen_val(&mut self, val: &ValDef) -> BasicValueEnum<'ctx> {
@@ -177,12 +200,16 @@ impl<'ctx> Codegen<'ctx> {
     fn codegen_literal(&mut self, literal: &IrLiteral) -> BasicValueEnum<'ctx> {
         match literal {
             IrLiteral::Record(record) => {
-                // Steps
-                // Ensure the identified struct type exists in LLVM
-                // For each field, evaluate the expression and perform a load into a GEP'd ptr for that field
-                let ty = self.get_or_codegen_type(record.type_id);
-                let llvm_ty = self.ctx.struct_type(field_types, false);
-                todo!("record codegen")
+                let ty = self.codegen_type(TypeRef::TypeId(record.type_id));
+                let struct_ptr = self.builder.build_alloca(ty, "record");
+                for (idx, field) in record.fields.iter().enumerate() {
+                    let value = self.codegen_expr(&field.expr);
+                    let field_ptr =
+                        self.builder.build_struct_gep(struct_ptr, idx as u32, &field.name).unwrap();
+                    self.builder.build_store(field_ptr, value);
+                }
+                let loaded = self.builder.build_load(struct_ptr, "record");
+                loaded
             }
             IrLiteral::Unit(_) => {
                 let value = self.builtin_types.unit.const_zero();
@@ -211,7 +238,7 @@ impl<'ctx> Codegen<'ctx> {
 
         // Entry block
         let condition = self.codegen_expr(&ir_if.condition);
-        let condition_value = self.loaded_value_from_enum(condition).into_int_value();
+        let condition_value = condition.into_int_value();
         self.builder.build_conditional_branch(condition_value, consequent_block, alternate_block);
 
         // Consequent Block
@@ -245,7 +272,8 @@ impl<'ctx> Codegen<'ctx> {
             IrExpr::Literal(literal) => self.codegen_literal(literal),
             IrExpr::Variable(ir_var) => {
                 if let Some(ptr) = self.pointers.get(&ir_var.variable_id) {
-                    ptr.as_basic_value_enum()
+                    let loaded = self.builder.build_load(*ptr, "loaded_variable");
+                    loaded
                 } else if let Some(global) = self.globals.get(&ir_var.variable_id) {
                     let value = global.get_initializer().unwrap();
                     value
@@ -253,23 +281,42 @@ impl<'ctx> Codegen<'ctx> {
                     panic!("No pointer or global found for variable {:?}", ir_var)
                 }
             }
+            IrExpr::FieldAccess(field_access) => {
+                let target = self.codegen_expr(&field_access.base);
+                if !target_ptr.is_pointer_value() {
+                    panic!(
+                        "Expected pointer value for field access, got {:?}",
+                        target_ptr.get_type()
+                    );
+                }
+                let field_ptr = self
+                    .builder
+                    .build_struct_gep(
+                        target_ptr.into_pointer_value(),
+                        field_access.target_field.index as u32,
+                        "field_access_target_ptr",
+                    )
+                    .unwrap();
+                let loaded = self.builder.build_load(field_ptr, "field_access_target");
+                loaded
+            }
             IrExpr::If(ir_if) => self.codegen_if_else(&ir_if),
             IrExpr::BinaryOp(bin_op) => match bin_op.ir_type {
                 TypeRef::Int => {
                     if bin_op.kind.is_integer_op() {
-                        let lhs_value = self.codegen_expr(&bin_op.lhs);
-                        let rhs_value = self.codegen_expr(&bin_op.rhs);
-                        let lhs_int = self.loaded_int_value_from_enum(lhs_value);
-                        let rhs_int = self.loaded_int_value_from_enum(rhs_value);
+                        let lhs_value = self.codegen_expr(&bin_op.lhs).into_int_value();
+                        let rhs_value = self.codegen_expr(&bin_op.rhs).into_int_value();
                         let op_res = match bin_op.kind {
                             BinaryOpKind::Add => {
-                                self.builder.build_int_add(lhs_int, rhs_int, "add")
+                                self.builder.build_int_add(lhs_value, rhs_value, "add")
                             }
                             BinaryOpKind::Multiply => {
-                                self.builder.build_int_mul(lhs_int, rhs_int, "mul")
+                                self.builder.build_int_mul(lhs_value, rhs_value, "mul")
                             }
-                            BinaryOpKind::And => self.builder.build_and(lhs_int, rhs_int, "and"),
-                            BinaryOpKind::Or => self.builder.build_or(lhs_int, rhs_int, "or"),
+                            BinaryOpKind::And => {
+                                self.builder.build_and(lhs_value, rhs_value, "and")
+                            }
+                            BinaryOpKind::Or => self.builder.build_or(lhs_value, rhs_value, "or"),
                         };
                         op_res.as_basic_value_enum()
                     } else {
@@ -278,10 +325,8 @@ impl<'ctx> Codegen<'ctx> {
                 }
                 TypeRef::Bool => match bin_op.kind {
                     BinaryOpKind::And | BinaryOpKind::Or => {
-                        let lhs = self.codegen_expr(&bin_op.lhs);
-                        let rhs = self.codegen_expr(&bin_op.rhs);
-                        let lhs_int = self.loaded_int_value_from_enum(lhs);
-                        let rhs_int = self.loaded_int_value_from_enum(rhs);
+                        let lhs_int = self.codegen_expr(&bin_op.lhs).into_int_value();
+                        let rhs_int = self.codegen_expr(&bin_op.rhs).into_int_value();
                         let op = match bin_op.kind {
                             BinaryOpKind::And => {
                                 self.builder.build_and(lhs_int, rhs_int, "bool_and")
@@ -418,8 +463,8 @@ impl<'ctx> Codegen<'ctx> {
             for (i, param) in fn_val.get_param_iter().enumerate() {
                 let ir_param = &function.params[i];
                 param.set_name(&ir_param.name);
-                let ptr =
-                    self.builder.build_alloca(self.codegen_type(ir_param.ir_type), &ir_param.name);
+                let ty = self.codegen_type(ir_param.ir_type);
+                let ptr = self.builder.build_alloca(ty, &ir_param.name);
                 self.builder.build_store(ptr, param);
                 self.pointers.insert(ir_param.variable_id, ptr);
             }
@@ -468,7 +513,7 @@ impl<'ctx> Codegen<'ctx> {
         module_pass_manager.add_verifier_pass();
         module_pass_manager.add_promote_memory_to_register_pass();
         module_pass_manager.add_function_attrs_pass();
-        module_pass_manager.add_instruction_combining_pass();
+        // module_pass_manager.add_instruction_combining_pass();
         module_pass_manager.add_function_inlining_pass();
 
         module_pass_manager.run_on(&self.llvm_module);

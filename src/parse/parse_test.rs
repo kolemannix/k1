@@ -100,3 +100,17 @@ fn if_no_else() -> ParseResult<()> {
     println!("{result:?}");
     Ok(())
 }
+
+#[test]
+fn dot_accessor() -> ParseResult<()> {
+    let input = "a.b.c";
+    let mut parser = setup(input);
+    let result = parser.parse_expression()?.unwrap();
+    let Expression::FieldAccess(acc) = result else { panic!() };
+    assert_eq!(acc.target.0, "c");
+    let Expression::FieldAccess(acc2) = *acc.base else {panic!() };
+    assert_eq!(acc2.target.0, "b");
+    let Expression::Variable(v) = *acc2.base else { panic!() };
+    assert_eq!(v.ident.0, "a");
+    Ok(())
+}

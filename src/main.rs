@@ -1,8 +1,6 @@
 use std::env;
 use std::rc::Rc;
 
-mod ast;
-//mod codegen;
 mod codegen_ir;
 mod ir;
 mod lex;
@@ -51,10 +49,10 @@ pub fn compile_single_file_program<'ctx>(
 }
 
 fn main() -> Result<()> {
-    static_assert_size!(ast::Definition, 168);
-    println!("Size of ast::Definition: {}", std::mem::size_of::<ast::Definition>());
-    println!("Size of ast::BlockStmt: {}", std::mem::size_of::<ast::BlockStmt>());
-    println!("Size of ast::Expression: {}", std::mem::size_of::<ast::Expression>());
+    static_assert_size!(parse::Definition, 168);
+    println!("Size of ast::Definition: {}", std::mem::size_of::<parse::Definition>());
+    println!("Size of ast::BlockStmt: {}", std::mem::size_of::<parse::BlockStmt>());
+    println!("Size of ast::Expression: {}", std::mem::size_of::<parse::Expression>());
     println!("Size of ir::IrExpr: {}", std::mem::size_of::<ir::IrExpr>());
     println!("Size of ir::IrStmt: {}", std::mem::size_of::<ir::IrStmt>());
 
