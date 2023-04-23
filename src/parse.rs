@@ -277,7 +277,7 @@ pub struct Source<'a> {
 }
 impl<'a> Source<'a> {
     fn line(&self, num: u32) -> &'a str {
-        &self.lines[num as usize]
+        self.lines[num as usize]
     }
 }
 
@@ -289,8 +289,8 @@ struct Parser<'a> {
 impl<'a> Parser<'a> {
     fn check<A>(value: Option<A>) -> ParseResult<Option<A>> {
         match value {
-            None => Result::Ok(None),
-            Some(a) => Result::Ok(Some(a)),
+            None => Ok(None),
+            Some(a) => Ok(Some(a)),
         }
     }
     fn expect<A>(what: &str, current: Token, value: ParseResult<Option<A>>) -> ParseResult<A> {
