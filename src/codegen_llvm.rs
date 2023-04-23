@@ -21,7 +21,10 @@ use crate::{ir::*, trace};
 struct BuiltinTypes<'ctx> {
     i64: IntType<'ctx>,
     unit: IntType<'ctx>,
+    unit_value: IntValue<'ctx>,
     boolean: IntType<'ctx>,
+    true_value: IntValue<'ctx>,
+    false_value: IntValue<'ctx>,
     char: IntType<'ctx>,
     c_str: PointerType<'ctx>,
     string: StructType<'ctx>,
@@ -50,7 +53,7 @@ pub struct Codegen<'ctx> {
     /// which need to be treated as pointers. It might be cool to abstract this behind
     /// some enum that can be either a Value or a PointerValue, and knows what its target type is,
     /// and can insert a load as needed. PointerOrValue.as_pointer() or .as_value() or something.
-    pointers: HashMap<VariableId, PointerValue<'ctx>>,
+    pointers: HashMap<VariableId, Pointer<'ctx>>,
     globals: HashMap<VariableId, GlobalValue<'ctx>>,
     builtin_functions: BuiltinFunctions<'ctx>,
     builtin_globals: HashMap<String, GlobalValue<'ctx>>,
@@ -61,7 +64,7 @@ pub struct Codegen<'ctx> {
 #[derive(Copy, Clone)]
 struct Pointer<'ctx> {
     pointee_ty: BasicTypeEnum<'ctx>,
-    pointer: PointerValue<'ctx>
+    pointer: PointerValue<'ctx>,
 }
 
 /// When we codegen an expression, sometimes the result is a pointer value, which does
@@ -79,10 +82,19 @@ impl<'ctx> From<BasicValueEnum<'ctx>> for GeneratedValue<'ctx> {
 }
 
 impl<'ctx> GeneratedValue<'ctx> {
+    /// This conversion loses type info but is necessary often for passing to LLVM
+    /// calls, such as for function calls, we need to convert from GeneratedValue BasicMetaDataValueEnum
+    fn as_basic_value_enum(&self) -> BasicValueEnum<'ctx> {
+        match self {
+            GeneratedValue::Value(value) => *value,
+            GeneratedValue::Pointer(pointer) => pointer.pointer.as_basic_value_enum(),
+        }
+    }
+
     fn expect_value(&self) -> BasicValueEnum<'ctx> {
         match self {
             GeneratedValue::Value(value) => *value,
-            GeneratedValue::Pointer(pointer) => panic!("Expected Value but got Pointer")
+            GeneratedValue::Pointer(pointer) => panic!("Expected Value but got Pointer"),
         }
     }
     fn expect_pointer(&self) -> Pointer<'ctx> {
@@ -131,7 +143,10 @@ impl<'ctx> Codegen<'ctx> {
         let builtin_types = BuiltinTypes {
             i64: ctx.i64_type(),
             unit: ctx.bool_type(),
+            unit_value: ctx.bool_type().const_int(0, false),
             boolean: ctx.bool_type(),
+            true_value: ctx.bool_type().const_int(1, true),
+            false_value: ctx.bool_type().const_int(0, true),
             char: char_type,
             c_str: char_type.ptr_type(AddressSpace::default()),
             string: ctx.struct_type(
@@ -227,7 +242,7 @@ impl<'ctx> Codegen<'ctx> {
     fn eval_basic_metadata_ty(&mut self, ir_type: TypeRef) -> BasicMetadataTypeEnum<'ctx> {
         self.codegen_type(ir_type).as_basic_type_enum().into()
     }
-    fn codegen_val(&mut self, val: &ValDef) -> BasicValueEnum<'ctx> {
+    fn codegen_val(&mut self, val: &ValDef) -> GeneratedValue<'ctx> {
         let value = self.codegen_expr(&val.initializer);
         value
     }
@@ -245,29 +260,23 @@ impl<'ctx> Codegen<'ctx> {
                         .unwrap();
                     self.builder.build_store(field_ptr, value);
                 }
-                GeneratedValue::Pointer(Pointer {
-                    pointee_ty: ty,
-                    pointer: struct_ptr,
-                })
+                GeneratedValue::Pointer(Pointer { pointee_ty: ty, pointer: struct_ptr })
             }
-            IrLiteral::Unit(_) => {
-                let value = self.builtin_types.unit.const_zero();
-                value.as_basic_value_enum()
-            }
+            IrLiteral::Unit(_) => self.builtin_types.unit_value.as_basic_value_enum().into(),
             IrLiteral::Int(int_value, _) => {
                 // LLVM only has unsigned values, the instructions are what provide the semantics
                 // of signed vs unsigned
                 let value = self.builtin_types.i64.const_int(*int_value as u64, false);
-                value.as_basic_value_enum()
+                value.as_basic_value_enum().into()
             }
-            IrLiteral::Bool(b, _) => {
-                let value = self.builtin_types.boolean.const_int(*b as u64, true);
-                value.as_basic_value_enum()
-            }
+            IrLiteral::Bool(b, _) => match b {
+                true => self.builtin_types.true_value.as_basic_value_enum().into(),
+                false => self.builtin_types.false_value.as_basic_value_enum().into(),
+            },
             IrLiteral::Str(_, _) => todo!("codegen String"),
         }
     }
-    fn codegen_if_else(&mut self, ir_if: &IrIf) -> BasicValueEnum<'ctx> {
+    fn codegen_if_else(&mut self, ir_if: &IrIf) -> GeneratedValue<'ctx> {
         let typ = self.codegen_type(ir_if.ir_type);
         let start_block = self.builder.get_insert_block().unwrap();
         let current_fn = start_block.get_parent().unwrap();
@@ -277,7 +286,7 @@ impl<'ctx> Codegen<'ctx> {
 
         // Entry block
         let condition = self.codegen_expr(&ir_if.condition);
-        let condition_value = condition.into_int_value();
+        let condition_value = condition.expect_value().into_int_value();
         self.builder.build_conditional_branch(condition_value, consequent_block, alternate_block);
 
         // Consequent Block
@@ -303,7 +312,7 @@ impl<'ctx> Codegen<'ctx> {
             (&consequent_expr, consequent_block),
             (&alternate_expr, alternate_block),
         ]);
-        phi_value.as_basic_value()
+        phi_value.as_basic_value().into()
     }
     fn codegen_expr(&mut self, expr: &IrExpr) -> GeneratedValue<'ctx> {
         match expr {
@@ -311,41 +320,41 @@ impl<'ctx> Codegen<'ctx> {
             IrExpr::Variable(ir_var) => {
                 if let Some(ptr) = self.pointers.get(&ir_var.variable_id) {
                     let ty = self.codegen_type(ir_var.ir_type);
-                    let loaded = self.builder.build_load(ty, *ptr, "loaded_variable");
-                    loaded
+                    // TODO: We may not need to load the pointer now
+                    // since we have our new enum that carries more type info
+                    let loaded =
+                        self.builder.build_load(ptr.pointee_ty, ptr.pointer, "loaded_variable");
+                    loaded.into()
                 } else if let Some(global) = self.globals.get(&ir_var.variable_id) {
                     let value = global.get_initializer().unwrap();
-                    value
+                    value.into()
                 } else {
                     panic!("No pointer or global found for variable {:?}", ir_var)
                 }
             }
             IrExpr::FieldAccess(field_access) => {
-                let target_ptr = self.codegen_expr(&field_access.base);
-                if !target_ptr.is_pointer_value() {
-                    panic!(
-                        "Expected pointer value for field access target llvm struct: {}",
-                        target_ptr
-                    )
-                }
+                let target_ptr = self.codegen_expr(&field_access.base).expect_pointer();
                 let field_ptr = self
                     .builder
                     .build_struct_gep(
-                        ,
-                        target_ptr.into_pointer_value(),
+                        target_ptr.pointee_ty,
+                        target_ptr.pointer,
                         field_access.target_field.index as u32,
                         "field_access_target_ptr",
                     )
                     .unwrap();
-                let loaded = self.builder.build_load(field_ptr, "field_access_target");
-                loaded
+                let target_ty = self.codegen_type(field_access.target_field.ty);
+                let loaded = self.builder.build_load(target_ty, field_ptr, "field_access_target");
+                loaded.into()
             }
             IrExpr::If(ir_if) => self.codegen_if_else(ir_if),
             IrExpr::BinaryOp(bin_op) => match bin_op.ir_type {
                 TypeRef::Int => {
                     if bin_op.kind.is_integer_op() {
-                        let lhs_value = self.codegen_expr(&bin_op.lhs).into_int_value();
-                        let rhs_value = self.codegen_expr(&bin_op.rhs).into_int_value();
+                        let lhs_value =
+                            self.codegen_expr(&bin_op.lhs).expect_value().into_int_value();
+                        let rhs_value =
+                            self.codegen_expr(&bin_op.rhs).expect_value().into_int_value();
                         let op_res = match bin_op.kind {
                             BinaryOpKind::Add => {
                                 self.builder.build_int_add(lhs_value, rhs_value, "add")
@@ -358,15 +367,17 @@ impl<'ctx> Codegen<'ctx> {
                             }
                             BinaryOpKind::Or => self.builder.build_or(lhs_value, rhs_value, "or"),
                         };
-                        op_res.as_basic_value_enum()
+                        op_res.as_basic_value_enum().into()
                     } else {
                         panic!("Unsupported binary operation {:?} on Int", bin_op.kind)
                     }
                 }
                 TypeRef::Bool => match bin_op.kind {
                     BinaryOpKind::And | BinaryOpKind::Or => {
-                        let lhs_int = self.codegen_expr(&bin_op.lhs).into_int_value();
-                        let rhs_int = self.codegen_expr(&bin_op.rhs).into_int_value();
+                        let lhs_int =
+                            self.codegen_expr(&bin_op.lhs).expect_value().into_int_value();
+                        let rhs_int =
+                            self.codegen_expr(&bin_op.rhs).expect_value().into_int_value();
                         let op = match bin_op.kind {
                             BinaryOpKind::And => {
                                 self.builder.build_and(lhs_int, rhs_int, "bool_and")
@@ -374,7 +385,7 @@ impl<'ctx> Codegen<'ctx> {
                             BinaryOpKind::Or => self.builder.build_or(lhs_int, rhs_int, "bool_or"),
                             _ => panic!(),
                         };
-                        op.as_basic_value_enum()
+                        op.as_basic_value_enum().into()
                     }
                     other => panic!("Unsupported binary operation {other:?} on Bool"),
                 },
@@ -401,7 +412,7 @@ impl<'ctx> Codegen<'ctx> {
                         .iter()
                         .map(|arg_expr| {
                             let basic_value = self.codegen_expr(arg_expr);
-                            BasicMetadataValueEnum::from(basic_value)
+                            BasicMetadataValueEnum::from(basic_value.as_basic_value_enum())
                         })
                         .collect();
                     let callsite_value =
@@ -409,14 +420,14 @@ impl<'ctx> Codegen<'ctx> {
                     // Call return Right for void, and Left for values
                     let result_value =
                         callsite_value.try_as_basic_value().left().expect("function returned void");
-                    result_value
+                    result_value.into()
                 } else if callee.name == "println" {
                     // TODO: This is our first 'intrinsic'
                     // Support intrinsics properly in the IR or prelude source or something
                     self.build_printf_call(call);
                     let ptr = self.builder.build_alloca(self.builtin_types.unit, "println_res_ptr");
                     self.builder.build_store(ptr, self.builtin_types.unit.const_int(0, false));
-                    self.builtin_types.unit.const_int(0, false).as_basic_value_enum()
+                    self.builtin_types.unit_value.as_basic_value_enum().into()
                 } else {
                     todo!("Unexpected intrinic: {}", callee.name);
                 }
