@@ -200,7 +200,7 @@ impl<'ctx> Codegen<'ctx> {
 
     fn build_printf_call(&mut self, call: &FunctionCall) -> BasicValueEnum<'ctx> {
         // Assume the arg is an int since that's what the intrinsic typechecks for
-        let first_arg = self.codegen_expr(&call.args[0]).expect_value().into_int_value();
+        let first_arg = self.codegen_expr(&call.args[0]).loaded_value(&self.builder);
 
         let format_str = self.builtin_globals.get("formatString").unwrap();
         let format_str_ptr = self.builder.build_bitcast(
@@ -239,10 +239,7 @@ impl<'ctx> Codegen<'ctx> {
                                 trace!("generating llvm pointer type for record type {type_id}");
                                 let field_types: Vec<_> =
                                     record.fields.iter().map(|f| self.codegen_type(f.ty)).collect();
-                                let struct_type = self
-                                    .ctx
-                                    .struct_type(&field_types, false)
-                                    .ptr_type(self.default_address_space);
+                                let struct_type = self.ctx.struct_type(&field_types, false);
                                 self.llvm_types.insert(type_id, struct_type.as_basic_type_enum());
                                 struct_type.as_basic_type_enum()
                             }
@@ -262,14 +259,16 @@ impl<'ctx> Codegen<'ctx> {
         let pointee_ty = value.value_type();
         let value_ptr = self.builder.build_alloca(pointee_ty, &val.variable_id.to_string());
         self.builder.build_store(value_ptr, value.loaded_value(&self.builder));
-        self.variables.insert(val.variable_id, Pointer { pointer: value_ptr, pointee_ty });
-        value
+        let pointer = Pointer { pointer: value_ptr, pointee_ty };
+        self.variables.insert(val.variable_id, pointer);
+        pointer.into()
     }
 
     fn codegen_literal(&mut self, literal: &IrLiteral) -> GeneratedValue<'ctx> {
         match literal {
             IrLiteral::Record(record) => {
                 let ty = self.codegen_type(TypeRef::TypeId(record.type_id));
+                // let struct_ty = ty.get_element_type().into_struct_type();
                 let struct_ptr = self.builder.build_alloca(ty, "record");
                 for (idx, field) in record.fields.iter().enumerate() {
                     let value = self.codegen_expr(&field.expr);
@@ -277,7 +276,7 @@ impl<'ctx> Codegen<'ctx> {
                         .builder
                         .build_struct_gep(ty, struct_ptr, idx as u32, &field.name)
                         .unwrap();
-                    self.builder.build_store(field_ptr, value.as_basic_value_enum());
+                    self.builder.build_store(field_ptr, value.loaded_value(&self.builder));
                 }
                 GeneratedValue::Pointer(Pointer { pointee_ty: ty, pointer: struct_ptr })
             }
@@ -367,10 +366,14 @@ impl<'ctx> Codegen<'ctx> {
             IrExpr::BinaryOp(bin_op) => match bin_op.ir_type {
                 TypeRef::Int => {
                     if bin_op.kind.is_integer_op() {
-                        let lhs_value =
-                            self.codegen_expr(&bin_op.lhs).expect_value().into_int_value();
-                        let rhs_value =
-                            self.codegen_expr(&bin_op.rhs).expect_value().into_int_value();
+                        let lhs_value = self
+                            .codegen_expr(&bin_op.lhs)
+                            .loaded_value(&self.builder)
+                            .into_int_value();
+                        let rhs_value = self
+                            .codegen_expr(&bin_op.rhs)
+                            .loaded_value(&self.builder)
+                            .into_int_value();
                         let op_res = match bin_op.kind {
                             BinaryOpKind::Add => {
                                 self.builder.build_int_add(lhs_value, rhs_value, "add")
@@ -390,10 +393,14 @@ impl<'ctx> Codegen<'ctx> {
                 }
                 TypeRef::Bool => match bin_op.kind {
                     BinaryOpKind::And | BinaryOpKind::Or => {
-                        let lhs_int =
-                            self.codegen_expr(&bin_op.lhs).expect_value().into_int_value();
-                        let rhs_int =
-                            self.codegen_expr(&bin_op.rhs).expect_value().into_int_value();
+                        let lhs_int = self
+                            .codegen_expr(&bin_op.lhs)
+                            .loaded_value(&self.builder)
+                            .into_int_value();
+                        let rhs_int = self
+                            .codegen_expr(&bin_op.rhs)
+                            .loaded_value(&self.builder)
+                            .into_int_value();
                         let op = match bin_op.kind {
                             BinaryOpKind::And => {
                                 self.builder.build_and(lhs_int, rhs_int, "bool_and")
@@ -469,7 +476,7 @@ impl<'ctx> Codegen<'ctx> {
                 }
                 IrStmt::ReturnStmt(return_stmt) => {
                     let value = self.codegen_expr(&return_stmt.expr);
-                    self.builder.build_return(Some(&value.as_basic_value_enum()));
+                    self.builder.build_return(Some(&value.loaded_value(&self.builder)));
                     return None;
                 }
                 IrStmt::Assignment(assignment) => {
