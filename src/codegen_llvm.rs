@@ -9,7 +9,7 @@ use inkwell::types::{
 };
 use inkwell::values::{
     ArrayValue, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue,
-    IntValue, PointerValue,
+    InstructionValue, IntValue, PointerValue,
 };
 use inkwell::{AddressSpace, OptimizationLevel};
 use std::collections::HashMap;
@@ -53,7 +53,7 @@ pub struct Codegen<'ctx> {
     /// which need to be treated as pointers. It might be cool to abstract this behind
     /// some enum that can be either a Value or a PointerValue, and knows what its target type is,
     /// and can insert a load as needed. PointerOrValue.as_pointer() or .as_value() or something.
-    pointers: HashMap<VariableId, Pointer<'ctx>>,
+    variables: HashMap<VariableId, Pointer<'ctx>>,
     globals: HashMap<VariableId, GlobalValue<'ctx>>,
     builtin_functions: BuiltinFunctions<'ctx>,
     builtin_globals: HashMap<String, GlobalValue<'ctx>>,
@@ -65,6 +65,18 @@ pub struct Codegen<'ctx> {
 struct Pointer<'ctx> {
     pointee_ty: BasicTypeEnum<'ctx>,
     pointer: PointerValue<'ctx>,
+}
+
+impl<'ctx> Into<GeneratedValue<'ctx>> for Pointer<'ctx> {
+    fn into(self) -> GeneratedValue<'ctx> {
+        GeneratedValue::Pointer(self)
+    }
+}
+
+impl<'ctx> Into<GeneratedValue<'ctx>> for &Pointer<'ctx> {
+    fn into(self) -> GeneratedValue<'ctx> {
+        GeneratedValue::Pointer(*self)
+    }
 }
 
 /// When we codegen an expression, sometimes the result is a pointer value, which does
@@ -88,6 +100,15 @@ impl<'ctx> GeneratedValue<'ctx> {
         match self {
             GeneratedValue::Value(value) => *value,
             GeneratedValue::Pointer(pointer) => pointer.pointer.as_basic_value_enum(),
+        }
+    }
+
+    fn loaded_value(&self, builder: &Builder<'ctx>) -> BasicValueEnum<'ctx> {
+        match self {
+            GeneratedValue::Pointer(pointer) => {
+                builder.build_load(pointer.pointee_ty, pointer.pointer, "loaded_value")
+            }
+            GeneratedValue::Value(value) => *value,
         }
     }
 
@@ -166,7 +187,7 @@ impl<'ctx> Codegen<'ctx> {
             llvm_module,
             llvm_machine: None,
             builder,
-            pointers,
+            variables: pointers,
             globals,
             llvm_functions: HashMap::new(),
             llvm_types: HashMap::new(),
@@ -175,10 +196,6 @@ impl<'ctx> Codegen<'ctx> {
             builtin_types,
             default_address_space: AddressSpace::default(),
         }
-    }
-
-    fn to_ptr_type(&self, ty: BasicTypeEnum<'ctx>) -> PointerType<'ctx> {
-        ty.ptr_type(self.default_address_space)
     }
 
     fn build_printf_call(&mut self, call: &FunctionCall) -> BasicValueEnum<'ctx> {
@@ -239,18 +256,20 @@ impl<'ctx> Codegen<'ctx> {
             }
         }
     }
-    fn eval_basic_metadata_ty(&mut self, ir_type: TypeRef) -> BasicMetadataTypeEnum<'ctx> {
-        self.codegen_type(ir_type).as_basic_type_enum().into()
-    }
+
     fn codegen_val(&mut self, val: &ValDef) -> GeneratedValue<'ctx> {
         let value = self.codegen_expr(&val.initializer);
+        let pointee_ty = value.value_type();
+        let value_ptr = self.builder.build_alloca(pointee_ty, &val.variable_id.to_string());
+        self.builder.build_store(value_ptr, value.loaded_value(&self.builder));
+        self.variables.insert(val.variable_id, Pointer { pointer: value_ptr, pointee_ty });
         value
     }
+
     fn codegen_literal(&mut self, literal: &IrLiteral) -> GeneratedValue<'ctx> {
         match literal {
             IrLiteral::Record(record) => {
                 let ty = self.codegen_type(TypeRef::TypeId(record.type_id));
-                // ty.into_pointer_type().get_element_type()
                 let struct_ptr = self.builder.build_alloca(ty, "record");
                 for (idx, field) in record.fields.iter().enumerate() {
                     let value = self.codegen_expr(&field.expr);
@@ -258,7 +277,7 @@ impl<'ctx> Codegen<'ctx> {
                         .builder
                         .build_struct_gep(ty, struct_ptr, idx as u32, &field.name)
                         .unwrap();
-                    self.builder.build_store(field_ptr, value);
+                    self.builder.build_store(field_ptr, value.as_basic_value_enum());
                 }
                 GeneratedValue::Pointer(Pointer { pointee_ty: ty, pointer: struct_ptr })
             }
@@ -286,7 +305,7 @@ impl<'ctx> Codegen<'ctx> {
 
         // Entry block
         let condition = self.codegen_expr(&ir_if.condition);
-        let condition_value = condition.expect_value().into_int_value();
+        let condition_value = condition.loaded_value(&self.builder).into_int_value();
         self.builder.build_conditional_branch(condition_value, consequent_block, alternate_block);
 
         // Consequent Block
@@ -295,14 +314,16 @@ impl<'ctx> Codegen<'ctx> {
         self.builder.position_at_end(consequent_block);
         let consequent_expr = self
             .codegen_block(&ir_if.consequent)
-            .expect("Expected IF branch block to return something");
+            .expect("Expected IF branch block to return something")
+            .loaded_value(&self.builder);
         self.builder.build_unconditional_branch(merge_block);
 
         // Alternate Block
         self.builder.position_at_end(alternate_block);
         let alternate_expr = self
             .codegen_block(&ir_if.alternate)
-            .expect("Expected IF branch block to return something");
+            .expect("Expected IF branch block to return something")
+            .loaded_value(&self.builder);
         self.builder.build_unconditional_branch(merge_block);
 
         // Merge block
@@ -318,13 +339,8 @@ impl<'ctx> Codegen<'ctx> {
         match expr {
             IrExpr::Literal(literal) => self.codegen_literal(literal),
             IrExpr::Variable(ir_var) => {
-                if let Some(ptr) = self.pointers.get(&ir_var.variable_id) {
-                    let ty = self.codegen_type(ir_var.ir_type);
-                    // TODO: We may not need to load the pointer now
-                    // since we have our new enum that carries more type info
-                    let loaded =
-                        self.builder.build_load(ptr.pointee_ty, ptr.pointer, "loaded_variable");
-                    loaded.into()
+                if let Some(value) = self.variables.get(&ir_var.variable_id) {
+                    value.into()
                 } else if let Some(global) = self.globals.get(&ir_var.variable_id) {
                     let value = global.get_initializer().unwrap();
                     value.into()
@@ -442,37 +458,39 @@ impl<'ctx> Codegen<'ctx> {
     // None. We'll fix it when implementing early returns
     // Maybe we rename ReturnStmt to Early Return to separate it from tail returns, which have
     // pretty different semantics and implications for codegen, I am realizing
-    fn codegen_block(&mut self, block: &IrBlock) -> Option<BasicValueEnum<'ctx>> {
-        let mut last: Option<BasicValueEnum<'ctx>> = None;
+    fn codegen_block(&mut self, block: &IrBlock) -> Option<GeneratedValue<'ctx>> {
+        let mut last: Option<GeneratedValue<'ctx>> = None;
         for stmt in &block.statements {
             match stmt {
-                IrStmt::Expr(expr) => last = Some(self.codegen_expr(expr).as_basic_value_enum()),
+                IrStmt::Expr(expr) => last = Some(self.codegen_expr(expr)),
                 IrStmt::ValDef(val_def) => {
-                    let typ = self.codegen_type(val_def.ir_type);
-                    let ptr =
-                        self.builder.build_alloca(typ, &format!("val_{}", val_def.variable_id));
-                    let value = self.codegen_val(val_def);
-                    self.builder.build_store(ptr, value);
-                    self.pointers.insert(val_def.variable_id, ptr);
-                    last = Some(ptr.as_basic_value_enum())
+                    let value = self.codegen_val(val_def).expect_pointer();
+                    last = Some(value.into())
                 }
                 IrStmt::ReturnStmt(return_stmt) => {
                     let value = self.codegen_expr(&return_stmt.expr);
-                    self.builder.build_return(Some(&value));
+                    self.builder.build_return(Some(&value.as_basic_value_enum()));
                     return None;
                 }
                 IrStmt::Assignment(assignment) => {
                     let variable_id = &assignment.destination_variable;
                     let destination_ptr =
-                        *self.pointers.get(variable_id).expect("Missing variable");
+                        *self.variables.get(variable_id).expect("Missing variable");
                     let initializer = self.codegen_expr(&assignment.value);
-                    let store = self.builder.build_store(destination_ptr, initializer);
-                    let unit = self.builtin_types.unit.const_zero();
-                    last = Some(unit.as_basic_value_enum())
+                    let store = self.store(&destination_ptr, initializer);
+                    last = Some(self.builtin_types.unit_value.as_basic_value_enum().into())
                 }
             }
         }
         last
+    }
+    /// Stores `value` into `pointer`, loading the value pointed to by `value` if necessary
+    fn store(
+        &mut self,
+        pointer: &Pointer<'ctx>,
+        value: GeneratedValue<'ctx>,
+    ) -> InstructionValue<'ctx> {
+        self.builder.build_store(pointer.pointer, value.loaded_value(&self.builder))
     }
     pub fn codegen_module(&mut self) {
         for constant in &self.module.constants {
@@ -499,9 +517,9 @@ impl<'ctx> Codegen<'ctx> {
             let param_types: Vec<BasicMetadataTypeEnum> = function
                 .params
                 .iter()
-                .map(|fn_arg| self.eval_basic_metadata_ty(fn_arg.ir_type))
+                .map(|fn_arg| self.codegen_type(fn_arg.ir_type).into())
                 .collect();
-            let ret_type = self.eval_basic_metadata_ty(function.ret_type);
+            let ret_type: BasicMetadataTypeEnum<'ctx> = self.codegen_type(function.ret_type).into();
             let fn_ty = match ret_type {
                 BasicMetadataTypeEnum::IntType(i) => i.fn_type(&param_types, false),
                 BasicMetadataTypeEnum::PointerType(p) => p.fn_type(&param_types, false),
@@ -514,9 +532,9 @@ impl<'ctx> Codegen<'ctx> {
                 let ir_param = &function.params[i];
                 param.set_name(&ir_param.name);
                 let ty = self.codegen_type(ir_param.ir_type);
-                let ptr = self.builder.build_alloca(ty, &ir_param.name);
-                self.builder.build_store(ptr, param);
-                self.pointers.insert(ir_param.variable_id, ptr);
+                let pointer = self.builder.build_alloca(ty, &ir_param.name);
+                self.builder.build_store(pointer, param);
+                self.variables.insert(ir_param.variable_id, Pointer { pointer, pointee_ty: ty });
             }
             self.codegen_block(&function.block);
         }
