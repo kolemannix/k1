@@ -5,14 +5,11 @@ type Point = {
   isGood: Bool
 }
 
-// fn increment_z(p: Ref[Point]): void fails Int {
-//   p.z = p.z + 1;
-// }
-
 fn main(): Int {
   val zero: Point = {
     x: 0, y: 0, z: 42, isGood: true
   };
   println(zero.z);
+  println(zero.isGood);
   return 0;
 }

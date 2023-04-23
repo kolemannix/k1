@@ -1,7 +1,7 @@
 use std::env;
 use std::rc::Rc;
 
-mod codegen_ir;
+mod codegen_llvm;
 mod ir;
 mod lex;
 mod output;
@@ -17,7 +17,7 @@ use std::fs::File;
 use std::io::{BufReader, Read, Write};
 use std::path::Path;
 
-use crate::codegen_ir::Codegen;
+use crate::codegen_llvm::Codegen;
 
 /// Type size assertion. The first argument is a type and the second argument is its expected size.
 /// Cool trick from rustc.
