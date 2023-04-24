@@ -11,11 +11,12 @@ in this language
   - [x] Parsing
   - [x] Typechecking
   - [x] codegen static as LLVM structs
-  - [ ] Accessor syntax
-  - [ ] Accessor ir
-  - [ ] Accessor codegen
-  - [ ] codegen dynamic as standard library Maps (long way off)
+  - [x] Accessor syntax
+  - [x] Accessor ir
+  - [x] Accessor codegen
+- [ ] Actual scoping and Identifier cleanup
 - [ ] Arrays
+- [ ] Function syntax change (foo = fn (a, b, c): Int { } 
 - [ ] Ditch semicolons? (this technically introduces significant whitespace)
 - [x] Binary infix operations
 - [ ] basic error reporting using spans
@@ -38,7 +39,6 @@ in this language
 - [ ] main function / detect entrypoint properly. Typing of main? How to get main args?
 - [ ] Replace all vectors with smallvec where appropriate
 - [ ] Proper println implementation. Fine to use printf internally for now but we should define our own func around it
-- [ ] Scoping is basically non-existent right now
 - [ ] Implement Display instead of relying on Debug
 
 Design for 

@@ -1,6 +1,9 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::io::{BufReader, Read};
+use std::rc::Rc;
 
 use TokenKind::*;
 
@@ -27,31 +30,50 @@ impl Literal {
     }
 }
 
-#[derive(Debug)]
-pub struct Ident(pub String);
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub struct IdentifierId(usize);
 
-impl AsRef<str> for Ident {
-    fn as_ref(&self) -> &str {
-        &self.0
+impl Display for IdentifierId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Default, Debug)]
+pub struct Identifiers {
+    identifiers: HashMap<&'static str, IdentifierId>,
+    identifiers_rev: Vec<&'static str>,
+}
+impl Identifiers {
+    pub fn intern(&mut self, s: &str) -> IdentifierId {
+        if let Some(id) = self.identifiers.get(s) {
+            *id
+        } else {
+            let id = IdentifierId(self.identifiers.len());
+            let leaked = Box::leak(s.to_string().into_boxed_str());
+            self.identifiers.insert(leaked, id);
+            self.identifiers_rev.push(leaked);
+            id
+        }
     }
 }
 
 #[derive(Debug)]
 pub struct FnArg {
-    pub name: Option<String>,
+    pub name: Option<IdentifierId>,
     pub value: Expression,
 }
 
 #[derive(Debug)]
 pub struct FnCall {
-    pub name: Ident,
+    pub name: IdentifierId,
     pub args: Vec<FnArg>,
     pub span: Span,
 }
 
 #[derive(Debug)]
 pub struct ValDef {
-    pub name: Ident,
+    pub name: IdentifierId,
     pub ty: Option<TypeExpression>,
     pub value: Expression,
     pub is_mutable: bool,
@@ -88,20 +110,20 @@ pub struct BinaryOp {
 
 #[derive(Debug)]
 pub struct Variable {
-    pub ident: Ident,
+    pub ident: IdentifierId,
     pub span: Span,
 }
 
 #[derive(Debug)]
 pub struct FieldAccess {
     pub base: Box<Expression>,
-    pub target: Ident,
+    pub target: IdentifierId,
     pub span: Span,
 }
 
 #[derive(Debug)]
 pub struct RecordField {
-    pub name: Ident,
+    pub name: IdentifierId,
     pub expr: Expression,
 }
 
@@ -143,7 +165,7 @@ impl Expression {
 
 #[derive(Debug)]
 pub struct Assignment {
-    pub ident: Ident,
+    pub ident: IdentifierId,
     pub expr: Expression,
     pub span: Span,
 }
@@ -182,7 +204,7 @@ pub struct Block {
 
 #[derive(Debug)]
 pub struct RecordTypeField {
-    pub name: Ident,
+    pub name: IdentifierId,
     pub ty: TypeExpression,
 }
 
@@ -197,7 +219,7 @@ pub enum TypeExpression {
     Int(Span),
     Bool(Span),
     Record(RecordType),
-    Name(Ident, Span),
+    Name(IdentifierId, Span),
 }
 
 impl TypeExpression {
@@ -214,7 +236,7 @@ impl TypeExpression {
 
 #[derive(Debug)]
 pub struct FnDef {
-    pub name: Ident,
+    pub name: IdentifierId,
     pub args: Vec<FnArgDef>,
     pub ret_type: Option<TypeExpression>,
     pub block: Option<Block>,
@@ -223,13 +245,13 @@ pub struct FnDef {
 
 #[derive(Debug)]
 pub struct FnArgDef {
-    pub name: Ident,
+    pub name: IdentifierId,
     pub ty: TypeExpression,
 }
 
 #[derive(Debug)]
 pub struct ConstVal {
-    pub name: Ident,
+    pub name: IdentifierId,
     pub ty: TypeExpression,
     pub value_expr: Expression,
     pub span: Span,
@@ -237,7 +259,7 @@ pub struct ConstVal {
 
 #[derive(Debug)]
 pub struct TypeDefn {
-    pub name: Ident,
+    pub name: IdentifierId,
     pub value_expr: TypeExpression,
     pub span: Span,
 }
@@ -251,8 +273,20 @@ pub enum Definition {
 
 #[derive(Debug)]
 pub struct Module {
-    pub name: Ident,
+    pub name: String,
+    pub name_id: IdentifierId,
     pub defs: Vec<Definition>,
+    /// Using RefCell here just so we can mutably access
+    /// the identifiers without having mutable access to
+    /// the entire AST module. Let's me wait to decide
+    /// where things actually live
+    pub identifiers: Rc<RefCell<Identifiers>>,
+}
+
+impl Module {
+    pub fn ident_id(&self, ident: &str) -> IdentifierId {
+        self.identifiers.get_mut().intern(ident)
+    }
 }
 
 pub type ParseResult<A> = Result<A, ParseError>;
@@ -284,9 +318,13 @@ impl<'a> Source<'a> {
 struct Parser<'a> {
     tokens: TokenIter,
     source: Source<'a>,
+    identifiers: Rc<RefCell<Identifiers>>,
 }
 
 impl<'a> Parser<'a> {
+    fn ident_id(&mut self, s: impl AsRef<str>) -> IdentifierId {
+        self.identifiers.get_mut().intern(s.as_ref())
+    }
     fn check<A>(value: Option<A>) -> ParseResult<Option<A>> {
         match value {
             None => Ok(None),
@@ -308,7 +346,11 @@ impl<'a> Parser<'a> {
     }
     fn make(tokens: TokenIter, source: &'a str) -> Parser<'a> {
         let lines = source.lines().collect();
-        Parser { tokens, source: Source { content: source, lines } }
+        Parser {
+            tokens,
+            source: Source { content: source, lines },
+            identifiers: Rc::new(RefCell::new(Identifiers::default())),
+        }
     }
     fn current_line(&self) -> &str {
         let span = self.peek().span;
@@ -390,8 +432,7 @@ impl<'a> Parser<'a> {
                 if close.kind == DoubleQuote {
                     self.tokens.advance();
                     let text = self.tok_chars(second);
-                    let mut span = first.span;
-                    span.end = close.span.end;
+                    let span = first.span.extended(&close.span);
                     Ok(Some(Literal::String(text.to_string(), span)))
                 } else {
                     Err(ParseError::ExpectedToken(DoubleQuote, close, None))
@@ -421,11 +462,11 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_record_type_field(&mut self) -> ParseResult<Option<RecordTypeField>> {
-        let ident = self.expect_eat_ident()?;
+        let ident_id = self.expect_eat_ident()?;
         self.expect_eat_token(Colon);
         let typ_expr =
             Parser::expect("Type expression", self.peek(), self.parse_type_expression())?;
-        Ok(Some(RecordTypeField { name: Ident(ident), ty: typ_expr }))
+        Ok(Some(RecordTypeField { name: self.ident_id(ident_id), ty: typ_expr }))
     }
 
     fn parse_type_expression(&mut self) -> ParseResult<Option<TypeExpression>> {
@@ -440,7 +481,7 @@ impl<'a> Parser<'a> {
                 Ok(Some(TypeExpression::Bool(tok.span)))
             } else {
                 self.tokens.advance();
-                Ok(Some(TypeExpression::Name(Ident(ident.to_string()), tok.span)))
+                Ok(Some(TypeExpression::Name(self.ident_id(ident), tok.span)))
             }
         } else if tok.kind == OpenBrace {
             let open_brace = self.expect_eat_token(OpenBrace)?;
@@ -468,7 +509,7 @@ impl<'a> Parser<'a> {
         };
         match self.parse_expression() {
             Ok(Some(expr)) => {
-                let name = if named { Some(self.tok_chars(one).to_string()) } else { None };
+                let name = if named { Some(self.ident_id(self.tok_chars(one))) } else { None };
                 Ok(Some(FnArg { name, value: expr }))
             }
             Ok(None) => {
@@ -495,10 +536,9 @@ impl<'a> Parser<'a> {
             let name = parser.expect_eat_ident()?;
             parser.expect_eat_token(Colon)?;
             let expr = Parser::expect("expression", parser.peek(), parser.parse_expression())?;
-            Ok(RecordField { name: Ident(name), expr })
+            Ok(RecordField { name: self.ident_id(name), expr })
         })?;
-        let mut span = open_brace.span;
-        span.end = fields_span.end;
+        let span = open_brace.span.extended(&fields_span);
         Ok(Some(Record { fields, span }))
     }
 
@@ -520,7 +560,7 @@ impl<'a> Parser<'a> {
                         let span = result.get_span().extended(&next.span);
                         result = Expression::FieldAccess(FieldAccess {
                             base: Box::new(result),
-                            target: Ident(target_ident),
+                            target: self.ident_id(target_ident),
                             span,
                         })
                     }
@@ -542,8 +582,7 @@ impl<'a> Parser<'a> {
                 Some(op_kind) => {
                     let operand2 =
                         Parser::expect("rhs of binary op", self.peek(), self.parse_expression())?;
-                    let mut span = expr.get_span();
-                    span.end = operand2.get_span().end;
+                    let span = expr.get_span().extended(&operand2.get_span());
                     return Ok(Expression::BinaryOp(BinaryOp {
                         operation: op_kind,
                         operand1: Box::new(expr),
@@ -570,15 +609,11 @@ impl<'a> Parser<'a> {
                 // Eat the OpenParen
                 self.tokens.advance();
                 match self.eat_delimited(Comma, CloseParen, |p| Parser::expect_fn_arg(p)) {
-                    Ok((args, args_span)) => {
-                        let mut span = first.span;
-                        span.end = args_span.end + 1;
-                        Ok(Some(Expression::FnCall(FnCall {
-                            name: Ident(self.tok_chars(first).to_string()),
-                            args,
-                            span,
-                        })))
-                    }
+                    Ok((args, args_span)) => Ok(Some(Expression::FnCall(FnCall {
+                        name: self.ident_id(self.tok_chars(first)),
+                        args,
+                        span: first.span.extended(&args_span),
+                    }))),
                     Err(e) => Err(ParseError::ExpectedNode(
                         "function arguments".to_string(),
                         self.peek(),
@@ -589,7 +624,7 @@ impl<'a> Parser<'a> {
                 // The last thing it can be is a simple variable reference expression
                 self.tokens.advance();
                 Ok(Some(Expression::Variable(Variable {
-                    ident: Ident(self.tok_chars(first).to_string()),
+                    ident: self.ident_id(self.tok_chars(first)),
                     span: first.span,
                 })))
             }
@@ -598,8 +633,7 @@ impl<'a> Parser<'a> {
             // If you want a void or empty block, the required syntax is { () }
             trace!("parse_expr {:?} {:?} {:?}", first, second, third);
             if second.kind == CloseBrace {
-                let mut span = first.span;
-                span.end = second.span.end;
+                let span = first.span.extended(&second.span);
                 Ok(Some(Expression::Record(Record { fields: vec![], span })))
             } else if second.kind == Text && third.kind == Colon {
                 let record = Parser::expect("record", first, self.parse_record())?;
@@ -645,10 +679,9 @@ impl<'a> Parser<'a> {
         self.expect_eat_token(Equals)?;
         let initializer_expression =
             Parser::expect("expression", self.peek(), self.parse_expression())?;
-        let mut span = eaten_keyword.span;
-        span.end = initializer_expression.get_span().end;
+        let span = eaten_keyword.span.extended(&initializer_expression.get_span());
         Ok(Some(ValDef {
-            name: Ident(ident),
+            name: self.ident_id(ident),
             ty: typ,
             value: initializer_expression,
             is_mutable: mutable,
@@ -666,9 +699,8 @@ impl<'a> Parser<'a> {
         let typ = Parser::expect("type_expression", self.peek(), self.parse_type_expression())?;
         self.expect_eat_token(Equals)?;
         let value_expr = Parser::expect("expression", self.peek(), self.parse_expression())?;
-        let mut span = keyword_val_token.span;
-        span.end = value_expr.get_span().end;
-        ParseResult::Ok(Some(ConstVal { name: Ident(ident), ty: typ, value_expr, span }))
+        let span = keyword_val_token.span.extended(&value_expr.get_span());
+        ParseResult::Ok(Some(ConstVal { name: self.ident_id(ident), ty: typ, value_expr, span }))
     }
 
     fn parse_assignment(&mut self) -> ParseResult<Option<Assignment>> {
@@ -685,10 +717,9 @@ impl<'a> Parser<'a> {
             self.peek(),
             self.parse_expression(),
         )?;
-        let mut span = ident_token.span;
-        span.end = expr.get_span().end;
+        let span = ident_token.span.extended(&expr.get_span());
         let ident = self.tok_chars(ident_token).to_string();
-        Ok(Some(Assignment { ident: Ident(ident), expr, span }))
+        Ok(Some(Assignment { ident: self.ident_id(ident), expr, span }))
     }
 
     fn eat_fn_arg_def(&mut self) -> ParseResult<FnArgDef> {
@@ -696,7 +727,7 @@ impl<'a> Parser<'a> {
         let ident = self.expect_eat_ident()?;
         self.expect_eat_token(Colon)?;
         let typ = Parser::expect("type_expression", self.peek(), self.parse_type_expression())?;
-        Ok(FnArgDef { name: Ident(ident), ty: typ })
+        Ok(FnArgDef { name: self.ident_id(ident), ty: typ })
     }
 
     fn eat_fndef_args(&mut self) -> ParseResult<(Vec<FnArgDef>, Span)> {
@@ -764,9 +795,8 @@ impl<'a> Parser<'a> {
             } else {
                 None
             };
-            let mut span = if_keyword.span;
-            span.end =
-                alt.as_ref().map(|a| a.get_span().end).unwrap_or(consequent_expr.get_span().end);
+            let end_span = alt.as_ref().map(|a| a.get_span()).unwrap_or(consequent_expr.get_span());
+            let span = if_keyword.span.extended(&end_span);
             let if_expr =
                 IfExpr { cond: condition_expr.into(), cons: consequent_expr.into(), alt, span };
             Ok(Some(if_expr))
@@ -783,8 +813,7 @@ impl<'a> Parser<'a> {
             Ok(Some(BlockStmt::ValDef(val_def)))
         } else if let Some(return_token) = self.eat_token(KeywordReturn) {
             if let Some(ret_val) = self.parse_expression()? {
-                let mut span = return_token.span;
-                span.end = ret_val.get_span().end;
+                let span = return_token.span.extended(&ret_val.get_span());
                 let return_stmt = ReturnStmt { expr: ret_val, span };
                 Ok(Some(BlockStmt::ReturnStmt(return_stmt)))
             } else {
@@ -811,8 +840,7 @@ impl<'a> Parser<'a> {
             |p: &mut Parser| Parser::expect("statement", p.peek(), Parser::parse_statement(p));
         let (block_statements, statements_span) =
             self.eat_delimited(Semicolon, CloseBrace, closure)?;
-        let mut span = block_start.span;
-        span.end = statements_span.end;
+        let span = block_start.span.extended(&statements_span);
         Ok(Some(Block { stmts: block_statements, span }))
     }
 
@@ -829,7 +857,7 @@ impl<'a> Parser<'a> {
         let block = self.parse_block()?;
         let mut span = fn_keyword.span;
         span.end = block.as_ref().map(|b| b.span.end).unwrap_or(args_span.end);
-        Ok(Some(FnDef { name: Ident(ident), args, ret_type, block, span }))
+        Ok(Some(FnDef { name: self.ident_id(ident), args, ret_type, block, span }))
     }
 
     fn parse_typedef(&mut self) -> ParseResult<Option<TypeDefn>> {
@@ -839,9 +867,8 @@ impl<'a> Parser<'a> {
             let equals = self.expect_eat_token(Equals)?;
             let type_expr =
                 Parser::expect("Type expression", equals, self.parse_type_expression())?;
-            let mut span = keyword_type.span;
-            span.end = type_expr.get_span().end;
-            Ok(Some(TypeDefn { name: Ident(ident), value_expr: type_expr, span }))
+            let span = keyword_type.span.extended(&type_expr.get_span());
+            Ok(Some(TypeDefn { name: self.ident_id(ident), value_expr: type_expr, span }))
         } else {
             Ok(None)
         }
@@ -869,7 +896,13 @@ impl<'a> Parser<'a> {
         while let Some(def) = self.parse_definition()? {
             defs.push(def)
         }
-        Ok(Module { name: Ident(filename.to_string()), defs })
+        let ident = self.ident_id(filename);
+        Ok(Module {
+            name: filename.to_string(),
+            name_id: ident,
+            defs,
+            identifiers: self.identifiers.clone(),
+        })
     }
 }
 

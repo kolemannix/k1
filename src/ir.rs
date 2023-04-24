@@ -1,6 +1,8 @@
 use crate::lex::Span;
 use crate::parse;
-use crate::parse::{Block, BlockStmt, Definition, Expression, FnDef, Ident, Literal, Module};
+use crate::parse::{
+    Block, BlockStmt, Definition, Expression, FnDef, IdentifierId, Literal, Module,
+};
 use crate::trace;
 use anyhow::{anyhow, bail, Result};
 use std::collections::HashMap;
@@ -16,7 +18,7 @@ pub type TypeId = u32;
 
 #[derive(Debug, Clone)]
 pub struct RecordDefnField {
-    pub name: String,
+    pub name: IdentifierId,
     pub ty: TypeRef,
     pub index: usize,
 }
@@ -28,8 +30,8 @@ pub struct RecordDefn {
 }
 
 impl RecordDefn {
-    pub fn find_field(&self, field_name: &Ident) -> Option<RecordDefnField> {
-        self.fields.iter().find(|field| field.name == field_name.0).cloned()
+    pub fn find_field(&self, field_name: IdentifierId) -> Option<RecordDefnField> {
+        self.fields.iter().find(|field| field.name == field_name).cloned()
     }
 }
 
@@ -64,7 +66,7 @@ pub struct IrBlock {
 
 #[derive(Debug, Clone)]
 pub struct FuncParam {
-    pub name: String,
+    pub name: IdentifierId,
     pub variable_id: VariableId,
     pub position: usize,
     pub ir_type: TypeRef,
@@ -72,7 +74,7 @@ pub struct FuncParam {
 
 #[derive(Debug, Clone)]
 pub struct Function {
-    pub name: String,
+    pub name: IdentifierId,
     pub ret_type: TypeRef,
     pub params: Vec<FuncParam>,
     pub block: IrBlock,
@@ -130,7 +132,7 @@ pub struct FunctionCall {
 
 #[derive(Debug, Clone)]
 pub struct RecordField {
-    pub name: String,
+    pub name: IdentifierId,
     pub expr: IrExpr,
 }
 
@@ -296,7 +298,7 @@ pub type IrGenResult<A> = anyhow::Result<A>;
 
 #[derive(Debug)]
 pub struct Variable {
-    pub name: String,
+    pub name: IdentifierId,
     pub ir_type: TypeRef,
     pub is_mutable: bool,
     pub owner_scope: Option<ScopeId>,
@@ -322,39 +324,39 @@ pub struct IrModule {
 
 #[derive(Default)]
 pub struct Scope {
-    variables: HashMap<String, VariableId>,
-    functions: HashMap<String, FunctionId>,
-    types: HashMap<String, TypeRef>,
+    variables: HashMap<IdentifierId, VariableId>,
+    functions: HashMap<IdentifierId, FunctionId>,
+    types: HashMap<IdentifierId, TypeRef>,
     parent: Option<Box<Scope>>,
 }
 impl Scope {
-    fn find_recursive(&self, name: impl AsRef<str>) -> Option<Index> {
-        match self.find_variable(&name) {
+    fn find_recursive(&self, ident: IdentifierId) -> Option<Index> {
+        match self.find_variable(ident) {
             Some(r) => Some(r),
-            None => self.parent.as_ref().and_then(|p| p.find_recursive(name)),
+            None => self.parent.as_ref().and_then(|p| p.find_recursive(ident)),
         }
     }
-    fn find_variable(&self, name: impl AsRef<str>) -> Option<VariableId> {
-        self.variables.get(name.as_ref()).copied()
+    fn find_variable(&self, ident: IdentifierId) -> Option<VariableId> {
+        self.variables.get(&ident).copied()
     }
-    fn add_variable(&mut self, name: String, value: VariableId) {
-        self.variables.insert(name, value);
-    }
-
-    fn add_type(&mut self, name: String, ty: TypeRef) {
-        self.types.insert(name, ty);
+    fn add_variable(&mut self, ident: IdentifierId, value: VariableId) {
+        self.variables.insert(ident, value);
     }
 
-    fn find_type(&self, name: impl AsRef<str>) -> Option<TypeRef> {
-        self.types.get(name.as_ref()).copied()
+    fn add_type(&mut self, ident: IdentifierId, ty: TypeRef) {
+        self.types.insert(ident, ty);
     }
 
-    fn add_function(&mut self, name: String, function_id: FunctionId) {
-        self.functions.insert(name, function_id);
+    fn find_type(&self, ident: IdentifierId) -> Option<TypeRef> {
+        self.types.get(&ident).copied()
     }
 
-    fn find_function(&self, name: impl AsRef<str>) -> Option<FunctionId> {
-        self.functions.get(name.as_ref()).copied()
+    fn add_function(&mut self, ident: IdentifierId, function_id: FunctionId) {
+        self.functions.insert(ident, function_id);
+    }
+
+    fn find_function(&self, ident: IdentifierId) -> Option<FunctionId> {
+        self.functions.get(&ident).copied()
     }
 }
 
@@ -367,9 +369,9 @@ fn simple_fail<A, T: AsRef<str>>(s: T) -> IrGenResult<A> {
 }
 
 impl IrModule {
-    pub fn new(module: Rc<Module>) -> IrModule {
+    pub fn new(parsed_module: Rc<Module>) -> IrModule {
         let mut module = IrModule {
-            ast: module,
+            ast: parsed_module,
             src: String::new(),
             functions: Vec::new(),
             variables: Vec::new(),
@@ -378,19 +380,19 @@ impl IrModule {
             scopes: vec![Scope::default()],
         };
         // TODO: Would be much better to write a prelude file
-        // in the source lang with some "extern" function definitions
+        //       in the source lang with some "extern" function definitions
         let println_arg = Variable {
-            name: "println_value".to_string(),
+            name: parsed_module.ident_id("println_value"),
             ir_type: TypeRef::Int,
             is_mutable: false,
             owner_scope: Some(0),
         };
         let println_arg_id = module.add_variable(println_arg);
         let intrinsic_functions = vec![Function {
-            name: "println".to_string(),
+            name: parsed_module.ident_id("println"),
             ret_type: TypeRef::Unit,
             params: vec![FuncParam {
-                name: "value".to_string(),
+                name: parsed_module.ident_id("value"),
                 variable_id: println_arg_id,
                 position: 0,
                 ir_type: TypeRef::Int,
@@ -412,7 +414,7 @@ impl IrModule {
     }
 
     pub fn name(&self) -> &str {
-        &self.ast.name.0
+        &self.ast.name
     }
 
     fn add_type(&mut self, typ: Type) -> TypeId {
@@ -425,24 +427,25 @@ impl IrModule {
         &self.types[type_id as usize]
     }
 
-    fn add_variable_to_scope(&mut self, scope_id: ScopeId, name: String, variable_id: VariableId) {
-        self.scopes[scope_id as usize].add_variable(name, variable_id);
-    }
-
-    fn find_variable_in_scope(
-        &self,
+    fn add_variable_to_scope(
+        &mut self,
         scope_id: ScopeId,
-        name: impl AsRef<str>,
-    ) -> Option<VariableId> {
-        self.scopes[scope_id as usize].find_variable(name)
+        ident: IdentifierId,
+        variable_id: VariableId,
+    ) {
+        self.scopes[scope_id as usize].add_variable(ident, variable_id);
     }
 
-    fn add_type_to_scope(&mut self, scope_id: ScopeId, name: String, ty: TypeRef) {
-        self.scopes[scope_id as usize].add_type(name, ty);
+    fn find_variable_in_scope(&self, scope_id: ScopeId, ident: IdentifierId) -> Option<VariableId> {
+        self.scopes[scope_id as usize].find_variable(ident)
     }
 
-    fn find_type_in_scope(&self, scope_id: ScopeId, name: impl AsRef<str>) -> Option<TypeRef> {
-        self.scopes[scope_id as usize].find_type(name)
+    fn add_type_to_scope(&mut self, scope_id: ScopeId, ident: IdentifierId, ty: TypeRef) {
+        self.scopes[scope_id as usize].add_type(ident, ty);
+    }
+
+    fn find_type_in_scope(&self, scope_id: ScopeId, ident: IdentifierId) -> Option<TypeRef> {
+        self.scopes[scope_id as usize].find_type(ident)
     }
 
     fn eval_type_expr(
@@ -456,16 +459,15 @@ impl IrModule {
             parse::TypeExpression::Record(record_defn) => {
                 let mut fields: Vec<RecordDefnField> = Vec::new();
                 for (index, ast_field) in record_defn.fields.iter().enumerate() {
-                    let name = ast_field.name.0.clone();
                     let ty = self.eval_type_expr(&ast_field.ty, scope_id)?;
-                    fields.push(RecordDefnField { name, ty, index })
+                    fields.push(RecordDefnField { name: ast_field.name, ty, index })
                 }
                 let record_defn = RecordDefn { fields, span: record_defn.span };
                 let type_id = self.add_type(Type::Record(record_defn));
                 Ok(TypeRef::TypeId(type_id))
             }
             parse::TypeExpression::Name(ident, span) => {
-                let ty_ref = self.find_type_in_scope(scope_id, &ident);
+                let ty_ref = self.find_type_in_scope(scope_id, *ident);
                 ty_ref.ok_or(anyhow!("could not find type for identifier {:?}", ident))
             }
         }
@@ -530,13 +532,13 @@ impl IrModule {
                 };
                 let expr = IrExpr::Literal(IrLiteral::Int(num, *span));
                 let variable_id = self.add_variable(Variable {
-                    name: name.0.clone(),
+                    name: *name,
                     ir_type,
                     is_mutable: false,
                     owner_scope: None,
                 });
                 self.constants.push(Constant { variable_id, expr, ir_type, span: *span });
-                self.add_variable_to_scope(scope_id, name.0.clone(), variable_id);
+                self.add_variable_to_scope(scope_id, *name, variable_id);
                 Ok(variable_id)
             }
         }
@@ -613,11 +615,11 @@ impl IrModule {
                 for (index, ast_field) in ast_record.fields.iter().enumerate() {
                     let expr = self.eval_expr(&ast_field.expr, scope_id)?;
                     field_types.push(RecordDefnField {
-                        name: ast_field.name.0.clone(),
+                        name: ast_field.name,
                         ty: expr.get_type(),
                         index,
                     });
-                    fields.push(RecordField { name: ast_field.name.0.clone(), expr });
+                    fields.push(RecordField { name: ast_field.name, expr });
                 }
                 let record_type = RecordDefn { fields: field_types, span: ast_record.span };
                 let record_ty = self.add_type(Type::Record(record_type));
@@ -709,8 +711,8 @@ impl IrModule {
             }
             Expression::Variable(variable) => {
                 let var_index = self
-                    .find_variable_in_scope(scope_id, &variable.ident)
-                    .ok_or(simple_err(format!("Identifier not found: {}", variable.ident.0)))?;
+                    .find_variable_in_scope(scope_id, variable.ident)
+                    .ok_or(simple_err(format!("Identifier not found: {}", variable.ident)))?;
                 let v = self.get_variable(var_index);
                 let expr = IrExpr::Variable(VariableExpr {
                     ir_type: v.ir_type,
@@ -722,13 +724,13 @@ impl IrModule {
             Expression::FieldAccess(field_access) => {
                 let base_expr = self.eval_expr(&field_access.base, scope_id)?;
                 let TypeRef::TypeId(type_id) = base_expr.get_type() else {
-                    bail!("Cannot access field {} on non-record type", field_access.target.0);
+                    bail!("Cannot access field {} on non-record type", field_access.target);
                 };
                 let Type::Record(record_type) = self.get_type(type_id) else {
-                    bail!("Cannot access field {} on non-record type", field_access.target.0);
+                    bail!("Cannot access field {} on non-record type", field_access.target);
                 };
-                let target_field = record_type.find_field(&field_access.target).ok_or(
-                    simple_err(format!("Field {} not found on record type", field_access.target.0)),
+                let target_field = record_type.find_field(field_access.target).ok_or(
+                    simple_err(format!("Field {} not found on record type", field_access.target)),
                 )?;
                 Ok(IrExpr::FieldAccess(FieldAccess {
                     base: Box::new(base_expr),
@@ -742,15 +744,17 @@ impl IrModule {
             }
             Expression::FnCall(fn_call) => {
                 let function_id = self.scopes[scope_id as usize]
-                    .find_function(&fn_call.name)
-                    .ok_or(simple_err(format!("Function not found: {}", fn_call.name.as_ref())))?;
+                    .find_function(fn_call.name)
+                    .ok_or(simple_err(format!("Function not found: {}", fn_call.name)))?;
                 // TODO: cloning a function
+                // Can I 'split the borrow' here by extracting this into a function
+                // that doesn't take all of self mutably
                 // Not sure if RC or clone is lighter-weight here... it does clone a vec
                 let function = self.functions[function_id as usize].clone();
                 let mut fn_args: Vec<IrExpr> = Vec::new();
                 for fn_param in &function.params {
                     let matching_param_by_name =
-                        fn_call.args.iter().find(|arg| arg.name.as_ref() == Some(&fn_param.name));
+                        fn_call.args.iter().find(|arg| arg.name == Some(fn_param.name));
                     let matching_param =
                         matching_param_by_name.or(fn_call.args.get(fn_param.position));
                     if let Some(param) = matching_param {
@@ -784,7 +788,7 @@ impl IrModule {
                 let ir_type = self.eval_type_expr(provided_type, scope_id)?;
                 let variable_id = self.add_variable(Variable {
                     is_mutable: val_def.is_mutable,
-                    name: val_def.name.0.clone(),
+                    name: val_def.name,
                     ir_type,
                     owner_scope: Some(scope_id),
                 });
@@ -797,18 +801,18 @@ impl IrModule {
                     initializer: value_expr,
                     span: val_def.span,
                 });
-                self.add_variable_to_scope(scope_id, val_def.name.0.clone(), variable_id);
+                self.add_variable_to_scope(scope_id, val_def.name, variable_id);
                 Ok(val_def_expr)
             }
             BlockStmt::Assignment(assignment) => {
                 let expr = self.eval_expr(&assignment.expr, scope_id)?;
                 let dest =
-                    self.find_variable_in_scope(scope_id, &assignment.ident).ok_or(simple_err(
-                        format!("Variable {} not found in scope {}", assignment.ident.0, scope_id),
+                    self.find_variable_in_scope(scope_id, assignment.ident).ok_or(simple_err(
+                        format!("Variable {} not found in scope {}", assignment.ident, scope_id),
                     ))?;
                 let var = self.get_variable(dest);
                 if !var.is_mutable {
-                    anyhow::bail!("Cannot assign to immutable variable {}", assignment.ident.0)
+                    anyhow::bail!("Cannot assign to immutable variable {}", assignment.ident)
                 }
                 if self.typecheck_types(var.ir_type, expr.get_type()).is_err() {
                     return simple_fail("Typecheck of assignment failed");
@@ -849,19 +853,14 @@ impl IrModule {
         for (idx, fn_arg) in fn_def.args.iter().enumerate() {
             let ir_type = self.eval_type_expr(&fn_arg.ty, scope_id)?;
             let variable = Variable {
-                name: fn_arg.name.0.clone(),
+                name: fn_arg.name,
                 ir_type,
                 is_mutable: false,
                 owner_scope: Some(scope_id),
             };
             let variable_id = self.add_variable(variable);
-            params.push(FuncParam {
-                name: fn_arg.name.0.clone(),
-                variable_id,
-                position: idx,
-                ir_type,
-            });
-            self.add_variable_to_scope(scope_id, fn_arg.name.0.clone(), variable_id);
+            params.push(FuncParam { name: fn_arg.name, variable_id, position: idx, ir_type });
+            self.add_variable_to_scope(scope_id, fn_arg.name, variable_id);
         }
         let body_block = fn_def
             .block
@@ -878,21 +877,21 @@ impl IrModule {
                 if self.typecheck_types(given_ir_type, body_block.ret_type).is_err() {
                     return simple_fail(format!(
                         "Function {} ret type mismatch: {:?} {:?}",
-                        &fn_def.name.0, given_ir_type, body_block.ret_type
+                        fn_def.name, given_ir_type, body_block.ret_type
                     ));
                 }
                 given_ir_type
             }
         };
         let function = Function {
-            name: fn_def.name.0.clone(),
+            name: fn_def.name,
             ret_type,
             params,
             block: body_block,
             is_intrinsic: false,
         };
         let function_id = self.add_function(function);
-        self.scopes[scope_id as usize].add_function(fn_def.name.0.clone(), function_id);
+        self.scopes[scope_id as usize].add_function(fn_def.name, function_id);
         Ok(function_id)
     }
     fn eval_definition(&mut self, def: &Definition) -> IrGenResult<()> {
@@ -909,7 +908,7 @@ impl IrModule {
             Definition::Type(type_defn) => {
                 let scope_id = 0;
                 let typ = self.eval_type_expr(&type_defn.value_expr, scope_id)?;
-                self.add_type_to_scope(scope_id, type_defn.name.0.clone(), typ);
+                self.add_type_to_scope(scope_id, type_defn.name, typ);
                 Ok(())
             }
         }
@@ -925,7 +924,7 @@ impl IrModule {
 impl Display for IrModule {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str("Module ")?;
-        f.write_str(&self.ast.name.0)?;
+        f.write_str(&self.ast.name)?;
         f.write_str("\n")?;
         for (id, variable) in self.variables.iter().enumerate() {
             f.write_fmt(format_args!("id={id:02} {variable:#?}\n"))?;

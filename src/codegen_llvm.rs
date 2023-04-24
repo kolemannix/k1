@@ -148,7 +148,7 @@ impl<'ctx> Codegen<'ctx> {
     pub fn create(ctx: &'ctx Context, module: Rc<IrModule>) -> Codegen<'ctx> {
         let builder = ctx.create_builder();
         let char_type = ctx.i8_type();
-        let llvm_module = ctx.create_module(&module.ast.name.0);
+        let llvm_module = ctx.create_module(&module.ast.name);
         let pointers = HashMap::new();
         let format_str = {
             let global = llvm_module.add_global(ctx.i8_type().array_type(3), None, "formatString");
@@ -484,7 +484,7 @@ impl<'ctx> Codegen<'ctx> {
                     let destination_ptr =
                         *self.variables.get(variable_id).expect("Missing variable");
                     let initializer = self.codegen_expr(&assignment.value);
-                    let store = self.store(&destination_ptr, initializer);
+                    let _store = self.store(&destination_ptr, initializer);
                     last = Some(self.builtin_types.unit_value.as_basic_value_enum().into())
                 }
             }
@@ -554,7 +554,6 @@ impl<'ctx> Codegen<'ctx> {
     pub fn optimize(&mut self) -> CodegenResult<()> {
         Target::initialize_aarch64(&InitializationConfig::default());
         let triple = TargetMachine::get_default_triple();
-        // let triple = TargetTriple::create("arm64-apple-darwin");
         let target = Target::from_triple(&triple).unwrap();
         self.llvm_module.verify().map_err(|err| {
             anyhow::anyhow!("Module '{}' failed validation: {}", self.name(), err.to_string_lossy())
