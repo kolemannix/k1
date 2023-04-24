@@ -49,7 +49,7 @@ pub fn compile_single_file_program<'ctx>(
 }
 
 fn main() -> Result<()> {
-    static_assert_size!(parse::Definition, 168);
+    static_assert_size!(parse::Definition, 144);
     println!("Size of ast::Definition: {}", std::mem::size_of::<parse::Definition>());
     println!("Size of ast::BlockStmt: {}", std::mem::size_of::<parse::BlockStmt>());
     println!("Size of ast::Expression: {}", std::mem::size_of::<parse::Expression>());
