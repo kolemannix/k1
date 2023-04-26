@@ -1,0 +1,6 @@
+val x: Int = 3
+
+fn main(x: Int): Int { 
+  val x: Int = 42;
+  return x;
+}

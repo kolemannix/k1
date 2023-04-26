@@ -2,7 +2,7 @@ fn main(x: Int): Int {
   val t: Bool = true;
   val f: Bool = false;
   val res: Bool = t or f;
-  println(t or f);
-  println(t and f);
+  printInt(t or f);
+  printInt(t and f);
   return 0;
 }

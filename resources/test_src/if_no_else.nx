@@ -1,6 +1,6 @@
 fn main(): Int {
   if true {
-    println(42)
+    printInt(42)
   };
   return 0;
 }

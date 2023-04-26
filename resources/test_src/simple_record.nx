@@ -9,8 +9,8 @@ fn main(): Int {
   val zero: Point = {
     x: 0, y: 298, z: 42, isGood: true
   };
-  println(zero.z);
-  println(zero.isGood);
-  println(zero.y);
+  printInt(zero.z);
+  printInt(zero.isGood);
+  printInt(zero.y);
   return 0;
 }
