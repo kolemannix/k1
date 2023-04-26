@@ -19,11 +19,11 @@ fn basic_fn() -> Result<(), ParseError> {
       y = add(42, 42);
       return add(x, y);
     }"#;
-    let Module { name, defs } = parse_text(src, "basic_fn.nx")?;
-    println!("defs {:?}", defs);
-    assert_eq!(name.0, "basic_fn.nx".to_string());
-    if let Some(Definition::FnDef(fndef)) = defs.first() {
-        assert_eq!(fndef.name.0, "basic")
+    let module = parse_text(src, "basic_fn.nx")?;
+    println!("defs {:?}", module.defs);
+    assert_eq!(&module.name, "basic_fn.nx");
+    if let Some(Definition::FnDef(fndef)) = module.defs.first() {
+        assert_eq!(module.get_ident_name(fndef.name), "basic")
     } else {
         panic!("no definitions for basic_fn")
     }
@@ -78,9 +78,10 @@ fn fn_args_literal() -> Result<(), String> {
     let input = "f(myarg = 42,42,\"abc\")";
     let mut parser = setup(input);
     let result = parser.parse_expression();
-    if let Ok(Some(Expression::FnCall(FnCall { name, args, span }))) = result {
-        assert_eq!(name.0, "f");
-        assert_eq!(args[0].name.as_deref(), Some("myarg"));
+    if let Ok(Some(Expression::FnCall(fn_call))) = result {
+        let args = &fn_call.args;
+        assert_eq!(parser.get_ident_name(fn_call.name), "f");
+        assert_eq!(parser.get_ident_name(args[0].name.unwrap()), "myarg");
         assert!(Expression::is_literal(&args[0].value));
         assert!(Expression::is_literal(&args[1].value));
         assert!(Expression::is_literal(&args[2].value));
@@ -107,10 +108,10 @@ fn dot_accessor() -> ParseResult<()> {
     let mut parser = setup(input);
     let result = parser.parse_expression()?.unwrap();
     let Expression::FieldAccess(acc) = result else { panic!() };
-    assert_eq!(acc.target.0, "c");
+    assert_eq!(acc.target.0, 2);
     let Expression::FieldAccess(acc2) = *acc.base else {panic!() };
-    assert_eq!(acc2.target.0, "b");
+    assert_eq!(acc2.target.0, 1);
     let Expression::Variable(v) = *acc2.base else { panic!() };
-    assert_eq!(v.ident.0, "a");
+    assert_eq!(v.ident.0, 0);
     Ok(())
 }

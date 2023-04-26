@@ -1,19 +1,19 @@
-fn foo(): Bool {
-  mut result: Bool = false;
+fn foo(): Int {
+  mut result: Int = 0;
   if true {
-    result = true;
+    result = 11;
   } else {
-    result = false;
+    result = 12;
   };
   return result;
 }
 
 fn main(): Int {
-  println(foo());
+  printInt(foo());
   mut count: Int = 0;
   count = 1;
-  println(count);
+  printInt(count);
   count = 2;
-  println(count);
+  printInt(count);
   return 0;
 }

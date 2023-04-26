@@ -30,7 +30,7 @@ struct BuiltinTypes<'ctx> {
     string: StructType<'ctx>,
 }
 
-struct BuiltinFunctions<'ctx> {
+struct LibcFunctions<'ctx> {
     printf: FunctionValue<'ctx>,
 }
 
@@ -55,7 +55,7 @@ pub struct Codegen<'ctx> {
     /// and can insert a load as needed. PointerOrValue.as_pointer() or .as_value() or something.
     variables: HashMap<VariableId, Pointer<'ctx>>,
     globals: HashMap<VariableId, GlobalValue<'ctx>>,
-    builtin_functions: BuiltinFunctions<'ctx>,
+    libc_functions: LibcFunctions<'ctx>,
     builtin_globals: HashMap<String, GlobalValue<'ctx>>,
     builtin_types: BuiltinTypes<'ctx>,
     default_address_space: AddressSpace,
@@ -191,7 +191,7 @@ impl<'ctx> Codegen<'ctx> {
             globals,
             llvm_functions: HashMap::new(),
             llvm_types: HashMap::new(),
-            builtin_functions: BuiltinFunctions { printf },
+            libc_functions: LibcFunctions { printf },
             builtin_globals,
             builtin_types,
             default_address_space: AddressSpace::default(),
@@ -211,7 +211,7 @@ impl<'ctx> Codegen<'ctx> {
         let call = self
             .builder
             .build_call(
-                self.builtin_functions.printf,
+                self.libc_functions.printf,
                 &[format_str_ptr.into(), first_arg.into()],
                 "printf",
             )
@@ -232,7 +232,7 @@ impl<'ctx> Codegen<'ctx> {
                 match self.llvm_types.get(&type_id) {
                     None => {
                         // Generate and store the type in here
-                        let module = &self.module.clone();
+                        let module = self.module.clone();
                         let ty = module.get_type(type_id);
                         match ty {
                             Type::Record(record) => {
@@ -272,10 +272,8 @@ impl<'ctx> Codegen<'ctx> {
                 let struct_ptr = self.builder.build_alloca(ty, "record");
                 for (idx, field) in record.fields.iter().enumerate() {
                     let value = self.codegen_expr(&field.expr);
-                    let field_ptr = self
-                        .builder
-                        .build_struct_gep(ty, struct_ptr, idx as u32, &field.name)
-                        .unwrap();
+                    let field_ptr =
+                        self.builder.build_struct_gep(ty, struct_ptr, idx as u32, "").unwrap();
                     self.builder.build_store(field_ptr, value.loaded_value(&self.builder));
                 }
                 GeneratedValue::Pointer(Pointer { pointee_ty: ty, pointer: struct_ptr })
@@ -425,34 +423,32 @@ impl<'ctx> Codegen<'ctx> {
             IrExpr::FunctionCall(call) => {
                 let ir_module = self.module.clone();
                 let callee = ir_module.get_function(call.callee_function_id);
-                if !&callee.is_intrinsic {
-                    let function_value: FunctionValue = self
-                        .llvm_module
-                        .get_function(&callee.name)
-                        .unwrap_or_else(|| panic!("LLVM function not found: {}", callee.name));
-                    let args: Vec<BasicMetadataValueEnum<'ctx>> = call
-                        .args
-                        .iter()
-                        .map(|arg_expr| {
-                            let basic_value = self.codegen_expr(arg_expr);
-                            BasicMetadataValueEnum::from(basic_value.as_basic_value_enum())
-                        })
-                        .collect();
-                    let callsite_value =
-                        self.builder.build_call(function_value, &args, &callee.name);
-                    // Call return Right for void, and Left for values
-                    let result_value =
-                        callsite_value.try_as_basic_value().left().expect("function returned void");
-                    result_value.into()
-                } else if callee.name == "println" {
-                    // TODO: This is our first 'intrinsic'
-                    // Support intrinsics properly in the IR or prelude source or something
-                    self.build_printf_call(call);
-                    let ptr = self.builder.build_alloca(self.builtin_types.unit, "println_res_ptr");
-                    self.builder.build_store(ptr, self.builtin_types.unit.const_int(0, false));
-                    self.builtin_types.unit_value.as_basic_value_enum().into()
-                } else {
-                    todo!("Unexpected intrinic: {}", callee.name);
+                match callee.intrinsic_type {
+                    None => {
+                        let function_value = *self
+                            .llvm_functions
+                            .get(&call.callee_function_id)
+                            .unwrap_or_else(|| panic!("LLVM function not found: {}", callee.name));
+                        let args: Vec<BasicMetadataValueEnum<'ctx>> = call
+                            .args
+                            .iter()
+                            .map(|arg_expr| {
+                                let basic_value = self.codegen_expr(arg_expr);
+                                BasicMetadataValueEnum::from(basic_value.as_basic_value_enum())
+                            })
+                            .collect();
+                        let callsite_value = self.builder.build_call(function_value, &args, "");
+                        // Call return Right for void, and Left for values
+                        let result_value = callsite_value
+                            .try_as_basic_value()
+                            .left()
+                            .expect("function returned void");
+                        result_value.into()
+                    }
+                    Some(IntrinsicFunctionType::PrintInt) => {
+                        self.build_printf_call(call);
+                        self.builtin_types.unit_value.as_basic_value_enum().into()
+                    }
                 }
             }
         }
@@ -501,15 +497,11 @@ impl<'ctx> Codegen<'ctx> {
     }
     pub fn codegen_module(&mut self) {
         for constant in &self.module.constants {
-            let variable = self.module.get_variable(constant.variable_id);
             match constant.expr {
                 IrExpr::Literal(IrLiteral::Int(i64, _)) => {
                     let llvm_ty = self.builtin_types.i64;
-                    let llvm_val = self.llvm_module.add_global(
-                        llvm_ty,
-                        Some(AddressSpace::default()),
-                        &variable.name,
-                    );
+                    let llvm_val =
+                        self.llvm_module.add_global(llvm_ty, Some(AddressSpace::default()), "");
                     llvm_val.set_constant(true);
                     llvm_val.set_initializer(&llvm_ty.const_int(i64 as u64, false));
                     self.globals.insert(constant.variable_id, llvm_val);
@@ -517,8 +509,12 @@ impl<'ctx> Codegen<'ctx> {
                 _ => todo!("constant must be int"),
             }
         }
-        for function in &self.module.clone().functions {
-            if function.is_intrinsic {
+        // TODO: It is gross to assume the ID is the index here, just because its implemented
+        //       that way. We should expose a way to iterate that provides the ID from the IR module
+        //       This will matter once the ID is more than just the index (it will at least need
+        //       module ID)
+        for (function_id, function) in self.module.clone().functions.iter().enumerate() {
+            if function.intrinsic_type.is_some() {
                 continue;
             }
             let param_types: Vec<BasicMetadataTypeEnum> = function
@@ -532,14 +528,17 @@ impl<'ctx> Codegen<'ctx> {
                 BasicMetadataTypeEnum::PointerType(p) => p.fn_type(&param_types, false),
                 _ => panic!("Unexpected function llvm type"),
             };
-            let fn_val = self.llvm_module.add_function(&function.name, fn_ty, None);
+            let name = self.module.ast.identifiers.borrow().get_name(function.name);
+            let fn_val = self.llvm_module.add_function(name, fn_ty, None);
+            self.llvm_functions.insert(function_id as u32, fn_val);
             let entry_block = self.ctx.append_basic_block(fn_val, "entry");
             self.builder.position_at_end(entry_block);
             for (i, param) in fn_val.get_param_iter().enumerate() {
                 let ir_param = &function.params[i];
-                param.set_name(&ir_param.name);
+                let param_name = self.module.ast.identifiers.borrow().get_name(ir_param.name);
+                param.set_name(param_name);
                 let ty = self.codegen_type(ir_param.ir_type);
-                let pointer = self.builder.build_alloca(ty, &ir_param.name);
+                let pointer = self.builder.build_alloca(ty, param_name);
                 self.builder.build_store(pointer, param);
                 self.variables.insert(ir_param.variable_id, Pointer { pointer, pointee_ty: ty });
             }

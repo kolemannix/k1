@@ -13,7 +13,6 @@ use std::rc::Rc;
 pub type ScopeId = u32;
 pub type FunctionId = u32;
 pub type VariableId = u32;
-pub type Index = u32;
 pub type TypeId = u32;
 
 #[derive(Debug, Clone)]
@@ -36,7 +35,6 @@ impl RecordDefn {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum TypeRef {
     Unit,
     Int,
@@ -78,12 +76,12 @@ pub struct Function {
     pub ret_type: TypeRef,
     pub params: Vec<FuncParam>,
     pub block: IrBlock,
-    pub is_intrinsic: bool,
+    pub intrinsic_type: Option<IntrinsicFunctionType>,
 }
 
 #[derive(Debug, Clone)]
 pub struct VariableExpr {
-    pub variable_id: Index,
+    pub variable_id: VariableId,
     pub ir_type: TypeRef,
     pub span: Span,
 }
@@ -306,7 +304,7 @@ pub struct Variable {
 
 #[derive(Debug)]
 pub struct Constant {
-    pub variable_id: Index,
+    pub variable_id: VariableId,
     pub expr: IrExpr,
     pub ir_type: TypeRef,
     pub span: Span,
@@ -322,15 +320,22 @@ pub struct IrModule {
     pub scopes: Vec<Scope>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntrinsicFunctionType {
+    PrintInt,
+}
+
 #[derive(Default)]
 pub struct Scope {
     variables: HashMap<IdentifierId, VariableId>,
     functions: HashMap<IdentifierId, FunctionId>,
+    intrinsic_functions: HashMap<FunctionId, IntrinsicFunctionType>,
     types: HashMap<IdentifierId, TypeRef>,
-    parent: Option<Box<Scope>>,
+    parent: Option<ScopeId>,
+    children: Vec<ScopeId>
 }
 impl Scope {
-    fn find_recursive(&self, ident: IdentifierId) -> Option<Index> {
+    fn find_recursive(&self, ident: IdentifierId) -> Option<VariableId> {
         match self.find_variable(ident) {
             Some(r) => Some(r),
             None => self.parent.as_ref().and_then(|p| p.find_recursive(ident)),
@@ -382,17 +387,17 @@ impl IrModule {
         // TODO: Would be much better to write a prelude file
         //       in the source lang with some "extern" function definitions
         let println_arg = Variable {
-            name: parsed_module.ident_id("println_value"),
+            name: module.ast.ident_id("printInt_value"),
             ir_type: TypeRef::Int,
             is_mutable: false,
             owner_scope: Some(0),
         };
         let println_arg_id = module.add_variable(println_arg);
         let intrinsic_functions = vec![Function {
-            name: parsed_module.ident_id("println"),
+            name: module.ast.ident_id("printInt"),
             ret_type: TypeRef::Unit,
             params: vec![FuncParam {
-                name: parsed_module.ident_id("value"),
+                name: module.ast.ident_id("value"),
                 variable_id: println_arg_id,
                 position: 0,
                 ir_type: TypeRef::Int,
@@ -403,10 +408,10 @@ impl IrModule {
                 statements: Vec::with_capacity(0),
                 span: Span::NONE,
             },
-            is_intrinsic: true,
+            intrinsic_type: Some(IntrinsicFunctionType::PrintInt),
         }];
         for function in intrinsic_functions {
-            let name = function.name.clone();
+            let name = function.name;
             let function_id = module.add_function(function);
             module.scopes[0].add_function(name, function_id);
         }
@@ -848,8 +853,11 @@ impl IrModule {
         let ir_block = IrBlock { ret_type, scope_id: 0, statements, span: block.span };
         Ok(ir_block)
     }
-    fn eval_function(&mut self, fn_def: &FnDef, scope_id: ScopeId) -> IrGenResult<Index> {
+    fn eval_function(&mut self, fn_def: &FnDef, scope_id: ScopeId) -> IrGenResult<FunctionId> {
         let mut params = Vec::new();
+        let fn_scope = Scope {
+
+        }
         for (idx, fn_arg) in fn_def.args.iter().enumerate() {
             let ir_type = self.eval_type_expr(&fn_arg.ty, scope_id)?;
             let variable = Variable {
@@ -888,25 +896,24 @@ impl IrModule {
             ret_type,
             params,
             block: body_block,
-            is_intrinsic: false,
+            intrinsic_type: None,
         };
         let function_id = self.add_function(function);
         self.scopes[scope_id as usize].add_function(fn_def.name, function_id);
         Ok(function_id)
     }
     fn eval_definition(&mut self, def: &Definition) -> IrGenResult<()> {
+        let scope_id = 0;
         match def {
             Definition::Const(const_val) => {
                 let _variable_id: VariableId = self.eval_const(const_val)?;
                 Ok(())
             }
             Definition::FnDef(fn_def) => {
-                let scope_index = 0;
-                self.eval_function(fn_def, scope_index)?;
+                self.eval_function(fn_def, scope_id)?;
                 Ok(())
             }
             Definition::Type(type_defn) => {
-                let scope_id = 0;
                 let typ = self.eval_type_expr(&type_defn.value_expr, scope_id)?;
                 self.add_type_to_scope(scope_id, type_defn.name, typ);
                 Ok(())

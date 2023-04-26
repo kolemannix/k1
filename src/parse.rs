@@ -56,6 +56,9 @@ impl Identifiers {
             id
         }
     }
+    pub fn get_name(&self, id: IdentifierId) -> &'static str {
+        self.identifiers_rev[id.0]
+    }
 }
 
 #[derive(Debug)]
@@ -285,7 +288,10 @@ pub struct Module {
 
 impl Module {
     pub fn ident_id(&self, ident: &str) -> IdentifierId {
-        self.identifiers.get_mut().intern(ident)
+        self.identifiers.borrow_mut().intern(ident)
+    }
+    pub fn get_ident_name(&self, id: IdentifierId) -> &'static str {
+        self.identifiers.borrow().get_name(id)
     }
 }
 
@@ -322,8 +328,11 @@ struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
-    fn ident_id(&mut self, s: impl AsRef<str>) -> IdentifierId {
-        self.identifiers.get_mut().intern(s.as_ref())
+    pub fn ident_id(&mut self, s: impl AsRef<str>) -> IdentifierId {
+        self.identifiers.borrow_mut().intern(s.as_ref())
+    }
+    pub fn get_ident_name(&self, id: IdentifierId) -> &'static str {
+        self.identifiers.borrow().get_name(id)
     }
     fn check<A>(value: Option<A>) -> ParseResult<Option<A>> {
         match value {
@@ -536,7 +545,7 @@ impl<'a> Parser<'a> {
             let name = parser.expect_eat_ident()?;
             parser.expect_eat_token(Colon)?;
             let expr = Parser::expect("expression", parser.peek(), parser.parse_expression())?;
-            Ok(RecordField { name: self.ident_id(name), expr })
+            Ok(RecordField { name: parser.ident_id(name), expr })
         })?;
         let span = open_brace.span.extended(&fields_span);
         Ok(Some(Record { fields, span }))
