@@ -317,7 +317,82 @@ pub struct IrModule {
     pub variables: Vec<Variable>,
     pub types: Vec<Type>,
     pub constants: Vec<Constant>,
-    pub scopes: Vec<Scope>,
+    pub scopes: Scopes,
+}
+
+pub struct Scopes {
+    scopes: Vec<Scope>,
+    intrinsic_functions: HashMap<FunctionId, IntrinsicFunctionType>,
+}
+
+impl Scopes {
+    fn make() -> Self {
+        let scopes = vec![Scope::default()];
+        Scopes { scopes, intrinsic_functions: HashMap::new() }
+    }
+    fn add_scope(&mut self, parent_scope_id: ScopeId) -> ScopeId {
+        let mut scope = Scope::default();
+        scope.parent = Some(parent_scope_id);
+        let id = self.scopes.len();
+        self.scopes.push(scope);
+        id as ScopeId
+    }
+
+    fn get_root(&self) -> &Scope {
+        self.get_scope(0)
+    }
+    fn get_root_mut(&mut self) -> &mut Scope {
+        self.get_scope_mut(0)
+    }
+
+    pub fn get_scope(&self, id: ScopeId) -> &Scope {
+        &self.scopes[id as usize]
+    }
+
+    pub fn get_scope_mut(&mut self, id: ScopeId) -> &mut Scope {
+        &mut self.scopes[id as usize]
+    }
+
+    fn find_variable(&self, scope: ScopeId, ident: IdentifierId) -> Option<VariableId> {
+        let scope = self.get_scope(scope);
+        if let v @ Some(r) = scope.find_variable(ident) {
+            return v;
+        }
+        match scope.parent {
+            Some(parent) => self.find_variable(parent, ident),
+            None => None,
+        }
+    }
+
+    fn find_variable_local(&self, scope_id: ScopeId, ident: IdentifierId) -> Option<VariableId> {
+        self.scopes[scope_id as usize].find_variable(ident)
+    }
+
+    fn add_variable(&mut self, scope_id: ScopeId, ident: IdentifierId, variable_id: VariableId) {
+        let scope = self.get_scope_mut(scope_id);
+        scope.add_variable(ident, variable_id);
+    }
+
+    fn find_function(&self, scope_id: ScopeId, identifier: IdentifierId) -> Option<FunctionId> {
+        self.get_scope(scope_id).find_function(identifier)
+    }
+
+    fn add_function(
+        &mut self,
+        scope_id: ScopeId,
+        identifier: IdentifierId,
+        function_id: FunctionId,
+    ) {
+        self.get_scope_mut(scope_id).add_function(identifier, function_id)
+    }
+
+    fn add_type(&mut self, scope_id: ScopeId, ident: IdentifierId, ty: TypeRef) {
+        self.get_scope_mut(scope_id).add_type(ident, ty)
+    }
+
+    fn find_type(&self, scope_id: ScopeId, ident: IdentifierId) -> Option<TypeRef> {
+        self.get_scope(scope_id).find_type(ident)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -329,18 +404,11 @@ pub enum IntrinsicFunctionType {
 pub struct Scope {
     variables: HashMap<IdentifierId, VariableId>,
     functions: HashMap<IdentifierId, FunctionId>,
-    intrinsic_functions: HashMap<FunctionId, IntrinsicFunctionType>,
     types: HashMap<IdentifierId, TypeRef>,
     parent: Option<ScopeId>,
-    children: Vec<ScopeId>
+    children: Vec<ScopeId>,
 }
 impl Scope {
-    fn find_recursive(&self, ident: IdentifierId) -> Option<VariableId> {
-        match self.find_variable(ident) {
-            Some(r) => Some(r),
-            None => self.parent.as_ref().and_then(|p| p.find_recursive(ident)),
-        }
-    }
     fn find_variable(&self, ident: IdentifierId) -> Option<VariableId> {
         self.variables.get(&ident).copied()
     }
@@ -382,7 +450,7 @@ impl IrModule {
             variables: Vec::new(),
             types: Vec::new(),
             constants: Vec::new(),
-            scopes: vec![Scope::default()],
+            scopes: Scopes::make(),
         };
         // TODO: Would be much better to write a prelude file
         //       in the source lang with some "extern" function definitions
@@ -413,7 +481,7 @@ impl IrModule {
         for function in intrinsic_functions {
             let name = function.name;
             let function_id = module.add_function(function);
-            module.scopes[0].add_function(name, function_id);
+            module.scopes.get_root_mut().add_function(name, function_id);
         }
         module
     }
@@ -430,27 +498,6 @@ impl IrModule {
 
     pub fn get_type(&self, type_id: TypeId) -> &Type {
         &self.types[type_id as usize]
-    }
-
-    fn add_variable_to_scope(
-        &mut self,
-        scope_id: ScopeId,
-        ident: IdentifierId,
-        variable_id: VariableId,
-    ) {
-        self.scopes[scope_id as usize].add_variable(ident, variable_id);
-    }
-
-    fn find_variable_in_scope(&self, scope_id: ScopeId, ident: IdentifierId) -> Option<VariableId> {
-        self.scopes[scope_id as usize].find_variable(ident)
-    }
-
-    fn add_type_to_scope(&mut self, scope_id: ScopeId, ident: IdentifierId, ty: TypeRef) {
-        self.scopes[scope_id as usize].add_type(ident, ty);
-    }
-
-    fn find_type_in_scope(&self, scope_id: ScopeId, ident: IdentifierId) -> Option<TypeRef> {
-        self.scopes[scope_id as usize].find_type(ident)
     }
 
     fn eval_type_expr(
@@ -472,7 +519,7 @@ impl IrModule {
                 Ok(TypeRef::TypeId(type_id))
             }
             parse::TypeExpression::Name(ident, span) => {
-                let ty_ref = self.find_type_in_scope(scope_id, *ident);
+                let ty_ref = self.scopes.find_type(scope_id, *ident);
                 ty_ref.ok_or(anyhow!("could not find type for identifier {:?}", ident))
             }
         }
@@ -543,7 +590,7 @@ impl IrModule {
                     owner_scope: None,
                 });
                 self.constants.push(Constant { variable_id, expr, ir_type, span: *span });
-                self.add_variable_to_scope(scope_id, *name, variable_id);
+                self.scopes.add_variable(scope_id, *name, variable_id);
                 Ok(variable_id)
             }
         }
@@ -716,7 +763,8 @@ impl IrModule {
             }
             Expression::Variable(variable) => {
                 let var_index = self
-                    .find_variable_in_scope(scope_id, variable.ident)
+                    .scopes
+                    .find_variable(scope_id, variable.ident)
                     .ok_or(simple_err(format!("Identifier not found: {}", variable.ident)))?;
                 let v = self.get_variable(var_index);
                 let expr = IrExpr::Variable(VariableExpr {
@@ -748,8 +796,9 @@ impl IrModule {
                 Ok(IrExpr::Block(block))
             }
             Expression::FnCall(fn_call) => {
-                let function_id = self.scopes[scope_id as usize]
-                    .find_function(fn_call.name)
+                let function_id = self
+                    .scopes
+                    .find_function(scope_id, fn_call.name)
                     .ok_or(simple_err(format!("Function not found: {}", fn_call.name)))?;
                 // TODO: cloning a function
                 // Can I 'split the borrow' here by extracting this into a function
@@ -806,13 +855,13 @@ impl IrModule {
                     initializer: value_expr,
                     span: val_def.span,
                 });
-                self.add_variable_to_scope(scope_id, val_def.name, variable_id);
+                self.scopes.add_variable(scope_id, val_def.name, variable_id);
                 Ok(val_def_expr)
             }
             BlockStmt::Assignment(assignment) => {
                 let expr = self.eval_expr(&assignment.expr, scope_id)?;
                 let dest =
-                    self.find_variable_in_scope(scope_id, assignment.ident).ok_or(simple_err(
+                    self.scopes.find_variable(scope_id, assignment.ident).ok_or(simple_err(
                         format!("Variable {} not found in scope {}", assignment.ident, scope_id),
                     ))?;
                 let var = self.get_variable(dest);
@@ -855,9 +904,7 @@ impl IrModule {
     }
     fn eval_function(&mut self, fn_def: &FnDef, scope_id: ScopeId) -> IrGenResult<FunctionId> {
         let mut params = Vec::new();
-        let fn_scope = Scope {
-
-        }
+        let fn_scope = self.scopes.add_scope(scope_id);
         for (idx, fn_arg) in fn_def.args.iter().enumerate() {
             let ir_type = self.eval_type_expr(&fn_arg.ty, scope_id)?;
             let variable = Variable {
@@ -868,7 +915,7 @@ impl IrModule {
             };
             let variable_id = self.add_variable(variable);
             params.push(FuncParam { name: fn_arg.name, variable_id, position: idx, ir_type });
-            self.add_variable_to_scope(scope_id, fn_arg.name, variable_id);
+            self.scopes.add_variable(scope_id, fn_arg.name, variable_id);
         }
         let body_block = fn_def
             .block
@@ -899,7 +946,7 @@ impl IrModule {
             intrinsic_type: None,
         };
         let function_id = self.add_function(function);
-        self.scopes[scope_id as usize].add_function(fn_def.name, function_id);
+        self.scopes.add_function(scope_id, fn_def.name, function_id);
         Ok(function_id)
     }
     fn eval_definition(&mut self, def: &Definition) -> IrGenResult<()> {
@@ -915,7 +962,7 @@ impl IrModule {
             }
             Definition::Type(type_defn) => {
                 let typ = self.eval_type_expr(&type_defn.value_expr, scope_id)?;
-                self.add_type_to_scope(scope_id, type_defn.name, typ);
+                self.scopes.add_type(scope_id, type_defn.name, typ);
                 Ok(())
             }
         }

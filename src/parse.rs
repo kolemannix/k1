@@ -30,6 +30,7 @@ impl Literal {
     }
 }
 
+// TODO: Should be u32
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct IdentifierId(usize);
 
