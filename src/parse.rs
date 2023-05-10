@@ -30,9 +30,8 @@ impl Literal {
     }
 }
 
-// TODO: Should be u32
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub struct IdentifierId(usize);
+pub struct IdentifierId(u32);
 
 impl Display for IdentifierId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -50,7 +49,7 @@ impl Identifiers {
         if let Some(id) = self.identifiers.get(s) {
             *id
         } else {
-            let id = IdentifierId(self.identifiers.len());
+            let id = IdentifierId(self.identifiers.len() as u32);
             let leaked = Box::leak(s.to_string().into_boxed_str());
             self.identifiers.insert(leaked, id);
             self.identifiers_rev.push(leaked);
@@ -58,7 +57,7 @@ impl Identifiers {
         }
     }
     pub fn get_name(&self, id: IdentifierId) -> &'static str {
-        self.identifiers_rev[id.0]
+        self.identifiers_rev[id.0 as usize]
     }
 }
 
@@ -270,9 +269,9 @@ pub struct TypeDefn {
 
 #[derive(Debug)]
 pub enum Definition {
-    FnDef(FnDef),
-    Const(ConstVal),
-    Type(TypeDefn),
+    FnDef(Box<FnDef>),
+    Const(Box<ConstVal>),
+    Type(Box<TypeDefn>),
 }
 
 #[derive(Debug)]
@@ -890,11 +889,11 @@ impl<'a> Parser<'a> {
             if sem.is_none() {
                 return Err(ParseError::ExpectedToken(Semicolon, self.peek(), None));
             }
-            Ok(Some(Definition::Const(const_def)))
+            Ok(Some(Definition::Const(const_def.into())))
         } else if let Some(fn_def) = self.parse_function()? {
-            Ok(Some(Definition::FnDef(fn_def)))
+            Ok(Some(Definition::FnDef(fn_def.into())))
         } else if let Some(type_def) = self.parse_typedef()? {
-            Ok(Some(Definition::Type(type_def)))
+            Ok(Some(Definition::Type(type_def.into())))
         } else {
             Ok(None)
         }

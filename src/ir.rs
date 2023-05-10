@@ -1,3 +1,5 @@
+#![allow(clippy::match_like_matches_macro)]
+
 use crate::lex::Span;
 use crate::parse;
 use crate::parse::{
@@ -5,6 +7,7 @@ use crate::parse::{
 };
 use crate::trace;
 use anyhow::{anyhow, bail, Result};
+use parse_display::Display;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -86,7 +89,7 @@ pub struct VariableExpr {
     pub span: Span,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Display)]
 pub enum BinaryOpKind {
     Add,
     Multiply,
@@ -100,7 +103,6 @@ impl BinaryOpKind {
             BinaryOpKind::Add => true,
             BinaryOpKind::Multiply => true,
             BinaryOpKind::Or | BinaryOpKind::And => true,
-            _ => false,
         }
     }
     pub fn is_boolean_op(&self) -> bool {
@@ -248,11 +250,10 @@ pub struct Assignment {
 
 #[derive(Debug, Clone)]
 pub enum IrStmt {
-    // TODO: Should we just Box the Exprs since they are big?
-    Expr(IrExpr),
-    ValDef(ValDef),
-    ReturnStmt(ReturnStmt),
-    Assignment(Assignment),
+    Expr(Box<IrExpr>),
+    ValDef(Box<ValDef>),
+    ReturnStmt(Box<ReturnStmt>),
+    Assignment(Box<Assignment>),
 }
 
 impl IrStmt {
@@ -635,18 +636,17 @@ impl IrModule {
         Ok(num)
     }
 
-    fn transform_expr_to_block(&mut self, expr: IrExpr) -> IrBlock {
+    fn transform_expr_to_block(&mut self, expr: IrExpr, scope_id: ScopeId) -> IrBlock {
         match expr {
             IrExpr::Block(b) => b,
             expr => {
-                // TODO: Call create scope, do the right stuff
-                let block_scope_id = 0;
+                let block_scope = self.scopes.add_scope(scope_id);
                 let ret_type = expr.get_type();
                 let span = expr.get_span();
-                let statement = IrStmt::Expr(expr);
+                let statement = IrStmt::Expr(Box::new(expr));
                 let statements = vec![statement];
 
-                IrBlock { ret_type, scope_id: block_scope_id, statements, span }
+                IrBlock { ret_type, scope_id: block_scope, statements, span }
             }
         }
     }
@@ -654,7 +654,7 @@ impl IrModule {
     fn coerce_block_to_unit_block(&mut self, block: &mut IrBlock) -> () {
         let span = block.statements.last().map(|s| s.get_span()).unwrap_or(block.span);
         let unit_literal = IrExpr::unit_literal(span);
-        block.statements.push(IrStmt::Expr(unit_literal));
+        block.statements.push(IrStmt::Expr(Box::new(unit_literal)));
         block.ret_type = TypeRef::Unit;
     }
 
@@ -692,20 +692,22 @@ impl IrModule {
                 // If there is no alternate, we coerce the consequent to return Unit, so both
                 // branches have a matching type, making codegen simple and branchless
                 let consequent = if if_expr.alt.is_none() {
-                    let mut block = self.transform_expr_to_block(consequent_expr);
+                    let mut block = self.transform_expr_to_block(consequent_expr, scope_id);
                     self.coerce_block_to_unit_block(&mut block);
                     block
                 } else {
-                    self.transform_expr_to_block(consequent_expr)
+                    self.transform_expr_to_block(consequent_expr, scope_id)
                 };
                 let alternate = if let Some(alt) = &if_expr.alt {
                     let expr = self.eval_expr(alt, scope_id)?;
-                    self.transform_expr_to_block(expr)
+                    self.transform_expr_to_block(expr, scope_id)
                 } else {
                     IrBlock {
                         ret_type: TypeRef::Unit,
                         scope_id,
-                        statements: vec![IrStmt::Expr(IrExpr::unit_literal(if_expr.span))],
+                        statements: vec![IrStmt::Expr(Box::new(IrExpr::unit_literal(
+                            if_expr.span,
+                        )))],
                         span: if_expr.span,
                     }
                 };
@@ -800,28 +802,31 @@ impl IrModule {
                     .scopes
                     .find_function(scope_id, fn_call.name)
                     .ok_or(simple_err(format!("Function not found: {}", fn_call.name)))?;
-                // TODO: cloning a function
-                // Can I 'split the borrow' here by extracting this into a function
-                // that doesn't take all of self mutably
-                // Not sure if RC or clone is lighter-weight here... it does clone a vec
-                let function = self.functions[function_id as usize].clone();
-                let mut fn_args: Vec<IrExpr> = Vec::new();
+
+                let function = &self.functions[function_id as usize];
+                let function_ret_type = function.ret_type;
+                let mut call_parameters: Vec<&parse::FnArg> = Vec::new();
                 for fn_param in &function.params {
                     let matching_param_by_name =
                         fn_call.args.iter().find(|arg| arg.name == Some(fn_param.name));
                     let matching_param =
                         matching_param_by_name.or(fn_call.args.get(fn_param.position));
                     if let Some(param) = matching_param {
-                        let param_expr = self.eval_expr(&param.value, scope_id)?;
-                        fn_args.push(param_expr);
+                        call_parameters.push(param);
                     } else {
                         return simple_fail("Could not find match for parameter {fn_param.name}");
                     }
                 }
+                // forget: function
+                let mut fn_args: Vec<IrExpr> = Vec::new();
+                for call_param in call_parameters {
+                    let param_expr = self.eval_expr(&call_param.value, scope_id)?;
+                    fn_args.push(param_expr);
+                }
                 let call = IrExpr::FunctionCall(FunctionCall {
                     callee_function_id: function_id,
                     args: fn_args,
-                    ret_type: function.ret_type,
+                    ret_type: function_ret_type,
                     span: fn_call.span,
                 });
                 Ok(call)
@@ -832,7 +837,8 @@ impl IrModule {
         match stmt {
             BlockStmt::ReturnStmt(return_stmt) => {
                 let expr = self.eval_expr(&return_stmt.expr, scope_id)?;
-                let ret_inst = IrStmt::ReturnStmt(ReturnStmt { expr, span: return_stmt.span });
+                let ret_inst =
+                    IrStmt::ReturnStmt(Box::new(ReturnStmt { expr, span: return_stmt.span }));
                 Ok(ret_inst)
             }
             BlockStmt::ValDef(val_def) => {
@@ -849,12 +855,12 @@ impl IrModule {
                 if let Err(e) = self.typecheck_types(ir_type, value_expr.get_type()) {
                     bail!("local type mismatch: {e}",);
                 }
-                let val_def_expr = IrStmt::ValDef(ValDef {
+                let val_def_expr = IrStmt::ValDef(Box::new(ValDef {
                     ir_type,
                     variable_id,
                     initializer: value_expr,
                     span: val_def.span,
-                });
+                }));
                 self.scopes.add_variable(scope_id, val_def.name, variable_id);
                 Ok(val_def_expr)
             }
@@ -871,16 +877,16 @@ impl IrModule {
                 if self.typecheck_types(var.ir_type, expr.get_type()).is_err() {
                     return simple_fail("Typecheck of assignment failed");
                 }
-                let expr = IrStmt::Assignment(Assignment {
+                let expr = IrStmt::Assignment(Box::new(Assignment {
                     value: expr,
                     destination_variable: dest,
                     span: assignment.span,
-                });
+                }));
                 Ok(expr)
             }
             BlockStmt::LoneExpression(expression) => {
                 let expr = self.eval_expr(expression, scope_id)?;
-                Ok(IrStmt::Expr(expr))
+                Ok(IrStmt::Expr(Box::new(expr)))
             }
         }
     }
@@ -904,7 +910,7 @@ impl IrModule {
     }
     fn eval_function(&mut self, fn_def: &FnDef, scope_id: ScopeId) -> IrGenResult<FunctionId> {
         let mut params = Vec::new();
-        let fn_scope = self.scopes.add_scope(scope_id);
+        let _fn_scope = self.scopes.add_scope(scope_id);
         for (idx, fn_arg) in fn_def.args.iter().enumerate() {
             let ir_type = self.eval_type_expr(&fn_arg.ty, scope_id)?;
             let variable = Variable {

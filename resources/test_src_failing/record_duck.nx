@@ -1,0 +1,18 @@
+type Duck = {
+  quack: Int,
+}
+
+// For this to actually work, we'd have to codegen a version of this function
+// foreach time it is called, or do vtables.
+// But at least it typechecks!
+fn quack(d: { quack: Int}): Int {
+  return d.quack;
+}
+
+fn main(): Int {
+  val duck: Duck = {
+    quack: 555
+  };
+  printInt(quack(duck));
+  return 0;
+}
