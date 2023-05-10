@@ -42,17 +42,9 @@ pub struct Codegen<'ctx> {
     builder: Builder<'ctx>,
     llvm_functions: HashMap<FunctionId, FunctionValue<'ctx>>,
     llvm_types: HashMap<TypeId, BasicTypeEnum<'ctx>>,
-    /// TODO: Pointers should be scoped and stuff not global
-    ///
     /// The type of stored pointers here should be one level higher than the type of the
-    /// value pointed to. This is to that it can be used reliably, without matching or
+    /// value pointed to. This is so that it can be used reliably, without matching or
     /// checking, as a Pointer to the actual type
-    ///
-    /// I guess we could also just store Values too, doesn't have to always be pointers.
-    /// But we're only going to use these for things that can be re-assigned, or for structs
-    /// which need to be treated as pointers. It might be cool to abstract this behind
-    /// some enum that can be either a Value or a PointerValue, and knows what its target type is,
-    /// and can insert a load as needed. PointerOrValue.as_pointer() or .as_value() or something.
     variables: HashMap<VariableId, Pointer<'ctx>>,
     globals: HashMap<VariableId, GlobalValue<'ctx>>,
     libc_functions: LibcFunctions<'ctx>,
@@ -67,15 +59,15 @@ struct Pointer<'ctx> {
     pointer: PointerValue<'ctx>,
 }
 
-impl<'ctx> Into<GeneratedValue<'ctx>> for Pointer<'ctx> {
-    fn into(self) -> GeneratedValue<'ctx> {
-        GeneratedValue::Pointer(self)
+impl<'ctx> From<Pointer<'ctx>> for GeneratedValue<'ctx> {
+    fn from(ptr: Pointer<'ctx>) -> Self {
+        GeneratedValue::Pointer(ptr)
     }
 }
 
-impl<'ctx> Into<GeneratedValue<'ctx>> for &Pointer<'ctx> {
-    fn into(self) -> GeneratedValue<'ctx> {
-        GeneratedValue::Pointer(*self)
+impl<'ctx> From<&Pointer<'ctx>> for GeneratedValue<'ctx> {
+    fn from(ptr: &Pointer<'ctx>) -> Self {
+        GeneratedValue::Pointer(*ptr)
     }
 }
 
@@ -555,6 +547,7 @@ impl<'ctx> Codegen<'ctx> {
         let triple = TargetMachine::get_default_triple();
         let target = Target::from_triple(&triple).unwrap();
         self.llvm_module.verify().map_err(|err| {
+            eprintln!("{}", self.llvm_module.to_string());
             anyhow::anyhow!("Module '{}' failed validation: {}", self.name(), err.to_string_lossy())
         })?;
         let machine = target

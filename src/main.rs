@@ -49,12 +49,14 @@ pub fn compile_single_file_program<'ctx>(
 }
 
 fn main() -> Result<()> {
-    static_assert_size!(parse::Definition, 144);
+    static_assert_size!(parse::Definition, 16);
+    static_assert_size!(parse::BlockStmt, 128);
+    static_assert_size!(parse::Expression, 56);
+    static_assert_size!(ir::IrExpr, 64);
+    static_assert_size!(ir::IrStmt, 16);
     println!("Size of ast::Definition: {}", std::mem::size_of::<parse::Definition>());
-    println!("Size of ast::BlockStmt: {}", std::mem::size_of::<parse::BlockStmt>());
-    println!("Size of ast::Expression: {}", std::mem::size_of::<parse::Expression>());
-    println!("Size of ir::IrExpr: {}", std::mem::size_of::<ir::IrExpr>());
-    println!("Size of ir::IrStmt: {}", std::mem::size_of::<ir::IrStmt>());
+    println!("Size of ast::FnDef: {}", std::mem::size_of::<parse::FnDef>());
+    println!("Size of ast::TypeExpression: {}", std::mem::size_of::<parse::TypeExpression>());
 
     let args: Vec<String> = env::args().collect();
     println!("NexLang Compiler v0.1.0");

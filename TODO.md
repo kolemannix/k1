@@ -35,7 +35,7 @@ to separate from 'semantics' so don't get me started) for Arrays in my silly lit
 it's just what I like to do. It just took me 10 years to discover it again, but this time at a deeper level.
 
 # Up next maybe
-- [-] Records
+- [x] Records
   - [x] Syntax decision ({} vs .{} vs Point {})
   - [x] Parsing
   - [x] Typechecking
@@ -44,7 +44,8 @@ it's just what I like to do. It just took me 10 years to discover it again, but 
   - [x] Accessor ir
   - [x] Accessor codegen
 - [x] Identifier cleanup and interning
-- [ ] Actual scoping
+- [x] Actual scoping
+- [ ] Optionals
 - [ ] Arrays
 - [ ] Function syntax change (foo = fn (a, b, c): Int { } 
 - [ ] Ditch semicolons? (this technically introduces significant whitespace)
@@ -53,7 +54,6 @@ it's just what I like to do. It just took me 10 years to discover it again, but 
 - [ ] oneofs (tagged unions)
 - [ ] Loops
 - [ ] Heap memory
-- [ ] Tuples
 - [ ] Control-Flow: proper codegen for early returns:
     // This needs to return either a basic value or an instruction value (in the case of early return)
     // Actually, early return is a big rabbit hole. We need to typecheck it in ir gen, and probably
@@ -64,6 +64,7 @@ it's just what I like to do. It just took me 10 years to discover it again, but 
     // Maybe we rename ReturnStmt to Early Return to separate it from tail returns, which have
     // pretty different semantics and implications for codegen, I am realizing
     fn codegen_block(&mut self, block: &IrBlock) -> Option<BasicValueEnum<'ctx>> {
+- [ ] Tuples
 
 # Hacks to fix
 - [ ] main function / detect entrypoint properly. Typing of main? How to get main args?
