@@ -4,6 +4,7 @@ use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::rc::Rc;
+use string_interner::Symbol;
 
 use TokenKind::*;
 
@@ -31,33 +32,27 @@ impl Literal {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub struct IdentifierId(u32);
+pub struct IdentifierId(string_interner::symbol::SymbolU32);
 
 impl Display for IdentifierId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+        write!(f, "{}", self.0.to_usize())
     }
 }
 
-#[derive(Default, Debug)]
+// We use the default StringInterner, which uses a contiguous string as its backend
+// and u32 symbols
+#[derive(Debug, Default)]
 pub struct Identifiers {
-    identifiers: HashMap<&'static str, IdentifierId>,
-    identifiers_rev: Vec<&'static str>,
+    intern_pool: string_interner::StringInterner,
 }
 impl Identifiers {
-    pub fn intern(&mut self, s: &str) -> IdentifierId {
-        if let Some(id) = self.identifiers.get(s) {
-            *id
-        } else {
-            let id = IdentifierId(self.identifiers.len() as u32);
-            let leaked = Box::leak(s.to_string().into_boxed_str());
-            self.identifiers.insert(leaked, id);
-            self.identifiers_rev.push(leaked);
-            id
-        }
+    pub fn intern(&mut self, s: impl AsRef<str>) -> IdentifierId {
+        let s = self.intern_pool.get_or_intern(&s);
+        IdentifierId(s)
     }
-    pub fn get_name(&self, id: IdentifierId) -> &'static str {
-        self.identifiers_rev[id.0 as usize]
+    pub fn get_name(&self, id: IdentifierId) -> &str {
+        self.intern_pool.resolve(id.0).expect("failed to resolve identifier")
     }
 }
 
@@ -290,8 +285,8 @@ impl Module {
     pub fn ident_id(&self, ident: &str) -> IdentifierId {
         self.identifiers.borrow_mut().intern(ident)
     }
-    pub fn get_ident_name(&self, id: IdentifierId) -> &'static str {
-        self.identifiers.borrow().get_name(id)
+    pub fn get_ident_name(&self, id: IdentifierId) -> String {
+        self.identifiers.borrow().get_name(id).to_string()
     }
 }
 
@@ -331,8 +326,10 @@ impl<'a> Parser<'a> {
     pub fn ident_id(&mut self, s: impl AsRef<str>) -> IdentifierId {
         self.identifiers.borrow_mut().intern(s.as_ref())
     }
-    pub fn get_ident_name(&self, id: IdentifierId) -> &'static str {
-        self.identifiers.borrow().get_name(id)
+    pub fn get_ident_name(&self, id: IdentifierId) -> String {
+        let idents = self.identifiers.borrow();
+        let n = idents.get_name(id).to_owned();
+        n
     }
     fn check<A>(value: Option<A>) -> ParseResult<Option<A>> {
         match value {
