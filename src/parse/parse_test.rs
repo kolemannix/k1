@@ -23,7 +23,7 @@ fn basic_fn() -> Result<(), ParseError> {
     println!("defs {:?}", module.defs);
     assert_eq!(&module.name, "basic_fn.nx");
     if let Some(Definition::FnDef(fndef)) = module.defs.first() {
-        assert_eq!(module.get_ident_name(fndef.name), "basic")
+        assert_eq!(&module.get_ident_name(fndef.name), "basic")
     } else {
         panic!("no definitions for basic_fn")
     }
@@ -108,10 +108,10 @@ fn dot_accessor() -> ParseResult<()> {
     let mut parser = setup(input);
     let result = parser.parse_expression()?.unwrap();
     let Expression::FieldAccess(acc) = result else { panic!() };
-    assert_eq!(acc.target.0, 2);
+    assert_eq!(acc.target.0.to_usize(), 2);
     let Expression::FieldAccess(acc2) = *acc.base else {panic!() };
-    assert_eq!(acc2.target.0, 1);
+    assert_eq!(acc2.target.0.to_usize(), 1);
     let Expression::Variable(v) = *acc2.base else { panic!() };
-    assert_eq!(v.ident.0, 0);
+    assert_eq!(v.ident.0.to_usize(), 0);
     Ok(())
 }

@@ -520,17 +520,17 @@ impl<'ctx> Codegen<'ctx> {
                 BasicMetadataTypeEnum::PointerType(p) => p.fn_type(&param_types, false),
                 _ => panic!("Unexpected function llvm type"),
             };
-            let name = self.module.ast.identifiers.borrow().get_name(function.name);
-            let fn_val = self.llvm_module.add_function(name, fn_ty, None);
+            let name = self.module.ast.get_ident_name(function.name);
+            let fn_val = self.llvm_module.add_function(&name, fn_ty, None);
             self.llvm_functions.insert(function_id as u32, fn_val);
             let entry_block = self.ctx.append_basic_block(fn_val, "entry");
             self.builder.position_at_end(entry_block);
             for (i, param) in fn_val.get_param_iter().enumerate() {
                 let ir_param = &function.params[i];
-                let param_name = self.module.ast.identifiers.borrow().get_name(ir_param.name);
-                param.set_name(param_name);
+                let param_name = self.module.ast.get_ident_name(ir_param.name);
+                param.set_name(&param_name);
                 let ty = self.codegen_type(ir_param.ir_type);
-                let pointer = self.builder.build_alloca(ty, param_name);
+                let pointer = self.builder.build_alloca(ty, &param_name);
                 self.builder.build_store(pointer, param);
                 self.variables.insert(ir_param.variable_id, Pointer { pointer, pointee_ty: ty });
             }
