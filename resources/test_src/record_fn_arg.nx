@@ -1,0 +1,10 @@
+fn addPoint(p: { x: Int, y: Int}): Int {
+  return p.x + p.y;
+}
+
+fn main(): Int {
+  printInt(addPoint({ x: 1, y: 2 }));
+  return 0;
+}
+// <expected output>
+// 3

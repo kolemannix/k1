@@ -9,7 +9,7 @@ use string_interner::Symbol;
 use TokenKind::*;
 
 use crate::lex::*;
-use crate::trace;
+use log::trace;
 
 #[cfg(test)]
 mod parse_test;
@@ -276,7 +276,7 @@ pub struct Module {
     pub defs: Vec<Definition>,
     /// Using RefCell here just so we can mutably access
     /// the identifiers without having mutable access to
-    /// the entire AST module. Let's me wait to decide
+    /// the entire AST module. Lets me wait to decide
     /// where things actually live
     pub identifiers: Rc<RefCell<Identifiers>>,
 }
@@ -285,8 +285,8 @@ impl Module {
     pub fn ident_id(&self, ident: &str) -> IdentifierId {
         self.identifiers.borrow_mut().intern(ident)
     }
-    pub fn get_ident_name(&self, id: IdentifierId) -> String {
-        self.identifiers.borrow().get_name(id).to_string()
+    pub fn get_ident_name(&self, id: IdentifierId) -> impl std::ops::Deref<Target = str> + '_ {
+        std::cell::Ref::map(self.identifiers.borrow(), |idents| idents.get_name(id))
     }
 }
 

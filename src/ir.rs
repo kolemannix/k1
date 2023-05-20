@@ -5,8 +5,8 @@ use crate::parse;
 use crate::parse::{
     Block, BlockStmt, Definition, Expression, FnDef, IdentifierId, Literal, Module,
 };
-use crate::trace;
 use anyhow::{anyhow, bail, Result};
+use log::trace;
 use parse_display::Display;
 use std::collections::HashMap;
 use std::error::Error;
@@ -541,6 +541,35 @@ impl IrModule {
     }
 
     fn typecheck_record(&self, expected: &RecordDefn, actual: &RecordDefn) -> IrGenResult<()> {
+        if expected.fields.len() != actual.fields.len() {
+            bail!(
+                "expected record with {} fields, got {}",
+                expected.fields.len(),
+                actual.fields.len()
+            )
+        }
+        for expected_field in &expected.fields {
+            trace!("typechecking record field {:?}", expected_field);
+            let Some(matching_field) = actual.fields.iter().find(|f| f.name == expected_field.name) else {
+                bail!("expected field {}", expected_field.name)
+            };
+            self.typecheck_types(matching_field.ty, expected_field.ty)?;
+        }
+        Ok(())
+    }
+
+    /// This implements 'duck-typing' for records, which is really cool
+    /// but I do not want to do this by default since the codegen involves
+    /// either v-tables or monomorphization of functions that accept records
+    /// Maybe a <: syntax to opt-in to dynamic stuff like this, read as "conforms to"
+    /// input <: {quack: () -> ()} means that it has at least a quack function
+    /// fn takes_quacker = (input <: {quack: () -> ()}) -> ()
+    ///
+    /// "Conforms To" would mean that it has at least the same fields as the expected type, and
+    /// it has them at least as strongly. If an optional is expected, actual can optional or required
+    /// If a required is expected, actual must be required, etc. Basically TypeScripts structural typing
+    #[allow(unused)]
+    fn typecheck_record_duck(&self, expected: &RecordDefn, actual: &RecordDefn) -> IrGenResult<()> {
         for expected_field in &expected.fields {
             trace!("typechecking record field {:?}", expected_field);
             let Some(matching_field) = actual.fields.iter().find(|f| f.name == expected_field.name) else {
@@ -553,7 +582,7 @@ impl IrModule {
 
     fn typecheck_types(&self, expected: TypeRef, actual: TypeRef) -> IrGenResult<()> {
         // Eventually, types can be compatible without being equal
-        // While we won't have full-blown inheritance, there will be some shallow subtyping
+        // While we won't have inheritance, there will be some shallow subtyping
         // and interfaces
         if expected == actual {
             Ok(())

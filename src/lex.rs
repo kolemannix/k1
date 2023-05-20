@@ -2,7 +2,7 @@ use std::fmt;
 use std::str::Chars;
 
 use crate::parse::BinaryOpKind;
-use crate::trace;
+use log::trace;
 use TokenKind::*;
 
 pub const EOF_CHAR: char = '\0';
