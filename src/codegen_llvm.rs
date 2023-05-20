@@ -1,6 +1,7 @@
 use anyhow::Result;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
+use inkwell::intrinsics::Intrinsic;
 use inkwell::module::Linkage;
 use inkwell::passes::{PassManager, PassManagerBuilder};
 use inkwell::targets::{InitializationConfig, Target, TargetMachine};
@@ -12,11 +13,12 @@ use inkwell::values::{
     InstructionValue, IntValue, PointerValue,
 };
 use inkwell::{AddressSpace, OptimizationLevel};
+use log::trace;
 use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
 
-use crate::{ir::*, trace};
+use crate::ir::*;
 
 struct BuiltinTypes<'ctx> {
     i64: IntType<'ctx>,
@@ -190,7 +192,7 @@ impl<'ctx> Codegen<'ctx> {
         }
     }
 
-    fn build_printf_call(&mut self, call: &FunctionCall) -> BasicValueEnum<'ctx> {
+    fn build_print_int_call(&mut self, call: &FunctionCall) -> BasicValueEnum<'ctx> {
         // Assume the arg is an int since that's what the intrinsic typechecks for
         let first_arg = self.codegen_expr(&call.args[0]).loaded_value(&self.builder);
 
@@ -410,38 +412,46 @@ impl<'ctx> Codegen<'ctx> {
                 // This is just a lexical scoping block, not a control-flow block, so doesn't need
                 // to correspond to an LLVM basic block
                 // We just need to codegen each statement and assign the return value to an alloca
-                todo!("codegen block")
+                todo!("codegen lexical block")
             }
-            IrExpr::FunctionCall(call) => {
-                let ir_module = self.module.clone();
-                let callee = ir_module.get_function(call.callee_function_id);
-                match callee.intrinsic_type {
-                    None => {
-                        let function_value = *self
-                            .llvm_functions
-                            .get(&call.callee_function_id)
-                            .unwrap_or_else(|| panic!("LLVM function not found: {}", callee.name));
-                        let args: Vec<BasicMetadataValueEnum<'ctx>> = call
-                            .args
-                            .iter()
-                            .map(|arg_expr| {
-                                let basic_value = self.codegen_expr(arg_expr);
-                                BasicMetadataValueEnum::from(basic_value.as_basic_value_enum())
-                            })
-                            .collect();
-                        let callsite_value = self.builder.build_call(function_value, &args, "");
-                        // Call return Right for void, and Left for values
-                        let result_value = callsite_value
-                            .try_as_basic_value()
-                            .left()
-                            .expect("function returned void");
-                        result_value.into()
-                    }
-                    Some(IntrinsicFunctionType::PrintInt) => {
-                        self.build_printf_call(call);
-                        self.builtin_types.unit_value.as_basic_value_enum().into()
-                    }
-                }
+            IrExpr::FunctionCall(call) => self.codegen_function_call(call),
+        }
+    }
+    fn codegen_function_call(&mut self, call: &FunctionCall) -> GeneratedValue<'ctx> {
+        let ir_module = self.module.clone();
+        let callee = ir_module.get_function(call.callee_function_id);
+        if let Some(intrinsic_type) = callee.intrinsic_type {
+            return self.codegen_intrinsic(intrinsic_type, call);
+        }
+
+        let function_value = *self
+            .llvm_functions
+            .get(&call.callee_function_id)
+            .unwrap_or_else(|| panic!("LLVM function not found: {}", callee.name));
+        let args: Vec<BasicMetadataValueEnum<'ctx>> = call
+            .args
+            .iter()
+            .map(|arg_expr| {
+                let basic_value = self.codegen_expr(arg_expr);
+                basic_value.loaded_value(&self.builder).into()
+            })
+            .collect();
+        let callsite_value = self.builder.build_call(function_value, &args, "");
+        // Call returns Right for void, and Left for values
+        let result_value =
+            callsite_value.try_as_basic_value().left().expect("function returned void");
+        result_value.into()
+    }
+
+    fn codegen_intrinsic(
+        &mut self,
+        intrinsic_type: IntrinsicFunctionType,
+        call: &FunctionCall,
+    ) -> GeneratedValue<'ctx> {
+        match intrinsic_type {
+            IntrinsicFunctionType::PrintInt => {
+                self.build_print_int_call(call);
+                self.builtin_types.unit_value.as_basic_value_enum().into()
             }
         }
     }
@@ -520,16 +530,18 @@ impl<'ctx> Codegen<'ctx> {
                 BasicMetadataTypeEnum::PointerType(p) => p.fn_type(&param_types, false),
                 _ => panic!("Unexpected function llvm type"),
             };
-            let name = self.module.ast.get_ident_name(function.name);
-            let fn_val = self.llvm_module.add_function(&name, fn_ty, None);
+            let fn_val = {
+                let name = self.module.ast.get_ident_name(function.name);
+                self.llvm_module.add_function(&name, fn_ty, None)
+            };
             self.llvm_functions.insert(function_id as u32, fn_val);
             let entry_block = self.ctx.append_basic_block(fn_val, "entry");
             self.builder.position_at_end(entry_block);
             for (i, param) in fn_val.get_param_iter().enumerate() {
                 let ir_param = &function.params[i];
+                let ty = self.codegen_type(ir_param.ir_type);
                 let param_name = self.module.ast.get_ident_name(ir_param.name);
                 param.set_name(&param_name);
-                let ty = self.codegen_type(ir_param.ir_type);
                 let pointer = self.builder.build_alloca(ty, &param_name);
                 self.builder.build_store(pointer, param);
                 self.variables.insert(ir_param.variable_id, Pointer { pointer, pointee_ty: ty });
@@ -576,11 +588,11 @@ impl<'ctx> Codegen<'ctx> {
 
         let module_pass_manager: PassManager<inkwell::module::Module<'ctx>> =
             PassManager::create(());
-        module_pass_manager.add_verifier_pass();
         module_pass_manager.add_promote_memory_to_register_pass();
         module_pass_manager.add_function_attrs_pass();
-        // module_pass_manager.add_instruction_combining_pass();
-        module_pass_manager.add_function_inlining_pass();
+        module_pass_manager.add_instruction_combining_pass();
+        // module_pass_manager.add_function_inlining_pass();
+        module_pass_manager.add_verifier_pass();
 
         module_pass_manager.run_on(&self.llvm_module);
 

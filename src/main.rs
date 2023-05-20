@@ -4,7 +4,6 @@ use std::rc::Rc;
 mod codegen_llvm;
 mod ir;
 mod lex;
-mod output;
 mod parse;
 #[cfg(test)]
 mod test_suite;
@@ -49,6 +48,8 @@ pub fn compile_single_file_program<'ctx>(
 }
 
 fn main() -> Result<()> {
+    env_logger::init();
+
     static_assert_size!(parse::Definition, 16);
     static_assert_size!(parse::BlockStmt, 128);
     static_assert_size!(parse::Expression, 56);
@@ -68,12 +69,13 @@ fn main() -> Result<()> {
     let src = fs::read_to_string(src_path).expect("could not read source directory");
     let codegen = compile_single_file_program(&ctx, filename, &src)?;
 
+    let llvm_text = codegen.output_llvm_ir_text();
+    let mut f = File::create(format!("./artifacts/{}.ll", filename))?;
+    f.write_all(llvm_text.as_bytes()).unwrap();
+
     codegen.emit_object_file()?;
     let result = codegen.interpret_module()?;
     println!("Interp result: {}", result);
-    let mut f = File::create(format!("./artifacts/{}.ll", filename))?;
-    let llvm_text = codegen.output_llvm_ir_text();
-    f.write_all(llvm_text.as_bytes()).unwrap();
     // println!("{}", llvm_text);
     Ok(())
 }

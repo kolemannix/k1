@@ -1,5 +1,6 @@
 type Duck = {
   quack: Int,
+  waddle: Int
 }
 
 // For this to actually work, we'd have to codegen a version of this function
