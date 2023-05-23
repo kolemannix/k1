@@ -8,7 +8,7 @@ type Identified = record {
 
 // records compose (statically) (what do to with member functions?)
 type Foo = record {
-  count: Int,
+  count: int,
   bytes: Array[Byte]
 } + Identified;
 

@@ -1,7 +1,7 @@
-fn main(x: Int): Int {
-  val t: Bool = true;
-  val f: Bool = false;
-  val res: Bool = t or f;
+fn main(x: int): int {
+  val t: bool = true;
+  val f: bool = false;
+  val res: bool = t or f;
   printInt(t or f);
   printInt(t and f);
   return 0;

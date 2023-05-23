@@ -1,16 +1,16 @@
 type Duck = {
-  quack: Int,
-  waddle: Int
+  quack: int,
+  waddle: int
 }
 
 // For this to actually work, we'd have to codegen a version of this function
 // foreach time it is called, or do vtables.
 // But at least it typechecks!
-fn quack(d: { quack: Int}): Int {
+fn quack(d: { quack: int}): int {
   return d.quack;
 }
 
-fn main(): Int {
+fn main(): int {
   val duck: Duck = {
     quack: 555
   };

@@ -213,11 +213,19 @@ pub struct RecordType {
 }
 
 #[derive(Debug)]
+pub struct TypeApplication {
+    pub base: Box<TypeExpression>,
+    pub params: Vec<TypeExpression>,
+    pub span: Span,
+}
+
+#[derive(Debug)]
 pub enum TypeExpression {
     Int(Span),
     Bool(Span),
     Record(RecordType),
     Name(IdentifierId, Span),
+    TypeApplication(TypeApplication),
 }
 
 impl TypeExpression {
@@ -228,6 +236,7 @@ impl TypeExpression {
             TypeExpression::Bool(span) => *span,
             TypeExpression::Record(record) => record.span,
             TypeExpression::Name(_, span) => *span,
+            TypeExpression::TypeApplication(app) => app.span,
         }
     }
 }
@@ -475,19 +484,37 @@ impl<'a> Parser<'a> {
         Ok(Some(RecordTypeField { name: self.ident_id(ident_id), ty: typ_expr }))
     }
 
+    fn expect_type_expression(&mut self) -> ParseResult<TypeExpression> {
+        Parser::expect("type_expression", self.peek(), self.parse_type_expression())
+    }
+
     fn parse_type_expression(&mut self) -> ParseResult<Option<TypeExpression>> {
         let tok = self.peek();
         if tok.kind == Text {
             let ident = self.tok_chars(tok);
-            if ident == "Int" {
+            if ident == "int" {
                 self.tokens.advance();
                 Ok(Some(TypeExpression::Int(tok.span)))
-            } else if ident == "Bool" {
+            } else if ident == "bool" {
                 self.tokens.advance();
                 Ok(Some(TypeExpression::Bool(tok.span)))
             } else {
                 self.tokens.advance();
-                Ok(Some(TypeExpression::Name(self.ident_id(ident), tok.span)))
+                let next = self.tokens.peek();
+                if next.kind == OpenBracket {
+                    // parameterized type: Dict[int, int]
+                    let (type_parameters, params_span) =
+                        self.eat_delimited(Comma, CloseBracket, |p| {
+                            Parser::expect_type_expression(p)
+                        })?;
+                    Ok(Some(TypeExpression::TypeApplication(TypeApplication {
+                        base: Box::new(TypeExpression::Name(self.ident_id(ident), tok.span)),
+                        params: type_parameters,
+                        span: tok.span.extended(&params_span),
+                    })))
+                } else {
+                    Ok(Some(TypeExpression::Name(self.ident_id(ident), tok.span)))
+                }
             }
         } else if tok.kind == OpenBrace {
             let open_brace = self.expect_eat_token(OpenBrace)?;

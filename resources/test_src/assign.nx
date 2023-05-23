@@ -1,5 +1,5 @@
-fn foo(): Int {
-  mut result: Int = 0;
+fn foo(): int {
+  mut result: int = 0;
   if true {
     result = 11;
   } else {
@@ -8,9 +8,9 @@ fn foo(): Int {
   return result;
 }
 
-fn main(): Int {
+fn main(): int {
   printInt(foo());
-  mut count: Int = 0;
+  mut count: int = 0;
   count = 1;
   printInt(count);
   count = 2;

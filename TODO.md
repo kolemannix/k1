@@ -45,9 +45,9 @@ it's just what I like to do. It just took me 10 years to discover it again, but 
   - [x] Accessor codegen
 - [x] Identifier cleanup and interning
 - [x] Actual scoping
+- [ ] Arrays (Dynamic only and first for now)
 - [ ] Optionals
-- [ ] Arrays
-- [ ] Function syntax change (foo = fn (a, b, c): Int { } 
+- [ ] Function syntax change (foo = fn (a, b, c): int { } 
 - [ ] Ditch semicolons? (this technically introduces significant whitespace)
 - [x] Binary infix operations
 - [ ] basic error reporting using spans

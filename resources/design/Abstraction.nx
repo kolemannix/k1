@@ -15,9 +15,9 @@ interface Monoid[A] {
 }
 
 val monoidInt: Monoid[Int] = Monoid {
-  fn zero(): Int = 0
-  fn one(): Int = 1
-  fn add(a: Int, b: Int): Int = a + b
+  fn zero(): int = 0
+  fn one(): int = 1
+  fn add(a: int, b: int): int = a + b
 }
 
 // Typeclass instances have to be imported

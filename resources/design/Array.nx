@@ -11,12 +11,12 @@ Dict[key = Int, value = String]
 
 // Jakt has both [T] and Array[T]
 
-fn sort = [T](x: Array[T]): () fails String {
+fn sort = [T](x: mut Array[T]): () fails String {
 
 }
 
 
-fn main(): Int {
+fn main(): int {
   val leet: Array[Int] = [1, 3, 3, 7];
   leet[3]
 }

@@ -1,4 +1,4 @@
-fn main(): Int {
+fn main(): int {
   if true {
     printInt(42)
   };

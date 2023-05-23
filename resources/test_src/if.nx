@@ -1,6 +1,6 @@
-fn main(): Int {
-  val cond: Bool = false;
-  val result: Int = if cond 42 else 1337;
+fn main(): int {
+  val cond: bool = false;
+  val result: int = if cond 42 else 1337;
   printInt(result);
   return 0;
 }
