@@ -11,10 +11,10 @@ fn setup(input: &str) -> Parser {
 #[test]
 fn basic_fn() -> Result<(), ParseError> {
     let src = r#"
-    fn basic(x: Int, y: Int): Int {
+    fn basic(x: int, y: int): int {
       println(42, 42, 42);
-      val x: Int = 0;
-      mut y: Int = 1;
+      val x: int = 0;
+      mut y: int = 1;
       y = { 1; 2; 3 };
       y = add(42, 42);
       return add(x, y);
@@ -23,7 +23,7 @@ fn basic_fn() -> Result<(), ParseError> {
     println!("defs {:?}", module.defs);
     assert_eq!(&module.name, "basic_fn.nx");
     if let Some(Definition::FnDef(fndef)) = module.defs.first() {
-        assert_eq!(&module.get_ident_name(fndef.name), "basic")
+        assert_eq!(*module.get_ident_name(fndef.name), *"basic")
     } else {
         panic!("no definitions for basic_fn")
     }

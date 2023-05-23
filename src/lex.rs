@@ -407,7 +407,7 @@ mod test {
     #[test]
     fn line_comment() {
         let input = r#"// Hello, world
-        val foo: Int = 74;
+        val foo: int = 74;
         // <test harness> expected output
         //
         "#;

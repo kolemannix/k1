@@ -1,11 +1,11 @@
 type Point = {
-  x: Int,
-  y: Int,
-  z: Int,
-  isGood: Bool
+  x: int,
+  y: int,
+  z: int,
+  isGood: bool
 }
 
-fn main(): Int {
+fn main(): int {
   val zero: Point = {
     x: 0, y: 298, z: 42, isGood: true
   };

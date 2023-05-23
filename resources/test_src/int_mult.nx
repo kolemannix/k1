@@ -1,9 +1,9 @@
-fn mult(x: Int, y: Int): Int {
+fn mult(x: int, y: int): int {
   return x * y;
 }
 
-fn main(x: Int): Int {
-  val result: Int = mult(
+fn main(x: int): int {
+  val result: int = mult(
     55, 
     2 + 3 + 3,
   );

@@ -1,8 +1,8 @@
-fn addPoint(p: { x: Int, y: Int}): Int {
+fn addPoint(p: { x: int, y: int}): int {
   return p.x + p.y;
 }
 
-fn main(): Int {
+fn main(): int {
   printInt(addPoint({ x: 1, y: 2 }));
   return 0;
 }

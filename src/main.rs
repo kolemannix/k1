@@ -51,7 +51,7 @@ fn main() -> Result<()> {
     env_logger::init();
 
     static_assert_size!(parse::Definition, 16);
-    static_assert_size!(parse::BlockStmt, 128);
+    static_assert_size!(parse::BlockStmt, 144);
     static_assert_size!(parse::Expression, 56);
     static_assert_size!(ir::IrExpr, 64);
     static_assert_size!(ir::IrStmt, 16);

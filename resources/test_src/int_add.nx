@@ -1,13 +1,13 @@
-val z: Int = 1337;
+val z: int = 1337;
 
-fn add_stuff(x: Int, y: Int): Int {
-  val b: Int = x + 1;
-  val foo: Int = b + z;
+fn add_stuff(x: int, y: int): int {
+  val b: int = x + 1;
+  val foo: int = b + z;
   return foo + y;
 }
 
-fn main(x: Int): Int {
-  val result: Int = add_stuff(y = 2, x = 1);
+fn main(x: int): int {
+  val result: int = add_stuff(y = 2, x = 1);
   printInt(result);
   return 1341;
 }

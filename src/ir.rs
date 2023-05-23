@@ -521,7 +521,15 @@ impl IrModule {
             }
             parse::TypeExpression::Name(ident, span) => {
                 let ty_ref = self.scopes.find_type(scope_id, *ident);
-                ty_ref.ok_or(anyhow!("could not find type for identifier {:?}", ident))
+                ty_ref.ok_or_else(|| {
+                    anyhow!(
+                        "could not find type for identifier {}",
+                        &*self.ast.get_ident_name(*ident)
+                    )
+                })
+            }
+            parse::TypeExpression::TypeApplication(ty_app) => {
+                todo!("ir for type applications")
             }
         }
     }
@@ -537,6 +545,9 @@ impl IrModule {
             parse::TypeExpression::Bool(_) => Ok(TypeRef::Bool),
             parse::TypeExpression::Record(_) => simple_fail("No const records yet"),
             parse::TypeExpression::Name(_, _) => simple_fail("No references allowed in constants"),
+            parse::TypeExpression::TypeApplication(_) => {
+                simple_fail("No type parameters allowed in constants")
+            }
         }
     }
 
@@ -1033,7 +1044,7 @@ mod test {
 
     #[test]
     fn const_definition_1() -> Result<(), Box<dyn Error>> {
-        let src = r"val x: Int = 420;";
+        let src = r"val x: int = 420;";
         let module = parse_text(src, "basic_fn.nx")?;
         let mut ir = IrModule::new(Rc::new(module));
         ir.run()?;
@@ -1051,11 +1062,11 @@ mod test {
     #[test]
     fn fn_definition_1() -> IrGenResult<()> {
         let src = r#"
-        fn foo(): Int {
+        fn foo(): int {
           return 1;
         }
-        fn basic(x: Int, y: Int): Int {
-          val x: Int = 0; mut y: Int = 1;
+        fn basic(x: int, y: int): int {
+          val x: int = 0; mut y: int = 1;
           y = { 1; 2; 3 };
           y = 42 + 42;
           return foo();
