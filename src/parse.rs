@@ -362,7 +362,7 @@ impl Parser {
     fn peek(&self) -> Token {
         self.tokens.peek()
     }
-    fn make(tokens: TokenIter, source: String, use_prelude: bool) -> Parser {
+    fn make(tokens: TokenIter, source: String, _use_prelude: bool) -> Parser {
         Parser {
             tokens,
             source: Source { content: source },

@@ -413,7 +413,7 @@ mod test {
         "#;
         let mut lexer = Lexer::make(input);
         let result = lexer.run();
-        let token_iter = TokenIter::make(result.clone());
+        let _token_iter = TokenIter::make(result.clone());
         let kinds: Vec<TokenKind> = result.iter().map(|t| t.kind).collect();
         assert_eq!(result[0].span, Span { start: 0, end: 14, line: 0, file_id: 0 });
         assert_eq!(&input[0..5], "// He");

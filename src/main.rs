@@ -11,10 +11,10 @@ mod test_suite;
 
 use anyhow::Result;
 use inkwell::context::Context;
-use std::error::Error;
+
 use std::fs;
 use std::fs::File;
-use std::io::{BufReader, Read, Write};
+use std::io::{Write};
 use std::path::Path;
 
 use crate::codegen_llvm::Codegen;
