@@ -609,27 +609,22 @@ impl IrModule {
 
     fn eval_const(&mut self, const_expr: &parse::ConstVal) -> IrGenResult<VariableId> {
         let scope_id = 0;
-        match const_expr {
-            parse::ConstVal { name, ty: typ, value_expr: value, span } => {
-                let ir_type = self.eval_const_type_expr(&typ, scope_id)?;
-                let num = match value {
-                    Expression::Literal(Literal::Numeric(n, _span)) => self.parse_numeric(n)?,
-                    other => {
-                        return simple_fail("Only literals are currently supported as constants")
-                    }
-                };
-                let expr = IrExpr::Literal(IrLiteral::Int(num, *span));
-                let variable_id = self.add_variable(Variable {
-                    name: *name,
-                    ir_type,
-                    is_mutable: false,
-                    owner_scope: None,
-                });
-                self.constants.push(Constant { variable_id, expr, ir_type, span: *span });
-                self.scopes.add_variable(scope_id, *name, variable_id);
-                Ok(variable_id)
-            }
-        }
+        let parse::ConstVal { name, ty: typ, value_expr: value, span } = const_expr;
+        let ir_type = self.eval_const_type_expr(typ, scope_id)?;
+        let num = match value {
+            Expression::Literal(Literal::Numeric(n, _span)) => self.parse_numeric(n)?,
+            other => return simple_fail("Only literals are currently supported as constants"),
+        };
+        let expr = IrExpr::Literal(IrLiteral::Int(num, *span));
+        let variable_id = self.add_variable(Variable {
+            name: *name,
+            ir_type,
+            is_mutable: false,
+            owner_scope: None,
+        });
+        self.constants.push(Constant { variable_id, expr, ir_type, span: *span });
+        self.scopes.add_variable(scope_id, *name, variable_id);
+        Ok(variable_id)
     }
 
     fn get_stmt_return_type(&self, stmt: &IrStmt) -> Option<TypeRef> {
