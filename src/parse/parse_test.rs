@@ -1,11 +1,12 @@
 use crate::parse::*;
+use anyhow::bail;
 
-fn setup(input: &str) -> Parser {
+fn set_up(input: &str) -> Parser {
     let mut lexer = Lexer::make(input);
     let token_vec = lexer.run();
     print_tokens(input, &token_vec[..]);
     let tokens = TokenIter::make(token_vec);
-    Parser::make(tokens, input)
+    Parser::make(tokens, input.to_string(), false)
 }
 
 #[test]
@@ -19,12 +20,12 @@ fn basic_fn() -> Result<(), ParseError> {
       y = add(42, 42);
       return add(x, y);
     }"#;
-    let module = parse_text(src, "basic_fn.nx")?;
-    println!("defs {:?}", module.defs);
+    let module = parse_text(src, "basic_fn.nx", false)?;
     assert_eq!(&module.name, "basic_fn.nx");
     if let Some(Definition::FnDef(fndef)) = module.defs.first() {
         assert_eq!(*module.get_ident_name(fndef.name), *"basic")
     } else {
+        println!("defs {:?}", module.defs);
         panic!("no definitions for basic_fn")
     }
     Ok(())
@@ -32,7 +33,7 @@ fn basic_fn() -> Result<(), ParseError> {
 
 #[test]
 fn infix1() -> Result<(), ParseError> {
-    let mut parser = setup("val x = a + b");
+    let mut parser = set_up("val x = a + b");
     let result = parser.parse_statement()?;
     assert!(matches!(
         result,
@@ -46,7 +47,7 @@ fn infix1() -> Result<(), ParseError> {
 
 #[test]
 fn infix2() -> Result<(), ParseError> {
-    let mut parser = setup("val x = a + b * doStuff(1, 2)");
+    let mut parser = set_up("val x = a + b * doStuff(1, 2)");
     let result = parser.parse_statement()?;
     if let Some(BlockStmt::ValDef(ValDef { value: Expression::BinaryOp(op), .. })) = &result {
         assert_eq!(op.operation, BinaryOpKind::Add);
@@ -67,7 +68,7 @@ fn infix2() -> Result<(), ParseError> {
 
 #[test]
 fn parse_eof() -> Result<(), ParseError> {
-    let mut parser = setup("");
+    let mut parser = set_up("");
     let result = parser.parse_expression()?;
     assert!(matches!(result, None));
     Ok(())
@@ -76,12 +77,12 @@ fn parse_eof() -> Result<(), ParseError> {
 #[test]
 fn fn_args_literal() -> Result<(), String> {
     let input = "f(myarg = 42,42,\"abc\")";
-    let mut parser = setup(input);
+    let mut parser = set_up(input);
     let result = parser.parse_expression();
     if let Ok(Some(Expression::FnCall(fn_call))) = result {
         let args = &fn_call.args;
-        assert_eq!(parser.get_ident_name(fn_call.name), "f");
-        assert_eq!(parser.get_ident_name(args[0].name.unwrap()), "myarg");
+        assert_eq!(&*parser.get_ident_name(fn_call.name), "f");
+        assert_eq!(&*parser.get_ident_name(args[0].name.unwrap()), "myarg");
         assert!(Expression::is_literal(&args[0].value));
         assert!(Expression::is_literal(&args[1].value));
         assert!(Expression::is_literal(&args[2].value));
@@ -96,7 +97,7 @@ fn fn_args_literal() -> Result<(), String> {
 #[test]
 fn if_no_else() -> ParseResult<()> {
     let input = "if x a";
-    let mut parser = setup(input);
+    let mut parser = set_up(input);
     let result = parser.parse_expression()?.unwrap();
     println!("{result:?}");
     Ok(())
@@ -105,7 +106,7 @@ fn if_no_else() -> ParseResult<()> {
 #[test]
 fn dot_accessor() -> ParseResult<()> {
     let input = "a.b.c";
-    let mut parser = setup(input);
+    let mut parser = set_up(input);
     let result = parser.parse_expression()?.unwrap();
     let Expression::FieldAccess(acc) = result else { panic!() };
     assert_eq!(acc.target.0.to_usize(), 2);
@@ -113,5 +114,44 @@ fn dot_accessor() -> ParseResult<()> {
     assert_eq!(acc2.target.0.to_usize(), 1);
     let Expression::Variable(v) = *acc2.base else { panic!() };
     assert_eq!(v.ident.0.to_usize(), 0);
+    Ok(())
+}
+
+#[test]
+fn type_parameter_single() -> ParseResult<()> {
+    let input = "Array[int]";
+    let mut parser = set_up(input);
+    let result = parser.parse_type_expression();
+    assert!(matches!(result, Ok(Some(TypeExpression::TypeApplication(_)))));
+    Ok(())
+}
+
+#[test]
+fn type_parameter_multi() -> ParseResult<()> {
+    let input = "Map[int, Array[int]]";
+    let mut parser = set_up(input);
+    let result = parser.parse_type_expression();
+    let Ok(Some(TypeExpression::TypeApplication(app))) = result else {
+        panic!("Expected type application")
+    };
+    assert_eq!(app.params.len(), 2);
+    let TypeExpression::TypeApplication(inner_app) = &app.params[1] else {
+        panic!("Expected second param to be a type application");
+    };
+    assert!(matches!(inner_app.params[0], TypeExpression::Int(_)));
+    Ok(())
+}
+
+#[test]
+fn prelude_only() -> Result<(), ParseError> {
+    env_logger::init();
+    let module = parse_text("", "prelude_only.nx", true)?;
+    assert_eq!(&module.name, "prelude_only.nx");
+    if let Some(Definition::FnDef(fndef)) = module.defs.first() {
+        assert_eq!(*module.get_ident_name(fndef.name), *"printInt")
+    } else {
+        println!("{module:?}");
+        panic!("no definitions in prelude");
+    }
     Ok(())
 }

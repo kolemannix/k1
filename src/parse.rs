@@ -1,5 +1,4 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::io::{BufReader, Read};
@@ -16,6 +15,7 @@ mod parse_test;
 
 #[derive(Debug)]
 pub enum Literal {
+    Unit(Span),
     Numeric(String, Span),
     Bool(bool, Span),
     String(String, Span),
@@ -24,6 +24,7 @@ pub enum Literal {
 impl Literal {
     pub fn get_span(&self) -> Span {
         match self {
+            Literal::Unit(span) => *span,
             Literal::Numeric(_, span) => *span,
             Literal::Bool(_, span) => *span,
             Literal::String(_, span) => *span,
@@ -33,6 +34,12 @@ impl Literal {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct IdentifierId(string_interner::symbol::SymbolU32);
+
+impl From<IdentifierId> for usize {
+    fn from(value: IdentifierId) -> Self {
+        value.0.to_usize()
+    }
+}
 
 impl Display for IdentifierId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -214,13 +221,14 @@ pub struct RecordType {
 
 #[derive(Debug)]
 pub struct TypeApplication {
-    pub base: Box<TypeExpression>,
+    pub base: IdentifierId,
     pub params: Vec<TypeExpression>,
     pub span: Span,
 }
 
 #[derive(Debug)]
 pub enum TypeExpression {
+    Unit(Span),
     Int(Span),
     Bool(Span),
     Record(RecordType),
@@ -232,6 +240,7 @@ impl TypeExpression {
     #[inline]
     pub fn get_span(&self) -> Span {
         match self {
+            TypeExpression::Unit(span) => *span,
             TypeExpression::Int(span) => *span,
             TypeExpression::Bool(span) => *span,
             TypeExpression::Record(record) => record.span,
@@ -248,6 +257,8 @@ pub struct FnDef {
     pub ret_type: Option<TypeExpression>,
     pub block: Option<Block>,
     pub span: Span,
+    // TODO: bitflags
+    pub is_intrinsic: bool,
 }
 
 #[derive(Debug)]
@@ -315,30 +326,22 @@ impl Display for ParseError {
 }
 impl std::error::Error for ParseError {}
 
-pub struct Source<'a> {
-    content: &'a str,
-    lines: Vec<&'a str>,
-}
-impl<'a> Source<'a> {
-    fn line(&self, num: u32) -> &'a str {
-        self.lines[num as usize]
-    }
+pub struct Source {
+    content: String,
 }
 
-struct Parser<'a> {
+struct Parser {
     tokens: TokenIter,
-    source: Source<'a>,
+    source: Source,
     identifiers: Rc<RefCell<Identifiers>>,
 }
 
-impl<'a> Parser<'a> {
-    pub fn ident_id(&mut self, s: impl AsRef<str>) -> IdentifierId {
+impl Parser {
+    pub fn ident_id(&self, s: impl AsRef<str>) -> IdentifierId {
         self.identifiers.borrow_mut().intern(s.as_ref())
     }
-    pub fn get_ident_name(&self, id: IdentifierId) -> String {
-        let idents = self.identifiers.borrow();
-        let n = idents.get_name(id).to_owned();
-        n
+    pub fn get_ident_name(&self, id: IdentifierId) -> impl std::ops::Deref<Target = str> + '_ {
+        std::cell::Ref::map(self.identifiers.borrow(), |idents| idents.get_name(id))
     }
     fn check<A>(value: Option<A>) -> ParseResult<Option<A>> {
         match value {
@@ -355,32 +358,31 @@ impl<'a> Parser<'a> {
     }
 }
 
-impl<'a> Parser<'a> {
+impl Parser {
     fn peek(&self) -> Token {
         self.tokens.peek()
     }
-    fn make(tokens: TokenIter, source: &'a str) -> Parser<'a> {
-        let lines = source.lines().collect();
+    fn make(tokens: TokenIter, source: String, use_prelude: bool) -> Parser {
         Parser {
             tokens,
-            source: Source { content: source, lines },
+            source: Source { content: source },
             identifiers: Rc::new(RefCell::new(Identifiers::default())),
         }
     }
-    fn current_line(&self) -> &str {
-        let span = self.peek().span;
-        self.source.line(span.line)
-    }
-    fn chars_at(&self, start: u32, end: u32) -> &'a str {
+    fn chars_at(&self, start: u32, end: u32) -> &str {
         &self.source.content[start as usize..end as usize]
     }
-    fn chars_at_span(&self, span: Span) -> &'a str {
+    fn chars_at_span(&self, span: Span) -> &str {
         self.chars_at(span.start, span.end)
     }
-    fn tok_chars(&self, tok: Token) -> &'a str {
+    fn tok_chars(&self, tok: Token) -> &str {
         let s = self.chars_at_span(tok.span);
         trace!("{} chars '{}'", tok.kind, s);
         s
+    }
+    // not a member fn; doesn't borrow all of self. <3 Rust
+    fn tok_chars_noself(source: &str, tok: Token) -> &str {
+        &source[tok.span.start as usize..tok.span.end as usize]
     }
 
     fn eat_token(&mut self, target_token: TokenKind) -> Option<Token> {
@@ -439,6 +441,13 @@ impl<'a> Parser<'a> {
         let (first, second) = self.tokens.peek_two();
         trace!("parse_literal {} {}", first.kind, second.kind);
         return match (first.kind, second.kind) {
+            (OpenParen, CloseParen) => {
+                trace!("parse_literal unit");
+                let span = first.span.extended(second.span);
+                self.tokens.advance();
+                self.tokens.advance();
+                Ok(Some(Literal::Unit(span)))
+            }
             (DoubleQuote, Text) => {
                 trace!("parse_literal string");
                 self.tokens.advance();
@@ -447,7 +456,7 @@ impl<'a> Parser<'a> {
                 if close.kind == DoubleQuote {
                     self.tokens.advance();
                     let text = self.tok_chars(second);
-                    let span = first.span.extended(&close.span);
+                    let span = first.span.extended(close.span);
                     Ok(Some(Literal::String(text.to_string(), span)))
                 } else {
                     Err(ParseError::ExpectedToken(DoubleQuote, close, None))
@@ -478,7 +487,7 @@ impl<'a> Parser<'a> {
 
     fn parse_record_type_field(&mut self) -> ParseResult<Option<RecordTypeField>> {
         let ident_id = self.expect_eat_ident()?;
-        self.expect_eat_token(Colon);
+        self.expect_eat_token(Colon)?;
         let typ_expr =
             Parser::expect("Type expression", self.peek(), self.parse_type_expression())?;
         Ok(Some(RecordTypeField { name: self.ident_id(ident_id), ty: typ_expr }))
@@ -491,8 +500,11 @@ impl<'a> Parser<'a> {
     fn parse_type_expression(&mut self) -> ParseResult<Option<TypeExpression>> {
         let tok = self.peek();
         if tok.kind == Text {
-            let ident = self.tok_chars(tok);
-            if ident == "int" {
+            let ident = Parser::tok_chars_noself(&self.source.content, tok);
+            if ident == "unit" {
+                self.tokens.advance();
+                Ok(Some(TypeExpression::Unit(tok.span)))
+            } else if ident == "int" {
                 self.tokens.advance();
                 Ok(Some(TypeExpression::Int(tok.span)))
             } else if ident == "bool" {
@@ -503,14 +515,16 @@ impl<'a> Parser<'a> {
                 let next = self.tokens.peek();
                 if next.kind == OpenBracket {
                     // parameterized type: Dict[int, int]
+                    self.tokens.advance();
                     let (type_parameters, params_span) =
                         self.eat_delimited(Comma, CloseBracket, |p| {
                             Parser::expect_type_expression(p)
                         })?;
+                    let ident = Parser::tok_chars_noself(&self.source.content, tok);
                     Ok(Some(TypeExpression::TypeApplication(TypeApplication {
-                        base: Box::new(TypeExpression::Name(self.ident_id(ident), tok.span)),
+                        base: self.ident_id(ident),
                         params: type_parameters,
-                        span: tok.span.extended(&params_span),
+                        span: tok.span.extended(params_span),
                     })))
                 } else {
                     Ok(Some(TypeExpression::Name(self.ident_id(ident), tok.span)))
@@ -571,7 +585,7 @@ impl<'a> Parser<'a> {
             let expr = Parser::expect("expression", parser.peek(), parser.parse_expression())?;
             Ok(RecordField { name: parser.ident_id(name), expr })
         })?;
-        let span = open_brace.span.extended(&fields_span);
+        let span = open_brace.span.extended(fields_span);
         Ok(Some(Record { fields, span }))
     }
 
@@ -590,7 +604,7 @@ impl<'a> Parser<'a> {
                         // Method call
                         todo!("method call parsing")
                     } else {
-                        let span = result.get_span().extended(&next.span);
+                        let span = result.get_span().extended(next.span);
                         result = Expression::FieldAccess(FieldAccess {
                             base: Box::new(result),
                             target: self.ident_id(target_ident),
@@ -615,13 +629,13 @@ impl<'a> Parser<'a> {
                 Some(op_kind) => {
                     let operand2 =
                         Parser::expect("rhs of binary op", self.peek(), self.parse_expression())?;
-                    let span = expr.get_span().extended(&operand2.get_span());
-                    return Ok(Expression::BinaryOp(BinaryOp {
+                    let span = expr.get_span().extended(operand2.get_span());
+                    Ok(Expression::BinaryOp(BinaryOp {
                         operation: op_kind,
                         operand1: Box::new(expr),
                         operand2: Box::new(operand2),
                         span,
-                    }));
+                    }))
                 }
             }
         } else {
@@ -641,11 +655,11 @@ impl<'a> Parser<'a> {
                 self.tokens.advance();
                 // Eat the OpenParen
                 self.tokens.advance();
-                match self.eat_delimited(Comma, CloseParen, |p| Parser::expect_fn_arg(p)) {
+                match self.eat_delimited(Comma, CloseParen, Parser::expect_fn_arg) {
                     Ok((args, args_span)) => Ok(Some(Expression::FnCall(FnCall {
                         name: self.ident_id(self.tok_chars(first)),
                         args,
-                        span: first.span.extended(&args_span),
+                        span: first.span.extended(args_span),
                     }))),
                     Err(e) => Err(ParseError::ExpectedNode(
                         "function arguments".to_string(),
@@ -666,7 +680,7 @@ impl<'a> Parser<'a> {
             // If you want a void or empty block, the required syntax is { () }
             trace!("parse_expr {:?} {:?} {:?}", first, second, third);
             if second.kind == CloseBrace {
-                let span = first.span.extended(&second.span);
+                let span = first.span.extended(second.span);
                 Ok(Some(Expression::Record(Record { fields: vec![], span })))
             } else if second.kind == Text && third.kind == Colon {
                 let record = Parser::expect("record", first, self.parse_record())?;
@@ -712,7 +726,7 @@ impl<'a> Parser<'a> {
         self.expect_eat_token(Equals)?;
         let initializer_expression =
             Parser::expect("expression", self.peek(), self.parse_expression())?;
-        let span = eaten_keyword.span.extended(&initializer_expression.get_span());
+        let span = eaten_keyword.span.extended(initializer_expression.get_span());
         Ok(Some(ValDef {
             name: self.ident_id(ident),
             ty: typ,
@@ -732,7 +746,7 @@ impl<'a> Parser<'a> {
         let typ = Parser::expect("type_expression", self.peek(), self.parse_type_expression())?;
         self.expect_eat_token(Equals)?;
         let value_expr = Parser::expect("expression", self.peek(), self.parse_expression())?;
-        let span = keyword_val_token.span.extended(&value_expr.get_span());
+        let span = keyword_val_token.span.extended(value_expr.get_span());
         ParseResult::Ok(Some(ConstVal { name: self.ident_id(ident), ty: typ, value_expr, span }))
     }
 
@@ -750,7 +764,7 @@ impl<'a> Parser<'a> {
             self.peek(),
             self.parse_expression(),
         )?;
-        let span = ident_token.span.extended(&expr.get_span());
+        let span = ident_token.span.extended(expr.get_span());
         let ident = self.tok_chars(ident_token).to_string();
         Ok(Some(Assignment { ident: self.ident_id(ident), expr, span }))
     }
@@ -764,7 +778,7 @@ impl<'a> Parser<'a> {
     }
 
     fn eat_fndef_args(&mut self) -> ParseResult<(Vec<FnArgDef>, Span)> {
-        self.eat_delimited(Comma, CloseParen, |p| Parser::eat_fn_arg_def(p))
+        self.eat_delimited(Comma, CloseParen, Parser::eat_fn_arg_def)
     }
 
     fn eat_delimited<T, F>(
@@ -829,7 +843,7 @@ impl<'a> Parser<'a> {
                 None
             };
             let end_span = alt.as_ref().map(|a| a.get_span()).unwrap_or(consequent_expr.get_span());
-            let span = if_keyword.span.extended(&end_span);
+            let span = if_keyword.span.extended(end_span);
             let if_expr =
                 IfExpr { cond: condition_expr.into(), cons: consequent_expr.into(), alt, span };
             Ok(Some(if_expr))
@@ -846,7 +860,7 @@ impl<'a> Parser<'a> {
             Ok(Some(BlockStmt::ValDef(val_def)))
         } else if let Some(return_token) = self.eat_token(KeywordReturn) {
             if let Some(ret_val) = self.parse_expression()? {
-                let span = return_token.span.extended(&ret_val.get_span());
+                let span = return_token.span.extended(ret_val.get_span());
                 let return_stmt = ReturnStmt { expr: ret_val, span };
                 Ok(Some(BlockStmt::ReturnStmt(return_stmt)))
             } else {
@@ -873,7 +887,7 @@ impl<'a> Parser<'a> {
             |p: &mut Parser| Parser::expect("statement", p.peek(), Parser::parse_statement(p));
         let (block_statements, statements_span) =
             self.eat_delimited(Semicolon, CloseBrace, closure)?;
-        let span = block_start.span.extended(&statements_span);
+        let span = block_start.span.extended(statements_span);
         Ok(Some(Block { stmts: block_statements, span }))
     }
 
@@ -890,7 +904,8 @@ impl<'a> Parser<'a> {
         let block = self.parse_block()?;
         let mut span = fn_keyword.span;
         span.end = block.as_ref().map(|b| b.span.end).unwrap_or(args_span.end);
-        Ok(Some(FnDef { name: self.ident_id(ident), args, ret_type, block, span }))
+        let is_intrinsic = &ident == "printInt";
+        Ok(Some(FnDef { name: self.ident_id(ident), args, ret_type, block, span, is_intrinsic }))
     }
 
     fn parse_typedef(&mut self) -> ParseResult<Option<TypeDefn>> {
@@ -900,7 +915,7 @@ impl<'a> Parser<'a> {
             let equals = self.expect_eat_token(Equals)?;
             let type_expr =
                 Parser::expect("Type expression", equals, self.parse_type_expression())?;
-            let span = keyword_type.span.extended(&type_expr.get_span());
+            let span = keyword_type.span.extended(type_expr.get_span());
             Ok(Some(TypeDefn { name: self.ident_id(ident), value_expr: type_expr, span }))
         } else {
             Ok(None)
@@ -923,7 +938,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn eat_module(&mut self, filename: &str) -> ParseResult<Module> {
+    fn parse_module(&mut self, filename: &str) -> ParseResult<Module> {
         let mut defs: Vec<Definition> = vec![];
 
         while let Some(def) = self.parse_definition()? {
@@ -959,16 +974,29 @@ fn print_tokens(content: &str, tokens: &[Token]) {
 
 // Eventually I want to keep the tokens around, and return them from here somehow, either in the
 // ast::Module or just separately
-pub fn parse_text(text: &str, module_name: &str) -> ParseResult<Module> {
-    let mut lexer = Lexer::make(text);
+pub fn parse_text(text: &str, module_name: &str, use_prelude: bool) -> ParseResult<Module> {
+    let full_source: String = if use_prelude {
+        let prelude = crate::prelude::PRELUDE_SOURCE;
+        let mut modified_source = String::from(prelude);
+        modified_source.push('\n');
+        modified_source.push_str(text);
+        modified_source
+    } else {
+        text.to_string()
+    };
+    log::info!("parser full source: {}", &full_source);
+
+    let mut lexer = Lexer::make(&full_source);
 
     let token_vec = lexer.run();
 
+    dbg!(&token_vec);
+
     let tokens: TokenIter = TokenIter::make(token_vec);
 
-    let mut parser = Parser::make(tokens, text);
+    let mut parser = Parser::make(tokens, full_source, use_prelude);
 
-    parser.eat_module(module_name)
+    parser.parse_module(module_name)
 }
 
 pub fn parse_file(path: &str) -> ParseResult<Module> {
@@ -976,5 +1004,5 @@ pub fn parse_file(path: &str) -> ParseResult<Module> {
     let mut buf_read = BufReader::new(file);
     let mut content = String::new();
     buf_read.read_to_string(&mut content).expect("read failed");
-    parse_text(&content, path)
+    parse_text(&content, path, false)
 }

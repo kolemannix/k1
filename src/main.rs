@@ -5,6 +5,7 @@ mod codegen_llvm;
 mod ir;
 mod lex;
 mod parse;
+mod prelude;
 #[cfg(test)]
 mod test_suite;
 
@@ -32,7 +33,8 @@ pub fn compile_single_file_program<'ctx>(
     filename: &str,
     source: &String,
 ) -> Result<Codegen<'ctx>> {
-    let ast = parse::parse_text(&source, filename).unwrap_or_else(|e| {
+    let use_prelude = true;
+    let ast = parse::parse_text(source, filename, use_prelude).unwrap_or_else(|e| {
         eprintln!("Encountered ParseError on file '{}': {:?}", filename, e);
         panic!("parse error");
     });
