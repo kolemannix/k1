@@ -52,8 +52,14 @@ pub struct TypeExpression {
     pub span: Span,
 }
 
+pub struct ArrayType {
+    pub element_ty: TypeRef,
+    pub span: Span,
+}
+
 pub enum Type {
     Record(RecordDefn),
+    Array(ArrayType),
     OpaqueAlias(TypeRef),
 }
 
@@ -334,9 +340,11 @@ impl Scopes {
     fn add_scope(&mut self, parent_scope_id: ScopeId) -> ScopeId {
         let mut scope = Scope::default();
         scope.parent = Some(parent_scope_id);
-        let id = self.scopes.len();
+        let id = self.scopes.len() as ScopeId;
         self.scopes.push(scope);
-        id as ScopeId
+        let parent_scope = self.get_scope_mut(parent_scope_id);
+        parent_scope.children.push(id);
+        id
     }
 
     fn get_root(&self) -> &Scope {
@@ -444,7 +452,7 @@ fn simple_fail<A, T: AsRef<str>>(s: T) -> IrGenResult<A> {
 
 impl IrModule {
     pub fn new(parsed_module: Rc<Module>) -> IrModule {
-        let mut module = IrModule {
+        IrModule {
             ast: parsed_module,
             src: String::new(),
             functions: Vec::new(),
@@ -452,43 +460,15 @@ impl IrModule {
             types: Vec::new(),
             constants: Vec::new(),
             scopes: Scopes::make(),
-        };
-        // TODO: Would be much better to write a prelude file
-        //       in the source lang with some "extern" function definitions
-        let println_arg = Variable {
-            name: module.ast.ident_id("printInt_value"),
-            ir_type: TypeRef::Int,
-            is_mutable: false,
-            owner_scope: Some(0),
-        };
-        let println_arg_id = module.add_variable(println_arg);
-        let intrinsic_functions = vec![Function {
-            name: module.ast.ident_id("printInt"),
-            ret_type: TypeRef::Unit,
-            params: vec![FuncParam {
-                name: module.ast.ident_id("value"),
-                variable_id: println_arg_id,
-                position: 0,
-                ir_type: TypeRef::Int,
-            }],
-            block: IrBlock {
-                ret_type: TypeRef::Unit,
-                scope_id: 0,
-                statements: Vec::with_capacity(0),
-                span: Span::NONE,
-            },
-            intrinsic_type: Some(IntrinsicFunctionType::PrintInt),
-        }];
-        for function in intrinsic_functions {
-            let name = function.name;
-            let function_id = module.add_function(function);
-            module.scopes.get_root_mut().add_function(name, function_id);
         }
-        module
     }
 
     pub fn name(&self) -> &str {
         &self.ast.name
+    }
+
+    fn get_ident_name(&self, id: IdentifierId) -> impl std::ops::Deref<Target = str> + '_ {
+        self.ast.get_ident_name(id)
     }
 
     fn add_type(&mut self, typ: Type) -> TypeId {
@@ -507,6 +487,7 @@ impl IrModule {
         scope_id: ScopeId,
     ) -> IrGenResult<TypeRef> {
         match expr {
+            parse::TypeExpression::Unit(_) => Ok(TypeRef::Unit),
             parse::TypeExpression::Int(_) => Ok(TypeRef::Int),
             parse::TypeExpression::Bool(_) => Ok(TypeRef::Bool),
             parse::TypeExpression::Record(record_defn) => {
@@ -529,7 +510,20 @@ impl IrModule {
                 })
             }
             parse::TypeExpression::TypeApplication(ty_app) => {
-                todo!("ir for type applications")
+                let base_name = self.ast.get_ident_name(ty_app.base);
+                if &*base_name == "Array" {
+                    drop(base_name);
+                    if ty_app.params.len() == 1 {
+                        let element_ty = self.eval_type_expr(&ty_app.params[0], scope_id)?;
+                        let array_ty = ArrayType { span: ty_app.span, element_ty };
+                        let type_id = self.add_type(Type::Array(array_ty));
+                        Ok(TypeRef::TypeId(type_id))
+                    } else {
+                        bail!("Expected 1 type parameter for Array")
+                    }
+                } else {
+                    todo!("ir for parameterized types")
+                }
             }
         }
     }
@@ -541,6 +535,7 @@ impl IrModule {
         scope_id: ScopeId,
     ) -> IrGenResult<TypeRef> {
         match expr {
+            parse::TypeExpression::Unit(_) => Ok(TypeRef::Unit),
             parse::TypeExpression::Int(_) => Ok(TypeRef::Int),
             parse::TypeExpression::Bool(_) => Ok(TypeRef::Bool),
             parse::TypeExpression::Record(_) => simple_fail("No const records yet"),
@@ -791,6 +786,7 @@ impl IrModule {
                 });
                 Ok(expr)
             }
+            Expression::Literal(Literal::Unit(span)) => Ok(IrExpr::Literal(IrLiteral::Unit(*span))),
             Expression::Literal(Literal::Numeric(s, span)) => {
                 let num = self.parse_numeric(s)?;
                 Ok(IrExpr::Literal(IrLiteral::Int(num, *span)))
@@ -838,10 +834,10 @@ impl IrModule {
                 Ok(IrExpr::Block(block))
             }
             Expression::FnCall(fn_call) => {
-                let function_id = self
-                    .scopes
-                    .find_function(scope_id, fn_call.name)
-                    .ok_or(simple_err(format!("Function not found: {}", fn_call.name)))?;
+                let function_id =
+                    self.scopes.find_function(scope_id, fn_call.name).ok_or(simple_err(
+                        format!("Function not found: {}", &*self.get_ident_name(fn_call.name)),
+                    ))?;
 
                 let function = &self.functions[function_id as usize];
                 let function_ret_type = function.ret_type;
@@ -967,10 +963,7 @@ impl IrModule {
             .block
             .as_ref()
             .ok_or(IRGenError::from("Top-level function definitions must have a body"))?;
-        // I need to push the block exprs into `exprs`, and push the actual block too to get its
-        // index, so I can put its index in the Expr::Func
         let body_block = self.eval_block(body_block, scope_id)?;
-        // If a return type was given in the AST, we need to typecheck it
         let ret_type: TypeRef = match &fn_def.ret_type {
             None => body_block.ret_type,
             Some(given_ret_type) => {
@@ -984,13 +977,16 @@ impl IrModule {
                 given_ir_type
             }
         };
-        let function = Function {
-            name: fn_def.name,
-            ret_type,
-            params,
-            block: body_block,
-            intrinsic_type: None,
+        let intrinsic_type = if fn_def.is_intrinsic {
+            match &*self.ast.get_ident_name(fn_def.name) {
+                "printInt" => Some(IntrinsicFunctionType::PrintInt),
+                _ => None,
+            }
+        } else {
+            None
         };
+        let function =
+            Function { name: fn_def.name, ret_type, params, block: body_block, intrinsic_type };
         let function_id = self.add_function(function);
         self.scopes.add_function(scope_id, fn_def.name, function_id);
         Ok(function_id)
@@ -1045,7 +1041,7 @@ mod test {
     #[test]
     fn const_definition_1() -> Result<(), Box<dyn Error>> {
         let src = r"val x: int = 420;";
-        let module = parse_text(src, "basic_fn.nx")?;
+        let module = parse_text(src, "basic_fn.nx", false)?;
         let mut ir = IrModule::new(Rc::new(module));
         ir.run()?;
         let i1 = &ir.constants[0];
@@ -1071,7 +1067,7 @@ mod test {
           y = 42 + 42;
           return foo();
         }"#;
-        let module = parse_text(src, "basic_fn.nx")?;
+        let module = parse_text(src, "basic_fn.nx", false)?;
         let mut ir = IrModule::new(Rc::new(module));
         ir.run()?;
         println!("{:?}", ir.functions);

@@ -19,6 +19,7 @@ use std::path::Path;
 use std::rc::Rc;
 
 use crate::ir::*;
+use crate::parse::IdentifierId;
 
 struct BuiltinTypes<'ctx> {
     i64: IntType<'ctx>,
@@ -192,6 +193,10 @@ impl<'ctx> Codegen<'ctx> {
         }
     }
 
+    fn get_ident_name(&self, id: IdentifierId) -> impl std::ops::Deref<Target = str> + '_ {
+        self.module.ast.get_ident_name(id)
+    }
+
     fn build_print_int_call(&mut self, call: &FunctionCall) -> BasicValueEnum<'ctx> {
         // Assume the arg is an int since that's what the intrinsic typechecks for
         let first_arg = self.codegen_expr(&call.args[0]).loaded_value(&self.builder);
@@ -216,7 +221,7 @@ impl<'ctx> Codegen<'ctx> {
         call
     }
     fn codegen_type(&mut self, type_ref: TypeRef) -> BasicTypeEnum<'ctx> {
-        trace!("typechecking {type_ref:?}");
+        trace!("codegen for type {type_ref:?}");
         match type_ref {
             TypeRef::Int => self.builtin_types.i64.as_basic_type_enum(),
             TypeRef::Bool => self.builtin_types.boolean.as_basic_type_enum(),
@@ -239,6 +244,9 @@ impl<'ctx> Codegen<'ctx> {
                             }
                             Type::OpaqueAlias(alias) => {
                                 todo!("opaque alias")
+                            }
+                            Type::Array(array) => {
+                                todo!("codegen for Array")
                             }
                         }
                     }
@@ -424,10 +432,10 @@ impl<'ctx> Codegen<'ctx> {
             return self.codegen_intrinsic(intrinsic_type, call);
         }
 
-        let function_value = *self
-            .llvm_functions
-            .get(&call.callee_function_id)
-            .unwrap_or_else(|| panic!("LLVM function not found: {}", callee.name));
+        let function_value =
+            *self.llvm_functions.get(&call.callee_function_id).unwrap_or_else(|| {
+                panic!("LLVM function not found: {}", &*self.get_ident_name(callee.name))
+            });
         let args: Vec<BasicMetadataValueEnum<'ctx>> = call
             .args
             .iter()
