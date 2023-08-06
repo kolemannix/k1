@@ -364,7 +364,7 @@ impl Scopes {
 
     fn find_variable(&self, scope: ScopeId, ident: IdentifierId) -> Option<VariableId> {
         let scope = self.get_scope(scope);
-        if let v @ Some(r) = scope.find_variable(ident) {
+        if let v @ Some(_r) = scope.find_variable(ident) {
             return v;
         }
         match scope.parent {
@@ -500,7 +500,7 @@ impl IrModule {
                 let type_id = self.add_type(Type::Record(record_defn));
                 Ok(TypeRef::TypeId(type_id))
             }
-            parse::TypeExpression::Name(ident, span) => {
+            parse::TypeExpression::Name(ident, _span) => {
                 let ty_ref = self.scopes.find_type(scope_id, *ident);
                 ty_ref.ok_or_else(|| {
                     anyhow!(
@@ -532,7 +532,7 @@ impl IrModule {
     fn eval_const_type_expr(
         &self,
         expr: &parse::TypeExpression,
-        scope_id: ScopeId,
+        _scope_id: ScopeId,
     ) -> IrGenResult<TypeRef> {
         match expr {
             parse::TypeExpression::Unit(_) => Ok(TypeRef::Unit),
@@ -613,7 +613,7 @@ impl IrModule {
         let ir_type = self.eval_const_type_expr(typ, scope_id)?;
         let num = match value {
             Expression::Literal(Literal::Numeric(n, _span)) => self.parse_numeric(n)?,
-            other => return simple_fail("Only literals are currently supported as constants"),
+            _other => return simple_fail("Only literals are currently supported as constants"),
         };
         let expr = IrExpr::Literal(IrLiteral::Int(num, *span));
         let variable_id = self.add_variable(Variable {
@@ -662,7 +662,7 @@ impl IrModule {
         // Eventually we need to find out what type of number literal this is.
         // For now we only support i64
         let num: i64 =
-            s.parse().map_err(|e| simple_err("Failed to parse signed numeric literal"))?;
+            s.parse().map_err(|_e| simple_err("Failed to parse signed numeric literal"))?;
         Ok(num)
     }
 

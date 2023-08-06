@@ -1,12 +1,12 @@
 use anyhow::Result;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
-use inkwell::intrinsics::Intrinsic;
+
 use inkwell::module::Linkage;
 use inkwell::passes::{PassManager, PassManagerBuilder};
 use inkwell::targets::{InitializationConfig, Target, TargetMachine};
 use inkwell::types::{
-    BasicMetadataTypeEnum, BasicType, BasicTypeEnum, IntType, PointerType, StringRadix, StructType,
+    BasicMetadataTypeEnum, BasicType, BasicTypeEnum, IntType, PointerType, StructType,
 };
 use inkwell::values::{
     ArrayValue, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue,
@@ -110,12 +110,12 @@ impl<'ctx> GeneratedValue<'ctx> {
     fn expect_value(&self) -> BasicValueEnum<'ctx> {
         match self {
             GeneratedValue::Value(value) => *value,
-            GeneratedValue::Pointer(pointer) => panic!("Expected Value but got Pointer"),
+            GeneratedValue::Pointer(_pointer) => panic!("Expected Value but got Pointer"),
         }
     }
     fn expect_pointer(&self) -> Pointer<'ctx> {
         match self {
-            GeneratedValue::Value(value) => panic!("Expected Pointer but got Value"),
+            GeneratedValue::Value(_value) => panic!("Expected Pointer but got Value"),
             GeneratedValue::Pointer(pointer) => *pointer,
         }
     }
@@ -242,10 +242,10 @@ impl<'ctx> Codegen<'ctx> {
                                 self.llvm_types.insert(type_id, struct_type.as_basic_type_enum());
                                 struct_type.as_basic_type_enum()
                             }
-                            Type::OpaqueAlias(alias) => {
+                            Type::OpaqueAlias(_alias) => {
                                 todo!("opaque alias")
                             }
-                            Type::Array(array) => {
+                            Type::Array(_array) => {
                                 todo!("codegen for Array")
                             }
                         }
@@ -416,7 +416,7 @@ impl<'ctx> Codegen<'ctx> {
                 TypeRef::Unit => panic!("No unit binary ops"),
                 TypeRef::TypeId(_) => todo!("codegen for binary ops on user-defined types"),
             },
-            IrExpr::Block(block) => {
+            IrExpr::Block(_block) => {
                 // This is just a lexical scoping block, not a control-flow block, so doesn't need
                 // to correspond to an LLVM basic block
                 // We just need to codegen each statement and assign the return value to an alloca
