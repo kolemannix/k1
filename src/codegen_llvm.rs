@@ -268,6 +268,18 @@ impl<'ctx> Codegen<'ctx> {
 
     fn codegen_literal(&mut self, literal: &IrLiteral) -> GeneratedValue<'ctx> {
         match literal {
+            IrLiteral::Unit(_) => self.builtin_types.unit_value.as_basic_value_enum().into(),
+            IrLiteral::Bool(b, _) => match b {
+                true => self.builtin_types.true_value.as_basic_value_enum().into(),
+                false => self.builtin_types.false_value.as_basic_value_enum().into(),
+            },
+            IrLiteral::Int(int_value, _) => {
+                // LLVM only has unsigned values, the instructions are what provide the semantics
+                // of signed vs unsigned
+                let value = self.builtin_types.i64.const_int(*int_value as u64, false);
+                value.as_basic_value_enum().into()
+            }
+            IrLiteral::Str(_, _) => todo!("codegen String"),
             IrLiteral::Record(record) => {
                 let ty = self.codegen_type(TypeRef::TypeId(record.type_id));
                 // let struct_ty = ty.get_element_type().into_struct_type();
@@ -280,18 +292,9 @@ impl<'ctx> Codegen<'ctx> {
                 }
                 GeneratedValue::Pointer(Pointer { pointee_ty: ty, pointer: struct_ptr })
             }
-            IrLiteral::Unit(_) => self.builtin_types.unit_value.as_basic_value_enum().into(),
-            IrLiteral::Int(int_value, _) => {
-                // LLVM only has unsigned values, the instructions are what provide the semantics
-                // of signed vs unsigned
-                let value = self.builtin_types.i64.const_int(*int_value as u64, false);
-                value.as_basic_value_enum().into()
+            IrLiteral::Array(_array) => {
+                todo!("codegen array literal")
             }
-            IrLiteral::Bool(b, _) => match b {
-                true => self.builtin_types.true_value.as_basic_value_enum().into(),
-                false => self.builtin_types.false_value.as_basic_value_enum().into(),
-            },
-            IrLiteral::Str(_, _) => todo!("codegen String"),
         }
     }
     fn codegen_if_else(&mut self, ir_if: &IrIf) -> GeneratedValue<'ctx> {
