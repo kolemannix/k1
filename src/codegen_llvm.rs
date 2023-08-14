@@ -75,7 +75,7 @@ impl<'ctx> From<&Pointer<'ctx>> for GeneratedValue<'ctx> {
 }
 
 /// When we codegen an expression, sometimes the result is a pointer value, which does
-/// not contain type information, so we return the pointee type in that case
+/// not contain type information, so we add the pointee type in that case
 #[derive(Copy, Clone)]
 enum GeneratedValue<'ctx> {
     Value(BasicValueEnum<'ctx>),
@@ -461,6 +461,24 @@ impl<'ctx> Codegen<'ctx> {
                 self.build_print_int_call(call);
                 self.builtin_types.unit_value.as_basic_value_enum().into()
             }
+            IntrinsicFunctionType::ArrayIndex => {
+                let pointee_ty = self.codegen_type(call.ret_type);
+                let array_expr = &call.args[0];
+                let index_expr = &call.args[1];
+                let array_value = self.codegen_expr(array_expr);
+                let index_value = self.codegen_expr(index_expr);
+                let array_value_as_ptr = array_value.expect_pointer();
+                let index_int_value = index_value.loaded_value(&self.builder).into_int_value();
+                unsafe {
+                    let gep_ptr = self.builder.build_gep(
+                        pointee_ty,
+                        array_value_as_ptr.pointer,
+                        &[index_int_value],
+                        "array_index",
+                    );
+                    Pointer { pointee_ty, pointer: gep_ptr }.into()
+                }
+            }
         }
     }
     // This needs to return either a basic value or an instruction value (in the case of early return)
@@ -525,6 +543,10 @@ impl<'ctx> Codegen<'ctx> {
         //       module ID)
         for (function_id, function) in self.module.clone().functions.iter().enumerate() {
             if function.intrinsic_type.is_some() {
+                // FIXME: Is this correct to not even codegen a function?
+                //        It means we are 'inlining' all intrinsics unconditionally
+                //        Probably should make an llvm function and implement it ourselves,
+                //        and call it regularly
                 continue;
             }
             let param_types: Vec<BasicMetadataTypeEnum> = function

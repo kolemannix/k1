@@ -7,11 +7,18 @@ use string_interner::Symbol;
 
 use TokenKind::*;
 
+use crate::ir::IntrinsicFunctionType;
 use crate::lex::*;
 use log::trace;
 
 #[cfg(test)]
 mod parse_test;
+
+#[derive(Debug)]
+pub struct ArrayExpr {
+    pub elements: Vec<Expression>,
+    pub span: Span,
+}
 
 #[derive(Debug)]
 pub enum Literal {
@@ -133,8 +140,20 @@ pub struct RecordField {
 }
 
 #[derive(Debug)]
+/// Example:
+/// { foo: 1, bar: false }
+///   ^................^ fields
 pub struct Record {
     pub fields: Vec<RecordField>,
+    pub span: Span,
+}
+
+#[derive(Debug)]
+/// Example: users  [42]
+///          ^target ^index_value
+pub struct IndexOperation {
+    pub target: Box<Expression>,
+    pub index_expr: Box<Expression>,
     pub span: Span,
 }
 
@@ -148,6 +167,8 @@ pub enum Expression {
     Block(Block),
     If(IfExpr),
     Record(Record),
+    IndexOperation(IndexOperation),
+    Array(ArrayExpr),
 }
 
 impl Expression {
@@ -164,6 +185,8 @@ impl Expression {
             Expression::Block(block) => block.span,
             Expression::If(if_expr) => if_expr.span,
             Expression::Record(record) => record.span,
+            Expression::IndexOperation(op) => op.span,
+            Expression::Array(array_expr) => array_expr.span,
         }
     }
 }
@@ -391,7 +414,7 @@ impl Parser {
         // It works OK here, but we do a lot of peeking at the next 1-3 tokens
         // If any are line comments, that peeking code will not produce
         // the correct result!
-        // Instead, we should probably filter the comments out after lexing
+        // Instead, we need to filter the comments out after lexing
         // Since the spans will remain correct
         if tok.kind == LineComment {
             self.tokens.advance();
@@ -694,6 +717,15 @@ impl Parser {
         } else if first.kind == KeywordIf {
             let if_expr = Parser::expect("If Expression", first, self.parse_if_expr())?;
             Ok(Some(Expression::If(if_expr)))
+        } else if first.kind == OpenBracket {
+            // Array
+            let start = self.expect_eat_token(OpenBracket)?;
+            let (elements, span) =
+                self.eat_delimited(TokenKind::Comma, TokenKind::CloseBracket, |p| {
+                    Parser::expect("expression", start, p.parse_expression())
+                })?;
+            let span = start.span.extended(span);
+            Ok(Some(Expression::Array(ArrayExpr { elements: elements, span })))
         } else {
             // More expression types
             Ok(None)
@@ -904,7 +936,9 @@ impl Parser {
         let block = self.parse_block()?;
         let mut span = fn_keyword.span;
         span.end = block.as_ref().map(|b| b.span.end).unwrap_or(args_span.end);
-        let is_intrinsic = &ident == "printInt";
+        // FIXME: Eventually, we'll use an 'intern' keyword to mark intrinsic decls
+        //        But for now, we are relying on the name
+        let is_intrinsic = IntrinsicFunctionType::from_function_name(&ident).is_some();
         Ok(Some(FnDef { name: self.ident_id(ident), args, ret_type, block, span, is_intrinsic }))
     }
 
@@ -989,8 +1023,6 @@ pub fn parse_text(text: &str, module_name: &str, use_prelude: bool) -> ParseResu
     let mut lexer = Lexer::make(&full_source);
 
     let token_vec = lexer.run();
-
-    dbg!(&token_vec);
 
     let tokens: TokenIter = TokenIter::make(token_vec);
 

@@ -35,6 +35,14 @@ fn test_file<'ctx, P: AsRef<Path>>(ctx: &'ctx Context, path: P) -> Result<()> {
 
 #[cfg(test)]
 #[test]
+pub fn hello_array() -> Result<()> {
+    let ctx = Context::create();
+    test_file(&ctx, "resources/test_src/hello_array.nx")?;
+    Ok(())
+}
+
+#[cfg(test)]
+#[test]
 pub fn run_all() -> Result<()> {
     let ctx = Context::create();
     let test_dir = "resources/test_src";

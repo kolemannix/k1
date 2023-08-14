@@ -1,0 +1,4 @@
+fn main(): int {
+  val xs: Array[int] = [1,2];
+  return 0;
+}
