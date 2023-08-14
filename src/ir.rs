@@ -1,5 +1,6 @@
 #![allow(clippy::match_like_matches_macro)]
 
+use crate::ir::TypeRef::Int;
 use crate::lex::Span;
 use crate::parse;
 use crate::parse::{
@@ -145,8 +146,15 @@ pub struct RecordField {
 #[derive(Debug, Clone)]
 pub struct Record {
     pub fields: Vec<RecordField>,
-    pub span: Span,
     pub type_id: TypeId,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct ArrayLiteral {
+    pub elements: Vec<IrExpr>,
+    pub type_id: TypeId,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -156,6 +164,7 @@ pub enum IrLiteral {
     Int(i64, Span),
     Bool(bool, Span),
     Record(Record),
+    Array(ArrayLiteral),
 }
 
 impl IrLiteral {
@@ -329,7 +338,7 @@ pub struct IrModule {
 
 pub struct Scopes {
     scopes: Vec<Scope>,
-    intrinsic_functions: HashMap<FunctionId, IntrinsicFunctionType>,
+    intrinsic_functions: HashMap<IntrinsicFunctionType, FunctionId>,
 }
 
 impl Scopes {
@@ -404,9 +413,20 @@ impl Scopes {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IntrinsicFunctionType {
     PrintInt,
+    ArrayIndex,
+}
+
+impl IntrinsicFunctionType {
+    pub fn from_function_name(value: &str) -> Option<Self> {
+        match value {
+            "printInt" => Some(IntrinsicFunctionType::PrintInt),
+            "_arrayIndex" => Some(IntrinsicFunctionType::ArrayIndex),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -691,6 +711,64 @@ impl IrModule {
     // Maybe, pass in expected type for smarter stuff
     fn eval_expr(&mut self, expr: &Expression, scope_id: ScopeId) -> IrGenResult<IrExpr> {
         match expr {
+            Expression::Array(array_expr) => {
+                // Do I need to make a type? What do I do for records?
+                // I think I make a type from the literal.
+                // Yet another place where passing in the expected type
+                // would be effective
+
+                let elements: Vec<IrExpr> = {
+                    let mut elements = Vec::new();
+                    for elem in &array_expr.elements {
+                        let ir_expr = self.eval_expr(elem, scope_id)?;
+                        elements.push(ir_expr);
+                    }
+                    elements
+                };
+                Ok(IrExpr::Literal(IrLiteral::Array(ArrayLiteral {
+                    elements,
+                    type_id: 0,
+                    span: array_expr.span,
+                })))
+            }
+            Expression::IndexOperation(index_op) => {
+                // De-sugar to _arrayIndex(target, index)
+                // TODO: Indexing only works for builtin Array for now
+                let target = self.eval_expr(&index_op.target, scope_id)?;
+                let TypeRef::TypeId(target_type_id) =  target.get_type() else {
+                    bail!("index base must be an array")
+                };
+                let index_expr = self.eval_expr(&index_op.index_expr, scope_id)?;
+                if index_expr.get_type() != TypeRef::Int {
+                    bail!("index type must be int")
+                }
+
+                let target_type = self.get_type(target_type_id);
+                let Type::Array(array_type) = target_type else {
+                    bail!("index base must be an array")
+                };
+                let TypeRef::Int = array_type.element_ty else {
+                    bail!("array type must be int")
+                };
+                // Special-case: call prelude function "_array_access"
+                // Just need to look up the ID by intrinsic type
+                let array_index_fn = self
+                    .scopes
+                    .intrinsic_functions
+                    .get(&IntrinsicFunctionType::ArrayIndex)
+                    .unwrap();
+                // Amazingly we actually have a polymorphic call here, even
+                // though we can't express it in the source yet,
+                // since ret_type is bound to the element type of the array
+
+                // _arrayIndex(array, 42)
+                Ok(IrExpr::FunctionCall(FunctionCall {
+                    callee_function_id: *array_index_fn,
+                    args: vec![target, index_expr],
+                    ret_type: array_type.element_ty,
+                    span: index_op.span,
+                }))
+            }
             Expression::Record(ast_record) => {
                 let mut fields = Vec::new();
                 let mut field_types = Vec::new();
@@ -973,10 +1051,8 @@ impl IrModule {
             }
         };
         let intrinsic_type = if fn_def.is_intrinsic {
-            match &*self.ast.get_ident_name(fn_def.name) {
-                "printInt" => Some(IntrinsicFunctionType::PrintInt),
-                _ => None,
-            }
+            let name = &*self.ast.get_ident_name(fn_def.name);
+            IntrinsicFunctionType::from_function_name(name)
         } else {
             None
         };
@@ -984,6 +1060,9 @@ impl IrModule {
             Function { name: fn_def.name, ret_type, params, block: body_block, intrinsic_type };
         let function_id = self.add_function(function);
         self.scopes.add_function(scope_id, fn_def.name, function_id);
+        if let Some(intrinsic_type) = intrinsic_type {
+            self.scopes.intrinsic_functions.insert(intrinsic_type, function_id);
+        }
         Ok(function_id)
     }
     fn eval_definition(&mut self, def: &Definition) -> IrGenResult<()> {

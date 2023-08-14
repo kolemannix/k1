@@ -19,19 +19,19 @@ I do this. I share this chapter of The Mythical Man-Month with my programming st
 > The programmer, like the poet, works only slightly removed from pure thought-stuff. He builds his castles in the air, from air, creating by exertion of the imagination. Few media of creation are so flexible, so easy to polish and rework, so readily capable of realizing grand conceptual structures.... Yet the program construct, unlike the poet's words, is real in the sense that it moves and works, producing visible outputs separate from the construct itself. 
 
 I'm realizing that my interest has never really been in applications at all, but in foundations, in the systems and libraries that make our software tick.
-I want to build my own castles, not simply learn my way around other people's castles.
+I want to build my own castles, not just learn my way around other people's castles.
 
-There are only like 15 industrially viable programming languages in the world. Building one when you have a full-time job and a family
+There are only like 15 industrially viable programming languages in the world. If your goal is adoption and recognition, building one when you have a full-time job and a family
 is an absolute waste of time. You can't possibly hope to compete. For awhile I thought about what side project I would throw my entire being into once
 I started programming outside of work again. I saw myself as biding my time, growing in maturity as an engineer, lying in wait to spring that world-class side
 project on the world. I bought domain names like naturaldb.dev (I have a great idea for a database, let me tell you!) and thought that if I ever tried to make anything, 
-it had to be world-class and industrially viable, make the top page of hacker news, otherwise I'd been wasting my free time and embarassing myself.
+it had to be world-class and industrially viable, make the top page of hackernews, otherwise I'd been wasting my free time and embarassing myself.
 
 But over the last year, through projects like Andreas Kling's SerenityOS and Jakt, Tsoding's 'recreational programming', the Helix editor, and little things like Advent of Code,
 I've realized that computers can be for fun again. I can grind on pull requests and large stable systems, worry about backwards-compatible SQL migrations, and trawl through 
 production logs and plan sprints by day, and still work on interesting software at night. Even if I only find 1 free hour this week, maybe I'll clean up something in the parser, 
-maybe I'll just fix warnings, or bikeshed about syntax (for real syntax is so important its how our brains work its literally the purpose of programming languages and not so easy
-to separate from 'semantics' so don't get me started) for Arrays in my silly little language. Once it becomes recreational, it's all fun. It's not a side hustle, 
+maybe I'll just fix warnings, or think about syntax (for real: syntax is so important its how our brains work its literally the purpose of programming languages and not so easy
+to separate from 'semantics' so don't get me started) for Arrays in my little language. Once it becomes recreational, it's all fun. It's not a side hustle, 
 it's just what I like to do. It just took me 10 years to discover it again, but this time at a deeper level.
 
 # Up next maybe
@@ -45,15 +45,17 @@ it's just what I like to do. It just took me 10 years to discover it again, but 
   - [x] Accessor codegen
 - [x] Identifier cleanup and interning
 - [x] Actual scoping
+- [x] Real prelude so we can more easily add runtime/stl functions (for array)
+- [ ] Heap memory
 - [ ] Arrays (Dynamic only and first for now)
 - [ ] Optionals
-- [ ] Function syntax change (foo = fn (a, b, c): int { } 
+- [ ] Function syntax change (foo = fn (a, b, c): int { }
 - [ ] Ditch semicolons? (this technically introduces significant whitespace)
+- [ ] Syntax overhaul; from qualifier-focused to name -focused
 - [x] Binary infix operations
 - [ ] basic error reporting using spans
 - [ ] oneofs (tagged unions)
 - [ ] Loops
-- [ ] Heap memory
 - [ ] Control-Flow: proper codegen for early returns:
     // This needs to return either a basic value or an instruction value (in the case of early return)
     // Actually, early return is a big rabbit hole. We need to typecheck it in ir gen, and probably
