@@ -53,11 +53,13 @@ pub struct TypeExpression {
     pub span: Span,
 }
 
+#[derive(Debug, Clone)]
 pub struct ArrayType {
-    pub element_ty: TypeRef,
+    pub element_type: TypeRef,
     pub span: Span,
 }
 
+#[derive(Debug, Clone)]
 pub enum Type {
     Record(RecordDefn),
     Array(ArrayType),
@@ -160,9 +162,9 @@ pub struct ArrayLiteral {
 #[derive(Debug, Clone)]
 pub enum IrLiteral {
     Unit(Span),
-    Str(String, Span),
-    Int(i64, Span),
     Bool(bool, Span),
+    Int(i64, Span),
+    Str(String, Span),
     Record(Record),
     Array(ArrayLiteral),
 }
@@ -176,6 +178,7 @@ impl IrLiteral {
             IrLiteral::Int(_, span) => *span,
             IrLiteral::Bool(_, span) => *span,
             IrLiteral::Record(record) => record.span,
+            IrLiteral::Array(arr) => arr.span,
         }
     }
 }
@@ -220,6 +223,7 @@ impl IrExpr {
             IrExpr::Literal(IrLiteral::Int(_, _)) => TypeRef::Int,
             IrExpr::Literal(IrLiteral::Bool(_, _)) => TypeRef::Bool,
             IrExpr::Literal(IrLiteral::Record(record)) => TypeRef::TypeId(record.type_id),
+            IrExpr::Literal(IrLiteral::Array(arr)) => TypeRef::TypeId(arr.type_id),
             IrExpr::Variable(var) => var.ir_type,
             IrExpr::FieldAccess(field_access) => field_access.target_field.ty,
             IrExpr::BinaryOp(binary_op) => binary_op.ir_type,
@@ -535,7 +539,7 @@ impl IrModule {
                     drop(base_name);
                     if ty_app.params.len() == 1 {
                         let element_ty = self.eval_type_expr(&ty_app.params[0], scope_id)?;
-                        let array_ty = ArrayType { span: ty_app.span, element_ty };
+                        let array_ty = ArrayType { span: ty_app.span, element_type: element_ty };
                         let type_id = self.add_type(Type::Array(array_ty));
                         Ok(TypeRef::TypeId(type_id))
                     } else {
@@ -607,7 +611,7 @@ impl IrModule {
     }
 
     fn typecheck_types(&self, expected: TypeRef, actual: TypeRef) -> IrGenResult<()> {
-        // Eventually, types can be compatible without being equal
+        // Types can be compatible without being equal
         // While we won't have inheritance, there will be some shallow subtyping
         // and interfaces
         if expected == actual {
@@ -619,7 +623,10 @@ impl IrModule {
                     let ty2 = self.get_type(id2);
                     match (ty1, ty2) {
                         (Type::Record(r1), Type::Record(r2)) => self.typecheck_record(r1, r2),
-                        _ => todo!("typecheck_types: other types"),
+                        (Type::Array(a1), Type::Array(a2)) => {
+                            self.typecheck_types(a1.element_type, a2.element_type)
+                        }
+                        _ => todo!("typecheck_types: other types: {ty1:?}, {ty2:?}"),
                     }
                 }
                 _ => bail!("Unrelated types failed typecheck"),
@@ -712,22 +719,30 @@ impl IrModule {
     fn eval_expr(&mut self, expr: &Expression, scope_id: ScopeId) -> IrGenResult<IrExpr> {
         match expr {
             Expression::Array(array_expr) => {
-                // Do I need to make a type? What do I do for records?
-                // I think I make a type from the literal.
                 // Yet another place where passing in the expected type
                 // would be effective
-
+                // What is the type of an array literal?
+                // If we have some subtyping, the 'widest' common element type
+                // Maybe just the type of the first element and enforce homogeneous
+                // IF empty, Never?
+                let mut element_type: TypeRef = TypeRef::Unit;
                 let elements: Vec<IrExpr> = {
                     let mut elements = Vec::new();
                     for elem in &array_expr.elements {
                         let ir_expr = self.eval_expr(elem, scope_id)?;
+                        if element_type != TypeRef::Unit {
+                            self.typecheck_types(element_type, ir_expr.get_type())?
+                        }
+                        element_type = ir_expr.get_type();
                         elements.push(ir_expr);
                     }
                     elements
                 };
+                let array_type = ArrayType { element_type, span: array_expr.span };
+                let type_id = self.add_type(Type::Array(array_type));
                 Ok(IrExpr::Literal(IrLiteral::Array(ArrayLiteral {
                     elements,
-                    type_id: 0,
+                    type_id,
                     span: array_expr.span,
                 })))
             }
@@ -747,7 +762,7 @@ impl IrModule {
                 let Type::Array(array_type) = target_type else {
                     bail!("index base must be an array")
                 };
-                let TypeRef::Int = array_type.element_ty else {
+                let TypeRef::Int = array_type.element_type else {
                     bail!("array type must be int")
                 };
                 // Special-case: call prelude function "_array_access"
@@ -765,7 +780,7 @@ impl IrModule {
                 Ok(IrExpr::FunctionCall(FunctionCall {
                     callee_function_id: *array_index_fn,
                     args: vec![target, index_expr],
-                    ret_type: array_type.element_ty,
+                    ret_type: array_type.element_type,
                     span: index_op.span,
                 }))
             }
