@@ -191,6 +191,7 @@ impl TokenKind {
     pub fn is_postfix_operator(&self) -> bool {
         match self {
             Dot => true,
+            OpenBracket => true,
             _ => false,
         }
     }
