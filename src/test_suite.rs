@@ -7,7 +7,7 @@ fn test_file<'ctx, P: AsRef<Path>>(ctx: &'ctx Context, path: P) -> Result<()> {
     let path = path.as_ref();
     let filename = path.file_name().unwrap().to_str().unwrap();
     let src = std::fs::read_to_string(path)?;
-    println!("********** TEST CASE: {:?} **********", path);
+    println!("********** {:?} **********", filename);
     let codegen = crate::compile_single_file_program(ctx, filename, &src).map_err(|err| {
         eprintln!("TEST CASE FAILED COMPILE: {:?}", path);
         eprintln!("Reason:           {}", err);
@@ -28,8 +28,13 @@ fn test_file<'ctx, P: AsRef<Path>>(ctx: &'ctx Context, path: P) -> Result<()> {
     } else {
         None
     };
-    println!("{:?} result: {} vs {:?}", path, result, expected_result);
-
+    match expected_result {
+        None => println!("result: {result}"),
+        Some(exp) => {
+            println!("result: {result} expected: {exp}");
+            // assert_eq!(result, exp)
+        }
+    }
     Ok(())
 }
 
