@@ -4,3 +4,4 @@ fn main(x: int): int {
   val x: int = 42;
   return x;
 }
+// 42

@@ -1,6 +1,7 @@
 use anyhow::Result;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
+use std::any::Any;
 
 use inkwell::module::Linkage;
 use inkwell::passes::{PassManager, PassManagerBuilder};
@@ -54,12 +55,19 @@ pub struct Codegen<'ctx> {
     builtin_globals: HashMap<String, GlobalValue<'ctx>>,
     builtin_types: BuiltinTypes<'ctx>,
     default_address_space: AddressSpace,
+    heap_address_space: AddressSpace,
 }
 
 #[derive(Copy, Clone)]
 struct Pointer<'ctx> {
     pointee_ty: BasicTypeEnum<'ctx>,
     pointer: PointerValue<'ctx>,
+}
+
+impl<'ctx> Pointer<'ctx> {
+    fn loaded_value(&self, builder: &Builder<'ctx>) -> BasicValueEnum<'ctx> {
+        builder.build_load(self.pointee_ty, self.pointer, "loaded_value")
+    }
 }
 
 impl<'ctx> From<Pointer<'ctx>> for GeneratedValue<'ctx> {
@@ -100,9 +108,14 @@ impl<'ctx> GeneratedValue<'ctx> {
 
     fn loaded_value(&self, builder: &Builder<'ctx>) -> BasicValueEnum<'ctx> {
         match self {
-            GeneratedValue::Pointer(pointer) => {
-                builder.build_load(pointer.pointee_ty, pointer.pointer, "loaded_value")
-            }
+            GeneratedValue::Pointer(pointer) => pointer.loaded_value(builder),
+            GeneratedValue::Value(value) => *value,
+        }
+    }
+
+    fn loaded_value_debug(&self, builder: &Builder<'ctx>) -> BasicValueEnum<'ctx> {
+        match self {
+            GeneratedValue::Pointer(pointer) => pointer.loaded_value(builder),
             GeneratedValue::Value(value) => *value,
         }
     }
@@ -190,6 +203,7 @@ impl<'ctx> Codegen<'ctx> {
             builtin_globals,
             builtin_types,
             default_address_space: AddressSpace::default(),
+            heap_address_space: AddressSpace::from(1),
         }
     }
 
@@ -259,8 +273,16 @@ impl<'ctx> Codegen<'ctx> {
     fn codegen_val(&mut self, val: &ValDef) -> GeneratedValue<'ctx> {
         let value = self.codegen_expr(&val.initializer);
         let pointee_ty = value.value_type();
-        let value_ptr = self.builder.build_alloca(pointee_ty, &val.variable_id.to_string());
-        self.builder.build_store(value_ptr, value.loaded_value(&self.builder));
+        let value_ptr = self.builder.build_alloca(
+            pointee_ty.ptr_type(self.default_address_space),
+            &val.variable_id.to_string(),
+        );
+        trace!("codegen_val {}: pointee_ty: {pointee_ty:?}", val.variable_id.to_string());
+        // Rather than LOADing to the stack, we want to make a pointer to our value,
+        // whether our value is a pointer or not. So we're always storing a pointer
+        // in self.variables that, when loaded, gives the actual type of the variable
+        self.builder.build_store(value_ptr, value.as_basic_value_enum());
+        // self.builder.build_store(value_ptr, value.loaded_value_debug(&self.builder));
         let pointer = Pointer { pointer: value_ptr, pointee_ty };
         self.variables.insert(val.variable_id, pointer);
         pointer.into()
@@ -292,8 +314,36 @@ impl<'ctx> Codegen<'ctx> {
                 }
                 GeneratedValue::Pointer(Pointer { pointee_ty: ty, pointer: struct_ptr })
             }
-            IrLiteral::Array(_array) => {
-                todo!("codegen array literal")
+            IrLiteral::Array(array) => {
+                // First, we allocate memory somewhere not on the stack
+                let Type::Array(array_ir_type) = self.module.get_type(array.type_id) else {
+                    panic!("expected array type for array");
+                };
+                let element_type = self.codegen_type(array_ir_type.element_type);
+                let array_len = self.builtin_types.i64.const_int(array.elements.len() as u64, true);
+                let array_ptr = self
+                    .builder
+                    .build_array_malloc(element_type, array_len, "array_literal")
+                    .unwrap();
+                // Store each element
+                for (index, element_expr) in array.elements.iter().enumerate() {
+                    let value = self.codegen_expr(element_expr);
+                    let index_value = self.ctx.i64_type().const_int(index as u64, true);
+                    log::trace!("storing element {} of array literal: {:?}", index, element_expr);
+                    let ptr_at_index = unsafe {
+                        self.builder.build_gep(element_type, array_ptr, &[index_value], "elem")
+                    };
+                    self.builder.build_store(ptr_at_index, value.loaded_value(&self.builder));
+                }
+
+                let array_type = element_type
+                    .array_type(array.elements.len() as u32)
+                    .as_basic_type_enum()
+                    .ptr_type(self.default_address_space);
+                GeneratedValue::Pointer(Pointer {
+                    pointee_ty: array_type.as_basic_type_enum(),
+                    pointer: array_ptr,
+                })
             }
         }
     }
@@ -341,8 +391,14 @@ impl<'ctx> Codegen<'ctx> {
         match expr {
             IrExpr::Literal(literal) => self.codegen_literal(literal),
             IrExpr::Variable(ir_var) => {
-                if let Some(value) = self.variables.get(&ir_var.variable_id) {
-                    value.into()
+                log::trace!("codegen variable expr {ir_var:?}");
+                if let Some(pointer) = self.variables.get(&ir_var.variable_id) {
+                    log::trace!("codegen variable got type {:?}", pointer.pointee_ty);
+                    // In the middle of fixing this; the key is codegen_expr for variables:
+                    // Once we find the variable pointer, do we LOAD it there and return a value? I did this but now everyone calling .expect_pointer() is broken
+                    // Or do we return the pointer from there, and expect everyone to load; but how would they know that they need to do so?
+                    let loaded = pointer.loaded_value(&self.builder);
+                    loaded.into()
                 } else if let Some(global) = self.globals.get(&ir_var.variable_id) {
                     let value = global.get_initializer().unwrap();
                     value.into()
@@ -351,12 +407,17 @@ impl<'ctx> Codegen<'ctx> {
                 }
             }
             IrExpr::FieldAccess(field_access) => {
-                let target_ptr = self.codegen_expr(&field_access.base).expect_pointer();
+                // In the middle of fixing this; the key is codegen_expr for variables:
+                // Once we find the variable pointer, do we LOAD it there and return a value? I did this but now everyone calling .expect_pointer() is broken
+                // Or do we return the pointer from there, and expect everyone to load; but how would they know that they need to do so?
+
+                let target_value = self.codegen_expr(&field_access.base).as_basic_value_enum();
+                let target_ptr = self.build_store(target_value, "record_access_ptr");
                 let field_ptr = self
                     .builder
                     .build_struct_gep(
-                        target_ptr.pointee_ty,
-                        target_ptr.pointer,
+                        target_value.get_type(),
+                        target_ptr.as_basic_value_enum().into_pointer_value(),
                         field_access.target_field.index as u32,
                         "field_access_target_ptr",
                     )
@@ -470,12 +531,14 @@ impl<'ctx> Codegen<'ctx> {
                 let index_expr = &call.args[1];
                 let array_value = self.codegen_expr(array_expr);
                 let index_value = self.codegen_expr(index_expr);
-                let array_value_as_ptr = array_value.expect_pointer();
+                // Arrays are always malloc'd in this language, so we expect a pointer
+                // This doesnt have to be the case, but I want dynamic arrays to be the default
+                let array_value_as_ptr = array_value.as_basic_value_enum().into_pointer_value();
                 let index_int_value = index_value.loaded_value(&self.builder).into_int_value();
                 unsafe {
                     let gep_ptr = self.builder.build_gep(
                         pointee_ty,
-                        array_value_as_ptr.pointer,
+                        array_value_as_ptr,
                         &[index_int_value],
                         "array_index",
                     );
@@ -517,6 +580,11 @@ impl<'ctx> Codegen<'ctx> {
             }
         }
         last
+    }
+    fn build_store(&mut self, value: BasicValueEnum<'ctx>, name: &str) -> PointerValue<'ctx> {
+        let ptr = self.builder.build_alloca(value.get_type(), name);
+        self.builder.build_store(ptr, value);
+        ptr
     }
     /// Stores `value` into `pointer`, loading the value pointed to by `value` if necessary
     fn store(
