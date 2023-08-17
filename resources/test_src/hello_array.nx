@@ -1,4 +1,8 @@
 fn main(): int {
-  val xs: Array[int] = [1,2];
+  val xs: Array[int] = [1,2,3];
+  printInt(_arrayIndex(xs, 0));
+  printInt(_arrayIndex(xs, 1));
+  printInt(_arrayIndex(xs, 2));
   return 0;
 }
+// 1\n2\n3

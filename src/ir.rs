@@ -330,6 +330,11 @@ pub struct Constant {
     pub span: Span,
 }
 
+pub struct IrCompilerError {
+    pub span: Span,
+    pub message: String,
+}
+
 pub struct IrModule {
     pub ast: Rc<Module>,
     src: String,
@@ -338,6 +343,7 @@ pub struct IrModule {
     pub types: Vec<Type>,
     pub constants: Vec<Constant>,
     pub scopes: Scopes,
+    pub errors: Vec<IrCompilerError>,
 }
 
 pub struct Scopes {
@@ -484,6 +490,7 @@ impl IrModule {
             types: Vec::new(),
             constants: Vec::new(),
             scopes: Scopes::make(),
+            errors: Vec::new(),
         }
     }
 
@@ -493,6 +500,10 @@ impl IrModule {
 
     fn get_ident_name(&self, id: IdentifierId) -> impl std::ops::Deref<Target = str> + '_ {
         self.ast.get_ident_name(id)
+    }
+
+    fn report_error(&mut self, span: Span, message: String) {
+        self.errors.push(IrCompilerError { span, message })
     }
 
     fn add_type(&mut self, typ: Type) -> TypeId {
@@ -977,7 +988,7 @@ impl IrModule {
                     owner_scope: Some(scope_id),
                 });
                 if let Err(e) = self.typecheck_types(ir_type, value_expr.get_type()) {
-                    bail!("local type mismatch: {e}",);
+                    bail!("local type mismatch: {e}");
                 }
                 let val_def_expr = IrStmt::ValDef(Box::new(ValDef {
                     ir_type,
