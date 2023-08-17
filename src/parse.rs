@@ -635,6 +635,21 @@ impl Parser {
                         })
                     }
                 }
+                if next.kind == OpenBracket {
+                    self.tokens.advance();
+                    let index_expr = Parser::expect(
+                        "expression inside []",
+                        self.peek(),
+                        self.parse_expression(),
+                    )?;
+                    let close = self.expect_eat_token(CloseBracket)?;
+                    let span = result.get_span().extended(close.span);
+                    result = Expression::IndexOperation(IndexOperation {
+                        target: Box::new(result),
+                        index_expr: Box::new(index_expr),
+                        span,
+                    })
+                }
             } else {
                 return Ok(result);
             }
@@ -725,7 +740,7 @@ impl Parser {
                     Parser::expect("expression", start, p.parse_expression())
                 })?;
             let span = start.span.extended(span);
-            Ok(Some(Expression::Array(ArrayExpr { elements: elements, span })))
+            Ok(Some(Expression::Array(ArrayExpr { elements, span })))
         } else {
             // More expression types
             Ok(None)

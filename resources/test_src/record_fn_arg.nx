@@ -3,8 +3,8 @@ fn addPoint(p: { x: int, y: int}): int {
 }
 
 fn main(): int {
-  printInt(addPoint({ x: 1, y: 2 }));
-  return 0;
+  val result: int = addPoint({ x: 1, y: 2 });
+  return result;
 }
 // <expected output>
 // 3
