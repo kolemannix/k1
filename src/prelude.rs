@@ -6,4 +6,5 @@ type Array = {}
 fn _arrayIndex(array: Array[int], index: int): int {
   return 0;
 }
+// -------- END PRELUDE --------
 "#;
