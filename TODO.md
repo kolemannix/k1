@@ -32,7 +32,7 @@ I've realized that computers can be for fun again. I can grind on pull requests 
 production logs and plan sprints by day, and still work on interesting software at night. Even if I only find 1 free hour this week, maybe I'll clean up something in the parser, 
 maybe I'll just fix warnings, or think about syntax (for real: syntax is so important its how our brains work its literally the purpose of programming languages and not so easy
 to separate from 'semantics' so don't get me started) for Arrays in my little language. Once it becomes recreational, it's all fun. It's not a side hustle, 
-it's just what I like to do. It just took me 10 years to discover it again, but this time at a deeper level.
+it's just an activity. It just took me 10 years to discover it again, but this time at a deeper level.
 
 # Up next maybe
 - [x] Records
@@ -46,11 +46,12 @@ it's just what I like to do. It just took me 10 years to discover it again, but 
 - [x] Identifier cleanup and interning
 - [x] Actual scoping
 - [x] Real prelude so we can more easily add runtime/stl functions (for array)
-- [ ] Heap memory
-- [ ] Arrays (Dynamic only and first for now)
+- [x] Heap memory (just using malloc)
+- [x] Arrays (Fixed size but heap allocated)
+- [ ] Remove / fix TokenIter type
 - [ ] Optionals
 - [ ] Function syntax change (foo = fn (a, b, c): int { }
-- [ ] Ditch semicolons? (this technically introduces significant whitespace)
+- [ ] Ditch semicolons? (this technically introduces significant whitespace; need newline token)
 - [ ] Syntax overhaul; from qualifier-focused to name -focused
 - [x] Binary infix operations
 - [ ] basic error reporting using spans
@@ -71,7 +72,7 @@ it's just what I like to do. It just took me 10 years to discover it again, but 
 # Hacks to fix
 - [ ] main function / detect entrypoint properly. Typing of main? How to get main args?
 - [ ] Replace all vectors with smallvec where appropriate
-- [ ] Proper println implementation. Fine to use printf internally for now but we should define our own func around it
+- [x] Proper println implementation. Fine to use printf internally for now but we should define our own func around it
 - [ ] Implement Display instead of relying on Debug
 
 Design for 

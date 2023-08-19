@@ -89,7 +89,13 @@ pub enum TokenKind {
 
 impl fmt::Display for TokenKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.get_repr().unwrap_or("<ident>"))
+        f.write_str(self.as_ref())
+    }
+}
+
+impl AsRef<str> for TokenKind {
+    fn as_ref(&self) -> &str {
+        self.get_repr().unwrap_or("<ident>")
     }
 }
 

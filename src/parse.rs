@@ -1,3 +1,5 @@
+use anyhow::bail;
+use colored::Colorize;
 use std::cell::RefCell;
 use std::fmt::{Display, Formatter};
 use std::fs::File;
@@ -317,6 +319,7 @@ pub struct Module {
     pub name: String,
     pub name_id: IdentifierId,
     pub defs: Vec<Definition>,
+    pub source: Rc<Source>,
     /// Using RefCell here just so we can mutably access
     /// the identifiers without having mutable access to
     /// the entire AST module. Lets me wait to decide
@@ -336,10 +339,16 @@ impl Module {
 pub type ParseResult<A> = Result<A, ParseError>;
 
 #[derive(Debug)]
-pub enum ParseError {
-    ExpectedToken(TokenKind, Token, Option<Box<ParseError>>),
-    ExpectedNode(String, Token, Option<Box<ParseError>>),
-    Msg(String, Token),
+pub struct ParseError {
+    expected: String,
+    token: Token,
+    cause: Option<Box<ParseError>>,
+}
+
+impl ParseError {
+    pub fn span(&self) -> Span {
+        self.token.span
+    }
 }
 
 impl Display for ParseError {
@@ -349,13 +358,27 @@ impl Display for ParseError {
 }
 impl std::error::Error for ParseError {}
 
+#[derive(Debug)]
 pub struct Source {
-    content: String,
+    pub content: String,
+    /// This is an inefficient copy but we need the lines cached because utf8
+    /// Eventually it can be references not copies
+    pub lines: Vec<String>,
+}
+
+impl Source {
+    pub fn get_span_content(&self, span: Span) -> &str {
+        &self.content[span.start as usize..span.end as usize]
+    }
+
+    pub fn get_line_by_index(&self, line_index: u32) -> &str {
+        &self.lines[line_index as usize]
+    }
 }
 
 struct Parser {
     tokens: TokenIter,
-    source: Source,
+    source: Rc<Source>,
     identifiers: Rc<RefCell<Identifiers>>,
 }
 
@@ -366,6 +389,27 @@ impl Parser {
     pub fn get_ident_name(&self, id: IdentifierId) -> impl std::ops::Deref<Target = str> + '_ {
         std::cell::Ref::map(self.identifiers.borrow(), |idents| idents.get_name(id))
     }
+
+    pub fn print_error(&self, parse_error: &ParseError) {
+        let span = parse_error.span();
+        let line_text = self.source.get_line_by_index(parse_error.span().line);
+        let span_text = &self.source.get_span_content(span);
+        use colored::*;
+        println!(
+            "{} on line {}. Expected '{}', but got '{}'",
+            "parse error".red(),
+            span.line,
+            parse_error.expected.blue(),
+            parse_error.token.kind.as_ref().red()
+        );
+        println!();
+        println!("{line_text}");
+        println!("{span_text}");
+    }
+    // pub fn get_span_line(&self, span: Span) -> &str {
+    //     &self.source.get_line_by_index(span.line)
+    // }
+
     fn check<A>(value: Option<A>) -> ParseResult<Option<A>> {
         match value {
             None => Ok(None),
@@ -374,7 +418,7 @@ impl Parser {
     }
     fn expect<A>(what: &str, current: Token, value: ParseResult<Option<A>>) -> ParseResult<A> {
         match value {
-            Ok(None) => Err(ParseError::ExpectedNode(what.to_string(), current, None)),
+            Ok(None) => Err(ParseError { expected: what.to_string(), token: current, cause: None }),
             Ok(Some(a)) => Ok(a),
             Err(e) => Err(e),
         }
@@ -386,9 +430,10 @@ impl Parser {
         self.tokens.peek()
     }
     fn make(tokens: TokenIter, source: String, _use_prelude: bool) -> Parser {
+        let lines: Vec<_> = source.lines().map(|l| l.to_owned()).collect();
         Parser {
             tokens,
-            source: Source { content: source },
+            source: Rc::new(Source { content: source, lines }),
             identifiers: Rc::new(RefCell::new(Identifiers::default())),
         }
     }
@@ -429,12 +474,19 @@ impl Parser {
         }
     }
 
+    fn error(expected: impl AsRef<str>, token: Token) -> ParseError {
+        ParseError { expected: expected.as_ref().to_owned(), token, cause: None }
+    }
+    fn error_cause(expected: impl AsRef<str>, token: Token, cause: ParseError) -> ParseError {
+        ParseError { expected: expected.as_ref().to_owned(), token, cause: Some(Box::new(cause)) }
+    }
+
     fn expect_eat_token(&mut self, target_token: TokenKind) -> ParseResult<Token> {
         let result = self.eat_token(target_token);
         match result {
             None => {
                 let actual = self.peek();
-                Err(ParseError::ExpectedToken(target_token, actual, None))
+                return Err(Parser::error(target_token, actual));
             }
             Some(t) => Ok(t),
         }
@@ -454,7 +506,7 @@ impl Parser {
         match result {
             None => {
                 let actual = self.peek();
-                Err(ParseError::ExpectedToken(TokenKind::Text, actual, None))
+                return Err(Parser::error(TokenKind::Text, actual));
             }
             Some(ident) => Ok(ident),
         }
@@ -482,7 +534,7 @@ impl Parser {
                     let span = first.span.extended(close.span);
                     Ok(Some(Literal::String(text.to_string(), span)))
                 } else {
-                    Err(ParseError::ExpectedToken(DoubleQuote, close, None))
+                    Err(Parser::error(DoubleQuote, close))
                 }
             }
             (Text, _) => {
@@ -584,7 +636,7 @@ impl Parser {
             }
             Ok(None) => {
                 if named {
-                    Err(ParseError::Msg("expected expression".to_string(), self.peek()))
+                    Err(Parser::error("expression", self.peek()))
                 } else {
                     Ok(None)
                 }
@@ -661,9 +713,7 @@ impl Parser {
             let op_token = self.tokens.next();
             let op_kind = BinaryOpKind::from_tokenkind(op_token.kind);
             match op_kind {
-                None => {
-                    Err(ParseError::ExpectedNode("Binary Operator".to_string(), op_token, None))
-                }
+                None => Err(Parser::error("Binary Operator", op_token)),
                 Some(op_kind) => {
                     let operand2 =
                         Parser::expect("rhs of binary op", self.peek(), self.parse_expression())?;
@@ -699,11 +749,7 @@ impl Parser {
                         args,
                         span: first.span.extended(args_span),
                     }))),
-                    Err(e) => Err(ParseError::ExpectedNode(
-                        "function arguments".to_string(),
-                        self.peek(),
-                        Some(Box::new(e)),
-                    )),
+                    Err(e) => Err(Parser::error_cause("function arguments", self.peek(), e)),
                 }
             } else {
                 // The last thing it can be is a simple variable reference expression
@@ -725,7 +771,7 @@ impl Parser {
                 Ok(Some(Expression::Record(record)))
             } else {
                 match self.parse_block()? {
-                    None => Err(ParseError::ExpectedNode("block".to_string(), self.peek(), None)),
+                    None => Err(Parser::error("block", self.peek())),
                     Some(block) => Ok(Some(Expression::Block(block))),
                 }
             }
@@ -860,15 +906,15 @@ impl Parser {
                     let found_delim = self.eat_token(delim);
                     if found_delim.is_none() {
                         trace!("eat_delimited missing delimiter.");
-                        break Err(ParseError::ExpectedToken(delim, self.peek(), None));
+                        break Err(Parser::error(delim, self.peek()));
                     }
                 }
                 Err(e) => {
                     // trace!("eat_delimited got err from 'parse': {}", e);
-                    break Err(ParseError::ExpectedNode(
+                    break Err(Parser::error_cause(
                         format!("eat_delimited for {delim} encountered error parsing element"),
                         self.peek(),
-                        Some(Box::new(e)),
+                        e,
                     ));
                 }
             }
@@ -911,11 +957,7 @@ impl Parser {
                 let return_stmt = ReturnStmt { expr: ret_val, span };
                 Ok(Some(BlockStmt::ReturnStmt(return_stmt)))
             } else {
-                Err(ParseError::ExpectedNode(
-                    "return statement".to_string(),
-                    self.tokens.next(),
-                    None,
-                ))
+                return Err(Parser::error("return statement", self.tokens.next()));
             }
         } else if let Some(assgn) = self.parse_assignment()? {
             Ok(Some(BlockStmt::Assignment(assgn)))
@@ -975,7 +1017,11 @@ impl Parser {
         if let Some(const_def) = self.parse_const()? {
             let sem = self.eat_token(Semicolon);
             if sem.is_none() {
-                return Err(ParseError::ExpectedToken(Semicolon, self.peek(), None));
+                return Err(ParseError {
+                    expected: Semicolon.to_string(),
+                    token: self.peek(),
+                    cause: None,
+                });
             }
             Ok(Some(Definition::Const(const_def.into())))
         } else if let Some(fn_def) = self.parse_function()? {
@@ -998,6 +1044,7 @@ impl Parser {
             name: filename.to_string(),
             name_id: ident,
             defs,
+            source: self.source.clone(),
             identifiers: self.identifiers.clone(),
         })
     }
@@ -1039,11 +1086,16 @@ pub fn parse_text(text: &str, module_name: &str, use_prelude: bool) -> ParseResu
 
     let token_vec = lexer.run();
 
+    // TODO: TokenIter is dumb
     let tokens: TokenIter = TokenIter::make(token_vec);
 
     let mut parser = Parser::make(tokens, full_source, use_prelude);
 
-    parser.parse_module(module_name)
+    let result = parser.parse_module(module_name);
+    if let Err(e) = &result {
+        parser.print_error(e);
+    }
+    result
 }
 
 pub fn parse_file(path: &str) -> ParseResult<Module> {

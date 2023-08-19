@@ -7,6 +7,7 @@ use crate::parse::{
     Block, BlockStmt, Definition, Expression, FnDef, IdentifierId, Literal, Module,
 };
 use anyhow::{anyhow, bail, Result};
+use colored::Colorize;
 use log::trace;
 use parse_display::Display;
 use std::collections::HashMap;
@@ -288,31 +289,26 @@ impl IrStmt {
 }
 
 #[derive(Debug)]
-struct IRGenError {
-    msg: String,
+pub struct IrGenError {
+    message: String,
+    span: Span,
 }
 
-impl Display for IRGenError {
+impl IrGenError {
+    fn make(message: impl AsRef<str>, span: Span) -> IrGenError {
+        IrGenError { message: message.as_ref().to_owned(), span }
+    }
+}
+
+impl Display for IrGenError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str("IRGenError: ")?;
-        f.write_str(&self.msg)
+        f.write_fmt(format_args!("error on line {}: {}", self.span.line, self.message))
     }
 }
 
-impl Error for IRGenError {}
+impl Error for IrGenError {}
 
-impl From<&str> for IRGenError {
-    fn from(s: &str) -> Self {
-        IRGenError { msg: s.to_string() }
-    }
-}
-
-pub type IrGenResult<A> = anyhow::Result<A>;
-// expressions dont have ids
-// statements dont have ids
-// scopes have ids
-// types have ids
-//
+pub type IrGenResult<A> = Result<A, IrGenError>;
 
 #[derive(Debug)]
 pub struct Variable {
@@ -337,7 +333,7 @@ pub struct IrCompilerError {
 
 pub struct IrModule {
     pub ast: Rc<Module>,
-    src: String,
+    source: Rc<parse::Source>,
     pub functions: Vec<Function>,
     pub variables: Vec<Variable>,
     pub types: Vec<Type>,
@@ -472,19 +468,19 @@ impl Scope {
     }
 }
 
-fn simple_err<T: AsRef<str>>(s: T) -> anyhow::Error {
-    IRGenError::from(s.as_ref()).into()
+fn simple_err<T: AsRef<str>>(s: T, span: Span) -> IrGenError {
+    IrGenError::make(s.as_ref(), span)
 }
 
-fn simple_fail<A, T: AsRef<str>>(s: T) -> IrGenResult<A> {
-    Err(Box::new(IRGenError::from(s.as_ref())).into())
+fn simple_fail<A, T: AsRef<str>>(s: T, span: Span) -> IrGenResult<A> {
+    Err(simple_err(s, span))
 }
 
 impl IrModule {
     pub fn new(parsed_module: Rc<Module>) -> IrModule {
         IrModule {
             ast: parsed_module,
-            src: String::new(),
+            source: parsed_module.source.clone(),
             functions: Vec::new(),
             variables: Vec::new(),
             types: Vec::new(),
@@ -492,6 +488,18 @@ impl IrModule {
             scopes: Scopes::make(),
             errors: Vec::new(),
         }
+    }
+
+    fn internal_compiler_error(&self, message: impl AsRef<str>, span: Span) -> ! {
+        eprintln!(
+            "Encountered fatal internal error at {}:{}\n  -> {}",
+            self.name(),
+            span.line,
+            message.as_ref()
+        );
+        eprintln!("{}", self.source.get_line_by_index(span.line).red());
+        eprintln!(" -> {}", self.source.get_span_content(span).red());
+        panic!()
     }
 
     pub fn name(&self) -> &str {
@@ -535,12 +543,16 @@ impl IrModule {
                 let type_id = self.add_type(Type::Record(record_defn));
                 Ok(TypeRef::TypeId(type_id))
             }
-            parse::TypeExpression::Name(ident, _span) => {
+            parse::TypeExpression::Name(ident, span) => {
                 let ty_ref = self.scopes.find_type(scope_id, *ident);
+
                 ty_ref.ok_or_else(|| {
-                    anyhow!(
-                        "could not find type for identifier {}",
-                        &*self.ast.get_ident_name(*ident)
+                    self.internal_compiler_error(
+                        format!(
+                            "could not find type for identifier {}",
+                            &*self.ast.get_ident_name(*ident)
+                        ),
+                        *span,
                     )
                 })
             }
@@ -554,7 +566,10 @@ impl IrModule {
                         let type_id = self.add_type(Type::Array(array_ty));
                         Ok(TypeRef::TypeId(type_id))
                     } else {
-                        bail!("Expected 1 type parameter for Array")
+                        self.internal_compiler_error(
+                            "Expected 1 type parameter for Array",
+                            ty_app.span,
+                        )
                     }
                 } else {
                     todo!("ir for parameterized types")
@@ -573,26 +588,31 @@ impl IrModule {
             parse::TypeExpression::Unit(_) => Ok(TypeRef::Unit),
             parse::TypeExpression::Int(_) => Ok(TypeRef::Int),
             parse::TypeExpression::Bool(_) => Ok(TypeRef::Bool),
-            parse::TypeExpression::Record(_) => simple_fail("No const records yet"),
-            parse::TypeExpression::Name(_, _) => simple_fail("No references allowed in constants"),
-            parse::TypeExpression::TypeApplication(_) => {
-                simple_fail("No type parameters allowed in constants")
+            parse::TypeExpression::Record(_) => {
+                self.internal_compiler_error("No const records yet", expr.get_span())
             }
+            parse::TypeExpression::Name(_, _) => {
+                self.internal_compiler_error("No references allowed in constants", expr.get_span())
+            }
+            parse::TypeExpression::TypeApplication(_) => self.internal_compiler_error(
+                "No type parameters allowed in constants",
+                expr.get_span(),
+            ),
         }
     }
 
-    fn typecheck_record(&self, expected: &RecordDefn, actual: &RecordDefn) -> IrGenResult<()> {
+    fn typecheck_record(&self, expected: &RecordDefn, actual: &RecordDefn) -> Result<(), String> {
         if expected.fields.len() != actual.fields.len() {
-            bail!(
+            return Err(format!(
                 "expected record with {} fields, got {}",
                 expected.fields.len(),
                 actual.fields.len()
-            )
+            ));
         }
         for expected_field in &expected.fields {
             trace!("typechecking record field {:?}", expected_field);
             let Some(matching_field) = actual.fields.iter().find(|f| f.name == expected_field.name) else {
-                bail!("expected field {}", expected_field.name)
+                return Err(format!("expected record to have field {}", expected_field.name))
             };
             self.typecheck_types(matching_field.ty, expected_field.ty)?;
         }
@@ -610,18 +630,22 @@ impl IrModule {
     /// it has them at least as strongly. If an optional is expected, actual can optional or required
     /// If a required is expected, actual must be required, etc. Basically TypeScripts structural typing
     #[allow(unused)]
-    fn typecheck_record_duck(&self, expected: &RecordDefn, actual: &RecordDefn) -> IrGenResult<()> {
+    fn typecheck_record_duck(
+        &self,
+        expected: &RecordDefn,
+        actual: &RecordDefn,
+    ) -> Result<(), String> {
         for expected_field in &expected.fields {
             trace!("typechecking record field {:?}", expected_field);
             let Some(matching_field) = actual.fields.iter().find(|f| f.name == expected_field.name) else {
-                bail!("expected field {}", expected_field.name)
+                return Err(format!("expected field {}", expected_field.name));
             };
             self.typecheck_types(matching_field.ty, expected_field.ty)?;
         }
         Ok(())
     }
 
-    fn typecheck_types(&self, expected: TypeRef, actual: TypeRef) -> IrGenResult<()> {
+    fn typecheck_types(&self, expected: TypeRef, actual: TypeRef) -> Result<(), String> {
         // Types can be compatible without being equal
         // While we won't have inheritance, there will be some shallow subtyping
         // and interfaces
@@ -637,10 +661,13 @@ impl IrModule {
                         (Type::Array(a1), Type::Array(a2)) => {
                             self.typecheck_types(a1.element_type, a2.element_type)
                         }
-                        _ => todo!("typecheck_types: other types: {ty1:?}, {ty2:?}"),
+                        _ => Err(format!("TODO typecheck_types: other types: {ty1:?}, {ty2:?}")),
                     }
                 }
-                _ => bail!("Unrelated types failed typecheck"),
+                _ => Err(format!(
+                    "Unrelated types failed typecheck: {:?} and {:?}",
+                    expected, actual
+                )),
             }
         }
     }
@@ -650,8 +677,15 @@ impl IrModule {
         let parse::ConstVal { name, ty: typ, value_expr: value, span } = const_expr;
         let ir_type = self.eval_const_type_expr(typ, scope_id)?;
         let num = match value {
-            Expression::Literal(Literal::Numeric(n, _span)) => self.parse_numeric(n)?,
-            _other => return simple_fail("Only literals are currently supported as constants"),
+            Expression::Literal(Literal::Numeric(n, span)) => {
+                self.parse_numeric(n).map_err(|msg| simple_err(msg, *span))?
+            }
+            _other => {
+                return simple_fail(
+                    "Only literals are currently supported as constants",
+                    const_expr.span,
+                )
+            }
         };
         let expr = IrExpr::Literal(IrLiteral::Int(num, *span));
         let variable_id = self.add_variable(Variable {
@@ -696,11 +730,10 @@ impl IrModule {
         &self.functions[function_id as usize]
     }
 
-    fn parse_numeric(&self, s: &str) -> IrGenResult<i64> {
+    fn parse_numeric(&self, s: &str) -> Result<i64, String> {
         // Eventually we need to find out what type of number literal this is.
         // For now we only support i64
-        let num: i64 =
-            s.parse().map_err(|_e| simple_err("Failed to parse signed numeric literal"))?;
+        let num: i64 = s.parse().map_err(|_e| "Failed to parse signed numeric literal")?;
         Ok(num)
     }
 
@@ -742,7 +775,8 @@ impl IrModule {
                     for elem in &array_expr.elements {
                         let ir_expr = self.eval_expr(elem, scope_id)?;
                         if element_type != TypeRef::Unit {
-                            self.typecheck_types(element_type, ir_expr.get_type())?
+                            self.typecheck_types(element_type, ir_expr.get_type())
+                                .map_err(|msg| simple_err(msg, elem.get_span()))?
                         }
                         element_type = ir_expr.get_type();
                         elements.push(ir_expr);
@@ -1061,7 +1095,7 @@ impl IrModule {
         let body_block = fn_def
             .block
             .as_ref()
-            .ok_or(IRGenError::from("Top-level function definitions must have a body"))?;
+            .ok_or(IrGenError::from("Top-level function definitions must have a body"))?;
         let body_block = self.eval_block(body_block, scope_id)?;
         let ret_type: TypeRef = match &fn_def.ret_type {
             None => body_block.ret_type,
