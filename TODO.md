@@ -52,7 +52,8 @@ it's just an activity. It just took me 10 years to discover it again, but this t
 - [ ] Optionals
 - [ ] Function syntax change (foo = fn (a, b, c): int { }
 - [ ] Ditch semicolons? (this technically introduces significant whitespace; need newline token)
-- [ ] Syntax overhaul; from qualifier-focused to name -focused
+- [ ] Syntax changes; from qualifier-focused to name -focused
+- [ ] Introduce uint type
 - [x] Binary infix operations
 - [ ] basic error reporting using spans
 - [ ] oneofs (tagged unions)
@@ -69,9 +70,14 @@ it's just an activity. It just took me 10 years to discover it again, but this t
     fn codegen_block(&mut self, block: &IrBlock) -> Option<BasicValueEnum<'ctx>> {
 - [ ] Tuples
 
+# Fibonacci todos (Aug 20)
+- [ ] Equality binop
+- [ ] Recursion fix: process module decls first, then impls
+- [ ] Negative integer literals
+
 # Hacks to fix
 - [ ] main function / detect entrypoint properly. Typing of main? How to get main args?
-- [ ] Replace all vectors with smallvec where appropriate
+- [ ] Replace vectors with smallvec where appropriate
 - [x] Proper println implementation. Fine to use printf internally for now but we should define our own func around it
 - [ ] Implement Display instead of relying on Debug
 
@@ -82,8 +88,8 @@ Design for
 
 # Dev ex
 - Pretty-print AST
-- Error Spans
-- fancy output COLORS
+- [x] Error Spans
+- [x] fancy output COLORS
 
 # Maybe later
 - [ ] Block-as-single-arg syntax (xs.map { y => } )

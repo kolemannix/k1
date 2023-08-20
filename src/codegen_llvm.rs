@@ -13,7 +13,7 @@ use inkwell::values::{
     ArrayValue, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue,
     InstructionValue, IntValue, PointerValue,
 };
-use inkwell::{AddressSpace, OptimizationLevel};
+use inkwell::{AddressSpace, IntPredicate, OptimizationLevel};
 use log::trace;
 use std::collections::HashMap;
 use std::path::Path;
@@ -449,6 +449,12 @@ impl<'ctx> Codegen<'ctx> {
                                 self.builder.build_and(lhs_value, rhs_value, "and")
                             }
                             BinaryOpKind::Or => self.builder.build_or(lhs_value, rhs_value, "or"),
+                            BinaryOpKind::Equals => self.builder.build_int_compare(
+                                IntPredicate::EQ,
+                                lhs_value,
+                                rhs_value,
+                                "eq",
+                            ),
                         };
                         op_res.as_basic_value_enum().into()
                     } else {

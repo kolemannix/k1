@@ -73,6 +73,7 @@ pub enum TokenKind {
     Colon,
     Semicolon,
     Equals,
+    EqualsEquals,
     Dot,
     Comma,
 
@@ -127,6 +128,7 @@ impl TokenKind {
             Colon => Some(":"),
             Semicolon => Some(";"),
             Equals => Some("="),
+            EqualsEquals => Some("=="),
             Dot => Some("."),
             Comma => Some(","),
 
@@ -164,7 +166,7 @@ impl TokenKind {
             _ => None,
         }
     }
-    pub fn keyword_from_str(str: &str) -> Option<TokenKind> {
+    pub fn token_from_str(str: &str) -> Option<TokenKind> {
         match str {
             "fn" => Some(KeywordFn),
             "return" => Some(KeywordReturn),
@@ -176,6 +178,7 @@ impl TokenKind {
             "else" => Some(KeywordElse),
             "type" => Some(KeywordType),
             "record" => Some(KeywordRecord),
+            "==" => Some(EqualsEquals),
             _ => None,
         }
     }
@@ -291,6 +294,7 @@ impl Lexer<'_> {
                 }
             }
             if let Some(single_char_tok) = TokenKind::from_char(c) {
+                let (_, next) = self.peek_two();
                 if !tok_buf.is_empty() {
                     // Break without advancing; we'll have a clear buffer next time
                     // and will advance
@@ -300,7 +304,11 @@ impl Lexer<'_> {
                         n - tok_len,
                         tok_len,
                     ));
-                } else if single_char_tok == TokenKind::Slash && self.peek() == '/' {
+                } else if single_char_tok == TokenKind::Equals && next == '=' {
+                    self.advance();
+                    self.advance();
+                    break Some(Token::make(EqualsEquals, self.line_index, n, 2));
+                } else if single_char_tok == TokenKind::Slash && next == '/' {
                     is_line_comment = true;
                     line_comment_start = n;
                     self.advance();
@@ -313,7 +321,7 @@ impl Lexer<'_> {
             if c.is_whitespace() {
                 if !tok_buf.is_empty() {
                     self.advance();
-                    if let Some(tok) = TokenKind::keyword_from_str(&tok_buf) {
+                    if let Some(tok) = TokenKind::token_from_str(&tok_buf) {
                         break Some(Token::make(tok, self.line_index, n - tok_len, tok_len));
                     } else {
                         break Some(Token::make(
@@ -328,7 +336,7 @@ impl Lexer<'_> {
             if (tok_buf.is_empty() && is_ident_start(c)) || is_ident_char(c) {
                 tok_len += 1;
                 tok_buf.push(c);
-            } else if let Some(tok) = TokenKind::keyword_from_str(&tok_buf) {
+            } else if let Some(tok) = TokenKind::token_from_str(&tok_buf) {
                 self.advance();
                 break Some(Token::make(tok, self.line_index, n - tok_len, tok_len));
             }
@@ -412,9 +420,17 @@ mod test {
     #[test]
     fn ending_ident() {
         let input = "val x = a + b";
-        let result = Lexer::make(&input).run();
+        let result = Lexer::make(input).run();
         let kinds: Vec<TokenKind> = result.iter().map(|t| t.kind).collect();
         assert_eq!(kinds, vec![KeywordVal, Text, Equals, Text, Plus, Text])
+    }
+
+    #[test]
+    fn double_equals() {
+        let input = "a == b";
+        let result = Lexer::make(input).run();
+        let kinds: Vec<TokenKind> = result.iter().map(|t| t.kind).collect();
+        assert_eq!(kinds, vec![Text, EqualsEquals, Text])
     }
 
     #[test]
