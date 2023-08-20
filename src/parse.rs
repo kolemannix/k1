@@ -100,6 +100,7 @@ pub enum BinaryOpKind {
     Multiply,
     And,
     Or,
+    Equals,
 }
 
 impl BinaryOpKind {
@@ -109,6 +110,7 @@ impl BinaryOpKind {
             TokenKind::Asterisk => Some(BinaryOpKind::Multiply),
             TokenKind::KeywordAnd => Some(BinaryOpKind::And),
             TokenKind::KeywordOr => Some(BinaryOpKind::Or),
+            TokenKind::EqualsEquals => Some(BinaryOpKind::Equals),
             _ => None,
         }
     }

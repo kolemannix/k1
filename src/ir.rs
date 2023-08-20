@@ -105,6 +105,7 @@ pub enum BinaryOpKind {
     Multiply,
     And,
     Or,
+    Equals,
 }
 
 impl BinaryOpKind {
@@ -113,12 +114,15 @@ impl BinaryOpKind {
             BinaryOpKind::Add => true,
             BinaryOpKind::Multiply => true,
             BinaryOpKind::Or | BinaryOpKind::And => true,
+            BinaryOpKind::Equals => true,
         }
     }
     pub fn is_boolean_op(&self) -> bool {
         match self {
+            BinaryOpKind::Equals => true,
             BinaryOpKind::Or | BinaryOpKind::And => true,
-            _ => false,
+            BinaryOpKind::Add => false,
+            BinaryOpKind::Multiply => false,
         }
     }
 }
@@ -333,7 +337,6 @@ pub struct IrCompilerError {
 
 pub struct IrModule {
     pub ast: Rc<Module>,
-    source: Rc<parse::Source>,
     pub functions: Vec<Function>,
     pub variables: Vec<Variable>,
     pub types: Vec<Type>,
@@ -468,19 +471,18 @@ impl Scope {
     }
 }
 
-fn simple_err<T: AsRef<str>>(s: T, span: Span) -> IrGenError {
+fn make_err<T: AsRef<str>>(s: T, span: Span) -> IrGenError {
     IrGenError::make(s.as_ref(), span)
 }
 
-fn simple_fail<A, T: AsRef<str>>(s: T, span: Span) -> IrGenResult<A> {
-    Err(simple_err(s, span))
+fn make_fail<A, T: AsRef<str>>(s: T, span: Span) -> IrGenResult<A> {
+    Err(make_err(s, span))
 }
 
 impl IrModule {
     pub fn new(parsed_module: Rc<Module>) -> IrModule {
         IrModule {
             ast: parsed_module,
-            source: parsed_module.source.clone(),
             functions: Vec::new(),
             variables: Vec::new(),
             types: Vec::new(),
@@ -491,15 +493,14 @@ impl IrModule {
     }
 
     fn internal_compiler_error(&self, message: impl AsRef<str>, span: Span) -> ! {
-        eprintln!(
-            "Encountered fatal internal error at {}:{}\n  -> {}",
-            self.name(),
-            span.line,
-            message.as_ref()
-        );
-        eprintln!("{}", self.source.get_line_by_index(span.line).red());
-        eprintln!(" -> {}", self.source.get_span_content(span).red());
+        self.print_error(message, span);
         panic!()
+    }
+
+    fn print_error(&self, message: impl AsRef<str>, span: Span) {
+        eprintln!("{} at {}:{}\n  -> {}", "error".red(), self.name(), span.line, message.as_ref());
+        eprintln!("{}", self.ast.source.get_line_by_index(span.line).red());
+        eprintln!(" -> {}", self.ast.source.get_span_content(span).red());
     }
 
     pub fn name(&self) -> &str {
@@ -664,10 +665,7 @@ impl IrModule {
                         _ => Err(format!("TODO typecheck_types: other types: {ty1:?}, {ty2:?}")),
                     }
                 }
-                _ => Err(format!(
-                    "Unrelated types failed typecheck: {:?} and {:?}",
-                    expected, actual
-                )),
+                _ => Err(format!("Expected {:?} but got {:?}", expected, actual)),
             }
         }
     }
@@ -678,10 +676,10 @@ impl IrModule {
         let ir_type = self.eval_const_type_expr(typ, scope_id)?;
         let num = match value {
             Expression::Literal(Literal::Numeric(n, span)) => {
-                self.parse_numeric(n).map_err(|msg| simple_err(msg, *span))?
+                self.parse_numeric(n).map_err(|msg| make_err(msg, *span))?
             }
             _other => {
-                return simple_fail(
+                return make_fail(
                     "Only literals are currently supported as constants",
                     const_expr.span,
                 )
@@ -776,7 +774,7 @@ impl IrModule {
                         let ir_expr = self.eval_expr(elem, scope_id)?;
                         if element_type != TypeRef::Unit {
                             self.typecheck_types(element_type, ir_expr.get_type())
-                                .map_err(|msg| simple_err(msg, elem.get_span()))?
+                                .map_err(|msg| make_err(msg, elem.get_span()))?
                         }
                         element_type = ir_expr.get_type();
                         elements.push(ir_expr);
@@ -796,19 +794,19 @@ impl IrModule {
                 // TODO: Indexing only works for builtin Array for now
                 let target = self.eval_expr(&index_op.target, scope_id)?;
                 let TypeRef::TypeId(target_type_id) =  target.get_type() else {
-                    bail!("index base must be an array")
+                    return make_fail("index base must be an array", index_op.span)
                 };
                 let index_expr = self.eval_expr(&index_op.index_expr, scope_id)?;
                 if index_expr.get_type() != TypeRef::Int {
-                    bail!("index type must be int")
+                    return make_fail("UNIMPLEMENTED index type must be int", index_op.span);
                 }
 
                 let target_type = self.get_type(target_type_id);
                 let Type::Array(array_type) = target_type else {
-                    bail!("index base must be an array")
+                    return make_fail("UNIMPLEMENTED index type must be int", index_op.span);
                 };
                 let TypeRef::Int = array_type.element_type else {
-                    bail!("array type must be int")
+                    return make_fail("UNIMPLEMENTED array element type must be int", index_op.span);
                 };
                 // Special-case: call prelude function "_array_access"
                 // Just need to look up the ID by intrinsic type
@@ -850,9 +848,12 @@ impl IrModule {
                 // Ensure boolean condition (or optional which isn't built yet)
                 let condition = self.eval_expr(&if_expr.cond, scope_id)?;
                 if self.typecheck_types(TypeRef::Bool, condition.get_type()).is_err() {
-                    anyhow::bail!(
-                        "If condition must be of type Boolean; but got {:?}",
-                        condition.get_type()
+                    return make_fail(
+                        format!(
+                            "If condition must be of type bool; but got {:?}",
+                            condition.get_type()
+                        ),
+                        if_expr.cond.get_span(),
                     );
                 }
                 let consequent_expr = self.eval_expr(&if_expr.cons, scope_id)?;
@@ -880,10 +881,12 @@ impl IrModule {
                     }
                 };
                 if self.typecheck_types(consequent.ret_type, alternate.ret_type).is_err() {
-                    anyhow::bail!(
-                        "else branch type {:?} did not match then branch type {:?}",
-                        consequent.ret_type,
-                        alternate.ret_type
+                    return make_fail(
+                        format!(
+                            "else branch type {:?} did not match then branch type {:?}",
+                            consequent.ret_type, alternate.ret_type
+                        ),
+                        alternate.span,
                     );
                 }
                 let overall_type = consequent.ret_type;
@@ -901,7 +904,7 @@ impl IrModule {
                 let rhs = self.eval_expr(&binary_op.operand2, scope_id)?;
 
                 if self.typecheck_types(lhs.get_type(), rhs.get_type()).is_err() {
-                    return simple_fail("operand types did not match");
+                    return make_fail("operand types did not match", binary_op.span);
                 }
 
                 let kind = match binary_op.operation {
@@ -909,10 +912,15 @@ impl IrModule {
                     parse::BinaryOpKind::Multiply => BinaryOpKind::Multiply,
                     parse::BinaryOpKind::And => BinaryOpKind::And,
                     parse::BinaryOpKind::Or => BinaryOpKind::Or,
+                    parse::BinaryOpKind::Equals => BinaryOpKind::Equals,
+                };
+                let result_type = match kind {
+                    BinaryOpKind::Equals => TypeRef::Bool,
+                    _ => lhs.get_type(),
                 };
                 let expr = IrExpr::BinaryOp(BinaryOp {
                     kind,
-                    ir_type: lhs.get_type(),
+                    ir_type: result_type,
                     lhs: Box::new(lhs),
                     rhs: Box::new(rhs),
                     span: binary_op.span,
@@ -921,7 +929,7 @@ impl IrModule {
             }
             Expression::Literal(Literal::Unit(span)) => Ok(IrExpr::Literal(IrLiteral::Unit(*span))),
             Expression::Literal(Literal::Numeric(s, span)) => {
-                let num = self.parse_numeric(s)?;
+                let num = self.parse_numeric(s).map_err(|msg| make_err(msg, *span))?;
                 Ok(IrExpr::Literal(IrLiteral::Int(num, *span)))
             }
             Expression::Literal(Literal::Bool(b, span)) => {
@@ -933,10 +941,9 @@ impl IrModule {
                 Ok(expr)
             }
             Expression::Variable(variable) => {
-                let var_index = self
-                    .scopes
-                    .find_variable(scope_id, variable.ident)
-                    .ok_or(simple_err(format!("Identifier not found: {}", variable.ident)))?;
+                let var_index = self.scopes.find_variable(scope_id, variable.ident).ok_or(
+                    make_err(format!("Identifier not found: {}", variable.ident), variable.span),
+                )?;
                 let v = self.get_variable(var_index);
                 let expr = IrExpr::Variable(VariableExpr {
                     ir_type: v.ir_type,
@@ -947,15 +954,18 @@ impl IrModule {
             }
             Expression::FieldAccess(field_access) => {
                 let base_expr = self.eval_expr(&field_access.base, scope_id)?;
+                // TODO Cleanup This is a recurring 'double-check' pattern where we know we need a type id
+                //      but also need it to resolve to a particular type
                 let TypeRef::TypeId(type_id) = base_expr.get_type() else {
-                    bail!("Cannot access field {} on non-record type", field_access.target);
+                    return make_fail(format!("Cannot access field {} on non-record type", field_access.target), field_access.span);
                 };
                 let Type::Record(record_type) = self.get_type(type_id) else {
-                    bail!("Cannot access field {} on non-record type", field_access.target);
+                    return make_fail(format!("Cannot access field {} on non-record type", field_access.target), field_access.span);
                 };
-                let target_field = record_type.find_field(field_access.target).ok_or(
-                    simple_err(format!("Field {} not found on record type", field_access.target)),
-                )?;
+                let target_field = record_type.find_field(field_access.target).ok_or(make_err(
+                    format!("Field {} not found on record type", field_access.target),
+                    field_access.span,
+                ))?;
                 Ok(IrExpr::FieldAccess(FieldAccess {
                     base: Box::new(base_expr),
                     target_field,
@@ -968,8 +978,9 @@ impl IrModule {
             }
             Expression::FnCall(fn_call) => {
                 let function_id =
-                    self.scopes.find_function(scope_id, fn_call.name).ok_or(simple_err(
+                    self.scopes.find_function(scope_id, fn_call.name).ok_or(make_err(
                         format!("Function not found: {}", &*self.get_ident_name(fn_call.name)),
+                        fn_call.span,
                     ))?;
 
                 let function = &self.functions[function_id as usize];
@@ -983,7 +994,10 @@ impl IrModule {
                     if let Some(param) = matching_param {
                         call_parameters.push(param);
                     } else {
-                        return simple_fail("Could not find match for parameter {fn_param.name}");
+                        return make_fail(
+                            format!("Could not find match for parameter {}", fn_param.name),
+                            fn_call.span,
+                        );
                     }
                 }
                 // forget: function
@@ -1021,8 +1035,11 @@ impl IrModule {
                     ir_type,
                     owner_scope: Some(scope_id),
                 });
-                if let Err(e) = self.typecheck_types(ir_type, value_expr.get_type()) {
-                    bail!("local type mismatch: {e}");
+                if let Err(msg) = self.typecheck_types(ir_type, value_expr.get_type()) {
+                    return make_fail(
+                        format!("Local variable type mismatch {}", msg),
+                        val_def.span,
+                    );
                 }
                 let val_def_expr = IrStmt::ValDef(Box::new(ValDef {
                     ir_type,
@@ -1036,15 +1053,23 @@ impl IrModule {
             BlockStmt::Assignment(assignment) => {
                 let expr = self.eval_expr(&assignment.expr, scope_id)?;
                 let dest =
-                    self.scopes.find_variable(scope_id, assignment.ident).ok_or(simple_err(
-                        format!("Variable {} not found in scope {}", assignment.ident, scope_id),
+                    self.scopes.find_variable(scope_id, assignment.ident).ok_or(make_err(
+                        format!(
+                            "Variable {} not found in scope {}",
+                            &*self.get_ident_name(assignment.ident),
+                            scope_id
+                        ),
+                        assignment.span,
                     ))?;
                 let var = self.get_variable(dest);
                 if !var.is_mutable {
-                    anyhow::bail!("Cannot assign to immutable variable {}", assignment.ident)
+                    return make_fail("Cannot assign to immutable variable", assignment.span);
                 }
-                if self.typecheck_types(var.ir_type, expr.get_type()).is_err() {
-                    return simple_fail("Typecheck of assignment failed");
+                if let Err(msg) = self.typecheck_types(var.ir_type, expr.get_type()) {
+                    return make_fail(
+                        format!("Typecheck of assignment failed: {}", msg),
+                        assignment.span,
+                    );
                 }
                 let expr = IrStmt::Assignment(Box::new(Assignment {
                     value: expr,
@@ -1095,17 +1120,20 @@ impl IrModule {
         let body_block = fn_def
             .block
             .as_ref()
-            .ok_or(IrGenError::from("Top-level function definitions must have a body"))?;
+            .ok_or(make_err("Top-level function definitions must have a body", fn_def.span))?;
         let body_block = self.eval_block(body_block, scope_id)?;
         let ret_type: TypeRef = match &fn_def.ret_type {
             None => body_block.ret_type,
             Some(given_ret_type) => {
                 let given_ir_type = self.eval_type_expr(given_ret_type, scope_id)?;
                 if self.typecheck_types(given_ir_type, body_block.ret_type).is_err() {
-                    return simple_fail(format!(
-                        "Function {} ret type mismatch: {:?} {:?}",
-                        fn_def.name, given_ir_type, body_block.ret_type
-                    ));
+                    return make_fail(
+                        format!(
+                            "Function {} ret type mismatch: {:?} {:?}",
+                            fn_def.name, given_ir_type, body_block.ret_type
+                        ),
+                        fn_def.span,
+                    );
                 }
                 given_ir_type
             }
@@ -1144,8 +1172,16 @@ impl IrModule {
         }
     }
     pub fn run(&mut self) -> Result<()> {
+        let mut errors: Vec<IrGenError> = Vec::new();
         for def in &self.ast.clone().defs {
-            self.eval_definition(def)?;
+            let result = self.eval_definition(def);
+            if let Err(e) = result {
+                self.print_error(&e.message, e.span);
+                errors.push(e);
+            }
+        }
+        if !errors.is_empty() {
+            bail!("Typechecking failed")
         }
         Ok(())
     }
@@ -1173,7 +1209,7 @@ mod test {
     use crate::parse::parse_text;
 
     #[test]
-    fn const_definition_1() -> Result<(), Box<dyn Error>> {
+    fn const_definition_1() -> anyhow::Result<()> {
         let src = r"val x: int = 420;";
         let module = parse_text(src, "basic_fn.nx", false)?;
         let mut ir = IrModule::new(Rc::new(module));
@@ -1190,7 +1226,7 @@ mod test {
     }
 
     #[test]
-    fn fn_definition_1() -> IrGenResult<()> {
+    fn fn_definition_1() -> anyhow::Result<()> {
         let src = r#"
         fn foo(): int {
           return 1;
