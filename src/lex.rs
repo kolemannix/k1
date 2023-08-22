@@ -318,22 +318,20 @@ impl Lexer<'_> {
                     break Some(Token::make(single_char_tok, self.line_index, n, 1));
                 }
             }
-            if c.is_whitespace() {
-                if !tok_buf.is_empty() {
-                    self.advance();
-                    if let Some(tok) = TokenKind::token_from_str(&tok_buf) {
-                        break Some(Token::make(tok, self.line_index, n - tok_len, tok_len));
-                    } else {
-                        break Some(Token::make(
-                            TokenKind::Text,
-                            self.line_index,
-                            n - tok_len,
-                            tok_len,
-                        ));
-                    }
+            if c.is_whitespace() && !tok_buf.is_empty() {
+                self.advance();
+                if let Some(tok) = TokenKind::token_from_str(&tok_buf) {
+                    break Some(Token::make(tok, self.line_index, n - tok_len, tok_len));
+                } else {
+                    break Some(Token::make(
+                        TokenKind::Text,
+                        self.line_index,
+                        n - tok_len,
+                        tok_len,
+                    ));
                 }
             }
-            if (tok_buf.is_empty() && is_ident_start(c)) || is_ident_char(c) {
+            if (tok_buf.is_empty() && is_ident_or_num_start(c)) || is_ident_char(c) {
                 tok_len += 1;
                 tok_buf.push(c);
             } else if let Some(tok) = TokenKind::token_from_str(&tok_buf) {
@@ -379,8 +377,8 @@ fn is_ident_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_' || c == '.'
 }
 
-fn is_ident_start(c: char) -> bool {
-    c.is_alphabetic() || c == '_'
+fn is_ident_or_num_start(c: char) -> bool {
+    c.is_alphabetic() || c == '_' || c == '-'
 }
 
 #[cfg(test)]
@@ -391,15 +389,25 @@ mod test {
     #[test]
     fn case1() {
         let input = "val x = println(4)";
-        let result = Lexer::make(&input).run();
+        let result = Lexer::make(input).run();
         let kinds: Vec<TokenKind> = result.iter().map(|t| t.kind).collect();
         assert_eq!(kinds, vec![KeywordVal, Text, Equals, Text, OpenParen, Text, CloseParen])
     }
 
     #[test]
+    fn signed_int() {
+        let input = "-43";
+        let result = Lexer::make(input).run();
+        let kinds: Vec<TokenKind> = result.iter().map(|t| t.kind).collect();
+        assert_eq!(kinds, vec![Text]);
+        assert_eq!(result[0].span.start, 0);
+        assert_eq!(result[0].span.end, 3);
+    }
+
+    #[test]
     fn literal_string() {
         let input = "val x = println(\"foobear\")";
-        let result = Lexer::make(&input).run();
+        let result = Lexer::make(input).run();
         let kinds: Vec<TokenKind> = result.iter().map(|t| t.kind).collect();
         assert_eq!(
             kinds,

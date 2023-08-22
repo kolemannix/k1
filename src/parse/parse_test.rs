@@ -1,6 +1,5 @@
 use crate::parse::*;
 
-
 fn set_up(input: &str) -> Parser {
     let mut lexer = Lexer::make(input);
     let token_vec = lexer.run();
@@ -153,5 +152,28 @@ fn prelude_only() -> Result<(), ParseError> {
         println!("{module:?}");
         panic!("no definitions in prelude");
     }
+    Ok(())
+}
+
+#[test]
+fn precedence() -> Result<(), ParseError> {
+    let input = "2 * 1 + 3";
+    let mut parser = set_up(input);
+    let result = parser.parse_expression()?;
+    let result2 = parser.parse_expression()?;
+    println!("{result:#?}");
+    println!("{result2:#?}");
+    let Some(Expression::BinaryOp(bin_op)) = result else {
+        panic!()
+    };
+    let Expression::BinaryOp(lhs) = bin_op.operand1.as_ref() else {
+        panic!()
+    };
+    let Expression::Literal(rhs) = bin_op.operand2.as_ref() else {
+        panic!()
+    };
+    assert_eq!(bin_op.operation, BinaryOpKind::Add);
+    assert_eq!(lhs.operation, BinaryOpKind::Multiply);
+    assert!(matches!(rhs, Literal::Numeric(_, _)));
     Ok(())
 }

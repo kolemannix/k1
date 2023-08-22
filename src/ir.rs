@@ -1,12 +1,11 @@
 #![allow(clippy::match_like_matches_macro)]
 
-use crate::ir::TypeRef::Int;
 use crate::lex::Span;
 use crate::parse;
 use crate::parse::{
     Block, BlockStmt, Definition, Expression, FnDef, IdentifierId, Literal, Module,
 };
-use anyhow::{anyhow, bail, Result};
+use anyhow::{bail, Result};
 use colored::Colorize;
 use log::trace;
 use parse_display::Display;
@@ -14,6 +13,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::rc::Rc;
+use std::thread::scope;
 
 pub type ScopeId = u32;
 pub type FunctionId = u32;
@@ -88,7 +88,7 @@ pub struct Function {
     pub name: IdentifierId,
     pub ret_type: TypeRef,
     pub params: Vec<FuncParam>,
-    pub block: IrBlock,
+    pub block: Option<IrBlock>,
     pub intrinsic_type: Option<IntrinsicFunctionType>,
 }
 
@@ -365,13 +365,6 @@ impl Scopes {
         id
     }
 
-    fn get_root(&self) -> &Scope {
-        self.get_scope(0)
-    }
-    fn get_root_mut(&mut self) -> &mut Scope {
-        self.get_scope_mut(0)
-    }
-
     pub fn get_scope(&self, id: ScopeId) -> &Scope {
         &self.scopes[id as usize]
     }
@@ -389,10 +382,6 @@ impl Scopes {
             Some(parent) => self.find_variable(parent, ident),
             None => None,
         }
-    }
-
-    fn find_variable_local(&self, scope_id: ScopeId, ident: IdentifierId) -> Option<VariableId> {
-        self.scopes[scope_id as usize].find_variable(ident)
     }
 
     fn add_variable(&mut self, scope_id: ScopeId, ident: IdentifierId, variable_id: VariableId) {
@@ -728,6 +717,10 @@ impl IrModule {
         &self.functions[function_id as usize]
     }
 
+    pub fn get_function_mut(&mut self, function_id: FunctionId) -> &mut Function {
+        &mut self.functions[function_id as usize]
+    }
+
     fn parse_numeric(&self, s: &str) -> Result<i64, String> {
         // Eventually we need to find out what type of number literal this is.
         // For now we only support i64
@@ -750,7 +743,7 @@ impl IrModule {
         }
     }
 
-    fn coerce_block_to_unit_block(&mut self, block: &mut IrBlock) -> () {
+    fn coerce_block_to_unit_block(&mut self, block: &mut IrBlock) {
         let span = block.statements.last().map(|s| s.get_span()).unwrap_or(block.span);
         let unit_literal = IrExpr::unit_literal(span);
         block.statements.push(IrStmt::Expr(Box::new(unit_literal)));
@@ -1117,40 +1110,48 @@ impl IrModule {
             params.push(FuncParam { name: fn_arg.name, variable_id, position: idx, ir_type });
             self.scopes.add_variable(scope_id, fn_arg.name, variable_id);
         }
-        let body_block = fn_def
-            .block
-            .as_ref()
-            .ok_or(make_err("Top-level function definitions must have a body", fn_def.span))?;
-        let body_block = self.eval_block(body_block, scope_id)?;
-        let ret_type: TypeRef = match &fn_def.ret_type {
-            None => body_block.ret_type,
-            Some(given_ret_type) => {
-                let given_ir_type = self.eval_type_expr(given_ret_type, scope_id)?;
-                if self.typecheck_types(given_ir_type, body_block.ret_type).is_err() {
-                    return make_fail(
-                        format!(
-                            "Function {} ret type mismatch: {:?} {:?}",
-                            fn_def.name, given_ir_type, body_block.ret_type
-                        ),
-                        fn_def.span,
-                    );
-                }
-                given_ir_type
-            }
-        };
         let intrinsic_type = if fn_def.is_intrinsic {
             let name = &*self.ast.get_ident_name(fn_def.name);
             IntrinsicFunctionType::from_function_name(name)
         } else {
             None
         };
-        let function =
-            Function { name: fn_def.name, ret_type, params, block: body_block, intrinsic_type };
+        let given_ir_type = match &fn_def.ret_type {
+            None => TypeRef::Unit,
+            Some(type_expr) => self.eval_type_expr(type_expr, scope_id)?,
+        };
+        let function = Function {
+            name: fn_def.name,
+            ret_type: given_ir_type,
+            params,
+            block: None,
+            intrinsic_type,
+        };
         let function_id = self.add_function(function);
         self.scopes.add_function(scope_id, fn_def.name, function_id);
         if let Some(intrinsic_type) = intrinsic_type {
             self.scopes.intrinsic_functions.insert(intrinsic_type, function_id);
         }
+        let body_block = fn_def
+            .block
+            .as_ref()
+            .ok_or(make_err("Top-level function definitions must have a body", fn_def.span))?;
+        let body_block = self.eval_block(body_block, scope_id)?;
+        let ret_type: TypeRef = {
+            if self.typecheck_types(given_ir_type, body_block.ret_type).is_err() {
+                return make_fail(
+                    format!(
+                        "Function {} ret type mismatch: {:?} {:?}",
+                        fn_def.name, given_ir_type, body_block.ret_type
+                    ),
+                    fn_def.span,
+                );
+            }
+            given_ir_type
+        };
+        // Add the body now
+        let function = self.get_function_mut(function_id);
+        function.block = Some(body_block);
         Ok(function_id)
     }
     fn eval_definition(&mut self, def: &Definition) -> IrGenResult<()> {
@@ -1173,6 +1174,9 @@ impl IrModule {
     }
     pub fn run(&mut self) -> Result<()> {
         let mut errors: Vec<IrGenError> = Vec::new();
+        // TODO: 'Declare' everything first, will allow modules
+        //        to declare their API without full typechecking
+        //        will also allow recursion without hacks
         for def in &self.ast.clone().defs {
             let result = self.eval_definition(def);
             if let Err(e) = result {
