@@ -1,9 +1,5 @@
-use anyhow::bail;
-use colored::Colorize;
 use std::cell::RefCell;
 use std::fmt::{Display, Formatter};
-use std::fs::File;
-use std::io::{BufReader, Read};
 use std::rc::Rc;
 use string_interner::Symbol;
 
@@ -94,7 +90,7 @@ pub struct ValDef {
     pub span: Span,
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub enum BinaryOpKind {
     Add,
     Multiply,
@@ -104,6 +100,15 @@ pub enum BinaryOpKind {
 }
 
 impl BinaryOpKind {
+    pub fn precedence(&self) -> usize {
+        match self {
+            BinaryOpKind::Add => 0,
+            BinaryOpKind::Multiply => 1,
+            BinaryOpKind::And => 1,
+            BinaryOpKind::Or => 1,
+            BinaryOpKind::Equals => 2,
+        }
+    }
     pub fn from_tokenkind(kind: TokenKind) -> Option<BinaryOpKind> {
         match kind {
             TokenKind::Plus => Some(BinaryOpKind::Add),
@@ -549,7 +554,7 @@ impl Parser {
                     Ok(Some(Literal::Bool(false, first.span)))
                 } else {
                     match text.chars().next() {
-                        Some(c) if c.is_numeric() => {
+                        Some(c) if c.is_numeric() || c == '-' => {
                             let s = text.to_string();
                             self.tokens.advance();
                             Ok(Some(Literal::Numeric(s, first.span)))
@@ -711,34 +716,36 @@ impl Parser {
     }
 
     fn parse_expression_binary_op(&mut self, expr: Expression) -> ParseResult<Expression> {
-        if self.peek().kind.is_binary_operator() {
-            let op_token = self.tokens.next();
-            let op_kind = BinaryOpKind::from_tokenkind(op_token.kind);
-            match op_kind {
-                None => Err(Parser::error("Binary Operator", op_token)),
-                Some(op_kind) => {
-                    let operand2 =
-                        Parser::expect("rhs of binary op", self.peek(), self.parse_expression())?;
-                    let span = expr.get_span().extended(operand2.get_span());
-                    Ok(Expression::BinaryOp(BinaryOp {
-                        operation: op_kind,
-                        operand1: Box::new(expr),
-                        operand2: Box::new(operand2),
-                        span,
-                    }))
-                }
+        let mut result = expr;
+        loop {
+            if self.peek().kind.is_binary_operator() {
+                let op_token = self.tokens.next();
+                let Some(op_kind) = BinaryOpKind::from_tokenkind(op_token.kind) else {
+                    return Err(Parser::error("Binary Operator", op_token))
+                };
+                let next_expr =
+                    Parser::expect("rhs of binary op", self.peek(), self.parse_expression())?;
+                let span = result.get_span().extended(next_expr.get_span());
+                result = Expression::BinaryOp(BinaryOp {
+                    operation: op_kind,
+                    operand1: Box::new(result),
+                    operand2: Box::new(next_expr),
+                    span,
+                });
+            } else {
+                return Ok(result);
             }
-        } else {
-            Ok(expr)
         }
     }
 
-    fn parse_expression(&mut self) -> ParseResult<Option<Expression>> {
+    /// Base expression meaning no postfix or binary ops
+    fn parse_base_expression(&mut self) -> ParseResult<Option<Expression>> {
         let (first, second, third) = self.tokens.peek_three();
         trace!("parse_expression {} {}", first.kind, second.kind);
-        let parsed_expression = if let Some(lit) = self.parse_literal()? {
-            Ok(Some(Expression::Literal(lit)))
-        } else if first.kind == Text {
+        if let Some(lit) = self.parse_literal()? {
+            return Ok(Some(Expression::Literal(lit)));
+        }
+        if first.kind == Text {
             // FnCall
             if second.kind == OpenParen {
                 trace!("parse_expression FnCall");
@@ -792,14 +799,63 @@ impl Parser {
         } else {
             // More expression types
             Ok(None)
-        }?;
+        }
+    }
+
+    fn parse_expression(&mut self) -> ParseResult<Option<Expression>> {
+        let parsed_expression = self.parse_base_expression()?;
         // Forward search for binary and postfix ops
         if let Some(expr) = parsed_expression {
             let result = self.parse_expression_postfix_op(expr)?;
             let result = self.parse_expression_binary_op(result)?;
+            let result = self.precedence_fixup(result);
             Ok(Some(result))
         } else {
             Ok(None)
+        }
+    }
+
+    fn precedence_fixup(&self, expression: Expression) -> Expression {
+        // PRECEDENCE FIXUP TIME
+        if let Expression::BinaryOp(bin_op) = expression {
+            if let Expression::BinaryOp(binop_rhs) = *bin_op.operand2 {
+                // bin_op = * => 1
+                // bin_op_rhs = + => 0
+                println!("binop fixup at {:?} with {:?}", bin_op.operation, binop_rhs.operation);
+                if binop_rhs.operation.precedence() < bin_op.operation.precedence() {
+                    let inner_span =
+                        bin_op.operand1.get_span().extended(binop_rhs.operand1.get_span());
+                    let outer_span = bin_op.span;
+                    Expression::BinaryOp(BinaryOp {
+                        operation: binop_rhs.operation,
+                        operand1: Box::new(Expression::BinaryOp(BinaryOp {
+                            operation: bin_op.operation,
+                            operand1: bin_op.operand1,
+                            operand2: binop_rhs.operand1,
+                            span: inner_span,
+                        })),
+                        operand2: binop_rhs.operand2,
+                        span: outer_span,
+                    })
+                    // 2 * 1 + 3
+                    //   *
+                    //  2 +
+                    //   1 3
+                } else {
+                    // We have to re-construct the original input because
+                    // everything is partially moved
+                    Expression::BinaryOp(BinaryOp {
+                        operation: bin_op.operation,
+                        operand1: bin_op.operand1,
+                        operand2: Box::new(Expression::BinaryOp(binop_rhs)),
+                        span: bin_op.span,
+                    })
+                }
+            } else {
+                Expression::BinaryOp(bin_op)
+            }
+        } else {
+            expression
         }
     }
 
@@ -1100,10 +1156,18 @@ pub fn parse_text(text: &str, module_name: &str, use_prelude: bool) -> ParseResu
     result
 }
 
-pub fn parse_file(path: &str) -> ParseResult<Module> {
-    let file = File::open(path).unwrap_or_else(|_| panic!("file not found {}", path));
-    let mut buf_read = BufReader::new(file);
-    let mut content = String::new();
-    buf_read.read_to_string(&mut content).expect("read failed");
-    parse_text(&content, path, false)
-}
+// pub fn print_ast(ast: &Module, identifiers: &Identifiers) -> Result<String, std::fmt::Error> {
+//     let mut output = String::new();
+//     output.write_str(&ast.name)?;
+//     output.write_str("\n")?;
+//     for def in &ast.defs {
+//         match def {
+//             Definition::Type(type_def) => output
+//                 .write_fmt(format_args!("Type {} {:?}", type_def.name, type_def.value_expr))?,
+//             Definition::FnDef(fn_def) => {
+//                 output.write_fmt(format_args!("Function {} {:?}", fn_def.name, fn_def.))?
+//             }
+//         }
+//     }
+//     output
+// }

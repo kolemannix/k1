@@ -1,7 +1,6 @@
 use anyhow::Result;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
-use std::any::Any;
 
 use inkwell::module::Linkage;
 use inkwell::passes::{PassManager, PassManagerBuilder};
@@ -368,6 +367,7 @@ impl<'ctx> Codegen<'ctx> {
             .codegen_block(&ir_if.consequent)
             .expect("Expected IF branch block to return something")
             .loaded_value(&self.builder);
+        let consequent_final_block = self.builder.get_insert_block().unwrap();
         self.builder.build_unconditional_branch(merge_block);
 
         // Alternate Block
@@ -376,14 +376,17 @@ impl<'ctx> Codegen<'ctx> {
             .codegen_block(&ir_if.alternate)
             .expect("Expected IF branch block to return something")
             .loaded_value(&self.builder);
+        // TODO: Cleaner to have codegen_block RETURN its 'terminus' block rather than
+        //       rely on the builder state
+        let alternate_final_block = self.builder.get_insert_block().unwrap();
         self.builder.build_unconditional_branch(merge_block);
 
         // Merge block
         self.builder.position_at_end(merge_block);
         let phi_value = self.builder.build_phi(typ, "if_phi");
         phi_value.add_incoming(&[
-            (&consequent_expr, consequent_block),
-            (&alternate_expr, alternate_block),
+            (&consequent_expr, consequent_final_block),
+            (&alternate_expr, alternate_final_block),
         ]);
         phi_value.as_basic_value().into()
     }
@@ -394,9 +397,6 @@ impl<'ctx> Codegen<'ctx> {
                 log::trace!("codegen variable expr {ir_var:?}");
                 if let Some(pointer) = self.variables.get(&ir_var.variable_id) {
                     log::trace!("codegen variable got type {:?}", pointer.pointee_ty);
-                    // In the middle of fixing this; the key is codegen_expr for variables:
-                    // Once we find the variable pointer, do we LOAD it there and return a value? I did this but now everyone calling .expect_pointer() is broken
-                    // Or do we return the pointer from there, and expect everyone to load; but how would they know that they need to do so?
                     let loaded = pointer.loaded_value(&self.builder);
                     loaded.into()
                 } else if let Some(global) = self.globals.get(&ir_var.variable_id) {
@@ -407,10 +407,6 @@ impl<'ctx> Codegen<'ctx> {
                 }
             }
             IrExpr::FieldAccess(field_access) => {
-                // In the middle of fixing this; the key is codegen_expr for variables:
-                // Once we find the variable pointer, do we LOAD it there and return a value? I did this but now everyone calling .expect_pointer() is broken
-                // Or do we return the pointer from there, and expect everyone to load; but how would they know that they need to do so?
-
                 let target_value = self.codegen_expr(&field_access.base).as_basic_value_enum();
                 let target_ptr = self.build_store(target_value, "record_access_ptr");
                 let field_ptr = self
@@ -462,7 +458,7 @@ impl<'ctx> Codegen<'ctx> {
                     }
                 }
                 TypeRef::Bool => match bin_op.kind {
-                    BinaryOpKind::And | BinaryOpKind::Or => {
+                    BinaryOpKind::And | BinaryOpKind::Or | BinaryOpKind::Equals => {
                         let lhs_int = self
                             .codegen_expr(&bin_op.lhs)
                             .loaded_value(&self.builder)
@@ -476,6 +472,12 @@ impl<'ctx> Codegen<'ctx> {
                                 self.builder.build_and(lhs_int, rhs_int, "bool_and")
                             }
                             BinaryOpKind::Or => self.builder.build_or(lhs_int, rhs_int, "bool_or"),
+                            BinaryOpKind::Equals => self.builder.build_int_compare(
+                                IntPredicate::EQ,
+                                lhs_int,
+                                rhs_int,
+                                "bool_eq",
+                            ),
                             _ => panic!(),
                         };
                         op.as_basic_value_enum().into()
@@ -653,7 +655,9 @@ impl<'ctx> Codegen<'ctx> {
                 self.builder.build_store(pointer, param);
                 self.variables.insert(ir_param.variable_id, Pointer { pointer, pointee_ty: ty });
             }
-            self.codegen_block(&function.block);
+            self.codegen_block(
+                function.block.as_ref().expect("functions must have blocks by codegen"),
+            );
         }
     }
 

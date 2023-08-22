@@ -1,7 +1,14 @@
 fn fib(n: int): int {
-  return if (n == 0) or (n == 1) 1 else fib(n + -1) + fib(n + -2);
+  return if n == 0 {
+    0
+  } else if n == 1 {
+    1
+  } else {
+    fib(n + -1) + fib(n + -2)
+  };
 }
 
 fn main(): int {
-  return fib(99);
+  return fib(11);
 }
+// 89

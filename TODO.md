@@ -55,8 +55,8 @@ it's just an activity. It just took me 10 years to discover it again, but this t
 - [ ] Syntax changes; from qualifier-focused to name -focused
 - [ ] Introduce uint type
 - [x] Binary infix operations
-- [ ] basic error reporting using spans
-- [ ] oneofs (tagged unions)
+- [x] basic error reporting using spans
+- [ ] oneofs (variants?) (tagged unions)
 - [ ] Loops
 - [ ] Control-Flow: proper codegen for early returns:
     // This needs to return either a basic value or an instruction value (in the case of early return)
@@ -71,11 +71,14 @@ it's just an activity. It just took me 10 years to discover it again, but this t
 - [ ] Tuples
 
 # Fibonacci todos (Aug 20)
-- [ ] Equality binop
-- [ ] Recursion fix: process module decls first, then impls
-- [ ] Negative integer literals
+- [x] Equality binop
+- [x] Precedence of binops; parens?
+- [x] Recursion fix: process module decls first, then impls
+- [x] Negative integer literals
+- [x] PHI nested branch fix
 
 # Hacks to fix
+- [ ] Fix unnecessary load of function args
 - [ ] main function / detect entrypoint properly. Typing of main? How to get main args?
 - [ ] Replace vectors with smallvec where appropriate
 - [x] Proper println implementation. Fine to use printf internally for now but we should define our own func around it
