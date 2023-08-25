@@ -816,6 +816,7 @@ impl Parser {
     }
 
     fn precedence_fixup(&self, expression: Expression) -> Expression {
+        // TODO: Use the precedence as argument fix when building
         // PRECEDENCE FIXUP TIME
         if let Expression::BinaryOp(bin_op) = expression {
             if let Expression::BinaryOp(binop_rhs) = *bin_op.operand2 {

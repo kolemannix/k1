@@ -48,6 +48,15 @@ pub enum TypeRef {
     TypeId(TypeId),
 }
 
+impl TypeRef {
+    pub fn expect_type_id(&self) -> TypeId {
+        match self {
+            TypeRef::TypeId(type_id) => *type_id,
+            _ => panic!("Expected TypeId on {:?}", self),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TypeExpression {
     pub ty: TypeRef,

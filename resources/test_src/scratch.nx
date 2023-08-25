@@ -1,4 +1,7 @@
+fn sum(arr: Array[int]): int {
+  return arr[0] + arr[1];
+}
 fn main(): int {
-  printInt(2 + -1);
+  printInt(sum([1,2]));
   return 0;
 }

@@ -78,6 +78,7 @@ it's just an activity. It just took me 10 years to discover it again, but this t
 - [x] PHI nested branch fix
 
 # Hacks to fix
+- [ ] Make intrinsics like arrayIndex a real function
 - [ ] Fix unnecessary load of function args
 - [ ] main function / detect entrypoint properly. Typing of main? How to get main args?
 - [ ] Replace vectors with smallvec where appropriate
@@ -96,7 +97,7 @@ Design for
 
 # Maybe later
 - [ ] Block-as-single-arg syntax (xs.map { y => } )
-- [ ] Type Params
+- [x] Type Params
 - [ ] Unicode source
 - [ ] multiple parameter lists
 - [ ] Symbols like lisp or Clojure keywords would be really great; or just have string literal types?
