@@ -1,7 +1,9 @@
-fn sum(arr: Array[int]): int {
-  return arr[0] + arr[1];
-}
+fn identity[T](t: T): T { return t; }
+
 fn main(): int {
-  printInt(sum([1,2]));
+  printInt(identity[int](4));
+  // printInt(identity[bool](true));
+  // printInt(identity[{ value: int }]({ value: 42 }).value);
   return 0;
 }
+// 4

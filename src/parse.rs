@@ -75,8 +75,15 @@ pub struct FnArg {
 }
 
 #[derive(Debug)]
+pub struct FnTypeArg {
+    pub name: Option<IdentifierId>,
+    pub value: TypeExpression,
+}
+
+#[derive(Debug)]
 pub struct FnCall {
     pub name: IdentifierId,
+    pub type_args: Option<Vec<FnTypeArg>>,
     pub args: Vec<FnArg>,
     pub span: Span,
 }
@@ -283,8 +290,15 @@ impl TypeExpression {
 }
 
 #[derive(Debug)]
+pub struct TypeParamDef {
+    pub ident: IdentifierId,
+    pub span: Span,
+}
+
+#[derive(Debug)]
 pub struct FnDef {
     pub name: IdentifierId,
+    pub type_args: Option<Vec<TypeParamDef>>,
     pub args: Vec<FnArgDef>,
     pub ret_type: Option<TypeExpression>,
     pub block: Option<Block>,
@@ -322,7 +336,7 @@ pub enum Definition {
 }
 
 #[derive(Debug)]
-pub struct Module {
+pub struct AstModule {
     pub name: String,
     pub name_id: IdentifierId,
     pub defs: Vec<Definition>,
@@ -334,7 +348,7 @@ pub struct Module {
     pub identifiers: Rc<RefCell<Identifiers>>,
 }
 
-impl Module {
+impl AstModule {
     pub fn ident_id(&self, ident: &str) -> IdentifierId {
         self.identifiers.borrow_mut().intern(ident)
     }
@@ -390,7 +404,7 @@ struct Parser {
 }
 
 impl Parser {
-    pub fn ident_id(&self, s: impl AsRef<str>) -> IdentifierId {
+    pub fn ident_id(&mut self, s: impl AsRef<str>) -> IdentifierId {
         self.identifiers.borrow_mut().intern(s.as_ref())
     }
     pub fn get_ident_name(&self, id: IdentifierId) -> impl std::ops::Deref<Target = str> + '_ {
@@ -499,24 +513,10 @@ impl Parser {
         }
     }
 
-    fn eat_ident(&mut self) -> Option<String> {
-        if let Some(t) = self.eat_token(Text) {
-            let ident_slice = self.tok_chars(t);
-            Some(ident_slice.to_string())
-        } else {
-            None
-        }
-    }
-
-    fn expect_eat_ident(&mut self) -> ParseResult<String> {
-        let result = self.eat_ident();
-        match result {
-            None => {
-                let actual = self.peek();
-                return Err(Parser::error(TokenKind::Text, actual));
-            }
-            Some(ident) => Ok(ident),
-        }
+    fn intern_ident_token(&mut self, token: Token) -> IdentifierId {
+        let source = self.source.clone();
+        let tok_chars = Source::get_span_content(&source, token.span);
+        self.ident_id(tok_chars)
     }
 
     fn parse_literal(&mut self) -> ParseResult<Option<Literal>> {
@@ -568,11 +568,12 @@ impl Parser {
     }
 
     fn parse_record_type_field(&mut self) -> ParseResult<Option<RecordTypeField>> {
-        let ident_id = self.expect_eat_ident()?;
+        let name_token = self.expect_eat_token(Text)?;
+        let ident_id = self.intern_ident_token(name_token);
         self.expect_eat_token(Colon)?;
         let typ_expr =
             Parser::expect("Type expression", self.peek(), self.parse_type_expression())?;
-        Ok(Some(RecordTypeField { name: self.ident_id(ident_id), ty: typ_expr }))
+        Ok(Some(RecordTypeField { name: ident_id, ty: typ_expr }))
     }
 
     fn expect_type_expression(&mut self) -> ParseResult<TypeExpression> {
@@ -582,14 +583,15 @@ impl Parser {
     fn parse_type_expression(&mut self) -> ParseResult<Option<TypeExpression>> {
         let tok = self.peek();
         if tok.kind == Text {
-            let ident = Parser::tok_chars_noself(&self.source.content, tok);
-            if ident == "unit" {
+            let source = self.source.clone();
+            let text_str = Source::get_span_content(&source, tok.span);
+            if text_str == "unit" {
                 self.tokens.advance();
                 Ok(Some(TypeExpression::Unit(tok.span)))
-            } else if ident == "int" {
+            } else if text_str == "int" {
                 self.tokens.advance();
                 Ok(Some(TypeExpression::Int(tok.span)))
-            } else if ident == "bool" {
+            } else if text_str == "bool" {
                 self.tokens.advance();
                 Ok(Some(TypeExpression::Bool(tok.span)))
             } else {
@@ -602,14 +604,14 @@ impl Parser {
                         self.eat_delimited(Comma, CloseBracket, |p| {
                             Parser::expect_type_expression(p)
                         })?;
-                    let ident = Parser::tok_chars_noself(&self.source.content, tok);
+                    let ident = self.intern_ident_token(tok);
                     Ok(Some(TypeExpression::TypeApplication(TypeApplication {
-                        base: self.ident_id(ident),
+                        base: ident,
                         params: type_parameters,
                         span: tok.span.extended(params_span),
                     })))
                 } else {
-                    Ok(Some(TypeExpression::Name(self.ident_id(ident), tok.span)))
+                    Ok(Some(TypeExpression::Name(self.ident_id(text_str), tok.span)))
                 }
             }
         } else if tok.kind == OpenBrace {
@@ -638,7 +640,7 @@ impl Parser {
         };
         match self.parse_expression() {
             Ok(Some(expr)) => {
-                let name = if named { Some(self.ident_id(self.tok_chars(one))) } else { None };
+                let name = if named { Some(self.intern_ident_token(one)) } else { None };
                 Ok(Some(FnArg { name, value: expr }))
             }
             Ok(None) => {
@@ -662,10 +664,10 @@ impl Parser {
             return Ok(None);
         };
         let (fields, fields_span) = self.eat_delimited(Comma, CloseBrace, |parser| {
-            let name = parser.expect_eat_ident()?;
+            let name = parser.expect_eat_token(Text)?;
             parser.expect_eat_token(Colon)?;
             let expr = Parser::expect("expression", parser.peek(), parser.parse_expression())?;
-            Ok(RecordField { name: parser.ident_id(name), expr })
+            Ok(RecordField { name: parser.intern_ident_token(name), expr })
         })?;
         let span = open_brace.span.extended(fields_span);
         Ok(Some(Record { fields, span }))
@@ -680,7 +682,7 @@ impl Parser {
                 if next.kind == Dot {
                     // Field access syntax; a.b
                     self.tokens.advance();
-                    let target_ident = self.expect_eat_ident()?;
+                    let target = self.expect_eat_token(Text)?;
                     let next = self.peek();
                     if next.kind == OpenParen {
                         // Method call
@@ -689,7 +691,7 @@ impl Parser {
                         let span = result.get_span().extended(next.span);
                         result = Expression::FieldAccess(FieldAccess {
                             base: Box::new(result),
-                            target: self.ident_id(target_ident),
+                            target: self.intern_ident_token(target),
                             span,
                         })
                     }
@@ -747,14 +749,28 @@ impl Parser {
         }
         if first.kind == Text {
             // FnCall
-            if second.kind == OpenParen {
+            if second.kind == OpenBracket || second.kind == OpenParen {
                 trace!("parse_expression FnCall");
+                // Eat the name
                 self.tokens.advance();
-                // Eat the OpenParen
-                self.tokens.advance();
+                let type_args: Option<Vec<FnTypeArg>> = if second.kind == OpenBracket {
+                    // Eat the OpenBracket
+                    let (type_expressions, type_args_span) =
+                        self.eat_delimited(Comma, CloseBracket, Parser::expect_type_expression)?;
+                    // TODO Support named type arguments later
+                    let type_args: Vec<_> = type_expressions
+                        .into_iter()
+                        .map(|type_expr| FnTypeArg { name: None, value: type_expr })
+                        .collect();
+                    Some(type_args)
+                } else {
+                    None
+                };
+                self.expect_eat_token(OpenParen)?;
                 match self.eat_delimited(Comma, CloseParen, Parser::expect_fn_arg) {
                     Ok((args, args_span)) => Ok(Some(Expression::FnCall(FnCall {
-                        name: self.ident_id(self.tok_chars(first)),
+                        name: self.intern_ident_token(first),
+                        type_args,
                         args,
                         span: first.span.extended(args_span),
                     }))),
@@ -764,7 +780,7 @@ impl Parser {
                 // The last thing it can be is a simple variable reference expression
                 self.tokens.advance();
                 Ok(Some(Expression::Variable(Variable {
-                    ident: self.ident_id(self.tok_chars(first)),
+                    ident: self.intern_ident_token(first),
                     span: first.span,
                 })))
             }
@@ -870,7 +886,7 @@ impl Parser {
         let Some(eaten_keyword) = self.eat_token(keyword) else {
             return Ok(None);
         };
-        let ident = self.expect_eat_ident()?;
+        let name_token = self.expect_eat_token(Text)?;
         let typ = match self.eat_token(Colon) {
             None => Ok(None),
             Some(_) => self.parse_type_expression(),
@@ -880,7 +896,7 @@ impl Parser {
             Parser::expect("expression", self.peek(), self.parse_expression())?;
         let span = eaten_keyword.span.extended(initializer_expression.get_span());
         Ok(Some(ValDef {
-            name: self.ident_id(ident),
+            name: self.intern_ident_token(name_token),
             ty: typ,
             value: initializer_expression,
             is_mutable: mutable,
@@ -893,13 +909,18 @@ impl Parser {
         let Some(keyword_val_token) = self.eat_token(KeywordVal) else {
             return Ok(None);
         };
-        let ident = self.expect_eat_ident()?;
+        let name_token = self.expect_eat_token(Text)?;
         let _colon = self.expect_eat_token(Colon);
         let typ = Parser::expect("type_expression", self.peek(), self.parse_type_expression())?;
         self.expect_eat_token(Equals)?;
         let value_expr = Parser::expect("expression", self.peek(), self.parse_expression())?;
         let span = keyword_val_token.span.extended(value_expr.get_span());
-        ParseResult::Ok(Some(ConstVal { name: self.ident_id(ident), ty: typ, value_expr, span }))
+        ParseResult::Ok(Some(ConstVal {
+            name: self.intern_ident_token(name_token),
+            ty: typ,
+            value_expr,
+            span,
+        }))
     }
 
     fn parse_assignment(&mut self) -> ParseResult<Option<Assignment>> {
@@ -923,10 +944,10 @@ impl Parser {
 
     fn eat_fn_arg_def(&mut self) -> ParseResult<FnArgDef> {
         trace!("eat_fn_arg_def");
-        let ident = self.expect_eat_ident()?;
+        let name_token = self.expect_eat_token(Text)?;
         self.expect_eat_token(Colon)?;
         let typ = Parser::expect("type_expression", self.peek(), self.parse_type_expression())?;
-        Ok(FnArgDef { name: self.ident_id(ident), ty: typ })
+        Ok(FnArgDef { name: self.intern_ident_token(name_token), ty: typ })
     }
 
     fn eat_fndef_args(&mut self) -> ParseResult<(Vec<FnArgDef>, Span)> {
@@ -971,7 +992,7 @@ impl Parser {
                 Err(e) => {
                     // trace!("eat_delimited got err from 'parse': {}", e);
                     break Err(Parser::error_cause(
-                        format!("eat_delimited for {delim} encountered error parsing element"),
+                        format!("eat_delimited for delim={delim} term={terminator} encountered error parsing element"),
                         self.peek(),
                         e,
                     ));
@@ -1039,12 +1060,31 @@ impl Parser {
         Ok(Some(Block { stmts: block_statements, span }))
     }
 
+    fn expect_type_param(&mut self) -> ParseResult<TypeParamDef> {
+        let s = self.expect_eat_token(Text)?;
+        let ident_id = self.intern_ident_token(s);
+        Ok(TypeParamDef { ident: ident_id, span: s.span })
+    }
+
     fn parse_function(&mut self) -> ParseResult<Option<FnDef>> {
         trace!("parse_fndef");
         let Some(fn_keyword) = Parser::check(self.eat_token(KeywordFn))? else {
             return Ok(None);
         };
-        let ident = self.expect_eat_ident()?;
+        let func_name = self.expect_eat_token(Text)?;
+        let func_name_id = self.intern_ident_token(func_name);
+        let type_arguments: Option<Vec<TypeParamDef>> =
+            if let TokenKind::OpenBracket = self.peek().kind {
+                self.tokens.advance();
+                let (type_args, type_arg_span) = self.eat_delimited(
+                    TokenKind::Comma,
+                    TokenKind::CloseBracket,
+                    Parser::expect_type_param,
+                )?;
+                Some(type_args)
+            } else {
+                None
+            };
         self.expect_eat_token(OpenParen)?;
         let (args, args_span) = self.eat_fndef_args()?;
         self.expect_eat_token(Colon)?;
@@ -1054,19 +1094,28 @@ impl Parser {
         span.end = block.as_ref().map(|b| b.span.end).unwrap_or(args_span.end);
         // FIXME: Eventually, we'll use an 'intern' keyword to mark intrinsic decls
         //        But for now, we are relying on the name
-        let is_intrinsic = IntrinsicFunctionType::from_function_name(&ident).is_some();
-        Ok(Some(FnDef { name: self.ident_id(ident), args, ret_type, block, span, is_intrinsic }))
+        let is_intrinsic =
+            IntrinsicFunctionType::from_function_name(&self.get_ident_name(func_name_id)).is_some();
+        Ok(Some(FnDef {
+            name: func_name_id,
+            type_args: type_arguments,
+            args: args,
+            ret_type,
+            block,
+            span,
+            is_intrinsic,
+        }))
     }
 
     fn parse_typedef(&mut self) -> ParseResult<Option<TypeDefn>> {
         let keyword_type = self.eat_token(KeywordType);
         if let Some(keyword_type) = keyword_type {
-            let ident = self.expect_eat_ident()?;
+            let name = self.expect_eat_token(Text)?;
             let equals = self.expect_eat_token(Equals)?;
             let type_expr =
                 Parser::expect("Type expression", equals, self.parse_type_expression())?;
             let span = keyword_type.span.extended(type_expr.get_span());
-            Ok(Some(TypeDefn { name: self.ident_id(ident), value_expr: type_expr, span }))
+            Ok(Some(TypeDefn { name: self.intern_ident_token(name), value_expr: type_expr, span }))
         } else {
             Ok(None)
         }
@@ -1092,14 +1141,14 @@ impl Parser {
         }
     }
 
-    fn parse_module(&mut self, filename: &str) -> ParseResult<Module> {
+    fn parse_module(&mut self, filename: &str) -> ParseResult<AstModule> {
         let mut defs: Vec<Definition> = vec![];
 
         while let Some(def) = self.parse_definition()? {
             defs.push(def)
         }
         let ident = self.ident_id(filename);
-        Ok(Module {
+        Ok(AstModule {
             name: filename.to_string(),
             name_id: ident,
             defs,
@@ -1129,7 +1178,7 @@ fn print_tokens(content: &str, tokens: &[Token]) {
 
 // Eventually I want to keep the tokens around, and return them from here somehow, either in the
 // ast::Module or just separately
-pub fn parse_text(text: &str, module_name: &str, use_prelude: bool) -> ParseResult<Module> {
+pub fn parse_text(text: &str, module_name: &str, use_prelude: bool) -> ParseResult<AstModule> {
     let full_source: String = if use_prelude {
         let prelude = crate::prelude::PRELUDE_SOURCE;
         let mut modified_source = String::from(prelude);

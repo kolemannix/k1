@@ -275,10 +275,11 @@ impl<'ctx> Codegen<'ctx> {
                             Type::OpaqueAlias(_alias) => {
                                 todo!("opaque alias")
                             }
-                            Type::Array(array) => {
-                                // Does it even matter what type of pointer type we use?
-                                // It doesn't seem to!! Figure out fully why
-                                // Any pointer type will do
+                            Type::TypeVariable(v) => {
+                                panic!("codegen was asked to codegen a type variable {:?}", v)
+                            }
+                            Type::Array(_array) => {
+                                // Does not matter what pointer type we use
                                 // let element_type = self.codegen_type_ref(array.element_type);
                                 // element_type
                                 //     .ptr_type(self.default_address_space)

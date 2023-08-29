@@ -40,9 +40,9 @@ fn test_file<'ctx, P: AsRef<Path>>(ctx: &'ctx Context, path: P) -> Result<()> {
 
 #[cfg(test)]
 #[test]
-pub fn hello_array() -> Result<()> {
+pub fn array_index_literal() -> Result<()> {
     let ctx = Context::create();
-    test_file(&ctx, "resources/test_src/hello_array.nx")?;
+    test_file(&ctx, "resources/test_src/array_index_literal.nx")?;
     Ok(())
 }
 
