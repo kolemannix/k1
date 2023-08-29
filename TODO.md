@@ -48,9 +48,13 @@ it's just an activity. It just took me 10 years to discover it again, but this t
 - [x] Real prelude so we can more easily add runtime/stl functions (for array)
 - [x] Heap memory (just using malloc)
 - [x] Arrays (Fixed size but heap allocated)
+- [ ] Generic functions (no inference)
+- [ ] Generic types
+- [ ] Parse trailing commas
 - [ ] Remove / fix TokenIter type
+- [ ] Generic type inference
 - [ ] Optionals
-- [ ] Function syntax change (foo = fn (a, b, c): int { }
+- [ ] Function syntax change? (foo = fn (a, b, c): int { }
 - [ ] Ditch semicolons? (this technically introduces significant whitespace; need newline token)
 - [ ] Syntax changes; from qualifier-focused to name -focused
 - [ ] Introduce uint type
@@ -79,9 +83,10 @@ it's just an activity. It just took me 10 years to discover it again, but this t
 
 # Hacks to fix
 - [ ] Make intrinsics like arrayIndex a real function
-- [ ] Fix unnecessary load of function args
+- [ ] Fix line numbers to account for prelude
 - [ ] main function / detect entrypoint properly. Typing of main? How to get main args?
 - [ ] Replace vectors with smallvec where appropriate
+- [x] Fix unnecessary load of function args
 - [x] Proper println implementation. Fine to use printf internally for now but we should define our own func around it
 - [ ] Implement Display instead of relying on Debug
 
