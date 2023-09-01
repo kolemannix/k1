@@ -7,6 +7,8 @@ use TokenKind::*;
 
 use crate::ir::IntrinsicFunctionType;
 use crate::lex::*;
+
+pub type AstId = u32;
 use log::trace;
 
 #[cfg(test)]
@@ -354,6 +356,14 @@ impl AstModule {
     }
     pub fn get_ident_name(&self, id: IdentifierId) -> impl std::ops::Deref<Target = str> + '_ {
         std::cell::Ref::map(self.identifiers.borrow(), |idents| idents.get_name(id))
+    }
+
+    pub fn get_defn(&self, ast_id: AstId) -> &Definition {
+        &self.defs[ast_id as usize]
+    }
+
+    pub fn defns_iter(&self) -> impl Iterator<Item = (AstId, &Definition)> {
+        self.defs.iter().enumerate().map(|(idx, def)| (idx as u32, def))
     }
 }
 
@@ -755,6 +765,7 @@ impl Parser {
                 self.tokens.advance();
                 let type_args: Option<Vec<FnTypeArg>> = if second.kind == OpenBracket {
                     // Eat the OpenBracket
+                    self.tokens.advance();
                     let (type_expressions, type_args_span) =
                         self.eat_delimited(Comma, CloseBracket, Parser::expect_type_expression)?;
                     // TODO Support named type arguments later

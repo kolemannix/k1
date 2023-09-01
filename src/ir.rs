@@ -3,11 +3,12 @@
 use crate::lex::Span;
 use crate::parse;
 use crate::parse::{
-    AstModule, Block, BlockStmt, Definition, Expression, FnCall, FnDef, IdentifierId, Literal,
+    AstId, AstModule, Block, BlockStmt, Definition, Expression, FnCall, FnDef, IdentifierId,
+    Literal,
 };
 use anyhow::{bail, Result};
 use colored::Colorize;
-use log::trace;
+use log::{error, trace};
 use parse_display::Display;
 use std::collections::HashMap;
 use std::error::Error;
@@ -102,12 +103,14 @@ pub struct FuncParam {
 #[derive(Debug, Clone)]
 pub struct Function {
     pub name: IdentifierId,
+    pub scope: ScopeId,
     pub ret_type: TypeRef,
     pub params: Vec<FuncParam>,
     pub type_params: Option<Vec<TypeParam>>,
     pub block: Option<IrBlock>,
     pub intrinsic_type: Option<IntrinsicFunctionType>,
     pub specializations: Vec<FunctionId>,
+    pub ast_id: AstId,
 }
 
 impl Function {
@@ -392,9 +395,11 @@ impl Scopes {
     fn get_root_scope_id(&self) -> ScopeId {
         0 as ScopeId
     }
+    fn add_scope_to_root(&mut self) -> ScopeId {
+        self.add_scope(0)
+    }
     fn add_scope(&mut self, parent_scope_id: ScopeId) -> ScopeId {
-        let mut scope = Scope::default();
-        scope.parent = Some(parent_scope_id);
+        let scope = Scope { parent: Some(parent_scope_id), ..Scope::default() };
         let id = self.scopes.len() as ScopeId;
         self.scopes.push(scope);
         let parent_scope = self.get_scope_mut(parent_scope_id);
@@ -444,7 +449,14 @@ impl Scopes {
     }
 
     fn find_type(&self, scope_id: ScopeId, ident: IdentifierId) -> Option<TypeRef> {
-        self.get_scope(scope_id).find_type(ident)
+        let scope = self.get_scope(scope_id);
+        if let v @ Some(_r) = scope.find_type(ident) {
+            return v;
+        }
+        match scope.parent {
+            Some(parent) => self.find_type(parent, ident),
+            None => None,
+        }
     }
 }
 
@@ -587,6 +599,12 @@ impl IrModule {
                 let ty_ref = self.scopes.find_type(scope_id, *ident);
 
                 ty_ref.ok_or_else(|| {
+                    error!("Scope {} Types: {:?}", scope_id, self.scopes.get_scope(scope_id).types);
+                    error!(
+                        "Scope {} Vars: {:?}",
+                        scope_id,
+                        self.scopes.get_scope(scope_id).variables
+                    );
                     make_err(
                         format!(
                             "could not find type for identifier {}",
@@ -1044,10 +1062,6 @@ impl IrModule {
                     }
                 }
                 let function_to_call = if function.is_generic() {
-                    let type_params = function.type_params.as_ref().unwrap();
-                    let type_args = fn_call
-                        .type_args
-                        .ok_or(make_err("fn call mising type args", fn_call.span))?;
                     // TODO: Implement full generic type inference. This could get slow!
                     //       Cases like [T](t: T) are easier but [T](x: ComplexType[A, B, T]) and solving for
                     //       T in that case is hard. Requires recursive search.
@@ -1060,7 +1074,7 @@ impl IrModule {
 
                     // For now, we require explicit type parameters in the call
                     let specialized_function_id =
-                        self.get_specialized_function_for_call(fn_call, scope_id, function_id)?;
+                        self.get_specialized_function_for_call(fn_call, function_id)?;
                     specialized_function_id
                 } else {
                     function_id
@@ -1085,38 +1099,34 @@ impl IrModule {
     fn get_specialized_function_for_call(
         &mut self,
         fn_call: &FnCall,
-        call_scope: ScopeId,
         old_function_id: FunctionId,
     ) -> IrGenResult<FunctionId> {
         trace!("Specializing function: {}", &*self.get_ident_name(fn_call.name));
-        let function = self.get_function(old_function_id);
-        let type_params = function.type_params.as_ref().expect("expected function to be generic");
+        let generic_function = self.get_function(old_function_id).clone();
+        let type_params =
+            generic_function.type_params.as_ref().expect("expected function to be generic");
         let type_args =
-            fn_call.type_args.ok_or(make_err("fn call mising type args", fn_call.span))?;
+            fn_call.type_args.as_ref().ok_or(make_err("fn call mising type args", fn_call.span))?;
         let mut new_name = self.get_ident_name(fn_call.name).to_string();
-        let mut mappings: HashMap<TypeRef, TypeRef> = HashMap::new();
+
         // The specialized function lives in the root of the module
-        let spec_fn_scope_id = self.scopes.add_scope(self.scopes.get_root_scope_id());
+        // The only real difference is the scope: it has substitutions for the type variables
+        let spec_fn_scope_id = self.scopes.add_scope_to_root();
         for (i, type_param) in type_params.iter().enumerate() {
-            let type_arg = type_args[i];
+            let type_arg = &type_args[i];
             let type_ref = self.eval_type_expr(&type_arg.value, spec_fn_scope_id)?;
             self.scopes.get_scope_mut(spec_fn_scope_id).add_type(type_param.ident, type_ref);
-            mappings.insert(TypeRef::TypeId(type_param.type_id), type_ref);
         }
-        // TODO: Name better
         new_name.push_str("_spec_");
-        let specialization_count = 1;
+        let specialization_count = generic_function.specializations.len();
         new_name.push_str(&specialization_count.to_string());
 
-        let specialized_function = Function {
-            name: self.ast.ident_id(&new_name),
-            ret_type: self.substitute_type(function_ret_type, mappings),
-            params: new_params,
-            type_params: None,
-            block: new_block,
-            intrinsic_type: function.intrinsic_type,
+        let ast = self.ast.clone();
+        let Definition::FnDef(ast_def) = ast.get_defn(generic_function.ast_id) else {
+            self.internal_compiler_error("failed to get AST node for function specialization", fn_call.span)
         };
-        let specialized_function_id = self.add_function(specialized_function);
+        let specialized_function_id =
+            self.eval_function(ast_def, generic_function.ast_id, spec_fn_scope_id, true)?;
         Ok(specialized_function_id)
     }
     fn eval_block_stmt(&mut self, stmt: &BlockStmt, scope_id: ScopeId) -> IrGenResult<IrStmt> {
@@ -1205,13 +1215,25 @@ impl IrModule {
         let ir_block = IrBlock { ret_type, scope_id: 0, statements, span: block.span };
         Ok(ir_block)
     }
-    fn eval_function(&mut self, fn_def: &FnDef, scope_id: ScopeId) -> IrGenResult<FunctionId> {
+    fn eval_function(
+        &mut self,
+        fn_def: &FnDef,
+        fn_ast_id: AstId,
+        scope_id: ScopeId,
+        specialize: bool,
+    ) -> IrGenResult<FunctionId> {
         let mut params = Vec::new();
         let fn_scope_id = self.scopes.add_scope(scope_id);
 
         // Instantiate type arguments
-        let is_generic = fn_def.type_args.as_ref().map(|args| !args.is_empty()).unwrap_or(false);
-        trace!("function {} is_generic: {}", &*self.get_ident_name(fn_def.name), is_generic);
+        let is_generic =
+            !specialize && fn_def.type_args.as_ref().map(|args| !args.is_empty()).unwrap_or(false);
+        trace!(
+            "function {} is_generic: {}, specialize: {}",
+            &*self.get_ident_name(fn_def.name),
+            is_generic,
+            specialize
+        );
         let mut type_params: Option<Vec<TypeParam>> = None;
         if is_generic {
             let mut the_type_params = Vec::new();
@@ -1259,11 +1281,14 @@ impl IrModule {
         };
         let function = Function {
             name: fn_def.name,
+            scope: fn_scope_id,
             ret_type: given_ret_type,
             params,
             type_params,
             block: None,
             intrinsic_type,
+            specializations: Vec::new(),
+            ast_id: fn_ast_id,
         };
         let function_id = self.add_function(function);
         self.scopes.add_function(scope_id, fn_def.name, function_id);
@@ -1273,7 +1298,7 @@ impl IrModule {
         let body_block = fn_def
             .block
             .as_ref()
-            .ok_or(make_err("Top-level function definitions must have a body", fn_def.span))?;
+            .ok_or(make_err("function definitions must have a body", fn_def.span))?;
         let body_block = self.eval_block(body_block, scope_id)?;
         if self.typecheck_types(given_ret_type, body_block.ret_type).is_err() {
             return make_fail(
@@ -1289,15 +1314,15 @@ impl IrModule {
         function.block = Some(body_block);
         Ok(function_id)
     }
-    fn eval_definition(&mut self, def: &Definition) -> IrGenResult<()> {
-        let scope_id = 0;
+    fn eval_definition(&mut self, ast_id: AstId, def: &Definition) -> IrGenResult<()> {
+        let scope_id = self.scopes.get_root_scope_id();
         match def {
             Definition::Const(const_val) => {
                 let _variable_id: VariableId = self.eval_const(const_val)?;
                 Ok(())
             }
             Definition::FnDef(fn_def) => {
-                self.eval_function(fn_def, scope_id)?;
+                self.eval_function(fn_def, ast_id, scope_id, false)?;
                 Ok(())
             }
             Definition::Type(type_defn) => {
@@ -1312,8 +1337,11 @@ impl IrModule {
         // TODO: 'Declare' everything first, will allow modules
         //        to declare their API without full typechecking
         //        will also allow recursion without hacks
-        for def in &self.ast.clone().defs {
-            let result = self.eval_definition(def);
+
+        // TODO: leaky abstraction of id vs index;
+        //       AST module needs to provide definitions iterator with IDs!
+        for (idx, def) in self.ast.clone().defs.iter().enumerate() {
+            let result = self.eval_definition(idx as AstId, def);
             if let Err(e) = result {
                 self.print_error(&e.message, e.span);
                 errors.push(e);
