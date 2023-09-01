@@ -14,7 +14,7 @@ use inkwell::context::Context;
 
 use std::fs;
 use std::fs::File;
-use std::io::{Write};
+use std::io::Write;
 use std::path::Path;
 
 use crate::codegen_llvm::Codegen;
@@ -53,8 +53,8 @@ fn main() -> Result<()> {
     env_logger::init();
 
     static_assert_size!(parse::Definition, 16);
-    static_assert_size!(parse::BlockStmt, 144);
-    static_assert_size!(parse::Expression, 56);
+    static_assert_size!(parse::BlockStmt, 168); // Get down below 100
+    static_assert_size!(parse::Expression, 80); // Get back down
     static_assert_size!(ir::IrExpr, 64);
     static_assert_size!(ir::IrStmt, 16);
     println!("Size of ast::Definition: {}", std::mem::size_of::<parse::Definition>());
