@@ -2,8 +2,9 @@ fn identity[T](t: T): T { return t; }
 
 fn main(): int {
   printInt(identity[int](4));
-  // printInt(identity[bool](true));
-  // printInt(identity[{ value: int }]({ value: 42 }).value);
+  val b: bool = identity[bool](true);
+  printInt(if b 1 else 0);
+  printInt(identity[{ value: int }]({ value: 42 }).value);
   return 0;
 }
 // 4
