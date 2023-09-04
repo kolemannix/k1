@@ -443,8 +443,6 @@ impl<'ctx> Codegen<'ctx> {
                 let result = self.codegen_expr(&field_access.base);
                 let record_type =
                     self.build_record_type(field_access.base.get_type().expect_type_id());
-                println!("FieldAccess base expr: {:#?}", field_access.base);
-                println!("FieldAccess result: {:?}", result);
                 // Whether a Pointer or Value, we expect it to be the right type as-is, no loading
                 let record_pointer = result.as_basic_value_enum();
                 // let Pointer { pointee_ty, pointer } = result.expect_pointer();
@@ -543,10 +541,9 @@ impl<'ctx> Codegen<'ctx> {
             return self.codegen_intrinsic(intrinsic_type, call);
         }
 
-        let function_value = match self.llvm_functions.get(&call.callee_function_id) {
-            None => self.codegen_function(callee),
-            Some(function_value) => function_value,
-        }
+        let function_value = self
+            .codegen_function(call.callee_function_id, callee)
+            .expect("could not get llvm function");
 
         let args: Vec<BasicMetadataValueEnum<'ctx>> = call
             .args
@@ -647,32 +644,36 @@ impl<'ctx> Codegen<'ctx> {
     }
     // FIXME: This option will go away if we either, check intrinsic before calling this, or
     //        codegen real functions for intrinsics
-    fn codegen_function(&mut self, function_id: FunctionId, function: &Function) -> Option<FunctionValue<'ctx>> {
+    fn codegen_function(
+        &mut self,
+        function_id: FunctionId,
+        function: &Function,
+    ) -> Option<FunctionValue<'ctx>> {
+        if let Some(function) = self.llvm_functions.get(&function_id) {
+            return Some(*function);
+        }
         if function.intrinsic_type.is_some() {
             // FIXME: Is this correct to not even codegen a function?
             //        It means we are 'inlining' all intrinsics unconditionally
             //        Probably should make an llvm function and implement it ourselves,
             //        and call it normally
             trace!(
-                    "Skipping codegen for intrinsic function: {}",
-                    &*self.get_ident_name(function.name)
-                );
-            continue;
+                "Skipping codegen for intrinsic function: {}",
+                &*self.get_ident_name(function.name)
+            );
+            return None;
         }
         if function.is_generic() {
             trace!(
-                    "Skipping codegen for generic function: {}",
-                    &*self.get_ident_name(function.name)
-                );
-            continue;
+                "Skipping codegen for generic function: {}",
+                &*self.get_ident_name(function.name)
+            );
+            return None;
         }
-        let param_types: Vec<BasicMetadataTypeEnum> = function
-            .params
-            .iter()
-            .map(|fn_arg| self.get_llvm_type(fn_arg.ir_type).into())
-            .collect();
-        let ret_type: BasicMetadataTypeEnum<'ctx> =
-            self.get_llvm_type(function.ret_type).into();
+        let maybe_start_block = self.builder.get_insert_block();
+        let param_types: Vec<BasicMetadataTypeEnum> =
+            function.params.iter().map(|fn_arg| self.get_llvm_type(fn_arg.ty).into()).collect();
+        let ret_type: BasicMetadataTypeEnum<'ctx> = self.get_llvm_type(function.ret_type).into();
         let fn_ty = match ret_type {
             BasicMetadataTypeEnum::IntType(i) => i.fn_type(&param_types, false),
             BasicMetadataTypeEnum::PointerType(p) => p.fn_type(&param_types, false),
@@ -682,22 +683,25 @@ impl<'ctx> Codegen<'ctx> {
             let name = self.module.ast.get_ident_name(function.name);
             self.llvm_module.add_function(&name, fn_ty, None)
         };
-        self.llvm_functions.insert(function_index as u32, fn_val);
+        self.llvm_functions.insert(function_id, fn_val);
         let entry_block = self.ctx.append_basic_block(fn_val, "entry");
         self.builder.position_at_end(entry_block);
         for (i, param) in fn_val.get_param_iter().enumerate() {
             let ir_param = &function.params[i];
-            let ty = self.get_llvm_type(ir_param.ir_type);
+            let ty = self.get_llvm_type(ir_param.ty);
             let param_name = self.module.ast.get_ident_name(ir_param.name);
             param.set_name(&param_name);
             let pointer = self.builder.build_alloca(ty, &param_name);
             self.builder.build_store(pointer, param);
             self.variables.insert(ir_param.variable_id, Pointer { pointer, pointee_ty: ty });
         }
-        self.codegen_block(
-            function.block.as_ref().expect("functions must have blocks by codegen"),
-        );
+        self.codegen_block(function.block.as_ref().expect("functions must have blocks by codegen"));
+        if let Some(start_block) = maybe_start_block {
+            self.builder.position_at_end(start_block);
+        }
+        Some(fn_val)
     }
+
     pub fn codegen_module(&mut self) {
         for constant in &self.module.constants {
             match constant.expr {
@@ -717,7 +721,7 @@ impl<'ctx> Codegen<'ctx> {
         //       This will matter once the ID is more than just the index (it will at least need
         //       module ID)
         for (function_index, function) in self.module.clone().functions.iter().enumerate() {
-            self.codegen_function(function_index as FunctionId, function)
+            self.codegen_function(function_index as FunctionId, function);
         }
     }
 

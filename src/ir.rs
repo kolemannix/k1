@@ -93,11 +93,11 @@ pub struct IrBlock {
 }
 
 #[derive(Debug, Clone)]
-pub struct FuncParam {
+pub struct FnArgDefn {
     pub name: IdentifierId,
     pub variable_id: VariableId,
     pub position: usize,
-    pub ir_type: TypeRef,
+    pub ty: TypeRef,
 }
 
 #[derive(Debug, Clone)]
@@ -105,7 +105,7 @@ pub struct Function {
     pub name: IdentifierId,
     pub scope: ScopeId,
     pub ret_type: TypeRef,
-    pub params: Vec<FuncParam>,
+    pub params: Vec<FnArgDefn>,
     pub type_params: Option<Vec<TypeParam>>,
     pub block: Option<IrBlock>,
     pub intrinsic_type: Option<IntrinsicFunctionType>,
@@ -630,7 +630,7 @@ impl IrModule {
                         )
                     }
                 } else {
-                    todo!("ir for parameterized types")
+                    todo!("not supported: generic non builtin types")
                 }
             }
         }
@@ -704,9 +704,6 @@ impl IrModule {
     }
 
     fn typecheck_types(&self, expected: TypeRef, actual: TypeRef) -> Result<(), String> {
-        // Types can be compatible without being equal
-        // While we won't have inheritance, there will be some shallow subtyping
-        // and interfaces
         trace!("typechecking {:?} vs {:?}", expected, actual);
         if expected == actual {
             Ok(())
@@ -720,10 +717,16 @@ impl IrModule {
                         (Type::Array(a1), Type::Array(a2)) => {
                             self.typecheck_types(a1.element_type, a2.element_type)
                         }
-                        _ => Err(format!("TODO typecheck_types: other types: {ty1:?}, {ty2:?}")),
+                        _ => Err(format!("Expected {ty1:?} but got {ty2:?}")),
                     }
                 }
-                _ => Err(format!("Expected {:?} but got {:?}", expected, actual)),
+                (TypeRef::TypeId(id1), got) => {
+                    Err(format!("Expected {:?} but got {:?}", self.get_type(id1), got))
+                }
+                (exp, TypeRef::TypeId(id2)) => {
+                    Err(format!("Expected {:?} but got {:?}", exp, self.get_type(id2)))
+                }
+                (exp, got) => Err(format!("Expected {:?} but got {:?}", exp, got)),
             }
         }
     }
@@ -1045,15 +1048,19 @@ impl IrModule {
                         fn_call.span,
                     ))?;
 
-                let function = self.get_function(function_id);
-                let mut call_parameters: Vec<&parse::FnArg> = Vec::new();
-                for fn_param in &function.params {
+                let function_to_call = if self.get_function(function_id).is_generic() {
+                    self.get_specialized_function_for_call(fn_call, function_id)?
+                } else {
+                    function_id
+                };
+                let mut call_parameters: Vec<(FnArgDefn, &parse::FnCallArg)> = Vec::new();
+                for fn_param in &self.get_function(function_to_call).params {
                     let matching_param_by_name =
                         fn_call.args.iter().find(|arg| arg.name == Some(fn_param.name));
                     let matching_param =
                         matching_param_by_name.or(fn_call.args.get(fn_param.position));
                     if let Some(param) = matching_param {
-                        call_parameters.push(param);
+                        call_parameters.push((fn_param.clone(), param));
                     } else {
                         return make_fail(
                             format!("Could not find match for parameter {}", fn_param.name),
@@ -1061,28 +1068,16 @@ impl IrModule {
                         );
                     }
                 }
-                let function_to_call = if function.is_generic() {
-                    // TODO: Implement full generic type inference. This could get slow!
-                    //       Cases like [T](t: T) are easier but [T](x: ComplexType[A, B, T]) and solving for
-                    //       T in that case is hard. Requires recursive search.
-                    //       I wonder if we could infer in simple cases and refuse to infer
-                    //       in complex cases that would be slow.
-                    //       Inference algorithm:
-                    //       1. Find arguments that include a type param
-                    //       2. Find the actual value passed for each, find where the type variable appears within
-                    //          that type expression, and assign it to the concrete type
-
-                    // For now, we require explicit type parameters in the call
-                    let specialized_function_id =
-                        self.get_specialized_function_for_call(fn_call, function_id)?;
-                    specialized_function_id
-                } else {
-                    function_id
-                };
                 // forget: function
                 let mut fn_args: Vec<IrExpr> = Vec::new();
-                for call_param in call_parameters {
-                    let param_expr = self.eval_expr(&call_param.value, scope_id)?;
+                for (arg_defn, arg_value) in call_parameters {
+                    let param_expr = self.eval_expr(&arg_value.value, scope_id)?;
+                    if let Err(e) = self.typecheck_types(arg_defn.ty, param_expr.get_type()) {
+                        return make_fail(
+                            format!("Invalid parameter type: {}", e),
+                            arg_value.value.get_span(),
+                        );
+                    }
                     fn_args.push(param_expr);
                 }
                 let function_ret_type = self.get_function(function_to_call).ret_type;
@@ -1101,6 +1096,15 @@ impl IrModule {
         fn_call: &FnCall,
         old_function_id: FunctionId,
     ) -> IrGenResult<FunctionId> {
+        // TODO: Implement full generic type inference. This could get slow!
+        //       Cases like [T](t: T) are easier but [T](x: ComplexType[A, B, T]) and solving for
+        //       T in that case is hard. Requires recursive search.
+        //       I wonder if we could infer in simple cases and refuse to infer
+        //       in complex cases that would be slow.
+        //       Inference algorithm:
+        //       1. Find arguments that include a type param
+        //       2. Find the actual value passed for each, find where the type variable appears within
+        //          that type expression, and assign it to the concrete type
         trace!("Specializing function: {}", &*self.get_ident_name(fn_call.name));
         let generic_function = self.get_function(old_function_id).clone();
         let type_params =
@@ -1139,8 +1143,10 @@ impl IrModule {
             }
             BlockStmt::ValDef(val_def) => {
                 let value_expr = self.eval_expr(&val_def.value, scope_id)?;
-                let provided_type =
-                    val_def.ty.as_ref().expect("Type inference not supported on vals yet!");
+                let provided_type = val_def
+                    .ty
+                    .as_ref()
+                    .ok_or(make_err("Missing type annotation for val", val_def.span))?;
                 let ir_type = self.eval_type_expr(provided_type, scope_id)?;
                 let variable_id = self.add_variable(Variable {
                     is_mutable: val_def.is_mutable,
@@ -1258,6 +1264,9 @@ impl IrModule {
         // Typecheck arguments
         for (idx, fn_arg) in fn_def.args.iter().enumerate() {
             let ir_type = self.eval_type_expr(&fn_arg.ty, fn_scope_id)?;
+            if specialize {
+                trace!("Specializing: {:?} got {:?}", &fn_arg, ir_type);
+            }
             let variable = Variable {
                 name: fn_arg.name,
                 ir_type,
@@ -1265,7 +1274,7 @@ impl IrModule {
                 owner_scope: Some(fn_scope_id),
             };
             let variable_id = self.add_variable(variable);
-            params.push(FuncParam { name: fn_arg.name, variable_id, position: idx, ir_type });
+            params.push(FnArgDefn { name: fn_arg.name, variable_id, position: idx, ty: ir_type });
             self.scopes.add_variable(scope_id, fn_arg.name, variable_id);
         }
 
@@ -1338,10 +1347,8 @@ impl IrModule {
         //        to declare their API without full typechecking
         //        will also allow recursion without hacks
 
-        // TODO: leaky abstraction of id vs index;
-        //       AST module needs to provide definitions iterator with IDs!
-        for (idx, def) in self.ast.clone().defs.iter().enumerate() {
-            let result = self.eval_definition(idx as AstId, def);
+        for (id, defn) in self.ast.clone().defns_iter() {
+            let result = self.eval_definition(id, defn);
             if let Err(e) = result {
                 self.print_error(&e.message, e.span);
                 errors.push(e);

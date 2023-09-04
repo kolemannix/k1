@@ -10,35 +10,36 @@ pub const EOF_TOKEN: Token =
     Token { span: Span { file_id: 0, start: 0, end: 0, line: 0 }, kind: TokenKind::Eof };
 
 // TODO Take any iterator of Tokens, not just one that came from a Vec
-pub struct TokenIter {
-    iter: std::vec::IntoIter<Token>,
+pub struct TokenIter<'a> {
+    iter: std::slice::Iter<'a, Token>,
+    // iter: Box<dyn std::iter::Peekable<I = Iterator<Item = Token>>>,
 }
 
-impl TokenIter {
-    pub fn make(data: Vec<Token>) -> TokenIter {
-        TokenIter { iter: data.into_iter() }
+impl<'a> TokenIter<'a> {
+    pub fn make(data: &[Token]) -> TokenIter {
+        TokenIter { iter: data.iter() }
     }
     pub fn next(&mut self) -> Token {
-        self.iter.next().unwrap_or(EOF_TOKEN)
+        *self.iter.next().unwrap_or(&EOF_TOKEN)
     }
     pub fn advance(&mut self) {
         self.next();
     }
     pub fn peek(&self) -> Token {
         let peeked = self.iter.clone().next();
-        peeked.unwrap_or(EOF_TOKEN)
+        *peeked.unwrap_or(&EOF_TOKEN)
     }
     pub fn peek_two(&self) -> (Token, Token) {
         let mut peek_iter = self.iter.clone();
-        let p1 = peek_iter.next().unwrap_or(EOF_TOKEN);
-        let p2 = peek_iter.next().unwrap_or(EOF_TOKEN);
+        let p1 = *peek_iter.next().unwrap_or(&EOF_TOKEN);
+        let p2 = *peek_iter.next().unwrap_or(&EOF_TOKEN);
         (p1, p2)
     }
     pub fn peek_three(&self) -> (Token, Token, Token) {
         let mut peek_iter = self.iter.clone();
-        let p1 = peek_iter.next().unwrap_or(EOF_TOKEN);
-        let p2 = peek_iter.next().unwrap_or(EOF_TOKEN);
-        let p3 = peek_iter.next().unwrap_or(EOF_TOKEN);
+        let p1 = *peek_iter.next().unwrap_or(&EOF_TOKEN);
+        let p2 = *peek_iter.next().unwrap_or(&EOF_TOKEN);
+        let p3 = *peek_iter.next().unwrap_or(&EOF_TOKEN);
         (p1, p2, p3)
     }
 }
@@ -450,7 +451,6 @@ mod test {
         "#;
         let mut lexer = Lexer::make(input);
         let result = lexer.run();
-        let _token_iter = TokenIter::make(result.clone());
         let kinds: Vec<TokenKind> = result.iter().map(|t| t.kind).collect();
         assert_eq!(result[0].span, Span { start: 0, end: 14, line: 0, file_id: 0 });
         assert_eq!(&input[0..5], "// He");

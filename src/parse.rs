@@ -71,13 +71,13 @@ impl Identifiers {
 }
 
 #[derive(Debug)]
-pub struct FnArg {
+pub struct FnCallArg {
     pub name: Option<IdentifierId>,
     pub value: Expression,
 }
 
 #[derive(Debug)]
-pub struct FnTypeArg {
+pub struct FnCallTypeArg {
     pub name: Option<IdentifierId>,
     pub value: TypeExpression,
 }
@@ -85,8 +85,8 @@ pub struct FnTypeArg {
 #[derive(Debug)]
 pub struct FnCall {
     pub name: IdentifierId,
-    pub type_args: Option<Vec<FnTypeArg>>,
-    pub args: Vec<FnArg>,
+    pub type_args: Option<Vec<FnCallTypeArg>>,
+    pub args: Vec<FnCallArg>,
     pub span: Span,
 }
 
@@ -639,7 +639,7 @@ impl Parser {
         }
     }
 
-    fn parse_fn_arg(&mut self) -> ParseResult<Option<FnArg>> {
+    fn parse_fn_arg(&mut self) -> ParseResult<Option<FnCallArg>> {
         let (one, two) = self.tokens.peek_two();
         let named = if one.kind == Text && two.kind == Equals {
             self.tokens.advance();
@@ -651,7 +651,7 @@ impl Parser {
         match self.parse_expression() {
             Ok(Some(expr)) => {
                 let name = if named { Some(self.intern_ident_token(one)) } else { None };
-                Ok(Some(FnArg { name, value: expr }))
+                Ok(Some(FnCallArg { name, value: expr }))
             }
             Ok(None) => {
                 if named {
@@ -664,7 +664,7 @@ impl Parser {
         }
     }
 
-    fn expect_fn_arg(&mut self) -> ParseResult<FnArg> {
+    fn expect_fn_arg(&mut self) -> ParseResult<FnCallArg> {
         let res = self.parse_fn_arg();
         Parser::expect("fn_arg", self.peek(), res)
     }
@@ -763,15 +763,15 @@ impl Parser {
                 trace!("parse_expression FnCall");
                 // Eat the name
                 self.tokens.advance();
-                let type_args: Option<Vec<FnTypeArg>> = if second.kind == OpenBracket {
+                let type_args: Option<Vec<FnCallTypeArg>> = if second.kind == OpenBracket {
                     // Eat the OpenBracket
                     self.tokens.advance();
                     let (type_expressions, type_args_span) =
                         self.eat_delimited(Comma, CloseBracket, Parser::expect_type_expression)?;
-                    // TODO Support named type arguments later
+                    // TODO named type arguments
                     let type_args: Vec<_> = type_expressions
                         .into_iter()
-                        .map(|type_expr| FnTypeArg { name: None, value: type_expr })
+                        .map(|type_expr| FnCallTypeArg { name: None, value: type_expr })
                         .collect();
                     Some(type_args)
                 } else {
