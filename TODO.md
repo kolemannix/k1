@@ -48,15 +48,15 @@ it's just an activity. It just took me 10 years to discover it again, but this t
 - [x] Real prelude so we can more easily add runtime/stl functions (for array)
 - [x] Heap memory (just using malloc)
 - [x] Arrays (Fixed size but heap allocated)
-- [ ] Generic functions (no inference)
+- [x] Generic functions (no inference)
 - [ ] Generic types
 - [ ] Parse trailing commas
-- [ ] Remove / fix TokenIter type
-- [ ] Generic type inference
+- [x] Remove / fix TokenIter type
 - [ ] Optionals
 - [ ] Function syntax change? (foo = fn (a, b, c): int { }
 - [ ] Ditch semicolons? (this technically introduces significant whitespace; need newline token)
-- [ ] Syntax changes; from qualifier-focused to name -focused
+- [ ] Syntax changes? from qualifier-focused to name -focused
+- [ ] Generic type inference
 - [ ] Introduce uint type
 - [x] Binary infix operations
 - [x] basic error reporting using spans

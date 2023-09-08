@@ -407,13 +407,43 @@ impl Source {
     }
 }
 
-struct Parser {
-    tokens: TokenIter,
+struct Parser<'toks> {
+    tokens: TokenIter<'toks>,
     source: Rc<Source>,
     identifiers: Rc<RefCell<Identifiers>>,
 }
 
-impl Parser {
+impl<'toks> Parser<'toks> {
+    fn make(tokens: &'toks [Token], source: String, _use_prelude: bool) -> Parser {
+        // TODO: parse the lines ourselves
+        let lines: Vec<_> = source.lines().map(|l| l.to_owned()).collect();
+        Parser {
+            tokens: TokenIter::make(tokens),
+            source: Rc::new(Source { content: source, lines }),
+            identifiers: Rc::new(RefCell::new(Identifiers::default())),
+        }
+    }
+
+    // pub fn get_span_line(&self, span: Span) -> &str {
+    //     &self.source.get_line_by_index(span.line)
+    // }
+
+    fn check<A>(value: Option<A>) -> ParseResult<Option<A>> {
+        match value {
+            None => Ok(None),
+            Some(a) => Ok(Some(a)),
+        }
+    }
+    fn expect<A>(what: &str, current: Token, value: ParseResult<Option<A>>) -> ParseResult<A> {
+        match value {
+            Ok(None) => Err(ParseError { expected: what.to_string(), token: current, cause: None }),
+            Ok(Some(a)) => Ok(a),
+            Err(e) => Err(e),
+        }
+    }
+}
+
+impl<'toks> Parser<'toks> {
     pub fn ident_id(&mut self, s: impl AsRef<str>) -> IdentifierId {
         self.identifiers.borrow_mut().intern(s.as_ref())
     }
@@ -437,37 +467,11 @@ impl Parser {
         println!("{line_text}");
         println!("{span_text}");
     }
-    // pub fn get_span_line(&self, span: Span) -> &str {
-    //     &self.source.get_line_by_index(span.line)
-    // }
 
-    fn check<A>(value: Option<A>) -> ParseResult<Option<A>> {
-        match value {
-            None => Ok(None),
-            Some(a) => Ok(Some(a)),
-        }
-    }
-    fn expect<A>(what: &str, current: Token, value: ParseResult<Option<A>>) -> ParseResult<A> {
-        match value {
-            Ok(None) => Err(ParseError { expected: what.to_string(), token: current, cause: None }),
-            Ok(Some(a)) => Ok(a),
-            Err(e) => Err(e),
-        }
-    }
-}
-
-impl Parser {
     fn peek(&self) -> Token {
         self.tokens.peek()
     }
-    fn make(tokens: TokenIter, source: String, _use_prelude: bool) -> Parser {
-        let lines: Vec<_> = source.lines().map(|l| l.to_owned()).collect();
-        Parser {
-            tokens,
-            source: Rc::new(Source { content: source, lines }),
-            identifiers: Rc::new(RefCell::new(Identifiers::default())),
-        }
-    }
+
     fn chars_at(&self, start: u32, end: u32) -> &str {
         &self.source.content[start as usize..end as usize]
     }
@@ -607,11 +611,11 @@ impl Parser {
             } else {
                 self.tokens.advance();
                 let next = self.tokens.peek();
-                if next.kind == OpenBracket {
+                if next.kind == OpenAngle {
                     // parameterized type: Dict[int, int]
                     self.tokens.advance();
                     let (type_parameters, params_span) =
-                        self.eat_delimited(Comma, CloseBracket, |p| {
+                        self.eat_delimited(Comma, CloseAngle, |p| {
                             Parser::expect_type_expression(p)
                         })?;
                     let ident = self.intern_ident_token(tok);
@@ -759,15 +763,15 @@ impl Parser {
         }
         if first.kind == Text {
             // FnCall
-            if second.kind == OpenBracket || second.kind == OpenParen {
+            if second.kind == OpenAngle || second.kind == OpenParen {
                 trace!("parse_expression FnCall");
                 // Eat the name
                 self.tokens.advance();
-                let type_args: Option<Vec<FnCallTypeArg>> = if second.kind == OpenBracket {
-                    // Eat the OpenBracket
+                let type_args: Option<Vec<FnCallTypeArg>> = if second.kind == OpenAngle {
+                    // Eat the OpenAngle
                     self.tokens.advance();
                     let (type_expressions, type_args_span) =
-                        self.eat_delimited(Comma, CloseBracket, Parser::expect_type_expression)?;
+                        self.eat_delimited(Comma, CloseAngle, Parser::expect_type_expression)?;
                     // TODO named type arguments
                     let type_args: Vec<_> = type_expressions
                         .into_iter()
@@ -972,7 +976,7 @@ impl Parser {
         parse: F,
     ) -> ParseResult<(Vec<T>, Span)>
     where
-        F: Fn(&mut Parser) -> ParseResult<T>,
+        F: Fn(&mut Parser<'toks>) -> ParseResult<T>,
     {
         trace!("eat_delimited delim='{}' terminator='{}'", delim, terminator);
         // TODO @Allocation Use smallvec
@@ -1085,11 +1089,11 @@ impl Parser {
         let func_name = self.expect_eat_token(Text)?;
         let func_name_id = self.intern_ident_token(func_name);
         let type_arguments: Option<Vec<TypeParamDef>> =
-            if let TokenKind::OpenBracket = self.peek().kind {
+            if let TokenKind::OpenAngle = self.peek().kind {
                 self.tokens.advance();
                 let (type_args, type_arg_span) = self.eat_delimited(
                     TokenKind::Comma,
-                    TokenKind::CloseBracket,
+                    TokenKind::CloseAngle,
                     Parser::expect_type_param,
                 )?;
                 Some(type_args)
@@ -1205,10 +1209,7 @@ pub fn parse_text(text: &str, module_name: &str, use_prelude: bool) -> ParseResu
 
     let token_vec = lexer.run();
 
-    // TODO: TokenIter is dumb
-    let tokens: TokenIter = TokenIter::make(token_vec);
-
-    let mut parser = Parser::make(tokens, full_source, use_prelude);
+    let mut parser = Parser::make(&token_vec, full_source, use_prelude);
 
     let result = parser.parse_module(module_name);
     if let Err(e) = &result {

@@ -857,32 +857,27 @@ impl IrModule {
             Expression::IndexOperation(index_op) => {
                 // De-sugar to _arrayIndex(target, index)
                 // TODO: Indexing only works for builtin Array for now
+
+                let index_expr = self.eval_expr(&index_op.index_expr, scope_id)?;
+                if index_expr.get_type() != TypeRef::Int {
+                    return make_fail("index type must be int", index_op.span);
+                }
+
                 let target = self.eval_expr(&index_op.target, scope_id)?;
                 let TypeRef::TypeId(target_type_id) =  target.get_type() else {
                     return make_fail("index base must be an array", index_op.span)
                 };
-                let index_expr = self.eval_expr(&index_op.index_expr, scope_id)?;
-                if index_expr.get_type() != TypeRef::Int {
-                    return make_fail("UNIMPLEMENTED index type must be int", index_op.span);
-                }
-
                 let target_type = self.get_type(target_type_id);
                 let Type::Array(array_type) = target_type else {
-                    return make_fail("UNIMPLEMENTED index type must be int", index_op.span);
+                    return make_fail("index base must be an array", index_op.span);
                 };
-                let TypeRef::Int = array_type.element_type else {
-                    return make_fail("UNIMPLEMENTED array element type must be int", index_op.span);
-                };
-                // Special-case: call prelude function "_array_access"
+                // Special-case: call prelude function "_arrayIndex"
                 // Just need to look up the ID by intrinsic type
                 let array_index_fn = self
                     .scopes
                     .intrinsic_functions
                     .get(&IntrinsicFunctionType::ArrayIndex)
                     .unwrap();
-                // Amazingly we actually have a polymorphic call here, even
-                // though we can't express it in the source yet,
-                // since ret_type is bound to the element type of the array
 
                 // _arrayIndex(array, 42)
                 Ok(IrExpr::FunctionCall(FunctionCall {
@@ -1006,9 +1001,11 @@ impl IrModule {
                 Ok(expr)
             }
             Expression::Variable(variable) => {
-                let var_index = self.scopes.find_variable(scope_id, variable.ident).ok_or(
-                    make_err(format!("Identifier not found: {}", variable.ident), variable.span),
-                )?;
+                let var_index =
+                    self.scopes.find_variable(scope_id, variable.ident).ok_or(make_err(
+                        format!("{} is not defined", &*self.get_ident_name(variable.ident)),
+                        variable.span,
+                    ))?;
                 let v = self.get_variable(var_index);
                 let expr = IrExpr::Variable(VariableExpr {
                     ir_type: v.ir_type,
@@ -1304,23 +1301,29 @@ impl IrModule {
         if let Some(intrinsic_type) = intrinsic_type {
             self.scopes.intrinsic_functions.insert(intrinsic_type, function_id);
         }
-        let body_block = fn_def
-            .block
-            .as_ref()
-            .ok_or(make_err("function definitions must have a body", fn_def.span))?;
-        let body_block = self.eval_block(body_block, scope_id)?;
-        if self.typecheck_types(given_ret_type, body_block.ret_type).is_err() {
-            return make_fail(
-                format!(
-                    "Function {} ret type mismatch: {:?} {:?}",
-                    fn_def.name, given_ret_type, body_block.ret_type
-                ),
-                fn_def.span,
-            );
-        }
+        let is_intrinsic = intrinsic_type.is_some();
+        let body_block = match &fn_def.block {
+            Some(block_ast) => {
+                let block = self.eval_block(block_ast, scope_id)?;
+                if let Err(msg) = self.typecheck_types(given_ret_type, block.ret_type) {
+                    return make_fail(
+                        format!(
+                            "Function {} return type mismatch: {}",
+                            &*self.get_ident_name(fn_def.name),
+                            msg
+                        ),
+                        fn_def.span,
+                    );
+                } else {
+                    Some(block)
+                }
+            }
+            None if is_intrinsic => None,
+            None => return make_fail("function is missing implementation", fn_def.span),
+        };
         // Add the body now
         let function = self.get_function_mut(function_id);
-        function.block = Some(body_block);
+        function.block = body_block;
         Ok(function_id)
     }
     fn eval_definition(&mut self, ast_id: AstId, def: &Definition) -> IrGenResult<()> {
