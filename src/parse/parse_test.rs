@@ -1,11 +1,12 @@
 use crate::parse::*;
 
-fn set_up(input: &str) -> Parser {
+#[cfg(test)]
+fn set_up(input: &str) -> Parser<'static> {
     let mut lexer = Lexer::make(input);
-    let token_vec = lexer.run();
-    print_tokens(input, &token_vec[..]);
-    let tokens = TokenIter::make(token_vec);
-    Parser::make(tokens, input.to_string(), false)
+    let token_vec: &'static mut [Token] = lexer.run().leak();
+    print_tokens(input, token_vec);
+    let parser = Parser::make(token_vec, input.to_string(), false);
+    parser
 }
 
 #[test]
@@ -118,7 +119,7 @@ fn dot_accessor() -> ParseResult<()> {
 
 #[test]
 fn type_parameter_single() -> ParseResult<()> {
-    let input = "Array[int]";
+    let input = "Array<int>";
     let mut parser = set_up(input);
     let result = parser.parse_type_expression();
     assert!(matches!(result, Ok(Some(TypeExpression::TypeApplication(_)))));
@@ -127,7 +128,7 @@ fn type_parameter_single() -> ParseResult<()> {
 
 #[test]
 fn type_parameter_multi() -> ParseResult<()> {
-    let input = "Map[int, Array[int]]";
+    let input = "Map<int, Array<int>>";
     let mut parser = set_up(input);
     let result = parser.parse_type_expression();
     let Ok(Some(TypeExpression::TypeApplication(app))) = result else {

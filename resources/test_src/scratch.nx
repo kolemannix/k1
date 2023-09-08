@@ -1,10 +1,10 @@
-fn identity[T](t: T): T { return t; }
-
+fn boolToInt(b: bool): int {
+  return if b 1 else 0;
+}
 fn main(): int {
-  printInt(identity[int](4));
-  val b: bool = identity[bool](true);
-  printInt(if b 1 else 0);
-  printInt(identity[{ value: int }]({ value: 42 }).value);
+  val boolArray: Array<bool> = [false,true];
+  printInt(boolToInt(boolArray[0]));
+  printInt(boolToInt(boolArray[1]));
   return 0;
 }
-// 4
+// 0, 1

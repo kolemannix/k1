@@ -9,14 +9,12 @@ pub const EOF_CHAR: char = '\0';
 pub const EOF_TOKEN: Token =
     Token { span: Span { file_id: 0, start: 0, end: 0, line: 0 }, kind: TokenKind::Eof };
 
-// TODO Take any iterator of Tokens, not just one that came from a Vec
-pub struct TokenIter<'a> {
-    iter: std::slice::Iter<'a, Token>,
-    // iter: Box<dyn std::iter::Peekable<I = Iterator<Item = Token>>>,
+pub struct TokenIter<'toks> {
+    iter: std::slice::Iter<'toks, Token>,
 }
 
-impl<'a> TokenIter<'a> {
-    pub fn make(data: &[Token]) -> TokenIter {
+impl<'toks> TokenIter<'toks> {
+    pub fn make(data: &'toks [Token]) -> TokenIter<'toks> {
         TokenIter { iter: data.iter() }
     }
     pub fn next(&mut self) -> Token {
@@ -223,7 +221,7 @@ impl Span {
     pub fn extended(&self, other: Span) -> Span {
         let mut copied = *self;
         copied.end = other.end;
-        return copied;
+        copied
     }
 }
 

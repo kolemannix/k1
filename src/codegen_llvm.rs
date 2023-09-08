@@ -298,12 +298,13 @@ impl<'ctx> Codegen<'ctx> {
 
     fn codegen_val(&mut self, val: &ValDef) -> GeneratedValue<'ctx> {
         let value = self.codegen_expr(&val.initializer);
-        let pointee_ty = value.as_basic_value_enum().get_type();
+        let pointee_ty = self.get_llvm_type(val.ir_type);
+        let variable = self.module.get_variable(val.variable_id);
         let value_ptr = self.builder.build_alloca(
             pointee_ty.ptr_type(self.default_address_space),
-            &val.variable_id.to_string(),
+            &self.get_ident_name(variable.name),
         );
-        trace!("codegen_val {}: pointee_ty: {pointee_ty:?}", val.variable_id.to_string());
+        trace!("codegen_val {}: pointee_ty: {pointee_ty:?}", &*self.get_ident_name(variable.name));
         // We're always storing a pointer
         // in self.variables that, when loaded, gives the actual type of the variable
         self.builder.build_store(value_ptr, value.as_basic_value_enum());
@@ -550,12 +551,10 @@ impl<'ctx> Codegen<'ctx> {
             .iter()
             .map(|arg_expr| {
                 let basic_value = self.codegen_expr(arg_expr);
-                // I think this is a bug; try passing an array as arg
-                //basic_value.loaded_value(&self.builder).into()
                 basic_value.as_basic_value_enum().into()
             })
             .collect();
-        let callsite_value = self.builder.build_call(function_value, &args, "");
+        let callsite_value = self.builder.build_call(function_value, &args, "call_ret");
         // Call returns Right for void, and Left for values
         let result_value =
             callsite_value.try_as_basic_value().left().expect("function returned void");
@@ -573,6 +572,7 @@ impl<'ctx> Codegen<'ctx> {
                 self.builtin_types.unit_value.as_basic_value_enum().into()
             }
             IntrinsicFunctionType::ArrayIndex => {
+                println!("ArrayIndex call: {:?}", call);
                 let pointee_ty = self.get_llvm_type(call.ret_type);
                 let array_expr = &call.args[0];
                 let index_expr = &call.args[1];
@@ -614,6 +614,7 @@ impl<'ctx> Codegen<'ctx> {
                 }
                 IrStmt::ReturnStmt(return_stmt) => {
                     let value = self.codegen_expr(&return_stmt.expr);
+                    // Likely another loaded_value bug
                     self.builder.build_return(Some(&value.loaded_value(&self.builder)));
                     return None;
                 }
