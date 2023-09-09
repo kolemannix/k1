@@ -31,7 +31,7 @@ macro_rules! static_assert_size {
 pub fn compile_single_file_program<'ctx>(
     ctx: &'ctx Context,
     filename: &str,
-    source: &String,
+    source: &str,
 ) -> Result<Codegen<'ctx>> {
     let use_prelude = true;
     let ast = parse::parse_text(source, filename, use_prelude).unwrap_or_else(|e| {
@@ -45,7 +45,7 @@ pub fn compile_single_file_program<'ctx>(
     // println!("{irgen}");
     let mut codegen: Codegen<'ctx> = Codegen::create(ctx, irgen);
     codegen.codegen_module();
-    codegen.optimize()?;
+    codegen.optimize(false)?;
     Ok(codegen)
 }
 
