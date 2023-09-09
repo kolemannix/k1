@@ -588,9 +588,10 @@ impl<'ctx> Codegen<'ctx> {
                         pointee_ty,
                         array_value_as_ptr,
                         &[index_int_value],
-                        "array_index",
+                        "array_index_ptr",
                     );
-                    Pointer { pointee_ty, pointer: gep_ptr }.into()
+                    let value = self.builder.build_load(pointee_ty, gep_ptr, "array_index_value");
+                    value.into()
                 }
             }
         }
@@ -730,7 +731,7 @@ impl<'ctx> Codegen<'ctx> {
         self.module.name()
     }
 
-    pub fn optimize(&mut self) -> CodegenResult<()> {
+    pub fn optimize(&mut self, optimize: bool) -> CodegenResult<()> {
         Target::initialize_aarch64(&InitializationConfig::default());
         let triple = TargetMachine::get_default_triple();
         let target = Target::from_triple(&triple).unwrap();
@@ -764,9 +765,11 @@ impl<'ctx> Codegen<'ctx> {
 
         let module_pass_manager: PassManager<inkwell::module::Module<'ctx>> =
             PassManager::create(());
-        module_pass_manager.add_promote_memory_to_register_pass();
-        module_pass_manager.add_function_attrs_pass();
-        module_pass_manager.add_instruction_combining_pass();
+        if optimize {
+            module_pass_manager.add_promote_memory_to_register_pass();
+            module_pass_manager.add_function_attrs_pass();
+            module_pass_manager.add_instruction_combining_pass();
+        }
         // module_pass_manager.add_function_inlining_pass();
         module_pass_manager.add_verifier_pass();
 
