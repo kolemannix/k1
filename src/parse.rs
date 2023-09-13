@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::fmt::{Display, Formatter};
+use std::fmt::{Debug, Display, Formatter, Write};
 use std::rc::Rc;
 use string_interner::Symbol;
 
@@ -26,6 +26,18 @@ pub enum Literal {
     Numeric(String, Span),
     Bool(bool, Span),
     String(String, Span),
+}
+
+impl Display for Literal {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Literal::Unit(span) => f.write_str("()"),
+            Literal::Numeric(n, span) => f.write_str(n),
+            Literal::Bool(true, span) => f.write_str("true"),
+            Literal::Bool(false, span) => f.write_str("false"),
+            Literal::String(s, span) => f.write_str(s),
+        }
+    }
 }
 
 impl Literal {
@@ -108,6 +120,18 @@ pub enum BinaryOpKind {
     Equals,
 }
 
+impl Display for BinaryOpKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BinaryOpKind::Add => f.write_char('+'),
+            BinaryOpKind::Multiply => f.write_char('*'),
+            BinaryOpKind::And => f.write_str("and"),
+            BinaryOpKind::Or => f.write_str("or"),
+            BinaryOpKind::Equals => f.write_str("=="),
+        }
+    }
+}
+
 impl BinaryOpKind {
     pub fn precedence(&self) -> usize {
         match self {
@@ -132,9 +156,9 @@ impl BinaryOpKind {
 
 #[derive(Debug)]
 pub struct BinaryOp {
-    pub operation: BinaryOpKind,
-    pub operand1: Box<Expression>,
-    pub operand2: Box<Expression>,
+    pub op_kind: BinaryOpKind,
+    pub lhs: Box<Expression>,
+    pub rhs: Box<Expression>,
     pub span: Span,
 }
 
@@ -205,6 +229,45 @@ impl Expression {
             Expression::Record(record) => record.span,
             Expression::IndexOperation(op) => op.span,
             Expression::Array(array_expr) => array_expr.span,
+        }
+    }
+}
+
+impl Display for Expression {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Expression::BinaryOp(op) => {
+                f.write_fmt(format_args!("({} {} {})", op.lhs, op.op_kind, op.rhs))
+            }
+            Expression::Literal(lit) => std::fmt::Display::fmt(&lit, f),
+            Expression::FnCall(call) => call.fmt(f),
+            Expression::Variable(var) => var.fmt(f),
+            Expression::FieldAccess(acc) => acc.fmt(f),
+            Expression::Block(block) => block.fmt(f),
+            Expression::If(if_expr) => if_expr.fmt(f),
+            Expression::Record(record) => record.fmt(f),
+            Expression::IndexOperation(op) => op.fmt(f),
+            Expression::Array(array_expr) => array_expr.fmt(f),
+        }
+    }
+}
+
+enum ExprStackMember {
+    Operator(BinaryOpKind, Span),
+    Expr(Expression),
+}
+
+impl ExprStackMember {
+    fn expect_expr(self) -> Expression {
+        match self {
+            ExprStackMember::Expr(expr) => expr,
+            _ => panic!("expected expr"),
+        }
+    }
+    fn expect_operator(self) -> (BinaryOpKind, Span) {
+        match self {
+            ExprStackMember::Operator(kind, span) => (kind, span),
+            _ => panic!("expected operator"),
         }
     }
 }
@@ -687,8 +750,10 @@ impl<'toks> Parser<'toks> {
         Ok(Some(Record { fields, span }))
     }
 
-    fn parse_expression_postfix_op(&mut self, expr: Expression) -> ParseResult<Expression> {
-        let mut result = expr;
+    fn parse_expression_with_postfix_ops(&mut self) -> ParseResult<Option<Expression>> {
+        let Some(mut result) = self.parse_base_expression()? else {
+            return Ok(None)
+        };
         // Looping for postfix ops inspired by Jakt's parser
         loop {
             let next = self.peek();
@@ -726,32 +791,87 @@ impl<'toks> Parser<'toks> {
                     })
                 }
             } else {
-                return Ok(result);
+                return Ok(Some(result));
             }
         }
     }
 
-    fn parse_expression_binary_op(&mut self, expr: Expression) -> ParseResult<Expression> {
-        let mut result = expr;
+    fn parse_expression(&mut self) -> ParseResult<Option<Expression>> {
+        let Some(expr) = self.parse_expression_with_postfix_ops()? else {
+            return Ok(None);
+        };
+        let mut expr_stack: Vec<ExprStackMember> = vec![ExprStackMember::Expr(expr)];
+        let mut last_precedence = 100_000;
         loop {
-            if self.peek().kind.is_binary_operator() {
-                let op_token = self.tokens.next();
-                let Some(op_kind) = BinaryOpKind::from_tokenkind(op_token.kind) else {
-                    return Err(Parser::error("Binary Operator", op_token))
+            let tok = self.peek();
+            let Some(op_kind) = BinaryOpKind::from_tokenkind(tok.kind) else {
+                break;
+            };
+            let precedence = op_kind.precedence();
+            self.tokens.advance();
+            let rhs = Parser::expect(
+                "rhs of binary op",
+                self.peek(),
+                self.parse_expression_with_postfix_ops(),
+            )?;
+            println!(
+                "at {:?}, precedence={}, last={}, stacklen={}",
+                op_kind,
+                precedence,
+                last_precedence,
+                expr_stack.len()
+            );
+            while precedence <= last_precedence && expr_stack.len() > 1 {
+                let rhs = expr_stack.pop().unwrap().expect_expr();
+                let (op_kind, op_span) = expr_stack.pop().unwrap().expect_operator();
+                println!("setting lp={}", op_kind.precedence());
+                last_precedence = op_kind.precedence();
+                if last_precedence < precedence {
+                    expr_stack.push(ExprStackMember::Operator(op_kind, op_span));
+                    expr_stack.push(ExprStackMember::Expr(rhs));
+                    break;
+                }
+                println!("Doing fixup; binding {:?}", op_kind);
+                let ExprStackMember::Expr(lhs) = expr_stack.pop().unwrap() else {
+                    panic!("expected expr on stack")
                 };
-                let next_expr =
-                    Parser::expect("rhs of binary op", self.peek(), self.parse_expression())?;
-                let span = result.get_span().extended(next_expr.get_span());
-                result = Expression::BinaryOp(BinaryOp {
-                    operation: op_kind,
-                    operand1: Box::new(result),
-                    operand2: Box::new(next_expr),
-                    span,
+                let new_span = lhs.get_span().extended(rhs.get_span());
+                let bin_op = Expression::BinaryOp(BinaryOp {
+                    op_kind,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                    span: new_span,
                 });
-            } else {
-                return Ok(result);
+                expr_stack.push(ExprStackMember::Expr(bin_op))
             }
+            expr_stack.push(ExprStackMember::Operator(op_kind, tok.span));
+            expr_stack.push(ExprStackMember::Expr(rhs));
+
+            println!("setting lp={}", precedence);
+            last_precedence = precedence;
         }
+
+        // Pop and build now that everything is right
+        while expr_stack.len() > 1 {
+            let ExprStackMember::Expr(rhs) = expr_stack.pop().unwrap() else {
+                panic!("expected expr")
+            };
+            let ExprStackMember::Operator(op_kind, _) = expr_stack.pop().unwrap() else {
+                panic!("expected operator")
+            };
+            let ExprStackMember::Expr(lhs) = expr_stack.pop().unwrap() else {
+                panic!("expected expr")
+            };
+            let new_span = lhs.get_span().extended(rhs.get_span());
+            expr_stack.push(ExprStackMember::Expr(Expression::BinaryOp(BinaryOp {
+                op_kind,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+                span: new_span,
+            })));
+        }
+        let final_expr = expr_stack.pop().unwrap().expect_expr();
+        Ok(Some(final_expr))
     }
 
     /// Base expression meaning no postfix or binary ops
@@ -833,40 +953,26 @@ impl<'toks> Parser<'toks> {
         }
     }
 
-    fn parse_expression(&mut self) -> ParseResult<Option<Expression>> {
-        let parsed_expression = self.parse_base_expression()?;
-        // Forward search for binary and postfix ops
-        if let Some(expr) = parsed_expression {
-            let result = self.parse_expression_postfix_op(expr)?;
-            let result = self.parse_expression_binary_op(result)?;
-            let result = self.precedence_fixup(result);
-            Ok(Some(result))
-        } else {
-            Ok(None)
-        }
-    }
-
     fn precedence_fixup(&self, expression: Expression) -> Expression {
         // TODO: Use the precedence as argument fix when building
         // PRECEDENCE FIXUP TIME
         if let Expression::BinaryOp(bin_op) = expression {
-            if let Expression::BinaryOp(binop_rhs) = *bin_op.operand2 {
+            if let Expression::BinaryOp(binop_rhs) = *bin_op.rhs {
                 // bin_op = * => 1
                 // bin_op_rhs = + => 0
-                println!("binop fixup at {:?} with {:?}", bin_op.operation, binop_rhs.operation);
-                if binop_rhs.operation.precedence() < bin_op.operation.precedence() {
-                    let inner_span =
-                        bin_op.operand1.get_span().extended(binop_rhs.operand1.get_span());
+                println!("binop fixup at {:?} with {:?}", bin_op.op_kind, binop_rhs.op_kind);
+                if binop_rhs.op_kind.precedence() < bin_op.op_kind.precedence() {
+                    let inner_span = bin_op.lhs.get_span().extended(binop_rhs.lhs.get_span());
                     let outer_span = bin_op.span;
                     Expression::BinaryOp(BinaryOp {
-                        operation: binop_rhs.operation,
-                        operand1: Box::new(Expression::BinaryOp(BinaryOp {
-                            operation: bin_op.operation,
-                            operand1: bin_op.operand1,
-                            operand2: binop_rhs.operand1,
+                        op_kind: binop_rhs.op_kind,
+                        lhs: Box::new(Expression::BinaryOp(BinaryOp {
+                            op_kind: bin_op.op_kind,
+                            lhs: bin_op.lhs,
+                            rhs: binop_rhs.lhs,
                             span: inner_span,
                         })),
-                        operand2: binop_rhs.operand2,
+                        rhs: binop_rhs.rhs,
                         span: outer_span,
                     })
                     // 2 * 1 + 3
@@ -877,9 +983,9 @@ impl<'toks> Parser<'toks> {
                     // We have to re-construct the original input because
                     // everything is partially moved
                     Expression::BinaryOp(BinaryOp {
-                        operation: bin_op.operation,
-                        operand1: bin_op.operand1,
-                        operand2: Box::new(Expression::BinaryOp(binop_rhs)),
+                        op_kind: bin_op.op_kind,
+                        lhs: bin_op.lhs,
+                        rhs: Box::new(Expression::BinaryOp(binop_rhs)),
                         span: bin_op.span,
                     })
                 }

@@ -960,14 +960,14 @@ impl IrModule {
             }
             Expression::BinaryOp(binary_op) => {
                 // Infer expected type to be type of operand1
-                let lhs = self.eval_expr(&binary_op.operand1, scope_id)?;
-                let rhs = self.eval_expr(&binary_op.operand2, scope_id)?;
+                let lhs = self.eval_expr(&binary_op.lhs, scope_id)?;
+                let rhs = self.eval_expr(&binary_op.rhs, scope_id)?;
 
                 if self.typecheck_types(lhs.get_type(), rhs.get_type()).is_err() {
                     return make_fail("operand types did not match", binary_op.span);
                 }
 
-                let kind = match binary_op.operation {
+                let kind = match binary_op.op_kind {
                     parse::BinaryOpKind::Add => BinaryOpKind::Add,
                     parse::BinaryOpKind::Multiply => BinaryOpKind::Multiply,
                     parse::BinaryOpKind::And => BinaryOpKind::And,

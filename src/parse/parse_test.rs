@@ -38,7 +38,7 @@ fn infix1() -> Result<(), ParseError> {
     assert!(matches!(
         result,
         Some(BlockStmt::ValDef(ValDef {
-            value: Expression::BinaryOp(BinaryOp { operation: BinaryOpKind::Add, .. }),
+            value: Expression::BinaryOp(BinaryOp { op_kind: BinaryOpKind::Add, .. }),
             ..
         }))
     ));
@@ -50,9 +50,14 @@ fn infix2() -> Result<(), ParseError> {
     let mut parser = set_up("val x = a + b * doStuff(1, 2)");
     let result = parser.parse_statement()?;
     if let Some(BlockStmt::ValDef(ValDef { value: Expression::BinaryOp(op), .. })) = &result {
-        assert_eq!(op.operation, BinaryOpKind::Add);
-        assert!(matches!(*op.operand1, Expression::Variable(_)));
-        if let Expression::BinaryOp(BinaryOp { operation, operand1, operand2, .. }) = &*op.operand2
+        assert_eq!(op.op_kind, BinaryOpKind::Add);
+        assert!(matches!(*op.lhs, Expression::Variable(_)));
+        if let Expression::BinaryOp(BinaryOp {
+            op_kind: operation,
+            lhs: operand1,
+            rhs: operand2,
+            ..
+        }) = &*op.rhs
         {
             assert_eq!(*operation, BinaryOpKind::Multiply);
             assert!(matches!(**operand1, Expression::Variable(_)));
@@ -160,21 +165,32 @@ fn prelude_only() -> Result<(), ParseError> {
 fn precedence() -> Result<(), ParseError> {
     let input = "2 * 1 + 3";
     let mut parser = set_up(input);
-    let result = parser.parse_expression()?;
-    let result2 = parser.parse_expression()?;
-    println!("{result:#?}");
-    println!("{result2:#?}");
-    let Some(Expression::BinaryOp(bin_op)) = result else {
+    let result = parser.parse_expression()?.unwrap();
+    println!("{result}");
+    let Expression::BinaryOp(bin_op) = result else {
         panic!()
     };
-    let Expression::BinaryOp(lhs) = bin_op.operand1.as_ref() else {
+    let Expression::BinaryOp(lhs) = bin_op.lhs.as_ref() else {
         panic!()
     };
-    let Expression::Literal(rhs) = bin_op.operand2.as_ref() else {
+    let Expression::Literal(rhs) = bin_op.rhs.as_ref() else {
         panic!()
     };
-    assert_eq!(bin_op.operation, BinaryOpKind::Add);
-    assert_eq!(lhs.operation, BinaryOpKind::Multiply);
+    assert_eq!(bin_op.op_kind, BinaryOpKind::Add);
+    assert_eq!(lhs.op_kind, BinaryOpKind::Multiply);
     assert!(matches!(rhs, Literal::Numeric(_, _)));
     Ok(())
+}
+
+#[test]
+fn paren_expression() -> Result<(), ParseError> {
+    let input = "(1 + 2) * 3";
+    let mut parser = set_up(input);
+    let result = parser.parse_expression()?;
+    if let Some(Expression::BinaryOp(bin_op)) = &result {
+        assert!(bin_op.op_kind == BinaryOpKind::Add);
+        return Ok(());
+    }
+    println!("{:?}", result);
+    panic!()
 }
