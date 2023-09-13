@@ -1,0 +1,76 @@
+
+1 / 2 * 3 + 2
+last_prec = /
+
+2
++
+((3 * 2) / 1)
+
+pop 2, pop +, pop((3 * 2) / 1)
+
+1. Parse a 'base expression' (operand)
+2. loop for operators + more base expressions
+3. compare precedence. IF left is tighter, pop and form a node, continue until left is never tighter
+4. pop the stack until empty forming binary ops as you go
+
+// Jakt has an expression type called 'operator' that is not type-checkable
+// used only for pushing on this expr stack. We can just have a stack of Either[Expr, BinopKind] to achieve
+// the same thing.
+I guess this makes it more of a 'parse tree' repr than an AST if it has no semantic meaning, at least if it has
+any 'operator's in it
+
+
+    fn parse_expression(mut this, allow_assignments: bool, allow_newlines: bool) throws -> ParsedExpression {
+        mut expr_stack: [ParsedExpression] = []
+        mut last_precedence = 1000000
+
+        let lhs = .parse_operand()
+        expr_stack.push(lhs)
+
+        loop {
+            let parsed_operator = .parse_operator(allow_assignments);
+            let precedence = parsed_operator.precedence();
+            let rhs = .parse_operand()
+
+            while precedence <= last_precedence and expr_stack.size() > 1 {
+                let rhs = expr_stack.pop()!
+                let op = expr_stack.pop()!
+
+                last_precedence = op.precedence()
+
+                if last_precedence < precedence {
+                    expr_stack.push(op)
+                    expr_stack.push(rhs)
+                    break
+                }
+
+                let lhs = expr_stack.pop()!
+
+                let new_span = merge_spans(lhs.span(), rhs.span())
+                expr_stack.push(ParsedExpression::BinaryOp(lhs, op, rhs, span: new_span))
+            }
+
+            expr_stack.push(parsed_operator)
+            expr_stack.push(rhs)
+
+            last_precedence = precedence
+        }
+
+        while expr_stack.size() > 1 {
+            let rhs = expr_stack.pop()!
+            let parsed_operator = expr_stack.pop()!
+            let lhs = expr_stack.pop()!
+
+            match parsed_operator {
+                Operator(op, span) => {
+                    let new_span = merge_spans(lhs.span(), rhs.span())
+                    expr_stack.push(ParsedExpression::BinaryOp(lhs, op, rhs, span: new_span))
+                }
+                else => {
+                    .compiler.panic("operator is not an operator")
+                }
+            }
+        }
+
+        return expr_stack[0]
+    }
