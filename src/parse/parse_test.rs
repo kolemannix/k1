@@ -184,13 +184,13 @@ fn precedence() -> Result<(), ParseError> {
 
 #[test]
 fn paren_expression() -> Result<(), ParseError> {
-    let input = "(1 + 2) * 3";
+    let input = "(1 + 2[i][i + 4]) * 3";
     let mut parser = set_up(input);
-    let result = parser.parse_expression()?;
-    if let Some(Expression::BinaryOp(bin_op)) = &result {
-        assert!(bin_op.op_kind == BinaryOpKind::Add);
+    let result = parser.parse_expression()?.unwrap();
+    println!("{}", result);
+    if let Expression::BinaryOp(bin_op) = &result {
+        assert!(bin_op.op_kind == BinaryOpKind::Multiply);
         return Ok(());
     }
-    println!("{:?}", result);
     panic!()
 }

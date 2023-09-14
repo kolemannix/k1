@@ -42,7 +42,7 @@ fn test_file<'ctx, P: AsRef<Path>>(ctx: &'ctx Context, path: P) -> Result<()> {
 #[test]
 pub fn array_index_literal() -> Result<()> {
     let ctx = Context::create();
-    test_file(&ctx, "resources/test_src/array_index_literal.nx")?;
+    test_file(&ctx, "resources/test_src/array_int.nx")?;
     Ok(())
 }
 
