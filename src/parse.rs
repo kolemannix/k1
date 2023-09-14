@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::fmt::{Debug, Display, Formatter, Write};
+use std::fmt::{Display, Formatter, Write};
 use std::rc::Rc;
 use string_interner::Symbol;
 
@@ -31,11 +31,11 @@ pub enum Literal {
 impl Display for Literal {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Literal::Unit(span) => f.write_str("()"),
-            Literal::Numeric(n, span) => f.write_str(n),
-            Literal::Bool(true, span) => f.write_str("true"),
-            Literal::Bool(false, span) => f.write_str("false"),
-            Literal::String(s, span) => f.write_str(s),
+            Literal::Unit(_) => f.write_str("()"),
+            Literal::Numeric(n, _) => f.write_str(n),
+            Literal::Bool(true, _) => f.write_str("true"),
+            Literal::Bool(false, _) => f.write_str("false"),
+            Literal::String(s, _) => f.write_str(s),
         }
     }
 }
@@ -168,6 +168,12 @@ pub struct Variable {
     pub span: Span,
 }
 
+impl Display for Variable {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("var#{}", self.ident))
+    }
+}
+
 #[derive(Debug)]
 pub struct FieldAccess {
     pub base: Box<Expression>,
@@ -197,6 +203,16 @@ pub struct IndexOperation {
     pub target: Box<Expression>,
     pub index_expr: Box<Expression>,
     pub span: Span,
+}
+
+impl Display for IndexOperation {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.target.fmt(f)?;
+        f.write_char('[')?;
+        self.index_expr.fmt(f)?;
+        f.write_char(']')?;
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -239,15 +255,15 @@ impl Display for Expression {
             Expression::BinaryOp(op) => {
                 f.write_fmt(format_args!("({} {} {})", op.lhs, op.op_kind, op.rhs))
             }
-            Expression::Literal(lit) => std::fmt::Display::fmt(&lit, f),
-            Expression::FnCall(call) => call.fmt(f),
+            Expression::Literal(lit) => lit.fmt(f),
+            Expression::FnCall(call) => std::fmt::Debug::fmt(call, f),
             Expression::Variable(var) => var.fmt(f),
-            Expression::FieldAccess(acc) => acc.fmt(f),
-            Expression::Block(block) => block.fmt(f),
-            Expression::If(if_expr) => if_expr.fmt(f),
-            Expression::Record(record) => record.fmt(f),
+            Expression::FieldAccess(acc) => std::fmt::Debug::fmt(acc, f),
+            Expression::Block(block) => std::fmt::Debug::fmt(block, f),
+            Expression::If(if_expr) => std::fmt::Debug::fmt(if_expr, f),
+            Expression::Record(record) => std::fmt::Debug::fmt(record, f),
             Expression::IndexOperation(op) => op.fmt(f),
-            Expression::Array(array_expr) => array_expr.fmt(f),
+            Expression::Array(array_expr) => std::fmt::Debug::fmt(array_expr, f),
         }
     }
 }
@@ -796,10 +812,17 @@ impl<'toks> Parser<'toks> {
         }
     }
 
+    fn expect_expression(&mut self) -> ParseResult<Expression> {
+        Parser::expect("expression", self.peek(), self.parse_expression())
+    }
+
     fn parse_expression(&mut self) -> ParseResult<Option<Expression>> {
         let Some(expr) = self.parse_expression_with_postfix_ops()? else {
             return Ok(None);
         };
+        if !self.peek().kind.is_binary_operator() {
+            return Ok(Some(expr));
+        }
         let mut expr_stack: Vec<ExprStackMember> = vec![ExprStackMember::Expr(expr)];
         let mut last_precedence = 100_000;
         loop {
@@ -814,24 +837,22 @@ impl<'toks> Parser<'toks> {
                 self.peek(),
                 self.parse_expression_with_postfix_ops(),
             )?;
-            println!(
-                "at {:?}, precedence={}, last={}, stacklen={}",
-                op_kind,
-                precedence,
-                last_precedence,
-                expr_stack.len()
-            );
             while precedence <= last_precedence && expr_stack.len() > 1 {
+                log::trace!(
+                    "expr_stack at {:?}, precedence={}, last={}, stacklen={}",
+                    op_kind,
+                    precedence,
+                    last_precedence,
+                    expr_stack.len()
+                );
                 let rhs = expr_stack.pop().unwrap().expect_expr();
                 let (op_kind, op_span) = expr_stack.pop().unwrap().expect_operator();
-                println!("setting lp={}", op_kind.precedence());
                 last_precedence = op_kind.precedence();
                 if last_precedence < precedence {
                     expr_stack.push(ExprStackMember::Operator(op_kind, op_span));
                     expr_stack.push(ExprStackMember::Expr(rhs));
                     break;
                 }
-                println!("Doing fixup; binding {:?}", op_kind);
                 let ExprStackMember::Expr(lhs) = expr_stack.pop().unwrap() else {
                     panic!("expected expr on stack")
                 };
@@ -881,7 +902,13 @@ impl<'toks> Parser<'toks> {
         if let Some(lit) = self.parse_literal()? {
             return Ok(Some(Expression::Literal(lit)));
         }
-        if first.kind == Text {
+        if first.kind == OpenParen {
+            self.tokens.advance();
+            let expr = self.expect_expression()?;
+            // TODO: If comma, parse a tuple
+            self.expect_eat_token(CloseParen)?;
+            Ok(Some(expr))
+        } else if first.kind == Text {
             // FnCall
             if second.kind == OpenAngle || second.kind == OpenParen {
                 trace!("parse_expression FnCall");
