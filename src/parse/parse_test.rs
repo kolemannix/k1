@@ -32,21 +32,7 @@ fn basic_fn() -> Result<(), ParseError> {
 }
 
 #[test]
-fn infix1() -> Result<(), ParseError> {
-    let mut parser = set_up("val x = a + b");
-    let result = parser.parse_statement()?;
-    assert!(matches!(
-        result,
-        Some(BlockStmt::ValDef(ValDef {
-            value: Expression::BinaryOp(BinaryOp { op_kind: BinaryOpKind::Add, .. }),
-            ..
-        }))
-    ));
-    Ok(())
-}
-
-#[test]
-fn infix2() -> Result<(), ParseError> {
+fn infix() -> Result<(), ParseError> {
     let mut parser = set_up("val x = a + b * doStuff(1, 2)");
     let result = parser.parse_statement()?;
     if let Some(BlockStmt::ValDef(ValDef { value: Expression::BinaryOp(op), .. })) = &result {
@@ -68,6 +54,14 @@ fn infix2() -> Result<(), ParseError> {
     } else {
         panic!("Expected nested infix ops; got {:?}", result);
     }
+    Ok(())
+}
+
+#[test]
+fn record() -> Result<(), ParseError> {
+    let mut parser = set_up("{ a: 4, b: x[42], c: true }");
+    let result = parser.parse_expression()?.unwrap();
+    assert!(matches!(result, Expression::Record(_)));
     Ok(())
 }
 
