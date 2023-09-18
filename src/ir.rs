@@ -537,7 +537,13 @@ impl IrModule {
     }
 
     fn print_error(&self, message: impl AsRef<str>, span: Span) {
-        eprintln!("{} at {}:{}\n  -> {}", "error".red(), self.name(), span.line, message.as_ref());
+        eprintln!(
+            "{} at {}:{}\n  -> {}",
+            "error".red(),
+            self.name(),
+            (span.line as usize - crate::prelude::PRELUDE_LINES) + 1,
+            message.as_ref()
+        );
         eprintln!("{}", self.ast.source.get_line_by_index(span.line).red());
         eprintln!(" -> {}", self.ast.source.get_span_content(span).red());
     }
