@@ -1,5 +1,6 @@
 #![allow(clippy::match_like_matches_macro)]
 
+use crate::ir::Type::OpaqueAlias;
 use crate::lex::Span;
 use crate::parse;
 use crate::parse::{
@@ -304,8 +305,8 @@ pub struct ReturnStmt {
 
 #[derive(Debug, Clone)]
 pub struct Assignment {
-    pub destination_variable: VariableId,
-    pub value: IrExpr,
+    pub destination: Box<IrExpr>,
+    pub value: Box<IrExpr>,
     pub span: Span,
 }
 
@@ -561,6 +562,24 @@ impl IrModule {
 
     pub fn get_type(&self, type_id: TypeId) -> &Type {
         &self.types[type_id as usize]
+    }
+
+    pub fn is_reference_type(&self, ty: TypeRef) -> bool {
+        match ty {
+            TypeRef::Unit => false,
+            TypeRef::Int => false,
+            TypeRef::Bool => false,
+            TypeRef::String => false,
+            TypeRef::TypeId(type_id) => {
+                let ty = self.get_type(type_id);
+                match ty {
+                    Type::Record(_) => true,
+                    Type::Array(_) => true,
+                    Type::OpaqueAlias(t) => self.is_reference_type(*t),
+                    Type::TypeVariable(_) => true,
+                }
+            }
+        }
     }
 
     /// Recursively checks if given type contains any type variables
@@ -1167,29 +1186,54 @@ impl IrModule {
                 Ok(val_def_expr)
             }
             BlockStmt::Assignment(assignment) => {
-                let expr = self.eval_expr(&assignment.expr, scope_id)?;
-                let dest =
-                    self.scopes.find_variable(scope_id, assignment.ident).ok_or(make_err(
-                        format!(
-                            "Variable {} not found in scope {}",
-                            &*self.get_ident_name(assignment.ident),
-                            scope_id
-                        ),
-                        assignment.span,
-                    ))?;
-                let var = self.get_variable(dest);
-                if !var.is_mutable {
-                    return make_fail("Cannot assign to immutable variable", assignment.span);
-                }
-                if let Err(msg) = self.typecheck_types(var.ir_type, expr.get_type()) {
+                // So, we want to be able to assign to an array elem, x[1] = 2,
+                // but we currently desugar the expression x[1] to a function call that returns an int, not a pointer
+                // we don't even have 'pointers' as language constructs so we need to do something different
+                // for the lhs based on whether its part of an assignment or not
+                //
+                // The question is: how do we represent "pointer to array elem" or "pointer to struct member"
+                // As the LHS in the IR so that codegen knows what to do with it
+                // I either need to have 'Pointer' types in the typed ast or
+                // just special-case it
+                let lhs = self.eval_expr(&assignment.lhs, scope_id)?;
+                match &lhs {
+                    IrExpr::Variable(v) => {
+                        let var = self.get_variable(v.variable_id);
+                        if !var.is_mutable {
+                            return make_fail(
+                                "Cannot assign to immutable variable",
+                                assignment.span,
+                            );
+                        }
+                    }
+                    IrExpr::FunctionCall(c) => {
+                        let f = self.get_function(c.callee_function_id);
+                        if f.intrinsic_type == Some(IntrinsicFunctionType::ArrayIndex) {
+                            // TODO Check mutability of the underlying array? How?
+                        } else {
+                            return make_fail("Invalid assignment lhs", lhs.get_span());
+                        }
+                    }
+                    IrExpr::FieldAccess(field_access) => {
+                        trace!("assignment to record member");
+                    }
+                    _ => {
+                        return make_fail(
+                            format!("Invalid assignment lhs: {:?}", lhs),
+                            lhs.get_span(),
+                        )
+                    }
+                };
+                let rhs = self.eval_expr(&assignment.rhs, scope_id)?;
+                if let Err(msg) = self.typecheck_types(lhs.get_type(), rhs.get_type()) {
                     return make_fail(
-                        format!("Typecheck of assignment failed: {}", msg),
+                        format!("Invalid types for assignment: {}", msg),
                         assignment.span,
                     );
                 }
                 let expr = IrStmt::Assignment(Box::new(Assignment {
-                    value: expr,
-                    destination_variable: dest,
+                    destination: Box::new(lhs),
+                    value: Box::new(rhs),
                     span: assignment.span,
                 }));
                 Ok(expr)

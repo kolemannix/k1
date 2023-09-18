@@ -14,4 +14,4 @@ fn main(): int {
   printInt(zero.y);
   return zero.y;
 }
-// 298
+// 42, 1, 298
