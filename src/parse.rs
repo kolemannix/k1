@@ -509,7 +509,7 @@ struct Parser<'toks> {
 }
 
 impl<'toks> Parser<'toks> {
-    fn make(tokens: &'toks [Token], source: String, _use_prelude: bool) -> Parser {
+    fn make(tokens: &'toks [Token], source: String) -> Parser {
         // TODO: parse the lines ourselves
         let lines: Vec<_> = source.lines().map(|l| l.to_owned()).collect();
         Parser {
@@ -518,10 +518,6 @@ impl<'toks> Parser<'toks> {
             identifiers: Rc::new(RefCell::new(Identifiers::default())),
         }
     }
-
-    // pub fn get_span_line(&self, span: Span) -> &str {
-    //     &self.source.get_line_by_index(span.line)
-    // }
 
     fn check<A>(value: Option<A>) -> ParseResult<Option<A>> {
         match value {
@@ -554,7 +550,7 @@ impl<'toks> Parser<'toks> {
         println!(
             "{} on line {}. Expected '{}', but got '{}'",
             "parse error".red(),
-            span.line,
+            (span.line as usize - crate::prelude::PRELUDE_LINES) + 1,
             parse_error.expected.blue(),
             parse_error.token.kind.as_ref().red()
         );
@@ -581,16 +577,7 @@ impl<'toks> Parser<'toks> {
 
     fn eat_token(&mut self, target_token: TokenKind) -> Option<Token> {
         let tok = self.peek();
-        // FIXME: The way we handle line comments is broken
-        //        It works OK here, but we do a lot of peeking at the next 1-3 tokens
-        //        If any are line comments, that peeking code will not produce
-        //        the correct result!
-        //        Instead, we need to filter the comments out after lexing
-        //        Since the spans will remain correct
-        if tok.kind == LineComment {
-            self.tokens.advance();
-            self.eat_token(target_token)
-        } else if tok.kind == target_token {
+        if tok.kind == target_token {
             self.tokens.advance();
             trace!("eat_token SUCCESS '{}'", target_token);
             Some(tok)
@@ -1309,9 +1296,10 @@ pub fn parse_text(text: &str, module_name: &str, use_prelude: bool) -> ParseResu
 
     let mut lexer = Lexer::make(&full_source);
 
-    let token_vec = lexer.run();
+    let token_vec: Vec<Token> =
+        lexer.run().into_iter().filter(|token| token.kind != LineComment).collect();
 
-    let mut parser = Parser::make(&token_vec, full_source, use_prelude);
+    let mut parser = Parser::make(&token_vec, full_source);
 
     let result = parser.parse_module(module_name);
     if let Err(e) = &result {
