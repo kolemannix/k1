@@ -139,6 +139,7 @@ pub struct VariableExpr {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Display)]
 pub enum BinaryOpKind {
     Add,
+    Subtract,
     Multiply,
     And,
     Or,
@@ -149,6 +150,7 @@ impl BinaryOpKind {
     pub fn is_integer_op(&self) -> bool {
         match self {
             BinaryOpKind::Add => true,
+            BinaryOpKind::Subtract => true,
             BinaryOpKind::Multiply => true,
             BinaryOpKind::Or | BinaryOpKind::And => true,
             BinaryOpKind::Equals => true,
@@ -159,6 +161,7 @@ impl BinaryOpKind {
             BinaryOpKind::Equals => true,
             BinaryOpKind::Or | BinaryOpKind::And => true,
             BinaryOpKind::Add => false,
+            BinaryOpKind::Subtract => false,
             BinaryOpKind::Multiply => false,
         }
     }
@@ -994,6 +997,7 @@ impl IrModule {
 
                 let kind = match binary_op.op_kind {
                     parse::BinaryOpKind::Add => BinaryOpKind::Add,
+                    parse::BinaryOpKind::Subtract => BinaryOpKind::Subtract,
                     parse::BinaryOpKind::Multiply => BinaryOpKind::Multiply,
                     parse::BinaryOpKind::And => BinaryOpKind::And,
                     parse::BinaryOpKind::Or => BinaryOpKind::Or,

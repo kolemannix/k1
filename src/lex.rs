@@ -81,6 +81,7 @@ pub enum TokenKind {
 
     // Infix Operators, hardcoded precedence
     Plus,
+    Minus,
     Asterisk,
 
     /// Not really a token but allows us to avoid Option<Token> everywhere
@@ -132,6 +133,7 @@ impl TokenKind {
             Comma => Some(","),
 
             Plus => Some("+"),
+            Minus => Some("-"),
             Asterisk => Some("*"),
 
             DoubleQuote => Some("\""),
@@ -160,6 +162,7 @@ impl TokenKind {
             '"' => Some(DoubleQuote),
             '\'' => Some(SingleQuote),
             '+' => Some(Plus),
+            '-' => Some(Minus),
             '*' => Some(Asterisk),
             '/' => Some(Slash),
             _ => None,
