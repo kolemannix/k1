@@ -1,0 +1,7 @@
+fn main(): int {
+  val x: Array<int> = [5,10,0];
+  x[1] = 3;
+  printInt(x[1]);
+  return 0;
+}
+// 3

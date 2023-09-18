@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::fmt::{Display, Formatter};
+use std::fmt::{Display, Formatter, Write};
 use std::rc::Rc;
 use string_interner::Symbol;
 
@@ -7,6 +7,8 @@ use TokenKind::*;
 
 use crate::ir::IntrinsicFunctionType;
 use crate::lex::*;
+
+pub type AstId = u32;
 use log::trace;
 
 #[cfg(test)]
@@ -24,6 +26,18 @@ pub enum Literal {
     Numeric(String, Span),
     Bool(bool, Span),
     String(String, Span),
+}
+
+impl Display for Literal {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Literal::Unit(_) => f.write_str("()"),
+            Literal::Numeric(n, _) => f.write_str(n),
+            Literal::Bool(true, _) => f.write_str("true"),
+            Literal::Bool(false, _) => f.write_str("false"),
+            Literal::String(s, _) => f.write_str(s),
+        }
+    }
 }
 
 impl Literal {
@@ -69,15 +83,22 @@ impl Identifiers {
 }
 
 #[derive(Debug)]
-pub struct FnArg {
+pub struct FnCallArg {
     pub name: Option<IdentifierId>,
     pub value: Expression,
 }
 
 #[derive(Debug)]
+pub struct FnCallTypeArg {
+    pub name: Option<IdentifierId>,
+    pub value: TypeExpression,
+}
+
+#[derive(Debug)]
 pub struct FnCall {
     pub name: IdentifierId,
-    pub args: Vec<FnArg>,
+    pub type_args: Option<Vec<FnCallTypeArg>>,
+    pub args: Vec<FnCallArg>,
     pub span: Span,
 }
 
@@ -97,6 +118,18 @@ pub enum BinaryOpKind {
     And,
     Or,
     Equals,
+}
+
+impl Display for BinaryOpKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BinaryOpKind::Add => f.write_char('+'),
+            BinaryOpKind::Multiply => f.write_char('*'),
+            BinaryOpKind::And => f.write_str("and"),
+            BinaryOpKind::Or => f.write_str("or"),
+            BinaryOpKind::Equals => f.write_str("=="),
+        }
+    }
 }
 
 impl BinaryOpKind {
@@ -123,9 +156,9 @@ impl BinaryOpKind {
 
 #[derive(Debug)]
 pub struct BinaryOp {
-    pub operation: BinaryOpKind,
-    pub operand1: Box<Expression>,
-    pub operand2: Box<Expression>,
+    pub op_kind: BinaryOpKind,
+    pub lhs: Box<Expression>,
+    pub rhs: Box<Expression>,
     pub span: Span,
 }
 
@@ -133,6 +166,12 @@ pub struct BinaryOp {
 pub struct Variable {
     pub ident: IdentifierId,
     pub span: Span,
+}
+
+impl Display for Variable {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("var#{}", self.ident))
+    }
 }
 
 #[derive(Debug)]
@@ -166,6 +205,16 @@ pub struct IndexOperation {
     pub span: Span,
 }
 
+impl Display for IndexOperation {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.target.fmt(f)?;
+        f.write_char('[')?;
+        self.index_expr.fmt(f)?;
+        f.write_char(']')?;
+        Ok(())
+    }
+}
+
 #[derive(Debug)]
 pub enum Expression {
     BinaryOp(BinaryOp),
@@ -184,6 +233,7 @@ impl Expression {
     pub fn is_literal(e: &Expression) -> bool {
         matches!(e, Expression::Literal(_))
     }
+    #[inline]
     pub fn get_span(&self) -> Span {
         match self {
             Expression::BinaryOp(op) => op.span,
@@ -198,12 +248,66 @@ impl Expression {
             Expression::Array(array_expr) => array_expr.span,
         }
     }
+
+    pub fn is_assignable(&self) -> bool {
+        match self {
+            Expression::Variable(var) => true,
+            Expression::IndexOperation(op) => true,
+            Expression::FieldAccess(acc) => true,
+            Expression::BinaryOp(op) => false,
+            Expression::Literal(lit) => false,
+            Expression::FnCall(call) => false,
+            Expression::Block(block) => false,
+            Expression::If(if_expr) => false,
+            Expression::Record(record) => false,
+            Expression::Array(array_expr) => false,
+        }
+    }
+}
+
+impl Display for Expression {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Expression::BinaryOp(op) => {
+                f.write_fmt(format_args!("({} {} {})", op.lhs, op.op_kind, op.rhs))
+            }
+            Expression::Literal(lit) => lit.fmt(f),
+            Expression::FnCall(call) => std::fmt::Debug::fmt(call, f),
+            Expression::Variable(var) => var.fmt(f),
+            Expression::FieldAccess(acc) => std::fmt::Debug::fmt(acc, f),
+            Expression::Block(block) => std::fmt::Debug::fmt(block, f),
+            Expression::If(if_expr) => std::fmt::Debug::fmt(if_expr, f),
+            Expression::Record(record) => std::fmt::Debug::fmt(record, f),
+            Expression::IndexOperation(op) => op.fmt(f),
+            Expression::Array(array_expr) => std::fmt::Debug::fmt(array_expr, f),
+        }
+    }
+}
+
+enum ExprStackMember {
+    Operator(BinaryOpKind, Span),
+    Expr(Expression),
+}
+
+impl ExprStackMember {
+    fn expect_expr(self) -> Expression {
+        match self {
+            ExprStackMember::Expr(expr) => expr,
+            _ => panic!("expected expr"),
+        }
+    }
+    fn expect_operator(self) -> (BinaryOpKind, Span) {
+        match self {
+            ExprStackMember::Operator(kind, span) => (kind, span),
+            _ => panic!("expected operator"),
+        }
+    }
 }
 
 #[derive(Debug)]
 pub struct Assignment {
-    pub ident: IdentifierId,
-    pub expr: Expression,
+    pub lhs: Expression,
+    pub rhs: Expression,
     pub span: Span,
 }
 
@@ -283,8 +387,15 @@ impl TypeExpression {
 }
 
 #[derive(Debug)]
+pub struct TypeParamDef {
+    pub ident: IdentifierId,
+    pub span: Span,
+}
+
+#[derive(Debug)]
 pub struct FnDef {
     pub name: IdentifierId,
+    pub type_args: Option<Vec<TypeParamDef>>,
     pub args: Vec<FnArgDef>,
     pub ret_type: Option<TypeExpression>,
     pub block: Option<Block>,
@@ -322,7 +433,7 @@ pub enum Definition {
 }
 
 #[derive(Debug)]
-pub struct Module {
+pub struct AstModule {
     pub name: String,
     pub name_id: IdentifierId,
     pub defs: Vec<Definition>,
@@ -334,12 +445,20 @@ pub struct Module {
     pub identifiers: Rc<RefCell<Identifiers>>,
 }
 
-impl Module {
+impl AstModule {
     pub fn ident_id(&self, ident: &str) -> IdentifierId {
         self.identifiers.borrow_mut().intern(ident)
     }
     pub fn get_ident_name(&self, id: IdentifierId) -> impl std::ops::Deref<Target = str> + '_ {
         std::cell::Ref::map(self.identifiers.borrow(), |idents| idents.get_name(id))
+    }
+
+    pub fn get_defn(&self, ast_id: AstId) -> &Definition {
+        &self.defs[ast_id as usize]
+    }
+
+    pub fn defns_iter(&self) -> impl Iterator<Item = (AstId, &Definition)> {
+        self.defs.iter().enumerate().map(|(idx, def)| (idx as u32, def))
     }
 }
 
@@ -383,14 +502,44 @@ impl Source {
     }
 }
 
-struct Parser {
-    tokens: TokenIter,
+struct Parser<'toks> {
+    tokens: TokenIter<'toks>,
     source: Rc<Source>,
     identifiers: Rc<RefCell<Identifiers>>,
 }
 
-impl Parser {
-    pub fn ident_id(&self, s: impl AsRef<str>) -> IdentifierId {
+impl<'toks> Parser<'toks> {
+    fn make(tokens: &'toks [Token], source: String, _use_prelude: bool) -> Parser {
+        // TODO: parse the lines ourselves
+        let lines: Vec<_> = source.lines().map(|l| l.to_owned()).collect();
+        Parser {
+            tokens: TokenIter::make(tokens),
+            source: Rc::new(Source { content: source, lines }),
+            identifiers: Rc::new(RefCell::new(Identifiers::default())),
+        }
+    }
+
+    // pub fn get_span_line(&self, span: Span) -> &str {
+    //     &self.source.get_line_by_index(span.line)
+    // }
+
+    fn check<A>(value: Option<A>) -> ParseResult<Option<A>> {
+        match value {
+            None => Ok(None),
+            Some(a) => Ok(Some(a)),
+        }
+    }
+    fn expect<A>(what: &str, current: Token, value: ParseResult<Option<A>>) -> ParseResult<A> {
+        match value {
+            Ok(None) => Err(ParseError { expected: what.to_string(), token: current, cause: None }),
+            Ok(Some(a)) => Ok(a),
+            Err(e) => Err(e),
+        }
+    }
+}
+
+impl<'toks> Parser<'toks> {
+    pub fn ident_id(&mut self, s: impl AsRef<str>) -> IdentifierId {
         self.identifiers.borrow_mut().intern(s.as_ref())
     }
     pub fn get_ident_name(&self, id: IdentifierId) -> impl std::ops::Deref<Target = str> + '_ {
@@ -413,37 +562,11 @@ impl Parser {
         println!("{line_text}");
         println!("{span_text}");
     }
-    // pub fn get_span_line(&self, span: Span) -> &str {
-    //     &self.source.get_line_by_index(span.line)
-    // }
 
-    fn check<A>(value: Option<A>) -> ParseResult<Option<A>> {
-        match value {
-            None => Ok(None),
-            Some(a) => Ok(Some(a)),
-        }
-    }
-    fn expect<A>(what: &str, current: Token, value: ParseResult<Option<A>>) -> ParseResult<A> {
-        match value {
-            Ok(None) => Err(ParseError { expected: what.to_string(), token: current, cause: None }),
-            Ok(Some(a)) => Ok(a),
-            Err(e) => Err(e),
-        }
-    }
-}
-
-impl Parser {
     fn peek(&self) -> Token {
         self.tokens.peek()
     }
-    fn make(tokens: TokenIter, source: String, _use_prelude: bool) -> Parser {
-        let lines: Vec<_> = source.lines().map(|l| l.to_owned()).collect();
-        Parser {
-            tokens,
-            source: Rc::new(Source { content: source, lines }),
-            identifiers: Rc::new(RefCell::new(Identifiers::default())),
-        }
-    }
+
     fn chars_at(&self, start: u32, end: u32) -> &str {
         &self.source.content[start as usize..end as usize]
     }
@@ -455,19 +578,15 @@ impl Parser {
         trace!("{} chars '{}'", tok.kind, s);
         s
     }
-    // not a member fn; doesn't borrow all of self. <3 Rust
-    fn tok_chars_noself(source: &str, tok: Token) -> &str {
-        &source[tok.span.start as usize..tok.span.end as usize]
-    }
 
     fn eat_token(&mut self, target_token: TokenKind) -> Option<Token> {
         let tok = self.peek();
         // FIXME: The way we handle line comments is broken
-        // It works OK here, but we do a lot of peeking at the next 1-3 tokens
-        // If any are line comments, that peeking code will not produce
-        // the correct result!
-        // Instead, we need to filter the comments out after lexing
-        // Since the spans will remain correct
+        //        It works OK here, but we do a lot of peeking at the next 1-3 tokens
+        //        If any are line comments, that peeking code will not produce
+        //        the correct result!
+        //        Instead, we need to filter the comments out after lexing
+        //        Since the spans will remain correct
         if tok.kind == LineComment {
             self.tokens.advance();
             self.eat_token(target_token)
@@ -499,24 +618,10 @@ impl Parser {
         }
     }
 
-    fn eat_ident(&mut self) -> Option<String> {
-        if let Some(t) = self.eat_token(Text) {
-            let ident_slice = self.tok_chars(t);
-            Some(ident_slice.to_string())
-        } else {
-            None
-        }
-    }
-
-    fn expect_eat_ident(&mut self) -> ParseResult<String> {
-        let result = self.eat_ident();
-        match result {
-            None => {
-                let actual = self.peek();
-                return Err(Parser::error(TokenKind::Text, actual));
-            }
-            Some(ident) => Ok(ident),
-        }
+    fn intern_ident_token(&mut self, token: Token) -> IdentifierId {
+        let source = self.source.clone();
+        let tok_chars = Source::get_span_content(&source, token.span);
+        self.ident_id(tok_chars)
     }
 
     fn parse_literal(&mut self) -> ParseResult<Option<Literal>> {
@@ -568,11 +673,12 @@ impl Parser {
     }
 
     fn parse_record_type_field(&mut self) -> ParseResult<Option<RecordTypeField>> {
-        let ident_id = self.expect_eat_ident()?;
+        let name_token = self.expect_eat_token(Text)?;
+        let ident_id = self.intern_ident_token(name_token);
         self.expect_eat_token(Colon)?;
         let typ_expr =
             Parser::expect("Type expression", self.peek(), self.parse_type_expression())?;
-        Ok(Some(RecordTypeField { name: self.ident_id(ident_id), ty: typ_expr }))
+        Ok(Some(RecordTypeField { name: ident_id, ty: typ_expr }))
     }
 
     fn expect_type_expression(&mut self) -> ParseResult<TypeExpression> {
@@ -582,34 +688,35 @@ impl Parser {
     fn parse_type_expression(&mut self) -> ParseResult<Option<TypeExpression>> {
         let tok = self.peek();
         if tok.kind == Text {
-            let ident = Parser::tok_chars_noself(&self.source.content, tok);
-            if ident == "unit" {
+            let source = self.source.clone();
+            let text_str = Source::get_span_content(&source, tok.span);
+            if text_str == "unit" {
                 self.tokens.advance();
                 Ok(Some(TypeExpression::Unit(tok.span)))
-            } else if ident == "int" {
+            } else if text_str == "int" {
                 self.tokens.advance();
                 Ok(Some(TypeExpression::Int(tok.span)))
-            } else if ident == "bool" {
+            } else if text_str == "bool" {
                 self.tokens.advance();
                 Ok(Some(TypeExpression::Bool(tok.span)))
             } else {
                 self.tokens.advance();
                 let next = self.tokens.peek();
-                if next.kind == OpenBracket {
+                if next.kind == OpenAngle {
                     // parameterized type: Dict[int, int]
                     self.tokens.advance();
                     let (type_parameters, params_span) =
-                        self.eat_delimited(Comma, CloseBracket, |p| {
+                        self.eat_delimited(Comma, CloseAngle, |p| {
                             Parser::expect_type_expression(p)
                         })?;
-                    let ident = Parser::tok_chars_noself(&self.source.content, tok);
+                    let ident = self.intern_ident_token(tok);
                     Ok(Some(TypeExpression::TypeApplication(TypeApplication {
-                        base: self.ident_id(ident),
+                        base: ident,
                         params: type_parameters,
                         span: tok.span.extended(params_span),
                     })))
                 } else {
-                    Ok(Some(TypeExpression::Name(self.ident_id(ident), tok.span)))
+                    Ok(Some(TypeExpression::Name(self.ident_id(text_str), tok.span)))
                 }
             }
         } else if tok.kind == OpenBrace {
@@ -627,7 +734,7 @@ impl Parser {
         }
     }
 
-    fn parse_fn_arg(&mut self) -> ParseResult<Option<FnArg>> {
+    fn parse_fn_arg(&mut self) -> ParseResult<Option<FnCallArg>> {
         let (one, two) = self.tokens.peek_two();
         let named = if one.kind == Text && two.kind == Equals {
             self.tokens.advance();
@@ -638,8 +745,8 @@ impl Parser {
         };
         match self.parse_expression() {
             Ok(Some(expr)) => {
-                let name = if named { Some(self.ident_id(self.tok_chars(one))) } else { None };
-                Ok(Some(FnArg { name, value: expr }))
+                let name = if named { Some(self.intern_ident_token(one)) } else { None };
+                Ok(Some(FnCallArg { name, value: expr }))
             }
             Ok(None) => {
                 if named {
@@ -652,7 +759,7 @@ impl Parser {
         }
     }
 
-    fn expect_fn_arg(&mut self) -> ParseResult<FnArg> {
+    fn expect_fn_arg(&mut self) -> ParseResult<FnCallArg> {
         let res = self.parse_fn_arg();
         Parser::expect("fn_arg", self.peek(), res)
     }
@@ -662,17 +769,19 @@ impl Parser {
             return Ok(None);
         };
         let (fields, fields_span) = self.eat_delimited(Comma, CloseBrace, |parser| {
-            let name = parser.expect_eat_ident()?;
+            let name = parser.expect_eat_token(Text)?;
             parser.expect_eat_token(Colon)?;
             let expr = Parser::expect("expression", parser.peek(), parser.parse_expression())?;
-            Ok(RecordField { name: parser.ident_id(name), expr })
+            Ok(RecordField { name: parser.intern_ident_token(name), expr })
         })?;
         let span = open_brace.span.extended(fields_span);
         Ok(Some(Record { fields, span }))
     }
 
-    fn parse_expression_postfix_op(&mut self, expr: Expression) -> ParseResult<Expression> {
-        let mut result = expr;
+    fn parse_expression_with_postfix_ops(&mut self) -> ParseResult<Option<Expression>> {
+        let Some(mut result) = self.parse_base_expression()? else {
+            return Ok(None)
+        };
         // Looping for postfix ops inspired by Jakt's parser
         loop {
             let next = self.peek();
@@ -680,7 +789,7 @@ impl Parser {
                 if next.kind == Dot {
                     // Field access syntax; a.b
                     self.tokens.advance();
-                    let target_ident = self.expect_eat_ident()?;
+                    let target = self.expect_eat_token(Text)?;
                     let next = self.peek();
                     if next.kind == OpenParen {
                         // Method call
@@ -689,7 +798,7 @@ impl Parser {
                         let span = result.get_span().extended(next.span);
                         result = Expression::FieldAccess(FieldAccess {
                             base: Box::new(result),
-                            target: self.ident_id(target_ident),
+                            target: self.intern_ident_token(target),
                             span,
                         })
                     }
@@ -710,32 +819,92 @@ impl Parser {
                     })
                 }
             } else {
-                return Ok(result);
+                return Ok(Some(result));
             }
         }
     }
 
-    fn parse_expression_binary_op(&mut self, expr: Expression) -> ParseResult<Expression> {
-        let mut result = expr;
-        loop {
-            if self.peek().kind.is_binary_operator() {
-                let op_token = self.tokens.next();
-                let Some(op_kind) = BinaryOpKind::from_tokenkind(op_token.kind) else {
-                    return Err(Parser::error("Binary Operator", op_token))
-                };
-                let next_expr =
-                    Parser::expect("rhs of binary op", self.peek(), self.parse_expression())?;
-                let span = result.get_span().extended(next_expr.get_span());
-                result = Expression::BinaryOp(BinaryOp {
-                    operation: op_kind,
-                    operand1: Box::new(result),
-                    operand2: Box::new(next_expr),
-                    span,
-                });
-            } else {
-                return Ok(result);
-            }
+    fn expect_expression(&mut self) -> ParseResult<Expression> {
+        Parser::expect("expression", self.peek(), self.parse_expression())
+    }
+
+    fn parse_expression(&mut self) -> ParseResult<Option<Expression>> {
+        let Some(expr) = self.parse_expression_with_postfix_ops()? else {
+            return Ok(None);
+        };
+        if !self.peek().kind.is_binary_operator() {
+            return Ok(Some(expr));
         }
+        let mut expr_stack: Vec<ExprStackMember> = vec![ExprStackMember::Expr(expr)];
+        let mut last_precedence = 100_000;
+        loop {
+            let tok = self.peek();
+            let Some(op_kind) = BinaryOpKind::from_tokenkind(tok.kind) else {
+                break;
+            };
+            let precedence = op_kind.precedence();
+            self.tokens.advance();
+            let rhs = Parser::expect(
+                "rhs of binary op",
+                self.peek(),
+                self.parse_expression_with_postfix_ops(),
+            )?;
+            while precedence <= last_precedence && expr_stack.len() > 1 {
+                log::trace!(
+                    "expr_stack at {:?}, precedence={}, last={}, stacklen={}",
+                    op_kind,
+                    precedence,
+                    last_precedence,
+                    expr_stack.len()
+                );
+                let rhs = expr_stack.pop().unwrap().expect_expr();
+                let (op_kind, op_span) = expr_stack.pop().unwrap().expect_operator();
+                last_precedence = op_kind.precedence();
+                if last_precedence < precedence {
+                    expr_stack.push(ExprStackMember::Operator(op_kind, op_span));
+                    expr_stack.push(ExprStackMember::Expr(rhs));
+                    break;
+                }
+                let ExprStackMember::Expr(lhs) = expr_stack.pop().unwrap() else {
+                    panic!("expected expr on stack")
+                };
+                let new_span = lhs.get_span().extended(rhs.get_span());
+                let bin_op = Expression::BinaryOp(BinaryOp {
+                    op_kind,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                    span: new_span,
+                });
+                expr_stack.push(ExprStackMember::Expr(bin_op))
+            }
+            expr_stack.push(ExprStackMember::Operator(op_kind, tok.span));
+            expr_stack.push(ExprStackMember::Expr(rhs));
+
+            println!("setting lp={}", precedence);
+            last_precedence = precedence;
+        }
+
+        // Pop and build now that everything is right
+        while expr_stack.len() > 1 {
+            let ExprStackMember::Expr(rhs) = expr_stack.pop().unwrap() else {
+                panic!("expected expr")
+            };
+            let ExprStackMember::Operator(op_kind, _) = expr_stack.pop().unwrap() else {
+                panic!("expected operator")
+            };
+            let ExprStackMember::Expr(lhs) = expr_stack.pop().unwrap() else {
+                panic!("expected expr")
+            };
+            let new_span = lhs.get_span().extended(rhs.get_span());
+            expr_stack.push(ExprStackMember::Expr(Expression::BinaryOp(BinaryOp {
+                op_kind,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+                span: new_span,
+            })));
+        }
+        let final_expr = expr_stack.pop().unwrap().expect_expr();
+        Ok(Some(final_expr))
     }
 
     /// Base expression meaning no postfix or binary ops
@@ -745,16 +914,37 @@ impl Parser {
         if let Some(lit) = self.parse_literal()? {
             return Ok(Some(Expression::Literal(lit)));
         }
-        if first.kind == Text {
+        if first.kind == OpenParen {
+            self.tokens.advance();
+            let expr = self.expect_expression()?;
+            // TODO: If comma, parse a tuple
+            self.expect_eat_token(CloseParen)?;
+            Ok(Some(expr))
+        } else if first.kind == Text {
             // FnCall
-            if second.kind == OpenParen {
+            if second.kind == OpenAngle || second.kind == OpenParen {
                 trace!("parse_expression FnCall");
+                // Eat the name
                 self.tokens.advance();
-                // Eat the OpenParen
-                self.tokens.advance();
+                let type_args: Option<Vec<FnCallTypeArg>> = if second.kind == OpenAngle {
+                    // Eat the OpenAngle
+                    self.tokens.advance();
+                    let (type_expressions, type_args_span) =
+                        self.eat_delimited(Comma, CloseAngle, Parser::expect_type_expression)?;
+                    // TODO named type arguments
+                    let type_args: Vec<_> = type_expressions
+                        .into_iter()
+                        .map(|type_expr| FnCallTypeArg { name: None, value: type_expr })
+                        .collect();
+                    Some(type_args)
+                } else {
+                    None
+                };
+                self.expect_eat_token(OpenParen)?;
                 match self.eat_delimited(Comma, CloseParen, Parser::expect_fn_arg) {
                     Ok((args, args_span)) => Ok(Some(Expression::FnCall(FnCall {
-                        name: self.ident_id(self.tok_chars(first)),
+                        name: self.intern_ident_token(first),
+                        type_args,
                         args,
                         span: first.span.extended(args_span),
                     }))),
@@ -764,7 +954,7 @@ impl Parser {
                 // The last thing it can be is a simple variable reference expression
                 self.tokens.advance();
                 Ok(Some(Expression::Variable(Variable {
-                    ident: self.ident_id(self.tok_chars(first)),
+                    ident: self.intern_ident_token(first),
                     span: first.span,
                 })))
             }
@@ -802,64 +992,6 @@ impl Parser {
         }
     }
 
-    fn parse_expression(&mut self) -> ParseResult<Option<Expression>> {
-        let parsed_expression = self.parse_base_expression()?;
-        // Forward search for binary and postfix ops
-        if let Some(expr) = parsed_expression {
-            let result = self.parse_expression_postfix_op(expr)?;
-            let result = self.parse_expression_binary_op(result)?;
-            let result = self.precedence_fixup(result);
-            Ok(Some(result))
-        } else {
-            Ok(None)
-        }
-    }
-
-    fn precedence_fixup(&self, expression: Expression) -> Expression {
-        // TODO: Use the precedence as argument fix when building
-        // PRECEDENCE FIXUP TIME
-        if let Expression::BinaryOp(bin_op) = expression {
-            if let Expression::BinaryOp(binop_rhs) = *bin_op.operand2 {
-                // bin_op = * => 1
-                // bin_op_rhs = + => 0
-                println!("binop fixup at {:?} with {:?}", bin_op.operation, binop_rhs.operation);
-                if binop_rhs.operation.precedence() < bin_op.operation.precedence() {
-                    let inner_span =
-                        bin_op.operand1.get_span().extended(binop_rhs.operand1.get_span());
-                    let outer_span = bin_op.span;
-                    Expression::BinaryOp(BinaryOp {
-                        operation: binop_rhs.operation,
-                        operand1: Box::new(Expression::BinaryOp(BinaryOp {
-                            operation: bin_op.operation,
-                            operand1: bin_op.operand1,
-                            operand2: binop_rhs.operand1,
-                            span: inner_span,
-                        })),
-                        operand2: binop_rhs.operand2,
-                        span: outer_span,
-                    })
-                    // 2 * 1 + 3
-                    //   *
-                    //  2 +
-                    //   1 3
-                } else {
-                    // We have to re-construct the original input because
-                    // everything is partially moved
-                    Expression::BinaryOp(BinaryOp {
-                        operation: bin_op.operation,
-                        operand1: bin_op.operand1,
-                        operand2: Box::new(Expression::BinaryOp(binop_rhs)),
-                        span: bin_op.span,
-                    })
-                }
-            } else {
-                Expression::BinaryOp(bin_op)
-            }
-        } else {
-            expression
-        }
-    }
-
     fn parse_mut(&mut self) -> ParseResult<Option<ValDef>> {
         self.parse_val(true)
     }
@@ -870,7 +1002,7 @@ impl Parser {
         let Some(eaten_keyword) = self.eat_token(keyword) else {
             return Ok(None);
         };
-        let ident = self.expect_eat_ident()?;
+        let name_token = self.expect_eat_token(Text)?;
         let typ = match self.eat_token(Colon) {
             None => Ok(None),
             Some(_) => self.parse_type_expression(),
@@ -880,7 +1012,7 @@ impl Parser {
             Parser::expect("expression", self.peek(), self.parse_expression())?;
         let span = eaten_keyword.span.extended(initializer_expression.get_span());
         Ok(Some(ValDef {
-            name: self.ident_id(ident),
+            name: self.intern_ident_token(name_token),
             ty: typ,
             value: initializer_expression,
             is_mutable: mutable,
@@ -893,40 +1025,39 @@ impl Parser {
         let Some(keyword_val_token) = self.eat_token(KeywordVal) else {
             return Ok(None);
         };
-        let ident = self.expect_eat_ident()?;
+        let name_token = self.expect_eat_token(Text)?;
         let _colon = self.expect_eat_token(Colon);
         let typ = Parser::expect("type_expression", self.peek(), self.parse_type_expression())?;
         self.expect_eat_token(Equals)?;
         let value_expr = Parser::expect("expression", self.peek(), self.parse_expression())?;
         let span = keyword_val_token.span.extended(value_expr.get_span());
-        ParseResult::Ok(Some(ConstVal { name: self.ident_id(ident), ty: typ, value_expr, span }))
+        ParseResult::Ok(Some(ConstVal {
+            name: self.intern_ident_token(name_token),
+            ty: typ,
+            value_expr,
+            span,
+        }))
     }
 
-    fn parse_assignment(&mut self) -> ParseResult<Option<Assignment>> {
-        let (ident_token, eq) = self.tokens.peek_two();
-        trace!("parse_assignment {} {}", ident_token.kind, eq.kind);
-        let is_assignment = ident_token.kind == Text && eq.kind == Equals;
-        if !is_assignment {
-            return Ok(None);
-        }
-        self.tokens.advance();
-        self.tokens.advance();
-        let expr = Parser::expect(
-            "assignment RHS expected an expression",
-            self.peek(),
-            self.parse_expression(),
-        )?;
-        let span = ident_token.span.extended(expr.get_span());
-        let ident = self.tok_chars(ident_token).to_string();
-        Ok(Some(Assignment { ident: self.ident_id(ident), expr, span }))
+    fn parse_assignment(&mut self, lhs: Expression) -> ParseResult<Assignment> {
+        let valid_lhs = match &lhs {
+            Expression::FieldAccess(_) => true,
+            Expression::Variable(_) => true,
+            Expression::IndexOperation(_) => true,
+            _ => false,
+        };
+        self.expect_eat_token(Equals)?;
+        let rhs = self.expect_expression()?;
+        let span = lhs.get_span().extended(rhs.get_span());
+        Ok(Assignment { lhs, rhs, span })
     }
 
     fn eat_fn_arg_def(&mut self) -> ParseResult<FnArgDef> {
         trace!("eat_fn_arg_def");
-        let ident = self.expect_eat_ident()?;
+        let name_token = self.expect_eat_token(Text)?;
         self.expect_eat_token(Colon)?;
         let typ = Parser::expect("type_expression", self.peek(), self.parse_type_expression())?;
-        Ok(FnArgDef { name: self.ident_id(ident), ty: typ })
+        Ok(FnArgDef { name: self.intern_ident_token(name_token), ty: typ })
     }
 
     fn eat_fndef_args(&mut self) -> ParseResult<(Vec<FnArgDef>, Span)> {
@@ -940,7 +1071,7 @@ impl Parser {
         parse: F,
     ) -> ParseResult<(Vec<T>, Span)>
     where
-        F: Fn(&mut Parser) -> ParseResult<T>,
+        F: Fn(&mut Parser<'toks>) -> ParseResult<T>,
     {
         trace!("eat_delimited delim='{}' terminator='{}'", delim, terminator);
         // TODO @Allocation Use smallvec
@@ -971,7 +1102,7 @@ impl Parser {
                 Err(e) => {
                     // trace!("eat_delimited got err from 'parse': {}", e);
                     break Err(Parser::error_cause(
-                        format!("eat_delimited for {delim} encountered error parsing element"),
+                        format!("eat_delimited for delim={delim} term={terminator} encountered error parsing element"),
                         self.peek(),
                         e,
                     ));
@@ -1018,10 +1149,17 @@ impl Parser {
             } else {
                 return Err(Parser::error("return statement", self.tokens.next()));
             }
-        } else if let Some(assgn) = self.parse_assignment()? {
-            Ok(Some(BlockStmt::Assignment(assgn)))
         } else if let Some(expr) = self.parse_expression()? {
-            Ok(Some(BlockStmt::LoneExpression(expr)))
+            let peeked = self.peek();
+            // Assignment:
+            // - Validate expr type, since only some exprs can be LHS of an assignment
+            // - Build assignment
+            if peeked.kind == Equals {
+                let assgn = self.parse_assignment(expr)?;
+                Ok(Some(BlockStmt::Assignment(assgn)))
+            } else {
+                Ok(Some(BlockStmt::LoneExpression(expr)))
+            }
         } else {
             Ok(None)
         }
@@ -1039,12 +1177,31 @@ impl Parser {
         Ok(Some(Block { stmts: block_statements, span }))
     }
 
+    fn expect_type_param(&mut self) -> ParseResult<TypeParamDef> {
+        let s = self.expect_eat_token(Text)?;
+        let ident_id = self.intern_ident_token(s);
+        Ok(TypeParamDef { ident: ident_id, span: s.span })
+    }
+
     fn parse_function(&mut self) -> ParseResult<Option<FnDef>> {
         trace!("parse_fndef");
         let Some(fn_keyword) = Parser::check(self.eat_token(KeywordFn))? else {
             return Ok(None);
         };
-        let ident = self.expect_eat_ident()?;
+        let func_name = self.expect_eat_token(Text)?;
+        let func_name_id = self.intern_ident_token(func_name);
+        let type_arguments: Option<Vec<TypeParamDef>> =
+            if let TokenKind::OpenAngle = self.peek().kind {
+                self.tokens.advance();
+                let (type_args, type_arg_span) = self.eat_delimited(
+                    TokenKind::Comma,
+                    TokenKind::CloseAngle,
+                    Parser::expect_type_param,
+                )?;
+                Some(type_args)
+            } else {
+                None
+            };
         self.expect_eat_token(OpenParen)?;
         let (args, args_span) = self.eat_fndef_args()?;
         self.expect_eat_token(Colon)?;
@@ -1054,19 +1211,28 @@ impl Parser {
         span.end = block.as_ref().map(|b| b.span.end).unwrap_or(args_span.end);
         // FIXME: Eventually, we'll use an 'intern' keyword to mark intrinsic decls
         //        But for now, we are relying on the name
-        let is_intrinsic = IntrinsicFunctionType::from_function_name(&ident).is_some();
-        Ok(Some(FnDef { name: self.ident_id(ident), args, ret_type, block, span, is_intrinsic }))
+        let is_intrinsic =
+            IntrinsicFunctionType::from_function_name(&self.get_ident_name(func_name_id)).is_some();
+        Ok(Some(FnDef {
+            name: func_name_id,
+            type_args: type_arguments,
+            args: args,
+            ret_type,
+            block,
+            span,
+            is_intrinsic,
+        }))
     }
 
     fn parse_typedef(&mut self) -> ParseResult<Option<TypeDefn>> {
         let keyword_type = self.eat_token(KeywordType);
         if let Some(keyword_type) = keyword_type {
-            let ident = self.expect_eat_ident()?;
+            let name = self.expect_eat_token(Text)?;
             let equals = self.expect_eat_token(Equals)?;
             let type_expr =
                 Parser::expect("Type expression", equals, self.parse_type_expression())?;
             let span = keyword_type.span.extended(type_expr.get_span());
-            Ok(Some(TypeDefn { name: self.ident_id(ident), value_expr: type_expr, span }))
+            Ok(Some(TypeDefn { name: self.intern_ident_token(name), value_expr: type_expr, span }))
         } else {
             Ok(None)
         }
@@ -1092,14 +1258,14 @@ impl Parser {
         }
     }
 
-    fn parse_module(&mut self, filename: &str) -> ParseResult<Module> {
+    fn parse_module(&mut self, filename: &str) -> ParseResult<AstModule> {
         let mut defs: Vec<Definition> = vec![];
 
         while let Some(def) = self.parse_definition()? {
             defs.push(def)
         }
         let ident = self.ident_id(filename);
-        Ok(Module {
+        Ok(AstModule {
             name: filename.to_string(),
             name_id: ident,
             defs,
@@ -1129,7 +1295,7 @@ fn print_tokens(content: &str, tokens: &[Token]) {
 
 // Eventually I want to keep the tokens around, and return them from here somehow, either in the
 // ast::Module or just separately
-pub fn parse_text(text: &str, module_name: &str, use_prelude: bool) -> ParseResult<Module> {
+pub fn parse_text(text: &str, module_name: &str, use_prelude: bool) -> ParseResult<AstModule> {
     let full_source: String = if use_prelude {
         let prelude = crate::prelude::PRELUDE_SOURCE;
         let mut modified_source = String::from(prelude);
@@ -1145,10 +1311,7 @@ pub fn parse_text(text: &str, module_name: &str, use_prelude: bool) -> ParseResu
 
     let token_vec = lexer.run();
 
-    // TODO: TokenIter is dumb
-    let tokens: TokenIter = TokenIter::make(token_vec);
-
-    let mut parser = Parser::make(tokens, full_source, use_prelude);
+    let mut parser = Parser::make(&token_vec, full_source, use_prelude);
 
     let result = parser.parse_module(module_name);
     if let Err(e) = &result {

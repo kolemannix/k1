@@ -28,8 +28,7 @@ project on the world. I bought domain names like naturaldb.dev (I have a great i
 it had to be world-class and industrially viable, make the top page of hackernews, otherwise I'd been wasting my free time and embarassing myself.
 
 But over the last year, through projects like Andreas Kling's SerenityOS and Jakt, Tsoding's 'recreational programming', the Helix editor, and little things like Advent of Code,
-I've realized that computers can be for fun again. I can grind on pull requests and large stable systems, worry about backwards-compatible SQL migrations, and trawl through 
-production logs and plan sprints by day, and still work on interesting software at night. Even if I only find 1 free hour this week, maybe I'll clean up something in the parser, 
+I've realized that computers can be for fun again. I can grind on business software by day, and still work on interesting software at night. Even if I only find 1 free hour this week, maybe I'll clean up something in the parser, 
 maybe I'll just fix warnings, or think about syntax (for real: syntax is so important its how our brains work its literally the purpose of programming languages and not so easy
 to separate from 'semantics' so don't get me started) for Arrays in my little language. Once it becomes recreational, it's all fun. It's not a side hustle, 
 it's just an activity. It just took me 10 years to discover it again, but this time at a deeper level.
@@ -48,16 +47,28 @@ it's just an activity. It just took me 10 years to discover it again, but this t
 - [x] Real prelude so we can more easily add runtime/stl functions (for array)
 - [x] Heap memory (just using malloc)
 - [x] Arrays (Fixed size but heap allocated)
-- [ ] Remove / fix TokenIter type
-- [ ] Optionals
-- [ ] Function syntax change (foo = fn (a, b, c): int { }
-- [ ] Ditch semicolons? (this technically introduces significant whitespace; need newline token)
-- [ ] Syntax changes; from qualifier-focused to name -focused
-- [ ] Introduce uint type
+- [x] Generic functions (no inference)
+- [x] Remove / fix TokenIter type
+- [x] parens around expressions
 - [x] Binary infix operations
 - [x] basic error reporting using spans
+- [x] Array and Struct member assignment
+- [-] While Loop
+- [ ] Array more
+  - [x] Assignment
+  - [ ] "Push" (requires actually growable array impl :/)
+- [ ] Optionals
+- [ ] Generic types
+- [ ] Introduce uint type
+- [ ] Generic type inference
+- [ ] Type literals would be fun
+- [ ] Syntax Shed
+    - [ ] Function syntax change? (foo = fn (a, b, c): int { }
+    - [ ] Ditch semicolons? (this technically introduces significant whitespace; need newline token)
+    - [ ] from qualifier-focused to name -focused
+    - [ ] Parse trailing commas
 - [ ] oneofs (variants?) (tagged unions)
-- [ ] Loops
+- [ ] For loops
 - [ ] Control-Flow: proper codegen for early returns:
     // This needs to return either a basic value or an instruction value (in the case of early return)
     // Actually, early return is a big rabbit hole. We need to typecheck it in ir gen, and probably
@@ -78,12 +89,15 @@ it's just an activity. It just took me 10 years to discover it again, but this t
 - [x] PHI nested branch fix
 
 # Hacks to fix
+- [ ] Fix line comments
+- [ ] Rename IR to typed-ast, since its a tree not instruction set. TAST?
 - [ ] Make intrinsics like arrayIndex a real function
-- [ ] Fix unnecessary load of function args
+- [ ] Fix line numbers to account for prelude
 - [ ] main function / detect entrypoint properly. Typing of main? How to get main args?
 - [ ] Replace vectors with smallvec where appropriate
+- [x] Fix unnecessary load of function args
 - [x] Proper println implementation. Fine to use printf internally for now but we should define our own func around it
-- [ ] Implement Display instead of relying on Debug
+- [-] Implement Display instead of relying on Debug
 
 Design for 
 - optionality
@@ -101,7 +115,7 @@ Design for
 - [ ] Unicode source
 - [ ] multiple parameter lists
 - [ ] Symbols like lisp or Clojure keywords would be really great; or just have string literal types?
-- [ ] Symbols are always interned and very fast. Also signals intent to use a symbol vs use strings
+- [ ] Symbols are always interned and very fast. Also signal intent to use a symbol vs use strings
 
 # Resurrect project (March '23)
 - [x] Implement typed IR
