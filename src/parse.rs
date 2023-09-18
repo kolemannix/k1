@@ -114,6 +114,7 @@ pub struct ValDef {
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub enum BinaryOpKind {
     Add,
+    Subtract,
     Multiply,
     And,
     Or,
@@ -124,6 +125,7 @@ impl Display for BinaryOpKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             BinaryOpKind::Add => f.write_char('+'),
+            BinaryOpKind::Subtract => f.write_char('-'),
             BinaryOpKind::Multiply => f.write_char('*'),
             BinaryOpKind::And => f.write_str("and"),
             BinaryOpKind::Or => f.write_str("or"),
@@ -136,6 +138,7 @@ impl BinaryOpKind {
     pub fn precedence(&self) -> usize {
         match self {
             BinaryOpKind::Add => 0,
+            BinaryOpKind::Subtract => 0,
             BinaryOpKind::Multiply => 1,
             BinaryOpKind::And => 1,
             BinaryOpKind::Or => 1,
@@ -145,6 +148,7 @@ impl BinaryOpKind {
     pub fn from_tokenkind(kind: TokenKind) -> Option<BinaryOpKind> {
         match kind {
             TokenKind::Plus => Some(BinaryOpKind::Add),
+            TokenKind::Minus => Some(BinaryOpKind::Subtract),
             TokenKind::Asterisk => Some(BinaryOpKind::Multiply),
             TokenKind::KeywordAnd => Some(BinaryOpKind::And),
             TokenKind::KeywordOr => Some(BinaryOpKind::Or),

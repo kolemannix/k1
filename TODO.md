@@ -57,6 +57,7 @@ it's just an activity. It just took me 10 years to discover it again, but this t
 - [ ] Array more
   - [x] Assignment
   - [ ] "Push" (requires actually growable array impl :/)
+- [ ] Strings
 - [ ] Optionals
 - [ ] Generic types
 - [ ] Introduce uint type

@@ -496,6 +496,9 @@ impl<'ctx> Codegen<'ctx> {
                             BinaryOpKind::Add => {
                                 self.builder.build_int_add(lhs_value, rhs_value, "add")
                             }
+                            BinaryOpKind::Subtract => {
+                                self.builder.build_int_sub(lhs_value, rhs_value, "sub")
+                            }
                             BinaryOpKind::Multiply => {
                                 self.builder.build_int_mul(lhs_value, rhs_value, "mul")
                             }
