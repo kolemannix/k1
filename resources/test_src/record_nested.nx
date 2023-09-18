@@ -1,0 +1,21 @@
+type Block = {
+  position: { x: int, y: int, width: int, height: int },
+  text: int
+}
+
+fn block_area(b: Block): int {
+  return b.position.width * b.position.height;
+}
+
+fn main(): int {
+  val b: Block = {
+    position: { x: 1, y: 1, width: 50, height: 50 },
+    text: 42
+  };
+  val area: int = block_area(b);
+  printInt(area);
+  val area2: int = block_area({ position: { x: 1, y: 1, width: 50, height: 50 }, text: 42 });
+  printInt(area2);
+  return 0;
+}
+// 2500\n2500

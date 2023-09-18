@@ -233,6 +233,7 @@ impl Expression {
     pub fn is_literal(e: &Expression) -> bool {
         matches!(e, Expression::Literal(_))
     }
+    #[inline]
     pub fn get_span(&self) -> Span {
         match self {
             Expression::BinaryOp(op) => op.span,
@@ -245,6 +246,21 @@ impl Expression {
             Expression::Record(record) => record.span,
             Expression::IndexOperation(op) => op.span,
             Expression::Array(array_expr) => array_expr.span,
+        }
+    }
+
+    pub fn is_assignable(&self) -> bool {
+        match self {
+            Expression::Variable(var) => true,
+            Expression::IndexOperation(op) => true,
+            Expression::FieldAccess(acc) => true,
+            Expression::BinaryOp(op) => false,
+            Expression::Literal(lit) => false,
+            Expression::FnCall(call) => false,
+            Expression::Block(block) => false,
+            Expression::If(if_expr) => false,
+            Expression::Record(record) => false,
+            Expression::Array(array_expr) => false,
         }
     }
 }
@@ -290,8 +306,8 @@ impl ExprStackMember {
 
 #[derive(Debug)]
 pub struct Assignment {
-    pub ident: IdentifierId,
-    pub expr: Expression,
+    pub lhs: Expression,
+    pub rhs: Expression,
     pub span: Span,
 }
 
@@ -562,19 +578,15 @@ impl<'toks> Parser<'toks> {
         trace!("{} chars '{}'", tok.kind, s);
         s
     }
-    // not a member fn; doesn't borrow all of self. <3 Rust
-    fn tok_chars_noself(source: &str, tok: Token) -> &str {
-        &source[tok.span.start as usize..tok.span.end as usize]
-    }
 
     fn eat_token(&mut self, target_token: TokenKind) -> Option<Token> {
         let tok = self.peek();
         // FIXME: The way we handle line comments is broken
-        // It works OK here, but we do a lot of peeking at the next 1-3 tokens
-        // If any are line comments, that peeking code will not produce
-        // the correct result!
-        // Instead, we need to filter the comments out after lexing
-        // Since the spans will remain correct
+        //        It works OK here, but we do a lot of peeking at the next 1-3 tokens
+        //        If any are line comments, that peeking code will not produce
+        //        the correct result!
+        //        Instead, we need to filter the comments out after lexing
+        //        Since the spans will remain correct
         if tok.kind == LineComment {
             self.tokens.advance();
             self.eat_token(target_token)
@@ -980,50 +992,6 @@ impl<'toks> Parser<'toks> {
         }
     }
 
-    fn precedence_fixup(&self, expression: Expression) -> Expression {
-        // TODO: Use the precedence as argument fix when building
-        // PRECEDENCE FIXUP TIME
-        if let Expression::BinaryOp(bin_op) = expression {
-            if let Expression::BinaryOp(binop_rhs) = *bin_op.rhs {
-                // bin_op = * => 1
-                // bin_op_rhs = + => 0
-                println!("binop fixup at {:?} with {:?}", bin_op.op_kind, binop_rhs.op_kind);
-                if binop_rhs.op_kind.precedence() < bin_op.op_kind.precedence() {
-                    let inner_span = bin_op.lhs.get_span().extended(binop_rhs.lhs.get_span());
-                    let outer_span = bin_op.span;
-                    Expression::BinaryOp(BinaryOp {
-                        op_kind: binop_rhs.op_kind,
-                        lhs: Box::new(Expression::BinaryOp(BinaryOp {
-                            op_kind: bin_op.op_kind,
-                            lhs: bin_op.lhs,
-                            rhs: binop_rhs.lhs,
-                            span: inner_span,
-                        })),
-                        rhs: binop_rhs.rhs,
-                        span: outer_span,
-                    })
-                    // 2 * 1 + 3
-                    //   *
-                    //  2 +
-                    //   1 3
-                } else {
-                    // We have to re-construct the original input because
-                    // everything is partially moved
-                    Expression::BinaryOp(BinaryOp {
-                        op_kind: bin_op.op_kind,
-                        lhs: bin_op.lhs,
-                        rhs: Box::new(Expression::BinaryOp(binop_rhs)),
-                        span: bin_op.span,
-                    })
-                }
-            } else {
-                Expression::BinaryOp(bin_op)
-            }
-        } else {
-            expression
-        }
-    }
-
     fn parse_mut(&mut self) -> ParseResult<Option<ValDef>> {
         self.parse_val(true)
     }
@@ -1071,23 +1039,17 @@ impl<'toks> Parser<'toks> {
         }))
     }
 
-    fn parse_assignment(&mut self) -> ParseResult<Option<Assignment>> {
-        let (ident_token, eq) = self.tokens.peek_two();
-        trace!("parse_assignment {} {}", ident_token.kind, eq.kind);
-        let is_assignment = ident_token.kind == Text && eq.kind == Equals;
-        if !is_assignment {
-            return Ok(None);
-        }
-        self.tokens.advance();
-        self.tokens.advance();
-        let expr = Parser::expect(
-            "assignment RHS expected an expression",
-            self.peek(),
-            self.parse_expression(),
-        )?;
-        let span = ident_token.span.extended(expr.get_span());
-        let ident = self.tok_chars(ident_token).to_string();
-        Ok(Some(Assignment { ident: self.ident_id(ident), expr, span }))
+    fn parse_assignment(&mut self, lhs: Expression) -> ParseResult<Assignment> {
+        let valid_lhs = match &lhs {
+            Expression::FieldAccess(_) => true,
+            Expression::Variable(_) => true,
+            Expression::IndexOperation(_) => true,
+            _ => false,
+        };
+        self.expect_eat_token(Equals)?;
+        let rhs = self.expect_expression()?;
+        let span = lhs.get_span().extended(rhs.get_span());
+        Ok(Assignment { lhs, rhs, span })
     }
 
     fn eat_fn_arg_def(&mut self) -> ParseResult<FnArgDef> {
@@ -1187,10 +1149,17 @@ impl<'toks> Parser<'toks> {
             } else {
                 return Err(Parser::error("return statement", self.tokens.next()));
             }
-        } else if let Some(assgn) = self.parse_assignment()? {
-            Ok(Some(BlockStmt::Assignment(assgn)))
         } else if let Some(expr) = self.parse_expression()? {
-            Ok(Some(BlockStmt::LoneExpression(expr)))
+            let peeked = self.peek();
+            // Assignment:
+            // - Validate expr type, since only some exprs can be LHS of an assignment
+            // - Build assignment
+            if peeked.kind == Equals {
+                let assgn = self.parse_assignment(expr)?;
+                Ok(Some(BlockStmt::Assignment(assgn)))
+            } else {
+                Ok(Some(BlockStmt::LoneExpression(expr)))
+            }
         } else {
             Ok(None)
         }
