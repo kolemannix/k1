@@ -1,19 +1,20 @@
 #![allow(clippy::match_like_matches_macro)]
 
+use crate::ir::Type::OpaqueAlias;
 use crate::lex::Span;
 use crate::parse;
 use crate::parse::{
-    Block, BlockStmt, Definition, Expression, FnDef, IdentifierId, Literal, Module,
+    AstId, AstModule, Block, BlockStmt, Definition, Expression, FnCall, FnDef, IdentifierId,
+    Literal,
 };
 use anyhow::{bail, Result};
 use colored::Colorize;
-use log::trace;
+use log::{error, trace};
 use parse_display::Display;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::rc::Rc;
-use std::thread::scope;
 
 pub type ScopeId = u32;
 pub type FunctionId = u32;
@@ -39,7 +40,7 @@ impl RecordDefn {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TypeRef {
     Unit,
     Int,
@@ -70,10 +71,18 @@ pub struct ArrayType {
 }
 
 #[derive(Debug, Clone)]
+pub struct TypeVariable {
+    identifier_id: IdentifierId,
+    /// This is where trait bounds would go
+    constraints: Option<Vec<()>>,
+}
+
+#[derive(Debug, Clone)]
 pub enum Type {
     Record(RecordDefn),
     Array(ArrayType),
     OpaqueAlias(TypeRef),
+    TypeVariable(TypeVariable),
 }
 
 #[derive(Debug, Clone)]
@@ -85,20 +94,39 @@ pub struct IrBlock {
 }
 
 #[derive(Debug, Clone)]
-pub struct FuncParam {
+pub struct FnArgDefn {
     pub name: IdentifierId,
     pub variable_id: VariableId,
     pub position: usize,
-    pub ir_type: TypeRef,
+    pub ty: TypeRef,
 }
 
 #[derive(Debug, Clone)]
 pub struct Function {
     pub name: IdentifierId,
+    pub scope: ScopeId,
     pub ret_type: TypeRef,
-    pub params: Vec<FuncParam>,
+    pub params: Vec<FnArgDefn>,
+    pub type_params: Option<Vec<TypeParam>>,
     pub block: Option<IrBlock>,
     pub intrinsic_type: Option<IntrinsicFunctionType>,
+    pub specializations: Vec<FunctionId>,
+    pub ast_id: AstId,
+}
+
+impl Function {
+    pub fn is_generic(&self) -> bool {
+        match &self.type_params {
+            None => false,
+            Some(vec) => !vec.is_empty(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TypeParam {
+    pub ident: IdentifierId,
+    pub type_id: TypeId,
 }
 
 #[derive(Debug, Clone)]
@@ -149,6 +177,7 @@ pub struct BinaryOp {
 pub struct FunctionCall {
     pub callee_function_id: FunctionId,
     pub args: Vec<IrExpr>,
+    // FIXME: ret_type doesn't belong on here; just look up the function to get it
     pub ret_type: TypeRef,
     pub span: Span,
 }
@@ -276,8 +305,8 @@ pub struct ReturnStmt {
 
 #[derive(Debug, Clone)]
 pub struct Assignment {
-    pub destination_variable: VariableId,
-    pub value: IrExpr,
+    pub destination: Box<IrExpr>,
+    pub value: Box<IrExpr>,
     pub span: Span,
 }
 
@@ -345,7 +374,7 @@ pub struct IrCompilerError {
 }
 
 pub struct IrModule {
-    pub ast: Rc<Module>,
+    pub ast: Rc<AstModule>,
     pub functions: Vec<Function>,
     pub variables: Vec<Variable>,
     pub types: Vec<Type>,
@@ -364,9 +393,14 @@ impl Scopes {
         let scopes = vec![Scope::default()];
         Scopes { scopes, intrinsic_functions: HashMap::new() }
     }
+    fn get_root_scope_id(&self) -> ScopeId {
+        0 as ScopeId
+    }
+    fn add_scope_to_root(&mut self) -> ScopeId {
+        self.add_scope(0)
+    }
     fn add_scope(&mut self, parent_scope_id: ScopeId) -> ScopeId {
-        let mut scope = Scope::default();
-        scope.parent = Some(parent_scope_id);
+        let scope = Scope { parent: Some(parent_scope_id), ..Scope::default() };
         let id = self.scopes.len() as ScopeId;
         self.scopes.push(scope);
         let parent_scope = self.get_scope_mut(parent_scope_id);
@@ -416,7 +450,14 @@ impl Scopes {
     }
 
     fn find_type(&self, scope_id: ScopeId, ident: IdentifierId) -> Option<TypeRef> {
-        self.get_scope(scope_id).find_type(ident)
+        let scope = self.get_scope(scope_id);
+        if let v @ Some(_r) = scope.find_type(ident) {
+            return v;
+        }
+        match scope.parent {
+            Some(parent) => self.find_type(parent, ident),
+            None => None,
+        }
     }
 }
 
@@ -436,7 +477,7 @@ impl IntrinsicFunctionType {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct Scope {
     variables: HashMap<IdentifierId, VariableId>,
     functions: HashMap<IdentifierId, FunctionId>,
@@ -478,7 +519,7 @@ fn make_fail<A, T: AsRef<str>>(s: T, span: Span) -> IrGenResult<A> {
 }
 
 impl IrModule {
-    pub fn new(parsed_module: Rc<Module>) -> IrModule {
+    pub fn new(parsed_module: Rc<AstModule>) -> IrModule {
         IrModule {
             ast: parsed_module,
             functions: Vec::new(),
@@ -523,6 +564,37 @@ impl IrModule {
         &self.types[type_id as usize]
     }
 
+    pub fn is_reference_type(&self, ty: TypeRef) -> bool {
+        match ty {
+            TypeRef::Unit => false,
+            TypeRef::Int => false,
+            TypeRef::Bool => false,
+            TypeRef::String => false,
+            TypeRef::TypeId(type_id) => {
+                let ty = self.get_type(type_id);
+                match ty {
+                    Type::Record(_) => true,
+                    Type::Array(_) => true,
+                    Type::OpaqueAlias(t) => self.is_reference_type(*t),
+                    Type::TypeVariable(_) => true,
+                }
+            }
+        }
+    }
+
+    /// Recursively checks if given type contains any type variables
+    fn is_generic(&self, ty: TypeRef) -> bool {
+        match ty {
+            TypeRef::TypeId(type_id) => match self.get_type(type_id) {
+                Type::TypeVariable(_) => true,
+                Type::Record(record) => record.fields.iter().any(|f| self.is_generic(f.ty)),
+                Type::Array(arr) => self.is_generic(arr.element_type),
+                Type::OpaqueAlias(t) => self.is_generic(*t),
+            },
+            _ => false,
+        }
+    }
+
     fn eval_type_expr(
         &mut self,
         expr: &parse::TypeExpression,
@@ -546,7 +618,13 @@ impl IrModule {
                 let ty_ref = self.scopes.find_type(scope_id, *ident);
 
                 ty_ref.ok_or_else(|| {
-                    self.internal_compiler_error(
+                    error!("Scope {} Types: {:?}", scope_id, self.scopes.get_scope(scope_id).types);
+                    error!(
+                        "Scope {} Vars: {:?}",
+                        scope_id,
+                        self.scopes.get_scope(scope_id).variables
+                    );
+                    make_err(
                         format!(
                             "could not find type for identifier {}",
                             &*self.ast.get_ident_name(*ident)
@@ -571,7 +649,7 @@ impl IrModule {
                         )
                     }
                 } else {
-                    todo!("ir for parameterized types")
+                    todo!("not supported: generic non builtin types")
                 }
             }
         }
@@ -645,9 +723,7 @@ impl IrModule {
     }
 
     fn typecheck_types(&self, expected: TypeRef, actual: TypeRef) -> Result<(), String> {
-        // Types can be compatible without being equal
-        // While we won't have inheritance, there will be some shallow subtyping
-        // and interfaces
+        trace!("typechecking {:?} vs {:?}", expected, actual);
         if expected == actual {
             Ok(())
         } else {
@@ -660,10 +736,16 @@ impl IrModule {
                         (Type::Array(a1), Type::Array(a2)) => {
                             self.typecheck_types(a1.element_type, a2.element_type)
                         }
-                        _ => Err(format!("TODO typecheck_types: other types: {ty1:?}, {ty2:?}")),
+                        _ => Err(format!("Expected {ty1:?} but got {ty2:?}")),
                     }
                 }
-                _ => Err(format!("Expected {:?} but got {:?}", expected, actual)),
+                (TypeRef::TypeId(id1), got) => {
+                    Err(format!("Expected {:?} but got {:?}", self.get_type(id1), got))
+                }
+                (exp, TypeRef::TypeId(id2)) => {
+                    Err(format!("Expected {:?} but got {:?}", exp, self.get_type(id2)))
+                }
+                (exp, got) => Err(format!("Expected {:?} but got {:?}", exp, got)),
             }
         }
     }
@@ -712,8 +794,8 @@ impl IrModule {
         id as u32
     }
 
-    pub fn get_variable(&self, index: u32) -> &Variable {
-        &self.variables[index as usize]
+    pub fn get_variable(&self, id: VariableId) -> &Variable {
+        &self.variables[id as usize]
     }
 
     fn add_function(&mut self, function: Function) -> FunctionId {
@@ -794,32 +876,27 @@ impl IrModule {
             Expression::IndexOperation(index_op) => {
                 // De-sugar to _arrayIndex(target, index)
                 // TODO: Indexing only works for builtin Array for now
+
+                let index_expr = self.eval_expr(&index_op.index_expr, scope_id)?;
+                if index_expr.get_type() != TypeRef::Int {
+                    return make_fail("index type must be int", index_op.span);
+                }
+
                 let target = self.eval_expr(&index_op.target, scope_id)?;
                 let TypeRef::TypeId(target_type_id) =  target.get_type() else {
                     return make_fail("index base must be an array", index_op.span)
                 };
-                let index_expr = self.eval_expr(&index_op.index_expr, scope_id)?;
-                if index_expr.get_type() != TypeRef::Int {
-                    return make_fail("UNIMPLEMENTED index type must be int", index_op.span);
-                }
-
                 let target_type = self.get_type(target_type_id);
                 let Type::Array(array_type) = target_type else {
-                    return make_fail("UNIMPLEMENTED index type must be int", index_op.span);
+                    return make_fail("index base must be an array", index_op.span);
                 };
-                let TypeRef::Int = array_type.element_type else {
-                    return make_fail("UNIMPLEMENTED array element type must be int", index_op.span);
-                };
-                // Special-case: call prelude function "_array_access"
+                // Special-case: call prelude function "_arrayIndex"
                 // Just need to look up the ID by intrinsic type
                 let array_index_fn = self
                     .scopes
                     .intrinsic_functions
                     .get(&IntrinsicFunctionType::ArrayIndex)
                     .unwrap();
-                // Amazingly we actually have a polymorphic call here, even
-                // though we can't express it in the source yet,
-                // since ret_type is bound to the element type of the array
 
                 // _arrayIndex(array, 42)
                 Ok(IrExpr::FunctionCall(FunctionCall {
@@ -902,14 +979,14 @@ impl IrModule {
             }
             Expression::BinaryOp(binary_op) => {
                 // Infer expected type to be type of operand1
-                let lhs = self.eval_expr(&binary_op.operand1, scope_id)?;
-                let rhs = self.eval_expr(&binary_op.operand2, scope_id)?;
+                let lhs = self.eval_expr(&binary_op.lhs, scope_id)?;
+                let rhs = self.eval_expr(&binary_op.rhs, scope_id)?;
 
                 if self.typecheck_types(lhs.get_type(), rhs.get_type()).is_err() {
                     return make_fail("operand types did not match", binary_op.span);
                 }
 
-                let kind = match binary_op.operation {
+                let kind = match binary_op.op_kind {
                     parse::BinaryOpKind::Add => BinaryOpKind::Add,
                     parse::BinaryOpKind::Multiply => BinaryOpKind::Multiply,
                     parse::BinaryOpKind::And => BinaryOpKind::And,
@@ -943,9 +1020,11 @@ impl IrModule {
                 Ok(expr)
             }
             Expression::Variable(variable) => {
-                let var_index = self.scopes.find_variable(scope_id, variable.ident).ok_or(
-                    make_err(format!("Identifier not found: {}", variable.ident), variable.span),
-                )?;
+                let var_index =
+                    self.scopes.find_variable(scope_id, variable.ident).ok_or(make_err(
+                        format!("{} is not defined", &*self.get_ident_name(variable.ident)),
+                        variable.span,
+                    ))?;
                 let v = self.get_variable(var_index);
                 let expr = IrExpr::Variable(VariableExpr {
                     ir_type: v.ir_type,
@@ -985,16 +1064,19 @@ impl IrModule {
                         fn_call.span,
                     ))?;
 
-                let function = &self.functions[function_id as usize];
-                let function_ret_type = function.ret_type;
-                let mut call_parameters: Vec<&parse::FnArg> = Vec::new();
-                for fn_param in &function.params {
+                let function_to_call = if self.get_function(function_id).is_generic() {
+                    self.get_specialized_function_for_call(fn_call, function_id)?
+                } else {
+                    function_id
+                };
+                let mut call_parameters: Vec<(FnArgDefn, &parse::FnCallArg)> = Vec::new();
+                for fn_param in &self.get_function(function_to_call).params {
                     let matching_param_by_name =
                         fn_call.args.iter().find(|arg| arg.name == Some(fn_param.name));
                     let matching_param =
                         matching_param_by_name.or(fn_call.args.get(fn_param.position));
                     if let Some(param) = matching_param {
-                        call_parameters.push(param);
+                        call_parameters.push((fn_param.clone(), param));
                     } else {
                         return make_fail(
                             format!("Could not find match for parameter {}", fn_param.name),
@@ -1004,12 +1086,19 @@ impl IrModule {
                 }
                 // forget: function
                 let mut fn_args: Vec<IrExpr> = Vec::new();
-                for call_param in call_parameters {
-                    let param_expr = self.eval_expr(&call_param.value, scope_id)?;
+                for (arg_defn, arg_value) in call_parameters {
+                    let param_expr = self.eval_expr(&arg_value.value, scope_id)?;
+                    if let Err(e) = self.typecheck_types(arg_defn.ty, param_expr.get_type()) {
+                        return make_fail(
+                            format!("Invalid parameter type: {}", e),
+                            arg_value.value.get_span(),
+                        );
+                    }
                     fn_args.push(param_expr);
                 }
+                let function_ret_type = self.get_function(function_to_call).ret_type;
                 let call = IrExpr::FunctionCall(FunctionCall {
-                    callee_function_id: function_id,
+                    callee_function_id: function_to_call,
                     args: fn_args,
                     ret_type: function_ret_type,
                     span: fn_call.span,
@@ -1017,6 +1106,48 @@ impl IrModule {
                 Ok(call)
             }
         }
+    }
+    fn get_specialized_function_for_call(
+        &mut self,
+        fn_call: &FnCall,
+        old_function_id: FunctionId,
+    ) -> IrGenResult<FunctionId> {
+        // TODO: Implement full generic type inference. This could get slow!
+        //       Cases like [T](t: T) are easier but [T](x: ComplexType[A, B, T]) and solving for
+        //       T in that case is hard. Requires recursive search.
+        //       I wonder if we could infer in simple cases and refuse to infer
+        //       in complex cases that would be slow.
+        //       Inference algorithm:
+        //       1. Find arguments that include a type param
+        //       2. Find the actual value passed for each, find where the type variable appears within
+        //          that type expression, and assign it to the concrete type
+        trace!("Specializing function: {}", &*self.get_ident_name(fn_call.name));
+        let generic_function = self.get_function(old_function_id).clone();
+        let type_params =
+            generic_function.type_params.as_ref().expect("expected function to be generic");
+        let type_args =
+            fn_call.type_args.as_ref().ok_or(make_err("fn call mising type args", fn_call.span))?;
+        let mut new_name = self.get_ident_name(fn_call.name).to_string();
+
+        // The specialized function lives in the root of the module
+        // The only real difference is the scope: it has substitutions for the type variables
+        let spec_fn_scope_id = self.scopes.add_scope_to_root();
+        for (i, type_param) in type_params.iter().enumerate() {
+            let type_arg = &type_args[i];
+            let type_ref = self.eval_type_expr(&type_arg.value, spec_fn_scope_id)?;
+            self.scopes.get_scope_mut(spec_fn_scope_id).add_type(type_param.ident, type_ref);
+        }
+        new_name.push_str("_spec_");
+        let specialization_count = generic_function.specializations.len();
+        new_name.push_str(&specialization_count.to_string());
+
+        let ast = self.ast.clone();
+        let Definition::FnDef(ast_def) = ast.get_defn(generic_function.ast_id) else {
+            self.internal_compiler_error("failed to get AST node for function specialization", fn_call.span)
+        };
+        let specialized_function_id =
+            self.eval_function(ast_def, generic_function.ast_id, spec_fn_scope_id, true)?;
+        Ok(specialized_function_id)
     }
     fn eval_block_stmt(&mut self, stmt: &BlockStmt, scope_id: ScopeId) -> IrGenResult<IrStmt> {
         match stmt {
@@ -1028,8 +1159,10 @@ impl IrModule {
             }
             BlockStmt::ValDef(val_def) => {
                 let value_expr = self.eval_expr(&val_def.value, scope_id)?;
-                let provided_type =
-                    val_def.ty.as_ref().expect("Type inference not supported on vals yet!");
+                let provided_type = val_def
+                    .ty
+                    .as_ref()
+                    .ok_or(make_err("Missing type annotation for val", val_def.span))?;
                 let ir_type = self.eval_type_expr(provided_type, scope_id)?;
                 let variable_id = self.add_variable(Variable {
                     is_mutable: val_def.is_mutable,
@@ -1053,29 +1186,54 @@ impl IrModule {
                 Ok(val_def_expr)
             }
             BlockStmt::Assignment(assignment) => {
-                let expr = self.eval_expr(&assignment.expr, scope_id)?;
-                let dest =
-                    self.scopes.find_variable(scope_id, assignment.ident).ok_or(make_err(
-                        format!(
-                            "Variable {} not found in scope {}",
-                            &*self.get_ident_name(assignment.ident),
-                            scope_id
-                        ),
-                        assignment.span,
-                    ))?;
-                let var = self.get_variable(dest);
-                if !var.is_mutable {
-                    return make_fail("Cannot assign to immutable variable", assignment.span);
-                }
-                if let Err(msg) = self.typecheck_types(var.ir_type, expr.get_type()) {
+                // So, we want to be able to assign to an array elem, x[1] = 2,
+                // but we currently desugar the expression x[1] to a function call that returns an int, not a pointer
+                // we don't even have 'pointers' as language constructs so we need to do something different
+                // for the lhs based on whether its part of an assignment or not
+                //
+                // The question is: how do we represent "pointer to array elem" or "pointer to struct member"
+                // As the LHS in the IR so that codegen knows what to do with it
+                // I either need to have 'Pointer' types in the typed ast or
+                // just special-case it
+                let lhs = self.eval_expr(&assignment.lhs, scope_id)?;
+                match &lhs {
+                    IrExpr::Variable(v) => {
+                        let var = self.get_variable(v.variable_id);
+                        if !var.is_mutable {
+                            return make_fail(
+                                "Cannot assign to immutable variable",
+                                assignment.span,
+                            );
+                        }
+                    }
+                    IrExpr::FunctionCall(c) => {
+                        let f = self.get_function(c.callee_function_id);
+                        if f.intrinsic_type == Some(IntrinsicFunctionType::ArrayIndex) {
+                            // TODO Check mutability of the underlying array? How?
+                        } else {
+                            return make_fail("Invalid assignment lhs", lhs.get_span());
+                        }
+                    }
+                    IrExpr::FieldAccess(field_access) => {
+                        trace!("assignment to record member");
+                    }
+                    _ => {
+                        return make_fail(
+                            format!("Invalid assignment lhs: {:?}", lhs),
+                            lhs.get_span(),
+                        )
+                    }
+                };
+                let rhs = self.eval_expr(&assignment.rhs, scope_id)?;
+                if let Err(msg) = self.typecheck_types(lhs.get_type(), rhs.get_type()) {
                     return make_fail(
-                        format!("Typecheck of assignment failed: {}", msg),
+                        format!("Invalid types for assignment: {}", msg),
                         assignment.span,
                     );
                 }
                 let expr = IrStmt::Assignment(Box::new(Assignment {
-                    value: expr,
-                    destination_variable: dest,
+                    destination: Box::new(lhs),
+                    value: Box::new(rhs),
                     span: assignment.span,
                 }));
                 Ok(expr)
@@ -1104,74 +1262,123 @@ impl IrModule {
         let ir_block = IrBlock { ret_type, scope_id: 0, statements, span: block.span };
         Ok(ir_block)
     }
-    fn eval_function(&mut self, fn_def: &FnDef, scope_id: ScopeId) -> IrGenResult<FunctionId> {
+    fn eval_function(
+        &mut self,
+        fn_def: &FnDef,
+        fn_ast_id: AstId,
+        scope_id: ScopeId,
+        specialize: bool,
+    ) -> IrGenResult<FunctionId> {
         let mut params = Vec::new();
-        let _fn_scope = self.scopes.add_scope(scope_id);
+        let fn_scope_id = self.scopes.add_scope(scope_id);
+
+        // Instantiate type arguments
+        let is_generic =
+            !specialize && fn_def.type_args.as_ref().map(|args| !args.is_empty()).unwrap_or(false);
+        trace!(
+            "function {} is_generic: {}, specialize: {}",
+            &*self.get_ident_name(fn_def.name),
+            is_generic,
+            specialize
+        );
+        let mut type_params: Option<Vec<TypeParam>> = None;
+        if is_generic {
+            let mut the_type_params = Vec::new();
+            for type_parameter in fn_def.type_args.as_ref().unwrap().iter() {
+                let type_variable =
+                    TypeVariable { identifier_id: type_parameter.ident, constraints: None };
+                let type_variable_id = self.add_type(Type::TypeVariable(type_variable));
+                let fn_scope = self.scopes.get_scope_mut(fn_scope_id);
+                let type_param =
+                    TypeParam { ident: type_parameter.ident, type_id: type_variable_id };
+                the_type_params.push(type_param);
+                fn_scope.add_type(type_parameter.ident, TypeRef::TypeId(type_variable_id))
+            }
+            type_params = Some(the_type_params);
+            trace!(
+                "Added type arguments to function {} scope {:?}",
+                &*self.get_ident_name(fn_def.name),
+                self.scopes.get_scope(fn_scope_id)
+            );
+        }
+
+        // Typecheck arguments
         for (idx, fn_arg) in fn_def.args.iter().enumerate() {
-            let ir_type = self.eval_type_expr(&fn_arg.ty, scope_id)?;
+            let ir_type = self.eval_type_expr(&fn_arg.ty, fn_scope_id)?;
+            if specialize {
+                trace!("Specializing: {:?} got {:?}", &fn_arg, ir_type);
+            }
             let variable = Variable {
                 name: fn_arg.name,
                 ir_type,
                 is_mutable: false,
-                owner_scope: Some(scope_id),
+                owner_scope: Some(fn_scope_id),
             };
             let variable_id = self.add_variable(variable);
-            params.push(FuncParam { name: fn_arg.name, variable_id, position: idx, ir_type });
+            params.push(FnArgDefn { name: fn_arg.name, variable_id, position: idx, ty: ir_type });
             self.scopes.add_variable(scope_id, fn_arg.name, variable_id);
         }
+
         let intrinsic_type = if fn_def.is_intrinsic {
             let name = &*self.ast.get_ident_name(fn_def.name);
             IntrinsicFunctionType::from_function_name(name)
         } else {
             None
         };
-        let given_ir_type = match &fn_def.ret_type {
+        let given_ret_type = match &fn_def.ret_type {
             None => TypeRef::Unit,
-            Some(type_expr) => self.eval_type_expr(type_expr, scope_id)?,
+            Some(type_expr) => self.eval_type_expr(type_expr, fn_scope_id)?,
         };
         let function = Function {
             name: fn_def.name,
-            ret_type: given_ir_type,
+            scope: fn_scope_id,
+            ret_type: given_ret_type,
             params,
+            type_params,
             block: None,
             intrinsic_type,
+            specializations: Vec::new(),
+            ast_id: fn_ast_id,
         };
         let function_id = self.add_function(function);
         self.scopes.add_function(scope_id, fn_def.name, function_id);
         if let Some(intrinsic_type) = intrinsic_type {
             self.scopes.intrinsic_functions.insert(intrinsic_type, function_id);
         }
-        let body_block = fn_def
-            .block
-            .as_ref()
-            .ok_or(make_err("Top-level function definitions must have a body", fn_def.span))?;
-        let body_block = self.eval_block(body_block, scope_id)?;
-        let ret_type: TypeRef = {
-            if self.typecheck_types(given_ir_type, body_block.ret_type).is_err() {
-                return make_fail(
-                    format!(
-                        "Function {} ret type mismatch: {:?} {:?}",
-                        fn_def.name, given_ir_type, body_block.ret_type
-                    ),
-                    fn_def.span,
-                );
+        let is_intrinsic = intrinsic_type.is_some();
+        let body_block = match &fn_def.block {
+            Some(block_ast) => {
+                let block = self.eval_block(block_ast, scope_id)?;
+                if let Err(msg) = self.typecheck_types(given_ret_type, block.ret_type) {
+                    return make_fail(
+                        format!(
+                            "Function {} return type mismatch: {}",
+                            &*self.get_ident_name(fn_def.name),
+                            msg
+                        ),
+                        fn_def.span,
+                    );
+                } else {
+                    Some(block)
+                }
             }
-            given_ir_type
+            None if is_intrinsic => None,
+            None => return make_fail("function is missing implementation", fn_def.span),
         };
         // Add the body now
         let function = self.get_function_mut(function_id);
-        function.block = Some(body_block);
+        function.block = body_block;
         Ok(function_id)
     }
-    fn eval_definition(&mut self, def: &Definition) -> IrGenResult<()> {
-        let scope_id = 0;
+    fn eval_definition(&mut self, ast_id: AstId, def: &Definition) -> IrGenResult<()> {
+        let scope_id = self.scopes.get_root_scope_id();
         match def {
             Definition::Const(const_val) => {
                 let _variable_id: VariableId = self.eval_const(const_val)?;
                 Ok(())
             }
             Definition::FnDef(fn_def) => {
-                self.eval_function(fn_def, scope_id)?;
+                self.eval_function(fn_def, ast_id, scope_id, false)?;
                 Ok(())
             }
             Definition::Type(type_defn) => {
@@ -1186,8 +1393,9 @@ impl IrModule {
         // TODO: 'Declare' everything first, will allow modules
         //        to declare their API without full typechecking
         //        will also allow recursion without hacks
-        for def in &self.ast.clone().defs {
-            let result = self.eval_definition(def);
+
+        for (id, defn) in self.ast.clone().defns_iter() {
+            let result = self.eval_definition(id, defn);
             if let Err(e) = result {
                 self.print_error(&e.message, e.span);
                 errors.push(e);

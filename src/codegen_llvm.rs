@@ -13,8 +13,9 @@ use inkwell::values::{
     InstructionValue, IntValue, PointerValue,
 };
 use inkwell::{AddressSpace, IntPredicate, OptimizationLevel};
-use log::trace;
+use log::{error, trace};
 use std::collections::HashMap;
+use std::ops::Deref;
 use std::path::Path;
 use std::rc::Rc;
 
@@ -89,8 +90,16 @@ impl<'ctx> From<&Pointer<'ctx>> for GeneratedValue<'ctx> {
     }
 }
 
-/// When we codegen an expression, sometimes the result is a pointer value, which does
-/// not contain type information, so we add the pointee type in that case
+/// When we codegen an expression, sometimes we produce a pointer that may
+/// be needed by the caller (for example, for assignment). In these
+/// cases we return Pointer, indicating that you've got a pointer
+/// to whatever the IR type indicates you should have.
+/// Example: { a: 1} is a record, which we model as ptr, but since we
+/// are returning the actual ptr to the record, not a pointer to it, we
+/// use Value.
+/// Example: [1,2,3][0]. We return a pointer to the array at that location
+/// in case this is for assignment. The types expect an int, but we gave a Pointer,
+/// so we return it in Pointer to indicate that
 #[derive(Copy, Clone, Debug)]
 enum GeneratedValue<'ctx> {
     Value(BasicValueEnum<'ctx>),
@@ -207,6 +216,20 @@ impl<'ctx> Codegen<'ctx> {
         self.module.ast.get_ident_name(id)
     }
 
+    fn load_if_value_type(
+        &self,
+        value: GeneratedValue<'ctx>,
+        expected_ty: TypeRef,
+    ) -> BasicValueEnum<'ctx> {
+        if self.module.is_reference_type(expected_ty) {
+            // Reference Type
+            value.as_basic_value_enum()
+        } else {
+            // Value Type
+            value.loaded_value(&self.builder)
+        }
+    }
+
     fn build_print_int_call(&mut self, call: &FunctionCall) -> BasicValueEnum<'ctx> {
         // Assume the arg is an int since that's what the intrinsic typechecks for
         let first_arg = self.codegen_expr(&call.args[0]).loaded_value(&self.builder);
@@ -237,13 +260,12 @@ impl<'ctx> Codegen<'ctx> {
         let Type::Record(record) = module.get_type(type_id) else {
             panic!("expected record type for id {}", type_id)
         };
-        let field_types: Vec<_> =
-            record.fields.iter().map(|f| self.codegen_type_ref(f.ty)).collect();
+        let field_types: Vec<_> = record.fields.iter().map(|f| self.get_llvm_type(f.ty)).collect();
         let struct_type = self.ctx.struct_type(&field_types, false);
         // self.llvm_types.insert(type_id, struct_ptr_type.as_basic_type_enum());
         struct_type
     }
-    fn codegen_type_ref(&mut self, type_ref: TypeRef) -> BasicTypeEnum<'ctx> {
+    fn get_llvm_type(&mut self, type_ref: TypeRef) -> BasicTypeEnum<'ctx> {
         trace!("codegen for type {type_ref:?}");
         match type_ref {
             TypeRef::Int => self.builtin_types.i64.as_basic_type_enum(),
@@ -262,7 +284,7 @@ impl<'ctx> Codegen<'ctx> {
                                 let field_types: Vec<_> = record
                                     .fields
                                     .iter()
-                                    .map(|f| self.codegen_type_ref(f.ty))
+                                    .map(|f| self.get_llvm_type(f.ty))
                                     .collect();
                                 let struct_type = self.ctx.struct_type(&field_types, false);
                                 let struct_ptr_type = struct_type
@@ -275,10 +297,11 @@ impl<'ctx> Codegen<'ctx> {
                             Type::OpaqueAlias(_alias) => {
                                 todo!("opaque alias")
                             }
-                            Type::Array(array) => {
-                                // Does it even matter what type of pointer type we use?
-                                // It doesn't seem to!! Figure out fully why
-                                // Any pointer type will do
+                            Type::TypeVariable(v) => {
+                                panic!("codegen was asked to codegen a type variable {:?}", v)
+                            }
+                            Type::Array(_array) => {
+                                // Does not matter what pointer type we use
                                 // let element_type = self.codegen_type_ref(array.element_type);
                                 // element_type
                                 //     .ptr_type(self.default_address_space)
@@ -297,13 +320,14 @@ impl<'ctx> Codegen<'ctx> {
     }
 
     fn codegen_val(&mut self, val: &ValDef) -> GeneratedValue<'ctx> {
-        let value = self.codegen_expr(&val.initializer);
-        let pointee_ty = value.as_basic_value_enum().get_type();
+        let value = self.codegen_expr(&val.initializer).loaded_value(&self.builder);
+        let pointee_ty = self.get_llvm_type(val.ir_type);
+        let variable = self.module.get_variable(val.variable_id);
         let value_ptr = self.builder.build_alloca(
             pointee_ty.ptr_type(self.default_address_space),
-            &val.variable_id.to_string(),
+            &self.get_ident_name(variable.name),
         );
-        trace!("codegen_val {}: pointee_ty: {pointee_ty:?}", val.variable_id.to_string());
+        trace!("codegen_val {}: pointee_ty: {pointee_ty:?}", &*self.get_ident_name(variable.name));
         // We're always storing a pointer
         // in self.variables that, when loaded, gives the actual type of the variable
         self.builder.build_store(value_ptr, value.as_basic_value_enum());
@@ -328,28 +352,28 @@ impl<'ctx> Codegen<'ctx> {
             IrLiteral::Str(_, _) => todo!("codegen String"),
             IrLiteral::Record(record) => {
                 let record_type = self.build_record_type(record.type_id);
-                // ------------> Start here tomorrow. Which of these?
-                //let struct_ptr = self.builder.build_alloca(pointer_ty, "record");
                 let struct_ptr = self.builder.build_alloca(record_type, "record");
                 for (idx, field) in record.fields.iter().enumerate() {
                     let value = self.codegen_expr(&field.expr);
-                    println!("Generating record literal field {:#?}", field.expr);
                     let field_ptr = self
                         .builder
-                        .build_struct_gep(record_type, struct_ptr, idx as u32, "")
+                        .build_struct_gep(
+                            record_type,
+                            struct_ptr,
+                            idx as u32,
+                            &format!("record_init_{}", idx),
+                        )
                         .unwrap();
-                    self.builder.build_store(field_ptr, value.loaded_value(&self.builder));
+                    let value_to_store = self.load_if_value_type(value, field.expr.get_type());
+                    self.builder.build_store(field_ptr, value_to_store);
                 }
-                GeneratedValue::Pointer(Pointer {
-                    pointee_ty: record_type.as_basic_type_enum(),
-                    pointer: struct_ptr,
-                })
+                GeneratedValue::Value(struct_ptr.as_basic_value_enum())
             }
             IrLiteral::Array(array) => {
                 let Type::Array(array_ir_type) = self.module.get_type(array.type_id) else {
                     panic!("expected array type for array");
                 };
-                let element_type = self.codegen_type_ref(array_ir_type.element_type);
+                let element_type = self.get_llvm_type(array_ir_type.element_type);
                 let array_len = self.builtin_types.i64.const_int(array.elements.len() as u64, true);
 
                 // First, we allocate memory somewhere not on the stack
@@ -380,7 +404,7 @@ impl<'ctx> Codegen<'ctx> {
         }
     }
     fn codegen_if_else(&mut self, ir_if: &IrIf) -> GeneratedValue<'ctx> {
-        let typ = self.codegen_type_ref(ir_if.ir_type);
+        let typ = self.get_llvm_type(ir_if.ir_type);
         let start_block = self.builder.get_insert_block().unwrap();
         let current_fn = start_block.get_parent().unwrap();
         let consequent_block = self.ctx.append_basic_block(current_fn, "if_cons");
@@ -443,23 +467,18 @@ impl<'ctx> Codegen<'ctx> {
                 let result = self.codegen_expr(&field_access.base);
                 let record_type =
                     self.build_record_type(field_access.base.get_type().expect_type_id());
-                println!("FieldAccess base expr: {:#?}", field_access.base);
-                println!("FieldAccess result: {:?}", result);
-                // Whether a Pointer or Value, we expect it to be the right type as-is, no loading
-                let record_pointer = result.as_basic_value_enum();
-                // let Pointer { pointee_ty, pointer } = result.expect_pointer();
+                let record_pointer = result.loaded_value(&self.builder).into_pointer_value();
                 let field_ptr = self
                     .builder
                     .build_struct_gep(
                         record_type,
-                        record_pointer.into_pointer_value(),
+                        record_pointer,
                         field_access.target_field.index as u32,
                         "field_access_target_ptr",
                     )
                     .unwrap();
-                let target_ty = self.codegen_type_ref(field_access.target_field.ty);
-                let loaded = self.builder.build_load(target_ty, field_ptr, "field_access_target");
-                loaded.into()
+                let target_ty = self.get_llvm_type(field_access.target_field.ty);
+                Pointer { pointee_ty: target_ty, pointer: field_ptr }.into()
             }
             IrExpr::If(ir_if) => self.codegen_if_else(ir_if),
             IrExpr::BinaryOp(bin_op) => match bin_op.ir_type {
@@ -543,21 +562,20 @@ impl<'ctx> Codegen<'ctx> {
             return self.codegen_intrinsic(intrinsic_type, call);
         }
 
-        let function_value =
-            *self.llvm_functions.get(&call.callee_function_id).unwrap_or_else(|| {
-                panic!("LLVM function not found: {}", &*self.get_ident_name(callee.name))
-            });
+        let function_value = self
+            .codegen_function(call.callee_function_id, callee)
+            .expect("could not get llvm function");
+
         let args: Vec<BasicMetadataValueEnum<'ctx>> = call
             .args
             .iter()
             .map(|arg_expr| {
                 let basic_value = self.codegen_expr(arg_expr);
-                // I think this is a bug; try passing an array as arg
-                //basic_value.loaded_value(&self.builder).into()
-                basic_value.as_basic_value_enum().into()
+                let expected_type = arg_expr.get_type();
+                self.load_if_value_type(basic_value, expected_type).into()
             })
             .collect();
-        let callsite_value = self.builder.build_call(function_value, &args, "");
+        let callsite_value = self.builder.build_call(function_value, &args, "call_ret");
         // Call returns Right for void, and Left for values
         let result_value =
             callsite_value.try_as_basic_value().left().expect("function returned void");
@@ -575,13 +593,14 @@ impl<'ctx> Codegen<'ctx> {
                 self.builtin_types.unit_value.as_basic_value_enum().into()
             }
             IntrinsicFunctionType::ArrayIndex => {
-                let pointee_ty = self.codegen_type_ref(call.ret_type);
+                println!("ArrayIndex call: {:?}", call);
+                let pointee_ty = self.get_llvm_type(call.ret_type);
                 let array_expr = &call.args[0];
                 let index_expr = &call.args[1];
                 let array_value = self.codegen_expr(array_expr);
                 let index_value = self.codegen_expr(index_expr);
-                // Arrays are always malloc'd in this language, so we expect a pointer
-                // This doesnt have to be the case, but I want dynamically sized arrays to be the default
+
+                // 'Arrays' are always on the heap in this language, so we expect a pointer
                 let array_value_as_ptr = array_value.as_basic_value_enum().into_pointer_value();
                 let index_int_value = index_value.loaded_value(&self.builder).into_int_value();
                 println!("ArrayIndex pointee_ty: {}", pointee_ty);
@@ -590,9 +609,11 @@ impl<'ctx> Codegen<'ctx> {
                         pointee_ty,
                         array_value_as_ptr,
                         &[index_int_value],
-                        "array_index",
+                        "array_index_ptr",
                     );
                     Pointer { pointee_ty, pointer: gep_ptr }.into()
+                    // let value = self.builder.build_load(pointee_ty, gep_ptr, "array_index_value");
+                    // value.into()
                 }
             }
         }
@@ -616,34 +637,113 @@ impl<'ctx> Codegen<'ctx> {
                 }
                 IrStmt::ReturnStmt(return_stmt) => {
                     let value = self.codegen_expr(&return_stmt.expr);
+                    // Likely another loaded_value bug
                     self.builder.build_return(Some(&value.loaded_value(&self.builder)));
                     return None;
                 }
-                IrStmt::Assignment(assignment) => {
-                    let variable_id = &assignment.destination_variable;
-                    let destination_ptr =
-                        *self.variables.get(variable_id).expect("Missing variable");
-                    let initializer = self.codegen_expr(&assignment.value);
-                    let _store = self.store(&destination_ptr, initializer);
-                    last = Some(self.builtin_types.unit_value.as_basic_value_enum().into())
-                }
+                IrStmt::Assignment(assignment) => match assignment.destination.deref() {
+                    IrExpr::Variable(v) => {
+                        let destination_ptr =
+                            *self.variables.get(&v.variable_id).expect("Missing variable");
+                        let initializer = self.codegen_expr(&assignment.value);
+
+                        //self.builder.build_store(des, value.loaded_value(&self.builder))
+                        let _store = self.store_loaded(&destination_ptr, initializer);
+                        last = Some(self.builtin_types.unit_value.as_basic_value_enum().into())
+                    }
+                    IrExpr::FieldAccess(field_access) => {
+                        let field_ptr = self.codegen_expr(&assignment.destination);
+                        let ptr = field_ptr.expect_pointer();
+                        let rhs = self.codegen_expr(&assignment.value);
+                        let _store = self.store_loaded(&ptr, rhs);
+                        // let _store = self.builder.build_store(ptr.pointer, rhs.loaded_value());
+                        last = Some(self.builtin_types.unit_value.as_basic_value_enum().into())
+                    }
+                    IrExpr::FunctionCall(call) => {
+                        let f = self.module.get_function(call.callee_function_id);
+                        if f.intrinsic_type == Some(IntrinsicFunctionType::ArrayIndex) {
+                            // We are assigning to an array element
+                        } else {
+                            panic!("Invalid assignmnent lhs");
+                        }
+                    }
+                    _ => {
+                        panic!("Invalid assignment lhs")
+                    }
+                },
             }
         }
         last
     }
-    fn build_store(&mut self, value: BasicValueEnum<'ctx>, name: &str) -> PointerValue<'ctx> {
-        let ptr = self.builder.build_alloca(value.get_type(), name);
-        self.builder.build_store(ptr, value);
-        ptr
-    }
+
     /// Stores `value` into `pointer`, loading the value pointed to by `value` if necessary
-    fn store(
+    fn store_loaded(
         &mut self,
         pointer: &Pointer<'ctx>,
         value: GeneratedValue<'ctx>,
     ) -> InstructionValue<'ctx> {
         self.builder.build_store(pointer.pointer, value.loaded_value(&self.builder))
     }
+    // FIXME: This option will go away if we either, check intrinsic before calling this, or
+    //        codegen real functions for intrinsics
+    fn codegen_function(
+        &mut self,
+        function_id: FunctionId,
+        function: &Function,
+    ) -> Option<FunctionValue<'ctx>> {
+        if let Some(function) = self.llvm_functions.get(&function_id) {
+            return Some(*function);
+        }
+        if function.intrinsic_type.is_some() {
+            // FIXME: Is this correct to not even codegen a function?
+            //        It means we are 'inlining' all intrinsics unconditionally
+            //        Probably should make an llvm function and implement it ourselves,
+            //        and call it normally
+            trace!(
+                "Skipping codegen for intrinsic function: {}",
+                &*self.get_ident_name(function.name)
+            );
+            return None;
+        }
+        if function.is_generic() {
+            trace!(
+                "Skipping codegen for generic function: {}",
+                &*self.get_ident_name(function.name)
+            );
+            return None;
+        }
+        let maybe_start_block = self.builder.get_insert_block();
+        let param_types: Vec<BasicMetadataTypeEnum> =
+            function.params.iter().map(|fn_arg| self.get_llvm_type(fn_arg.ty).into()).collect();
+        let ret_type: BasicMetadataTypeEnum<'ctx> = self.get_llvm_type(function.ret_type).into();
+        let fn_ty = match ret_type {
+            BasicMetadataTypeEnum::IntType(i) => i.fn_type(&param_types, false),
+            BasicMetadataTypeEnum::PointerType(p) => p.fn_type(&param_types, false),
+            _ => panic!("Unexpected function llvm type"),
+        };
+        let fn_val = {
+            let name = self.module.ast.get_ident_name(function.name);
+            self.llvm_module.add_function(&name, fn_ty, None)
+        };
+        self.llvm_functions.insert(function_id, fn_val);
+        let entry_block = self.ctx.append_basic_block(fn_val, "entry");
+        self.builder.position_at_end(entry_block);
+        for (i, param) in fn_val.get_param_iter().enumerate() {
+            let ir_param = &function.params[i];
+            let ty = self.get_llvm_type(ir_param.ty);
+            let param_name = self.module.ast.get_ident_name(ir_param.name);
+            param.set_name(&param_name);
+            let pointer = self.builder.build_alloca(ty, &param_name);
+            self.builder.build_store(pointer, param);
+            self.variables.insert(ir_param.variable_id, Pointer { pointer, pointee_ty: ty });
+        }
+        self.codegen_block(function.block.as_ref().expect("functions must have blocks by codegen"));
+        if let Some(start_block) = maybe_start_block {
+            self.builder.position_at_end(start_block);
+        }
+        Some(fn_val)
+    }
+
     pub fn codegen_module(&mut self) {
         for constant in &self.module.constants {
             match constant.expr {
@@ -662,45 +762,8 @@ impl<'ctx> Codegen<'ctx> {
         //       that way. We should expose a way to iterate that provides the ID from the IR module
         //       This will matter once the ID is more than just the index (it will at least need
         //       module ID)
-        for (function_id, function) in self.module.clone().functions.iter().enumerate() {
-            if function.intrinsic_type.is_some() {
-                // FIXME: Is this correct to not even codegen a function?
-                //        It means we are 'inlining' all intrinsics unconditionally
-                //        Probably should make an llvm function and implement it ourselves,
-                //        and call it regularly
-                continue;
-            }
-            let param_types: Vec<BasicMetadataTypeEnum> = function
-                .params
-                .iter()
-                .map(|fn_arg| self.codegen_type_ref(fn_arg.ir_type).into())
-                .collect();
-            let ret_type: BasicMetadataTypeEnum<'ctx> =
-                self.codegen_type_ref(function.ret_type).into();
-            let fn_ty = match ret_type {
-                BasicMetadataTypeEnum::IntType(i) => i.fn_type(&param_types, false),
-                BasicMetadataTypeEnum::PointerType(p) => p.fn_type(&param_types, false),
-                _ => panic!("Unexpected function llvm type"),
-            };
-            let fn_val = {
-                let name = self.module.ast.get_ident_name(function.name);
-                self.llvm_module.add_function(&name, fn_ty, None)
-            };
-            self.llvm_functions.insert(function_id as u32, fn_val);
-            let entry_block = self.ctx.append_basic_block(fn_val, "entry");
-            self.builder.position_at_end(entry_block);
-            for (i, param) in fn_val.get_param_iter().enumerate() {
-                let ir_param = &function.params[i];
-                let ty = self.codegen_type_ref(ir_param.ir_type);
-                let param_name = self.module.ast.get_ident_name(ir_param.name);
-                param.set_name(&param_name);
-                let pointer = self.builder.build_alloca(ty, &param_name);
-                self.builder.build_store(pointer, param);
-                self.variables.insert(ir_param.variable_id, Pointer { pointer, pointee_ty: ty });
-            }
-            self.codegen_block(
-                function.block.as_ref().expect("functions must have blocks by codegen"),
-            );
+        for (function_index, function) in self.module.clone().functions.iter().enumerate() {
+            self.codegen_function(function_index as FunctionId, function);
         }
     }
 
@@ -708,7 +771,7 @@ impl<'ctx> Codegen<'ctx> {
         self.module.name()
     }
 
-    pub fn optimize(&mut self) -> CodegenResult<()> {
+    pub fn optimize(&mut self, optimize: bool) -> CodegenResult<()> {
         Target::initialize_aarch64(&InitializationConfig::default());
         let triple = TargetMachine::get_default_triple();
         let target = Target::from_triple(&triple).unwrap();
@@ -742,9 +805,11 @@ impl<'ctx> Codegen<'ctx> {
 
         let module_pass_manager: PassManager<inkwell::module::Module<'ctx>> =
             PassManager::create(());
-        module_pass_manager.add_promote_memory_to_register_pass();
-        module_pass_manager.add_function_attrs_pass();
-        module_pass_manager.add_instruction_combining_pass();
+        if optimize {
+            module_pass_manager.add_promote_memory_to_register_pass();
+            module_pass_manager.add_function_attrs_pass();
+            module_pass_manager.add_instruction_combining_pass();
+        }
         // module_pass_manager.add_function_inlining_pass();
         module_pass_manager.add_verifier_pass();
 
