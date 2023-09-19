@@ -675,7 +675,28 @@ impl<'ctx> Codegen<'ctx> {
                     }
                 },
                 IrStmt::WhileLoop(while_stmt) => {
-                    todo!("codegen for while")
+                    let start_block = self.builder.get_insert_block().unwrap();
+                    let current_fn = start_block.get_parent().unwrap();
+                    let loop_entry_block = self.ctx.append_basic_block(current_fn, "while_cond");
+                    let loop_body_block = self.ctx.append_basic_block(current_fn, "while_body");
+                    let loop_end_block = self.ctx.append_basic_block(current_fn, "while_end");
+
+                    // Go to the loop
+                    self.builder.build_unconditional_branch(loop_entry_block);
+
+                    self.builder.position_at_end(loop_entry_block);
+                    let cond = self
+                        .codegen_expr(&while_stmt.cond)
+                        .loaded_value(&self.builder)
+                        .into_int_value();
+
+                    self.builder.build_conditional_branch(cond, loop_body_block, loop_end_block);
+
+                    self.builder.position_at_end(loop_body_block);
+                    self.codegen_block(&while_stmt.block);
+                    self.builder.build_unconditional_branch(loop_end_block);
+
+                    self.builder.position_at_end(loop_end_block);
                 }
             }
         }

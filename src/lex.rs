@@ -80,10 +80,11 @@ pub enum TokenKind {
     DoubleQuote,
     SingleQuote,
 
-    // Infix Operators, hardcoded precedence
     Plus,
     Minus,
     Asterisk,
+    LessThanEqual,
+    GreaterThanEqual,
 
     /// Not really a token but allows us to avoid Option<Token> everywhere
     Eof,
@@ -137,6 +138,8 @@ impl TokenKind {
             Plus => Some("+"),
             Minus => Some("-"),
             Asterisk => Some("*"),
+            LessThanEqual => Some("<="),
+            GreaterThanEqual => Some(">="),
 
             DoubleQuote => Some("\""),
             SingleQuote => Some("'"),
@@ -184,6 +187,8 @@ impl TokenKind {
             "type" => Some(KeywordType),
             "while" => Some(KeywordWhile),
             "==" => Some(EqualsEquals),
+            "<=" => Some(LessThanEqual),
+            ">=" => Some(GreaterThanEqual),
             _ => None,
         }
     }
@@ -314,6 +319,14 @@ impl Lexer<'_> {
                     self.advance();
                     self.advance();
                     break Some(Token::make(EqualsEquals, self.line_index, n, 2));
+                } else if single_char_tok == TokenKind::OpenAngle && next == '=' {
+                    self.advance();
+                    self.advance();
+                    break Some(Token::make(LessThanEqual, self.line_index, n, 2));
+                } else if single_char_tok == TokenKind::CloseAngle && next == '=' {
+                    self.advance();
+                    self.advance();
+                    break Some(Token::make(GreaterThanEqual, self.line_index, n, 2));
                 } else if single_char_tok == TokenKind::Slash && next == '/' {
                     is_line_comment = true;
                     line_comment_start = n;
