@@ -674,6 +674,9 @@ impl<'ctx> Codegen<'ctx> {
                         panic!("Invalid assignment lhs")
                     }
                 },
+                IrStmt::WhileLoop(while_stmt) => {
+                    todo!("codegen for while")
+                }
             }
         }
         last

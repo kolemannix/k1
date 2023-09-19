@@ -327,6 +327,14 @@ pub struct IfExpr {
 }
 
 #[derive(Debug)]
+pub struct WhileStmt {
+    pub cond: Expression,
+    pub block: Block,
+    /// Maybe its better not to store a span on nodes for which a span is trivially calculated
+    pub span: Span,
+}
+
+#[derive(Debug)]
 pub struct ReturnStmt {
     pub expr: Expression,
     pub span: Span,
@@ -339,6 +347,7 @@ pub enum BlockStmt {
     ReturnStmt(ReturnStmt),
     Assignment(Assignment),
     LoneExpression(Expression),
+    While(WhileStmt),
 }
 
 #[derive(Debug)]
@@ -1126,9 +1135,23 @@ impl<'toks> Parser<'toks> {
         }
     }
 
+    fn parse_while_loop(&mut self) -> ParseResult<Option<WhileStmt>> {
+        let while_token = self.peek();
+        if while_token.kind != KeywordWhile {
+            return Ok(None);
+        }
+        self.tokens.advance();
+        let cond = self.expect_expression()?;
+        let block = Parser::expect("block for while loop", while_token, self.parse_block())?;
+        let span = while_token.span.extended(block.span);
+        Ok(Some(WhileStmt { cond, block, span }))
+    }
+
     fn parse_statement(&mut self) -> ParseResult<Option<BlockStmt>> {
         trace!("eat_statement {:?}", self.peek());
-        if let Some(mut_def) = self.parse_mut()? {
+        if let Some(while_loop) = self.parse_while_loop()? {
+            Ok(Some(BlockStmt::While(while_loop)))
+        } else if let Some(mut_def) = self.parse_mut()? {
             Ok(Some(BlockStmt::ValDef(mut_def)))
         } else if let Some(val_def) = self.parse_val(false)? {
             Ok(Some(BlockStmt::ValDef(val_def)))
