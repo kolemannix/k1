@@ -116,6 +116,11 @@ pub enum BinaryOpKind {
     Add,
     Subtract,
     Multiply,
+    Divide,
+    LessThan,
+    GreaterThan,
+    LessThanEqual,
+    GreaterThanEqual,
     And,
     Or,
     Equals,
@@ -127,6 +132,11 @@ impl Display for BinaryOpKind {
             BinaryOpKind::Add => f.write_char('+'),
             BinaryOpKind::Subtract => f.write_char('-'),
             BinaryOpKind::Multiply => f.write_char('*'),
+            BinaryOpKind::Divide => f.write_char('/'),
+            BinaryOpKind::LessThan => f.write_char('<'),
+            BinaryOpKind::GreaterThan => f.write_char('>'),
+            BinaryOpKind::LessThanEqual => f.write_str("<="),
+            BinaryOpKind::GreaterThanEqual => f.write_str(">="),
             BinaryOpKind::And => f.write_str("and"),
             BinaryOpKind::Or => f.write_str("or"),
             BinaryOpKind::Equals => f.write_str("=="),
@@ -136,13 +146,57 @@ impl Display for BinaryOpKind {
 
 impl BinaryOpKind {
     pub fn precedence(&self) -> usize {
+        /*
+                   Multiply
+           | Modulo
+           | Divide => 100
+
+           Add
+           | Subtract => 90
+
+           BitwiseLeftShift
+           | BitwiseRightShift
+           | ArithmeticLeftShift
+           | ArithmeticRightShift => 85
+
+           LessThan
+           | LessThanOrEqual
+           | GreaterThan
+           | GreaterThanOrEqual
+           | Equal
+           | NotEqual => 80
+
+           BitwiseAnd => 73
+           BitwiseXor => 72
+           BitwiseOr => 71
+           LogicalAnd => 70
+
+           LogicalOr
+           | NoneCoalescing => 69
+
+           Assign
+           | BitwiseAndAssign
+           | BitwiseOrAssign
+           | BitwiseXorAssign
+           | BitwiseLeftShiftAssign
+           | BitwiseRightShiftAssign
+           | AddAssign
+           | SubtractAssign
+           | MultiplyAssign
+           | ModuloAssign
+           | DivideAssign
+           | NoneCoalescingAssign => 50
+
+           else => 0
+
+        */
+        use BinaryOpKind as B;
         match self {
-            BinaryOpKind::Add => 0,
-            BinaryOpKind::Subtract => 0,
-            BinaryOpKind::Multiply => 1,
-            BinaryOpKind::And => 1,
-            BinaryOpKind::Or => 1,
-            BinaryOpKind::Equals => 2,
+            B::Multiply | B::Divide => 100,
+            B::Add | B::Subtract => 90,
+            B::LessThan | B::LessThanEqual | B::GreaterThan | B::GreaterThanEqual | B::Equals => 80,
+            B::And => 70,
+            B::Or => 66,
         }
     }
     pub fn from_tokenkind(kind: TokenKind) -> Option<BinaryOpKind> {
@@ -150,6 +204,9 @@ impl BinaryOpKind {
             TokenKind::Plus => Some(BinaryOpKind::Add),
             TokenKind::Minus => Some(BinaryOpKind::Subtract),
             TokenKind::Asterisk => Some(BinaryOpKind::Multiply),
+            TokenKind::Slash => Some(BinaryOpKind::Divide),
+            TokenKind::OpenAngle => Some(BinaryOpKind::LessThan),
+            TokenKind::CloseAngle => Some(BinaryOpKind::GreaterThan),
             TokenKind::KeywordAnd => Some(BinaryOpKind::And),
             TokenKind::KeywordOr => Some(BinaryOpKind::Or),
             TokenKind::EqualsEquals => Some(BinaryOpKind::Equals),
@@ -880,7 +937,6 @@ impl<'toks> Parser<'toks> {
             expr_stack.push(ExprStackMember::Operator(op_kind, tok.span));
             expr_stack.push(ExprStackMember::Expr(rhs));
 
-            println!("setting lp={}", precedence);
             last_precedence = precedence;
         }
 
