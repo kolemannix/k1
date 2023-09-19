@@ -5,7 +5,7 @@ fn set_up(input: &str) -> Parser<'static> {
     let mut lexer = Lexer::make(input);
     let token_vec: &'static mut [Token] = lexer.run().leak();
     print_tokens(input, token_vec);
-    let parser = Parser::make(token_vec, input.to_string(), false);
+    let parser = Parser::make(token_vec, input.to_string());
     parser
 }
 
@@ -184,6 +184,19 @@ fn paren_expression() -> Result<(), ParseError> {
     println!("{}", result);
     if let Expression::BinaryOp(bin_op) = &result {
         assert!(bin_op.op_kind == BinaryOpKind::Multiply);
+        return Ok(());
+    }
+    panic!()
+}
+
+#[test]
+fn while_loop_1() -> Result<(), ParseError> {
+    let input = "while true { (); (); 42 }";
+    let mut parser = set_up(input);
+    let result = parser.parse_statement()?.unwrap();
+    println!("{:?}", result);
+    if let BlockStmt::While(while_stmt) = result {
+        assert!(while_stmt.block.stmts.len() == 3);
         return Ok(());
     }
     panic!()

@@ -314,11 +314,20 @@ pub struct Assignment {
 }
 
 #[derive(Debug, Clone)]
+pub struct IrWhileLoop {
+    pub cond: IrExpr,
+    pub block: IrBlock,
+    pub span: Span,
+}
+
+// TODO: When do we 'clone' a whole IrStmt?
+#[derive(Debug, Clone)]
 pub enum IrStmt {
     Expr(Box<IrExpr>),
     ValDef(Box<ValDef>),
     ReturnStmt(Box<ReturnStmt>),
     Assignment(Box<Assignment>),
+    WhileLoop(Box<IrWhileLoop>),
 }
 
 impl IrStmt {
@@ -329,6 +338,7 @@ impl IrStmt {
             IrStmt::ValDef(v) => v.span,
             IrStmt::ReturnStmt(ret) => ret.span,
             IrStmt::Assignment(ass) => ass.span,
+            IrStmt::WhileLoop(w) => w.span,
         }
     }
 }
@@ -791,9 +801,10 @@ impl IrModule {
             IrStmt::Expr(expr) => Some(expr.get_type()),
             IrStmt::ValDef(_) => Some(TypeRef::Unit),
             // FIXME: This is not quite right; a return statement
-            // is different; should probably be None or 'never'
+            //        is different; should probably be None or 'never'
             IrStmt::ReturnStmt(ret) => Some(ret.expr.get_type()),
             IrStmt::Assignment(_) => Some(TypeRef::Unit),
+            IrStmt::WhileLoop(_) => Some(TypeRef::Unit),
         }
     }
 
@@ -1251,6 +1262,17 @@ impl IrModule {
             BlockStmt::LoneExpression(expression) => {
                 let expr = self.eval_expr(expression, scope_id)?;
                 Ok(IrStmt::Expr(Box::new(expr)))
+            }
+            BlockStmt::While(while_stmt) => {
+                let cond = self.eval_expr(&while_stmt.cond, scope_id)?;
+                if let Err(e) = self.typecheck_types(TypeRef::Bool, cond.get_type()) {
+                    return make_fail(
+                        format!("Invalid while condition type: {}", e),
+                        cond.get_span(),
+                    );
+                }
+                let block = self.eval_block(&while_stmt.block, scope_id)?;
+                Ok(IrStmt::WhileLoop(Box::new(IrWhileLoop { cond, block, span: while_stmt.span })))
             }
         }
     }
