@@ -7,7 +7,7 @@ use TokenKind::*;
 
 pub const EOF_CHAR: char = '\0';
 pub const EOF_TOKEN: Token =
-    Token { span: Span { file_id: 0, start: 0, end: 0, line: 0 }, kind: TokenKind::Eof };
+    Token { span: Span { file_id: 0, start: 0, end: 0, line: 0 }, kind: TokenKind::Eof, flags: 0 };
 
 pub struct TokenIter<'toks> {
     iter: std::slice::Iter<'toks, Token>,
@@ -237,16 +237,31 @@ impl Span {
     }
 }
 
+const TOKEN_FLAG_IS_WHITESPACE_PRECEEDED: u64 = 0x01;
+const TOKEN_FLAG_IS_WHITESPACE_FOLLOWED: u64 = 0x02;
+
 #[derive(Debug, Clone, Copy)]
 pub struct Token {
     pub span: Span,
     pub kind: TokenKind,
+    pub flags: u64,
 }
 
 impl Token {
-    pub fn make(kind: TokenKind, line_index: u32, start: u32, len: u32) -> Token {
+    pub fn new(
+        kind: TokenKind,
+        line_index: u32,
+        start: u32,
+        len: u32,
+        whitespace_preceeded: bool,
+    ) -> Token {
         let span = Span { start, end: start + len, line: line_index, file_id: 0 };
-        Token { span, kind }
+        let flags = if whitespace_preceeded { TOKEN_FLAG_IS_WHITESPACE_PRECEEDED } else { 0 };
+
+        Token { span, kind, flags }
+    }
+    pub fn is_whitespace_preceeded(&self) -> bool {
+        self.flags & TOKEN_FLAG_IS_WHITESPACE_PRECEEDED == TOKEN_FLAG_IS_WHITESPACE_PRECEEDED
     }
 }
 
@@ -263,6 +278,7 @@ impl Lexer<'_> {
     pub fn run(&mut self) -> Vec<Token> {
         let mut tokens = Vec::with_capacity(1024);
         while let Some(tok) = self.eat_token() {
+            println!("emitted token kind={}, prec={}", tok.kind, tok.is_whitespace_preceeded());
             tokens.push(tok);
         }
         tokens
@@ -273,17 +289,23 @@ impl Lexer<'_> {
         let mut tok_len = 0;
         let mut is_line_comment = false;
         let mut line_comment_start = 0;
+        let peeked_whitespace = self.peek().is_whitespace();
+        // let mut prev_skip = false;
+        // Trying to output whether a token was preceeded by whitespace or not
+        // so we can tell the difference between less than and a type param on a fn call!!!!
+        log::trace!("lex starting new token with prev_skip=false");
         loop {
             let (c, n) = self.peek_with_pos();
             trace!("LEX line={} char={} '{}' buf={}", self.line_index, n, c, tok_buf);
             if is_line_comment {
                 if c == '\n' || c == EOF_CHAR {
                     let len = n - line_comment_start - 1;
-                    let comment_tok = Token::make(
+                    let comment_tok = Token::new(
                         TokenKind::LineComment,
                         self.line_index,
                         line_comment_start,
                         len,
+                        peeked_whitespace,
                     );
                     self.advance();
                     break Some(comment_tok);
@@ -294,11 +316,12 @@ impl Lexer<'_> {
             }
             if c == EOF_CHAR {
                 if !tok_buf.is_empty() {
-                    break Some(Token::make(
+                    break Some(Token::new(
                         TokenKind::Text,
                         self.line_index,
                         n - tok_len,
                         tok_len,
+                        peeked_whitespace,
                     ));
                 } else {
                     break None;
@@ -309,24 +332,37 @@ impl Lexer<'_> {
                 if !tok_buf.is_empty() {
                     // Break without advancing; we'll have a clear buffer next time
                     // and will advance
-                    break Some(Token::make(
+                    break Some(Token::new(
                         TokenKind::Text,
                         self.line_index,
                         n - tok_len,
                         tok_len,
+                        false,
                     ));
                 } else if single_char_tok == TokenKind::Equals && next == '=' {
                     self.advance();
                     self.advance();
-                    break Some(Token::make(EqualsEquals, self.line_index, n, 2));
+                    break Some(Token::new(EqualsEquals, self.line_index, n, 2, peeked_whitespace));
                 } else if single_char_tok == TokenKind::OpenAngle && next == '=' {
                     self.advance();
                     self.advance();
-                    break Some(Token::make(LessThanEqual, self.line_index, n, 2));
+                    break Some(Token::new(
+                        LessThanEqual,
+                        self.line_index,
+                        n,
+                        2,
+                        peeked_whitespace,
+                    ));
                 } else if single_char_tok == TokenKind::CloseAngle && next == '=' {
                     self.advance();
                     self.advance();
-                    break Some(Token::make(GreaterThanEqual, self.line_index, n, 2));
+                    break Some(Token::new(
+                        GreaterThanEqual,
+                        self.line_index,
+                        n,
+                        2,
+                        peeked_whitespace,
+                    ));
                 } else if single_char_tok == TokenKind::Slash && next == '/' {
                     is_line_comment = true;
                     line_comment_start = n;
@@ -334,19 +370,33 @@ impl Lexer<'_> {
                     self.advance();
                 } else {
                     self.advance();
-                    break Some(Token::make(single_char_tok, self.line_index, n, 1));
+                    break Some(Token::new(
+                        single_char_tok,
+                        self.line_index,
+                        n,
+                        1,
+                        peeked_whitespace,
+                    ));
                 }
             }
             if c.is_whitespace() && !tok_buf.is_empty() {
-                self.advance();
+                // No longer eat this so the next eat_token call can see it.
+                // self.advance();
                 if let Some(tok) = TokenKind::token_from_str(&tok_buf) {
-                    break Some(Token::make(tok, self.line_index, n - tok_len, tok_len));
+                    break Some(Token::new(
+                        tok,
+                        self.line_index,
+                        n - tok_len,
+                        tok_len,
+                        peeked_whitespace,
+                    ));
                 } else {
-                    break Some(Token::make(
+                    break Some(Token::new(
                         TokenKind::Text,
                         self.line_index,
                         n - tok_len,
                         tok_len,
+                        peeked_whitespace,
                     ));
                 }
             }
@@ -354,8 +404,15 @@ impl Lexer<'_> {
                 tok_len += 1;
                 tok_buf.push(c);
             } else if let Some(tok) = TokenKind::token_from_str(&tok_buf) {
-                self.advance();
-                break Some(Token::make(tok, self.line_index, n - tok_len, tok_len));
+                // No longer eat this so the next eat_token call can see it.
+                // self.advance();
+                break Some(Token::new(
+                    tok,
+                    self.line_index,
+                    n - tok_len,
+                    tok_len,
+                    peeked_whitespace,
+                ));
             }
             self.advance();
         }
@@ -418,9 +475,25 @@ mod test {
         let input = "-43";
         let result = Lexer::make(input).run();
         let kinds: Vec<TokenKind> = result.iter().map(|t| t.kind).collect();
-        assert_eq!(kinds, vec![Text]);
+        assert_eq!(kinds, vec![Minus, Text]);
         assert_eq!(result[0].span.start, 0);
-        assert_eq!(result[0].span.end, 3);
+        assert_eq!(result[0].span.end, 1);
+        assert_eq!(result[1].span.start, 1);
+        assert_eq!(result[1].span.end, 3);
+        assert!(!result[1].is_whitespace_preceeded());
+    }
+
+    #[test]
+    fn minus_int() {
+        let input = "- 43";
+        let result = Lexer::make(input).run();
+        let kinds: Vec<TokenKind> = result.iter().map(|t| t.kind).collect();
+        assert_eq!(kinds, vec![Minus, Text]);
+        assert_eq!(result[0].span.start, 0);
+        assert_eq!(result[0].span.end, 1);
+        assert_eq!(result[1].span.start, 2);
+        assert_eq!(result[1].span.end, 4);
+        assert!(result[1].is_whitespace_preceeded());
     }
 
     #[test]

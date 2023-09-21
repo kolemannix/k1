@@ -483,43 +483,39 @@ impl<'ctx> Codegen<'ctx> {
             IrExpr::If(ir_if) => self.codegen_if_else(ir_if),
             IrExpr::BinaryOp(bin_op) => match bin_op.ir_type {
                 TypeRef::Int => {
-                    if bin_op.kind.is_integer_op() {
-                        let lhs_value = self
-                            .codegen_expr(&bin_op.lhs)
-                            .loaded_value(&self.builder)
-                            .into_int_value();
-                        let rhs_value = self
-                            .codegen_expr(&bin_op.rhs)
-                            .loaded_value(&self.builder)
-                            .into_int_value();
-                        let op_res = match bin_op.kind {
-                            BinaryOpKind::Add => {
-                                self.builder.build_int_add(lhs_value, rhs_value, "add")
-                            }
-                            BinaryOpKind::Subtract => {
-                                self.builder.build_int_sub(lhs_value, rhs_value, "sub")
-                            }
-                            BinaryOpKind::Multiply => {
-                                self.builder.build_int_mul(lhs_value, rhs_value, "mul")
-                            }
-                            BinaryOpKind::And => {
-                                self.builder.build_and(lhs_value, rhs_value, "and")
-                            }
-                            BinaryOpKind::Or => self.builder.build_or(lhs_value, rhs_value, "or"),
-                            BinaryOpKind::Equals => self.builder.build_int_compare(
-                                IntPredicate::EQ,
-                                lhs_value,
-                                rhs_value,
-                                "eq",
-                            ),
-                        };
-                        op_res.as_basic_value_enum().into()
-                    } else {
-                        panic!("Unsupported binary operation {:?} on Int", bin_op.kind)
-                    }
+                    let lhs_value =
+                        self.codegen_expr(&bin_op.lhs).loaded_value(&self.builder).into_int_value();
+                    let rhs_value =
+                        self.codegen_expr(&bin_op.rhs).loaded_value(&self.builder).into_int_value();
+                    let op_res = match bin_op.kind {
+                        BinaryOpKind::Add => {
+                            self.builder.build_int_add(lhs_value, rhs_value, "add")
+                        }
+                        BinaryOpKind::Subtract => {
+                            self.builder.build_int_sub(lhs_value, rhs_value, "sub")
+                        }
+                        BinaryOpKind::Multiply => {
+                            self.builder.build_int_mul(lhs_value, rhs_value, "mul")
+                        }
+                        BinaryOpKind::Divide => {
+                            self.builder.build_int_signed_div(lhs_value, rhs_value, "sdiv")
+                        }
+                        BinaryOpKind::And => self.builder.build_and(lhs_value, rhs_value, "and"),
+                        BinaryOpKind::Or => self.builder.build_or(lhs_value, rhs_value, "or"),
+                        BinaryOpKind::Equals => self.builder.build_int_compare(
+                            IntPredicate::EQ,
+                            lhs_value,
+                            rhs_value,
+                            "eq",
+                        ),
+                        _ => {
+                            panic!("Unsupported bin op kind returning int: {}", bin_op.kind)
+                        }
+                    };
+                    op_res.as_basic_value_enum().into()
                 }
                 TypeRef::Bool => match bin_op.kind {
-                    BinaryOpKind::And | BinaryOpKind::Or | BinaryOpKind::Equals => {
+                    BinaryOpKind::And | BinaryOpKind::Or => {
                         let lhs_int = self
                             .codegen_expr(&bin_op.lhs)
                             .loaded_value(&self.builder)
@@ -543,7 +539,33 @@ impl<'ctx> Codegen<'ctx> {
                         };
                         op.as_basic_value_enum().into()
                     }
-                    other => panic!("Unsupported binary operation {other:?} on Bool"),
+                    BinaryOpKind::Equals
+                    | BinaryOpKind::Less
+                    | BinaryOpKind::LessEqual
+                    | BinaryOpKind::Greater
+                    | BinaryOpKind::GreaterEqual => {
+                        let lhs_int = self
+                            .codegen_expr(&bin_op.lhs)
+                            .loaded_value(&self.builder)
+                            .into_int_value();
+                        let rhs_int = self
+                            .codegen_expr(&bin_op.rhs)
+                            .loaded_value(&self.builder)
+                            .into_int_value();
+                        let pred = match bin_op.kind {
+                            BinaryOpKind::Equals => IntPredicate::EQ,
+                            BinaryOpKind::Less => IntPredicate::SLT,
+                            BinaryOpKind::LessEqual => IntPredicate::SLE,
+                            BinaryOpKind::Greater => IntPredicate::SGT,
+                            BinaryOpKind::GreaterEqual => IntPredicate::SGE,
+                            _ => unreachable!("unexpected binop kind"),
+                        };
+                        self.builder
+                            .build_int_compare(pred, lhs_int, rhs_int, &format!("{}", bin_op.kind))
+                            .as_basic_value_enum()
+                            .into()
+                    }
+                    other => panic!("Unsupported binary operation {other:?} returning Bool"),
                 },
                 TypeRef::String => panic!("No string binary ops yet"),
                 TypeRef::Unit => panic!("No unit binary ops"),
@@ -694,7 +716,7 @@ impl<'ctx> Codegen<'ctx> {
 
                     self.builder.position_at_end(loop_body_block);
                     self.codegen_block(&while_stmt.block);
-                    self.builder.build_unconditional_branch(loop_end_block);
+                    self.builder.build_unconditional_branch(loop_entry_block);
 
                     self.builder.position_at_end(loop_end_block);
                 }

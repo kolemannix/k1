@@ -201,3 +201,21 @@ fn while_loop_1() -> Result<(), ParseError> {
     }
     panic!()
 }
+
+#[test]
+fn cmp_operators() -> Result<(), ParseError> {
+    let input = "a < b <= c > d >= e";
+    let mut parser = set_up(input);
+    let result = parser.parse_expression()?.unwrap();
+    println!("{:?}", result);
+    Ok(())
+}
+
+#[test]
+fn generic_fn_call() -> Result<(), ParseError> {
+    let input = "square<int>(42)";
+    let mut parser = set_up(input);
+    let result = parser.parse_expression()?.unwrap();
+    assert!(matches!(result, Expression::FnCall(_)));
+    Ok(())
+}
