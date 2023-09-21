@@ -117,10 +117,10 @@ pub enum BinaryOpKind {
     Subtract,
     Multiply,
     Divide,
-    LessThan,
-    GreaterThan,
-    LessThanEqual,
-    GreaterThanEqual,
+    Less,
+    Greater,
+    LessEqual,
+    GreaterEqual,
     And,
     Or,
     Equals,
@@ -133,10 +133,10 @@ impl Display for BinaryOpKind {
             BinaryOpKind::Subtract => f.write_char('-'),
             BinaryOpKind::Multiply => f.write_char('*'),
             BinaryOpKind::Divide => f.write_char('/'),
-            BinaryOpKind::LessThan => f.write_char('<'),
-            BinaryOpKind::GreaterThan => f.write_char('>'),
-            BinaryOpKind::LessThanEqual => f.write_str("<="),
-            BinaryOpKind::GreaterThanEqual => f.write_str(">="),
+            BinaryOpKind::Less => f.write_char('<'),
+            BinaryOpKind::Greater => f.write_char('>'),
+            BinaryOpKind::LessEqual => f.write_str("<="),
+            BinaryOpKind::GreaterEqual => f.write_str(">="),
             BinaryOpKind::And => f.write_str("and"),
             BinaryOpKind::Or => f.write_str("or"),
             BinaryOpKind::Equals => f.write_str("=="),
@@ -194,7 +194,7 @@ impl BinaryOpKind {
         match self {
             B::Multiply | B::Divide => 100,
             B::Add | B::Subtract => 90,
-            B::LessThan | B::LessThanEqual | B::GreaterThan | B::GreaterThanEqual | B::Equals => 80,
+            B::Less | B::LessEqual | B::Greater | B::GreaterEqual | B::Equals => 80,
             B::And => 70,
             B::Or => 66,
         }
@@ -205,8 +205,8 @@ impl BinaryOpKind {
             TokenKind::Minus => Some(BinaryOpKind::Subtract),
             TokenKind::Asterisk => Some(BinaryOpKind::Multiply),
             TokenKind::Slash => Some(BinaryOpKind::Divide),
-            TokenKind::OpenAngle => Some(BinaryOpKind::LessThan),
-            TokenKind::CloseAngle => Some(BinaryOpKind::GreaterThan),
+            TokenKind::OpenAngle => Some(BinaryOpKind::Less),
+            TokenKind::CloseAngle => Some(BinaryOpKind::Greater),
             TokenKind::KeywordAnd => Some(BinaryOpKind::And),
             TokenKind::KeywordOr => Some(BinaryOpKind::Or),
             TokenKind::EqualsEquals => Some(BinaryOpKind::Equals),
@@ -669,7 +669,7 @@ impl<'toks> Parser<'toks> {
         match result {
             None => {
                 let actual = self.peek();
-                return Err(Parser::error(target_token, actual));
+                Err(Parser::error(target_token, actual))
             }
             Some(t) => Ok(t),
         }
@@ -704,6 +704,18 @@ impl<'toks> Parser<'toks> {
                     Ok(Some(Literal::String(text.to_string(), span)))
                 } else {
                     Err(Parser::error(DoubleQuote, close))
+                }
+            }
+            (Minus, Text) if !second.is_whitespace_preceeded() => {
+                let text = self.tok_chars(second);
+                if text.chars().next().unwrap().is_numeric() {
+                    let mut s = "-".to_string();
+                    s.push_str(text);
+                    self.tokens.advance();
+                    self.tokens.advance();
+                    Ok(Some(Literal::Numeric(s, first.span.extended(second.span))))
+                } else {
+                    Err(Parser::error("number following '-'", second))
                 }
             }
             (Text, _) => {
@@ -978,7 +990,12 @@ impl<'toks> Parser<'toks> {
             Ok(Some(expr))
         } else if first.kind == Text {
             // FnCall
-            if second.kind == OpenAngle || second.kind == OpenParen {
+            // Here we use is_whitespace_preceeded to distinguish between:
+            // square<int>(42) -> FnCall
+            // square < int > (42) -> square LESS THAN int GREATER THAN (42)
+            if (second.kind == OpenAngle && !second.is_whitespace_preceeded())
+                || second.kind == OpenParen
+            {
                 trace!("parse_expression FnCall");
                 // Eat the name
                 self.tokens.advance();
@@ -997,15 +1014,14 @@ impl<'toks> Parser<'toks> {
                     None
                 };
                 self.expect_eat_token(OpenParen)?;
-                match self.eat_delimited(Comma, CloseParen, Parser::expect_fn_arg) {
-                    Ok((args, args_span)) => Ok(Some(Expression::FnCall(FnCall {
-                        name: self.intern_ident_token(first),
-                        type_args,
-                        args,
-                        span: first.span.extended(args_span),
-                    }))),
-                    Err(e) => Err(Parser::error_cause("function arguments", self.peek(), e)),
-                }
+                let (args, args_span) =
+                    self.eat_delimited(Comma, CloseParen, Parser::expect_fn_arg)?;
+                Ok(Some(Expression::FnCall(FnCall {
+                    name: self.intern_ident_token(first),
+                    type_args,
+                    args,
+                    span: first.span.extended(args_span),
+                })))
             } else {
                 // The last thing it can be is a simple variable reference expression
                 self.tokens.advance();

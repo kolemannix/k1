@@ -54,13 +54,12 @@ it's just an activity. It just took me 10 years to discover it again, but this t
 - [x] basic error reporting using spans
 - [x] Array and Struct member assignment
 - [-] While Loop
-- [ ] Array more
-  - [x] Assignment
-  - [ ] "Push" (requires actually growable array impl :/)
+- [ ] Assert (syscall exit? 'panic'?)
 - [ ] Strings
 - [ ] Optionals
+- [ ] Array push
 - [ ] Generic types
-- [ ] Introduce uint type
+- [ ] uint type
 - [ ] Generic type inference
 - [ ] Type literals would be fun
 - [ ] Syntax Shed
@@ -90,10 +89,10 @@ it's just an activity. It just took me 10 years to discover it again, but this t
 - [x] PHI nested branch fix
 
 # Hacks to fix
-- [ ] Fix line comments
+- [x] Fix line comments
 - [ ] Rename IR to typed-ast, since its a tree not instruction set. TAST?
 - [ ] Make intrinsics like arrayIndex a real function
-- [ ] Fix line numbers to account for prelude
+- [x] Fix line numbers to account for prelude
 - [ ] main function / detect entrypoint properly. Typing of main? How to get main args?
 - [ ] Replace vectors with smallvec where appropriate
 - [x] Fix unnecessary load of function args

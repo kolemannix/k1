@@ -1,6 +1,5 @@
 #![allow(clippy::match_like_matches_macro)]
 
-use crate::ir::Type::OpaqueAlias;
 use crate::lex::Span;
 use crate::parse;
 use crate::parse::{
@@ -141,6 +140,11 @@ pub enum BinaryOpKind {
     Add,
     Subtract,
     Multiply,
+    Divide,
+    Less,
+    LessEqual,
+    Greater,
+    GreaterEqual,
     And,
     Or,
     Equals,
@@ -148,21 +152,13 @@ pub enum BinaryOpKind {
 
 impl BinaryOpKind {
     pub fn is_integer_op(&self) -> bool {
+        use BinaryOpKind as B;
         match self {
-            BinaryOpKind::Add => true,
-            BinaryOpKind::Subtract => true,
-            BinaryOpKind::Multiply => true,
-            BinaryOpKind::Or | BinaryOpKind::And => true,
-            BinaryOpKind::Equals => true,
-        }
-    }
-    pub fn is_boolean_op(&self) -> bool {
-        match self {
-            BinaryOpKind::Equals => true,
-            BinaryOpKind::Or | BinaryOpKind::And => true,
-            BinaryOpKind::Add => false,
-            BinaryOpKind::Subtract => false,
-            BinaryOpKind::Multiply => false,
+            B::Add | B::Subtract => true,
+            B::Multiply | B::Divide => true,
+            B::Less | B::Greater | B::LessEqual | B::GreaterEqual => true,
+            B::Or | B::And => true,
+            B::Equals => true,
         }
     }
 }
@@ -1002,6 +998,8 @@ impl IrModule {
                 let lhs = self.eval_expr(&binary_op.lhs, scope_id)?;
                 let rhs = self.eval_expr(&binary_op.rhs, scope_id)?;
 
+                // FIXME: Typechecker This is not enough; we need to check that the lhs is actually valid
+                //        for this operation first
                 if self.typecheck_types(lhs.get_type(), rhs.get_type()).is_err() {
                     return make_fail("operand types did not match", binary_op.span);
                 }
@@ -1010,13 +1008,27 @@ impl IrModule {
                     parse::BinaryOpKind::Add => BinaryOpKind::Add,
                     parse::BinaryOpKind::Subtract => BinaryOpKind::Subtract,
                     parse::BinaryOpKind::Multiply => BinaryOpKind::Multiply,
+                    parse::BinaryOpKind::Divide => BinaryOpKind::Divide,
+                    parse::BinaryOpKind::Less => BinaryOpKind::Less,
+                    parse::BinaryOpKind::LessEqual => BinaryOpKind::LessEqual,
+                    parse::BinaryOpKind::Greater => BinaryOpKind::Greater,
+                    parse::BinaryOpKind::GreaterEqual => BinaryOpKind::GreaterEqual,
                     parse::BinaryOpKind::And => BinaryOpKind::And,
                     parse::BinaryOpKind::Or => BinaryOpKind::Or,
                     parse::BinaryOpKind::Equals => BinaryOpKind::Equals,
                 };
                 let result_type = match kind {
+                    BinaryOpKind::Add => lhs.get_type(),
+                    BinaryOpKind::Subtract => lhs.get_type(),
+                    BinaryOpKind::Multiply => lhs.get_type(),
+                    BinaryOpKind::Divide => lhs.get_type(),
+                    BinaryOpKind::Less => TypeRef::Bool,
+                    BinaryOpKind::LessEqual => TypeRef::Bool,
+                    BinaryOpKind::Greater => TypeRef::Bool,
+                    BinaryOpKind::GreaterEqual => TypeRef::Bool,
+                    BinaryOpKind::And => lhs.get_type(),
+                    BinaryOpKind::Or => lhs.get_type(),
                     BinaryOpKind::Equals => TypeRef::Bool,
-                    _ => lhs.get_type(),
                 };
                 let expr = IrExpr::BinaryOp(BinaryOp {
                     kind,
