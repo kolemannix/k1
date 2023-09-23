@@ -33,7 +33,6 @@ struct BuiltinTypes<'ctx> {
     false_value: IntValue<'ctx>,
     char: IntType<'ctx>,
     c_str: PointerType<'ctx>,
-    string: StructType<'ctx>,
 }
 
 impl<'ctx> BuiltinTypes<'ctx> {
@@ -172,16 +171,24 @@ impl<'ctx> Codegen<'ctx> {
         let char_type = ctx.i8_type();
         let llvm_module = ctx.create_module(&module.ast.name);
         let pointers = HashMap::new();
-        let format_str = {
-            let global = llvm_module.add_global(ctx.i8_type().array_type(3), None, "formatString");
+        let format_int_str = {
+            let global = llvm_module.add_global(ctx.i8_type().array_type(3), None, "formatInt");
             global.set_constant(true);
             global.set_unnamed_addr(true);
             global.set_initializer(&i8_array_from_str(ctx, "%i\n"));
             global
         };
+        let format_str_str = {
+            let global = llvm_module.add_global(ctx.i8_type().array_type(3), None, "formatString");
+            global.set_constant(true);
+            global.set_unnamed_addr(true);
+            global.set_initializer(&i8_array_from_str(ctx, "%s\n"));
+            global
+        };
         let globals = HashMap::new();
         let mut builtin_globals: HashMap<String, GlobalValue<'ctx>> = HashMap::new();
-        builtin_globals.insert("formatString".to_string(), format_str);
+        builtin_globals.insert("formatInt".to_string(), format_int_str);
+        builtin_globals.insert("formatString".to_string(), format_str_str);
 
         let builtin_types = BuiltinTypes {
             i64: ctx.i64_type(),
@@ -192,13 +199,6 @@ impl<'ctx> Codegen<'ctx> {
             false_value: ctx.bool_type().const_int(0, true),
             char: char_type,
             c_str: char_type.ptr_type(AddressSpace::default()),
-            string: ctx.struct_type(
-                &[
-                    BasicTypeEnum::IntType(ctx.i64_type()),
-                    BasicTypeEnum::PointerType(char_type.ptr_type(AddressSpace::default())),
-                ],
-                false,
-            ),
         };
 
         let printf_type = ctx.i32_type().fn_type(&[builtin_types.c_str.into()], true);
@@ -248,6 +248,31 @@ impl<'ctx> Codegen<'ctx> {
         // Assume the arg is an int since that's what the intrinsic typechecks for
         let first_arg = self.codegen_expr(&call.args[0]);
 
+        // TODO: Builtin globals could be a struct not a hashmap because its all static currently
+        let format_str = self.builtin_globals.get("formatInt").unwrap();
+        let format_str_ptr = self.builder.build_bitcast(
+            format_str.as_pointer_value(),
+            self.builtin_types.c_str,
+            "fmt_str",
+        );
+        let call = self
+            .builder
+            .build_call(
+                self.libc_functions.printf,
+                &[format_str_ptr.into(), first_arg.into()],
+                "printf",
+            )
+            .try_as_basic_value()
+            .left()
+            .unwrap();
+        call.set_name("print_int_res");
+        call
+    }
+    // TODO: DRY up printint and printstr
+    fn build_print_string_call(&mut self, call: &FunctionCall) -> BasicValueEnum<'ctx> {
+        // Assume the arg is an int since that's what the intrinsic typechecks for
+        let first_arg = self.codegen_expr(&call.args[0]);
+
         let format_str = self.builtin_globals.get("formatString").unwrap();
         let format_str_ptr = self.builder.build_bitcast(
             format_str.as_pointer_value(),
@@ -264,7 +289,7 @@ impl<'ctx> Codegen<'ctx> {
             .try_as_basic_value()
             .left()
             .unwrap();
-        call.set_name("println_res");
+        call.set_name("print_str_res");
         call
     }
     // FIXME: Only needs mut self because of the self.llvm_types cache, which
@@ -284,7 +309,9 @@ impl<'ctx> Codegen<'ctx> {
         match type_ref {
             TypeRef::Int => self.builtin_types.i64.as_basic_type_enum(),
             TypeRef::Bool => self.builtin_types.boolean.as_basic_type_enum(),
-            TypeRef::String => self.builtin_types.string.as_basic_type_enum(),
+            TypeRef::String => {
+                self.builtin_types.char.ptr_type(self.default_address_space).as_basic_type_enum()
+            }
             TypeRef::Unit => self.builtin_types.unit.as_basic_type_enum(),
             TypeRef::TypeId(type_id) => {
                 match self.llvm_types.get(&type_id) {
@@ -363,7 +390,7 @@ impl<'ctx> Codegen<'ctx> {
                 let value = self.builtin_types.i64.const_int(*int_value as u64, false);
                 value.as_basic_value_enum().into()
             }
-            IrLiteral::Str(string_value, span) => {
+            IrLiteral::Str(string_value, _) => {
                 // I don't want to do anything fancy; just an array of bytes with typechecking and stuff for now
                 // We will make them records (structs) with an array pointer and a length for now
 
@@ -382,9 +409,10 @@ impl<'ctx> Codegen<'ctx> {
                 let global_value = self.llvm_module.add_global(lit_type, None, "str");
                 global_value.set_constant(true);
                 global_value.set_initializer(&i8_array_from_str(self.ctx, string_value));
-                let loaded =
-                    self.builder.build_load(lit_type, global_value.as_pointer_value(), "str_lit");
-                loaded.into()
+                global_value.as_basic_value_enum().into()
+                // let loaded =
+                //     self.builder.build_load(lit_type, global_value.as_pointer_value(), "str_lit");
+                // loaded.into()
             }
             IrLiteral::Record(record) => {
                 let record_type = self.build_record_type(record.type_id);
@@ -642,6 +670,10 @@ impl<'ctx> Codegen<'ctx> {
             }
             IntrinsicFunctionType::PrintInt => {
                 self.build_print_int_call(call);
+                self.builtin_types.unit_value.as_basic_value_enum().into()
+            }
+            IntrinsicFunctionType::PrintString => {
+                self.build_print_string_call(call);
                 self.builtin_types.unit_value.as_basic_value_enum().into()
             }
             IntrinsicFunctionType::ArrayIndex => {
