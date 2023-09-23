@@ -25,6 +25,7 @@ pub enum Literal {
     Unit(Span),
     Numeric(String, Span),
     Bool(bool, Span),
+    /// TODO: Move these into the intern pool?
     String(String, Span),
 }
 

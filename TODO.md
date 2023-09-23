@@ -53,9 +53,10 @@ it's just an activity. It just took me 10 years to discover it again, but this t
 - [x] Binary infix operations
 - [x] basic error reporting using spans
 - [x] Array and Struct member assignment
-- [-] While Loop
-- [ ] Assert (syscall exit? 'panic'?)
+- [x] While Loop
+- [x] Assert (syscall exit? 'panic'?)
 - [ ] Strings
+- [ ] Embed comments in LLVM IR (source snippets or line numbers?)
 - [ ] Optionals
 - [ ] Array push
 - [ ] Generic types
