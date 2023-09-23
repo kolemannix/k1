@@ -474,6 +474,7 @@ impl Scopes {
 pub enum IntrinsicFunctionType {
     PrintInt,
     ArrayIndex,
+    Exit,
 }
 
 impl IntrinsicFunctionType {
@@ -481,6 +482,7 @@ impl IntrinsicFunctionType {
         match value {
             "printInt" => Some(IntrinsicFunctionType::PrintInt),
             "_arrayIndex" => Some(IntrinsicFunctionType::ArrayIndex),
+            "exit" => Some(IntrinsicFunctionType::Exit),
             _ => None,
         }
     }
@@ -546,13 +548,10 @@ impl IrModule {
     }
 
     fn print_error(&self, message: impl AsRef<str>, span: Span) {
-        eprintln!(
-            "{} at {}:{}\n  -> {}",
-            "error".red(),
-            self.name(),
-            (span.line as usize - crate::prelude::PRELUDE_LINES) + 1,
-            message.as_ref()
-        );
+        let adjusted_line = span.line as i32 - crate::prelude::PRELUDE_LINES as i32 + 1;
+        let line_no =
+            if adjusted_line < 0 { "prelude".to_string() } else { adjusted_line.to_string() };
+        eprintln!("{} at {}:{}\n  -> {}", "error".red(), self.name(), line_no, message.as_ref());
         eprintln!("{}", self.ast.source.get_line_by_index(span.line).red());
         eprintln!(" -> {}", self.ast.source.get_span_content(span).red());
     }
