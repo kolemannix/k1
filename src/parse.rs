@@ -394,6 +394,7 @@ pub enum TypeExpression {
     Unit(Span),
     Int(Span),
     Bool(Span),
+    String(Span),
     Record(RecordType),
     Name(IdentifierId, Span),
     TypeApplication(TypeApplication),
@@ -406,6 +407,7 @@ impl TypeExpression {
             TypeExpression::Unit(span) => *span,
             TypeExpression::Int(span) => *span,
             TypeExpression::Bool(span) => *span,
+            TypeExpression::String(span) => *span,
             TypeExpression::Record(record) => record.span,
             TypeExpression::Name(_, span) => *span,
             TypeExpression::TypeApplication(app) => app.span,
@@ -719,6 +721,9 @@ impl<'toks> Parser<'toks> {
             if text_str == "unit" {
                 self.tokens.advance();
                 Ok(Some(TypeExpression::Unit(tok.span)))
+            } else if text_str == "string" {
+                self.tokens.advance();
+                Ok(Some(TypeExpression::String(tok.span)))
             } else if text_str == "int" {
                 self.tokens.advance();
                 Ok(Some(TypeExpression::Int(tok.span)))

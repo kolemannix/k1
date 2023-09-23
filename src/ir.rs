@@ -473,6 +473,7 @@ impl Scopes {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IntrinsicFunctionType {
     PrintInt,
+    PrintString,
     ArrayIndex,
     Exit,
 }
@@ -481,6 +482,7 @@ impl IntrinsicFunctionType {
     pub fn from_function_name(value: &str) -> Option<Self> {
         match value {
             "printInt" => Some(IntrinsicFunctionType::PrintInt),
+            "print" => Some(IntrinsicFunctionType::PrintString),
             "_arrayIndex" => Some(IntrinsicFunctionType::ArrayIndex),
             "exit" => Some(IntrinsicFunctionType::Exit),
             _ => None,
@@ -618,6 +620,7 @@ impl IrModule {
             parse::TypeExpression::Unit(_) => Ok(TypeRef::Unit),
             parse::TypeExpression::Int(_) => Ok(TypeRef::Int),
             parse::TypeExpression::Bool(_) => Ok(TypeRef::Bool),
+            parse::TypeExpression::String(_) => Ok(TypeRef::String),
             parse::TypeExpression::Record(record_defn) => {
                 let mut fields: Vec<RecordDefnField> = Vec::new();
                 for (index, ast_field) in record_defn.fields.iter().enumerate() {
@@ -679,6 +682,7 @@ impl IrModule {
             parse::TypeExpression::Unit(_) => Ok(TypeRef::Unit),
             parse::TypeExpression::Int(_) => Ok(TypeRef::Int),
             parse::TypeExpression::Bool(_) => Ok(TypeRef::Bool),
+            parse::TypeExpression::String(_) => Ok(TypeRef::String),
             parse::TypeExpression::Record(_) => {
                 self.internal_compiler_error("No const records yet", expr.get_span())
             }
@@ -1048,6 +1052,11 @@ impl IrModule {
                 Ok(expr)
             }
             Expression::Literal(Literal::String(s, span)) => {
+                // So sad, we could just point to the source. BUT if we ever do escaping and things
+                // then the source string is not the same as the string the user meant; perhaps here
+                // is the place, or maybe in the parser, that we would actually do some work, which
+                // would justify storing it separately. But then, post-transform, we should intern
+                // these
                 let expr = IrExpr::Literal(IrLiteral::Str(s.clone(), *span));
                 Ok(expr)
             }
