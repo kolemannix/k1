@@ -9,6 +9,7 @@ use inkwell::targets::{InitializationConfig, Target, TargetMachine};
 use inkwell::types::{
     BasicMetadataTypeEnum, BasicType, BasicTypeEnum, IntType, PointerType, StructType,
 };
+use inkwell::values::AnyValueEnum::MetadataValue;
 use inkwell::values::{
     ArrayValue, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue,
     InstructionValue, IntValue, PointerValue,
@@ -33,6 +34,12 @@ struct BuiltinTypes<'ctx> {
     char: IntType<'ctx>,
     c_str: PointerType<'ctx>,
     string: StructType<'ctx>,
+}
+
+impl<'ctx> BuiltinTypes<'ctx> {
+    fn string(&self, len: u32) -> PointerType<'ctx> {
+        self.char.array_type(len).ptr_type(AddressSpace::default())
+    }
 }
 
 struct LibcFunctions<'ctx> {
@@ -356,7 +363,29 @@ impl<'ctx> Codegen<'ctx> {
                 let value = self.builtin_types.i64.const_int(*int_value as u64, false);
                 value.as_basic_value_enum().into()
             }
-            IrLiteral::Str(_, _) => todo!("codegen String"),
+            IrLiteral::Str(string_value, span) => {
+                // I don't want to do anything fancy; just an array of bytes with typechecking and stuff for now
+                // We will make them records (structs) with an array pointer and a length for now
+
+                // This is how we'll do runtime strings; let's do a constant for the literal
+                // let length = string_value.len()
+                // let string_repr = self
+                //     .builder
+                //     .build_array_malloc(
+                //         self.builtin_types.char,
+                //         self.builtin_types.i64.const_int(length as u64, true),
+                //         "str_array",
+                //     )
+                //     .unwrap();
+                // self.builder.all
+                let lit_type = self.builtin_types.char.array_type(string_value.len() as u32);
+                let global_value = self.llvm_module.add_global(lit_type, None, "str");
+                global_value.set_constant(true);
+                global_value.set_initializer(&i8_array_from_str(self.ctx, string_value));
+                let loaded =
+                    self.builder.build_load(lit_type, global_value.as_pointer_value(), "str_lit");
+                loaded.into()
+            }
             IrLiteral::Record(record) => {
                 let record_type = self.build_record_type(record.type_id);
                 let struct_ptr = self.builder.build_alloca(record_type, "record");
