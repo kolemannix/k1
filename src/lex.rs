@@ -278,7 +278,6 @@ impl Lexer<'_> {
     pub fn run(&mut self) -> Vec<Token> {
         let mut tokens = Vec::with_capacity(1024);
         while let Some(tok) = self.eat_token() {
-            println!("emitted token kind={}, prec={}", tok.kind, tok.is_whitespace_preceeded());
             tokens.push(tok);
         }
         tokens

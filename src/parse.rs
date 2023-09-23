@@ -146,50 +146,6 @@ impl Display for BinaryOpKind {
 
 impl BinaryOpKind {
     pub fn precedence(&self) -> usize {
-        /*
-                   Multiply
-           | Modulo
-           | Divide => 100
-
-           Add
-           | Subtract => 90
-
-           BitwiseLeftShift
-           | BitwiseRightShift
-           | ArithmeticLeftShift
-           | ArithmeticRightShift => 85
-
-           LessThan
-           | LessThanOrEqual
-           | GreaterThan
-           | GreaterThanOrEqual
-           | Equal
-           | NotEqual => 80
-
-           BitwiseAnd => 73
-           BitwiseXor => 72
-           BitwiseOr => 71
-           LogicalAnd => 70
-
-           LogicalOr
-           | NoneCoalescing => 69
-
-           Assign
-           | BitwiseAndAssign
-           | BitwiseOrAssign
-           | BitwiseXorAssign
-           | BitwiseLeftShiftAssign
-           | BitwiseRightShiftAssign
-           | AddAssign
-           | SubtractAssign
-           | MultiplyAssign
-           | ModuloAssign
-           | DivideAssign
-           | NoneCoalescingAssign => 50
-
-           else => 0
-
-        */
         use BinaryOpKind as B;
         match self {
             B::Multiply | B::Divide => 100,
