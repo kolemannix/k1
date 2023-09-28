@@ -33,12 +33,7 @@ struct BuiltinTypes<'ctx> {
     false_value: IntValue<'ctx>,
     char: IntType<'ctx>,
     c_str: PointerType<'ctx>,
-}
-
-impl<'ctx> BuiltinTypes<'ctx> {
-    fn string(&self, len: u32) -> PointerType<'ctx> {
-        self.char.array_type(len).ptr_type(AddressSpace::default())
-    }
+    string_struct: StructType<'ctx>,
 }
 
 struct LibcFunctions<'ctx> {
@@ -172,23 +167,30 @@ impl<'ctx> Codegen<'ctx> {
         let llvm_module = ctx.create_module(&module.ast.name);
         let pointers = HashMap::new();
         let format_int_str = {
-            let global = llvm_module.add_global(ctx.i8_type().array_type(3), None, "formatInt");
+            let global = llvm_module.add_global(ctx.i8_type().array_type(4), None, "formatInt");
             global.set_constant(true);
             global.set_unnamed_addr(true);
-            global.set_initializer(&i8_array_from_str(ctx, "%i\n"));
+            global.set_initializer(&i8_array_from_str(ctx, "%i\n\0"));
             global
         };
         let format_str_str = {
-            let global = llvm_module.add_global(ctx.i8_type().array_type(3), None, "formatString");
+            let global = llvm_module.add_global(ctx.i8_type().array_type(6), None, "formatString");
             global.set_constant(true);
             global.set_unnamed_addr(true);
-            global.set_initializer(&i8_array_from_str(ctx, "%s\n"));
+            global.set_initializer(&i8_array_from_str(ctx, "%.*s\n\0"));
             global
         };
         let globals = HashMap::new();
         let mut builtin_globals: HashMap<String, GlobalValue<'ctx>> = HashMap::new();
         builtin_globals.insert("formatInt".to_string(), format_int_str);
         builtin_globals.insert("formatString".to_string(), format_str_str);
+        let string_struct = ctx.struct_type(
+            &[
+                ctx.i64_type().as_basic_type_enum(),
+                char_type.ptr_type(AddressSpace::default()).as_basic_type_enum(),
+            ],
+            true,
+        );
 
         let builtin_types = BuiltinTypes {
             i64: ctx.i64_type(),
@@ -199,6 +201,7 @@ impl<'ctx> Codegen<'ctx> {
             false_value: ctx.bool_type().const_int(0, true),
             char: char_type,
             c_str: char_type.ptr_type(AddressSpace::default()),
+            string_struct: string_struct,
         };
 
         let printf_type = ctx.i32_type().fn_type(&[builtin_types.c_str.into()], true);
@@ -230,20 +233,6 @@ impl<'ctx> Codegen<'ctx> {
         self.module.ast.get_ident_name(id)
     }
 
-    fn load_if_value_type(
-        &self,
-        value: GeneratedValue<'ctx>,
-        expected_ty: TypeRef,
-    ) -> BasicValueEnum<'ctx> {
-        if self.module.is_reference_type(expected_ty) {
-            // Reference Type
-            value.as_basic_value_enum()
-        } else {
-            // Value Type
-            value.loaded_value(&self.builder)
-        }
-    }
-
     fn build_print_int_call(&mut self, call: &FunctionCall) -> BasicValueEnum<'ctx> {
         // Assume the arg is an int since that's what the intrinsic typechecks for
         let first_arg = self.codegen_expr(&call.args[0]);
@@ -270,8 +259,31 @@ impl<'ctx> Codegen<'ctx> {
     }
     // TODO: DRY up printint and printstr
     fn build_print_string_call(&mut self, call: &FunctionCall) -> BasicValueEnum<'ctx> {
-        // Assume the arg is an int since that's what the intrinsic typechecks for
         let first_arg = self.codegen_expr(&call.args[0]);
+        // Load the string struct to get its length; this really should be done in user land... but lets see if
+        // we can get it working in 20 minutes
+        let length_ptr = self
+            .builder
+            .build_struct_gep(
+                self.builtin_types.string_struct,
+                first_arg.into_pointer_value(),
+                0,
+                "length_ptr",
+            )
+            .unwrap();
+        let length = self.builder.build_load(self.ctx.i64_type(), length_ptr, "length_value");
+
+        let string_values_ptr_ptr = self
+            .builder
+            .build_struct_gep(
+                self.builtin_types.string_struct,
+                first_arg.into_pointer_value(),
+                1,
+                "str_ptr",
+            )
+            .unwrap();
+        let string_values_ptr =
+            self.builder.build_load(self.builtin_types.c_str, string_values_ptr_ptr, "str");
 
         let format_str = self.builtin_globals.get("formatString").unwrap();
         let format_str_ptr = self.builder.build_bitcast(
@@ -283,7 +295,7 @@ impl<'ctx> Codegen<'ctx> {
             .builder
             .build_call(
                 self.libc_functions.printf,
-                &[format_str_ptr.into(), first_arg.into()],
+                &[format_str_ptr.into(), length.into(), string_values_ptr.into()],
                 "printf",
             )
             .try_as_basic_value()
@@ -310,6 +322,7 @@ impl<'ctx> Codegen<'ctx> {
             TypeRef::Int => self.builtin_types.i64.as_basic_type_enum(),
             TypeRef::Bool => self.builtin_types.boolean.as_basic_type_enum(),
             TypeRef::String => {
+                // Any ptr type will work; need to re-think this whole function
                 self.builtin_types.char.ptr_type(self.default_address_space).as_basic_type_enum()
             }
             TypeRef::Unit => self.builtin_types.unit.as_basic_type_enum(),
@@ -394,25 +407,22 @@ impl<'ctx> Codegen<'ctx> {
                 // I don't want to do anything fancy; just an array of bytes with typechecking and stuff for now
                 // We will make them records (structs) with an array pointer and a length for now
 
-                // This is how we'll do runtime strings; let's do a constant for the literal
-                // let length = string_value.len()
-                // let string_repr = self
-                //     .builder
-                //     .build_array_malloc(
-                //         self.builtin_types.char,
-                //         self.builtin_types.i64.const_int(length as u64, true),
-                //         "str_array",
-                //     )
-                //     .unwrap();
-                // self.builder.all
-                let lit_type = self.builtin_types.char.array_type(string_value.len() as u32);
-                let global_value = self.llvm_module.add_global(lit_type, None, "str");
+                let global_str = self.llvm_module.add_global(
+                    self.builtin_types.char.array_type(string_value.len() as u32),
+                    None,
+                    "str_data",
+                );
+                global_str.set_initializer(&i8_array_from_str(self.ctx, string_value));
+                global_str.set_constant(true);
+                let global_value =
+                    self.llvm_module.add_global(self.builtin_types.string_struct, None, "str");
                 global_value.set_constant(true);
-                global_value.set_initializer(&i8_array_from_str(self.ctx, string_value));
+                let value = self.builtin_types.string_struct.const_named_struct(&[
+                    self.builtin_types.i64.const_int(string_value.len() as u64, true).into(),
+                    global_str.as_pointer_value().into(),
+                ]);
+                global_value.set_initializer(&value);
                 global_value.as_basic_value_enum().into()
-                // let loaded =
-                //     self.builder.build_load(lit_type, global_value.as_pointer_value(), "str_lit");
-                // loaded.into()
             }
             IrLiteral::Record(record) => {
                 let record_type = self.build_record_type(record.type_id);

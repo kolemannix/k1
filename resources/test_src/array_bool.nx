@@ -5,9 +5,8 @@ fn printBool(b: bool): unit {
 
 fn main(): int {
   val boolArray: Array<bool> = [false,true];
-  // printBool(boolArray[0]);
-  // printBool(boolArray[1]);
-  print("true");
+  printBool(boolArray[0]);
+  printBool(boolArray[1]);
   return 0;
 }
 // 0, 1
