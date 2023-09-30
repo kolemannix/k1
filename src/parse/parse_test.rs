@@ -4,6 +4,7 @@ use crate::parse::*;
 fn set_up(input: &str) -> Parser<'static> {
     let mut lexer = Lexer::make(input);
     let token_vec: &'static mut [Token] = lexer.run().leak();
+    println!("{:?}", token_vec);
     print_tokens(input, token_vec);
     let parser = Parser::make(token_vec, input.to_string());
     parser
@@ -28,6 +29,19 @@ fn basic_fn() -> Result<(), ParseError> {
         println!("defs {:?}", module.defs);
         panic!("no definitions for basic_fn")
     }
+    Ok(())
+}
+
+#[test]
+fn string_literal() -> ParseResult<()> {
+    let mut parser = set_up(r#""hello world""#);
+    let result = parser.expect_expression()?;
+    let Expression::Literal(Literal::String(s, span)) = result else {
+        panic!()
+    };
+    assert_eq!(&s, "hello world");
+    assert_eq!(span.start, 1);
+    assert_eq!(span.end, 12);
     Ok(())
 }
 

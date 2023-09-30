@@ -36,12 +36,35 @@ struct BuiltinTypes<'ctx> {
     string_struct: StructType<'ctx>,
 }
 
+impl<'ctx> BuiltinTypes<'ctx> {
+    fn string_length_loaded(
+        &self,
+        builder: &Builder<'ctx>,
+        string_pointer: PointerValue<'ctx>,
+    ) -> IntValue<'ctx> {
+        let length_ptr = builder
+            .build_struct_gep(self.string_struct, string_pointer, 0, "string_length_ptr")
+            .unwrap();
+        let length = builder.build_load(self.i64, length_ptr, "length_value");
+        length.into_int_value()
+    }
+    fn string_data_ptr(
+        &self,
+        builder: &Builder<'ctx>,
+        string_pointer: PointerValue<'ctx>,
+    ) -> PointerValue<'ctx> {
+        let data_ptr_ptr = builder
+            .build_struct_gep(self.string_struct, string_pointer, 1, "string_data_ptr_ptr")
+            .unwrap();
+        let data_ptr = builder.build_load(self.c_str, data_ptr_ptr, "string_data_ptr");
+        data_ptr.into_pointer_value()
+    }
+}
+
 struct LibcFunctions<'ctx> {
     printf: FunctionValue<'ctx>,
     exit: FunctionValue<'ctx>,
 }
-
-const TEMP_ARRAY_LENGTH: u32 = 32;
 
 pub struct Codegen<'ctx> {
     ctx: &'ctx Context,
@@ -257,33 +280,13 @@ impl<'ctx> Codegen<'ctx> {
         call.set_name("print_int_res");
         call
     }
-    // TODO: DRY up printint and printstr
+
     fn build_print_string_call(&mut self, call: &FunctionCall) -> BasicValueEnum<'ctx> {
         let first_arg = self.codegen_expr(&call.args[0]);
-        // Load the string struct to get its length; this really should be done in user land... but lets see if
-        // we can get it working in 20 minutes
-        let length_ptr = self
-            .builder
-            .build_struct_gep(
-                self.builtin_types.string_struct,
-                first_arg.into_pointer_value(),
-                0,
-                "length_ptr",
-            )
-            .unwrap();
-        let length = self.builder.build_load(self.ctx.i64_type(), length_ptr, "length_value");
-
-        let string_values_ptr_ptr = self
-            .builder
-            .build_struct_gep(
-                self.builtin_types.string_struct,
-                first_arg.into_pointer_value(),
-                1,
-                "str_ptr",
-            )
-            .unwrap();
-        let string_values_ptr =
-            self.builder.build_load(self.builtin_types.c_str, string_values_ptr_ptr, "str");
+        let length =
+            self.builtin_types.string_length_loaded(&self.builder, first_arg.into_pointer_value());
+        let data =
+            self.builtin_types.string_data_ptr(&self.builder, first_arg.into_pointer_value());
 
         let format_str = self.builtin_globals.get("formatString").unwrap();
         let format_str_ptr = self.builder.build_bitcast(
@@ -295,7 +298,7 @@ impl<'ctx> Codegen<'ctx> {
             .builder
             .build_call(
                 self.libc_functions.printf,
-                &[format_str_ptr.into(), length.into(), string_values_ptr.into()],
+                &[format_str_ptr.into(), length.into(), data.into()],
                 "printf",
             )
             .try_as_basic_value()
@@ -306,17 +309,17 @@ impl<'ctx> Codegen<'ctx> {
     }
     // FIXME: Only needs mut self because of the self.llvm_types cache, which
     //        has questionable value at this point in time
-    fn build_record_type(&mut self, type_id: TypeId) -> StructType<'ctx> {
-        let module = self.module.clone();
-        let Type::Record(record) = module.get_type(type_id) else {
-            panic!("expected record type for id {}", type_id)
-        };
+    fn build_record_type(&mut self, record: &RecordDefn) -> StructType<'ctx> {
         let field_types: Vec<_> = record.fields.iter().map(|f| self.get_llvm_type(f.ty)).collect();
         let struct_type = self.ctx.struct_type(&field_types, false);
         // self.llvm_types.insert(type_id, struct_ptr_type.as_basic_type_enum());
         struct_type
     }
     fn get_llvm_type(&mut self, type_ref: TypeRef) -> BasicTypeEnum<'ctx> {
+        // Now that I am not relying on inspect the BasicTypeEnum returned by this function,
+        // but rather just using the type info from the TAST, I think I can go back to using this
+        // method instead of build_record_type. I can just immediately cast to a StructType if
+        // I need one for GEP generation
         trace!("codegen for type {type_ref:?}");
         match type_ref {
             TypeRef::Int => self.builtin_types.i64.as_basic_type_enum(),
@@ -425,14 +428,16 @@ impl<'ctx> Codegen<'ctx> {
                 global_value.as_basic_value_enum().into()
             }
             IrLiteral::Record(record) => {
-                let record_type = self.build_record_type(record.type_id);
-                let struct_ptr = self.builder.build_alloca(record_type, "record");
+                let module = self.module.clone();
+                let record_type = module.get_type(record.type_id).expect_record_type();
+                let record_llvm_type = self.build_record_type(record_type);
+                let struct_ptr = self.builder.build_alloca(record_llvm_type, "record");
                 for (idx, field) in record.fields.iter().enumerate() {
                     let value = self.codegen_expr(&field.expr);
                     let field_ptr = self
                         .builder
                         .build_struct_gep(
-                            record_type,
+                            record_llvm_type,
                             struct_ptr,
                             idx as u32,
                             &format!("record_init_{}", idx),
@@ -537,21 +542,54 @@ impl<'ctx> Codegen<'ctx> {
                 }
             }
             IrExpr::FieldAccess(field_access) => {
+                // TODO: Cleanup: Move special identifier IDs to a struct of builtins or something
+                let length_identifier_id = self.module.ast.ident_id("length");
                 let result = self.codegen_expr(&field_access.base);
-                let record_type =
-                    self.build_record_type(field_access.base.get_type().expect_type_id());
-                let record_pointer = result.into_pointer_value();
-                let field_ptr = self
-                    .builder
-                    .build_struct_gep(
-                        record_type,
-                        record_pointer,
-                        field_access.target_field.index as u32,
-                        "field_access_target_ptr",
-                    )
-                    .unwrap();
-                let target_ty = self.get_llvm_type(field_access.target_field.ty);
-                Pointer { pointee_ty: target_ty, pointer: field_ptr }.into()
+                let type_ref = field_access.base.get_type();
+                if let TypeRef::String = type_ref {
+                    // Return the length as a value
+                    if field_access.target_field != length_identifier_id {
+                        panic!("Invalid member of string; only 'length' currently is implemented")
+                    }
+                    let base_expr = self.codegen_expr(&field_access.base).into_pointer_value();
+                    let length = self.builtin_types.string_length_loaded(&self.builder, base_expr);
+                    length.as_basic_value_enum().into()
+                } else if let TypeRef::TypeId(type_id) = type_ref {
+                    let module = self.module.clone();
+                    let ty = module.get_type(type_id);
+
+                    if let Type::Record(record) = ty {
+                        let record_type = self.build_record_type(record);
+                        let record_pointer = result.into_pointer_value();
+                        let (index, _) = record
+                            .find_field(field_access.target_field)
+                            .expect("RecordDefn missing field in codegen!");
+
+                        let field_ptr = self
+                            .builder
+                            .build_struct_gep(
+                                record_type,
+                                record_pointer,
+                                index as u32,
+                                "field_access_target_ptr",
+                            )
+                            .unwrap();
+                        let target_ty = self.get_llvm_type(field_access.ir_type);
+                        Pointer { pointee_ty: target_ty, pointer: field_ptr }.into()
+                    } else if let Type::Array(array) = ty {
+                        if field_access.target_field != length_identifier_id {
+                            panic!(
+                                "Invalid member of Array; only 'length' currently is implemented"
+                            )
+                        }
+                        let base_expr = self.codegen_expr(&field_access.base).into_pointer_value();
+                        unimplemented!("I dont know the length of arrays yet")
+                    } else {
+                        panic!("Invalid field access node: {:?}", field_access)
+                    }
+                } else {
+                    panic!("Invalid field access node: {:?}", field_access)
+                }
             }
             IrExpr::If(ir_if) => self.codegen_if_else(ir_if),
             IrExpr::BinaryOp(bin_op) => match bin_op.ir_type {
@@ -706,6 +744,33 @@ impl<'ctx> Codegen<'ctx> {
                     Pointer { pointee_ty, pointer: gep_ptr }.into()
                     // let value = self.builder.build_load(pointee_ty, gep_ptr, "array_index_value");
                     // value.into()
+                }
+            }
+            IntrinsicFunctionType::StringIndex => {
+                // let pointee_ty = self.builtin_types.char;
+                let string_expr = &call.args[0];
+                let index_expr = &call.args[1];
+                let string_value = self.codegen_expr(string_expr);
+                let index_value = self.codegen_expr(index_expr);
+
+                // strings are pointers to structs
+                let string_value_as_ptr = string_value.as_basic_value_enum().into_pointer_value();
+                let data_ptr =
+                    self.builtin_types.string_data_ptr(&self.builder, string_value_as_ptr);
+
+                let index_int_value = index_value.into_int_value();
+                unsafe {
+                    let gep_ptr = self.builder.build_gep(
+                        self.builtin_types.char,
+                        data_ptr,
+                        &[index_int_value],
+                        "string_index_ptr",
+                    );
+                    Pointer {
+                        pointee_ty: self.builtin_types.char.as_basic_type_enum(),
+                        pointer: gep_ptr,
+                    }
+                    .into()
                 }
             }
         }
