@@ -2,12 +2,14 @@ use anyhow::Result;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 
+use env_logger::init;
 use inkwell::module::Linkage;
 use inkwell::passes::{PassManager, PassManagerBuilder};
 use inkwell::targets::{InitializationConfig, Target, TargetMachine};
 use inkwell::types::{
     BasicMetadataTypeEnum, BasicType, BasicTypeEnum, IntType, PointerType, StructType,
 };
+use inkwell::values::AnyValueEnum::MetadataValue;
 use inkwell::values::{
     ArrayValue, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue,
     InstructionValue, IntValue, PointerValue,
@@ -31,14 +33,38 @@ struct BuiltinTypes<'ctx> {
     false_value: IntValue<'ctx>,
     char: IntType<'ctx>,
     c_str: PointerType<'ctx>,
-    string: StructType<'ctx>,
+    string_struct: StructType<'ctx>,
+}
+
+impl<'ctx> BuiltinTypes<'ctx> {
+    fn string_length_loaded(
+        &self,
+        builder: &Builder<'ctx>,
+        string_pointer: PointerValue<'ctx>,
+    ) -> IntValue<'ctx> {
+        let length_ptr = builder
+            .build_struct_gep(self.string_struct, string_pointer, 0, "string_length_ptr")
+            .unwrap();
+        let length = builder.build_load(self.i64, length_ptr, "length_value");
+        length.into_int_value()
+    }
+    fn string_data_ptr(
+        &self,
+        builder: &Builder<'ctx>,
+        string_pointer: PointerValue<'ctx>,
+    ) -> PointerValue<'ctx> {
+        let data_ptr_ptr = builder
+            .build_struct_gep(self.string_struct, string_pointer, 1, "string_data_ptr_ptr")
+            .unwrap();
+        let data_ptr = builder.build_load(self.c_str, data_ptr_ptr, "string_data_ptr");
+        data_ptr.into_pointer_value()
+    }
 }
 
 struct LibcFunctions<'ctx> {
     printf: FunctionValue<'ctx>,
+    exit: FunctionValue<'ctx>,
 }
-
-const TEMP_ARRAY_LENGTH: u32 = 32;
 
 pub struct Codegen<'ctx> {
     ctx: &'ctx Context,
@@ -163,16 +189,31 @@ impl<'ctx> Codegen<'ctx> {
         let char_type = ctx.i8_type();
         let llvm_module = ctx.create_module(&module.ast.name);
         let pointers = HashMap::new();
-        let format_str = {
-            let global = llvm_module.add_global(ctx.i8_type().array_type(3), None, "formatString");
+        let format_int_str = {
+            let global = llvm_module.add_global(ctx.i8_type().array_type(4), None, "formatInt");
             global.set_constant(true);
             global.set_unnamed_addr(true);
-            global.set_initializer(&i8_array_from_str(ctx, "%i\n"));
+            global.set_initializer(&i8_array_from_str(ctx, "%i\n\0"));
+            global
+        };
+        let format_str_str = {
+            let global = llvm_module.add_global(ctx.i8_type().array_type(6), None, "formatString");
+            global.set_constant(true);
+            global.set_unnamed_addr(true);
+            global.set_initializer(&i8_array_from_str(ctx, "%.*s\n\0"));
             global
         };
         let globals = HashMap::new();
         let mut builtin_globals: HashMap<String, GlobalValue<'ctx>> = HashMap::new();
-        builtin_globals.insert("formatString".to_string(), format_str);
+        builtin_globals.insert("formatInt".to_string(), format_int_str);
+        builtin_globals.insert("formatString".to_string(), format_str_str);
+        let string_struct = ctx.struct_type(
+            &[
+                ctx.i64_type().as_basic_type_enum(),
+                char_type.ptr_type(AddressSpace::default()).as_basic_type_enum(),
+            ],
+            true,
+        );
 
         let builtin_types = BuiltinTypes {
             i64: ctx.i64_type(),
@@ -183,17 +224,16 @@ impl<'ctx> Codegen<'ctx> {
             false_value: ctx.bool_type().const_int(0, true),
             char: char_type,
             c_str: char_type.ptr_type(AddressSpace::default()),
-            string: ctx.struct_type(
-                &[
-                    BasicTypeEnum::IntType(ctx.i64_type()),
-                    BasicTypeEnum::PointerType(char_type.ptr_type(AddressSpace::default())),
-                ],
-                false,
-            ),
+            string_struct: string_struct,
         };
 
         let printf_type = ctx.i32_type().fn_type(&[builtin_types.c_str.into()], true);
         let printf = llvm_module.add_function("printf", printf_type, Some(Linkage::External));
+        let exit = llvm_module.add_function(
+            "exit",
+            ctx.void_type().fn_type(&[builtin_types.i64.into()], false),
+            Some(Linkage::External),
+        );
         Codegen {
             ctx,
             module,
@@ -204,7 +244,7 @@ impl<'ctx> Codegen<'ctx> {
             globals,
             llvm_functions: HashMap::new(),
             llvm_types: HashMap::new(),
-            libc_functions: LibcFunctions { printf },
+            libc_functions: LibcFunctions { printf, exit },
             builtin_globals,
             builtin_types,
             default_address_space: AddressSpace::default(),
@@ -216,25 +256,12 @@ impl<'ctx> Codegen<'ctx> {
         self.module.ast.get_ident_name(id)
     }
 
-    fn load_if_value_type(
-        &self,
-        value: GeneratedValue<'ctx>,
-        expected_ty: TypeRef,
-    ) -> BasicValueEnum<'ctx> {
-        if self.module.is_reference_type(expected_ty) {
-            // Reference Type
-            value.as_basic_value_enum()
-        } else {
-            // Value Type
-            value.loaded_value(&self.builder)
-        }
-    }
-
     fn build_print_int_call(&mut self, call: &FunctionCall) -> BasicValueEnum<'ctx> {
         // Assume the arg is an int since that's what the intrinsic typechecks for
-        let first_arg = self.codegen_expr(&call.args[0]).loaded_value(&self.builder);
+        let first_arg = self.codegen_expr(&call.args[0]);
 
-        let format_str = self.builtin_globals.get("formatString").unwrap();
+        // TODO: Builtin globals could be a struct not a hashmap because its all static currently
+        let format_str = self.builtin_globals.get("formatInt").unwrap();
         let format_str_ptr = self.builder.build_bitcast(
             format_str.as_pointer_value(),
             self.builtin_types.c_str,
@@ -250,27 +277,57 @@ impl<'ctx> Codegen<'ctx> {
             .try_as_basic_value()
             .left()
             .unwrap();
-        call.set_name("println_res");
+        call.set_name("print_int_res");
+        call
+    }
+
+    fn build_print_string_call(&mut self, call: &FunctionCall) -> BasicValueEnum<'ctx> {
+        let first_arg = self.codegen_expr(&call.args[0]);
+        let length =
+            self.builtin_types.string_length_loaded(&self.builder, first_arg.into_pointer_value());
+        let data =
+            self.builtin_types.string_data_ptr(&self.builder, first_arg.into_pointer_value());
+
+        let format_str = self.builtin_globals.get("formatString").unwrap();
+        let format_str_ptr = self.builder.build_bitcast(
+            format_str.as_pointer_value(),
+            self.builtin_types.c_str,
+            "fmt_str",
+        );
+        let call = self
+            .builder
+            .build_call(
+                self.libc_functions.printf,
+                &[format_str_ptr.into(), length.into(), data.into()],
+                "printf",
+            )
+            .try_as_basic_value()
+            .left()
+            .unwrap();
+        call.set_name("print_str_res");
         call
     }
     // FIXME: Only needs mut self because of the self.llvm_types cache, which
     //        has questionable value at this point in time
-    fn build_record_type(&mut self, type_id: TypeId) -> StructType<'ctx> {
-        let module = self.module.clone();
-        let Type::Record(record) = module.get_type(type_id) else {
-            panic!("expected record type for id {}", type_id)
-        };
+    fn build_record_type(&mut self, record: &RecordDefn) -> StructType<'ctx> {
         let field_types: Vec<_> = record.fields.iter().map(|f| self.get_llvm_type(f.ty)).collect();
         let struct_type = self.ctx.struct_type(&field_types, false);
         // self.llvm_types.insert(type_id, struct_ptr_type.as_basic_type_enum());
         struct_type
     }
     fn get_llvm_type(&mut self, type_ref: TypeRef) -> BasicTypeEnum<'ctx> {
+        // Now that I am not relying on inspect the BasicTypeEnum returned by this function,
+        // but rather just using the type info from the TAST, I think I can go back to using this
+        // method instead of build_record_type. I can just immediately cast to a StructType if
+        // I need one for GEP generation
         trace!("codegen for type {type_ref:?}");
         match type_ref {
             TypeRef::Int => self.builtin_types.i64.as_basic_type_enum(),
             TypeRef::Bool => self.builtin_types.boolean.as_basic_type_enum(),
-            TypeRef::String => self.builtin_types.string.as_basic_type_enum(),
+            TypeRef::String => {
+                // Any ptr type will work; need to re-think this whole function
+                self.builtin_types.char.ptr_type(self.default_address_space).as_basic_type_enum()
+            }
             TypeRef::Unit => self.builtin_types.unit.as_basic_type_enum(),
             TypeRef::TypeId(type_id) => {
                 match self.llvm_types.get(&type_id) {
@@ -320,7 +377,7 @@ impl<'ctx> Codegen<'ctx> {
     }
 
     fn codegen_val(&mut self, val: &ValDef) -> GeneratedValue<'ctx> {
-        let value = self.codegen_expr(&val.initializer).loaded_value(&self.builder);
+        let value = self.codegen_expr(&val.initializer);
         let pointee_ty = self.get_llvm_type(val.ir_type);
         let variable = self.module.get_variable(val.variable_id);
         let value_ptr = self.builder.build_alloca(
@@ -349,23 +406,45 @@ impl<'ctx> Codegen<'ctx> {
                 let value = self.builtin_types.i64.const_int(*int_value as u64, false);
                 value.as_basic_value_enum().into()
             }
-            IrLiteral::Str(_, _) => todo!("codegen String"),
+            IrLiteral::Str(string_value, _) => {
+                // I don't want to do anything fancy; just an array of bytes with typechecking and stuff for now
+                // We will make them records (structs) with an array pointer and a length for now
+
+                let global_str = self.llvm_module.add_global(
+                    self.builtin_types.char.array_type(string_value.len() as u32),
+                    None,
+                    "str_data",
+                );
+                global_str.set_initializer(&i8_array_from_str(self.ctx, string_value));
+                global_str.set_constant(true);
+                let global_value =
+                    self.llvm_module.add_global(self.builtin_types.string_struct, None, "str");
+                global_value.set_constant(true);
+                let value = self.builtin_types.string_struct.const_named_struct(&[
+                    self.builtin_types.i64.const_int(string_value.len() as u64, true).into(),
+                    global_str.as_pointer_value().into(),
+                ]);
+                global_value.set_initializer(&value);
+                global_value.as_basic_value_enum().into()
+            }
             IrLiteral::Record(record) => {
-                let record_type = self.build_record_type(record.type_id);
-                let struct_ptr = self.builder.build_alloca(record_type, "record");
+                let module = self.module.clone();
+                let record_type = module.get_type(record.type_id).expect_record_type();
+                let record_llvm_type = self.build_record_type(record_type);
+                let struct_ptr = self.builder.build_alloca(record_llvm_type, "record");
                 for (idx, field) in record.fields.iter().enumerate() {
                     let value = self.codegen_expr(&field.expr);
                     let field_ptr = self
                         .builder
                         .build_struct_gep(
-                            record_type,
+                            record_llvm_type,
                             struct_ptr,
                             idx as u32,
                             &format!("record_init_{}", idx),
                         )
                         .unwrap();
-                    let value_to_store = self.load_if_value_type(value, field.expr.get_type());
-                    self.builder.build_store(field_ptr, value_to_store);
+                    // let value_to_store = self.load_if_value_type(value, field.expr.get_type());
+                    self.builder.build_store(field_ptr, value);
                 }
                 GeneratedValue::Value(struct_ptr.as_basic_value_enum())
             }
@@ -389,17 +468,9 @@ impl<'ctx> Codegen<'ctx> {
                     let ptr_at_index = unsafe {
                         self.builder.build_gep(element_type, array_ptr, &[index_value], "elem")
                     };
-                    self.builder.build_store(ptr_at_index, value.loaded_value(&self.builder));
+                    self.builder.build_store(ptr_at_index, value);
                 }
-
-                let array_type = element_type
-                    .array_type(array.elements.len() as u32)
-                    .as_basic_type_enum()
-                    .ptr_type(self.default_address_space);
-                GeneratedValue::Pointer(Pointer {
-                    pointee_ty: array_type.as_basic_type_enum(),
-                    pointer: array_ptr,
-                })
+                array_ptr.as_basic_value_enum().into()
             }
         }
     }
@@ -413,7 +484,7 @@ impl<'ctx> Codegen<'ctx> {
 
         // Entry block
         let condition = self.codegen_expr(&ir_if.condition);
-        let condition_value = condition.loaded_value(&self.builder).into_int_value();
+        let condition_value = condition.into_int_value();
         self.builder.build_conditional_branch(condition_value, consequent_block, alternate_block);
 
         // Consequent Block
@@ -422,8 +493,7 @@ impl<'ctx> Codegen<'ctx> {
         self.builder.position_at_end(consequent_block);
         let consequent_expr = self
             .codegen_block(&ir_if.consequent)
-            .expect("Expected IF branch block to return something")
-            .loaded_value(&self.builder);
+            .expect("Expected IF branch block to return something");
         let consequent_final_block = self.builder.get_insert_block().unwrap();
         self.builder.build_unconditional_branch(merge_block);
 
@@ -431,8 +501,7 @@ impl<'ctx> Codegen<'ctx> {
         self.builder.position_at_end(alternate_block);
         let alternate_expr = self
             .codegen_block(&ir_if.alternate)
-            .expect("Expected IF branch block to return something")
-            .loaded_value(&self.builder);
+            .expect("Expected IF branch block to return something");
         // TODO: Cleaner to have codegen_block RETURN its 'terminus' block rather than
         //       rely on the builder state
         let alternate_final_block = self.builder.get_insert_block().unwrap();
@@ -447,7 +516,16 @@ impl<'ctx> Codegen<'ctx> {
         ]);
         phi_value.as_basic_value().into()
     }
-    fn codegen_expr(&mut self, expr: &IrExpr) -> GeneratedValue<'ctx> {
+    fn codegen_expr(&mut self, expr: &IrExpr) -> BasicValueEnum<'ctx> {
+        let value = self.codegen_expr_inner(expr);
+        value.loaded_value(&self.builder)
+    }
+    /// Returns the original reference, even if its one layer of indirection
+    /// higher than the expression should give. For example, a pointer to
+    /// an array element or record member, rather than the element or member itself
+    /// This allows for the caller to decide if they want to just load the value, or use the pointer
+    /// for things like assignment
+    fn codegen_expr_inner(&mut self, expr: &IrExpr) -> GeneratedValue<'ctx> {
         match expr {
             IrExpr::Literal(literal) => self.codegen_literal(literal),
             IrExpr::Variable(ir_var) => {
@@ -464,70 +542,91 @@ impl<'ctx> Codegen<'ctx> {
                 }
             }
             IrExpr::FieldAccess(field_access) => {
+                // TODO: Cleanup: Move special identifier IDs to a struct of builtins or something
+                let length_identifier_id = self.module.ast.ident_id("length");
                 let result = self.codegen_expr(&field_access.base);
-                let record_type =
-                    self.build_record_type(field_access.base.get_type().expect_type_id());
-                let record_pointer = result.loaded_value(&self.builder).into_pointer_value();
-                let field_ptr = self
-                    .builder
-                    .build_struct_gep(
-                        record_type,
-                        record_pointer,
-                        field_access.target_field.index as u32,
-                        "field_access_target_ptr",
-                    )
-                    .unwrap();
-                let target_ty = self.get_llvm_type(field_access.target_field.ty);
-                Pointer { pointee_ty: target_ty, pointer: field_ptr }.into()
+                let type_ref = field_access.base.get_type();
+                if let TypeRef::String = type_ref {
+                    // Return the length as a value
+                    if field_access.target_field != length_identifier_id {
+                        panic!("Invalid member of string; only 'length' currently is implemented")
+                    }
+                    let base_expr = self.codegen_expr(&field_access.base).into_pointer_value();
+                    let length = self.builtin_types.string_length_loaded(&self.builder, base_expr);
+                    length.as_basic_value_enum().into()
+                } else if let TypeRef::TypeId(type_id) = type_ref {
+                    let module = self.module.clone();
+                    let ty = module.get_type(type_id);
+
+                    if let Type::Record(record) = ty {
+                        let record_type = self.build_record_type(record);
+                        let record_pointer = result.into_pointer_value();
+                        let (index, _) = record
+                            .find_field(field_access.target_field)
+                            .expect("RecordDefn missing field in codegen!");
+
+                        let field_ptr = self
+                            .builder
+                            .build_struct_gep(
+                                record_type,
+                                record_pointer,
+                                index as u32,
+                                "field_access_target_ptr",
+                            )
+                            .unwrap();
+                        let target_ty = self.get_llvm_type(field_access.ir_type);
+                        Pointer { pointee_ty: target_ty, pointer: field_ptr }.into()
+                    } else if let Type::Array(array) = ty {
+                        if field_access.target_field != length_identifier_id {
+                            panic!(
+                                "Invalid member of Array; only 'length' currently is implemented"
+                            )
+                        }
+                        let base_expr = self.codegen_expr(&field_access.base).into_pointer_value();
+                        unimplemented!("I dont know the length of arrays yet")
+                    } else {
+                        panic!("Invalid field access node: {:?}", field_access)
+                    }
+                } else {
+                    panic!("Invalid field access node: {:?}", field_access)
+                }
             }
             IrExpr::If(ir_if) => self.codegen_if_else(ir_if),
             IrExpr::BinaryOp(bin_op) => match bin_op.ir_type {
                 TypeRef::Int => {
-                    if bin_op.kind.is_integer_op() {
-                        let lhs_value = self
-                            .codegen_expr(&bin_op.lhs)
-                            .loaded_value(&self.builder)
-                            .into_int_value();
-                        let rhs_value = self
-                            .codegen_expr(&bin_op.rhs)
-                            .loaded_value(&self.builder)
-                            .into_int_value();
-                        let op_res = match bin_op.kind {
-                            BinaryOpKind::Add => {
-                                self.builder.build_int_add(lhs_value, rhs_value, "add")
-                            }
-                            BinaryOpKind::Subtract => {
-                                self.builder.build_int_sub(lhs_value, rhs_value, "sub")
-                            }
-                            BinaryOpKind::Multiply => {
-                                self.builder.build_int_mul(lhs_value, rhs_value, "mul")
-                            }
-                            BinaryOpKind::And => {
-                                self.builder.build_and(lhs_value, rhs_value, "and")
-                            }
-                            BinaryOpKind::Or => self.builder.build_or(lhs_value, rhs_value, "or"),
-                            BinaryOpKind::Equals => self.builder.build_int_compare(
-                                IntPredicate::EQ,
-                                lhs_value,
-                                rhs_value,
-                                "eq",
-                            ),
-                        };
-                        op_res.as_basic_value_enum().into()
-                    } else {
-                        panic!("Unsupported binary operation {:?} on Int", bin_op.kind)
-                    }
+                    let lhs_value = self.codegen_expr(&bin_op.lhs).into_int_value();
+                    let rhs_value = self.codegen_expr(&bin_op.rhs).into_int_value();
+                    let op_res = match bin_op.kind {
+                        BinaryOpKind::Add => {
+                            self.builder.build_int_add(lhs_value, rhs_value, "add")
+                        }
+                        BinaryOpKind::Subtract => {
+                            self.builder.build_int_sub(lhs_value, rhs_value, "sub")
+                        }
+                        BinaryOpKind::Multiply => {
+                            self.builder.build_int_mul(lhs_value, rhs_value, "mul")
+                        }
+                        BinaryOpKind::Divide => {
+                            self.builder.build_int_signed_div(lhs_value, rhs_value, "sdiv")
+                        }
+                        BinaryOpKind::And => self.builder.build_and(lhs_value, rhs_value, "and"),
+                        BinaryOpKind::Or => self.builder.build_or(lhs_value, rhs_value, "or"),
+                        BinaryOpKind::Equals => self.builder.build_int_compare(
+                            IntPredicate::EQ,
+                            lhs_value,
+                            rhs_value,
+                            "eq",
+                        ),
+                        _ => {
+                            panic!("Unsupported bin op kind returning int: {}", bin_op.kind)
+                        }
+                    };
+                    op_res.as_basic_value_enum().into()
                 }
                 TypeRef::Bool => match bin_op.kind {
-                    BinaryOpKind::And | BinaryOpKind::Or | BinaryOpKind::Equals => {
-                        let lhs_int = self
-                            .codegen_expr(&bin_op.lhs)
-                            .loaded_value(&self.builder)
-                            .into_int_value();
-                        let rhs_int = self
-                            .codegen_expr(&bin_op.rhs)
-                            .loaded_value(&self.builder)
-                            .into_int_value();
+                    BinaryOpKind::And | BinaryOpKind::Or => {
+                        let lhs_int = self.codegen_expr(&bin_op.lhs).into_int_value();
+                        let rhs_int = self.codegen_expr(&bin_op.rhs).into_int_value();
                         let op = match bin_op.kind {
                             BinaryOpKind::And => {
                                 self.builder.build_and(lhs_int, rhs_int, "bool_and")
@@ -543,7 +642,27 @@ impl<'ctx> Codegen<'ctx> {
                         };
                         op.as_basic_value_enum().into()
                     }
-                    other => panic!("Unsupported binary operation {other:?} on Bool"),
+                    BinaryOpKind::Equals
+                    | BinaryOpKind::Less
+                    | BinaryOpKind::LessEqual
+                    | BinaryOpKind::Greater
+                    | BinaryOpKind::GreaterEqual => {
+                        let lhs_int = self.codegen_expr(&bin_op.lhs).into_int_value();
+                        let rhs_int = self.codegen_expr(&bin_op.rhs).into_int_value();
+                        let pred = match bin_op.kind {
+                            BinaryOpKind::Equals => IntPredicate::EQ,
+                            BinaryOpKind::Less => IntPredicate::SLT,
+                            BinaryOpKind::LessEqual => IntPredicate::SLE,
+                            BinaryOpKind::Greater => IntPredicate::SGT,
+                            BinaryOpKind::GreaterEqual => IntPredicate::SGE,
+                            _ => unreachable!("unexpected binop kind"),
+                        };
+                        self.builder
+                            .build_int_compare(pred, lhs_int, rhs_int, &format!("{}", bin_op.kind))
+                            .as_basic_value_enum()
+                            .into()
+                    }
+                    other => panic!("Unsupported binary operation {other:?} returning Bool"),
                 },
                 TypeRef::String => panic!("No string binary ops yet"),
                 TypeRef::Unit => panic!("No unit binary ops"),
@@ -574,8 +693,9 @@ impl<'ctx> Codegen<'ctx> {
             .iter()
             .map(|arg_expr| {
                 let basic_value = self.codegen_expr(arg_expr);
-                let expected_type = arg_expr.get_type();
-                self.load_if_value_type(basic_value, expected_type).into()
+                basic_value.into()
+                // let expected_type = arg_expr.get_type();
+                // self.load_if_value_type(basic_value, expected_type).into()
             })
             .collect();
         let callsite_value = self.builder.build_call(function_value, &args, "call_ret");
@@ -591,12 +711,20 @@ impl<'ctx> Codegen<'ctx> {
         call: &FunctionCall,
     ) -> GeneratedValue<'ctx> {
         match intrinsic_type {
+            IntrinsicFunctionType::Exit => {
+                let first_arg = self.codegen_expr(&call.args[0]);
+                self.builder.build_call(self.libc_functions.exit, &[first_arg.into()], "exit");
+                self.builtin_types.unit_value.as_basic_value_enum().into()
+            }
             IntrinsicFunctionType::PrintInt => {
                 self.build_print_int_call(call);
                 self.builtin_types.unit_value.as_basic_value_enum().into()
             }
+            IntrinsicFunctionType::PrintString => {
+                self.build_print_string_call(call);
+                self.builtin_types.unit_value.as_basic_value_enum().into()
+            }
             IntrinsicFunctionType::ArrayIndex => {
-                println!("ArrayIndex call: {:?}", call);
                 let pointee_ty = self.get_llvm_type(call.ret_type);
                 let array_expr = &call.args[0];
                 let index_expr = &call.args[1];
@@ -605,8 +733,7 @@ impl<'ctx> Codegen<'ctx> {
 
                 // 'Arrays' are always on the heap in this language, so we expect a pointer
                 let array_value_as_ptr = array_value.as_basic_value_enum().into_pointer_value();
-                let index_int_value = index_value.loaded_value(&self.builder).into_int_value();
-                println!("ArrayIndex pointee_ty: {}", pointee_ty);
+                let index_int_value = index_value.into_int_value();
                 unsafe {
                     let gep_ptr = self.builder.build_gep(
                         pointee_ty,
@@ -619,6 +746,33 @@ impl<'ctx> Codegen<'ctx> {
                     // value.into()
                 }
             }
+            IntrinsicFunctionType::StringIndex => {
+                // let pointee_ty = self.builtin_types.char;
+                let string_expr = &call.args[0];
+                let index_expr = &call.args[1];
+                let string_value = self.codegen_expr(string_expr);
+                let index_value = self.codegen_expr(index_expr);
+
+                // strings are pointers to structs
+                let string_value_as_ptr = string_value.as_basic_value_enum().into_pointer_value();
+                let data_ptr =
+                    self.builtin_types.string_data_ptr(&self.builder, string_value_as_ptr);
+
+                let index_int_value = index_value.into_int_value();
+                unsafe {
+                    let gep_ptr = self.builder.build_gep(
+                        self.builtin_types.char,
+                        data_ptr,
+                        &[index_int_value],
+                        "string_index_ptr",
+                    );
+                    Pointer {
+                        pointee_ty: self.builtin_types.char.as_basic_type_enum(),
+                        pointer: gep_ptr,
+                    }
+                    .into()
+                }
+            }
         }
     }
     // This needs to return either a basic value or an instruction value (in the case of early return)
@@ -629,19 +783,18 @@ impl<'ctx> Codegen<'ctx> {
     // None. We'll fix it when implementing early returns
     // Maybe we rename ReturnStmt to Early Return to separate it from tail returns, which have
     // pretty different semantics and implications for codegen, I am realizing
-    fn codegen_block(&mut self, block: &IrBlock) -> Option<GeneratedValue<'ctx>> {
-        let mut last: Option<GeneratedValue<'ctx>> = None;
+    fn codegen_block(&mut self, block: &IrBlock) -> Option<BasicValueEnum<'ctx>> {
+        let mut last: Option<BasicValueEnum<'ctx>> = None;
         for stmt in &block.statements {
             match stmt {
                 IrStmt::Expr(expr) => last = Some(self.codegen_expr(expr)),
                 IrStmt::ValDef(val_def) => {
                     let value = self.codegen_val(val_def).expect_pointer();
-                    last = Some(value.into())
+                    last = Some(self.builtin_types.unit_value.as_basic_value_enum())
                 }
                 IrStmt::ReturnStmt(return_stmt) => {
                     let value = self.codegen_expr(&return_stmt.expr);
-                    // Likely another loaded_value bug
-                    self.builder.build_return(Some(&value.loaded_value(&self.builder)));
+                    self.builder.build_return(Some(&value));
                     return None;
                 }
                 IrStmt::Assignment(assignment) => match assignment.destination.deref() {
@@ -649,23 +802,30 @@ impl<'ctx> Codegen<'ctx> {
                         let destination_ptr =
                             *self.variables.get(&v.variable_id).expect("Missing variable");
                         let initializer = self.codegen_expr(&assignment.value);
+                        self.builder.build_store(destination_ptr.pointer, initializer);
 
                         //self.builder.build_store(des, value.loaded_value(&self.builder))
-                        let _store = self.store_loaded(&destination_ptr, initializer);
-                        last = Some(self.builtin_types.unit_value.as_basic_value_enum().into())
+                        last = Some(self.builtin_types.unit_value.as_basic_value_enum())
                     }
                     IrExpr::FieldAccess(field_access) => {
-                        let field_ptr = self.codegen_expr(&assignment.destination);
+                        // We use codegen_expr_inner to get the pointer to the accessed field
+                        let field_ptr = self.codegen_expr_inner(&assignment.destination);
                         let ptr = field_ptr.expect_pointer();
                         let rhs = self.codegen_expr(&assignment.value);
-                        let _store = self.store_loaded(&ptr, rhs);
-                        // let _store = self.builder.build_store(ptr.pointer, rhs.loaded_value());
-                        last = Some(self.builtin_types.unit_value.as_basic_value_enum().into())
+                        self.builder.build_store(ptr.pointer, rhs);
+                        last = Some(self.builtin_types.unit_value.as_basic_value_enum())
                     }
                     IrExpr::FunctionCall(call) => {
                         let f = self.module.get_function(call.callee_function_id);
+                        // We are assigning to an array element; array indexing desugars to
+                        // an intrinsic function call
                         if f.intrinsic_type == Some(IntrinsicFunctionType::ArrayIndex) {
-                            // We are assigning to an array element
+                            let array_element_pointer = self
+                                .codegen_function_call(call)
+                                .as_basic_value_enum()
+                                .into_pointer_value();
+                            let rhs = self.codegen_expr(&assignment.value);
+                            self.builder.build_store(array_element_pointer, rhs);
                         } else {
                             panic!("Invalid assignmnent lhs");
                         }
@@ -674,6 +834,27 @@ impl<'ctx> Codegen<'ctx> {
                         panic!("Invalid assignment lhs")
                     }
                 },
+                IrStmt::WhileLoop(while_stmt) => {
+                    let start_block = self.builder.get_insert_block().unwrap();
+                    let current_fn = start_block.get_parent().unwrap();
+                    let loop_entry_block = self.ctx.append_basic_block(current_fn, "while_cond");
+                    let loop_body_block = self.ctx.append_basic_block(current_fn, "while_body");
+                    let loop_end_block = self.ctx.append_basic_block(current_fn, "while_end");
+
+                    // Go to the loop
+                    self.builder.build_unconditional_branch(loop_entry_block);
+
+                    self.builder.position_at_end(loop_entry_block);
+                    let cond = self.codegen_expr(&while_stmt.cond).into_int_value();
+
+                    self.builder.build_conditional_branch(cond, loop_body_block, loop_end_block);
+
+                    self.builder.position_at_end(loop_body_block);
+                    self.codegen_block(&while_stmt.block);
+                    self.builder.build_unconditional_branch(loop_entry_block);
+
+                    self.builder.position_at_end(loop_end_block);
+                }
             }
         }
         last

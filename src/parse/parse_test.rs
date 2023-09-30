@@ -4,8 +4,9 @@ use crate::parse::*;
 fn set_up(input: &str) -> Parser<'static> {
     let mut lexer = Lexer::make(input);
     let token_vec: &'static mut [Token] = lexer.run().leak();
+    println!("{:?}", token_vec);
     print_tokens(input, token_vec);
-    let parser = Parser::make(token_vec, input.to_string(), false);
+    let parser = Parser::make(token_vec, input.to_string());
     parser
 }
 
@@ -28,6 +29,19 @@ fn basic_fn() -> Result<(), ParseError> {
         println!("defs {:?}", module.defs);
         panic!("no definitions for basic_fn")
     }
+    Ok(())
+}
+
+#[test]
+fn string_literal() -> ParseResult<()> {
+    let mut parser = set_up(r#""hello world""#);
+    let result = parser.expect_expression()?;
+    let Expression::Literal(Literal::String(s, span)) = result else {
+        panic!()
+    };
+    assert_eq!(&s, "hello world");
+    assert_eq!(span.start, 1);
+    assert_eq!(span.end, 12);
     Ok(())
 }
 
@@ -187,4 +201,35 @@ fn paren_expression() -> Result<(), ParseError> {
         return Ok(());
     }
     panic!()
+}
+
+#[test]
+fn while_loop_1() -> Result<(), ParseError> {
+    let input = "while true { (); (); 42 }";
+    let mut parser = set_up(input);
+    let result = parser.parse_statement()?.unwrap();
+    println!("{:?}", result);
+    if let BlockStmt::While(while_stmt) = result {
+        assert!(while_stmt.block.stmts.len() == 3);
+        return Ok(());
+    }
+    panic!()
+}
+
+#[test]
+fn cmp_operators() -> Result<(), ParseError> {
+    let input = "a < b <= c > d >= e";
+    let mut parser = set_up(input);
+    let result = parser.parse_expression()?.unwrap();
+    println!("{:?}", result);
+    Ok(())
+}
+
+#[test]
+fn generic_fn_call() -> Result<(), ParseError> {
+    let input = "square<int>(42)";
+    let mut parser = set_up(input);
+    let result = parser.parse_expression()?.unwrap();
+    assert!(matches!(result, Expression::FnCall(_)));
+    Ok(())
 }
