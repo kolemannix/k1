@@ -1,8 +1,7 @@
 #![allow(clippy::match_like_matches_macro)]
 
-use crate::ir::Type::OpaqueAlias;
 use crate::lex::Span;
-use crate::parse;
+use crate::parse::{self, IndexOperation};
 use crate::parse::{
     AstId, AstModule, Block, BlockStmt, Definition, Expression, FnCall, FnDef, IdentifierId,
     Literal,
@@ -35,8 +34,8 @@ pub struct RecordDefn {
 }
 
 impl RecordDefn {
-    pub fn find_field(&self, field_name: IdentifierId) -> Option<RecordDefnField> {
-        self.fields.iter().find(|field| field.name == field_name).cloned()
+    pub fn find_field(&self, field_name: IdentifierId) -> Option<(usize, &RecordDefnField)> {
+        self.fields.iter().enumerate().find(|(idx, field)| field.name == field_name)
     }
 }
 
@@ -83,6 +82,15 @@ pub enum Type {
     Array(ArrayType),
     OpaqueAlias(TypeRef),
     TypeVariable(TypeVariable),
+}
+
+impl Type {
+    pub fn expect_record_type(&self) -> &RecordDefn {
+        match self {
+            Type::Record(record) => record,
+            _ => panic!("expect_record called on: {:?}", self),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -141,6 +149,11 @@ pub enum BinaryOpKind {
     Add,
     Subtract,
     Multiply,
+    Divide,
+    Less,
+    LessEqual,
+    Greater,
+    GreaterEqual,
     And,
     Or,
     Equals,
@@ -148,21 +161,13 @@ pub enum BinaryOpKind {
 
 impl BinaryOpKind {
     pub fn is_integer_op(&self) -> bool {
+        use BinaryOpKind as B;
         match self {
-            BinaryOpKind::Add => true,
-            BinaryOpKind::Subtract => true,
-            BinaryOpKind::Multiply => true,
-            BinaryOpKind::Or | BinaryOpKind::And => true,
-            BinaryOpKind::Equals => true,
-        }
-    }
-    pub fn is_boolean_op(&self) -> bool {
-        match self {
-            BinaryOpKind::Equals => true,
-            BinaryOpKind::Or | BinaryOpKind::And => true,
-            BinaryOpKind::Add => false,
-            BinaryOpKind::Subtract => false,
-            BinaryOpKind::Multiply => false,
+            B::Add | B::Subtract => true,
+            B::Multiply | B::Divide => true,
+            B::Less | B::Greater | B::LessEqual | B::GreaterEqual => true,
+            B::Or | B::And => true,
+            B::Equals => true,
         }
     }
 }
@@ -241,7 +246,8 @@ pub struct IrIf {
 #[derive(Debug, Clone)]
 pub struct FieldAccess {
     pub base: Box<IrExpr>,
-    pub target_field: RecordDefnField,
+    pub target_field: IdentifierId,
+    pub ir_type: TypeRef,
     pub span: Span,
 }
 
@@ -271,7 +277,7 @@ impl IrExpr {
             IrExpr::Literal(IrLiteral::Record(record)) => TypeRef::TypeId(record.type_id),
             IrExpr::Literal(IrLiteral::Array(arr)) => TypeRef::TypeId(arr.type_id),
             IrExpr::Variable(var) => var.ir_type,
-            IrExpr::FieldAccess(field_access) => field_access.target_field.ty,
+            IrExpr::FieldAccess(field_access) => field_access.ir_type,
             IrExpr::BinaryOp(binary_op) => binary_op.ir_type,
             IrExpr::Block(b) => b.ret_type,
             IrExpr::FunctionCall(call) => call.ret_type,
@@ -314,11 +320,20 @@ pub struct Assignment {
 }
 
 #[derive(Debug, Clone)]
+pub struct IrWhileLoop {
+    pub cond: IrExpr,
+    pub block: IrBlock,
+    pub span: Span,
+}
+
+// TODO: When do we 'clone' a whole IrStmt?
+#[derive(Debug, Clone)]
 pub enum IrStmt {
     Expr(Box<IrExpr>),
     ValDef(Box<ValDef>),
     ReturnStmt(Box<ReturnStmt>),
     Assignment(Box<Assignment>),
+    WhileLoop(Box<IrWhileLoop>),
 }
 
 impl IrStmt {
@@ -329,6 +344,7 @@ impl IrStmt {
             IrStmt::ValDef(v) => v.span,
             IrStmt::ReturnStmt(ret) => ret.span,
             IrStmt::Assignment(ass) => ass.span,
+            IrStmt::WhileLoop(w) => w.span,
         }
     }
 }
@@ -467,14 +483,20 @@ impl Scopes {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IntrinsicFunctionType {
     PrintInt,
+    PrintString,
     ArrayIndex,
+    StringIndex,
+    Exit,
 }
 
 impl IntrinsicFunctionType {
     pub fn from_function_name(value: &str) -> Option<Self> {
         match value {
             "printInt" => Some(IntrinsicFunctionType::PrintInt),
+            "print" => Some(IntrinsicFunctionType::PrintString),
             "_arrayIndex" => Some(IntrinsicFunctionType::ArrayIndex),
+            "_stringIndex" => Some(IntrinsicFunctionType::StringIndex),
+            "exit" => Some(IntrinsicFunctionType::Exit),
             _ => None,
         }
     }
@@ -540,13 +562,10 @@ impl IrModule {
     }
 
     fn print_error(&self, message: impl AsRef<str>, span: Span) {
-        eprintln!(
-            "{} at {}:{}\n  -> {}",
-            "error".red(),
-            self.name(),
-            (span.line as usize - crate::prelude::PRELUDE_LINES) + 1,
-            message.as_ref()
-        );
+        let adjusted_line = span.line as i32 - crate::prelude::PRELUDE_LINES as i32 + 1;
+        let line_no =
+            if adjusted_line < 0 { "PRELUDE".to_string() } else { adjusted_line.to_string() };
+        eprintln!("{} at {}:{}\n  -> {}", "error".red(), self.name(), line_no, message.as_ref());
         eprintln!("{}", self.ast.source.get_line_by_index(span.line).red());
         eprintln!(" -> {}", self.ast.source.get_span_content(span).red());
     }
@@ -613,6 +632,7 @@ impl IrModule {
             parse::TypeExpression::Unit(_) => Ok(TypeRef::Unit),
             parse::TypeExpression::Int(_) => Ok(TypeRef::Int),
             parse::TypeExpression::Bool(_) => Ok(TypeRef::Bool),
+            parse::TypeExpression::String(_) => Ok(TypeRef::String),
             parse::TypeExpression::Record(record_defn) => {
                 let mut fields: Vec<RecordDefnField> = Vec::new();
                 for (index, ast_field) in record_defn.fields.iter().enumerate() {
@@ -674,6 +694,7 @@ impl IrModule {
             parse::TypeExpression::Unit(_) => Ok(TypeRef::Unit),
             parse::TypeExpression::Int(_) => Ok(TypeRef::Int),
             parse::TypeExpression::Bool(_) => Ok(TypeRef::Bool),
+            parse::TypeExpression::String(_) => Ok(TypeRef::String),
             parse::TypeExpression::Record(_) => {
                 self.internal_compiler_error("No const records yet", expr.get_span())
             }
@@ -791,9 +812,10 @@ impl IrModule {
             IrStmt::Expr(expr) => Some(expr.get_type()),
             IrStmt::ValDef(_) => Some(TypeRef::Unit),
             // FIXME: This is not quite right; a return statement
-            // is different; should probably be None or 'never'
+            //        is different; should probably be None or 'never'
             IrStmt::ReturnStmt(ret) => Some(ret.expr.get_type()),
             IrStmt::Assignment(_) => Some(TypeRef::Unit),
+            IrStmt::WhileLoop(_) => Some(TypeRef::Unit),
         }
     }
 
@@ -884,15 +906,29 @@ impl IrModule {
             }
             Expression::IndexOperation(index_op) => {
                 // De-sugar to _arrayIndex(target, index)
-                // TODO: Indexing only works for builtin Array for now
+                // Indexing only works for builtin Array and string for now
 
                 let index_expr = self.eval_expr(&index_op.index_expr, scope_id)?;
                 if index_expr.get_type() != TypeRef::Int {
                     return make_fail("index type must be int", index_op.span);
                 }
 
-                let target = self.eval_expr(&index_op.target, scope_id)?;
-                let TypeRef::TypeId(target_type_id) =  target.get_type() else {
+                let base_expr = self.eval_expr(&index_op.target, scope_id)?;
+                let target_type = base_expr.get_type();
+                if target_type == TypeRef::String {
+                    let string_index_fn = self
+                        .scopes
+                        .intrinsic_functions
+                        .get(&IntrinsicFunctionType::StringIndex)
+                        .unwrap();
+                    return Ok(IrExpr::FunctionCall(FunctionCall {
+                        callee_function_id: *string_index_fn,
+                        args: vec![base_expr, index_expr],
+                        ret_type: TypeRef::Int,
+                        span: index_op.span,
+                    }));
+                }
+                let TypeRef::TypeId(target_type_id) =  base_expr.get_type() else {
                     return make_fail("index base must be an array", index_op.span)
                 };
                 let target_type = self.get_type(target_type_id);
@@ -910,7 +946,7 @@ impl IrModule {
                 // _arrayIndex(array, 42)
                 Ok(IrExpr::FunctionCall(FunctionCall {
                     callee_function_id: *array_index_fn,
-                    args: vec![target, index_expr],
+                    args: vec![base_expr, index_expr],
                     ret_type: array_type.element_type,
                     span: index_op.span,
                 }))
@@ -991,6 +1027,8 @@ impl IrModule {
                 let lhs = self.eval_expr(&binary_op.lhs, scope_id)?;
                 let rhs = self.eval_expr(&binary_op.rhs, scope_id)?;
 
+                // FIXME: Typechecker This is not enough; we need to check that the lhs is actually valid
+                //        for this operation first
                 if self.typecheck_types(lhs.get_type(), rhs.get_type()).is_err() {
                     return make_fail("operand types did not match", binary_op.span);
                 }
@@ -999,13 +1037,27 @@ impl IrModule {
                     parse::BinaryOpKind::Add => BinaryOpKind::Add,
                     parse::BinaryOpKind::Subtract => BinaryOpKind::Subtract,
                     parse::BinaryOpKind::Multiply => BinaryOpKind::Multiply,
+                    parse::BinaryOpKind::Divide => BinaryOpKind::Divide,
+                    parse::BinaryOpKind::Less => BinaryOpKind::Less,
+                    parse::BinaryOpKind::LessEqual => BinaryOpKind::LessEqual,
+                    parse::BinaryOpKind::Greater => BinaryOpKind::Greater,
+                    parse::BinaryOpKind::GreaterEqual => BinaryOpKind::GreaterEqual,
                     parse::BinaryOpKind::And => BinaryOpKind::And,
                     parse::BinaryOpKind::Or => BinaryOpKind::Or,
                     parse::BinaryOpKind::Equals => BinaryOpKind::Equals,
                 };
                 let result_type = match kind {
+                    BinaryOpKind::Add => lhs.get_type(),
+                    BinaryOpKind::Subtract => lhs.get_type(),
+                    BinaryOpKind::Multiply => lhs.get_type(),
+                    BinaryOpKind::Divide => lhs.get_type(),
+                    BinaryOpKind::Less => TypeRef::Bool,
+                    BinaryOpKind::LessEqual => TypeRef::Bool,
+                    BinaryOpKind::Greater => TypeRef::Bool,
+                    BinaryOpKind::GreaterEqual => TypeRef::Bool,
+                    BinaryOpKind::And => lhs.get_type(),
+                    BinaryOpKind::Or => lhs.get_type(),
                     BinaryOpKind::Equals => TypeRef::Bool,
-                    _ => lhs.get_type(),
                 };
                 let expr = IrExpr::BinaryOp(BinaryOp {
                     kind,
@@ -1026,6 +1078,11 @@ impl IrModule {
                 Ok(expr)
             }
             Expression::Literal(Literal::String(s, span)) => {
+                // So sad, we could just point to the source. BUT if we ever do escaping and things
+                // then the source string is not the same as the string the user meant; perhaps here
+                // is the place, or maybe in the parser, that we would actually do some work, which
+                // would justify storing it separately. But then, post-transform, we should intern
+                // these
                 let expr = IrExpr::Literal(IrLiteral::Str(s.clone(), *span));
                 Ok(expr)
             }
@@ -1045,21 +1102,61 @@ impl IrModule {
             }
             Expression::FieldAccess(field_access) => {
                 let base_expr = self.eval_expr(&field_access.base, scope_id)?;
-                // TODO Cleanup This is a recurring 'double-check' pattern where we know we need a type id
-                //      but also need it to resolve to a particular type
-                let TypeRef::TypeId(type_id) = base_expr.get_type() else {
-                    return make_fail(format!("Cannot access field {} on non-record type", field_access.target), field_access.span);
-                };
-                let Type::Record(record_type) = self.get_type(type_id) else {
-                    return make_fail(format!("Cannot access field {} on non-record type", field_access.target), field_access.span);
-                };
-                let target_field = record_type.find_field(field_access.target).ok_or(make_err(
-                    format!("Field {} not found on record type", field_access.target),
-                    field_access.span,
-                ))?;
+                let type_ref = base_expr.get_type();
+                let ret_type = match type_ref {
+                    TypeRef::String => {
+                        let length_id = self.ast.ident_id("length");
+                        if length_id == field_access.target {
+                            Ok(TypeRef::Int)
+                        } else {
+                            make_fail("string only has .length right now", field_access.span)
+                        }
+                    }
+                    TypeRef::TypeId(type_id) => {
+                        let ty = self.get_type(type_id);
+                        match ty {
+                            Type::Array(array_type) => {
+                                let length_id = self.ast.ident_id("length");
+                                if length_id == field_access.target {
+                                    Ok(array_type.element_type)
+                                } else {
+                                    make_fail("array only has .length right now", field_access.span)
+                                }
+                            }
+                            Type::Record(record_type) => {
+                                let (_idx, target_field) =
+                                    record_type.find_field(field_access.target).ok_or(make_err(
+                                        format!(
+                                            "Field {} not found on record type",
+                                            &*self.get_ident_name(field_access.target)
+                                        ),
+                                        field_access.span,
+                                    ))?;
+                                Ok(target_field.ty)
+                            }
+                            _ => make_fail(
+                                format!(
+                                    "Cannot access field {} on non-record type: {:?}",
+                                    &*self.get_ident_name(field_access.target),
+                                    ty
+                                ),
+                                field_access.span,
+                            ),
+                        }
+                    }
+                    _ => make_fail(
+                        format!(
+                            "Cannot access field {} on non-record type: {:?}",
+                            &*self.get_ident_name(field_access.target),
+                            type_ref
+                        ),
+                        field_access.span,
+                    ),
+                }?;
                 Ok(IrExpr::FieldAccess(FieldAccess {
                     base: Box::new(base_expr),
-                    target_field,
+                    target_field: field_access.target,
+                    ir_type: ret_type,
                     span: field_access.span,
                 }))
             }
@@ -1251,6 +1348,17 @@ impl IrModule {
             BlockStmt::LoneExpression(expression) => {
                 let expr = self.eval_expr(expression, scope_id)?;
                 Ok(IrStmt::Expr(Box::new(expr)))
+            }
+            BlockStmt::While(while_stmt) => {
+                let cond = self.eval_expr(&while_stmt.cond, scope_id)?;
+                if let Err(e) = self.typecheck_types(TypeRef::Bool, cond.get_type()) {
+                    return make_fail(
+                        format!("Invalid while condition type: {}", e),
+                        cond.get_span(),
+                    );
+                }
+                let block = self.eval_block(&while_stmt.block, scope_id)?;
+                Ok(IrStmt::WhileLoop(Box::new(IrWhileLoop { cond, block, span: while_stmt.span })))
             }
         }
     }

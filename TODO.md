@@ -53,14 +53,24 @@ it's just an activity. It just took me 10 years to discover it again, but this t
 - [x] Binary infix operations
 - [x] basic error reporting using spans
 - [x] Array and Struct member assignment
-- [-] While Loop
-- [ ] Array more
-  - [x] Assignment
-  - [ ] "Push" (requires actually growable array impl :/)
-- [ ] Strings
+- [x] While Loop
+- [x] Assert (syscall exit? 'panic'?)
+- [-] Strings
+  - [x] String literals cant have spaces lol
+  - [x] print(string)
+  - [x] hardcoded via codegen
+  - [x] string.length
+  - [x] string[i] (int)
+  - [ ] char
+  - [ ] string[i] (char)
+  - [x] add string_length function
+- [ ] Infer val types
+- [ ] Change Array repr to a struct w/ length so we have length
+- [ ] Embed comments in LLVM IR (source snippets or line numbers?)
 - [ ] Optionals
+- [ ] Array push
 - [ ] Generic types
-- [ ] Introduce uint type
+- [ ] uint type
 - [ ] Generic type inference
 - [ ] Type literals would be fun
 - [ ] Syntax Shed
@@ -90,10 +100,10 @@ it's just an activity. It just took me 10 years to discover it again, but this t
 - [x] PHI nested branch fix
 
 # Hacks to fix
-- [ ] Fix line comments
+- [x] Fix line comments
 - [ ] Rename IR to typed-ast, since its a tree not instruction set. TAST?
 - [ ] Make intrinsics like arrayIndex a real function
-- [ ] Fix line numbers to account for prelude
+- [x] Fix line numbers to account for prelude
 - [ ] main function / detect entrypoint properly. Typing of main? How to get main args?
 - [ ] Replace vectors with smallvec where appropriate
 - [x] Fix unnecessary load of function args
