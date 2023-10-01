@@ -8,7 +8,5 @@ fn assert(value: bool): unit {
   };
 }
 type Array = {}
-fn _arrayIndex<T>(array: Array<T>, index: int): T 
-fn _stringIndex(s: string): int
 // -------- END PRELUDE --------"#;
 pub const PRELUDE_LINES: usize = 11;

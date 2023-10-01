@@ -55,15 +55,18 @@ it's just an activity. It just took me 10 years to discover it again, but this t
 - [x] Array and Struct member assignment
 - [x] While Loop
 - [x] Assert (syscall exit? 'panic'?)
+- [ ] Replace spans on IR with just ast node ids
+- [ ] Replace .length on string and array with a MethodCall node (adding empty parens ())
 - [-] Strings
   - [x] String literals cant have spaces lol
   - [x] print(string)
   - [x] hardcoded via codegen
   - [x] string.length
   - [x] string[i] (int)
-  - [ ] char
-  - [ ] string[i] (char)
-  - [x] add string_length function
+  - [x] char
+  - [x] string[i] (char)
+  - [x] add string.length function
+  - [ ] char.to_string()
 - [ ] Infer val types
 - [ ] Change Array repr to a struct w/ length so we have length
 - [ ] Embed comments in LLVM IR (source snippets or line numbers?)

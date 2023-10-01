@@ -35,13 +35,14 @@ pub struct RecordDefn {
 
 impl RecordDefn {
     pub fn find_field(&self, field_name: IdentifierId) -> Option<(usize, &RecordDefnField)> {
-        self.fields.iter().enumerate().find(|(idx, field)| field.name == field_name)
+        self.fields.iter().enumerate().find(|(_, field)| field.name == field_name)
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TypeRef {
     Unit,
+    Char,
     Int,
     Bool,
     String,
@@ -185,7 +186,6 @@ pub struct BinaryOp {
 pub struct FunctionCall {
     pub callee_function_id: FunctionId,
     pub args: Vec<IrExpr>,
-    // FIXME: ret_type doesn't belong on here; just look up the function to get it
     pub ret_type: TypeRef,
     pub span: Span,
 }
@@ -213,6 +213,7 @@ pub struct ArrayLiteral {
 #[derive(Debug, Clone)]
 pub enum IrLiteral {
     Unit(Span),
+    Char(u8, Span),
     Bool(bool, Span),
     Int(i64, Span),
     Str(String, Span),
@@ -225,6 +226,7 @@ impl IrLiteral {
     pub fn get_span(&self) -> Span {
         match self {
             IrLiteral::Unit(span) => *span,
+            IrLiteral::Char(_, span) => *span,
             IrLiteral::Str(_, span) => *span,
             IrLiteral::Int(_, span) => *span,
             IrLiteral::Bool(_, span) => *span,
@@ -250,6 +252,13 @@ pub struct FieldAccess {
     pub ir_type: TypeRef,
     pub span: Span,
 }
+#[derive(Debug, Clone)]
+pub struct IndexOp {
+    pub base_expr: Box<IrExpr>,
+    pub index_expr: Box<IrExpr>,
+    pub result_type: TypeRef,
+    pub span: Span,
+}
 
 #[derive(Debug, Clone)]
 pub enum IrExpr {
@@ -260,6 +269,8 @@ pub enum IrExpr {
     Block(IrBlock),
     FunctionCall(FunctionCall),
     If(Box<IrIf>),
+    ArrayIndex(IndexOp),
+    StringIndex(IndexOp),
 }
 
 impl IrExpr {
@@ -271,6 +282,7 @@ impl IrExpr {
     pub fn get_type(&self) -> TypeRef {
         match self {
             IrExpr::Literal(IrLiteral::Unit(_)) => TypeRef::Unit,
+            IrExpr::Literal(IrLiteral::Char(_, _)) => TypeRef::Char,
             IrExpr::Literal(IrLiteral::Str(_, _)) => TypeRef::String,
             IrExpr::Literal(IrLiteral::Int(_, _)) => TypeRef::Int,
             IrExpr::Literal(IrLiteral::Bool(_, _)) => TypeRef::Bool,
@@ -282,6 +294,8 @@ impl IrExpr {
             IrExpr::Block(b) => b.ret_type,
             IrExpr::FunctionCall(call) => call.ret_type,
             IrExpr::If(ir_if) => ir_if.ir_type,
+            IrExpr::ArrayIndex(op) => op.result_type,
+            IrExpr::StringIndex(op) => op.result_type,
         }
     }
     #[inline]
@@ -294,6 +308,8 @@ impl IrExpr {
             IrExpr::Block(b) => b.span,
             IrExpr::FunctionCall(call) => call.span,
             IrExpr::If(ir_if) => ir_if.span,
+            IrExpr::ArrayIndex(op) => op.span,
+            IrExpr::StringIndex(op) => op.span,
         }
     }
 }
@@ -484,8 +500,6 @@ impl Scopes {
 pub enum IntrinsicFunctionType {
     PrintInt,
     PrintString,
-    ArrayIndex,
-    StringIndex,
     Exit,
 }
 
@@ -494,8 +508,6 @@ impl IntrinsicFunctionType {
         match value {
             "printInt" => Some(IntrinsicFunctionType::PrintInt),
             "print" => Some(IntrinsicFunctionType::PrintString),
-            "_arrayIndex" => Some(IntrinsicFunctionType::ArrayIndex),
-            "_stringIndex" => Some(IntrinsicFunctionType::StringIndex),
             "exit" => Some(IntrinsicFunctionType::Exit),
             _ => None,
         }
@@ -595,6 +607,7 @@ impl IrModule {
     pub fn is_reference_type(&self, ty: TypeRef) -> bool {
         match ty {
             TypeRef::Unit => false,
+            TypeRef::Char => false,
             TypeRef::Int => false,
             TypeRef::Bool => false,
             TypeRef::String => false,
@@ -630,6 +643,7 @@ impl IrModule {
     ) -> IrGenResult<TypeRef> {
         match expr {
             parse::TypeExpression::Unit(_) => Ok(TypeRef::Unit),
+            parse::TypeExpression::Char(_) => Ok(TypeRef::Char),
             parse::TypeExpression::Int(_) => Ok(TypeRef::Int),
             parse::TypeExpression::Bool(_) => Ok(TypeRef::Bool),
             parse::TypeExpression::String(_) => Ok(TypeRef::String),
@@ -684,7 +698,7 @@ impl IrModule {
         }
     }
 
-    /// Eventually this will be more restrictive than its sibling eval_type_expr
+    /// This should just call eval_type_expr then reject types that arent' allowed in const
     fn eval_const_type_expr(
         &self,
         expr: &parse::TypeExpression,
@@ -692,6 +706,7 @@ impl IrModule {
     ) -> IrGenResult<TypeRef> {
         match expr {
             parse::TypeExpression::Unit(_) => Ok(TypeRef::Unit),
+            parse::TypeExpression::Char(_) => Ok(TypeRef::Char),
             parse::TypeExpression::Int(_) => Ok(TypeRef::Int),
             parse::TypeExpression::Bool(_) => Ok(TypeRef::Bool),
             parse::TypeExpression::String(_) => Ok(TypeRef::String),
@@ -915,41 +930,27 @@ impl IrModule {
 
                 let base_expr = self.eval_expr(&index_op.target, scope_id)?;
                 let target_type = base_expr.get_type();
-                if target_type == TypeRef::String {
-                    let string_index_fn = self
-                        .scopes
-                        .intrinsic_functions
-                        .get(&IntrinsicFunctionType::StringIndex)
-                        .unwrap();
-                    return Ok(IrExpr::FunctionCall(FunctionCall {
-                        callee_function_id: *string_index_fn,
-                        args: vec![base_expr, index_expr],
-                        ret_type: TypeRef::Int,
+                match target_type {
+                    TypeRef::String => Ok(IrExpr::StringIndex(IndexOp {
+                        base_expr: Box::new(base_expr),
+                        index_expr: Box::new(index_expr),
+                        result_type: TypeRef::Char,
                         span: index_op.span,
-                    }));
+                    })),
+                    TypeRef::TypeId(target_type_id) => {
+                        let target_type = self.get_type(target_type_id);
+                        match target_type {
+                            Type::Array(array_type) => Ok(IrExpr::ArrayIndex(IndexOp {
+                                base_expr: Box::new(base_expr),
+                                index_expr: Box::new(index_expr),
+                                result_type: array_type.element_type,
+                                span: index_op.span,
+                            })),
+                            _ => make_fail("index base must be an array", index_op.span),
+                        }
+                    }
+                    _ => make_fail("invalid index base type", index_op.span),
                 }
-                let TypeRef::TypeId(target_type_id) =  base_expr.get_type() else {
-                    return make_fail("index base must be an array", index_op.span)
-                };
-                let target_type = self.get_type(target_type_id);
-                let Type::Array(array_type) = target_type else {
-                    return make_fail("index base must be an array", index_op.span);
-                };
-                // Special-case: call prelude function "_arrayIndex"
-                // Just need to look up the ID by intrinsic type
-                let array_index_fn = self
-                    .scopes
-                    .intrinsic_functions
-                    .get(&IntrinsicFunctionType::ArrayIndex)
-                    .unwrap();
-
-                // _arrayIndex(array, 42)
-                Ok(IrExpr::FunctionCall(FunctionCall {
-                    callee_function_id: *array_index_fn,
-                    args: vec![base_expr, index_expr],
-                    ret_type: array_type.element_type,
-                    span: index_op.span,
-                }))
             }
             Expression::Record(ast_record) => {
                 let mut fields = Vec::new();
@@ -1069,6 +1070,9 @@ impl IrModule {
                 Ok(expr)
             }
             Expression::Literal(Literal::Unit(span)) => Ok(IrExpr::Literal(IrLiteral::Unit(*span))),
+            Expression::Literal(Literal::Char(byte, span)) => {
+                Ok(IrExpr::Literal(IrLiteral::Char(*byte, *span)))
+            }
             Expression::Literal(Literal::Numeric(s, span)) => {
                 let num = self.parse_numeric(s).map_err(|msg| make_err(msg, *span))?;
                 Ok(IrExpr::Literal(IrLiteral::Int(num, *span)))
@@ -1311,14 +1315,6 @@ impl IrModule {
                                 "Cannot assign to immutable variable",
                                 assignment.span,
                             );
-                        }
-                    }
-                    IrExpr::FunctionCall(c) => {
-                        let f = self.get_function(c.callee_function_id);
-                        if f.intrinsic_type == Some(IntrinsicFunctionType::ArrayIndex) {
-                            // TODO Check mutability of the underlying array? How?
-                        } else {
-                            return make_fail("Invalid assignment lhs", lhs.get_span());
                         }
                     }
                     IrExpr::FieldAccess(field_access) => {

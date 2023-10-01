@@ -233,3 +233,22 @@ fn generic_fn_call() -> Result<(), ParseError> {
     assert!(matches!(result, Expression::FnCall(_)));
     Ok(())
 }
+
+#[test]
+fn char_type() -> ParseResult<()> {
+    let input = "char";
+    let mut parser = set_up(input);
+    let result = parser.parse_type_expression()?.unwrap();
+    assert!(matches!(result, TypeExpression::Char(_)));
+    Ok(())
+}
+
+#[test]
+fn char_value() -> ParseResult<()> {
+    let input = "'x'";
+    let mut parser = set_up(input);
+    let result = parser.expect_expression()?;
+    let x_byte = 'x' as u8;
+    assert!(matches!(result, Expression::Literal(Literal::Char(b, _)) if b == x_byte));
+    Ok(())
+}
