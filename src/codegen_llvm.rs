@@ -22,7 +22,7 @@ use std::path::Path;
 use std::rc::Rc;
 
 use crate::ir::*;
-use crate::parse::IdentifierId;
+use crate::parse::{IdentifierId, IndexOperation};
 
 struct BuiltinTypes<'ctx> {
     i64: IntType<'ctx>,
@@ -322,13 +322,14 @@ impl<'ctx> Codegen<'ctx> {
         // I need one for GEP generation
         trace!("codegen for type {type_ref:?}");
         match type_ref {
+            TypeRef::Unit => self.builtin_types.unit.as_basic_type_enum(),
+            TypeRef::Char => self.builtin_types.char.as_basic_type_enum(),
             TypeRef::Int => self.builtin_types.i64.as_basic_type_enum(),
             TypeRef::Bool => self.builtin_types.boolean.as_basic_type_enum(),
             TypeRef::String => {
                 // Any ptr type will work; need to re-think this whole function
                 self.builtin_types.char.ptr_type(self.default_address_space).as_basic_type_enum()
             }
-            TypeRef::Unit => self.builtin_types.unit.as_basic_type_enum(),
             TypeRef::TypeId(type_id) => {
                 match self.llvm_types.get(&type_id) {
                     None => {
@@ -396,6 +397,9 @@ impl<'ctx> Codegen<'ctx> {
     fn codegen_literal(&mut self, literal: &IrLiteral) -> GeneratedValue<'ctx> {
         match literal {
             IrLiteral::Unit(_) => self.builtin_types.unit_value.as_basic_value_enum().into(),
+            IrLiteral::Char(byte, _) => {
+                self.builtin_types.char.const_int(*byte as u64, false).as_basic_value_enum().into()
+            }
             IrLiteral::Bool(b, _) => match b {
                 true => self.builtin_types.true_value.as_basic_value_enum().into(),
                 false => self.builtin_types.false_value.as_basic_value_enum().into(),
@@ -642,8 +646,25 @@ impl<'ctx> Codegen<'ctx> {
                         };
                         op.as_basic_value_enum().into()
                     }
-                    BinaryOpKind::Equals
-                    | BinaryOpKind::Less
+                    BinaryOpKind::Equals => {
+                        // I actually have no idea how I want to handle equality at this point
+                        // Obviously we want some sort of value equality on user-defined types
+                        // But here for builtin types maybe we just keep assuming everything
+                        // is represented as an int value
+                        let lhs_int = self.codegen_expr(&bin_op.lhs).into_int_value();
+                        let rhs_int = self.codegen_expr(&bin_op.rhs).into_int_value();
+                        self.builder
+                            .build_int_compare(
+                                IntPredicate::EQ,
+                                lhs_int,
+                                rhs_int,
+                                &format!("{}", bin_op.kind),
+                            )
+                            .as_basic_value_enum()
+                            .into()
+                    }
+
+                    BinaryOpKind::Less
                     | BinaryOpKind::LessEqual
                     | BinaryOpKind::Greater
                     | BinaryOpKind::GreaterEqual => {
@@ -664,8 +685,9 @@ impl<'ctx> Codegen<'ctx> {
                     }
                     other => panic!("Unsupported binary operation {other:?} returning Bool"),
                 },
-                TypeRef::String => panic!("No string binary ops yet"),
-                TypeRef::Unit => panic!("No unit binary ops"),
+                TypeRef::String => panic!("No string-returning binary ops yet"),
+                TypeRef::Unit => panic!("No unit-returning binary ops"),
+                TypeRef::Char => panic!("No char-returning binary ops"),
                 TypeRef::TypeId(_) => todo!("codegen for binary ops on user-defined types"),
             },
             IrExpr::Block(_block) => {
@@ -675,6 +697,8 @@ impl<'ctx> Codegen<'ctx> {
                 todo!("codegen lexical block")
             }
             IrExpr::FunctionCall(call) => self.codegen_function_call(call),
+            IrExpr::ArrayIndex(index_op) => self.codegen_array_index_operation(index_op),
+            IrExpr::StringIndex(index_op) => self.codegen_string_index_operation(index_op),
         }
     }
     fn codegen_function_call(&mut self, call: &FunctionCall) -> GeneratedValue<'ctx> {
@@ -705,6 +729,45 @@ impl<'ctx> Codegen<'ctx> {
         result_value.into()
     }
 
+    fn codegen_string_index_operation(&mut self, operation: &IndexOp) -> GeneratedValue<'ctx> {
+        let string_value = self.codegen_expr(&operation.base_expr);
+        let index_value = self.codegen_expr(&operation.index_expr);
+
+        // strings are pointers to structs
+        let string_value_as_ptr = string_value.as_basic_value_enum().into_pointer_value();
+        let data_ptr = self.builtin_types.string_data_ptr(&self.builder, string_value_as_ptr);
+
+        let index_int_value = index_value.into_int_value();
+        unsafe {
+            let gep_ptr = self.builder.build_gep(
+                self.builtin_types.char,
+                data_ptr,
+                &[index_int_value],
+                "string_index_ptr",
+            );
+            Pointer { pointee_ty: self.builtin_types.char.as_basic_type_enum(), pointer: gep_ptr }
+                .into()
+        }
+    }
+
+    fn codegen_array_index_operation(&mut self, operation: &IndexOp) -> GeneratedValue<'ctx> {
+        let pointee_ty = self.get_llvm_type(operation.result_type);
+        let array_value = self.codegen_expr(&operation.base_expr);
+        let index_value = self.codegen_expr(&operation.index_expr);
+
+        let array_value_as_ptr = array_value.as_basic_value_enum().into_pointer_value();
+        let index_int_value = index_value.into_int_value();
+        unsafe {
+            let gep_ptr = self.builder.build_gep(
+                pointee_ty,
+                array_value_as_ptr,
+                &[index_int_value],
+                "array_index_ptr",
+            );
+            Pointer { pointee_ty, pointer: gep_ptr }.into()
+        }
+    }
+
     fn codegen_intrinsic(
         &mut self,
         intrinsic_type: IntrinsicFunctionType,
@@ -723,55 +786,6 @@ impl<'ctx> Codegen<'ctx> {
             IntrinsicFunctionType::PrintString => {
                 self.build_print_string_call(call);
                 self.builtin_types.unit_value.as_basic_value_enum().into()
-            }
-            IntrinsicFunctionType::ArrayIndex => {
-                let pointee_ty = self.get_llvm_type(call.ret_type);
-                let array_expr = &call.args[0];
-                let index_expr = &call.args[1];
-                let array_value = self.codegen_expr(array_expr);
-                let index_value = self.codegen_expr(index_expr);
-
-                // 'Arrays' are always on the heap in this language, so we expect a pointer
-                let array_value_as_ptr = array_value.as_basic_value_enum().into_pointer_value();
-                let index_int_value = index_value.into_int_value();
-                unsafe {
-                    let gep_ptr = self.builder.build_gep(
-                        pointee_ty,
-                        array_value_as_ptr,
-                        &[index_int_value],
-                        "array_index_ptr",
-                    );
-                    Pointer { pointee_ty, pointer: gep_ptr }.into()
-                    // let value = self.builder.build_load(pointee_ty, gep_ptr, "array_index_value");
-                    // value.into()
-                }
-            }
-            IntrinsicFunctionType::StringIndex => {
-                // let pointee_ty = self.builtin_types.char;
-                let string_expr = &call.args[0];
-                let index_expr = &call.args[1];
-                let string_value = self.codegen_expr(string_expr);
-                let index_value = self.codegen_expr(index_expr);
-
-                // strings are pointers to structs
-                let string_value_as_ptr = string_value.as_basic_value_enum().into_pointer_value();
-                let data_ptr =
-                    self.builtin_types.string_data_ptr(&self.builder, string_value_as_ptr);
-
-                let index_int_value = index_value.into_int_value();
-                unsafe {
-                    let gep_ptr = self.builder.build_gep(
-                        self.builtin_types.char,
-                        data_ptr,
-                        &[index_int_value],
-                        "string_index_ptr",
-                    );
-                    Pointer {
-                        pointee_ty: self.builtin_types.char.as_basic_type_enum(),
-                        pointer: gep_ptr,
-                    }
-                    .into()
-                }
             }
         }
     }
@@ -807,28 +821,13 @@ impl<'ctx> Codegen<'ctx> {
                         //self.builder.build_store(des, value.loaded_value(&self.builder))
                         last = Some(self.builtin_types.unit_value.as_basic_value_enum())
                     }
-                    IrExpr::FieldAccess(field_access) => {
+                    IrExpr::FieldAccess(_field_access) => {
                         // We use codegen_expr_inner to get the pointer to the accessed field
                         let field_ptr = self.codegen_expr_inner(&assignment.destination);
                         let ptr = field_ptr.expect_pointer();
                         let rhs = self.codegen_expr(&assignment.value);
                         self.builder.build_store(ptr.pointer, rhs);
                         last = Some(self.builtin_types.unit_value.as_basic_value_enum())
-                    }
-                    IrExpr::FunctionCall(call) => {
-                        let f = self.module.get_function(call.callee_function_id);
-                        // We are assigning to an array element; array indexing desugars to
-                        // an intrinsic function call
-                        if f.intrinsic_type == Some(IntrinsicFunctionType::ArrayIndex) {
-                            let array_element_pointer = self
-                                .codegen_function_call(call)
-                                .as_basic_value_enum()
-                                .into_pointer_value();
-                            let rhs = self.codegen_expr(&assignment.value);
-                            self.builder.build_store(array_element_pointer, rhs);
-                        } else {
-                            panic!("Invalid assignmnent lhs");
-                        }
                     }
                     _ => {
                         panic!("Invalid assignment lhs")

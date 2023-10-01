@@ -1,0 +1,5 @@
+fn main(): int {
+  val c: char = 'x';
+  assert(c == 'x');
+  return 0;
+}

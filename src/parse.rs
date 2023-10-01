@@ -22,6 +22,7 @@ pub struct ArrayExpr {
 #[derive(Debug)]
 pub enum Literal {
     Unit(Span),
+    Char(u8, Span),
     Numeric(String, Span),
     Bool(bool, Span),
     /// TODO: Move these into the intern pool?
@@ -32,6 +33,7 @@ impl Display for Literal {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Literal::Unit(_) => f.write_str("()"),
+            Literal::Char(byte, _) => f.write_char(*byte as char),
             Literal::Numeric(n, _) => f.write_str(n),
             Literal::Bool(true, _) => f.write_str("true"),
             Literal::Bool(false, _) => f.write_str("false"),
@@ -44,6 +46,7 @@ impl Literal {
     pub fn get_span(&self) -> Span {
         match self {
             Literal::Unit(span) => *span,
+            Literal::Char(_, span) => *span,
             Literal::Numeric(_, span) => *span,
             Literal::Bool(_, span) => *span,
             Literal::String(_, span) => *span,
@@ -391,6 +394,7 @@ pub struct TypeApplication {
 #[derive(Debug)]
 pub enum TypeExpression {
     Unit(Span),
+    Char(Span),
     Int(Span),
     Bool(Span),
     String(Span),
@@ -404,6 +408,7 @@ impl TypeExpression {
     pub fn get_span(&self) -> Span {
         match self {
             TypeExpression::Unit(span) => *span,
+            TypeExpression::Char(span) => *span,
             TypeExpression::Int(span) => *span,
             TypeExpression::Bool(span) => *span,
             TypeExpression::String(span) => *span,
@@ -653,6 +658,14 @@ impl<'toks> Parser<'toks> {
                 self.tokens.advance();
                 Ok(Some(Literal::Unit(span)))
             }
+            (K::Char, _) => {
+                trace!("parse_literal char");
+                self.tokens.advance();
+                let text = self.tok_chars(first);
+                assert_eq!(text.len(), 1);
+                let byte = text.bytes().next().unwrap();
+                Ok(Some(Literal::Char(byte, first.span)))
+            }
             (K::String, _) => {
                 trace!("parse_literal string");
                 self.tokens.advance();
@@ -724,6 +737,9 @@ impl<'toks> Parser<'toks> {
             } else if text_str == "bool" {
                 self.tokens.advance();
                 Ok(Some(TypeExpression::Bool(tok.span)))
+            } else if text_str == "char" {
+                self.tokens.advance();
+                Ok(Some(TypeExpression::Char(tok.span)))
             } else {
                 self.tokens.advance();
                 let next = self.tokens.peek();

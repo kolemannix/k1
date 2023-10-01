@@ -48,6 +48,8 @@ pub enum TokenKind {
     Ident,
     String,
 
+    Char,
+
     KeywordFn,
     KeywordReturn,
     KeywordVal,
@@ -147,6 +149,7 @@ impl TokenKind {
 
             K::Ident => None,
             K::String => Some("\"?\""),
+            K::Char => Some("'?'"),
 
             K::Eof => Some("<EOF>"),
         }
@@ -360,6 +363,25 @@ impl Lexer<'_> {
                         n - tok_len,
                         tok_len,
                         false,
+                    ));
+                } else if single_char_tok == TokenKind::SingleQuote {
+                    self.advance(); // eat opening '
+                    let c = self.next(); // eat the char itself
+                                         //
+                                         //
+                                         // TODO: Support escapes in char literal
+                    let quote = self.next(); // eat closing '
+                    assert!(quote == '\''); // lmao that's meta
+                                            //
+                                            // `n` is the index of the opening quote
+                                            // n + 1 will be the index of the char we care about
+                                            // length will be 1
+                    break Some(Token::new(
+                        TokenKind::Char,
+                        self.line_index,
+                        n + 1,
+                        1,
+                        peeked_whitespace,
                     ));
                 } else if single_char_tok == TokenKind::Equals && next == '=' {
                     self.advance();
