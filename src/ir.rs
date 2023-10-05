@@ -1289,18 +1289,20 @@ impl IrModule {
         };
         let mut final_args: Vec<IrExpr> = Vec::new();
         let params_cloned = self.get_function(function_to_call).params.clone();
-        let mut param_iter = params_cloned.iter();
         // We have to deal with this outside of the loop because
         // we can't 'move' out of this_expr more than once
-        if let Some(first) = param_iter.next() {
+        let mut skip_first = false;
+        if let Some(first) = params_cloned.get(0) {
             let is_self = first.name == self.ast.ident_id("self");
             if is_self {
                 if let Some(this) = this_expr {
                     final_args.push(this);
+                    skip_first = true;
                 }
             }
         }
-        for fn_param in param_iter {
+        let start = if skip_first { 1 } else { 0 };
+        for fn_param in &params_cloned[start..] {
             let matching_param_by_name =
                 fn_call.args.iter().find(|arg| arg.name == Some(fn_param.name));
             let matching_param = matching_param_by_name.or(fn_call.args.get(fn_param.position));
@@ -1494,6 +1496,7 @@ impl IrModule {
         fn_def: &FnDef,
         scope_id: ScopeId,
     ) -> Option<IntrinsicFunctionType> {
+        trace!("resolve_intrinsic_function_type for {}", &*self.get_ident_str(fn_def.name));
         let Some(current_namespace) = self.namespaces.iter().find(|ns| ns.scope_id == scope_id) else {
             panic!("Functions must be defined within a namespace scope")
         };
@@ -1572,7 +1575,7 @@ impl IrModule {
         }
 
         let intrinsic_type = if fn_def.is_intrinsic {
-            self.resolve_intrinsic_function_type(&fn_def, scope_id)
+            self.resolve_intrinsic_function_type(fn_def, scope_id)
         } else {
             None
         };

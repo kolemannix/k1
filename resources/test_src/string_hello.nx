@@ -4,7 +4,7 @@ fn main(): int {
   print("x.length is:");
   printInt(x.length());
   while i < (x.length() - 1) {
-    printInt(x[i] * x[i + 1]);
+    x[i];
     i = i + 1;
   };
   print(x);

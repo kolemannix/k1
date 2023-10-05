@@ -282,6 +282,7 @@ impl<'ctx> Codegen<'ctx> {
     }
 
     fn build_print_string_call(&mut self, call: &Call) -> BasicValueEnum<'ctx> {
+        trace!("codegen print_string");
         let first_arg = self.codegen_expr(&call.args[0]);
         let length =
             self.builtin_types.string_length_loaded(&self.builder, first_arg.into_pointer_value());
