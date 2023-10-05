@@ -1,4 +1,5 @@
 use crate::parse::*;
+use std::ops::Deref;
 
 #[cfg(test)]
 fn set_up(input: &str) -> Parser<'static> {
@@ -231,6 +232,24 @@ fn generic_fn_call() -> Result<(), ParseError> {
     let mut parser = set_up(input);
     let result = parser.parse_expression()?.unwrap();
     assert!(matches!(result, Expression::FnCall(_)));
+    Ok(())
+}
+
+#[test]
+fn generic_method_call_lhs_expr() -> Result<(), ParseError> {
+    let input = "getFn().baz<int>(42)";
+    let mut parser = set_up(input);
+    let result = parser.parse_expression()?.unwrap();
+    let Expression::MethodCall(call) = result else {
+        panic!()
+    };
+    let Expression::FnCall(fn_call) = call.base.deref() else {
+        panic!()
+    };
+    assert!(fn_call.name == parser.ident_id("getFn"));
+    assert!(call.call.name == parser.ident_id("baz"));
+    assert!(call.call.type_args.unwrap()[0].value.is_int());
+    assert!(matches!(call.call.args[0].value, Expression::Literal(_)));
     Ok(())
 }
 

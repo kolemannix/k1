@@ -61,6 +61,8 @@ pub enum TokenKind {
     KeywordRecord,
     KeywordType,
     KeywordWhile,
+    KeywordNamespace,
+    KeywordIntern,
 
     Slash,
     LineComment,
@@ -119,6 +121,8 @@ impl TokenKind {
             K::KeywordRecord => Some("record"),
             K::KeywordType => Some("type"),
             K::KeywordWhile => Some("while"),
+            K::KeywordNamespace => Some("namespace"),
+            K::KeywordIntern => Some("intern"),
 
             K::Slash => Some("/"),
             K::LineComment => Some("//"),
@@ -191,6 +195,8 @@ impl TokenKind {
             "record" => Some(K::KeywordRecord),
             "type" => Some(K::KeywordType),
             "while" => Some(K::KeywordWhile),
+            "namespace" => Some(K::KeywordNamespace),
+            "intern" => Some(K::KeywordNamespace),
             "==" => Some(K::EqualsEquals),
             "<=" => Some(K::LessThanEqual),
             ">=" => Some(K::GreaterThanEqual),
@@ -207,6 +213,8 @@ impl TokenKind {
             K::KeywordOr => true,
             K::KeywordIf => true,
             K::KeywordWhile => true,
+            K::KeywordNamespace => true,
+            K::KeywordIntern => true,
             _ => false,
         }
     }

@@ -1,7 +1,7 @@
 #![allow(clippy::match_like_matches_macro)]
 
 use crate::lex::Span;
-use crate::parse::{self, IndexOperation};
+use crate::parse::{self, IndexOperation, ParsedNamespace};
 use crate::parse::{
     AstId, AstModule, Block, BlockStmt, Definition, Expression, FnCall, FnDef, IdentifierId,
     Literal,
@@ -13,12 +13,14 @@ use parse_display::Display;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+use std::ops::Deref;
 use std::rc::Rc;
 
 pub type ScopeId = u32;
 pub type FunctionId = u32;
 pub type VariableId = u32;
 pub type TypeId = u32;
+pub type NamespaceId = u32;
 
 #[derive(Debug, Clone)]
 pub struct RecordDefnField {
@@ -183,7 +185,7 @@ pub struct BinaryOp {
 }
 
 #[derive(Debug, Clone)]
-pub struct FunctionCall {
+pub struct Call {
     pub callee_function_id: FunctionId,
     pub args: Vec<IrExpr>,
     pub ret_type: TypeRef,
@@ -267,7 +269,7 @@ pub enum IrExpr {
     FieldAccess(FieldAccess),
     BinaryOp(BinaryOp),
     Block(IrBlock),
-    FunctionCall(FunctionCall),
+    FunctionCall(Call),
     If(Box<IrIf>),
     ArrayIndex(IndexOp),
     StringIndex(IndexOp),
@@ -408,6 +410,11 @@ pub struct IrCompilerError {
     pub message: String,
 }
 
+pub struct Namespace {
+    pub name: IdentifierId,
+    pub scope_id: ScopeId,
+}
+
 pub struct IrModule {
     pub ast: Rc<AstModule>,
     pub functions: Vec<Function>,
@@ -416,6 +423,7 @@ pub struct IrModule {
     pub constants: Vec<Constant>,
     pub scopes: Scopes,
     pub errors: Vec<IrCompilerError>,
+    pub namespaces: Vec<Namespace>,
 }
 
 pub struct Scopes {
@@ -449,6 +457,11 @@ impl Scopes {
 
     pub fn get_scope_mut(&mut self, id: ScopeId) -> &mut Scope {
         &mut self.scopes[id as usize]
+    }
+
+    fn find_namespace(&self, scope: ScopeId, ident: IdentifierId) -> Option<NamespaceId> {
+        let scope = self.get_scope(scope);
+        scope.find_namespace(ident)
     }
 
     fn find_variable(&self, scope: ScopeId, ident: IdentifierId) -> Option<VariableId> {
@@ -498,9 +511,11 @@ impl Scopes {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IntrinsicFunctionType {
+    Exit,
     PrintInt,
     PrintString,
-    Exit,
+    StringLength,
+    ArrayLength,
 }
 
 impl IntrinsicFunctionType {
@@ -509,6 +524,8 @@ impl IntrinsicFunctionType {
             "printInt" => Some(IntrinsicFunctionType::PrintInt),
             "print" => Some(IntrinsicFunctionType::PrintString),
             "exit" => Some(IntrinsicFunctionType::Exit),
+            "_stringLength" => Some(IntrinsicFunctionType::StringLength),
+            "_arrayLength" => Some(IntrinsicFunctionType::ArrayLength),
             _ => None,
         }
     }
@@ -518,6 +535,7 @@ impl IntrinsicFunctionType {
 pub struct Scope {
     variables: HashMap<IdentifierId, VariableId>,
     functions: HashMap<IdentifierId, FunctionId>,
+    namespaces: HashMap<IdentifierId, NamespaceId>,
     types: HashMap<IdentifierId, TypeRef>,
     parent: Option<ScopeId>,
     children: Vec<ScopeId>,
@@ -545,6 +563,14 @@ impl Scope {
     fn find_function(&self, ident: IdentifierId) -> Option<FunctionId> {
         self.functions.get(&ident).copied()
     }
+
+    fn add_namespace(&mut self, ident: IdentifierId, namespace_id: NamespaceId) {
+        self.namespaces.insert(ident, namespace_id);
+    }
+
+    fn find_namespace(&self, ident: IdentifierId) -> Option<NamespaceId> {
+        self.namespaces.get(&ident).copied()
+    }
 }
 
 fn make_err<T: AsRef<str>>(s: T, span: Span) -> IrGenError {
@@ -557,6 +583,8 @@ fn make_fail<A, T: AsRef<str>>(s: T, span: Span) -> IrGenResult<A> {
 
 impl IrModule {
     pub fn new(parsed_module: Rc<AstModule>) -> IrModule {
+        let scopes = Scopes::make();
+        let root_ident = parsed_module.ident_id("_root");
         IrModule {
             ast: parsed_module,
             functions: Vec::new(),
@@ -565,6 +593,7 @@ impl IrModule {
             constants: Vec::new(),
             scopes: Scopes::make(),
             errors: Vec::new(),
+            namespaces: vec![Namespace { name: root_ident, scope_id: scopes.get_root_scope_id() }],
         }
     }
 
@@ -586,7 +615,7 @@ impl IrModule {
         &self.ast.name
     }
 
-    fn get_ident_name(&self, id: IdentifierId) -> impl std::ops::Deref<Target = str> + '_ {
+    fn get_ident_str(&self, id: IdentifierId) -> impl std::ops::Deref<Target = str> + '_ {
         self.ast.get_ident_name(id)
     }
 
@@ -598,6 +627,11 @@ impl IrModule {
         let id = self.types.len();
         self.types.push(typ);
         id as u32
+    }
+
+    // Should namespaces live in scopes instead of the module? Maybe scopes just have ident -> namespace_id
+    fn get_namespace(&self, namespace_id: NamespaceId) -> Option<&Namespace> {
+        self.namespaces.get(namespace_id as usize)
     }
 
     pub fn get_type(&self, type_id: TypeId) -> &Type {
@@ -850,6 +884,12 @@ impl IrModule {
         id as u32
     }
 
+    fn add_namespace(&mut self, namespace: Namespace) -> NamespaceId {
+        let id = self.namespaces.len();
+        self.namespaces.push(namespace);
+        id as u32
+    }
+
     pub fn get_function(&self, function_id: FunctionId) -> &Function {
         &self.functions[function_id as usize]
     }
@@ -1093,7 +1133,7 @@ impl IrModule {
             Expression::Variable(variable) => {
                 let var_index =
                     self.scopes.find_variable(scope_id, variable.ident).ok_or(make_err(
-                        format!("{} is not defined", &*self.get_ident_name(variable.ident)),
+                        format!("{} is not defined", &*self.get_ident_str(variable.ident)),
                         variable.span,
                     ))?;
                 let v = self.get_variable(var_index);
@@ -1132,7 +1172,7 @@ impl IrModule {
                                     record_type.find_field(field_access.target).ok_or(make_err(
                                         format!(
                                             "Field {} not found on record type",
-                                            &*self.get_ident_name(field_access.target)
+                                            &*self.get_ident_str(field_access.target)
                                         ),
                                         field_access.span,
                                     ))?;
@@ -1141,7 +1181,7 @@ impl IrModule {
                             _ => make_fail(
                                 format!(
                                     "Cannot access field {} on non-record type: {:?}",
-                                    &*self.get_ident_name(field_access.target),
+                                    &*self.get_ident_str(field_access.target),
                                     ty
                                 ),
                                 field_access.span,
@@ -1151,7 +1191,7 @@ impl IrModule {
                     _ => make_fail(
                         format!(
                             "Cannot access field {} on non-record type: {:?}",
-                            &*self.get_ident_name(field_access.target),
+                            &*self.get_ident_str(field_access.target),
                             type_ref
                         ),
                         field_access.span,
@@ -1168,56 +1208,128 @@ impl IrModule {
                 let block = self.eval_block(block, scope_id)?;
                 Ok(IrExpr::Block(block))
             }
+            Expression::MethodCall(m_call) => {
+                let base_expr = self.eval_expr(&m_call.base, scope_id)?;
+                let call = self.eval_function_call(&m_call.call, Some(base_expr), scope_id)?;
+                Ok(IrExpr::FunctionCall(call))
+            }
             Expression::FnCall(fn_call) => {
-                let function_id =
-                    self.scopes.find_function(scope_id, fn_call.name).ok_or(make_err(
-                        format!("Function not found: {}", &*self.get_ident_name(fn_call.name)),
-                        fn_call.span,
-                    ))?;
-
-                let function_to_call = if self.get_function(function_id).is_generic() {
-                    self.get_specialized_function_for_call(fn_call, function_id)?
-                } else {
-                    function_id
-                };
-                let mut call_parameters: Vec<(FnArgDefn, &parse::FnCallArg)> = Vec::new();
-                for fn_param in &self.get_function(function_to_call).params {
-                    let matching_param_by_name =
-                        fn_call.args.iter().find(|arg| arg.name == Some(fn_param.name));
-                    let matching_param =
-                        matching_param_by_name.or(fn_call.args.get(fn_param.position));
-                    if let Some(param) = matching_param {
-                        call_parameters.push((fn_param.clone(), param));
-                    } else {
-                        return make_fail(
-                            format!("Could not find match for parameter {}", fn_param.name),
-                            fn_call.span,
-                        );
-                    }
-                }
-                // forget: function
-                let mut fn_args: Vec<IrExpr> = Vec::new();
-                for (arg_defn, arg_value) in call_parameters {
-                    let param_expr = self.eval_expr(&arg_value.value, scope_id)?;
-                    if let Err(e) = self.typecheck_types(arg_defn.ty, param_expr.get_type()) {
-                        return make_fail(
-                            format!("Invalid parameter type: {}", e),
-                            arg_value.value.get_span(),
-                        );
-                    }
-                    fn_args.push(param_expr);
-                }
-                let function_ret_type = self.get_function(function_to_call).ret_type;
-                let call = IrExpr::FunctionCall(FunctionCall {
-                    callee_function_id: function_to_call,
-                    args: fn_args,
-                    ret_type: function_ret_type,
-                    span: fn_call.span,
-                });
-                Ok(call)
+                let call = self.eval_function_call(fn_call, None, scope_id)?;
+                Ok(IrExpr::FunctionCall(call))
             }
         }
     }
+    fn eval_function_call(
+        &mut self,
+        fn_call: &FnCall,
+        this_expr: Option<IrExpr>,
+        scope_id: ScopeId,
+    ) -> IrGenResult<Call> {
+        let function_id = match this_expr.as_ref() {
+            Some(base_expr) => {
+                // Resolve a method call
+                let type_ref = base_expr.get_type();
+                let function_id = match type_ref {
+                    TypeRef::String => {
+                        // TODO: Abstract out a way to go from identifier to scope
+                        //       (name -> ident id -> namespace id -> namespace -> scope id -> scope
+                        let string_ident_id = self.ast.ident_id("string");
+                        let string_namespace_id =
+                            self.scopes.find_namespace(scope_id, string_ident_id).unwrap();
+                        let string_namespace = self.get_namespace(string_namespace_id).unwrap();
+                        let string_scope = self.scopes.get_scope(string_namespace.scope_id);
+                        string_scope.find_function(fn_call.name)
+                    }
+                    TypeRef::TypeId(type_id) => {
+                        let ty = self.get_type(type_id);
+                        match ty {
+                            Type::Array(_array_type) => {
+                                let array_ident_id = self.ast.ident_id("Array");
+                                let array_namespace_id =
+                                    self.scopes.find_namespace(scope_id, array_ident_id).unwrap();
+                                let array_namespace =
+                                    self.get_namespace(array_namespace_id).unwrap();
+                                let array_scope = self.scopes.get_scope(array_namespace.scope_id);
+                                array_scope.find_function(fn_call.name)
+                            }
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                };
+                match function_id {
+                    Some(function_id) => function_id,
+                    None => {
+                        return make_fail(
+                            format!(
+                                "Method {} does not exist on type {:?}",
+                                &*self.get_ident_str(fn_call.name),
+                                type_ref,
+                            ),
+                            fn_call.span,
+                        )
+                    }
+                }
+            }
+            None => {
+                // Resolve a non-method call
+                let function_id =
+                    self.scopes.find_function(scope_id, fn_call.name).ok_or(make_err(
+                        format!("Function not found: {}", &*self.get_ident_str(fn_call.name)),
+                        fn_call.span,
+                    ))?;
+                function_id
+            }
+        };
+
+        let function_to_call = if self.get_function(function_id).is_generic() {
+            self.get_specialized_function_for_call(fn_call, function_id)?
+        } else {
+            function_id
+        };
+        let mut final_args: Vec<IrExpr> = Vec::new();
+        let params_cloned = self.get_function(function_to_call).params.clone();
+        let mut param_iter = params_cloned.iter();
+        // We have to deal with this outside of the loop because
+        // we can't 'move' out of this_expr more than once
+        if let Some(first) = param_iter.next() {
+            let is_self = first.name == self.ast.ident_id("self");
+            if is_self {
+                if let Some(this) = this_expr {
+                    final_args.push(this);
+                }
+            }
+        }
+        for fn_param in param_iter {
+            let matching_param_by_name =
+                fn_call.args.iter().find(|arg| arg.name == Some(fn_param.name));
+            let matching_param = matching_param_by_name.or(fn_call.args.get(fn_param.position));
+            if let Some(param) = matching_param {
+                let expr = self.eval_expr(&param.value, scope_id)?;
+                if let Err(e) = self.typecheck_types(fn_param.ty, expr.get_type()) {
+                    return make_fail(
+                        format!("Invalid parameter type: {}", e),
+                        param.value.get_span(),
+                    );
+                }
+                final_args.push(expr);
+            } else {
+                return make_fail(
+                    format!("Could not find match for parameter {}", fn_param.name),
+                    fn_call.span,
+                );
+            }
+        }
+        let function_ret_type = self.get_function(function_to_call).ret_type;
+        let call = Call {
+            callee_function_id: function_to_call,
+            args: final_args,
+            ret_type: function_ret_type,
+            span: fn_call.span,
+        };
+        Ok(call)
+    }
+
     fn get_specialized_function_for_call(
         &mut self,
         fn_call: &FnCall,
@@ -1232,13 +1344,13 @@ impl IrModule {
         //       1. Find arguments that include a type param
         //       2. Find the actual value passed for each, find where the type variable appears within
         //          that type expression, and assign it to the concrete type
-        trace!("Specializing function: {}", &*self.get_ident_name(fn_call.name));
+        trace!("Specializing function: {}", &*self.get_ident_str(fn_call.name));
         let generic_function = self.get_function(old_function_id).clone();
         let type_params =
             generic_function.type_params.as_ref().expect("expected function to be generic");
         let type_args =
             fn_call.type_args.as_ref().ok_or(make_err("fn call mising type args", fn_call.span))?;
-        let mut new_name = self.get_ident_name(fn_call.name).to_string();
+        let mut new_name = self.get_ident_str(fn_call.name).to_string();
 
         // The specialized function lives in the root of the module
         // The only real difference is the scope: it has substitutions for the type variables
@@ -1376,6 +1488,31 @@ impl IrModule {
         let ir_block = IrBlock { ret_type, scope_id: 0, statements, span: block.span };
         Ok(ir_block)
     }
+
+    fn resolve_intrinsic_function_type(
+        &self,
+        fn_def: &FnDef,
+        scope_id: ScopeId,
+    ) -> Option<IntrinsicFunctionType> {
+        let Some(current_namespace) = self.namespaces.iter().find(|ns| ns.scope_id == scope_id) else {
+            panic!("Functions must be defined within a namespace scope")
+        };
+        if current_namespace.name == self.ast.ident_id("string")
+            && fn_def.name == self.ast.ident_id("length")
+        {
+            Some(IntrinsicFunctionType::StringLength)
+        } else if current_namespace.name == self.ast.ident_id("Array")
+            && fn_def.name == self.ast.ident_id("length")
+        {
+            Some(IntrinsicFunctionType::ArrayLength)
+        } else if current_namespace.name == self.ast.ident_id("_root") {
+            let function_name = &*self.get_ident_str(fn_def.name);
+            IntrinsicFunctionType::from_function_name(function_name)
+        } else {
+            None
+        }
+    }
+
     fn eval_function(
         &mut self,
         fn_def: &FnDef,
@@ -1390,10 +1527,11 @@ impl IrModule {
         let is_generic =
             !specialize && fn_def.type_args.as_ref().map(|args| !args.is_empty()).unwrap_or(false);
         trace!(
-            "function {} is_generic: {}, specialize: {}",
-            &*self.get_ident_name(fn_def.name),
+            "eval_function {} is_generic: {}, specialize: {} in scope: {}",
+            &*self.get_ident_str(fn_def.name),
             is_generic,
-            specialize
+            specialize,
+            scope_id
         );
         let mut type_params: Option<Vec<TypeParam>> = None;
         if is_generic {
@@ -1411,7 +1549,7 @@ impl IrModule {
             type_params = Some(the_type_params);
             trace!(
                 "Added type arguments to function {} scope {:?}",
-                &*self.get_ident_name(fn_def.name),
+                &*self.get_ident_str(fn_def.name),
                 self.scopes.get_scope(fn_scope_id)
             );
         }
@@ -1434,8 +1572,7 @@ impl IrModule {
         }
 
         let intrinsic_type = if fn_def.is_intrinsic {
-            let name = &*self.ast.get_ident_name(fn_def.name);
-            IntrinsicFunctionType::from_function_name(name)
+            self.resolve_intrinsic_function_type(&fn_def, scope_id)
         } else {
             None
         };
@@ -1467,7 +1604,7 @@ impl IrModule {
                     return make_fail(
                         format!(
                             "Function {} return type mismatch: {}",
-                            &*self.get_ident_name(fn_def.name),
+                            &*self.get_ident_str(fn_def.name),
                             msg
                         ),
                         fn_def.span,
@@ -1484,9 +1621,31 @@ impl IrModule {
         function.block = body_block;
         Ok(function_id)
     }
+    fn eval_namespace(
+        &mut self,
+        ast_namespace: &ParsedNamespace,
+        scope_id: ScopeId,
+    ) -> IrGenResult<NamespaceId> {
+        // We add the new namespace's scope as a child of the current scope
+        let ns_scope_id = self.scopes.add_scope(scope_id);
+        let namespace = Namespace { name: ast_namespace.name, scope_id: ns_scope_id };
+        let namespace_id = self.add_namespace(namespace);
+        // We add the new namespace to the current scope
+        let scope = self.scopes.get_scope_mut(scope_id);
+        scope.add_namespace(ast_namespace.name, namespace_id);
+        for fn_def in &ast_namespace.functions {
+            // FIXME: The current AstId of index doesn't work when we have namespaces
+            self.eval_function(fn_def, 1000, ns_scope_id, false)?;
+        }
+        Ok(namespace_id)
+    }
     fn eval_definition(&mut self, ast_id: AstId, def: &Definition) -> IrGenResult<()> {
         let scope_id = self.scopes.get_root_scope_id();
         match def {
+            Definition::Namespace(namespace) => {
+                self.eval_namespace(namespace, scope_id)?;
+                Ok(())
+            }
             Definition::Const(const_val) => {
                 let _variable_id: VariableId = self.eval_const(const_val)?;
                 Ok(())
