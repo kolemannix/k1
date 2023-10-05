@@ -1,6 +1,6 @@
-pub const PRELUDE_SOURCE: &str = r#"fn printInt(value: int): unit
-fn print(value: string): unit
-fn exit(code: int): unit
+pub const PRELUDE_SOURCE: &str = r#"intern fn printInt(value: int): unit
+intern fn print(value: string): unit
+intern fn exit(code: int): unit
 fn assert(value: bool): unit {
   return if value { () } else { 
     print("ASSERT FAILED");
@@ -9,7 +9,7 @@ fn assert(value: bool): unit {
 }
 type Array = {}
 namespace string {
-  fn length(self: string): int
+  intern fn length(self: string): int
 }
 // -------- END PRELUDE --------"#;
 pub const PRELUDE_LINES: usize = 14;

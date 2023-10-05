@@ -196,7 +196,7 @@ impl TokenKind {
             "type" => Some(K::KeywordType),
             "while" => Some(K::KeywordWhile),
             "namespace" => Some(K::KeywordNamespace),
-            "intern" => Some(K::KeywordNamespace),
+            "intern" => Some(K::KeywordIntern),
             "==" => Some(K::EqualsEquals),
             "<=" => Some(K::LessThanEqual),
             ">=" => Some(K::GreaterThanEqual),
