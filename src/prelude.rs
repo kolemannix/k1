@@ -8,5 +8,8 @@ fn assert(value: bool): unit {
   };
 }
 type Array = {}
+namespace string {
+  fn length(self: string): int
+}
 // -------- END PRELUDE --------"#;
-pub const PRELUDE_LINES: usize = 11;
+pub const PRELUDE_LINES: usize = 14;

@@ -55,7 +55,6 @@ it's just an activity. It just took me 10 years to discover it again, but this t
 - [x] Array and Struct member assignment
 - [x] While Loop
 - [x] Assert (syscall exit? 'panic'?)
-- [ ] Replace spans on IR with just ast node ids
 - [ ] Replace .length on string and array with a MethodCall node (adding empty parens ())
 - [-] Strings
   - [x] String literals cant have spaces lol
@@ -68,6 +67,7 @@ it's just an activity. It just took me 10 years to discover it again, but this t
   - [x] add string.length function
   - [ ] char.to_string()
 - [ ] Infer val types
+- [ ] Replace spans on IR with just ast node ids
 - [ ] Change Array repr to a struct w/ length so we have length
 - [ ] Embed comments in LLVM IR (source snippets or line numbers?)
 - [ ] Optionals
@@ -104,10 +104,11 @@ it's just an activity. It just took me 10 years to discover it again, but this t
 
 # Hacks to fix
 - [x] Fix line comments
+- [ ] Parse: lhs of function call can currently only be an identifier; can't do `makeFn(power = "max")()`
 - [ ] Rename IR to typed-ast, since its a tree not instruction set. TAST?
-- [ ] Make intrinsics like arrayIndex a real function
+- [ ] Make intrinsics like arrayIndex a real function in the LLVM IR
 - [x] Fix line numbers to account for prelude
-- [ ] main function / detect entrypoint properly. Typing of main? How to get main args?
+- [ ] main entrypoint properly. Typing of main? How to get main args?
 - [ ] Replace vectors with smallvec where appropriate
 - [x] Fix unnecessary load of function args
 - [x] Proper println implementation. Fine to use printf internally for now but we should define our own func around it

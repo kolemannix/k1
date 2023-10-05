@@ -256,7 +256,7 @@ impl<'ctx> Codegen<'ctx> {
         self.module.ast.get_ident_name(id)
     }
 
-    fn build_print_int_call(&mut self, call: &FunctionCall) -> BasicValueEnum<'ctx> {
+    fn build_print_int_call(&mut self, call: &Call) -> BasicValueEnum<'ctx> {
         // Assume the arg is an int since that's what the intrinsic typechecks for
         let first_arg = self.codegen_expr(&call.args[0]);
 
@@ -281,7 +281,7 @@ impl<'ctx> Codegen<'ctx> {
         call
     }
 
-    fn build_print_string_call(&mut self, call: &FunctionCall) -> BasicValueEnum<'ctx> {
+    fn build_print_string_call(&mut self, call: &Call) -> BasicValueEnum<'ctx> {
         let first_arg = self.codegen_expr(&call.args[0]);
         let length =
             self.builtin_types.string_length_loaded(&self.builder, first_arg.into_pointer_value());
@@ -701,7 +701,7 @@ impl<'ctx> Codegen<'ctx> {
             IrExpr::StringIndex(index_op) => self.codegen_string_index_operation(index_op),
         }
     }
-    fn codegen_function_call(&mut self, call: &FunctionCall) -> GeneratedValue<'ctx> {
+    fn codegen_function_call(&mut self, call: &Call) -> GeneratedValue<'ctx> {
         let ir_module = self.module.clone();
         let callee = ir_module.get_function(call.callee_function_id);
         if let Some(intrinsic_type) = callee.intrinsic_type {
@@ -771,7 +771,7 @@ impl<'ctx> Codegen<'ctx> {
     fn codegen_intrinsic(
         &mut self,
         intrinsic_type: IntrinsicFunctionType,
-        call: &FunctionCall,
+        call: &Call,
     ) -> GeneratedValue<'ctx> {
         match intrinsic_type {
             IntrinsicFunctionType::Exit => {
@@ -786,6 +786,12 @@ impl<'ctx> Codegen<'ctx> {
             IntrinsicFunctionType::PrintString => {
                 self.build_print_string_call(call);
                 self.builtin_types.unit_value.as_basic_value_enum().into()
+            }
+            IntrinsicFunctionType::StringLength => {
+                unimplemented!("String Length");
+            }
+            IntrinsicFunctionType::ArrayLength => {
+                unimplemented!("Array Length");
             }
         }
     }

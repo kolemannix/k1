@@ -3,7 +3,6 @@ use std::fmt::{Display, Formatter, Write};
 use std::rc::Rc;
 use string_interner::Symbol;
 
-use crate::ir::IntrinsicFunctionType;
 use crate::lex::*;
 use TokenKind as K;
 
@@ -236,12 +235,20 @@ impl Display for IndexOperation {
 }
 
 #[derive(Debug)]
+pub struct MethodCall {
+    pub base: Box<Expression>,
+    pub call: Box<FnCall>,
+    pub span: Span,
+}
+
+#[derive(Debug)]
 pub enum Expression {
     BinaryOp(BinaryOp),
     Literal(Literal),
     FnCall(FnCall),
     Variable(Variable),
     FieldAccess(FieldAccess),
+    MethodCall(MethodCall),
     Block(Block),
     If(IfExpr),
     Record(Record),
@@ -261,6 +268,7 @@ impl Expression {
             Expression::FnCall(call) => call.span,
             Expression::Variable(var) => var.span,
             Expression::FieldAccess(acc) => acc.span,
+            Expression::MethodCall(call) => call.span,
             Expression::Block(block) => block.span,
             Expression::If(if_expr) => if_expr.span,
             Expression::Record(record) => record.span,
@@ -271,16 +279,17 @@ impl Expression {
 
     pub fn is_assignable(&self) -> bool {
         match self {
-            Expression::Variable(var) => true,
-            Expression::IndexOperation(op) => true,
-            Expression::FieldAccess(acc) => true,
-            Expression::BinaryOp(op) => false,
-            Expression::Literal(lit) => false,
-            Expression::FnCall(call) => false,
-            Expression::Block(block) => false,
-            Expression::If(if_expr) => false,
-            Expression::Record(record) => false,
-            Expression::Array(array_expr) => false,
+            Expression::Variable(_var) => true,
+            Expression::IndexOperation(_op) => true,
+            Expression::FieldAccess(_acc) => true,
+            Expression::MethodCall(_call) => false,
+            Expression::BinaryOp(_op) => false,
+            Expression::Literal(_lit) => false,
+            Expression::FnCall(_call) => false,
+            Expression::Block(_block) => false,
+            Expression::If(_if_expr) => false,
+            Expression::Record(_record) => false,
+            Expression::Array(_array_expr) => false,
         }
     }
 }
@@ -295,6 +304,7 @@ impl Display for Expression {
             Expression::FnCall(call) => std::fmt::Debug::fmt(call, f),
             Expression::Variable(var) => var.fmt(f),
             Expression::FieldAccess(acc) => std::fmt::Debug::fmt(acc, f),
+            Expression::MethodCall(call) => std::fmt::Debug::fmt(call, f),
             Expression::Block(block) => std::fmt::Debug::fmt(block, f),
             Expression::If(if_expr) => std::fmt::Debug::fmt(if_expr, f),
             Expression::Record(record) => std::fmt::Debug::fmt(record, f),
@@ -405,6 +415,13 @@ pub enum TypeExpression {
 
 impl TypeExpression {
     #[inline]
+    pub fn is_int(&self) -> bool {
+        match self {
+            TypeExpression::Int(_) => true,
+            _ => false,
+        }
+    }
+    #[inline]
     pub fn get_span(&self) -> Span {
         match self {
             TypeExpression::Unit(span) => *span,
@@ -459,10 +476,17 @@ pub struct TypeDefn {
 }
 
 #[derive(Debug)]
+pub struct ParsedNamespace {
+    pub name: IdentifierId,
+    pub functions: Vec<FnDef>,
+}
+
+#[derive(Debug)]
 pub enum Definition {
     FnDef(Box<FnDef>),
     Const(Box<ConstVal>),
     Type(Box<TypeDefn>),
+    Namespace(Box<ParsedNamespace>),
 }
 
 #[derive(Debug)]
@@ -552,12 +576,6 @@ impl<'toks> Parser<'toks> {
         }
     }
 
-    fn check<A>(value: Option<A>) -> ParseResult<Option<A>> {
-        match value {
-            None => Ok(None),
-            Some(a) => Ok(Some(a)),
-        }
-    }
     fn expect<A>(what: &str, current: Token, value: ParseResult<Option<A>>) -> ParseResult<A> {
         match value {
             Ok(None) => Err(ParseError { expected: what.to_string(), token: current, cause: None }),
@@ -832,16 +850,32 @@ impl<'toks> Parser<'toks> {
                     self.tokens.advance();
                     let target = self.expect_eat_token(K::Ident)?;
                     let next = self.peek();
-                    if next.kind == K::OpenParen {
-                        // Method call
-                        todo!("method call parsing")
+                    // method call access syntax; a.b() a.b<int>(c)
+                    if next.kind == K::OpenParen
+                        || (next.kind == K::OpenAngle && !next.is_whitespace_preceeded())
+                    {
+                        let type_args = self.parse_optional_type_args()?;
+                        self.expect_eat_token(K::OpenParen)?;
+                        let (args, args_span) =
+                            self.eat_delimited(K::Comma, K::CloseParen, Parser::expect_fn_arg)?;
+                        let span = result.get_span().extended(args_span);
+                        result = Expression::MethodCall(MethodCall {
+                            base: Box::new(result),
+                            call: Box::new(FnCall {
+                                name: self.intern_ident_token(target),
+                                type_args,
+                                args,
+                                span,
+                            }),
+                            span,
+                        });
                     } else {
                         let span = result.get_span().extended(next.span);
                         result = Expression::FieldAccess(FieldAccess {
                             base: Box::new(result),
                             target: self.intern_ident_token(target),
                             span,
-                        })
+                        });
                     }
                 }
                 if next.kind == K::OpenBracket {
@@ -857,7 +891,7 @@ impl<'toks> Parser<'toks> {
                         target: Box::new(result),
                         index_expr: Box::new(index_expr),
                         span,
-                    })
+                    });
                 }
             } else {
                 return Ok(Some(result));
@@ -947,6 +981,24 @@ impl<'toks> Parser<'toks> {
         Ok(Some(final_expr))
     }
 
+    fn parse_optional_type_args(&mut self) -> ParseResult<Option<Vec<FnCallTypeArg>>> {
+        let next = self.peek();
+        if next.kind == K::OpenAngle {
+            // Eat the OpenAngle
+            self.tokens.advance();
+            let (type_expressions, type_args_span) =
+                self.eat_delimited(K::Comma, K::CloseAngle, Parser::expect_type_expression)?;
+            // TODO named type arguments
+            let type_args: Vec<_> = type_expressions
+                .into_iter()
+                .map(|type_expr| FnCallTypeArg { name: None, value: type_expr })
+                .collect();
+            Ok(Some(type_args))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Base expression meaning no postfix or binary ops
     fn parse_base_expression(&mut self) -> ParseResult<Option<Expression>> {
         let (first, second, third) = self.tokens.peek_three();
@@ -971,23 +1023,7 @@ impl<'toks> Parser<'toks> {
                 trace!("parse_expression FnCall");
                 // Eat the name
                 self.tokens.advance();
-                let type_args: Option<Vec<FnCallTypeArg>> = if second.kind == K::OpenAngle {
-                    // Eat the OpenAngle
-                    self.tokens.advance();
-                    let (type_expressions, type_args_span) = self.eat_delimited(
-                        K::Comma,
-                        K::CloseAngle,
-                        Parser::expect_type_expression,
-                    )?;
-                    // TODO named type arguments
-                    let type_args: Vec<_> = type_expressions
-                        .into_iter()
-                        .map(|type_expr| FnCallTypeArg { name: None, value: type_expr })
-                        .collect();
-                    Some(type_args)
-                } else {
-                    None
-                };
+                let type_args = self.parse_optional_type_args()?;
                 self.expect_eat_token(K::OpenParen)?;
                 let (args, args_span) =
                     self.eat_delimited(K::Comma, K::CloseParen, Parser::expect_fn_arg)?;
@@ -1227,7 +1263,7 @@ impl<'toks> Parser<'toks> {
     }
 
     fn parse_block(&mut self) -> ParseResult<Option<Block>> {
-        let Some(block_start) = Parser::check(self.eat_token(K::OpenBrace))? else {
+        let Some(block_start) = self.eat_token(K::OpenBrace) else {
             return Ok(None);
         };
         let closure =
@@ -1246,8 +1282,19 @@ impl<'toks> Parser<'toks> {
 
     fn parse_function(&mut self) -> ParseResult<Option<FnDef>> {
         trace!("parse_fndef");
-        let Some(fn_keyword) = Parser::check(self.eat_token(K::KeywordFn))? else {
-            return Ok(None);
+        let is_intrinsic = if self.peek().kind == K::KeywordIntern {
+            self.tokens.advance();
+            true
+        } else {
+            false
+        };
+
+        let Some(fn_keyword) = self.eat_token(K::KeywordFn) else {
+            if is_intrinsic {
+                return Err(ParseError { expected: "fn".to_string(), token: self.peek(), cause: None })
+            } else {
+                return Ok(None);
+            }
         };
         let func_name = self.expect_eat_token(K::Ident)?;
         let func_name_id = self.intern_ident_token(func_name);
@@ -1270,14 +1317,10 @@ impl<'toks> Parser<'toks> {
         let block = self.parse_block()?;
         let mut span = fn_keyword.span;
         span.end = block.as_ref().map(|b| b.span.end).unwrap_or(args_span.end);
-        // FIXME: Eventually, we'll use an 'intern' keyword to mark intrinsic decls
-        //        But for now, we are relying on the name
-        let is_intrinsic =
-            IntrinsicFunctionType::from_function_name(&self.get_ident_name(func_name_id)).is_some();
         Ok(Some(FnDef {
             name: func_name_id,
             type_args: type_arguments,
-            args: args,
+            args,
             ret_type,
             block,
             span,
@@ -1299,16 +1342,27 @@ impl<'toks> Parser<'toks> {
         }
     }
 
+    fn parse_namespace(&mut self) -> ParseResult<Option<ParsedNamespace>> {
+        let next = self.peek();
+        if next.kind != K::KeywordNamespace {
+            return Ok(None);
+        };
+        self.tokens.advance();
+        let ident = self.expect_eat_token(K::Ident)?;
+        self.expect_eat_token(K::OpenBrace)?;
+        let mut functions = Vec::new();
+        while let Some(fn_def) = self.parse_function()? {
+            functions.push(fn_def);
+        }
+        self.expect_eat_token(K::CloseBrace)?;
+        Ok(Some(ParsedNamespace { name: self.intern_ident_token(ident), functions }))
+    }
+
     fn parse_definition(&mut self) -> ParseResult<Option<Definition>> {
-        if let Some(const_def) = self.parse_const()? {
-            let sem = self.eat_token(K::Semicolon);
-            if sem.is_none() {
-                return Err(ParseError {
-                    expected: K::Semicolon.to_string(),
-                    token: self.peek(),
-                    cause: None,
-                });
-            }
+        if let Some(ns) = self.parse_namespace()? {
+            Ok(Some(Definition::Namespace(ns.into())))
+        } else if let Some(const_def) = self.parse_const()? {
+            self.expect_eat_token(K::Semicolon)?;
             Ok(Some(Definition::Const(const_def.into())))
         } else if let Some(fn_def) = self.parse_function()? {
             Ok(Some(Definition::FnDef(fn_def.into())))
