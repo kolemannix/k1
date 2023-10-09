@@ -55,7 +55,8 @@ it's just an activity. It just took me 10 years to discover it again, but this t
 - [x] Array and Struct member assignment
 - [x] While Loop
 - [x] Assert (syscall exit? 'panic'?)
-- [ ] Replace .length on string and array with a MethodCall node (adding empty parens ())
+- [x] Replace .length on string and array with a MethodCall node (adding empty parens ())
+- [x] Change Array repr to a struct w/ length so we have length
 - [-] Strings
   - [x] String literals cant have spaces lol
   - [x] print(string)
@@ -66,9 +67,10 @@ it's just an activity. It just took me 10 years to discover it again, but this t
   - [x] string[i] (char)
   - [x] add string.length function
   - [ ] char.to_string()
-- [ ] Infer val types
+- [x] Infer val types
+- [ ] Fix namespaces to require full paths (currently busted must be unique names globally)
 - [ ] Replace spans on IR with just ast node ids
-- [ ] Change Array repr to a struct w/ length so we have length
+- [ ] Type Ascriptions
 - [ ] Embed comments in LLVM IR (source snippets or line numbers?)
 - [ ] Optionals
 - [ ] Array push
@@ -105,8 +107,8 @@ it's just an activity. It just took me 10 years to discover it again, but this t
 # Hacks to fix
 - [x] Fix line comments
 - [ ] Parse: lhs of function call can currently only be an identifier; can't do `makeFn(power = "max")()`
-- [ ] Rename IR to typed-ast, since its a tree not instruction set. TAST?
-- [ ] Make intrinsics like arrayIndex a real function in the LLVM IR
+- [ ] Rename IR to typed-ast, since it's a tree not instruction set. TAST?
+- [ ] Make intrinsics like arrayIndex a real function in the LLVM IR?
 - [x] Fix line numbers to account for prelude
 - [ ] main entrypoint properly. Typing of main? How to get main args?
 - [ ] Replace vectors with smallvec where appropriate

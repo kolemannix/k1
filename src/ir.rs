@@ -32,6 +32,7 @@ pub struct RecordDefnField {
 #[derive(Debug, Clone)]
 pub struct RecordDefn {
     pub fields: Vec<RecordDefnField>,
+    pub name_if_named: Option<IdentifierId>,
     pub span: Span,
 }
 
@@ -52,6 +53,12 @@ pub enum TypeRef {
 }
 
 impl TypeRef {
+    pub fn as_type_id(&self) -> Option<TypeId> {
+        match self {
+            TypeRef::TypeId(type_id) => Some(*type_id),
+            _ => None,
+        }
+    }
     pub fn expect_type_id(&self) -> TypeId {
         match self {
             TypeRef::TypeId(type_id) => *type_id,
@@ -634,8 +641,20 @@ impl IrModule {
         self.namespaces.get(namespace_id as usize)
     }
 
+    pub fn get_type_if_id(&self, type_ref: TypeRef) -> Option<&Type> {
+        if let TypeRef::TypeId(type_id) = type_ref {
+            Some(self.get_type(type_id))
+        } else {
+            None
+        }
+    }
+
     pub fn get_type(&self, type_id: TypeId) -> &Type {
         &self.types[type_id as usize]
+    }
+
+    pub fn get_type_mut(&mut self, type_id: TypeId) -> &mut Type {
+        &mut self.types[type_id as usize]
     }
 
     pub fn is_reference_type(&self, ty: TypeRef) -> bool {
@@ -670,6 +689,23 @@ impl IrModule {
         }
     }
 
+    fn eval_type_defn(&mut self, defn: &parse::TypeDefn, scope_id: ScopeId) -> IrGenResult<TypeId> {
+        let TypeRef::TypeId(type_id) = self.eval_type_expr(&defn.value_expr, scope_id)? else {
+            return make_fail("Expected non-scalar rhs of type definition", defn.value_expr.get_span());
+        };
+        match self.get_type_mut(type_id) {
+            Type::Record(record_defn) => {
+                // Add the name to this record defn so it can have associated
+                // methods and constants
+                record_defn.name_if_named = Some(defn.name);
+                Ok(type_id)
+            }
+            _ => make_fail("Invalid rhs for named type definition", defn.value_expr.get_span()),
+        }?;
+        self.scopes.add_type(scope_id, defn.name, TypeRef::TypeId(type_id));
+        Ok(type_id)
+    }
+
     fn eval_type_expr(
         &mut self,
         expr: &parse::TypeExpression,
@@ -687,7 +723,8 @@ impl IrModule {
                     let ty = self.eval_type_expr(&ast_field.ty, scope_id)?;
                     fields.push(RecordDefnField { name: ast_field.name, ty, index })
                 }
-                let record_defn = RecordDefn { fields, span: record_defn.span };
+                let record_defn =
+                    RecordDefn { fields, name_if_named: None, span: record_defn.span };
                 let type_id = self.add_type(Type::Record(record_defn));
                 Ok(TypeRef::TypeId(type_id))
             }
@@ -905,6 +942,9 @@ impl IrModule {
         Ok(num)
     }
 
+    // If the expr is already a block, do nothing
+    // If it is not, make a new block with just this expression inside.
+    // Used main for if/else
     fn transform_expr_to_block(&mut self, expr: IrExpr, scope_id: ScopeId) -> IrBlock {
         match expr {
             IrExpr::Block(b) => b,
@@ -927,32 +967,56 @@ impl IrModule {
         block.ret_type = TypeRef::Unit;
     }
 
-    // Maybe, pass in expected type for smarter stuff
-    fn eval_expr(&mut self, expr: &Expression, scope_id: ScopeId) -> IrGenResult<IrExpr> {
+    /// Passing `expected_type` is an optimization that can save us work.
+    /// It does not guarantee that the returned expr always conforms
+    /// to the given `expected_type`
+    /// Although, maybe we re-think that because it would save
+    /// a lot of code if we did a final check here before returning!
+    fn eval_expr(
+        &mut self,
+        expr: &Expression,
+        scope_id: ScopeId,
+        expected_type: Option<TypeRef>,
+    ) -> IrGenResult<IrExpr> {
         match expr {
             Expression::Array(array_expr) => {
-                // Yet another place where passing in the expected type
-                // would be effective
-                // What is the type of an array literal?
-                // If we have some subtyping, the 'widest' common element type
-                // Maybe just the type of the first element and enforce homogeneous
-                // IF empty, Never?
-                let mut element_type: TypeRef = TypeRef::Unit;
+                let mut element_type: Option<TypeRef> = match expected_type.as_ref() {
+                    Some(TypeRef::TypeId(type_id)) => match self.get_type(*type_id) {
+                        Type::Array(arr) => Ok(Some(arr.element_type)),
+                        t => make_fail(format!("Expected {:?} but got Array", t), array_expr.span),
+                    },
+                    Some(other) => {
+                        make_fail(format!("Expected {:?} but got Array", other), array_expr.span)
+                    }
+                    None => Ok(None),
+                }?;
                 let elements: Vec<IrExpr> = {
                     let mut elements = Vec::new();
                     for elem in &array_expr.elements {
-                        let ir_expr = self.eval_expr(elem, scope_id)?;
-                        if element_type != TypeRef::Unit {
-                            self.typecheck_types(element_type, ir_expr.get_type())
-                                .map_err(|msg| make_err(msg, elem.get_span()))?
-                        }
-                        element_type = ir_expr.get_type();
+                        let ir_expr = self.eval_expr(elem, scope_id, element_type)?;
+                        if element_type.is_none() {
+                            element_type = Some(ir_expr.get_type())
+                        };
                         elements.push(ir_expr);
                     }
                     elements
                 };
-                let array_type = ArrayType { element_type, span: array_expr.span };
-                let type_id = self.add_type(Type::Array(array_type));
+                let element_type = element_type.expect("By now this should be populated");
+                // Technically we should not insert a new type here if we already have a type_id
+                // representing an Array with this element type. But maybe we just make
+                // the type internment do an equality check instead, so the 'consumer' code
+                // throughout the compiler doesn't have to worry about creating or not creating
+                // duplicate types; this is what Andrew Kelley just implemented with Zig's
+                // intern pool that does full equality checking
+                // https://github.com/ziglang/zig/pull/15569
+                let type_id = match expected_type {
+                    Some(t) => t.expect_type_id(),
+                    None => {
+                        let array_type = ArrayType { element_type, span: array_expr.span };
+                        let type_id = self.add_type(Type::Array(array_type));
+                        type_id
+                    }
+                };
                 Ok(IrExpr::Literal(IrLiteral::Array(ArrayLiteral {
                     elements,
                     type_id,
@@ -960,15 +1024,13 @@ impl IrModule {
                 })))
             }
             Expression::IndexOperation(index_op) => {
-                // De-sugar to _arrayIndex(target, index)
-                // Indexing only works for builtin Array and string for now
-
-                let index_expr = self.eval_expr(&index_op.index_expr, scope_id)?;
+                let index_expr =
+                    self.eval_expr(&index_op.index_expr, scope_id, Some(TypeRef::Int))?;
                 if index_expr.get_type() != TypeRef::Int {
                     return make_fail("index type must be int", index_op.span);
                 }
 
-                let base_expr = self.eval_expr(&index_op.target, scope_id)?;
+                let base_expr = self.eval_expr(&index_op.target, scope_id, None)?;
                 let target_type = base_expr.get_type();
                 match target_type {
                     TypeRef::String => Ok(IrExpr::StringIndex(IndexOp {
@@ -993,35 +1055,61 @@ impl IrModule {
                 }
             }
             Expression::Record(ast_record) => {
-                let mut fields = Vec::new();
-                let mut field_types = Vec::new();
+                // TODO: Technically we could check expected_type here and save this evaluation if it
+                // is not a record
+                let mut field_values = Vec::new();
+                let mut field_defns = Vec::new();
                 for (index, ast_field) in ast_record.fields.iter().enumerate() {
-                    let expr = self.eval_expr(&ast_field.expr, scope_id)?;
-                    field_types.push(RecordDefnField {
+                    let expr = self.eval_expr(&ast_field.expr, scope_id, None)?;
+                    field_defns.push(RecordDefnField {
                         name: ast_field.name,
                         ty: expr.get_type(),
                         index,
                     });
-                    fields.push(RecordField { name: ast_field.name, expr });
+                    field_values.push(RecordField { name: ast_field.name, expr });
                 }
-                let record_type = RecordDefn { fields: field_types, span: ast_record.span };
-                let record_ty = self.add_type(Type::Record(record_type));
-                let ir_record = Record { fields, span: ast_record.span, type_id: record_ty };
+                // We can use 'expected type' here to just go ahead and typecheck or fail
+                // rather than make a duplicate type
+                let record_type_id = match expected_type.as_ref() {
+                    None => {
+                        let record_type = RecordDefn {
+                            fields: field_defns,
+                            name_if_named: None,
+                            span: ast_record.span,
+                        };
+                        let anon_record_type_id = self.add_type(Type::Record(record_type));
+                        Ok(anon_record_type_id)
+                    }
+                    Some(TypeRef::TypeId(record_type_id)) => match self.get_type(*record_type_id) {
+                        // If there is an expected type, it had better be a record
+                        // If it is, we return its existing id
+                        // If it is not, that's a typechecker error
+                        Type::Record(_) => Ok(*record_type_id),
+                        t => make_fail(
+                            format!("Expected type {:?} but got record literal", t),
+                            ast_record.span,
+                        ),
+                    },
+                    Some(other_type) => make_fail(
+                        format!("Expected type {:?} but got record literal", other_type),
+                        ast_record.span,
+                    ),
+                }?;
+                let ir_record =
+                    Record { fields: field_values, span: ast_record.span, type_id: record_type_id };
                 Ok(IrExpr::Literal(IrLiteral::Record(ir_record)))
             }
             Expression::If(if_expr) => {
                 // Ensure boolean condition (or optional which isn't built yet)
-                let condition = self.eval_expr(&if_expr.cond, scope_id)?;
-                if self.typecheck_types(TypeRef::Bool, condition.get_type()).is_err() {
+                let condition = self.eval_expr(&if_expr.cond, scope_id, Some(TypeRef::Bool))?;
+                if let Err(e) = self.typecheck_types(TypeRef::Bool, condition.get_type()) {
                     return make_fail(
-                        format!(
-                            "If condition must be of type bool; but got {:?}",
-                            condition.get_type()
-                        ),
+                        format!("Invalid if condition type: {}", e),
                         if_expr.cond.get_span(),
                     );
                 }
-                let consequent_expr = self.eval_expr(&if_expr.cons, scope_id)?;
+                let consequent_expr = self.eval_expr(&if_expr.cons, scope_id, None)?;
+                let consequent_type = consequent_expr.get_type();
                 // De-sugar if without else:
                 // If there is no alternate, we coerce the consequent to return Unit, so both
                 // branches have a matching type, making codegen simple and branchless
@@ -1033,7 +1121,7 @@ impl IrModule {
                     self.transform_expr_to_block(consequent_expr, scope_id)
                 };
                 let alternate = if let Some(alt) = &if_expr.alt {
-                    let expr = self.eval_expr(alt, scope_id)?;
+                    let expr = self.eval_expr(alt, scope_id, Some(consequent_type))?;
                     self.transform_expr_to_block(expr, scope_id)
                 } else {
                     IrBlock {
@@ -1065,10 +1153,11 @@ impl IrModule {
             }
             Expression::BinaryOp(binary_op) => {
                 // Infer expected type to be type of operand1
-                let lhs = self.eval_expr(&binary_op.lhs, scope_id)?;
-                let rhs = self.eval_expr(&binary_op.rhs, scope_id)?;
+                let lhs = self.eval_expr(&binary_op.lhs, scope_id, None)?;
+                let rhs = self.eval_expr(&binary_op.rhs, scope_id, Some(lhs.get_type()))?;
 
-                // FIXME: Typechecker This is not enough; we need to check that the lhs is actually valid
+                // FIXME: Typechecker We are not really typechecking binary operations at all.
+                //        This is not enough; we need to check that the lhs is actually valid
                 //        for this operation first
                 if self.typecheck_types(lhs.get_type(), rhs.get_type()).is_err() {
                     return make_fail("operand types did not match", binary_op.span);
@@ -1145,7 +1234,7 @@ impl IrModule {
                 Ok(expr)
             }
             Expression::FieldAccess(field_access) => {
-                let base_expr = self.eval_expr(&field_access.base, scope_id)?;
+                let base_expr = self.eval_expr(&field_access.base, scope_id, None)?;
                 let type_ref = base_expr.get_type();
                 let ret_type = match type_ref {
                     TypeRef::String => {
@@ -1209,7 +1298,7 @@ impl IrModule {
                 Ok(IrExpr::Block(block))
             }
             Expression::MethodCall(m_call) => {
-                let base_expr = self.eval_expr(&m_call.base, scope_id)?;
+                let base_expr = self.eval_expr(&m_call.base, scope_id, None)?;
                 let call = self.eval_function_call(&m_call.call, Some(base_expr), scope_id)?;
                 Ok(IrExpr::FunctionCall(call))
             }
@@ -1225,6 +1314,9 @@ impl IrModule {
         this_expr: Option<IrExpr>,
         scope_id: ScopeId,
     ) -> IrGenResult<Call> {
+        // This block is all about method or resolution
+        // We are trying to find out if this method or function
+        // exists, and returning its id if so
         let function_id = match this_expr.as_ref() {
             Some(base_expr) => {
                 // Resolve a method call
@@ -1251,6 +1343,19 @@ impl IrModule {
                                     self.get_namespace(array_namespace_id).unwrap();
                                 let array_scope = self.scopes.get_scope(array_namespace.scope_id);
                                 array_scope.find_function(fn_call.name)
+                            }
+                            Type::Record(record) => {
+                                // Need to distinguish between instances of 'named'
+                                // records and anonymous ones
+                                let Some(record_type_name) = record.name_if_named else {
+                                  return make_fail("Anonymous records currently have no methods", record.span);  
+                                };
+                                let record_namespace_id =
+                                    self.scopes.find_namespace(scope_id, record_type_name).unwrap();
+                                let record_namespace =
+                                    self.get_namespace(record_namespace_id).unwrap();
+                                let record_scope = self.scopes.get_scope(record_namespace.scope_id);
+                                record_scope.find_function(fn_call.name)
                             }
                             _ => None,
                         }
@@ -1282,6 +1387,7 @@ impl IrModule {
             }
         };
 
+        // Now that we have resolved to a function id, we need to specialize it if generic
         let function_to_call = if self.get_function(function_id).is_generic() {
             self.get_specialized_function_for_call(fn_call, function_id)?
         } else {
@@ -1307,7 +1413,7 @@ impl IrModule {
                 fn_call.args.iter().find(|arg| arg.name == Some(fn_param.name));
             let matching_param = matching_param_by_name.or(fn_call.args.get(fn_param.position));
             if let Some(param) = matching_param {
-                let expr = self.eval_expr(&param.value, scope_id)?;
+                let expr = self.eval_expr(&param.value, scope_id, Some(fn_param.ty))?;
                 if let Err(e) = self.typecheck_types(fn_param.ty, expr.get_type()) {
                     return make_fail(
                         format!("Invalid parameter type: {}", e),
@@ -1377,50 +1483,43 @@ impl IrModule {
     fn eval_block_stmt(&mut self, stmt: &BlockStmt, scope_id: ScopeId) -> IrGenResult<IrStmt> {
         match stmt {
             BlockStmt::ReturnStmt(return_stmt) => {
-                let expr = self.eval_expr(&return_stmt.expr, scope_id)?;
-                let ret_inst =
-                    IrStmt::ReturnStmt(Box::new(ReturnStmt { expr, span: return_stmt.span }));
-                Ok(ret_inst)
+                let expr = self.eval_expr(&return_stmt.expr, scope_id, None)?;
+                let ret = IrStmt::ReturnStmt(Box::new(ReturnStmt { expr, span: return_stmt.span }));
+                Ok(ret)
             }
             BlockStmt::ValDef(val_def) => {
-                let value_expr = self.eval_expr(&val_def.value, scope_id)?;
-                let provided_type = val_def
-                    .ty
-                    .as_ref()
-                    .ok_or(make_err("Missing type annotation for val", val_def.span))?;
-                let ir_type = self.eval_type_expr(provided_type, scope_id)?;
+                let provided_ir_type = match val_def.ty.as_ref() {
+                    None => None,
+                    Some(type_expr) => Some(self.eval_type_expr(&type_expr, scope_id)?),
+                };
+                let value_expr = self.eval_expr(&val_def.value, scope_id, provided_ir_type)?;
+                let actual_type = value_expr.get_type();
+                if let Some(expected_type) = provided_ir_type {
+                    if let Err(msg) = self.typecheck_types(expected_type, actual_type) {
+                        return make_fail(
+                            format!("Local variable type mismatch: {}", msg),
+                            val_def.span,
+                        );
+                    }
+                }
+
                 let variable_id = self.add_variable(Variable {
                     is_mutable: val_def.is_mutable,
                     name: val_def.name,
-                    ir_type,
+                    ir_type: actual_type,
                     owner_scope: Some(scope_id),
                 });
-                if let Err(msg) = self.typecheck_types(ir_type, value_expr.get_type()) {
-                    return make_fail(
-                        format!("Local variable type mismatch {}", msg),
-                        val_def.span,
-                    );
-                }
-                let val_def_expr = IrStmt::ValDef(Box::new(ValDef {
-                    ir_type,
+                let val_def_stmt = IrStmt::ValDef(Box::new(ValDef {
+                    ir_type: actual_type,
                     variable_id,
                     initializer: value_expr,
                     span: val_def.span,
                 }));
                 self.scopes.add_variable(scope_id, val_def.name, variable_id);
-                Ok(val_def_expr)
+                Ok(val_def_stmt)
             }
             BlockStmt::Assignment(assignment) => {
-                // So, we want to be able to assign to an array elem, x[1] = 2,
-                // but we currently desugar the expression x[1] to a function call that returns an int, not a pointer
-                // we don't even have 'pointers' as language constructs so we need to do something different
-                // for the lhs based on whether its part of an assignment or not
-                //
-                // The question is: how do we represent "pointer to array elem" or "pointer to struct member"
-                // As the LHS in the IR so that codegen knows what to do with it
-                // I either need to have 'Pointer' types in the typed ast or
-                // just special-case it
-                let lhs = self.eval_expr(&assignment.lhs, scope_id)?;
+                let lhs = self.eval_expr(&assignment.lhs, scope_id, None)?;
                 match &lhs {
                     IrExpr::Variable(v) => {
                         let var = self.get_variable(v.variable_id);
@@ -1441,7 +1540,7 @@ impl IrModule {
                         )
                     }
                 };
-                let rhs = self.eval_expr(&assignment.rhs, scope_id)?;
+                let rhs = self.eval_expr(&assignment.rhs, scope_id, Some(lhs.get_type()))?;
                 if let Err(msg) = self.typecheck_types(lhs.get_type(), rhs.get_type()) {
                     return make_fail(
                         format!("Invalid types for assignment: {}", msg),
@@ -1456,11 +1555,11 @@ impl IrModule {
                 Ok(expr)
             }
             BlockStmt::LoneExpression(expression) => {
-                let expr = self.eval_expr(expression, scope_id)?;
+                let expr = self.eval_expr(expression, scope_id, None)?;
                 Ok(IrStmt::Expr(Box::new(expr)))
             }
             BlockStmt::While(while_stmt) => {
-                let cond = self.eval_expr(&while_stmt.cond, scope_id)?;
+                let cond = self.eval_expr(&while_stmt.cond, scope_id, Some(TypeRef::Bool))?;
                 if let Err(e) = self.typecheck_types(TypeRef::Bool, cond.get_type()) {
                     return make_fail(
                         format!("Invalid while condition type: {}", e),
@@ -1657,9 +1756,9 @@ impl IrModule {
                 self.eval_function(fn_def, ast_id, scope_id, false)?;
                 Ok(())
             }
-            Definition::Type(type_defn) => {
+            Definition::TypeDef(type_defn) => {
+                self.eval_type_defn(type_defn, scope_id)?;
                 let typ = self.eval_type_expr(&type_defn.value_expr, scope_id)?;
-                self.scopes.add_type(scope_id, type_defn.name, typ);
                 Ok(())
             }
         }

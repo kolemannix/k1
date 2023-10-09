@@ -485,7 +485,7 @@ pub struct ParsedNamespace {
 pub enum Definition {
     FnDef(Box<FnDef>),
     Const(Box<ConstVal>),
-    Type(Box<TypeDefn>),
+    TypeDef(Box<TypeDefn>),
     Namespace(Box<ParsedNamespace>),
 }
 
@@ -1367,7 +1367,7 @@ impl<'toks> Parser<'toks> {
         } else if let Some(fn_def) = self.parse_function()? {
             Ok(Some(Definition::FnDef(fn_def.into())))
         } else if let Some(type_def) = self.parse_typedef()? {
-            Ok(Some(Definition::Type(type_def.into())))
+            Ok(Some(Definition::TypeDef(type_def.into())))
         } else {
             Ok(None)
         }
