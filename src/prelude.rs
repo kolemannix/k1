@@ -11,5 +11,8 @@ type Array = {}
 namespace string {
   intern fn length(self: string): int
 }
+namespace Array {
+  intern fn length(self: Array): int
+}
 // -------- END PRELUDE --------"#;
-pub const PRELUDE_LINES: usize = 14;
+pub const PRELUDE_LINES: usize = 17;

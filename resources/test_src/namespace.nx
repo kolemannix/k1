@@ -1,0 +1,13 @@
+type Foo = { x: int }
+
+namespace Foo {
+  fn getValue(self: Foo): int {
+    return self.x;
+  }
+}
+
+fn main(): int {
+  val x: Foo = { x: 42 };
+  assert(x.getValue() == 42);
+  return 0;
+}

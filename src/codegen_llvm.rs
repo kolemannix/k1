@@ -25,6 +25,7 @@ use crate::ir::*;
 use crate::parse::{IdentifierId, IndexOperation};
 
 struct BuiltinTypes<'ctx> {
+    ctx: &'ctx Context,
     i64: IntType<'ctx>,
     unit: IntType<'ctx>,
     unit_value: IntValue<'ctx>,
@@ -33,10 +34,48 @@ struct BuiltinTypes<'ctx> {
     false_value: IntValue<'ctx>,
     char: IntType<'ctx>,
     c_str: PointerType<'ctx>,
+    any_ptr: PointerType<'ctx>,
+    any_value: BasicTypeEnum<'ctx>,
     string_struct: StructType<'ctx>,
 }
 
 impl<'ctx> BuiltinTypes<'ctx> {
+    fn array_struct(&self, elem_type: BasicTypeEnum<'ctx>) -> StructType<'ctx> {
+        // NOTE: All the 'length' types could probably be i32 but our language int type is only i64
+        //       so we couldn't enforce that at the lang level right now
+        let length_type = self.ctx.i64_type().as_basic_type_enum();
+        let data_type = elem_type.ptr_type(AddressSpace::default()).as_basic_type_enum();
+        self.ctx.struct_type(&[length_type, data_type], false)
+    }
+    fn array_length_loaded(
+        &self,
+        builder: &Builder<'ctx>,
+        array_ptr: PointerValue<'ctx>,
+    ) -> IntValue<'ctx> {
+        // The element type doesn't matter we just want to gep to the length field
+        let length_ptr = builder
+            .build_struct_gep(self.array_struct(self.any_value), array_ptr, 0, "array_length_ptr")
+            .unwrap();
+        let length = builder.build_load(self.i64, length_ptr, "length_value");
+        length.into_int_value()
+    }
+    fn array_data_ptr(
+        &self,
+        builder: &Builder<'ctx>,
+        array_pointer: PointerValue<'ctx>,
+    ) -> PointerValue<'ctx> {
+        let data_ptr_ptr = builder
+            .build_struct_gep(
+                self.array_struct(self.any_value),
+                array_pointer,
+                1,
+                "array_data_ptr_ptr",
+            )
+            .unwrap();
+        let data_ptr = builder.build_load(self.any_ptr, data_ptr_ptr, "array_data_ptr");
+        data_ptr.into_pointer_value()
+    }
+
     fn string_length_loaded(
         &self,
         builder: &Builder<'ctx>,
@@ -212,10 +251,11 @@ impl<'ctx> Codegen<'ctx> {
                 ctx.i64_type().as_basic_type_enum(),
                 char_type.ptr_type(AddressSpace::default()).as_basic_type_enum(),
             ],
-            true,
+            false,
         );
 
         let builtin_types = BuiltinTypes {
+            ctx,
             i64: ctx.i64_type(),
             unit: ctx.bool_type(),
             unit_value: ctx.bool_type().const_int(0, false),
@@ -224,7 +264,9 @@ impl<'ctx> Codegen<'ctx> {
             false_value: ctx.bool_type().const_int(0, true),
             char: char_type,
             c_str: char_type.ptr_type(AddressSpace::default()),
-            string_struct: string_struct,
+            any_ptr: ctx.i64_type().ptr_type(AddressSpace::default()),
+            any_value: ctx.i64_type().as_basic_type_enum(),
+            string_struct,
         };
 
         let printf_type = ctx.i32_type().fn_type(&[builtin_types.c_str.into()], true);
@@ -475,7 +517,20 @@ impl<'ctx> Codegen<'ctx> {
                     };
                     self.builder.build_store(ptr_at_index, value);
                 }
-                array_ptr.as_basic_value_enum().into()
+                let array_type = self.builtin_types.array_struct(element_type);
+                let pointer_to_struct = self.builder.build_alloca(array_type, "array_lit");
+                // insert_value returns a value and takes a value, doesn't modify memory at pointers
+                // We can start building a struct by giving it an undefined struct first
+                let array_struct = self
+                    .builder
+                    .build_insert_value(array_type.get_undef(), array_len, 0, "array_len")
+                    .unwrap();
+                let array_struct = self
+                    .builder
+                    .build_insert_value(array_struct, array_ptr, 1, "array_data")
+                    .unwrap();
+                self.builder.build_store(pointer_to_struct, array_struct);
+                pointer_to_struct.as_basic_value_enum().into()
             }
         }
     }
@@ -547,19 +602,9 @@ impl<'ctx> Codegen<'ctx> {
                 }
             }
             IrExpr::FieldAccess(field_access) => {
-                // TODO: Cleanup: Move special identifier IDs to a struct of builtins or something
-                let length_identifier_id = self.module.ast.ident_id("length");
                 let result = self.codegen_expr(&field_access.base);
                 let type_ref = field_access.base.get_type();
-                if let TypeRef::String = type_ref {
-                    // Return the length as a value
-                    if field_access.target_field != length_identifier_id {
-                        panic!("Invalid member of string; only 'length' currently is implemented")
-                    }
-                    let base_expr = self.codegen_expr(&field_access.base).into_pointer_value();
-                    let length = self.builtin_types.string_length_loaded(&self.builder, base_expr);
-                    length.as_basic_value_enum().into()
-                } else if let TypeRef::TypeId(type_id) = type_ref {
+                if let TypeRef::TypeId(type_id) = type_ref {
                     let module = self.module.clone();
                     let ty = module.get_type(type_id);
 
@@ -581,19 +626,11 @@ impl<'ctx> Codegen<'ctx> {
                             .unwrap();
                         let target_ty = self.get_llvm_type(field_access.ir_type);
                         Pointer { pointee_ty: target_ty, pointer: field_ptr }.into()
-                    } else if let Type::Array(array) = ty {
-                        if field_access.target_field != length_identifier_id {
-                            panic!(
-                                "Invalid member of Array; only 'length' currently is implemented"
-                            )
-                        }
-                        let base_expr = self.codegen_expr(&field_access.base).into_pointer_value();
-                        unimplemented!("I dont know the length of arrays yet")
                     } else {
-                        panic!("Invalid field access node: {:?}", field_access)
+                        panic!("Invalid field access: {:?}", field_access)
                     }
                 } else {
-                    panic!("Invalid field access node: {:?}", field_access)
+                    panic!("Invalid field access: {:?}", field_access)
                 }
             }
             IrExpr::If(ir_if) => self.codegen_if_else(ir_if),
@@ -756,12 +793,14 @@ impl<'ctx> Codegen<'ctx> {
         let array_value = self.codegen_expr(&operation.base_expr);
         let index_value = self.codegen_expr(&operation.index_expr);
 
-        let array_value_as_ptr = array_value.as_basic_value_enum().into_pointer_value();
+        let array_value_as_ptr = array_value.into_pointer_value();
         let index_int_value = index_value.into_int_value();
+        // Likely we need one more level of dereferencing
+        let array_data = self.builtin_types.array_data_ptr(&self.builder, array_value_as_ptr);
         unsafe {
             let gep_ptr = self.builder.build_gep(
                 pointee_ty,
-                array_value_as_ptr,
+                array_data,
                 &[index_int_value],
                 "array_index_ptr",
             );
@@ -789,10 +828,19 @@ impl<'ctx> Codegen<'ctx> {
                 self.builtin_types.unit_value.as_basic_value_enum().into()
             }
             IntrinsicFunctionType::StringLength => {
-                unimplemented!("String Length");
+                // TODO: Cleanup: Move special identifier IDs to a struct of builtins or something
+                let length_identifier_id = self.module.ast.ident_id("length");
+                let string_arg = &call.args[0];
+                let string_base = self.codegen_expr(string_arg).into_pointer_value();
+                let length = self.builtin_types.string_length_loaded(&self.builder, string_base);
+                length.as_basic_value_enum().into()
             }
             IntrinsicFunctionType::ArrayLength => {
-                unimplemented!("Array Length");
+                let length_identifier_id = self.module.ast.ident_id("length");
+                let array_arg = &call.args[0];
+                let array_base = self.codegen_expr(&array_arg).into_pointer_value();
+                let length = self.builtin_types.array_length_loaded(&self.builder, array_base);
+                length.as_basic_value_enum().into()
             }
         }
     }
