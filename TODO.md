@@ -73,18 +73,19 @@ it's just an activity. It just took me 10 years to discover it again, but this t
 - [ ] Type Ascriptions
 - [ ] Embed comments in LLVM IR (source snippets or line numbers?)
 - [ ] Optionals
+- [ ] Errors
 - [ ] Array push
-- [ ] Generic types
 - [ ] uint type
 - [ ] Generic type inference
 - [ ] Type literals would be fun
+- [ ] Generic record types
 - [ ] Syntax Shed
     - [ ] Function syntax change? (foo = fn (a, b, c): int { }
     - [ ] Ditch semicolons? (this technically introduces significant whitespace; need newline token)
     - [ ] from qualifier-focused to name -focused
     - [ ] Parse trailing commas
 - [ ] oneofs (variants?) (tagged unions)
-- [ ] For loops
+- [ ] For iteration
 - [ ] Control-Flow: proper codegen for early returns:
     // This needs to return either a basic value or an instruction value (in the case of early return)
     // Actually, early return is a big rabbit hole. We need to typecheck it in ir gen, and probably
@@ -96,6 +97,14 @@ it's just an activity. It just took me 10 years to discover it again, but this t
     // pretty different semantics and implications for codegen, I am realizing
     fn codegen_block(&mut self, block: &IrBlock) -> Option<BasicValueEnum<'ctx>> {
 - [ ] Tuples
+
+# Dogfood wishlist Oct23
+- [x] I really need a way to write code in Zig or C and use it in my stl to move things along
+- [ ] Zig binding of my Array
+- [ ] Array.distinct in zig
+- [ ] Not equal != operator
+- [ ] Unary negation operator
+- [ ] 
 
 # Fibonacci todos (Aug 20)
 - [x] Equality binop
