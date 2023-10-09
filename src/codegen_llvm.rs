@@ -299,17 +299,6 @@ impl<'ctx> Codegen<'ctx> {
         // Assume the arg is an int since that's what the intrinsic typechecks for
         let first_arg = self.codegen_expr(&call.args[0]);
 
-        let double = self
-            .builder
-            .build_call(
-                self.llvm_module.get_function("zigadd").unwrap(),
-                &[first_arg.into(), first_arg.into()],
-                "zigadd_double",
-            )
-            .try_as_basic_value()
-            .left()
-            .unwrap();
-
         // TODO: Builtin globals could be a struct not a hashmap because its all static currently
         let format_str = self.builtin_globals.get("formatInt").unwrap();
         let format_str_ptr = self.builder.build_bitcast(
@@ -321,7 +310,7 @@ impl<'ctx> Codegen<'ctx> {
             .builder
             .build_call(
                 self.libc_functions.printf,
-                &[format_str_ptr.into(), double.into()],
+                &[format_str_ptr.into(), first_arg.into()],
                 "printf",
             )
             .try_as_basic_value()
