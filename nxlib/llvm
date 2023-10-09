@@ -1,0 +1,33 @@
+; ModuleID = 'nxlib'
+source_filename = "nxlib"
+target datalayout = "e-m:o-i64:64-i128:128-n32:64-S128"
+target triple = "aarch64-unknown-macosx13.4.1-unknown"
+
+%target.Target.Cpu.Feature.Set = type { [5 x i64] }
+%target.Target.Cpu.Model = type { { ptr, i64 }, { ptr, i64 }, %target.Target.Cpu.Feature.Set }
+%target.Target.Cpu = type { ptr, %target.Target.Cpu.Feature.Set, i6, [7 x i8] }
+
+@builtin.zig_backend = internal unnamed_addr constant i64 2, align 8
+@target.Target.Cpu.Feature.Set.empty = internal unnamed_addr constant %target.Target.Cpu.Feature.Set zeroinitializer, align 8
+@target.aarch64.cpu.apple_a14 = internal unnamed_addr constant %target.Target.Cpu.Model { { ptr, i64 } { ptr @target.aarch64.cpu.apple_a14__anon_482, i64 9 }, { ptr, i64 } { ptr @target.aarch64.cpu.apple_a14__anon_483, i64 9 }, %target.Target.Cpu.Feature.Set { [5 x i64] [i64 -3170529464207527040, i64 42949672991, i64 1125899932009024, i64 12, i64 0] } }, align 8
+@target.aarch64.cpu.apple_a14__anon_482 = internal unnamed_addr constant [10 x i8] c"apple_a14\00", align 1
+@target.aarch64.cpu.apple_a14__anon_483 = internal unnamed_addr constant [10 x i8] c"apple-a14\00", align 1
+@builtin.cpu = internal unnamed_addr constant %target.Target.Cpu { ptr @target.aarch64.cpu.apple_a14, %target.Target.Cpu.Feature.Set { [5 x i64] [i64 -251959218960058432, i64 14619274031135, i64 -9149197848548473920, i64 44, i64 0] }, i6 2, [7 x i8] undef }, align 8
+@start.simplified_logic = internal unnamed_addr constant i1 false, align 1
+@builtin.output_mode = internal unnamed_addr constant i2 1, align 1
+@builtin.link_mode = internal unnamed_addr constant i1 false, align 1
+@HELLO_WORLD = dso_local constant ptr @main.HELLO_WORLD__anon_922, align 8
+@main.HELLO_WORLD__anon_922 = internal unnamed_addr constant [13 x i8] c"Hello, World\00", align 1
+
+; Function Attrs: minsize nounwind optsize uwtable
+define dso_local i64 @zigadd(i64 %0, i64 %1) #0 {
+  %3 = add nsw i64 %0, %1
+  ret i64 %3
+}
+
+attributes #0 = { minsize nounwind optsize uwtable "frame-pointer"="none" "target-cpu"="apple-a14" "target-features"="-a510,-a65,-a710,-a76,-a78,-a78c,+aes,+aggressive-fma,+alternate-sextload-cvt-f32-pattern,+altnzcv,+am,-amvs,+arith-bcc-fusion,+arith-cbz-fusion,-ascend-store-address,-b16b16,-balance-fp-ops,-bf16,-brbe,-bti,-call-saved-x10,-call-saved-x11,-call-saved-x12,-call-saved-x13,-call-saved-x14,-call-saved-x15,-call-saved-x18,-call-saved-x8,-call-saved-x9,+ccdp,+ccidx,+ccpp,-clrbhb,-cmp-bcc-fusion,+complxnum,+CONTEXTIDREL2,-cortex-r82,+crc,+crypto,-cssc,-custom-cheap-as-move,-d128,+disable-latency-sched-heuristic,+dit,+dotprod,-ecv,+el2vmsa,+el3,-enable-select-opt,-ete,-exynos-cheap-as-move,-f32mm,-f64mm,-fgt,-fix-cortex-a53-835769,+flagm,-fmv,-force-32bit-jump-tables,+fp16fml,+fp-armv8,+fptoint,+fullfp16,+fuse-address,+fuse-adrp-add,+fuse-aes,+fuse-arith-logic,+fuse-crypto-eor,+fuse-csel,+fuse-literals,-harden-sls-blr,-harden-sls-nocomdat,-harden-sls-retbr,-hbc,-hcx,-i8mm,-ite,+jsconv,+lor,-ls64,+lse,-lse128,+lse2,-lsl-fast,-mec,-mops,+mpam,-mte,+neon,-nmi,-no-bti-at-return-twice,-no-neg-immediates,-no-zcz-fp,+nv,-outline-atomics,+pan,+pan-rwv,+pauth,+perfmon,-predictable-select-expensive,+predres,-prfm-slc-target,-rand,+ras,-rasv2,+rcpc,-rcpc3,+rcpc-immo,+rdm,-reserve-x1,-reserve-x10,-reserve-x11,-reserve-x12,-reserve-x13,-reserve-x14,-reserve-x15,-reserve-x18,-reserve-x2,-reserve-x20,-reserve-x21,-reserve-x22,-reserve-x23,-reserve-x24,-reserve-x25,-reserve-x26,-reserve-x27,-reserve-x28,-reserve-x3,-reserve-x30,-reserve-x4,-reserve-x5,-reserve-x6,-reserve-x7,-reserve-x9,-rme,+sb,+sel2,+sha2,+sha3,-slow-misaligned-128store,-slow-paired-128,-slow-strqro-store,-sm4,-sme,-sme2,-sme2p1,-sme-f16f16,-sme-f64f64,-sme-i16i64,-spe,-spe-eef,-specres2,+specrestrict,+ssbs,-strict-align,-sve,-sve2,-sve2-aes,-sve2-bitperm,-sve2-sha3,-sve2-sm4,-sve2p1,-tagged-globals,-the,+tlb-rmi,-tme,-tpidr-el1,-tpidr-el2,-tpidr-el3,+tracev8.4,-trbe,+uaops,-use-experimental-zeroing-pseudos,-use-postra-scheduler,-use-reciprocal-square-root,-use-scalar-inc-vl,+v8.1a,+v8.2a,+v8.3a,+v8.4a,-v8.5a,-v8.6a,-v8.7a,-v8.8a,-v8.9a,+v8a,-v8r,-v9.1a,-v9.2a,-v9.3a,-v9.4a,-v9a,+vh,-wfxt,-xs,+zcm,+zcz,-zcz-fp-workaround,+zcz-gp" }
+
+!llvm.module.flags = !{!0, !1}
+
+!0 = !{i32 8, !"PIC Level", i32 2}
+!1 = !{i32 7, !"PIE Level", i32 2}

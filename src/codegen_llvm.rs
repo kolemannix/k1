@@ -3,6 +3,7 @@ use inkwell::builder::Builder;
 use inkwell::context::Context;
 
 use env_logger::init;
+use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::module::Linkage;
 use inkwell::passes::{PassManager, PassManagerBuilder};
 use inkwell::targets::{InitializationConfig, Target, TargetMachine};
@@ -122,14 +123,7 @@ pub struct Codegen<'ctx> {
     builtin_globals: HashMap<String, GlobalValue<'ctx>>,
     builtin_types: BuiltinTypes<'ctx>,
     default_address_space: AddressSpace,
-    heap_address_space: AddressSpace,
 }
-
-// #[derive(Copy, Clone, Debug)]
-// struct TypedVariable<'ctx> {
-//     pointer: Pointer<'ctx>,
-//     variable_type: BasicTypeEnum<'ctx>,
-// }
 
 #[derive(Copy, Clone, Debug)]
 struct Pointer<'ctx> {
@@ -226,7 +220,11 @@ impl<'ctx> Codegen<'ctx> {
     pub fn create(ctx: &'ctx Context, module: Rc<IrModule>) -> Codegen<'ctx> {
         let builder = ctx.create_builder();
         let char_type = ctx.i8_type();
+        let stdlib_module = ctx
+            .create_module_from_ir(MemoryBuffer::create_from_file(Path::new("nxlib/llvm")).unwrap())
+            .unwrap();
         let llvm_module = ctx.create_module(&module.ast.name);
+        llvm_module.link_in_module(stdlib_module).unwrap();
         let pointers = HashMap::new();
         let format_int_str = {
             let global = llvm_module.add_global(ctx.i8_type().array_type(4), None, "formatInt");
@@ -290,7 +288,6 @@ impl<'ctx> Codegen<'ctx> {
             builtin_globals,
             builtin_types,
             default_address_space: AddressSpace::default(),
-            heap_address_space: AddressSpace::from(1),
         }
     }
 
@@ -301,6 +298,17 @@ impl<'ctx> Codegen<'ctx> {
     fn build_print_int_call(&mut self, call: &Call) -> BasicValueEnum<'ctx> {
         // Assume the arg is an int since that's what the intrinsic typechecks for
         let first_arg = self.codegen_expr(&call.args[0]);
+
+        let double = self
+            .builder
+            .build_call(
+                self.llvm_module.get_function("zigadd").unwrap(),
+                &[first_arg.into(), first_arg.into()],
+                "zigadd_double",
+            )
+            .try_as_basic_value()
+            .left()
+            .unwrap();
 
         // TODO: Builtin globals could be a struct not a hashmap because its all static currently
         let format_str = self.builtin_globals.get("formatInt").unwrap();
@@ -313,7 +321,7 @@ impl<'ctx> Codegen<'ctx> {
             .builder
             .build_call(
                 self.libc_functions.printf,
-                &[format_str_ptr.into(), first_arg.into()],
+                &[format_str_ptr.into(), double.into()],
                 "printf",
             )
             .try_as_basic_value()
@@ -880,6 +888,14 @@ impl<'ctx> Codegen<'ctx> {
                         // We use codegen_expr_inner to get the pointer to the accessed field
                         let field_ptr = self.codegen_expr_inner(&assignment.destination);
                         let ptr = field_ptr.expect_pointer();
+                        let rhs = self.codegen_expr(&assignment.value);
+                        self.builder.build_store(ptr.pointer, rhs);
+                        last = Some(self.builtin_types.unit_value.as_basic_value_enum())
+                    }
+                    IrExpr::ArrayIndex(_array_index) => {
+                        // We use codegen_expr_inner to get the llvm 'pointer' to the indexed element
+                        let elem_ptr = self.codegen_expr_inner(&assignment.destination);
+                        let ptr = elem_ptr.expect_pointer();
                         let rhs = self.codegen_expr(&assignment.value);
                         self.builder.build_store(ptr.pointer, rhs);
                         last = Some(self.builtin_types.unit_value.as_basic_value_enum())

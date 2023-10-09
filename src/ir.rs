@@ -1530,8 +1530,11 @@ impl IrModule {
                             );
                         }
                     }
-                    IrExpr::FieldAccess(field_access) => {
+                    IrExpr::FieldAccess(_) => {
                         trace!("assignment to record member");
+                    }
+                    IrExpr::ArrayIndex(_) => {
+                        trace!("assignment to array index");
                     }
                     _ => {
                         return make_fail(
