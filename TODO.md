@@ -101,6 +101,7 @@ it's just an activity. It just took me 10 years to discover it again, but this t
 # Dogfood wishlist Oct23
 - [x] I really need a way to write code in Zig or C and use it in my stl to move things along
 - [ ] Zig binding of my Array
+- [ ] array bounds checking
 - [ ] Array.distinct in zig
 - [ ] Not equal != operator
 - [ ] Unary negation operator

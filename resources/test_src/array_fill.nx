@@ -6,6 +6,7 @@ fn main(): int {
     i = i + 1;
   };
   printInt(xs[49]);
+  printInt(xs[0]);
   return 0;
 }
 // 4
