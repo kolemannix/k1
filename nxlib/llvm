@@ -9,15 +9,15 @@ target triple = "aarch64-unknown-macosx13.4.1-unknown"
 
 @builtin.zig_backend = internal unnamed_addr constant i64 2, align 8
 @target.Target.Cpu.Feature.Set.empty = internal unnamed_addr constant %target.Target.Cpu.Feature.Set zeroinitializer, align 8
-@target.aarch64.cpu.apple_a14 = internal unnamed_addr constant %target.Target.Cpu.Model { { ptr, i64 } { ptr @target.aarch64.cpu.apple_a14__anon_482, i64 9 }, { ptr, i64 } { ptr @target.aarch64.cpu.apple_a14__anon_483, i64 9 }, %target.Target.Cpu.Feature.Set { [5 x i64] [i64 -3170529464207527040, i64 42949672991, i64 1125899932009024, i64 12, i64 0] } }, align 8
-@target.aarch64.cpu.apple_a14__anon_482 = internal unnamed_addr constant [10 x i8] c"apple_a14\00", align 1
-@target.aarch64.cpu.apple_a14__anon_483 = internal unnamed_addr constant [10 x i8] c"apple-a14\00", align 1
+@target.aarch64.cpu.apple_a14 = internal unnamed_addr constant %target.Target.Cpu.Model { { ptr, i64 } { ptr @target.aarch64.cpu.apple_a14__anon_484, i64 9 }, { ptr, i64 } { ptr @target.aarch64.cpu.apple_a14__anon_485, i64 9 }, %target.Target.Cpu.Feature.Set { [5 x i64] [i64 -3170529464207527040, i64 42949672991, i64 1125899932009024, i64 12, i64 0] } }, align 8
+@target.aarch64.cpu.apple_a14__anon_484 = internal unnamed_addr constant [10 x i8] c"apple_a14\00", align 1
+@target.aarch64.cpu.apple_a14__anon_485 = internal unnamed_addr constant [10 x i8] c"apple-a14\00", align 1
 @builtin.cpu = internal unnamed_addr constant %target.Target.Cpu { ptr @target.aarch64.cpu.apple_a14, %target.Target.Cpu.Feature.Set { [5 x i64] [i64 -251959218960058432, i64 14619274031135, i64 -9149197848548473920, i64 44, i64 0] }, i6 2, [7 x i8] undef }, align 8
 @start.simplified_logic = internal unnamed_addr constant i1 false, align 1
 @builtin.output_mode = internal unnamed_addr constant i2 1, align 1
 @builtin.link_mode = internal unnamed_addr constant i1 false, align 1
-@HELLO_WORLD = dso_local constant ptr @main.HELLO_WORLD__anon_922, align 8
-@main.HELLO_WORLD__anon_922 = internal unnamed_addr constant [13 x i8] c"Hello, World\00", align 1
+@HELLO_WORLD = dso_local constant ptr @main.HELLO_WORLD__anon_924, align 8
+@main.HELLO_WORLD__anon_924 = internal unnamed_addr constant [13 x i8] c"Hello, World\00", align 1
 
 ; Function Attrs: minsize nounwind optsize uwtable
 define dso_local i64 @zigadd(i64 %0, i64 %1) #0 {

@@ -300,17 +300,12 @@ impl<'ctx> Codegen<'ctx> {
         let first_arg = self.codegen_expr(&call.args[0]);
 
         // TODO: Builtin globals could be a struct not a hashmap because its all static currently
-        let format_str = self.builtin_globals.get("formatInt").unwrap();
-        let format_str_ptr = self.builder.build_bitcast(
-            format_str.as_pointer_value(),
-            self.builtin_types.c_str,
-            "fmt_str",
-        );
+        let format_str_global = self.builtin_globals.get("formatInt").unwrap();
         let call = self
             .builder
             .build_call(
                 self.libc_functions.printf,
-                &[format_str_ptr.into(), first_arg.into()],
+                &[format_str_global.as_pointer_value().into(), first_arg.into()],
                 "printf",
             )
             .try_as_basic_value()
@@ -329,16 +324,11 @@ impl<'ctx> Codegen<'ctx> {
             self.builtin_types.string_data_ptr(&self.builder, first_arg.into_pointer_value());
 
         let format_str = self.builtin_globals.get("formatString").unwrap();
-        let format_str_ptr = self.builder.build_bitcast(
-            format_str.as_pointer_value(),
-            self.builtin_types.c_str,
-            "fmt_str",
-        );
         let call = self
             .builder
             .build_call(
                 self.libc_functions.printf,
-                &[format_str_ptr.into(), length.into(), data.into()],
+                &[format_str.as_pointer_value().into(), length.into(), data.into()],
                 "printf",
             )
             .try_as_basic_value()
@@ -499,35 +489,22 @@ impl<'ctx> Codegen<'ctx> {
                 let element_type = self.get_llvm_type(array_ir_type.element_type);
                 let array_len = self.builtin_types.i64.const_int(array.elements.len() as u64, true);
 
-                // First, we allocate memory somewhere not on the stack
                 let array_ptr = self
-                    .builder
-                    .build_array_malloc(element_type, array_len, "array_literal")
-                    .unwrap();
+                    .make_array(array_len, element_type)
+                    .as_basic_value_enum()
+                    .into_pointer_value();
+                let array_data_ptr = self.builtin_types.array_data_ptr(&self.builder, array_ptr);
                 // Store each element
                 for (index, element_expr) in array.elements.iter().enumerate() {
                     let value = self.codegen_expr(element_expr);
                     let index_value = self.ctx.i64_type().const_int(index as u64, true);
                     log::trace!("storing element {} of array literal: {:?}", index, element_expr);
                     let ptr_at_index = unsafe {
-                        self.builder.build_gep(element_type, array_ptr, &[index_value], "elem")
+                        self.builder.build_gep(element_type, array_data_ptr, &[index_value], "elem")
                     };
                     self.builder.build_store(ptr_at_index, value);
                 }
-                let array_type = self.builtin_types.array_struct(element_type);
-                let pointer_to_struct = self.builder.build_alloca(array_type, "array_lit");
-                // insert_value returns a value and takes a value, doesn't modify memory at pointers
-                // We can start building a struct by giving it an undefined struct first
-                let array_struct = self
-                    .builder
-                    .build_insert_value(array_type.get_undef(), array_len, 0, "array_len")
-                    .unwrap();
-                let array_struct = self
-                    .builder
-                    .build_insert_value(array_struct, array_ptr, 1, "array_data")
-                    .unwrap();
-                self.builder.build_store(pointer_to_struct, array_struct);
-                pointer_to_struct.as_basic_value_enum().into()
+                array_ptr.as_basic_value_enum().into()
             }
         }
     }
@@ -805,6 +782,28 @@ impl<'ctx> Codegen<'ctx> {
         }
     }
 
+    fn make_array(
+        &mut self,
+        array_len: IntValue<'ctx>,
+        element_type: BasicTypeEnum<'ctx>,
+    ) -> GeneratedValue<'ctx> {
+        // First, we allocate memory somewhere not on the stack
+        let array_ptr =
+            self.builder.build_array_malloc(element_type, array_len, "array_literal").unwrap();
+        let array_type = self.builtin_types.array_struct(element_type);
+        let pointer_to_struct = self.builder.build_alloca(array_type, "array_lit");
+        // insert_value returns a value and takes a value, doesn't modify memory at pointers
+        // We can start building a struct by giving it an undefined struct first
+        let array_struct = self
+            .builder
+            .build_insert_value(array_type.get_undef(), array_len, 0, "array_len")
+            .unwrap();
+        let array_struct =
+            self.builder.build_insert_value(array_struct, array_ptr, 1, "array_data").unwrap();
+        self.builder.build_store(pointer_to_struct, array_struct);
+        pointer_to_struct.as_basic_value_enum().into()
+    }
+
     fn codegen_intrinsic(
         &mut self,
         intrinsic_type: IntrinsicFunctionType,
@@ -825,19 +824,23 @@ impl<'ctx> Codegen<'ctx> {
                 self.builtin_types.unit_value.as_basic_value_enum().into()
             }
             IntrinsicFunctionType::StringLength => {
-                // TODO: Cleanup: Move special identifier IDs to a struct of builtins or something
-                let length_identifier_id = self.module.ast.ident_id("length");
                 let string_arg = &call.args[0];
                 let string_base = self.codegen_expr(string_arg).into_pointer_value();
                 let length = self.builtin_types.string_length_loaded(&self.builder, string_base);
                 length.as_basic_value_enum().into()
             }
             IntrinsicFunctionType::ArrayLength => {
-                let length_identifier_id = self.module.ast.ident_id("length");
                 let array_arg = &call.args[0];
-                let array_base = self.codegen_expr(&array_arg).into_pointer_value();
+                let array_base = self.codegen_expr(array_arg).into_pointer_value();
                 let length = self.builtin_types.array_length_loaded(&self.builder, array_base);
                 length.as_basic_value_enum().into()
+            }
+            IntrinsicFunctionType::ArrayNew => {
+                let array_type_id = call.ret_type.expect_type_id();
+                let array_type = self.module.get_type(array_type_id);
+                let element_type = self.get_llvm_type(array_type.expect_array_type().element_type);
+                let len = self.codegen_expr(&call.args[0]).into_int_value();
+                self.make_array(len, element_type)
             }
         }
     }
