@@ -1,0 +1,11 @@
+fn main(): int {
+  val xs: Array<int> = array_new<int>(50);
+  mut i = 0;
+  while i < xs.length() {
+    xs[i] = 4;
+    i = i + 1;
+  };
+  printInt(xs[49]);
+  return 0;
+}
+// 4

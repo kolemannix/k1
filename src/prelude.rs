@@ -8,6 +8,7 @@ fn assert(value: bool): unit {
   };
 }
 type Array = {}
+intern fn array_new<T>(len: int): Array<T>
 namespace Array {
   intern fn length(self: Array): int
 }
@@ -15,4 +16,4 @@ namespace string {
   intern fn length(self: string): int
 }
 // -------- END PRELUDE --------"#;
-pub const PRELUDE_LINES: usize = 17;
+pub const PRELUDE_LINES: usize = 18;
