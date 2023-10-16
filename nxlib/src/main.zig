@@ -1,5 +1,5 @@
 const std = @import("std");
-const allocator = std.heap.c_allocator;
+const allocator = std.heap.GeneralPurposeAllocator();
 
 const NxString = packed struct {
     len: u64,

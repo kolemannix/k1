@@ -541,6 +541,8 @@ pub enum IntrinsicFunctionType {
     StringLength,
     ArrayLength,
     ArrayNew,
+    CharToString,
+    StringNew,
 }
 
 impl IntrinsicFunctionType {
@@ -550,6 +552,7 @@ impl IntrinsicFunctionType {
             "print" => Some(IntrinsicFunctionType::PrintString),
             "exit" => Some(IntrinsicFunctionType::Exit),
             "array_new" => Some(IntrinsicFunctionType::ArrayNew),
+            "string_new" => Some(IntrinsicFunctionType::StringNew),
             _ => None,
         }
     }
@@ -1254,25 +1257,9 @@ impl IrModule {
                 let base_expr = self.eval_expr(&field_access.base, scope_id, None)?;
                 let type_ref = base_expr.get_type();
                 let ret_type = match type_ref {
-                    TypeRef::String => {
-                        let length_id = self.ast.ident_id("length");
-                        if length_id == field_access.target {
-                            Ok(TypeRef::Int)
-                        } else {
-                            make_fail("string only has .length right now", field_access.span)
-                        }
-                    }
                     TypeRef::TypeId(type_id) => {
                         let ty = self.get_type(type_id);
                         match ty {
-                            Type::Array(array_type) => {
-                                let length_id = self.ast.ident_id("length");
-                                if length_id == field_access.target {
-                                    Ok(array_type.element_type)
-                                } else {
-                                    make_fail("array only has .length right now", field_access.span)
-                                }
-                            }
                             Type::Record(record_type) => {
                                 let (_idx, target_field) =
                                     record_type.find_field(field_access.target).ok_or(make_err(
@@ -1348,6 +1335,14 @@ impl IrModule {
                         let string_namespace = self.get_namespace(string_namespace_id).unwrap();
                         let string_scope = self.scopes.get_scope(string_namespace.scope_id);
                         string_scope.find_function(fn_call.name)
+                    }
+                    TypeRef::Char => {
+                        let char_ident_id = self.ast.ident_id("char");
+                        let char_namespace_id =
+                            self.scopes.find_namespace(scope_id, char_ident_id).unwrap();
+                        let char_namespace = self.get_namespace(char_namespace_id).unwrap();
+                        let char_scope = self.scopes.get_scope(char_namespace.scope_id);
+                        char_scope.find_function(fn_call.name)
                     }
                     TypeRef::TypeId(type_id) => {
                         let ty = self.get_type(type_id);
@@ -1432,7 +1427,9 @@ impl IrModule {
         for fn_param in &params_cloned[start..] {
             let matching_param_by_name =
                 fn_call.args.iter().find(|arg| arg.name == Some(fn_param.name));
-            let matching_param = matching_param_by_name.or(fn_call.args.get(fn_param.position));
+            // If we skipped 'self', we need to subtract 1 from the offset we index into fn_call.args with
+            let matching_idx = fn_param.position - start;
+            let matching_param = matching_param_by_name.or(fn_call.args.get(matching_idx));
             if let Some(param) = matching_param {
                 let expr = self.eval_expr(&param.value, scope_id, Some(fn_param.ty))?;
                 if let Err(e) = self.typecheck_types(fn_param.ty, expr.get_type()) {
@@ -1444,7 +1441,10 @@ impl IrModule {
                 final_args.push(expr);
             } else {
                 return make_fail(
-                    format!("Could not find match for parameter {}", fn_param.name),
+                    format!(
+                        "Could not find match for parameter {}",
+                        &*self.get_ident_str(fn_param.name)
+                    ),
                     fn_call.span,
                 );
             }
@@ -1640,6 +1640,12 @@ impl IrModule {
             && fn_def.name == self.ast.ident_id("length")
         {
             Some(IntrinsicFunctionType::ArrayLength)
+        } else if current_namespace.name == self.ast.ident_id("char") {
+            if fn_def.name == self.ast.ident_id("to_string") {
+                Some(IntrinsicFunctionType::CharToString)
+            } else {
+                None
+            }
         } else if current_namespace.name == self.ast.ident_id("_root") {
             let function_name = &*self.get_ident_str(fn_def.name);
             IntrinsicFunctionType::from_function_name(function_name)

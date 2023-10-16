@@ -782,6 +782,25 @@ impl<'ctx> Codegen<'ctx> {
         }
     }
 
+    fn make_string(&mut self, array_len: IntValue<'ctx>) -> BasicValueEnum<'ctx> {
+        let string_ptr = self
+            .builder
+            .build_array_malloc(self.builtin_types.char, array_len, "string_data")
+            .unwrap();
+        let string_type = self.builtin_types.string_struct;
+        let pointer_to_struct = self.builder.build_alloca(string_type, "string");
+        // insert_value returns a value and takes a value, doesn't modify memory at pointers
+        // We can start building a struct by giving it an undefined struct first
+        let string_struct = self
+            .builder
+            .build_insert_value(string_type.get_undef(), array_len, 0, "string_len")
+            .unwrap();
+        let string_struct =
+            self.builder.build_insert_value(string_struct, string_ptr, 1, "string_data").unwrap();
+        self.builder.build_store(pointer_to_struct, string_struct);
+        pointer_to_struct.as_basic_value_enum()
+    }
+
     fn make_array(
         &mut self,
         array_len: IntValue<'ctx>,
@@ -841,6 +860,25 @@ impl<'ctx> Codegen<'ctx> {
                 let element_type = self.get_llvm_type(array_type.expect_array_type().element_type);
                 let len = self.codegen_expr(&call.args[0]).into_int_value();
                 self.make_array(len, element_type)
+            }
+            IntrinsicFunctionType::StringNew => {
+                let array = self.codegen_expr(&call.args[0]).into_pointer_value();
+                let array_len = self.builtin_types.array_length_loaded(&self.builder, array);
+                let string = self.make_string(array_len).into_pointer_value();
+                let string_data = self.builtin_types.string_data_ptr(&self.builder, string);
+                let array_data = self.builtin_types.array_data_ptr(&self.builder, array);
+                let copied =
+                    self.builder.build_memcpy(string_data, 1, array_data, 1, array_len).unwrap();
+                string.as_basic_value_enum().into()
+            }
+            IntrinsicFunctionType::CharToString => {
+                let self_char = self.codegen_expr(&call.args[0]);
+                let call = self.builder.build_call(
+                    self.llvm_module.get_function("_nx_charToString").unwrap(),
+                    &[self_char.into()],
+                    "c2s",
+                );
+                call.try_as_basic_value().left().unwrap().into()
             }
         }
     }
