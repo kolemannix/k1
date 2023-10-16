@@ -45,7 +45,7 @@ pub fn compile_single_file_program<'ctx>(
     // println!("{irgen}");
     let mut codegen: Codegen<'ctx> = Codegen::create(ctx, irgen);
     codegen.codegen_module();
-    codegen.optimize(false)?;
+    codegen.optimize(true)?;
     Ok(codegen)
 }
 
@@ -53,8 +53,8 @@ fn main() -> Result<()> {
     env_logger::init();
 
     static_assert_size!(parse::Definition, 16);
-    static_assert_size!(parse::BlockStmt, 184); // Get down below 100
-    static_assert_size!(parse::Expression, 80); // Get back down
+    static_assert_size!(parse::BlockStmt, 224); // Get down below 100
+    static_assert_size!(parse::Expression, 104); // Get back down
     static_assert_size!(ir::IrExpr, 64);
     static_assert_size!(ir::IrStmt, 16);
     println!("Size of ast::Definition: {}", std::mem::size_of::<parse::Definition>());

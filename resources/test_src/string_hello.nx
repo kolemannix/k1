@@ -1,12 +1,5 @@
 fn main(): int {
-  val x: string = "abc ABC";
-  mut i: int = 0;
-  print("x.length is:");
-  printInt(x.length());
-  while i < (x.length() - 1) {
-    x[i];
-    i = i + 1;
-  };
-  print(x);
+  val x: string = "abc";
+  print(x.concat(x));
   return 0;
 }

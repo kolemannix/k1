@@ -101,6 +101,7 @@ pub struct FnCall {
     pub name: IdentifierId,
     pub type_args: Option<Vec<FnCallTypeArg>>,
     pub args: Vec<FnCallArg>,
+    pub namespaces: Vec<IdentifierId>,
     pub span: Span,
 }
 
@@ -865,6 +866,7 @@ impl<'toks> Parser<'toks> {
                                 name: self.intern_ident_token(target),
                                 type_args,
                                 args,
+                                namespaces: Vec::new(),
                                 span,
                             }),
                             span,
@@ -1017,6 +1019,29 @@ impl<'toks> Parser<'toks> {
             // Here we use is_whitespace_preceeded to distinguish between:
             // square<int>(42) -> FnCall
             // square < int > (42) -> square LESS THAN int GREATER THAN (42)
+            let mut namespaces = Vec::new();
+            if second.kind == K::Colon
+                && third.kind == K::Colon
+                && !second.is_whitespace_preceeded()
+            {
+                // Namespaced expression; foo::
+                // Loop until we don't see a ::
+                namespaces.push(self.intern_ident_token(first));
+                self.tokens.advance(); // ident
+                self.tokens.advance(); // colon
+                self.tokens.advance(); // colon
+                loop {
+                    let (a, b, c) = self.tokens.peek_three();
+                    if a.kind == K::Colon && b.kind == K::Colon && c.kind == K::Ident {
+                        self.tokens.advance(); // ident
+                        self.tokens.advance(); // colon
+                        self.tokens.advance(); // colon
+                        namespaces.push(self.intern_ident_token(c));
+                    } else {
+                        break;
+                    }
+                }
+            }
             if (second.kind == K::OpenAngle && !second.is_whitespace_preceeded())
                 || second.kind == K::OpenParen
             {
@@ -1031,6 +1056,7 @@ impl<'toks> Parser<'toks> {
                     name: self.intern_ident_token(first),
                     type_args,
                     args,
+                    namespaces,
                     span: first.span.extended(args_span),
                 })))
             } else {
@@ -1038,6 +1064,7 @@ impl<'toks> Parser<'toks> {
                 self.tokens.advance();
                 Ok(Some(Expression::Variable(Variable {
                     ident: self.intern_ident_token(first),
+                    // namespaces are ready when we need em here
                     span: first.span,
                 })))
             }
