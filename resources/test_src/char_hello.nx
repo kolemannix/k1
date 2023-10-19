@@ -1,6 +1,6 @@
 fn main(): int {
   val c: char = '!';
   print(c.to_string());
-  assert(c == 'x');
+  assert(c == '!');
   return 0;
 }

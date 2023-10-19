@@ -453,6 +453,7 @@ pub struct FnDef {
     pub span: Span,
     // TODO: bitflags
     pub is_intrinsic: bool,
+    pub ast_id: AstId,
 }
 
 #[derive(Debug)]
@@ -467,6 +468,7 @@ pub struct ConstVal {
     pub ty: TypeExpression,
     pub value_expr: Expression,
     pub span: Span,
+    pub ast_id: AstId,
 }
 
 #[derive(Debug)]
@@ -474,12 +476,14 @@ pub struct TypeDefn {
     pub name: IdentifierId,
     pub value_expr: TypeExpression,
     pub span: Span,
+    pub ast_id: AstId,
 }
 
 #[derive(Debug)]
 pub struct ParsedNamespace {
     pub name: IdentifierId,
-    pub functions: Vec<FnDef>,
+    pub definitions: Vec<Definition>,
+    pub ast_id: AstId,
 }
 
 #[derive(Debug)]
@@ -488,6 +492,17 @@ pub enum Definition {
     Const(Box<ConstVal>),
     TypeDef(Box<TypeDefn>),
     Namespace(Box<ParsedNamespace>),
+}
+
+impl Definition {
+    pub fn get_ast_id(&self) -> AstId {
+        match self {
+            Definition::FnDef(def) => def.ast_id,
+            Definition::Const(def) => def.ast_id,
+            Definition::TypeDef(def) => def.ast_id,
+            Definition::Namespace(def) => def.ast_id,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -512,7 +527,18 @@ impl AstModule {
     }
 
     pub fn get_defn(&self, ast_id: AstId) -> &Definition {
-        &self.defs[ast_id as usize]
+        for defn in &self.defs {
+            if defn.get_ast_id() == ast_id {
+                return defn;
+            } else if let Definition::Namespace(ns) = defn {
+                for inner_def in &ns.definitions {
+                    if inner_def.get_ast_id() == ast_id {
+                        return &inner_def;
+                    }
+                }
+            }
+        }
+        panic!("failed to find defn with ast_id {}", ast_id);
     }
 
     pub fn defns_iter(&self) -> impl Iterator<Item = (AstId, &Definition)> {
@@ -564,6 +590,7 @@ struct Parser<'toks> {
     tokens: TokenIter<'toks>,
     source: Rc<Source>,
     identifiers: Rc<RefCell<Identifiers>>,
+    function_index: u32,
 }
 
 impl<'toks> Parser<'toks> {
@@ -574,6 +601,7 @@ impl<'toks> Parser<'toks> {
             tokens: TokenIter::make(tokens),
             source: Rc::new(Source { content: source, lines }),
             identifiers: Rc::new(RefCell::new(Identifiers::default())),
+            function_index: 0,
         }
     }
 
@@ -1031,7 +1059,9 @@ impl<'toks> Parser<'toks> {
                 self.tokens.advance(); // colon
                 self.tokens.advance(); // colon
                 loop {
+                    println!("Parsing namespaces {:?}", namespaces);
                     let (a, b, c) = self.tokens.peek_three();
+                    println!("Parsing namespaces peeked 3 {} {} {}", a.kind, b.kind, c.kind);
                     if a.kind == K::Colon && b.kind == K::Colon && c.kind == K::Ident {
                         self.tokens.advance(); // ident
                         self.tokens.advance(); // colon
@@ -1042,6 +1072,7 @@ impl<'toks> Parser<'toks> {
                     }
                 }
             }
+            let (first, second) = self.tokens.peek_two();
             if (second.kind == K::OpenAngle && !second.is_whitespace_preceeded())
                 || second.kind == K::OpenParen
             {
@@ -1146,6 +1177,7 @@ impl<'toks> Parser<'toks> {
             ty: typ,
             value_expr,
             span,
+            ast_id: self.next_ast_id(),
         }))
     }
 
@@ -1352,7 +1384,13 @@ impl<'toks> Parser<'toks> {
             block,
             span,
             is_intrinsic,
+            ast_id: self.next_ast_id(),
         }))
+    }
+    fn next_ast_id(&mut self) -> AstId {
+        let id = self.function_index;
+        self.function_index += 1;
+        id
     }
 
     fn parse_typedef(&mut self) -> ParseResult<Option<TypeDefn>> {
@@ -1363,7 +1401,12 @@ impl<'toks> Parser<'toks> {
             let type_expr =
                 Parser::expect("Type expression", equals, self.parse_type_expression())?;
             let span = keyword_type.span.extended(type_expr.get_span());
-            Ok(Some(TypeDefn { name: self.intern_ident_token(name), value_expr: type_expr, span }))
+            Ok(Some(TypeDefn {
+                name: self.intern_ident_token(name),
+                value_expr: type_expr,
+                span,
+                ast_id: self.next_ast_id(),
+            }))
         } else {
             Ok(None)
         }
@@ -1379,10 +1422,14 @@ impl<'toks> Parser<'toks> {
         self.expect_eat_token(K::OpenBrace)?;
         let mut functions = Vec::new();
         while let Some(fn_def) = self.parse_function()? {
-            functions.push(fn_def);
+            functions.push(Definition::FnDef(Box::new(fn_def)));
         }
         self.expect_eat_token(K::CloseBrace)?;
-        Ok(Some(ParsedNamespace { name: self.intern_ident_token(ident), functions }))
+        Ok(Some(ParsedNamespace {
+            name: self.intern_ident_token(ident),
+            definitions: functions,
+            ast_id: self.next_ast_id(),
+        }))
     }
 
     fn parse_definition(&mut self) -> ParseResult<Option<Definition>> {
