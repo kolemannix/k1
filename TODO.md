@@ -103,6 +103,7 @@ it's just an activity. It just took me 10 years to discover it again, but this t
 - [x] I really need a way to write code in Zig or C and use it in my stl to move things along
 - [x] Zig binding of my Array
 - [ ] Early return
+- [x] Implicit return of unit if no return statement
 - [ ] string.indexOf
   - charToString implemented in zig and linked
 - [ ] array bounds checking
@@ -119,6 +120,7 @@ it's just an activity. It just took me 10 years to discover it again, but this t
 
 # Hacks to fix
 - [x] Fix line comments
+- [ ] Maybe eventually actually free some memory? lol
 - [ ] Rename IR to typed-ast, since it's a tree not instruction set. TAST?
 - [ ] Make intrinsics like arrayIndex a real function in the LLVM IR?
 - [x] Fix line numbers to account for prelude

@@ -888,9 +888,8 @@ impl IrModule {
 
     fn eval_const(&mut self, const_expr: &parse::ConstVal) -> IrGenResult<VariableId> {
         let scope_id = 0;
-        let parse::ConstVal { name, ty: typ, value_expr: value, span } = const_expr;
-        let ir_type = self.eval_const_type_expr(typ, scope_id)?;
-        let num = match value {
+        let ir_type = self.eval_const_type_expr(&const_expr.ty, scope_id)?;
+        let num = match &const_expr.value_expr {
             Expression::Literal(Literal::Numeric(n, span)) => {
                 self.parse_numeric(n).map_err(|msg| make_err(msg, *span))?
             }
@@ -901,15 +900,15 @@ impl IrModule {
                 )
             }
         };
-        let expr = IrExpr::Literal(IrLiteral::Int(num, *span));
+        let expr = IrExpr::Literal(IrLiteral::Int(num, const_expr.span));
         let variable_id = self.add_variable(Variable {
-            name: *name,
+            name: const_expr.name,
             ir_type,
             is_mutable: false,
             owner_scope: None,
         });
-        self.constants.push(Constant { variable_id, expr, ir_type, span: *span });
-        self.scopes.add_variable(scope_id, *name, variable_id);
+        self.constants.push(Constant { variable_id, expr, ir_type, span: const_expr.span });
+        self.scopes.add_variable(scope_id, const_expr.name, variable_id);
         Ok(variable_id)
     }
 
@@ -985,6 +984,33 @@ impl IrModule {
         let unit_literal = IrExpr::unit_literal(span);
         block.statements.push(IrStmt::Expr(Box::new(unit_literal)));
         block.ret_type = TypeRef::Unit;
+    }
+
+    fn traverse_namespace_chain(
+        &self,
+        scope_id: ScopeId,
+        namespaces: &[IdentifierId],
+        span: Span,
+    ) -> IrGenResult<ScopeId> {
+        log::trace!(
+            "traverse_namespace_chain: {:?}",
+            namespaces.iter().map(|id| self.get_ident_str(*id).to_string()).collect::<Vec<_>>()
+        );
+        let ns_iter = namespaces.iter();
+        let mut cur_scope = scope_id;
+        for ns in ns_iter {
+            let namespace_id = self.scopes.find_namespace(cur_scope, *ns).ok_or(make_err(
+                format!(
+                    "Namespace not found: {} in scope: {:?}",
+                    &*self.get_ident_str(*ns),
+                    self.scopes.get_scope(scope_id)
+                ),
+                span,
+            ))?;
+            let namespace = self.get_namespace(namespace_id).unwrap();
+            cur_scope = namespace.scope_id;
+        }
+        Ok(cur_scope)
     }
 
     /// Passing `expected_type` is an optimization that can save us work.
@@ -1390,8 +1416,10 @@ impl IrModule {
             }
             None => {
                 // Resolve a non-method call
+                let scope_to_search =
+                    self.traverse_namespace_chain(scope_id, &fn_call.namespaces, fn_call.span)?;
                 let function_id =
-                    self.scopes.find_function(scope_id, fn_call.name).ok_or(make_err(
+                    self.scopes.find_function(scope_to_search, fn_call.name).ok_or(make_err(
                         format!(
                             "Function not found: {} in scope: {:?}",
                             &*self.get_ident_str(fn_call.name),
@@ -1404,8 +1432,10 @@ impl IrModule {
         };
 
         // Now that we have resolved to a function id, we need to specialize it if generic
-        let function_to_call = if self.get_function(function_id).is_generic() {
-            self.get_specialized_function_for_call(fn_call, function_id)?
+        let original_function = self.get_function(function_id);
+        let function_to_call = if original_function.is_generic() {
+            let intrinsic_type = original_function.intrinsic_type;
+            self.get_specialized_function_for_call(fn_call, function_id, intrinsic_type)?
         } else {
             function_id
         };
@@ -1463,6 +1493,7 @@ impl IrModule {
         &mut self,
         fn_call: &FnCall,
         old_function_id: FunctionId,
+        intrinsic_type: Option<IntrinsicFunctionType>,
     ) -> IrGenResult<FunctionId> {
         // TODO: Implement full generic type inference. This could get slow!
         //       Cases like [T](t: T) are easier but [T](x: ComplexType[A, B, T]) and solving for
@@ -1506,6 +1537,7 @@ impl IrModule {
             self.scopes.get_root_scope_id(),
             Some(spec_fn_scope_id),
             true,
+            intrinsic_type,
         )?;
         Ok(specialized_function_id)
     }
@@ -1622,24 +1654,36 @@ impl IrModule {
         Ok(ir_block)
     }
 
+    fn get_scope_for_namespace(&self, namespace_ident: IdentifierId) -> ScopeId {
+        self.namespaces.iter().find(|ns| ns.name == namespace_ident).unwrap().scope_id
+    }
+
     fn resolve_intrinsic_function_type(
         &self,
         fn_def: &FnDef,
         scope_id: ScopeId,
-    ) -> Option<IntrinsicFunctionType> {
+    ) -> IntrinsicFunctionType {
         trace!("resolve_intrinsic_function_type for {}", &*self.get_ident_str(fn_def.name));
         let Some(current_namespace) = self.namespaces.iter().find(|ns| ns.scope_id == scope_id) else {
             println!("{:?}", fn_def);
             panic!("Functions must be defined within a namespace scope: {:?}", &*self.get_ident_str(fn_def.name))
         };
-        if current_namespace.name == self.ast.ident_id("string")
-            && fn_def.name == self.ast.ident_id("length")
-        {
-            Some(IntrinsicFunctionType::StringLength)
-        } else if current_namespace.name == self.ast.ident_id("Array")
-            && fn_def.name == self.ast.ident_id("length")
-        {
-            Some(IntrinsicFunctionType::ArrayLength)
+        let result = if current_namespace.name == self.ast.ident_id("string") {
+            if fn_def.name == self.ast.ident_id("length") {
+                Some(IntrinsicFunctionType::StringLength)
+            } else if fn_def.name == self.ast.ident_id("new") {
+                Some(IntrinsicFunctionType::StringNew)
+            } else {
+                None
+            }
+        } else if current_namespace.name == self.ast.ident_id("Array") {
+            if fn_def.name == self.ast.ident_id("length") {
+                Some(IntrinsicFunctionType::ArrayLength)
+            } else if fn_def.name == self.ast.ident_id("new") {
+                Some(IntrinsicFunctionType::ArrayNew)
+            } else {
+                None
+            }
         } else if current_namespace.name == self.ast.ident_id("char") {
             if fn_def.name == self.ast.ident_id("to_string") {
                 Some(IntrinsicFunctionType::CharToString)
@@ -1651,6 +1695,14 @@ impl IrModule {
             IntrinsicFunctionType::from_function_name(function_name)
         } else {
             None
+        };
+        match result {
+            Some(result) => result,
+            None => panic!(
+                "Could not resolve intrinsic function type for function: {} in namespace: {}",
+                &*self.get_ident_str(fn_def.name),
+                &*self.get_ident_str(current_namespace.name)
+            ),
         }
     }
 
@@ -1661,6 +1713,9 @@ impl IrModule {
         parent_scope_id: ScopeId,
         fn_scope_id: Option<ScopeId>,
         specialize: bool,
+        // Used only during specialization; we already know the intrinsic type
+        // from the generic version so we just pass it in
+        known_intrinsic: Option<IntrinsicFunctionType>,
     ) -> IrGenResult<FunctionId> {
         let mut params = Vec::new();
         let fn_scope_id = match fn_scope_id {
@@ -1716,8 +1771,10 @@ impl IrModule {
             self.scopes.add_variable(fn_scope_id, fn_arg.name, variable_id);
         }
 
-        let intrinsic_type = if fn_def.is_intrinsic {
-            self.resolve_intrinsic_function_type(fn_def, parent_scope_id)
+        let intrinsic_type = if specialize && known_intrinsic.is_some() {
+            known_intrinsic
+        } else if fn_def.is_intrinsic {
+            Some(self.resolve_intrinsic_function_type(fn_def, parent_scope_id))
         } else {
             None
         };
@@ -1780,14 +1837,21 @@ impl IrModule {
         // We add the new namespace to the current scope
         let scope = self.scopes.get_scope_mut(scope_id);
         scope.add_namespace(ast_namespace.name, namespace_id);
-        for fn_def in &ast_namespace.functions {
-            // FIXME: The current AstId of index doesn't work when we have namespaces
-            self.eval_function(fn_def, 1000, ns_scope_id, None, false)?;
+        for fn_def in &ast_namespace.definitions {
+            if let Definition::FnDef(fn_def) = fn_def {
+                self.eval_function(fn_def, fn_def.ast_id, ns_scope_id, None, false, None)?;
+            } else {
+                panic!("Unsupported definition type inside namespace: {:?}", fn_def)
+            }
         }
         Ok(namespace_id)
     }
-    fn eval_definition(&mut self, ast_id: AstId, def: &Definition) -> IrGenResult<()> {
-        let scope_id = self.scopes.get_root_scope_id();
+    fn eval_definition(
+        &mut self,
+        ast_id: AstId,
+        def: &Definition,
+        scope_id: ScopeId,
+    ) -> IrGenResult<()> {
         match def {
             Definition::Namespace(namespace) => {
                 self.eval_namespace(namespace, scope_id)?;
@@ -1798,7 +1862,7 @@ impl IrModule {
                 Ok(())
             }
             Definition::FnDef(fn_def) => {
-                self.eval_function(fn_def, ast_id, scope_id, None, false)?;
+                self.eval_function(fn_def, ast_id, scope_id, None, false, None)?;
                 Ok(())
             }
             Definition::TypeDef(type_defn) => {
@@ -1814,8 +1878,9 @@ impl IrModule {
         //        to declare their API without full typechecking
         //        will also allow recursion without hacks
 
+        let scope_id = self.scopes.get_root_scope_id();
         for (id, defn) in self.ast.clone().defns_iter() {
-            let result = self.eval_definition(id, defn);
+            let result = self.eval_definition(id, defn, scope_id);
             if let Err(e) = result {
                 self.print_error(&e.message, e.span);
                 errors.push(e);

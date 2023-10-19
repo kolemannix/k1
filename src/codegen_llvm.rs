@@ -883,7 +883,7 @@ impl<'ctx> Codegen<'ctx> {
         }
     }
     // This needs to return either a basic value or an instruction value (in the case of early return)
-    // Actually, early return is a big rabbit hole. We need to typecheck it in ir gen, and probably
+    // Actually, early return is a big rabbit hole. We need to typecheck it earlier, and probably
     // store it on the block
     //
     // For now, I'm going to return an Option. If the block has an early return, we just return
@@ -902,6 +902,7 @@ impl<'ctx> Codegen<'ctx> {
                 IrStmt::ReturnStmt(return_stmt) => {
                     let value = self.codegen_expr(&return_stmt.expr);
                     self.builder.build_return(Some(&value));
+                    // This should not return here
                     return None;
                 }
                 IrStmt::Assignment(assignment) => match assignment.destination.deref() {
@@ -1022,6 +1023,10 @@ impl<'ctx> Codegen<'ctx> {
             self.variables.insert(ir_param.variable_id, Pointer { pointer, pointee_ty: ty });
         }
         self.codegen_block(function.block.as_ref().expect("functions must have blocks by codegen"));
+        let current_block = self.builder.get_insert_block().unwrap();
+        if current_block.get_terminator().is_none() {
+            self.builder.build_return(Some(&self.builtin_types.unit_value));
+        }
         if let Some(start_block) = maybe_start_block {
             self.builder.position_at_end(start_block);
         }
