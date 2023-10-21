@@ -292,7 +292,7 @@ impl<'ctx> Codegen<'ctx> {
     }
 
     fn get_ident_name(&self, id: IdentifierId) -> impl std::ops::Deref<Target = str> + '_ {
-        self.module.ast.get_ident_name(id)
+        self.module.ast.get_ident_str(id)
     }
 
     fn build_print_int_call(&mut self, call: &Call) -> BasicValueEnum<'ctx> {
@@ -1007,7 +1007,7 @@ impl<'ctx> Codegen<'ctx> {
             _ => panic!("Unexpected function llvm type"),
         };
         let fn_val = {
-            let name = self.module.ast.get_ident_name(function.name);
+            let name = self.module.ast.get_ident_str(function.name);
             self.llvm_module.add_function(&name, fn_ty, None)
         };
         self.llvm_functions.insert(function_id, fn_val);
@@ -1016,7 +1016,7 @@ impl<'ctx> Codegen<'ctx> {
         for (i, param) in fn_val.get_param_iter().enumerate() {
             let ir_param = &function.params[i];
             let ty = self.get_llvm_type(ir_param.ty);
-            let param_name = self.module.ast.get_ident_name(ir_param.name);
+            let param_name = self.module.ast.get_ident_str(ir_param.name);
             param.set_name(&param_name);
             let pointer = self.builder.build_alloca(ty, &param_name);
             self.builder.build_store(pointer, param);

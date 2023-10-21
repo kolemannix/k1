@@ -643,7 +643,7 @@ impl IrModule {
     }
 
     fn get_ident_str(&self, id: IdentifierId) -> impl std::ops::Deref<Target = str> + '_ {
-        self.ast.get_ident_name(id)
+        self.ast.get_ident_str(id)
     }
 
     fn report_error(&mut self, span: Span, message: String) {
@@ -761,14 +761,14 @@ impl IrModule {
                     make_err(
                         format!(
                             "could not find type for identifier {}",
-                            &*self.ast.get_ident_name(*ident)
+                            &*self.ast.get_ident_str(*ident)
                         ),
                         *span,
                     )
                 })
             }
             parse::TypeExpression::TypeApplication(ty_app) => {
-                let base_name = self.ast.get_ident_name(ty_app.base);
+                let base_name = self.ast.get_ident_str(ty_app.base);
                 if &*base_name == "Array" {
                     drop(base_name);
                     if ty_app.params.len() == 1 {
@@ -1504,8 +1504,15 @@ impl IrModule {
         //       1. Find arguments that include a type param
         //       2. Find the actual value passed for each, find where the type variable appears within
         //          that type expression, and assign it to the concrete type
-        trace!("Specializing function: {}", &*self.get_ident_str(fn_call.name));
+
+        // FIXME: Can we avoid this clone of the whole function
         let generic_function = self.get_function(old_function_id).clone();
+        trace!(
+            "Specializing function call: {}, {} ,astid {}",
+            &*self.get_ident_str(fn_call.name),
+            &*self.get_ident_str(generic_function.name),
+            generic_function.ast_id
+        );
         let type_params =
             generic_function.type_params.as_ref().expect("expected function to be generic");
         let type_args =
@@ -1533,7 +1540,6 @@ impl IrModule {
         };
         let specialized_function_id = self.eval_function(
             ast_def,
-            generic_function.ast_id,
             self.scopes.get_root_scope_id(),
             Some(spec_fn_scope_id),
             true,
@@ -1709,7 +1715,6 @@ impl IrModule {
     fn eval_function(
         &mut self,
         fn_def: &FnDef,
-        fn_ast_id: AstId,
         parent_scope_id: ScopeId,
         fn_scope_id: Option<ScopeId>,
         specialize: bool,
@@ -1758,7 +1763,7 @@ impl IrModule {
         for (idx, fn_arg) in fn_def.args.iter().enumerate() {
             let ir_type = self.eval_type_expr(&fn_arg.ty, fn_scope_id)?;
             if specialize {
-                trace!("Specializing: {:?} got {:?}", &fn_arg, ir_type);
+                trace!("Specializing: {:?} got {:?}", &*self.get_ident_str(fn_arg.name), ir_type);
             }
             let variable = Variable {
                 name: fn_arg.name,
@@ -1791,7 +1796,7 @@ impl IrModule {
             block: None,
             intrinsic_type,
             specializations: Vec::new(),
-            ast_id: fn_ast_id,
+            ast_id: fn_def.ast_id,
         };
         let function_id = self.add_function(function);
         // We do not want to resolve specialized functions by name!
@@ -1839,19 +1844,14 @@ impl IrModule {
         scope.add_namespace(ast_namespace.name, namespace_id);
         for fn_def in &ast_namespace.definitions {
             if let Definition::FnDef(fn_def) = fn_def {
-                self.eval_function(fn_def, fn_def.ast_id, ns_scope_id, None, false, None)?;
+                self.eval_function(fn_def, ns_scope_id, None, false, None)?;
             } else {
                 panic!("Unsupported definition type inside namespace: {:?}", fn_def)
             }
         }
         Ok(namespace_id)
     }
-    fn eval_definition(
-        &mut self,
-        ast_id: AstId,
-        def: &Definition,
-        scope_id: ScopeId,
-    ) -> IrGenResult<()> {
+    fn eval_definition(&mut self, def: &Definition, scope_id: ScopeId) -> IrGenResult<()> {
         match def {
             Definition::Namespace(namespace) => {
                 self.eval_namespace(namespace, scope_id)?;
@@ -1862,7 +1862,7 @@ impl IrModule {
                 Ok(())
             }
             Definition::FnDef(fn_def) => {
-                self.eval_function(fn_def, ast_id, scope_id, None, false, None)?;
+                self.eval_function(fn_def, scope_id, None, false, None)?;
                 Ok(())
             }
             Definition::TypeDef(type_defn) => {
@@ -1879,8 +1879,8 @@ impl IrModule {
         //        will also allow recursion without hacks
 
         let scope_id = self.scopes.get_root_scope_id();
-        for (id, defn) in self.ast.clone().defns_iter() {
-            let result = self.eval_definition(id, defn, scope_id);
+        for defn in self.ast.clone().defns_iter() {
+            let result = self.eval_definition(defn, scope_id);
             if let Err(e) = result {
                 self.print_error(&e.message, e.span);
                 errors.push(e);

@@ -495,6 +495,14 @@ pub enum Definition {
 }
 
 impl Definition {
+    pub fn get_name(&self) -> IdentifierId {
+        match self {
+            Definition::FnDef(def) => def.name,
+            Definition::Const(def) => def.name,
+            Definition::TypeDef(def) => def.name,
+            Definition::Namespace(def) => def.name,
+        }
+    }
     pub fn get_ast_id(&self) -> AstId {
         match self {
             Definition::FnDef(def) => def.ast_id,
@@ -522,18 +530,29 @@ impl AstModule {
     pub fn ident_id(&self, ident: &str) -> IdentifierId {
         self.identifiers.borrow_mut().intern(ident)
     }
-    pub fn get_ident_name(&self, id: IdentifierId) -> impl std::ops::Deref<Target = str> + '_ {
+    pub fn get_ident_str(&self, id: IdentifierId) -> impl std::ops::Deref<Target = str> + '_ {
         std::cell::Ref::map(self.identifiers.borrow(), |idents| idents.get_name(id))
     }
 
     pub fn get_defn(&self, ast_id: AstId) -> &Definition {
+        log::trace!("get_defn id {}", ast_id);
         for defn in &self.defs {
+            log::trace!(
+                "defn {:?} has ast_id {}",
+                &*self.get_ident_str(defn.get_name()),
+                defn.get_ast_id()
+            );
             if defn.get_ast_id() == ast_id {
                 return defn;
             } else if let Definition::Namespace(ns) = defn {
                 for inner_def in &ns.definitions {
+                    log::trace!(
+                        "inner defn {:?} has ast_id {}",
+                        &*self.get_ident_str(inner_def.get_name()),
+                        inner_def.get_ast_id()
+                    );
                     if inner_def.get_ast_id() == ast_id {
-                        return &inner_def;
+                        return inner_def;
                     }
                 }
             }
@@ -541,8 +560,8 @@ impl AstModule {
         panic!("failed to find defn with ast_id {}", ast_id);
     }
 
-    pub fn defns_iter(&self) -> impl Iterator<Item = (AstId, &Definition)> {
-        self.defs.iter().enumerate().map(|(idx, def)| (idx as u32, def))
+    pub fn defns_iter(&self) -> impl Iterator<Item = &Definition> {
+        self.defs.iter()
     }
 }
 
@@ -590,7 +609,7 @@ struct Parser<'toks> {
     tokens: TokenIter<'toks>,
     source: Rc<Source>,
     identifiers: Rc<RefCell<Identifiers>>,
-    function_index: u32,
+    ast_id_index: u32,
 }
 
 impl<'toks> Parser<'toks> {
@@ -601,7 +620,7 @@ impl<'toks> Parser<'toks> {
             tokens: TokenIter::make(tokens),
             source: Rc::new(Source { content: source, lines }),
             identifiers: Rc::new(RefCell::new(Identifiers::default())),
-            function_index: 0,
+            ast_id_index: 0,
         }
     }
 
@@ -1388,8 +1407,8 @@ impl<'toks> Parser<'toks> {
         }))
     }
     fn next_ast_id(&mut self) -> AstId {
-        let id = self.function_index;
-        self.function_index += 1;
+        let id = self.ast_id_index;
+        self.ast_id_index += 1;
         id
     }
 
