@@ -25,7 +25,7 @@ fn basic_fn() -> Result<(), ParseError> {
     let module = parse_text(src, "basic_fn.nx", false)?;
     assert_eq!(&module.name, "basic_fn.nx");
     if let Some(Definition::FnDef(fndef)) = module.defs.first() {
-        assert_eq!(*module.get_ident_name(fndef.name), *"basic")
+        assert_eq!(*module.get_ident_str(fndef.name), *"basic")
     } else {
         println!("defs {:?}", module.defs);
         panic!("no definitions for basic_fn")
@@ -162,7 +162,7 @@ fn prelude_only() -> Result<(), ParseError> {
     let module = parse_text("", "prelude_only.nx", true)?;
     assert_eq!(&module.name, "prelude_only.nx");
     if let Some(Definition::FnDef(fndef)) = module.defs.first() {
-        assert_eq!(*module.get_ident_name(fndef.name), *"printInt")
+        assert_eq!(*module.get_ident_str(fndef.name), *"printInt")
     } else {
         println!("{module:?}");
         panic!("no definitions in prelude");

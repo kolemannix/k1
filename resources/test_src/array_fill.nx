@@ -1,5 +1,5 @@
 fn main(): int {
-  val xs: Array<int> = array_new<int>(50);
+  val xs: Array<int> = Array::new<int>(50);
   mut i = 0;
   while i < xs.length() {
     xs[i] = 4;
