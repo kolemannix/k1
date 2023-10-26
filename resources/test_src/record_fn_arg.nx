@@ -1,10 +1,11 @@
 fn addPoint(p: { x: int, y: int}): int {
-  return p.x + p.y;
+  p.x + p.y
 }
 
 fn main(): int {
   val result: int = addPoint({ x: 1, y: 2 });
-  return result;
+  printInt(result);
+  0
 }
 // <expected output>
 // 3

@@ -5,7 +5,7 @@ fn foo(): int {
   } else {
     result = 12;
   };
-  return result;
+  result
 }
 
 fn main(): int {
@@ -15,5 +15,5 @@ fn main(): int {
   printInt(count);
   count = 2;
   printInt(count);
-  return 0;
+  0
 }

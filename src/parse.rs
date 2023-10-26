@@ -362,16 +362,8 @@ pub struct WhileStmt {
 }
 
 #[derive(Debug)]
-pub struct ReturnStmt {
-    pub expr: Expression,
-    pub span: Span,
-}
-
-#[derive(Debug)]
 pub enum BlockStmt {
     ValDef(ValDef),
-    /// return keyword will only be allowed to denote explicit early returns
-    ReturnStmt(ReturnStmt),
     Assignment(Assignment),
     LoneExpression(Expression),
     While(WhileStmt),
@@ -1078,9 +1070,9 @@ impl<'toks> Parser<'toks> {
                 self.tokens.advance(); // colon
                 self.tokens.advance(); // colon
                 loop {
-                    println!("Parsing namespaces {:?}", namespaces);
+                    log::trace!("Parsing namespaces {:?}", namespaces);
                     let (a, b, c) = self.tokens.peek_three();
-                    println!("Parsing namespaces peeked 3 {} {} {}", a.kind, b.kind, c.kind);
+                    log::trace!("Parsing namespaces peeked 3 {} {} {}", a.kind, b.kind, c.kind);
                     if a.kind == K::Colon && b.kind == K::Colon && c.kind == K::Ident {
                         self.tokens.advance(); // ident
                         self.tokens.advance(); // colon
@@ -1316,14 +1308,6 @@ impl<'toks> Parser<'toks> {
             Ok(Some(BlockStmt::ValDef(mut_def)))
         } else if let Some(val_def) = self.parse_val(false)? {
             Ok(Some(BlockStmt::ValDef(val_def)))
-        } else if let Some(return_token) = self.eat_token(K::KeywordReturn) {
-            if let Some(ret_val) = self.parse_expression()? {
-                let span = return_token.span.extended(ret_val.get_span());
-                let return_stmt = ReturnStmt { expr: ret_val, span };
-                Ok(Some(BlockStmt::ReturnStmt(return_stmt)))
-            } else {
-                return Err(Parser::error("return statement", self.tokens.next()));
-            }
         } else if let Some(expr) = self.parse_expression()? {
             let peeked = self.peek();
             // Assignment:

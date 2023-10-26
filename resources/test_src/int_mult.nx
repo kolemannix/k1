@@ -1,5 +1,5 @@
 fn mult(x: int, y: int): int {
-  return x * y;
+  x * y
 }
 
 fn main(x: int): int {
@@ -7,6 +7,7 @@ fn main(x: int): int {
     55, 
     2 + 3 + 3,
   );
-  return result;
+  printInt(result);
+  0
 }
 // 440

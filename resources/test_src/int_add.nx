@@ -3,13 +3,13 @@ val z: int = 1337;
 fn add_stuff(x: int, y: int): int {
   val b: int = x + 1;
   val foo: int = b + z;
-  return foo + y;
+  foo + y
 }
 
 fn main(x: int): int {
   val result: int = add_stuff(y = 2, x = 1);
   assert(result == 1341);
-  return 0;
+  0
 }
 // <expected output>
 // 1341

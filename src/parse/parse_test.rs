@@ -20,7 +20,7 @@ fn basic_fn() -> Result<(), ParseError> {
       mut y: int = 1;
       y = { 1; 2; 3 };
       y = add(42, 42);
-      return add(x, y);
+      add(x, y)
     }"#;
     let module = parse_text(src, "basic_fn.nx", false)?;
     assert_eq!(&module.name, "basic_fn.nx");

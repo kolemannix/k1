@@ -2,6 +2,6 @@ val x: int = 3;
 
 fn main(x: int): int {
   val x: int = 42;
-  return x;
+  x
 }
 // 42

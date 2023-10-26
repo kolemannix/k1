@@ -4,6 +4,6 @@ fn main(): int {
   assert(y == 52);
   assert(y > 51);
   assert(y < 53);
-  return 0;
+  0
 }
 // 0

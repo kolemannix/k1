@@ -1,8 +1,8 @@
 fn main(): int {
-  val xs: Array<int> = [10, 20, 30+5, if true 4 else 2];
+  val xs = [10, 20, 30+5, if true 4 else 2];
   printInt(xs.length());
   assert(xs[0] + xs[1] + xs[2] + xs[3] == 69);
-  return 0;
+  0
 }
 // <expected output>
 // 69

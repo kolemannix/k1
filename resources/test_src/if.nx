@@ -2,6 +2,6 @@ fn main(): int {
   val cond: bool = false;
   val result: int = if cond 42 else 1337;
   printInt(result);
-  return 1337;
+  1337
 }
 // 1337

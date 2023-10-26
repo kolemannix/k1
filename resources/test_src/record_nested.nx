@@ -4,7 +4,7 @@ type Block = {
 }
 
 fn block_area(b: Block): int {
-  return b.position.width * b.position.height;
+  b.position.width * b.position.height
 }
 
 fn main(): int {
@@ -16,6 +16,6 @@ fn main(): int {
   printInt(area);
   val area2: int = block_area({ position: { x: 1, y: 1, width: 50, height: 50 }, text: 42 });
   printInt(area2);
-  return 0;
+  0
 }
 // 2500\n2500

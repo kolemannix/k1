@@ -51,7 +51,6 @@ pub enum TokenKind {
     Char,
 
     KeywordFn,
-    KeywordReturn,
     KeywordVal,
     KeywordMut,
     KeywordAnd,
@@ -111,7 +110,6 @@ impl TokenKind {
     pub fn get_repr(&self) -> Option<&'static str> {
         match self {
             K::KeywordFn => Some("fn"),
-            K::KeywordReturn => Some("return"),
             K::KeywordVal => Some("val"),
             K::KeywordMut => Some("mut"),
             K::KeywordAnd => Some("and"),
@@ -185,7 +183,6 @@ impl TokenKind {
     pub fn token_from_str(str: &str) -> Option<TokenKind> {
         match str {
             "fn" => Some(K::KeywordFn),
-            "return" => Some(K::KeywordReturn),
             "val" => Some(K::KeywordVal),
             "mut" => Some(K::KeywordMut),
             "and" => Some(K::KeywordAnd),
@@ -206,7 +203,6 @@ impl TokenKind {
     pub fn is_keyword(&self) -> bool {
         match self {
             K::KeywordFn => true,
-            K::KeywordReturn => true,
             K::KeywordVal => true,
             K::KeywordMut => true,
             K::KeywordAnd => true,
