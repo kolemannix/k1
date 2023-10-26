@@ -2,8 +2,6 @@ use anyhow::Result;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 
-use env_logger::init;
-use inkwell::basic_block::BasicBlock;
 use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::module::Linkage;
 use inkwell::passes::{PassManager, PassManagerBuilder};
@@ -11,20 +9,19 @@ use inkwell::targets::{InitializationConfig, Target, TargetMachine};
 use inkwell::types::{
     BasicMetadataTypeEnum, BasicType, BasicTypeEnum, IntType, PointerType, StructType,
 };
-use inkwell::values::AnyValueEnum::MetadataValue;
 use inkwell::values::{
     ArrayValue, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue,
     InstructionValue, IntValue, PointerValue,
 };
 use inkwell::{AddressSpace, IntPredicate, OptimizationLevel};
-use log::{error, trace};
+use log::trace;
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::path::Path;
 use std::rc::Rc;
 
-use crate::ir::*;
-use crate::parse::{IdentifierId, IndexOperation};
+use crate::parse::IdentifierId;
+use crate::typer::*;
 
 struct BuiltinTypes<'ctx> {
     ctx: &'ctx Context,
@@ -109,7 +106,7 @@ struct LibcFunctions<'ctx> {
 
 pub struct Codegen<'ctx> {
     ctx: &'ctx Context,
-    pub module: Rc<IrModule>,
+    pub module: Rc<TypedModule>,
     llvm_module: inkwell::module::Module<'ctx>,
     llvm_machine: Option<TargetMachine>,
     builder: Builder<'ctx>,
@@ -218,7 +215,7 @@ fn i8_array_from_str<'ctx>(ctx: &'ctx Context, value: &str) -> ArrayValue<'ctx> 
 }
 
 impl<'ctx> Codegen<'ctx> {
-    pub fn create(ctx: &'ctx Context, module: Rc<IrModule>) -> Codegen<'ctx> {
+    pub fn create(ctx: &'ctx Context, module: Rc<TypedModule>) -> Codegen<'ctx> {
         let builder = ctx.create_builder();
         let char_type = ctx.i8_type();
         let stdlib_module = ctx
@@ -425,23 +422,23 @@ impl<'ctx> Codegen<'ctx> {
         pointer.into()
     }
 
-    fn codegen_literal(&mut self, literal: &IrLiteral) -> GeneratedValue<'ctx> {
+    fn codegen_literal(&mut self, literal: &TypedLiteral) -> GeneratedValue<'ctx> {
         match literal {
-            IrLiteral::Unit(_) => self.builtin_types.unit_value.as_basic_value_enum().into(),
-            IrLiteral::Char(byte, _) => {
+            TypedLiteral::Unit(_) => self.builtin_types.unit_value.as_basic_value_enum().into(),
+            TypedLiteral::Char(byte, _) => {
                 self.builtin_types.char.const_int(*byte as u64, false).as_basic_value_enum().into()
             }
-            IrLiteral::Bool(b, _) => match b {
+            TypedLiteral::Bool(b, _) => match b {
                 true => self.builtin_types.true_value.as_basic_value_enum().into(),
                 false => self.builtin_types.false_value.as_basic_value_enum().into(),
             },
-            IrLiteral::Int(int_value, _) => {
+            TypedLiteral::Int(int_value, _) => {
                 // LLVM only has unsigned values, the instructions are what provide the semantics
                 // of signed vs unsigned
                 let value = self.builtin_types.i64.const_int(*int_value as u64, false);
                 value.as_basic_value_enum().into()
             }
-            IrLiteral::Str(string_value, _) => {
+            TypedLiteral::Str(string_value, _) => {
                 // We will make them records (structs) with an array pointer and a length for now
                 let global_str = self.llvm_module.add_global(
                     self.builtin_types.char.array_type(string_value.len() as u32),
@@ -460,7 +457,7 @@ impl<'ctx> Codegen<'ctx> {
                 global_value.set_initializer(&value);
                 global_value.as_basic_value_enum().into()
             }
-            IrLiteral::Record(record) => {
+            TypedLiteral::Record(record) => {
                 let module = self.module.clone();
                 let record_type = module.get_type(record.type_id).expect_record_type();
                 let record_llvm_type = self.build_record_type(record_type);
@@ -481,7 +478,7 @@ impl<'ctx> Codegen<'ctx> {
                 }
                 GeneratedValue::Value(struct_ptr.as_basic_value_enum())
             }
-            IrLiteral::Array(array) => {
+            TypedLiteral::Array(array) => {
                 let Type::Array(array_ir_type) = self.module.get_type(array.type_id) else {
                     panic!("expected array type for array");
                 };
@@ -507,7 +504,7 @@ impl<'ctx> Codegen<'ctx> {
             }
         }
     }
-    fn codegen_if_else(&mut self, ir_if: &IrIf) -> GeneratedValue<'ctx> {
+    fn codegen_if_else(&mut self, ir_if: &TypedIf) -> GeneratedValue<'ctx> {
         let typ = self.get_llvm_type(ir_if.ir_type);
         let start_block = self.builder.get_insert_block().unwrap();
         let current_fn = start_block.get_parent().unwrap();
@@ -573,7 +570,7 @@ impl<'ctx> Codegen<'ctx> {
             _ => self.builtin_types.unit_value.as_basic_value_enum().into(),
         }
     }
-    fn codegen_expr(&mut self, expr: &IrExpr) -> BasicValueEnum<'ctx> {
+    fn codegen_expr(&mut self, expr: &TypedExpr) -> BasicValueEnum<'ctx> {
         let value = self.codegen_expr_inner(expr);
         value.loaded_value(&self.builder)
     }
@@ -582,10 +579,10 @@ impl<'ctx> Codegen<'ctx> {
     /// an array element or record member, rather than the element or member itself
     /// This allows for the caller to decide if they want to just load the value, or use the pointer
     /// for things like assignment
-    fn codegen_expr_inner(&mut self, expr: &IrExpr) -> GeneratedValue<'ctx> {
+    fn codegen_expr_inner(&mut self, expr: &TypedExpr) -> GeneratedValue<'ctx> {
         match expr {
-            IrExpr::Literal(literal) => self.codegen_literal(literal),
-            IrExpr::Variable(ir_var) => {
+            TypedExpr::Literal(literal) => self.codegen_literal(literal),
+            TypedExpr::Variable(ir_var) => {
                 log::trace!("codegen variable expr {ir_var:?}");
                 if let Some(pointer) = self.variables.get(&ir_var.variable_id) {
                     log::trace!("codegen variable got type {:?}", pointer.pointee_ty);
@@ -598,7 +595,7 @@ impl<'ctx> Codegen<'ctx> {
                     panic!("No pointer or global found for variable {:?}", ir_var)
                 }
             }
-            IrExpr::FieldAccess(field_access) => {
+            TypedExpr::FieldAccess(field_access) => {
                 let result = self.codegen_expr(&field_access.base);
                 let type_ref = field_access.base.get_type();
                 if let TypeRef::TypeId(type_id) = type_ref {
@@ -630,8 +627,8 @@ impl<'ctx> Codegen<'ctx> {
                     panic!("Invalid field access: {:?}", field_access)
                 }
             }
-            IrExpr::If(ir_if) => self.codegen_if_else(ir_if),
-            IrExpr::BinaryOp(bin_op) => match bin_op.ir_type {
+            TypedExpr::If(ir_if) => self.codegen_if_else(ir_if),
+            TypedExpr::BinaryOp(bin_op) => match bin_op.ir_type {
                 TypeRef::Int => {
                     let lhs_value = self.codegen_expr(&bin_op.lhs).into_int_value();
                     let rhs_value = self.codegen_expr(&bin_op.rhs).into_int_value();
@@ -725,15 +722,15 @@ impl<'ctx> Codegen<'ctx> {
                 TypeRef::Char => panic!("No char-returning binary ops"),
                 TypeRef::TypeId(_) => todo!("codegen for binary ops on user-defined types"),
             },
-            IrExpr::Block(_block) => {
+            TypedExpr::Block(_block) => {
                 // This is just a lexical scoping block, not a control-flow block, so doesn't need
                 // to correspond to an LLVM basic block
                 // We just need to codegen each statement and assign the return value to an alloca
                 todo!("codegen lexical block")
             }
-            IrExpr::FunctionCall(call) => self.codegen_function_call(call),
-            IrExpr::ArrayIndex(index_op) => self.codegen_array_index_operation(index_op),
-            IrExpr::StringIndex(index_op) => self.codegen_string_index_operation(index_op),
+            TypedExpr::FunctionCall(call) => self.codegen_function_call(call),
+            TypedExpr::ArrayIndex(index_op) => self.codegen_array_index_operation(index_op),
+            TypedExpr::StringIndex(index_op) => self.codegen_string_index_operation(index_op),
         }
     }
     fn codegen_function_call(&mut self, call: &Call) -> GeneratedValue<'ctx> {
@@ -915,22 +912,22 @@ impl<'ctx> Codegen<'ctx> {
     // None. We'll fix it when implementing early returns
     // Maybe we rename ReturnStmt to Early Return to separate it from tail returns, which have
     // pretty different semantics and implications for codegen, I am realizing
-    fn codegen_block_statements(&mut self, block: &IrBlock) -> Option<BasicValueEnum<'ctx>> {
+    fn codegen_block_statements(&mut self, block: &TypedBlock) -> Option<BasicValueEnum<'ctx>> {
         let mut last: Option<BasicValueEnum<'ctx>> = None;
         for stmt in &block.statements {
             match stmt {
-                IrStmt::Expr(expr) => last = Some(self.codegen_expr(expr)),
-                IrStmt::ValDef(val_def) => {
+                TypedStmt::Expr(expr) => last = Some(self.codegen_expr(expr)),
+                TypedStmt::ValDef(val_def) => {
                     let value = self.codegen_val(val_def).expect_pointer();
                     last = Some(self.builtin_types.unit_value.as_basic_value_enum())
                 }
-                IrStmt::ReturnStmt(return_stmt) => {
+                TypedStmt::ReturnStmt(return_stmt) => {
                     let value = self.codegen_expr(&return_stmt.expr);
                     self.builder.build_return(Some(&value));
                     return None;
                 }
-                IrStmt::Assignment(assignment) => match assignment.destination.deref() {
-                    IrExpr::Variable(v) => {
+                TypedStmt::Assignment(assignment) => match assignment.destination.deref() {
+                    TypedExpr::Variable(v) => {
                         let destination_ptr =
                             *self.variables.get(&v.variable_id).expect("Missing variable");
                         let initializer = self.codegen_expr(&assignment.value);
@@ -939,7 +936,7 @@ impl<'ctx> Codegen<'ctx> {
                         //self.builder.build_store(des, value.loaded_value(&self.builder))
                         last = Some(self.builtin_types.unit_value.as_basic_value_enum())
                     }
-                    IrExpr::FieldAccess(_field_access) => {
+                    TypedExpr::FieldAccess(_field_access) => {
                         // We use codegen_expr_inner to get the pointer to the accessed field
                         let field_ptr = self.codegen_expr_inner(&assignment.destination);
                         let ptr = field_ptr.expect_pointer();
@@ -947,7 +944,7 @@ impl<'ctx> Codegen<'ctx> {
                         self.builder.build_store(ptr.pointer, rhs);
                         last = Some(self.builtin_types.unit_value.as_basic_value_enum())
                     }
-                    IrExpr::ArrayIndex(_array_index) => {
+                    TypedExpr::ArrayIndex(_array_index) => {
                         // We use codegen_expr_inner to get the llvm 'pointer' to the indexed element
                         let elem_ptr = self.codegen_expr_inner(&assignment.destination);
                         let ptr = elem_ptr.expect_pointer();
@@ -959,7 +956,7 @@ impl<'ctx> Codegen<'ctx> {
                         panic!("Invalid assignment lhs")
                     }
                 },
-                IrStmt::WhileLoop(while_stmt) => {
+                TypedStmt::WhileLoop(while_stmt) => {
                     let start_block = self.builder.get_insert_block().unwrap();
                     let current_fn = start_block.get_parent().unwrap();
                     let loop_entry_block = self.ctx.append_basic_block(current_fn, "while_cond");
@@ -1060,7 +1057,7 @@ impl<'ctx> Codegen<'ctx> {
     pub fn codegen_module(&mut self) {
         for constant in &self.module.constants {
             match constant.expr {
-                IrExpr::Literal(IrLiteral::Int(i64, _)) => {
+                TypedExpr::Literal(TypedLiteral::Int(i64, _)) => {
                     let llvm_ty = self.builtin_types.i64;
                     let llvm_val =
                         self.llvm_module.add_global(llvm_ty, Some(AddressSpace::default()), "");
