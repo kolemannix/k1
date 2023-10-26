@@ -2,12 +2,12 @@ use std::env;
 use std::rc::Rc;
 
 mod codegen_llvm;
-mod ir;
 mod lex;
 mod parse;
 mod prelude;
 #[cfg(test)]
 mod test_suite;
+mod typer;
 
 use anyhow::Result;
 use inkwell::context::Context;
@@ -39,7 +39,7 @@ pub fn compile_single_file_program<'ctx>(
         panic!("parse error");
     });
     let ast = Rc::new(ast);
-    let mut irgen = ir::IrModule::new(ast);
+    let mut irgen = typer::TypedModule::new(ast);
     irgen.run()?;
     let irgen = Rc::new(irgen);
     // println!("{irgen}");
@@ -55,8 +55,8 @@ fn main() -> Result<()> {
     static_assert_size!(parse::Definition, 16);
     static_assert_size!(parse::BlockStmt, 224); // Get down below 100
     static_assert_size!(parse::Expression, 104); // Get back down
-    static_assert_size!(ir::IrExpr, 64);
-    static_assert_size!(ir::IrStmt, 16);
+    static_assert_size!(typer::TypedExpr, 64);
+    static_assert_size!(typer::TypedStmt, 16);
     println!("Size of ast::Definition: {}", std::mem::size_of::<parse::Definition>());
     println!("Size of ast::FnDef: {}", std::mem::size_of::<parse::FnDef>());
     println!("Size of ast::TypeExpression: {}", std::mem::size_of::<parse::TypeExpression>());

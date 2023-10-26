@@ -109,11 +109,11 @@ impl Type {
 }
 
 #[derive(Debug, Clone)]
-pub struct IrBlock {
+pub struct TypedBlock {
     // If this block is just an expression, the type of the expression
     pub expr_type: TypeRef,
     pub scope_id: ScopeId,
-    pub statements: Vec<IrStmt>,
+    pub statements: Vec<TypedStmt>,
     pub span: Span,
 }
 
@@ -132,7 +132,7 @@ pub struct Function {
     pub ret_type: TypeRef,
     pub params: Vec<FnArgDefn>,
     pub type_params: Option<Vec<TypeParam>>,
-    pub block: Option<IrBlock>,
+    pub block: Option<TypedBlock>,
     pub intrinsic_type: Option<IntrinsicFunctionType>,
     pub specializations: Vec<FunctionId>,
     pub ast_id: AstId,
@@ -192,15 +192,15 @@ impl BinaryOpKind {
 pub struct BinaryOp {
     pub kind: BinaryOpKind,
     pub ir_type: TypeRef,
-    pub lhs: Box<IrExpr>,
-    pub rhs: Box<IrExpr>,
+    pub lhs: Box<TypedExpr>,
+    pub rhs: Box<TypedExpr>,
     pub span: Span,
 }
 
 #[derive(Debug, Clone)]
 pub struct Call {
     pub callee_function_id: FunctionId,
-    pub args: Vec<IrExpr>,
+    pub args: Vec<TypedExpr>,
     pub ret_type: TypeRef,
     pub span: Span,
 }
@@ -208,7 +208,7 @@ pub struct Call {
 #[derive(Debug, Clone)]
 pub struct RecordField {
     pub name: IdentifierId,
-    pub expr: IrExpr,
+    pub expr: TypedExpr,
 }
 
 #[derive(Debug, Clone)]
@@ -220,13 +220,13 @@ pub struct Record {
 
 #[derive(Debug, Clone)]
 pub struct ArrayLiteral {
-    pub elements: Vec<IrExpr>,
+    pub elements: Vec<TypedExpr>,
     pub type_id: TypeId,
     pub span: Span,
 }
 
 #[derive(Debug, Clone)]
-pub enum IrLiteral {
+pub enum TypedLiteral {
     Unit(Span),
     Char(u8, Span),
     Bool(bool, Span),
@@ -236,95 +236,95 @@ pub enum IrLiteral {
     Array(ArrayLiteral),
 }
 
-impl IrLiteral {
+impl TypedLiteral {
     #[inline]
     pub fn get_span(&self) -> Span {
         match self {
-            IrLiteral::Unit(span) => *span,
-            IrLiteral::Char(_, span) => *span,
-            IrLiteral::Str(_, span) => *span,
-            IrLiteral::Int(_, span) => *span,
-            IrLiteral::Bool(_, span) => *span,
-            IrLiteral::Record(record) => record.span,
-            IrLiteral::Array(arr) => arr.span,
+            TypedLiteral::Unit(span) => *span,
+            TypedLiteral::Char(_, span) => *span,
+            TypedLiteral::Str(_, span) => *span,
+            TypedLiteral::Int(_, span) => *span,
+            TypedLiteral::Bool(_, span) => *span,
+            TypedLiteral::Record(record) => record.span,
+            TypedLiteral::Array(arr) => arr.span,
         }
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct IrIf {
-    pub condition: IrExpr,
-    pub consequent: IrBlock,
-    pub alternate: IrBlock,
+pub struct TypedIf {
+    pub condition: TypedExpr,
+    pub consequent: TypedBlock,
+    pub alternate: TypedBlock,
     pub ir_type: TypeRef,
     pub span: Span,
 }
 
 #[derive(Debug, Clone)]
 pub struct FieldAccess {
-    pub base: Box<IrExpr>,
+    pub base: Box<TypedExpr>,
     pub target_field: IdentifierId,
     pub ir_type: TypeRef,
     pub span: Span,
 }
 #[derive(Debug, Clone)]
 pub struct IndexOp {
-    pub base_expr: Box<IrExpr>,
-    pub index_expr: Box<IrExpr>,
+    pub base_expr: Box<TypedExpr>,
+    pub index_expr: Box<TypedExpr>,
     pub result_type: TypeRef,
     pub span: Span,
 }
 
 #[derive(Debug, Clone)]
-pub enum IrExpr {
-    Literal(IrLiteral),
+pub enum TypedExpr {
+    Literal(TypedLiteral),
     Variable(VariableExpr),
     FieldAccess(FieldAccess),
     BinaryOp(BinaryOp),
-    Block(IrBlock),
+    Block(TypedBlock),
     FunctionCall(Call),
-    If(Box<IrIf>),
+    If(Box<TypedIf>),
     ArrayIndex(IndexOp),
     StringIndex(IndexOp),
 }
 
-impl IrExpr {
-    pub fn unit_literal(span: Span) -> IrExpr {
-        IrExpr::Literal(IrLiteral::Unit(span))
+impl TypedExpr {
+    pub fn unit_literal(span: Span) -> TypedExpr {
+        TypedExpr::Literal(TypedLiteral::Unit(span))
     }
 
     #[inline]
     pub fn get_type(&self) -> TypeRef {
         match self {
-            IrExpr::Literal(IrLiteral::Unit(_)) => TypeRef::Unit,
-            IrExpr::Literal(IrLiteral::Char(_, _)) => TypeRef::Char,
-            IrExpr::Literal(IrLiteral::Str(_, _)) => TypeRef::String,
-            IrExpr::Literal(IrLiteral::Int(_, _)) => TypeRef::Int,
-            IrExpr::Literal(IrLiteral::Bool(_, _)) => TypeRef::Bool,
-            IrExpr::Literal(IrLiteral::Record(record)) => TypeRef::TypeId(record.type_id),
-            IrExpr::Literal(IrLiteral::Array(arr)) => TypeRef::TypeId(arr.type_id),
-            IrExpr::Variable(var) => var.ir_type,
-            IrExpr::FieldAccess(field_access) => field_access.ir_type,
-            IrExpr::BinaryOp(binary_op) => binary_op.ir_type,
-            IrExpr::Block(b) => b.expr_type,
-            IrExpr::FunctionCall(call) => call.ret_type,
-            IrExpr::If(ir_if) => ir_if.ir_type,
-            IrExpr::ArrayIndex(op) => op.result_type,
-            IrExpr::StringIndex(op) => op.result_type,
+            TypedExpr::Literal(TypedLiteral::Unit(_)) => TypeRef::Unit,
+            TypedExpr::Literal(TypedLiteral::Char(_, _)) => TypeRef::Char,
+            TypedExpr::Literal(TypedLiteral::Str(_, _)) => TypeRef::String,
+            TypedExpr::Literal(TypedLiteral::Int(_, _)) => TypeRef::Int,
+            TypedExpr::Literal(TypedLiteral::Bool(_, _)) => TypeRef::Bool,
+            TypedExpr::Literal(TypedLiteral::Record(record)) => TypeRef::TypeId(record.type_id),
+            TypedExpr::Literal(TypedLiteral::Array(arr)) => TypeRef::TypeId(arr.type_id),
+            TypedExpr::Variable(var) => var.ir_type,
+            TypedExpr::FieldAccess(field_access) => field_access.ir_type,
+            TypedExpr::BinaryOp(binary_op) => binary_op.ir_type,
+            TypedExpr::Block(b) => b.expr_type,
+            TypedExpr::FunctionCall(call) => call.ret_type,
+            TypedExpr::If(ir_if) => ir_if.ir_type,
+            TypedExpr::ArrayIndex(op) => op.result_type,
+            TypedExpr::StringIndex(op) => op.result_type,
         }
     }
     #[inline]
     pub fn get_span(&self) -> Span {
         match self {
-            IrExpr::Literal(lit) => lit.get_span(),
-            IrExpr::Variable(var) => var.span,
-            IrExpr::FieldAccess(field_access) => field_access.span,
-            IrExpr::BinaryOp(binary_op) => binary_op.span,
-            IrExpr::Block(b) => b.span,
-            IrExpr::FunctionCall(call) => call.span,
-            IrExpr::If(ir_if) => ir_if.span,
-            IrExpr::ArrayIndex(op) => op.span,
-            IrExpr::StringIndex(op) => op.span,
+            TypedExpr::Literal(lit) => lit.get_span(),
+            TypedExpr::Variable(var) => var.span,
+            TypedExpr::FieldAccess(field_access) => field_access.span,
+            TypedExpr::BinaryOp(binary_op) => binary_op.span,
+            TypedExpr::Block(b) => b.span,
+            TypedExpr::FunctionCall(call) => call.span,
+            TypedExpr::If(ir_if) => ir_if.span,
+            TypedExpr::ArrayIndex(op) => op.span,
+            TypedExpr::StringIndex(op) => op.span,
         }
     }
 }
@@ -333,74 +333,74 @@ impl IrExpr {
 pub struct ValDef {
     pub variable_id: VariableId,
     pub ir_type: TypeRef,
-    pub initializer: IrExpr,
+    pub initializer: TypedExpr,
     pub span: Span,
 }
 
 #[derive(Debug, Clone)]
 pub struct ReturnStmt {
-    pub expr: IrExpr,
+    pub expr: TypedExpr,
     pub span: Span,
 }
 
 #[derive(Debug, Clone)]
 pub struct Assignment {
-    pub destination: Box<IrExpr>,
-    pub value: Box<IrExpr>,
+    pub destination: Box<TypedExpr>,
+    pub value: Box<TypedExpr>,
     pub span: Span,
 }
 
 #[derive(Debug, Clone)]
-pub struct IrWhileLoop {
-    pub cond: IrExpr,
-    pub block: IrBlock,
+pub struct TypedWhileLoop {
+    pub cond: TypedExpr,
+    pub block: TypedBlock,
     pub span: Span,
 }
 
-// TODO: When do we 'clone' a whole IrStmt?
+// TODO: When do we 'clone' a whole TypedStmt?
 #[derive(Debug, Clone)]
-pub enum IrStmt {
-    Expr(Box<IrExpr>),
+pub enum TypedStmt {
+    Expr(Box<TypedExpr>),
     ValDef(Box<ValDef>),
     ReturnStmt(Box<ReturnStmt>),
     Assignment(Box<Assignment>),
-    WhileLoop(Box<IrWhileLoop>),
+    WhileLoop(Box<TypedWhileLoop>),
 }
 
-impl IrStmt {
+impl TypedStmt {
     #[inline]
     pub fn get_span(&self) -> Span {
         match self {
-            IrStmt::Expr(e) => e.get_span(),
-            IrStmt::ValDef(v) => v.span,
-            IrStmt::ReturnStmt(ret) => ret.span,
-            IrStmt::Assignment(ass) => ass.span,
-            IrStmt::WhileLoop(w) => w.span,
+            TypedStmt::Expr(e) => e.get_span(),
+            TypedStmt::ValDef(v) => v.span,
+            TypedStmt::ReturnStmt(ret) => ret.span,
+            TypedStmt::Assignment(ass) => ass.span,
+            TypedStmt::WhileLoop(w) => w.span,
         }
     }
 }
 
 #[derive(Debug)]
-pub struct IrGenError {
+pub struct TypedGenError {
     message: String,
     span: Span,
 }
 
-impl IrGenError {
-    fn make(message: impl AsRef<str>, span: Span) -> IrGenError {
-        IrGenError { message: message.as_ref().to_owned(), span }
+impl TypedGenError {
+    fn make(message: impl AsRef<str>, span: Span) -> TypedGenError {
+        TypedGenError { message: message.as_ref().to_owned(), span }
     }
 }
 
-impl Display for IrGenError {
+impl Display for TypedGenError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_fmt(format_args!("error on line {}: {}", self.span.line, self.message))
     }
 }
 
-impl Error for IrGenError {}
+impl Error for TypedGenError {}
 
-pub type IrGenResult<A> = Result<A, IrGenError>;
+pub type TypedGenResult<A> = Result<A, TypedGenError>;
 
 #[derive(Debug)]
 pub struct Variable {
@@ -413,12 +413,12 @@ pub struct Variable {
 #[derive(Debug)]
 pub struct Constant {
     pub variable_id: VariableId,
-    pub expr: IrExpr,
+    pub expr: TypedExpr,
     pub ir_type: TypeRef,
     pub span: Span,
 }
 
-pub struct IrCompilerError {
+pub struct TypedCompilerError {
     pub span: Span,
     pub message: String,
 }
@@ -590,30 +590,30 @@ impl Scope {
     }
 }
 
-fn make_err<T: AsRef<str>>(s: T, span: Span) -> IrGenError {
-    IrGenError::make(s.as_ref(), span)
+fn make_err<T: AsRef<str>>(s: T, span: Span) -> TypedGenError {
+    TypedGenError::make(s.as_ref(), span)
 }
 
-fn make_fail<A, T: AsRef<str>>(s: T, span: Span) -> IrGenResult<A> {
+fn make_fail<A, T: AsRef<str>>(s: T, span: Span) -> TypedGenResult<A> {
     Err(make_err(s, span))
 }
 
-pub struct IrModule {
+pub struct TypedModule {
     pub ast: Rc<AstModule>,
     functions: Vec<Function>,
     pub variables: Vec<Variable>,
     pub types: Vec<Type>,
     pub constants: Vec<Constant>,
     pub scopes: Scopes,
-    pub errors: Vec<IrCompilerError>,
+    pub errors: Vec<TypedCompilerError>,
     pub namespaces: Vec<Namespace>,
 }
 
-impl IrModule {
-    pub fn new(parsed_module: Rc<AstModule>) -> IrModule {
+impl TypedModule {
+    pub fn new(parsed_module: Rc<AstModule>) -> TypedModule {
         let scopes = Scopes::make();
         let root_ident = parsed_module.ident_id("_root");
-        IrModule {
+        TypedModule {
             ast: parsed_module,
             functions: Vec::new(),
             variables: Vec::new(),
@@ -652,7 +652,7 @@ impl IrModule {
     }
 
     fn report_error(&mut self, span: Span, message: String) {
-        self.errors.push(IrCompilerError { span, message })
+        self.errors.push(TypedCompilerError { span, message })
     }
 
     fn add_type(&mut self, typ: Type) -> TypeId {
@@ -714,7 +714,11 @@ impl IrModule {
         }
     }
 
-    fn eval_type_defn(&mut self, defn: &parse::TypeDefn, scope_id: ScopeId) -> IrGenResult<TypeId> {
+    fn eval_type_defn(
+        &mut self,
+        defn: &parse::TypeDefn,
+        scope_id: ScopeId,
+    ) -> TypedGenResult<TypeId> {
         let TypeRef::TypeId(type_id) = self.eval_type_expr(&defn.value_expr, scope_id)? else {
             return make_fail("Expected non-scalar rhs of type definition", defn.value_expr.get_span());
         };
@@ -735,7 +739,7 @@ impl IrModule {
         &mut self,
         expr: &parse::TypeExpression,
         scope_id: ScopeId,
-    ) -> IrGenResult<TypeRef> {
+    ) -> TypedGenResult<TypeRef> {
         match expr {
             parse::TypeExpression::Unit(_) => Ok(TypeRef::Unit),
             parse::TypeExpression::Char(_) => Ok(TypeRef::Char),
@@ -799,7 +803,7 @@ impl IrModule {
         &self,
         expr: &parse::TypeExpression,
         _scope_id: ScopeId,
-    ) -> IrGenResult<TypeRef> {
+    ) -> TypedGenResult<TypeRef> {
         match expr {
             parse::TypeExpression::Unit(_) => Ok(TypeRef::Unit),
             parse::TypeExpression::Char(_) => Ok(TypeRef::Char),
@@ -891,7 +895,7 @@ impl IrModule {
         }
     }
 
-    fn eval_const(&mut self, const_expr: &parse::ConstVal) -> IrGenResult<VariableId> {
+    fn eval_const(&mut self, const_expr: &parse::ConstVal) -> TypedGenResult<VariableId> {
         let scope_id = 0;
         let ir_type = self.eval_const_type_expr(&const_expr.ty, scope_id)?;
         let num = match &const_expr.value_expr {
@@ -905,7 +909,7 @@ impl IrModule {
                 )
             }
         };
-        let expr = IrExpr::Literal(IrLiteral::Int(num, const_expr.span));
+        let expr = TypedExpr::Literal(TypedLiteral::Int(num, const_expr.span));
         let variable_id = self.add_variable(Variable {
             name: const_expr.name,
             ir_type,
@@ -917,13 +921,13 @@ impl IrModule {
         Ok(variable_id)
     }
 
-    fn get_stmt_expression_type(&self, stmt: &IrStmt) -> TypeRef {
+    fn get_stmt_expression_type(&self, stmt: &TypedStmt) -> TypeRef {
         match stmt {
-            IrStmt::Expr(expr) => expr.get_type(),
-            IrStmt::ValDef(_) => TypeRef::Unit,
-            IrStmt::Assignment(_) => TypeRef::Unit,
-            IrStmt::WhileLoop(_) => TypeRef::Unit,
-            IrStmt::ReturnStmt(_) => TypeRef::Unit,
+            TypedStmt::Expr(expr) => expr.get_type(),
+            TypedStmt::ValDef(_) => TypeRef::Unit,
+            TypedStmt::Assignment(_) => TypeRef::Unit,
+            TypedStmt::WhileLoop(_) => TypeRef::Unit,
+            TypedStmt::ReturnStmt(_) => TypeRef::Unit,
         }
     }
 
@@ -967,25 +971,25 @@ impl IrModule {
     // If the expr is already a block, do nothing
     // If it is not, make a new block with just this expression inside.
     // Used main for if/else
-    fn transform_expr_to_block(&mut self, expr: IrExpr, scope_id: ScopeId) -> IrBlock {
+    fn transform_expr_to_block(&mut self, expr: TypedExpr, scope_id: ScopeId) -> TypedBlock {
         match expr {
-            IrExpr::Block(b) => b,
+            TypedExpr::Block(b) => b,
             expr => {
                 let block_scope = self.scopes.add_scope(scope_id);
                 let ret_type = expr.get_type();
                 let span = expr.get_span();
-                let statement = IrStmt::Expr(Box::new(expr));
+                let statement = TypedStmt::Expr(Box::new(expr));
                 let statements = vec![statement];
 
-                IrBlock { expr_type: ret_type, scope_id: block_scope, statements, span }
+                TypedBlock { expr_type: ret_type, scope_id: block_scope, statements, span }
             }
         }
     }
 
-    fn coerce_block_to_unit_block(&mut self, block: &mut IrBlock) {
+    fn coerce_block_to_unit_block(&mut self, block: &mut TypedBlock) {
         let span = block.statements.last().map(|s| s.get_span()).unwrap_or(block.span);
-        let unit_literal = IrExpr::unit_literal(span);
-        block.statements.push(IrStmt::Expr(Box::new(unit_literal)));
+        let unit_literal = TypedExpr::unit_literal(span);
+        block.statements.push(TypedStmt::Expr(Box::new(unit_literal)));
         block.expr_type = TypeRef::Unit;
     }
 
@@ -994,7 +998,7 @@ impl IrModule {
         scope_id: ScopeId,
         namespaces: &[IdentifierId],
         span: Span,
-    ) -> IrGenResult<ScopeId> {
+    ) -> TypedGenResult<ScopeId> {
         log::trace!(
             "traverse_namespace_chain: {:?}",
             namespaces.iter().map(|id| self.get_ident_str(*id).to_string()).collect::<Vec<_>>()
@@ -1026,7 +1030,7 @@ impl IrModule {
         expr: &Expression,
         scope_id: ScopeId,
         expected_type: Option<TypeRef>,
-    ) -> IrGenResult<IrExpr> {
+    ) -> TypedGenResult<TypedExpr> {
         match expr {
             Expression::Array(array_expr) => {
                 let mut element_type: Option<TypeRef> = match expected_type.as_ref() {
@@ -1039,7 +1043,7 @@ impl IrModule {
                     }
                     None => Ok(None),
                 }?;
-                let elements: Vec<IrExpr> = {
+                let elements: Vec<TypedExpr> = {
                     let mut elements = Vec::new();
                     for elem in &array_expr.elements {
                         let ir_expr = self.eval_expr(elem, scope_id, element_type)?;
@@ -1066,7 +1070,7 @@ impl IrModule {
                         type_id
                     }
                 };
-                Ok(IrExpr::Literal(IrLiteral::Array(ArrayLiteral {
+                Ok(TypedExpr::Literal(TypedLiteral::Array(ArrayLiteral {
                     elements,
                     type_id,
                     span: array_expr.span,
@@ -1082,7 +1086,7 @@ impl IrModule {
                 let base_expr = self.eval_expr(&index_op.target, scope_id, None)?;
                 let target_type = base_expr.get_type();
                 match target_type {
-                    TypeRef::String => Ok(IrExpr::StringIndex(IndexOp {
+                    TypeRef::String => Ok(TypedExpr::StringIndex(IndexOp {
                         base_expr: Box::new(base_expr),
                         index_expr: Box::new(index_expr),
                         result_type: TypeRef::Char,
@@ -1091,7 +1095,7 @@ impl IrModule {
                     TypeRef::TypeId(target_type_id) => {
                         let target_type = self.get_type(target_type_id);
                         match target_type {
-                            Type::Array(array_type) => Ok(IrExpr::ArrayIndex(IndexOp {
+                            Type::Array(array_type) => Ok(TypedExpr::ArrayIndex(IndexOp {
                                 base_expr: Box::new(base_expr),
                                 index_expr: Box::new(index_expr),
                                 result_type: array_type.element_type,
@@ -1146,7 +1150,7 @@ impl IrModule {
                 }?;
                 let ir_record =
                     Record { fields: field_values, span: ast_record.span, type_id: record_type_id };
-                Ok(IrExpr::Literal(IrLiteral::Record(ir_record)))
+                Ok(TypedExpr::Literal(TypedLiteral::Record(ir_record)))
             }
             Expression::If(if_expr) => {
                 // Ensure boolean condition (or optional which isn't built yet)
@@ -1173,10 +1177,10 @@ impl IrModule {
                     let expr = self.eval_expr(alt, scope_id, Some(consequent_type))?;
                     self.transform_expr_to_block(expr, scope_id)
                 } else {
-                    IrBlock {
+                    TypedBlock {
                         expr_type: TypeRef::Unit,
                         scope_id,
-                        statements: vec![IrStmt::Expr(Box::new(IrExpr::unit_literal(
+                        statements: vec![TypedStmt::Expr(Box::new(TypedExpr::unit_literal(
                             if_expr.span,
                         )))],
                         span: if_expr.span,
@@ -1192,7 +1196,7 @@ impl IrModule {
                     );
                 }
                 let overall_type = consequent.expr_type;
-                Ok(IrExpr::If(Box::new(IrIf {
+                Ok(TypedExpr::If(Box::new(TypedIf {
                     condition,
                     consequent,
                     alternate,
@@ -1238,7 +1242,7 @@ impl IrModule {
                     BinaryOpKind::Or => lhs.get_type(),
                     BinaryOpKind::Equals => TypeRef::Bool,
                 };
-                let expr = IrExpr::BinaryOp(BinaryOp {
+                let expr = TypedExpr::BinaryOp(BinaryOp {
                     kind,
                     ir_type: result_type,
                     lhs: Box::new(lhs),
@@ -1247,16 +1251,18 @@ impl IrModule {
                 });
                 Ok(expr)
             }
-            Expression::Literal(Literal::Unit(span)) => Ok(IrExpr::Literal(IrLiteral::Unit(*span))),
+            Expression::Literal(Literal::Unit(span)) => {
+                Ok(TypedExpr::Literal(TypedLiteral::Unit(*span)))
+            }
             Expression::Literal(Literal::Char(byte, span)) => {
-                Ok(IrExpr::Literal(IrLiteral::Char(*byte, *span)))
+                Ok(TypedExpr::Literal(TypedLiteral::Char(*byte, *span)))
             }
             Expression::Literal(Literal::Numeric(s, span)) => {
                 let num = self.parse_numeric(s).map_err(|msg| make_err(msg, *span))?;
-                Ok(IrExpr::Literal(IrLiteral::Int(num, *span)))
+                Ok(TypedExpr::Literal(TypedLiteral::Int(num, *span)))
             }
             Expression::Literal(Literal::Bool(b, span)) => {
-                let expr = IrExpr::Literal(IrLiteral::Bool(*b, *span));
+                let expr = TypedExpr::Literal(TypedLiteral::Bool(*b, *span));
                 Ok(expr)
             }
             Expression::Literal(Literal::String(s, span)) => {
@@ -1265,7 +1271,7 @@ impl IrModule {
                 // is the place, or maybe in the parser, that we would actually do some work, which
                 // would justify storing it separately. But then, post-transform, we should intern
                 // these
-                let expr = IrExpr::Literal(IrLiteral::Str(s.clone(), *span));
+                let expr = TypedExpr::Literal(TypedLiteral::Str(s.clone(), *span));
                 Ok(expr)
             }
             Expression::Variable(variable) => {
@@ -1275,7 +1281,7 @@ impl IrModule {
                         variable.span,
                     ))?;
                 let v = self.get_variable(var_index);
-                let expr = IrExpr::Variable(VariableExpr {
+                let expr = TypedExpr::Variable(VariableExpr {
                     ir_type: v.ir_type,
                     variable_id: var_index,
                     span: variable.span,
@@ -1319,7 +1325,7 @@ impl IrModule {
                         field_access.span,
                     ),
                 }?;
-                Ok(IrExpr::FieldAccess(FieldAccess {
+                Ok(TypedExpr::FieldAccess(FieldAccess {
                     base: Box::new(base_expr),
                     target_field: field_access.target,
                     ir_type: ret_type,
@@ -1328,25 +1334,25 @@ impl IrModule {
             }
             Expression::Block(block) => {
                 let block = self.eval_block(block, scope_id)?;
-                Ok(IrExpr::Block(block))
+                Ok(TypedExpr::Block(block))
             }
             Expression::MethodCall(m_call) => {
                 let base_expr = self.eval_expr(&m_call.base, scope_id, None)?;
                 let call = self.eval_function_call(&m_call.call, Some(base_expr), scope_id)?;
-                Ok(IrExpr::FunctionCall(call))
+                Ok(TypedExpr::FunctionCall(call))
             }
             Expression::FnCall(fn_call) => {
                 let call = self.eval_function_call(fn_call, None, scope_id)?;
-                Ok(IrExpr::FunctionCall(call))
+                Ok(TypedExpr::FunctionCall(call))
             }
         }
     }
     fn eval_function_call(
         &mut self,
         fn_call: &FnCall,
-        this_expr: Option<IrExpr>,
+        this_expr: Option<TypedExpr>,
         scope_id: ScopeId,
-    ) -> IrGenResult<Call> {
+    ) -> TypedGenResult<Call> {
         // This block is all about method or resolution
         // We are trying to find out if this method or function
         // exists, and returning its id if so
@@ -1442,7 +1448,7 @@ impl IrModule {
         } else {
             function_id
         };
-        let mut final_args: Vec<IrExpr> = Vec::new();
+        let mut final_args: Vec<TypedExpr> = Vec::new();
         let params_cloned = self.get_function(function_to_call).params.clone();
         // We have to deal with this outside of the loop because
         // we can't 'move' out of this_expr more than once
@@ -1497,7 +1503,7 @@ impl IrModule {
         fn_call: &FnCall,
         old_function_id: FunctionId,
         intrinsic_type: Option<IntrinsicFunctionType>,
-    ) -> IrGenResult<FunctionId> {
+    ) -> TypedGenResult<FunctionId> {
         // TODO: Implement full generic type inference. This could get slow!
         //       Cases like [T](t: T) are easier but [T](x: ComplexType[A, B, T]) and solving for
         //       T in that case is hard. Requires recursive search.
@@ -1550,7 +1556,11 @@ impl IrModule {
         )?;
         Ok(specialized_function_id)
     }
-    fn eval_block_stmt(&mut self, stmt: &BlockStmt, scope_id: ScopeId) -> IrGenResult<IrStmt> {
+    fn eval_block_stmt(
+        &mut self,
+        stmt: &BlockStmt,
+        scope_id: ScopeId,
+    ) -> TypedGenResult<TypedStmt> {
         match stmt {
             BlockStmt::ValDef(val_def) => {
                 let provided_ir_type = match val_def.ty.as_ref() {
@@ -1574,7 +1584,7 @@ impl IrModule {
                     ir_type: actual_type,
                     owner_scope: Some(scope_id),
                 });
-                let val_def_stmt = IrStmt::ValDef(Box::new(ValDef {
+                let val_def_stmt = TypedStmt::ValDef(Box::new(ValDef {
                     ir_type: actual_type,
                     variable_id,
                     initializer: value_expr,
@@ -1586,7 +1596,7 @@ impl IrModule {
             BlockStmt::Assignment(assignment) => {
                 let lhs = self.eval_expr(&assignment.lhs, scope_id, None)?;
                 match &lhs {
-                    IrExpr::Variable(v) => {
+                    TypedExpr::Variable(v) => {
                         let var = self.get_variable(v.variable_id);
                         if !var.is_mutable {
                             return make_fail(
@@ -1595,10 +1605,10 @@ impl IrModule {
                             );
                         }
                     }
-                    IrExpr::FieldAccess(_) => {
+                    TypedExpr::FieldAccess(_) => {
                         trace!("assignment to record member");
                     }
-                    IrExpr::ArrayIndex(_) => {
+                    TypedExpr::ArrayIndex(_) => {
                         trace!("assignment to array index");
                     }
                     _ => {
@@ -1615,7 +1625,7 @@ impl IrModule {
                         assignment.span,
                     );
                 }
-                let expr = IrStmt::Assignment(Box::new(Assignment {
+                let expr = TypedStmt::Assignment(Box::new(Assignment {
                     destination: Box::new(lhs),
                     value: Box::new(rhs),
                     span: assignment.span,
@@ -1624,7 +1634,7 @@ impl IrModule {
             }
             BlockStmt::LoneExpression(expression) => {
                 let expr = self.eval_expr(expression, scope_id, None)?;
-                Ok(IrStmt::Expr(Box::new(expr)))
+                Ok(TypedStmt::Expr(Box::new(expr)))
             }
             BlockStmt::While(while_stmt) => {
                 let cond = self.eval_expr(&while_stmt.cond, scope_id, Some(TypeRef::Bool))?;
@@ -1635,11 +1645,15 @@ impl IrModule {
                     );
                 }
                 let block = self.eval_block(&while_stmt.block, scope_id)?;
-                Ok(IrStmt::WhileLoop(Box::new(IrWhileLoop { cond, block, span: while_stmt.span })))
+                Ok(TypedStmt::WhileLoop(Box::new(TypedWhileLoop {
+                    cond,
+                    block,
+                    span: while_stmt.span,
+                })))
             }
         }
     }
-    fn eval_block(&mut self, block: &Block, scope_id: ScopeId) -> IrGenResult<IrBlock> {
+    fn eval_block(&mut self, block: &Block, scope_id: ScopeId) -> TypedGenResult<TypedBlock> {
         let mut statements = Vec::new();
         for stmt in &block.stmts {
             let stmt = self.eval_block_stmt(stmt, scope_id)?;
@@ -1655,7 +1669,7 @@ impl IrModule {
         // a typechecker!!!
         //
         // let return_type = statements.iter().find(|stmt| stmt.get_return_type());
-        let ir_block = IrBlock { expr_type, scope_id: 0, statements, span: block.span };
+        let ir_block = TypedBlock { expr_type, scope_id: 0, statements, span: block.span };
         Ok(ir_block)
     }
 
@@ -1720,7 +1734,7 @@ impl IrModule {
         // Used only during specialization; we already know the intrinsic type
         // from the generic version so we just pass it in
         known_intrinsic: Option<IntrinsicFunctionType>,
-    ) -> IrGenResult<FunctionId> {
+    ) -> TypedGenResult<FunctionId> {
         let mut params = Vec::new();
         let fn_scope_id = match fn_scope_id {
             None => self.scopes.add_scope(parent_scope_id),
@@ -1833,7 +1847,7 @@ impl IrModule {
         &mut self,
         ast_namespace: &ParsedNamespace,
         scope_id: ScopeId,
-    ) -> IrGenResult<NamespaceId> {
+    ) -> TypedGenResult<NamespaceId> {
         // We add the new namespace's scope as a child of the current scope
         let ns_scope_id = self.scopes.add_scope(scope_id);
         let namespace = Namespace { name: ast_namespace.name, scope_id: ns_scope_id };
@@ -1850,7 +1864,7 @@ impl IrModule {
         }
         Ok(namespace_id)
     }
-    fn eval_definition(&mut self, def: &Definition, scope_id: ScopeId) -> IrGenResult<()> {
+    fn eval_definition(&mut self, def: &Definition, scope_id: ScopeId) -> TypedGenResult<()> {
         match def {
             Definition::Namespace(namespace) => {
                 self.eval_namespace(namespace, scope_id)?;
@@ -1872,7 +1886,7 @@ impl IrModule {
         }
     }
     pub fn run(&mut self) -> Result<()> {
-        let mut errors: Vec<IrGenError> = Vec::new();
+        let mut errors: Vec<TypedGenError> = Vec::new();
         // TODO: 'Declare' everything first, will allow modules
         //        to declare their API without full typechecking
         //        will also allow recursion without hacks
@@ -1892,7 +1906,7 @@ impl IrModule {
     }
 }
 
-impl Display for IrModule {
+impl Display for TypedModule {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str("Module ")?;
         f.write_str(&self.ast.name)?;
@@ -1910,17 +1924,17 @@ impl Display for IrModule {
 
 #[cfg(test)]
 mod test {
-    use crate::ir::*;
     use crate::parse::parse_text;
+    use crate::typer::*;
 
     #[test]
     fn const_definition_1() -> anyhow::Result<()> {
         let src = r"val x: int = 420;";
         let module = parse_text(src, "basic_fn.nx", false)?;
-        let mut ir = IrModule::new(Rc::new(module));
+        let mut ir = TypedModule::new(Rc::new(module));
         ir.run()?;
         let i1 = &ir.constants[0];
-        if let IrExpr::Literal(IrLiteral::Int(i, span)) = i1.expr {
+        if let TypedExpr::Literal(TypedLiteral::Int(i, span)) = i1.expr {
             assert_eq!(i, 420);
             assert_eq!(span.end, 16);
             assert_eq!(span.start, 0);
@@ -1943,7 +1957,7 @@ mod test {
           foo()
         }"#;
         let module = parse_text(src, "basic_fn.nx", false)?;
-        let mut ir = IrModule::new(Rc::new(module));
+        let mut ir = TypedModule::new(Rc::new(module));
         ir.run()?;
         println!("{:?}", ir.functions);
         Ok(())
