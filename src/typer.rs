@@ -381,26 +381,26 @@ impl TypedStmt {
 }
 
 #[derive(Debug)]
-pub struct TypedGenError {
+pub struct TyperError {
     message: String,
     span: Span,
 }
 
-impl TypedGenError {
-    fn make(message: impl AsRef<str>, span: Span) -> TypedGenError {
-        TypedGenError { message: message.as_ref().to_owned(), span }
+impl TyperError {
+    fn make(message: impl AsRef<str>, span: Span) -> TyperError {
+        TyperError { message: message.as_ref().to_owned(), span }
     }
 }
 
-impl Display for TypedGenError {
+impl Display for TyperError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_fmt(format_args!("error on line {}: {}", self.span.line, self.message))
     }
 }
 
-impl Error for TypedGenError {}
+impl Error for TyperError {}
 
-pub type TypedGenResult<A> = Result<A, TypedGenError>;
+pub type TypedGenResult<A> = Result<A, TyperError>;
 
 #[derive(Debug)]
 pub struct Variable {
@@ -416,11 +416,6 @@ pub struct Constant {
     pub expr: TypedExpr,
     pub ir_type: TypeRef,
     pub span: Span,
-}
-
-pub struct TypedCompilerError {
-    pub span: Span,
-    pub message: String,
 }
 
 pub struct Namespace {
@@ -590,8 +585,8 @@ impl Scope {
     }
 }
 
-fn make_err<T: AsRef<str>>(s: T, span: Span) -> TypedGenError {
-    TypedGenError::make(s.as_ref(), span)
+fn make_err<T: AsRef<str>>(s: T, span: Span) -> TyperError {
+    TyperError::make(s.as_ref(), span)
 }
 
 fn make_fail<A, T: AsRef<str>>(s: T, span: Span) -> TypedGenResult<A> {
@@ -605,7 +600,7 @@ pub struct TypedModule {
     pub types: Vec<Type>,
     pub constants: Vec<Constant>,
     pub scopes: Scopes,
-    pub errors: Vec<TypedCompilerError>,
+    pub errors: Vec<TyperError>,
     pub namespaces: Vec<Namespace>,
 }
 
@@ -652,7 +647,7 @@ impl TypedModule {
     }
 
     fn report_error(&mut self, span: Span, message: String) {
-        self.errors.push(TypedCompilerError { span, message })
+        self.errors.push(TyperError { span, message })
     }
 
     fn add_type(&mut self, typ: Type) -> TypeId {
@@ -1886,7 +1881,7 @@ impl TypedModule {
         }
     }
     pub fn run(&mut self) -> Result<()> {
-        let mut errors: Vec<TypedGenError> = Vec::new();
+        let mut errors: Vec<TyperError> = Vec::new();
         // TODO: 'Declare' everything first, will allow modules
         //        to declare their API without full typechecking
         //        will also allow recursion without hacks
