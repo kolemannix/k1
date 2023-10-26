@@ -2,7 +2,7 @@ pub const PRELUDE_SOURCE: &str = r#"intern fn printInt(value: int): unit
 intern fn print(value: string): unit
 intern fn exit(code: int): unit
 fn assert(value: bool): unit {
-  return if value { () } else { 
+  if value { () } else { 
     print("ASSERT FAILED");
     exit(1)
   };
@@ -18,6 +18,17 @@ namespace Array {
 namespace string {
   intern fn new(bytes: Array<char>): string
   intern fn length(self: string): int
+  // fn index_of(self: string, c: char): int {
+  //   mut i = 0;
+  //   mut ret = -1
+  //   while (ret != -1 and i < self.length()) {
+  //     if (self[i] == c) {
+  //       ret = i;
+  //     };
+  //     i = i + 1;
+  //   };
+  //   ret
+  // }
   fn concat(self: string, other: string): string {
     val new_length = self.length() + other.length();
     val copied = Array::new<char>(new_length);
@@ -31,8 +42,8 @@ namespace string {
       copied[i + self.length()] = other[i];
       i = i + 1;
     };
-    return new(copied);
+    new(copied)
   }
 }
 // -------- END PRELUDE --------"#;
-pub const PRELUDE_LINES: usize = 37;
+pub const PRELUDE_LINES: usize = 47;

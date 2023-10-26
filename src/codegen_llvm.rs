@@ -3,6 +3,7 @@ use inkwell::builder::Builder;
 use inkwell::context::Context;
 
 use env_logger::init;
+use inkwell::basic_block::BasicBlock;
 use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::module::Linkage;
 use inkwell::passes::{PassManager, PassManagerBuilder};
@@ -295,17 +296,14 @@ impl<'ctx> Codegen<'ctx> {
         self.module.ast.get_ident_str(id)
     }
 
-    fn build_print_int_call(&mut self, call: &Call) -> BasicValueEnum<'ctx> {
-        // Assume the arg is an int since that's what the intrinsic typechecks for
-        let first_arg = self.codegen_expr(&call.args[0]);
-
+    fn build_print_int_call(&mut self, int_value: BasicValueEnum<'ctx>) -> BasicValueEnum<'ctx> {
         // TODO: Builtin globals could be a struct not a hashmap because its all static currently
         let format_str_global = self.builtin_globals.get("formatInt").unwrap();
         let call = self
             .builder
             .build_call(
                 self.libc_functions.printf,
-                &[format_str_global.as_pointer_value().into(), first_arg.into()],
+                &[format_str_global.as_pointer_value().into(), int_value.into()],
                 "printf",
             )
             .try_as_basic_value()
@@ -315,13 +313,16 @@ impl<'ctx> Codegen<'ctx> {
         call
     }
 
-    fn build_print_string_call(&mut self, call: &Call) -> BasicValueEnum<'ctx> {
+    fn build_print_string_call(
+        &mut self,
+        string_value: BasicValueEnum<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
         trace!("codegen print_string");
-        let first_arg = self.codegen_expr(&call.args[0]);
-        let length =
-            self.builtin_types.string_length_loaded(&self.builder, first_arg.into_pointer_value());
+        let length = self
+            .builtin_types
+            .string_length_loaded(&self.builder, string_value.into_pointer_value());
         let data =
-            self.builtin_types.string_data_ptr(&self.builder, first_arg.into_pointer_value());
+            self.builtin_types.string_data_ptr(&self.builder, string_value.into_pointer_value());
 
         let format_str = self.builtin_globals.get("formatString").unwrap();
         let call = self
@@ -441,9 +442,7 @@ impl<'ctx> Codegen<'ctx> {
                 value.as_basic_value_enum().into()
             }
             IrLiteral::Str(string_value, _) => {
-                // I don't want to do anything fancy; just an array of bytes with typechecking and stuff for now
                 // We will make them records (structs) with an array pointer and a length for now
-
                 let global_str = self.llvm_module.add_global(
                     self.builtin_types.char.array_type(string_value.len() as u32),
                     None,
@@ -525,30 +524,54 @@ impl<'ctx> Codegen<'ctx> {
         // If any of these blocks have an early return, they'll return None, and we'll panic for
         // now
         self.builder.position_at_end(consequent_block);
-        let consequent_expr = self
-            .codegen_block(&ir_if.consequent)
-            .expect("Expected IF branch block to return something");
-        let consequent_final_block = self.builder.get_insert_block().unwrap();
-        self.builder.build_unconditional_branch(merge_block);
+        let (consequent_final_block, consequent_expr) =
+            match self.codegen_block_statements(&ir_if.consequent) {
+                None => {
+                    // The consequent block does not return an expression, instead, it returns early
+                    // Thus, a PHI makes no sense, and the type of this entire if 'expression' is
+                    // Unit, and there's no need for a PHI.
+                    (None, None)
+                }
+                Some(value) => {
+                    let consequent_final_block = self.builder.get_insert_block().unwrap();
+                    self.builder.build_unconditional_branch(merge_block);
+                    (Some(consequent_final_block), Some(value))
+                }
+            };
 
         // Alternate Block
         self.builder.position_at_end(alternate_block);
-        let alternate_expr = self
-            .codegen_block(&ir_if.alternate)
-            .expect("Expected IF branch block to return something");
-        // TODO: Cleaner to have codegen_block RETURN its 'terminus' block rather than
-        //       rely on the builder state
-        let alternate_final_block = self.builder.get_insert_block().unwrap();
-        self.builder.build_unconditional_branch(merge_block);
+        let (alternate_final_block, alternate_expr) =
+            match self.codegen_block_statements(&ir_if.alternate) {
+                None => (None, None),
+                Some(value) => {
+                    let alternate_final_block = self.builder.get_insert_block().unwrap();
+                    self.builder.build_unconditional_branch(merge_block);
+                    (Some(alternate_final_block), Some(value))
+                }
+            };
+
+        // FIXME: What we are doing here is inferring whether this is an if expression or
+        //       an if statement that can return early.
+        //       If both sides result in an expression, we do the PHI thing
+        //       If either side returns early, we can't, and we return unit
+        //
+        //       This should all be done and decided earlier during typechecking to make codegen
+        //       less branchy and more mechanical.
 
         // Merge block
         self.builder.position_at_end(merge_block);
-        let phi_value = self.builder.build_phi(typ, "if_phi");
-        phi_value.add_incoming(&[
-            (&consequent_expr, consequent_final_block),
-            (&alternate_expr, alternate_final_block),
-        ]);
-        phi_value.as_basic_value().into()
+        match (consequent_expr, alternate_expr) {
+            (Some(consequent_expr), Some(alternate_expr)) => {
+                let phi_value = self.builder.build_phi(typ, "if_phi");
+                phi_value.add_incoming(&[
+                    (&consequent_expr, consequent_final_block.unwrap()),
+                    (&alternate_expr, alternate_final_block.unwrap()),
+                ]);
+                phi_value.as_basic_value().into()
+            }
+            _ => self.builtin_types.unit_value.as_basic_value_enum().into(),
+        }
     }
     fn codegen_expr(&mut self, expr: &IrExpr) -> BasicValueEnum<'ctx> {
         let value = self.codegen_expr_inner(expr);
@@ -716,13 +739,8 @@ impl<'ctx> Codegen<'ctx> {
     fn codegen_function_call(&mut self, call: &Call) -> GeneratedValue<'ctx> {
         let ir_module = self.module.clone();
         let callee = ir_module.get_function(call.callee_function_id);
-        if let Some(intrinsic_type) = callee.intrinsic_type {
-            return self.codegen_intrinsic(intrinsic_type, call);
-        }
 
-        let function_value = self
-            .codegen_function(call.callee_function_id, callee)
-            .expect("could not get llvm function");
+        let function_value = self.codegen_function(call.callee_function_id, callee);
 
         let args: Vec<BasicMetadataValueEnum<'ctx>> = call
             .args
@@ -823,46 +841,53 @@ impl<'ctx> Codegen<'ctx> {
         pointer_to_struct.as_basic_value_enum().into()
     }
 
+    fn get_loaded_variable(&mut self, variable_id: VariableId) -> BasicValueEnum<'ctx> {
+        self.variables.get(&variable_id).unwrap().loaded_value(&self.builder)
+    }
+
     fn codegen_intrinsic(
         &mut self,
         intrinsic_type: IntrinsicFunctionType,
-        call: &Call,
+        function: &Function,
     ) -> GeneratedValue<'ctx> {
         match intrinsic_type {
             IntrinsicFunctionType::Exit => {
-                let first_arg = self.codegen_expr(&call.args[0]);
+                let first_arg = self.get_loaded_variable(function.params[0].variable_id);
                 self.builder.build_call(self.libc_functions.exit, &[first_arg.into()], "exit");
                 self.builtin_types.unit_value.as_basic_value_enum().into()
             }
             IntrinsicFunctionType::PrintInt => {
-                self.build_print_int_call(call);
+                let first_arg = self.get_loaded_variable(function.params[0].variable_id);
+                self.build_print_int_call(first_arg);
                 self.builtin_types.unit_value.as_basic_value_enum().into()
             }
             IntrinsicFunctionType::PrintString => {
-                self.build_print_string_call(call);
+                let string_arg = self.get_loaded_variable(function.params[0].variable_id);
+                self.build_print_string_call(string_arg);
                 self.builtin_types.unit_value.as_basic_value_enum().into()
             }
             IntrinsicFunctionType::StringLength => {
-                let string_arg = &call.args[0];
-                let string_base = self.codegen_expr(string_arg).into_pointer_value();
-                let length = self.builtin_types.string_length_loaded(&self.builder, string_base);
+                let string_arg =
+                    self.get_loaded_variable(function.params[0].variable_id).into_pointer_value();
+                let length = self.builtin_types.string_length_loaded(&self.builder, string_arg);
                 length.as_basic_value_enum().into()
             }
             IntrinsicFunctionType::ArrayLength => {
-                let array_arg = &call.args[0];
-                let array_base = self.codegen_expr(array_arg).into_pointer_value();
-                let length = self.builtin_types.array_length_loaded(&self.builder, array_base);
+                let array_arg =
+                    self.get_loaded_variable(function.params[0].variable_id).into_pointer_value();
+                let length = self.builtin_types.array_length_loaded(&self.builder, array_arg);
                 length.as_basic_value_enum().into()
             }
             IntrinsicFunctionType::ArrayNew => {
-                let array_type_id = call.ret_type.expect_type_id();
+                let array_type_id = function.ret_type.expect_type_id();
                 let array_type = self.module.get_type(array_type_id);
                 let element_type = self.get_llvm_type(array_type.expect_array_type().element_type);
-                let len = self.codegen_expr(&call.args[0]).into_int_value();
+                let len = self.get_loaded_variable(function.params[0].variable_id).into_int_value();
                 self.make_array(len, element_type)
             }
             IntrinsicFunctionType::StringNew => {
-                let array = self.codegen_expr(&call.args[0]).into_pointer_value();
+                let array =
+                    self.get_loaded_variable(function.params[0].variable_id).into_pointer_value();
                 let array_len = self.builtin_types.array_length_loaded(&self.builder, array);
                 let string = self.make_string(array_len).into_pointer_value();
                 let string_data = self.builtin_types.string_data_ptr(&self.builder, string);
@@ -872,11 +897,11 @@ impl<'ctx> Codegen<'ctx> {
                 string.as_basic_value_enum().into()
             }
             IntrinsicFunctionType::CharToString => {
-                let self_char = self.codegen_expr(&call.args[0]);
+                let self_char = self.get_loaded_variable(function.params[0].variable_id);
                 let call = self.builder.build_call(
                     self.llvm_module.get_function("_nx_charToString").unwrap(),
                     &[self_char.into()],
-                    "c2s",
+                    "_nx_charToString",
                 );
                 call.try_as_basic_value().left().unwrap().into()
             }
@@ -890,7 +915,7 @@ impl<'ctx> Codegen<'ctx> {
     // None. We'll fix it when implementing early returns
     // Maybe we rename ReturnStmt to Early Return to separate it from tail returns, which have
     // pretty different semantics and implications for codegen, I am realizing
-    fn codegen_block(&mut self, block: &IrBlock) -> Option<BasicValueEnum<'ctx>> {
+    fn codegen_block_statements(&mut self, block: &IrBlock) -> Option<BasicValueEnum<'ctx>> {
         let mut last: Option<BasicValueEnum<'ctx>> = None;
         for stmt in &block.statements {
             match stmt {
@@ -902,7 +927,6 @@ impl<'ctx> Codegen<'ctx> {
                 IrStmt::ReturnStmt(return_stmt) => {
                     let value = self.codegen_expr(&return_stmt.expr);
                     self.builder.build_return(Some(&value));
-                    // This should not return here
                     return None;
                 }
                 IrStmt::Assignment(assignment) => match assignment.destination.deref() {
@@ -951,7 +975,7 @@ impl<'ctx> Codegen<'ctx> {
                     self.builder.build_conditional_branch(cond, loop_body_block, loop_end_block);
 
                     self.builder.position_at_end(loop_body_block);
-                    self.codegen_block(&while_stmt.block);
+                    self.codegen_block_statements(&while_stmt.block);
                     self.builder.build_unconditional_branch(loop_entry_block);
 
                     self.builder.position_at_end(loop_end_block);
@@ -969,35 +993,20 @@ impl<'ctx> Codegen<'ctx> {
     ) -> InstructionValue<'ctx> {
         self.builder.build_store(pointer.pointer, value.loaded_value(&self.builder))
     }
-    // FIXME: This option will go away if we either, check intrinsic before calling this, or
-    //        codegen real functions for intrinsics
+
     fn codegen_function(
         &mut self,
         function_id: FunctionId,
         function: &Function,
-    ) -> Option<FunctionValue<'ctx>> {
+    ) -> FunctionValue<'ctx> {
         if let Some(function) = self.llvm_functions.get(&function_id) {
-            return Some(*function);
-        }
-        if function.intrinsic_type.is_some() {
-            // FIXME: Is this correct to not even codegen a function?
-            //        It means we are 'inlining' all intrinsics unconditionally
-            //        Probably should make an llvm function and implement it ourselves,
-            //        and call it normally
-            trace!(
-                "Skipping codegen for intrinsic function: {}",
-                &*self.get_ident_name(function.name)
-            );
-            return None;
+            return *function;
         }
         if function.is_generic() {
-            trace!(
-                "Skipping codegen for generic function: {}",
-                &*self.get_ident_name(function.name)
-            );
-            return None;
+            panic!("Cannot codegen generic function: {}", &*self.get_ident_name(function.name));
         }
-        let maybe_start_block = self.builder.get_insert_block();
+
+        let maybe_starting_block = self.builder.get_insert_block();
         let param_types: Vec<BasicMetadataTypeEnum> =
             function.params.iter().map(|fn_arg| self.get_llvm_type(fn_arg.ty).into()).collect();
         let ret_type: BasicMetadataTypeEnum<'ctx> = self.get_llvm_type(function.ret_type).into();
@@ -1022,15 +1031,30 @@ impl<'ctx> Codegen<'ctx> {
             self.builder.build_store(pointer, param);
             self.variables.insert(ir_param.variable_id, Pointer { pointer, pointee_ty: ty });
         }
-        self.codegen_block(function.block.as_ref().expect("functions must have blocks by codegen"));
-        let current_block = self.builder.get_insert_block().unwrap();
-        if current_block.get_terminator().is_none() {
-            self.builder.build_return(Some(&self.builtin_types.unit_value));
-        }
-        if let Some(start_block) = maybe_start_block {
+        match function.intrinsic_type {
+            Some(intrinsic_type) => {
+                let value = self.codegen_intrinsic(intrinsic_type, function).as_basic_value_enum();
+                self.builder.build_return(Some(&value));
+            }
+            None => {
+                // The plan is to separate the notion of "expression blocks" from "control flow
+                // blocks" to make this all more reasonable
+                // Rust rejects "unreachable expression"
+                let value = self.codegen_block_statements(
+                    function.block.as_ref().expect("functions must have blocks by codegen"),
+                );
+                let current_block = self.builder.get_insert_block().unwrap();
+                if current_block.get_terminator().is_none() {
+                    let return_value =
+                        value.unwrap_or(self.builtin_types.unit_value.as_basic_value_enum());
+                    self.builder.build_return(Some(&return_value));
+                }
+            }
+        };
+        if let Some(start_block) = maybe_starting_block {
             self.builder.position_at_end(start_block);
         }
-        Some(fn_val)
+        fn_val
     }
 
     pub fn codegen_module(&mut self) {
@@ -1047,12 +1071,10 @@ impl<'ctx> Codegen<'ctx> {
                 _ => todo!("constant must be int"),
             }
         }
-        // TODO: It is gross to assume the ID is the index here, just because its implemented
-        //       that way. We should expose a way to iterate that provides the ID from the IR module
-        //       This will matter once the ID is more than just the index (it will at least need
-        //       module ID)
-        for (function_index, function) in self.module.clone().functions.iter().enumerate() {
-            self.codegen_function(function_index as FunctionId, function);
+        for (id, function) in self.module.clone().function_iter() {
+            if !function.is_generic() {
+                self.codegen_function(id, function);
+            }
         }
     }
 

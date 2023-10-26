@@ -2,7 +2,7 @@ fn main(): int {
   if true {
     printInt(42)
   };
-  return 0;
+  0
 }
-// output: 42
+// 42
 // 0

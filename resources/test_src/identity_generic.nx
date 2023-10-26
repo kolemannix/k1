@@ -1,10 +1,10 @@
-fn identity<T>(t: T): T { return t; }
+fn identity<T>(t: T): T { t }
 
 fn main(): int {
   printInt(identity<int>(4));
   val b: bool = identity<bool>(true);
   printInt(if b 1 else 0);
   printInt(identity<{ value: int }>({ value: 42 }).value);
-  return 0;
+  0
 }
 // 4, 1, 42

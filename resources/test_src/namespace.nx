@@ -2,21 +2,21 @@ type Foo = { x: int }
 
 namespace Foo {
   fn getValue(self: Foo): int {
-    return self.x;
+    self.x
   }
   fn setValue(self: Foo, x: int): unit {
     self.x = x;
   }
 
   fn new(x: int): Foo {
-    return { x: x };
+    { x: x }
   }
 
 }
 
 namespace Baz {
   fn secret(): string {
-    return "hello from baz";
+    "hello from baz"
   }
 }
 
@@ -28,5 +28,6 @@ fn main(): int {
   x.setValue(41);
   // assert(x.getValue() == 41);
   print(Baz::secret());
-  return 0;
+  0
 }
+// "hello from baz"

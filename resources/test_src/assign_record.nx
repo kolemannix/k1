@@ -2,6 +2,6 @@ fn main(): int {
   val x = { min: 4, max: 11 };
   x.min = 2;
   printInt(x.min);
-  return x.min;
+  x.min
 }
 // 2

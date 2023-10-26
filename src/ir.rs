@@ -110,7 +110,8 @@ impl Type {
 
 #[derive(Debug, Clone)]
 pub struct IrBlock {
-    pub ret_type: TypeRef,
+    // If this block is just an expression, the type of the expression
+    pub expr_type: TypeRef,
     pub scope_id: ScopeId,
     pub statements: Vec<IrStmt>,
     pub span: Span,
@@ -305,7 +306,7 @@ impl IrExpr {
             IrExpr::Variable(var) => var.ir_type,
             IrExpr::FieldAccess(field_access) => field_access.ir_type,
             IrExpr::BinaryOp(binary_op) => binary_op.ir_type,
-            IrExpr::Block(b) => b.ret_type,
+            IrExpr::Block(b) => b.expr_type,
             IrExpr::FunctionCall(call) => call.ret_type,
             IrExpr::If(ir_if) => ir_if.ir_type,
             IrExpr::ArrayIndex(op) => op.result_type,
@@ -425,17 +426,6 @@ pub struct IrCompilerError {
 pub struct Namespace {
     pub name: IdentifierId,
     pub scope_id: ScopeId,
-}
-
-pub struct IrModule {
-    pub ast: Rc<AstModule>,
-    pub functions: Vec<Function>,
-    pub variables: Vec<Variable>,
-    pub types: Vec<Type>,
-    pub constants: Vec<Constant>,
-    pub scopes: Scopes,
-    pub errors: Vec<IrCompilerError>,
-    pub namespaces: Vec<Namespace>,
 }
 
 pub struct Scopes {
@@ -608,6 +598,17 @@ fn make_fail<A, T: AsRef<str>>(s: T, span: Span) -> IrGenResult<A> {
     Err(make_err(s, span))
 }
 
+pub struct IrModule {
+    pub ast: Rc<AstModule>,
+    functions: Vec<Function>,
+    pub variables: Vec<Variable>,
+    pub types: Vec<Type>,
+    pub constants: Vec<Constant>,
+    pub scopes: Scopes,
+    pub errors: Vec<IrCompilerError>,
+    pub namespaces: Vec<Namespace>,
+}
+
 impl IrModule {
     pub fn new(parsed_module: Rc<AstModule>) -> IrModule {
         let scopes = Scopes::make();
@@ -622,6 +623,10 @@ impl IrModule {
             errors: Vec::new(),
             namespaces: vec![Namespace { name: root_ident, scope_id: scopes.get_root_scope_id() }],
         }
+    }
+
+    pub fn function_iter(&self) -> impl Iterator<Item = (FunctionId, &Function)> {
+        self.functions.iter().enumerate().map(|(idx, f)| (idx as FunctionId, f))
     }
 
     fn internal_compiler_error(&self, message: impl AsRef<str>, span: Span) -> ! {
@@ -912,15 +917,13 @@ impl IrModule {
         Ok(variable_id)
     }
 
-    fn get_stmt_return_type(&self, stmt: &IrStmt) -> Option<TypeRef> {
+    fn get_stmt_expression_type(&self, stmt: &IrStmt) -> TypeRef {
         match stmt {
-            IrStmt::Expr(expr) => Some(expr.get_type()),
-            IrStmt::ValDef(_) => Some(TypeRef::Unit),
-            // FIXME: This is not quite right; a return statement
-            //        is different; should probably be None or 'never'
-            IrStmt::ReturnStmt(ret) => Some(ret.expr.get_type()),
-            IrStmt::Assignment(_) => Some(TypeRef::Unit),
-            IrStmt::WhileLoop(_) => Some(TypeRef::Unit),
+            IrStmt::Expr(expr) => expr.get_type(),
+            IrStmt::ValDef(_) => TypeRef::Unit,
+            IrStmt::Assignment(_) => TypeRef::Unit,
+            IrStmt::WhileLoop(_) => TypeRef::Unit,
+            IrStmt::ReturnStmt(_) => TypeRef::Unit,
         }
     }
 
@@ -974,7 +977,7 @@ impl IrModule {
                 let statement = IrStmt::Expr(Box::new(expr));
                 let statements = vec![statement];
 
-                IrBlock { ret_type, scope_id: block_scope, statements, span }
+                IrBlock { expr_type: ret_type, scope_id: block_scope, statements, span }
             }
         }
     }
@@ -983,7 +986,7 @@ impl IrModule {
         let span = block.statements.last().map(|s| s.get_span()).unwrap_or(block.span);
         let unit_literal = IrExpr::unit_literal(span);
         block.statements.push(IrStmt::Expr(Box::new(unit_literal)));
-        block.ret_type = TypeRef::Unit;
+        block.expr_type = TypeRef::Unit;
     }
 
     fn traverse_namespace_chain(
@@ -1171,7 +1174,7 @@ impl IrModule {
                     self.transform_expr_to_block(expr, scope_id)
                 } else {
                     IrBlock {
-                        ret_type: TypeRef::Unit,
+                        expr_type: TypeRef::Unit,
                         scope_id,
                         statements: vec![IrStmt::Expr(Box::new(IrExpr::unit_literal(
                             if_expr.span,
@@ -1179,16 +1182,16 @@ impl IrModule {
                         span: if_expr.span,
                     }
                 };
-                if self.typecheck_types(consequent.ret_type, alternate.ret_type).is_err() {
+                if self.typecheck_types(consequent.expr_type, alternate.expr_type).is_err() {
                     return make_fail(
                         format!(
                             "else branch type {:?} did not match then branch type {:?}",
-                            consequent.ret_type, alternate.ret_type
+                            consequent.expr_type, alternate.expr_type
                         ),
                         alternate.span,
                     );
                 }
-                let overall_type = consequent.ret_type;
+                let overall_type = consequent.expr_type;
                 Ok(IrExpr::If(Box::new(IrIf {
                     condition,
                     consequent,
@@ -1549,11 +1552,6 @@ impl IrModule {
     }
     fn eval_block_stmt(&mut self, stmt: &BlockStmt, scope_id: ScopeId) -> IrGenResult<IrStmt> {
         match stmt {
-            BlockStmt::ReturnStmt(return_stmt) => {
-                let expr = self.eval_expr(&return_stmt.expr, scope_id, None)?;
-                let ret = IrStmt::ReturnStmt(Box::new(ReturnStmt { expr, span: return_stmt.span }));
-                Ok(ret)
-            }
             BlockStmt::ValDef(val_def) => {
                 let provided_ir_type = match val_def.ty.as_ref() {
                     None => None,
@@ -1647,16 +1645,17 @@ impl IrModule {
             let stmt = self.eval_block_stmt(stmt, scope_id)?;
             statements.push(stmt);
         }
-        // TODO: The return type of a block is actually an interesting problem, need to think about
-        // branching, early returns, etc!
-        // For now return type is inferred to be the return type of the last instruction
-        // note: This came up again when implementing if/else (return is special!)
-        let ret_type = if let Some(stmt) = statements.last() {
-            self.get_stmt_return_type(stmt).expect("last block statement should have a return type")
+
+        let expr_type = if let Some(stmt) = statements.last() {
+            self.get_stmt_expression_type(stmt)
         } else {
             TypeRef::Unit
         };
-        let ir_block = IrBlock { ret_type, scope_id: 0, statements, span: block.span };
+        // This whole expr_type vs return_type thing is just a really bad beginner version of the concept of "control flow" in
+        // a typechecker!!!
+        //
+        // let return_type = statements.iter().find(|stmt| stmt.get_return_type());
+        let ir_block = IrBlock { expr_type, scope_id: 0, statements, span: block.span };
         Ok(ir_block)
     }
 
@@ -1809,7 +1808,7 @@ impl IrModule {
         let body_block = match &fn_def.block {
             Some(block_ast) => {
                 let block = self.eval_block(block_ast, fn_scope_id)?;
-                if let Err(msg) = self.typecheck_types(given_ret_type, block.ret_type) {
+                if let Err(msg) = self.typecheck_types(given_ret_type, block.expr_type) {
                     return make_fail(
                         format!(
                             "Function {} return type mismatch: {}",
@@ -1935,13 +1934,13 @@ mod test {
     fn fn_definition_1() -> anyhow::Result<()> {
         let src = r#"
         fn foo(): int {
-          return 1;
+          1
         }
         fn basic(x: int, y: int): int {
           val x: int = 0; mut y: int = 1;
           y = { 1; 2; 3 };
           y = 42 + 42;
-          return foo();
+          foo()
         }"#;
         let module = parse_text(src, "basic_fn.nx", false)?;
         let mut ir = IrModule::new(Rc::new(module));

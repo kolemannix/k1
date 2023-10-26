@@ -3,5 +3,5 @@ fn main(x: int): int {
   val f: bool = false;
   t or f;
   t and f;
-  return 0;
+  0
 }

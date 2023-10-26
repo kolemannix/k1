@@ -1,5 +1,6 @@
 fn main(): int {
   val x: string = "abc";
   print(x.concat(x));
-  return 0;
+  0
 }
+// abcabc
