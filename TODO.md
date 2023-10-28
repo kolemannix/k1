@@ -47,6 +47,9 @@ The project isn't mature enough yet to make this list but the spirit of the effo
   - [x] char.to_string()
 - [x] Concatenate strings (in userland; slow)
 - [x] Infer val types
+- [x] Extern keyword, then
+- [x] Link at build time not via LLVM module
+- [ ] Refactor while statement to be an expr that can break w/ value 
 - [ ] Fix namespaces to require full paths (currently busted must be unique names globally)
 - [ ] Type Ascriptions (literally can just pass expected_type into eval and do an addtl typecheck)
 - [ ] Embed comments in LLVM IR (source snippets or line numbers?)
@@ -65,16 +68,6 @@ The project isn't mature enough yet to make this list but the spirit of the effo
 - [ ] oneofs (variants?) (tagged unions)
 - [ ] For iteration
 - [ ] Replace spans on IR with just ast node ids
-- [ ] Control-Flow: proper codegen for early returns:
-    // This needs to return either a basic value or an instruction value (in the case of early return)
-    // Actually, early return is a big rabbit hole. We need to typecheck it in ir gen, and probably
-    // store it on the block
-    //
-    // For now, I'm going to return an Option. If the block has an early return, we just return
-    // None. We'll fix it when implementing early returns
-    // Maybe we rename ReturnStmt to Early Return to separate it from tail returns, which have
-    // pretty different semantics and implications for codegen, I am realizing
-    fn codegen_block(&mut self, block: &IrBlock) -> Option<BasicValueEnum<'ctx>> {
 - [ ] Tuples
 
 # Dogfood wishlist Oct23
@@ -82,7 +75,7 @@ The project isn't mature enough yet to make this list but the spirit of the effo
 - [x] Zig binding of my Array
 - [ ] Early return
 - [x] Implicit return of unit if no return statement
-- [ ] string.indexOf
+- [x] string.indexOf
   - charToString implemented in zig and linked
 - [ ] array bounds checking
 - [ ] Array.distinct in zig
@@ -99,8 +92,8 @@ The project isn't mature enough yet to make this list but the spirit of the effo
 # Hacks to fix
 - [x] Fix line comments
 - [ ] Maybe eventually actually free some memory? lol
-- [ ] Rename IR to typed-ast, since it's a tree not instruction set. TAST?
-- [ ] Make intrinsics like arrayIndex a real function in the LLVM IR?
+- [x] Rename IR to typed-ast, since it's a tree not instruction set. TAST?
+- [x] Make intrinsics like arrayIndex a real function in the LLVM IR?
 - [x] Fix line numbers to account for prelude
 - [ ] main entrypoint properly. Typing of main? How to get main args?
 - [ ] Replace vectors with smallvec where appropriate
@@ -114,7 +107,7 @@ Design for
 
 
 # Dev ex
-- Pretty-print AST
+- [ ] Pretty-print AST
 - [x] Error Spans
 - [x] fancy output COLORS
 

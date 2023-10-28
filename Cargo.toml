@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.69"
+clap = { version = "4.4.7", features = ["derive"] }
 colored = "2"
 env_logger = "0.10.0"
 inkwell = { git = "https://github.com/TheDan64/inkwell", branch = "master", features = ["llvm15-0"] }

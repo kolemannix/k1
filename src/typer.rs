@@ -21,6 +21,13 @@ pub type VariableId = u32;
 pub type TypeId = u32;
 pub type NamespaceId = u32;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Linkage {
+    Standard,
+    External,
+    Intrinsic,
+}
+
 #[derive(Debug, Clone)]
 pub struct RecordDefnField {
     pub name: IdentifierId,
@@ -134,6 +141,7 @@ pub struct Function {
     pub type_params: Option<Vec<TypeParam>>,
     pub block: Option<TypedBlock>,
     pub intrinsic_type: Option<IntrinsicFunctionType>,
+    pub linkage: Linkage,
     pub specializations: Vec<FunctionId>,
     pub ast_id: AstId,
 }
@@ -526,7 +534,6 @@ pub enum IntrinsicFunctionType {
     StringLength,
     ArrayLength,
     ArrayNew,
-    CharToString,
     StringNew,
 }
 
@@ -1699,11 +1706,8 @@ impl TypedModule {
                 None
             }
         } else if current_namespace.name == self.ast.ident_id("char") {
-            if fn_def.name == self.ast.ident_id("to_string") {
-                Some(IntrinsicFunctionType::CharToString)
-            } else {
-                None
-            }
+            // Future Char intrinsics
+            None
         } else if current_namespace.name == self.ast.ident_id("_root") {
             let function_name = &*self.get_ident_str(fn_def.name);
             IntrinsicFunctionType::from_function_name(function_name)
@@ -1786,7 +1790,7 @@ impl TypedModule {
 
         let intrinsic_type = if specialize && known_intrinsic.is_some() {
             known_intrinsic
-        } else if fn_def.is_intrinsic {
+        } else if fn_def.linkage == Linkage::Intrinsic {
             Some(self.resolve_intrinsic_function_type(fn_def, parent_scope_id))
         } else {
             None
@@ -1803,9 +1807,11 @@ impl TypedModule {
             type_params,
             block: None,
             intrinsic_type,
+            linkage: fn_def.linkage,
             specializations: Vec::new(),
             ast_id: fn_def.ast_id,
         };
+        let is_extern = function.linkage == Linkage::External;
         let function_id = self.add_function(function);
         // We do not want to resolve specialized functions by name!
         // So don't add them to any scope.
@@ -1830,7 +1836,7 @@ impl TypedModule {
                     Some(block)
                 }
             }
-            None if is_intrinsic => None,
+            None if is_intrinsic || is_extern => None,
             None => return make_fail("function is missing implementation", fn_def.span),
         };
         // Add the body now

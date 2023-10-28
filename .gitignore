@@ -1,5 +1,5 @@
 /target
 .idea
-artifacts
+nx-out
 zig-cache
 

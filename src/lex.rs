@@ -62,6 +62,7 @@ pub enum TokenKind {
     KeywordWhile,
     KeywordNamespace,
     KeywordIntern,
+    KeywordExtern,
 
     Slash,
     LineComment,
@@ -121,6 +122,7 @@ impl TokenKind {
             K::KeywordWhile => Some("while"),
             K::KeywordNamespace => Some("namespace"),
             K::KeywordIntern => Some("intern"),
+            K::KeywordExtern => Some("extern"),
 
             K::Slash => Some("/"),
             K::LineComment => Some("//"),
@@ -194,6 +196,7 @@ impl TokenKind {
             "while" => Some(K::KeywordWhile),
             "namespace" => Some(K::KeywordNamespace),
             "intern" => Some(K::KeywordIntern),
+            "extern" => Some(K::KeywordExtern),
             "==" => Some(K::EqualsEquals),
             "<=" => Some(K::LessThanEqual),
             ">=" => Some(K::GreaterThanEqual),
@@ -211,6 +214,7 @@ impl TokenKind {
             K::KeywordWhile => true,
             K::KeywordNamespace => true,
             K::KeywordIntern => true,
+            K::KeywordExtern => true,
             _ => false,
         }
     }
