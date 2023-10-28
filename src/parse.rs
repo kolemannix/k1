@@ -4,6 +4,7 @@ use std::rc::Rc;
 use string_interner::Symbol;
 
 use crate::lex::*;
+use crate::typer::{self, Linkage};
 use TokenKind as K;
 
 pub type AstId = u32;
@@ -443,8 +444,7 @@ pub struct FnDef {
     pub ret_type: Option<TypeExpression>,
     pub block: Option<Block>,
     pub span: Span,
-    // TODO: bitflags
-    pub is_intrinsic: bool,
+    pub linkage: Linkage,
     pub ast_id: AstId,
 }
 
@@ -1350,6 +1350,14 @@ impl<'toks> Parser<'toks> {
         } else {
             false
         };
+        let linkage = if is_intrinsic {
+            typer::Linkage::Intrinsic
+        } else if !is_intrinsic && self.peek().kind == K::KeywordExtern {
+            self.tokens.advance();
+            typer::Linkage::External
+        } else {
+            typer::Linkage::Standard
+        };
 
         let Some(fn_keyword) = self.eat_token(K::KeywordFn) else {
             if is_intrinsic {
@@ -1386,7 +1394,7 @@ impl<'toks> Parser<'toks> {
             ret_type,
             block,
             span,
-            is_intrinsic,
+            linkage,
             ast_id: self.next_ast_id(),
         }))
     }
@@ -1497,7 +1505,7 @@ pub fn parse_text(text: &str, module_name: &str, use_prelude: bool) -> ParseResu
     } else {
         text.to_string()
     };
-    log::info!("parser full source: {}", &full_source);
+    log::info!("parser full source:\n{}", &full_source);
 
     let mut lexer = Lexer::make(&full_source);
 

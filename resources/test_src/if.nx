@@ -1,7 +1,7 @@
 fn main(): int {
   val cond: bool = false;
   val result: int = if cond 42 else 1337;
-  printInt(result);
-  1337
+  assert(result == 1337);
+  0
 }
 // 1337

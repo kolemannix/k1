@@ -1,0 +1,4 @@
+fn main(): int {
+  print('x'.to_string());
+  0
+}

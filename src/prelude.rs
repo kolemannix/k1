@@ -1,4 +1,6 @@
-pub const PRELUDE_SOURCE: &str = r#"intern fn printInt(value: int): unit
+pub const PRELUDE_SOURCE: &str = r#"
+extern fn _nx_charToString(c: char): string
+intern fn printInt(value: int): unit
 intern fn print(value: string): unit
 intern fn exit(code: int): unit
 fn assert(value: bool): unit {
@@ -8,7 +10,9 @@ fn assert(value: bool): unit {
   };
 }
 namespace char {
-  intern fn to_string(self: char): string
+  fn to_string(self: char): string {
+    _nx_charToString(self)
+  }
 }
 type Array = {}
 namespace Array {

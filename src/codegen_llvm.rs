@@ -3,7 +3,7 @@ use inkwell::builder::Builder;
 use inkwell::context::Context;
 
 use inkwell::memory_buffer::MemoryBuffer;
-use inkwell::module::Linkage;
+use inkwell::module::Linkage as LlvmLinkage;
 use inkwell::passes::{PassManager, PassManagerBuilder};
 use inkwell::targets::{InitializationConfig, Target, TargetMachine};
 use inkwell::types::{
@@ -21,7 +21,7 @@ use std::path::Path;
 use std::rc::Rc;
 
 use crate::parse::IdentifierId;
-use crate::typer::*;
+use crate::typer::{self, *};
 
 struct BuiltinTypes<'ctx> {
     ctx: &'ctx Context,
@@ -218,11 +218,12 @@ impl<'ctx> Codegen<'ctx> {
     pub fn create(ctx: &'ctx Context, module: Rc<TypedModule>) -> Codegen<'ctx> {
         let builder = ctx.create_builder();
         let char_type = ctx.i8_type();
-        let stdlib_module = ctx
-            .create_module_from_ir(MemoryBuffer::create_from_file(Path::new("nxlib/llvm")).unwrap())
-            .unwrap();
         let llvm_module = ctx.create_module(&module.ast.name);
-        llvm_module.link_in_module(stdlib_module).unwrap();
+        // Example of linking an LLVM module
+        // let stdlib_module = ctx
+        //     .create_module_from_ir(MemoryBuffer::create_from_file(Path::new("nxlib/llvm")).unwrap())
+        //     .unwrap();
+        // llvm_module.link_in_module(stdlib_module).unwrap();
         let pointers = HashMap::new();
         let format_int_str = {
             let global = llvm_module.add_global(ctx.i8_type().array_type(4), None, "formatInt");
@@ -266,11 +267,11 @@ impl<'ctx> Codegen<'ctx> {
         };
 
         let printf_type = ctx.i32_type().fn_type(&[builtin_types.c_str.into()], true);
-        let printf = llvm_module.add_function("printf", printf_type, Some(Linkage::External));
+        let printf = llvm_module.add_function("printf", printf_type, Some(LlvmLinkage::External));
         let exit = llvm_module.add_function(
             "exit",
             ctx.void_type().fn_type(&[builtin_types.i64.into()], false),
-            Some(Linkage::External),
+            Some(LlvmLinkage::External),
         );
         Codegen {
             ctx,
@@ -893,15 +894,6 @@ impl<'ctx> Codegen<'ctx> {
                     self.builder.build_memcpy(string_data, 1, array_data, 1, array_len).unwrap();
                 string.as_basic_value_enum().into()
             }
-            IntrinsicFunctionType::CharToString => {
-                let self_char = self.get_loaded_variable(function.params[0].variable_id);
-                let call = self.builder.build_call(
-                    self.llvm_module.get_function("_nx_charToString").unwrap(),
-                    &[self_char.into()],
-                    "_nx_charToString",
-                );
-                call.try_as_basic_value().left().unwrap().into()
-            }
         }
     }
     // This needs to return either a basic value or an instruction value (in the case of early return)
@@ -1012,11 +1004,22 @@ impl<'ctx> Codegen<'ctx> {
             BasicMetadataTypeEnum::PointerType(p) => p.fn_type(&param_types, false),
             _ => panic!("Unexpected function llvm type"),
         };
+        let llvm_linkage = match function.linkage {
+            typer::Linkage::Standard => None,
+            typer::Linkage::External => Some(LlvmLinkage::External),
+            typer::Linkage::Intrinsic => None,
+        };
         let fn_val = {
             let name = self.module.ast.get_ident_str(function.name);
-            self.llvm_module.add_function(&name, fn_ty, None)
+            self.llvm_module.add_function(&name, fn_ty, llvm_linkage)
         };
+
         self.llvm_functions.insert(function_id, fn_val);
+
+        if function.linkage == Linkage::External {
+            return fn_val;
+        }
+
         let entry_block = self.ctx.append_basic_block(fn_val, "entry");
         self.builder.position_at_end(entry_block);
         for (i, param) in fn_val.get_param_iter().enumerate() {
@@ -1130,12 +1133,12 @@ impl<'ctx> Codegen<'ctx> {
         Ok(())
     }
 
-    pub fn emit_object_file(&self) -> Result<()> {
+    pub fn emit_object_file(&self, rel_destination_dir: &str) -> Result<()> {
         let filename = format!("{}.o", self.name());
-        println!("Outputting object file to {filename}");
         let machine =
             self.llvm_machine.as_ref().expect("Cannot emit object file before optimizing");
-        let path = Path::new("./artifacts").join(Path::new(&filename));
+        let path = Path::new(rel_destination_dir).join(Path::new(&filename));
+        log::info!("Outputting object file to {}", path.to_str().unwrap());
         machine
             .write_to_file(&self.llvm_module, inkwell::targets::FileType::Object, &path)
             .unwrap();
