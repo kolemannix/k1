@@ -253,7 +253,7 @@ impl Display for Expression {
                 f.write_fmt(format_args!("({} {} {})", op.lhs, op.op_kind, op.rhs))
             }
             Expression::UnaryOp(op) => {
-                op.op_kind.fmt(f);
+                let _ = op.op_kind.fmt(f);
                 op.expr.fmt(f)
             }
             Expression::Literal(lit) => lit.fmt(f),
@@ -982,7 +982,7 @@ impl<'toks> Parser<'toks> {
         if next.kind == K::OpenAngle {
             // Eat the OpenAngle
             self.tokens.advance();
-            let (type_expressions, type_args_span) =
+            let (type_expressions, _type_args_span) =
                 self.eat_delimited(K::Comma, K::CloseAngle, Parser::expect_type_expression)?;
             // TODO named type arguments
             let type_args: Vec<_> = type_expressions
@@ -1157,7 +1157,7 @@ impl<'toks> Parser<'toks> {
     }
 
     fn parse_assignment(&mut self, lhs: Expression) -> ParseResult<Assignment> {
-        let valid_lhs = match &lhs {
+        let _valid_lhs = match &lhs {
             Expression::FieldAccess(_) => true,
             Expression::Variable(_) => true,
             Expression::IndexOperation(_) => true,
@@ -1339,7 +1339,7 @@ impl<'toks> Parser<'toks> {
         let type_arguments: Option<Vec<TypeParamDef>> =
             if let TokenKind::OpenAngle = self.peek().kind {
                 self.tokens.advance();
-                let (type_args, type_arg_span) = self.eat_delimited(
+                let (type_args, _type_arg_span) = self.eat_delimited(
                     TokenKind::Comma,
                     TokenKind::CloseAngle,
                     Parser::expect_type_param,

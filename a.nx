@@ -1,6 +1,4 @@
 fn main(): int {
-  !true;
-  printBool(!1);
-  printBool(!!!!!!!true);
+  val x: int? = 2;
   0
 }

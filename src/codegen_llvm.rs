@@ -2,7 +2,7 @@ use anyhow::Result;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 
-use inkwell::memory_buffer::MemoryBuffer;
+
 use inkwell::module::Linkage as LlvmLinkage;
 use inkwell::passes::{PassManager, PassManagerBuilder};
 use inkwell::targets::{InitializationConfig, Target, TargetMachine};
@@ -900,7 +900,7 @@ impl<'ctx> Codegen<'ctx> {
                 let string = self.make_string(array_len).into_pointer_value();
                 let string_data = self.builtin_types.string_data_ptr(&self.builder, string);
                 let array_data = self.builtin_types.array_data_ptr(&self.builder, array);
-                let copied =
+                let _copied =
                     self.builder.build_memcpy(string_data, 1, array_data, 1, array_len).unwrap();
                 string.as_basic_value_enum().into()
             }
@@ -920,7 +920,7 @@ impl<'ctx> Codegen<'ctx> {
             match stmt {
                 TypedStmt::Expr(expr) => last = Some(self.codegen_expr(expr)),
                 TypedStmt::ValDef(val_def) => {
-                    let value = self.codegen_val(val_def).expect_pointer();
+                    let _value = self.codegen_val(val_def).expect_pointer();
                     last = Some(self.builtin_types.unit_value.as_basic_value_enum())
                 }
                 TypedStmt::ReturnStmt(return_stmt) => {

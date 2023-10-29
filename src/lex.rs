@@ -378,10 +378,10 @@ impl Lexer<'_> {
                     ));
                 } else if single_char_tok == TokenKind::SingleQuote {
                     self.advance(); // eat opening '
-                    let c = self.next(); // eat the char itself
-                                         //
-                                         //
-                                         // TODO: Support escapes in char literal
+                    let _c = self.next(); // eat the char itself
+                                          //
+                                          //
+                                          // TODO: Support escapes in char literal
                     let quote = self.next(); // eat closing '
                     assert!(quote == '\''); // lmao that's meta
                                             //
