@@ -4,7 +4,7 @@ use std::rc::Rc;
 use string_interner::Symbol;
 
 use crate::lex::*;
-use crate::typer::{self, Linkage};
+use crate::typer::{self, BinaryOpKind, Linkage, UnaryOpKind};
 use TokenKind as K;
 
 pub type AstId = u32;
@@ -115,71 +115,18 @@ pub struct ValDef {
     pub span: Span,
 }
 
-#[derive(Debug, Eq, PartialEq, Clone, Copy)]
-pub enum BinaryOpKind {
-    Add,
-    Subtract,
-    Multiply,
-    Divide,
-    Less,
-    Greater,
-    LessEqual,
-    GreaterEqual,
-    And,
-    Or,
-    Equals,
-}
-
-impl Display for BinaryOpKind {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            BinaryOpKind::Add => f.write_char('+'),
-            BinaryOpKind::Subtract => f.write_char('-'),
-            BinaryOpKind::Multiply => f.write_char('*'),
-            BinaryOpKind::Divide => f.write_char('/'),
-            BinaryOpKind::Less => f.write_char('<'),
-            BinaryOpKind::Greater => f.write_char('>'),
-            BinaryOpKind::LessEqual => f.write_str("<="),
-            BinaryOpKind::GreaterEqual => f.write_str(">="),
-            BinaryOpKind::And => f.write_str("and"),
-            BinaryOpKind::Or => f.write_str("or"),
-            BinaryOpKind::Equals => f.write_str("=="),
-        }
-    }
-}
-
-impl BinaryOpKind {
-    pub fn precedence(&self) -> usize {
-        use BinaryOpKind as B;
-        match self {
-            B::Multiply | B::Divide => 100,
-            B::Add | B::Subtract => 90,
-            B::Less | B::LessEqual | B::Greater | B::GreaterEqual | B::Equals => 80,
-            B::And => 70,
-            B::Or => 66,
-        }
-    }
-    pub fn from_tokenkind(kind: TokenKind) -> Option<BinaryOpKind> {
-        match kind {
-            TokenKind::Plus => Some(BinaryOpKind::Add),
-            TokenKind::Minus => Some(BinaryOpKind::Subtract),
-            TokenKind::Asterisk => Some(BinaryOpKind::Multiply),
-            TokenKind::Slash => Some(BinaryOpKind::Divide),
-            TokenKind::OpenAngle => Some(BinaryOpKind::Less),
-            TokenKind::CloseAngle => Some(BinaryOpKind::Greater),
-            TokenKind::KeywordAnd => Some(BinaryOpKind::And),
-            TokenKind::KeywordOr => Some(BinaryOpKind::Or),
-            TokenKind::EqualsEquals => Some(BinaryOpKind::Equals),
-            _ => None,
-        }
-    }
-}
-
 #[derive(Debug)]
 pub struct BinaryOp {
     pub op_kind: BinaryOpKind,
     pub lhs: Box<Expression>,
     pub rhs: Box<Expression>,
+    pub span: Span,
+}
+
+#[derive(Debug)]
+pub struct UnaryOp {
+    pub op_kind: UnaryOpKind,
+    pub expr: Box<Expression>,
     pub span: Span,
 }
 
@@ -246,6 +193,7 @@ pub struct MethodCall {
 #[derive(Debug)]
 pub enum Expression {
     BinaryOp(BinaryOp),
+    UnaryOp(UnaryOp),
     Literal(Literal),
     FnCall(FnCall),
     Variable(Variable),
@@ -266,6 +214,7 @@ impl Expression {
     pub fn get_span(&self) -> Span {
         match self {
             Expression::BinaryOp(op) => op.span,
+            Expression::UnaryOp(op) => op.span,
             Expression::Literal(lit) => lit.get_span(),
             Expression::FnCall(call) => call.span,
             Expression::Variable(var) => var.span,
@@ -286,6 +235,7 @@ impl Expression {
             Expression::FieldAccess(_acc) => true,
             Expression::MethodCall(_call) => false,
             Expression::BinaryOp(_op) => false,
+            Expression::UnaryOp(_op) => false,
             Expression::Literal(_lit) => false,
             Expression::FnCall(_call) => false,
             Expression::Block(_block) => false,
@@ -301,6 +251,10 @@ impl Display for Expression {
         match self {
             Expression::BinaryOp(op) => {
                 f.write_fmt(format_args!("({} {} {})", op.lhs, op.op_kind, op.rhs))
+            }
+            Expression::UnaryOp(op) => {
+                op.op_kind.fmt(f);
+                op.expr.fmt(f)
             }
             Expression::Literal(lit) => lit.fmt(f),
             Expression::FnCall(call) => std::fmt::Debug::fmt(call, f),
@@ -878,13 +832,14 @@ impl<'toks> Parser<'toks> {
     }
 
     fn parse_expression_with_postfix_ops(&mut self) -> ParseResult<Option<Expression>> {
-        let Some(mut result) = self.parse_base_expression()? else {
-            return Ok(None)
-        };
+        let Some(mut result) = self.parse_base_expression()? else { return Ok(None) };
         // Looping for postfix ops inspired by Jakt's parser
         loop {
             let next = self.peek();
             if next.kind.is_postfix_operator() {
+                if next.kind == K::Bang {
+                    unimplemented!("Postfix ! is unimplemented")
+                }
                 if next.kind == K::Dot {
                     // Field access syntax; a.b
                     self.tokens.advance();
@@ -1053,6 +1008,15 @@ impl<'toks> Parser<'toks> {
             // TODO: If comma, parse a tuple
             self.expect_eat_token(K::CloseParen)?;
             Ok(Some(expr))
+        } else if first.kind == K::Bang {
+            self.tokens.advance();
+            let expr = self.expect_expression()?;
+            let span = first.span.extended(expr.get_span());
+            Ok(Some(Expression::UnaryOp(UnaryOp {
+                expr: Box::new(expr),
+                op_kind: UnaryOpKind::BooleanNegation,
+                span,
+            })))
         } else if first.kind == K::Ident {
             // FnCall
             // Here we use is_whitespace_preceeded to distinguish between:
@@ -1361,7 +1325,11 @@ impl<'toks> Parser<'toks> {
 
         let Some(fn_keyword) = self.eat_token(K::KeywordFn) else {
             if is_intrinsic {
-                return Err(ParseError { expected: "fn".to_string(), token: self.peek(), cause: None })
+                return Err(ParseError {
+                    expected: "fn".to_string(),
+                    token: self.peek(),
+                    cause: None,
+                });
             } else {
                 return Ok(None);
             }

@@ -1,6 +1,6 @@
 #![allow(clippy::match_like_matches_macro)]
 
-use crate::lex::Span;
+use crate::lex::{Span, TokenKind};
 use crate::parse::{self, ParsedNamespace};
 use crate::parse::{
     AstId, AstModule, Block, BlockStmt, Definition, Expression, FnCall, FnDef, IdentifierId,
@@ -9,10 +9,10 @@ use crate::parse::{
 use anyhow::{bail, Result};
 use colored::Colorize;
 use log::{error, trace};
-use parse_display::Display;
 use std::collections::HashMap;
 use std::error::Error;
-use std::fmt::{Display, Formatter};
+
+use std::fmt::{Display, Formatter, Write};
 use std::rc::Rc;
 
 pub type ScopeId = u32;
@@ -168,7 +168,7 @@ pub struct VariableExpr {
     pub span: Span,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Display)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryOpKind {
     Add,
     Subtract,
@@ -183,7 +183,51 @@ pub enum BinaryOpKind {
     Equals,
 }
 
+impl Display for BinaryOpKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BinaryOpKind::Add => f.write_char('+'),
+            BinaryOpKind::Subtract => f.write_char('-'),
+            BinaryOpKind::Multiply => f.write_char('*'),
+            BinaryOpKind::Divide => f.write_char('/'),
+            BinaryOpKind::Less => f.write_char('<'),
+            BinaryOpKind::Greater => f.write_char('>'),
+            BinaryOpKind::LessEqual => f.write_str("<="),
+            BinaryOpKind::GreaterEqual => f.write_str(">="),
+            BinaryOpKind::And => f.write_str("and"),
+            BinaryOpKind::Or => f.write_str("or"),
+            BinaryOpKind::Equals => f.write_str("=="),
+        }
+    }
+}
+
 impl BinaryOpKind {
+    pub fn precedence(&self) -> usize {
+        use BinaryOpKind as B;
+        match self {
+            B::Multiply | B::Divide => 100,
+            B::Add | B::Subtract => 90,
+            B::Less | B::LessEqual | B::Greater | B::GreaterEqual | B::Equals => 80,
+            B::And => 70,
+            B::Or => 66,
+        }
+    }
+
+    pub fn from_tokenkind(kind: TokenKind) -> Option<BinaryOpKind> {
+        match kind {
+            TokenKind::Plus => Some(BinaryOpKind::Add),
+            TokenKind::Minus => Some(BinaryOpKind::Subtract),
+            TokenKind::Asterisk => Some(BinaryOpKind::Multiply),
+            TokenKind::Slash => Some(BinaryOpKind::Divide),
+            TokenKind::OpenAngle => Some(BinaryOpKind::Less),
+            TokenKind::CloseAngle => Some(BinaryOpKind::Greater),
+            TokenKind::KeywordAnd => Some(BinaryOpKind::And),
+            TokenKind::KeywordOr => Some(BinaryOpKind::Or),
+            TokenKind::EqualsEquals => Some(BinaryOpKind::Equals),
+            _ => None,
+        }
+    }
+
     pub fn is_integer_op(&self) -> bool {
         use BinaryOpKind as B;
         match self {
@@ -202,6 +246,29 @@ pub struct BinaryOp {
     pub ir_type: TypeRef,
     pub lhs: Box<TypedExpr>,
     pub rhs: Box<TypedExpr>,
+    pub span: Span,
+}
+
+#[derive(Debug, Eq, PartialEq, Clone, Copy)]
+pub enum UnaryOpKind {
+    BooleanNegation,
+}
+
+impl Display for UnaryOpKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UnaryOpKind::BooleanNegation => f.write_char('!'),
+        }
+    }
+}
+
+impl UnaryOpKind {}
+
+#[derive(Debug, Clone)]
+pub struct UnaryOp {
+    pub kind: UnaryOpKind,
+    pub ty: TypeRef,
+    pub expr: Box<TypedExpr>,
     pub span: Span,
 }
 
@@ -289,6 +356,7 @@ pub enum TypedExpr {
     Variable(VariableExpr),
     FieldAccess(FieldAccess),
     BinaryOp(BinaryOp),
+    UnaryOp(UnaryOp),
     Block(TypedBlock),
     FunctionCall(Call),
     If(Box<TypedIf>),
@@ -314,6 +382,7 @@ impl TypedExpr {
             TypedExpr::Variable(var) => var.ir_type,
             TypedExpr::FieldAccess(field_access) => field_access.ir_type,
             TypedExpr::BinaryOp(binary_op) => binary_op.ir_type,
+            TypedExpr::UnaryOp(unary_op) => unary_op.ty,
             TypedExpr::Block(b) => b.expr_type,
             TypedExpr::FunctionCall(call) => call.ret_type,
             TypedExpr::If(ir_if) => ir_if.ir_type,
@@ -328,6 +397,7 @@ impl TypedExpr {
             TypedExpr::Variable(var) => var.span,
             TypedExpr::FieldAccess(field_access) => field_access.span,
             TypedExpr::BinaryOp(binary_op) => binary_op.span,
+            TypedExpr::UnaryOp(unary_op) => unary_op.span,
             TypedExpr::Block(b) => b.span,
             TypedExpr::FunctionCall(call) => call.span,
             TypedExpr::If(ir_if) => ir_if.span,
@@ -722,7 +792,10 @@ impl TypedModule {
         scope_id: ScopeId,
     ) -> TypedGenResult<TypeId> {
         let TypeRef::TypeId(type_id) = self.eval_type_expr(&defn.value_expr, scope_id)? else {
-            return make_fail("Expected non-scalar rhs of type definition", defn.value_expr.get_span());
+            return make_fail(
+                "Expected non-scalar rhs of type definition",
+                defn.value_expr.get_span(),
+            );
         };
         match self.get_type_mut(type_id) {
             Type::Record(record_defn) => {
@@ -835,8 +908,9 @@ impl TypedModule {
         }
         for expected_field in &expected.fields {
             trace!("typechecking record field {:?}", expected_field);
-            let Some(matching_field) = actual.fields.iter().find(|f| f.name == expected_field.name) else {
-                return Err(format!("expected record to have field {}", expected_field.name))
+            let Some(matching_field) = actual.fields.iter().find(|f| f.name == expected_field.name)
+            else {
+                return Err(format!("expected record to have field {}", expected_field.name));
             };
             self.typecheck_types(matching_field.ty, expected_field.ty)?;
         }
@@ -861,7 +935,8 @@ impl TypedModule {
     ) -> Result<(), String> {
         for expected_field in &expected.fields {
             trace!("typechecking record field {:?}", expected_field);
-            let Some(matching_field) = actual.fields.iter().find(|f| f.name == expected_field.name) else {
+            let Some(matching_field) = actual.fields.iter().find(|f| f.name == expected_field.name)
+            else {
                 return Err(format!("expected field {}", expected_field.name));
             };
             self.typecheck_types(matching_field.ty, expected_field.ty)?;
@@ -1218,19 +1293,7 @@ impl TypedModule {
                     return make_fail("operand types did not match", binary_op.span);
                 }
 
-                let kind = match binary_op.op_kind {
-                    parse::BinaryOpKind::Add => BinaryOpKind::Add,
-                    parse::BinaryOpKind::Subtract => BinaryOpKind::Subtract,
-                    parse::BinaryOpKind::Multiply => BinaryOpKind::Multiply,
-                    parse::BinaryOpKind::Divide => BinaryOpKind::Divide,
-                    parse::BinaryOpKind::Less => BinaryOpKind::Less,
-                    parse::BinaryOpKind::LessEqual => BinaryOpKind::LessEqual,
-                    parse::BinaryOpKind::Greater => BinaryOpKind::Greater,
-                    parse::BinaryOpKind::GreaterEqual => BinaryOpKind::GreaterEqual,
-                    parse::BinaryOpKind::And => BinaryOpKind::And,
-                    parse::BinaryOpKind::Or => BinaryOpKind::Or,
-                    parse::BinaryOpKind::Equals => BinaryOpKind::Equals,
-                };
+                let kind = binary_op.op_kind;
                 let result_type = match kind {
                     BinaryOpKind::Add => lhs.get_type(),
                     BinaryOpKind::Subtract => lhs.get_type(),
@@ -1252,6 +1315,21 @@ impl TypedModule {
                     span: binary_op.span,
                 });
                 Ok(expr)
+            }
+            Expression::UnaryOp(op) => {
+                let base_expr = self.eval_expr(&op.expr, scope_id, None)?;
+                match op.op_kind {
+                    UnaryOpKind::BooleanNegation => {
+                        self.typecheck_types(TypeRef::Bool, base_expr.get_type())
+                            .map_err(|s| make_err(s, op.span))?;
+                        Ok(TypedExpr::UnaryOp(UnaryOp {
+                            kind: UnaryOpKind::BooleanNegation,
+                            ty: TypeRef::Bool,
+                            expr: Box::new(base_expr),
+                            span: op.span,
+                        }))
+                    }
+                }
             }
             Expression::Literal(Literal::Unit(span)) => {
                 Ok(TypedExpr::Literal(TypedLiteral::Unit(*span)))
@@ -1397,7 +1475,10 @@ impl TypedModule {
                                 // Need to distinguish between instances of 'named'
                                 // records and anonymous ones
                                 let Some(record_type_name) = record.name_if_named else {
-                                  return make_fail("Anonymous records currently have no methods", record.span);  
+                                    return make_fail(
+                                        "Anonymous records currently have no methods",
+                                        record.span,
+                                    );
                                 };
                                 let record_namespace_id =
                                     self.scopes.find_namespace(scope_id, record_type_name).unwrap();
@@ -1547,7 +1628,10 @@ impl TypedModule {
 
         let ast = self.ast.clone();
         let Definition::FnDef(ast_def) = ast.get_defn(generic_function.ast_id) else {
-            self.internal_compiler_error("failed to get AST node for function specialization", fn_call.span)
+            self.internal_compiler_error(
+                "failed to get AST node for function specialization",
+                fn_call.span,
+            )
         };
         let specialized_function_id = self.eval_function(
             ast_def,
@@ -1685,9 +1769,13 @@ impl TypedModule {
         scope_id: ScopeId,
     ) -> IntrinsicFunctionType {
         trace!("resolve_intrinsic_function_type for {}", &*self.get_ident_str(fn_def.name));
-        let Some(current_namespace) = self.namespaces.iter().find(|ns| ns.scope_id == scope_id) else {
+        let Some(current_namespace) = self.namespaces.iter().find(|ns| ns.scope_id == scope_id)
+        else {
             println!("{:?}", fn_def);
-            panic!("Functions must be defined within a namespace scope: {:?}", &*self.get_ident_str(fn_def.name))
+            panic!(
+                "Functions must be defined within a namespace scope: {:?}",
+                &*self.get_ident_str(fn_def.name)
+            )
         };
         let result = if current_namespace.name == self.ast.ident_id("string") {
             if fn_def.name == self.ast.ident_id("length") {

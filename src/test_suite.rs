@@ -8,11 +8,12 @@ fn test_file<'ctx, P: AsRef<Path>>(ctx: &'ctx Context, path: P) -> Result<()> {
     let filename = path.file_name().unwrap().to_str().unwrap();
     let src = std::fs::read_to_string(path)?;
     println!("********** {:?} **********", filename);
-    let codegen = crate::compile_single_file_program(ctx, filename, &src).map_err(|err| {
-        eprintln!("TEST CASE FAILED COMPILE: {:?}", path);
-        eprintln!("Reason:           {}", err);
-        err
-    })?;
+    let codegen =
+        crate::compile_single_file_program(ctx, filename, &src, false).map_err(|err| {
+            eprintln!("TEST CASE FAILED COMPILE: {:?}", path);
+            eprintln!("Reason:           {}", err);
+            err
+        })?;
     let result = codegen.interpret_module().map_err(|err| {
         eprintln!("TEST CASE FAILED EXECUTION: {:?}", path);
         eprintln!("Reason: {}", err);

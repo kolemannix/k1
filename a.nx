@@ -1,4 +1,6 @@
 fn main(): int {
-  print('x'.to_string());
+  !true;
+  printBool(!1);
+  printBool(!!!!!!!true);
   0
 }

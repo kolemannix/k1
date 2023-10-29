@@ -1,7 +1,7 @@
 use std::fmt;
 use std::str::Chars;
 
-use crate::parse::BinaryOpKind;
+use crate::typer::BinaryOpKind;
 use log::trace;
 use TokenKind as K;
 
@@ -81,6 +81,7 @@ pub enum TokenKind {
     EqualsEquals,
     Dot,
     Comma,
+    Bang,
 
     DoubleQuote,
     SingleQuote,
@@ -141,6 +142,7 @@ impl TokenKind {
             K::EqualsEquals => Some("=="),
             K::Dot => Some("."),
             K::Comma => Some(","),
+            K::Bang => Some("!"),
 
             K::Plus => Some("+"),
             K::Minus => Some("-"),
@@ -179,6 +181,7 @@ impl TokenKind {
             '-' => Some(K::Minus),
             '*' => Some(K::Asterisk),
             '/' => Some(K::Slash),
+            '!' => Some(K::Bang),
             _ => None,
         }
     }
@@ -225,6 +228,7 @@ impl TokenKind {
         match self {
             K::Dot => true,
             K::OpenBracket => true,
+            K::Bang => true,
             _ => false,
         }
     }
