@@ -49,11 +49,10 @@ The project isn't mature enough yet to make this list but the spirit of the effo
 - [x] Infer val types
 - [x] Extern keyword, then
 - [x] Link at build time not via LLVM module
-- [ ] Refactor while statement to be an expr that can break w/ value 
 - [ ] Fix namespaces to require full paths (currently busted must be unique names globally)
 - [ ] Type Ascriptions (literally can just pass expected_type into eval and do an addtl typecheck)
 - [ ] Embed comments in LLVM IR (source snippets or line numbers?)
-- [ ] Sum types
+- [ ] Sum types (oneofs) (variants?) (tagged unions)
 - [ ] Optionals
 - [ ] Errors
 - [ ] Array push
@@ -65,9 +64,8 @@ The project isn't mature enough yet to make this list but the spirit of the effo
     - [ ] Ditch semicolons? (this technically introduces significant whitespace; need newline token)
     - [ ] from qualifier-focused to name -focused
     - [ ] Parse trailing commas
-- [ ] oneofs (variants?) (tagged unions)
 - [ ] For iteration
-- [ ] Replace spans on IR with just ast node ids
+- [ ] Replace spans on typed ast with just ast node ids
 - [ ] Tuples
 
 # Dogfood wishlist Oct23
@@ -80,7 +78,7 @@ The project isn't mature enough yet to make this list but the spirit of the effo
 - [ ] array bounds checking
 - [ ] Array.distinct in zig
 - [ ] Not equal != operator
-- [ ] Unary negation operator
+- [x] Unary negation operator
 
 # Fibonacci todos (Aug 20)
 - [x] Equality binop

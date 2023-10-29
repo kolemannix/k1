@@ -3,6 +3,9 @@ extern fn _nx_charToString(c: char): string
 intern fn printInt(value: int): unit
 intern fn print(value: string): unit
 intern fn exit(code: int): unit
+fn printBool(value: bool): unit {
+  if value { print("true") } else { print("false") }
+}
 fn assert(value: bool): unit {
   if value { () } else { 
     print("ASSERT FAILED");

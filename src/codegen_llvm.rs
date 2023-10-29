@@ -723,6 +723,16 @@ impl<'ctx> Codegen<'ctx> {
                 TypeRef::Char => panic!("No char-returning binary ops"),
                 TypeRef::TypeId(_) => todo!("codegen for binary ops on user-defined types"),
             },
+            TypedExpr::UnaryOp(unary_op) => {
+                let value = self.codegen_expr(&unary_op.expr);
+                let op_res = match unary_op.kind {
+                    UnaryOpKind::BooleanNegation => {
+                        let value = value.into_int_value();
+                        self.builder.build_not(value, "bool_not")
+                    }
+                };
+                op_res.as_basic_value_enum().into()
+            }
             TypedExpr::Block(_block) => {
                 // This is just a lexical scoping block, not a control-flow block, so doesn't need
                 // to correspond to an LLVM basic block
