@@ -30,6 +30,10 @@ struct Args {
     #[arg(long, default_value_t = false)]
     print_llvm: bool,
 
+    /// No Optimize
+    #[arg(long, default_value_t = false)]
+    no_llvm_opt: bool,
+
     /// Print AST to stdout
     #[arg(long, default_value_t = false)]
     print_ast: bool,
@@ -53,6 +57,7 @@ pub fn compile_single_file_program<'ctx>(
     source: &str,
     no_prelude: bool,
     out_dir: &str,
+    llvm_optimize: bool,
 ) -> Result<Codegen<'ctx>> {
     let use_prelude = !no_prelude;
     let ast = parse::parse_text(source, filename, use_prelude).unwrap_or_else(|e| {
@@ -66,7 +71,7 @@ pub fn compile_single_file_program<'ctx>(
     // println!("{irgen}");
     let mut codegen: Codegen<'ctx> = Codegen::create(ctx, irgen);
     codegen.codegen_module();
-    codegen.optimize(true)?;
+    codegen.optimize(llvm_optimize)?;
 
     let llvm_text = codegen.output_llvm_ir_text();
     let mut f = File::create(format!("{}/{}.ll", out_dir, filename))?;
@@ -84,6 +89,7 @@ pub fn compile_single_file_program<'ctx>(
         "nxlib/zig-out/lib",
         "-l",
         "nxlib",
+        "-O2",
     ]);
     log::debug!("Build Command: {:?}", build_cmd);
     let build_output = build_cmd.output().unwrap();
@@ -99,7 +105,7 @@ pub fn compile_single_file_program<'ctx>(
 fn main() -> Result<()> {
     env_logger::init();
     let args = Args::parse();
-    println!("Args {:?}", args);
+    println!("{:?}", args);
 
     static_assert_size!(parse::Definition, 16);
     static_assert_size!(parse::BlockStmt, 224); // Get down below 100
@@ -114,7 +120,11 @@ fn main() -> Result<()> {
     let ctx = Context::create();
     let filename = Path::new(&src_path).file_name().unwrap().to_str().unwrap();
     let src = fs::read_to_string(src_path).expect("could not read source directory");
-    let codegen = compile_single_file_program(&ctx, filename, &src, no_prelude, out_dir)?;
+    let codegen =
+        compile_single_file_program(&ctx, filename, &src, no_prelude, out_dir, !args.no_llvm_opt)?;
+    if args.print_llvm {
+        println!("{}", codegen.output_llvm_ir_text());
+    }
 
     // println!("Build Output: {}", String::from_utf8(build_output.stdout).unwrap());
 

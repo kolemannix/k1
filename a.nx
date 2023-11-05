@@ -1,10 +1,9 @@
 fn main(): int {
   mut x: int? = None;
   x = 1;
-  x = None;
-  if x |y| {
-    printInt(y);
-  };
+  // if x |y| {
+  //   printInt(y);
+  // };
   //if person.x |x| {
   //  printInt(x);
   //}

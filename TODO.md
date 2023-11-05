@@ -49,6 +49,7 @@ The project isn't mature enough yet to make this list but the spirit of the effo
 - [x] Infer val types
 - [x] Extern keyword, then
 - [x] Link at build time not via LLVM module
+- [ ] Use ctx.const_string for printf format strings
 - [ ] Optionals
 - [ ] Improve printing output by fixing display functions
 - [ ] Fix namespaces to require full paths (currently busted must be unique names globally)
