@@ -336,7 +336,8 @@ impl<'ctx> Codegen<'ctx> {
     // FIXME: Only needs mut self because of the self.llvm_types cache, which
     //        has questionable value at this point in time
     fn build_record_type(&mut self, record: &RecordDefn) -> StructType<'ctx> {
-        let field_types: Vec<_> = record.fields.iter().map(|f| self.get_llvm_type(f.ty)).collect();
+        let field_types: Vec<_> =
+            record.fields.iter().map(|f| self.get_llvm_type(f.type_id)).collect();
         let struct_type = self.ctx.struct_type(&field_types, false);
         // self.llvm_types.insert(type_id, struct_ptr_type.as_basic_type_enum());
         struct_type
@@ -370,7 +371,7 @@ impl<'ctx> Codegen<'ctx> {
                                 let field_types: Vec<_> = record
                                     .fields
                                     .iter()
-                                    .map(|f| self.get_llvm_type(f.ty))
+                                    .map(|f| self.get_llvm_type(f.type_id))
                                     .collect();
                                 let struct_type = self.ctx.struct_type(&field_types, false);
                                 let struct_ptr_type = struct_type
@@ -492,10 +493,10 @@ impl<'ctx> Codegen<'ctx> {
                 GeneratedValue::Value(struct_ptr.as_basic_value_enum())
             }
             TypedLiteral::Array(array) => {
-                let Type::Array(array_ir_type) = self.module.get_type(array.type_id) else {
+                let Type::Array(array_type) = self.module.get_type(array.type_id) else {
                     panic!("expected array type for array");
                 };
-                let element_type = self.get_llvm_type(array_ir_type.element_type);
+                let element_type = self.get_llvm_type(array_type.element_type);
                 let array_len = self.builtin_types.i64.const_int(array.elements.len() as u64, true);
 
                 let array_ptr = self
@@ -518,7 +519,7 @@ impl<'ctx> Codegen<'ctx> {
         }
     }
     fn codegen_if_else(&mut self, ir_if: &TypedIf) -> GeneratedValue<'ctx> {
-        let typ = self.get_llvm_type(ir_if.ir_type);
+        let typ = self.get_llvm_type(ir_if.ty);
         let start_block = self.builder.get_insert_block().unwrap();
         let current_fn = start_block.get_parent().unwrap();
         let consequent_block = self.ctx.append_basic_block(current_fn, "if_cons");
@@ -629,14 +630,14 @@ impl<'ctx> Codegen<'ctx> {
                             "field_access_target_ptr",
                         )
                         .unwrap();
-                    let target_ty = self.get_llvm_type(field_access.ir_type);
+                    let target_ty = self.get_llvm_type(field_access.ty);
                     Pointer { pointee_ty: target_ty, pointer: field_ptr }.into()
                 } else {
                     panic!("Invalid field access: {:?}", field_access)
                 }
             }
             TypedExpr::If(if_expr) => self.codegen_if_else(if_expr),
-            TypedExpr::BinaryOp(bin_op) => match bin_op.ir_type {
+            TypedExpr::BinaryOp(bin_op) => match bin_op.ty {
                 INT_TYPE_ID => {
                     let lhs_value = self.codegen_expr(&bin_op.lhs).into_int_value();
                     let rhs_value = self.codegen_expr(&bin_op.rhs).into_int_value();
@@ -1008,8 +1009,11 @@ impl<'ctx> Codegen<'ctx> {
         }
 
         let maybe_starting_block = self.builder.get_insert_block();
-        let param_types: Vec<BasicMetadataTypeEnum> =
-            function.params.iter().map(|fn_arg| self.get_llvm_type(fn_arg.ty).into()).collect();
+        let param_types: Vec<BasicMetadataTypeEnum> = function
+            .params
+            .iter()
+            .map(|fn_arg| self.get_llvm_type(fn_arg.type_id).into())
+            .collect();
         let ret_type: BasicMetadataTypeEnum<'ctx> = self.get_llvm_type(function.ret_type).into();
         let fn_ty = match ret_type {
             BasicMetadataTypeEnum::IntType(i) => i.fn_type(&param_types, false),
@@ -1036,7 +1040,7 @@ impl<'ctx> Codegen<'ctx> {
         self.builder.position_at_end(entry_block);
         for (i, param) in fn_val.get_param_iter().enumerate() {
             let ir_param = &function.params[i];
-            let ty = self.get_llvm_type(ir_param.ty);
+            let ty = self.get_llvm_type(ir_param.type_id);
             let param_name = self.module.ast.get_ident_str(ir_param.name);
             param.set_name(&param_name);
             let pointer = self.builder.build_alloca(ty, &param_name);
