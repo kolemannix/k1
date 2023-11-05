@@ -33,7 +33,7 @@ pub enum Linkage {
 #[derive(Debug, Clone)]
 pub struct RecordDefnField {
     pub name: IdentifierId,
-    pub ty: TypeId,
+    pub type_id: TypeId,
     pub index: usize,
 }
 
@@ -58,7 +58,7 @@ pub const STRING_TYPE_ID: TypeId = 4;
 
 #[derive(Debug, Clone)]
 pub struct TypeExpression {
-    pub ty: TypeId,
+    pub type_id: TypeId,
     pub span: Span,
 }
 
@@ -147,7 +147,7 @@ pub struct FnArgDefn {
     pub name: IdentifierId,
     pub variable_id: VariableId,
     pub position: usize,
-    pub ty: TypeId,
+    pub type_id: TypeId,
 }
 
 #[derive(Debug, Clone)]
@@ -261,7 +261,7 @@ impl BinaryOpKind {
 #[derive(Debug, Clone)]
 pub struct BinaryOp {
     pub kind: BinaryOpKind,
-    pub ir_type: TypeId,
+    pub ty: TypeId,
     pub lhs: Box<TypedExpr>,
     pub rhs: Box<TypedExpr>,
     pub span: Span,
@@ -351,7 +351,7 @@ pub struct TypedIf {
     pub condition: TypedExpr,
     pub consequent: TypedBlock,
     pub alternate: TypedBlock,
-    pub ir_type: TypeId,
+    pub ty: TypeId,
     pub span: Span,
 }
 
@@ -359,7 +359,7 @@ pub struct TypedIf {
 pub struct FieldAccess {
     pub base: Box<TypedExpr>,
     pub target_field: IdentifierId,
-    pub ir_type: TypeId,
+    pub ty: TypeId,
     pub span: Span,
 }
 #[derive(Debug, Clone)]
@@ -421,12 +421,12 @@ impl TypedExpr {
             TypedExpr::Literal(TypedLiteral::Record(record)) => record.type_id,
             TypedExpr::Literal(TypedLiteral::Array(arr)) => arr.type_id,
             TypedExpr::Variable(var) => var.type_id,
-            TypedExpr::FieldAccess(field_access) => field_access.ir_type,
-            TypedExpr::BinaryOp(binary_op) => binary_op.ir_type,
+            TypedExpr::FieldAccess(field_access) => field_access.ty,
+            TypedExpr::BinaryOp(binary_op) => binary_op.ty,
             TypedExpr::UnaryOp(unary_op) => unary_op.ty,
             TypedExpr::Block(b) => b.expr_type,
             TypedExpr::FunctionCall(call) => call.ret_type,
-            TypedExpr::If(ir_if) => ir_if.ir_type,
+            TypedExpr::If(ir_if) => ir_if.ty,
             TypedExpr::ArrayIndex(op) => op.result_type,
             TypedExpr::StringIndex(op) => op.result_type,
         }
@@ -522,7 +522,7 @@ pub type TyperResult<A> = Result<A, TyperError>;
 #[derive(Debug)]
 pub struct Variable {
     pub name: IdentifierId,
-    pub ty: TypeId,
+    pub type_id: TypeId,
     pub is_mutable: bool,
     pub owner_scope: Option<ScopeId>,
 }
@@ -531,7 +531,7 @@ pub struct Variable {
 pub struct Constant {
     pub variable_id: VariableId,
     pub expr: TypedExpr,
-    pub ir_type: TypeId,
+    pub ty: TypeId,
     pub span: Span,
 }
 
@@ -849,7 +849,7 @@ impl TypedModule {
                 let mut fields: Vec<RecordDefnField> = Vec::new();
                 for (index, ast_field) in record_defn.fields.iter().enumerate() {
                     let ty = self.eval_type_expr(&ast_field.ty, scope_id)?;
-                    fields.push(RecordDefnField { name: ast_field.name, ty, index })
+                    fields.push(RecordDefnField { name: ast_field.name, type_id: ty, index })
                 }
                 let record_defn =
                     RecordDefn { fields, name_if_named: None, span: record_defn.span };
@@ -929,7 +929,7 @@ impl TypedModule {
             else {
                 return Err(format!("expected record to have field {}", expected_field.name));
             };
-            self.typecheck_types(matching_field.ty, expected_field.ty)?;
+            self.typecheck_types(matching_field.type_id, expected_field.type_id)?;
         }
         Ok(())
     }
@@ -956,7 +956,7 @@ impl TypedModule {
             else {
                 return Err(format!("expected field {}", expected_field.name));
             };
-            self.typecheck_types(matching_field.ty, expected_field.ty)?;
+            self.typecheck_types(matching_field.type_id, expected_field.type_id)?;
         }
         Ok(())
     }
@@ -1000,7 +1000,7 @@ impl TypedModule {
 
     fn eval_const(&mut self, const_expr: &parse::ConstVal) -> TyperResult<VariableId> {
         let scope_id = 0;
-        let ir_type = self.eval_const_type_expr(&const_expr.ty)?;
+        let type_id = self.eval_const_type_expr(&const_expr.ty)?;
         let expr = match &const_expr.value_expr {
             Expression::Literal(Literal::Numeric(n, span)) => {
                 let num = self.parse_numeric(n).map_err(|msg| make_err(msg, *span))?;
@@ -1021,11 +1021,11 @@ impl TypedModule {
         };
         let variable_id = self.add_variable(Variable {
             name: const_expr.name,
-            ty: ir_type,
+            type_id: type_id,
             is_mutable: false,
             owner_scope: None,
         });
-        self.constants.push(Constant { variable_id, expr, ir_type, span: const_expr.span });
+        self.constants.push(Constant { variable_id, expr, ty: type_id, span: const_expr.span });
         self.scopes.add_variable(scope_id, const_expr.name, variable_id);
         Ok(variable_id)
     }
@@ -1220,7 +1220,7 @@ impl TypedModule {
                     let expr = self.eval_expr(&ast_field.expr, scope_id, None)?;
                     field_defns.push(RecordDefnField {
                         name: ast_field.name,
-                        ty: expr.get_type(),
+                        type_id: expr.get_type(),
                         index,
                     });
                     field_values.push(RecordField { name: ast_field.name, expr });
@@ -1285,7 +1285,7 @@ impl TypedModule {
                 };
                 let expr = TypedExpr::BinaryOp(BinaryOp {
                     kind,
-                    ir_type: result_type,
+                    ty: result_type,
                     lhs: Box::new(lhs),
                     rhs: Box::new(rhs),
                     span: binary_op.span,
@@ -1359,7 +1359,7 @@ impl TypedModule {
                     ))?;
                 let v = self.get_variable(var_index);
                 let expr = TypedExpr::Variable(VariableExpr {
-                    type_id: v.ty,
+                    type_id: v.type_id,
                     variable_id: var_index,
                     span: variable.span,
                 });
@@ -1378,7 +1378,7 @@ impl TypedModule {
                                 ),
                                 field_access.span,
                             ))?;
-                        Ok(target_field.ty)
+                        Ok(target_field.type_id)
                     }
                     ty => make_fail(
                         format!(
@@ -1392,7 +1392,7 @@ impl TypedModule {
                 Ok(TypedExpr::FieldAccess(FieldAccess {
                     base: Box::new(base_expr),
                     target_field: field_access.target,
-                    ir_type: ret_type,
+                    ty: ret_type,
                     span: field_access.span,
                 }))
             }
@@ -1432,7 +1432,7 @@ impl TypedModule {
             // That is the non-optional type of the condition's type
             let narrowed_variable = Variable {
                 name: binding,
-                ty: inner_type,
+                type_id: inner_type,
                 is_mutable: false,
                 // This should be the scope of the consequent expr
                 owner_scope: Some(scope_id),
@@ -1482,7 +1482,7 @@ impl TypedModule {
             condition,
             consequent,
             alternate,
-            ir_type: overall_type,
+            ty: overall_type,
             span: if_expr.span,
         })))
     }
@@ -1605,8 +1605,8 @@ impl TypedModule {
             let matching_idx = fn_param.position - start;
             let matching_param = matching_param_by_name.or(fn_call.args.get(matching_idx));
             if let Some(param) = matching_param {
-                let expr = self.eval_expr(&param.value, scope_id, Some(fn_param.ty))?;
-                if let Err(e) = self.typecheck_types(fn_param.ty, expr.get_type()) {
+                let expr = self.eval_expr(&param.value, scope_id, Some(fn_param.type_id))?;
+                if let Err(e) = self.typecheck_types(fn_param.type_id, expr.get_type()) {
                     return make_fail(
                         format!("Invalid parameter type: {}", e),
                         param.value.get_span(),
@@ -1671,8 +1671,8 @@ impl TypedModule {
         let spec_fn_scope_id = self.scopes.add_scope_to_root();
         for (i, type_param) in type_params.iter().enumerate() {
             let type_arg = &type_args[i];
-            let type_ref = self.eval_type_expr(&type_arg.value, spec_fn_scope_id)?;
-            self.scopes.get_scope_mut(spec_fn_scope_id).add_type(type_param.ident, type_ref);
+            let type_id = self.eval_type_expr(&type_arg.value, spec_fn_scope_id)?;
+            self.scopes.get_scope_mut(spec_fn_scope_id).add_type(type_param.ident, type_id);
         }
         new_name.push_str("_spec_");
         let specialization_count = generic_function.specializations.len();
@@ -1697,7 +1697,7 @@ impl TypedModule {
     fn eval_block_stmt(&mut self, stmt: &BlockStmt, scope_id: ScopeId) -> TyperResult<TypedStmt> {
         match stmt {
             BlockStmt::ValDef(val_def) => {
-                let provided_type = match val_def.ty.as_ref() {
+                let provided_type = match val_def.type_id.as_ref() {
                     None => None,
                     Some(type_expr) => Some(self.eval_type_expr(type_expr, scope_id)?),
                 };
@@ -1718,7 +1718,7 @@ impl TypedModule {
                 let variable_id = self.add_variable(Variable {
                     is_mutable: val_def.is_mutable,
                     name: val_def.name,
-                    ty: variable_type,
+                    type_id: variable_type,
                     owner_scope: Some(scope_id),
                 });
                 let val_def_stmt = TypedStmt::ValDef(Box::new(ValDef {
@@ -1909,18 +1909,23 @@ impl TypedModule {
 
         // Typecheck arguments
         for (idx, fn_arg) in fn_def.args.iter().enumerate() {
-            let ir_type = self.eval_type_expr(&fn_arg.ty, fn_scope_id)?;
+            let type_id = self.eval_type_expr(&fn_arg.ty, fn_scope_id)?;
             if specialize {
-                trace!("Specializing: {:?} got {:?}", &*self.get_ident_str(fn_arg.name), ir_type);
+                trace!("Specializing: {:?} got {:?}", &*self.get_ident_str(fn_arg.name), type_id);
             }
             let variable = Variable {
                 name: fn_arg.name,
-                ty: ir_type,
+                type_id: type_id,
                 is_mutable: false,
                 owner_scope: Some(fn_scope_id),
             };
             let variable_id = self.add_variable(variable);
-            params.push(FnArgDefn { name: fn_arg.name, variable_id, position: idx, ty: ir_type });
+            params.push(FnArgDefn {
+                name: fn_arg.name,
+                variable_id,
+                position: idx,
+                type_id: type_id,
+            });
             self.scopes.add_variable(fn_scope_id, fn_arg.name, variable_id);
         }
 
@@ -2088,7 +2093,7 @@ impl TypedModule {
         }
         writ.write_str(&self.get_ident_str(var.name))?;
         writ.write_str(": ")?;
-        self.display_type_id(var.ty, writ)
+        self.display_type_id(var.type_id, writ)
     }
 
     fn display_type_id(&self, ty: TypeId, writ: &mut impl std::fmt::Write) -> std::fmt::Result {
@@ -2131,7 +2136,7 @@ impl TypedModule {
                     }
                     writ.write_str(&self.get_ident_str(field.name))?;
                     writ.write_str(": ")?;
-                    self.display_type_id(field.ty, writ)?;
+                    self.display_type_id(field.type_id, writ)?;
                 }
                 writ.write_str("}")
             }
@@ -2183,7 +2188,7 @@ impl TypedModule {
             }
             writ.write_str(&self.get_ident_str(param.name))?;
             writ.write_str(": ")?;
-            self.display_type_id(param.ty, writ)?;
+            self.display_type_id(param.type_id, writ)?;
         }
         writ.write_str(")")?;
         writ.write_str(": ")?;

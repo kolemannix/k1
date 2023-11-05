@@ -120,7 +120,7 @@ pub struct FnCall {
 #[derive(Debug)]
 pub struct ValDef {
     pub name: IdentifierId,
-    pub ty: Option<TypeExpression>,
+    pub type_id: Option<TypeExpression>,
     pub value: Expression,
     pub is_mutable: bool,
     pub span: Span,
@@ -1165,7 +1165,7 @@ impl<'toks> Parser<'toks> {
         let span = eaten_keyword.span.extended(initializer_expression.get_span());
         Ok(Some(ValDef {
             name: self.intern_ident_token(name_token),
-            ty: typ,
+            type_id: typ,
             value: initializer_expression,
             is_mutable: mutable,
             span,
