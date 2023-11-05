@@ -10,10 +10,9 @@ use anyhow::{bail, Result};
 use colored::Colorize;
 use log::{error, trace};
 use std::collections::HashMap;
-use std::env::var;
 use std::error::Error;
 
-use crate::typer::Type::{Int, Unit};
+use crate::typer::Type::Unit;
 use std::fmt::{Display, Formatter, Write};
 use std::rc::Rc;
 
@@ -92,21 +91,9 @@ pub enum Type {
     OpaqueAlias(TypeId),
     TypeVariable(TypeVariable),
     Optional(OptionalType),
-    None(NoneType),
-}
-
-#[derive(Debug, Clone)]
-pub struct NoneType {
-    pub inner_type: TypeId,
 }
 
 impl Type {
-    pub fn expect_none_type(&self) -> &NoneType {
-        match self {
-            Type::None(none) => none,
-            _ => panic!("expect_none called on: {:?}", self),
-        }
-    }
     pub fn as_optional_type(&self) -> Option<&OptionalType> {
         match self {
             Type::Optional(opt) => Some(opt),
@@ -319,34 +306,6 @@ pub struct ArrayLiteral {
 }
 
 #[derive(Debug, Clone)]
-pub enum TypedLiteral {
-    Unit(Span),
-    Char(u8, Span),
-    Bool(bool, Span),
-    Int(i64, Span),
-    Str(String, Span),
-    None(TypeId, Span),
-    Record(Record),
-    Array(ArrayLiteral),
-}
-
-impl TypedLiteral {
-    #[inline]
-    pub fn get_span(&self) -> Span {
-        match self {
-            TypedLiteral::Unit(span) => *span,
-            TypedLiteral::Char(_, span) => *span,
-            TypedLiteral::Str(_, span) => *span,
-            TypedLiteral::Int(_, span) => *span,
-            TypedLiteral::Bool(_, span) => *span,
-            TypedLiteral::None(_, span) => *span,
-            TypedLiteral::Record(record) => record.span,
-            TypedLiteral::Array(arr) => arr.span,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
 pub struct TypedIf {
     pub condition: TypedExpr,
     pub consequent: TypedBlock,
@@ -371,8 +330,21 @@ pub struct IndexOp {
 }
 
 #[derive(Debug, Clone)]
+pub struct OptionalSome {
+    pub inner_expr: Box<TypedExpr>,
+    pub type_id: TypeId,
+}
+
+#[derive(Debug, Clone)]
 pub enum TypedExpr {
-    Literal(TypedLiteral),
+    Unit(Span),
+    Char(u8, Span),
+    Bool(bool, Span),
+    Int(i64, Span),
+    Str(String, Span),
+    None(TypeId, Span),
+    Record(Record),
+    Array(ArrayLiteral),
     Variable(VariableExpr),
     FieldAccess(FieldAccess),
     BinaryOp(BinaryOp),
@@ -382,6 +354,7 @@ pub enum TypedExpr {
     If(Box<TypedIf>),
     ArrayIndex(IndexOp),
     StringIndex(IndexOp),
+    OptionalSome(OptionalSome),
 }
 
 // pub enum BuiltinType {
@@ -406,20 +379,20 @@ pub enum TypedExpr {
 
 impl TypedExpr {
     pub fn unit_literal(span: Span) -> TypedExpr {
-        TypedExpr::Literal(TypedLiteral::Unit(span))
+        TypedExpr::Unit(span)
     }
 
     #[inline]
     pub fn get_type(&self) -> TypeId {
         match self {
-            TypedExpr::Literal(TypedLiteral::None(type_id, _)) => *type_id,
-            TypedExpr::Literal(TypedLiteral::Unit(_)) => UNIT_TYPE_ID,
-            TypedExpr::Literal(TypedLiteral::Char(_, _)) => CHAR_TYPE_ID,
-            TypedExpr::Literal(TypedLiteral::Str(_, _)) => STRING_TYPE_ID,
-            TypedExpr::Literal(TypedLiteral::Int(_, _)) => INT_TYPE_ID,
-            TypedExpr::Literal(TypedLiteral::Bool(_, _)) => BOOL_TYPE_ID,
-            TypedExpr::Literal(TypedLiteral::Record(record)) => record.type_id,
-            TypedExpr::Literal(TypedLiteral::Array(arr)) => arr.type_id,
+            TypedExpr::None(type_id, _) => *type_id,
+            TypedExpr::Unit(_) => UNIT_TYPE_ID,
+            TypedExpr::Char(_, _) => CHAR_TYPE_ID,
+            TypedExpr::Str(_, _) => STRING_TYPE_ID,
+            TypedExpr::Int(_, _) => INT_TYPE_ID,
+            TypedExpr::Bool(_, _) => BOOL_TYPE_ID,
+            TypedExpr::Record(record) => record.type_id,
+            TypedExpr::Array(arr) => arr.type_id,
             TypedExpr::Variable(var) => var.type_id,
             TypedExpr::FieldAccess(field_access) => field_access.ty,
             TypedExpr::BinaryOp(binary_op) => binary_op.ty,
@@ -429,12 +402,20 @@ impl TypedExpr {
             TypedExpr::If(ir_if) => ir_if.ty,
             TypedExpr::ArrayIndex(op) => op.result_type,
             TypedExpr::StringIndex(op) => op.result_type,
+            TypedExpr::OptionalSome(opt) => opt.type_id,
         }
     }
     #[inline]
     pub fn get_span(&self) -> Span {
         match self {
-            TypedExpr::Literal(lit) => lit.get_span(),
+            TypedExpr::Unit(span) => *span,
+            TypedExpr::Char(_, span) => *span,
+            TypedExpr::Bool(_, span) => *span,
+            TypedExpr::Int(_, span) => *span,
+            TypedExpr::Str(_, span) => *span,
+            TypedExpr::None(_, span) => *span,
+            TypedExpr::Record(record) => record.span,
+            TypedExpr::Array(array) => array.span,
             TypedExpr::Variable(var) => var.span,
             TypedExpr::FieldAccess(field_access) => field_access.span,
             TypedExpr::BinaryOp(binary_op) => binary_op.span,
@@ -444,6 +425,7 @@ impl TypedExpr {
             TypedExpr::If(ir_if) => ir_if.span,
             TypedExpr::ArrayIndex(op) => op.span,
             TypedExpr::StringIndex(op) => op.span,
+            TypedExpr::OptionalSome(opt) => opt.inner_expr.get_span(),
         }
     }
 }
@@ -970,18 +952,6 @@ impl TypedModule {
         if expected == actual {
             return Ok(());
         }
-        if let Type::Optional(expected_opt) = self.get_type(expected) {
-            return match self.get_type(actual) {
-                Type::None(none_type) => {
-                    // The only way to have a None is a literal, and there's no way to give it the wrong type
-                    // If we had type ascriptions, then you could do `opt_int = (None: bool?)` and technically assign
-                    // a bool-none to an int-option, so then we might have a bug here since we aren't caring about the inner
-                    // type of the none
-                    self.typecheck_types(expected_opt.inner_type, none_type.inner_type)
-                }
-                _ => self.typecheck_types(expected_opt.inner_type, actual),
-            };
-        }
         match (self.get_type(expected), self.get_type(actual)) {
             (Type::Optional(o1), Type::Optional(o2)) => {
                 self.typecheck_types(o1.inner_type, o2.inner_type)
@@ -1004,14 +974,10 @@ impl TypedModule {
         let expr = match &const_expr.value_expr {
             Expression::Literal(Literal::Numeric(n, span)) => {
                 let num = self.parse_numeric(n).map_err(|msg| make_err(msg, *span))?;
-                TypedExpr::Literal(TypedLiteral::Int(num, const_expr.span))
+                TypedExpr::Int(num, const_expr.span)
             }
-            Expression::Literal(Literal::Bool(b, span)) => {
-                TypedExpr::Literal(TypedLiteral::Bool(*b, *span))
-            }
-            Expression::Literal(Literal::Char(c, span)) => {
-                TypedExpr::Literal(TypedLiteral::Char(*c, *span))
-            }
+            Expression::Literal(Literal::Bool(b, span)) => TypedExpr::Bool(*b, *span),
+            Expression::Literal(Literal::Char(c, span)) => TypedExpr::Char(*c, *span),
             _other => {
                 return make_fail(
                     "Only literals are currently supported as constants",
@@ -1021,7 +987,7 @@ impl TypedModule {
         };
         let variable_id = self.add_variable(Variable {
             name: const_expr.name,
-            type_id: type_id,
+            type_id,
             is_mutable: false,
             owner_scope: None,
         });
@@ -1138,7 +1104,7 @@ impl TypedModule {
         scope_id: ScopeId,
         expected_type: Option<TypeId>,
     ) -> TyperResult<TypedExpr> {
-        match expr {
+        let base_result = match expr {
             Expression::Array(array_expr) => {
                 let mut element_type: Option<TypeId> = match expected_type {
                     Some(type_id) => match self.get_type(type_id) {
@@ -1174,11 +1140,7 @@ impl TypedModule {
                         type_id
                     }
                 };
-                Ok(TypedExpr::Literal(TypedLiteral::Array(ArrayLiteral {
-                    elements,
-                    type_id,
-                    span: array_expr.span,
-                })))
+                Ok(TypedExpr::Array(ArrayLiteral { elements, type_id, span: array_expr.span }))
             }
             Expression::IndexOperation(index_op) => {
                 let index_expr =
@@ -1254,7 +1216,7 @@ impl TypedModule {
                 }?;
                 let ir_record =
                     Record { fields: field_values, span: ast_record.span, type_id: record_type_id };
-                Ok(TypedExpr::Literal(TypedLiteral::Record(ir_record)))
+                Ok(TypedExpr::Record(ir_record))
             }
             Expression::If(if_expr) => self.eval_if_expr(if_expr, scope_id),
             Expression::BinaryOp(binary_op) => {
@@ -1307,9 +1269,7 @@ impl TypedModule {
                     }
                 }
             }
-            Expression::Literal(Literal::Unit(span)) => {
-                Ok(TypedExpr::Literal(TypedLiteral::Unit(*span)))
-            }
+            Expression::Literal(Literal::Unit(span)) => Ok(TypedExpr::Unit(*span)),
             Expression::Literal(Literal::None(span)) => {
                 // If we are expecting an Option, I need to reach inside it to get the inner type
                 let expected_type = expected_type.ok_or(make_err(
@@ -1325,21 +1285,19 @@ impl TypedModule {
                         *span,
                     ))?;
                 let inner_type = expected_type.inner_type;
-                let none_type = Type::None(NoneType { inner_type });
+                let none_type = Type::Optional(OptionalType { inner_type });
                 // FIXME: We'll re-create the type for optional int, bool, etc over and over. Instead of add_type it should be
                 //        self.get_or_add_type()
                 let type_id = self.add_type(none_type);
-                Ok(TypedExpr::Literal(TypedLiteral::None(type_id, *span)))
+                Ok(TypedExpr::None(type_id, *span))
             }
-            Expression::Literal(Literal::Char(byte, span)) => {
-                Ok(TypedExpr::Literal(TypedLiteral::Char(*byte, *span)))
-            }
+            Expression::Literal(Literal::Char(byte, span)) => Ok(TypedExpr::Char(*byte, *span)),
             Expression::Literal(Literal::Numeric(s, span)) => {
                 let num = self.parse_numeric(s).map_err(|msg| make_err(msg, *span))?;
-                Ok(TypedExpr::Literal(TypedLiteral::Int(num, *span)))
+                Ok(TypedExpr::Int(num, *span))
             }
             Expression::Literal(Literal::Bool(b, span)) => {
-                let expr = TypedExpr::Literal(TypedLiteral::Bool(*b, *span));
+                let expr = TypedExpr::Bool(*b, *span);
                 Ok(expr)
             }
             Expression::Literal(Literal::String(s, span)) => {
@@ -1348,7 +1306,7 @@ impl TypedModule {
                 // is the place, or maybe in the parser, that we would actually do some work, which
                 // would justify storing it separately. But then, post-transform, we should intern
                 // these
-                let expr = TypedExpr::Literal(TypedLiteral::Str(s.clone(), *span));
+                let expr = TypedExpr::Str(s.clone(), *span);
                 Ok(expr)
             }
             Expression::Variable(variable) => {
@@ -1409,6 +1367,29 @@ impl TypedModule {
                 let call = self.eval_function_call(fn_call, None, scope_id)?;
                 Ok(TypedExpr::FunctionCall(call))
             }
+        }?;
+
+        // Automatic some-wrapping; should be moved into a function later
+        if let TypedExpr::None(_type_id, _span) = base_result {
+            return Ok(base_result);
+        }
+        if let Some(expected_type_id) = expected_type {
+            if let Type::Optional(optional_type) = self.get_type(expected_type_id) {
+                match self.typecheck_types(optional_type.inner_type, base_result.get_type()) {
+                    Ok(_) => Ok(TypedExpr::OptionalSome(OptionalSome {
+                        inner_expr: Box::new(base_result),
+                        type_id: expected_type_id,
+                    })),
+                    Err(msg) => make_fail(
+                        format!("Expected optional but got unwrapped value: {}", msg),
+                        expr.get_span(),
+                    ),
+                }
+            } else {
+                Ok(base_result)
+            }
+        } else {
+            Ok(base_result)
         }
     }
 
@@ -1915,17 +1896,12 @@ impl TypedModule {
             }
             let variable = Variable {
                 name: fn_arg.name,
-                type_id: type_id,
+                type_id,
                 is_mutable: false,
                 owner_scope: Some(fn_scope_id),
             };
             let variable_id = self.add_variable(variable);
-            params.push(FnArgDefn {
-                name: fn_arg.name,
-                variable_id,
-                position: idx,
-                type_id: type_id,
-            });
+            params.push(FnArgDefn { name: fn_arg.name, variable_id, position: idx, type_id });
             self.scopes.add_variable(fn_scope_id, fn_arg.name, variable_id);
         }
 
@@ -2158,11 +2134,6 @@ impl TypedModule {
                 self.display_type_id(opt.inner_type, writ)?;
                 writ.write_char('?')
             }
-            Type::None(t) => {
-                writ.write_str("None<")?;
-                self.display_type_id(t.inner_type, writ)?;
-                writ.write_str(">")
-            }
         }
     }
 
@@ -2249,40 +2220,38 @@ impl TypedModule {
         writ: &mut impl std::fmt::Write,
     ) -> std::fmt::Result {
         match expr {
-            TypedExpr::Literal(lit) => match lit {
-                TypedLiteral::Unit(_) => writ.write_str("()"),
-                TypedLiteral::Char(c, _) => writ.write_fmt(format_args!("'{}'", c)),
-                TypedLiteral::Int(i, _) => writ.write_fmt(format_args!("{}", i)),
-                TypedLiteral::Bool(b, _) => writ.write_fmt(format_args!("{}", b)),
-                TypedLiteral::Str(s, _) => writ.write_fmt(format_args!("\"{}\"", s)),
-                TypedLiteral::None(typ, _) => {
-                    writ.write_str("None<")?;
-                    self.display_type_id(*typ, writ)?;
-                    writ.write_str(">")
-                }
-                TypedLiteral::Array(array) => {
-                    writ.write_str("[")?;
-                    for (idx, expr) in array.elements.iter().enumerate() {
-                        if idx > 0 {
-                            writ.write_str(", ")?;
-                        }
-                        self.display_expr(expr, writ)?;
+            TypedExpr::Unit(_) => writ.write_str("()"),
+            TypedExpr::Char(c, _) => writ.write_fmt(format_args!("'{}'", c)),
+            TypedExpr::Int(i, _) => writ.write_fmt(format_args!("{}", i)),
+            TypedExpr::Bool(b, _) => writ.write_fmt(format_args!("{}", b)),
+            TypedExpr::Str(s, _) => writ.write_fmt(format_args!("\"{}\"", s)),
+            TypedExpr::None(typ, _) => {
+                writ.write_str("None<")?;
+                self.display_type_id(*typ, writ)?;
+                writ.write_str(">")
+            }
+            TypedExpr::Array(array) => {
+                writ.write_str("[")?;
+                for (idx, expr) in array.elements.iter().enumerate() {
+                    if idx > 0 {
+                        writ.write_str(", ")?;
                     }
-                    writ.write_str("]")
+                    self.display_expr(expr, writ)?;
                 }
-                TypedLiteral::Record(record) => {
-                    writ.write_str("{")?;
-                    for (idx, field) in record.fields.iter().enumerate() {
-                        if idx > 0 {
-                            writ.write_str(", ")?;
-                        }
-                        writ.write_str(&self.get_ident_str(field.name))?;
-                        writ.write_str(": ")?;
-                        self.display_expr(&field.expr, writ)?;
+                writ.write_str("]")
+            }
+            TypedExpr::Record(record) => {
+                writ.write_str("{")?;
+                for (idx, field) in record.fields.iter().enumerate() {
+                    if idx > 0 {
+                        writ.write_str(", ")?;
                     }
-                    writ.write_str("}")
+                    writ.write_str(&self.get_ident_str(field.name))?;
+                    writ.write_str(": ")?;
+                    self.display_expr(&field.expr, writ)?;
                 }
-            },
+                writ.write_str("}")
+            }
             TypedExpr::Variable(v) => {
                 let variable = self.get_variable(v.variable_id);
                 writ.write_str(&self.get_ident_str(variable.name))
@@ -2335,6 +2304,11 @@ impl TypedModule {
                 writ.write_fmt(format_args!(" {} ", binary_op.kind))?;
                 self.display_expr(&binary_op.rhs, writ)
             }
+            TypedExpr::OptionalSome(opt) => {
+                writ.write_str("Some(")?;
+                self.display_expr(&opt.inner_expr, writ)?;
+                writ.write_str(")")
+            }
         }
     }
 }
@@ -2351,7 +2325,7 @@ mod test {
         let mut ir = TypedModule::new(Rc::new(module));
         ir.run()?;
         let i1 = &ir.constants[0];
-        if let TypedExpr::Literal(TypedLiteral::Int(i, span)) = i1.expr {
+        if let TypedExpr::Int(i, span) = i1.expr {
             assert_eq!(i, 420);
             assert_eq!(span.end, 16);
             assert_eq!(span.start, 0);
