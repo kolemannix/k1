@@ -1,7 +1,7 @@
 #![allow(clippy::match_like_matches_macro)]
 
 use crate::lex::{Span, TokenKind};
-use crate::parse::{self, ParsedNamespace};
+use crate::parse::{self, IfExpr, ParsedNamespace};
 use crate::parse::{
     AstId, AstModule, Block, BlockStmt, Definition, Expression, FnCall, FnDef, IdentifierId,
     Literal,
@@ -10,8 +10,10 @@ use anyhow::{bail, Result};
 use colored::Colorize;
 use log::{error, trace};
 use std::collections::HashMap;
+use std::env::var;
 use std::error::Error;
 
+use crate::typer::Type::{Int, Unit};
 use std::fmt::{Display, Formatter, Write};
 use std::rc::Rc;
 
@@ -31,7 +33,7 @@ pub enum Linkage {
 #[derive(Debug, Clone)]
 pub struct RecordDefnField {
     pub name: IdentifierId,
-    pub ty: TypeRef,
+    pub ty: TypeId,
     pub index: usize,
 }
 
@@ -48,40 +50,21 @@ impl RecordDefn {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum TypeRef {
-    Unit,
-    Char,
-    Int,
-    Bool,
-    String,
-    TypeId(TypeId),
-}
-
-impl TypeRef {
-    pub fn as_type_id(&self) -> Option<TypeId> {
-        match self {
-            TypeRef::TypeId(type_id) => Some(*type_id),
-            _ => None,
-        }
-    }
-    pub fn expect_type_id(&self) -> TypeId {
-        match self {
-            TypeRef::TypeId(type_id) => *type_id,
-            _ => panic!("Expected TypeId on {:?}", self),
-        }
-    }
-}
+pub const UNIT_TYPE_ID: TypeId = 0;
+pub const CHAR_TYPE_ID: TypeId = 1;
+pub const INT_TYPE_ID: TypeId = 2;
+pub const BOOL_TYPE_ID: TypeId = 3;
+pub const STRING_TYPE_ID: TypeId = 4;
 
 #[derive(Debug, Clone)]
 pub struct TypeExpression {
-    pub ty: TypeRef,
+    pub ty: TypeId,
     pub span: Span,
 }
 
 #[derive(Debug, Clone)]
 pub struct ArrayType {
-    pub element_type: TypeRef,
+    pub element_type: TypeId,
     pub span: Span,
 }
 
@@ -93,14 +76,49 @@ pub struct TypeVariable {
 }
 
 #[derive(Debug, Clone)]
+pub struct OptionalType {
+    pub inner_type: TypeId,
+}
+
+#[derive(Debug, Clone)]
 pub enum Type {
+    Unit,
+    Char,
+    Int,
+    Bool,
+    String,
     Record(RecordDefn),
     Array(ArrayType),
-    OpaqueAlias(TypeRef),
+    OpaqueAlias(TypeId),
     TypeVariable(TypeVariable),
+    Optional(OptionalType),
+    None(NoneType),
+}
+
+#[derive(Debug, Clone)]
+pub struct NoneType {
+    pub inner_type: TypeId,
 }
 
 impl Type {
+    pub fn expect_none_type(&self) -> &NoneType {
+        match self {
+            Type::None(none) => none,
+            _ => panic!("expect_none called on: {:?}", self),
+        }
+    }
+    pub fn as_optional_type(&self) -> Option<&OptionalType> {
+        match self {
+            Type::Optional(opt) => Some(opt),
+            _ => None,
+        }
+    }
+    pub fn expect_optional_type(&self) -> &OptionalType {
+        match self {
+            Type::Optional(opt) => opt,
+            _ => panic!("expect_optional called on: {:?}", self),
+        }
+    }
     pub fn expect_array_type(&self) -> &ArrayType {
         match self {
             Type::Array(array) => array,
@@ -118,7 +136,7 @@ impl Type {
 #[derive(Debug, Clone)]
 pub struct TypedBlock {
     // If this block is just an expression, the type of the expression
-    pub expr_type: TypeRef,
+    pub expr_type: TypeId,
     pub scope_id: ScopeId,
     pub statements: Vec<TypedStmt>,
     pub span: Span,
@@ -129,14 +147,14 @@ pub struct FnArgDefn {
     pub name: IdentifierId,
     pub variable_id: VariableId,
     pub position: usize,
-    pub ty: TypeRef,
+    pub ty: TypeId,
 }
 
 #[derive(Debug, Clone)]
 pub struct Function {
     pub name: IdentifierId,
     pub scope: ScopeId,
-    pub ret_type: TypeRef,
+    pub ret_type: TypeId,
     pub params: Vec<FnArgDefn>,
     pub type_params: Option<Vec<TypeParam>>,
     pub block: Option<TypedBlock>,
@@ -164,7 +182,7 @@ pub struct TypeParam {
 #[derive(Debug, Clone)]
 pub struct VariableExpr {
     pub variable_id: VariableId,
-    pub ir_type: TypeRef,
+    pub type_id: TypeId,
     pub span: Span,
 }
 
@@ -243,7 +261,7 @@ impl BinaryOpKind {
 #[derive(Debug, Clone)]
 pub struct BinaryOp {
     pub kind: BinaryOpKind,
-    pub ir_type: TypeRef,
+    pub ir_type: TypeId,
     pub lhs: Box<TypedExpr>,
     pub rhs: Box<TypedExpr>,
     pub span: Span,
@@ -267,7 +285,7 @@ impl UnaryOpKind {}
 #[derive(Debug, Clone)]
 pub struct UnaryOp {
     pub kind: UnaryOpKind,
-    pub ty: TypeRef,
+    pub ty: TypeId,
     pub expr: Box<TypedExpr>,
     pub span: Span,
 }
@@ -276,7 +294,7 @@ pub struct UnaryOp {
 pub struct Call {
     pub callee_function_id: FunctionId,
     pub args: Vec<TypedExpr>,
-    pub ret_type: TypeRef,
+    pub ret_type: TypeId,
     pub span: Span,
 }
 
@@ -307,6 +325,7 @@ pub enum TypedLiteral {
     Bool(bool, Span),
     Int(i64, Span),
     Str(String, Span),
+    None(TypeId, Span),
     Record(Record),
     Array(ArrayLiteral),
 }
@@ -320,6 +339,7 @@ impl TypedLiteral {
             TypedLiteral::Str(_, span) => *span,
             TypedLiteral::Int(_, span) => *span,
             TypedLiteral::Bool(_, span) => *span,
+            TypedLiteral::None(_, span) => *span,
             TypedLiteral::Record(record) => record.span,
             TypedLiteral::Array(arr) => arr.span,
         }
@@ -331,7 +351,7 @@ pub struct TypedIf {
     pub condition: TypedExpr,
     pub consequent: TypedBlock,
     pub alternate: TypedBlock,
-    pub ir_type: TypeRef,
+    pub ir_type: TypeId,
     pub span: Span,
 }
 
@@ -339,14 +359,14 @@ pub struct TypedIf {
 pub struct FieldAccess {
     pub base: Box<TypedExpr>,
     pub target_field: IdentifierId,
-    pub ir_type: TypeRef,
+    pub ir_type: TypeId,
     pub span: Span,
 }
 #[derive(Debug, Clone)]
 pub struct IndexOp {
     pub base_expr: Box<TypedExpr>,
     pub index_expr: Box<TypedExpr>,
-    pub result_type: TypeRef,
+    pub result_type: TypeId,
     pub span: Span,
 }
 
@@ -364,22 +384,43 @@ pub enum TypedExpr {
     StringIndex(IndexOp),
 }
 
+// pub enum BuiltinType {
+//     Unit,
+//     Char,
+//     Int,
+//     Bool,
+//     String,
+// }
+
+// impl BuiltinType {
+//     pub fn id() -> TypeId {
+//         match self {
+//             BuiltinType::Unit => UNIT_TYPE_ID,
+//             BuiltinType::Char => CHAR_TYPE_ID,
+//             BuiltinType::Int => INT_TYPE_ID,
+//             BuiltinType::Bool => BOOL_TYPE_ID,
+//             BuiltinType::String => STRING_TYPE_ID,
+//         }
+//     }
+// }
+
 impl TypedExpr {
     pub fn unit_literal(span: Span) -> TypedExpr {
         TypedExpr::Literal(TypedLiteral::Unit(span))
     }
 
     #[inline]
-    pub fn get_type(&self) -> TypeRef {
+    pub fn get_type(&self) -> TypeId {
         match self {
-            TypedExpr::Literal(TypedLiteral::Unit(_)) => TypeRef::Unit,
-            TypedExpr::Literal(TypedLiteral::Char(_, _)) => TypeRef::Char,
-            TypedExpr::Literal(TypedLiteral::Str(_, _)) => TypeRef::String,
-            TypedExpr::Literal(TypedLiteral::Int(_, _)) => TypeRef::Int,
-            TypedExpr::Literal(TypedLiteral::Bool(_, _)) => TypeRef::Bool,
-            TypedExpr::Literal(TypedLiteral::Record(record)) => TypeRef::TypeId(record.type_id),
-            TypedExpr::Literal(TypedLiteral::Array(arr)) => TypeRef::TypeId(arr.type_id),
-            TypedExpr::Variable(var) => var.ir_type,
+            TypedExpr::Literal(TypedLiteral::None(type_id, _)) => *type_id,
+            TypedExpr::Literal(TypedLiteral::Unit(_)) => UNIT_TYPE_ID,
+            TypedExpr::Literal(TypedLiteral::Char(_, _)) => CHAR_TYPE_ID,
+            TypedExpr::Literal(TypedLiteral::Str(_, _)) => STRING_TYPE_ID,
+            TypedExpr::Literal(TypedLiteral::Int(_, _)) => INT_TYPE_ID,
+            TypedExpr::Literal(TypedLiteral::Bool(_, _)) => BOOL_TYPE_ID,
+            TypedExpr::Literal(TypedLiteral::Record(record)) => record.type_id,
+            TypedExpr::Literal(TypedLiteral::Array(arr)) => arr.type_id,
+            TypedExpr::Variable(var) => var.type_id,
             TypedExpr::FieldAccess(field_access) => field_access.ir_type,
             TypedExpr::BinaryOp(binary_op) => binary_op.ir_type,
             TypedExpr::UnaryOp(unary_op) => unary_op.ty,
@@ -410,7 +451,7 @@ impl TypedExpr {
 #[derive(Debug, Clone)]
 pub struct ValDef {
     pub variable_id: VariableId,
-    pub ir_type: TypeRef,
+    pub ty: TypeId,
     pub initializer: TypedExpr,
     pub span: Span,
 }
@@ -440,7 +481,6 @@ pub struct TypedWhileLoop {
 pub enum TypedStmt {
     Expr(Box<TypedExpr>),
     ValDef(Box<ValDef>),
-    ReturnStmt(Box<ReturnStmt>),
     Assignment(Box<Assignment>),
     WhileLoop(Box<TypedWhileLoop>),
 }
@@ -451,7 +491,6 @@ impl TypedStmt {
         match self {
             TypedStmt::Expr(e) => e.get_span(),
             TypedStmt::ValDef(v) => v.span,
-            TypedStmt::ReturnStmt(ret) => ret.span,
             TypedStmt::Assignment(ass) => ass.span,
             TypedStmt::WhileLoop(w) => w.span,
         }
@@ -478,12 +517,12 @@ impl Display for TyperError {
 
 impl Error for TyperError {}
 
-pub type TypedGenResult<A> = Result<A, TyperError>;
+pub type TyperResult<A> = Result<A, TyperError>;
 
 #[derive(Debug)]
 pub struct Variable {
     pub name: IdentifierId,
-    pub ir_type: TypeRef,
+    pub ty: TypeId,
     pub is_mutable: bool,
     pub owner_scope: Option<ScopeId>,
 }
@@ -492,7 +531,7 @@ pub struct Variable {
 pub struct Constant {
     pub variable_id: VariableId,
     pub expr: TypedExpr,
-    pub ir_type: TypeRef,
+    pub ir_type: TypeId,
     pub span: Span,
 }
 
@@ -514,9 +553,9 @@ impl Scopes {
         0 as ScopeId
     }
     fn add_scope_to_root(&mut self) -> ScopeId {
-        self.add_scope(0)
+        self.add_child_scope(0)
     }
-    fn add_scope(&mut self, parent_scope_id: ScopeId) -> ScopeId {
+    fn add_child_scope(&mut self, parent_scope_id: ScopeId) -> ScopeId {
         let scope = Scope { parent: Some(parent_scope_id), ..Scope::default() };
         let id = self.scopes.len() as ScopeId;
         self.scopes.push(scope);
@@ -580,11 +619,11 @@ impl Scopes {
         self.get_scope_mut(scope_id).add_function(identifier, function_id)
     }
 
-    fn add_type(&mut self, scope_id: ScopeId, ident: IdentifierId, ty: TypeRef) {
+    fn add_type(&mut self, scope_id: ScopeId, ident: IdentifierId, ty: TypeId) {
         self.get_scope_mut(scope_id).add_type(ident, ty)
     }
 
-    fn find_type(&self, scope_id: ScopeId, ident: IdentifierId) -> Option<TypeRef> {
+    fn find_type(&self, scope_id: ScopeId, ident: IdentifierId) -> Option<TypeId> {
         let scope = self.get_scope(scope_id);
         if let v @ Some(_r) = scope.find_type(ident) {
             return v;
@@ -625,7 +664,7 @@ pub struct Scope {
     variables: HashMap<IdentifierId, VariableId>,
     functions: HashMap<IdentifierId, FunctionId>,
     namespaces: HashMap<IdentifierId, NamespaceId>,
-    types: HashMap<IdentifierId, TypeRef>,
+    types: HashMap<IdentifierId, TypeId>,
     parent: Option<ScopeId>,
     children: Vec<ScopeId>,
 }
@@ -637,11 +676,11 @@ impl Scope {
         self.variables.insert(ident, value);
     }
 
-    fn add_type(&mut self, ident: IdentifierId, ty: TypeRef) {
+    fn add_type(&mut self, ident: IdentifierId, ty: TypeId) {
         self.types.insert(ident, ty);
     }
 
-    fn find_type(&self, ident: IdentifierId) -> Option<TypeRef> {
+    fn find_type(&self, ident: IdentifierId) -> Option<TypeId> {
         self.types.get(&ident).copied()
     }
 
@@ -666,7 +705,7 @@ fn make_err<T: AsRef<str>>(s: T, span: Span) -> TyperError {
     TyperError::make(s.as_ref(), span)
 }
 
-fn make_fail<A, T: AsRef<str>>(s: T, span: Span) -> TypedGenResult<A> {
+fn make_fail<A, T: AsRef<str>>(s: T, span: Span) -> TyperResult<A> {
     Err(make_err(s, span))
 }
 
@@ -685,11 +724,12 @@ impl TypedModule {
     pub fn new(parsed_module: Rc<AstModule>) -> TypedModule {
         let scopes = Scopes::make();
         let root_ident = parsed_module.ident_id("_root");
+        let types = vec![Type::Unit, Type::Char, Type::Int, Type::Bool, Type::String];
         TypedModule {
             ast: parsed_module,
             functions: Vec::new(),
             variables: Vec::new(),
-            types: Vec::new(),
+            types,
             constants: Vec::new(),
             scopes: Scopes::make(),
             errors: Vec::new(),
@@ -738,14 +778,6 @@ impl TypedModule {
         self.namespaces.get(namespace_id as usize)
     }
 
-    pub fn get_type_if_id(&self, type_ref: TypeRef) -> Option<&Type> {
-        if let TypeRef::TypeId(type_id) = type_ref {
-            Some(self.get_type(type_id))
-        } else {
-            None
-        }
-    }
-
     pub fn get_type(&self, type_id: TypeId) -> &Type {
         &self.types[type_id as usize]
     }
@@ -754,49 +786,41 @@ impl TypedModule {
         &mut self.types[type_id as usize]
     }
 
-    pub fn is_reference_type(&self, ty: TypeRef) -> bool {
-        match ty {
-            TypeRef::Unit => false,
-            TypeRef::Char => false,
-            TypeRef::Int => false,
-            TypeRef::Bool => false,
-            TypeRef::String => false,
-            TypeRef::TypeId(type_id) => {
-                let ty = self.get_type(type_id);
-                match ty {
-                    Type::Record(_) => true,
-                    Type::Array(_) => true,
-                    Type::OpaqueAlias(t) => self.is_reference_type(*t),
-                    Type::TypeVariable(_) => true,
-                }
-            }
-        }
-    }
+    // pub fn is_reference_type(&self, ty: TypeId) -> bool {
+    //     match ty {
+    //         TypeId::Unit => false,
+    //         TypeId::Char => false,
+    //         TypeId::Int => false,
+    //         TypeId::Bool => false,
+    //         TypeId::String => false,
+    //         TypeId::TypeId(type_id) => {
+    //             let ty = self.get_type(type_id);
+    //             match ty {
+    //                 Type::Record(_) => true,
+    //                 Type::Array(_) => true,
+    //                 Type::OpaqueAlias(t) => self.is_reference_type(*t),
+    //                 Type::TypeVariable(_) => true,
+    //                 Type::Optional(opt) => true,
+    //             }
+    //         }
+    //     }
+    // }
 
     /// Recursively checks if given type contains any type variables
-    fn is_generic(&self, ty: TypeRef) -> bool {
-        match ty {
-            TypeRef::TypeId(type_id) => match self.get_type(type_id) {
-                Type::TypeVariable(_) => true,
-                Type::Record(record) => record.fields.iter().any(|f| self.is_generic(f.ty)),
-                Type::Array(arr) => self.is_generic(arr.element_type),
-                Type::OpaqueAlias(t) => self.is_generic(*t),
-            },
-            _ => false,
-        }
-    }
+    // fn is_generic(&self, ty: TypeId) -> bool {
+    //     match ty {
+    //         TypeId::TypeId(type_id) => match self.get_type(type_id) {
+    //             Type::TypeVariable(_) => true,
+    //             Type::Record(record) => record.fields.iter().any(|f| self.is_generic(f.ty)),
+    //             Type::Array(arr) => self.is_generic(arr.element_type),
+    //             Type::OpaqueAlias(t) => self.is_generic(*t),
+    //         },
+    //         _ => false,
+    //     }
+    // }
 
-    fn eval_type_defn(
-        &mut self,
-        defn: &parse::TypeDefn,
-        scope_id: ScopeId,
-    ) -> TypedGenResult<TypeId> {
-        let TypeRef::TypeId(type_id) = self.eval_type_expr(&defn.value_expr, scope_id)? else {
-            return make_fail(
-                "Expected non-scalar rhs of type definition",
-                defn.value_expr.get_span(),
-            );
-        };
+    fn eval_type_defn(&mut self, defn: &parse::TypeDefn, scope_id: ScopeId) -> TyperResult<TypeId> {
+        let type_id = self.eval_type_expr(&defn.value_expr, scope_id)?;
         match self.get_type_mut(type_id) {
             Type::Record(record_defn) => {
                 // Add the name to this record defn so it can have associated
@@ -806,7 +830,7 @@ impl TypedModule {
             }
             _ => make_fail("Invalid rhs for named type definition", defn.value_expr.get_span()),
         }?;
-        self.scopes.add_type(scope_id, defn.name, TypeRef::TypeId(type_id));
+        self.scopes.add_type(scope_id, defn.name, type_id);
         Ok(type_id)
     }
 
@@ -814,13 +838,13 @@ impl TypedModule {
         &mut self,
         expr: &parse::TypeExpression,
         scope_id: ScopeId,
-    ) -> TypedGenResult<TypeRef> {
+    ) -> TyperResult<TypeId> {
         match expr {
-            parse::TypeExpression::Unit(_) => Ok(TypeRef::Unit),
-            parse::TypeExpression::Char(_) => Ok(TypeRef::Char),
-            parse::TypeExpression::Int(_) => Ok(TypeRef::Int),
-            parse::TypeExpression::Bool(_) => Ok(TypeRef::Bool),
-            parse::TypeExpression::String(_) => Ok(TypeRef::String),
+            parse::TypeExpression::Unit(_) => Ok(UNIT_TYPE_ID),
+            parse::TypeExpression::Char(_) => Ok(CHAR_TYPE_ID),
+            parse::TypeExpression::Int(_) => Ok(INT_TYPE_ID),
+            parse::TypeExpression::Bool(_) => Ok(BOOL_TYPE_ID),
+            parse::TypeExpression::String(_) => Ok(STRING_TYPE_ID),
             parse::TypeExpression::Record(record_defn) => {
                 let mut fields: Vec<RecordDefnField> = Vec::new();
                 for (index, ast_field) in record_defn.fields.iter().enumerate() {
@@ -830,7 +854,7 @@ impl TypedModule {
                 let record_defn =
                     RecordDefn { fields, name_if_named: None, span: record_defn.span };
                 let type_id = self.add_type(Type::Record(record_defn));
-                Ok(TypeRef::TypeId(type_id))
+                Ok(type_id)
             }
             parse::TypeExpression::Name(ident, span) => {
                 let ty_ref = self.scopes.find_type(scope_id, *ident);
@@ -859,7 +883,7 @@ impl TypedModule {
                         let element_ty = self.eval_type_expr(&ty_app.params[0], scope_id)?;
                         let array_ty = ArrayType { span: ty_app.span, element_type: element_ty };
                         let type_id = self.add_type(Type::Array(array_ty));
-                        Ok(TypeRef::TypeId(type_id))
+                        Ok(type_id)
                     } else {
                         self.internal_compiler_error(
                             "Expected 1 type parameter for Array",
@@ -870,31 +894,24 @@ impl TypedModule {
                     todo!("not supported: generic non builtin types")
                 }
             }
+            parse::TypeExpression::Optional(opt) => {
+                let inner_ty = self.eval_type_expr(&opt.base, scope_id)?;
+                let optional_type = Type::Optional(OptionalType { inner_type: inner_ty });
+                let type_id = self.add_type(optional_type);
+                Ok(type_id)
+            }
         }
     }
 
-    /// This should just call eval_type_expr then reject types that arent' allowed in const
-    fn eval_const_type_expr(
-        &self,
-        expr: &parse::TypeExpression,
-        _scope_id: ScopeId,
-    ) -> TypedGenResult<TypeRef> {
-        match expr {
-            parse::TypeExpression::Unit(_) => Ok(TypeRef::Unit),
-            parse::TypeExpression::Char(_) => Ok(TypeRef::Char),
-            parse::TypeExpression::Int(_) => Ok(TypeRef::Int),
-            parse::TypeExpression::Bool(_) => Ok(TypeRef::Bool),
-            parse::TypeExpression::String(_) => Ok(TypeRef::String),
-            parse::TypeExpression::Record(_) => {
-                self.internal_compiler_error("No const records yet", expr.get_span())
-            }
-            parse::TypeExpression::Name(_, _) => {
-                self.internal_compiler_error("No references allowed in constants", expr.get_span())
-            }
-            parse::TypeExpression::TypeApplication(_) => self.internal_compiler_error(
-                "No type parameters allowed in constants",
-                expr.get_span(),
-            ),
+    fn eval_const_type_expr(&mut self, expr: &parse::TypeExpression) -> TyperResult<TypeId> {
+        let ty = self.eval_type_expr(expr, self.scopes.get_root_scope_id())?;
+        match ty {
+            UNIT_TYPE_ID => Ok(ty),
+            CHAR_TYPE_ID => Ok(ty),
+            INT_TYPE_ID => Ok(ty),
+            BOOL_TYPE_ID => Ok(ty),
+            STRING_TYPE_ID => Ok(ty),
+            _ => make_fail("Only scalar types allowed in constants", expr.get_span()),
         }
     }
 
@@ -944,40 +961,56 @@ impl TypedModule {
         Ok(())
     }
 
-    fn typecheck_types(&self, expected: TypeRef, actual: TypeRef) -> Result<(), String> {
-        trace!("typechecking {:?} vs {:?}", expected, actual);
+    fn typecheck_types(&self, expected: TypeId, actual: TypeId) -> Result<(), String> {
+        trace!(
+            "typechecking {} vs {}",
+            self.type_id_to_string(expected),
+            self.type_id_to_string(actual)
+        );
         if expected == actual {
-            Ok(())
-        } else {
-            match (expected, actual) {
-                (TypeRef::TypeId(id1), TypeRef::TypeId(id2)) => {
-                    let ty1 = self.get_type(id1);
-                    let ty2 = self.get_type(id2);
-                    match (ty1, ty2) {
-                        (Type::Record(r1), Type::Record(r2)) => self.typecheck_record(r1, r2),
-                        (Type::Array(a1), Type::Array(a2)) => {
-                            self.typecheck_types(a1.element_type, a2.element_type)
-                        }
-                        _ => Err(format!("Expected {ty1:?} but got {ty2:?}")),
-                    }
+            return Ok(());
+        }
+        if let Type::Optional(expected_opt) = self.get_type(expected) {
+            return match self.get_type(actual) {
+                Type::None(none_type) => {
+                    // The only way to have a None is a literal, and there's no way to give it the wrong type
+                    // If we had type ascriptions, then you could do `opt_int = (None: bool?)` and technically assign
+                    // a bool-none to an int-option, so then we might have a bug here since we aren't caring about the inner
+                    // type of the none
+                    self.typecheck_types(expected_opt.inner_type, none_type.inner_type)
                 }
-                (TypeRef::TypeId(id1), got) => {
-                    Err(format!("Expected {:?} but got {:?}", self.get_type(id1), got))
-                }
-                (exp, TypeRef::TypeId(id2)) => {
-                    Err(format!("Expected {:?} but got {:?}", exp, self.get_type(id2)))
-                }
-                (exp, got) => Err(format!("Expected {:?} but got {:?}", exp, got)),
+                _ => self.typecheck_types(expected_opt.inner_type, actual),
+            };
+        }
+        match (self.get_type(expected), self.get_type(actual)) {
+            (Type::Optional(o1), Type::Optional(o2)) => {
+                self.typecheck_types(o1.inner_type, o2.inner_type)
             }
+            (Type::Record(r1), Type::Record(r2)) => self.typecheck_record(r1, r2),
+            (Type::Array(a1), Type::Array(a2)) => {
+                self.typecheck_types(a1.element_type, a2.element_type)
+            }
+            (exp, got) => Err(format!(
+                "Expected {} but got {}",
+                self.type_to_string(exp),
+                self.type_to_string(got)
+            )),
         }
     }
 
-    fn eval_const(&mut self, const_expr: &parse::ConstVal) -> TypedGenResult<VariableId> {
+    fn eval_const(&mut self, const_expr: &parse::ConstVal) -> TyperResult<VariableId> {
         let scope_id = 0;
-        let ir_type = self.eval_const_type_expr(&const_expr.ty, scope_id)?;
-        let num = match &const_expr.value_expr {
+        let ir_type = self.eval_const_type_expr(&const_expr.ty)?;
+        let expr = match &const_expr.value_expr {
             Expression::Literal(Literal::Numeric(n, span)) => {
-                self.parse_numeric(n).map_err(|msg| make_err(msg, *span))?
+                let num = self.parse_numeric(n).map_err(|msg| make_err(msg, *span))?;
+                TypedExpr::Literal(TypedLiteral::Int(num, const_expr.span))
+            }
+            Expression::Literal(Literal::Bool(b, span)) => {
+                TypedExpr::Literal(TypedLiteral::Bool(*b, *span))
+            }
+            Expression::Literal(Literal::Char(c, span)) => {
+                TypedExpr::Literal(TypedLiteral::Char(*c, *span))
             }
             _other => {
                 return make_fail(
@@ -986,10 +1019,9 @@ impl TypedModule {
                 )
             }
         };
-        let expr = TypedExpr::Literal(TypedLiteral::Int(num, const_expr.span));
         let variable_id = self.add_variable(Variable {
             name: const_expr.name,
-            ir_type,
+            ty: ir_type,
             is_mutable: false,
             owner_scope: None,
         });
@@ -998,13 +1030,12 @@ impl TypedModule {
         Ok(variable_id)
     }
 
-    fn get_stmt_expression_type(&self, stmt: &TypedStmt) -> TypeRef {
+    fn get_stmt_expression_type(&self, stmt: &TypedStmt) -> TypeId {
         match stmt {
             TypedStmt::Expr(expr) => expr.get_type(),
-            TypedStmt::ValDef(_) => TypeRef::Unit,
-            TypedStmt::Assignment(_) => TypeRef::Unit,
-            TypedStmt::WhileLoop(_) => TypeRef::Unit,
-            TypedStmt::ReturnStmt(_) => TypeRef::Unit,
+            TypedStmt::ValDef(_) => UNIT_TYPE_ID,
+            TypedStmt::Assignment(_) => UNIT_TYPE_ID,
+            TypedStmt::WhileLoop(_) => UNIT_TYPE_ID,
         }
     }
 
@@ -1048,11 +1079,10 @@ impl TypedModule {
     // If the expr is already a block, do nothing
     // If it is not, make a new block with just this expression inside.
     // Used main for if/else
-    fn transform_expr_to_block(&mut self, expr: TypedExpr, scope_id: ScopeId) -> TypedBlock {
+    fn transform_expr_to_block(&mut self, expr: TypedExpr, block_scope: ScopeId) -> TypedBlock {
         match expr {
             TypedExpr::Block(b) => b,
             expr => {
-                let block_scope = self.scopes.add_scope(scope_id);
                 let ret_type = expr.get_type();
                 let span = expr.get_span();
                 let statement = TypedStmt::Expr(Box::new(expr));
@@ -1067,7 +1097,7 @@ impl TypedModule {
         let span = block.statements.last().map(|s| s.get_span()).unwrap_or(block.span);
         let unit_literal = TypedExpr::unit_literal(span);
         block.statements.push(TypedStmt::Expr(Box::new(unit_literal)));
-        block.expr_type = TypeRef::Unit;
+        block.expr_type = UNIT_TYPE_ID;
     }
 
     fn traverse_namespace_chain(
@@ -1075,7 +1105,7 @@ impl TypedModule {
         scope_id: ScopeId,
         namespaces: &[IdentifierId],
         span: Span,
-    ) -> TypedGenResult<ScopeId> {
+    ) -> TyperResult<ScopeId> {
         log::trace!(
             "traverse_namespace_chain: {:?}",
             namespaces.iter().map(|id| self.get_ident_str(*id).to_string()).collect::<Vec<_>>()
@@ -1106,18 +1136,15 @@ impl TypedModule {
         &mut self,
         expr: &Expression,
         scope_id: ScopeId,
-        expected_type: Option<TypeRef>,
-    ) -> TypedGenResult<TypedExpr> {
+        expected_type: Option<TypeId>,
+    ) -> TyperResult<TypedExpr> {
         match expr {
             Expression::Array(array_expr) => {
-                let mut element_type: Option<TypeRef> = match expected_type.as_ref() {
-                    Some(TypeRef::TypeId(type_id)) => match self.get_type(*type_id) {
+                let mut element_type: Option<TypeId> = match expected_type {
+                    Some(type_id) => match self.get_type(type_id) {
                         Type::Array(arr) => Ok(Some(arr.element_type)),
                         t => make_fail(format!("Expected {:?} but got Array", t), array_expr.span),
                     },
-                    Some(other) => {
-                        make_fail(format!("Expected {:?} but got Array", other), array_expr.span)
-                    }
                     None => Ok(None),
                 }?;
                 let elements: Vec<TypedExpr> = {
@@ -1140,7 +1167,7 @@ impl TypedModule {
                 // intern pool that does full equality checking
                 // https://github.com/ziglang/zig/pull/15569
                 let type_id = match expected_type {
-                    Some(t) => t.expect_type_id(),
+                    Some(t) => t,
                     None => {
                         let array_type = ArrayType { element_type, span: array_expr.span };
                         let type_id = self.add_type(Type::Array(array_type));
@@ -1155,21 +1182,21 @@ impl TypedModule {
             }
             Expression::IndexOperation(index_op) => {
                 let index_expr =
-                    self.eval_expr(&index_op.index_expr, scope_id, Some(TypeRef::Int))?;
-                if index_expr.get_type() != TypeRef::Int {
+                    self.eval_expr(&index_op.index_expr, scope_id, Some(INT_TYPE_ID))?;
+                if index_expr.get_type() != INT_TYPE_ID {
                     return make_fail("index type must be int", index_op.span);
                 }
 
                 let base_expr = self.eval_expr(&index_op.target, scope_id, None)?;
                 let target_type = base_expr.get_type();
                 match target_type {
-                    TypeRef::String => Ok(TypedExpr::StringIndex(IndexOp {
+                    STRING_TYPE_ID => Ok(TypedExpr::StringIndex(IndexOp {
                         base_expr: Box::new(base_expr),
                         index_expr: Box::new(index_expr),
-                        result_type: TypeRef::Char,
+                        result_type: CHAR_TYPE_ID,
                         span: index_op.span,
                     })),
-                    TypeRef::TypeId(target_type_id) => {
+                    target_type_id => {
                         let target_type = self.get_type(target_type_id);
                         match target_type {
                             Type::Array(array_type) => Ok(TypedExpr::ArrayIndex(IndexOp {
@@ -1185,8 +1212,8 @@ impl TypedModule {
                 }
             }
             Expression::Record(ast_record) => {
-                // TODO: Technically we could check expected_type here and save this evaluation if it
-                // is not a record
+                // TODO: we should check expected_type here and save this evaluation if it
+                //       is not a record
                 let mut field_values = Vec::new();
                 let mut field_defns = Vec::new();
                 for (index, ast_field) in ast_record.fields.iter().enumerate() {
@@ -1200,7 +1227,7 @@ impl TypedModule {
                 }
                 // We can use 'expected type' here to just go ahead and typecheck or fail
                 // rather than make a duplicate type
-                let record_type_id = match expected_type.as_ref() {
+                let record_type_id = match expected_type {
                     None => {
                         let record_type = RecordDefn {
                             fields: field_defns,
@@ -1210,11 +1237,11 @@ impl TypedModule {
                         let anon_record_type_id = self.add_type(Type::Record(record_type));
                         Ok(anon_record_type_id)
                     }
-                    Some(TypeRef::TypeId(record_type_id)) => match self.get_type(*record_type_id) {
+                    Some(record_type_id) => match self.get_type(record_type_id) {
                         // If there is an expected type, it had better be a record
                         // If it is, we return its existing id
                         // If it is not, that's a typechecker error
-                        Type::Record(_) => Ok(*record_type_id),
+                        Type::Record(_) => Ok(record_type_id),
                         t => make_fail(
                             format!("Expected type {:?} but got record literal", t),
                             ast_record.span,
@@ -1229,58 +1256,7 @@ impl TypedModule {
                     Record { fields: field_values, span: ast_record.span, type_id: record_type_id };
                 Ok(TypedExpr::Literal(TypedLiteral::Record(ir_record)))
             }
-            Expression::If(if_expr) => {
-                // Ensure boolean condition (or optional which isn't built yet)
-                let condition = self.eval_expr(&if_expr.cond, scope_id, Some(TypeRef::Bool))?;
-                if let Err(e) = self.typecheck_types(TypeRef::Bool, condition.get_type()) {
-                    return make_fail(
-                        format!("Invalid if condition type: {}", e),
-                        if_expr.cond.get_span(),
-                    );
-                }
-                let consequent_expr = self.eval_expr(&if_expr.cons, scope_id, None)?;
-                let consequent_type = consequent_expr.get_type();
-                // De-sugar if without else:
-                // If there is no alternate, we coerce the consequent to return Unit, so both
-                // branches have a matching type, making codegen simple and branchless
-                let consequent = if if_expr.alt.is_none() {
-                    let mut block = self.transform_expr_to_block(consequent_expr, scope_id);
-                    self.coerce_block_to_unit_block(&mut block);
-                    block
-                } else {
-                    self.transform_expr_to_block(consequent_expr, scope_id)
-                };
-                let alternate = if let Some(alt) = &if_expr.alt {
-                    let expr = self.eval_expr(alt, scope_id, Some(consequent_type))?;
-                    self.transform_expr_to_block(expr, scope_id)
-                } else {
-                    TypedBlock {
-                        expr_type: TypeRef::Unit,
-                        scope_id,
-                        statements: vec![TypedStmt::Expr(Box::new(TypedExpr::unit_literal(
-                            if_expr.span,
-                        )))],
-                        span: if_expr.span,
-                    }
-                };
-                if self.typecheck_types(consequent.expr_type, alternate.expr_type).is_err() {
-                    return make_fail(
-                        format!(
-                            "else branch type {:?} did not match then branch type {:?}",
-                            consequent.expr_type, alternate.expr_type
-                        ),
-                        alternate.span,
-                    );
-                }
-                let overall_type = consequent.expr_type;
-                Ok(TypedExpr::If(Box::new(TypedIf {
-                    condition,
-                    consequent,
-                    alternate,
-                    ir_type: overall_type,
-                    span: if_expr.span,
-                })))
-            }
+            Expression::If(if_expr) => self.eval_if_expr(if_expr, scope_id),
             Expression::BinaryOp(binary_op) => {
                 // Infer expected type to be type of operand1
                 let lhs = self.eval_expr(&binary_op.lhs, scope_id, None)?;
@@ -1299,13 +1275,13 @@ impl TypedModule {
                     BinaryOpKind::Subtract => lhs.get_type(),
                     BinaryOpKind::Multiply => lhs.get_type(),
                     BinaryOpKind::Divide => lhs.get_type(),
-                    BinaryOpKind::Less => TypeRef::Bool,
-                    BinaryOpKind::LessEqual => TypeRef::Bool,
-                    BinaryOpKind::Greater => TypeRef::Bool,
-                    BinaryOpKind::GreaterEqual => TypeRef::Bool,
+                    BinaryOpKind::Less => BOOL_TYPE_ID,
+                    BinaryOpKind::LessEqual => BOOL_TYPE_ID,
+                    BinaryOpKind::Greater => BOOL_TYPE_ID,
+                    BinaryOpKind::GreaterEqual => BOOL_TYPE_ID,
                     BinaryOpKind::And => lhs.get_type(),
                     BinaryOpKind::Or => lhs.get_type(),
-                    BinaryOpKind::Equals => TypeRef::Bool,
+                    BinaryOpKind::Equals => BOOL_TYPE_ID,
                 };
                 let expr = TypedExpr::BinaryOp(BinaryOp {
                     kind,
@@ -1320,11 +1296,11 @@ impl TypedModule {
                 let base_expr = self.eval_expr(&op.expr, scope_id, None)?;
                 match op.op_kind {
                     UnaryOpKind::BooleanNegation => {
-                        self.typecheck_types(TypeRef::Bool, base_expr.get_type())
+                        self.typecheck_types(BOOL_TYPE_ID, base_expr.get_type())
                             .map_err(|s| make_err(s, op.span))?;
                         Ok(TypedExpr::UnaryOp(UnaryOp {
                             kind: UnaryOpKind::BooleanNegation,
-                            ty: TypeRef::Bool,
+                            ty: BOOL_TYPE_ID,
                             expr: Box::new(base_expr),
                             span: op.span,
                         }))
@@ -1333,6 +1309,27 @@ impl TypedModule {
             }
             Expression::Literal(Literal::Unit(span)) => {
                 Ok(TypedExpr::Literal(TypedLiteral::Unit(*span)))
+            }
+            Expression::Literal(Literal::None(span)) => {
+                // If we are expecting an Option, I need to reach inside it to get the inner type
+                let expected_type = expected_type.ok_or(make_err(
+                    "Cannot infer type of None literal without type hint",
+                    *span,
+                ))?;
+                let expected_type =
+                    self.get_type(expected_type).as_optional_type().ok_or(make_err(
+                        format!(
+                            "Expected optional type for None literal but got {:?}",
+                            expected_type
+                        ),
+                        *span,
+                    ))?;
+                let inner_type = expected_type.inner_type;
+                let none_type = Type::None(NoneType { inner_type });
+                // FIXME: We'll re-create the type for optional int, bool, etc over and over. Instead of add_type it should be
+                //        self.get_or_add_type()
+                let type_id = self.add_type(none_type);
+                Ok(TypedExpr::Literal(TypedLiteral::None(type_id, *span)))
             }
             Expression::Literal(Literal::Char(byte, span)) => {
                 Ok(TypedExpr::Literal(TypedLiteral::Char(*byte, *span)))
@@ -1362,7 +1359,7 @@ impl TypedModule {
                     ))?;
                 let v = self.get_variable(var_index);
                 let expr = TypedExpr::Variable(VariableExpr {
-                    ir_type: v.ir_type,
+                    type_id: v.ty,
                     variable_id: var_index,
                     span: variable.span,
                 });
@@ -1370,37 +1367,24 @@ impl TypedModule {
             }
             Expression::FieldAccess(field_access) => {
                 let base_expr = self.eval_expr(&field_access.base, scope_id, None)?;
-                let type_ref = base_expr.get_type();
-                let ret_type = match type_ref {
-                    TypeRef::TypeId(type_id) => {
-                        let ty = self.get_type(type_id);
-                        match ty {
-                            Type::Record(record_type) => {
-                                let (_idx, target_field) =
-                                    record_type.find_field(field_access.target).ok_or(make_err(
-                                        format!(
-                                            "Field {} not found on record type",
-                                            &*self.get_ident_str(field_access.target)
-                                        ),
-                                        field_access.span,
-                                    ))?;
-                                Ok(target_field.ty)
-                            }
-                            _ => make_fail(
+                let type_id = base_expr.get_type();
+                let ret_type = match self.get_type(type_id) {
+                    Type::Record(record_type) => {
+                        let (_idx, target_field) =
+                            record_type.find_field(field_access.target).ok_or(make_err(
                                 format!(
-                                    "Cannot access field {} on non-record type: {:?}",
-                                    &*self.get_ident_str(field_access.target),
-                                    ty
+                                    "Field {} not found on record type",
+                                    &*self.get_ident_str(field_access.target)
                                 ),
                                 field_access.span,
-                            ),
-                        }
+                            ))?;
+                        Ok(target_field.ty)
                     }
-                    _ => make_fail(
+                    ty => make_fail(
                         format!(
                             "Cannot access field {} on non-record type: {:?}",
                             &*self.get_ident_str(field_access.target),
-                            type_ref
+                            self.type_to_string(ty)
                         ),
                         field_access.span,
                     ),
@@ -1427,21 +1411,97 @@ impl TypedModule {
             }
         }
     }
+
+    fn eval_if_expr(&mut self, if_expr: &IfExpr, scope_id: ScopeId) -> TyperResult<TypedExpr> {
+        // Ensure boolean condition (or optional which isn't built yet)
+        let condition = self.eval_expr(&if_expr.cond, scope_id, None)?;
+        let consequent_scope_id = self.scopes.add_child_scope(scope_id);
+        if if_expr.optional_ident.is_some() {
+            let condition_optional_type = match self.get_type(condition.get_type()) {
+                Type::Optional(opt) => opt,
+                _other => {
+                    return make_fail(
+                        "Condition type for if with binding must be an optional",
+                        if_expr.cond.get_span(),
+                    );
+                }
+            };
+            let inner_type = condition_optional_type.inner_type;
+            let binding = if_expr.optional_ident.expect("We already checked this");
+            // Make a variable with the identifier binding from the expr
+            // That is the non-optional type of the condition's type
+            let narrowed_variable = Variable {
+                name: binding,
+                ty: inner_type,
+                is_mutable: false,
+                // This should be the scope of the consequent expr
+                owner_scope: Some(scope_id),
+            };
+            let narrowed_variable_id = self.add_variable(narrowed_variable);
+            let consequent_scope = self.scopes.get_scope_mut(consequent_scope_id);
+            consequent_scope.add_variable(binding, narrowed_variable_id);
+        } else {
+            // If there is no binding, the condition must be a boolean
+            if let Err(msg) = self.typecheck_types(BOOL_TYPE_ID, condition.get_type()) {
+                return make_fail(
+                    format!("Invalid if condition type: {}. If you intended to use a binding optional if, you must supply a binding using |<ident>|", msg),
+                    if_expr.cond.get_span(),
+                );
+            }
+        };
+        // This eval_expr needs to run in the block's scope; currently we only make a block scope later.
+        let consequent_expr = self.eval_expr(&if_expr.cons, consequent_scope_id, None)?;
+        let consequent_type = consequent_expr.get_type();
+        let mut consequent = self.transform_expr_to_block(consequent_expr, consequent_scope_id);
+        // De-sugar if without else:
+        // If there is no alternate, we coerce the consequent to return Unit, so both
+        // branches have a matching type, making codegen simpler
+        if if_expr.alt.is_none() {
+            self.coerce_block_to_unit_block(&mut consequent);
+        };
+        let alternate_scope = self.scopes.add_child_scope(scope_id);
+        let alternate = if let Some(alt) = &if_expr.alt {
+            let expr = self.eval_expr(alt, alternate_scope, Some(consequent_type))?;
+            self.transform_expr_to_block(expr, alternate_scope)
+        } else {
+            TypedBlock {
+                expr_type: UNIT_TYPE_ID,
+                scope_id: alternate_scope,
+                statements: vec![TypedStmt::Expr(Box::new(TypedExpr::unit_literal(if_expr.span)))],
+                span: if_expr.span,
+            }
+        };
+        if let Err(msg) = self.typecheck_types(consequent.expr_type, alternate.expr_type) {
+            return make_fail(
+                format!("else branch type did not match then branch type: {}", msg),
+                alternate.span,
+            );
+        }
+        let overall_type = consequent.expr_type;
+        Ok(TypedExpr::If(Box::new(TypedIf {
+            condition,
+            consequent,
+            alternate,
+            ir_type: overall_type,
+            span: if_expr.span,
+        })))
+    }
+
     fn eval_function_call(
         &mut self,
         fn_call: &FnCall,
         this_expr: Option<TypedExpr>,
         scope_id: ScopeId,
-    ) -> TypedGenResult<Call> {
+    ) -> TyperResult<Call> {
         // This block is all about method or resolution
         // We are trying to find out if this method or function
         // exists, and returning its id if so
         let function_id = match this_expr.as_ref() {
             Some(base_expr) => {
                 // Resolve a method call
-                let type_ref = base_expr.get_type();
-                let function_id = match type_ref {
-                    TypeRef::String => {
+                let type_id = base_expr.get_type();
+                let function_id = match self.get_type(type_id) {
+                    Type::String => {
                         // TODO: Abstract out a way to go from identifier to scope
                         //       (name -> ident id -> namespace id -> namespace -> scope id -> scope
                         let string_ident_id = self.ast.ident_id("string");
@@ -1451,7 +1511,7 @@ impl TypedModule {
                         let string_scope = self.scopes.get_scope(string_namespace.scope_id);
                         string_scope.find_function(fn_call.name)
                     }
-                    TypeRef::Char => {
+                    Type::Char => {
                         let char_ident_id = self.ast.ident_id("char");
                         let char_namespace_id =
                             self.scopes.find_namespace(scope_id, char_ident_id).unwrap();
@@ -1459,36 +1519,28 @@ impl TypedModule {
                         let char_scope = self.scopes.get_scope(char_namespace.scope_id);
                         char_scope.find_function(fn_call.name)
                     }
-                    TypeRef::TypeId(type_id) => {
-                        let ty = self.get_type(type_id);
-                        match ty {
-                            Type::Array(_array_type) => {
-                                let array_ident_id = self.ast.ident_id("Array");
-                                let array_namespace_id =
-                                    self.scopes.find_namespace(scope_id, array_ident_id).unwrap();
-                                let array_namespace =
-                                    self.get_namespace(array_namespace_id).unwrap();
-                                let array_scope = self.scopes.get_scope(array_namespace.scope_id);
-                                array_scope.find_function(fn_call.name)
-                            }
-                            Type::Record(record) => {
-                                // Need to distinguish between instances of 'named'
-                                // records and anonymous ones
-                                let Some(record_type_name) = record.name_if_named else {
-                                    return make_fail(
-                                        "Anonymous records currently have no methods",
-                                        record.span,
-                                    );
-                                };
-                                let record_namespace_id =
-                                    self.scopes.find_namespace(scope_id, record_type_name).unwrap();
-                                let record_namespace =
-                                    self.get_namespace(record_namespace_id).unwrap();
-                                let record_scope = self.scopes.get_scope(record_namespace.scope_id);
-                                record_scope.find_function(fn_call.name)
-                            }
-                            _ => None,
-                        }
+                    Type::Array(_array_type) => {
+                        let array_ident_id = self.ast.ident_id("Array");
+                        let array_namespace_id =
+                            self.scopes.find_namespace(scope_id, array_ident_id).unwrap();
+                        let array_namespace = self.get_namespace(array_namespace_id).unwrap();
+                        let array_scope = self.scopes.get_scope(array_namespace.scope_id);
+                        array_scope.find_function(fn_call.name)
+                    }
+                    Type::Record(record) => {
+                        // Need to distinguish between instances of 'named'
+                        // records and anonymous ones
+                        let Some(record_type_name) = record.name_if_named else {
+                            return make_fail(
+                                "Anonymous records currently have no methods",
+                                record.span,
+                            );
+                        };
+                        let record_namespace_id =
+                            self.scopes.find_namespace(scope_id, record_type_name).unwrap();
+                        let record_namespace = self.get_namespace(record_namespace_id).unwrap();
+                        let record_scope = self.scopes.get_scope(record_namespace.scope_id);
+                        record_scope.find_function(fn_call.name)
                     }
                     _ => None,
                 };
@@ -1499,7 +1551,7 @@ impl TypedModule {
                             format!(
                                 "Method {} does not exist on type {:?}",
                                 &*self.get_ident_str(fn_call.name),
-                                type_ref,
+                                type_id,
                             ),
                             fn_call.span,
                         )
@@ -1586,7 +1638,7 @@ impl TypedModule {
         fn_call: &FnCall,
         old_function_id: FunctionId,
         intrinsic_type: Option<IntrinsicFunctionType>,
-    ) -> TypedGenResult<FunctionId> {
+    ) -> TyperResult<FunctionId> {
         // TODO: Implement full generic type inference. This could get slow!
         //       Cases like [T](t: T) are easier but [T](x: ComplexType[A, B, T]) and solving for
         //       T in that case is hard. Requires recursive search.
@@ -1642,36 +1694,35 @@ impl TypedModule {
         )?;
         Ok(specialized_function_id)
     }
-    fn eval_block_stmt(
-        &mut self,
-        stmt: &BlockStmt,
-        scope_id: ScopeId,
-    ) -> TypedGenResult<TypedStmt> {
+    fn eval_block_stmt(&mut self, stmt: &BlockStmt, scope_id: ScopeId) -> TyperResult<TypedStmt> {
         match stmt {
             BlockStmt::ValDef(val_def) => {
-                let provided_ir_type = match val_def.ty.as_ref() {
+                let provided_type = match val_def.ty.as_ref() {
                     None => None,
-                    Some(type_expr) => Some(self.eval_type_expr(&type_expr, scope_id)?),
+                    Some(type_expr) => Some(self.eval_type_expr(type_expr, scope_id)?),
                 };
-                let value_expr = self.eval_expr(&val_def.value, scope_id, provided_ir_type)?;
+                let value_expr = self.eval_expr(&val_def.value, scope_id, provided_type)?;
                 let actual_type = value_expr.get_type();
-                if let Some(expected_type) = provided_ir_type {
+                let variable_type = if let Some(expected_type) = provided_type {
                     if let Err(msg) = self.typecheck_types(expected_type, actual_type) {
                         return make_fail(
                             format!("Local variable type mismatch: {}", msg),
                             val_def.span,
                         );
                     }
-                }
+                    expected_type
+                } else {
+                    actual_type
+                };
 
                 let variable_id = self.add_variable(Variable {
                     is_mutable: val_def.is_mutable,
                     name: val_def.name,
-                    ir_type: actual_type,
+                    ty: variable_type,
                     owner_scope: Some(scope_id),
                 });
                 let val_def_stmt = TypedStmt::ValDef(Box::new(ValDef {
-                    ir_type: actual_type,
+                    ty: variable_type,
                     variable_id,
                     initializer: value_expr,
                     span: val_def.span,
@@ -1723,8 +1774,8 @@ impl TypedModule {
                 Ok(TypedStmt::Expr(Box::new(expr)))
             }
             BlockStmt::While(while_stmt) => {
-                let cond = self.eval_expr(&while_stmt.cond, scope_id, Some(TypeRef::Bool))?;
-                if let Err(e) = self.typecheck_types(TypeRef::Bool, cond.get_type()) {
+                let cond = self.eval_expr(&while_stmt.cond, scope_id, Some(BOOL_TYPE_ID))?;
+                if let Err(e) = self.typecheck_types(BOOL_TYPE_ID, cond.get_type()) {
                     return make_fail(
                         format!("Invalid while condition type: {}", e),
                         cond.get_span(),
@@ -1739,7 +1790,7 @@ impl TypedModule {
             }
         }
     }
-    fn eval_block(&mut self, block: &Block, scope_id: ScopeId) -> TypedGenResult<TypedBlock> {
+    fn eval_block(&mut self, block: &Block, scope_id: ScopeId) -> TyperResult<TypedBlock> {
         let mut statements = Vec::new();
         for stmt in &block.stmts {
             let stmt = self.eval_block_stmt(stmt, scope_id)?;
@@ -1749,12 +1800,9 @@ impl TypedModule {
         let expr_type = if let Some(stmt) = statements.last() {
             self.get_stmt_expression_type(stmt)
         } else {
-            TypeRef::Unit
+            UNIT_TYPE_ID
         };
-        // This whole expr_type vs return_type thing is just a really bad beginner version of the concept of "control flow" in
-        // a typechecker!!!
-        //
-        // let return_type = statements.iter().find(|stmt| stmt.get_return_type());
+
         let ir_block = TypedBlock { expr_type, scope_id: 0, statements, span: block.span };
         Ok(ir_block)
     }
@@ -1821,10 +1869,10 @@ impl TypedModule {
         // Used only during specialization; we already know the intrinsic type
         // from the generic version so we just pass it in
         known_intrinsic: Option<IntrinsicFunctionType>,
-    ) -> TypedGenResult<FunctionId> {
+    ) -> TyperResult<FunctionId> {
         let mut params = Vec::new();
         let fn_scope_id = match fn_scope_id {
-            None => self.scopes.add_scope(parent_scope_id),
+            None => self.scopes.add_child_scope(parent_scope_id),
             Some(fn_scope_id) => fn_scope_id,
         };
 
@@ -1849,7 +1897,7 @@ impl TypedModule {
                 let type_param =
                     TypeParam { ident: type_parameter.ident, type_id: type_variable_id };
                 the_type_params.push(type_param);
-                fn_scope.add_type(type_parameter.ident, TypeRef::TypeId(type_variable_id))
+                fn_scope.add_type(type_parameter.ident, type_variable_id)
             }
             type_params = Some(the_type_params);
             trace!(
@@ -1867,7 +1915,7 @@ impl TypedModule {
             }
             let variable = Variable {
                 name: fn_arg.name,
-                ir_type,
+                ty: ir_type,
                 is_mutable: false,
                 owner_scope: Some(fn_scope_id),
             };
@@ -1884,7 +1932,7 @@ impl TypedModule {
             None
         };
         let given_ret_type = match &fn_def.ret_type {
-            None => TypeRef::Unit,
+            None => UNIT_TYPE_ID,
             Some(type_expr) => self.eval_type_expr(type_expr, fn_scope_id)?,
         };
         let function = Function {
@@ -1936,9 +1984,9 @@ impl TypedModule {
         &mut self,
         ast_namespace: &ParsedNamespace,
         scope_id: ScopeId,
-    ) -> TypedGenResult<NamespaceId> {
+    ) -> TyperResult<NamespaceId> {
         // We add the new namespace's scope as a child of the current scope
-        let ns_scope_id = self.scopes.add_scope(scope_id);
+        let ns_scope_id = self.scopes.add_child_scope(scope_id);
         let namespace = Namespace { name: ast_namespace.name, scope_id: ns_scope_id };
         let namespace_id = self.add_namespace(namespace);
         // We add the new namespace to the current scope
@@ -1953,7 +2001,7 @@ impl TypedModule {
         }
         Ok(namespace_id)
     }
-    fn eval_definition(&mut self, def: &Definition, scope_id: ScopeId) -> TypedGenResult<()> {
+    fn eval_definition(&mut self, def: &Definition, scope_id: ScopeId) -> TyperResult<()> {
         match def {
             Definition::Namespace(namespace) => {
                 self.eval_namespace(namespace, scope_id)?;
@@ -1989,6 +2037,7 @@ impl TypedModule {
             }
         }
         if !errors.is_empty() {
+            //println!("{}", self);
             bail!("Typechecking failed")
         }
         Ok(())
@@ -2000,14 +2049,288 @@ impl Display for TypedModule {
         f.write_str("Module ")?;
         f.write_str(&self.ast.name)?;
         f.write_str("\n")?;
-        for (id, variable) in self.variables.iter().enumerate() {
-            f.write_fmt(format_args!("id={id:02} {variable:#?}\n"))?;
+        f.write_str("--- TYPES ---\n")?;
+        for (id, ty) in self.types.iter().enumerate() {
+            f.write_fmt(format_args!("{} ", id))?;
+            self.write_type(ty, f)?;
+            f.write_str("\n")?;
         }
-        f.write_str(": \n")?;
+        f.write_str("--- Namespaces ---\n")?;
+        for (id, namespace) in self.namespaces.iter().enumerate() {
+            f.write_fmt(format_args!("{} ", id))?;
+            f.write_str(&self.get_ident_str(namespace.name))?;
+            f.write_str("\n")?;
+        }
+        f.write_str("--- Variables ---\n")?;
+        for (id, variable) in self.variables.iter().enumerate() {
+            f.write_fmt(format_args!("{id:02} "))?;
+            self.display_variable(variable, f)?;
+            f.write_str("\n")?;
+        }
+        f.write_str("--- Functions ---\n")?;
         for (id, func) in self.functions.iter().enumerate() {
-            f.write_fmt(format_args!("id={id:02} {func:#?}\n"))?;
+            self.display_function(func, f, false)?;
+            f.write_str("\n")?;
         }
         Ok(())
+    }
+}
+
+// Dumping
+impl TypedModule {
+    fn display_variable(
+        &self,
+        var: &Variable,
+        writ: &mut impl std::fmt::Write,
+    ) -> std::fmt::Result {
+        if var.is_mutable {
+            writ.write_str("mut ")?;
+        }
+        writ.write_str(&self.get_ident_str(var.name))?;
+        writ.write_str(": ")?;
+        self.display_type_id(var.ty, writ)
+    }
+
+    fn display_type_id(&self, ty: TypeId, writ: &mut impl std::fmt::Write) -> std::fmt::Result {
+        match ty {
+            UNIT_TYPE_ID => writ.write_str("()"),
+            CHAR_TYPE_ID => writ.write_str("char"),
+            INT_TYPE_ID => writ.write_str("int"),
+            BOOL_TYPE_ID => writ.write_str("bool"),
+            STRING_TYPE_ID => writ.write_str("string"),
+            type_id => {
+                let ty = self.get_type(type_id);
+                self.write_type(ty, writ)
+            }
+        }
+    }
+
+    pub fn type_id_to_string(&self, type_id: TypeId) -> String {
+        let ty = self.get_type(type_id);
+        self.type_to_string(ty)
+    }
+
+    pub fn type_to_string(&self, ty: &Type) -> String {
+        let mut s = String::new();
+        self.write_type(ty, &mut s).unwrap();
+        s
+    }
+
+    fn write_type(&self, ty: &Type, writ: &mut impl std::fmt::Write) -> std::fmt::Result {
+        match ty {
+            Type::Unit => writ.write_str("()"),
+            Type::Char => writ.write_str("char"),
+            Type::Int => writ.write_str("int"),
+            Type::Bool => writ.write_str("bool"),
+            Type::String => writ.write_str("string"),
+            Type::Record(record) => {
+                writ.write_str("{")?;
+                for (index, field) in record.fields.iter().enumerate() {
+                    if index > 0 {
+                        writ.write_str(", ")?;
+                    }
+                    writ.write_str(&self.get_ident_str(field.name))?;
+                    writ.write_str(": ")?;
+                    self.display_type_id(field.ty, writ)?;
+                }
+                writ.write_str("}")
+            }
+            Type::Array(array) => {
+                writ.write_str("array<")?;
+                self.display_type_id(array.element_type, writ)?;
+                writ.write_str(">")
+            }
+            Type::OpaqueAlias(t) => {
+                writ.write_str("opaque<")?;
+                self.display_type_id(*t, writ)?;
+                writ.write_char('>')
+            }
+            Type::TypeVariable(tv) => {
+                writ.write_str("tvar#")?;
+                writ.write_str(&self.get_ident_str(tv.identifier_id))
+            }
+            Type::Optional(opt) => {
+                self.display_type_id(opt.inner_type, writ)?;
+                writ.write_char('?')
+            }
+            Type::None(t) => {
+                writ.write_str("None<")?;
+                self.display_type_id(t.inner_type, writ)?;
+                writ.write_str(">")
+            }
+        }
+    }
+
+    fn display_function(
+        &self,
+        function: &Function,
+        writ: &mut impl std::fmt::Write,
+        display_block: bool,
+    ) -> std::fmt::Result {
+        if function.linkage == Linkage::External {
+            writ.write_str("extern ")?;
+        }
+        if function.linkage == Linkage::Intrinsic {
+            writ.write_str("intern ")?;
+        }
+
+        writ.write_str("fn ")?;
+        writ.write_str(&self.get_ident_str(function.name))?;
+        writ.write_str("(")?;
+        for (idx, param) in function.params.iter().enumerate() {
+            if idx > 0 {
+                writ.write_str(", ")?;
+            }
+            writ.write_str(&self.get_ident_str(param.name))?;
+            writ.write_str(": ")?;
+            self.display_type_id(param.ty, writ)?;
+        }
+        writ.write_str(")")?;
+        writ.write_str(": ")?;
+        self.display_type_id(function.ret_type, writ)?;
+        if display_block {
+            if let Some(block) = &function.block {
+                self.display_block(block, writ)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn display_block(
+        &self,
+        block: &TypedBlock,
+        writ: &mut impl std::fmt::Write,
+    ) -> std::fmt::Result {
+        writ.write_str("{\n")?;
+        for stmt in &block.statements {
+            self.display_stmt(stmt, writ)?;
+            writ.write_str("\n")?;
+        }
+        writ.write_str("}")
+    }
+
+    fn display_stmt(&self, stmt: &TypedStmt, writ: &mut impl std::fmt::Write) -> std::fmt::Result {
+        match stmt {
+            TypedStmt::Expr(expr) => self.display_expr(expr, writ),
+            TypedStmt::ValDef(val_def) => {
+                writ.write_str("val ")?;
+                self.display_variable(self.get_variable(val_def.variable_id), writ)?;
+                writ.write_str(" = ")?;
+                self.display_expr(&val_def.initializer, writ)
+            }
+            TypedStmt::Assignment(assignment) => {
+                self.display_expr(&assignment.destination, writ)?;
+                writ.write_str(" = ")?;
+                self.display_expr(&assignment.value, writ)
+            }
+            TypedStmt::WhileLoop(while_loop) => {
+                writ.write_str("while ")?;
+                self.display_expr(&while_loop.cond, writ)?;
+                writ.write_str(" ")?;
+                self.display_block(&while_loop.block, writ)
+            }
+        }
+    }
+
+    pub fn expr_to_string(&self, expr: &TypedExpr) -> String {
+        let mut s = String::new();
+        self.display_expr(expr, &mut s).unwrap();
+        s
+    }
+
+    pub fn display_expr(
+        &self,
+        expr: &TypedExpr,
+        writ: &mut impl std::fmt::Write,
+    ) -> std::fmt::Result {
+        match expr {
+            TypedExpr::Literal(lit) => match lit {
+                TypedLiteral::Unit(_) => writ.write_str("()"),
+                TypedLiteral::Char(c, _) => writ.write_fmt(format_args!("'{}'", c)),
+                TypedLiteral::Int(i, _) => writ.write_fmt(format_args!("{}", i)),
+                TypedLiteral::Bool(b, _) => writ.write_fmt(format_args!("{}", b)),
+                TypedLiteral::Str(s, _) => writ.write_fmt(format_args!("\"{}\"", s)),
+                TypedLiteral::None(typ, _) => {
+                    writ.write_str("None<")?;
+                    self.display_type_id(*typ, writ)?;
+                    writ.write_str(">")
+                }
+                TypedLiteral::Array(array) => {
+                    writ.write_str("[")?;
+                    for (idx, expr) in array.elements.iter().enumerate() {
+                        if idx > 0 {
+                            writ.write_str(", ")?;
+                        }
+                        self.display_expr(expr, writ)?;
+                    }
+                    writ.write_str("]")
+                }
+                TypedLiteral::Record(record) => {
+                    writ.write_str("{")?;
+                    for (idx, field) in record.fields.iter().enumerate() {
+                        if idx > 0 {
+                            writ.write_str(", ")?;
+                        }
+                        writ.write_str(&self.get_ident_str(field.name))?;
+                        writ.write_str(": ")?;
+                        self.display_expr(&field.expr, writ)?;
+                    }
+                    writ.write_str("}")
+                }
+            },
+            TypedExpr::Variable(v) => {
+                let variable = self.get_variable(v.variable_id);
+                writ.write_str(&self.get_ident_str(variable.name))
+            }
+            TypedExpr::FieldAccess(field_access) => {
+                self.display_expr(&field_access.base, writ)?;
+                writ.write_str(".")?;
+                writ.write_str(&self.get_ident_str(field_access.target_field))
+            }
+            TypedExpr::ArrayIndex(array_index) => {
+                self.display_expr(&array_index.base_expr, writ)?;
+                writ.write_str("[")?;
+                self.display_expr(&array_index.index_expr, writ)?;
+                writ.write_str("]")
+            }
+            TypedExpr::StringIndex(string_index) => {
+                self.display_expr(&string_index.base_expr, writ)?;
+                writ.write_str("[")?;
+                self.display_expr(&string_index.index_expr, writ)?;
+                writ.write_str("]")
+            }
+            TypedExpr::FunctionCall(fn_call) => {
+                let function = self.get_function(fn_call.callee_function_id);
+                writ.write_str(&self.get_ident_str(function.name))?;
+                writ.write_str("(")?;
+                for (idx, arg) in fn_call.args.iter().enumerate() {
+                    if idx > 0 {
+                        writ.write_str(", ")?;
+                    }
+                    self.display_expr(arg, writ)?;
+                }
+                writ.write_str(")")
+            }
+            TypedExpr::Block(block) => self.display_block(block, writ),
+            TypedExpr::If(if_expr) => {
+                writ.write_str("if ")?;
+                self.display_expr(&if_expr.condition, writ)?;
+                writ.write_str(" ")?;
+                self.display_block(&if_expr.consequent, writ)?;
+                writ.write_str(" else ")?;
+                self.display_block(&if_expr.alternate, writ)?;
+                Ok(())
+            }
+            TypedExpr::UnaryOp(unary_op) => {
+                writ.write_fmt(format_args!("{}", unary_op.kind))?;
+                self.display_expr(&unary_op.expr, writ)
+            }
+            TypedExpr::BinaryOp(binary_op) => {
+                self.display_expr(&binary_op.lhs, writ)?;
+                writ.write_fmt(format_args!(" {} ", binary_op.kind))?;
+                self.display_expr(&binary_op.rhs, writ)
+            }
+        }
     }
 }
 

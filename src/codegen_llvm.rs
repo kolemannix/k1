@@ -2,7 +2,6 @@ use anyhow::Result;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 
-
 use inkwell::module::Linkage as LlvmLinkage;
 use inkwell::passes::{PassManager, PassManagerBuilder};
 use inkwell::targets::{InitializationConfig, Target, TargetMachine};
@@ -25,6 +24,7 @@ use crate::typer::{self, *};
 
 struct BuiltinTypes<'ctx> {
     ctx: &'ctx Context,
+    none: IntType<'ctx>,
     i64: IntType<'ctx>,
     unit: IntType<'ctx>,
     unit_value: IntValue<'ctx>,
@@ -202,10 +202,6 @@ impl<'ctx> GeneratedValue<'ctx> {
     }
 }
 
-pub fn init_context() -> Context {
-    Context::create()
-}
-
 type CodegenResult<T> = Result<T>;
 
 fn i8_array_from_str<'ctx>(ctx: &'ctx Context, value: &str) -> ArrayValue<'ctx> {
@@ -253,6 +249,7 @@ impl<'ctx> Codegen<'ctx> {
 
         let builtin_types = BuiltinTypes {
             ctx,
+            none: ctx.i64_type(),
             i64: ctx.i64_type(),
             unit: ctx.bool_type(),
             unit_value: ctx.bool_type().const_int(0, false),
@@ -344,28 +341,30 @@ impl<'ctx> Codegen<'ctx> {
         // self.llvm_types.insert(type_id, struct_ptr_type.as_basic_type_enum());
         struct_type
     }
-    fn get_llvm_type(&mut self, type_ref: TypeRef) -> BasicTypeEnum<'ctx> {
+    fn get_llvm_type(&mut self, type_id: TypeId) -> BasicTypeEnum<'ctx> {
         // Now that I am not relying on inspect the BasicTypeEnum returned by this function,
         // but rather just using the type info from the TAST, I think I can go back to using this
         // method instead of build_record_type. I can just immediately cast to a StructType if
         // I need one for GEP generation
-        trace!("codegen for type {type_ref:?}");
-        match type_ref {
-            TypeRef::Unit => self.builtin_types.unit.as_basic_type_enum(),
-            TypeRef::Char => self.builtin_types.char.as_basic_type_enum(),
-            TypeRef::Int => self.builtin_types.i64.as_basic_type_enum(),
-            TypeRef::Bool => self.builtin_types.boolean.as_basic_type_enum(),
-            TypeRef::String => {
+        trace!("codegen for type {}", self.module.type_id_to_string(type_id));
+        match type_id {
+            UNIT_TYPE_ID => self.builtin_types.unit.as_basic_type_enum(),
+            CHAR_TYPE_ID => self.builtin_types.char.as_basic_type_enum(),
+            INT_TYPE_ID => self.builtin_types.i64.as_basic_type_enum(),
+            BOOL_TYPE_ID => self.builtin_types.boolean.as_basic_type_enum(),
+            STRING_TYPE_ID => {
                 // Any ptr type will work; need to re-think this whole function
                 self.builtin_types.char.ptr_type(self.default_address_space).as_basic_type_enum()
             }
-            TypeRef::TypeId(type_id) => {
+            type_id => {
                 match self.llvm_types.get(&type_id) {
                     None => {
                         // Generate and store the type in here
                         let module = self.module.clone();
                         let ty = module.get_type(type_id);
                         match ty {
+                            Type::None(none_type) => self.get_llvm_type(none_type.inner_type),
+                            Type::Optional(optional) => self.get_llvm_type(optional.inner_type),
                             Type::Record(record) => {
                                 trace!("generating llvm pointer type for record type {type_id}");
                                 let field_types: Vec<_> = record
@@ -398,6 +397,12 @@ impl<'ctx> Codegen<'ctx> {
                                     .ptr_type(self.default_address_space)
                                     .as_basic_type_enum()
                             }
+                            other => {
+                                panic!(
+                                    "get_llvm_type for type dropped through unexpectedly: {:?}",
+                                    other
+                                )
+                            }
                         }
                     }
                     Some(basic_ty) => *basic_ty,
@@ -408,7 +413,7 @@ impl<'ctx> Codegen<'ctx> {
 
     fn codegen_val(&mut self, val: &ValDef) -> GeneratedValue<'ctx> {
         let value = self.codegen_expr(&val.initializer);
-        let pointee_ty = self.get_llvm_type(val.ir_type);
+        let pointee_ty = self.get_llvm_type(val.ty);
         let variable = self.module.get_variable(val.variable_id);
         let value_ptr = self.builder.build_alloca(
             pointee_ty.ptr_type(self.default_address_space),
@@ -425,6 +430,13 @@ impl<'ctx> Codegen<'ctx> {
 
     fn codegen_literal(&mut self, literal: &TypedLiteral) -> GeneratedValue<'ctx> {
         match literal {
+            TypedLiteral::None(type_id, _) => {
+                // Produce a null (0) value of the size of this None's inner type
+                let none_type = self.module.get_type(*type_id).expect_none_type();
+                let llvm_type = self.get_llvm_type(none_type.inner_type);
+                let value = llvm_type.const_zero();
+                value.into()
+            }
             TypedLiteral::Unit(_) => self.builtin_types.unit_value.as_basic_value_enum().into(),
             TypedLiteral::Char(byte, _) => {
                 self.builtin_types.char.const_int(*byte as u64, false).as_basic_value_enum().into()
@@ -581,10 +593,10 @@ impl<'ctx> Codegen<'ctx> {
     /// This allows for the caller to decide if they want to just load the value, or use the pointer
     /// for things like assignment
     fn codegen_expr_inner(&mut self, expr: &TypedExpr) -> GeneratedValue<'ctx> {
+        log::trace!("codegen expr\n{}", self.module.expr_to_string(expr));
         match expr {
             TypedExpr::Literal(literal) => self.codegen_literal(literal),
             TypedExpr::Variable(ir_var) => {
-                log::trace!("codegen variable expr {ir_var:?}");
                 if let Some(pointer) = self.variables.get(&ir_var.variable_id) {
                     log::trace!("codegen variable got type {:?}", pointer.pointee_ty);
                     let loaded = pointer.loaded_value(&self.builder);
@@ -598,39 +610,34 @@ impl<'ctx> Codegen<'ctx> {
             }
             TypedExpr::FieldAccess(field_access) => {
                 let result = self.codegen_expr(&field_access.base);
-                let type_ref = field_access.base.get_type();
-                if let TypeRef::TypeId(type_id) = type_ref {
-                    let module = self.module.clone();
-                    let ty = module.get_type(type_id);
+                let type_id = field_access.base.get_type();
+                let module = self.module.clone();
+                let ty = module.get_type(type_id);
+                if let Type::Record(record) = ty {
+                    let record_type = self.build_record_type(record);
+                    let record_pointer = result.into_pointer_value();
+                    let (index, _) = record
+                        .find_field(field_access.target_field)
+                        .expect("RecordDefn missing field in codegen!");
 
-                    if let Type::Record(record) = ty {
-                        let record_type = self.build_record_type(record);
-                        let record_pointer = result.into_pointer_value();
-                        let (index, _) = record
-                            .find_field(field_access.target_field)
-                            .expect("RecordDefn missing field in codegen!");
-
-                        let field_ptr = self
-                            .builder
-                            .build_struct_gep(
-                                record_type,
-                                record_pointer,
-                                index as u32,
-                                "field_access_target_ptr",
-                            )
-                            .unwrap();
-                        let target_ty = self.get_llvm_type(field_access.ir_type);
-                        Pointer { pointee_ty: target_ty, pointer: field_ptr }.into()
-                    } else {
-                        panic!("Invalid field access: {:?}", field_access)
-                    }
+                    let field_ptr = self
+                        .builder
+                        .build_struct_gep(
+                            record_type,
+                            record_pointer,
+                            index as u32,
+                            "field_access_target_ptr",
+                        )
+                        .unwrap();
+                    let target_ty = self.get_llvm_type(field_access.ir_type);
+                    Pointer { pointee_ty: target_ty, pointer: field_ptr }.into()
                 } else {
                     panic!("Invalid field access: {:?}", field_access)
                 }
             }
-            TypedExpr::If(ir_if) => self.codegen_if_else(ir_if),
+            TypedExpr::If(if_expr) => self.codegen_if_else(if_expr),
             TypedExpr::BinaryOp(bin_op) => match bin_op.ir_type {
-                TypeRef::Int => {
+                INT_TYPE_ID => {
                     let lhs_value = self.codegen_expr(&bin_op.lhs).into_int_value();
                     let rhs_value = self.codegen_expr(&bin_op.rhs).into_int_value();
                     let op_res = match bin_op.kind {
@@ -660,7 +667,7 @@ impl<'ctx> Codegen<'ctx> {
                     };
                     op_res.as_basic_value_enum().into()
                 }
-                TypeRef::Bool => match bin_op.kind {
+                BOOL_TYPE_ID => match bin_op.kind {
                     BinaryOpKind::And | BinaryOpKind::Or => {
                         let lhs_int = self.codegen_expr(&bin_op.lhs).into_int_value();
                         let rhs_int = self.codegen_expr(&bin_op.rhs).into_int_value();
@@ -718,10 +725,10 @@ impl<'ctx> Codegen<'ctx> {
                     }
                     other => panic!("Unsupported binary operation {other:?} returning Bool"),
                 },
-                TypeRef::String => panic!("No string-returning binary ops yet"),
-                TypeRef::Unit => panic!("No unit-returning binary ops"),
-                TypeRef::Char => panic!("No char-returning binary ops"),
-                TypeRef::TypeId(_) => todo!("codegen for binary ops on user-defined types"),
+                STRING_TYPE_ID => panic!("No string-returning binary ops yet"),
+                UNIT_TYPE_ID => panic!("No unit-returning binary ops"),
+                CHAR_TYPE_ID => panic!("No char-returning binary ops"),
+                other => todo!("codegen for binary ops on user-defined types: {other}"),
             },
             TypedExpr::UnaryOp(unary_op) => {
                 let value = self.codegen_expr(&unary_op.expr);
@@ -887,7 +894,7 @@ impl<'ctx> Codegen<'ctx> {
                 length.as_basic_value_enum().into()
             }
             IntrinsicFunctionType::ArrayNew => {
-                let array_type_id = function.ret_type.expect_type_id();
+                let array_type_id = function.ret_type;
                 let array_type = self.module.get_type(array_type_id);
                 let element_type = self.get_llvm_type(array_type.expect_array_type().element_type);
                 let len = self.get_loaded_variable(function.params[0].variable_id).into_int_value();
@@ -922,11 +929,6 @@ impl<'ctx> Codegen<'ctx> {
                 TypedStmt::ValDef(val_def) => {
                     let _value = self.codegen_val(val_def).expect_pointer();
                     last = Some(self.builtin_types.unit_value.as_basic_value_enum())
-                }
-                TypedStmt::ReturnStmt(return_stmt) => {
-                    let value = self.codegen_expr(&return_stmt.expr);
-                    self.builder.build_return(Some(&value));
-                    return None;
                 }
                 TypedStmt::Assignment(assignment) => match assignment.destination.deref() {
                     TypedExpr::Variable(v) => {

@@ -49,11 +49,12 @@ The project isn't mature enough yet to make this list but the spirit of the effo
 - [x] Infer val types
 - [x] Extern keyword, then
 - [x] Link at build time not via LLVM module
+- [ ] Optionals
+- [ ] Improve printing output by fixing display functions
 - [ ] Fix namespaces to require full paths (currently busted must be unique names globally)
 - [ ] Type Ascriptions (literally can just pass expected_type into eval and do an addtl typecheck)
 - [ ] Embed comments in LLVM IR (source snippets or line numbers?)
 - [ ] Sum types (oneofs) (variants?) (tagged unions)
-- [ ] Optionals
 - [ ] Errors
 - [ ] Array push
 - [ ] uint type
@@ -67,6 +68,17 @@ The project isn't mature enough yet to make this list but the spirit of the effo
 - [ ] For iteration
 - [ ] Replace spans on typed ast with just ast node ids
 - [ ] Tuples
+ 
+ 
+# Optionals
+- [x] Optional types
+- [x] None types
+- [x] None value
+- [ ] Runtime repr for pointer-y types (string, array, record)
+- [ ] Runtime repr for boolean
+- [ ] Runtime repr for unit
+- [ ] Runtime repr for int
+- [ ] Runtime repr for char
 
 # Dogfood wishlist Oct23
 - [x] I really need a way to write code in Zig or C and use it in my stl to move things along

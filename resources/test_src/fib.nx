@@ -9,6 +9,8 @@ fn fib(n: int): int {
 }
 
 fn main(): int {
-  fib(11)
+  val result = fib(11);
+  assert(result == 89);
+  0
 }
 // 89

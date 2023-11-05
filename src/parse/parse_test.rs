@@ -37,9 +37,7 @@ fn basic_fn() -> Result<(), ParseError> {
 fn string_literal() -> ParseResult<()> {
     let mut parser = set_up(r#""hello world""#);
     let result = parser.expect_expression()?;
-    let Expression::Literal(Literal::String(s, span)) = result else {
-        panic!()
-    };
+    let Expression::Literal(Literal::String(s, span)) = result else { panic!() };
     assert_eq!(&s, "hello world");
     assert_eq!(span.start, 1);
     assert_eq!(span.end, 12);
@@ -124,7 +122,7 @@ fn dot_accessor() -> ParseResult<()> {
     let result = parser.parse_expression()?.unwrap();
     let Expression::FieldAccess(acc) = result else { panic!() };
     assert_eq!(acc.target.0.to_usize(), 2);
-    let Expression::FieldAccess(acc2) = *acc.base else {panic!() };
+    let Expression::FieldAccess(acc2) = *acc.base else { panic!() };
     assert_eq!(acc2.target.0.to_usize(), 1);
     let Expression::Variable(v) = *acc2.base else { panic!() };
     assert_eq!(v.ident.0.to_usize(), 0);
@@ -162,7 +160,7 @@ fn prelude_only() -> Result<(), ParseError> {
     let module = parse_text("", "prelude_only.nx", true)?;
     assert_eq!(&module.name, "prelude_only.nx");
     if let Some(Definition::FnDef(fndef)) = module.defs.first() {
-        assert_eq!(*module.get_ident_str(fndef.name), *"printInt")
+        assert_eq!(*module.get_ident_str(fndef.name), *"_nx_charToString")
     } else {
         println!("{module:?}");
         panic!("no definitions in prelude");
@@ -176,15 +174,9 @@ fn precedence() -> Result<(), ParseError> {
     let mut parser = set_up(input);
     let result = parser.parse_expression()?.unwrap();
     println!("{result}");
-    let Expression::BinaryOp(bin_op) = result else {
-        panic!()
-    };
-    let Expression::BinaryOp(lhs) = bin_op.lhs.as_ref() else {
-        panic!()
-    };
-    let Expression::Literal(rhs) = bin_op.rhs.as_ref() else {
-        panic!()
-    };
+    let Expression::BinaryOp(bin_op) = result else { panic!() };
+    let Expression::BinaryOp(lhs) = bin_op.lhs.as_ref() else { panic!() };
+    let Expression::Literal(rhs) = bin_op.rhs.as_ref() else { panic!() };
     assert_eq!(bin_op.op_kind, BinaryOpKind::Add);
     assert_eq!(lhs.op_kind, BinaryOpKind::Multiply);
     assert!(matches!(rhs, Literal::Numeric(_, _)));
@@ -240,12 +232,8 @@ fn generic_method_call_lhs_expr() -> Result<(), ParseError> {
     let input = "getFn().baz<int>(42)";
     let mut parser = set_up(input);
     let result = parser.parse_expression()?.unwrap();
-    let Expression::MethodCall(call) = result else {
-        panic!()
-    };
-    let Expression::FnCall(fn_call) = call.base.deref() else {
-        panic!()
-    };
+    let Expression::MethodCall(call) = result else { panic!() };
+    let Expression::FnCall(fn_call) = call.base.deref() else { panic!() };
     assert!(fn_call.name == parser.ident_id("getFn"));
     assert!(call.call.name == parser.ident_id("baz"));
     assert!(call.call.type_args.unwrap()[0].value.is_int());

@@ -1,4 +1,3 @@
-
 use std::rc::Rc;
 
 mod codegen_llvm;
@@ -53,6 +52,7 @@ pub fn compile_single_file_program<'ctx>(
     filename: &str,
     source: &str,
     no_prelude: bool,
+    out_dir: &str,
 ) -> Result<Codegen<'ctx>> {
     let use_prelude = !no_prelude;
     let ast = parse::parse_text(source, filename, use_prelude).unwrap_or_else(|e| {
@@ -67,28 +67,6 @@ pub fn compile_single_file_program<'ctx>(
     let mut codegen: Codegen<'ctx> = Codegen::create(ctx, irgen);
     codegen.codegen_module();
     codegen.optimize(true)?;
-    Ok(codegen)
-}
-
-fn main() -> Result<()> {
-    env_logger::init();
-    let args = Args::parse();
-    println!("Args {:?}", args);
-
-    static_assert_size!(parse::Definition, 16);
-    static_assert_size!(parse::BlockStmt, 224); // Get down below 100
-    static_assert_size!(parse::Expression, 104); // Get back down
-    static_assert_size!(typer::TypedExpr, 64);
-    static_assert_size!(typer::TypedStmt, 16);
-    println!("NexLang Compiler v0.1.0");
-    let src_path = &args.file;
-    let no_prelude = args.no_prelude;
-    let out_dir = "nx-out";
-
-    let ctx = Context::create();
-    let filename = Path::new(&src_path).file_name().unwrap().to_str().unwrap();
-    let src = fs::read_to_string(src_path).expect("could not read source directory");
-    let codegen = compile_single_file_program(&ctx, filename, &src, no_prelude)?;
 
     let llvm_text = codegen.output_llvm_ir_text();
     let mut f = File::create(format!("{}/{}.ll", out_dir, filename))?;
@@ -114,6 +92,30 @@ fn main() -> Result<()> {
         eprintln!("{}", String::from_utf8(build_output.stderr).unwrap());
         std::process::exit(1)
     }
+
+    Ok(codegen)
+}
+
+fn main() -> Result<()> {
+    env_logger::init();
+    let args = Args::parse();
+    println!("Args {:?}", args);
+
+    static_assert_size!(parse::Definition, 16);
+    static_assert_size!(parse::BlockStmt, 224); // Get down below 100
+    static_assert_size!(parse::Expression, 104); // Get back down
+    static_assert_size!(typer::TypedExpr, 56);
+    static_assert_size!(typer::TypedStmt, 16);
+    println!("NexLang Compiler v0.1.0");
+    let src_path = &args.file;
+    let no_prelude = args.no_prelude;
+    let out_dir = "nx-out";
+
+    let ctx = Context::create();
+    let filename = Path::new(&src_path).file_name().unwrap().to_str().unwrap();
+    let src = fs::read_to_string(src_path).expect("could not read source directory");
+    let codegen = compile_single_file_program(&ctx, filename, &src, no_prelude, out_dir)?;
+
     // println!("Build Output: {}", String::from_utf8(build_output.stdout).unwrap());
 
     let mut run_cmd = std::process::Command::new(format!("{}/{}.out", out_dir, filename));
