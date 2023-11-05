@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{anyhow, bail, Result};
 use inkwell::context::Context;
 
 fn test_file<'ctx, P: AsRef<Path>>(ctx: &'ctx Context, path: P) -> Result<()> {
@@ -8,17 +8,9 @@ fn test_file<'ctx, P: AsRef<Path>>(ctx: &'ctx Context, path: P) -> Result<()> {
     let filename = path.file_name().unwrap().to_str().unwrap();
     let src = std::fs::read_to_string(path)?;
     println!("********** {:?} **********", filename);
-    let codegen =
-        crate::compile_single_file_program(ctx, filename, &src, false).map_err(|err| {
-            eprintln!("TEST CASE FAILED COMPILE: {:?}", path);
-            eprintln!("Reason:           {}", err);
-            err
-        })?;
-    let result = codegen.interpret_module().map_err(|err| {
-        eprintln!("TEST CASE FAILED EXECUTION: {:?}", path);
-        eprintln!("Reason: {}", err);
-        err
-    })?;
+    let out_dir = "nx-out/test_suite";
+    crate::compile_single_file_program(ctx, filename, &src, false, out_dir)
+        .map_err(|err| anyhow!("TEST CASE FAILED COMPILE: {}. Reason: {}", filename, err))?;
     let last_line = src.lines().last().unwrap();
     // We want expected output but we can't intercept or read what goes to stdout, so we just make
     // it expected return value for now
@@ -29,13 +21,25 @@ fn test_file<'ctx, P: AsRef<Path>>(ctx: &'ctx Context, path: P) -> Result<()> {
     } else {
         None
     };
+    let mut run_cmd = std::process::Command::new(format!("{}/{}.out", out_dir, filename));
+    let run_output = run_cmd.output().unwrap();
+    let output = String::from_utf8(run_output.stdout).unwrap();
     match expected_result {
-        None => println!("result: {result}"),
+        None => {
+            println!("{filename}:\n{}", output);
+        }
         Some(exp) => {
-            println!("result: {result} expected: {exp}");
-            // assert_eq!(result, exp)
+            println!("Expected: {exp}");
+            println!("Output: {}", output);
         }
     }
+    if !run_output.status.success() {
+        bail!(
+            "TEST CASE FAILED EXECUTION: {}, exit code: {}",
+            filename,
+            run_output.status.code().unwrap()
+        );
+    };
     Ok(())
 }
 

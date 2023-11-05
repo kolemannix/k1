@@ -21,6 +21,7 @@ pub struct ArrayExpr {
 
 #[derive(Debug)]
 pub enum Literal {
+    None(Span),
     Unit(Span),
     Char(u8, Span),
     Numeric(String, Span),
@@ -32,12 +33,21 @@ pub enum Literal {
 impl Display for Literal {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            Literal::None(_) => f.write_str("None"),
             Literal::Unit(_) => f.write_str("()"),
-            Literal::Char(byte, _) => f.write_char(*byte as char),
+            Literal::Char(byte, _) => {
+                f.write_char('\'')?;
+                f.write_char(*byte as char)?;
+                f.write_char('\'')
+            }
             Literal::Numeric(n, _) => f.write_str(n),
             Literal::Bool(true, _) => f.write_str("true"),
             Literal::Bool(false, _) => f.write_str("false"),
-            Literal::String(s, _) => f.write_str(s),
+            Literal::String(s, _) => {
+                f.write_char('"')?;
+                f.write_str(s)?;
+                f.write_char('"')
+            }
         }
     }
 }
@@ -45,6 +55,7 @@ impl Display for Literal {
 impl Literal {
     pub fn get_span(&self) -> Span {
         match self {
+            Literal::None(span) => *span,
             Literal::Unit(span) => *span,
             Literal::Char(_, span) => *span,
             Literal::Numeric(_, span) => *span,
@@ -300,6 +311,7 @@ pub struct Assignment {
 #[derive(Debug)]
 pub struct IfExpr {
     pub cond: Box<Expression>,
+    pub optional_ident: Option<IdentifierId>,
     pub cons: Box<Expression>,
     // TODO: Add 'binding' Ifs, for optionals and failures
     // if some_optional { value => }
@@ -350,6 +362,12 @@ pub struct TypeApplication {
 }
 
 #[derive(Debug)]
+pub struct Optional {
+    pub base: Box<TypeExpression>,
+    pub span: Span,
+}
+
+#[derive(Debug)]
 pub enum TypeExpression {
     Unit(Span),
     Char(Span),
@@ -359,6 +377,7 @@ pub enum TypeExpression {
     Record(RecordType),
     Name(IdentifierId, Span),
     TypeApplication(TypeApplication),
+    Optional(Optional),
 }
 
 impl TypeExpression {
@@ -380,6 +399,7 @@ impl TypeExpression {
             TypeExpression::Record(record) => record.span,
             TypeExpression::Name(_, span) => *span,
             TypeExpression::TypeApplication(app) => app.span,
+            TypeExpression::Optional(opt) => opt.span,
         }
     }
 }
@@ -704,6 +724,9 @@ impl<'toks> Parser<'toks> {
                 } else if text == "false" {
                     self.tokens.advance();
                     Ok(Some(Literal::Bool(false, first.span)))
+                } else if text == "None" {
+                    self.tokens.advance();
+                    Ok(Some(Literal::None(first.span)))
                 } else {
                     match text.chars().next() {
                         Some(c) if c.is_numeric() || c == '-' => {
@@ -733,6 +756,19 @@ impl<'toks> Parser<'toks> {
     }
 
     fn parse_type_expression(&mut self) -> ParseResult<Option<TypeExpression>> {
+        let Some(result) = self.parse_base_type_expression()? else {
+            return Ok(None);
+        };
+        let next = self.peek();
+        if next.kind == K::QuestionMark {
+            self.tokens.advance();
+            Ok(Some(TypeExpression::Optional(Optional { base: Box::new(result), span: next.span })))
+        } else {
+            Ok(Some(result))
+        }
+    }
+
+    fn parse_base_type_expression(&mut self) -> ParseResult<Option<TypeExpression>> {
         let tok = self.peek();
         if tok.kind == K::Ident {
             let source = self.source.clone();
@@ -1232,6 +1268,14 @@ impl<'toks> Parser<'toks> {
         if let Some(if_keyword) = self.eat_token(TokenKind::KeywordIf) {
             let condition_expr =
                 Parser::expect("conditional expression", if_keyword, self.parse_expression())?;
+            let optional_ident = if self.peek().kind == K::Pipe {
+                self.tokens.advance();
+                let ident = self.expect_eat_token(K::Ident)?;
+                self.expect_eat_token(K::Pipe)?;
+                Some(self.intern_ident_token(ident))
+            } else {
+                None
+            };
             let consequent_expr =
                 Parser::expect("block following condition", if_keyword, self.parse_expression())?;
             let else_peek = self.peek();
@@ -1244,8 +1288,13 @@ impl<'toks> Parser<'toks> {
             };
             let end_span = alt.as_ref().map(|a| a.get_span()).unwrap_or(consequent_expr.get_span());
             let span = if_keyword.span.extended(end_span);
-            let if_expr =
-                IfExpr { cond: condition_expr.into(), cons: consequent_expr.into(), alt, span };
+            let if_expr = IfExpr {
+                cond: condition_expr.into(),
+                optional_ident,
+                cons: consequent_expr.into(),
+                alt,
+                span,
+            };
             Ok(Some(if_expr))
         } else {
             Ok(None)
@@ -1473,7 +1522,7 @@ pub fn parse_text(text: &str, module_name: &str, use_prelude: bool) -> ParseResu
     } else {
         text.to_string()
     };
-    log::info!("parser full source:\n{}", &full_source);
+    log::info!("parser source:\n{}", &text);
 
     let mut lexer = Lexer::make(&full_source);
 

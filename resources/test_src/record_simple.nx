@@ -12,6 +12,6 @@ fn main(): int {
   printInt(zero.z);
   printInt(if zero.isGood 1 else 0);
   printInt(zero.y);
-  zero.y
+  0
 }
 // 42, 1, 298

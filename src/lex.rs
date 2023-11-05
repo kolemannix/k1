@@ -82,6 +82,8 @@ pub enum TokenKind {
     Dot,
     Comma,
     Bang,
+    QuestionMark,
+    Pipe,
 
     DoubleQuote,
     SingleQuote,
@@ -143,6 +145,8 @@ impl TokenKind {
             K::Dot => Some("."),
             K::Comma => Some(","),
             K::Bang => Some("!"),
+            K::QuestionMark => Some("?"),
+            K::Pipe => Some("|"),
 
             K::Plus => Some("+"),
             K::Minus => Some("-"),
@@ -182,6 +186,8 @@ impl TokenKind {
             '*' => Some(K::Asterisk),
             '/' => Some(K::Slash),
             '!' => Some(K::Bang),
+            '?' => Some(K::QuestionMark),
+            '|' => Some(K::Pipe),
             _ => None,
         }
     }
@@ -229,6 +235,12 @@ impl TokenKind {
             K::Dot => true,
             K::OpenBracket => true,
             K::Bang => true,
+            _ => false,
+        }
+    }
+    pub fn is_postfix_type_operator(&self) -> bool {
+        match self {
+            K::QuestionMark => true,
             _ => false,
         }
     }

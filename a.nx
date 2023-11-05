@@ -1,4 +1,12 @@
 fn main(): int {
-  val x: int? = 2;
+  mut x: int? = None;
+  x = 1;
+  x = None;
+  if x |y| {
+    printInt(y);
+  };
+  //if person.x |x| {
+  //  printInt(x);
+  //}
   0
 }
