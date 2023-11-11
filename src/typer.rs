@@ -9,6 +9,7 @@ use crate::parse::{
 use anyhow::{bail, Result};
 use colored::Colorize;
 use log::{error, trace};
+use std::any::Any;
 use std::collections::HashMap;
 use std::error::Error;
 
@@ -88,7 +89,6 @@ pub enum Type {
     String,
     Record(RecordDefn),
     Array(ArrayType),
-    OpaqueAlias(TypeId),
     TypeVariable(TypeVariable),
     Optional(OptionalType),
 }
@@ -336,6 +336,13 @@ pub struct OptionalSome {
 }
 
 #[derive(Debug, Clone)]
+pub struct OptionalGet {
+    pub inner_expr: Box<TypedExpr>,
+    pub result_type_id: TypeId,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
 pub enum TypedExpr {
     Unit(Span),
     Char(u8, Span),
@@ -355,6 +362,8 @@ pub enum TypedExpr {
     ArrayIndex(IndexOp),
     StringIndex(IndexOp),
     OptionalSome(OptionalSome),
+    OptionalHasValue(Box<TypedExpr>),
+    OptionalGet(OptionalGet),
 }
 
 // pub enum BuiltinType {
@@ -403,6 +412,8 @@ impl TypedExpr {
             TypedExpr::ArrayIndex(op) => op.result_type,
             TypedExpr::StringIndex(op) => op.result_type,
             TypedExpr::OptionalSome(opt) => opt.type_id,
+            TypedExpr::OptionalHasValue(opt) => BOOL_TYPE_ID,
+            TypedExpr::OptionalGet(opt_get) => opt_get.result_type_id,
         }
     }
     #[inline]
@@ -426,6 +437,8 @@ impl TypedExpr {
             TypedExpr::ArrayIndex(op) => op.span,
             TypedExpr::StringIndex(op) => op.span,
             TypedExpr::OptionalSome(opt) => opt.inner_expr.get_span(),
+            TypedExpr::OptionalHasValue(opt) => opt.get_span(),
+            TypedExpr::OptionalGet(get) => get.span,
         }
     }
 }
@@ -780,7 +793,6 @@ impl TypedModule {
     //             match ty {
     //                 Type::Record(_) => true,
     //                 Type::Array(_) => true,
-    //                 Type::OpaqueAlias(t) => self.is_reference_type(*t),
     //                 Type::TypeVariable(_) => true,
     //                 Type::Optional(opt) => true,
     //             }
@@ -795,7 +807,6 @@ impl TypedModule {
     //             Type::TypeVariable(_) => true,
     //             Type::Record(record) => record.fields.iter().any(|f| self.is_generic(f.ty)),
     //             Type::Array(arr) => self.is_generic(arr.element_type),
-    //             Type::OpaqueAlias(t) => self.is_generic(*t),
     //         },
     //         _ => false,
     //     }
@@ -1395,9 +1406,9 @@ impl TypedModule {
 
     fn eval_if_expr(&mut self, if_expr: &IfExpr, scope_id: ScopeId) -> TyperResult<TypedExpr> {
         // Ensure boolean condition (or optional which isn't built yet)
-        let condition = self.eval_expr(&if_expr.cond, scope_id, None)?;
+        let mut condition = self.eval_expr(&if_expr.cond, scope_id, None)?;
         let consequent_scope_id = self.scopes.add_child_scope(scope_id);
-        if if_expr.optional_ident.is_some() {
+        let mut consequent = if if_expr.optional_ident.is_some() {
             let condition_optional_type = match self.get_type(condition.get_type()) {
                 Type::Optional(opt) => opt,
                 _other => {
@@ -1408,7 +1419,7 @@ impl TypedModule {
                 }
             };
             let inner_type = condition_optional_type.inner_type;
-            let binding = if_expr.optional_ident.expect("We already checked this");
+            let (binding, binding_span) = if_expr.optional_ident.expect("We already checked this");
             // Make a variable with the identifier binding from the expr
             // That is the non-optional type of the condition's type
             let narrowed_variable = Variable {
@@ -1421,6 +1432,24 @@ impl TypedModule {
             let narrowed_variable_id = self.add_variable(narrowed_variable);
             let consequent_scope = self.scopes.get_scope_mut(consequent_scope_id);
             consequent_scope.add_variable(binding, narrowed_variable_id);
+            let original_condition = condition.clone();
+            condition = TypedExpr::OptionalHasValue(Box::new(condition));
+            let consequent_expr = self.eval_expr(&if_expr.cons, consequent_scope_id, None)?;
+            let mut consequent = self.transform_expr_to_block(consequent_expr, consequent_scope_id);
+            consequent.statements.insert(
+                0,
+                TypedStmt::ValDef(Box::new(ValDef {
+                    variable_id: narrowed_variable_id,
+                    ty: inner_type,
+                    initializer: TypedExpr::OptionalGet(OptionalGet {
+                        inner_expr: Box::new(original_condition),
+                        result_type_id: inner_type,
+                        span: binding_span,
+                    }),
+                    span: binding_span,
+                })),
+            );
+            consequent
         } else {
             // If there is no binding, the condition must be a boolean
             if let Err(msg) = self.typecheck_types(BOOL_TYPE_ID, condition.get_type()) {
@@ -1429,11 +1458,10 @@ impl TypedModule {
                     if_expr.cond.get_span(),
                 );
             }
+            let consequent_expr = self.eval_expr(&if_expr.cons, consequent_scope_id, None)?;
+            self.transform_expr_to_block(consequent_expr, consequent_scope_id)
         };
-        // This eval_expr needs to run in the block's scope; currently we only make a block scope later.
-        let consequent_expr = self.eval_expr(&if_expr.cons, consequent_scope_id, None)?;
-        let consequent_type = consequent_expr.get_type();
-        let mut consequent = self.transform_expr_to_block(consequent_expr, consequent_scope_id);
+        let consequent_type = consequent.expr_type;
         // De-sugar if without else:
         // If there is no alternate, we coerce the consequent to return Unit, so both
         // branches have a matching type, making codegen simpler
@@ -2121,11 +2149,6 @@ impl TypedModule {
                 self.display_type_id(array.element_type, writ)?;
                 writ.write_str(">")
             }
-            Type::OpaqueAlias(t) => {
-                writ.write_str("opaque<")?;
-                self.display_type_id(*t, writ)?;
-                writ.write_char('>')
-            }
             Type::TypeVariable(tv) => {
                 writ.write_str("tvar#")?;
                 writ.write_str(&self.get_ident_str(tv.identifier_id))
@@ -2308,6 +2331,14 @@ impl TypedModule {
                 writ.write_str("Some(")?;
                 self.display_expr(&opt.inner_expr, writ)?;
                 writ.write_str(")")
+            }
+            TypedExpr::OptionalHasValue(opt) => {
+                self.display_expr(&opt, writ)?;
+                writ.write_str(".has_value()")
+            }
+            TypedExpr::OptionalGet(opt) => {
+                self.display_expr(&opt.inner_expr, writ)?;
+                writ.write_str("!")
             }
         }
     }

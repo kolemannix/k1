@@ -311,11 +311,8 @@ pub struct Assignment {
 #[derive(Debug)]
 pub struct IfExpr {
     pub cond: Box<Expression>,
-    pub optional_ident: Option<IdentifierId>,
+    pub optional_ident: Option<(IdentifierId, Span)>,
     pub cons: Box<Expression>,
-    // TODO: Add 'binding' Ifs, for optionals and failures
-    // if some_optional { value => }
-    // if get_file() { result => }
     pub alt: Option<Box<Expression>>,
     pub span: Span,
 }
@@ -1272,7 +1269,7 @@ impl<'toks> Parser<'toks> {
                 self.tokens.advance();
                 let ident = self.expect_eat_token(K::Ident)?;
                 self.expect_eat_token(K::Pipe)?;
-                Some(self.intern_ident_token(ident))
+                Some((self.intern_ident_token(ident), ident.span))
             } else {
                 None
             };

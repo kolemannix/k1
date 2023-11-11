@@ -49,9 +49,10 @@ The project isn't mature enough yet to make this list but the spirit of the effo
 - [x] Infer val types
 - [x] Extern keyword, then
 - [x] Link at build time not via LLVM module
+- [ ] Codegen 'variables' is broken (never cleared); use enter scope / exit scope w/ a stack of vecs or something instead
 - [ ] Use ctx.const_string for printf format strings
 - [ ] Optionals
-- [ ] Improve printing output by fixing display functions
+- [x] Improve printing output by fixing display functions
 - [ ] Fix namespaces to require full paths (currently busted must be unique names globally)
 - [ ] Type Ascriptions (literally can just pass expected_type into eval and do an addtl typecheck)
 - [ ] Embed comments in LLVM IR (source snippets or line numbers?)
@@ -75,11 +76,19 @@ The project isn't mature enough yet to make this list but the spirit of the effo
 - [x] Optional types
 - [x] None types
 - [x] None value
-- [ ] Runtime repr for pointer-y types (string, array, record)
-- [ ] Runtime repr for boolean
-- [ ] Runtime repr for unit
-- [ ] Runtime repr for int
-- [ ] Runtime repr for char
+- [x] Runtime repr for boolean
+- [x] Runtime repr for unit
+- [x] Runtime repr for int
+- [x] Runtime repr for char
+- [ ] Runtime repr for string
+- [ ] array, record
+
+# Optionals Round 2
+- [ ] has value from userland (currently only happens by desugaring))
+- [ ] unwrap from userland (I think this can just be a prelude function not intrinsic)
+- [ ] test with optional array elements
+- [ ] test with optional record fields
+- [ ] test with optional function args
 
 # Dogfood wishlist Oct23
 - [x] I really need a way to write code in Zig or C and use it in my stl to move things along
