@@ -1,11 +1,11 @@
 fn main(): int {
-  mut x: int? = None;
-  x = 1;
-  // if x |y| {
-  //   printInt(y);
-  // };
-  //if person.x |x| {
-  //  printInt(x);
-  //}
+  mut maybe_x: string? = None;
+  // maybe_x = "hello";
+  if maybe_x |x| {
+    // This gives assert failed instead of taking the else branch
+    assert(x.length() == 5);
+  } else {
+    print("none");
+  };
   0
 }
