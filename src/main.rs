@@ -14,6 +14,7 @@ use inkwell::context::Context;
 use std::fs;
 use std::fs::File;
 use std::io::Write;
+use std::os::unix::prelude::ExitStatusExt;
 use std::path::{Path, PathBuf};
 
 use crate::codegen_llvm::Codegen;
@@ -133,7 +134,14 @@ fn main() -> Result<()> {
     let run_output = run_cmd.output().unwrap();
 
     println!("{}", String::from_utf8(run_output.stdout).unwrap());
-    println!("Exit Code: {}", run_output.status.code().unwrap());
+    match run_output.status.code() {
+        Some(code) => {
+            println!("Program exited with code: {}", code);
+        },
+        None => {
+            println!("Program was terminated with signal: {:?}", run_output.status.signal());
+        }
+    }
     // println!("{}", llvm_text);
     Ok(())
 }
