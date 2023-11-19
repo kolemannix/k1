@@ -578,10 +578,8 @@ impl<'ctx> Codegen<'ctx> {
             if let Some(optional_some) = optional_some {
                 self.codegen_expr(&optional_some.inner_expr)
             } else {
-                let ptr =
-                    self.builder.build_alloca(self.builtin_types.string_struct, "none_string");
-                self.builder.build_store(ptr, ptr.get_type().const_null());
-                ptr.as_basic_value_enum()
+                let null_string_ptr = self.builtin_types.string_struct.ptr_type(self.default_address_space).const_null();
+                null_string_ptr.as_basic_value_enum()
             }
         } else {
             unimplemented!(
@@ -622,7 +620,7 @@ impl<'ctx> Codegen<'ctx> {
             is_some.as_basic_value_enum()
         } else {
             let value_struct_ptr = optional_value.into_pointer_value();
-            let not_null_int_value = self.builder.build_is_not_null(value_struct_ptr, "is_null");
+            let not_null_int_value = self.builder.build_is_not_null(value_struct_ptr, "not_null");
             not_null_int_value.as_basic_value_enum()
         }
     }
@@ -753,8 +751,9 @@ impl<'ctx> Codegen<'ctx> {
             }
             TypedExpr::Variable(ir_var) => {
                 if let Some(pointer) = self.variables.get(&ir_var.variable_id) {
-                    log::trace!("codegen variable got type {:?}", pointer.pointee_ty);
+                    log::trace!("codegen variable got pointee type {:?}", pointer.pointee_ty);
                     let loaded = pointer.loaded_value(&self.builder);
+                    log::trace!("codegen variable got loaded value {:?}", loaded);
                     loaded.into()
                 } else if let Some(global) = self.globals.get(&ir_var.variable_id) {
                     let value = global.get_initializer().unwrap();
