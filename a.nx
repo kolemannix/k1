@@ -1,19 +1,12 @@
-type Point = { x: int, y: int }
+type Point = { x: int?, y: int }
 
 fn main(): int {
-  mut maybe_x: Point? = None;
-  // maybe_x = "hello";
-  if maybe_x |x| {
-    assert(x.y == 5);
+  mut my_point: Point = { x: 42, y: 0 };
+  if my_point.x |my_x| {
+    assert(my_x == 42);
   } else {
-    print("none");
+    assert(false);
   };
 
-  mut maybe_int: int? = 42;
-  // codegen variable got loaded value StructValue(StructValue { struct_value: Value { name: "loaded_value8", address: 0x60000372ea80, is_const: false, is_null: false, is_undef: false, llvm_value: "  %loaded_value8 = load { i1, i64 }, ptr %maybe_int, align 4", llvm_type: "{ i1, i64 }" } })
-  // should be a pointer to a struct not a struct itself
-  if maybe_int |i| {
-    assert(i == 42);
-  };
   0
 }
