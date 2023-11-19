@@ -80,7 +80,7 @@ The project isn't mature enough yet to make this list but the spirit of the effo
 - [x] Runtime repr for unit
 - [x] Runtime repr for int
 - [x] Runtime repr for char
-- [ ] Runtime repr for string
+- [x] Runtime repr for string
 - [ ] array, record
 
 # Optionals Round 2
