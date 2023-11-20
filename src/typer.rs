@@ -922,7 +922,7 @@ impl TypedModule {
             else {
                 return Err(format!("expected record to have field {}", expected_field.name));
             };
-            self.typecheck_types(matching_field.type_id, expected_field.type_id)?;
+            self.typecheck_types(expected_field.type_id, matching_field.type_id)?;
         }
         Ok(())
     }
@@ -1185,12 +1185,25 @@ impl TypedModule {
                 }
             }
             Expression::Record(ast_record) => {
-                // TODO: we should check expected_type here and save this evaluation if it
-                //       is not a record
+                // FIXME: Let's factor out Structs and Records into separate things
+                //        records can be created on the fly and are just hashmap literals
+                //        Structs are structs
                 let mut field_values = Vec::new();
                 let mut field_defns = Vec::new();
+                let expected_record = if let Some(expected_type) = expected_type {
+                    match self.get_type(expected_type) {
+                        Type::Record(record) => Some(record.clone()),
+                        other => {
+                            return make_fail(format!("Got Record but expected {}", self.type_to_string(other)), ast_record.span)
+                        }
+                    }
+                } else {
+                    None
+                };
                 for (index, ast_field) in ast_record.fields.iter().enumerate() {
-                    let expr = self.eval_expr(&ast_field.expr, scope_id, None)?;
+                    let expected_field = expected_record.as_ref().map(|rec| rec.find_field(ast_field.name)).flatten();
+                    let expected_type_id = expected_field.map(|(_, f)| f.type_id);
+                    let expr = self.eval_expr(&ast_field.expr, scope_id, expected_type_id)?;
                     field_defns.push(RecordDefnField {
                         name: ast_field.name,
                         type_id: expr.get_type(),
@@ -1200,7 +1213,7 @@ impl TypedModule {
                 }
                 // We can use 'expected type' here to just go ahead and typecheck or fail
                 // rather than make a duplicate type
-                let record_type_id = match expected_type {
+                let record_type_id = match expected_record {
                     None => {
                         let record_type = RecordDefn {
                             fields: field_defns,
@@ -1210,24 +1223,22 @@ impl TypedModule {
                         let anon_record_type_id = self.add_type(Type::Record(record_type));
                         Ok(anon_record_type_id)
                     }
-                    Some(record_type_id) => match self.get_type(record_type_id) {
-                        // If there is an expected type, it had better be a record
-                        // If it is, we return its existing id
-                        // If it is not, that's a typechecker error
-                        Type::Record(_) => Ok(record_type_id),
-                        t => make_fail(
-                            format!("Expected type {:?} but got record literal", t),
-                            ast_record.span,
-                        ),
-                    },
-                    Some(other_type) => make_fail(
-                        format!("Expected type {:?} but got record literal", other_type),
-                        ast_record.span,
-                    ),
+                    Some(expected_record) => {
+                            match self.typecheck_record(&expected_record, &RecordDefn {
+                                fields: field_defns,
+                                name_if_named: None,
+                                span: ast_record.span,
+                            }) {
+                                Ok(_) => Ok(expected_type.unwrap()),
+                                Err(s) => make_fail(format!("Invalid record type: {}", s), ast_record.span)
+                            }
+                        },
                 }?;
-                let ir_record =
+                let typed_record =
                     Record { fields: field_values, span: ast_record.span, type_id: record_type_id };
-                Ok(TypedExpr::Record(ir_record))
+                let expr = TypedExpr::Record(typed_record);
+                trace!("generated record: {}", self.expr_to_string(&expr));
+                Ok(expr)
             }
             Expression::If(if_expr) => self.eval_if_expr(if_expr, scope_id),
             Expression::BinaryOp(binary_op) => {
