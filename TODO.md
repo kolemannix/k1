@@ -81,9 +81,11 @@ The project isn't mature enough yet to make this list but the spirit of the effo
 - [x] Runtime repr for int
 - [x] Runtime repr for char
 - [x] Runtime repr for string
-- [ ] array, record
+- [x] record
+- [x] array of optional records
 
 # Optionals Round 2
+- [ ] move some-wrapping into a function
 - [ ] has value from userland (currently only happens by desugaring))
 - [ ] unwrap from userland (I think this can just be a prelude function not intrinsic)
 - [ ] test with optional array elements
