@@ -1,53 +1,104 @@
 ; ModuleID = 'nxlib'
 source_filename = "nxlib"
 target datalayout = "e-m:o-i64:64-i128:128-n32:64-S128"
-target triple = "aarch64-unknown-macosx13.4.1-unknown"
+target triple = "aarch64-unknown-macosx14.1.0-unknown"
 
 %target.Target.Cpu.Feature.Set = type { [5 x i64] }
 %target.Target.Cpu.Model = type { { ptr, i64 }, { ptr, i64 }, %target.Target.Cpu.Feature.Set }
 %target.Target.Cpu = type { ptr, %target.Target.Cpu.Feature.Set, i6, [7 x i8] }
 %mem.Allocator.VTable = type { ptr, ptr, ptr }
 %mem.Allocator = type { ptr, ptr }
+%fs.file.File.OpenFlags = type { i2, i2, i1, i1 }
 %SemanticVersion.Range = type { %SemanticVersion, %SemanticVersion }
 %SemanticVersion = type { i64, i64, i64, { ptr, i64 }, { ptr, i64 } }
 %macho.mach_header_64 = type { i32, i32, i32, i32, i32, i32, i32, i32 }
+%fs.Dir = type { i32 }
+%"io.reader.Reader(fs.file.File,error{AccessDenied,Unexpected,SystemResources,IsDir,WouldBlock,InputOutput,OperationAborted,BrokenPipe,ConnectionResetByPeer,ConnectionTimedOut,NotOpenForReading,NetNameDeleted},(function 'read'))" = type { %fs.file.File }
+%fs.file.File = type { i32 }
+%"array_list.ArrayListAligned(u8,null)" = type { { ptr, i64 }, i64, %mem.Allocator }
+%"array_list.ArrayListAlignedUnmanaged(u8,null)" = type { { ptr, i64 }, i64 }
 
 @builtin.zig_backend = internal unnamed_addr constant i64 2, align 8
 @target.Target.Cpu.Feature.Set.empty = internal unnamed_addr constant %target.Target.Cpu.Feature.Set zeroinitializer, align 8
-@target.aarch64.cpu.apple_a14 = internal unnamed_addr constant %target.Target.Cpu.Model { { ptr, i64 } { ptr @target.aarch64.cpu.apple_a14__anon_486, i64 9 }, { ptr, i64 } { ptr @target.aarch64.cpu.apple_a14__anon_487, i64 9 }, %target.Target.Cpu.Feature.Set { [5 x i64] [i64 -3170529464207527040, i64 42949672991, i64 1125899932009024, i64 12, i64 0] } }, align 8
-@target.aarch64.cpu.apple_a14__anon_486 = internal unnamed_addr constant [10 x i8] c"apple_a14\00", align 1
-@target.aarch64.cpu.apple_a14__anon_487 = internal unnamed_addr constant [10 x i8] c"apple-a14\00", align 1
-@builtin.cpu = internal unnamed_addr constant %target.Target.Cpu { ptr @target.aarch64.cpu.apple_a14, %target.Target.Cpu.Feature.Set { [5 x i64] [i64 -251959218960058432, i64 14619274031135, i64 -9149197848548473920, i64 44, i64 0] }, i6 2, [7 x i8] undef }, align 8
+@target.aarch64.cpu.generic = internal unnamed_addr constant %target.Target.Cpu.Model { { ptr, i64 } { ptr @target.aarch64.cpu.generic__anon_487, i64 7 }, { ptr, i64 } { ptr @target.aarch64.cpu.generic__anon_487, i64 7 }, %target.Target.Cpu.Feature.Set { [5 x i64] [i64 -9222527611924643840, i64 8388609, i64 17592186044416, i64 0, i64 0] } }, align 8
+@target.aarch64.cpu.generic__anon_487 = internal unnamed_addr constant [8 x i8] c"generic\00", align 1
+@builtin.cpu = internal unnamed_addr constant %target.Target.Cpu { ptr @target.aarch64.cpu.generic, %target.Target.Cpu.Feature.Set { [5 x i64] [i64 -8646066859621220352, i64 8388609, i64 19791209299968, i64 0, i64 0] }, i6 2, [7 x i8] undef }, align 8
 @start.simplified_logic = internal unnamed_addr constant i1 false, align 1
 @builtin.output_mode = internal unnamed_addr constant i2 1, align 1
 @builtin.link_mode = internal unnamed_addr constant i1 false, align 1
-@HELLO_WORLD = dso_local constant ptr @main.HELLO_WORLD__anon_926, align 8
-@main.HELLO_WORLD__anon_926 = internal unnamed_addr constant [13 x i8] c"Hello, World\00", align 1
+@HELLO_WORLD = dso_local constant ptr @main.HELLO_WORLD__anon_849, align 8
+@main.HELLO_WORLD__anon_849 = internal unnamed_addr constant [13 x i8] c"Hello, World\00", align 1
 @heap.c_allocator_vtable = internal unnamed_addr constant %mem.Allocator.VTable { ptr @heap.CAllocator.alloc, ptr @heap.CAllocator.resize, ptr @heap.CAllocator.free }, align 8
 @0 = private unnamed_addr constant %mem.Allocator { ptr undef, ptr @heap.c_allocator_vtable }, align 8
-@builtin.os = internal unnamed_addr global { { <{ %SemanticVersion.Range, [56 x i8] }> }, i6, [7 x i8] } { { <{ %SemanticVersion.Range, [56 x i8] }> } { <{ %SemanticVersion.Range, [56 x i8] }> <{ %SemanticVersion.Range { %SemanticVersion { i64 13, i64 4, i64 1, { ptr, i64 } zeroinitializer, { ptr, i64 } zeroinitializer }, %SemanticVersion { i64 13, i64 4, i64 1, { ptr, i64 } zeroinitializer, { ptr, i64 } zeroinitializer } }, [56 x i8] undef }> }, i6 10, [7 x i8] undef }, align 8
+@1 = private unnamed_addr constant { { ptr, i64 }, i16, [6 x i8] } { { ptr, i64 } undef, i16 18, [6 x i8] undef }, align 8
+@2 = private unnamed_addr constant { i64, i8, [7 x i8] } { i64 undef, i8 0, [7 x i8] undef }, align 8
+@3 = private unnamed_addr constant %fs.file.File.OpenFlags zeroinitializer, align 1
+@4 = private unnamed_addr constant %mem.Allocator { ptr undef, ptr @heap.c_allocator_vtable }, align 8
+@builtin.os = internal unnamed_addr global { { <{ %SemanticVersion.Range, [56 x i8] }> }, i6, [7 x i8] } { { <{ %SemanticVersion.Range, [56 x i8] }> } { <{ %SemanticVersion.Range, [56 x i8] }> <{ %SemanticVersion.Range { %SemanticVersion { i64 14, i64 1, i64 0, { ptr, i64 } zeroinitializer, { ptr, i64 } zeroinitializer }, %SemanticVersion { i64 14, i64 1, i64 0, { ptr, i64 } zeroinitializer, { ptr, i64 } zeroinitializer } }, [56 x i8] undef }> }, i6 10, [7 x i8] undef }, align 8
 @heap.c_allocator = internal unnamed_addr constant %mem.Allocator { ptr undef, ptr @heap.c_allocator_vtable }, align 8
 @main.allocator = internal unnamed_addr constant %mem.Allocator { ptr undef, ptr @heap.c_allocator_vtable }, align 8
+@std.options.io_mode = internal unnamed_addr constant i1 false, align 1
+@io.mode = internal unnamed_addr constant i1 false, align 1
+@io.is_async = internal unnamed_addr constant i1 false, align 1
 @builtin.link_libc = internal unnamed_addr constant i1 true, align 1
 @builtin.abi = internal unnamed_addr constant i6 0, align 1
 @builtin.object_format = internal unnamed_addr constant i4 3, align 1
-@builtin.target = internal unnamed_addr global { %target.Target.Cpu, { { <{ %SemanticVersion.Range, [56 x i8] }> }, i6, [7 x i8] }, i6, i4, [6 x i8] } { %target.Target.Cpu { ptr @target.aarch64.cpu.apple_a14, %target.Target.Cpu.Feature.Set { [5 x i64] [i64 -251959218960058432, i64 14619274031135, i64 -9149197848548473920, i64 44, i64 0] }, i6 2, [7 x i8] undef }, { { <{ %SemanticVersion.Range, [56 x i8] }> }, i6, [7 x i8] } { { <{ %SemanticVersion.Range, [56 x i8] }> } { <{ %SemanticVersion.Range, [56 x i8] }> <{ %SemanticVersion.Range { %SemanticVersion { i64 13, i64 4, i64 1, { ptr, i64 } zeroinitializer, { ptr, i64 } zeroinitializer }, %SemanticVersion { i64 13, i64 4, i64 1, { ptr, i64 } zeroinitializer, { ptr, i64 } zeroinitializer } }, [56 x i8] undef }> }, i6 10, [7 x i8] undef }, i6 0, i4 3, [6 x i8] undef }, align 8
+@builtin.target = internal unnamed_addr global { %target.Target.Cpu, { { <{ %SemanticVersion.Range, [56 x i8] }> }, i6, [7 x i8] }, i6, i4, [6 x i8] } { %target.Target.Cpu { ptr @target.aarch64.cpu.generic, %target.Target.Cpu.Feature.Set { [5 x i64] [i64 -8646066859621220352, i64 8388609, i64 19791209299968, i64 0, i64 0] }, i6 2, [7 x i8] undef }, { { <{ %SemanticVersion.Range, [56 x i8] }> }, i6, [7 x i8] } { { <{ %SemanticVersion.Range, [56 x i8] }> } { <{ %SemanticVersion.Range, [56 x i8] }> <{ %SemanticVersion.Range { %SemanticVersion { i64 14, i64 1, i64 0, { ptr, i64 } zeroinitializer, { ptr, i64 } zeroinitializer }, %SemanticVersion { i64 14, i64 1, i64 0, { ptr, i64 } zeroinitializer, { ptr, i64 } zeroinitializer } }, [56 x i8] undef }> }, i6 10, [7 x i8] undef }, i6 0, i4 3, [6 x i8] undef }, align 8
 @_mh_execute_header = weak_odr dso_local global %macho.mach_header_64 undef, align 4
-@heap.CAllocator.usingnamespace_0__struct_2241.supports_malloc_size = internal unnamed_addr constant i1 true, align 1
-@1 = private unnamed_addr constant { ptr, i16, [6 x i8] } { ptr inttoptr (i64 -16 to ptr), i16 0, [6 x i8] undef }, align 8
-@2 = private unnamed_addr constant { ptr, i16, [6 x i8] } { ptr undef, i16 1, [6 x i8] undef }, align 8
-@3 = private unnamed_addr constant { ptr, i16, [6 x i8] } { ptr undef, i16 1, [6 x i8] undef }, align 8
-@heap.CAllocator.supports_posix_memalign = internal unnamed_addr constant i1 true, align 1
-@4 = private unnamed_addr constant { i64, i16, [6 x i8] } { i64 undef, i16 2, [6 x i8] undef }, align 8
-@5 = private unnamed_addr constant { ptr, i16, [6 x i8] } { ptr inttoptr (i64 -1 to ptr), i16 0, [6 x i8] undef }, align 8
+@heap.CAllocator.usingnamespace_0__struct_2165.supports_malloc_size = internal unnamed_addr constant i1 true, align 1
+@5 = private unnamed_addr constant { ptr, i16, [6 x i8] } { ptr inttoptr (i64 -16 to ptr), i16 0, [6 x i8] undef }, align 8
 @6 = private unnamed_addr constant { ptr, i16, [6 x i8] } { ptr undef, i16 1, [6 x i8] undef }, align 8
+@7 = private unnamed_addr constant { ptr, i16, [6 x i8] } { ptr undef, i16 1, [6 x i8] undef }, align 8
+@8 = private unnamed_addr constant %fs.Dir { i32 -2 }, align 4
+@9 = private unnamed_addr constant { i16, [1024 x i8] } { i16 7, [1024 x i8] undef }, align 2
+@fs.file.is_windows = internal unnamed_addr constant i1 false, align 1
+@heap.CAllocator.supports_posix_memalign = internal unnamed_addr constant i1 true, align 1
+@10 = private unnamed_addr constant { i64, i16, [6 x i8] } { i64 undef, i16 34, [6 x i8] undef }, align 8
+@11 = private unnamed_addr constant { ptr, i16, [6 x i8] } { ptr inttoptr (i64 -1 to ptr), i16 0, [6 x i8] undef }, align 8
+@12 = private unnamed_addr constant { ptr, i16, [6 x i8] } { ptr undef, i16 1, [6 x i8] undef }, align 8
+@fs.path.native_os = internal unnamed_addr constant i6 10, align 1
+@builtin.mode = internal unnamed_addr constant i2 -1, align 1
+@debug.runtime_safety = internal unnamed_addr constant i1 false, align 1
+@13 = private unnamed_addr constant { i32, i16, [2 x i8] } { i32 undef, i16 5, [2 x i8] undef }, align 4
+@14 = private unnamed_addr constant { i32, i16, [2 x i8] } { i32 undef, i16 18, [2 x i8] undef }, align 4
+@15 = private unnamed_addr constant { i32, i16, [2 x i8] } { i32 undef, i16 19, [2 x i8] undef }, align 4
+@16 = private unnamed_addr constant { i32, i16, [2 x i8] } { i32 undef, i16 13, [2 x i8] undef }, align 4
+@17 = private unnamed_addr constant { i32, i16, [2 x i8] } { i32 undef, i16 14, [2 x i8] undef }, align 4
+@18 = private unnamed_addr constant { i32, i16, [2 x i8] } { i32 undef, i16 7, [2 x i8] undef }, align 4
+@19 = private unnamed_addr constant { i32, i16, [2 x i8] } { i32 undef, i16 15, [2 x i8] undef }, align 4
+@20 = private unnamed_addr constant { i32, i16, [2 x i8] } { i32 undef, i16 16, [2 x i8] undef }, align 4
+@21 = private unnamed_addr constant { i32, i16, [2 x i8] } { i32 undef, i16 4, [2 x i8] undef }, align 4
+@22 = private unnamed_addr constant { i32, i16, [2 x i8] } { i32 undef, i16 17, [2 x i8] undef }, align 4
+@23 = private unnamed_addr constant { i32, i16, [2 x i8] } { i32 undef, i16 20, [2 x i8] undef }, align 4
+@24 = private unnamed_addr constant { i32, i16, [2 x i8] } { i32 undef, i16 21, [2 x i8] undef }, align 4
+@25 = private unnamed_addr constant { i32, i16, [2 x i8] } { i32 undef, i16 3, [2 x i8] undef }, align 4
+@26 = private unnamed_addr constant { i32, i16, [2 x i8] } { i32 undef, i16 22, [2 x i8] undef }, align 4
+@27 = private unnamed_addr constant { i32, i16, [2 x i8] } { i32 undef, i16 23, [2 x i8] undef }, align 4
+@28 = private unnamed_addr constant { i32, i16, [2 x i8] } { i32 undef, i16 25, [2 x i8] undef }, align 4
+@29 = private unnamed_addr constant { i32, i16, [2 x i8] } { i32 undef, i16 24, [2 x i8] undef }, align 4
+@30 = private unnamed_addr constant { i64, i16, [6 x i8] } { i64 undef, i16 24, [6 x i8] undef }, align 8
+@31 = private unnamed_addr constant { i64, i16, [6 x i8] } { i64 undef, i16 35, [6 x i8] undef }, align 8
+@32 = private unnamed_addr constant { i64, i16, [6 x i8] } { i64 undef, i16 14, [6 x i8] undef }, align 8
+@33 = private unnamed_addr constant { i64, i16, [6 x i8] } { i64 undef, i16 37, [6 x i8] undef }, align 8
+@34 = private unnamed_addr constant { i64, i16, [6 x i8] } { i64 undef, i16 38, [6 x i8] undef }, align 8
+@35 = private unnamed_addr constant { i64, i16, [6 x i8] } { i64 undef, i16 36, [6 x i8] undef }, align 8
+@os.lfs64_abi = internal unnamed_addr constant i1 false, align 1
+@36 = private unnamed_addr constant { i64, i16, [6 x i8] } { i64 0, i16 0, [6 x i8] undef }, align 8
+@37 = private unnamed_addr constant { i64, i16, [6 x i8] } { i64 undef, i16 25, [6 x i8] undef }, align 8
+@38 = private unnamed_addr constant { i64, i16, [6 x i8] } { i64 undef, i16 31, [6 x i8] undef }, align 8
+@39 = private unnamed_addr constant { i64, i16, [6 x i8] } { i64 undef, i16 26, [6 x i8] undef }, align 8
+@40 = private unnamed_addr constant { i64, i16, [6 x i8] } { i64 undef, i16 19, [6 x i8] undef }, align 8
+@41 = private unnamed_addr constant { i64, i16, [6 x i8] } { i64 undef, i16 17, [6 x i8] undef }, align 8
+@42 = private unnamed_addr constant { i64, i16, [6 x i8] } { i64 undef, i16 29, [6 x i8] undef }, align 8
+@43 = private unnamed_addr constant { i64, i16, [6 x i8] } { i64 undef, i16 30, [6 x i8] undef }, align 8
+@os.unexpected_error_tracing = internal unnamed_addr constant i1 false, align 1
 
 ; Function Attrs: minsize nounwind optsize uwtable
 define dso_local ptr @_nx_charToString(i8 zeroext %0) #0 {
   %2 = alloca { ptr, i64 }, align 8
   %3 = alloca { { ptr, i64 }, i16, [6 x i8] }, align 8
   %4 = alloca { ptr, i16, [6 x i8] }, align 8
-  call fastcc void @mem.Allocator.create__anon_2245(ptr sret({ ptr, i16, [6 x i8] }) %4, ptr nonnull readonly align 8 @0)
+  call fastcc void @mem.Allocator.create__anon_2169(ptr sret({ ptr, i16, [6 x i8] }) %4, ptr nonnull readonly align 8 @0)
   %5 = getelementptr inbounds { ptr, i16, [6 x i8] }, ptr %4, i32 0, i32 1
   %6 = load i16, ptr %5, align 2
   %7 = icmp eq i16 %6, 0
@@ -55,7 +106,7 @@ define dso_local ptr @_nx_charToString(i8 zeroext %0) #0 {
 
 8:                                                ; preds = %13
   %9 = phi ptr [ %15, %13 ]
-  call fastcc void @mem.Allocator.alloc__anon_2246(ptr sret({ { ptr, i64 }, i16, [6 x i8] }) %3, ptr nonnull readonly align 8 @0, i64 1)
+  call fastcc void @mem.Allocator.alloc__anon_2170(ptr sret({ { ptr, i64 }, i16, [6 x i8] }) %3, ptr nonnull readonly align 8 @0, i64 1)
   %10 = getelementptr inbounds { { ptr, i64 }, i16, [6 x i8] }, ptr %3, i32 0, i32 1
   %11 = load i16, ptr %10, align 2
   %12 = icmp eq i16 %11, 0
@@ -92,7 +143,7 @@ define dso_local ptr @_nx_charToString(i8 zeroext %0) #0 {
 }
 
 ; Function Attrs: minsize nounwind optsize uwtable
-define internal fastcc void @mem.Allocator.create__anon_2245(ptr noalias nonnull sret({ ptr, i16, [6 x i8] }) %0, ptr nonnull readonly align 8 %1) unnamed_addr #0 {
+define internal fastcc void @mem.Allocator.create__anon_2169(ptr noalias nonnull sret({ ptr, i16, [6 x i8] }) %0, ptr nonnull readonly align 8 %1) unnamed_addr #0 {
   %3 = alloca { ptr, i16, [6 x i8] }, align 8
   %4 = alloca { ptr, i16, [6 x i8] }, align 8
   %5 = alloca { ptr, i16, [6 x i8] }, align 8
@@ -100,7 +151,7 @@ define internal fastcc void @mem.Allocator.create__anon_2245(ptr noalias nonnull
   call void @llvm.memcpy.p0.p0.i64(ptr align 8 %6, ptr align 8 %1, i64 16, i1 false)
   %7 = call fastcc ptr @llvm.returnaddress(i32 0)
   %8 = ptrtoint ptr %7 to i64
-  call fastcc void @mem.Allocator.allocBytesWithAlignment__anon_2682(ptr sret({ ptr, i16, [6 x i8] }) %5, ptr nonnull readonly align 8 %6, i64 16, i64 %8)
+  call fastcc void @mem.Allocator.allocBytesWithAlignment__anon_3516(ptr sret({ ptr, i16, [6 x i8] }) %5, ptr nonnull readonly align 8 %6, i64 16, i64 %8)
   %9 = getelementptr inbounds { ptr, i16, [6 x i8] }, ptr %5, i32 0, i32 1
   %10 = load i16, ptr %9, align 2
   %11 = icmp ne i16 %10, 0
@@ -127,7 +178,7 @@ define internal fastcc void @mem.Allocator.create__anon_2245(ptr noalias nonnull
 }
 
 ; Function Attrs: minsize nounwind optsize uwtable
-define internal fastcc void @mem.Allocator.alloc__anon_2246(ptr noalias nonnull sret({ { ptr, i64 }, i16, [6 x i8] }) %0, ptr nonnull readonly align 8 %1, i64 %2) unnamed_addr #0 {
+define internal fastcc void @mem.Allocator.alloc__anon_2170(ptr noalias nonnull sret({ { ptr, i64 }, i16, [6 x i8] }) %0, ptr nonnull readonly align 8 %1, i64 %2) unnamed_addr #0 {
   %4 = alloca { { ptr, i64 }, i16, [6 x i8] }, align 8
   %5 = alloca ptr, align 8
   %6 = alloca { { ptr, i64 }, i16, [6 x i8] }, align 8
@@ -140,7 +191,7 @@ define internal fastcc void @mem.Allocator.alloc__anon_2246(ptr noalias nonnull 
   %11 = call fastcc ptr @llvm.returnaddress(i32 0)
   %12 = ptrtoint ptr %11 to i64
   call void @llvm.memcpy.p0.p0.i64(ptr align 8 %8, ptr align 8 %9, i64 16, i1 false)
-  call fastcc void @mem.Allocator.allocWithSizeAndAlignment__anon_2683(ptr sret({ ptr, i16, [6 x i8] }) %7, ptr nonnull readonly align 8 %8, i64 %2, i64 %12)
+  call fastcc void @mem.Allocator.allocWithSizeAndAlignment__anon_3517(ptr sret({ ptr, i16, [6 x i8] }) %7, ptr nonnull readonly align 8 %8, i64 %2, i64 %12)
   %13 = getelementptr inbounds { ptr, i16, [6 x i8] }, ptr %7, i32 0, i32 1
   %14 = load i16, ptr %13, align 2
   %15 = icmp ne i16 %14, 0
@@ -172,6 +223,588 @@ define internal fastcc void @mem.Allocator.alloc__anon_2246(ptr noalias nonnull 
   %31 = getelementptr inbounds { { ptr, i64 }, i16, [6 x i8] }, ptr %4, i32 0, i32 0
   store { ptr, i64 } %29, ptr %31, align 8
   br label %16
+}
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc i16 @"io.reader.Reader(fs.file.File,error{AccessDenied,Unexpected,SystemResources,IsDir,WouldBlock,InputOutput,OperationAborted,BrokenPipe,ConnectionResetByPeer,ConnectionTimedOut,NotOpenForReading,NetNameDeleted},(function 'read')).readAllArrayListAligned__anon_3080"(ptr nonnull readonly align 4 %0, ptr nonnull align 8 %1, i64 %2) unnamed_addr #0 {
+  %4 = alloca ptr, align 8
+  %5 = alloca ptr, align 8
+  %6 = alloca ptr, align 8
+  %7 = alloca { i64, i16, [6 x i8] }, align 8
+  %8 = alloca %"io.reader.Reader(fs.file.File,error{AccessDenied,Unexpected,SystemResources,IsDir,WouldBlock,InputOutput,OperationAborted,BrokenPipe,ConnectionResetByPeer,ConnectionTimedOut,NotOpenForReading,NetNameDeleted},(function 'read'))", align 4
+  %9 = alloca ptr, align 8
+  %10 = alloca ptr, align 8
+  %11 = alloca i64, align 8
+  %12 = alloca ptr, align 8
+  store ptr %1, ptr %12, align 8
+  %13 = load ptr, ptr %12, align 8
+  %14 = call i64 @llvm.umin.i64(i64 4096, i64 %2)
+  %15 = trunc i64 %14 to i13
+  %16 = zext i13 %15 to i64
+  %17 = call fastcc i16 @"array_list.ArrayListAligned(u8,null).ensureTotalCapacity"(ptr nonnull align 8 %13, i64 %16)
+  %18 = icmp ne i16 %17, 0
+  br i1 %18, label %19, label %20
+
+19:                                               ; preds = %3
+  ret i16 %17
+
+20:                                               ; preds = %3
+  %21 = getelementptr inbounds %"array_list.ArrayListAligned(u8,null)", ptr %1, i32 0, i32 0
+  %22 = load { ptr, i64 }, ptr %21, align 8
+  %23 = extractvalue { ptr, i64 } %22, 1
+  store i64 %23, ptr %11, align 8
+  br label %24
+
+24:                                               ; preds = %70, %20
+  store ptr %1, ptr %10, align 8
+  %25 = load ptr, ptr %10, align 8
+  call fastcc void @"array_list.ArrayListAligned(u8,null).expandToCapacity"(ptr nonnull align 8 %25)
+  store ptr %1, ptr %9, align 8
+  %26 = load ptr, ptr %9, align 8
+  %27 = getelementptr inbounds %"array_list.ArrayListAligned(u8,null)", ptr %26, i32 0, i32 0
+  %28 = load i64, ptr %11, align 8
+  %29 = load { ptr, i64 }, ptr %27, align 8
+  %30 = extractvalue { ptr, i64 } %29, 0
+  %31 = getelementptr inbounds i8, ptr %30, i64 %28
+  %32 = extractvalue { ptr, i64 } %29, 1
+  %33 = sub nuw i64 %32, %28
+  %34 = insertvalue { ptr, i64 } poison, ptr %31, 0
+  %35 = insertvalue { ptr, i64 } %34, i64 %33, 1
+  call void @llvm.memcpy.p0.p0.i64(ptr align 4 %8, ptr align 4 %0, i64 4, i1 false)
+  %36 = extractvalue { ptr, i64 } %35, 0
+  %37 = extractvalue { ptr, i64 } %35, 1
+  call fastcc void @"io.reader.Reader(fs.file.File,error{AccessDenied,Unexpected,SystemResources,IsDir,WouldBlock,InputOutput,OperationAborted,BrokenPipe,ConnectionResetByPeer,ConnectionTimedOut,NotOpenForReading,NetNameDeleted},(function 'read')).readAll"(ptr sret({ i64, i16, [6 x i8] }) %7, ptr nonnull readonly align 4 %8, ptr nonnull align 1 %36, i64 %37)
+  %38 = getelementptr inbounds { i64, i16, [6 x i8] }, ptr %7, i32 0, i32 1
+  %39 = load i16, ptr %38, align 2
+  %40 = icmp ne i16 %39, 0
+  br i1 %40, label %41, label %44
+
+41:                                               ; preds = %24
+  %42 = getelementptr inbounds { i64, i16, [6 x i8] }, ptr %7, i32 0, i32 1
+  %43 = load i16, ptr %42, align 2
+  ret i16 %43
+
+44:                                               ; preds = %24
+  %45 = getelementptr inbounds { i64, i16, [6 x i8] }, ptr %7, i32 0, i32 0
+  %46 = load i64, ptr %45, align 8
+  %47 = load i64, ptr %11, align 8
+  %48 = add nuw i64 %47, %46
+  store i64 %48, ptr %11, align 8
+  %49 = load i64, ptr %11, align 8
+  %50 = sub nuw i64 %49, %23
+  %51 = icmp ugt i64 %50, %2
+  br i1 %51, label %55, label %58
+
+52:                                               ; preds = %58
+  %53 = extractvalue { ptr, i64 } %35, 1
+  %54 = icmp ne i64 %46, %53
+  br i1 %54, label %65, label %68
+
+55:                                               ; preds = %44
+  store ptr %1, ptr %6, align 8
+  %56 = load ptr, ptr %6, align 8
+  %57 = add nuw i64 %23, %2
+  call fastcc void @"array_list.ArrayListAligned(u8,null).shrinkAndFree"(ptr nonnull align 8 %56, i64 %57)
+  ret i16 33
+
+58:                                               ; preds = %44
+  br label %52
+
+59:                                               ; preds = %68
+  store ptr %1, ptr %4, align 8
+  %60 = load ptr, ptr %4, align 8
+  %61 = load i64, ptr %11, align 8
+  %62 = add nuw i64 %61, 1
+  %63 = call fastcc i16 @"array_list.ArrayListAligned(u8,null).ensureTotalCapacity"(ptr nonnull align 8 %60, i64 %62)
+  %64 = icmp ne i16 %63, 0
+  br i1 %64, label %69, label %70
+
+65:                                               ; preds = %52
+  store ptr %1, ptr %5, align 8
+  %66 = load ptr, ptr %5, align 8
+  %67 = load i64, ptr %11, align 8
+  call fastcc void @"array_list.ArrayListAligned(u8,null).shrinkAndFree"(ptr nonnull align 8 %66, i64 %67)
+  ret i16 0
+
+68:                                               ; preds = %52
+  br label %59
+
+69:                                               ; preds = %59
+  ret i16 %63
+
+70:                                               ; preds = %59
+  br label %24
+}
+
+; Function Attrs: nocallback nofree nosync nounwind speculatable willreturn memory(none)
+declare i64 @llvm.umin.i64(i64, i64) #1
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc i16 @"array_list.ArrayListAligned(u8,null).ensureTotalCapacity"(ptr nonnull align 8 %0, i64 %1) unnamed_addr #0 {
+  %3 = alloca ptr, align 8
+  %4 = alloca i64, align 8
+  %5 = getelementptr inbounds %"array_list.ArrayListAligned(u8,null)", ptr %0, i32 0, i32 1
+  %6 = load i64, ptr %5, align 8
+  %7 = icmp uge i64 %6, %1
+  br i1 %7, label %11, label %12
+
+8:                                                ; preds = %12
+  %9 = getelementptr inbounds %"array_list.ArrayListAligned(u8,null)", ptr %0, i32 0, i32 1
+  %10 = load i64, ptr %9, align 8
+  store i64 %10, ptr %4, align 8
+  br label %17
+
+11:                                               ; preds = %2
+  ret i16 0
+
+12:                                               ; preds = %2
+  br label %8
+
+13:                                               ; preds = %26
+  store ptr %0, ptr %3, align 8
+  %14 = load ptr, ptr %3, align 8
+  %15 = load i64, ptr %4, align 8
+  %16 = call fastcc i16 @"array_list.ArrayListAligned(u8,null).ensureTotalCapacityPrecise"(ptr nonnull align 8 %14, i64 %15)
+  ret i16 %16
+
+17:                                               ; preds = %25, %8
+  %18 = load i64, ptr %4, align 8
+  %19 = load i64, ptr %4, align 8
+  %20 = udiv i64 %19, 2
+  %21 = add nuw i64 %20, 8
+  %22 = call i64 @llvm.uadd.sat.i64(i64 %18, i64 %21)
+  store i64 %22, ptr %4, align 8
+  %23 = load i64, ptr %4, align 8
+  %24 = icmp uge i64 %23, %1
+  br i1 %24, label %26, label %27
+
+25:                                               ; preds = %27
+  br label %17
+
+26:                                               ; preds = %17
+  br label %13
+
+27:                                               ; preds = %17
+  br label %25
+}
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc void @"array_list.ArrayListAligned(u8,null).expandToCapacity"(ptr nonnull align 8 %0) unnamed_addr #0 {
+  %2 = alloca ptr, align 8
+  store ptr %0, ptr %2, align 8
+  %3 = load ptr, ptr %2, align 8
+  %4 = getelementptr inbounds %"array_list.ArrayListAligned(u8,null)", ptr %3, i32 0, i32 0
+  %5 = getelementptr inbounds { ptr, i64 }, ptr %4, i32 0, i32 1
+  %6 = getelementptr inbounds %"array_list.ArrayListAligned(u8,null)", ptr %0, i32 0, i32 1
+  %7 = load i64, ptr %6, align 8
+  store i64 %7, ptr %5, align 8
+  ret void
+}
+
+; Function Attrs: nocallback nofree nounwind willreturn memory(argmem: readwrite)
+declare void @llvm.memcpy.p0.p0.i64(ptr noalias nocapture writeonly, ptr noalias nocapture readonly, i64, i1 immarg) #2
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc void @"io.reader.Reader(fs.file.File,error{AccessDenied,Unexpected,SystemResources,IsDir,WouldBlock,InputOutput,OperationAborted,BrokenPipe,ConnectionResetByPeer,ConnectionTimedOut,NotOpenForReading,NetNameDeleted},(function 'read')).readAll"(ptr noalias nonnull sret({ i64, i16, [6 x i8] }) %0, ptr nonnull readonly align 4 %1, ptr nonnull align 1 %2, i64 %3) unnamed_addr #0 {
+  %5 = alloca { i64, i16, [6 x i8] }, align 8
+  %6 = insertvalue { ptr, i64 } poison, ptr %2, 0
+  %7 = insertvalue { ptr, i64 } %6, i64 %3, 1
+  %8 = extractvalue { ptr, i64 } %7, 1
+  %9 = extractvalue { ptr, i64 } %7, 0
+  %10 = extractvalue { ptr, i64 } %7, 1
+  call fastcc void @"io.reader.Reader(fs.file.File,error{AccessDenied,Unexpected,SystemResources,IsDir,WouldBlock,InputOutput,OperationAborted,BrokenPipe,ConnectionResetByPeer,ConnectionTimedOut,NotOpenForReading,NetNameDeleted},(function 'read')).readAtLeast"(ptr sret({ i64, i16, [6 x i8] }) %5, ptr nonnull readonly align 4 %1, ptr nonnull align 1 %9, i64 %10, i64 %8)
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 %5, i64 16, i1 false)
+  ret void
+}
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc void @"array_list.ArrayListAligned(u8,null).shrinkAndFree"(ptr nonnull align 8 %0, i64 %1) unnamed_addr #0 {
+  %3 = alloca %"array_list.ArrayListAligned(u8,null)", align 8
+  %4 = alloca %"array_list.ArrayListAlignedUnmanaged(u8,null)", align 8
+  %5 = alloca ptr, align 8
+  %6 = alloca %"array_list.ArrayListAlignedUnmanaged(u8,null)", align 8
+  store ptr %0, ptr %5, align 8
+  %7 = load ptr, ptr %5, align 8
+  call fastcc void @"array_list.ArrayListAligned(u8,null).moveToUnmanaged"(ptr sret(%"array_list.ArrayListAlignedUnmanaged(u8,null)") %4, ptr nonnull align 8 %7)
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %6, ptr align 8 %4, i64 24, i1 false)
+  %8 = getelementptr inbounds %"array_list.ArrayListAligned(u8,null)", ptr %0, i32 0, i32 2
+  call fastcc void @"array_list.ArrayListAlignedUnmanaged(u8,null).shrinkAndFree"(ptr nonnull align 8 %6, ptr nonnull readonly align 8 %8, i64 %1)
+  %9 = getelementptr inbounds %"array_list.ArrayListAligned(u8,null)", ptr %0, i32 0, i32 2
+  call fastcc void @"array_list.ArrayListAlignedUnmanaged(u8,null).toManaged"(ptr sret(%"array_list.ArrayListAligned(u8,null)") %3, ptr nonnull align 8 %6, ptr nonnull readonly align 8 %9)
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 %3, i64 40, i1 false)
+  ret void
+}
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc void @fs.file.File.readToEndAllocOptions__anon_2910(ptr noalias nonnull sret({ { ptr, i64 }, i16, [6 x i8] }) %0, ptr nonnull readonly align 4 %1, ptr nonnull readonly align 8 %2, i64 %3, ptr nonnull readonly align 8 %4) unnamed_addr #0 {
+  %6 = alloca { { ptr, i64 }, i16, [6 x i8] }, align 8
+  %7 = alloca { { ptr, i64 }, i16, [6 x i8] }, align 8
+  %8 = alloca { { ptr, i64 }, i16, [6 x i8] }, align 8
+  %9 = alloca { { ptr, i64 }, i16, [6 x i8] }, align 8
+  %10 = alloca %"io.reader.Reader(fs.file.File,error{AccessDenied,Unexpected,SystemResources,IsDir,WouldBlock,InputOutput,OperationAborted,BrokenPipe,ConnectionResetByPeer,ConnectionTimedOut,NotOpenForReading,NetNameDeleted},(function 'read'))", align 4
+  %11 = alloca %"io.reader.Reader(fs.file.File,error{AccessDenied,Unexpected,SystemResources,IsDir,WouldBlock,InputOutput,OperationAborted,BrokenPipe,ConnectionResetByPeer,ConnectionTimedOut,NotOpenForReading,NetNameDeleted},(function 'read'))", align 4
+  %12 = alloca %fs.file.File, align 4
+  %13 = alloca { { ptr, i64 }, i16, [6 x i8] }, align 8
+  %14 = alloca { %"array_list.ArrayListAligned(u8,null)", i16, [6 x i8] }, align 8
+  %15 = alloca %"array_list.ArrayListAligned(u8,null)", align 8
+  %16 = getelementptr inbounds { i64, i8, [7 x i8] }, ptr %4, i32 0, i32 1
+  %17 = load i8, ptr %16, align 1
+  %18 = icmp ne i8 %17, 0
+  br i1 %18, label %22, label %25
+
+19:                                               ; preds = %25, %22
+  %20 = phi i64 [ %24, %22 ], [ 0, %25 ]
+  %21 = icmp ugt i64 %20, 0
+  br i1 %21, label %31, label %32
+
+22:                                               ; preds = %5
+  %23 = getelementptr inbounds { i64, i8, [7 x i8] }, ptr %4, i32 0, i32 0
+  %24 = load i64, ptr %23, align 8
+  br label %19
+
+25:                                               ; preds = %5
+  br label %19
+
+26:                                               ; preds = %32, %31
+  %27 = phi i64 [ %20, %31 ], [ 1024, %32 ]
+  call fastcc void @"array_list.ArrayListAligned(u8,null).initCapacity"(ptr sret({ %"array_list.ArrayListAligned(u8,null)", i16, [6 x i8] }) %14, ptr nonnull readonly align 8 %2, i64 %27)
+  %28 = getelementptr inbounds { %"array_list.ArrayListAligned(u8,null)", i16, [6 x i8] }, ptr %14, i32 0, i32 1
+  %29 = load i16, ptr %28, align 2
+  %30 = icmp ne i16 %29, 0
+  br i1 %30, label %33, label %38
+
+31:                                               ; preds = %19
+  br label %26
+
+32:                                               ; preds = %19
+  br label %26
+
+33:                                               ; preds = %26
+  %34 = getelementptr inbounds { %"array_list.ArrayListAligned(u8,null)", i16, [6 x i8] }, ptr %14, i32 0, i32 1
+  %35 = load i16, ptr %34, align 2
+  %36 = getelementptr inbounds { { ptr, i64 }, i16, [6 x i8] }, ptr %13, i32 0, i32 1
+  store i16 %35, ptr %36, align 2
+  %37 = getelementptr inbounds { { ptr, i64 }, i16, [6 x i8] }, ptr %13, i32 0, i32 0
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 %13, i64 24, i1 false)
+  ret void
+
+38:                                               ; preds = %26
+  %39 = getelementptr inbounds { %"array_list.ArrayListAligned(u8,null)", i16, [6 x i8] }, ptr %14, i32 0, i32 0
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %15, ptr align 8 %39, i64 40, i1 false)
+  call void @llvm.memcpy.p0.p0.i64(ptr align 4 %12, ptr align 4 %1, i64 4, i1 false)
+  call fastcc void @fs.file.File.reader(ptr sret(%"io.reader.Reader(fs.file.File,error{AccessDenied,Unexpected,SystemResources,IsDir,WouldBlock,InputOutput,OperationAborted,BrokenPipe,ConnectionResetByPeer,ConnectionTimedOut,NotOpenForReading,NetNameDeleted},(function 'read'))") %11, ptr nonnull readonly align 4 %12)
+  call void @llvm.memcpy.p0.p0.i64(ptr align 4 %10, ptr align 4 %11, i64 4, i1 false)
+  %40 = call fastcc i16 @"io.reader.Reader(fs.file.File,error{AccessDenied,Unexpected,SystemResources,IsDir,WouldBlock,InputOutput,OperationAborted,BrokenPipe,ConnectionResetByPeer,ConnectionTimedOut,NotOpenForReading,NetNameDeleted},(function 'read')).readAllArrayListAligned__anon_3080"(ptr nonnull readonly align 4 %10, ptr nonnull align 8 %15, i64 %3)
+  %41 = icmp eq i16 %40, 0
+  br i1 %41, label %46, label %47
+
+42:                                               ; preds = %46
+  call fastcc void @"array_list.ArrayListAligned(u8,null).toOwnedSlice"(ptr sret({ { ptr, i64 }, i16, [6 x i8] }) %8, ptr nonnull align 8 %15)
+  %43 = getelementptr inbounds { { ptr, i64 }, i16, [6 x i8] }, ptr %8, i32 0, i32 1
+  %44 = load i16, ptr %43, align 2
+  %45 = icmp ne i16 %44, 0
+  br i1 %45, label %52, label %57
+
+46:                                               ; preds = %38
+  br label %42
+
+47:                                               ; preds = %38
+  switch i16 %40, label %48 [
+    i16 33, label %51
+  ]
+
+48:                                               ; preds = %47
+  %49 = getelementptr inbounds { { ptr, i64 }, i16, [6 x i8] }, ptr %9, i32 0, i32 1
+  store i16 %40, ptr %49, align 2
+  %50 = getelementptr inbounds { { ptr, i64 }, i16, [6 x i8] }, ptr %9, i32 0, i32 0
+  call fastcc void @"array_list.ArrayListAligned(u8,null).deinit"(ptr nonnull readonly align 8 %15)
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 %9, i64 24, i1 false)
+  ret void
+
+51:                                               ; preds = %47
+  call fastcc void @"array_list.ArrayListAligned(u8,null).deinit"(ptr nonnull readonly align 8 %15)
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 @1, i64 24, i1 false)
+  ret void
+
+52:                                               ; preds = %42
+  %53 = getelementptr inbounds { { ptr, i64 }, i16, [6 x i8] }, ptr %8, i32 0, i32 1
+  %54 = load i16, ptr %53, align 2
+  call fastcc void @"array_list.ArrayListAligned(u8,null).deinit"(ptr nonnull readonly align 8 %15)
+  %55 = getelementptr inbounds { { ptr, i64 }, i16, [6 x i8] }, ptr %7, i32 0, i32 1
+  store i16 %54, ptr %55, align 2
+  %56 = getelementptr inbounds { { ptr, i64 }, i16, [6 x i8] }, ptr %7, i32 0, i32 0
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 %7, i64 24, i1 false)
+  ret void
+
+57:                                               ; preds = %42
+  %58 = getelementptr inbounds { { ptr, i64 }, i16, [6 x i8] }, ptr %8, i32 0, i32 0
+  %59 = load { ptr, i64 }, ptr %58, align 8
+  %60 = getelementptr inbounds { { ptr, i64 }, i16, [6 x i8] }, ptr %6, i32 0, i32 1
+  store i16 0, ptr %60, align 2
+  %61 = getelementptr inbounds { { ptr, i64 }, i16, [6 x i8] }, ptr %6, i32 0, i32 0
+  store { ptr, i64 } %59, ptr %61, align 8
+  call fastcc void @"array_list.ArrayListAligned(u8,null).deinit"(ptr nonnull readonly align 8 %15)
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 %6, i64 24, i1 false)
+  ret void
+}
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc void @"array_list.ArrayListAligned(u8,null).initCapacity"(ptr noalias nonnull sret({ %"array_list.ArrayListAligned(u8,null)", i16, [6 x i8] }) %0, ptr nonnull readonly align 8 %1, i64 %2) unnamed_addr #0 {
+  %4 = alloca { %"array_list.ArrayListAligned(u8,null)", i16, [6 x i8] }, align 8
+  %5 = alloca { %"array_list.ArrayListAligned(u8,null)", i16, [6 x i8] }, align 8
+  %6 = alloca %"array_list.ArrayListAligned(u8,null)", align 8
+  %7 = alloca %"array_list.ArrayListAligned(u8,null)", align 8
+  call fastcc void @"array_list.ArrayListAligned(u8,null).init"(ptr sret(%"array_list.ArrayListAligned(u8,null)") %6, ptr nonnull readonly align 8 %1)
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %7, ptr align 8 %6, i64 40, i1 false)
+  %8 = call fastcc i16 @"array_list.ArrayListAligned(u8,null).ensureTotalCapacityPrecise"(ptr nonnull align 8 %7, i64 %2)
+  %9 = icmp ne i16 %8, 0
+  br i1 %9, label %10, label %13
+
+10:                                               ; preds = %3
+  %11 = getelementptr inbounds { %"array_list.ArrayListAligned(u8,null)", i16, [6 x i8] }, ptr %5, i32 0, i32 1
+  store i16 %8, ptr %11, align 2
+  %12 = getelementptr inbounds { %"array_list.ArrayListAligned(u8,null)", i16, [6 x i8] }, ptr %5, i32 0, i32 0
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 %5, i64 48, i1 false)
+  ret void
+
+13:                                               ; preds = %3
+  %14 = getelementptr inbounds { %"array_list.ArrayListAligned(u8,null)", i16, [6 x i8] }, ptr %4, i32 0, i32 1
+  store i16 0, ptr %14, align 2
+  %15 = getelementptr inbounds { %"array_list.ArrayListAligned(u8,null)", i16, [6 x i8] }, ptr %4, i32 0, i32 0
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %15, ptr align 8 %7, i64 40, i1 false)
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 %4, i64 48, i1 false)
+  ret void
+}
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc void @fs.file.File.reader(ptr noalias nonnull sret(%"io.reader.Reader(fs.file.File,error{AccessDenied,Unexpected,SystemResources,IsDir,WouldBlock,InputOutput,OperationAborted,BrokenPipe,ConnectionResetByPeer,ConnectionTimedOut,NotOpenForReading,NetNameDeleted},(function 'read'))") %0, ptr nonnull readonly align 4 %1) unnamed_addr #0 {
+  %3 = getelementptr inbounds %"io.reader.Reader(fs.file.File,error{AccessDenied,Unexpected,SystemResources,IsDir,WouldBlock,InputOutput,OperationAborted,BrokenPipe,ConnectionResetByPeer,ConnectionTimedOut,NotOpenForReading,NetNameDeleted},(function 'read'))", ptr %0, i32 0, i32 0
+  call void @llvm.memcpy.p0.p0.i64(ptr align 4 %3, ptr align 4 %1, i64 4, i1 false)
+  ret void
+}
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc void @"array_list.ArrayListAligned(u8,null).deinit"(ptr nonnull readonly align 8 %0) unnamed_addr #0 {
+  %2 = alloca %"array_list.ArrayListAligned(u8,null)", align 8
+  %3 = alloca %mem.Allocator, align 8
+  %4 = alloca %"array_list.ArrayListAligned(u8,null)", align 8
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %4, ptr align 8 %0, i64 40, i1 false)
+  %5 = getelementptr inbounds %"array_list.ArrayListAligned(u8,null)", ptr %4, i32 0, i32 2
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %3, ptr align 8 %5, i64 16, i1 false)
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %2, ptr align 8 %0, i64 40, i1 false)
+  %6 = call fastcc { ptr, i64 } @"array_list.ArrayListAligned(u8,null).allocatedSlice"(ptr nonnull readonly align 8 %2)
+  %7 = extractvalue { ptr, i64 } %6, 0
+  %8 = extractvalue { ptr, i64 } %6, 1
+  call fastcc void @mem.Allocator.free__anon_3748(ptr nonnull readonly align 8 %3, ptr nonnull align 1 %7, i64 %8)
+  ret void
+}
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc void @"array_list.ArrayListAligned(u8,null).toOwnedSlice"(ptr noalias nonnull sret({ { ptr, i64 }, i16, [6 x i8] }) %0, ptr nonnull align 8 %1) unnamed_addr #0 {
+  %3 = alloca { { ptr, i64 }, i16, [6 x i8] }, align 8
+  %4 = alloca ptr, align 8
+  %5 = alloca { { ptr, i64 }, i16, [6 x i8] }, align 8
+  %6 = alloca { { ptr, i64 }, i16, [6 x i8] }, align 8
+  %7 = alloca { { ptr, i64 }, i16, [6 x i8] }, align 8
+  %8 = alloca %"array_list.ArrayListAligned(u8,null)", align 8
+  %9 = alloca ptr, align 8
+  %10 = alloca %mem.Allocator, align 8
+  %11 = alloca %mem.Allocator, align 8
+  %12 = getelementptr inbounds %"array_list.ArrayListAligned(u8,null)", ptr %1, i32 0, i32 2
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %11, ptr align 8 %12, i64 16, i1 false)
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %10, ptr align 8 %11, i64 16, i1 false)
+  store ptr %1, ptr %9, align 8
+  %13 = load ptr, ptr %9, align 8
+  %14 = call fastcc { ptr, i64 } @"array_list.ArrayListAligned(u8,null).allocatedSlice"(ptr nonnull readonly align 8 %13)
+  %15 = getelementptr inbounds %"array_list.ArrayListAligned(u8,null)", ptr %1, i32 0, i32 0
+  %16 = load { ptr, i64 }, ptr %15, align 8
+  %17 = extractvalue { ptr, i64 } %16, 1
+  %18 = extractvalue { ptr, i64 } %14, 0
+  %19 = extractvalue { ptr, i64 } %14, 1
+  %20 = call fastcc i1 @mem.Allocator.resize__anon_3749(ptr nonnull readonly align 8 %10, ptr nonnull align 1 %18, i64 %19, i64 %17)
+  br i1 %20, label %28, label %33
+
+21:                                               ; preds = %33
+  %22 = getelementptr inbounds %"array_list.ArrayListAligned(u8,null)", ptr %1, i32 0, i32 0
+  %23 = load { ptr, i64 }, ptr %22, align 8
+  %24 = extractvalue { ptr, i64 } %23, 1
+  call fastcc void @mem.Allocator.alignedAlloc__anon_3750(ptr sret({ { ptr, i64 }, i16, [6 x i8] }) %6, ptr nonnull readonly align 8 %10, i64 %24)
+  %25 = getelementptr inbounds { { ptr, i64 }, i16, [6 x i8] }, ptr %6, i32 0, i32 1
+  %26 = load i16, ptr %25, align 2
+  %27 = icmp ne i16 %26, 0
+  br i1 %27, label %34, label %39
+
+28:                                               ; preds = %2
+  %29 = getelementptr inbounds %"array_list.ArrayListAligned(u8,null)", ptr %1, i32 0, i32 0
+  %30 = load { ptr, i64 }, ptr %29, align 8
+  call fastcc void @"array_list.ArrayListAligned(u8,null).init"(ptr sret(%"array_list.ArrayListAligned(u8,null)") %8, ptr nonnull readonly align 8 %11)
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %1, ptr align 8 %8, i64 40, i1 false)
+  %31 = getelementptr inbounds { { ptr, i64 }, i16, [6 x i8] }, ptr %7, i32 0, i32 1
+  store i16 0, ptr %31, align 2
+  %32 = getelementptr inbounds { { ptr, i64 }, i16, [6 x i8] }, ptr %7, i32 0, i32 0
+  store { ptr, i64 } %30, ptr %32, align 8
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 %7, i64 24, i1 false)
+  ret void
+
+33:                                               ; preds = %2
+  br label %21
+
+34:                                               ; preds = %21
+  %35 = getelementptr inbounds { { ptr, i64 }, i16, [6 x i8] }, ptr %6, i32 0, i32 1
+  %36 = load i16, ptr %35, align 2
+  %37 = getelementptr inbounds { { ptr, i64 }, i16, [6 x i8] }, ptr %5, i32 0, i32 1
+  store i16 %36, ptr %37, align 2
+  %38 = getelementptr inbounds { { ptr, i64 }, i16, [6 x i8] }, ptr %5, i32 0, i32 0
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 %5, i64 24, i1 false)
+  ret void
+
+39:                                               ; preds = %21
+  %40 = getelementptr inbounds { { ptr, i64 }, i16, [6 x i8] }, ptr %6, i32 0, i32 0
+  %41 = load { ptr, i64 }, ptr %40, align 8
+  %42 = getelementptr inbounds %"array_list.ArrayListAligned(u8,null)", ptr %1, i32 0, i32 0
+  %43 = load { ptr, i64 }, ptr %42, align 8
+  %44 = extractvalue { ptr, i64 } %43, 0
+  %45 = extractvalue { ptr, i64 } %41, 1
+  %46 = extractvalue { ptr, i64 } %41, 0
+  call void @llvm.memcpy.p0.p0.i64(ptr align 1 %46, ptr align 1 %44, i64 %45, i1 false)
+  %47 = getelementptr inbounds %"array_list.ArrayListAligned(u8,null)", ptr %1, i32 0, i32 0
+  %48 = load { ptr, i64 }, ptr %47, align 8
+  %49 = extractvalue { ptr, i64 } %48, 0
+  %50 = extractvalue { ptr, i64 } %48, 1
+  call void @llvm.memset.p0.i64(ptr align 1 %49, i8 undef, i64 %50, i1 false)
+  store ptr %1, ptr %4, align 8
+  %51 = load ptr, ptr %4, align 8
+  call fastcc void @"array_list.ArrayListAligned(u8,null).clearAndFree"(ptr nonnull align 8 %51)
+  %52 = getelementptr inbounds { { ptr, i64 }, i16, [6 x i8] }, ptr %3, i32 0, i32 1
+  store i16 0, ptr %52, align 2
+  %53 = getelementptr inbounds { { ptr, i64 }, i16, [6 x i8] }, ptr %3, i32 0, i32 0
+  store { ptr, i64 } %41, ptr %53, align 8
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 %3, i64 24, i1 false)
+  ret void
+}
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc void @fs.file.File.readToEndAlloc(ptr noalias nonnull sret({ { ptr, i64 }, i16, [6 x i8] }) %0, ptr nonnull readonly align 4 %1, ptr nonnull readonly align 8 %2, i64 %3) unnamed_addr #0 {
+  %5 = alloca { { ptr, i64 }, i16, [6 x i8] }, align 8
+  %6 = alloca %fs.file.File, align 4
+  call void @llvm.memcpy.p0.p0.i64(ptr align 4 %6, ptr align 4 %1, i64 4, i1 false)
+  call fastcc void @fs.file.File.readToEndAllocOptions__anon_2910(ptr sret({ { ptr, i64 }, i16, [6 x i8] }) %5, ptr nonnull readonly align 4 %6, ptr nonnull readonly align 8 %2, i64 %3, ptr nonnull readonly align 8 @2)
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 %5, i64 24, i1 false)
+  ret void
+}
+
+; Function Attrs: minsize nounwind optsize uwtable
+define dso_local ptr @_nx_readFileToString(ptr nonnull align 16 %0) #0 {
+  %2 = alloca { ptr, i16, [6 x i8] }, align 8
+  %3 = alloca { { ptr, i64 }, i16, [6 x i8] }, align 8
+  %4 = alloca %fs.file.File, align 4
+  %5 = alloca { %fs.file.File, i16, [2 x i8] }, align 4
+  %6 = alloca { ptr, i64 }, align 8
+  %7 = alloca ptr, align 8
+  store ptr %0, ptr %7, align 8
+  %8 = load ptr, ptr %7, align 8
+  %9 = call fastcc { ptr, i64 } @main.NxString.as_slice(ptr nonnull readonly align 16 %8)
+  store { ptr, i64 } %9, ptr %6, align 8
+  %10 = load { ptr, i64 }, ptr %6, align 8
+  %11 = extractvalue { ptr, i64 } %10, 0
+  %12 = extractvalue { ptr, i64 } %10, 1
+  call fastcc void @fs.openFileAbsolute(ptr sret({ %fs.file.File, i16, [2 x i8] }) %5, ptr nonnull readonly align 1 %11, i64 %12, ptr nonnull readonly align 1 @3)
+  %13 = getelementptr inbounds { %fs.file.File, i16, [2 x i8] }, ptr %5, i32 0, i32 1
+  %14 = load i16, ptr %13, align 2
+  %15 = icmp eq i16 %14, 0
+  br i1 %15, label %21, label %23
+
+16:                                               ; preds = %21
+  %17 = phi ptr [ %22, %21 ]
+  call void @llvm.memcpy.p0.p0.i64(ptr align 4 %4, ptr align 4 %17, i64 4, i1 false)
+  call fastcc void @fs.file.File.readToEndAlloc(ptr sret({ { ptr, i64 }, i16, [6 x i8] }) %3, ptr nonnull readonly align 4 %4, ptr nonnull readonly align 8 @4, i64 1024)
+  %18 = getelementptr inbounds { { ptr, i64 }, i16, [6 x i8] }, ptr %3, i32 0, i32 1
+  %19 = load i16, ptr %18, align 2
+  %20 = icmp eq i16 %19, 0
+  br i1 %20, label %30, label %33
+
+21:                                               ; preds = %1
+  %22 = getelementptr inbounds { %fs.file.File, i16, [2 x i8] }, ptr %5, i32 0, i32 0
+  br label %16
+
+23:                                               ; preds = %1
+  unreachable
+
+24:                                               ; preds = %30
+  %25 = phi { ptr, i64 } [ %32, %30 ]
+  %26 = extractvalue { ptr, i64 } %25, 1
+  call fastcc void @mem.Allocator.create__anon_2169(ptr sret({ ptr, i16, [6 x i8] }) %2, ptr nonnull readonly align 8 @4)
+  %27 = getelementptr inbounds { ptr, i16, [6 x i8] }, ptr %2, i32 0, i32 1
+  %28 = load i16, ptr %27, align 2
+  %29 = icmp eq i16 %28, 0
+  br i1 %29, label %38, label %41
+
+30:                                               ; preds = %16
+  %31 = getelementptr inbounds { { ptr, i64 }, i16, [6 x i8] }, ptr %3, i32 0, i32 0
+  %32 = load { ptr, i64 }, ptr %31, align 8
+  br label %24
+
+33:                                               ; preds = %16
+  unreachable
+
+34:                                               ; preds = %38
+  %35 = phi ptr [ %40, %38 ]
+  store i64 %26, ptr %35, align 16
+  %36 = getelementptr inbounds i8, ptr %35, i64 8
+  %37 = extractvalue { ptr, i64 } %25, 0
+  store ptr %37, ptr %36, align 8
+  call fastcc void @fs.file.File.close(ptr nonnull readonly align 4 %4)
+  ret ptr %35
+
+38:                                               ; preds = %24
+  %39 = getelementptr inbounds { ptr, i16, [6 x i8] }, ptr %2, i32 0, i32 0
+  %40 = load ptr, ptr %39, align 8
+  br label %34
+
+41:                                               ; preds = %24
+  unreachable
+}
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc { ptr, i64 } @main.NxString.as_slice(ptr nonnull readonly align 16 %0) unnamed_addr #0 {
+  %2 = alloca ptr, align 8
+  store ptr %0, ptr %2, align 8
+  %3 = load ptr, ptr %2, align 8
+  %4 = getelementptr inbounds i8, ptr %3, i64 8
+  %5 = load i64, ptr %0, align 16
+  %6 = load ptr, ptr %4, align 8
+  %7 = getelementptr inbounds i8, ptr %6, i64 0
+  %8 = insertvalue { ptr, i64 } poison, ptr %7, 0
+  %9 = insertvalue { ptr, i64 } %8, i64 %5, 1
+  ret { ptr, i64 } %9
+}
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc void @fs.openFileAbsolute(ptr noalias nonnull sret({ %fs.file.File, i16, [2 x i8] }) %0, ptr nonnull readonly align 1 %1, i64 %2, ptr nonnull readonly align 1 %3) unnamed_addr #0 {
+  %5 = alloca { %fs.file.File, i16, [2 x i8] }, align 4
+  %6 = alloca %fs.Dir, align 4
+  %7 = alloca %fs.Dir, align 4
+  %8 = insertvalue { ptr, i64 } poison, ptr %1, 0
+  %9 = insertvalue { ptr, i64 } %8, i64 %2, 1
+  %10 = extractvalue { ptr, i64 } %9, 0
+  %11 = extractvalue { ptr, i64 } %9, 1
+  %12 = call fastcc i1 @fs.path.isAbsolute(ptr nonnull readonly align 1 %10, i64 %11)
+  call fastcc void @debug.assert(i1 %12)
+  call fastcc void @fs.cwd(ptr sret(%fs.Dir) %7)
+  call void @llvm.memcpy.p0.p0.i64(ptr align 4 %6, ptr align 4 %7, i64 4, i1 false)
+  %13 = extractvalue { ptr, i64 } %9, 0
+  %14 = extractvalue { ptr, i64 } %9, 1
+  call fastcc void @fs.Dir.openFile(ptr sret({ %fs.file.File, i16, [2 x i8] }) %5, ptr nonnull readonly align 4 %6, ptr nonnull readonly align 1 %13, i64 %14, ptr nonnull readonly align 1 %3)
+  call void @llvm.memcpy.p0.p0.i64(ptr align 4 %0, ptr align 4 %5, i64 8, i1 false)
+  ret void
+}
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc void @fs.file.File.close(ptr nonnull readonly align 4 %0) unnamed_addr #0 {
+  %2 = getelementptr inbounds %fs.file.File, ptr %0, i32 0, i32 0
+  %3 = load i32, ptr %2, align 4
+  call fastcc void @os.close(i32 %3)
+  ret void
 }
 
 ; Function Attrs: minsize nounwind optsize uwtable
@@ -271,14 +904,11 @@ define internal fastcc void @heap.CAllocator.alignedFree(ptr nonnull align 1 %0)
   ret void
 }
 
-; Function Attrs: nocallback nofree nounwind willreturn memory(argmem: readwrite)
-declare void @llvm.memcpy.p0.p0.i64(ptr noalias nocapture writeonly, ptr noalias nocapture readonly, i64, i1 immarg) #1
-
 ; Function Attrs: nocallback nofree nosync nounwind willreturn memory(none)
-declare ptr @llvm.returnaddress(i32 immarg) #2
+declare ptr @llvm.returnaddress(i32 immarg) #3
 
 ; Function Attrs: minsize nounwind optsize uwtable
-define internal fastcc void @mem.Allocator.allocBytesWithAlignment__anon_2682(ptr noalias nonnull sret({ ptr, i16, [6 x i8] }) %0, ptr nonnull readonly align 8 %1, i64 %2, i64 %3) unnamed_addr #0 {
+define internal fastcc void @mem.Allocator.allocBytesWithAlignment__anon_3516(ptr noalias nonnull sret({ ptr, i16, [6 x i8] }) %0, ptr nonnull readonly align 8 %1, i64 %2, i64 %3) unnamed_addr #0 {
   %5 = alloca { ptr, i16, [6 x i8] }, align 8
   %6 = alloca ptr, align 8
   %7 = alloca %mem.Allocator, align 8
@@ -290,154 +920,7 @@ define internal fastcc void @mem.Allocator.allocBytesWithAlignment__anon_2682(pt
 11:                                               ; preds = %23
   call void @llvm.memcpy.p0.p0.i64(ptr align 8 %9, ptr align 8 %1, i64 16, i1 false)
   call void @llvm.memcpy.p0.p0.i64(ptr align 8 %8, ptr align 8 %9, i64 16, i1 false)
-  %12 = call fastcc i5 @math.log2_int__anon_2687(i29 16)
-  %13 = zext i5 %12 to i8
-  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %7, ptr align 8 %8, i64 16, i1 false)
-  %14 = getelementptr inbounds %mem.Allocator, ptr %7, i32 0, i32 1
-  %15 = load ptr, ptr %14, align 8
-  %16 = getelementptr inbounds %mem.Allocator.VTable, ptr %15, i32 0, i32 0
-  %17 = load ptr, ptr %16, align 8
-  %18 = getelementptr inbounds %mem.Allocator, ptr %8, i32 0, i32 0
-  %19 = load ptr, ptr %18, align 8
-  %20 = call fastcc ptr %17(ptr nonnull align 1 %19, i64 %2, i8 %13, i64 %3)
-  %21 = icmp ne ptr %20, null
-  br i1 %21, label %34, label %35
-
-22:                                               ; preds = %4
-  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 @1, i64 16, i1 false)
-  ret void
-
-23:                                               ; preds = %4
-  br label %11
-
-24:                                               ; preds = %34
-  %25 = phi ptr [ %20, %34 ]
-  store ptr %25, ptr %6, align 8
-  %26 = load ptr, ptr %6, align 8
-  %27 = getelementptr inbounds i8, ptr %26, i64 0
-  %28 = insertvalue { ptr, i64 } poison, ptr %27, 0
-  %29 = insertvalue { ptr, i64 } %28, i64 %2, 1
-  %30 = extractvalue { ptr, i64 } %29, 0
-  %31 = extractvalue { ptr, i64 } %29, 1
-  call void @llvm.memset.p0.i64(ptr align 1 %30, i8 undef, i64 %31, i1 false)
-  %32 = getelementptr inbounds { ptr, i16, [6 x i8] }, ptr %5, i32 0, i32 1
-  store i16 0, ptr %32, align 2
-  %33 = getelementptr inbounds { ptr, i16, [6 x i8] }, ptr %5, i32 0, i32 0
-  store ptr %25, ptr %33, align 8
-  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 %5, i64 16, i1 false)
-  ret void
-
-34:                                               ; preds = %11
-  br label %24
-
-35:                                               ; preds = %11
-  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 @2, i64 16, i1 false)
-  ret void
-}
-
-; Function Attrs: minsize nounwind optsize uwtable
-define internal fastcc void @mem.Allocator.allocWithSizeAndAlignment__anon_2683(ptr noalias nonnull sret({ ptr, i16, [6 x i8] }) %0, ptr nonnull readonly align 8 %1, i64 %2, i64 %3) unnamed_addr #0 {
-  %5 = alloca { ptr, i16, [6 x i8] }, align 8
-  %6 = alloca %mem.Allocator, align 8
-  %7 = alloca { i64, i16, [6 x i8] }, align 8
-  call fastcc void @math.mul__anon_2690(ptr sret({ i64, i16, [6 x i8] }) %7, i64 1, i64 %2)
-  %8 = getelementptr inbounds { i64, i16, [6 x i8] }, ptr %7, i32 0, i32 1
-  %9 = load i16, ptr %8, align 2
-  %10 = icmp eq i16 %9, 0
-  br i1 %10, label %13, label %16
-
-11:                                               ; preds = %13
-  %12 = phi i64 [ %15, %13 ]
-  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %6, ptr align 8 %1, i64 16, i1 false)
-  call fastcc void @mem.Allocator.allocBytesWithAlignment__anon_2691(ptr sret({ ptr, i16, [6 x i8] }) %5, ptr nonnull readonly align 8 %6, i64 %12, i64 %3)
-  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 %5, i64 16, i1 false)
-  ret void
-
-13:                                               ; preds = %4
-  %14 = getelementptr inbounds { i64, i16, [6 x i8] }, ptr %7, i32 0, i32 0
-  %15 = load i64, ptr %14, align 8
-  br label %11
-
-16:                                               ; preds = %4
-  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 @3, i64 16, i1 false)
-  ret void
-}
-
-; Function Attrs: nocallback nofree nosync nounwind speculatable willreturn memory(none)
-declare i64 @llvm.umax.i64(i64, i64) #3
-
-; Function Attrs: nocallback nofree nounwind willreturn memory(argmem: write)
-declare void @llvm.memset.p0.i64(ptr nocapture writeonly, i8, i64, i1 immarg) #4
-
-; Function Attrs: minsize nounwind optsize uwtable
-declare i32 @posix_memalign(ptr nonnull align 8, i64, i64) #0
-
-; Function Attrs: minsize nounwind optsize uwtable
-declare i64 @malloc_size(ptr readonly align 1) #0
-
-; Function Attrs: minsize nounwind optsize uwtable
-declare void @free(ptr align 1) #0
-
-; Function Attrs: minsize nounwind optsize uwtable
-define internal fastcc i5 @math.log2_int__anon_2687(i29 %0) unnamed_addr #0 {
-  %2 = icmp ne i29 %0, 0
-  call fastcc void @debug.assert(i1 %2)
-  %3 = call i29 @llvm.ctlz.i29(i29 %0, i1 false)
-  %4 = trunc i29 %3 to i5
-  %5 = zext i5 %4 to i16
-  %6 = sub nuw i16 28, %5
-  %7 = trunc i16 %6 to i5
-  ret i5 %7
-}
-
-; Function Attrs: minsize nounwind optsize uwtable
-define internal fastcc void @math.mul__anon_2690(ptr noalias nonnull sret({ i64, i16, [6 x i8] }) %0, i64 %1, i64 %2) unnamed_addr #0 {
-  %4 = alloca { i64, i16, [6 x i8] }, align 8
-  %5 = alloca { i64, i1, [7 x i8] }, align 8
-  %6 = call fastcc { i64, i1 } @llvm.umul.with.overflow.i64(i64 %1, i64 %2)
-  %7 = extractvalue { i64, i1 } %6, 0
-  %8 = extractvalue { i64, i1 } %6, 1
-  %9 = getelementptr inbounds { i64, i1, [7 x i8] }, ptr %5, i32 0, i32 0
-  store i64 %7, ptr %9, align 8
-  %10 = getelementptr inbounds { i64, i1, [7 x i8] }, ptr %5, i32 0, i32 1
-  store i1 %8, ptr %10, align 1
-  %11 = getelementptr inbounds { i64, i1, [7 x i8] }, ptr %5, i32 0, i32 1
-  %12 = load i1, ptr %11, align 1
-  %13 = icmp ne i1 %12, false
-  br i1 %13, label %19, label %20
-
-14:                                               ; preds = %20
-  %15 = getelementptr inbounds { i64, i1, [7 x i8] }, ptr %5, i32 0, i32 0
-  %16 = load i64, ptr %15, align 8
-  %17 = getelementptr inbounds { i64, i16, [6 x i8] }, ptr %4, i32 0, i32 1
-  store i16 0, ptr %17, align 2
-  %18 = getelementptr inbounds { i64, i16, [6 x i8] }, ptr %4, i32 0, i32 0
-  store i64 %16, ptr %18, align 8
-  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 %4, i64 16, i1 false)
-  ret void
-
-19:                                               ; preds = %3
-  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 @4, i64 16, i1 false)
-  ret void
-
-20:                                               ; preds = %3
-  br label %14
-}
-
-; Function Attrs: minsize nounwind optsize uwtable
-define internal fastcc void @mem.Allocator.allocBytesWithAlignment__anon_2691(ptr noalias nonnull sret({ ptr, i16, [6 x i8] }) %0, ptr nonnull readonly align 8 %1, i64 %2, i64 %3) unnamed_addr #0 {
-  %5 = alloca { ptr, i16, [6 x i8] }, align 8
-  %6 = alloca ptr, align 8
-  %7 = alloca %mem.Allocator, align 8
-  %8 = alloca %mem.Allocator, align 8
-  %9 = alloca %mem.Allocator, align 8
-  %10 = icmp eq i64 %2, 0
-  br i1 %10, label %22, label %23
-
-11:                                               ; preds = %23
-  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %9, ptr align 8 %1, i64 16, i1 false)
-  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %8, ptr align 8 %9, i64 16, i1 false)
-  %12 = call fastcc i5 @math.log2_int__anon_2687(i29 1)
+  %12 = call fastcc i5 @math.log2_int__anon_3754(i29 16)
   %13 = zext i5 %12 to i8
   call void @llvm.memcpy.p0.p0.i64(ptr align 8 %7, ptr align 8 %8, i64 16, i1 false)
   %14 = getelementptr inbounds %mem.Allocator, ptr %7, i32 0, i32 1
@@ -482,17 +965,1531 @@ define internal fastcc void @mem.Allocator.allocBytesWithAlignment__anon_2691(pt
   ret void
 }
 
-; Function Attrs: nocallback nofree nosync nounwind speculatable willreturn memory(none)
-declare i29 @llvm.ctlz.i29(i29, i1 immarg) #3
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc void @mem.Allocator.allocWithSizeAndAlignment__anon_3517(ptr noalias nonnull sret({ ptr, i16, [6 x i8] }) %0, ptr nonnull readonly align 8 %1, i64 %2, i64 %3) unnamed_addr #0 {
+  %5 = alloca { ptr, i16, [6 x i8] }, align 8
+  %6 = alloca %mem.Allocator, align 8
+  %7 = alloca { i64, i16, [6 x i8] }, align 8
+  call fastcc void @math.mul__anon_3757(ptr sret({ i64, i16, [6 x i8] }) %7, i64 1, i64 %2)
+  %8 = getelementptr inbounds { i64, i16, [6 x i8] }, ptr %7, i32 0, i32 1
+  %9 = load i16, ptr %8, align 2
+  %10 = icmp eq i16 %9, 0
+  br i1 %10, label %13, label %16
+
+11:                                               ; preds = %13
+  %12 = phi i64 [ %15, %13 ]
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %6, ptr align 8 %1, i64 16, i1 false)
+  call fastcc void @mem.Allocator.allocBytesWithAlignment__anon_3758(ptr sret({ ptr, i16, [6 x i8] }) %5, ptr nonnull readonly align 8 %6, i64 %12, i64 %3)
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 %5, i64 16, i1 false)
+  ret void
+
+13:                                               ; preds = %4
+  %14 = getelementptr inbounds { i64, i16, [6 x i8] }, ptr %7, i32 0, i32 0
+  %15 = load i64, ptr %14, align 8
+  br label %11
+
+16:                                               ; preds = %4
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 @7, i64 16, i1 false)
+  ret void
+}
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc i1 @fs.path.isAbsolute(ptr nonnull readonly align 1 %0, i64 %1) unnamed_addr #0 {
+  %3 = insertvalue { ptr, i64 } poison, ptr %0, 0
+  %4 = insertvalue { ptr, i64 } %3, i64 %1, 1
+  %5 = extractvalue { ptr, i64 } %4, 0
+  %6 = extractvalue { ptr, i64 } %4, 1
+  %7 = call fastcc i1 @fs.path.isAbsolutePosix(ptr nonnull readonly align 1 %5, i64 %6)
+  ret i1 %7
+}
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc void @fs.cwd(ptr noalias nonnull sret(%fs.Dir) %0) unnamed_addr #0 {
+  call void @llvm.memcpy.p0.p0.i64(ptr align 4 %0, ptr align 4 @8, i64 4, i1 false)
+  ret void
+}
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc void @fs.Dir.openFile(ptr noalias nonnull sret({ %fs.file.File, i16, [2 x i8] }) %0, ptr nonnull readonly align 4 %1, ptr nonnull readonly align 1 %2, i64 %3, ptr nonnull readonly align 1 %4) unnamed_addr #0 {
+  %6 = alloca { %fs.file.File, i16, [2 x i8] }, align 4
+  %7 = alloca %fs.Dir, align 4
+  %8 = alloca [1024 x i8], align 1
+  %9 = alloca { %fs.file.File, i16, [2 x i8] }, align 4
+  %10 = alloca { i16, [1024 x i8] }, align 2
+  %11 = insertvalue { ptr, i64 } poison, ptr %2, 0
+  %12 = insertvalue { ptr, i64 } %11, i64 %3, 1
+  %13 = extractvalue { ptr, i64 } %12, 0
+  %14 = extractvalue { ptr, i64 } %12, 1
+  call fastcc void @os.toPosixPath(ptr sret({ i16, [1024 x i8] }) %10, ptr nonnull readonly align 1 %13, i64 %14)
+  %15 = getelementptr inbounds { i16, [1024 x i8] }, ptr %10, i32 0, i32 0
+  %16 = load i16, ptr %15, align 2
+  %17 = icmp ne i16 %16, 0
+  br i1 %17, label %18, label %23
+
+18:                                               ; preds = %5
+  %19 = getelementptr inbounds { i16, [1024 x i8] }, ptr %10, i32 0, i32 0
+  %20 = load i16, ptr %19, align 2
+  %21 = getelementptr inbounds { %fs.file.File, i16, [2 x i8] }, ptr %9, i32 0, i32 1
+  store i16 %20, ptr %21, align 2
+  %22 = getelementptr inbounds { %fs.file.File, i16, [2 x i8] }, ptr %9, i32 0, i32 0
+  call void @llvm.memcpy.p0.p0.i64(ptr align 4 %0, ptr align 4 %9, i64 8, i1 false)
+  ret void
+
+23:                                               ; preds = %5
+  %24 = getelementptr inbounds { i16, [1024 x i8] }, ptr %10, i32 0, i32 1
+  call void @llvm.memcpy.p0.p0.i64(ptr align 1 %8, ptr align 1 %24, i64 1024, i1 false)
+  call void @llvm.memcpy.p0.p0.i64(ptr align 4 %7, ptr align 4 %1, i64 4, i1 false)
+  call fastcc void @fs.Dir.openFileZ(ptr sret({ %fs.file.File, i16, [2 x i8] }) %6, ptr nonnull readonly align 4 %7, ptr nonnull readonly align 1 %8, ptr nonnull readonly align 1 %4)
+  call void @llvm.memcpy.p0.p0.i64(ptr align 4 %0, ptr align 4 %6, i64 8, i1 false)
+  ret void
+}
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc void @"array_list.ArrayListAligned(u8,null).init"(ptr noalias nonnull sret(%"array_list.ArrayListAligned(u8,null)") %0, ptr nonnull readonly align 8 %1) unnamed_addr #0 {
+  %3 = getelementptr inbounds %"array_list.ArrayListAligned(u8,null)", ptr %0, i32 0, i32 0
+  store { ptr, i64 } { ptr inttoptr (i64 -6148914691236517206 to ptr), i64 0 }, ptr %3, align 8
+  %4 = getelementptr inbounds %"array_list.ArrayListAligned(u8,null)", ptr %0, i32 0, i32 1
+  store i64 0, ptr %4, align 8
+  %5 = getelementptr inbounds %"array_list.ArrayListAligned(u8,null)", ptr %0, i32 0, i32 2
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %5, ptr align 8 %1, i64 16, i1 false)
+  ret void
+}
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc i16 @"array_list.ArrayListAligned(u8,null).ensureTotalCapacityPrecise"(ptr nonnull align 8 %0, i64 %1) unnamed_addr #0 {
+  %3 = alloca ptr, align 8
+  %4 = alloca ptr, align 8
+  %5 = alloca ptr, align 8
+  %6 = alloca { ptr, i64 }, align 8
+  %7 = alloca { { ptr, i64 }, i16, [6 x i8] }, align 8
+  %8 = alloca ptr, align 8
+  %9 = alloca ptr, align 8
+  %10 = alloca ptr, align 8
+  %11 = alloca ptr, align 8
+  %12 = getelementptr inbounds %"array_list.ArrayListAligned(u8,null)", ptr %0, i32 0, i32 1
+  %13 = load i64, ptr %12, align 8
+  %14 = icmp uge i64 %13, %1
+  br i1 %14, label %23, label %24
+
+15:                                               ; preds = %24
+  store ptr %0, ptr %11, align 8
+  %16 = load ptr, ptr %11, align 8
+  %17 = call fastcc { ptr, i64 } @"array_list.ArrayListAligned(u8,null).allocatedSlice"(ptr nonnull readonly align 8 %16)
+  store ptr %0, ptr %10, align 8
+  %18 = load ptr, ptr %10, align 8
+  %19 = getelementptr inbounds %"array_list.ArrayListAligned(u8,null)", ptr %18, i32 0, i32 2
+  %20 = extractvalue { ptr, i64 } %17, 0
+  %21 = extractvalue { ptr, i64 } %17, 1
+  %22 = call fastcc i1 @mem.Allocator.resize__anon_3749(ptr nonnull readonly align 8 %19, ptr nonnull align 1 %20, i64 %21, i64 %1)
+  br i1 %22, label %26, label %29
+
+23:                                               ; preds = %2
+  ret i16 0
+
+24:                                               ; preds = %2
+  br label %15
+
+25:                                               ; preds = %38, %26
+  ret i16 0
+
+26:                                               ; preds = %15
+  store ptr %0, ptr %9, align 8
+  %27 = load ptr, ptr %9, align 8
+  %28 = getelementptr inbounds %"array_list.ArrayListAligned(u8,null)", ptr %27, i32 0, i32 1
+  store i64 %1, ptr %28, align 8
+  br label %25
+
+29:                                               ; preds = %15
+  store ptr %0, ptr %8, align 8
+  %30 = load ptr, ptr %8, align 8
+  %31 = getelementptr inbounds %"array_list.ArrayListAligned(u8,null)", ptr %30, i32 0, i32 2
+  call fastcc void @mem.Allocator.alignedAlloc__anon_3750(ptr sret({ { ptr, i64 }, i16, [6 x i8] }) %7, ptr nonnull readonly align 8 %31, i64 %1)
+  %32 = getelementptr inbounds { { ptr, i64 }, i16, [6 x i8] }, ptr %7, i32 0, i32 1
+  %33 = load i16, ptr %32, align 2
+  %34 = icmp ne i16 %33, 0
+  br i1 %34, label %35, label %38
+
+35:                                               ; preds = %29
+  %36 = getelementptr inbounds { { ptr, i64 }, i16, [6 x i8] }, ptr %7, i32 0, i32 1
+  %37 = load i16, ptr %36, align 2
+  ret i16 %37
+
+38:                                               ; preds = %29
+  %39 = getelementptr inbounds { { ptr, i64 }, i16, [6 x i8] }, ptr %7, i32 0, i32 0
+  %40 = load { ptr, i64 }, ptr %39, align 8
+  store { ptr, i64 } %40, ptr %6, align 8
+  %41 = getelementptr inbounds %"array_list.ArrayListAligned(u8,null)", ptr %0, i32 0, i32 0
+  %42 = load { ptr, i64 }, ptr %41, align 8
+  %43 = extractvalue { ptr, i64 } %42, 1
+  %44 = load { ptr, i64 }, ptr %6, align 8
+  %45 = extractvalue { ptr, i64 } %44, 0
+  %46 = getelementptr inbounds i8, ptr %45, i64 0
+  %47 = insertvalue { ptr, i64 } poison, ptr %46, 0
+  %48 = insertvalue { ptr, i64 } %47, i64 %43, 1
+  %49 = getelementptr inbounds %"array_list.ArrayListAligned(u8,null)", ptr %0, i32 0, i32 0
+  %50 = load { ptr, i64 }, ptr %49, align 8
+  %51 = extractvalue { ptr, i64 } %50, 0
+  %52 = extractvalue { ptr, i64 } %48, 1
+  %53 = extractvalue { ptr, i64 } %48, 0
+  call void @llvm.memcpy.p0.p0.i64(ptr align 1 %53, ptr align 1 %51, i64 %52, i1 false)
+  store ptr %0, ptr %5, align 8
+  %54 = load ptr, ptr %5, align 8
+  %55 = getelementptr inbounds %"array_list.ArrayListAligned(u8,null)", ptr %54, i32 0, i32 2
+  %56 = extractvalue { ptr, i64 } %17, 0
+  %57 = extractvalue { ptr, i64 } %17, 1
+  call fastcc void @mem.Allocator.free__anon_3748(ptr nonnull readonly align 8 %55, ptr nonnull align 1 %56, i64 %57)
+  store ptr %0, ptr %4, align 8
+  %58 = load ptr, ptr %4, align 8
+  %59 = getelementptr inbounds %"array_list.ArrayListAligned(u8,null)", ptr %58, i32 0, i32 0
+  %60 = getelementptr inbounds { ptr, i64 }, ptr %59, i32 0, i32 0
+  %61 = extractvalue { ptr, i64 } %40, 0
+  store ptr %61, ptr %60, align 8
+  store ptr %0, ptr %3, align 8
+  %62 = load ptr, ptr %3, align 8
+  %63 = getelementptr inbounds %"array_list.ArrayListAligned(u8,null)", ptr %62, i32 0, i32 1
+  %64 = extractvalue { ptr, i64 } %40, 1
+  store i64 %64, ptr %63, align 8
+  br label %25
+}
 
 ; Function Attrs: nocallback nofree nosync nounwind speculatable willreturn memory(none)
-declare { i64, i1 } @llvm.umul.with.overflow.i64(i64, i64) #3
+declare i64 @llvm.uadd.sat.i64(i64, i64) #1
 
-attributes #0 = { minsize nounwind optsize uwtable "frame-pointer"="none" "target-cpu"="apple-a14" }
-attributes #1 = { nocallback nofree nounwind willreturn }
-attributes #2 = { nocallback nofree nosync nounwind willreturn }
-attributes #3 = { nocallback nofree nosync nounwind speculatable willreturn }
-attributes #4 = { nocallback nofree nounwind willreturn }
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc void @"io.reader.Reader(fs.file.File,error{AccessDenied,Unexpected,SystemResources,IsDir,WouldBlock,InputOutput,OperationAborted,BrokenPipe,ConnectionResetByPeer,ConnectionTimedOut,NotOpenForReading,NetNameDeleted},(function 'read')).readAtLeast"(ptr noalias nonnull sret({ i64, i16, [6 x i8] }) %0, ptr nonnull readonly align 4 %1, ptr nonnull align 1 %2, i64 %3, i64 %4) unnamed_addr #0 {
+  %6 = alloca { i64, i16, [6 x i8] }, align 8
+  %7 = alloca { i64, i16, [6 x i8] }, align 8
+  %8 = alloca { i64, i16, [6 x i8] }, align 8
+  %9 = alloca { ptr, i64 }, align 8
+  %10 = alloca %"io.reader.Reader(fs.file.File,error{AccessDenied,Unexpected,SystemResources,IsDir,WouldBlock,InputOutput,OperationAborted,BrokenPipe,ConnectionResetByPeer,ConnectionTimedOut,NotOpenForReading,NetNameDeleted},(function 'read'))", align 4
+  %11 = alloca %"io.reader.Reader(fs.file.File,error{AccessDenied,Unexpected,SystemResources,IsDir,WouldBlock,InputOutput,OperationAborted,BrokenPipe,ConnectionResetByPeer,ConnectionTimedOut,NotOpenForReading,NetNameDeleted},(function 'read'))", align 4
+  %12 = alloca i64, align 8
+  %13 = insertvalue { ptr, i64 } poison, ptr %2, 0
+  %14 = insertvalue { ptr, i64 } %13, i64 %3, 1
+  %15 = extractvalue { ptr, i64 } %14, 1
+  %16 = icmp ule i64 %4, %15
+  call fastcc void @debug.assert(i1 %16)
+  store i64 0, ptr %12, align 8
+  br label %21
+
+17:                                               ; preds = %39, %52
+  %18 = load i64, ptr %12, align 8
+  %19 = getelementptr inbounds { i64, i16, [6 x i8] }, ptr %6, i32 0, i32 1
+  store i16 0, ptr %19, align 2
+  %20 = getelementptr inbounds { i64, i16, [6 x i8] }, ptr %6, i32 0, i32 0
+  store i64 %18, ptr %20, align 8
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 %6, i64 16, i1 false)
+  ret void
+
+21:                                               ; preds = %24, %5
+  %22 = load i64, ptr %12, align 8
+  %23 = icmp ult i64 %22, %4
+  br i1 %23, label %25, label %39
+
+24:                                               ; preds = %49
+  br label %21
+
+25:                                               ; preds = %21
+  call void @llvm.memcpy.p0.p0.i64(ptr align 4 %11, ptr align 4 %1, i64 4, i1 false)
+  call void @llvm.memcpy.p0.p0.i64(ptr align 4 %10, ptr align 4 %11, i64 4, i1 false)
+  store { ptr, i64 } %14, ptr %9, align 8
+  %26 = load i64, ptr %12, align 8
+  %27 = load { ptr, i64 }, ptr %9, align 8
+  %28 = extractvalue { ptr, i64 } %27, 0
+  %29 = getelementptr inbounds i8, ptr %28, i64 %26
+  %30 = extractvalue { ptr, i64 } %27, 1
+  %31 = sub nuw i64 %30, %26
+  %32 = insertvalue { ptr, i64 } poison, ptr %29, 0
+  %33 = insertvalue { ptr, i64 } %32, i64 %31, 1
+  %34 = extractvalue { ptr, i64 } %33, 0
+  %35 = extractvalue { ptr, i64 } %33, 1
+  call fastcc void @"io.reader.Reader(fs.file.File,error{AccessDenied,Unexpected,SystemResources,IsDir,WouldBlock,InputOutput,OperationAborted,BrokenPipe,ConnectionResetByPeer,ConnectionTimedOut,NotOpenForReading,NetNameDeleted},(function 'read')).read"(ptr sret({ i64, i16, [6 x i8] }) %8, ptr nonnull readonly align 4 %10, ptr nonnull align 1 %34, i64 %35)
+  %36 = getelementptr inbounds { i64, i16, [6 x i8] }, ptr %8, i32 0, i32 1
+  %37 = load i16, ptr %36, align 2
+  %38 = icmp ne i16 %37, 0
+  br i1 %38, label %40, label %45
+
+39:                                               ; preds = %21
+  br label %17
+
+40:                                               ; preds = %25
+  %41 = getelementptr inbounds { i64, i16, [6 x i8] }, ptr %8, i32 0, i32 1
+  %42 = load i16, ptr %41, align 2
+  %43 = getelementptr inbounds { i64, i16, [6 x i8] }, ptr %7, i32 0, i32 1
+  store i16 %42, ptr %43, align 2
+  %44 = getelementptr inbounds { i64, i16, [6 x i8] }, ptr %7, i32 0, i32 0
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 %7, i64 16, i1 false)
+  ret void
+
+45:                                               ; preds = %25
+  %46 = getelementptr inbounds { i64, i16, [6 x i8] }, ptr %8, i32 0, i32 0
+  %47 = load i64, ptr %46, align 8
+  %48 = icmp eq i64 %47, 0
+  br i1 %48, label %52, label %53
+
+49:                                               ; preds = %53
+  %50 = load i64, ptr %12, align 8
+  %51 = add nuw i64 %50, %47
+  store i64 %51, ptr %12, align 8
+  br label %24
+
+52:                                               ; preds = %45
+  br label %17
+
+53:                                               ; preds = %45
+  br label %49
+}
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc void @"array_list.ArrayListAligned(u8,null).moveToUnmanaged"(ptr noalias nonnull sret(%"array_list.ArrayListAlignedUnmanaged(u8,null)") %0, ptr nonnull align 8 %1) unnamed_addr #0 {
+  %3 = alloca %"array_list.ArrayListAlignedUnmanaged(u8,null)", align 8
+  %4 = alloca %"array_list.ArrayListAligned(u8,null)", align 8
+  %5 = alloca { { ptr, i64 }, i64 }, align 8
+  %6 = getelementptr inbounds %"array_list.ArrayListAligned(u8,null)", ptr %1, i32 0, i32 2
+  %7 = getelementptr inbounds %"array_list.ArrayListAligned(u8,null)", ptr %1, i32 0, i32 0
+  %8 = load { ptr, i64 }, ptr %7, align 8
+  %9 = getelementptr inbounds %"array_list.ArrayListAligned(u8,null)", ptr %1, i32 0, i32 1
+  %10 = load i64, ptr %9, align 8
+  %11 = getelementptr inbounds { { ptr, i64 }, i64 }, ptr %5, i32 0, i32 0
+  store { ptr, i64 } %8, ptr %11, align 8
+  %12 = getelementptr inbounds { { ptr, i64 }, i64 }, ptr %5, i32 0, i32 1
+  store i64 %10, ptr %12, align 8
+  call fastcc void @"array_list.ArrayListAligned(u8,null).init"(ptr sret(%"array_list.ArrayListAligned(u8,null)") %4, ptr nonnull readonly align 8 %6)
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %1, ptr align 8 %4, i64 40, i1 false)
+  %13 = getelementptr inbounds { { ptr, i64 }, i64 }, ptr %5, i32 0, i32 0
+  %14 = load { ptr, i64 }, ptr %13, align 8
+  %15 = getelementptr inbounds { { ptr, i64 }, i64 }, ptr %5, i32 0, i32 1
+  %16 = load i64, ptr %15, align 8
+  %17 = getelementptr inbounds %"array_list.ArrayListAlignedUnmanaged(u8,null)", ptr %3, i32 0, i32 0
+  store { ptr, i64 } %14, ptr %17, align 8
+  %18 = getelementptr inbounds %"array_list.ArrayListAlignedUnmanaged(u8,null)", ptr %3, i32 0, i32 1
+  store i64 %16, ptr %18, align 8
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 %3, i64 24, i1 false)
+  ret void
+}
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc void @"array_list.ArrayListAlignedUnmanaged(u8,null).shrinkAndFree"(ptr nonnull align 8 %0, ptr nonnull readonly align 8 %1, i64 %2) unnamed_addr #0 {
+  %4 = alloca ptr, align 8
+  %5 = alloca ptr, align 8
+  %6 = alloca %mem.Allocator, align 8
+  %7 = alloca ptr, align 8
+  %8 = alloca ptr, align 8
+  %9 = alloca { { ptr, i64 }, i16, [6 x i8] }, align 8
+  %10 = alloca %mem.Allocator, align 8
+  %11 = alloca ptr, align 8
+  %12 = alloca ptr, align 8
+  %13 = alloca %mem.Allocator, align 8
+  %14 = alloca ptr, align 8
+  %15 = getelementptr inbounds %"array_list.ArrayListAlignedUnmanaged(u8,null)", ptr %0, i32 0, i32 0
+  %16 = load { ptr, i64 }, ptr %15, align 8
+  %17 = extractvalue { ptr, i64 } %16, 1
+  %18 = icmp ule i64 %2, %17
+  call fastcc void @debug.assert(i1 %18)
+  store ptr %0, ptr %14, align 8
+  %19 = load ptr, ptr %14, align 8
+  %20 = call fastcc { ptr, i64 } @"array_list.ArrayListAlignedUnmanaged(u8,null).allocatedSlice"(ptr nonnull readonly align 8 %19)
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %13, ptr align 8 %1, i64 16, i1 false)
+  %21 = extractvalue { ptr, i64 } %20, 0
+  %22 = extractvalue { ptr, i64 } %20, 1
+  %23 = call fastcc i1 @mem.Allocator.resize__anon_3749(ptr nonnull readonly align 8 %13, ptr nonnull align 1 %21, i64 %22, i64 %2)
+  br i1 %23, label %28, label %34
+
+24:                                               ; preds = %34
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %10, ptr align 8 %1, i64 16, i1 false)
+  call fastcc void @mem.Allocator.alignedAlloc__anon_3750(ptr sret({ { ptr, i64 }, i16, [6 x i8] }) %9, ptr nonnull readonly align 8 %10, i64 %2)
+  %25 = getelementptr inbounds { { ptr, i64 }, i16, [6 x i8] }, ptr %9, i32 0, i32 1
+  %26 = load i16, ptr %25, align 2
+  %27 = icmp eq i16 %26, 0
+  br i1 %27, label %54, label %57
+
+28:                                               ; preds = %3
+  store ptr %0, ptr %12, align 8
+  %29 = load ptr, ptr %12, align 8
+  %30 = getelementptr inbounds %"array_list.ArrayListAlignedUnmanaged(u8,null)", ptr %29, i32 0, i32 1
+  store i64 %2, ptr %30, align 8
+  store ptr %0, ptr %11, align 8
+  %31 = load ptr, ptr %11, align 8
+  %32 = getelementptr inbounds %"array_list.ArrayListAlignedUnmanaged(u8,null)", ptr %31, i32 0, i32 0
+  %33 = getelementptr inbounds { ptr, i64 }, ptr %32, i32 0, i32 1
+  store i64 %2, ptr %33, align 8
+  ret void
+
+34:                                               ; preds = %3
+  br label %24
+
+35:                                               ; preds = %54
+  %36 = phi { ptr, i64 } [ %56, %54 ]
+  store ptr %0, ptr %7, align 8
+  %37 = load ptr, ptr %7, align 8
+  %38 = getelementptr inbounds %"array_list.ArrayListAlignedUnmanaged(u8,null)", ptr %37, i32 0, i32 0
+  %39 = load { ptr, i64 }, ptr %38, align 8
+  %40 = extractvalue { ptr, i64 } %39, 0
+  %41 = getelementptr inbounds i8, ptr %40, i64 0
+  %42 = insertvalue { ptr, i64 } poison, ptr %41, 0
+  %43 = insertvalue { ptr, i64 } %42, i64 %2, 1
+  %44 = extractvalue { ptr, i64 } %43, 0
+  %45 = extractvalue { ptr, i64 } %36, 1
+  %46 = extractvalue { ptr, i64 } %36, 0
+  call void @llvm.memcpy.p0.p0.i64(ptr align 1 %46, ptr align 1 %44, i64 %45, i1 false)
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %6, ptr align 8 %1, i64 16, i1 false)
+  %47 = extractvalue { ptr, i64 } %20, 0
+  %48 = extractvalue { ptr, i64 } %20, 1
+  call fastcc void @mem.Allocator.free__anon_3748(ptr nonnull readonly align 8 %6, ptr nonnull align 1 %47, i64 %48)
+  store ptr %0, ptr %5, align 8
+  %49 = load ptr, ptr %5, align 8
+  %50 = getelementptr inbounds %"array_list.ArrayListAlignedUnmanaged(u8,null)", ptr %49, i32 0, i32 0
+  store { ptr, i64 } %36, ptr %50, align 8
+  store ptr %0, ptr %4, align 8
+  %51 = load ptr, ptr %4, align 8
+  %52 = getelementptr inbounds %"array_list.ArrayListAlignedUnmanaged(u8,null)", ptr %51, i32 0, i32 1
+  %53 = extractvalue { ptr, i64 } %36, 1
+  store i64 %53, ptr %52, align 8
+  ret void
+
+54:                                               ; preds = %24
+  %55 = getelementptr inbounds { { ptr, i64 }, i16, [6 x i8] }, ptr %9, i32 0, i32 0
+  %56 = load { ptr, i64 }, ptr %55, align 8
+  br label %35
+
+57:                                               ; preds = %24
+  %58 = getelementptr inbounds { { ptr, i64 }, i16, [6 x i8] }, ptr %9, i32 0, i32 1
+  %59 = load i16, ptr %58, align 2
+  switch i16 %59, label %60 [
+    i16 1, label %61
+  ]
+
+60:                                               ; preds = %57
+  unreachable
+
+61:                                               ; preds = %57
+  store ptr %0, ptr %8, align 8
+  %62 = load ptr, ptr %8, align 8
+  %63 = getelementptr inbounds %"array_list.ArrayListAlignedUnmanaged(u8,null)", ptr %62, i32 0, i32 0
+  %64 = getelementptr inbounds { ptr, i64 }, ptr %63, i32 0, i32 1
+  store i64 %2, ptr %64, align 8
+  ret void
+}
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc void @"array_list.ArrayListAlignedUnmanaged(u8,null).toManaged"(ptr noalias nonnull sret(%"array_list.ArrayListAligned(u8,null)") %0, ptr nonnull align 8 %1, ptr nonnull readonly align 8 %2) unnamed_addr #0 {
+  %4 = getelementptr inbounds %"array_list.ArrayListAligned(u8,null)", ptr %0, i32 0, i32 0
+  %5 = getelementptr inbounds %"array_list.ArrayListAlignedUnmanaged(u8,null)", ptr %1, i32 0, i32 0
+  %6 = load { ptr, i64 }, ptr %5, align 8
+  store { ptr, i64 } %6, ptr %4, align 8
+  %7 = getelementptr inbounds %"array_list.ArrayListAligned(u8,null)", ptr %0, i32 0, i32 1
+  %8 = getelementptr inbounds %"array_list.ArrayListAlignedUnmanaged(u8,null)", ptr %1, i32 0, i32 1
+  %9 = load i64, ptr %8, align 8
+  store i64 %9, ptr %7, align 8
+  %10 = getelementptr inbounds %"array_list.ArrayListAligned(u8,null)", ptr %0, i32 0, i32 2
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %10, ptr align 8 %2, i64 16, i1 false)
+  ret void
+}
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc { ptr, i64 } @"array_list.ArrayListAligned(u8,null).allocatedSlice"(ptr nonnull readonly align 8 %0) unnamed_addr #0 {
+  %2 = alloca %"array_list.ArrayListAligned(u8,null)", align 8
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %2, ptr align 8 %0, i64 40, i1 false)
+  %3 = getelementptr inbounds %"array_list.ArrayListAligned(u8,null)", ptr %2, i32 0, i32 0
+  %4 = getelementptr inbounds { ptr, i64 }, ptr %3, i32 0, i32 0
+  %5 = getelementptr inbounds %"array_list.ArrayListAligned(u8,null)", ptr %0, i32 0, i32 1
+  %6 = load i64, ptr %5, align 8
+  %7 = load ptr, ptr %4, align 8
+  %8 = getelementptr inbounds i8, ptr %7, i64 0
+  %9 = insertvalue { ptr, i64 } poison, ptr %8, 0
+  %10 = insertvalue { ptr, i64 } %9, i64 %6, 1
+  ret { ptr, i64 } %10
+}
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc void @mem.Allocator.free__anon_3748(ptr nonnull readonly align 8 %0, ptr nonnull align 1 %1, i64 %2) unnamed_addr #0 {
+  %4 = alloca %mem.Allocator, align 8
+  %5 = alloca %mem.Allocator, align 8
+  %6 = alloca %mem.Allocator, align 8
+  %7 = alloca ptr, align 8
+  %8 = insertvalue { ptr, i64 } poison, ptr %1, 0
+  %9 = insertvalue { ptr, i64 } %8, i64 %2, 1
+  %10 = extractvalue { ptr, i64 } %9, 0
+  %11 = extractvalue { ptr, i64 } %9, 1
+  %12 = call fastcc { ptr, i64 } @mem.sliceAsBytes__anon_3874(ptr nonnull align 1 %10, i64 %11)
+  %13 = extractvalue { ptr, i64 } %12, 1
+  %14 = icmp eq i64 %13, 0
+  br i1 %14, label %37, label %38
+
+15:                                               ; preds = %38
+  %16 = extractvalue { ptr, i64 } %12, 0
+  store ptr %16, ptr %7, align 8
+  %17 = load ptr, ptr %7, align 8
+  %18 = getelementptr inbounds i8, ptr %17, i64 0
+  %19 = insertvalue { ptr, i64 } poison, ptr %18, 0
+  %20 = insertvalue { ptr, i64 } %19, i64 %13, 1
+  %21 = extractvalue { ptr, i64 } %20, 0
+  %22 = extractvalue { ptr, i64 } %20, 1
+  call void @llvm.memset.p0.i64(ptr align 1 %21, i8 undef, i64 %22, i1 false)
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %6, ptr align 8 %0, i64 16, i1 false)
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %5, ptr align 8 %6, i64 16, i1 false)
+  %23 = load ptr, ptr %7, align 8
+  %24 = getelementptr inbounds i8, ptr %23, i64 0
+  %25 = insertvalue { ptr, i64 } poison, ptr %24, 0
+  %26 = insertvalue { ptr, i64 } %25, i64 %13, 1
+  %27 = call fastcc ptr @llvm.returnaddress(i32 0)
+  %28 = ptrtoint ptr %27 to i64
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %4, ptr align 8 %5, i64 16, i1 false)
+  %29 = getelementptr inbounds %mem.Allocator, ptr %4, i32 0, i32 1
+  %30 = load ptr, ptr %29, align 8
+  %31 = getelementptr inbounds %mem.Allocator.VTable, ptr %30, i32 0, i32 2
+  %32 = load ptr, ptr %31, align 8
+  %33 = getelementptr inbounds %mem.Allocator, ptr %5, i32 0, i32 0
+  %34 = load ptr, ptr %33, align 8
+  %35 = extractvalue { ptr, i64 } %26, 0
+  %36 = extractvalue { ptr, i64 } %26, 1
+  call fastcc void %32(ptr nonnull align 1 %34, ptr nonnull align 1 %35, i64 %36, i8 0, i64 %28)
+  ret void
+
+37:                                               ; preds = %3
+  ret void
+
+38:                                               ; preds = %3
+  br label %15
+}
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc i1 @mem.Allocator.resize__anon_3749(ptr nonnull readonly align 8 %0, ptr nonnull align 1 %1, i64 %2, i64 %3) unnamed_addr #0 {
+  %5 = alloca %mem.Allocator, align 8
+  %6 = alloca %mem.Allocator, align 8
+  %7 = alloca %mem.Allocator, align 8
+  %8 = alloca { i64, i16, [6 x i8] }, align 8
+  %9 = alloca %mem.Allocator, align 8
+  %10 = insertvalue { ptr, i64 } poison, ptr %1, 0
+  %11 = insertvalue { ptr, i64 } %10, i64 %2, 1
+  %12 = icmp eq i64 %3, 0
+  br i1 %12, label %16, label %19
+
+13:                                               ; preds = %19
+  %14 = extractvalue { ptr, i64 } %11, 1
+  %15 = icmp eq i64 %14, 0
+  br i1 %15, label %27, label %28
+
+16:                                               ; preds = %4
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %9, ptr align 8 %0, i64 16, i1 false)
+  %17 = extractvalue { ptr, i64 } %11, 0
+  %18 = extractvalue { ptr, i64 } %11, 1
+  call fastcc void @mem.Allocator.free__anon_3748(ptr nonnull readonly align 8 %9, ptr nonnull align 1 %17, i64 %18)
+  ret i1 true
+
+19:                                               ; preds = %4
+  br label %13
+
+20:                                               ; preds = %28
+  %21 = extractvalue { ptr, i64 } %11, 0
+  %22 = extractvalue { ptr, i64 } %11, 1
+  %23 = call fastcc { ptr, i64 } @mem.sliceAsBytes__anon_3874(ptr nonnull align 1 %21, i64 %22)
+  call fastcc void @math.mul__anon_3757(ptr sret({ i64, i16, [6 x i8] }) %8, i64 1, i64 %3)
+  %24 = getelementptr inbounds { i64, i16, [6 x i8] }, ptr %8, i32 0, i32 1
+  %25 = load i16, ptr %24, align 2
+  %26 = icmp eq i16 %25, 0
+  br i1 %26, label %42, label %45
+
+27:                                               ; preds = %13
+  ret i1 false
+
+28:                                               ; preds = %13
+  br label %20
+
+29:                                               ; preds = %42
+  %30 = phi i64 [ %44, %42 ]
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %7, ptr align 8 %0, i64 16, i1 false)
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %6, ptr align 8 %7, i64 16, i1 false)
+  %31 = call fastcc ptr @llvm.returnaddress(i32 0)
+  %32 = ptrtoint ptr %31 to i64
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %5, ptr align 8 %6, i64 16, i1 false)
+  %33 = getelementptr inbounds %mem.Allocator, ptr %5, i32 0, i32 1
+  %34 = load ptr, ptr %33, align 8
+  %35 = getelementptr inbounds %mem.Allocator.VTable, ptr %34, i32 0, i32 1
+  %36 = load ptr, ptr %35, align 8
+  %37 = getelementptr inbounds %mem.Allocator, ptr %6, i32 0, i32 0
+  %38 = load ptr, ptr %37, align 8
+  %39 = extractvalue { ptr, i64 } %23, 0
+  %40 = extractvalue { ptr, i64 } %23, 1
+  %41 = call fastcc i1 %36(ptr nonnull align 1 %38, ptr nonnull align 1 %39, i64 %40, i8 0, i64 %30, i64 %32)
+  ret i1 %41
+
+42:                                               ; preds = %20
+  %43 = getelementptr inbounds { i64, i16, [6 x i8] }, ptr %8, i32 0, i32 0
+  %44 = load i64, ptr %43, align 8
+  br label %29
+
+45:                                               ; preds = %20
+  ret i1 false
+}
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc void @mem.Allocator.alignedAlloc__anon_3750(ptr noalias nonnull sret({ { ptr, i64 }, i16, [6 x i8] }) %0, ptr nonnull readonly align 8 %1, i64 %2) unnamed_addr #0 {
+  %4 = alloca { { ptr, i64 }, i16, [6 x i8] }, align 8
+  %5 = alloca ptr, align 8
+  %6 = alloca { { ptr, i64 }, i16, [6 x i8] }, align 8
+  %7 = alloca { ptr, i16, [6 x i8] }, align 8
+  %8 = alloca %mem.Allocator, align 8
+  %9 = alloca %mem.Allocator, align 8
+  %10 = alloca %mem.Allocator, align 8
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %10, ptr align 8 %1, i64 16, i1 false)
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %9, ptr align 8 %10, i64 16, i1 false)
+  %11 = call fastcc ptr @llvm.returnaddress(i32 0)
+  %12 = ptrtoint ptr %11 to i64
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %8, ptr align 8 %9, i64 16, i1 false)
+  call fastcc void @mem.Allocator.allocWithSizeAndAlignment__anon_3517(ptr sret({ ptr, i16, [6 x i8] }) %7, ptr nonnull readonly align 8 %8, i64 %2, i64 %12)
+  %13 = getelementptr inbounds { ptr, i16, [6 x i8] }, ptr %7, i32 0, i32 1
+  %14 = load i16, ptr %13, align 2
+  %15 = icmp ne i16 %14, 0
+  br i1 %15, label %18, label %23
+
+16:                                               ; preds = %23, %18
+  %17 = phi ptr [ %6, %18 ], [ %4, %23 ]
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 %17, i64 24, i1 false)
+  ret void
+
+18:                                               ; preds = %3
+  %19 = getelementptr inbounds { ptr, i16, [6 x i8] }, ptr %7, i32 0, i32 1
+  %20 = load i16, ptr %19, align 2
+  %21 = getelementptr inbounds { { ptr, i64 }, i16, [6 x i8] }, ptr %6, i32 0, i32 1
+  store i16 %20, ptr %21, align 2
+  %22 = getelementptr inbounds { { ptr, i64 }, i16, [6 x i8] }, ptr %6, i32 0, i32 0
+  br label %16
+
+23:                                               ; preds = %3
+  %24 = getelementptr inbounds { ptr, i16, [6 x i8] }, ptr %7, i32 0, i32 0
+  %25 = load ptr, ptr %24, align 8
+  store ptr %25, ptr %5, align 8
+  %26 = load ptr, ptr %5, align 8
+  %27 = getelementptr inbounds i8, ptr %26, i64 0
+  %28 = insertvalue { ptr, i64 } poison, ptr %27, 0
+  %29 = insertvalue { ptr, i64 } %28, i64 %2, 1
+  %30 = getelementptr inbounds { { ptr, i64 }, i16, [6 x i8] }, ptr %4, i32 0, i32 1
+  store i16 0, ptr %30, align 2
+  %31 = getelementptr inbounds { { ptr, i64 }, i16, [6 x i8] }, ptr %4, i32 0, i32 0
+  store { ptr, i64 } %29, ptr %31, align 8
+  br label %16
+}
+
+; Function Attrs: nocallback nofree nounwind willreturn memory(argmem: write)
+declare void @llvm.memset.p0.i64(ptr nocapture writeonly, i8, i64, i1 immarg) #4
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc void @"array_list.ArrayListAligned(u8,null).clearAndFree"(ptr nonnull align 8 %0) unnamed_addr #0 {
+  %2 = alloca ptr, align 8
+  %3 = alloca ptr, align 8
+  %4 = alloca ptr, align 8
+  %5 = alloca %mem.Allocator, align 8
+  %6 = alloca ptr, align 8
+  store ptr %0, ptr %6, align 8
+  %7 = load ptr, ptr %6, align 8
+  %8 = getelementptr inbounds %"array_list.ArrayListAligned(u8,null)", ptr %7, i32 0, i32 2
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %5, ptr align 8 %8, i64 16, i1 false)
+  store ptr %0, ptr %4, align 8
+  %9 = load ptr, ptr %4, align 8
+  %10 = call fastcc { ptr, i64 } @"array_list.ArrayListAligned(u8,null).allocatedSlice"(ptr nonnull readonly align 8 %9)
+  %11 = extractvalue { ptr, i64 } %10, 0
+  %12 = extractvalue { ptr, i64 } %10, 1
+  call fastcc void @mem.Allocator.free__anon_3748(ptr nonnull readonly align 8 %5, ptr nonnull align 1 %11, i64 %12)
+  store ptr %0, ptr %3, align 8
+  %13 = load ptr, ptr %3, align 8
+  %14 = getelementptr inbounds %"array_list.ArrayListAligned(u8,null)", ptr %13, i32 0, i32 0
+  %15 = getelementptr inbounds { ptr, i64 }, ptr %14, i32 0, i32 1
+  store i64 0, ptr %15, align 8
+  store ptr %0, ptr %2, align 8
+  %16 = load ptr, ptr %2, align 8
+  %17 = getelementptr inbounds %"array_list.ArrayListAligned(u8,null)", ptr %16, i32 0, i32 1
+  store i64 0, ptr %17, align 8
+  ret void
+}
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc void @os.close(i32 %0) unnamed_addr #0 {
+  %2 = call i32 @"close$NOCANCEL"(i32 %0)
+  %3 = call fastcc i16 @c.getErrno__anon_3888(i32 %2)
+  switch i16 %3, label %4 [
+    i16 9, label %5
+  ]
+
+4:                                                ; preds = %1
+  ret void
+
+5:                                                ; preds = %1
+  unreachable
+}
+
+; Function Attrs: nocallback nofree nosync nounwind speculatable willreturn memory(none)
+declare i64 @llvm.umax.i64(i64, i64) #1
+
+; Function Attrs: minsize nounwind optsize uwtable
+declare i32 @posix_memalign(ptr nonnull align 8, i64, i64) #0
+
+; Function Attrs: minsize nounwind optsize uwtable
+declare i64 @malloc_size(ptr readonly align 1) #0
+
+; Function Attrs: minsize nounwind optsize uwtable
+declare void @free(ptr align 1) #0
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc i5 @math.log2_int__anon_3754(i29 %0) unnamed_addr #0 {
+  %2 = icmp ne i29 %0, 0
+  call fastcc void @debug.assert(i1 %2)
+  %3 = call i29 @llvm.ctlz.i29(i29 %0, i1 false)
+  %4 = trunc i29 %3 to i5
+  %5 = zext i5 %4 to i16
+  %6 = sub nuw i16 28, %5
+  %7 = trunc i16 %6 to i5
+  ret i5 %7
+}
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc void @math.mul__anon_3757(ptr noalias nonnull sret({ i64, i16, [6 x i8] }) %0, i64 %1, i64 %2) unnamed_addr #0 {
+  %4 = alloca { i64, i16, [6 x i8] }, align 8
+  %5 = alloca { i64, i1, [7 x i8] }, align 8
+  %6 = call fastcc { i64, i1 } @llvm.umul.with.overflow.i64(i64 %1, i64 %2)
+  %7 = extractvalue { i64, i1 } %6, 0
+  %8 = extractvalue { i64, i1 } %6, 1
+  %9 = getelementptr inbounds { i64, i1, [7 x i8] }, ptr %5, i32 0, i32 0
+  store i64 %7, ptr %9, align 8
+  %10 = getelementptr inbounds { i64, i1, [7 x i8] }, ptr %5, i32 0, i32 1
+  store i1 %8, ptr %10, align 1
+  %11 = getelementptr inbounds { i64, i1, [7 x i8] }, ptr %5, i32 0, i32 1
+  %12 = load i1, ptr %11, align 1
+  %13 = icmp ne i1 %12, false
+  br i1 %13, label %19, label %20
+
+14:                                               ; preds = %20
+  %15 = getelementptr inbounds { i64, i1, [7 x i8] }, ptr %5, i32 0, i32 0
+  %16 = load i64, ptr %15, align 8
+  %17 = getelementptr inbounds { i64, i16, [6 x i8] }, ptr %4, i32 0, i32 1
+  store i16 0, ptr %17, align 2
+  %18 = getelementptr inbounds { i64, i16, [6 x i8] }, ptr %4, i32 0, i32 0
+  store i64 %16, ptr %18, align 8
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 %4, i64 16, i1 false)
+  ret void
+
+19:                                               ; preds = %3
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 @10, i64 16, i1 false)
+  ret void
+
+20:                                               ; preds = %3
+  br label %14
+}
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc void @mem.Allocator.allocBytesWithAlignment__anon_3758(ptr noalias nonnull sret({ ptr, i16, [6 x i8] }) %0, ptr nonnull readonly align 8 %1, i64 %2, i64 %3) unnamed_addr #0 {
+  %5 = alloca { ptr, i16, [6 x i8] }, align 8
+  %6 = alloca ptr, align 8
+  %7 = alloca %mem.Allocator, align 8
+  %8 = alloca %mem.Allocator, align 8
+  %9 = alloca %mem.Allocator, align 8
+  %10 = icmp eq i64 %2, 0
+  br i1 %10, label %22, label %23
+
+11:                                               ; preds = %23
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %9, ptr align 8 %1, i64 16, i1 false)
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %8, ptr align 8 %9, i64 16, i1 false)
+  %12 = call fastcc i5 @math.log2_int__anon_3754(i29 1)
+  %13 = zext i5 %12 to i8
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %7, ptr align 8 %8, i64 16, i1 false)
+  %14 = getelementptr inbounds %mem.Allocator, ptr %7, i32 0, i32 1
+  %15 = load ptr, ptr %14, align 8
+  %16 = getelementptr inbounds %mem.Allocator.VTable, ptr %15, i32 0, i32 0
+  %17 = load ptr, ptr %16, align 8
+  %18 = getelementptr inbounds %mem.Allocator, ptr %8, i32 0, i32 0
+  %19 = load ptr, ptr %18, align 8
+  %20 = call fastcc ptr %17(ptr nonnull align 1 %19, i64 %2, i8 %13, i64 %3)
+  %21 = icmp ne ptr %20, null
+  br i1 %21, label %34, label %35
+
+22:                                               ; preds = %4
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 @11, i64 16, i1 false)
+  ret void
+
+23:                                               ; preds = %4
+  br label %11
+
+24:                                               ; preds = %34
+  %25 = phi ptr [ %20, %34 ]
+  store ptr %25, ptr %6, align 8
+  %26 = load ptr, ptr %6, align 8
+  %27 = getelementptr inbounds i8, ptr %26, i64 0
+  %28 = insertvalue { ptr, i64 } poison, ptr %27, 0
+  %29 = insertvalue { ptr, i64 } %28, i64 %2, 1
+  %30 = extractvalue { ptr, i64 } %29, 0
+  %31 = extractvalue { ptr, i64 } %29, 1
+  call void @llvm.memset.p0.i64(ptr align 1 %30, i8 undef, i64 %31, i1 false)
+  %32 = getelementptr inbounds { ptr, i16, [6 x i8] }, ptr %5, i32 0, i32 1
+  store i16 0, ptr %32, align 2
+  %33 = getelementptr inbounds { ptr, i16, [6 x i8] }, ptr %5, i32 0, i32 0
+  store ptr %25, ptr %33, align 8
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 %5, i64 16, i1 false)
+  ret void
+
+34:                                               ; preds = %11
+  br label %24
+
+35:                                               ; preds = %11
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 @12, i64 16, i1 false)
+  ret void
+}
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc i1 @fs.path.isAbsolutePosix(ptr nonnull readonly align 1 %0, i64 %1) unnamed_addr #0 {
+  %3 = insertvalue { ptr, i64 } poison, ptr %0, 0
+  %4 = insertvalue { ptr, i64 } %3, i64 %1, 1
+  %5 = extractvalue { ptr, i64 } %4, 1
+  %6 = icmp ugt i64 %5, 0
+  br i1 %6, label %9, label %14
+
+7:                                                ; preds = %14, %9
+  %8 = phi i1 [ %13, %9 ], [ false, %14 ]
+  ret i1 %8
+
+9:                                                ; preds = %2
+  %10 = extractvalue { ptr, i64 } %4, 0
+  %11 = getelementptr inbounds i8, ptr %10, i64 0
+  %12 = load i8, ptr %11, align 1
+  %13 = icmp eq i8 %12, 47
+  br label %7
+
+14:                                               ; preds = %2
+  br label %7
+}
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc void @os.toPosixPath(ptr noalias nonnull sret({ i16, [1024 x i8] }) %0, ptr nonnull readonly align 1 %1, i64 %2) unnamed_addr #0 {
+  %4 = alloca { i16, [1024 x i8] }, align 2
+  %5 = alloca [1024 x i8], align 1
+  %6 = insertvalue { ptr, i64 } poison, ptr %1, 0
+  %7 = insertvalue { ptr, i64 } %6, i64 %2, 1
+  call void @llvm.memset.p0.i64(ptr align 1 %5, i8 undef, i64 1024, i1 false)
+  %8 = extractvalue { ptr, i64 } %7, 1
+  %9 = icmp uge i64 %8, 1024
+  br i1 %9, label %22, label %23
+
+10:                                               ; preds = %23
+  %11 = extractvalue { ptr, i64 } %7, 1
+  %12 = getelementptr inbounds i8, ptr %5, i64 0
+  %13 = insertvalue { ptr, i64 } poison, ptr %12, 0
+  %14 = insertvalue { ptr, i64 } %13, i64 %11, 1
+  %15 = extractvalue { ptr, i64 } %7, 0
+  %16 = extractvalue { ptr, i64 } %14, 1
+  %17 = extractvalue { ptr, i64 } %14, 0
+  call void @llvm.memcpy.p0.p0.i64(ptr align 1 %17, ptr align 1 %15, i64 %16, i1 false)
+  %18 = extractvalue { ptr, i64 } %7, 1
+  %19 = getelementptr inbounds [1024 x i8], ptr %5, i64 0, i64 %18
+  store i8 0, ptr %19, align 1
+  %20 = getelementptr inbounds { i16, [1024 x i8] }, ptr %4, i32 0, i32 0
+  store i16 0, ptr %20, align 2
+  %21 = getelementptr inbounds { i16, [1024 x i8] }, ptr %4, i32 0, i32 1
+  call void @llvm.memcpy.p0.p0.i64(ptr align 1 %21, ptr align 1 %5, i64 1024, i1 false)
+  call void @llvm.memcpy.p0.p0.i64(ptr align 2 %0, ptr align 2 %4, i64 1026, i1 false)
+  ret void
+
+22:                                               ; preds = %3
+  call void @llvm.memcpy.p0.p0.i64(ptr align 2 %0, ptr align 2 @9, i64 1026, i1 false)
+  ret void
+
+23:                                               ; preds = %3
+  br label %10
+}
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc void @fs.Dir.openFileZ(ptr noalias nonnull sret({ %fs.file.File, i16, [2 x i8] }) %0, ptr nonnull readonly align 4 %1, ptr nonnull readonly align 1 %2, ptr nonnull readonly align 1 %3) unnamed_addr #0 {
+  %5 = alloca { %fs.file.File, i16, [2 x i8] }, align 4
+  %6 = alloca { i64, i16, [6 x i8] }, align 8
+  %7 = alloca { %fs.file.File, i16, [2 x i8] }, align 4
+  %8 = alloca { i64, i16, [6 x i8] }, align 8
+  %9 = alloca i64, align 8
+  %10 = alloca { %fs.file.File, i16, [2 x i8] }, align 4
+  %11 = alloca { i32, i16, [2 x i8] }, align 4
+  %12 = alloca i32, align 4
+  store i32 0, ptr %12, align 4
+  store i32 16777216, ptr %12, align 4
+  %13 = getelementptr inbounds %fs.file.File.OpenFlags, ptr %3, i32 0, i32 2
+  %14 = load i1, ptr %13, align 1
+  br i1 %14, label %20, label %21
+
+15:                                               ; preds = %21, %20
+  %16 = phi i32 [ 4, %20 ], [ 0, %21 ]
+  %17 = load i32, ptr %12, align 4
+  %18 = getelementptr inbounds %fs.file.File.OpenFlags, ptr %3, i32 0, i32 1
+  %19 = load i2, ptr %18, align 1
+  switch i2 %19, label %28 [
+    i2 0, label %29
+    i2 1, label %30
+    i2 -2, label %32
+  ]
+
+20:                                               ; preds = %4
+  br label %15
+
+21:                                               ; preds = %4
+  br label %15
+
+22:                                               ; preds = %32, %30, %29
+  %23 = phi i32 [ 0, %29 ], [ %31, %30 ], [ %33, %32 ]
+  %24 = or i32 %17, %23
+  store i32 %24, ptr %12, align 4
+  %25 = getelementptr inbounds %fs.file.File.OpenFlags, ptr %3, i32 0, i32 3
+  %26 = load i1, ptr %25, align 1
+  %27 = xor i1 %26, true
+  br i1 %27, label %38, label %41
+
+28:                                               ; preds = %15
+  unreachable
+
+29:                                               ; preds = %15
+  br label %22
+
+30:                                               ; preds = %15
+  %31 = or i32 16, %16
+  br label %22
+
+32:                                               ; preds = %15
+  %33 = or i32 32, %16
+  br label %22
+
+34:                                               ; preds = %41, %38
+  %35 = load i32, ptr %12, align 4
+  %36 = getelementptr inbounds %fs.file.File.OpenFlags, ptr %3, i32 0, i32 0
+  %37 = load i2, ptr %36, align 1
+  switch i2 %37, label %51 [
+    i2 0, label %52
+    i2 1, label %53
+    i2 -2, label %54
+  ]
+
+38:                                               ; preds = %22
+  %39 = load i32, ptr %12, align 4
+  %40 = or i32 %39, 131072
+  store i32 %40, ptr %12, align 4
+  br label %34
+
+41:                                               ; preds = %22
+  br label %34
+
+42:                                               ; preds = %54, %53, %52
+  %43 = phi i32 [ 0, %52 ], [ 1, %53 ], [ 2, %54 ]
+  %44 = or i32 %35, %43
+  store i32 %44, ptr %12, align 4
+  %45 = getelementptr inbounds %fs.Dir, ptr %1, i32 0, i32 0
+  %46 = load i32, ptr %45, align 4
+  %47 = load i32, ptr %12, align 4
+  call fastcc void @os.openatZ(ptr sret({ i32, i16, [2 x i8] }) %11, i32 %46, ptr nonnull readonly align 1 %2, i32 %47, i32 0)
+  %48 = getelementptr inbounds { i32, i16, [2 x i8] }, ptr %11, i32 0, i32 1
+  %49 = load i16, ptr %48, align 2
+  %50 = icmp ne i16 %49, 0
+  br i1 %50, label %55, label %60
+
+51:                                               ; preds = %34
+  unreachable
+
+52:                                               ; preds = %34
+  br label %42
+
+53:                                               ; preds = %34
+  br label %42
+
+54:                                               ; preds = %34
+  br label %42
+
+55:                                               ; preds = %42
+  %56 = getelementptr inbounds { i32, i16, [2 x i8] }, ptr %11, i32 0, i32 1
+  %57 = load i16, ptr %56, align 2
+  %58 = getelementptr inbounds { %fs.file.File, i16, [2 x i8] }, ptr %10, i32 0, i32 1
+  store i16 %57, ptr %58, align 2
+  %59 = getelementptr inbounds { %fs.file.File, i16, [2 x i8] }, ptr %10, i32 0, i32 0
+  call void @llvm.memcpy.p0.p0.i64(ptr align 4 %0, ptr align 4 %10, i64 8, i1 false)
+  ret void
+
+60:                                               ; preds = %42
+  %61 = getelementptr inbounds { i32, i16, [2 x i8] }, ptr %11, i32 0, i32 0
+  %62 = load i32, ptr %61, align 4
+  %63 = getelementptr inbounds %fs.file.File.OpenFlags, ptr %3, i32 0, i32 2
+  %64 = load i1, ptr %63, align 1
+  br i1 %64, label %69, label %73
+
+65:                                               ; preds = %73, %96
+  %66 = getelementptr inbounds { %fs.file.File, i16, [2 x i8] }, ptr %0, i32 0, i32 1
+  store i16 0, ptr %66, align 2
+  %67 = getelementptr inbounds { %fs.file.File, i16, [2 x i8] }, ptr %0, i32 0, i32 0
+  %68 = getelementptr inbounds %fs.file.File, ptr %67, i32 0, i32 0
+  store i32 %62, ptr %68, align 4
+  ret void
+
+69:                                               ; preds = %60
+  call fastcc void @os.fcntl(ptr sret({ i64, i16, [6 x i8] }) %8, i32 %62, i32 3, i64 0)
+  %70 = getelementptr inbounds { i64, i16, [6 x i8] }, ptr %8, i32 0, i32 1
+  %71 = load i16, ptr %70, align 2
+  %72 = icmp eq i16 %71, 0
+  br i1 %72, label %82, label %85
+
+73:                                               ; preds = %60
+  br label %65
+
+74:                                               ; preds = %82
+  %75 = phi i64 [ %84, %82 ]
+  store i64 %75, ptr %9, align 8
+  %76 = load i64, ptr %9, align 8
+  %77 = and i64 %76, -5
+  store i64 %77, ptr %9, align 8
+  %78 = load i64, ptr %9, align 8
+  call fastcc void @os.fcntl(ptr sret({ i64, i16, [6 x i8] }) %6, i32 %62, i32 4, i64 %78)
+  %79 = getelementptr inbounds { i64, i16, [6 x i8] }, ptr %6, i32 0, i32 1
+  %80 = load i16, ptr %79, align 2
+  %81 = icmp eq i16 %80, 0
+  br i1 %81, label %97, label %98
+
+82:                                               ; preds = %69
+  %83 = getelementptr inbounds { i64, i16, [6 x i8] }, ptr %8, i32 0, i32 0
+  %84 = load i64, ptr %83, align 8
+  br label %74
+
+85:                                               ; preds = %69
+  %86 = getelementptr inbounds { i64, i16, [6 x i8] }, ptr %8, i32 0, i32 1
+  %87 = load i16, ptr %86, align 2
+  switch i16 %87, label %88 [
+    i16 24, label %91
+    i16 36, label %92
+    i16 35, label %93
+    i16 37, label %94
+    i16 38, label %95
+  ]
+
+88:                                               ; preds = %85
+  %89 = getelementptr inbounds { %fs.file.File, i16, [2 x i8] }, ptr %7, i32 0, i32 1
+  store i16 %87, ptr %89, align 2
+  %90 = getelementptr inbounds { %fs.file.File, i16, [2 x i8] }, ptr %7, i32 0, i32 0
+  call fastcc void @os.close(i32 %62)
+  call void @llvm.memcpy.p0.p0.i64(ptr align 4 %0, ptr align 4 %7, i64 8, i1 false)
+  ret void
+
+91:                                               ; preds = %85
+  unreachable
+
+92:                                               ; preds = %85
+  unreachable
+
+93:                                               ; preds = %85
+  unreachable
+
+94:                                               ; preds = %85
+  unreachable
+
+95:                                               ; preds = %85
+  unreachable
+
+96:                                               ; preds = %97
+  br label %65
+
+97:                                               ; preds = %74
+  br label %96
+
+98:                                               ; preds = %74
+  %99 = getelementptr inbounds { i64, i16, [6 x i8] }, ptr %6, i32 0, i32 1
+  %100 = load i16, ptr %99, align 2
+  switch i16 %100, label %101 [
+    i16 24, label %104
+    i16 36, label %105
+    i16 35, label %106
+    i16 37, label %107
+    i16 38, label %108
+  ]
+
+101:                                              ; preds = %98
+  %102 = getelementptr inbounds { %fs.file.File, i16, [2 x i8] }, ptr %5, i32 0, i32 1
+  store i16 %100, ptr %102, align 2
+  %103 = getelementptr inbounds { %fs.file.File, i16, [2 x i8] }, ptr %5, i32 0, i32 0
+  call fastcc void @os.close(i32 %62)
+  call void @llvm.memcpy.p0.p0.i64(ptr align 4 %0, ptr align 4 %5, i64 8, i1 false)
+  ret void
+
+104:                                              ; preds = %98
+  unreachable
+
+105:                                              ; preds = %98
+  unreachable
+
+106:                                              ; preds = %98
+  unreachable
+
+107:                                              ; preds = %98
+  unreachable
+
+108:                                              ; preds = %98
+  unreachable
+}
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc void @"io.reader.Reader(fs.file.File,error{AccessDenied,Unexpected,SystemResources,IsDir,WouldBlock,InputOutput,OperationAborted,BrokenPipe,ConnectionResetByPeer,ConnectionTimedOut,NotOpenForReading,NetNameDeleted},(function 'read')).read"(ptr noalias nonnull sret({ i64, i16, [6 x i8] }) %0, ptr nonnull readonly align 4 %1, ptr nonnull align 1 %2, i64 %3) unnamed_addr #0 {
+  %5 = alloca { i64, i16, [6 x i8] }, align 8
+  %6 = insertvalue { ptr, i64 } poison, ptr %2, 0
+  %7 = insertvalue { ptr, i64 } %6, i64 %3, 1
+  %8 = getelementptr inbounds %"io.reader.Reader(fs.file.File,error{AccessDenied,Unexpected,SystemResources,IsDir,WouldBlock,InputOutput,OperationAborted,BrokenPipe,ConnectionResetByPeer,ConnectionTimedOut,NotOpenForReading,NetNameDeleted},(function 'read'))", ptr %1, i32 0, i32 0
+  %9 = extractvalue { ptr, i64 } %7, 0
+  %10 = extractvalue { ptr, i64 } %7, 1
+  call fastcc void @fs.file.File.read(ptr sret({ i64, i16, [6 x i8] }) %5, ptr nonnull readonly align 4 %8, ptr nonnull align 1 %9, i64 %10)
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 %5, i64 16, i1 false)
+  ret void
+}
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc { ptr, i64 } @"array_list.ArrayListAlignedUnmanaged(u8,null).allocatedSlice"(ptr nonnull readonly align 8 %0) unnamed_addr #0 {
+  %2 = alloca %"array_list.ArrayListAlignedUnmanaged(u8,null)", align 8
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %2, ptr align 8 %0, i64 24, i1 false)
+  %3 = getelementptr inbounds %"array_list.ArrayListAlignedUnmanaged(u8,null)", ptr %2, i32 0, i32 0
+  %4 = getelementptr inbounds { ptr, i64 }, ptr %3, i32 0, i32 0
+  %5 = getelementptr inbounds %"array_list.ArrayListAlignedUnmanaged(u8,null)", ptr %0, i32 0, i32 1
+  %6 = load i64, ptr %5, align 8
+  %7 = load ptr, ptr %4, align 8
+  %8 = getelementptr inbounds i8, ptr %7, i64 0
+  %9 = insertvalue { ptr, i64 } poison, ptr %8, 0
+  %10 = insertvalue { ptr, i64 } %9, i64 %6, 1
+  ret { ptr, i64 } %10
+}
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc { ptr, i64 } @mem.sliceAsBytes__anon_3874(ptr nonnull align 1 %0, i64 %1) unnamed_addr #0 {
+  %3 = alloca ptr, align 8
+  %4 = insertvalue { ptr, i64 } poison, ptr %0, 0
+  %5 = insertvalue { ptr, i64 } %4, i64 %1, 1
+  %6 = extractvalue { ptr, i64 } %5, 1
+  %7 = icmp eq i64 %6, 0
+  br i1 %7, label %17, label %18
+
+8:                                                ; preds = %20
+  %9 = extractvalue { ptr, i64 } %5, 0
+  store ptr %9, ptr %3, align 8
+  %10 = extractvalue { ptr, i64 } %5, 1
+  %11 = load ptr, ptr %3, align 8
+  %12 = getelementptr inbounds i8, ptr %11, i64 0
+  %13 = insertvalue { ptr, i64 } poison, ptr %12, 0
+  %14 = insertvalue { ptr, i64 } %13, i64 %10, 1
+  ret { ptr, i64 } %14
+
+15:                                               ; preds = %18, %17
+  %16 = phi i1 [ true, %17 ], [ false, %18 ]
+  br i1 %16, label %19, label %20
+
+17:                                               ; preds = %2
+  br label %15
+
+18:                                               ; preds = %2
+  br label %15
+
+19:                                               ; preds = %15
+  ret { ptr, i64 } { ptr inttoptr (i64 -6148914691236517206 to ptr), i64 0 }
+
+20:                                               ; preds = %15
+  br label %8
+}
+
+; Function Attrs: minsize nounwind optsize uwtable
+declare i32 @"close$NOCANCEL"(i32) #0
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc i16 @c.getErrno__anon_3888(i32 %0) unnamed_addr #0 {
+  %2 = icmp eq i32 %0, -1
+  br i1 %2, label %3, label %7
+
+3:                                                ; preds = %1
+  %4 = call ptr @__error()
+  %5 = load i32, ptr %4, align 4
+  %6 = trunc i32 %5 to i16
+  ret i16 %6
+
+7:                                                ; preds = %1
+  ret i16 0
+}
+
+; Function Attrs: nocallback nofree nosync nounwind speculatable willreturn memory(none)
+declare i29 @llvm.ctlz.i29(i29, i1 immarg) #1
+
+; Function Attrs: nocallback nofree nosync nounwind speculatable willreturn memory(none)
+declare { i64, i1 } @llvm.umul.with.overflow.i64(i64, i64) #1
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc void @os.openatZ(ptr noalias nonnull sret({ i32, i16, [2 x i8] }) %0, i32 %1, ptr nonnull readonly align 1 %2, i32 %3, i32 %4) unnamed_addr #0 {
+  %6 = alloca { i32, i16, [2 x i8] }, align 4
+  %7 = alloca { i32, i16, [2 x i8] }, align 4
+  br label %8
+
+8:                                                ; preds = %11, %5
+  %9 = call i32 (i32, ptr, i32, ...) @openat(i32 %1, ptr nonnull readonly align 1 %2, i32 %3, i32 %4)
+  %10 = call fastcc i16 @c.getErrno__anon_3888(i32 %9)
+  switch i16 %10, label %12 [
+    i16 0, label %16
+    i16 4, label %19
+    i16 14, label %20
+    i16 22, label %21
+    i16 9, label %22
+    i16 13, label %23
+    i16 27, label %24
+    i16 84, label %25
+    i16 21, label %26
+    i16 62, label %27
+    i16 24, label %28
+    i16 63, label %29
+    i16 23, label %30
+    i16 19, label %31
+    i16 2, label %32
+    i16 12, label %33
+    i16 28, label %34
+    i16 20, label %35
+    i16 1, label %36
+    i16 17, label %37
+    i16 16, label %38
+    i16 45, label %39
+    i16 35, label %40
+    i16 26, label %41
+  ]
+
+11:                                               ; preds = %19
+  br label %8
+
+12:                                               ; preds = %8
+  %13 = call fastcc i16 @os.unexpectedErrno(i16 %10)
+  %14 = getelementptr inbounds { i32, i16, [2 x i8] }, ptr %6, i32 0, i32 1
+  store i16 %13, ptr %14, align 2
+  %15 = getelementptr inbounds { i32, i16, [2 x i8] }, ptr %6, i32 0, i32 0
+  call void @llvm.memcpy.p0.p0.i64(ptr align 4 %0, ptr align 4 %6, i64 8, i1 false)
+  ret void
+
+16:                                               ; preds = %8
+  %17 = getelementptr inbounds { i32, i16, [2 x i8] }, ptr %7, i32 0, i32 1
+  store i16 0, ptr %17, align 2
+  %18 = getelementptr inbounds { i32, i16, [2 x i8] }, ptr %7, i32 0, i32 0
+  store i32 %9, ptr %18, align 4
+  call void @llvm.memcpy.p0.p0.i64(ptr align 4 %0, ptr align 4 %7, i64 8, i1 false)
+  ret void
+
+19:                                               ; preds = %8
+  br label %11
+
+20:                                               ; preds = %8
+  unreachable
+
+21:                                               ; preds = %8
+  unreachable
+
+22:                                               ; preds = %8
+  unreachable
+
+23:                                               ; preds = %8
+  call void @llvm.memcpy.p0.p0.i64(ptr align 4 %0, ptr align 4 @13, i64 8, i1 false)
+  ret void
+
+24:                                               ; preds = %8
+  call void @llvm.memcpy.p0.p0.i64(ptr align 4 %0, ptr align 4 @14, i64 8, i1 false)
+  ret void
+
+25:                                               ; preds = %8
+  call void @llvm.memcpy.p0.p0.i64(ptr align 4 %0, ptr align 4 @14, i64 8, i1 false)
+  ret void
+
+26:                                               ; preds = %8
+  call void @llvm.memcpy.p0.p0.i64(ptr align 4 %0, ptr align 4 @15, i64 8, i1 false)
+  ret void
+
+27:                                               ; preds = %8
+  call void @llvm.memcpy.p0.p0.i64(ptr align 4 %0, ptr align 4 @16, i64 8, i1 false)
+  ret void
+
+28:                                               ; preds = %8
+  call void @llvm.memcpy.p0.p0.i64(ptr align 4 %0, ptr align 4 @17, i64 8, i1 false)
+  ret void
+
+29:                                               ; preds = %8
+  call void @llvm.memcpy.p0.p0.i64(ptr align 4 %0, ptr align 4 @18, i64 8, i1 false)
+  ret void
+
+30:                                               ; preds = %8
+  call void @llvm.memcpy.p0.p0.i64(ptr align 4 %0, ptr align 4 @19, i64 8, i1 false)
+  ret void
+
+31:                                               ; preds = %8
+  call void @llvm.memcpy.p0.p0.i64(ptr align 4 %0, ptr align 4 @20, i64 8, i1 false)
+  ret void
+
+32:                                               ; preds = %8
+  call void @llvm.memcpy.p0.p0.i64(ptr align 4 %0, ptr align 4 @21, i64 8, i1 false)
+  ret void
+
+33:                                               ; preds = %8
+  call void @llvm.memcpy.p0.p0.i64(ptr align 4 %0, ptr align 4 @22, i64 8, i1 false)
+  ret void
+
+34:                                               ; preds = %8
+  call void @llvm.memcpy.p0.p0.i64(ptr align 4 %0, ptr align 4 @23, i64 8, i1 false)
+  ret void
+
+35:                                               ; preds = %8
+  call void @llvm.memcpy.p0.p0.i64(ptr align 4 %0, ptr align 4 @24, i64 8, i1 false)
+  ret void
+
+36:                                               ; preds = %8
+  call void @llvm.memcpy.p0.p0.i64(ptr align 4 %0, ptr align 4 @13, i64 8, i1 false)
+  ret void
+
+37:                                               ; preds = %8
+  call void @llvm.memcpy.p0.p0.i64(ptr align 4 %0, ptr align 4 @25, i64 8, i1 false)
+  ret void
+
+38:                                               ; preds = %8
+  call void @llvm.memcpy.p0.p0.i64(ptr align 4 %0, ptr align 4 @26, i64 8, i1 false)
+  ret void
+
+39:                                               ; preds = %8
+  call void @llvm.memcpy.p0.p0.i64(ptr align 4 %0, ptr align 4 @27, i64 8, i1 false)
+  ret void
+
+40:                                               ; preds = %8
+  call void @llvm.memcpy.p0.p0.i64(ptr align 4 %0, ptr align 4 @28, i64 8, i1 false)
+  ret void
+
+41:                                               ; preds = %8
+  call void @llvm.memcpy.p0.p0.i64(ptr align 4 %0, ptr align 4 @29, i64 8, i1 false)
+  ret void
+}
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc void @os.fcntl(ptr noalias nonnull sret({ i64, i16, [6 x i8] }) %0, i32 %1, i32 %2, i64 %3) unnamed_addr #0 {
+  %5 = alloca { i64, i16, [6 x i8] }, align 8
+  %6 = alloca { i64, i16, [6 x i8] }, align 8
+  br label %7
+
+7:                                                ; preds = %10, %4
+  %8 = call i32 (i32, i32, ...) @fcntl(i32 %1, i32 %2, i64 %3)
+  %9 = call fastcc i16 @c.getErrno__anon_3888(i32 %8)
+  switch i16 %9, label %11 [
+    i16 0, label %15
+    i16 4, label %19
+    i16 9, label %20
+    i16 16, label %21
+    i16 22, label %22
+    i16 1, label %23
+    i16 24, label %24
+    i16 20, label %25
+    i16 11, label %26
+    i16 77, label %27
+    i16 35, label %28
+    i16 13, label %28
+  ]
+
+10:                                               ; preds = %19
+  br label %7
+
+11:                                               ; preds = %7
+  %12 = call fastcc i16 @os.unexpectedErrno(i16 %9)
+  %13 = getelementptr inbounds { i64, i16, [6 x i8] }, ptr %5, i32 0, i32 1
+  store i16 %12, ptr %13, align 2
+  %14 = getelementptr inbounds { i64, i16, [6 x i8] }, ptr %5, i32 0, i32 0
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 %5, i64 16, i1 false)
+  ret void
+
+15:                                               ; preds = %7
+  %16 = sext i32 %8 to i64
+  %17 = getelementptr inbounds { i64, i16, [6 x i8] }, ptr %6, i32 0, i32 1
+  store i16 0, ptr %17, align 2
+  %18 = getelementptr inbounds { i64, i16, [6 x i8] }, ptr %6, i32 0, i32 0
+  store i64 %16, ptr %18, align 8
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 %6, i64 16, i1 false)
+  ret void
+
+19:                                               ; preds = %7
+  br label %10
+
+20:                                               ; preds = %7
+  unreachable
+
+21:                                               ; preds = %7
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 @30, i64 16, i1 false)
+  ret void
+
+22:                                               ; preds = %7
+  unreachable
+
+23:                                               ; preds = %7
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 @31, i64 16, i1 false)
+  ret void
+
+24:                                               ; preds = %7
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 @32, i64 16, i1 false)
+  ret void
+
+25:                                               ; preds = %7
+  unreachable
+
+26:                                               ; preds = %7
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 @33, i64 16, i1 false)
+  ret void
+
+27:                                               ; preds = %7
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 @34, i64 16, i1 false)
+  ret void
+
+28:                                               ; preds = %7, %7
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 @35, i64 16, i1 false)
+  ret void
+}
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc void @fs.file.File.read(ptr noalias nonnull sret({ i64, i16, [6 x i8] }) %0, ptr nonnull readonly align 4 %1, ptr nonnull align 1 %2, i64 %3) unnamed_addr #0 {
+  %5 = alloca { i64, i16, [6 x i8] }, align 8
+  %6 = insertvalue { ptr, i64 } poison, ptr %2, 0
+  %7 = insertvalue { ptr, i64 } %6, i64 %3, 1
+  %8 = getelementptr inbounds %fs.file.File, ptr %1, i32 0, i32 0
+  %9 = load i32, ptr %8, align 4
+  %10 = extractvalue { ptr, i64 } %7, 0
+  %11 = extractvalue { ptr, i64 } %7, 1
+  call fastcc void @os.read(ptr sret({ i64, i16, [6 x i8] }) %5, i32 %9, ptr nonnull align 1 %10, i64 %11)
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 %5, i64 16, i1 false)
+  ret void
+}
+
+; Function Attrs: minsize nounwind optsize uwtable
+declare ptr @__error() #0
+
+; Function Attrs: minsize nounwind optsize uwtable
+declare i32 @openat(i32, ptr nonnull readonly align 1, i32, ...) #0
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc i16 @os.unexpectedErrno(i16 %0) unnamed_addr #0 {
+  ret i16 10
+}
+
+; Function Attrs: minsize nounwind optsize uwtable
+declare i32 @fcntl(i32, i32, ...) #0
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc void @os.read(ptr noalias nonnull sret({ i64, i16, [6 x i8] }) %0, i32 %1, ptr nonnull align 1 %2, i64 %3) unnamed_addr #0 {
+  %5 = alloca { i64, i16, [6 x i8] }, align 8
+  %6 = alloca { i64, i16, [6 x i8] }, align 8
+  %7 = insertvalue { ptr, i64 } poison, ptr %2, 0
+  %8 = insertvalue { ptr, i64 } %7, i64 %3, 1
+  %9 = extractvalue { ptr, i64 } %8, 1
+  %10 = icmp eq i64 %9, 0
+  br i1 %10, label %15, label %16
+
+11:                                               ; preds = %16
+  %12 = extractvalue { ptr, i64 } %8, 1
+  %13 = call i64 @llvm.umin.i64(i64 2147483647, i64 %12)
+  %14 = trunc i64 %13 to i31
+  br label %17
+
+15:                                               ; preds = %4
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 @36, i64 16, i1 false)
+  ret void
+
+16:                                               ; preds = %4
+  br label %11
+
+17:                                               ; preds = %22, %11
+  %18 = extractvalue { ptr, i64 } %8, 0
+  %19 = zext i31 %14 to i64
+  %20 = call i64 @read(i32 %1, ptr nonnull align 1 %18, i64 %19)
+  %21 = call fastcc i16 @c.getErrno__anon_3975(i64 %20)
+  switch i16 %21, label %23 [
+    i16 0, label %27
+    i16 4, label %30
+    i16 22, label %31
+    i16 14, label %32
+    i16 35, label %33
+    i16 9, label %34
+    i16 5, label %35
+    i16 21, label %36
+    i16 55, label %37
+    i16 12, label %38
+    i16 54, label %39
+    i16 60, label %40
+  ]
+
+22:                                               ; preds = %30
+  br label %17
+
+23:                                               ; preds = %17
+  %24 = call fastcc i16 @os.unexpectedErrno(i16 %21)
+  %25 = getelementptr inbounds { i64, i16, [6 x i8] }, ptr %5, i32 0, i32 1
+  store i16 %24, ptr %25, align 2
+  %26 = getelementptr inbounds { i64, i16, [6 x i8] }, ptr %5, i32 0, i32 0
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 %5, i64 16, i1 false)
+  ret void
+
+27:                                               ; preds = %17
+  %28 = getelementptr inbounds { i64, i16, [6 x i8] }, ptr %6, i32 0, i32 1
+  store i16 0, ptr %28, align 2
+  %29 = getelementptr inbounds { i64, i16, [6 x i8] }, ptr %6, i32 0, i32 0
+  store i64 %20, ptr %29, align 8
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 %6, i64 16, i1 false)
+  ret void
+
+30:                                               ; preds = %17
+  br label %22
+
+31:                                               ; preds = %17
+  unreachable
+
+32:                                               ; preds = %17
+  unreachable
+
+33:                                               ; preds = %17
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 @37, i64 16, i1 false)
+  ret void
+
+34:                                               ; preds = %17
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 @38, i64 16, i1 false)
+  ret void
+
+35:                                               ; preds = %17
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 @39, i64 16, i1 false)
+  ret void
+
+36:                                               ; preds = %17
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 @40, i64 16, i1 false)
+  ret void
+
+37:                                               ; preds = %17
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 @41, i64 16, i1 false)
+  ret void
+
+38:                                               ; preds = %17
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 @41, i64 16, i1 false)
+  ret void
+
+39:                                               ; preds = %17
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 @42, i64 16, i1 false)
+  ret void
+
+40:                                               ; preds = %17
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %0, ptr align 8 @43, i64 16, i1 false)
+  ret void
+}
+
+; Function Attrs: minsize nounwind optsize uwtable
+declare i64 @read(i32, ptr nonnull align 1, i64) #0
+
+; Function Attrs: minsize nounwind optsize uwtable
+define internal fastcc i16 @c.getErrno__anon_3975(i64 %0) unnamed_addr #0 {
+  %2 = icmp eq i64 %0, -1
+  br i1 %2, label %3, label %7
+
+3:                                                ; preds = %1
+  %4 = call ptr @__error()
+  %5 = load i32, ptr %4, align 4
+  %6 = trunc i32 %5 to i16
+  ret i16 %6
+
+7:                                                ; preds = %1
+  ret i16 0
+}
+
+attributes #0 = { minsize nounwind optsize uwtable "frame-pointer"="none" "target-cpu"="generic" "target-features"="-a510,-a65,-a710,-a76,-a78,-a78c,-aes,-aggressive-fma,-alternate-sextload-cvt-f32-pattern,-altnzcv,-am,-amvs,-arith-bcc-fusion,-arith-cbz-fusion,-ascend-store-address,-b16b16,-balance-fp-ops,-bf16,-brbe,-bti,-call-saved-x10,-call-saved-x11,-call-saved-x12,-call-saved-x13,-call-saved-x14,-call-saved-x15,-call-saved-x18,-call-saved-x8,-call-saved-x9,-ccdp,-ccidx,-ccpp,-clrbhb,-cmp-bcc-fusion,-complxnum,-CONTEXTIDREL2,-cortex-r82,-crc,-crypto,-cssc,-custom-cheap-as-move,-d128,-disable-latency-sched-heuristic,-dit,-dotprod,-ecv,-el2vmsa,-el3,+enable-select-opt,+ete,-exynos-cheap-as-move,-f32mm,-f64mm,-fgt,-fix-cortex-a53-835769,-flagm,-fmv,-force-32bit-jump-tables,-fp16fml,+fp-armv8,-fptoint,-fullfp16,-fuse-address,+fuse-adrp-add,+fuse-aes,-fuse-arith-logic,-fuse-crypto-eor,-fuse-csel,-fuse-literals,-harden-sls-blr,-harden-sls-nocomdat,-harden-sls-retbr,-hbc,-hcx,-i8mm,-ite,-jsconv,-lor,-ls64,-lse,-lse128,-lse2,-lsl-fast,-mec,-mops,-mpam,-mte,+neon,-nmi,-no-bti-at-return-twice,-no-neg-immediates,-no-zcz-fp,-nv,-outline-atomics,-pan,-pan-rwv,-pauth,-perfmon,-predictable-select-expensive,-predres,-prfm-slc-target,-rand,-ras,-rasv2,-rcpc,-rcpc3,-rcpc-immo,-rdm,-reserve-x1,-reserve-x10,-reserve-x11,-reserve-x12,-reserve-x13,-reserve-x14,-reserve-x15,-reserve-x18,-reserve-x2,-reserve-x20,-reserve-x21,-reserve-x22,-reserve-x23,-reserve-x24,-reserve-x25,-reserve-x26,-reserve-x27,-reserve-x28,-reserve-x3,-reserve-x30,-reserve-x4,-reserve-x5,-reserve-x6,-reserve-x7,-reserve-x9,-rme,-sb,-sel2,-sha2,-sha3,-slow-misaligned-128store,-slow-paired-128,-slow-strqro-store,-sm4,-sme,-sme2,-sme2p1,-sme-f16f16,-sme-f64f64,-sme-i16i64,-spe,-spe-eef,-specres2,-specrestrict,-ssbs,-strict-align,-sve,-sve2,-sve2-aes,-sve2-bitperm,-sve2-sha3,-sve2-sm4,-sve2p1,-tagged-globals,-the,-tlb-rmi,-tme,-tpidr-el1,-tpidr-el2,-tpidr-el3,-tracev8.4,+trbe,-uaops,-use-experimental-zeroing-pseudos,+use-postra-scheduler,-use-reciprocal-square-root,-use-scalar-inc-vl,-v8.1a,-v8.2a,-v8.3a,-v8.4a,-v8.5a,-v8.6a,-v8.7a,-v8.8a,-v8.9a,-v8a,-v8r,-v9.1a,-v9.2a,-v9.3a,-v9.4a,-v9a,-vh,-wfxt,-xs,-zcm,-zcz,-zcz-fp-workaround,-zcz-gp" }
+attributes #1 = { nocallback nofree nosync nounwind speculatable willreturn memory(none) }
+attributes #2 = { nocallback nofree nounwind willreturn memory(argmem: readwrite) }
+attributes #3 = { nocallback nofree nosync nounwind willreturn memory(none) }
+attributes #4 = { nocallback nofree nounwind willreturn memory(argmem: write) }
 
 !llvm.module.flags = !{!0, !1}
 

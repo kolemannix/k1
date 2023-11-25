@@ -9,7 +9,7 @@ fn test_file<'ctx, P: AsRef<Path>>(ctx: &'ctx Context, path: P) -> Result<()> {
     let src = std::fs::read_to_string(path)?;
     println!("********** {:?} **********", filename);
     let out_dir = "nx-out/test_suite";
-    crate::compile_single_file_program(ctx, filename, &src, false, out_dir)
+    crate::compile_single_file_program(ctx, filename, &src, false, out_dir, true)
         .map_err(|err| anyhow!("TEST CASE FAILED COMPILE: {}. Reason: {}", filename, err))?;
     let last_line = src.lines().last().unwrap();
     // We want expected output but we can't intercept or read what goes to stdout, so we just make
