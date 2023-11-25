@@ -49,6 +49,7 @@ The project isn't mature enough yet to make this list but the spirit of the effo
 - [x] Infer val types
 - [x] Extern keyword, then
 - [x] Link at build time not via LLVM module
+- [ ] Back builtin Array with zig's ArrayList
 - [ ] Codegen 'variables' is broken (never cleared); use enter scope / exit scope w/ a stack of vecs or something instead
 - [ ] Use ctx.const_string for printf format strings
 - [ ] Optionals
@@ -87,7 +88,7 @@ The project isn't mature enough yet to make this list but the spirit of the effo
 # Optionals Round 2
 - [ ] move some-wrapping into a function
 - [ ] has value from userland (currently only happens by desugaring))
-- [ ] unwrap from userland (I think this can just be a prelude function not intrinsic)
+- [x] unwrap from userland (I think this can just be a prelude function not intrinsic)
 - [ ] test with optional array elements
 - [ ] test with optional record fields
 - [ ] test with optional function args

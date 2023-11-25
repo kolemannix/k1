@@ -1102,19 +1102,63 @@ impl TypedModule {
         Ok(cur_scope)
     }
 
-    /// Passing `expected_type` is an optimization that can save us work.
-    /// It does not guarantee that the returned expr always conforms
-    /// to the given `expected_type`
-    /// Although, maybe we re-think that because it would save
-    /// a lot of code if we did a final check here before returning!
     fn eval_expr(
         &mut self,
         expr: &Expression,
         scope_id: ScopeId,
         expected_type: Option<TypeId>,
     ) -> TyperResult<TypedExpr> {
-        trace!("eval_expr: {:?} expected type: {:?}", expr, expected_type.map(|t| self.type_id_to_string(t)));
-        let base_result = match expr {
+        let base_result = self.eval_expr_inner(expr, scope_id, expected_type)?;
+
+        if let TypedExpr::None(_type_id, _span) = base_result {
+            return Ok(base_result);
+        }
+        if let Some(expected_type_id) = expected_type {
+            if let Type::Optional(optional_type) = self.get_type(expected_type_id) {
+                trace!(
+                    "some boxing: expected type is optional: {}",
+                    self.type_id_to_string(expected_type_id)
+                );
+                trace!("some boxing: value is: {}", self.expr_to_string(&base_result));
+                trace!(
+                    "some boxing: value type is: {}",
+                    self.type_id_to_string(base_result.get_type())
+                );
+                match self.typecheck_types(optional_type.inner_type, base_result.get_type()) {
+                    Ok(_) => Ok(TypedExpr::OptionalSome(OptionalSome {
+                        inner_expr: Box::new(base_result),
+                        type_id: expected_type_id,
+                    })),
+                    Err(msg) => make_fail(
+                        format!("Typecheck failed when expecting optional: {}", msg),
+                        expr.get_span(),
+                    ),
+                }
+            } else {
+                Ok(base_result)
+            }
+        } else {
+            Ok(base_result)
+        }
+    }
+
+    /// Passing `expected_type` is an optimization that can save us work.
+    /// It does not guarantee that the returned expr always conforms
+    /// to the given `expected_type`
+    /// Although, maybe we re-think that because it would save
+    /// a lot of code if we did a final check here before returning!
+    fn eval_expr_inner(
+        &mut self,
+        expr: &Expression,
+        scope_id: ScopeId,
+        expected_type: Option<TypeId>,
+    ) -> TyperResult<TypedExpr> {
+        trace!(
+            "eval_expr: {:?} expected type: {:?}",
+            expr,
+            expected_type.map(|t| self.type_id_to_string(t))
+        );
+        match expr {
             Expression::Array(array_expr) => {
                 let mut element_type: Option<TypeId> = match expected_type {
                     Some(type_id) => match self.get_type(type_id) {
@@ -1192,20 +1236,24 @@ impl TypedModule {
                 let expected_record = if let Some(expected_type) = expected_type {
                     match self.get_type(expected_type) {
                         Type::Record(record) => Some((expected_type, record.clone())),
-                        Type::Optional(opt) => {
-                            match self.get_type(opt.inner_type) {
-                                Type::Record(record) => Some((opt.inner_type, record.clone())),
-                                other_ty => {
-                                    return make_fail(
-                                        format!("Got record literal but expected {}", self.type_to_string(other_ty)),
-                                        ast_record.span,
-                                    )
-                                }
+                        Type::Optional(opt) => match self.get_type(opt.inner_type) {
+                            Type::Record(record) => Some((opt.inner_type, record.clone())),
+                            other_ty => {
+                                return make_fail(
+                                    format!(
+                                        "Got record literal but expected {}",
+                                        self.type_to_string(other_ty)
+                                    ),
+                                    ast_record.span,
+                                )
                             }
-                        }
+                        },
                         other_ty => {
                             return make_fail(
-                                format!("Got record literal but expected {}", self.type_to_string(other_ty)),
+                                format!(
+                                    "Got record literal but expected {}",
+                                    self.type_to_string(other_ty)
+                                ),
                                 ast_record.span,
                             )
                         }
@@ -1214,7 +1262,10 @@ impl TypedModule {
                     None
                 };
                 for (index, ast_field) in ast_record.fields.iter().enumerate() {
-                    let expected_field = expected_record.as_ref().map(|(_, rec)| rec.find_field(ast_field.name)).flatten();
+                    let expected_field = expected_record
+                        .as_ref()
+                        .map(|(_, rec)| rec.find_field(ast_field.name))
+                        .flatten();
                     let expected_type_id = expected_field.map(|(_, f)| f.type_id);
                     let expr = self.eval_expr(&ast_field.expr, scope_id, expected_type_id)?;
                     field_defns.push(RecordDefnField {
@@ -1237,15 +1288,20 @@ impl TypedModule {
                         Ok(anon_record_type_id)
                     }
                     Some((expected_type_id, expected_record)) => {
-                            match self.typecheck_record(&expected_record, &RecordDefn {
+                        match self.typecheck_record(
+                            &expected_record,
+                            &RecordDefn {
                                 fields: field_defns,
                                 name_if_named: None,
                                 span: ast_record.span,
-                            }) {
-                                Ok(_) => Ok(expected_type_id),
-                                Err(s) => make_fail(format!("Invalid record type: {}", s), ast_record.span)
+                            },
+                        ) {
+                            Ok(_) => Ok(expected_type_id),
+                            Err(s) => {
+                                make_fail(format!("Invalid record type: {}", s), ast_record.span)
                             }
-                        },
+                        }
+                    }
                 }?;
                 let typed_record =
                     Record { fields: field_values, span: ast_record.span, type_id: record_type_id };
@@ -1402,32 +1458,23 @@ impl TypedModule {
                 let call = self.eval_function_call(fn_call, None, scope_id)?;
                 Ok(TypedExpr::FunctionCall(call))
             }
-        }?;
-
-        // Automatic some-wrapping; should be moved into a function later
-        if let TypedExpr::None(_type_id, _span) = base_result {
-            return Ok(base_result);
-        }
-        if let Some(expected_type_id) = expected_type {
-            if let Type::Optional(optional_type) = self.get_type(expected_type_id) {
-                trace!("some boxing: expected type is optional: {}", self.type_id_to_string(expected_type_id));
-                trace!("some boxing: value is: {}", self.expr_to_string(&base_result));
-                trace!("some boxing: value type is: {}", self.type_id_to_string(base_result.get_type()));
-                match self.typecheck_types(optional_type.inner_type, base_result.get_type()) {
-                    Ok(_) => Ok(TypedExpr::OptionalSome(OptionalSome {
-                        inner_expr: Box::new(base_result),
-                        type_id: expected_type_id,
-                    })),
-                    Err(msg) => make_fail(
-                        format!("Typecheck failed when expecting optional: {}", msg),
-                        expr.get_span(),
-                    ),
-                }
-            } else {
-                Ok(base_result)
+            Expression::OptionalGet(optional_get) => {
+                let base = self.eval_expr_inner(&optional_get.base, scope_id, expected_type)?;
+                let Type::Optional(optional_type) = self.get_type(base.get_type()) else {
+                    return make_fail(
+                        format!(
+                            "Cannot get value with ! from non-optional type: {}",
+                            self.type_id_to_string(base.get_type())
+                        ),
+                        optional_get.span,
+                    );
+                };
+                Ok(TypedExpr::OptionalGet(OptionalGet {
+                    inner_expr: Box::new(base),
+                    result_type_id: optional_type.inner_type,
+                    span: optional_get.span,
+                }))
             }
-        } else {
-            Ok(base_result)
         }
     }
 

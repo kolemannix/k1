@@ -83,7 +83,7 @@ pub fn compile_single_file_program<'ctx>(
     let mut build_cmd = std::process::Command::new("clang");
     build_cmd.args([
         "-g",
-        &format!("{}/{}.o", out_dir, filename), //"-l", "nxlib/zig-out/lib/nxlib.a"
+        &format!("{}/{}.o", out_dir, filename),
         "-o",
         &format!("{}/{}.out", out_dir, filename),
         "-L",
@@ -133,11 +133,12 @@ fn main() -> Result<()> {
     log::debug!("Run Command: {:?}", run_cmd);
     let run_output = run_cmd.output().unwrap();
 
-    println!("{}", String::from_utf8(run_output.stdout).unwrap());
+    println!("stdout\n{}", String::from_utf8(run_output.stdout).unwrap());
+    println!("stderr\n{}", String::from_utf8(run_output.stderr).unwrap());
     match run_output.status.code() {
         Some(code) => {
             println!("Program exited with code: {}", code);
-        },
+        }
         None => {
             println!("Program was terminated with signal: {:?}", run_output.status.signal());
         }

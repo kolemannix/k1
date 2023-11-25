@@ -1,6 +1,0 @@
-type Point = { x: int };
-fn main(): int {
-  val p: Point = { x: 42 };
-  printInt(p.x);
-  0
-}

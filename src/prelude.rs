@@ -1,8 +1,16 @@
 pub const PRELUDE_SOURCE: &str = r#"
 extern fn _nx_charToString(c: char): string
+extern fn _nx_readFileToString(path: string): string
 intern fn printInt(value: int): unit
 intern fn print(value: string): unit
 intern fn exit(code: int): unit
+
+namespace Files {
+  fn readToString(path: string): string {
+    _nx_readFileToString(path)
+  }
+}
+
 fn printBool(value: bool): unit {
   if value { print("true") } else { print("false") }
 }

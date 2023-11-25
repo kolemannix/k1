@@ -202,6 +202,12 @@ pub struct MethodCall {
 }
 
 #[derive(Debug)]
+pub struct OptionalGet {
+    pub base: Box<Expression>,
+    pub span: Span,
+}
+
+#[derive(Debug)]
 pub enum Expression {
     BinaryOp(BinaryOp),
     UnaryOp(UnaryOp),
@@ -215,6 +221,7 @@ pub enum Expression {
     Record(Record),
     IndexOperation(IndexOperation),
     Array(ArrayExpr),
+    OptionalGet(OptionalGet),
 }
 
 impl Expression {
@@ -236,6 +243,7 @@ impl Expression {
             Expression::Record(record) => record.span,
             Expression::IndexOperation(op) => op.span,
             Expression::Array(array_expr) => array_expr.span,
+            Expression::OptionalGet(optional_get) => optional_get.span,
         }
     }
 
@@ -253,6 +261,7 @@ impl Expression {
             Expression::If(_if_expr) => false,
             Expression::Record(_record) => false,
             Expression::Array(_array_expr) => false,
+            Expression::OptionalGet(_optional_get) => false,
         }
     }
 }
@@ -277,6 +286,7 @@ impl Display for Expression {
             Expression::Record(record) => std::fmt::Debug::fmt(record, f),
             Expression::IndexOperation(op) => op.fmt(f),
             Expression::Array(array_expr) => std::fmt::Debug::fmt(array_expr, f),
+            Expression::OptionalGet(array_expr) => std::fmt::Debug::fmt(array_expr, f),
         }
     }
 }
@@ -870,10 +880,12 @@ impl<'toks> Parser<'toks> {
         loop {
             let next = self.peek();
             if next.kind.is_postfix_operator() {
+                // Optional uwrap `config!.url`
                 if next.kind == K::Bang {
-                    unimplemented!("Postfix ! is unimplemented")
-                }
-                if next.kind == K::Dot {
+                    self.tokens.advance();
+                    let span = result.get_span().extended(next.span);
+                    result = Expression::OptionalGet(OptionalGet { base: Box::new(result), span });
+                } else if next.kind == K::Dot {
                     // Field access syntax; a.b
                     self.tokens.advance();
                     let target = self.expect_eat_token(K::Ident)?;
@@ -906,8 +918,7 @@ impl<'toks> Parser<'toks> {
                             span,
                         });
                     }
-                }
-                if next.kind == K::OpenBracket {
+                } else if next.kind == K::OpenBracket {
                     self.tokens.advance();
                     let index_expr = Parser::expect(
                         "expression inside []",
