@@ -204,9 +204,8 @@ impl<'ctx> GeneratedValue<'ctx> {
 type CodegenResult<T> = Result<T>;
 
 fn i8_array_from_str<'ctx>(ctx: &'ctx Context, value: &str) -> ArrayValue<'ctx> {
-    let chars =
-        value.bytes().map(|b| ctx.i8_type().const_int(b as u64, false)).collect::<Vec<IntValue>>();
-    ctx.i8_type().const_array(&chars)
+    let bytes = value.as_bytes();
+    ctx.const_string(bytes, false)
 }
 
 impl<'ctx> Codegen<'ctx> {

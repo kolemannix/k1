@@ -49,17 +49,20 @@ The project isn't mature enough yet to make this list but the spirit of the effo
 - [x] Infer val types
 - [x] Extern keyword, then
 - [x] Link at build time not via LLVM module
-- [ ] Back builtin Array with zig's ArrayList
-- [ ] Codegen 'variables' is broken (never cleared); use enter scope / exit scope w/ a stack of vecs or something instead
-- [ ] Use ctx.const_string for printf format strings
-- [ ] Optionals
+- [x] Use ctx.const_string for printf format strings
+- [x] Optionals
 - [x] Improve printing output by fixing display functions
+- [ ] Codegen 'variables' is broken (never cleared); use enter scope / exit scope w/ a stack of vecs or something instead
+- [ ] Support multiple files (module ID in all IDs)
+- [ ] Back builtin Array with zig's ArrayList
+- [ ] Back builtin Map with zig's HashMap
 - [ ] Fix namespaces to require full paths (currently busted must be unique names globally)
 - [ ] Type Ascriptions (literally can just pass expected_type into eval and do an addtl typecheck)
-- [ ] Embed comments in LLVM IR (source snippets or line numbers?)
+- [ ] For iteration (we will just hardcode the iterable types)
+- [ ] Some debug info in LLVM IR (source snippets or line numbers?)
+- [ ] Single-arm match syntax with `is`; `if x is Some(y)` instead of `if let Some(y) = x`; if x is not Err(y) (replaces let-else)
 - [ ] Sum types (oneofs) (variants?) (tagged unions)
 - [ ] Errors
-- [ ] Array push
 - [ ] uint type
 - [ ] Generic type inference
 - [ ] Type literals would be fun
@@ -68,7 +71,6 @@ The project isn't mature enough yet to make this list but the spirit of the effo
     - [ ] Ditch semicolons? (this technically introduces significant whitespace; need newline token)
     - [ ] from qualifier-focused to name -focused
     - [ ] Parse trailing commas
-- [ ] For iteration
 - [ ] Replace spans on typed ast with just ast node ids
 - [ ] Tuples
  
@@ -86,12 +88,13 @@ The project isn't mature enough yet to make this list but the spirit of the effo
 - [x] array of optional records
 
 # Optionals Round 2
-- [ ] move some-wrapping into a function
-- [ ] has value from userland (currently only happens by desugaring))
+- [x] move some-wrapping into a function
+- [x] has value from userland (currently only happens by desugaring))
 - [x] unwrap from userland (I think this can just be a prelude function not intrinsic)
-- [ ] test with optional array elements
-- [ ] test with optional record fields
-- [ ] test with optional function args
+- [x] test with optional array elements
+- [x] test with optional record fields
+- [x] test with optional function args
+- [x] Explicit Some() expression
 
 # Dogfood wishlist Oct23
 - [x] I really need a way to write code in Zig or C and use it in my stl to move things along

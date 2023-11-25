@@ -1462,11 +1462,11 @@ impl TypedModule {
                     return Ok(TypedExpr::OptionalHasValue(Box::new(base_expr)));
                 }
                 let call = self.eval_function_call(&m_call.call, Some(base_expr), scope_id)?;
-                Ok(TypedExpr::FunctionCall(call))
+                Ok(call)
             }
             Expression::FnCall(fn_call) => {
                 let call = self.eval_function_call(fn_call, None, scope_id)?;
-                Ok(TypedExpr::FunctionCall(call))
+                Ok(call)
             }
             Expression::OptionalGet(optional_get) => {
                 let base = self.eval_expr_inner(&optional_get.base, scope_id, expected_type)?;
@@ -1585,7 +1585,22 @@ impl TypedModule {
         fn_call: &FnCall,
         this_expr: Option<TypedExpr>,
         scope_id: ScopeId,
-    ) -> TyperResult<Call> {
+    ) -> TyperResult<TypedExpr> {
+        // Special case for Some() because it is parsed as a function call
+        // but should result in a special expression
+        if fn_call.name == self.ast.ident_id("Some") {
+            if fn_call.args.len() != 1 {
+                return make_fail("Some() must have exactly one argument", fn_call.span);
+            }
+            let arg = self.eval_expr_inner(&fn_call.args[0].value, scope_id, None)?;
+            let type_id = arg.get_type();
+            let optional_type = Type::Optional(OptionalType { inner_type: type_id });
+            let type_id = self.add_type(optional_type);
+            return Ok(TypedExpr::OptionalSome(OptionalSome {
+                inner_expr: Box::new(arg),
+                type_id,
+            }));
+        }
         // This block is all about method or resolution
         // We are trying to find out if this method or function
         // exists, and returning its id if so
@@ -1701,7 +1716,11 @@ impl TypedModule {
                 let expr = self.eval_expr(&param.value, scope_id, Some(fn_param.type_id))?;
                 if let Err(e) = self.typecheck_types(fn_param.type_id, expr.get_type()) {
                     return make_fail(
-                        format!("Invalid parameter type: {}", e),
+                        format!(
+                            "Invalid parameter type passed to function {}: {}",
+                            &*self.ast.get_ident_str(fn_call.name),
+                            e
+                        ),
                         param.value.get_span(),
                     );
                 }
@@ -1723,7 +1742,7 @@ impl TypedModule {
             ret_type: function_ret_type,
             span: fn_call.span,
         };
-        Ok(call)
+        Ok(TypedExpr::FunctionCall(call))
     }
 
     fn get_specialized_function_for_call(
