@@ -286,7 +286,7 @@ impl Display for Expression {
             Expression::Record(record) => std::fmt::Debug::fmt(record, f),
             Expression::IndexOperation(op) => op.fmt(f),
             Expression::Array(array_expr) => std::fmt::Debug::fmt(array_expr, f),
-            Expression::OptionalGet(array_expr) => std::fmt::Debug::fmt(array_expr, f),
+            Expression::OptionalGet(optional_get) => std::fmt::Debug::fmt(optional_get, f),
         }
     }
 }
@@ -1078,9 +1078,9 @@ impl<'toks> Parser<'toks> {
                 self.tokens.advance(); // colon
                 self.tokens.advance(); // colon
                 loop {
-                    log::trace!("Parsing namespaces {:?}", namespaces);
+                    trace!("Parsing namespaces {:?}", namespaces);
                     let (a, b, c) = self.tokens.peek_three();
-                    log::trace!("Parsing namespaces peeked 3 {} {} {}", a.kind, b.kind, c.kind);
+                    trace!("Parsing namespaces peeked 3 {} {} {}", a.kind, b.kind, c.kind);
                     if a.kind == K::Colon && b.kind == K::Colon && c.kind == K::Ident {
                         self.tokens.advance(); // ident
                         self.tokens.advance(); // colon

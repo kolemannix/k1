@@ -1,0 +1,8 @@
+fn main(): int {
+  val b = Some(true);
+  if b |x| {
+    assert(x);
+  };
+  assert(b.has_value());
+  0
+}

@@ -1,5 +1,0 @@
-fn main(): int {
-  val b: bool? = true;
-  assert(b.has_value());
-  0
-}
