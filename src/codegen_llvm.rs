@@ -340,7 +340,7 @@ impl<'ctx> Codegen<'ctx> {
         // self.llvm_types.insert(type_id, struct_ptr_type.as_basic_type_enum());
         struct_type
     }
-    fn build_optional_type(&mut self, optional_type: &OptionalType, ) -> (bool, BasicTypeEnum<'ctx>) {
+    fn build_optional_type(&mut self, optional_type: &OptionalType) -> (bool, BasicTypeEnum<'ctx>) {
         // Optional representation summary:
         // Pointer-like types (array, record, string) are represented the same way, and
         // we use the null pointer to represent None
@@ -348,13 +348,12 @@ impl<'ctx> Codegen<'ctx> {
         // flag indicating whether the value is None, and the value itself
         let optional_struct_repr = self.optional_repr_for_type_is_struct(optional_type.inner_type);
         let type_enum = if optional_struct_repr {
-                let inner = self.get_llvm_type(optional_type.inner_type);
-                // Do I need to think about alignment and packing?
-                let llvm_struct = self
-                    .ctx
-                    .struct_type(&[self.ctx.bool_type().as_basic_type_enum(), inner], false);
-                llvm_struct.as_basic_type_enum()
-            } else {
+            let inner = self.get_llvm_type(optional_type.inner_type);
+            // Do I need to think about alignment and packing?
+            let llvm_struct =
+                self.ctx.struct_type(&[self.ctx.bool_type().as_basic_type_enum(), inner], false);
+            llvm_struct.as_basic_type_enum()
+        } else {
             self.builtin_types.any_ptr.as_basic_type_enum()
         };
         (optional_struct_repr, type_enum)
@@ -387,7 +386,7 @@ impl<'ctx> Codegen<'ctx> {
                                 // So no need to call build_optional_type as shown:
                                 // self.build_optional_type(optional).1.ptr_type()
                                 self.builtin_types.any_ptr.as_basic_type_enum()
-                            },
+                            }
                             Type::Record(record) => {
                                 trace!("generating llvm pointer type for record type {type_id}");
                                 let field_types: Vec<_> = record
@@ -584,19 +583,22 @@ impl<'ctx> Codegen<'ctx> {
     }
     fn codegen_optional_has_value(
         &mut self,
+        // The type id of the optional that we are checking, not the type id of its contained type
         type_id: TypeId,
-        optional_value: BasicValueEnum<'ctx>,
+        optional_value: PointerValue<'ctx>,
     ) -> BasicValueEnum<'ctx> {
         let module = self.module.clone();
         let optional_type = module.get_type(type_id).expect_optional_type();
         let (is_struct_repr, optional_llvm_type) = self.build_optional_type(optional_type);
         if is_struct_repr {
             // Struct Repr
-            let struct_ptr = optional_value.into_pointer_value();
+            let struct_ptr = optional_value;
             let opt_struct_type = optional_llvm_type.into_struct_type();
 
-            let discriminator_pointer =
-                self.builder.build_struct_gep(opt_struct_type, struct_ptr, 0, "discrim_ptr").unwrap();
+            let discriminator_pointer = self
+                .builder
+                .build_struct_gep(opt_struct_type, struct_ptr, 0, "discrim_ptr")
+                .unwrap();
             let discriminator_value = self
                 .builder
                 .build_load(
@@ -613,7 +615,7 @@ impl<'ctx> Codegen<'ctx> {
             );
             is_some.as_basic_value_enum()
         } else {
-            let value_struct_ptr = optional_value.into_pointer_value();
+            let value_struct_ptr = optional_value;
             let not_null_int_value = self.builder.build_is_not_null(value_struct_ptr, "not_null");
             not_null_int_value.as_basic_value_enum()
         }
@@ -659,7 +661,11 @@ impl<'ctx> Codegen<'ctx> {
             }
             TypedExpr::OptionalHasValue(optional_expr) => {
                 let optional_value = self.codegen_expr(optional_expr);
-                self.codegen_optional_has_value(optional_expr.get_type(), optional_value).into()
+                self.codegen_optional_has_value(
+                    optional_expr.get_type(),
+                    optional_value.into_pointer_value(),
+                )
+                .into()
             }
             TypedExpr::OptionalGet(opt_get) => {
                 let optional_value = self.codegen_expr(&opt_get.inner_expr);

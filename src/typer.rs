@@ -645,8 +645,6 @@ impl IntrinsicFunctionType {
             "printInt" => Some(IntrinsicFunctionType::PrintInt),
             "print" => Some(IntrinsicFunctionType::PrintString),
             "exit" => Some(IntrinsicFunctionType::Exit),
-            "array_new" => Some(IntrinsicFunctionType::ArrayNew),
-            "string_new" => Some(IntrinsicFunctionType::StringNew),
             _ => None,
         }
     }
@@ -1451,6 +1449,18 @@ impl TypedModule {
             }
             Expression::MethodCall(m_call) => {
                 let base_expr = self.eval_expr(&m_call.base, scope_id, None)?;
+                if m_call.call.name == self.ast.ident_id("has_value") {
+                    let Type::Optional(_opt) = self.get_type(base_expr.get_type()) else {
+                        return make_fail(
+                            format!(
+                                "Cannot call has_value() on non-optional type: {}",
+                                self.type_id_to_string(base_expr.get_type())
+                            ),
+                            m_call.call.span,
+                        );
+                    };
+                    return Ok(TypedExpr::OptionalHasValue(Box::new(base_expr)));
+                }
                 let call = self.eval_function_call(&m_call.call, Some(base_expr), scope_id)?;
                 Ok(TypedExpr::FunctionCall(call))
             }
@@ -1634,7 +1644,7 @@ impl TypedModule {
                             format!(
                                 "Method {} does not exist on type {:?}",
                                 &*self.get_ident_str(fn_call.name),
-                                type_id,
+                                self.type_id_to_string(type_id),
                             ),
                             fn_call.span,
                         )
