@@ -509,20 +509,10 @@ impl AstModule {
 
     pub fn get_defn(&self, ast_id: AstId) -> &Definition {
         for defn in &self.defs {
-            log::trace!(
-                "defn {:?} has ast_id {}",
-                &*self.get_ident_str(defn.get_name()),
-                defn.get_ast_id()
-            );
             if defn.get_ast_id() == ast_id {
                 return defn;
             } else if let Definition::Namespace(ns) = defn {
                 for inner_def in &ns.definitions {
-                    log::trace!(
-                        "inner defn {:?} has ast_id {}",
-                        &*self.get_ident_str(inner_def.get_name()),
-                        inner_def.get_ast_id()
-                    );
                     if inner_def.get_ast_id() == ast_id {
                         return inner_def;
                     }
@@ -1529,7 +1519,7 @@ pub fn parse_text(text: &str, module_name: &str, use_prelude: bool) -> ParseResu
     } else {
         text.to_string()
     };
-    log::info!("parser source:\n{}", &text);
+    // log::info!("parser source:\n{}", &text);
 
     let mut lexer = Lexer::make(&full_source);
 

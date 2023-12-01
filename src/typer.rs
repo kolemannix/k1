@@ -8,7 +8,7 @@ use crate::parse::{
 };
 use anyhow::{bail, Result};
 use colored::Colorize;
-use log::{error, trace};
+use log::{error, trace, warn};
 use std::collections::HashMap;
 use std::error::Error;
 
@@ -136,6 +136,12 @@ pub struct FnArgDefn {
 }
 
 #[derive(Debug, Clone)]
+pub struct SpecializationRecord {
+    pub type_params: Vec<TypeId>,
+    pub specialized_function_id: FunctionId,
+}
+
+#[derive(Debug, Clone)]
 pub struct Function {
     pub name: IdentifierId,
     pub scope: ScopeId,
@@ -145,7 +151,7 @@ pub struct Function {
     pub block: Option<TypedBlock>,
     pub intrinsic_type: Option<IntrinsicFunctionType>,
     pub linkage: Linkage,
-    pub specializations: Vec<FunctionId>,
+    pub specializations: Vec<SpecializationRecord>,
     pub ast_id: AstId,
 }
 
@@ -1822,7 +1828,7 @@ impl TypedModule {
     fn get_specialized_function_for_call(
         &mut self,
         fn_call: &FnCall,
-        old_function_id: FunctionId,
+        generic_function_id: FunctionId,
         intrinsic_type: Option<IntrinsicFunctionType>,
         calling_scope: ScopeId,
     ) -> TyperResult<FunctionId> {
@@ -1837,7 +1843,7 @@ impl TypedModule {
         //          that type expression, and assign it to the concrete type
 
         // FIXME: Can we avoid this clone of the whole function
-        let generic_function = self.get_function(old_function_id).clone();
+        let generic_function = self.get_function(generic_function_id).clone();
         trace!(
             "Specializing function call: {}, {}, astid {}",
             &*self.get_ident_str(fn_call.name),
@@ -1858,6 +1864,31 @@ impl TypedModule {
 
         // The only real difference is the scope: it has substitutions for the type variables
         let spec_fn_scope_id = self.scopes.add_scope_to_root();
+        let evaluated_type_args = type_args
+            .iter()
+            .map(|type_arg| self.eval_type_expr(&type_arg.value, calling_scope))
+            .collect::<TyperResult<Vec<TypeId>>>()?;
+        for (i, existing_specialization) in generic_function.specializations.iter().enumerate() {
+            // For now, naive comparison that all type ids are identical
+            // There may be some scenarios where they are _equivalent_ but not identical
+            // But I'm not sure
+            let x = existing_specialization
+                .type_params
+                .iter()
+                .map(|type_id| self.type_id_to_string(*type_id))
+                .collect::<Vec<_>>()
+                .join(",");
+            warn!("existing specialization for {} {}: {}", new_name, i, x);
+            if existing_specialization.type_params == evaluated_type_args {
+                log::info!(
+                    "Found existing specialization for function {} with types: {}",
+                    &*self.get_ident_str(generic_function.name),
+                    x
+                );
+                return Ok(existing_specialization.specialized_function_id);
+            }
+        }
+
         for (i, type_param) in type_params.iter().enumerate() {
             let type_arg = &type_args[i];
             let type_id = self.eval_type_expr(&type_arg.value, calling_scope)?;
@@ -1878,9 +1909,6 @@ impl TypedModule {
             );
             self.scopes.get_scope_mut(spec_fn_scope_id).add_type(type_param.ident, type_id);
         }
-        new_name.push_str("_spec_");
-        let specialization_count = generic_function.specializations.len();
-        new_name.push_str(&specialization_count.to_string());
 
         let ast = self.ast.clone();
         let Definition::FnDef(ast_def) = ast.get_defn(generic_function.ast_id) else {
@@ -1896,6 +1924,10 @@ impl TypedModule {
             true,
             intrinsic_type,
         )?;
+        self.get_function_mut(generic_function_id).specializations.push(SpecializationRecord {
+            specialized_function_id,
+            type_params: evaluated_type_args,
+        });
         Ok(specialized_function_id)
     }
     fn eval_block_stmt(&mut self, stmt: &BlockStmt, scope_id: ScopeId) -> TyperResult<TypedStmt> {
