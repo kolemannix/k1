@@ -11,8 +11,26 @@ const NxString = packed struct {
 };
 fn NxArray(T: type) type {
     return struct {
+        const Self = @This();
         len: u64,
+        cap: u64,
         data: [*]T,
+
+        fn push(self: *Self, value: T) void {
+            if (self.len + 1 > self.cap) {
+              self.grow();
+            }
+            self.data[self.len] = value;
+            self.len += 1;
+        }
+
+        fn grow(self: *Self) void {
+          const new_cap = self.cap * 2;
+          const data = allocator.alloc(T, new_cap);
+          @memcpy(data, self.data);
+          self.cap = new_cap;
+          self.data = data;
+        }
     };
 }
 

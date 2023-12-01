@@ -52,9 +52,10 @@ The project isn't mature enough yet to make this list but the spirit of the effo
 - [x] Use ctx.const_string for printf format strings
 - [x] Optionals
 - [x] Improve printing output by fixing display functions
+- [ ] Make codegen fail instead of panic
 - [ ] Codegen 'variables' is broken (never cleared); use enter scope / exit scope w/ a stack of vecs or something instead
 - [ ] Support multiple files (module ID in all IDs)
-- [ ] Back builtin Array with zig's ArrayList
+- [ ] Implement builtin growable array
 - [ ] Back builtin Map with zig's HashMap
 - [ ] Fix namespaces to require full paths (currently busted must be unique names globally)
 - [ ] Type Ascriptions (literally can just pass expected_type into eval and do an addtl typecheck)

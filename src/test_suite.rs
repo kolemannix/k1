@@ -48,12 +48,19 @@ fn test_file<'ctx, P: AsRef<Path>>(ctx: &'ctx Context, path: P) -> Result<()> {
 pub fn run_all() -> Result<()> {
     let ctx = Context::create();
     let test_dir = "resources/test_src";
+    let mut total = 0;
+    let mut success = 0;
     for dir_entry in std::fs::read_dir(test_dir)? {
         let dir_entry = dir_entry?;
         let metadata = dir_entry.metadata()?;
         if metadata.is_file() {
-            test_file(&ctx, dir_entry.path())?;
+            let result = test_file(&ctx, dir_entry.path());
+            if result.is_ok() {
+                success += 1;
+            }
+            total += 1;
         }
     }
+    eprintln!("Ran {} tests, {} succeeded", total, success);
     Ok(())
 }

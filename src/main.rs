@@ -35,9 +35,9 @@ struct Args {
     #[arg(long, default_value_t = false)]
     no_llvm_opt: bool,
 
-    /// Print AST to stdout
+    /// Dump Module
     #[arg(long, default_value_t = false)]
-    print_ast: bool,
+    dump_module: bool,
 
     /// File
     file: PathBuf,
@@ -126,8 +126,9 @@ fn main() -> Result<()> {
     if args.print_llvm {
         println!("{}", codegen.output_llvm_ir_text());
     }
-
-    // println!("Build Output: {}", String::from_utf8(build_output.stdout).unwrap());
+    if args.dump_module {
+        println!("{}", codegen.module);
+    }
 
     let mut run_cmd = std::process::Command::new(format!("{}/{}.out", out_dir, filename));
     log::debug!("Run Command: {:?}", run_cmd);

@@ -1,0 +1,6 @@
+fn main(): int {
+  val xs = [1,2,4, 9, 16, 25];
+  printInt(xs[3]);
+  // xs.push<int>(36);
+  0
+}

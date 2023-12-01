@@ -508,7 +508,6 @@ impl AstModule {
     }
 
     pub fn get_defn(&self, ast_id: AstId) -> &Definition {
-        log::trace!("get_defn id {}", ast_id);
         for defn in &self.defs {
             log::trace!(
                 "defn {:?} has ast_id {}",

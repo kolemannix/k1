@@ -26,9 +26,18 @@ namespace char {
   }
 }
 type Array = {}
+
 namespace Array {
   intern fn new<T>(len: int): Array<T>
   intern fn length(self: Array): int
+  // intern fn capacity(self: Array): int
+  // intern fn grow<T>(self: Array<T>): unit
+  // fn push<T>(self: Array<T>, elem: T): unit {
+  //   if self.length() == self.capacity() {
+  //     self.grow<T>();
+  //   };
+  //   self[self.length()] = elem;
+  // }
 }
 namespace string {
   intern fn new(bytes: Array<char>): string
