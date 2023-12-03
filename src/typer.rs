@@ -644,6 +644,7 @@ pub enum IntrinsicFunctionType {
     ArrayLength,
     ArrayNew,
     ArrayGrow,
+    ArraySetLength,
     ArrayCapacity,
     StringNew,
 }
@@ -2078,6 +2079,8 @@ impl TypedModule {
                 Some(IntrinsicFunctionType::ArrayGrow)
             } else if fn_def.name == self.ast.ident_id("new") {
                 Some(IntrinsicFunctionType::ArrayNew)
+            } else if fn_def.name == self.ast.ident_id("set_length") {
+                Some(IntrinsicFunctionType::ArraySetLength)
             } else {
                 None
             }

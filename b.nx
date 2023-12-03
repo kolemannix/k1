@@ -1,0 +1,53 @@
+// fn dump(arr: Array<char>): unit {
+//     print("[");
+//     mut i = 0;
+//     while (i < arr.length()) {
+//       if (i > 0) {
+//         print(", ");
+//       };
+//       print(arr[i].toString());
+//       i = i + 1;
+//     };
+//     print("]");
+//     println("");
+// }
+
+// print is clearly fucking up something
+fn main(): int {
+  val a: string = "hello, ";
+  val b: string = "world";
+  // val a_len = a.length();
+  // val b_len = b.length();
+  // val c = b.concat(a);
+  // val new_length = a.length() + b.length();
+  //printInt(new_length);
+  val copied = Array::new<char>(12);
+  printInt(copied.length());
+  //mut i = 0;
+  //while i < new_length {
+  //  copied[i] = '!';
+  //  i = i + 1;
+  //};
+  //dump(copied);
+
+  // i = 0;
+  // printInt(7);
+  // copied[0] = 'F';
+  // while (i < a_len) {
+  //   copied[i] = a[i];
+  //   i = i + 1;
+  // };
+  // dump(copied);
+  // i = 0;
+  // while (i < b_len) {
+  //   copied[i + a_len] = b[i];
+  //   i = i + 1;
+  // };
+  // dump(copied);
+  // new(copied)
+
+  // val y: string = "aa";
+  // print(c);
+  // print(c);
+  0
+}

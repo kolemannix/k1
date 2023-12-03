@@ -90,6 +90,14 @@ impl<'ctx> BuiltinTypes<'ctx> {
                 "array_data_ptr_ptr",
             )
             .unwrap();
+        data_ptr_ptr
+    }
+    fn array_data_loaded(
+        &self,
+        builder: &Builder<'ctx>,
+        array_pointer: PointerValue<'ctx>,
+    ) -> PointerValue<'ctx> {
+        let data_ptr_ptr = self.array_data_ptr(builder, array_pointer);
         let data_ptr = builder.build_load(self.any_ptr, data_ptr_ptr, "array_data_ptr");
         data_ptr.into_pointer_value()
     }
@@ -240,17 +248,17 @@ impl<'ctx> Codegen<'ctx> {
         // llvm_module.link_in_module(stdlib_module).unwrap();
         let pointers = HashMap::new();
         let format_int_str = {
-            let global = llvm_module.add_global(ctx.i8_type().array_type(4), None, "formatInt");
+            let global = llvm_module.add_global(ctx.i8_type().array_type(3), None, "formatInt");
             global.set_constant(true);
             global.set_unnamed_addr(true);
-            global.set_initializer(&i8_array_from_str(ctx, "%i\n\0"));
+            global.set_initializer(&i8_array_from_str(ctx, "%i\0"));
             global
         };
         let format_str_str = {
-            let global = llvm_module.add_global(ctx.i8_type().array_type(6), None, "formatString");
+            let global = llvm_module.add_global(ctx.i8_type().array_type(5), None, "formatString");
             global.set_constant(true);
             global.set_unnamed_addr(true);
-            global.set_initializer(&i8_array_from_str(ctx, "%.*s\n\0"));
+            global.set_initializer(&i8_array_from_str(ctx, "%.*s\0"));
             global
         };
         let globals = HashMap::new();
@@ -757,7 +765,7 @@ impl<'ctx> Codegen<'ctx> {
                     .make_array(array_len, array_capacity, element_type)
                     .as_basic_value_enum()
                     .into_pointer_value();
-                let array_data_ptr = self.builtin_types.array_data_ptr(&self.builder, array_ptr);
+                let array_data_ptr = self.builtin_types.array_data_loaded(&self.builder, array_ptr);
                 // Store each element
                 for (index, element_expr) in array.elements.iter().enumerate() {
                     let value = self.codegen_expr(element_expr);
@@ -981,7 +989,7 @@ impl<'ctx> Codegen<'ctx> {
         let array_value_as_ptr = array_value.into_pointer_value();
         let index_int_value = index_value.into_int_value();
         // Likely we need one more level of dereferencing
-        let array_data = self.builtin_types.array_data_ptr(&self.builder, array_value_as_ptr);
+        let array_data = self.builtin_types.array_data_loaded(&self.builder, array_value_as_ptr);
         unsafe {
             let gep_ptr = self.builder.build_gep(
                 pointee_ty,
@@ -1098,17 +1106,24 @@ impl<'ctx> Codegen<'ctx> {
                     self.builtin_types.i64.const_int(2, true),
                     "new_cap",
                 );
-                let old_data = self.builtin_types.array_data_ptr(&self.builder, array);
+                let old_data = self.builtin_types.array_data_loaded(&self.builder, array);
                 let element_type_id =
                     self.module.get_type(self_param.type_id).expect_array_type().element_type;
                 let new_data_type = self.get_llvm_type(element_type_id);
                 let new_data =
                     self.builder.build_array_malloc(new_data_type, new_cap, "new_data").unwrap();
-                let _copied = self.builder.build_memcpy(new_data, 1, old_data, 1, cap).unwrap();
+                let memcpy_bytes = self.builder.build_int_mul(
+                    cap,
+                    new_data_type.size_of().unwrap(),
+                    "memcpy_bytes",
+                );
+                let _copied =
+                    self.builder.build_memcpy(new_data, 1, old_data, 1, memcpy_bytes).unwrap();
                 let array_cap_ptr = self.builtin_types.array_cap_ptr(&self.builder, array);
                 let array_data_ptr = self.builtin_types.array_data_ptr(&self.builder, array);
                 self.builder.build_store(array_cap_ptr, new_cap);
                 self.builder.build_store(array_data_ptr, new_data);
+                self.builder.build_free(old_data);
                 self.builtin_types.unit_value.as_basic_value_enum().into()
             }
             IntrinsicFunctionType::ArrayCapacity => {
@@ -1119,13 +1134,22 @@ impl<'ctx> Codegen<'ctx> {
                     self.builder.build_load(self.builtin_types.i64, capacity_ptr, "capacity");
                 capacity_value.as_basic_value_enum().into()
             }
+            IntrinsicFunctionType::ArraySetLength => {
+                let array_arg =
+                    self.get_loaded_variable(function.params[0].variable_id).into_pointer_value();
+                let new_len =
+                    self.get_loaded_variable(function.params[1].variable_id).into_int_value();
+                let array_len_ptr = self.builtin_types.array_length_ptr(&self.builder, array_arg);
+                self.builder.build_store(array_len_ptr, new_len);
+                self.builtin_types.unit_value.as_basic_value_enum().into()
+            }
             IntrinsicFunctionType::StringNew => {
                 let array =
                     self.get_loaded_variable(function.params[0].variable_id).into_pointer_value();
                 let array_len = self.builtin_types.array_length_loaded(&self.builder, array);
                 let string = self.make_string(array_len).into_pointer_value();
                 let string_data = self.builtin_types.string_data_ptr(&self.builder, string);
-                let array_data = self.builtin_types.array_data_ptr(&self.builder, array);
+                let array_data = self.builtin_types.array_data_loaded(&self.builder, array);
                 let _copied =
                     self.builder.build_memcpy(string_data, 1, array_data, 1, array_len).unwrap();
                 string.as_basic_value_enum().into()
@@ -1360,10 +1384,10 @@ impl<'ctx> Codegen<'ctx> {
             PassManager::create(());
         if optimize {
             module_pass_manager.add_promote_memory_to_register_pass();
-            module_pass_manager.add_function_attrs_pass();
             module_pass_manager.add_instruction_combining_pass();
+            module_pass_manager.add_function_inlining_pass();
         }
-        // module_pass_manager.add_function_inlining_pass();
+        module_pass_manager.add_function_attrs_pass();
         module_pass_manager.add_verifier_pass();
 
         module_pass_manager.run_on(&self.llvm_module);

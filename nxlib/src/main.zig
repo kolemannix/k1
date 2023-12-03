@@ -45,6 +45,14 @@ export fn _nx_charToString(c: u8) *NxString {
     return new_str;
 }
 
+export fn _nx_charToInt(c: u8) i64 {
+    return @intCast(c);
+}
+
+export fn _nx_intToChar(i: i64) u8 {
+    return @intCast(i);
+}
+
 export fn _nx_readFileToString(s: *NxString) *const NxString {
     //std.fs.cwd()
     const file = std.fs.openFileAbsolute(s.as_slice(), .{ .mode = .read_only }) catch unreachable;

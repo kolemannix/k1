@@ -2,6 +2,7 @@ use std::path::Path;
 
 use anyhow::{anyhow, bail, Result};
 use inkwell::context::Context;
+use std::os::unix::prelude::ExitStatusExt;
 
 fn test_file<'ctx, P: AsRef<Path>>(ctx: &'ctx Context, path: P) -> Result<()> {
     let path = path.as_ref();
@@ -35,9 +36,10 @@ fn test_file<'ctx, P: AsRef<Path>>(ctx: &'ctx Context, path: P) -> Result<()> {
     }
     if !run_output.status.success() {
         bail!(
-            "TEST CASE FAILED EXECUTION: {}, exit code: {}",
+            "TEST CASE FAILED EXECUTION: {}, exit code: {:?}, signal: {:?}",
             filename,
-            run_output.status.code().unwrap()
+            run_output.status.code(),
+            run_output.status.signal()
         );
     };
     Ok(())
@@ -50,6 +52,7 @@ pub fn run_all() -> Result<()> {
     let test_dir = "resources/test_src";
     let mut total = 0;
     let mut success = 0;
+    let mut failures: Vec<String> = Vec::new();
     for dir_entry in std::fs::read_dir(test_dir)? {
         let dir_entry = dir_entry?;
         let metadata = dir_entry.metadata()?;
@@ -57,10 +60,18 @@ pub fn run_all() -> Result<()> {
             let result = test_file(&ctx, dir_entry.path());
             if result.is_ok() {
                 success += 1;
+            } else {
+                failures.push(dir_entry.path().file_name().unwrap().to_str().unwrap().to_string());
+                eprintln!("Test failed: {}", result.unwrap_err());
             }
             total += 1;
         }
     }
-    eprintln!("Ran {} tests, {} succeeded", total, success);
+    if success != total {
+        eprintln!("Failed tests: {:?}", failures);
+        bail!("{} tests failed", total - success);
+    } else {
+        eprintln!("Ran {} tests, {} succeeded", total, success);
+    }
     Ok(())
 }

@@ -1,5 +1,7 @@
 pub const PRELUDE_SOURCE: &str = r#"
 extern fn _nx_charToString(c: char): string
+extern fn _nx_charToInt(c: char): int
+extern fn _nx_intToChar(i: int): char
 extern fn _nx_readFileToString(path: string): string
 intern fn printInt(value: int): unit
 intern fn print(value: string): unit
@@ -21,23 +23,36 @@ fn assert(value: bool): unit {
   };
 }
 namespace char {
-  fn to_string(self: char): string {
+  fn fromInt(value: int): char {
+    _nx_intToChar(value)
+  }
+  fn toInt(self: char): int {
+    _nx_charToInt(self)
+  }
+  fn toString(self: char): string {
     _nx_charToString(self)
   }
+}
+fn println(value: string): unit {
+  print(value);
+  print(char::fromInt(10).toString());
 }
 type Array = {}
 
 namespace Array {
   intern fn new<T>(len: int): Array<T>
   intern fn length(self: Array): int
-  // intern fn capacity(self: Array): int
-  // intern fn grow<T>(self: Array<T>): unit
-  // fn push<T>(self: Array<T>, elem: T): unit {
-  //   if self.length() == self.capacity() {
-  //     self.grow<T>();
-  //   };
-  //   self[self.length()] = elem;
-  // }
+  intern fn capacity(self: Array): int
+  intern fn grow<T>(self: Array<T>): unit
+  intern fn set_length<T>(self: Array<T>, new_length: int): unit
+  fn push<T>(self: Array<T>, elem: T): unit {
+    val start_length = self.length();
+    if start_length == self.capacity() {
+      self.grow<T>();
+    };
+    self[start_length] = elem;
+    self.set_length<T>(start_length + 1);
+  }
 }
 namespace string {
   intern fn new(bytes: Array<char>): string
@@ -70,4 +85,4 @@ namespace string {
   }
 }
 // -------- END PRELUDE --------"#;
-pub const PRELUDE_LINES: usize = 47;
+pub const PRELUDE_LINES: usize = 87;
