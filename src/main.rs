@@ -94,7 +94,8 @@ pub fn compile_single_file_program<'ctx>(
     codegen.optimize(llvm_optimize)?;
 
     let llvm_text = codegen.output_llvm_ir_text();
-    let mut f = File::create(format!("{}/{}.ll", out_dir, filename))?;
+    let mut f =
+        File::create(format!("{}/{}.ll", out_dir, filename)).expect("Failed to create .ll file");
     f.write_all(llvm_text.as_bytes()).unwrap();
 
     // TODO: We could do this a lot more efficiently by just feeding the in-memory LLVM IR to clang

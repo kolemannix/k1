@@ -751,6 +751,15 @@ impl TypedModule {
         panic!()
     }
 
+    pub fn get_line_number(&self, span: Span) -> u32 {
+        if span.line < crate::prelude::PRELUDE_LINES as u32 {
+            // FIXME: Prelude needs to be in another file
+            0
+        } else {
+            span.line_number() - crate::prelude::PRELUDE_LINES as u32
+        }
+    }
+
     fn print_error(&self, message: impl AsRef<str>, span: Span) {
         let adjusted_line = span.line as i32 - crate::prelude::PRELUDE_LINES as i32 + 1;
         let line_no =
@@ -2603,13 +2612,17 @@ impl TypedModule {
 
 #[cfg(test)]
 mod test {
-    use crate::parse::parse_text;
+    use crate::parse::{parse_text, ParseResult};
     use crate::typer::*;
+
+    fn setup(src: &str, test_name: &str) -> ParseResult<AstModule> {
+        parse_text(src.to_string(), ".".to_string(), test_name.to_string(), false)
+    }
 
     #[test]
     fn const_definition_1() -> anyhow::Result<()> {
         let src = r"val x: int = 420;";
-        let module = parse_text(src, "basic_fn.nx", false)?;
+        let module = setup(src, "const_definition_1.nx")?;
         let mut ir = TypedModule::new(Rc::new(module));
         ir.run()?;
         let i1 = &ir.constants[0];
@@ -2635,7 +2648,7 @@ mod test {
           y = 42 + 42;
           foo()
         }"#;
-        let module = parse_text(src, "basic_fn.nx", false)?;
+        let module = setup(src, "basic_fn.nx")?;
         let mut ir = TypedModule::new(Rc::new(module));
         ir.run()?;
         println!("{:?}", ir.functions);

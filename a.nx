@@ -9,7 +9,7 @@ fn main(): int {
   val xs = [{ x: 1, y: 2, z: 3}];
   printInt(xs[0].z);
   mut i = 0;
-  while i < 1000000 {
+  while i < 3 {
     xs.push<Point>({ x: 1, y: 2, z: 3});
     i = i + 1;
   };

@@ -7,7 +7,7 @@ fn set_up(input: &str) -> Parser<'static> {
     let token_vec: &'static mut [Token] = lexer.run().leak();
     println!("{:?}", token_vec);
     print_tokens(input, token_vec);
-    let parser = Parser::make(token_vec, input.to_string());
+    let parser = Parser::make(token_vec, input.to_string(), ".".to_string(), input.to_string());
     parser
 }
 
@@ -22,7 +22,7 @@ fn basic_fn() -> Result<(), ParseError> {
       y = add(42, 42);
       add(x, y)
     }"#;
-    let module = parse_text(src, "basic_fn.nx", false)?;
+    let module = parse_text(src.to_string(), ".".to_string(), "basic_fn.nx".to_string(), false)?;
     assert_eq!(&module.name, "basic_fn.nx");
     if let Some(Definition::FnDef(fndef)) = module.defs.first() {
         assert_eq!(*module.get_ident_str(fndef.name), *"basic")
@@ -157,7 +157,7 @@ fn type_parameter_multi() -> ParseResult<()> {
 #[test]
 fn prelude_only() -> Result<(), ParseError> {
     env_logger::init();
-    let module = parse_text("", "prelude_only.nx", true)?;
+    let module = parse_text("".to_string(), ".".to_string(), "prelude_only.nx".to_string(), true)?;
     assert_eq!(&module.name, "prelude_only.nx");
     if let Some(Definition::FnDef(fndef)) = module.defs.first() {
         assert_eq!(*module.get_ident_str(fndef.name), *"_nx_charToString")
