@@ -53,6 +53,13 @@ The project isn't mature enough yet to make this list but the spirit of the effo
 - [x] Optionals
 - [x] Improve printing output by fixing display functions
 - [x] Implement builtin growable array
+- [ ] DEBUG info
+  - [x] on or off
+  - [x] flag types
+  - [x] correct line nums
+  - [ ] correct spans
+  - [x] correct file path
+  - [ ] Add lexical scopes for if and while
 - [ ] Make codegen fail instead of panic
 - [ ] Codegen 'variables' is broken (never cleared); use enter scope / exit scope w/ a stack of vecs or something instead
 - [ ] Support multiple files (module ID in all IDs)

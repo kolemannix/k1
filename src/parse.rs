@@ -433,6 +433,7 @@ pub struct FnDef {
 pub struct FnArgDef {
     pub name: IdentifierId,
     pub ty: TypeExpression,
+    pub span: Span,
 }
 
 #[derive(Debug)]
@@ -551,6 +552,8 @@ impl std::error::Error for ParseError {}
 
 #[derive(Debug)]
 pub struct Source {
+    pub directory: String,
+    pub filename: String,
     pub content: String,
     /// This is an inefficient copy but we need the lines cached because utf8
     /// Eventually it can be references not copies
@@ -575,12 +578,12 @@ struct Parser<'toks> {
 }
 
 impl<'toks> Parser<'toks> {
-    fn make(tokens: &'toks [Token], source: String) -> Parser {
+    fn make(tokens: &'toks [Token], source: String, directory: String, filename: String) -> Parser {
         // TODO: parse the lines ourselves
         let lines: Vec<_> = source.lines().map(|l| l.to_owned()).collect();
         Parser {
             tokens: TokenIter::make(tokens),
-            source: Rc::new(Source { content: source, lines }),
+            source: Rc::new(Source { content: source, lines, directory, filename }),
             identifiers: Rc::new(RefCell::new(Identifiers::default())),
             ast_id_index: 0,
         }
@@ -1207,7 +1210,8 @@ impl<'toks> Parser<'toks> {
         let name_token = self.expect_eat_token(K::Ident)?;
         self.expect_eat_token(K::Colon)?;
         let typ = Parser::expect("type_expression", self.peek(), self.parse_type_expression())?;
-        Ok(FnArgDef { name: self.intern_ident_token(name_token), ty: typ })
+        let span = name_token.span.extended(typ.get_span());
+        Ok(FnArgDef { name: self.intern_ident_token(name_token), ty: typ, span })
     }
 
     fn eat_fndef_args(&mut self) -> ParseResult<(Vec<FnArgDef>, Span)> {
@@ -1472,15 +1476,18 @@ impl<'toks> Parser<'toks> {
         }
     }
 
-    fn parse_module(&mut self, filename: &str) -> ParseResult<AstModule> {
+    fn parse_module(&mut self) -> ParseResult<AstModule> {
         let mut defs: Vec<Definition> = vec![];
 
         while let Some(def) = self.parse_definition()? {
             defs.push(def)
         }
-        let ident = self.ident_id(filename);
+        // Drop the extension from the filename
+        // Assumes a single dot in the filename
+        let module_name = self.source.filename.split('.').next().unwrap().to_string();
+        let ident = self.ident_id(&module_name);
         Ok(AstModule {
-            name: filename.to_string(),
+            name: module_name,
             name_id: ident,
             defs,
             source: self.source.clone(),
@@ -1509,15 +1516,20 @@ fn print_tokens(content: &str, tokens: &[Token]) {
 
 // Eventually I want to keep the tokens around, and return them from here somehow, either in the
 // ast::Module or just separately
-pub fn parse_text(text: &str, module_name: &str, use_prelude: bool) -> ParseResult<AstModule> {
+pub fn parse_text(
+    text: String,
+    directory: String,
+    filename: String,
+    use_prelude: bool,
+) -> ParseResult<AstModule> {
     let full_source: String = if use_prelude {
         let prelude = crate::prelude::PRELUDE_SOURCE;
         let mut modified_source = String::from(prelude);
         modified_source.push('\n');
-        modified_source.push_str(text);
+        modified_source.push_str(&text);
         modified_source
     } else {
-        text.to_string()
+        text
     };
     // log::info!("parser source:\n{}", &text);
 
@@ -1526,9 +1538,9 @@ pub fn parse_text(text: &str, module_name: &str, use_prelude: bool) -> ParseResu
     let token_vec: Vec<Token> =
         lexer.run().into_iter().filter(|token| token.kind != K::LineComment).collect();
 
-    let mut parser = Parser::make(&token_vec, full_source);
+    let mut parser = Parser::make(&token_vec, full_source, directory, filename);
 
-    let result = parser.parse_module(module_name);
+    let result = parser.parse_module();
     if let Err(e) = &result {
         parser.print_error(e);
     }

@@ -44,7 +44,7 @@ fn main(): int {
   //   i = i + 1;
   // };
   // dump(copied);
-  // new(copied)
+  // fromChars(copied)
 
   // val y: string = "aa";
   // print(c);

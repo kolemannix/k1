@@ -131,8 +131,9 @@ pub struct TypedBlock {
 pub struct FnArgDefn {
     pub name: IdentifierId,
     pub variable_id: VariableId,
-    pub position: usize,
+    pub position: u32,
     pub type_id: TypeId,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -153,6 +154,7 @@ pub struct Function {
     pub linkage: Linkage,
     pub specializations: Vec<SpecializationRecord>,
     pub ast_id: AstId,
+    pub span: Span,
 }
 
 impl Function {
@@ -548,9 +550,11 @@ impl Scopes {
         let scopes = vec![Scope::default()];
         Scopes { scopes }
     }
-    fn get_root_scope_id(&self) -> ScopeId {
+
+    pub fn get_root_scope_id(&self) -> ScopeId {
         0 as ScopeId
     }
+
     fn add_scope_to_root(&mut self) -> ScopeId {
         self.add_child_scope(0)
     }
@@ -646,7 +650,7 @@ pub enum IntrinsicFunctionType {
     ArrayGrow,
     ArraySetLength,
     ArrayCapacity,
-    StringNew,
+    StringFromCharArray,
 }
 
 impl IntrinsicFunctionType {
@@ -1786,13 +1790,13 @@ impl TypedModule {
                 }
             }
         }
-        let start = if skip_first { 1 } else { 0 };
-        for fn_param in &params_cloned[start..] {
+        let start: u32 = if skip_first { 1 } else { 0 };
+        for fn_param in &params_cloned[start as usize..] {
             let matching_param_by_name =
                 fn_call.args.iter().find(|arg| arg.name == Some(fn_param.name));
             // If we skipped 'self', we need to subtract 1 from the offset we index into fn_call.args with
             let matching_idx = fn_param.position - start;
-            let matching_param = matching_param_by_name.or(fn_call.args.get(matching_idx));
+            let matching_param = matching_param_by_name.or(fn_call.args.get(matching_idx as usize));
             if let Some(param) = matching_param {
                 let expr = self.eval_expr(&param.value, scope_id, Some(fn_param.type_id))?;
                 if let Err(e) = self.typecheck_types(fn_param.type_id, expr.get_type()) {
@@ -2065,8 +2069,8 @@ impl TypedModule {
         let result = if current_namespace.name == self.ast.ident_id("string") {
             if fn_def.name == self.ast.ident_id("length") {
                 Some(IntrinsicFunctionType::StringLength)
-            } else if fn_def.name == self.ast.ident_id("new") {
-                Some(IntrinsicFunctionType::StringNew)
+            } else if fn_def.name == self.ast.ident_id("fromChars") {
+                Some(IntrinsicFunctionType::StringFromCharArray)
             } else {
                 None
             }
@@ -2167,7 +2171,13 @@ impl TypedModule {
                 owner_scope: Some(fn_scope_id),
             };
             let variable_id = self.add_variable(variable);
-            params.push(FnArgDefn { name: fn_arg.name, variable_id, position: idx, type_id });
+            params.push(FnArgDefn {
+                name: fn_arg.name,
+                variable_id,
+                position: idx as u32,
+                type_id,
+                span: fn_arg.span,
+            });
             self.scopes.add_variable(fn_scope_id, fn_arg.name, variable_id);
         }
 
@@ -2193,6 +2203,7 @@ impl TypedModule {
             linkage: fn_def.linkage,
             specializations: Vec::new(),
             ast_id: fn_def.ast_id,
+            span: fn_def.span,
         };
         let is_extern = function.linkage == Linkage::External;
         let function_id = self.add_function(function);

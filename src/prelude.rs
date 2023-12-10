@@ -55,7 +55,7 @@ namespace Array {
   }
 }
 namespace string {
-  intern fn new(bytes: Array<char>): string
+  intern fn fromChars(bytes: Array<char>): string
   intern fn length(self: string): int
   fn index_of(self: string, c: char): int {
     mut i = 0;
@@ -81,7 +81,7 @@ namespace string {
       copied[i + self.length()] = other[i];
       i = i + 1;
     };
-    new(copied)
+    fromChars(copied)
   }
 }
 // -------- END PRELUDE --------"#;
