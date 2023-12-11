@@ -1,0 +1,26 @@
+type Point = {
+  x: int,
+  y: int,
+  z: int,
+}
+// Doesn't work with records
+
+fn main(): int {
+  val xs = [{ x: 1, y: 2, z: 3}];
+  printInt(xs[0].z);
+  mut i = 0;
+  while i < 3 {
+    xs.push<Point>({ x: 1, y: 2, z: 3});
+    i = i + 1;
+  };
+  printInt(xs.capacity());
+  printInt(xs.length());
+  i = 0;
+  mut sum = 0;
+  while i < xs.length() {
+    sum = sum + xs[i].z;
+    i = i + 1;
+  };
+  printInt(sum);
+  0
+}

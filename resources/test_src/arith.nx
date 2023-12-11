@@ -6,3 +6,4 @@ fn main(): int {
   assert(y < 53);
   0
 }
+// 0

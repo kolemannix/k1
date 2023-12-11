@@ -259,6 +259,10 @@ pub struct Span {
 impl Span {
     pub const NONE: Span = Span { file_id: 0, start: 0, end: 0, line: 0 };
 
+    pub fn line_number(&self) -> u32 {
+        self.line + 1
+    }
+
     pub fn extended(&self, other: Span) -> Span {
         let mut copied = *self;
         copied.end = other.end;

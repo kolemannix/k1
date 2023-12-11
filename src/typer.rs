@@ -8,7 +8,7 @@ use crate::parse::{
 };
 use anyhow::{bail, Result};
 use colored::Colorize;
-use log::{error, trace};
+use log::{error, trace, warn};
 use std::collections::HashMap;
 use std::error::Error;
 
@@ -131,8 +131,15 @@ pub struct TypedBlock {
 pub struct FnArgDefn {
     pub name: IdentifierId,
     pub variable_id: VariableId,
-    pub position: usize,
+    pub position: u32,
     pub type_id: TypeId,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct SpecializationRecord {
+    pub type_params: Vec<TypeId>,
+    pub specialized_function_id: FunctionId,
 }
 
 #[derive(Debug, Clone)]
@@ -145,8 +152,9 @@ pub struct Function {
     pub block: Option<TypedBlock>,
     pub intrinsic_type: Option<IntrinsicFunctionType>,
     pub linkage: Linkage,
-    pub specializations: Vec<FunctionId>,
+    pub specializations: Vec<SpecializationRecord>,
     pub ast_id: AstId,
+    pub span: Span,
 }
 
 impl Function {
@@ -542,9 +550,11 @@ impl Scopes {
         let scopes = vec![Scope::default()];
         Scopes { scopes }
     }
-    fn get_root_scope_id(&self) -> ScopeId {
+
+    pub fn get_root_scope_id(&self) -> ScopeId {
         0 as ScopeId
     }
+
     fn add_scope_to_root(&mut self) -> ScopeId {
         self.add_child_scope(0)
     }
@@ -618,6 +628,7 @@ impl Scopes {
 
     fn find_type(&self, scope_id: ScopeId, ident: IdentifierId) -> Option<TypeId> {
         let scope = self.get_scope(scope_id);
+        trace!("Find type {} in {:?}", ident, scope.types);
         if let v @ Some(_r) = scope.find_type(ident) {
             return v;
         }
@@ -636,7 +647,10 @@ pub enum IntrinsicFunctionType {
     StringLength,
     ArrayLength,
     ArrayNew,
-    StringNew,
+    ArrayGrow,
+    ArraySetLength,
+    ArrayCapacity,
+    StringFromCharArray,
 }
 
 impl IntrinsicFunctionType {
@@ -737,6 +751,15 @@ impl TypedModule {
         panic!()
     }
 
+    pub fn get_line_number(&self, span: Span) -> u32 {
+        if span.line < crate::prelude::PRELUDE_LINES as u32 {
+            // FIXME: Prelude needs to be in another file
+            0
+        } else {
+            span.line_number() - crate::prelude::PRELUDE_LINES as u32
+        }
+    }
+
     fn print_error(&self, message: impl AsRef<str>, span: Span) {
         let adjusted_line = span.line as i32 - crate::prelude::PRELUDE_LINES as i32 + 1;
         let line_no =
@@ -828,7 +851,7 @@ impl TypedModule {
         expr: &parse::TypeExpression,
         scope_id: ScopeId,
     ) -> TyperResult<TypeId> {
-        match expr {
+        let mut base = match expr {
             parse::TypeExpression::Unit(_) => Ok(UNIT_TYPE_ID),
             parse::TypeExpression::Char(_) => Ok(CHAR_TYPE_ID),
             parse::TypeExpression::Int(_) => Ok(INT_TYPE_ID),
@@ -865,9 +888,7 @@ impl TypedModule {
                 })
             }
             parse::TypeExpression::TypeApplication(ty_app) => {
-                let base_name = self.ast.get_ident_str(ty_app.base);
-                if &*base_name == "Array" {
-                    drop(base_name);
+                if self.ast.ident_id("Array") == ty_app.base {
                     if ty_app.params.len() == 1 {
                         let element_ty = self.eval_type_expr(&ty_app.params[0], scope_id)?;
                         let array_ty = ArrayType { span: ty_app.span, element_type: element_ty };
@@ -889,7 +910,30 @@ impl TypedModule {
                 let type_id = self.add_type(optional_type);
                 Ok(type_id)
             }
-        }
+        }?;
+        // Attempt to fully resolve type variables before returning
+        // loop {
+        //     match self.get_type(base) {
+        //         Type::TypeVariable(type_variable) => {
+        //             let type_id = self.scopes.find_type(scope_id, type_variable.identifier_id);
+        //             match type_id {
+        //                 None => {
+        //                     break;
+        //                 }
+        //                 Some(type_id) => {
+        //                     trace!(
+        //                         "eval_type_expr attempt resolve of TypeVariable {} got {:?}",
+        //                         &*self.get_ident_str(type_variable.identifier_id),
+        //                         self.type_id_to_string(type_id)
+        //                     );
+        //                     base = type_id;
+        //                 }
+        //             }
+        //         }
+        //         _other_type => break,
+        //     }
+        // }
+        Ok(base)
     }
 
     fn eval_const_type_expr(&mut self, expr: &parse::TypeExpression) -> TyperResult<TypeId> {
@@ -966,6 +1010,17 @@ impl TypedModule {
             (Type::Record(r1), Type::Record(r2)) => self.typecheck_record(r1, r2),
             (Type::Array(a1), Type::Array(a2)) => {
                 self.typecheck_types(a1.element_type, a2.element_type)
+            }
+            (Type::TypeVariable(t1), Type::TypeVariable(t2)) => {
+                if t1.identifier_id == t2.identifier_id {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "expected type variable {} but got {}",
+                        &*self.get_ident_str(t1.identifier_id),
+                        &*self.get_ident_str(t2.identifier_id)
+                    ))
+                }
             }
             (exp, got) => Err(format!(
                 "Expected {} but got {}",
@@ -1152,7 +1207,7 @@ impl TypedModule {
         expected_type: Option<TypeId>,
     ) -> TyperResult<TypedExpr> {
         trace!(
-            "eval_expr: {:?} expected type: {:?}",
+            "eval_expr: {} expected type: {:?}",
             expr,
             expected_type.map(|t| self.type_id_to_string(t))
         );
@@ -1399,17 +1454,22 @@ impl TypedModule {
                 Ok(expr)
             }
             Expression::Variable(variable) => {
-                let var_index =
+                let variable_id =
                     self.scopes.find_variable(scope_id, variable.ident).ok_or(make_err(
                         format!("{} is not defined", &*self.get_ident_str(variable.ident)),
                         variable.span,
                     ))?;
-                let v = self.get_variable(var_index);
+                let v = self.get_variable(variable_id);
                 let expr = TypedExpr::Variable(VariableExpr {
                     type_id: v.type_id,
-                    variable_id: var_index,
+                    variable_id,
                     span: variable.span,
                 });
+                trace!(
+                    "variable {} had type {}",
+                    &*self.get_ident_str(variable.ident),
+                    self.type_id_to_string(v.type_id)
+                );
                 Ok(expr)
             }
             Expression::FieldAccess(field_access) => {
@@ -1685,9 +1745,40 @@ impl TypedModule {
 
         // Now that we have resolved to a function id, we need to specialize it if generic
         let original_function = self.get_function(function_id);
+        // We should only specialize if we are in a concrete context, meaning
+        // we have no unresolved type variables.
+        // We could just be evaluating a generic function that calls another generic function,
+        // in which case we don't want to generate a 'specialized' function where we haven't
+        // actually specialized anything
         let function_to_call = if original_function.is_generic() {
             let intrinsic_type = original_function.intrinsic_type;
-            self.get_specialized_function_for_call(fn_call, function_id, intrinsic_type)?
+            let Some(type_args) = &fn_call.type_args else {
+                return make_fail(
+                    format!(
+                        "Generic function {} must be called with type arguments",
+                        &*self.get_ident_str(original_function.name)
+                    ),
+                    fn_call.span,
+                );
+            };
+            // We skip specialization if any of the type arguments are type variables
+            let mut any_type_vars = false;
+            for type_arg in type_args.iter() {
+                let type_id = self.eval_type_expr(&type_arg.value, scope_id)?;
+                if let Type::TypeVariable(_tv) = self.get_type(type_id) {
+                    any_type_vars = true;
+                }
+            }
+            if any_type_vars {
+                function_id
+            } else {
+                self.get_specialized_function_for_call(
+                    fn_call,
+                    function_id,
+                    intrinsic_type,
+                    scope_id,
+                )?
+            }
         } else {
             function_id
         };
@@ -1700,18 +1791,19 @@ impl TypedModule {
             let is_self = first.name == self.ast.ident_id("self");
             if is_self {
                 if let Some(this) = this_expr {
+                    trace!("Method call; self = {}", self.expr_to_string(&this));
                     final_args.push(this);
                     skip_first = true;
                 }
             }
         }
-        let start = if skip_first { 1 } else { 0 };
-        for fn_param in &params_cloned[start..] {
+        let start: u32 = if skip_first { 1 } else { 0 };
+        for fn_param in &params_cloned[start as usize..] {
             let matching_param_by_name =
                 fn_call.args.iter().find(|arg| arg.name == Some(fn_param.name));
             // If we skipped 'self', we need to subtract 1 from the offset we index into fn_call.args with
             let matching_idx = fn_param.position - start;
-            let matching_param = matching_param_by_name.or(fn_call.args.get(matching_idx));
+            let matching_param = matching_param_by_name.or(fn_call.args.get(matching_idx as usize));
             if let Some(param) = matching_param {
                 let expr = self.eval_expr(&param.value, scope_id, Some(fn_param.type_id))?;
                 if let Err(e) = self.typecheck_types(fn_param.type_id, expr.get_type()) {
@@ -1748,8 +1840,9 @@ impl TypedModule {
     fn get_specialized_function_for_call(
         &mut self,
         fn_call: &FnCall,
-        old_function_id: FunctionId,
+        generic_function_id: FunctionId,
         intrinsic_type: Option<IntrinsicFunctionType>,
+        calling_scope: ScopeId,
     ) -> TyperResult<FunctionId> {
         // TODO: Implement full generic type inference. This could get slow!
         //       Cases like [T](t: T) are easier but [T](x: ComplexType[A, B, T]) and solving for
@@ -1762,17 +1855,19 @@ impl TypedModule {
         //          that type expression, and assign it to the concrete type
 
         // FIXME: Can we avoid this clone of the whole function
-        let generic_function = self.get_function(old_function_id).clone();
+        let generic_function = self.get_function(generic_function_id).clone();
         trace!(
-            "Specializing function call: {}, {} ,astid {}",
+            "Specializing function call: {}, {}, astid {}",
             &*self.get_ident_str(fn_call.name),
             &*self.get_ident_str(generic_function.name),
             generic_function.ast_id
         );
         let type_params =
             generic_function.type_params.as_ref().expect("expected function to be generic");
-        let type_args =
-            fn_call.type_args.as_ref().ok_or(make_err("fn call mising type args", fn_call.span))?;
+        let type_args = fn_call
+            .type_args
+            .as_ref()
+            .ok_or(make_err("fn call missing type args", fn_call.span))?;
         let mut new_name = self.get_ident_str(fn_call.name).to_string();
 
         // The specialized function lives in the root of the module because
@@ -1781,14 +1876,51 @@ impl TypedModule {
 
         // The only real difference is the scope: it has substitutions for the type variables
         let spec_fn_scope_id = self.scopes.add_scope_to_root();
+        let evaluated_type_args = type_args
+            .iter()
+            .map(|type_arg| self.eval_type_expr(&type_arg.value, calling_scope))
+            .collect::<TyperResult<Vec<TypeId>>>()?;
+        for (i, existing_specialization) in generic_function.specializations.iter().enumerate() {
+            // For now, naive comparison that all type ids are identical
+            // There may be some scenarios where they are _equivalent_ but not identical
+            // But I'm not sure
+            let x = existing_specialization
+                .type_params
+                .iter()
+                .map(|type_id| self.type_id_to_string(*type_id))
+                .collect::<Vec<_>>()
+                .join(",");
+            warn!("existing specialization for {} {}: {}", new_name, i, x);
+            if existing_specialization.type_params == evaluated_type_args {
+                log::info!(
+                    "Found existing specialization for function {} with types: {}",
+                    &*self.get_ident_str(generic_function.name),
+                    x
+                );
+                return Ok(existing_specialization.specialized_function_id);
+            }
+        }
+
         for (i, type_param) in type_params.iter().enumerate() {
             let type_arg = &type_args[i];
-            let type_id = self.eval_type_expr(&type_arg.value, spec_fn_scope_id)?;
+            let type_id = self.eval_type_expr(&type_arg.value, calling_scope)?;
+            if let Type::TypeVariable(tv) = self.get_type(type_id) {
+                return make_fail(
+                    format!(
+                        "Cannot specialize function with type variable: {}",
+                        &*self.get_ident_str(tv.identifier_id)
+                    ),
+                    type_arg.value.get_span(),
+                );
+            };
+            trace!(
+                "Adding type param {} = {} to scope for specialized function {}",
+                &*self.get_ident_str(type_param.ident),
+                self.type_id_to_string(type_id),
+                new_name
+            );
             self.scopes.get_scope_mut(spec_fn_scope_id).add_type(type_param.ident, type_id);
         }
-        new_name.push_str("_spec_");
-        let specialization_count = generic_function.specializations.len();
-        new_name.push_str(&specialization_count.to_string());
 
         let ast = self.ast.clone();
         let Definition::FnDef(ast_def) = ast.get_defn(generic_function.ast_id) else {
@@ -1804,6 +1936,10 @@ impl TypedModule {
             true,
             intrinsic_type,
         )?;
+        self.get_function_mut(generic_function_id).specializations.push(SpecializationRecord {
+            specialized_function_id,
+            type_params: evaluated_type_args,
+        });
         Ok(specialized_function_id)
     }
     fn eval_block_stmt(&mut self, stmt: &BlockStmt, scope_id: ScopeId) -> TyperResult<TypedStmt> {
@@ -1940,16 +2076,22 @@ impl TypedModule {
         let result = if current_namespace.name == self.ast.ident_id("string") {
             if fn_def.name == self.ast.ident_id("length") {
                 Some(IntrinsicFunctionType::StringLength)
-            } else if fn_def.name == self.ast.ident_id("new") {
-                Some(IntrinsicFunctionType::StringNew)
+            } else if fn_def.name == self.ast.ident_id("fromChars") {
+                Some(IntrinsicFunctionType::StringFromCharArray)
             } else {
                 None
             }
         } else if current_namespace.name == self.ast.ident_id("Array") {
             if fn_def.name == self.ast.ident_id("length") {
                 Some(IntrinsicFunctionType::ArrayLength)
+            } else if fn_def.name == self.ast.ident_id("capacity") {
+                Some(IntrinsicFunctionType::ArrayCapacity)
+            } else if fn_def.name == self.ast.ident_id("grow") {
+                Some(IntrinsicFunctionType::ArrayGrow)
             } else if fn_def.name == self.ast.ident_id("new") {
                 Some(IntrinsicFunctionType::ArrayNew)
+            } else if fn_def.name == self.ast.ident_id("set_length") {
+                Some(IntrinsicFunctionType::ArraySetLength)
             } else {
                 None
             }
@@ -2023,7 +2165,11 @@ impl TypedModule {
         for (idx, fn_arg) in fn_def.args.iter().enumerate() {
             let type_id = self.eval_type_expr(&fn_arg.ty, fn_scope_id)?;
             if specialize {
-                trace!("Specializing: {:?} got {:?}", &*self.get_ident_str(fn_arg.name), type_id);
+                trace!(
+                    "Specializing argument: {} got {}",
+                    &*self.get_ident_str(fn_arg.name),
+                    self.type_id_to_string(type_id)
+                );
             }
             let variable = Variable {
                 name: fn_arg.name,
@@ -2032,7 +2178,13 @@ impl TypedModule {
                 owner_scope: Some(fn_scope_id),
             };
             let variable_id = self.add_variable(variable);
-            params.push(FnArgDefn { name: fn_arg.name, variable_id, position: idx, type_id });
+            params.push(FnArgDefn {
+                name: fn_arg.name,
+                variable_id,
+                position: idx as u32,
+                type_id,
+                span: fn_arg.span,
+            });
             self.scopes.add_variable(fn_scope_id, fn_arg.name, variable_id);
         }
 
@@ -2058,9 +2210,11 @@ impl TypedModule {
             linkage: fn_def.linkage,
             specializations: Vec::new(),
             ast_id: fn_def.ast_id,
+            span: fn_def.span,
         };
         let is_extern = function.linkage == Linkage::External;
         let function_id = self.add_function(function);
+
         // We do not want to resolve specialized functions by name!
         // So don't add them to any scope.
         // They all have the same name but different types!!!
@@ -2149,7 +2303,8 @@ impl TypedModule {
             }
         }
         if !errors.is_empty() {
-            //println!("{}", self);
+            println!("{}", self);
+            println!("{:?}", errors);
             bail!("Typechecking failed")
         }
         Ok(())
@@ -2263,7 +2418,7 @@ impl TypedModule {
         }
     }
 
-    fn display_function(
+    pub fn display_function(
         &self,
         function: &Function,
         writ: &mut impl std::fmt::Write,
@@ -2445,17 +2600,27 @@ impl TypedModule {
             }
         }
     }
+
+    pub fn function_to_string(&self, function: &Function, display_block: bool) -> String {
+        let mut s = String::new();
+        self.display_function(function, &mut s, display_block).unwrap();
+        s
+    }
 }
 
 #[cfg(test)]
 mod test {
-    use crate::parse::parse_text;
+    use crate::parse::{parse_text, ParseResult};
     use crate::typer::*;
+
+    fn setup(src: &str, test_name: &str) -> ParseResult<AstModule> {
+        parse_text(src.to_string(), ".".to_string(), test_name.to_string(), false)
+    }
 
     #[test]
     fn const_definition_1() -> anyhow::Result<()> {
         let src = r"val x: int = 420;";
-        let module = parse_text(src, "basic_fn.nx", false)?;
+        let module = setup(src, "const_definition_1.nx")?;
         let mut ir = TypedModule::new(Rc::new(module));
         ir.run()?;
         let i1 = &ir.constants[0];
@@ -2481,7 +2646,7 @@ mod test {
           y = 42 + 42;
           foo()
         }"#;
-        let module = parse_text(src, "basic_fn.nx", false)?;
+        let module = setup(src, "basic_fn.nx")?;
         let mut ir = TypedModule::new(Rc::new(module));
         ir.run()?;
         println!("{:?}", ir.functions);

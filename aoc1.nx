@@ -1,0 +1,60 @@
+fn dump(arr: Array<string>): unit {
+    print("[");
+    mut i = 0;
+    while (i < arr.length()) {
+      if (i > 0) {
+        print(", ");
+      };
+      print(arr[i]);
+      i = i + 1;
+    };
+    print("]");
+    println("");
+}
+
+fn is_digit(c: char): bool {
+  val i_code = c.toInt();
+  // TODO: lte gte
+  val ret = i_code > 47 and i_code < 58;
+  ret
+}
+
+fn as_digit(c: char): int {
+  val i_code = c.toInt();
+  i_code - 48
+}
+
+val NEW_LINE: int = 10;
+
+fn main(): int {
+  val input = Files::readToString("aoc/1.txt");
+  mut i = 0;
+  val sums: Array<char> = Array::new<char>(0);
+  mut line = 0;
+  mut first = true;
+  while i < input.length() {
+    val c = input[i];
+    val i_code = c.toInt();
+    if i_code == NEW_LINE {
+      line = line + 1;
+      first = true;
+      printInt(line);
+    };
+    if is_digit(c) {
+      if first {
+        sums.push(c);
+        first = false;
+      } else {
+        sums.push(c);
+        // sums[line] = sums[line].concat(c.toString());
+      };
+    };
+    i = i + 1;
+  };
+  mut ii = 0;
+  while ii < sums.length() {
+    print(sums[ii]);
+    ii = ii + 1;
+  };
+  0
+}
