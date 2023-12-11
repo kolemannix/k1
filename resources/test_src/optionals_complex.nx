@@ -2,12 +2,13 @@ type Point = { x: int?, y: int }
 
 fn main(): int {
   mut my_point: Point = { x: 42, y: 0 };
-  mut my_arr: Array<Point?> = [{ x: 42, y: 3}, None];
   if my_point.x |my_x| {
     assert(my_x == 42);
   } else {
     assert(false);
   };
+
+  mut my_arr: Array<Point?> = [{ x: 42, y: 3}, None];
   if my_arr[0] |a| {
     assert(a.y == 3);
   };

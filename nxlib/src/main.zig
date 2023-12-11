@@ -37,11 +37,10 @@ fn NxArray(T: type) type {
 export const HELLO_WORLD = "Hello, World";
 // const s = NxString{ .len = 4, .data = [4]u8{ 'a', 's', 'd', 'f' } };
 
-export fn _nx_charToString(c: u8) *NxString {
-    const new_str: *NxString = allocator.create(NxString) catch unreachable;
+export fn _nx_charToString(c: u8) NxString {
     const data = allocator.alloc(u8, 1) catch unreachable;
     data[0] = c;
-    new_str.* = .{ .len = 1, .data = data.ptr };
+    const new_str: NxString = .{ .len = 1, .data = data.ptr };
     return new_str;
 }
 

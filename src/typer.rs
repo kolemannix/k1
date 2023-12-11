@@ -888,9 +888,7 @@ impl TypedModule {
                 })
             }
             parse::TypeExpression::TypeApplication(ty_app) => {
-                let base_name = self.ast.get_ident_str(ty_app.base);
-                if &*base_name == "Array" {
-                    drop(base_name);
+                if self.ast.ident_id("Array") == ty_app.base {
                     if ty_app.params.len() == 1 {
                         let element_ty = self.eval_type_expr(&ty_app.params[0], scope_id)?;
                         let array_ty = ArrayType { span: ty_app.span, element_type: element_ty };

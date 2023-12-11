@@ -33,23 +33,16 @@ fn test_file<'ctx, P: AsRef<Path>>(ctx: &'ctx Context, path: P) -> Result<()> {
         None
     };
     let mut run_cmd = std::process::Command::new(format!("{}/{}.out", out_dir, filename));
-    let run_output = run_cmd.output().unwrap();
-    let output = String::from_utf8(run_output.stdout).unwrap();
-    match expected_result {
-        None => {
-            println!("{filename}:\n{}", output);
-        }
-        Some(exp) => {
-            println!("Expected: {exp}");
-            println!("Output: {}", output);
-        }
+    if let Some(exp) = expected_result {
+        println!("Expected: {exp}");
     }
-    if !run_output.status.success() {
+    let run_status = run_cmd.status().unwrap();
+    if !run_status.success() {
         bail!(
             "TEST CASE FAILED EXECUTION: {}, exit code: {:?}, signal: {:?}",
             filename,
-            run_output.status.code(),
-            run_output.status.signal()
+            run_status.code(),
+            run_status.signal()
         );
     };
     Ok(())

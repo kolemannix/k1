@@ -1,6 +1,6 @@
 fn main(): int {
   val xs = [10, 20, 30+5, if true 4 else 2];
-  printInt(xs.length());
+  printInt(xs.length<int>());
   assert(xs[0] + xs[1] + xs[2] + xs[3] == 69);
   0
 }

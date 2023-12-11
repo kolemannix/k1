@@ -32,6 +32,10 @@ use crate::typer::{self, *};
 const STRING_LENGTH_FIELD_INDEX: u32 = 0;
 const STRING_DATA_FIELD_INDEX: u32 = 1;
 
+const ARRAY_LENGTH_FIELD_INDEX: u32 = 0;
+const ARRAY_CAPACITY_FIELD_INDEX: u32 = 1;
+const ARRAY_DATA_FIELD_INDEX: u32 = 2;
+
 struct BuiltinTypes<'ctx> {
     ctx: &'ctx Context,
     i64: IntType<'ctx>,
@@ -56,60 +60,23 @@ impl<'ctx> BuiltinTypes<'ctx> {
         let data_type = elem_type.ptr_type(AddressSpace::default()).as_basic_type_enum();
         self.ctx.struct_type(&[length_type, capacity_type, data_type], false)
     }
-    fn array_length_loaded(
-        &self,
-        builder: &Builder<'ctx>,
-        array_ptr: PointerValue<'ctx>,
-    ) -> IntValue<'ctx> {
-        let length_ptr = self.array_length_ptr(builder, array_ptr);
-        let length = builder.build_load(self.i64, length_ptr, "length_value");
+
+    fn array_length(&self, builder: &Builder<'ctx>, array: StructValue<'ctx>) -> IntValue<'ctx> {
+        let length =
+            builder.build_extract_value(array, ARRAY_LENGTH_FIELD_INDEX, "array_length").unwrap();
         length.into_int_value()
     }
-    fn array_length_ptr(
-        &self,
-        builder: &Builder<'ctx>,
-        array_ptr: PointerValue<'ctx>,
-    ) -> PointerValue<'ctx> {
-        // The element type doesn't matter we just want to gep to the length field
-        let length_ptr = builder
-            .build_struct_gep(self.array_struct(self.any_value), array_ptr, 0, "array_length_ptr")
-            .unwrap();
-        length_ptr
+
+    fn array_cap(&self, builder: &Builder<'ctx>, array: StructValue<'ctx>) -> IntValue<'ctx> {
+        let cap =
+            builder.build_extract_value(array, ARRAY_CAPACITY_FIELD_INDEX, "array_cap").unwrap();
+        cap.into_int_value()
     }
-    fn array_cap_ptr(
-        &self,
-        builder: &Builder<'ctx>,
-        array_ptr: PointerValue<'ctx>,
-    ) -> PointerValue<'ctx> {
-        // The element type doesn't matter we just want to gep to the length field
-        let cap_ptr = builder
-            .build_struct_gep(self.array_struct(self.any_value), array_ptr, 1, "array_cap_ptr")
-            .unwrap();
-        cap_ptr
-    }
-    fn array_data_ptr(
-        &self,
-        builder: &Builder<'ctx>,
-        array_pointer: PointerValue<'ctx>,
-    ) -> PointerValue<'ctx> {
-        let data_ptr_ptr = builder
-            .build_struct_gep(
-                self.array_struct(self.any_value),
-                array_pointer,
-                2,
-                "array_data_ptr_ptr",
-            )
-            .unwrap();
-        data_ptr_ptr
-    }
-    fn array_data_loaded(
-        &self,
-        builder: &Builder<'ctx>,
-        array_pointer: PointerValue<'ctx>,
-    ) -> PointerValue<'ctx> {
-        let data_ptr_ptr = self.array_data_ptr(builder, array_pointer);
-        let data_ptr = builder.build_load(self.any_ptr, data_ptr_ptr, "array_data_ptr");
-        data_ptr.into_pointer_value()
+    fn array_data(&self, builder: &Builder<'ctx>, array: StructValue<'ctx>) -> PointerValue<'ctx> {
+        builder
+            .build_extract_value(array, ARRAY_DATA_FIELD_INDEX, "array_data")
+            .unwrap()
+            .into_pointer_value()
     }
 
     fn string_length(
@@ -676,8 +643,25 @@ impl<'ctx> Codegen<'ctx> {
                     )
                     .as_type()
             }
-            Type::Optional(optional) => {
-                panic!("TODO codegen debug info for optional type");
+            Type::Optional(_optional) => {
+                let name = format!("optional_{}", self.module.type_id_to_string(type_id));
+                self.debug
+                    .debug_builder
+                    .create_struct_type(
+                        self.debug.current_scope(),
+                        &name,
+                        self.debug.file,
+                        0,
+                        128,
+                        128,
+                        0,
+                        None,
+                        &[],
+                        0,
+                        None,
+                        &name,
+                    )
+                    .as_type()
             }
         }
     }
@@ -730,16 +714,9 @@ impl<'ctx> Codegen<'ctx> {
                                 println!("{}", self.module);
                                 panic!("codegen was asked to codegen a type variable {:?}", v)
                             }
-                            Type::Array(_array) => {
-                                // Does not matter what pointer type we use
-                                // let element_type = self.codegen_type_ref(array.element_type);
-                                // element_type
-                                //     .ptr_type(self.default_address_space)
-                                //     .as_basic_type_enum()
-                                self.builtin_types
-                                    .i64
-                                    .ptr_type(self.default_address_space)
-                                    .as_basic_type_enum()
+                            Type::Array(array) => {
+                                let element_type = self.get_llvm_type(array.element_type);
+                                self.builtin_types.array_struct(element_type).as_basic_type_enum()
                             }
                             other => {
                                 panic!(
@@ -761,10 +738,7 @@ impl<'ctx> Codegen<'ctx> {
         let value = self.codegen_expr(&val.initializer);
         let pointee_ty = self.get_llvm_type(val.ty);
         let variable = self.module.get_variable(val.variable_id);
-        let value_ptr = self.builder.build_alloca(
-            pointee_ty.ptr_type(self.default_address_space),
-            &self.get_ident_name(variable.name),
-        );
+        let value_ptr = self.builder.build_alloca(pointee_ty, &self.get_ident_name(variable.name));
         trace!("codegen_val {}: pointee_ty: {pointee_ty:?}", &*self.get_ident_name(variable.name));
         // We're always storing a pointer
         // in self.variables that, when loaded, gives the actual type of the variable
@@ -1082,22 +1056,19 @@ impl<'ctx> Codegen<'ctx> {
                 let array_len = self.builtin_types.i64.const_int(array.elements.len() as u64, true);
 
                 let array_capacity = array_len.clone();
-                let array_ptr = self
-                    .make_array(array_len, array_capacity, element_type)
-                    .as_basic_value_enum()
-                    .into_pointer_value();
-                let array_data_ptr = self.builtin_types.array_data_loaded(&self.builder, array_ptr);
+                let array_value = self.make_array(array_len, array_capacity, element_type, false);
+                let array_data = self.builtin_types.array_data(&self.builder, array_value);
                 // Store each element
                 for (index, element_expr) in array.elements.iter().enumerate() {
                     let value = self.codegen_expr(element_expr);
                     let index_value = self.ctx.i64_type().const_int(index as u64, true);
                     log::trace!("storing element {} of array literal: {:?}", index, element_expr);
                     let ptr_at_index = unsafe {
-                        self.builder.build_gep(element_type, array_data_ptr, &[index_value], "elem")
+                        self.builder.build_gep(element_type, array_data, &[index_value], "elem")
                     };
                     self.builder.build_store(ptr_at_index, value);
                 }
-                array_ptr.as_basic_value_enum().into()
+                array_value.as_basic_value_enum().into()
             }
             TypedExpr::Variable(ir_var) => {
                 if let Some(pointer) = self.variables.get(&ir_var.variable_id) {
@@ -1306,10 +1277,10 @@ impl<'ctx> Codegen<'ctx> {
         let array_value = self.codegen_expr(&operation.base_expr);
         let index_value = self.codegen_expr(&operation.index_expr);
 
-        let array_value_as_ptr = array_value.into_pointer_value();
+        let array_value = array_value.into_struct_value();
         let index_int_value = index_value.into_int_value();
         // Likely we need one more level of dereferencing
-        let array_data = self.builtin_types.array_data_loaded(&self.builder, array_value_as_ptr);
+        let array_data = self.builtin_types.array_data(&self.builder, array_value);
         unsafe {
             let gep_ptr = self.builder.build_gep(
                 pointee_ty,
@@ -1352,12 +1323,22 @@ impl<'ctx> Codegen<'ctx> {
         array_len: IntValue<'ctx>,
         capacity: IntValue<'ctx>,
         element_type: BasicTypeEnum<'ctx>,
-    ) -> GeneratedValue<'ctx> {
+        zero_initialize: bool,
+    ) -> StructValue<'ctx> {
         // First, we allocate memory somewhere not on the stack
-        let array_ptr =
+        let data_ptr =
             self.builder.build_array_malloc(element_type, capacity, "array_data").unwrap();
+        if zero_initialize {
+            let size_bytes = self.builder.build_int_mul(
+                capacity,
+                element_type.size_of().unwrap(),
+                "memset_bytes",
+            );
+            self.builder
+                .build_memset(data_ptr, 1, self.builtin_types.char.const_zero(), size_bytes)
+                .unwrap();
+        }
         let array_type = self.builtin_types.array_struct(element_type);
-        let pointer_to_struct = self.builder.build_alloca(array_type, "array");
         // insert_value returns a value and takes a value, doesn't modify memory at pointers
         // We can start building a struct by giving it an undefined struct first
         let array_struct = self
@@ -1367,9 +1348,8 @@ impl<'ctx> Codegen<'ctx> {
         let array_struct =
             self.builder.build_insert_value(array_struct, capacity, 1, "array_cap").unwrap();
         let array_struct =
-            self.builder.build_insert_value(array_struct, array_ptr, 2, "array_data").unwrap();
-        self.builder.build_store(pointer_to_struct, array_struct);
-        pointer_to_struct.as_basic_value_enum().into()
+            self.builder.build_insert_value(array_struct, data_ptr, 2, "array_data").unwrap();
+        array_struct.into_struct_value()
     }
 
     fn get_loaded_variable(&mut self, variable_id: VariableId) -> BasicValueEnum<'ctx> {
@@ -1406,19 +1386,19 @@ impl<'ctx> Codegen<'ctx> {
             }
             IntrinsicFunctionType::StringFromCharArray => {
                 let array =
-                    self.get_loaded_variable(function.params[0].variable_id).into_pointer_value();
-                let array_len = self.builtin_types.array_length_loaded(&self.builder, array);
+                    self.get_loaded_variable(function.params[0].variable_id).into_struct_value();
+                let array_len = self.builtin_types.array_length(&self.builder, array);
                 let string = self.make_string(array_len);
                 let string_data = self.builtin_types.string_data(&self.builder, string);
-                let array_data = self.builtin_types.array_data_loaded(&self.builder, array);
+                let array_data = self.builtin_types.array_data(&self.builder, array);
                 let _copied =
                     self.builder.build_memcpy(string_data, 1, array_data, 1, array_len).unwrap();
                 string.as_basic_value_enum().into()
             }
             IntrinsicFunctionType::ArrayLength => {
                 let array_arg =
-                    self.get_loaded_variable(function.params[0].variable_id).into_pointer_value();
-                let length = self.builtin_types.array_length_loaded(&self.builder, array_arg);
+                    self.get_loaded_variable(function.params[0].variable_id).into_struct_value();
+                let length = self.builtin_types.array_length(&self.builder, array_arg);
                 length.as_basic_value_enum().into()
             }
             IntrinsicFunctionType::ArrayNew => {
@@ -1433,19 +1413,19 @@ impl<'ctx> Codegen<'ctx> {
                 // let ctlz_function = ctlz_intrinsic.get_declaration(&self.llvm_module, &[self.ctx.i64_type().as_basic_type_enum()]).unwrap();
                 // let capacity = self.builder.build_call(ctlz_function, &[], "capacity");
                 let capacity = len.clone();
-                self.make_array(len, capacity, element_type)
+                self.make_array(len, capacity, element_type, true).as_basic_value_enum().into()
             }
             IntrinsicFunctionType::ArrayGrow => {
                 // We need to resize the array and copy the elements into the new memory
                 let self_param = &function.params[0];
-                let array = self.get_loaded_variable(self_param.variable_id).into_pointer_value();
-                let cap = self.builtin_types.array_length_loaded(&self.builder, array);
+                let array = self.get_loaded_variable(self_param.variable_id).into_struct_value();
+                let cap = self.builtin_types.array_cap(&self.builder, array);
                 let new_cap = self.builder.build_int_mul(
                     cap,
                     self.builtin_types.i64.const_int(2, true),
                     "new_cap",
                 );
-                let old_data = self.builtin_types.array_data_loaded(&self.builder, array);
+                let old_data = self.builtin_types.array_data(&self.builder, array);
                 let element_type_id =
                     self.module.get_type(self_param.type_id).expect_array_type().element_type;
                 let new_data_type = self.get_llvm_type(element_type_id);
@@ -1458,28 +1438,39 @@ impl<'ctx> Codegen<'ctx> {
                 );
                 let _copied =
                     self.builder.build_memcpy(new_data, 1, old_data, 1, memcpy_bytes).unwrap();
-                let array_cap_ptr = self.builtin_types.array_cap_ptr(&self.builder, array);
-                let array_data_ptr = self.builtin_types.array_data_ptr(&self.builder, array);
-                self.builder.build_store(array_cap_ptr, new_cap);
-                self.builder.build_store(array_data_ptr, new_data);
                 self.builder.build_free(old_data);
+                self.builder.build_insert_value(
+                    array,
+                    new_data,
+                    ARRAY_DATA_FIELD_INDEX,
+                    "new_array_data",
+                );
+                self.builder.build_insert_value(
+                    array,
+                    new_cap,
+                    ARRAY_CAPACITY_FIELD_INDEX,
+                    "new_array_cap",
+                );
                 self.builtin_types.unit_value.as_basic_value_enum().into()
             }
             IntrinsicFunctionType::ArrayCapacity => {
                 let array_arg =
-                    self.get_loaded_variable(function.params[0].variable_id).into_pointer_value();
-                let capacity_ptr = self.builtin_types.array_cap_ptr(&self.builder, array_arg);
+                    self.get_loaded_variable(function.params[0].variable_id).into_struct_value();
                 let capacity_value =
-                    self.builder.build_load(self.builtin_types.i64, capacity_ptr, "capacity");
-                capacity_value.as_basic_value_enum().into()
+                    self.builtin_types.array_cap(&self.builder, array_arg).as_basic_value_enum();
+                capacity_value.into()
             }
             IntrinsicFunctionType::ArraySetLength => {
                 let array_arg =
-                    self.get_loaded_variable(function.params[0].variable_id).into_pointer_value();
+                    self.get_loaded_variable(function.params[0].variable_id).into_struct_value();
                 let new_len =
                     self.get_loaded_variable(function.params[1].variable_id).into_int_value();
-                let array_len_ptr = self.builtin_types.array_length_ptr(&self.builder, array_arg);
-                self.builder.build_store(array_len_ptr, new_len);
+                self.builder.build_insert_value(
+                    array_arg,
+                    new_len,
+                    ARRAY_LENGTH_FIELD_INDEX,
+                    "set_length",
+                );
                 self.builtin_types.unit_value.as_basic_value_enum().into()
             }
         }
@@ -1771,6 +1762,7 @@ impl<'ctx> Codegen<'ctx> {
         let module_pass_manager: PassManager<inkwell::module::Module<'ctx>> =
             PassManager::create(());
         if optimize {
+            module_pass_manager.add_cfg_simplification_pass();
             module_pass_manager.add_promote_memory_to_register_pass();
             module_pass_manager.add_instruction_combining_pass();
             module_pass_manager.add_function_inlining_pass();

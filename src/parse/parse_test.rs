@@ -23,7 +23,6 @@ fn basic_fn() -> Result<(), ParseError> {
       add(x, y)
     }"#;
     let module = parse_text(src.to_string(), ".".to_string(), "basic_fn.nx".to_string(), false)?;
-    assert_eq!(&module.name, "basic_fn.nx");
     if let Some(Definition::FnDef(fndef)) = module.defs.first() {
         assert_eq!(*module.get_ident_str(fndef.name), *"basic")
     } else {
@@ -158,7 +157,9 @@ fn type_parameter_multi() -> ParseResult<()> {
 fn prelude_only() -> Result<(), ParseError> {
     env_logger::init();
     let module = parse_text("".to_string(), ".".to_string(), "prelude_only.nx".to_string(), true)?;
-    assert_eq!(&module.name, "prelude_only.nx");
+    assert_eq!(&module.name, "prelude_only");
+    assert_eq!(&module.source.filename, "prelude_only.nx");
+    assert_eq!(&module.source.directory, ".");
     if let Some(Definition::FnDef(fndef)) = module.defs.first() {
         assert_eq!(*module.get_ident_str(fndef.name), *"_nx_charToString")
     } else {

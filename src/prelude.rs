@@ -37,17 +37,16 @@ fn println(value: string): unit {
   print(value);
   print(char::fromInt(10).toString());
 }
-type Array = {}
 
 namespace Array {
   intern fn new<T>(len: int): Array<T>
-  intern fn length(self: Array): int
-  intern fn capacity(self: Array): int
+  intern fn length<T>(self: Array<T>): int
+  intern fn capacity<T>(self: Array<T>): int
   intern fn grow<T>(self: Array<T>): unit
   intern fn set_length<T>(self: Array<T>, new_length: int): unit
   fn push<T>(self: Array<T>, elem: T): unit {
-    val start_length = self.length();
-    if start_length == self.capacity() {
+    val start_length = self.length<T>();
+    if start_length == self.capacity<T>() {
       self.grow<T>();
     };
     self[start_length] = elem;

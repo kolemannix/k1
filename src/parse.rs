@@ -791,7 +791,7 @@ impl<'toks> Parser<'toks> {
                 self.tokens.advance();
                 let next = self.tokens.peek();
                 if next.kind == K::OpenAngle {
-                    // parameterized type: Dict[int, int]
+                    // parameterized type: Dict<int, int>
                     self.tokens.advance();
                     let (type_parameters, params_span) =
                         self.eat_delimited(K::Comma, K::CloseAngle, |p| {
