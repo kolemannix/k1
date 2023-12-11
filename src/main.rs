@@ -35,9 +35,17 @@ struct Args {
     #[arg(long, default_value_t = false)]
     no_llvm_opt: bool,
 
-    /// Print AST to stdout
+    /// Dump Module
     #[arg(long, default_value_t = false)]
-    print_ast: bool,
+    dump_module: bool,
+
+    /// Debug Module
+    #[arg(long, default_value_t = true)]
+    debug: bool,
+
+    /// Run after compiling
+    #[arg(long, default_value_t = false)]
+    run: bool,
 
     /// File
     file: PathBuf,
@@ -54,15 +62,26 @@ macro_rules! static_assert_size {
 
 pub fn compile_single_file_program<'ctx>(
     ctx: &'ctx Context,
-    filename: &str,
-    source: &str,
+    filename: impl AsRef<str>,
+    source_dir: impl AsRef<str>,
+    source: impl AsRef<str>,
     no_prelude: bool,
-    out_dir: &str,
+    out_dir: impl AsRef<str>,
     llvm_optimize: bool,
+    debug: bool,
 ) -> Result<Codegen<'ctx>> {
+    let filename = filename.as_ref();
+    let source_dir = source_dir.as_ref();
+    let out_dir = out_dir.as_ref();
     let use_prelude = !no_prelude;
-    let ast = parse::parse_text(source, filename, use_prelude).unwrap_or_else(|e| {
-        eprintln!("Encountered ParseError on file '{}': {:?}", filename, e);
+    let ast = parse::parse_text(
+        source.as_ref().to_string(),
+        source_dir.to_string(),
+        filename.to_string(),
+        use_prelude,
+    )
+    .unwrap_or_else(|e| {
+        eprintln!("Encountered ParseError on file '{}/{}': {:?}", source_dir, filename, e);
         panic!("parse error");
     });
     let ast = Rc::new(ast);
@@ -70,33 +89,36 @@ pub fn compile_single_file_program<'ctx>(
     irgen.run()?;
     let irgen = Rc::new(irgen);
     // println!("{irgen}");
-    let mut codegen: Codegen<'ctx> = Codegen::create(ctx, irgen);
+    let mut codegen: Codegen<'ctx> = Codegen::create(ctx, irgen, debug, llvm_optimize);
     codegen.codegen_module();
     codegen.optimize(llvm_optimize)?;
 
     let llvm_text = codegen.output_llvm_ir_text();
-    let mut f = File::create(format!("{}/{}.ll", out_dir, filename))?;
+    let mut f =
+        File::create(format!("{}/{}.ll", out_dir, filename)).expect("Failed to create .ll file");
     f.write_all(llvm_text.as_bytes()).unwrap();
 
-    codegen.emit_object_file(out_dir)?;
+    // TODO: We could do this a lot more efficiently by just feeding the in-memory LLVM IR to clang
+
+    // codegen.emit_object_file(out_dir)?;
 
     let mut build_cmd = std::process::Command::new("clang");
     build_cmd.args([
-        "-g",
-        &format!("{}/{}.o", out_dir, filename),
+        // "-v",
+        if debug { "-g" } else { "" },
+        if debug { "-O0" } else { "-O3" },
+        &format!("{}/{}.ll", out_dir, filename),
         "-o",
         &format!("{}/{}.out", out_dir, filename),
         "-L",
         "nxlib/zig-out/lib",
         "-l",
         "nxlib",
-        "-O2",
     ]);
-    log::debug!("Build Command: {:?}", build_cmd);
-    let build_output = build_cmd.output().unwrap();
-    if !build_output.status.success() {
+    log::info!("Build Command: {:?}", build_cmd);
+    let build_status = build_cmd.status().unwrap();
+    if !build_status.success() {
         eprintln!("Build failed!");
-        eprintln!("{}", String::from_utf8(build_output.stderr).unwrap());
         std::process::exit(1)
     }
 
@@ -119,30 +141,40 @@ fn main() -> Result<()> {
     let out_dir = "nx-out";
 
     let ctx = Context::create();
-    let filename = Path::new(&src_path).file_name().unwrap().to_str().unwrap();
-    let src = fs::read_to_string(src_path).expect("could not read source directory");
-    let codegen =
-        compile_single_file_program(&ctx, filename, &src, no_prelude, out_dir, !args.no_llvm_opt)?;
+    let src_path = src_path.canonicalize().unwrap();
+    let filename = src_path.file_name().unwrap().to_str().unwrap();
+    let src_dir = src_path.parent().unwrap().to_str().unwrap();
+    let src = fs::read_to_string(&src_path).expect("could not read source directory");
+    let codegen = compile_single_file_program(
+        &ctx,
+        filename,
+        src_dir,
+        src,
+        no_prelude,
+        out_dir,
+        !args.no_llvm_opt,
+        args.debug,
+    )?;
     if args.print_llvm {
         println!("{}", codegen.output_llvm_ir_text());
     }
+    if args.dump_module {
+        println!("{}", codegen.module);
+    }
 
-    // println!("Build Output: {}", String::from_utf8(build_output.stdout).unwrap());
+    if args.run {
+        let mut run_cmd = std::process::Command::new(format!("{}/{}.out", out_dir, filename));
+        log::debug!("Run Command: {:?}", run_cmd);
+        let run_status = run_cmd.status().unwrap();
 
-    let mut run_cmd = std::process::Command::new(format!("{}/{}.out", out_dir, filename));
-    log::debug!("Run Command: {:?}", run_cmd);
-    let run_output = run_cmd.output().unwrap();
-
-    println!("stdout\n{}", String::from_utf8(run_output.stdout).unwrap());
-    println!("stderr\n{}", String::from_utf8(run_output.stderr).unwrap());
-    match run_output.status.code() {
-        Some(code) => {
-            println!("Program exited with code: {}", code);
-        }
-        None => {
-            println!("Program was terminated with signal: {:?}", run_output.status.signal());
+        match run_status.code() {
+            Some(code) => {
+                println!("Program exited with code: {}", code);
+            }
+            None => {
+                println!("Program was terminated with signal: {:?}", run_status.signal());
+            }
         }
     }
-    // println!("{}", llvm_text);
     Ok(())
 }

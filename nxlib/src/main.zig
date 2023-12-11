@@ -11,20 +11,45 @@ const NxString = packed struct {
 };
 fn NxArray(T: type) type {
     return struct {
+        const Self = @This();
         len: u64,
+        cap: u64,
         data: [*]T,
+
+        fn push(self: *Self, value: T) void {
+            if (self.len + 1 > self.cap) {
+              self.grow();
+            }
+            self.data[self.len] = value;
+            self.len += 1;
+        }
+
+        fn grow(self: *Self) void {
+          const new_cap = self.cap * 2;
+          const data = allocator.alloc(T, new_cap);
+          @memcpy(data, self.data);
+          self.cap = new_cap;
+          self.data = data;
+        }
     };
 }
 
 export const HELLO_WORLD = "Hello, World";
 // const s = NxString{ .len = 4, .data = [4]u8{ 'a', 's', 'd', 'f' } };
 
-export fn _nx_charToString(c: u8) *NxString {
-    const new_str: *NxString = allocator.create(NxString) catch unreachable;
+export fn _nx_charToString(c: u8) NxString {
     const data = allocator.alloc(u8, 1) catch unreachable;
     data[0] = c;
-    new_str.* = .{ .len = 1, .data = data.ptr };
+    const new_str: NxString = .{ .len = 1, .data = data.ptr };
     return new_str;
+}
+
+export fn _nx_charToInt(c: u8) i64 {
+    return @intCast(c);
+}
+
+export fn _nx_intToChar(i: i64) u8 {
+    return @intCast(i);
 }
 
 export fn _nx_readFileToString(s: *NxString) *const NxString {
