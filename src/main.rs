@@ -1,4 +1,15 @@
+use std::fs;
+use std::fs::File;
+use std::io::Write;
+use std::os::unix::prelude::ExitStatusExt;
+use std::path::PathBuf;
 use std::rc::Rc;
+
+use anyhow::Result;
+use clap::Parser;
+use inkwell::context::Context;
+
+use crate::codegen_llvm::Codegen;
 
 mod codegen_llvm;
 mod lex;
@@ -7,18 +18,6 @@ mod prelude;
 #[cfg(test)]
 mod test_suite;
 mod typer;
-
-use anyhow::Result;
-use inkwell::context::Context;
-
-use std::fs;
-use std::fs::File;
-use std::io::Write;
-use std::os::unix::prelude::ExitStatusExt;
-use std::path::{Path, PathBuf};
-
-use crate::codegen_llvm::Codegen;
-use clap::Parser;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]

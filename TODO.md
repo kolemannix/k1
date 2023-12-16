@@ -53,17 +53,12 @@ The project isn't mature enough yet to make this list but the spirit of the effo
 - [x] Optionals
 - [x] Improve printing output by fixing display functions
 - [x] Implement builtin growable array
-- [ ] DEBUG info
-  - [x] on or off
-  - [x] flag types
-  - [x] correct line nums
-  - [ ] correct spans
-  - [x] correct file path
-  - [ ] Add lexical scopes for if and while
+- [x] Use aggregates in codegen, not pointers, for optionals
+- [ ] Change our builtin int type to be 32 bits?
 - [ ] Make codegen fail instead of panic
-- [ ] Codegen 'variables' is broken (never cleared); use enter scope / exit scope w/ a stack of vecs or something instead
+- [ ] Codegen 'variables' is broken (never cleared); use enter scope / exit scope w/ a stack of vecs or something instead (matters when a variable id is reused because the same function is called twice; I think we just overwrite it with the correct one but maybe nesting is a problem?)
 - [ ] Support multiple files (module ID in all IDs)
-- [ ] Back builtin Map with zig's HashMap
+- [ ] Builtin maps
 - [ ] Fix namespaces to require full paths (currently busted must be unique names globally)
 - [ ] Type Ascriptions (literally can just pass expected_type into eval and do an addtl typecheck)
 - [ ] For iteration (we will just hardcode the iterable types)
@@ -81,7 +76,16 @@ The project isn't mature enough yet to make this list but the spirit of the effo
     - [ ] Parse trailing commas
 - [ ] Replace spans on typed ast with just ast node ids
 - [ ] Tuples
- 
+- [ ] Pure lambdas with ->
+- [ ] Full-on closures with =>
+
+- [ ] DEBUG info
+  - [x] on or off
+  - [x] flag types
+  - [x] correct line nums
+  - [ ] correct spans (depends on multifile)
+  - [x] correct file path
+  - [ ] Add lexical scopes for if and while
  
 # Optionals
 - [x] Optional types

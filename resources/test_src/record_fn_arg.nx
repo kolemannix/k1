@@ -4,8 +4,8 @@ fn addPoint(p: { x: int, y: int}): int {
 
 fn main(): int {
   val result: int = addPoint({ x: 1, y: 2 });
+  assert(result == 3);
   printInt(result);
   0
 }
-// <expected output>
 // 3

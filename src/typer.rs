@@ -324,6 +324,7 @@ pub struct TypedIf {
 pub struct FieldAccess {
     pub base: Box<TypedExpr>,
     pub target_field: IdentifierId,
+    pub target_field_index: u32,
     pub ty: TypeId,
     pub span: Span,
 }
@@ -359,7 +360,7 @@ pub enum TypedExpr {
     Record(Record),
     Array(ArrayLiteral),
     Variable(VariableExpr),
-    FieldAccess(FieldAccess),
+    RecordFieldAccess(FieldAccess),
     BinaryOp(BinaryOp),
     UnaryOp(UnaryOp),
     Block(TypedBlock),
@@ -409,7 +410,7 @@ impl TypedExpr {
             TypedExpr::Record(record) => record.type_id,
             TypedExpr::Array(arr) => arr.type_id,
             TypedExpr::Variable(var) => var.type_id,
-            TypedExpr::FieldAccess(field_access) => field_access.ty,
+            TypedExpr::RecordFieldAccess(field_access) => field_access.ty,
             TypedExpr::BinaryOp(binary_op) => binary_op.ty,
             TypedExpr::UnaryOp(unary_op) => unary_op.ty,
             TypedExpr::Block(b) => b.expr_type,
@@ -434,7 +435,7 @@ impl TypedExpr {
             TypedExpr::Record(record) => record.span,
             TypedExpr::Array(array) => array.span,
             TypedExpr::Variable(var) => var.span,
-            TypedExpr::FieldAccess(field_access) => field_access.span,
+            TypedExpr::RecordFieldAccess(field_access) => field_access.span,
             TypedExpr::BinaryOp(binary_op) => binary_op.span,
             TypedExpr::UnaryOp(unary_op) => unary_op.span,
             TypedExpr::Block(b) => b.span,
@@ -1475,9 +1476,9 @@ impl TypedModule {
             Expression::FieldAccess(field_access) => {
                 let base_expr = self.eval_expr(&field_access.base, scope_id, None)?;
                 let type_id = base_expr.get_type();
-                let ret_type = match self.get_type(type_id) {
+                let (field_index, ret_type) = match self.get_type(type_id) {
                     Type::Record(record_type) => {
-                        let (_idx, target_field) =
+                        let (idx, target_field) =
                             record_type.find_field(field_access.target).ok_or(make_err(
                                 format!(
                                     "Field {} not found on record type",
@@ -1485,7 +1486,7 @@ impl TypedModule {
                                 ),
                                 field_access.span,
                             ))?;
-                        Ok(target_field.type_id)
+                        Ok((idx as u32, target_field.type_id))
                     }
                     ty => make_fail(
                         format!(
@@ -1496,9 +1497,10 @@ impl TypedModule {
                         field_access.span,
                     ),
                 }?;
-                Ok(TypedExpr::FieldAccess(FieldAccess {
+                Ok(TypedExpr::RecordFieldAccess(FieldAccess {
                     base: Box::new(base_expr),
                     target_field: field_access.target,
+                    target_field_index: field_index,
                     ty: ret_type,
                     span: field_access.span,
                 }))
@@ -1990,7 +1992,7 @@ impl TypedModule {
                             );
                         }
                     }
-                    TypedExpr::FieldAccess(_) => {
+                    TypedExpr::RecordFieldAccess(_) => {
                         trace!("assignment to record member");
                     }
                     TypedExpr::ArrayIndex(_) => {
@@ -2537,7 +2539,7 @@ impl TypedModule {
                 let variable = self.get_variable(v.variable_id);
                 writ.write_str(&self.get_ident_str(variable.name))
             }
-            TypedExpr::FieldAccess(field_access) => {
+            TypedExpr::RecordFieldAccess(field_access) => {
                 self.display_expr(&field_access.base, writ)?;
                 writ.write_str(".")?;
                 writ.write_str(&self.get_ident_str(field_access.target_field))

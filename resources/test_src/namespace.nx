@@ -23,6 +23,7 @@ namespace Baz {
 fn main(): int {
   val x: Foo = { x: 42 };
   val y = Foo::new(42);
+  Foo::getValue()
   assert(x.getValue() == 42);
   // assert(y.getValue() == 42);
   x.setValue(41);
