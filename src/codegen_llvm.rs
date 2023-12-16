@@ -1,14 +1,16 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::ops::Deref;
+use std::path::Path;
+use std::rc::Rc;
+
 use anyhow::Result;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
-use std::cell::RefCell;
-
-use crate::lex::Span;
 use inkwell::debug_info::{
-    AsDIScope, DICompileUnit, DIFile, DIFlags, DILocation, DIScope, DISubprogram, DIType,
-    DWARFEmissionKind, DWARFSourceLanguage, DebugInfoBuilder, LLVMDWARFTypeEncoding,
+    AsDIScope, DICompileUnit, DIFile, DILocation, DIScope, DISubprogram, DIType, DWARFEmissionKind,
+    DWARFSourceLanguage, DebugInfoBuilder,
 };
-use inkwell::execution_engine::RemoveModuleError::LLVMError;
 use inkwell::module::{Linkage as LlvmLinkage, Module};
 use inkwell::passes::{PassManager, PassManagerBuilder};
 use inkwell::targets::{InitializationConfig, Target, TargetMachine};
@@ -21,12 +23,9 @@ use inkwell::values::{
 };
 use inkwell::{AddressSpace, IntPredicate, OptimizationLevel};
 use log::trace;
-use std::collections::HashMap;
-use std::ops::Deref;
-use std::path::Path;
-use std::rc::Rc;
 
-use crate::parse::{AstModule, IdentifierId};
+use crate::lex::Span;
+use crate::parse::IdentifierId;
 use crate::typer::{self, *};
 
 const STRING_LENGTH_FIELD_INDEX: u32 = 0;
@@ -455,34 +454,23 @@ impl<'ctx> Codegen<'ctx> {
         let field_types: Vec<_> =
             record.fields.iter().map(|f| self.get_llvm_type(f.type_id)).collect();
         let struct_type = self.ctx.struct_type(&field_types, false);
-        // self.llvm_types.insert(type_id, struct_ptr_type.as_basic_type_enum());
         struct_type
     }
 
-    fn build_optional_type(&self, optional_type: &OptionalType) -> (bool, BasicTypeEnum<'ctx>) {
+    fn build_optional_type(&self, optional_type: &OptionalType) -> StructType<'ctx> {
         // Optional representation summary:
-        // Pointer-like types (array, record, string) are represented the same way, and
-        // we use the null pointer to represent None
-        // Scalar types (int, char, bool) are represented as a struct with a boolean
+        // types are represented as a struct with a boolean
         // flag indicating whether the value is None, and the value itself
-        let optional_struct_repr = self.optional_repr_for_type_is_struct(optional_type.inner_type);
-        let type_enum = if optional_struct_repr {
-            let inner = self.get_llvm_type(optional_type.inner_type);
-            // Do I need to think about alignment and packing?
-            let llvm_struct =
-                self.ctx.struct_type(&[self.ctx.bool_type().as_basic_type_enum(), inner], false);
-            llvm_struct.as_basic_type_enum()
-        } else {
-            self.builtin_types.any_ptr.as_basic_type_enum()
-        };
-        (optional_struct_repr, type_enum)
+        let inner = self.get_llvm_type(optional_type.inner_type);
+        // Do I need to think about alignment and packing?
+        self.ctx.struct_type(&[self.builtin_types.boolean.as_basic_type_enum(), inner], false)
     }
 
     fn get_debug_type(&self, type_id: TypeId) -> DIType<'ctx> {
-        let dw_ate_address = 0x01;
+        let _dw_ate_address = 0x01;
         let dw_ate_boolean = 0x02;
-        let dw_ate_complex_float = 0x03;
-        let dw_ate_float = 0x04;
+        let _dw_ate_complex_float = 0x03;
+        let _dw_ate_float = 0x04;
         let dw_ate_signed = 0x05;
         let dw_ate_char = 0x06;
         let _dw_ate_unsigned = 0x07;
@@ -626,20 +614,66 @@ impl<'ctx> Codegen<'ctx> {
                         &self.module.type_id_to_string(type_id),
                         self.debug.file,
                         0,
-                        128,
-                        128,
+                        64 * 3,
+                        64,
                         0,
                         None,
                         &[
-                            self.get_debug_type(INT_TYPE_ID),
                             self.debug
                                 .debug_builder
-                                .create_array_type(element_type, 64, 64, &[])
+                                .create_member_type(
+                                    self.debug.current_scope(),
+                                    "length",
+                                    self.debug.file,
+                                    0,
+                                    64,
+                                    64,
+                                    0,
+                                    0,
+                                    self.get_debug_type(INT_TYPE_ID),
+                                )
+                                .as_type(),
+                            self.debug
+                                .debug_builder
+                                .create_member_type(
+                                    self.debug.current_scope(),
+                                    "capacity",
+                                    self.debug.file,
+                                    0,
+                                    64,
+                                    64,
+                                    64,
+                                    0,
+                                    self.get_debug_type(INT_TYPE_ID),
+                                )
+                                .as_type(),
+                            self.debug
+                                .debug_builder
+                                .create_member_type(
+                                    self.debug.current_scope(),
+                                    "data_ptr",
+                                    self.debug.file,
+                                    0,
+                                    64,
+                                    64,
+                                    128,
+                                    0,
+                                    self.debug
+                                        .debug_builder
+                                        .create_pointer_type(
+                                            "array_data",
+                                            element_type,
+                                            64,
+                                            64,
+                                            self.default_address_space,
+                                        )
+                                        .as_type(),
+                                )
                                 .as_type(),
                         ],
                         0,
                         None,
-                        "string",
+                        &self.module.type_id_to_string(type_id),
                     )
                     .as_type()
             }
@@ -667,10 +701,6 @@ impl<'ctx> Codegen<'ctx> {
     }
 
     fn get_llvm_type(&self, type_id: TypeId) -> BasicTypeEnum<'ctx> {
-        // Now that I am not relying on inspect the BasicTypeEnum returned by this function,
-        // but rather just using the type info from the TAST, I think I can go back to using this
-        // method instead of build_record_type. I can just immediately cast to a StructType if
-        // I need one for GEP generation
         trace!("codegen for type {}", self.module.type_id_to_string(type_id));
         match type_id {
             UNIT_TYPE_ID => self.builtin_types.unit.as_basic_type_enum(),
@@ -690,25 +720,18 @@ impl<'ctx> Codegen<'ctx> {
                         let module = self.module.clone();
                         let ty = module.get_type(type_id);
                         let generated = match ty {
-                            Type::Optional(_optional) => {
-                                // Will always be a ptr since even for the struct ones, we represent structs as ptr
-                                // So no need to call build_optional_type as shown:
-                                // self.build_optional_type(optional).1.ptr_type()
-                                self.builtin_types.any_ptr.as_basic_type_enum()
+                            Type::Optional(optional) => {
+                                self.build_optional_type(optional).as_basic_type_enum()
                             }
                             Type::Record(record) => {
-                                trace!("generating llvm pointer type for record type {type_id}");
+                                trace!("generating llvm type for record type {type_id}");
                                 let field_types: Vec<_> = record
                                     .fields
                                     .iter()
                                     .map(|f| self.get_llvm_type(f.type_id))
                                     .collect();
                                 let struct_type = self.ctx.struct_type(&field_types, false);
-                                let struct_ptr_type = struct_type
-                                    .as_basic_type_enum()
-                                    .ptr_type(self.default_address_space);
-
-                                struct_ptr_type.as_basic_type_enum()
+                                struct_type.as_basic_type_enum()
                             }
                             Type::TypeVariable(v) => {
                                 println!("{}", self.module);
@@ -834,141 +857,70 @@ impl<'ctx> Codegen<'ctx> {
         let value = self.codegen_expr_inner(expr);
         value.loaded_value(&self.builder)
     }
-    fn optional_repr_for_type_is_struct(&self, inner_type_id: TypeId) -> bool {
-        match inner_type_id {
-            UNIT_TYPE_ID | CHAR_TYPE_ID | INT_TYPE_ID | BOOL_TYPE_ID => true,
-            _ => match self.module.get_type(inner_type_id) {
-                Type::Unit => true,
-                Type::Char => true,
-                Type::Int => true,
-                Type::Bool => true,
-                Type::String => false,
-                Type::Record(_) => false,
-                Type::Array(_) => false,
-                Type::TypeVariable(_) => unreachable!("type variable in is_optional_pointer_repr"),
-                Type::Optional(_) => unreachable!("nested optional in is_optional_pointer_repr"),
-            },
-        }
-    }
+
     fn codegen_optional_value(
         &mut self,
         type_id: TypeId,
         optional_some: Option<&OptionalSome>,
     ) -> BasicValueEnum<'ctx> {
-        let module = self.module.clone();
-        let optional_type = module.get_type(type_id).expect_optional_type();
         let is_none = optional_some.is_none();
-        let (is_struct_repr, optional_llvm_type) = self.build_optional_type(optional_type);
-        if is_struct_repr {
-            let struct_type = optional_llvm_type.into_struct_type();
-            let discriminator_type = struct_type.get_field_type_at_index(0).unwrap();
-            let discriminator_value: BasicValueEnum<'ctx> = if is_none {
-                discriminator_type.const_zero()
-            } else {
-                discriminator_type.into_int_type().const_int(1, false).into()
-            };
-            let value_value: BasicValueEnum<'ctx> = if let Some(opt_some) = optional_some {
-                self.codegen_expr(&opt_some.inner_expr)
-            } else {
-                struct_type.get_field_type_at_index(1).unwrap().const_zero()
-            };
-            let none_struct = self
-                .builder
-                .build_insert_value(
-                    struct_type.get_undef(),
-                    discriminator_value,
-                    0,
-                    &format!("opt_discrim_{}", type_id),
-                )
-                .unwrap();
-            let struct_value = self
-                .builder
-                .build_insert_value(none_struct, value_value, 1, &format!("opt_value_{}", type_id))
-                .unwrap();
-            let struct_ptr = self.builder.build_alloca(struct_type, &format!("opt_{}", type_id));
-            self.builder.build_store(struct_ptr, struct_value);
-            struct_ptr.as_basic_value_enum()
+        let optional_llvm_type = self.get_llvm_type(type_id);
+        let struct_type = optional_llvm_type.into_struct_type();
+        let discriminator_value =
+            if is_none { self.builtin_types.false_value } else { self.builtin_types.true_value };
+        let value_value: BasicValueEnum<'ctx> = if let Some(opt_some) = optional_some {
+            self.codegen_expr(&opt_some.inner_expr)
         } else {
-            // Is pointer repr
-            if let Some(optional_some) = optional_some {
-                self.codegen_expr(&optional_some.inner_expr)
-            } else {
-                let null_string_ptr = self.builtin_types.any_ptr.const_null();
-                null_string_ptr.as_basic_value_enum()
-            }
-        }
+            struct_type.get_field_type_at_index(1).unwrap().const_zero()
+        };
+        let none_struct = self
+            .builder
+            .build_insert_value(
+                struct_type.get_undef(),
+                discriminator_value,
+                0,
+                &format!("opt_discrim_{}", type_id),
+            )
+            .unwrap();
+        let struct_value = self
+            .builder
+            .build_insert_value(none_struct, value_value, 1, &format!("opt_value_{}", type_id))
+            .unwrap();
+        struct_value.as_basic_value_enum()
     }
     fn codegen_optional_has_value(
         &mut self,
-        // The type id of the optional that we are checking, not the type id of its contained type
-        type_id: TypeId,
-        optional_value: PointerValue<'ctx>,
+        optional_value: StructValue<'ctx>,
     ) -> BasicValueEnum<'ctx> {
-        let module = self.module.clone();
-        let optional_type = module.get_type(type_id).expect_optional_type();
-        let (is_struct_repr, optional_llvm_type) = self.build_optional_type(optional_type);
-        if is_struct_repr {
-            // Struct Repr
-            let struct_ptr = optional_value;
-            let opt_struct_type = optional_llvm_type.into_struct_type();
-
-            let discriminator_pointer = self
-                .builder
-                .build_struct_gep(opt_struct_type, struct_ptr, 0, "discrim_ptr")
-                .unwrap();
-            let discriminator_value = self
-                .builder
-                .build_load(
-                    opt_struct_type.get_field_type_at_index(0).unwrap(),
-                    discriminator_pointer,
-                    "discrim_value",
-                )
-                .into_int_value();
-            let is_some = self.builder.build_int_compare(
-                IntPredicate::NE,
-                discriminator_value,
-                self.builtin_types.false_value,
-                "is_some",
-            );
-            is_some.as_basic_value_enum()
-        } else {
-            let value_struct_ptr = optional_value;
-            let not_null_int_value = self.builder.build_is_not_null(value_struct_ptr, "not_null");
-            not_null_int_value.as_basic_value_enum()
-        }
+        let discriminator_value = self
+            .builder
+            .build_extract_value(optional_value, 0, "discrim_value")
+            .unwrap()
+            .into_int_value();
+        let is_some = self.builder.build_int_compare(
+            IntPredicate::NE,
+            discriminator_value,
+            self.builtin_types.false_value,
+            "is_some",
+        );
+        is_some.as_basic_value_enum()
     }
-    fn codegen_optional_get(
-        &mut self,
-        optional_type_id: TypeId,
-        optional_value: BasicValueEnum<'ctx>,
-    ) -> BasicValueEnum<'ctx> {
-        let module = self.module.clone();
-        let optional_type = module.get_type(optional_type_id).expect_optional_type();
-        let (is_struct_repr, optional_type_llvm) = self.build_optional_type(optional_type);
-        if is_struct_repr {
-            // Struct Repr
-            let base_optional_struct_ptr = optional_value.into_pointer_value();
-            // This is UNSAFE we don't check the discriminator. The actual unwrap method
-            // or user-facing unwrap should check it and panic if it is None later
-            let struct_type_llvm = optional_type_llvm.into_struct_type();
-            let value = self
-                .builder
-                .build_struct_gep(struct_type_llvm, base_optional_struct_ptr, 1, "opt_value")
-                .unwrap();
-            self.builder.build_load(
-                struct_type_llvm.get_field_type_at_index(1).unwrap(),
-                value,
-                "opt_value",
-            )
-        } else {
-            optional_value
-        }
+    fn codegen_optional_get(&mut self, optional_value: StructValue<'ctx>) -> BasicValueEnum<'ctx> {
+        // This is UNSAFE we don't check the discriminator. The actual unwrap method
+        // or user-facing unwrap should check it and exit if it is None later
+        self.builder
+            .build_extract_value(optional_value, 1, "opt_value")
+            .expect("optional should always have a 2nd field")
     }
     /// Returns the original reference, even if its one layer of indirection
     /// higher than the expression should give. For example, a pointer to
     /// an array element or record member, rather than the element or member itself
     /// This allows for the caller to decide if they want to just load the value, or use the pointer
     /// for things like assignment
+    ///
+    /// I think a much better solution coul be to just pass in a boolean 'is_lvalue'
+    /// If true, we return a pointer for assigning to things that are valid lvalues
+    /// If false, we return the actual value as indicated by the type system
     fn codegen_expr_inner(&mut self, expr: &TypedExpr) -> GeneratedValue<'ctx> {
         self.set_debug_location(expr.get_span());
         log::trace!("codegen expr\n{}", self.module.expr_to_string(expr));
@@ -979,15 +931,11 @@ impl<'ctx> Codegen<'ctx> {
             }
             TypedExpr::OptionalHasValue(optional_expr) => {
                 let optional_value = self.codegen_expr(optional_expr);
-                self.codegen_optional_has_value(
-                    optional_expr.get_type(),
-                    optional_value.into_pointer_value(),
-                )
-                .into()
+                self.codegen_optional_has_value(optional_value.into_struct_value()).into()
             }
             TypedExpr::OptionalGet(opt_get) => {
                 let optional_value = self.codegen_expr(&opt_get.inner_expr);
-                self.codegen_optional_get(opt_get.inner_expr.get_type(), optional_value).into()
+                self.codegen_optional_get(optional_value.into_struct_value()).into()
             }
             TypedExpr::Unit(_) => self.builtin_types.unit_value.as_basic_value_enum().into(),
             TypedExpr::Char(byte, _) => {
@@ -1028,25 +976,39 @@ impl<'ctx> Codegen<'ctx> {
                 loaded.into()
             }
             TypedExpr::Record(record) => {
-                let module = self.module.clone();
-                let record_type = module.get_type(record.type_id).expect_record_type();
-                let record_llvm_type = self.build_record_type(record_type);
-                let struct_ptr = self.builder.build_alloca(record_llvm_type, "record");
+                let record_llvm_type = self.get_llvm_type(record.type_id).into_struct_type();
+                let mut struct_value = record_llvm_type.get_undef();
                 for (idx, field) in record.fields.iter().enumerate() {
                     let value = self.codegen_expr(&field.expr);
-                    let field_ptr = self
+                    struct_value = self
                         .builder
-                        .build_struct_gep(
-                            record_llvm_type,
-                            struct_ptr,
+                        .build_insert_value(
+                            struct_value,
+                            value,
                             idx as u32,
                             &format!("record_init_{}", idx),
                         )
-                        .unwrap();
-                    // let value_to_store = self.load_if_value_type(value, field.expr.get_type());
-                    self.builder.build_store(field_ptr, value);
+                        .unwrap()
+                        .into_struct_value();
                 }
-                GeneratedValue::Value(struct_ptr.as_basic_value_enum())
+                struct_value.as_basic_value_enum().into()
+            }
+            TypedExpr::RecordFieldAccess(field_access) => {
+                let record_struct = self.codegen_expr(&field_access.base).into_struct_value();
+                let field_value = self
+                    .builder
+                    .build_extract_value(
+                        record_struct,
+                        field_access.target_field_index,
+                        &format!(
+                            "record.{}",
+                            &*self.module.ast.get_ident_str(field_access.target_field)
+                        ),
+                    )
+                    .unwrap();
+                // FIXME: Assignment: We can't guarantee that we can assign to struct fields
+                //       unless they're in variables; need a different way of handling assignment
+                GeneratedValue::Value(field_value)
             }
             TypedExpr::Array(array) => {
                 let Type::Array(array_type) = self.module.get_type(array.type_id) else {
@@ -1084,33 +1046,6 @@ impl<'ctx> Codegen<'ctx> {
                         "No pointer or global found for variable {}",
                         self.module.expr_to_string(expr)
                     )
-                }
-            }
-            TypedExpr::FieldAccess(field_access) => {
-                let result = self.codegen_expr(&field_access.base);
-                let type_id = field_access.base.get_type();
-                let module = self.module.clone();
-                let ty = module.get_type(type_id);
-                if let Type::Record(record) = ty {
-                    let record_type = self.build_record_type(record);
-                    let record_pointer = result.into_pointer_value();
-                    let (index, _) = record
-                        .find_field(field_access.target_field)
-                        .expect("RecordDefn missing field in codegen!");
-
-                    let field_ptr = self
-                        .builder
-                        .build_struct_gep(
-                            record_type,
-                            record_pointer,
-                            index as u32,
-                            "field_access_target_ptr",
-                        )
-                        .unwrap();
-                    let target_ty = self.get_llvm_type(field_access.ty);
-                    Pointer { pointee_ty: target_ty, pointer: field_ptr }.into()
-                } else {
-                    panic!("Invalid field access: {:?}", field_access)
                 }
             }
             TypedExpr::If(if_expr) => self.codegen_if_else(if_expr),
@@ -1503,7 +1438,7 @@ impl<'ctx> Codegen<'ctx> {
                         //self.builder.build_store(des, value.loaded_value(&self.builder))
                         last = Some(self.builtin_types.unit_value.as_basic_value_enum())
                     }
-                    TypedExpr::FieldAccess(_field_access) => {
+                    TypedExpr::RecordFieldAccess(_field_access) => {
                         // We use codegen_expr_inner to get the pointer to the accessed field
                         let field_ptr = self.codegen_expr_inner(&assignment.destination);
                         let ptr = field_ptr.expect_pointer();
