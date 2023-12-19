@@ -79,6 +79,11 @@ pub struct OptionalType {
 }
 
 #[derive(Debug, Clone)]
+pub struct ReferenceType {
+    pub inner_type: TypeId,
+}
+
+#[derive(Debug, Clone)]
 pub enum Type {
     Unit,
     Char,
@@ -89,28 +94,49 @@ pub enum Type {
     Array(ArrayType),
     TypeVariable(TypeVariable),
     Optional(OptionalType),
+    Reference(ReferenceType),
 }
 
 impl Type {
-    pub fn as_optional_type(&self) -> Option<&OptionalType> {
+    pub fn as_reference(&self) -> Option<&ReferenceType> {
+        match self {
+            Type::Reference(r) => Some(r),
+            _ => None,
+        }
+    }
+    pub fn expect_reference(&self) -> &ReferenceType {
+        match self {
+            Type::Reference(r) => r,
+            _ => panic!("expect_reference called on: {:?}", self),
+        }
+    }
+    pub fn as_optional(&self) -> Option<&OptionalType> {
         match self {
             Type::Optional(opt) => Some(opt),
             _ => None,
         }
     }
-    pub fn expect_optional_type(&self) -> &OptionalType {
+    pub fn expect_optional(&self) -> &OptionalType {
         match self {
             Type::Optional(opt) => opt,
             _ => panic!("expect_optional called on: {:?}", self),
         }
     }
-    pub fn expect_array_type(&self) -> &ArrayType {
+    pub fn expect_array(&self) -> &ArrayType {
         match self {
             Type::Array(array) => array,
             _ => panic!("expect_array called on: {:?}", self),
         }
     }
-    pub fn expect_record_type(&self) -> &RecordDefn {
+
+    pub fn as_record(&self) -> Option<&RecordDefn> {
+        match self {
+            Type::Record(record) => Some(record),
+            _ => None,
+        }
+    }
+
+    pub fn expect_record(&self) -> &RecordDefn {
         match self {
             Type::Record(record) => record,
             _ => panic!("expect_record called on: {:?}", self),
@@ -797,6 +823,13 @@ impl TypedModule {
         &self.types[type_id as usize]
     }
 
+    pub fn get_type_dereferenced(&self, type_id: TypeId) -> &Type {
+        match self.get_type(type_id) {
+            Type::Reference(r) => self.get_type(r.inner_type),
+            _ => self.get_type(type_id),
+        }
+    }
+
     pub fn get_type_mut(&mut self, type_id: TypeId) -> &mut Type {
         &mut self.types[type_id as usize]
     }
@@ -849,16 +882,16 @@ impl TypedModule {
 
     fn eval_type_expr(
         &mut self,
-        expr: &parse::TypeExpression,
+        expr: &parse::ParsedTypeExpression,
         scope_id: ScopeId,
     ) -> TyperResult<TypeId> {
-        let mut base = match expr {
-            parse::TypeExpression::Unit(_) => Ok(UNIT_TYPE_ID),
-            parse::TypeExpression::Char(_) => Ok(CHAR_TYPE_ID),
-            parse::TypeExpression::Int(_) => Ok(INT_TYPE_ID),
-            parse::TypeExpression::Bool(_) => Ok(BOOL_TYPE_ID),
-            parse::TypeExpression::String(_) => Ok(STRING_TYPE_ID),
-            parse::TypeExpression::Record(record_defn) => {
+        let base = match expr {
+            parse::ParsedTypeExpression::Unit(_) => Ok(UNIT_TYPE_ID),
+            parse::ParsedTypeExpression::Char(_) => Ok(CHAR_TYPE_ID),
+            parse::ParsedTypeExpression::Int(_) => Ok(INT_TYPE_ID),
+            parse::ParsedTypeExpression::Bool(_) => Ok(BOOL_TYPE_ID),
+            parse::ParsedTypeExpression::String(_) => Ok(STRING_TYPE_ID),
+            parse::ParsedTypeExpression::Record(record_defn) => {
                 let mut fields: Vec<RecordDefnField> = Vec::new();
                 for (index, ast_field) in record_defn.fields.iter().enumerate() {
                     let ty = self.eval_type_expr(&ast_field.ty, scope_id)?;
@@ -869,7 +902,7 @@ impl TypedModule {
                 let type_id = self.add_type(Type::Record(record_defn));
                 Ok(type_id)
             }
-            parse::TypeExpression::Name(ident, span) => {
+            parse::ParsedTypeExpression::Name(ident, span) => {
                 let ty_ref = self.scopes.find_type(scope_id, *ident);
 
                 ty_ref.ok_or_else(|| {
@@ -888,7 +921,7 @@ impl TypedModule {
                     )
                 })
             }
-            parse::TypeExpression::TypeApplication(ty_app) => {
+            parse::ParsedTypeExpression::TypeApplication(ty_app) => {
                 if self.ast.ident_id("Array") == ty_app.base {
                     if ty_app.params.len() == 1 {
                         let element_ty = self.eval_type_expr(&ty_app.params[0], scope_id)?;
@@ -905,39 +938,23 @@ impl TypedModule {
                     todo!("not supported: generic non builtin types")
                 }
             }
-            parse::TypeExpression::Optional(opt) => {
+            parse::ParsedTypeExpression::Optional(opt) => {
                 let inner_ty = self.eval_type_expr(&opt.base, scope_id)?;
                 let optional_type = Type::Optional(OptionalType { inner_type: inner_ty });
                 let type_id = self.add_type(optional_type);
                 Ok(type_id)
             }
+            parse::ParsedTypeExpression::Reference(r) => {
+                let inner_ty = self.eval_type_expr(&r.base, scope_id)?;
+                let reference_type = Type::Reference(ReferenceType { inner_type: inner_ty });
+                let type_id = self.add_type(reference_type);
+                Ok(type_id)
+            }
         }?;
-        // Attempt to fully resolve type variables before returning
-        // loop {
-        //     match self.get_type(base) {
-        //         Type::TypeVariable(type_variable) => {
-        //             let type_id = self.scopes.find_type(scope_id, type_variable.identifier_id);
-        //             match type_id {
-        //                 None => {
-        //                     break;
-        //                 }
-        //                 Some(type_id) => {
-        //                     trace!(
-        //                         "eval_type_expr attempt resolve of TypeVariable {} got {:?}",
-        //                         &*self.get_ident_str(type_variable.identifier_id),
-        //                         self.type_id_to_string(type_id)
-        //                     );
-        //                     base = type_id;
-        //                 }
-        //             }
-        //         }
-        //         _other_type => break,
-        //     }
-        // }
         Ok(base)
     }
 
-    fn eval_const_type_expr(&mut self, expr: &parse::TypeExpression) -> TyperResult<TypeId> {
+    fn eval_const_type_expr(&mut self, expr: &parse::ParsedTypeExpression) -> TyperResult<TypeId> {
         let ty = self.eval_type_expr(expr, self.scopes.get_root_scope_id())?;
         match ty {
             UNIT_TYPE_ID => Ok(ty),
@@ -1421,14 +1438,10 @@ impl TypedModule {
                     "Cannot infer type of None literal without type hint",
                     *span,
                 ))?;
-                let expected_type =
-                    self.get_type(expected_type).as_optional_type().ok_or(make_err(
-                        format!(
-                            "Expected optional type for None literal but got {:?}",
-                            expected_type
-                        ),
-                        *span,
-                    ))?;
+                let expected_type = self.get_type(expected_type).as_optional().ok_or(make_err(
+                    format!("Expected optional type for None literal but got {:?}", expected_type),
+                    *span,
+                ))?;
                 let inner_type = expected_type.inner_type;
                 let none_type = Type::Optional(OptionalType { inner_type });
                 // FIXME: We'll re-create the type for optional int, bool, etc over and over. Instead of add_type it should be
@@ -1476,7 +1489,7 @@ impl TypedModule {
             Expression::FieldAccess(field_access) => {
                 let base_expr = self.eval_expr(&field_access.base, scope_id, None)?;
                 let type_id = base_expr.get_type();
-                let (field_index, ret_type) = match self.get_type(type_id) {
+                let (field_index, ret_type) = match self.get_type_dereferenced(type_id) {
                     Type::Record(record_type) => {
                         let (idx, target_field) =
                             record_type.find_field(field_access.target).ok_or(make_err(
@@ -1490,7 +1503,7 @@ impl TypedModule {
                     }
                     ty => make_fail(
                         format!(
-                            "Cannot access field {} on non-record type: {:?}",
+                            "Cannot access field {} on non-record type: {}",
                             &*self.get_ident_str(field_access.target),
                             self.type_to_string(ty)
                         ),
@@ -2416,6 +2429,10 @@ impl TypedModule {
             Type::Optional(opt) => {
                 self.display_type_id(opt.inner_type, writ)?;
                 writ.write_char('?')
+            }
+            Type::Reference(r) => {
+                self.display_type_id(r.inner_type, writ)?;
+                writ.write_char('*')
             }
         }
     }

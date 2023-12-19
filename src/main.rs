@@ -39,7 +39,7 @@ struct Args {
     dump_module: bool,
 
     /// Debug Module
-    #[arg(long, default_value_t = true)]
+    #[arg(long)]
     debug: bool,
 
     /// Run after compiling

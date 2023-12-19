@@ -149,80 +149,14 @@ impl<'ctx> DebugContext<'ctx> {
 
 #[derive(Copy, Clone, Debug)]
 struct Pointer<'ctx> {
-    pointee_ty: BasicTypeEnum<'ctx>,
+    pointee_type_id: TypeId,
+    pointee_llvm_type: BasicTypeEnum<'ctx>,
     pointer: PointerValue<'ctx>,
 }
 
 impl<'ctx> Pointer<'ctx> {
     fn loaded_value(&self, builder: &Builder<'ctx>) -> BasicValueEnum<'ctx> {
-        builder.build_load(self.pointee_ty, self.pointer, "loaded_value")
-    }
-}
-
-impl<'ctx> From<Pointer<'ctx>> for GeneratedValue<'ctx> {
-    fn from(ptr: Pointer<'ctx>) -> Self {
-        GeneratedValue::Pointer(ptr)
-    }
-}
-
-impl<'ctx> From<&Pointer<'ctx>> for GeneratedValue<'ctx> {
-    fn from(ptr: &Pointer<'ctx>) -> Self {
-        GeneratedValue::Pointer(*ptr)
-    }
-}
-
-/// When we codegen an expression, sometimes we produce a pointer that may
-/// be needed by the caller (for example, for assignment). In these
-/// cases we return Pointer, indicating that you've got a pointer
-/// to whatever the IR type indicates you should have.
-/// Example: { a: 1} is a record, which we model as ptr, but since we
-/// are returning the actual ptr to the record, not a pointer to it, we
-/// use Value.
-/// Example: [1,2,3][0]. We return a pointer to the array at that location
-/// in case this is for assignment. The types expect an int, but we gave a Pointer,
-/// so we return it in Pointer to indicate that
-#[derive(Copy, Clone, Debug)]
-enum GeneratedValue<'ctx> {
-    Value(BasicValueEnum<'ctx>),
-    Pointer(Pointer<'ctx>),
-}
-
-impl<'ctx> From<BasicValueEnum<'ctx>> for GeneratedValue<'ctx> {
-    fn from(value: BasicValueEnum<'ctx>) -> Self {
-        GeneratedValue::Value(value)
-    }
-}
-
-impl<'ctx> GeneratedValue<'ctx> {
-    /// This conversion loses type info but is necessary often for passing to LLVM
-    /// calls, such as for function calls, we need to convert from GeneratedValue BasicMetaDataValueEnum
-    fn as_basic_value_enum(&self) -> BasicValueEnum<'ctx> {
-        match self {
-            GeneratedValue::Value(value) => *value,
-            GeneratedValue::Pointer(pointer) => pointer.pointer.as_basic_value_enum(),
-        }
-    }
-
-    fn loaded_value(&self, builder: &Builder<'ctx>) -> BasicValueEnum<'ctx> {
-        match self {
-            GeneratedValue::Pointer(pointer) => pointer.loaded_value(builder),
-            GeneratedValue::Value(value) => *value,
-        }
-    }
-
-    fn expect_value(&self) -> BasicValueEnum<'ctx> {
-        match self {
-            GeneratedValue::Value(value) => *value,
-            GeneratedValue::Pointer(pointer) => {
-                panic!("Expected Value but got Pointer on {:?}", pointer)
-            }
-        }
-    }
-    fn expect_pointer(&self) -> Pointer<'ctx> {
-        match self {
-            GeneratedValue::Value(value) => panic!("Expected Pointer but got Value on {}", value),
-            GeneratedValue::Pointer(pointer) => *pointer,
-        }
+        builder.build_load(self.pointee_llvm_type, self.pointer, "loaded_value")
     }
 }
 
@@ -568,7 +502,6 @@ impl<'ctx> Codegen<'ctx> {
                 )
                 .as_type(),
             Type::Record(record) => {
-                let struct_type = self.build_record_type(record);
                 // FIXME: We need to compute actual physical size at some point
                 //        Probably here in codegen? But maybe in typecheck?
                 //        What about a struct of our own, called CodegenedType or something,
@@ -697,6 +630,26 @@ impl<'ctx> Codegen<'ctx> {
                     )
                     .as_type()
             }
+            Type::Reference(_ref) => {
+                let name = format!("reference_{}", self.module.type_id_to_string(type_id));
+                self.debug
+                    .debug_builder
+                    .create_pointer_type(
+                        &name,
+                        self.get_debug_type(_ref.inner_type),
+                        64,
+                        64,
+                        self.default_address_space,
+                    )
+                    .as_type()
+            }
+        }
+    }
+
+    fn get_llvm_type_dereferenced(&self, type_id: TypeId) -> BasicTypeEnum<'ctx> {
+        match self.module.get_type(type_id) {
+            Type::Reference(reference) => self.get_llvm_type(reference.inner_type),
+            _other => self.get_llvm_type(type_id),
         }
     }
 
@@ -741,6 +694,11 @@ impl<'ctx> Codegen<'ctx> {
                                 let element_type = self.get_llvm_type(array.element_type);
                                 self.builtin_types.array_struct(element_type).as_basic_type_enum()
                             }
+                            Type::Reference(reference) => {
+                                // Could also use any_ptr here
+                                let inner_type = self.get_llvm_type(reference.inner_type);
+                                inner_type.ptr_type(AddressSpace::default()).as_basic_type_enum()
+                            }
                             other => {
                                 panic!(
                                     "get_llvm_type for type dropped through unexpectedly: {:?}",
@@ -757,17 +715,18 @@ impl<'ctx> Codegen<'ctx> {
         }
     }
 
-    fn codegen_val(&mut self, val: &ValDef) -> GeneratedValue<'ctx> {
-        let value = self.codegen_expr(&val.initializer);
+    fn codegen_val(&mut self, val: &ValDef) -> PointerValue<'ctx> {
+        let value = self.codegen_expr_rvalue(&val.initializer);
         let pointee_ty = self.get_llvm_type(val.ty);
         let variable = self.module.get_variable(val.variable_id);
-        let value_ptr = self.builder.build_alloca(pointee_ty, &self.get_ident_name(variable.name));
+        let variable_ptr =
+            self.builder.build_alloca(pointee_ty, &self.get_ident_name(variable.name));
         trace!("codegen_val {}: pointee_ty: {pointee_ty:?}", &*self.get_ident_name(variable.name));
         // We're always storing a pointer
         // in self.variables that, when loaded, gives the actual type of the variable
-        let store_instr = self.builder.build_store(value_ptr, value.as_basic_value_enum());
+        let store_instr = self.builder.build_store(variable_ptr, value.as_basic_value_enum());
         self.debug.debug_builder.insert_declare_before_instruction(
-            value_ptr,
+            variable_ptr,
             Some(self.debug.debug_builder.create_auto_variable(
                 self.debug.current_scope(),
                 &*self.get_ident_name(variable.name),
@@ -782,12 +741,16 @@ impl<'ctx> Codegen<'ctx> {
             self.builder.get_current_debug_location().unwrap(),
             store_instr,
         );
-        let pointer = Pointer { pointer: value_ptr, pointee_ty };
+        let pointer = Pointer {
+            pointer: variable_ptr,
+            pointee_type_id: val.ty,
+            pointee_llvm_type: pointee_ty,
+        };
         self.variables.insert(val.variable_id, pointer);
-        pointer.into()
+        variable_ptr
     }
 
-    fn codegen_if_else(&mut self, ir_if: &TypedIf) -> GeneratedValue<'ctx> {
+    fn codegen_if_else(&mut self, ir_if: &TypedIf) -> BasicValueEnum<'ctx> {
         let typ = self.get_llvm_type(ir_if.ty);
         let start_block = self.builder.get_insert_block().unwrap();
         let current_fn = start_block.get_parent().unwrap();
@@ -796,7 +759,7 @@ impl<'ctx> Codegen<'ctx> {
         let merge_block = self.ctx.append_basic_block(current_fn, "if_merge");
 
         // Entry block
-        let condition = self.codegen_expr(&ir_if.condition);
+        let condition = self.codegen_expr_rvalue(&ir_if.condition);
         let condition_value = condition.into_int_value();
         self.builder.build_conditional_branch(condition_value, consequent_block, alternate_block);
 
@@ -850,12 +813,11 @@ impl<'ctx> Codegen<'ctx> {
                 ]);
                 phi_value.as_basic_value().into()
             }
-            _ => self.builtin_types.unit_value.as_basic_value_enum().into(),
+            _ => self.builtin_types.unit_value.as_basic_value_enum(),
         }
     }
-    fn codegen_expr(&mut self, expr: &TypedExpr) -> BasicValueEnum<'ctx> {
-        let value = self.codegen_expr_inner(expr);
-        value.loaded_value(&self.builder)
+    fn codegen_expr_rvalue(&mut self, expr: &TypedExpr) -> BasicValueEnum<'ctx> {
+        self.codegen_expr(expr, false)
     }
 
     fn codegen_optional_value(
@@ -869,7 +831,7 @@ impl<'ctx> Codegen<'ctx> {
         let discriminator_value =
             if is_none { self.builtin_types.false_value } else { self.builtin_types.true_value };
         let value_value: BasicValueEnum<'ctx> = if let Some(opt_some) = optional_some {
-            self.codegen_expr(&opt_some.inner_expr)
+            self.codegen_expr_rvalue(&opt_some.inner_expr)
         } else {
             struct_type.get_field_type_at_index(1).unwrap().const_zero()
         };
@@ -912,44 +874,59 @@ impl<'ctx> Codegen<'ctx> {
             .build_extract_value(optional_value, 1, "opt_value")
             .expect("optional should always have a 2nd field")
     }
-    /// Returns the original reference, even if its one layer of indirection
-    /// higher than the expression should give. For example, a pointer to
-    /// an array element or record member, rather than the element or member itself
-    /// This allows for the caller to decide if they want to just load the value, or use the pointer
-    /// for things like assignment
-    ///
-    /// I think a much better solution coul be to just pass in a boolean 'is_lvalue'
-    /// If true, we return a pointer for assigning to things that are valid lvalues
-    /// If false, we return the actual value as indicated by the type system
-    fn codegen_expr_inner(&mut self, expr: &TypedExpr) -> GeneratedValue<'ctx> {
+
+    fn codegen_expr(&mut self, expr: &TypedExpr, is_lvalue: bool) -> BasicValueEnum<'ctx> {
         self.set_debug_location(expr.get_span());
-        log::trace!("codegen expr\n{}", self.module.expr_to_string(expr));
+        log::trace!("codegen expr\n{} (lvalue={is_lvalue})", self.module.expr_to_string(expr));
         match expr {
-            TypedExpr::None(type_id, _) => self.codegen_optional_value(*type_id, None).into(),
+            TypedExpr::Variable(ir_var) => {
+                if let Some(pointer) = self.variables.get(&ir_var.variable_id) {
+                    trace!(
+                        "codegen variable (lvalue) got pointee type {:?}",
+                        pointer.pointee_llvm_type
+                    );
+                    if is_lvalue {
+                        pointer.pointer.into()
+                    } else {
+                        let loaded = pointer.loaded_value(&self.builder);
+                        trace!("codegen variable (rvalue) got loaded value {:?}", loaded);
+                        loaded.into()
+                    }
+                } else if let Some(global) = self.globals.get(&ir_var.variable_id) {
+                    let value = global.get_initializer().unwrap();
+                    value.into()
+                } else {
+                    panic!(
+                        "No pointer or global found for variable {}",
+                        self.module.expr_to_string(expr)
+                    )
+                }
+            }
+            TypedExpr::None(type_id, _) => self.codegen_optional_value(*type_id, None),
             TypedExpr::OptionalSome(opt_some) => {
-                self.codegen_optional_value(opt_some.type_id, Some(opt_some)).into()
+                self.codegen_optional_value(opt_some.type_id, Some(opt_some))
             }
             TypedExpr::OptionalHasValue(optional_expr) => {
-                let optional_value = self.codegen_expr(optional_expr);
-                self.codegen_optional_has_value(optional_value.into_struct_value()).into()
+                let optional_value = self.codegen_expr_rvalue(optional_expr);
+                self.codegen_optional_has_value(optional_value.into_struct_value())
             }
             TypedExpr::OptionalGet(opt_get) => {
-                let optional_value = self.codegen_expr(&opt_get.inner_expr);
-                self.codegen_optional_get(optional_value.into_struct_value()).into()
+                let optional_value = self.codegen_expr_rvalue(&opt_get.inner_expr);
+                self.codegen_optional_get(optional_value.into_struct_value())
             }
-            TypedExpr::Unit(_) => self.builtin_types.unit_value.as_basic_value_enum().into(),
+            TypedExpr::Unit(_) => self.builtin_types.unit_value.as_basic_value_enum(),
             TypedExpr::Char(byte, _) => {
-                self.builtin_types.char.const_int(*byte as u64, false).as_basic_value_enum().into()
+                self.builtin_types.char.const_int(*byte as u64, false).as_basic_value_enum()
             }
             TypedExpr::Bool(b, _) => match b {
-                true => self.builtin_types.true_value.as_basic_value_enum().into(),
-                false => self.builtin_types.false_value.as_basic_value_enum().into(),
+                true => self.builtin_types.true_value.as_basic_value_enum(),
+                false => self.builtin_types.false_value.as_basic_value_enum(),
             },
             TypedExpr::Int(int_value, _) => {
                 // LLVM only has unsigned values, the instructions are what provide the semantics
                 // of signed vs unsigned
                 let value = self.builtin_types.i64.const_int(*int_value as u64, false);
-                value.as_basic_value_enum().into()
+                value.as_basic_value_enum()
             }
             TypedExpr::Str(string_value, _) => {
                 // We will make them records (structs) with an array pointer and a length for now
@@ -979,7 +956,7 @@ impl<'ctx> Codegen<'ctx> {
                 let record_llvm_type = self.get_llvm_type(record.type_id).into_struct_type();
                 let mut struct_value = record_llvm_type.get_undef();
                 for (idx, field) in record.fields.iter().enumerate() {
-                    let value = self.codegen_expr(&field.expr);
+                    let value = self.codegen_expr_rvalue(&field.expr);
                     struct_value = self
                         .builder
                         .build_insert_value(
@@ -994,21 +971,41 @@ impl<'ctx> Codegen<'ctx> {
                 struct_value.as_basic_value_enum().into()
             }
             TypedExpr::RecordFieldAccess(field_access) => {
-                let record_struct = self.codegen_expr(&field_access.base).into_struct_value();
-                let field_value = self
-                    .builder
-                    .build_extract_value(
-                        record_struct,
-                        field_access.target_field_index,
-                        &format!(
-                            "record.{}",
-                            &*self.module.ast.get_ident_str(field_access.target_field)
-                        ),
-                    )
-                    .unwrap();
-                // FIXME: Assignment: We can't guarantee that we can assign to struct fields
-                //       unless they're in variables; need a different way of handling assignment
-                GeneratedValue::Value(field_value)
+                if is_lvalue {
+                    // Codegen a pointer to the field's storage location
+                    let record_pointer =
+                        self.codegen_expr(&field_access.base, false).into_pointer_value();
+                    let record_type = self.get_llvm_type_dereferenced(field_access.base.get_type());
+                    let field_ptr = self
+                        .builder
+                        .build_struct_gep(
+                            record_type,
+                            record_pointer,
+                            field_access.target_field_index,
+                            &format!(
+                                "record.{}",
+                                &*self.module.ast.get_ident_str(field_access.target_field)
+                            ),
+                        )
+                        .unwrap();
+                    field_ptr.as_basic_value_enum()
+                } else {
+                    // Codegen the field's loaded, dereferenced value
+                    let record_struct =
+                        self.codegen_expr_rvalue(&field_access.base).into_struct_value();
+                    let field_value = self
+                        .builder
+                        .build_extract_value(
+                            record_struct,
+                            field_access.target_field_index,
+                            &format!(
+                                "record.{}",
+                                &*self.module.ast.get_ident_str(field_access.target_field)
+                            ),
+                        )
+                        .unwrap();
+                    field_value
+                }
             }
             TypedExpr::Array(array) => {
                 let Type::Array(array_type) = self.module.get_type(array.type_id) else {
@@ -1022,7 +1019,7 @@ impl<'ctx> Codegen<'ctx> {
                 let array_data = self.builtin_types.array_data(&self.builder, array_value);
                 // Store each element
                 for (index, element_expr) in array.elements.iter().enumerate() {
-                    let value = self.codegen_expr(element_expr);
+                    let value = self.codegen_expr_rvalue(element_expr);
                     let index_value = self.ctx.i64_type().const_int(index as u64, true);
                     log::trace!("storing element {} of array literal: {:?}", index, element_expr);
                     let ptr_at_index = unsafe {
@@ -1032,27 +1029,11 @@ impl<'ctx> Codegen<'ctx> {
                 }
                 array_value.as_basic_value_enum().into()
             }
-            TypedExpr::Variable(ir_var) => {
-                if let Some(pointer) = self.variables.get(&ir_var.variable_id) {
-                    log::trace!("codegen variable got pointee type {:?}", pointer.pointee_ty);
-                    let loaded = pointer.loaded_value(&self.builder);
-                    log::trace!("codegen variable got loaded value {:?}", loaded);
-                    loaded.into()
-                } else if let Some(global) = self.globals.get(&ir_var.variable_id) {
-                    let value = global.get_initializer().unwrap();
-                    value.into()
-                } else {
-                    panic!(
-                        "No pointer or global found for variable {}",
-                        self.module.expr_to_string(expr)
-                    )
-                }
-            }
             TypedExpr::If(if_expr) => self.codegen_if_else(if_expr),
             TypedExpr::BinaryOp(bin_op) => match bin_op.ty {
                 INT_TYPE_ID => {
-                    let lhs_value = self.codegen_expr(&bin_op.lhs).into_int_value();
-                    let rhs_value = self.codegen_expr(&bin_op.rhs).into_int_value();
+                    let lhs_value = self.codegen_expr_rvalue(&bin_op.lhs).into_int_value();
+                    let rhs_value = self.codegen_expr_rvalue(&bin_op.rhs).into_int_value();
                     let op_res = match bin_op.kind {
                         BinaryOpKind::Add => {
                             self.builder.build_int_add(lhs_value, rhs_value, "add")
@@ -1082,8 +1063,8 @@ impl<'ctx> Codegen<'ctx> {
                 }
                 BOOL_TYPE_ID => match bin_op.kind {
                     BinaryOpKind::And | BinaryOpKind::Or => {
-                        let lhs_int = self.codegen_expr(&bin_op.lhs).into_int_value();
-                        let rhs_int = self.codegen_expr(&bin_op.rhs).into_int_value();
+                        let lhs_int = self.codegen_expr_rvalue(&bin_op.lhs).into_int_value();
+                        let rhs_int = self.codegen_expr_rvalue(&bin_op.rhs).into_int_value();
                         let op = match bin_op.kind {
                             BinaryOpKind::And => {
                                 self.builder.build_and(lhs_int, rhs_int, "bool_and")
@@ -1104,8 +1085,8 @@ impl<'ctx> Codegen<'ctx> {
                         // Obviously we want some sort of value equality on user-defined types
                         // But here for builtin types maybe we just keep assuming everything
                         // is represented as an int value
-                        let lhs_int = self.codegen_expr(&bin_op.lhs).into_int_value();
-                        let rhs_int = self.codegen_expr(&bin_op.rhs).into_int_value();
+                        let lhs_int = self.codegen_expr_rvalue(&bin_op.lhs).into_int_value();
+                        let rhs_int = self.codegen_expr_rvalue(&bin_op.rhs).into_int_value();
                         self.builder
                             .build_int_compare(
                                 IntPredicate::EQ,
@@ -1121,8 +1102,8 @@ impl<'ctx> Codegen<'ctx> {
                     | BinaryOpKind::LessEqual
                     | BinaryOpKind::Greater
                     | BinaryOpKind::GreaterEqual => {
-                        let lhs_int = self.codegen_expr(&bin_op.lhs).into_int_value();
-                        let rhs_int = self.codegen_expr(&bin_op.rhs).into_int_value();
+                        let lhs_int = self.codegen_expr_rvalue(&bin_op.lhs).into_int_value();
+                        let rhs_int = self.codegen_expr_rvalue(&bin_op.rhs).into_int_value();
                         let pred = match bin_op.kind {
                             BinaryOpKind::Equals => IntPredicate::EQ,
                             BinaryOpKind::Less => IntPredicate::SLT,
@@ -1144,7 +1125,7 @@ impl<'ctx> Codegen<'ctx> {
                 other => todo!("codegen for binary ops on user-defined types: {other}"),
             },
             TypedExpr::UnaryOp(unary_op) => {
-                let value = self.codegen_expr(&unary_op.expr);
+                let value = self.codegen_expr_rvalue(&unary_op.expr);
                 let op_res = match unary_op.kind {
                     UnaryOpKind::BooleanNegation => {
                         let value = value.into_int_value();
@@ -1160,11 +1141,31 @@ impl<'ctx> Codegen<'ctx> {
                 todo!("codegen lexical block")
             }
             TypedExpr::FunctionCall(call) => self.codegen_function_call(call),
-            TypedExpr::ArrayIndex(index_op) => self.codegen_array_index_operation(index_op),
-            TypedExpr::StringIndex(index_op) => self.codegen_string_index_operation(index_op),
+            TypedExpr::ArrayIndex(index_op) => {
+                let elem_ptr = self.codegen_array_index_operation(index_op);
+                if is_lvalue {
+                    elem_ptr.as_basic_value_enum()
+                } else {
+                    let elem_type = self.get_llvm_type(index_op.result_type);
+                    let elem_value =
+                        self.builder.build_load(elem_type, elem_ptr, "array_index_rvalue");
+                    elem_value
+                }
+            }
+            TypedExpr::StringIndex(index_op) => {
+                let elem_ptr = self.codegen_string_index_operation(index_op);
+                if is_lvalue {
+                    elem_ptr.as_basic_value_enum()
+                } else {
+                    let elem_type = self.get_llvm_type(index_op.result_type);
+                    let elem_value =
+                        self.builder.build_load(elem_type, elem_ptr, "string_index_rvalue");
+                    elem_value
+                }
+            }
         }
     }
-    fn codegen_function_call(&mut self, call: &Call) -> GeneratedValue<'ctx> {
+    fn codegen_function_call(&mut self, call: &Call) -> BasicValueEnum<'ctx> {
         let ir_module = self.module.clone();
         let callee = ir_module.get_function(call.callee_function_id);
 
@@ -1173,8 +1174,20 @@ impl<'ctx> Codegen<'ctx> {
         let args: Vec<BasicMetadataValueEnum<'ctx>> = call
             .args
             .iter()
-            .map(|arg_expr| {
-                let basic_value = self.codegen_expr(arg_expr);
+            .enumerate()
+            .map(|(idx, arg_expr)| {
+                let expected_type = callee.params[idx].type_id;
+                let need_reference = self.module.get_type(expected_type).as_reference().is_some();
+                let basic_value = self.codegen_expr(arg_expr, need_reference);
+                if need_reference {
+                    eprintln!(
+                        "NEED REFERENCE codegen function call arg: {}: {} (expected: {}) \n {:?}",
+                        self.module.expr_to_string(arg_expr),
+                        self.module.type_id_to_string(arg_expr.get_type()),
+                        self.module.type_id_to_string(expected_type),
+                        basic_value
+                    );
+                }
                 basic_value.into()
                 // let expected_type = arg_expr.get_type();
                 // self.load_if_value_type(basic_value, expected_type).into()
@@ -1184,47 +1197,43 @@ impl<'ctx> Codegen<'ctx> {
         // Call returns Right for void, and Left for values
         let result_value =
             callsite_value.try_as_basic_value().left().expect("function returned void");
-        result_value.into()
+        result_value
     }
 
-    fn codegen_string_index_operation(&mut self, operation: &IndexOp) -> GeneratedValue<'ctx> {
-        let string_value = self.codegen_expr(&operation.base_expr);
-        let index_value = self.codegen_expr(&operation.index_expr);
+    fn codegen_string_index_operation(&mut self, operation: &IndexOp) -> PointerValue<'ctx> {
+        let string_value = self.codegen_expr_rvalue(&operation.base_expr);
+        let index_value = self.codegen_expr_rvalue(&operation.index_expr);
 
         let string_value = string_value.as_basic_value_enum().into_struct_value();
         let data_ptr = self.builtin_types.string_data(&self.builder, string_value);
 
         let index_int_value = index_value.into_int_value();
-        unsafe {
-            let gep_ptr = self.builder.build_gep(
+        let character_pointer = unsafe {
+            self.builder.build_gep(
                 self.builtin_types.char,
                 data_ptr,
                 &[index_int_value],
                 "string_index_ptr",
-            );
-            Pointer { pointee_ty: self.builtin_types.char.as_basic_type_enum(), pointer: gep_ptr }
-                .into()
-        }
+            )
+        };
+        character_pointer
     }
 
-    fn codegen_array_index_operation(&mut self, operation: &IndexOp) -> GeneratedValue<'ctx> {
+    fn codegen_array_index_operation(&mut self, operation: &IndexOp) -> PointerValue<'ctx> {
         let pointee_ty = self.get_llvm_type(operation.result_type);
-        let array_value = self.codegen_expr(&operation.base_expr);
-        let index_value = self.codegen_expr(&operation.index_expr);
+        let array_value = self.codegen_expr_rvalue(&operation.base_expr);
+        let index_value = self.codegen_expr_rvalue(&operation.index_expr);
 
         let array_value = array_value.into_struct_value();
         let index_int_value = index_value.into_int_value();
         // Likely we need one more level of dereferencing
         let array_data = self.builtin_types.array_data(&self.builder, array_value);
-        unsafe {
-            let gep_ptr = self.builder.build_gep(
-                pointee_ty,
-                array_data,
-                &[index_int_value],
-                "array_index_ptr",
-            );
-            Pointer { pointee_ty, pointer: gep_ptr }.into()
-        }
+        let gep_ptr = unsafe {
+            self.builder.build_gep(pointee_ty, array_data, &[index_int_value], "array_index_ptr")
+        };
+        // We want to return a pointer to the element, not the element itself
+        // This is usually so that we can assign to the element
+        gep_ptr
     }
 
     fn make_string(&mut self, array_len: IntValue<'ctx>) -> StructValue<'ctx> {
@@ -1295,7 +1304,7 @@ impl<'ctx> Codegen<'ctx> {
         &mut self,
         intrinsic_type: IntrinsicFunctionType,
         function: &Function,
-    ) -> GeneratedValue<'ctx> {
+    ) -> BasicValueEnum<'ctx> {
         match intrinsic_type {
             IntrinsicFunctionType::Exit => {
                 let first_arg = self.get_loaded_variable(function.params[0].variable_id);
@@ -1339,7 +1348,7 @@ impl<'ctx> Codegen<'ctx> {
             IntrinsicFunctionType::ArrayNew => {
                 let array_type_id = function.ret_type;
                 let array_type = self.module.get_type(array_type_id);
-                let element_type = self.get_llvm_type(array_type.expect_array_type().element_type);
+                let element_type = self.get_llvm_type(array_type.expect_array().element_type);
                 let len = self.get_loaded_variable(function.params[0].variable_id).into_int_value();
 
                 // TODO: Use ctlz intrinsic to count leading zeroes and get next highest
@@ -1362,7 +1371,7 @@ impl<'ctx> Codegen<'ctx> {
                 );
                 let old_data = self.builtin_types.array_data(&self.builder, array);
                 let element_type_id =
-                    self.module.get_type(self_param.type_id).expect_array_type().element_type;
+                    self.module.get_type(self_param.type_id).expect_array().element_type;
                 let new_data_type = self.get_llvm_type(element_type_id);
                 let new_data =
                     self.builder.build_array_malloc(new_data_type, new_cap, "new_data").unwrap();
@@ -1423,41 +1432,47 @@ impl<'ctx> Codegen<'ctx> {
         self.set_debug_location(block.span);
         for stmt in &block.statements {
             match stmt {
-                TypedStmt::Expr(expr) => last = Some(self.codegen_expr(expr)),
+                TypedStmt::Expr(expr) => last = Some(self.codegen_expr_rvalue(expr)),
                 TypedStmt::ValDef(val_def) => {
-                    let _value = self.codegen_val(val_def).expect_pointer();
+                    let _value = self.codegen_val(val_def);
                     last = Some(self.builtin_types.unit_value.as_basic_value_enum())
                 }
-                TypedStmt::Assignment(assignment) => match assignment.destination.deref() {
-                    TypedExpr::Variable(v) => {
-                        let destination_ptr =
-                            *self.variables.get(&v.variable_id).expect("Missing variable");
-                        let initializer = self.codegen_expr(&assignment.value);
-                        self.builder.build_store(destination_ptr.pointer, initializer);
+                TypedStmt::Assignment(assignment) => {
+                    match assignment.destination.deref() {
+                        // ASSIGNMENT! We're in lvalue land. We need to get the pointer to the
+                        // destination, and be sure to call the correct variant of codegen_expr
+                        TypedExpr::Variable(v) => {
+                            let destination_ptr =
+                                *self.variables.get(&v.variable_id).expect("Missing variable");
+                            let initializer = self.codegen_expr_rvalue(&assignment.value);
+                            self.builder.build_store(destination_ptr.pointer, initializer);
 
-                        //self.builder.build_store(des, value.loaded_value(&self.builder))
-                        last = Some(self.builtin_types.unit_value.as_basic_value_enum())
+                            //self.builder.build_store(des, value.loaded_value(&self.builder))
+                            last = Some(self.builtin_types.unit_value.as_basic_value_enum())
+                        }
+                        TypedExpr::RecordFieldAccess(_field_access) => {
+                            // We use codegen_expr with is_lvalue = true to get the pointer to the accessed field
+                            let field_ptr = self
+                                .codegen_expr(&assignment.destination, true)
+                                .into_pointer_value();
+                            let rhs = self.codegen_expr_rvalue(&assignment.value);
+                            self.builder.build_store(field_ptr, rhs);
+                            last = Some(self.builtin_types.unit_value.as_basic_value_enum())
+                        }
+                        TypedExpr::ArrayIndex(_array_index) => {
+                            // We use codegen_expr with is_lvalue = true to get the pointer to the accessed element
+                            let elem_ptr = self
+                                .codegen_expr(&assignment.destination, true)
+                                .into_pointer_value();
+                            let rhs = self.codegen_expr_rvalue(&assignment.value);
+                            self.builder.build_store(elem_ptr, rhs);
+                            last = Some(self.builtin_types.unit_value.as_basic_value_enum())
+                        }
+                        _ => {
+                            panic!("Invalid assignment lhs")
+                        }
                     }
-                    TypedExpr::RecordFieldAccess(_field_access) => {
-                        // We use codegen_expr_inner to get the pointer to the accessed field
-                        let field_ptr = self.codegen_expr_inner(&assignment.destination);
-                        let ptr = field_ptr.expect_pointer();
-                        let rhs = self.codegen_expr(&assignment.value);
-                        self.builder.build_store(ptr.pointer, rhs);
-                        last = Some(self.builtin_types.unit_value.as_basic_value_enum())
-                    }
-                    TypedExpr::ArrayIndex(_array_index) => {
-                        // We use codegen_expr_inner to get the llvm 'pointer' to the indexed element
-                        let elem_ptr = self.codegen_expr_inner(&assignment.destination);
-                        let ptr = elem_ptr.expect_pointer();
-                        let rhs = self.codegen_expr(&assignment.value);
-                        self.builder.build_store(ptr.pointer, rhs);
-                        last = Some(self.builtin_types.unit_value.as_basic_value_enum())
-                    }
-                    _ => {
-                        panic!("Invalid assignment lhs")
-                    }
-                },
+                }
                 TypedStmt::WhileLoop(while_stmt) => {
                     let start_block = self.builder.get_insert_block().unwrap();
                     let current_fn = start_block.get_parent().unwrap();
@@ -1469,7 +1484,7 @@ impl<'ctx> Codegen<'ctx> {
                     self.builder.build_unconditional_branch(loop_entry_block);
 
                     self.builder.position_at_end(loop_entry_block);
-                    let cond = self.codegen_expr(&while_stmt.cond).into_int_value();
+                    let cond = self.codegen_expr_rvalue(&while_stmt.cond).into_int_value();
 
                     self.builder.build_conditional_branch(cond, loop_body_block, loop_end_block);
 
@@ -1482,15 +1497,6 @@ impl<'ctx> Codegen<'ctx> {
             }
         }
         last
-    }
-
-    /// Stores `value` into `pointer`, loading the value pointed to by `value` if necessary
-    fn store_loaded(
-        &mut self,
-        pointer: &Pointer<'ctx>,
-        value: GeneratedValue<'ctx>,
-    ) -> InstructionValue<'ctx> {
-        self.builder.build_store(pointer.pointer, value.loaded_value(&self.builder))
     }
 
     fn get_function_debug_info(&mut self, function: &Function) -> DISubprogram<'ctx> {
@@ -1601,7 +1607,10 @@ impl<'ctx> Codegen<'ctx> {
                 self.set_debug_location(typed_param.span),
                 store,
             );
-            self.variables.insert(typed_param.variable_id, Pointer { pointer, pointee_ty: ty });
+            self.variables.insert(
+                typed_param.variable_id,
+                Pointer { pointer, pointee_type_id: typed_param.type_id, pointee_llvm_type: ty },
+            );
         }
         match function.intrinsic_type {
             Some(intrinsic_type) => {

@@ -1,0 +1,24 @@
+type Foo = { x: int }
+
+namespace Foo {
+  fn getValue(self: Foo): int {
+    self.x
+  }
+  fn setValue(self: Foo*, x: int): unit {
+    self.x = x;
+  }
+
+  fn new(x: int): Foo {
+    { x: x }
+  }
+}
+
+fn main(): int {
+  val x: Foo = { x: 42 };
+  val y = Foo::new(42);
+  assert(x.getValue() == 42);
+  assert(y.getValue() == 42);
+  x.setValue(41);
+  assert(x.getValue() == 41);
+  0
+}
