@@ -105,7 +105,7 @@ pub struct FnCallArg {
 #[derive(Debug)]
 pub struct FnCallTypeArg {
     pub name: Option<IdentifierId>,
-    pub value: TypeExpression,
+    pub value: ParsedTypeExpression,
 }
 
 #[derive(Debug)]
@@ -120,7 +120,7 @@ pub struct FnCall {
 #[derive(Debug)]
 pub struct ValDef {
     pub name: IdentifierId,
-    pub type_id: Option<TypeExpression>,
+    pub type_id: Option<ParsedTypeExpression>,
     pub value: Expression,
     pub is_mutable: bool,
     pub span: Span,
@@ -352,7 +352,7 @@ pub struct Block {
 #[derive(Debug)]
 pub struct RecordTypeField {
     pub name: IdentifierId,
-    pub ty: TypeExpression,
+    pub ty: ParsedTypeExpression,
 }
 
 #[derive(Debug)]
@@ -364,18 +364,24 @@ pub struct RecordType {
 #[derive(Debug)]
 pub struct TypeApplication {
     pub base: IdentifierId,
-    pub params: Vec<TypeExpression>,
+    pub params: Vec<ParsedTypeExpression>,
     pub span: Span,
 }
 
 #[derive(Debug)]
-pub struct Optional {
-    pub base: Box<TypeExpression>,
+pub struct ParsedOptional {
+    pub base: Box<ParsedTypeExpression>,
     pub span: Span,
 }
 
 #[derive(Debug)]
-pub enum TypeExpression {
+pub struct ParsedReference {
+    pub base: Box<ParsedTypeExpression>,
+    pub span: Span,
+}
+
+#[derive(Debug)]
+pub enum ParsedTypeExpression {
     Unit(Span),
     Char(Span),
     Int(Span),
@@ -384,29 +390,31 @@ pub enum TypeExpression {
     Record(RecordType),
     Name(IdentifierId, Span),
     TypeApplication(TypeApplication),
-    Optional(Optional),
+    Optional(ParsedOptional),
+    Reference(ParsedReference),
 }
 
-impl TypeExpression {
+impl ParsedTypeExpression {
     #[inline]
     pub fn is_int(&self) -> bool {
         match self {
-            TypeExpression::Int(_) => true,
+            ParsedTypeExpression::Int(_) => true,
             _ => false,
         }
     }
     #[inline]
     pub fn get_span(&self) -> Span {
         match self {
-            TypeExpression::Unit(span) => *span,
-            TypeExpression::Char(span) => *span,
-            TypeExpression::Int(span) => *span,
-            TypeExpression::Bool(span) => *span,
-            TypeExpression::String(span) => *span,
-            TypeExpression::Record(record) => record.span,
-            TypeExpression::Name(_, span) => *span,
-            TypeExpression::TypeApplication(app) => app.span,
-            TypeExpression::Optional(opt) => opt.span,
+            ParsedTypeExpression::Unit(span) => *span,
+            ParsedTypeExpression::Char(span) => *span,
+            ParsedTypeExpression::Int(span) => *span,
+            ParsedTypeExpression::Bool(span) => *span,
+            ParsedTypeExpression::String(span) => *span,
+            ParsedTypeExpression::Record(record) => record.span,
+            ParsedTypeExpression::Name(_, span) => *span,
+            ParsedTypeExpression::TypeApplication(app) => app.span,
+            ParsedTypeExpression::Optional(opt) => opt.span,
+            ParsedTypeExpression::Reference(r) => r.span,
         }
     }
 }
@@ -422,7 +430,7 @@ pub struct FnDef {
     pub name: IdentifierId,
     pub type_args: Option<Vec<TypeParamDef>>,
     pub args: Vec<FnArgDef>,
-    pub ret_type: Option<TypeExpression>,
+    pub ret_type: Option<ParsedTypeExpression>,
     pub block: Option<Block>,
     pub span: Span,
     pub linkage: Linkage,
@@ -432,14 +440,14 @@ pub struct FnDef {
 #[derive(Debug)]
 pub struct FnArgDef {
     pub name: IdentifierId,
-    pub ty: TypeExpression,
+    pub ty: ParsedTypeExpression,
     pub span: Span,
 }
 
 #[derive(Debug)]
 pub struct ConstVal {
     pub name: IdentifierId,
-    pub ty: TypeExpression,
+    pub ty: ParsedTypeExpression,
     pub value_expr: Expression,
     pub span: Span,
     pub ast_id: AstId,
@@ -448,7 +456,7 @@ pub struct ConstVal {
 #[derive(Debug)]
 pub struct TypeDefn {
     pub name: IdentifierId,
-    pub value_expr: TypeExpression,
+    pub value_expr: ParsedTypeExpression,
     pub span: Span,
     pub ast_id: AstId,
 }
@@ -750,43 +758,58 @@ impl<'toks> Parser<'toks> {
         Ok(Some(RecordTypeField { name: ident_id, ty: typ_expr }))
     }
 
-    fn expect_type_expression(&mut self) -> ParseResult<TypeExpression> {
+    fn expect_type_expression(&mut self) -> ParseResult<ParsedTypeExpression> {
         Parser::expect("type_expression", self.peek(), self.parse_type_expression())
     }
 
-    fn parse_type_expression(&mut self) -> ParseResult<Option<TypeExpression>> {
+    fn parse_type_expression(&mut self) -> ParseResult<Option<ParsedTypeExpression>> {
         let Some(result) = self.parse_base_type_expression()? else {
             return Ok(None);
         };
         let next = self.peek();
-        if next.kind == K::QuestionMark {
-            self.tokens.advance();
-            Ok(Some(TypeExpression::Optional(Optional { base: Box::new(result), span: next.span })))
+        if next.kind.is_postfix_type_operator() {
+            if next.kind == K::QuestionMark {
+                // Optional Type
+                self.tokens.advance();
+                Ok(Some(ParsedTypeExpression::Optional(ParsedOptional {
+                    base: Box::new(result),
+                    span: next.span,
+                })))
+            } else if next.kind == K::Asterisk {
+                // Reference Type
+                self.tokens.advance();
+                Ok(Some(ParsedTypeExpression::Reference(ParsedReference {
+                    base: Box::new(result),
+                    span: next.span,
+                })))
+            } else {
+                panic!("unhandled postfix type operator {:?}", next.kind);
+            }
         } else {
             Ok(Some(result))
         }
     }
 
-    fn parse_base_type_expression(&mut self) -> ParseResult<Option<TypeExpression>> {
+    fn parse_base_type_expression(&mut self) -> ParseResult<Option<ParsedTypeExpression>> {
         let tok = self.peek();
         if tok.kind == K::Ident {
             let source = self.source.clone();
             let text_str = Source::get_span_content(&source, tok.span);
             if text_str == "unit" {
                 self.tokens.advance();
-                Ok(Some(TypeExpression::Unit(tok.span)))
+                Ok(Some(ParsedTypeExpression::Unit(tok.span)))
             } else if text_str == "string" {
                 self.tokens.advance();
-                Ok(Some(TypeExpression::String(tok.span)))
+                Ok(Some(ParsedTypeExpression::String(tok.span)))
             } else if text_str == "int" {
                 self.tokens.advance();
-                Ok(Some(TypeExpression::Int(tok.span)))
+                Ok(Some(ParsedTypeExpression::Int(tok.span)))
             } else if text_str == "bool" {
                 self.tokens.advance();
-                Ok(Some(TypeExpression::Bool(tok.span)))
+                Ok(Some(ParsedTypeExpression::Bool(tok.span)))
             } else if text_str == "char" {
                 self.tokens.advance();
-                Ok(Some(TypeExpression::Char(tok.span)))
+                Ok(Some(ParsedTypeExpression::Char(tok.span)))
             } else {
                 self.tokens.advance();
                 let next = self.tokens.peek();
@@ -798,13 +821,13 @@ impl<'toks> Parser<'toks> {
                             Parser::expect_type_expression(p)
                         })?;
                     let ident = self.intern_ident_token(tok);
-                    Ok(Some(TypeExpression::TypeApplication(TypeApplication {
+                    Ok(Some(ParsedTypeExpression::TypeApplication(TypeApplication {
                         base: ident,
                         params: type_parameters,
                         span: tok.span.extended(params_span),
                     })))
                 } else {
-                    Ok(Some(TypeExpression::Name(self.ident_id(text_str), tok.span)))
+                    Ok(Some(ParsedTypeExpression::Name(self.ident_id(text_str), tok.span)))
                 }
             }
         } else if tok.kind == K::OpenBrace {
@@ -816,7 +839,7 @@ impl<'toks> Parser<'toks> {
             let mut record_span = tok.span;
             record_span.end = fields_span.end;
             let record = RecordType { fields, span: record_span };
-            Ok(Some(TypeExpression::Record(record)))
+            Ok(Some(ParsedTypeExpression::Record(record)))
         } else {
             Ok(None)
         }
@@ -1183,7 +1206,7 @@ impl<'toks> Parser<'toks> {
         self.expect_eat_token(K::Equals)?;
         let value_expr = Parser::expect("expression", self.peek(), self.parse_expression())?;
         let span = keyword_val_token.span.extended(value_expr.get_span());
-        ParseResult::Ok(Some(ConstVal {
+        Ok(Some(ConstVal {
             name: self.intern_ident_token(name_token),
             ty: typ,
             value_expr,

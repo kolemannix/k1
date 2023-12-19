@@ -133,7 +133,7 @@ fn type_parameter_single() -> ParseResult<()> {
     let input = "Array<int>";
     let mut parser = set_up(input);
     let result = parser.parse_type_expression();
-    assert!(matches!(result, Ok(Some(TypeExpression::TypeApplication(_)))));
+    assert!(matches!(result, Ok(Some(ParsedTypeExpression::TypeApplication(_)))));
     Ok(())
 }
 
@@ -142,14 +142,14 @@ fn type_parameter_multi() -> ParseResult<()> {
     let input = "Map<int, Array<int>>";
     let mut parser = set_up(input);
     let result = parser.parse_type_expression();
-    let Ok(Some(TypeExpression::TypeApplication(app))) = result else {
+    let Ok(Some(ParsedTypeExpression::TypeApplication(app))) = result else {
         panic!("Expected type application")
     };
     assert_eq!(app.params.len(), 2);
-    let TypeExpression::TypeApplication(inner_app) = &app.params[1] else {
+    let ParsedTypeExpression::TypeApplication(inner_app) = &app.params[1] else {
         panic!("Expected second param to be a type application");
     };
-    assert!(matches!(inner_app.params[0], TypeExpression::Int(_)));
+    assert!(matches!(inner_app.params[0], ParsedTypeExpression::Int(_)));
     Ok(())
 }
 
@@ -247,7 +247,7 @@ fn char_type() -> ParseResult<()> {
     let input = "char";
     let mut parser = set_up(input);
     let result = parser.parse_type_expression()?.unwrap();
-    assert!(matches!(result, TypeExpression::Char(_)));
+    assert!(matches!(result, ParsedTypeExpression::Char(_)));
     Ok(())
 }
 
