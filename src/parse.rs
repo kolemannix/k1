@@ -1067,15 +1067,14 @@ impl<'toks> Parser<'toks> {
             // TODO: If comma, parse a tuple
             self.expect_eat_token(K::CloseParen)?;
             Ok(Some(expr))
-        } else if first.kind == K::Bang {
+        } else if first.kind.is_prefix_operator() {
+            let Some(op_kind) = UnaryOpKind::from_tokenkind(first.kind) else {
+                return Err(Parser::error("unexpected prefix operator", first));
+            };
             self.tokens.advance();
             let expr = self.expect_expression()?;
             let span = first.span.extended(expr.get_span());
-            Ok(Some(Expression::UnaryOp(UnaryOp {
-                expr: Box::new(expr),
-                op_kind: UnaryOpKind::BooleanNegation,
-                span,
-            })))
+            Ok(Some(Expression::UnaryOp(UnaryOp { expr: Box::new(expr), op_kind, span })))
         } else if first.kind == K::Ident {
             // FnCall
             // Here we use is_whitespace_preceeded to distinguish between:

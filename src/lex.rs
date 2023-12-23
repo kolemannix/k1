@@ -84,6 +84,7 @@ pub enum TokenKind {
     Bang,
     QuestionMark,
     Pipe,
+    Ampersand,
 
     DoubleQuote,
     SingleQuote,
@@ -147,6 +148,7 @@ impl TokenKind {
             K::Bang => Some("!"),
             K::QuestionMark => Some("?"),
             K::Pipe => Some("|"),
+            K::Ampersand => Some("&"),
 
             K::Plus => Some("+"),
             K::Minus => Some("-"),
@@ -188,6 +190,7 @@ impl TokenKind {
             '!' => Some(K::Bang),
             '?' => Some(K::QuestionMark),
             '|' => Some(K::Pipe),
+            '&' => Some(K::Ampersand),
             _ => None,
         }
     }
@@ -229,6 +232,14 @@ impl TokenKind {
     }
     pub fn is_binary_operator(&self) -> bool {
         BinaryOpKind::from_tokenkind(*self).is_some()
+    }
+    pub fn is_prefix_operator(&self) -> bool {
+        match self {
+            K::Asterisk => true,
+            K::Bang => true,
+            K::Ampersand => true,
+            _ => false,
+        }
     }
     pub fn is_postfix_operator(&self) -> bool {
         match self {

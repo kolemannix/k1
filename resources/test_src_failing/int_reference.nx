@@ -1,0 +1,10 @@
+fn increment(x: int*): unit {
+  x = (*x) + 1;
+}
+
+fn main(): int {
+  val i: int* = 0;
+  increment(i);
+  printInt(*i);
+  0
+}
