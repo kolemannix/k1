@@ -1,4 +1,4 @@
-type Foo = { x: int }
+type Foo = { x: int, y: bool }
 
 namespace Foo {
   fn getValue(self: Foo): int {
@@ -7,18 +7,17 @@ namespace Foo {
   fn setValue(self: Foo*, x: int): unit {
     self.x = x;
   }
-
   fn new(x: int): Foo {
-    { x: x }
+    { x: x, y: false }
   }
 }
 
 fn main(): int {
-  val x: Foo = { x: 42 };
-  val y = Foo::new(42);
-  assert(x.getValue() == 42);
-  assert(y.getValue() == 42);
+  val x: Foo* = Foo::new(42);
+  assert(x.x == 42);
+  assert((*x).getValue() == 42);
   x.setValue(41);
-  assert(x.getValue() == 41);
+  assert((*x).getValue() == 41);
+  assert(!x.y);
   0
 }

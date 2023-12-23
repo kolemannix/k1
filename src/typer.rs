@@ -1,7 +1,7 @@
 #![allow(clippy::match_like_matches_macro)]
 
 use crate::lex::{Span, TokenKind};
-use crate::parse::{self, IfExpr, ParsedNamespace};
+use crate::parse::{self, IfExpr, IndexOperation, ParsedNamespace};
 use crate::parse::{
     AstId, AstModule, Block, BlockStmt, Definition, Expression, FnCall, FnDef, IdentifierId,
     Literal,
@@ -289,22 +289,35 @@ pub struct BinaryOp {
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub enum UnaryOpKind {
     BooleanNegation,
+    Reference,
+    Dereference,
 }
 
 impl Display for UnaryOpKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             UnaryOpKind::BooleanNegation => f.write_char('!'),
+            UnaryOpKind::Reference => f.write_char('&'),
+            UnaryOpKind::Dereference => f.write_char('*'),
         }
     }
 }
 
-impl UnaryOpKind {}
+impl UnaryOpKind {
+    pub fn from_tokenkind(kind: TokenKind) -> Option<UnaryOpKind> {
+        match kind {
+            TokenKind::Bang => Some(UnaryOpKind::BooleanNegation),
+            TokenKind::Ampersand => Some(UnaryOpKind::Reference),
+            TokenKind::Asterisk => Some(UnaryOpKind::Dereference),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct UnaryOp {
     pub kind: UnaryOpKind,
-    pub ty: TypeId,
+    pub type_id: TypeId,
     pub expr: Box<TypedExpr>,
     pub span: Span,
 }
@@ -394,6 +407,7 @@ pub enum TypedExpr {
     If(Box<TypedIf>),
     ArrayIndex(IndexOp),
     StringIndex(IndexOp),
+    // TODO: Can some of these just be unary ops
     OptionalSome(OptionalSome),
     OptionalHasValue(Box<TypedExpr>),
     OptionalGet(OptionalGet),
@@ -438,7 +452,7 @@ impl TypedExpr {
             TypedExpr::Variable(var) => var.type_id,
             TypedExpr::RecordFieldAccess(field_access) => field_access.ty,
             TypedExpr::BinaryOp(binary_op) => binary_op.ty,
-            TypedExpr::UnaryOp(unary_op) => unary_op.ty,
+            TypedExpr::UnaryOp(unary_op) => unary_op.type_id,
             TypedExpr::Block(b) => b.expr_type,
             TypedExpr::FunctionCall(call) => call.ret_type,
             TypedExpr::If(ir_if) => ir_if.ty,
@@ -1040,6 +1054,9 @@ impl TypedModule {
                     ))
                 }
             }
+            (Type::Reference(o1), Type::Reference(o2)) => {
+                self.typecheck_types(o1.inner_type, o2.inner_type)
+            }
             (exp, got) => Err(format!(
                 "Expected {} but got {}",
                 self.type_to_string(exp),
@@ -1173,6 +1190,141 @@ impl TypedModule {
         Ok(cur_scope)
     }
 
+    fn eval_index_operation(
+        &mut self,
+        index_op: &IndexOperation,
+        scope_id: ScopeId,
+    ) -> TyperResult<TypedExpr> {
+        let index_expr = self.eval_expr(&index_op.index_expr, scope_id, Some(INT_TYPE_ID))?;
+        if index_expr.get_type() != INT_TYPE_ID {
+            return make_fail("index type must be int", index_op.span);
+        }
+
+        let base_expr = self.eval_expr(&index_op.target, scope_id, None)?;
+        let target_type = base_expr.get_type();
+        match target_type {
+            STRING_TYPE_ID => Ok(TypedExpr::StringIndex(IndexOp {
+                base_expr: Box::new(base_expr),
+                index_expr: Box::new(index_expr),
+                result_type: CHAR_TYPE_ID,
+                span: index_op.span,
+            })),
+            target_type_id => {
+                let target_type = self.get_type(target_type_id);
+                match target_type {
+                    Type::Array(array_type) => Ok(TypedExpr::ArrayIndex(IndexOp {
+                        base_expr: Box::new(base_expr),
+                        index_expr: Box::new(index_expr),
+                        result_type: array_type.element_type,
+                        span: index_op.span,
+                    })),
+                    _ => make_fail("index base must be an array", index_op.span),
+                }
+            }
+        }
+    }
+
+    fn eval_variable(
+        &mut self,
+        variable: &parse::Variable,
+        scope_id: ScopeId,
+        is_assignment_lhs: bool,
+    ) -> TyperResult<TypedExpr> {
+        let variable_id = self.scopes.find_variable(scope_id, variable.ident).ok_or(make_err(
+            format!("{} is not defined", &*self.get_ident_str(variable.ident)),
+            variable.span,
+        ))?;
+        let v = self.get_variable(variable_id);
+        // if is_assignment_lhs && !v.is_mutable {
+        //     return make_fail(
+        //         format!("Cannot assign to immutable variable {}", &*self.get_ident_str(v.name)),
+        //         variable.span,
+        //     );
+        // }
+        let expr = TypedExpr::Variable(VariableExpr {
+            type_id: v.type_id,
+            variable_id,
+            span: variable.span,
+        });
+        trace!(
+            "variable {} had type {}",
+            &*self.get_ident_str(variable.ident),
+            self.type_id_to_string(v.type_id)
+        );
+        Ok(expr)
+    }
+
+    fn eval_field_access(
+        &mut self,
+        field_access: &parse::FieldAccess,
+        scope_id: ScopeId,
+        is_assignment_lhs: bool,
+    ) -> TyperResult<TypedExpr> {
+        let mut base_expr = self.eval_expr(&field_access.base, scope_id, None)?;
+        let type_id = base_expr.get_type();
+        let maybe_record_type = match self.get_type(type_id) {
+            Type::Reference(reference_type) => {
+                // Auto de-reference records for  field access
+                let maybe_record = self.get_type(reference_type.inner_type).as_record();
+                if !is_assignment_lhs && maybe_record.is_some() {
+                    // Dereference the base expression
+                    base_expr = TypedExpr::UnaryOp(UnaryOp {
+                        kind: UnaryOpKind::Dereference,
+                        type_id: reference_type.inner_type,
+                        span: base_expr.get_span(),
+                        expr: Box::new(base_expr),
+                    });
+                }
+                maybe_record
+            }
+            Type::Record(record_type) => Some(record_type),
+            _ => None,
+        };
+        let Some(record_type) = maybe_record_type else {
+            return make_fail(
+                format!(
+                    "Cannot access field {} on non-record type: {}",
+                    &*self.get_ident_str(field_access.target),
+                    self.type_id_to_string(base_expr.get_type())
+                ),
+                field_access.span,
+            );
+        };
+        let (field_index, target_field) =
+            record_type.find_field(field_access.target).ok_or(make_err(
+                format!(
+                    "Field {} not found on record type",
+                    &*self.get_ident_str(field_access.target)
+                ),
+                field_access.span,
+            ))?;
+        Ok(TypedExpr::RecordFieldAccess(FieldAccess {
+            base: Box::new(base_expr),
+            target_field: field_access.target,
+            target_field_index: field_index as u32,
+            ty: target_field.type_id,
+            span: field_access.span,
+        }))
+    }
+
+    fn eval_assigment_lhs_expr(
+        &mut self,
+        expr: &Expression,
+        scope_id: ScopeId,
+        _expected_type: Option<TypeId>,
+    ) -> TyperResult<TypedExpr> {
+        match expr {
+            Expression::IndexOperation(index_op) => self.eval_index_operation(index_op, scope_id),
+            Expression::Variable(variable) => self.eval_variable(variable, scope_id, true),
+            Expression::FieldAccess(field_access) => {
+                self.eval_field_access(field_access, scope_id, true)
+            }
+            other => {
+                return make_fail(format!("Invalid assignment lhs: {:?}", other), other.get_span())
+            }
+        }
+    }
+
     fn eval_expr(
         &mut self,
         expr: &Expression,
@@ -1184,29 +1336,51 @@ impl TypedModule {
         if let TypedExpr::None(_type_id, _span) = base_result {
             return Ok(base_result);
         }
+        // Special case for some-boxing and auto-referencing
         if let Some(expected_type_id) = expected_type {
-            if let Type::Optional(optional_type) = self.get_type(expected_type_id) {
-                trace!(
-                    "some boxing: expected type is optional: {}",
-                    self.type_id_to_string(expected_type_id)
-                );
-                trace!("some boxing: value is: {}", self.expr_to_string(&base_result));
-                trace!(
-                    "some boxing: value type is: {}",
-                    self.type_id_to_string(base_result.get_type())
-                );
-                match self.typecheck_types(optional_type.inner_type, base_result.get_type()) {
-                    Ok(_) => Ok(TypedExpr::OptionalSome(OptionalSome {
-                        inner_expr: Box::new(base_result),
-                        type_id: expected_type_id,
-                    })),
-                    Err(msg) => make_fail(
-                        format!("Typecheck failed when expecting optional: {}", msg),
-                        expr.get_span(),
-                    ),
+            match self.get_type(expected_type_id) {
+                Type::Optional(optional_type) => {
+                    trace!(
+                        "some boxing: expected type is optional: {}",
+                        self.type_id_to_string(expected_type_id)
+                    );
+                    trace!("some boxing: value is: {}", self.expr_to_string(&base_result));
+                    trace!(
+                        "some boxing: value type is: {}",
+                        self.type_id_to_string(base_result.get_type())
+                    );
+                    match self.typecheck_types(optional_type.inner_type, base_result.get_type()) {
+                        Ok(_) => Ok(TypedExpr::OptionalSome(OptionalSome {
+                            inner_expr: Box::new(base_result),
+                            type_id: expected_type_id,
+                        })),
+                        Err(msg) => make_fail(
+                            format!("Typecheck failed when expecting optional: {}", msg),
+                            expr.get_span(),
+                        ),
+                    }
                 }
-            } else {
-                Ok(base_result)
+                Type::Reference(reference_type) => {
+                    trace!(
+                        "reference promotion: expected type is reference: {}",
+                        self.type_id_to_string(expected_type_id)
+                    );
+                    trace!(
+                        "reference promotion: value is: {}: {}",
+                        self.expr_to_string(&base_result),
+                        self.type_id_to_string(base_result.get_type())
+                    );
+                    match self.typecheck_types(reference_type.inner_type, base_result.get_type()) {
+                        Ok(_) => Ok(TypedExpr::UnaryOp(UnaryOp {
+                            kind: UnaryOpKind::Reference,
+                            type_id: expected_type_id,
+                            expr: Box::new(base_result),
+                            span: expr.get_span(),
+                        })),
+                        Err(_) => Ok(base_result),
+                    }
+                }
+                _ => Ok(base_result),
             }
         } else {
             Ok(base_result)
@@ -1268,36 +1442,7 @@ impl TypedModule {
                 };
                 Ok(TypedExpr::Array(ArrayLiteral { elements, type_id, span: array_expr.span }))
             }
-            Expression::IndexOperation(index_op) => {
-                let index_expr =
-                    self.eval_expr(&index_op.index_expr, scope_id, Some(INT_TYPE_ID))?;
-                if index_expr.get_type() != INT_TYPE_ID {
-                    return make_fail("index type must be int", index_op.span);
-                }
-
-                let base_expr = self.eval_expr(&index_op.target, scope_id, None)?;
-                let target_type = base_expr.get_type();
-                match target_type {
-                    STRING_TYPE_ID => Ok(TypedExpr::StringIndex(IndexOp {
-                        base_expr: Box::new(base_expr),
-                        index_expr: Box::new(index_expr),
-                        result_type: CHAR_TYPE_ID,
-                        span: index_op.span,
-                    })),
-                    target_type_id => {
-                        let target_type = self.get_type(target_type_id);
-                        match target_type {
-                            Type::Array(array_type) => Ok(TypedExpr::ArrayIndex(IndexOp {
-                                base_expr: Box::new(base_expr),
-                                index_expr: Box::new(index_expr),
-                                result_type: array_type.element_type,
-                                span: index_op.span,
-                            })),
-                            _ => make_fail("index base must be an array", index_op.span),
-                        }
-                    }
-                }
-            }
+            Expression::IndexOperation(index_op) => self.eval_index_operation(index_op, scope_id),
             Expression::Record(ast_record) => {
                 // FIXME: Let's factor out Structs and Records into separate things
                 //        records can be created on the fly and are just hashmap literals
@@ -1309,6 +1454,18 @@ impl TypedModule {
                         Type::Record(record) => Some((expected_type, record.clone())),
                         Type::Optional(opt) => match self.get_type(opt.inner_type) {
                             Type::Record(record) => Some((opt.inner_type, record.clone())),
+                            other_ty => {
+                                return make_fail(
+                                    format!(
+                                        "Got record literal but expected {}",
+                                        self.type_to_string(other_ty)
+                                    ),
+                                    ast_record.span,
+                                )
+                            }
+                        },
+                        Type::Reference(refer) => match self.get_type(refer.inner_type) {
+                            Type::Record(record) => Some((refer.inner_type, record.clone())),
                             other_ty => {
                                 return make_fail(
                                     format!(
@@ -1419,12 +1576,44 @@ impl TypedModule {
             Expression::UnaryOp(op) => {
                 let base_expr = self.eval_expr(&op.expr, scope_id, None)?;
                 match op.op_kind {
+                    UnaryOpKind::Dereference => {
+                        let reference_type =
+                            self.get_type(base_expr.get_type()).as_reference().ok_or(make_err(
+                                format!(
+                                    "Cannot dereference non-reference type: {}",
+                                    self.type_id_to_string(base_expr.get_type())
+                                ),
+                                op.span,
+                            ))?;
+                        eprintln!(
+                            "DEREFERENCING: {}: {}",
+                            self.expr_to_string(&base_expr),
+                            self.type_id_to_string(base_expr.get_type())
+                        );
+                        Ok(TypedExpr::UnaryOp(UnaryOp {
+                            kind: UnaryOpKind::Dereference,
+                            type_id: reference_type.inner_type,
+                            expr: Box::new(base_expr),
+                            span: op.span,
+                        }))
+                    }
+                    UnaryOpKind::Reference => {
+                        let type_id = self.add_type(Type::Reference(ReferenceType {
+                            inner_type: base_expr.get_type(),
+                        }));
+                        Ok(TypedExpr::UnaryOp(UnaryOp {
+                            kind: UnaryOpKind::Reference,
+                            type_id,
+                            expr: Box::new(base_expr),
+                            span: op.span,
+                        }))
+                    }
                     UnaryOpKind::BooleanNegation => {
                         self.typecheck_types(BOOL_TYPE_ID, base_expr.get_type())
                             .map_err(|s| make_err(s, op.span))?;
                         Ok(TypedExpr::UnaryOp(UnaryOp {
                             kind: UnaryOpKind::BooleanNegation,
-                            ty: BOOL_TYPE_ID,
+                            type_id: BOOL_TYPE_ID,
                             expr: Box::new(base_expr),
                             span: op.span,
                         }))
@@ -1467,56 +1656,9 @@ impl TypedModule {
                 let expr = TypedExpr::Str(s.clone(), *span);
                 Ok(expr)
             }
-            Expression::Variable(variable) => {
-                let variable_id =
-                    self.scopes.find_variable(scope_id, variable.ident).ok_or(make_err(
-                        format!("{} is not defined", &*self.get_ident_str(variable.ident)),
-                        variable.span,
-                    ))?;
-                let v = self.get_variable(variable_id);
-                let expr = TypedExpr::Variable(VariableExpr {
-                    type_id: v.type_id,
-                    variable_id,
-                    span: variable.span,
-                });
-                trace!(
-                    "variable {} had type {}",
-                    &*self.get_ident_str(variable.ident),
-                    self.type_id_to_string(v.type_id)
-                );
-                Ok(expr)
-            }
+            Expression::Variable(variable) => self.eval_variable(variable, scope_id, false),
             Expression::FieldAccess(field_access) => {
-                let base_expr = self.eval_expr(&field_access.base, scope_id, None)?;
-                let type_id = base_expr.get_type();
-                let (field_index, ret_type) = match self.get_type_dereferenced(type_id) {
-                    Type::Record(record_type) => {
-                        let (idx, target_field) =
-                            record_type.find_field(field_access.target).ok_or(make_err(
-                                format!(
-                                    "Field {} not found on record type",
-                                    &*self.get_ident_str(field_access.target)
-                                ),
-                                field_access.span,
-                            ))?;
-                        Ok((idx as u32, target_field.type_id))
-                    }
-                    ty => make_fail(
-                        format!(
-                            "Cannot access field {} on non-record type: {}",
-                            &*self.get_ident_str(field_access.target),
-                            self.type_to_string(ty)
-                        ),
-                        field_access.span,
-                    ),
-                }?;
-                Ok(TypedExpr::RecordFieldAccess(FieldAccess {
-                    base: Box::new(base_expr),
-                    target_field: field_access.target,
-                    target_field_index: field_index,
-                    ty: ret_type,
-                    span: field_access.span,
-                }))
+                self.eval_field_access(field_access, scope_id, false)
             }
             Expression::Block(block) => {
                 let block = self.eval_block(block, scope_id)?;
@@ -1683,7 +1825,7 @@ impl TypedModule {
             Some(base_expr) => {
                 // Resolve a method call
                 let type_id = base_expr.get_type();
-                let function_id = match self.get_type(type_id) {
+                let function_id = match self.get_type_dereferenced(type_id) {
                     Type::String => {
                         // TODO: Abstract out a way to go from identifier to scope
                         //       (name -> ident id -> namespace id -> namespace -> scope id -> scope
@@ -1806,7 +1948,16 @@ impl TypedModule {
             let is_self = first.name == self.ast.ident_id("self");
             if is_self {
                 if let Some(this) = this_expr {
-                    trace!("Method call; self = {}", self.expr_to_string(&this));
+                    if let Err(e) = self.typecheck_types(first.type_id, this.get_type()) {
+                        return make_fail(
+                            format!(
+                                "Invalid parameter type for 'self' to function {}: {}",
+                                &*self.ast.get_ident_str(fn_call.name),
+                                e
+                            ),
+                            fn_call.span,
+                        );
+                    }
                     final_args.push(this);
                     skip_first = true;
                 }
@@ -1994,30 +2145,8 @@ impl TypedModule {
                 Ok(val_def_stmt)
             }
             BlockStmt::Assignment(assignment) => {
-                let lhs = self.eval_expr(&assignment.lhs, scope_id, None)?;
-                match &lhs {
-                    TypedExpr::Variable(v) => {
-                        let var = self.get_variable(v.variable_id);
-                        if !var.is_mutable {
-                            return make_fail(
-                                "Cannot assign to immutable variable",
-                                assignment.span,
-                            );
-                        }
-                    }
-                    TypedExpr::RecordFieldAccess(_) => {
-                        trace!("assignment to record member");
-                    }
-                    TypedExpr::ArrayIndex(_) => {
-                        trace!("assignment to array index");
-                    }
-                    _ => {
-                        return make_fail(
-                            format!("Invalid assignment lhs: {:?}", lhs),
-                            lhs.get_span(),
-                        )
-                    }
-                };
+                // let lhs = self.eval_expr(&assignment.lhs, scope_id, None)?;
+                let lhs = self.eval_assigment_lhs_expr(&assignment.lhs, scope_id, None)?;
                 let rhs = self.eval_expr(&assignment.rhs, scope_id, Some(lhs.get_type()))?;
                 if let Err(msg) = self.typecheck_types(lhs.get_type(), rhs.get_type()) {
                     return make_fail(

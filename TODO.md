@@ -54,6 +54,7 @@ The project isn't mature enough yet to make this list but the spirit of the effo
 - [x] Improve printing output by fixing display functions
 - [x] Implement builtin growable array
 - [x] Use aggregates in codegen, not pointers, for optionals
+- [ ] Precedence of dereference (and i guess unary ops in general) should be higher
 - [ ] Change our builtin int type to be 32 bits?
 - [ ] Make codegen fail instead of panic
 - [ ] Codegen 'variables' is broken (never cleared); use enter scope / exit scope w/ a stack of vecs or something instead (matters when a variable id is reused because the same function is called twice; I think we just overwrite it with the correct one but maybe nesting is a problem?)

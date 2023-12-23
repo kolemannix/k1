@@ -19,7 +19,7 @@ use inkwell::types::{
 };
 use inkwell::values::{
     ArrayValue, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue,
-    InstructionValue, IntValue, PointerValue, StructValue,
+    IntValue, PointerValue, StructValue,
 };
 use inkwell::{AddressSpace, IntPredicate, OptimizationLevel};
 use log::trace;
@@ -991,8 +991,8 @@ impl<'ctx> Codegen<'ctx> {
                     field_ptr.as_basic_value_enum()
                 } else {
                     // Codegen the field's loaded, dereferenced value
-                    let record_struct =
-                        self.codegen_expr_rvalue(&field_access.base).into_struct_value();
+                    let record = self.codegen_expr_rvalue(&field_access.base);
+                    let record_struct = record.into_struct_value();
                     let field_value = self
                         .builder
                         .build_extract_value(
@@ -1126,13 +1126,24 @@ impl<'ctx> Codegen<'ctx> {
             },
             TypedExpr::UnaryOp(unary_op) => {
                 let value = self.codegen_expr_rvalue(&unary_op.expr);
-                let op_res = match unary_op.kind {
-                    UnaryOpKind::BooleanNegation => {
-                        let value = value.into_int_value();
-                        self.builder.build_not(value, "bool_not")
+                match unary_op.kind {
+                    UnaryOpKind::Dereference => {
+                        let value_ptr = value.into_pointer_value();
+                        let pointee_ty = self.get_llvm_type(unary_op.type_id);
+                        let value = self.builder.build_load(pointee_ty, value_ptr, "deref");
+                        value
                     }
-                };
-                op_res.as_basic_value_enum().into()
+                    UnaryOpKind::Reference => {
+                        let value_location = self.builder.build_alloca(value.get_type(), "ref");
+                        self.builder.build_store(value_location, value);
+                        value_location.as_basic_value_enum()
+                    }
+                    UnaryOpKind::BooleanNegation => {
+                        let int_value = value.into_int_value();
+                        let int_value_negated = self.builder.build_not(int_value, "bool_not");
+                        int_value_negated.as_basic_value_enum()
+                    }
+                }
             }
             TypedExpr::Block(_block) => {
                 // This is just a lexical scoping block, not a control-flow block, so doesn't need
@@ -1177,20 +1188,15 @@ impl<'ctx> Codegen<'ctx> {
             .enumerate()
             .map(|(idx, arg_expr)| {
                 let expected_type = callee.params[idx].type_id;
-                let need_reference = self.module.get_type(expected_type).as_reference().is_some();
-                let basic_value = self.codegen_expr(arg_expr, need_reference);
-                if need_reference {
-                    eprintln!(
-                        "NEED REFERENCE codegen function call arg: {}: {} (expected: {}) \n {:?}",
-                        self.module.expr_to_string(arg_expr),
-                        self.module.type_id_to_string(arg_expr.get_type()),
-                        self.module.type_id_to_string(expected_type),
-                        basic_value
-                    );
-                }
+                let basic_value = self.codegen_expr_rvalue(arg_expr);
+                trace!(
+                    "codegen function call arg: {}: {} (expected: {}) \n {:?}",
+                    self.module.expr_to_string(arg_expr),
+                    self.module.type_id_to_string(arg_expr.get_type()),
+                    self.module.type_id_to_string(expected_type),
+                    basic_value
+                );
                 basic_value.into()
-                // let expected_type = arg_expr.get_type();
-                // self.load_if_value_type(basic_value, expected_type).into()
             })
             .collect();
         let callsite_value = self.builder.build_call(function_value, &args, "call_ret");
@@ -1382,7 +1388,7 @@ impl<'ctx> Codegen<'ctx> {
                 );
                 let _copied =
                     self.builder.build_memcpy(new_data, 1, old_data, 1, memcpy_bytes).unwrap();
-                self.builder.build_free(old_data);
+                // self.builder.build_free(old_data);
                 self.builder.build_insert_value(
                     array,
                     new_data,
