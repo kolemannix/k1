@@ -10,12 +10,16 @@ fn main(): int {
   printInt(xs[0].y);
   printInt(xs[0].z);
   mut i = 0;
-  while i < 3 {
-    print("pushing");
+  while i < 100 {
+    println("pushing");
     xs.push<Point>({ x: 1, y: 2, z: 3});
     i = i + 1;
   };
+  print("capacity: ");
   printInt(xs.capacity<Point>());
+  println("");
+  print("length: ");
   printInt(xs.length<Point>());
+  println("");
   0
 }

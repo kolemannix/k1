@@ -11,7 +11,6 @@ fn main(): int {
   printInt(xs[2]);
   printInt(xs[3]);
   printInt(xs[4]);
-  // in lldb: parray `xs.length` xs.data_ptr
+  // in lldb: parray `xs->length` xs->data_ptr
   0
 }
-// 4
