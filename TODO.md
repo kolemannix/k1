@@ -80,7 +80,7 @@ The project isn't mature enough yet to make this list but the spirit of the effo
 - [ ] Pure lambdas with ->
 - [ ] Full-on closures with =>
 
-- [ ] DEBUG info
+- [x] DEBUG info
   - [x] on or off
   - [x] flag types
   - [x] correct line nums
@@ -130,7 +130,7 @@ The project isn't mature enough yet to make this list but the spirit of the effo
 
 # Hacks to fix
 - [x] Fix line comments
-- [ ] Maybe eventually actually free some memory? lol
+- [x] Maybe eventually actually free some memory? lol
 - [x] Rename IR to typed-ast, since it's a tree not instruction set. TAST?
 - [x] Make intrinsics like arrayIndex a real function in the LLVM IR?
 - [x] Fix line numbers to account for prelude
@@ -138,7 +138,7 @@ The project isn't mature enough yet to make this list but the spirit of the effo
 - [ ] Replace vectors with smallvec where appropriate
 - [x] Fix unnecessary load of function args
 - [x] Proper println implementation. Fine to use printf internally for now but we should define our own func around it
-- [-] Implement Display instead of relying on Debug
+- [x] Implement Display instead of relying on Debug
 
 Design for 
 - optionality
