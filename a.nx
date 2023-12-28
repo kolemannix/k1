@@ -15,6 +15,12 @@ fn main(): int {
     xs.push<Point>({ x: 1, y: 2, z: 3});
     i = i + 1;
   };
+
+  xs[50] = { x: 100, y: 200, z: 300};
+  printInt(xs[50].x);
+  printInt(xs[50].y);
+  printInt(xs[50].z);
+
   print("capacity: ");
   printInt(xs.capacity<Point>());
   println("");

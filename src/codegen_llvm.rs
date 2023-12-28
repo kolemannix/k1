@@ -239,7 +239,6 @@ impl<'ctx> Codegen<'ctx> {
         optimize: bool,
         debug: bool,
     ) -> DebugContext<'ctx> {
-        // TODO: need source path
         let (debug_builder, compile_unit) = llvm_module.create_debug_info_builder(
             false,
             DWARFSourceLanguage::C,
@@ -700,6 +699,7 @@ impl<'ctx> Codegen<'ctx> {
             }
             Type::Optional(_optional) => {
                 let name = format!("optional_{}", self.module.type_id_to_string(type_id));
+                // TODO: We are punting on the debug type definition for optionals right now
                 self.debug
                     .debug_builder
                     .create_struct_type(
@@ -718,13 +718,13 @@ impl<'ctx> Codegen<'ctx> {
                     )
                     .as_type()
             }
-            Type::Reference(_ref) => {
-                let name = format!("reference_{}", self.module.type_id_to_string(type_id));
+            Type::Reference(reference_type) => {
+                let name = format!("{}*", self.module.type_id_to_string(type_id));
                 self.debug
                     .debug_builder
                     .create_pointer_type(
                         &name,
-                        self.get_debug_type(_ref.inner_type),
+                        self.get_debug_type(reference_type.inner_type),
                         WORD_SIZE_BITS,
                         WORD_SIZE_BITS as u32,
                         self.default_address_space,
