@@ -1545,7 +1545,8 @@ impl<'ctx> Codegen<'ctx> {
                 // let capacity = self.builder.build_call(ctlz_function, &[], "capacity");
                 let capacity = len.clone();
                 let array_struct = self.make_array(len, capacity, element_type.value_type(), true);
-                let array_ptr = self.builder.build_alloca(array_struct.get_type(), "array_ptr");
+                let array_ptr =
+                    self.builder.build_malloc(array_struct.get_type(), "array_ptr").unwrap();
                 self.builder.build_store(array_ptr, array_struct);
                 array_ptr.as_basic_value_enum()
             }
