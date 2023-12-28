@@ -1235,12 +1235,12 @@ impl TypedModule {
             variable.span,
         ))?;
         let v = self.get_variable(variable_id);
-        // if is_assignment_lhs && !v.is_mutable {
-        //     return make_fail(
-        //         format!("Cannot assign to immutable variable {}", &*self.get_ident_str(v.name)),
-        //         variable.span,
-        //     );
-        // }
+        if is_assignment_lhs && !v.is_mutable {
+            return make_fail(
+                format!("Cannot assign to immutable variable {}", &*self.get_ident_str(v.name)),
+                variable.span,
+            );
+        }
         let expr = TypedExpr::Variable(VariableExpr {
             type_id: v.type_id,
             variable_id,

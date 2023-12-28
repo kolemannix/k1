@@ -18,7 +18,7 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P) -> Result<()> {
         src.clone(),
         false,
         out_dir,
-        false,
+        true,
         true,
     )
     .map_err(|err| anyhow!("\tTEST CASE FAILED COMPILE: {}. Reason: {}", filename, err))?;
