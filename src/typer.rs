@@ -1659,18 +1659,6 @@ impl TypedModule {
             }
             Expression::MethodCall(m_call) => {
                 let base_expr = self.eval_expr(&m_call.base, scope_id, None)?;
-                if m_call.call.name == self.ast.ident_id("has_value") {
-                    let Type::Optional(_opt) = self.get_type(base_expr.get_type()) else {
-                        return make_fail(
-                            format!(
-                                "Cannot call has_value() on non-optional type: {}",
-                                self.type_id_to_string(base_expr.get_type())
-                            ),
-                            m_call.call.span,
-                        );
-                    };
-                    return Ok(TypedExpr::OptionalHasValue(Box::new(base_expr)));
-                }
                 let call = self.eval_function_call(&m_call.call, Some(base_expr), scope_id)?;
                 Ok(call)
             }
@@ -1856,6 +1844,16 @@ impl TypedModule {
                         let array_namespace = self.get_namespace(array_namespace_id).unwrap();
                         let array_scope = self.scopes.get_scope(array_namespace.scope_id);
                         array_scope.find_function(fn_call.name)
+                    }
+                    Type::Optional(_optional_type) => {
+                        if fn_call.name == self.ast.ident_id("hasValue")
+                            && fn_call.args.is_empty()
+                            && fn_call.type_args.is_none()
+                        {
+                            return Ok(TypedExpr::OptionalHasValue(Box::new(base_expr.clone())));
+                        } else {
+                            None
+                        }
                     }
                     Type::Record(record) => {
                         // Need to distinguish between instances of 'named'
@@ -2756,7 +2754,7 @@ impl TypedModule {
             }
             TypedExpr::OptionalHasValue(opt) => {
                 self.display_expr(&opt, writ)?;
-                writ.write_str(".has_value()")
+                writ.write_str(".hasValue()")
             }
             TypedExpr::OptionalGet(opt) => {
                 self.display_expr(&opt.inner_expr, writ)?;
