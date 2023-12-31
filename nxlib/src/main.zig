@@ -52,15 +52,14 @@ export fn _nx_intToChar(i: i64) u8 {
     return @intCast(i);
 }
 
-export fn _nx_readFileToString(s: *NxString) *const NxString {
+export fn _nx_readFileToString(s: NxString) NxString {
     //std.fs.cwd()
     const file = std.fs.openFileAbsolute(s.as_slice(), .{ .mode = .read_only }) catch unreachable;
     defer file.close();
-    const buffer = file.readToEndAlloc(allocator, 1024) catch unreachable;
+    const buffer = file.readToEndAlloc(allocator, 1024 * 1024 * 10) catch unreachable;
     const length = buffer.len;
     // std.debug.print("reading {s} to {} buf ", .{ s.as_slice(), length });
-    const new_str: *NxString = allocator.create(NxString) catch unreachable;
-    new_str.* = .{ .len = length, .data = buffer.ptr };
+    const new_str: NxString = .{ .len = length, .data = buffer.ptr };
     // std.debug.print("our string {any} \n'{s}'", .{ new_str, new_str.as_slice() });
     return new_str;
 }
