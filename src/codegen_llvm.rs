@@ -1563,12 +1563,27 @@ impl<'ctx> Codegen<'ctx> {
                 let array =
                     self.builder.build_load(array_type, array_ptr, "array").into_struct_value();
                 let cap = self.builtin_types.build_array_capacity(&self.builder, array);
-                let new_cap = self.builder.build_int_mul(
+                let cap_is_zero = self.builder.build_int_compare(
+                    IntPredicate::EQ,
+                    cap,
+                    self.builtin_types.i64.const_zero(),
+                    "cap_is_zero",
+                );
+                let cap_times_two = self.builder.build_int_mul(
                     cap,
                     self.builtin_types.i64.const_int(2, true),
                     "new_cap",
                 );
-                self.build_print_string_call(self.const_string("growing array\n"));
+                let new_cap = self
+                    .builder
+                    .build_select(
+                        cap_is_zero,
+                        self.builtin_types.i64.const_int(1, true),
+                        cap_times_two,
+                        "new_cap",
+                    )
+                    .into_int_value();
+                // self.build_print_string_call(self.const_string("growing array\n"));
                 let old_data = self.builtin_types.array_data(&self.builder, array);
                 let element_type_id =
                     self.module.get_type(self_param.type_id).expect_array().element_type;
