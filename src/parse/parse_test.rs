@@ -237,7 +237,7 @@ fn generic_method_call_lhs_expr() -> Result<(), ParseError> {
     let Expression::FnCall(fn_call) = call.base.deref() else { panic!() };
     assert!(fn_call.name == parser.ident_id("getFn"));
     assert!(call.call.name == parser.ident_id("baz"));
-    assert!(call.call.type_args.unwrap()[0].value.is_int());
+    assert!(call.call.type_args.unwrap()[0].type_expr.is_int());
     assert!(matches!(call.call.args[0].value, Expression::Literal(_)));
     Ok(())
 }

@@ -1,31 +1,12 @@
-type Point = {
-  x: int,
-  y: int,
-  z: int,
-}
+fn len<T>(x: Array<T>, y: Array<T>): int { x.length() + y.length() }
 
 fn main(): int {
-  val xs = [{ x: 1, y: 2, z: 3}];
-  printInt(xs[0].x);
-  printInt(xs[0].y);
-  printInt(xs[0].z);
-  mut i = 0;
-  while i < 100 {
-    println("pushing");
-    xs.push<Point>({ x: 1, y: 2, z: 3});
-    i = i + 1;
-  };
-
-  xs[50] = { x: 100, y: 200, z: 300};
-  printInt(xs[50].x);
-  printInt(xs[50].y);
-  printInt(xs[50].z);
-
-  print("capacity: ");
-  printInt(xs.capacity<Point>());
-  println("");
-  print("length: ");
-  printInt(xs.length<Point>());
-  println("");
+  val xs = [1,2,3];
+  val ys = [true];
+  len(xs, ys);
+  Array::length(xs);
+  xs.length();
+  identity(xs).length();
+//  xs.length();
   0
 }

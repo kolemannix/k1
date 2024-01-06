@@ -1,0 +1,18 @@
+type Point = {
+  x: int,
+  y: int,
+  z: int,
+}
+
+fn main(): int {
+  val xs = [{ x: 1, y: 2, z: 3}];
+  mut i = 0;
+  while i < 100 {
+    xs.push<Point>({ x: 1, y: 2, z: 3});
+    i = i + 1;
+  };
+
+  assert(xs.length<Point>() == 101);
+  assert(xs.capacity<Point>() == 128);
+  0
+}

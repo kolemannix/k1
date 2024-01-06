@@ -13,13 +13,13 @@ use log::trace;
 #[cfg(test)]
 mod parse_test;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ArrayExpr {
     pub elements: Vec<Expression>,
     pub span: Span,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Literal {
     None(Span),
     Unit(Span),
@@ -96,19 +96,19 @@ impl Identifiers {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FnCallArg {
     pub name: Option<IdentifierId>,
     pub value: Expression,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FnCallTypeArg {
     pub name: Option<IdentifierId>,
-    pub value: ParsedTypeExpression,
+    pub type_expr: ParsedTypeExpression,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FnCall {
     pub name: IdentifierId,
     pub type_args: Option<Vec<FnCallTypeArg>>,
@@ -117,7 +117,7 @@ pub struct FnCall {
     pub span: Span,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ValDef {
     pub name: IdentifierId,
     pub type_id: Option<ParsedTypeExpression>,
@@ -126,7 +126,7 @@ pub struct ValDef {
     pub span: Span,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BinaryOp {
     pub op_kind: BinaryOpKind,
     pub lhs: Box<Expression>,
@@ -134,14 +134,14 @@ pub struct BinaryOp {
     pub span: Span,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct UnaryOp {
     pub op_kind: UnaryOpKind,
     pub expr: Box<Expression>,
     pub span: Span,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Variable {
     pub ident: IdentifierId,
     pub span: Span,
@@ -153,20 +153,20 @@ impl Display for Variable {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FieldAccess {
     pub base: Box<Expression>,
     pub target: IdentifierId,
     pub span: Span,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RecordField {
     pub name: IdentifierId,
     pub expr: Expression,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 /// Example:
 /// { foo: 1, bar: false }
 ///   ^................^ fields
@@ -175,7 +175,7 @@ pub struct Record {
     pub span: Span,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 /// Example: users  [42]
 ///          ^target ^index_value
 pub struct IndexOperation {
@@ -194,20 +194,20 @@ impl Display for IndexOperation {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MethodCall {
     pub base: Box<Expression>,
     pub call: Box<FnCall>,
     pub span: Span,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct OptionalGet {
     pub base: Box<Expression>,
     pub span: Span,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Expression {
     BinaryOp(BinaryOp),
     UnaryOp(UnaryOp),
@@ -311,14 +311,14 @@ impl ExprStackMember {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Assignment {
     pub lhs: Expression,
     pub rhs: Expression,
     pub span: Span,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct IfExpr {
     pub cond: Box<Expression>,
     pub optional_ident: Option<(IdentifierId, Span)>,
@@ -327,7 +327,7 @@ pub struct IfExpr {
     pub span: Span,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct WhileStmt {
     pub cond: Expression,
     pub block: Block,
@@ -335,7 +335,7 @@ pub struct WhileStmt {
     pub span: Span,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum BlockStmt {
     ValDef(ValDef),
     Assignment(Assignment),
@@ -343,44 +343,44 @@ pub enum BlockStmt {
     While(WhileStmt),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Block {
     pub stmts: Vec<BlockStmt>,
     pub span: Span,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RecordTypeField {
     pub name: IdentifierId,
     pub ty: ParsedTypeExpression,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RecordType {
     pub fields: Vec<RecordTypeField>,
     pub span: Span,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TypeApplication {
     pub base: IdentifierId,
     pub params: Vec<ParsedTypeExpression>,
     pub span: Span,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ParsedOptional {
     pub base: Box<ParsedTypeExpression>,
     pub span: Span,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ParsedReference {
     pub base: Box<ParsedTypeExpression>,
     pub span: Span,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ParsedTypeExpression {
     Unit(Span),
     Char(Span),
@@ -1046,7 +1046,7 @@ impl<'toks> Parser<'toks> {
             // TODO named type arguments
             let type_args: Vec<_> = type_expressions
                 .into_iter()
-                .map(|type_expr| FnCallTypeArg { name: None, value: type_expr })
+                .map(|type_expr| FnCallTypeArg { name: None, type_expr: type_expr })
                 .collect();
             Ok(Some(type_args))
         } else {
