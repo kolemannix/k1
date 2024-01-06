@@ -1,17 +1,18 @@
 #![allow(clippy::match_like_matches_macro)]
 
 use crate::lex::{Span, TokenKind};
-use crate::parse::{self, IfExpr, IndexOperation, ParsedNamespace};
+use crate::parse::{self, FnCallTypeArg, IfExpr, IndexOperation, ParsedNamespace};
 use crate::parse::{
     AstId, AstModule, Block, BlockStmt, Definition, Expression, FnCall, FnDef, IdentifierId,
     Literal,
 };
 use anyhow::{bail, Result};
 use colored::Colorize;
-use log::{error, trace, warn};
+use log::{error, info, trace, warn};
 use std::collections::HashMap;
 use std::error::Error;
 
+use either::Either;
 use std::fmt::{Display, Formatter, Write};
 use std::rc::Rc;
 
@@ -122,10 +123,18 @@ impl Type {
             _ => panic!("expect_optional called on: {:?}", self),
         }
     }
+
     pub fn expect_array(&self) -> &ArrayType {
         match self {
             Type::Array(array) => array,
             _ => panic!("expect_array called on: {:?}", self),
+        }
+    }
+
+    pub fn as_array(&self) -> Option<&ArrayType> {
+        match self {
+            Type::Array(array) => Some(array),
+            _ => None,
         }
     }
 
@@ -164,8 +173,9 @@ pub struct FnArgDefn {
 
 #[derive(Debug, Clone)]
 pub struct SpecializationRecord {
-    pub type_params: Vec<TypeId>,
+    pub specialized_type_params: Vec<TypeId>,
     pub specialized_function_id: FunctionId,
+    pub specialized_params: Vec<FnArgDefn>,
 }
 
 #[derive(Debug, Clone)]
@@ -1759,11 +1769,6 @@ impl TypedModule {
         };
         let alternate_scope = self.scopes.add_child_scope(scope_id);
         let alternate = if let Some(alt) = &if_expr.alt {
-            eprintln!(
-                "EVALUATING ALTERNATE with type hint: {}. Consequent expr: {}",
-                self.type_id_to_string(consequent_type),
-                self.type_id_to_string(consequent.expr_type)
-            );
             let expr = self.eval_expr(alt, alternate_scope, Some(consequent_type))?;
             self.transform_expr_to_block(expr, alternate_scope)
         } else {
@@ -1790,31 +1795,15 @@ impl TypedModule {
         })))
     }
 
-    fn eval_function_call(
-        &mut self,
+    /// Can 'shortcircuit' with Left if the function call to resolve
+    /// is actually a builtin
+    fn resolve_function_call(
+        &self,
         fn_call: &FnCall,
-        this_expr: Option<TypedExpr>,
-        scope_id: ScopeId,
-    ) -> TyperResult<TypedExpr> {
-        // Special case for Some() because it is parsed as a function call
-        // but should result in a special expression
-        if fn_call.name == self.ast.ident_id("Some") {
-            if fn_call.args.len() != 1 {
-                return make_fail("Some() must have exactly one argument", fn_call.span);
-            }
-            let arg = self.eval_expr_inner(&fn_call.args[0].value, scope_id, None)?;
-            let type_id = arg.get_type();
-            let optional_type = Type::Optional(OptionalType { inner_type: type_id });
-            let type_id = self.add_type(optional_type);
-            return Ok(TypedExpr::OptionalSome(OptionalSome {
-                inner_expr: Box::new(arg),
-                type_id,
-            }));
-        }
-        // This block is all about method or resolution
-        // We are trying to find out if this method or function
-        // exists, and returning its id if so
-        let function_id = match this_expr.as_ref() {
+        this_expr: Option<&TypedExpr>,
+        calling_scope: ScopeId,
+    ) -> TyperResult<Either<TypedExpr, FunctionId>> {
+        let function_id = match this_expr {
             Some(base_expr) => {
                 // Resolve a method call
                 let type_id = base_expr.get_type();
@@ -1824,7 +1813,7 @@ impl TypedModule {
                         //       (name -> ident id -> namespace id -> namespace -> scope id -> scope
                         let string_ident_id = self.ast.ident_id("string");
                         let string_namespace_id =
-                            self.scopes.find_namespace(scope_id, string_ident_id).unwrap();
+                            self.scopes.find_namespace(calling_scope, string_ident_id).unwrap();
                         let string_namespace = self.get_namespace(string_namespace_id).unwrap();
                         let string_scope = self.scopes.get_scope(string_namespace.scope_id);
                         string_scope.find_function(fn_call.name)
@@ -1832,7 +1821,7 @@ impl TypedModule {
                     Type::Char => {
                         let char_ident_id = self.ast.ident_id("char");
                         let char_namespace_id =
-                            self.scopes.find_namespace(scope_id, char_ident_id).unwrap();
+                            self.scopes.find_namespace(calling_scope, char_ident_id).unwrap();
                         let char_namespace = self.get_namespace(char_namespace_id).unwrap();
                         let char_scope = self.scopes.get_scope(char_namespace.scope_id);
                         char_scope.find_function(fn_call.name)
@@ -1840,7 +1829,7 @@ impl TypedModule {
                     Type::Array(_array_type) => {
                         let array_ident_id = self.ast.ident_id("Array");
                         let array_namespace_id =
-                            self.scopes.find_namespace(scope_id, array_ident_id).unwrap();
+                            self.scopes.find_namespace(calling_scope, array_ident_id).unwrap();
                         let array_namespace = self.get_namespace(array_namespace_id).unwrap();
                         let array_scope = self.scopes.get_scope(array_namespace.scope_id);
                         array_scope.find_function(fn_call.name)
@@ -1850,7 +1839,9 @@ impl TypedModule {
                             && fn_call.args.is_empty()
                             && fn_call.type_args.is_none()
                         {
-                            return Ok(TypedExpr::OptionalHasValue(Box::new(base_expr.clone())));
+                            return Ok(Either::Left(TypedExpr::OptionalHasValue(Box::new(
+                                base_expr.clone(),
+                            ))));
                         } else {
                             None
                         }
@@ -1865,7 +1856,7 @@ impl TypedModule {
                             );
                         };
                         let record_namespace_id =
-                            self.scopes.find_namespace(scope_id, record_type_name).unwrap();
+                            self.scopes.find_namespace(calling_scope, record_type_name).unwrap();
                         let record_namespace = self.get_namespace(record_namespace_id).unwrap();
                         let record_scope = self.scopes.get_scope(record_namespace.scope_id);
                         record_scope.find_function(fn_call.name)
@@ -1888,78 +1879,55 @@ impl TypedModule {
             }
             None => {
                 // Resolve a non-method call
-                let scope_to_search =
-                    self.traverse_namespace_chain(scope_id, &fn_call.namespaces, fn_call.span)?;
+                let scope_to_search = self.traverse_namespace_chain(
+                    calling_scope,
+                    &fn_call.namespaces,
+                    fn_call.span,
+                )?;
                 let function_id =
                     self.scopes.find_function(scope_to_search, fn_call.name).ok_or(make_err(
                         format!(
                             "Function not found: {} in scope: {:?}",
                             &*self.get_ident_str(fn_call.name),
-                            self.scopes.get_scope(scope_id)
+                            self.scopes.get_scope(calling_scope)
                         ),
                         fn_call.span,
                     ))?;
                 function_id
             }
         };
+        return Ok(Either::Right(function_id));
+    }
 
-        // Now that we have resolved to a function id, we need to specialize it if generic
-        let original_function = self.get_function(function_id);
-        // We should only specialize if we are in a concrete context, meaning
-        // we have no unresolved type variables.
-        // We could just be evaluating a generic function that calls another generic function,
-        // in which case we don't want to generate a 'specialized' function where we haven't
-        // actually specialized anything
-        let function_to_call = if original_function.is_generic() {
-            let intrinsic_type = original_function.intrinsic_type;
-            let Some(type_args) = &fn_call.type_args else {
-                return make_fail(
-                    format!(
-                        "Generic function {} must be called with type arguments",
-                        &*self.get_ident_str(original_function.name)
-                    ),
-                    fn_call.span,
-                );
-            };
-            // We skip specialization if any of the type arguments are type variables
-            let mut any_type_vars = false;
-            for type_arg in type_args.iter() {
-                let type_id = self.eval_type_expr(&type_arg.value, scope_id)?;
-                if let Type::TypeVariable(_tv) = self.get_type(type_id) {
-                    any_type_vars = true;
-                }
-            }
-            if any_type_vars {
-                function_id
-            } else {
-                self.get_specialized_function_for_call(
-                    fn_call,
-                    function_id,
-                    intrinsic_type,
-                    scope_id,
-                )?
-            }
-        } else {
-            function_id
-        };
+    // I actually just want this to handle the 'self' order and zipping thing because I sometimes
+    // don't want these checked just yet because I'm using them for inference
+    fn typecheck_call_arguments(
+        &mut self,
+        fn_call: &FnCall,
+        this_expr: Option<TypedExpr>,
+        params: &Vec<FnArgDefn>,
+        calling_scope: ScopeId,
+        skip_typecheck: bool,
+    ) -> TyperResult<Vec<TypedExpr>> {
         let mut final_args: Vec<TypedExpr> = Vec::new();
-        let params_cloned = self.get_function(function_to_call).params.clone();
-        // We have to deal with this outside of the loop because
+        // We have to deal with `self` arguments outside of the loop because
         // we can't 'move' out of this_expr more than once
         let mut skip_first = false;
-        if let Some(first) = params_cloned.get(0) {
+        if let Some(first) = params.get(0) {
             let is_self = first.name == self.ast.ident_id("self");
             if is_self {
                 if let Some(this) = this_expr {
-                    if let Err(e) = self.typecheck_types(first.type_id, this.get_type()) {
-                        return make_fail(
-                            format!(
-                                "Invalid parameter type for 'self' to function {}: {}",
-                                &*self.ast.get_ident_str(fn_call.name),
-                                e
-                            ),
-                            fn_call.span,
-                        );
+                    if !skip_typecheck {
+                        if let Err(e) = self.typecheck_types(first.type_id, this.get_type()) {
+                            return make_fail(
+                                format!(
+                                    "Invalid parameter type for 'self' to function {}: {}",
+                                    &*self.ast.get_ident_str(fn_call.name),
+                                    e
+                                ),
+                                fn_call.span,
+                            );
+                        }
                     }
                     final_args.push(this);
                     skip_first = true;
@@ -1967,39 +1935,124 @@ impl TypedModule {
             }
         }
         let start: u32 = if skip_first { 1 } else { 0 };
-        for fn_param in &params_cloned[start as usize..] {
+        for fn_param in &params[start as usize..] {
             let matching_param_by_name =
                 fn_call.args.iter().find(|arg| arg.name == Some(fn_param.name));
             // If we skipped 'self', we need to subtract 1 from the offset we index into fn_call.args with
             let matching_idx = fn_param.position - start;
             let matching_param = matching_param_by_name.or(fn_call.args.get(matching_idx as usize));
             if let Some(param) = matching_param {
-                let expr = self.eval_expr(&param.value, scope_id, Some(fn_param.type_id))?;
-                if let Err(e) = self.typecheck_types(fn_param.type_id, expr.get_type()) {
-                    return make_fail(
-                        format!(
-                            "Invalid parameter type passed to function {}: {}",
-                            &*self.ast.get_ident_str(fn_call.name),
-                            e
-                        ),
-                        param.value.get_span(),
-                    );
+                let expr = self.eval_expr(&param.value, calling_scope, Some(fn_param.type_id))?;
+                if !skip_typecheck {
+                    if let Err(e) = self.typecheck_types(fn_param.type_id, expr.get_type()) {
+                        return make_fail(
+                            format!(
+                                "Invalid parameter type passed to function {}: {}",
+                                &*self.ast.get_ident_str(fn_call.name),
+                                e
+                            ),
+                            param.value.get_span(),
+                        );
+                    }
                 }
                 final_args.push(expr);
             } else {
                 return make_fail(
                     format!(
-                        "Could not find match for parameter {}",
+                        "Missing argument to function {}: {}",
+                        &*self.ast.get_ident_str(fn_call.name),
                         &*self.get_ident_str(fn_param.name)
                     ),
                     fn_call.span,
                 );
             }
         }
+        Ok(final_args)
+    }
+
+    fn eval_function_call(
+        &mut self,
+        fn_call: &FnCall,
+        this_expr: Option<TypedExpr>,
+        scope_id: ScopeId,
+    ) -> TyperResult<TypedExpr> {
+        // Special case for Some() because it is parsed as a function call
+        // but should result in a special expression
+        if fn_call.name == self.ast.ident_id("Some") {
+            if fn_call.args.len() != 1 {
+                return make_fail("Some() must have exactly one argument", fn_call.span);
+            }
+            let arg = self.eval_expr_inner(&fn_call.args[0].value, scope_id, None)?;
+            let type_id = arg.get_type();
+            let optional_type = Type::Optional(OptionalType { inner_type: type_id });
+            let type_id = self.add_type(optional_type);
+            return Ok(TypedExpr::OptionalSome(OptionalSome {
+                inner_expr: Box::new(arg),
+                type_id,
+            }));
+        }
+
+        let function_id = match self.resolve_function_call(fn_call, this_expr.as_ref(), scope_id)? {
+            Either::Left(expr) => return Ok(expr),
+            Either::Right(function_id) => function_id,
+        };
+
+        // Now that we have resolved to a function id, we need to specialize it if generic
+        let original_function = self.get_function(function_id);
+        let original_params = original_function.params.clone();
+
+        let (function_to_call, typechecked_arguments) = if original_function.is_generic() {
+            let intrinsic_type = original_function.intrinsic_type;
+
+            // We skip specialization if any of the type arguments are type variables: `any_type_vars`
+            // because we could just be evaluating a generic function that calls another generic function,
+            // in which case we don't want to generate a 'specialized' function where we haven't
+            // actually specialized everything
+            let mut any_type_vars = false;
+            for type_arg in fn_call.type_args.as_ref().unwrap_or(&Vec::new()).iter() {
+                let type_id = self.eval_type_expr(&type_arg.type_expr, scope_id)?;
+                if let Type::TypeVariable(_tv) = self.get_type(type_id) {
+                    any_type_vars = true;
+                }
+            }
+            if any_type_vars {
+                // let params = original_function.params.clone();
+                (
+                    function_id,
+                    self.typecheck_call_arguments(
+                        fn_call,
+                        this_expr,
+                        &original_params,
+                        scope_id,
+                        false,
+                    )?,
+                )
+            } else {
+                self.get_specialized_function_for_call(
+                    fn_call,
+                    function_id,
+                    intrinsic_type,
+                    this_expr,
+                    scope_id,
+                )?
+            }
+        } else {
+            (
+                function_id,
+                self.typecheck_call_arguments(
+                    fn_call,
+                    this_expr,
+                    &original_params,
+                    scope_id,
+                    false,
+                )?,
+            )
+        };
+
         let function_ret_type = self.get_function(function_to_call).ret_type;
         let call = Call {
             callee_function_id: function_to_call,
-            args: final_args,
+            args: typechecked_arguments,
             ret_type: function_ret_type,
             span: fn_call.span,
         };
@@ -2011,84 +2064,187 @@ impl TypedModule {
         fn_call: &FnCall,
         generic_function_id: FunctionId,
         intrinsic_type: Option<IntrinsicFunctionType>,
+        this_expr: Option<TypedExpr>,
         calling_scope: ScopeId,
-    ) -> TyperResult<FunctionId> {
-        // TODO: Implement full generic type inference. This could get slow!
-        //       Cases like [T](t: T) are easier but [T](x: ComplexType[A, B, T]) and solving for
-        //       T in that case is hard. Requires recursive search.
-        //       I wonder if we could infer in simple cases and refuse to infer
-        //       in complex cases that would be slow.
-        //       Inference algorithm:
-        //       1. Find arguments that include a type param
-        //       2. Find the actual value passed for each, find where the type variable appears within
-        //          that type expression, and assign it to the concrete type
-
-        // FIXME: Can we avoid this clone of the whole function
+    ) -> TyperResult<(FunctionId, Vec<TypedExpr>)> {
+        // FIXME: Can we avoid this clone of the original function
         let generic_function = self.get_function(generic_function_id).clone();
+        // The specialized function lives in the root of the module because
+        // we never look it up by name; we look up the generic version then use a cached
+        // specialized function anyway
+        let spec_fn_scope_id = self.scopes.add_scope_to_root();
         trace!(
             "Specializing function call: {}, {}, astid {}",
             &*self.get_ident_str(fn_call.name),
             &*self.get_ident_str(generic_function.name),
             generic_function.ast_id
         );
-        let type_params =
-            generic_function.type_params.as_ref().expect("expected function to be generic");
-        let type_args = fn_call
-            .type_args
-            .as_ref()
-            .ok_or(make_err("fn call missing type args", fn_call.span))?;
         let mut new_name = self.get_ident_str(fn_call.name).to_string();
 
-        // The specialized function lives in the root of the module because
-        // we never look it up by name; we look up the generic version then use a cached
-        // specialized function anyway
-
-        // The only real difference is the scope: it has substitutions for the type variables
-        let spec_fn_scope_id = self.scopes.add_scope_to_root();
-        let evaluated_type_args = type_args
-            .iter()
-            .map(|type_arg| self.eval_type_expr(&type_arg.value, calling_scope))
-            .collect::<TyperResult<Vec<TypeId>>>()?;
-        for (i, existing_specialization) in generic_function.specializations.iter().enumerate() {
-            // For now, naive comparison that all type ids are identical
-            // There may be some scenarios where they are _equivalent_ but not identical
-            // But I'm not sure
-            let x = existing_specialization
-                .type_params
-                .iter()
-                .map(|type_id| self.type_id_to_string(*type_id))
-                .collect::<Vec<_>>()
-                .join(",");
-            warn!("existing specialization for {} {}: {}", new_name, i, x);
-            if existing_specialization.type_params == evaluated_type_args {
-                log::info!(
-                    "Found existing specialization for function {} with types: {}",
-                    &*self.get_ident_str(generic_function.name),
-                    x
-                );
-                return Ok(existing_specialization.specialized_function_id);
+        let type_params =
+            generic_function.type_params.as_ref().expect("expected function to be generic");
+        let inferred_or_passed_type_args: Vec<TypeParam> = match &fn_call.type_args {
+            Some(type_args) => {
+                if type_args.len() != type_params.len() {
+                    return make_fail(
+                        format!(
+                            "Expected {} type arguments but got {}",
+                            type_params.len(),
+                            type_args.len()
+                        ),
+                        fn_call.span,
+                    );
+                }
+                let mut checked_params = Vec::new();
+                for (idx, type_arg) in type_args.iter().enumerate() {
+                    let param = &type_params[idx];
+                    // TODO: This is where we'd apply constraints
+                    let type_id = self.eval_type_expr(&type_arg.type_expr, calling_scope)?;
+                    checked_params.push(TypeParam { ident: param.ident, type_id });
+                }
+                checked_params
             }
-        }
+            None => {
+                // Implement some generic type inference. This could get slow!
+                //       Cases like [T](t: T) are easier but [T](x: ComplexType[A, B, T]) and solving for
+                //       T in that case is hard. Requires recursive search.
+                //       I wonder if we could infer in simple cases and refuse to infer
+                //       in complex cases that would be slow.
+                //       Inference algorithm:
+                //       1. Find arguments that include a type param
+                //       2. Find the actual value passed for each, find where the type variable appears within
+                //          that type expression, and assign it to the concrete type
+                let exprs = self.typecheck_call_arguments(
+                    fn_call,
+                    this_expr.clone(),
+                    &generic_function.params,
+                    calling_scope,
+                    true,
+                )?;
 
-        for (i, type_param) in type_params.iter().enumerate() {
-            let type_arg = &type_args[i];
-            let type_id = self.eval_type_expr(&type_arg.value, calling_scope)?;
-            if let Type::TypeVariable(tv) = self.get_type(type_id) {
+                // T = ?
+                // Exprs = [Array<int>, int]
+                // param = self: Array<T>
+                // expr = xs: Array<int>
+                // if param.
+                let mut solved_params: Vec<TypeParam> = Vec::new();
+
+                for (idx, expr) in exprs.iter().enumerate() {
+                    let param = &generic_function.params[idx];
+
+                    // This 'match' is where we would ideally implement some actual
+                    // recursive type unification algorithm rather than hardcode 2 cases
+                    let maybe_solved_param = match self.get_type(param.type_id) {
+                        Type::TypeVariable(tv) => {
+                            // If the type param is used in the type of the argument, we can infer
+                            // the type param from the type of the argument
+                            Some(TypeParam { ident: tv.identifier_id, type_id: expr.get_type() })
+                        }
+                        Type::Array(array_type) => {
+                            // If the type param is used in the element type of an array, we can infer
+                            // the type param from the type of the array
+                            if let Type::TypeVariable(tv) = self.get_type(array_type.element_type) {
+                                if let Type::Array(at) = self.get_type(expr.get_type()) {
+                                    Some(TypeParam {
+                                        ident: tv.identifier_id,
+                                        type_id: at.element_type,
+                                    })
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
+                    };
+                    if let Some(solved_param) = maybe_solved_param {
+                        let existing_solution =
+                            solved_params.iter().find(|p| p.ident == solved_param.ident);
+                        if let Some(existing_solution) = existing_solution {
+                            if existing_solution.type_id != solved_param.type_id {
+                                return make_fail(
+                                    format!(
+                                        "Conflicting type parameters for type param {} in call to {}: {} and {}",
+                                        &*self.get_ident_str(solved_param.ident),
+                                        &*self.get_ident_str(generic_function.name),
+                                        self.type_id_to_string(existing_solution.type_id),
+                                        self.type_id_to_string(solved_param.type_id),
+                                    ),
+                                    fn_call.span,
+                                );
+                            }
+                        }
+                        solved_params.push(solved_param);
+                    }
+                }
+                if solved_params.len() < type_params.len() {
+                    return make_fail(
+                        format!(
+                            "Could not infer all type parameters for function call to {}",
+                            &*self.get_ident_str(generic_function.name)
+                        ),
+                        fn_call.span,
+                    );
+                } else {
+                    eprintln!("Solved params: {:?}", solved_params);
+                    solved_params
+                }
+            }
+        };
+
+        // Add type_args to scope and typecheck them against the actual params
+        for (i, type_param) in inferred_or_passed_type_args.iter().enumerate() {
+            if let Type::TypeVariable(tv) = self.get_type(type_param.type_id) {
                 return make_fail(
                     format!(
                         "Cannot specialize function with type variable: {}",
                         &*self.get_ident_str(tv.identifier_id)
                     ),
-                    type_arg.value.get_span(),
+                    fn_call.span,
                 );
             };
-            trace!(
-                "Adding type param {} = {} to scope for specialized function {}",
+            info!(
+                "Adding type param {}: {} to scope for specialized function {}",
                 &*self.get_ident_str(type_param.ident),
-                self.type_id_to_string(type_id),
+                self.type_id_to_string(type_param.type_id),
                 new_name
             );
-            self.scopes.get_scope_mut(spec_fn_scope_id).add_type(type_param.ident, type_id);
+            self.scopes
+                .get_scope_mut(spec_fn_scope_id)
+                .add_type(type_param.ident, type_param.type_id);
+        }
+        let type_ids = inferred_or_passed_type_args
+            .iter()
+            .map(|type_param| type_param.type_id)
+            .collect::<Vec<_>>();
+
+        for (i, existing_specialization) in generic_function.specializations.iter().enumerate() {
+            // For now, naive comparison that all type ids are identical
+            // There may be some scenarios where they are _equivalent_ but not identical
+            // But I'm not sure
+            let x = existing_specialization
+                .specialized_type_params
+                .iter()
+                .map(|type_id| self.type_id_to_string(*type_id))
+                .collect::<Vec<_>>()
+                .join("_");
+            warn!("existing specialization for {} {}: {}", new_name, i, x);
+            if existing_specialization.specialized_type_params == type_ids {
+                log::info!(
+                    "Found existing specialization for function {} with types: {}",
+                    &*self.get_ident_str(generic_function.name),
+                    x
+                );
+                let exprs = self.typecheck_call_arguments(
+                    fn_call,
+                    this_expr,
+                    &existing_specialization.specialized_params,
+                    calling_scope,
+                    false,
+                )?;
+                return Ok((existing_specialization.specialized_function_id, exprs));
+            }
         }
 
         let ast = self.ast.clone();
@@ -2105,12 +2261,23 @@ impl TypedModule {
             true,
             intrinsic_type,
         )?;
+        let specialized_params = self.get_function(specialized_function_id).params.clone();
         self.get_function_mut(generic_function_id).specializations.push(SpecializationRecord {
             specialized_function_id,
-            type_params: evaluated_type_args,
+            specialized_type_params: type_ids,
+            specialized_params: specialized_params.clone(),
         });
-        Ok(specialized_function_id)
+
+        let typechecked_exprs = self.typecheck_call_arguments(
+            fn_call,
+            this_expr,
+            &specialized_params,
+            calling_scope,
+            false,
+        )?;
+        Ok((specialized_function_id, typechecked_exprs))
     }
+
     fn eval_block_stmt(
         &mut self,
         stmt: &BlockStmt,
@@ -2282,7 +2449,6 @@ impl TypedModule {
         // from the generic version so we just pass it in
         known_intrinsic: Option<IntrinsicFunctionType>,
     ) -> TyperResult<FunctionId> {
-        let mut params = Vec::new();
         let fn_scope_id = match fn_scope_id {
             None => self.scopes.add_child_scope(parent_scope_id),
             Some(fn_scope_id) => fn_scope_id,
@@ -2320,6 +2486,7 @@ impl TypedModule {
         }
 
         // Typecheck arguments
+        let mut params = Vec::new();
         for (idx, fn_arg) in fn_def.args.iter().enumerate() {
             let type_id = self.eval_type_expr(&fn_arg.ty, fn_scope_id)?;
             if specialize {
@@ -2561,12 +2728,12 @@ impl TypedModule {
                 writ.write_str("}")
             }
             Type::Array(array) => {
-                writ.write_str("array<")?;
+                writ.write_str("Array<")?;
                 self.display_type_id(array.element_type, writ)?;
                 writ.write_str(">")
             }
             Type::TypeVariable(tv) => {
-                writ.write_str("tvar#")?;
+                writ.write_str("$")?;
                 writ.write_str(&self.get_ident_str(tv.identifier_id))
             }
             Type::Optional(opt) => {
