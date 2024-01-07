@@ -1,0 +1,21 @@
+fn combinedLength<T>(x: Array<T>, y: Array<T>): int {
+  x.length() + y.length()
+}
+
+fn identity<T>(x: T): T {
+  x
+}
+
+fn main(): int {
+  val xs = [1,2,3];
+  val ys = [4,5,6];
+
+  Array::length(xs);
+  xs.length();
+
+  identity(xs).length();
+
+  combinedLength(xs, ys);
+//  xs.length();
+  0
+}
