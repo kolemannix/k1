@@ -1,11 +1,11 @@
 fn last<T>(arr: Array<T>): T? {
-  if arr.length<T>() > 0 {
-    arr[arr.length<T>() - 1]
+  if arr.length() > 0 {
+    arr[arr.length() - 1]
   } else None
 }
 
 fn first<T>(arr: Array<T>): T? {
-  if arr.length<T>() > 0 {
+  if arr.length() > 0 {
     arr[0]
   } else None
 }
@@ -26,6 +26,9 @@ val NEW_LINE: int = 10;
 
 fn main(): int {
   val input = Files::readToString("/Users/knix/dev/nexlang/aoc/1.txt");
+  print("The file was ");
+  printInt(input.length());
+  println(" characters long");
   val digits: Array<Array<int>> = [];
   mut line = 0;
   mut first = true;
@@ -39,21 +42,27 @@ fn main(): int {
     };
     if is_digit(c) {
       if first {
-        digits.push<Array<int>>([as_digit(c)]);
+        digits.push([as_digit(c)]);
         first = false;
       } else {
-        digits[line].push<int>(as_digit(c));
+        digits[line].push(as_digit(c));
       };
     };
     i = i + 1;
   };
   i = 0;
   mut sum = 0;
-  while i < digits.length<Array<int>>() {
-    val first = first<int>(digits[i]);
-    val last = last<int>(digits[i]);
-    val two_digit = first! * 10 + last!;
-    sum = sum + two_digit;
+  while i < digits.length() {
+    val first: int? = first(digits[i]);
+    val last: int? = last(digits[i]);
+    if first |fst| {
+      if last |lst| {
+        val two_digit = fst * 10 + lst;
+        sum = sum + two_digit;
+      }
+    };
+//    val two_digit = first! * 10 + last!;
+//    sum = sum + two_digit;
     i = i + 1;
   };
   print("sum is ");
