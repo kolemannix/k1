@@ -54,6 +54,7 @@ The project isn't mature enough yet to make this list but the spirit of the effo
 - [x] Improve printing output by fixing display functions
 - [x] Implement builtin growable array
 - [x] Use aggregates in codegen, not pointers, for optionals
+- [x] Basic generic type inference in function calls
 - [ ] Precedence of dereference (and i guess unary ops in general) should be higher
 - [ ] Change our builtin int type to be 32 bits?
 - [ ] Make codegen fail instead of panic

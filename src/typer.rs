@@ -1055,6 +1055,8 @@ impl TypedModule {
                 self.typecheck_types(a1.element_type, a2.element_type)
             }
             (Type::TypeVariable(t1), Type::TypeVariable(t2)) => {
+                // This is broken; should be more robust than just same identifier; we need to know the scope
+                // so that we can resolve these type variables IF they point to something and typecheck those types
                 if t1.identifier_id == t2.identifier_id {
                     Ok(())
                 } else {
@@ -1412,7 +1414,7 @@ impl TypedModule {
                 let mut element_type: Option<TypeId> = match expected_type {
                     Some(type_id) => match self.get_type(type_id) {
                         Type::Array(arr) => Ok(Some(arr.element_type)),
-                        t => make_fail(format!("Expected {:?} but got Array", t), array_expr.span),
+                        _ => Ok(None),
                     },
                     None => Ok(None),
                 }?;
@@ -1943,7 +1945,9 @@ impl TypedModule {
             let matching_idx = fn_param.position - start;
             let matching_param = matching_param_by_name.or(fn_call.args.get(matching_idx as usize));
             if let Some(param) = matching_param {
-                let expr = self.eval_expr(&param.value, calling_scope, Some(fn_param.type_id))?;
+                let expected_type_for_param =
+                    if skip_typecheck { None } else { Some(fn_param.type_id) };
+                let expr = self.eval_expr(&param.value, calling_scope, expected_type_for_param)?;
                 if !skip_typecheck {
                     if let Err(e) = self.typecheck_types(fn_param.type_id, expr.get_type()) {
                         return make_fail(
@@ -2100,15 +2104,6 @@ impl TypedModule {
                 checked_params
             }
             None => {
-                // Implement some generic type inference. This could get slow!
-                //       Cases like [T](t: T) are easier but [T](x: ComplexType[A, B, T]) and solving for
-                //       T in that case is hard. Requires recursive search.
-                //       I wonder if we could infer in simple cases and refuse to infer
-                //       in complex cases that would be slow.
-                //       Inference algorithm:
-                //       1. Find arguments that include a type param
-                //       2. Find the actual value passed for each, find where the type variable appears within
-                //          that type expression, and assign it to the concrete type
                 let exprs = self.typecheck_call_arguments(
                     fn_call,
                     this_expr.cloned(),
@@ -2152,14 +2147,15 @@ impl TypedModule {
                         let existing_solution =
                             solved_params.iter().find(|p| p.ident == solved_param.ident);
                         if let Some(existing_solution) = existing_solution {
-                            if existing_solution.type_id != solved_param.type_id {
+                            if let Err(msg) = self
+                                .typecheck_types(existing_solution.type_id, solved_param.type_id)
+                            {
                                 return make_fail(
                                     format!(
-                                        "Conflicting type parameters for type param {} in call to {}: {} and {}",
+                                        "Conflicting type parameters for type param {} in call to {}: {}",
                                         &*self.get_ident_str(solved_param.ident),
                                         &*self.get_ident_str(generic_name),
-                                        self.type_id_to_string(existing_solution.type_id),
-                                        self.type_id_to_string(solved_param.type_id),
+                                        msg
                                     ),
                                     fn_call.span,
                                 );

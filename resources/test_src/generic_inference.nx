@@ -10,7 +10,6 @@ fn main(): int {
   val xs = [1,2,3];
   val ys = [4,5,6];
 
-  Array::length(xs);
   xs.length();
 
   identity(xs).length();
