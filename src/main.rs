@@ -106,6 +106,7 @@ pub fn compile_single_file_program<'ctx>(
         // "-v",
         if debug { "-g" } else { "" },
         if debug { "-O0" } else { "-O3" },
+        "-Woverride-module",
         &format!("{}/{}.ll", out_dir, filename),
         "-o",
         &format!("{}/{}.out", out_dir, filename),
@@ -134,7 +135,7 @@ fn main() -> Result<()> {
     static_assert_size!(parse::Expression, 104); // Get back down
     static_assert_size!(typer::TypedExpr, 56);
     static_assert_size!(typer::TypedStmt, 16);
-    println!("NexLang Compiler v0.1.0");
+    println!("bfl Compiler v0.1.0");
     let src_path = &args.file;
     let no_prelude = args.no_prelude;
     let out_dir = "nx-out";

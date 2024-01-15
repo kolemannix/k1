@@ -1705,7 +1705,6 @@ impl TypedModule {
         scope_id: ScopeId,
         expected_type: Option<TypeId>,
     ) -> TyperResult<TypedExpr> {
-        // Ensure boolean condition (or optional which isn't built yet)
         let mut condition = self.eval_expr(&if_expr.cond, scope_id, None)?;
         let consequent_scope_id = self.scopes.add_child_scope(scope_id);
         let mut consequent = if if_expr.optional_ident.is_some() {

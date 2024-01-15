@@ -3,6 +3,7 @@ extern fn _nx_charToString(c: char): string
 extern fn _nx_charToInt(c: char): int
 extern fn _nx_intToChar(i: int): char
 extern fn _nx_readFileToString(path: string): string
+
 intern fn printInt(value: int): unit
 intern fn print(value: string): unit
 intern fn exit(code: int): unit
@@ -17,7 +18,7 @@ fn printBool(value: bool): unit {
   if value { print("true") } else { print("false") }
 }
 fn assert(value: bool): unit {
-  if value { () } else { 
+  if !value { 
     print("ASSERT FAILED");
     exit(1)
   };
