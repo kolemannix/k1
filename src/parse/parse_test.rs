@@ -161,7 +161,7 @@ fn prelude_only() -> Result<(), ParseError> {
     assert_eq!(&module.source.filename, "prelude_only.nx");
     assert_eq!(&module.source.directory, ".");
     if let Some(Definition::FnDef(fndef)) = module.defs.first() {
-        assert_eq!(*module.get_ident_str(fndef.name), *"_nx_charToString")
+        assert_eq!(*module.get_ident_str(fndef.name), *"_bfl_charToString")
     } else {
         println!("{module:?}");
         panic!("no definitions in prelude");

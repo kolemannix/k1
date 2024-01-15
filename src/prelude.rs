@@ -1,8 +1,8 @@
 pub const PRELUDE_SOURCE: &str = r#"
-extern fn _nx_charToString(c: char): string
-extern fn _nx_charToInt(c: char): int
-extern fn _nx_intToChar(i: int): char
-extern fn _nx_readFileToString(path: string): string
+extern fn _bfl_charToString(c: char): string
+extern fn _bfl_charToInt(c: char): int
+extern fn _bfl_intToChar(i: int): char
+extern fn _bfl_readFileToString(path: string): string
 
 intern fn printInt(value: int): unit
 intern fn print(value: string): unit
@@ -10,7 +10,7 @@ intern fn exit(code: int): unit
 
 namespace Files {
   fn readToString(path: string): string {
-    _nx_readFileToString(path)
+    _bfl_readFileToString(path)
   }
 }
 
@@ -25,13 +25,13 @@ fn assert(value: bool): unit {
 }
 namespace char {
   fn fromInt(value: int): char {
-    _nx_intToChar(value)
+    _bfl_intToChar(value)
   }
   fn toInt(self: char): int {
-    _nx_charToInt(self)
+    _bfl_charToInt(self)
   }
   fn toString(self: char): string {
-    _nx_charToString(self)
+    _bfl_charToString(self)
   }
 }
 fn println(value: string): unit {
