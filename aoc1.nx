@@ -25,7 +25,7 @@ fn as_digit(c: char): int {
 val NEW_LINE: int = 10;
 
 fn main(): int {
-  val input = Files::readToString("/Users/knix/dev/nexlang/aoc/1.txt");
+  val input = Files::readToString("/Users/knix/dev/bfl/aoc/1.txt");
   print("The file was ");
   printInt(input.length());
   println(" characters long");
@@ -53,10 +53,10 @@ fn main(): int {
   i = 0;
   mut sum = 0;
   while i < digits.length() {
-    val first: int? = first(digits[i]);
-    val last: int? = last(digits[i]);
-    if first |fst| {
-      if last |lst| {
+//    val first: int? = first(digits[i]);
+//    val last: int? = last(digits[i]);
+    if first(digits[i]) |fst| {
+      if last(digits[i]) |lst| {
         val two_digit = fst * 10 + lst;
         sum = sum + two_digit;
       }

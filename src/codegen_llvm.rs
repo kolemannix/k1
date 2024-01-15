@@ -14,7 +14,7 @@ use inkwell::debug_info::{
 };
 use inkwell::module::{Linkage as LlvmLinkage, Module};
 use inkwell::passes::{PassManager, PassManagerBuilder};
-use inkwell::targets::{InitializationConfig, Target, TargetMachine};
+use inkwell::targets::{InitializationConfig, Target, TargetMachine, TargetTriple};
 use inkwell::types::{
     BasicMetadataTypeEnum, BasicType, BasicTypeEnum, IntType, PointerType, StructType,
 };
@@ -244,7 +244,7 @@ impl<'ctx> Codegen<'ctx> {
             DWARFSourceLanguage::C,
             &module.ast.source.filename,
             &module.ast.source.directory,
-            "nexlang_compiler",
+            "bfl_compiler",
             optimize,
             "",
             0,
@@ -1922,7 +1922,8 @@ impl<'ctx> Codegen<'ctx> {
 
     pub fn optimize(&mut self, optimize: bool) -> CodegenResult<()> {
         Target::initialize_aarch64(&InitializationConfig::default());
-        let triple = TargetMachine::get_default_triple();
+        // let triple = TargetMachine::get_default_triple();
+        let triple = TargetTriple::create("arm64-apple-macosx14.0.0");
         let target = Target::from_triple(&triple).unwrap();
         if !self.debug.strip_debug {
             self.debug.debug_builder.finalize();

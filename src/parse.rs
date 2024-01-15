@@ -209,6 +209,7 @@ pub struct OptionalGet {
 
 #[derive(Debug, Clone)]
 pub enum Expression {
+    // TODO: examples of each AST expression as comments
     BinaryOp(BinaryOp),
     UnaryOp(UnaryOp),
     Literal(Literal),
@@ -220,7 +221,7 @@ pub enum Expression {
     If(IfExpr),
     Record(Record),
     IndexOperation(IndexOperation),
-    Array(ArrayExpr),
+    Array(ArrayExpr), // [1, 3, 5, 7]
     OptionalGet(OptionalGet),
 }
 
@@ -337,9 +338,9 @@ pub struct WhileStmt {
 
 #[derive(Debug, Clone)]
 pub enum BlockStmt {
-    ValDef(ValDef),
-    Assignment(Assignment),
-    LoneExpression(Expression),
+    ValDef(ValDef),             // val x = 42
+    Assignment(Assignment),     // x = 42
+    LoneExpression(Expression), // println("asdfasdf")
     While(WhileStmt),
 }
 
@@ -1288,40 +1289,37 @@ impl<'toks> Parser<'toks> {
     }
 
     fn parse_if_expr(&mut self) -> ParseResult<Option<IfExpr>> {
-        if let Some(if_keyword) = self.eat_token(TokenKind::KeywordIf) {
-            let condition_expr =
-                Parser::expect("conditional expression", if_keyword, self.parse_expression())?;
-            let optional_ident = if self.peek().kind == K::Pipe {
-                self.tokens.advance();
-                let ident = self.expect_eat_token(K::Ident)?;
-                self.expect_eat_token(K::Pipe)?;
-                Some((self.intern_ident_token(ident), ident.span))
-            } else {
-                None
-            };
-            let consequent_expr =
-                Parser::expect("block following condition", if_keyword, self.parse_expression())?;
-            let else_peek = self.peek();
-            let alt = if else_peek.kind == K::KeywordElse {
-                self.tokens.advance();
-                let alt_result = Parser::expect("else block", else_peek, self.parse_expression())?;
-                Some(Box::new(alt_result))
-            } else {
-                None
-            };
-            let end_span = alt.as_ref().map(|a| a.get_span()).unwrap_or(consequent_expr.get_span());
-            let span = if_keyword.span.extended(end_span);
-            let if_expr = IfExpr {
-                cond: condition_expr.into(),
-                optional_ident,
-                cons: consequent_expr.into(),
-                alt,
-                span,
-            };
-            Ok(Some(if_expr))
+        let Some(if_keyword) = self.eat_token(TokenKind::KeywordIf) else { return Ok(None) };
+        let condition_expr =
+            Parser::expect("conditional expression", if_keyword, self.parse_expression())?;
+        let optional_ident = if self.peek().kind == K::Pipe {
+            self.tokens.advance();
+            let ident = self.expect_eat_token(K::Ident)?;
+            self.expect_eat_token(K::Pipe)?;
+            Some((self.intern_ident_token(ident), ident.span))
         } else {
-            Ok(None)
-        }
+            None
+        };
+        let consequent_expr =
+            Parser::expect("block following condition", if_keyword, self.parse_expression())?;
+        let else_peek = self.peek();
+        let alt = if else_peek.kind == K::KeywordElse {
+            self.tokens.advance();
+            let alt_result = Parser::expect("else block", else_peek, self.parse_expression())?;
+            Some(Box::new(alt_result))
+        } else {
+            None
+        };
+        let end_span = alt.as_ref().map(|a| a.get_span()).unwrap_or(consequent_expr.get_span());
+        let span = if_keyword.span.extended(end_span);
+        let if_expr = IfExpr {
+            cond: condition_expr.into(),
+            optional_ident,
+            cons: consequent_expr.into(),
+            alt,
+            span,
+        };
+        Ok(Some(if_expr))
     }
 
     fn parse_while_loop(&mut self) -> ParseResult<Option<WhileStmt>> {

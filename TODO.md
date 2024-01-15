@@ -1,9 +1,8 @@
-# nexlang
+# bfl
 
 Just learning lang dev by implementing a toy language. The goal is to implement all the basics, but maybe
 with a few syntactic insights or pet ideas that I like. I am trying not to have any aspirations for this project
-except to explore the problem space of compiler development, and maybe to be able to do some of advent of code 2023
-in this language
+except to explore the problem space of compiler development, and maybe to be able to do some of advent of code 2023 in this language
 
 # What? Why?
 
