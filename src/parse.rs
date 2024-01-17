@@ -1,14 +1,16 @@
 use std::cell::RefCell;
 use std::fmt::{Display, Formatter, Write};
 use std::rc::Rc;
+
+use log::trace;
 use string_interner::Symbol;
 
-use crate::lex::*;
-use crate::typer::{self, BinaryOpKind, Linkage, UnaryOpKind};
 use TokenKind as K;
 
+use crate::lex::*;
+use crate::typer::{BinaryOpKind, Linkage, UnaryOpKind};
+
 pub type AstId = u32;
-use log::trace;
 
 #[cfg(test)]
 mod parse_test;
@@ -537,13 +539,13 @@ impl AstModule {
     }
 }
 
-pub type ParseResult<A> = Result<A, ParseError>;
+pub type ParseResult<A> = anyhow::Result<A, ParseError>;
 
 #[derive(Debug)]
 pub struct ParseError {
-    expected: String,
-    token: Token,
-    cause: Option<Box<ParseError>>,
+    pub expected: String,
+    pub token: Token,
+    pub cause: Option<Box<ParseError>>,
 }
 
 impl ParseError {
@@ -610,9 +612,6 @@ impl<'toks> Parser<'toks> {
 impl<'toks> Parser<'toks> {
     pub fn ident_id(&mut self, s: impl AsRef<str>) -> IdentifierId {
         self.identifiers.borrow_mut().intern(s.as_ref())
-    }
-    pub fn get_ident_name(&self, id: IdentifierId) -> impl std::ops::Deref<Target = str> + '_ {
-        std::cell::Ref::map(self.identifiers.borrow(), |idents| idents.get_name(id))
     }
 
     pub fn print_error(&self, parse_error: &ParseError) {
@@ -981,7 +980,7 @@ impl<'toks> Parser<'toks> {
                 self.parse_expression_with_postfix_ops(),
             )?;
             while precedence <= last_precedence && expr_stack.len() > 1 {
-                log::trace!(
+                trace!(
                     "expr_stack at {:?}, precedence={}, last={}, stacklen={}",
                     op_kind,
                     precedence,
@@ -1047,7 +1046,7 @@ impl<'toks> Parser<'toks> {
             // TODO named type arguments
             let type_args: Vec<_> = type_expressions
                 .into_iter()
-                .map(|type_expr| FnCallTypeArg { name: None, type_expr: type_expr })
+                .map(|type_expr| FnCallTypeArg { name: None, type_expr })
                 .collect();
             Ok(Some(type_args))
         } else {
@@ -1385,24 +1384,20 @@ impl<'toks> Parser<'toks> {
             false
         };
         let linkage = if is_intrinsic {
-            typer::Linkage::Intrinsic
+            Linkage::Intrinsic
         } else if !is_intrinsic && self.peek().kind == K::KeywordExtern {
             self.tokens.advance();
-            typer::Linkage::External
+            Linkage::External
         } else {
-            typer::Linkage::Standard
+            Linkage::Standard
         };
 
         let Some(fn_keyword) = self.eat_token(K::KeywordFn) else {
-            if is_intrinsic {
-                return Err(ParseError {
-                    expected: "fn".to_string(),
-                    token: self.peek(),
-                    cause: None,
-                });
+            return if is_intrinsic {
+                Err(ParseError { expected: "fn".to_string(), token: self.peek(), cause: None })
             } else {
-                return Ok(None);
-            }
+                Ok(None)
+            };
         };
         let func_name = self.expect_eat_token(K::Ident)?;
         let func_name_id = self.intern_ident_token(func_name);
@@ -1516,7 +1511,8 @@ impl<'toks> Parser<'toks> {
     }
 }
 
-fn print_tokens(content: &str, tokens: &[Token]) {
+#[allow(unused)]
+pub fn print_tokens(content: &str, tokens: &[Token]) {
     let mut line_idx = 0;
     for tok in tokens.iter() {
         if tok.span.line > line_idx {
