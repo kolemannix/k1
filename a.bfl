@@ -1,7 +1,4 @@
 fn main(): int {
-  print('\t'.toString());
-  print('\t'.toString());
-  print('\t'.toString());
-  print("asdfasdfasdfasdf");
+  assert(1 != 2);
   0
 }

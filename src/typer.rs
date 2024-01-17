@@ -229,6 +229,7 @@ pub enum BinaryOpKind {
     And,
     Or,
     Equals,
+    NotEquals,
 }
 
 impl Display for BinaryOpKind {
@@ -245,6 +246,7 @@ impl Display for BinaryOpKind {
             BinaryOpKind::And => f.write_str("and"),
             BinaryOpKind::Or => f.write_str("or"),
             BinaryOpKind::Equals => f.write_str("=="),
+            BinaryOpKind::NotEquals => f.write_str("!="),
         }
     }
 }
@@ -255,7 +257,7 @@ impl BinaryOpKind {
         match self {
             B::Multiply | B::Divide => 100,
             B::Add | B::Subtract => 90,
-            B::Less | B::LessEqual | B::Greater | B::GreaterEqual | B::Equals => 80,
+            B::Less | B::LessEqual | B::Greater | B::GreaterEqual | B::Equals | B::NotEquals => 80,
             B::And => 70,
             B::Or => 66,
         }
@@ -272,6 +274,7 @@ impl BinaryOpKind {
             TokenKind::KeywordAnd => Some(BinaryOpKind::And),
             TokenKind::KeywordOr => Some(BinaryOpKind::Or),
             TokenKind::EqualsEquals => Some(BinaryOpKind::Equals),
+            TokenKind::BangEquals => Some(BinaryOpKind::NotEquals),
             _ => None,
         }
     }
@@ -283,7 +286,7 @@ impl BinaryOpKind {
             B::Multiply | B::Divide => true,
             B::Less | B::Greater | B::LessEqual | B::GreaterEqual => true,
             B::Or | B::And => true,
-            B::Equals => true,
+            B::Equals | B::NotEquals => true,
         }
     }
 }
@@ -1570,6 +1573,7 @@ impl TypedModule {
                     BinaryOpKind::And => lhs.get_type(),
                     BinaryOpKind::Or => lhs.get_type(),
                     BinaryOpKind::Equals => BOOL_TYPE_ID,
+                    BinaryOpKind::NotEquals => BOOL_TYPE_ID,
                 };
                 let expr = TypedExpr::BinaryOp(BinaryOp {
                     kind,

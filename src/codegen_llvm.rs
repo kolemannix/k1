@@ -1212,7 +1212,7 @@ impl<'ctx> Codegen<'ctx> {
                         };
                         op.as_basic_value_enum().into()
                     }
-                    BinaryOpKind::Equals => {
+                    BinaryOpKind::Equals | BinaryOpKind::NotEquals => {
                         // I actually have no idea how I want to handle equality at this point
                         // Obviously we want some sort of value equality on user-defined types
                         // But here for builtin types maybe we just keep assuming everything
@@ -1221,7 +1221,11 @@ impl<'ctx> Codegen<'ctx> {
                         let rhs_int = self.codegen_expr_rvalue(&bin_op.rhs).into_int_value();
                         self.builder
                             .build_int_compare(
-                                IntPredicate::EQ,
+                                if bin_op.kind == BinaryOpKind::Equals {
+                                    IntPredicate::EQ
+                                } else {
+                                    IntPredicate::NE
+                                },
                                 lhs_int,
                                 rhs_int,
                                 &format!("{}", bin_op.kind),
