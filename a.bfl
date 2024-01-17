@@ -1,0 +1,9 @@
+fn main(): int {
+  print("hello, world!");
+  val xs: Array<int> = [1, 5, 9];
+  val squared = for it in xs { it * it };
+  for squared {
+    true
+  };
+  0
+}

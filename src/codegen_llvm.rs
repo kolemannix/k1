@@ -1324,6 +1324,14 @@ impl<'ctx> Codegen<'ctx> {
                     elem_value
                 }
             }
+            TypedExpr::For(typed_for_expr) => {
+                eprintln!(
+                    "codegen for expr: {}: {}",
+                    self.module.expr_to_string(expr),
+                    self.module.type_id_to_string(expr.get_type())
+                );
+                todo!("codegen for exprs")
+            }
         }
     }
     fn codegen_function_call(&mut self, call: &Call) -> BasicValueEnum<'ctx> {

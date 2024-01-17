@@ -63,6 +63,8 @@ pub enum TokenKind {
     KeywordNamespace,
     KeywordIntern,
     KeywordExtern,
+    KeywordFor,
+    KeywordIn,
 
     Slash,
     LineComment,
@@ -127,6 +129,8 @@ impl TokenKind {
             K::KeywordNamespace => Some("namespace"),
             K::KeywordIntern => Some("intern"),
             K::KeywordExtern => Some("extern"),
+            K::KeywordFor => Some("for"),
+            K::KeywordIn => Some("in"),
 
             K::Slash => Some("/"),
             K::LineComment => Some("//"),
@@ -209,6 +213,8 @@ impl TokenKind {
             "namespace" => Some(K::KeywordNamespace),
             "intern" => Some(K::KeywordIntern),
             "extern" => Some(K::KeywordExtern),
+            "for" => Some(K::KeywordFor),
+            "in" => Some(K::KeywordIn),
             "==" => Some(K::EqualsEquals),
             "<=" => Some(K::LessThanEqual),
             ">=" => Some(K::GreaterThanEqual),
@@ -227,6 +233,8 @@ impl TokenKind {
             K::KeywordNamespace => true,
             K::KeywordIntern => true,
             K::KeywordExtern => true,
+            K::KeywordFor => true,
+            K::KeywordIn => true,
             _ => false,
         }
     }
