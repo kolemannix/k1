@@ -79,6 +79,7 @@ pub enum TokenKind {
     Semicolon,
     Equals,
     EqualsEquals,
+    BangEquals,
     Dot,
     Comma,
     Bang,
@@ -143,6 +144,7 @@ impl TokenKind {
             K::Semicolon => Some(";"),
             K::Equals => Some("="),
             K::EqualsEquals => Some("=="),
+            K::BangEquals => Some("!="),
             K::Dot => Some("."),
             K::Comma => Some(","),
             K::Bang => Some("!"),
@@ -210,6 +212,7 @@ impl TokenKind {
             "intern" => Some(K::KeywordIntern),
             "extern" => Some(K::KeywordExtern),
             "==" => Some(K::EqualsEquals),
+            "!=" => Some(K::BangEquals),
             "<=" => Some(K::LessThanEqual),
             ">=" => Some(K::GreaterThanEqual),
             _ => None,
@@ -428,6 +431,16 @@ impl Lexer<'_> {
                     self.advance();
                     break Some(Token::new(
                         K::EqualsEquals,
+                        self.line_index,
+                        n,
+                        2,
+                        peeked_whitespace,
+                    ));
+                } else if single_char_tok == TokenKind::Bang && next == '=' {
+                    self.advance();
+                    self.advance();
+                    break Some(Token::new(
+                        K::BangEquals,
                         self.line_index,
                         n,
                         2,
