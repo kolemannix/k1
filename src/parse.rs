@@ -4,7 +4,7 @@ use std::rc::Rc;
 use string_interner::Symbol;
 
 use crate::lex::*;
-use crate::typer::{self, BinaryOpKind, Linkage, UnaryOpKind};
+use crate::typer::{self, BinaryOpKind, Linkage, TypedExpr, UnaryOpKind};
 use TokenKind as K;
 
 pub type AstId = u32;
@@ -223,6 +223,7 @@ pub enum Expression {
     IndexOperation(IndexOperation),
     Array(ArrayExpr), // [1, 3, 5, 7]
     OptionalGet(OptionalGet),
+    For(ForExpr),
 }
 
 impl Expression {
@@ -245,6 +246,7 @@ impl Expression {
             Expression::IndexOperation(op) => op.span,
             Expression::Array(array_expr) => array_expr.span,
             Expression::OptionalGet(optional_get) => optional_get.span,
+            Expression::For(for_expr) => for_expr.span,
         }
     }
 
@@ -263,6 +265,7 @@ impl Expression {
             Expression::Record(_record) => false,
             Expression::Array(_array_expr) => false,
             Expression::OptionalGet(_optional_get) => false,
+            Expression::For(_) => false,
         }
     }
 }
@@ -288,6 +291,7 @@ impl Display for Expression {
             Expression::IndexOperation(op) => op.fmt(f),
             Expression::Array(array_expr) => std::fmt::Debug::fmt(array_expr, f),
             Expression::OptionalGet(optional_get) => std::fmt::Debug::fmt(optional_get, f),
+            Expression::For(for_expr) => std::fmt::Debug::fmt(for_expr, f),
         }
     }
 }
@@ -333,6 +337,14 @@ pub struct WhileStmt {
     pub cond: Expression,
     pub block: Block,
     /// Maybe its better not to store a span on nodes for which a span is trivially calculated
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct ForExpr {
+    pub iterable_expr: Box<Expression>,
+    pub binding: Option<IdentifierId>,
+    pub body_block: Block,
     pub span: Span,
 }
 
@@ -955,6 +967,10 @@ impl<'toks> Parser<'toks> {
         }
     }
 
+    fn expect_block(&mut self) -> ParseResult<Block> {
+        Parser::expect("block", self.peek(), self.parse_block())
+    }
+
     fn expect_expression(&mut self) -> ParseResult<Expression> {
         Parser::expect("expression", self.peek(), self.parse_expression())
     }
@@ -1068,6 +1084,28 @@ impl<'toks> Parser<'toks> {
             // TODO: If comma, parse a tuple
             self.expect_eat_token(K::CloseParen)?;
             Ok(Some(expr))
+        } else if first.kind == K::KeywordFor {
+            self.tokens.advance();
+            let binding = if third.kind == K::KeywordIn {
+                if second.kind != K::Ident {
+                    return Err(Parser::error("Expected identifiers between for and in keywords", second));
+                }
+                let binding_ident = self.intern_ident_token(second);
+                self.tokens.advance();
+                self.tokens.advance();
+                Some(binding_ident)
+            } else {
+                None
+            };
+            let iterable_expr = self.expect_expression()?;
+            let body_expr = self.expect_block()?;
+            let span = first.span.extended(body_expr.span);
+            Ok(Some(Expression::For(ForExpr {
+                iterable_expr: Box::new(iterable_expr),
+                binding,
+                body_block: body_expr,
+                span
+            })))
         } else if first.kind.is_prefix_operator() {
             let Some(op_kind) = UnaryOpKind::from_tokenkind(first.kind) else {
                 return Err(Parser::error("unexpected prefix operator", first));

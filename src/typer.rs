@@ -399,6 +399,15 @@ pub struct OptionalGet {
 }
 
 #[derive(Debug, Clone)]
+pub struct TypedForExpr {
+    pub iterable_expr: Box<TypedExpr>,
+    pub binding: IdentifierId,
+    pub body_block: Box<TypedBlock>,
+    pub result_type_id: TypeId,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
 pub enum TypedExpr {
     Unit(Span),
     Char(u8, Span),
@@ -421,6 +430,7 @@ pub enum TypedExpr {
     OptionalSome(OptionalSome),
     OptionalHasValue(Box<TypedExpr>),
     OptionalGet(OptionalGet),
+    For(TypedForExpr),
 }
 
 // pub enum BuiltinType {
@@ -471,6 +481,7 @@ impl TypedExpr {
             TypedExpr::OptionalSome(opt) => opt.type_id,
             TypedExpr::OptionalHasValue(_opt) => BOOL_TYPE_ID,
             TypedExpr::OptionalGet(opt_get) => opt_get.result_type_id,
+            TypedExpr::For(for_expr) => for_expr.result_type_id,
         }
     }
     #[inline]
@@ -496,6 +507,7 @@ impl TypedExpr {
             TypedExpr::OptionalSome(opt) => opt.inner_expr.get_span(),
             TypedExpr::OptionalHasValue(opt) => opt.get_span(),
             TypedExpr::OptionalGet(get) => get.span,
+            TypedExpr::For(for_expr) => for_expr.span,
         }
     }
 }
@@ -887,6 +899,22 @@ impl TypedModule {
             Type::Optional(opt) => self.is_generic(opt.inner_type),
             Type::Reference(refer) => self.is_generic(refer.inner_type),
             Type::TypeVariable(_) => true,
+        }
+    }
+
+    fn item_type_of_iterable(&self, type_id: TypeId) -> Option<TypeId> {
+        match self.get_type(type_id) {
+            Type::Unit => None,
+            Type::Char => None,
+            Type::Int => None,
+            Type::Bool => None,
+            Type::String => Some(CHAR_TYPE_ID),
+            Type::Array(arr) => Some(arr.element_type),
+            // We don't yet support generics in records
+            Type::Record(_record) => None,
+            Type::Optional(opt) => Some(opt.inner_type),
+            Type::Reference(_refer) => None,
+            Type::TypeVariable(_) => None,
         }
     }
 
@@ -1695,6 +1723,67 @@ impl TypedModule {
                     result_type_id: optional_type.inner_type,
                     span: optional_get.span,
                 }))
+            }
+            Expression::For(for_expr) => {
+                let binding_ident = for_expr.binding.unwrap_or(self.ast.ident_id("it"));
+                let iterable_expr = self.eval_expr(&for_expr.iterable_expr, scope_id, None)?;
+                let iteree_type = iterable_expr.get_type();
+                let Some(item_type) = self.item_type_of_iterable(iteree_type) else {
+                    return make_fail(
+                        format!(
+                            "Type {} is not iterable",
+                            self.type_id_to_string(iterable_expr.get_type())
+                        ),
+                        for_expr.iterable_expr.get_span(),
+                    );
+                };
+
+                // We need to 'bind' before eval of the body
+                let body_scope_id = self.scopes.add_child_scope(scope_id);
+                let binding_variable_id = self.add_variable(Variable {
+                    name: binding_ident,
+                    type_id: item_type,
+                    is_mutable: false,
+                    owner_scope: Some(body_scope_id),
+                });
+                self.scopes.add_variable(body_scope_id, binding_ident, binding_variable_id);
+
+                // TODO: we can hint to the block based on the expected type of the entire for expr
+                let body_block = self.eval_block(&for_expr.body_block, body_scope_id, None)?;
+                let result_type = match self.get_type(iteree_type) {
+                    Type::Optional(opt) => {
+                        let new_optional =
+                            Type::Optional(OptionalType { inner_type: body_block.expr_type });
+                        let new_type_id = self.add_type(new_optional);
+                        new_type_id
+                    }
+                    Type::Array(arr) => {
+                        let new_array = Type::Array(ArrayType {
+                            element_type: body_block.expr_type,
+                            span: for_expr.span,
+                        });
+                        let new_type_id = self.add_type(new_array);
+                        new_type_id
+                    }
+                    Type::String => {
+                        let new_array = Type::Array(ArrayType {
+                            element_type: body_block.expr_type,
+                            span: for_expr.span,
+                        });
+                        let new_type_id = self.add_type(new_array);
+                        new_type_id
+                    }
+                    other => UNIT_TYPE_ID,
+                };
+                let span = for_expr.span;
+                let for_expr = TypedForExpr {
+                    iterable_expr: Box::new(iterable_expr),
+                    binding: binding_ident,
+                    body_block: Box::new(body_block),
+                    result_type_id: result_type,
+                    span,
+                };
+                Ok(TypedExpr::For(for_expr))
             }
         }
     }
@@ -2934,6 +3023,14 @@ impl TypedModule {
             TypedExpr::OptionalGet(opt) => {
                 self.display_expr(&opt.inner_expr, writ)?;
                 writ.write_str("!")
+            }
+            TypedExpr::For(for_expr) => {
+                writ.write_str("for ")?;
+                writ.write_str(&self.get_ident_str(for_expr.binding))?;
+                writ.write_str(" in ")?;
+                self.display_expr(&for_expr.iterable_expr, writ)?;
+                writ.write_str(" ")?;
+                self.display_block(&for_expr.body_block, writ)
             }
         }
     }
