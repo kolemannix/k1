@@ -1,0 +1,7 @@
+fn main(): int {
+  print('\t'.toString());
+  print('\t'.toString());
+  print('\t'.toString());
+  print("asdfasdfasdfasdf");
+  0
+}

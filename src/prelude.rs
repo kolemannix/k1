@@ -17,6 +17,7 @@ namespace Files {
 fn printBool(value: bool): unit {
   if value { print("true") } else { print("false") }
 }
+
 fn assert(value: bool): unit {
   if !value { 
     print("ASSERT FAILED");
@@ -33,10 +34,6 @@ namespace char {
   fn toString(self: char): string {
     _bfl_charToString(self)
   }
-}
-fn println(value: string): unit {
-  print(value);
-  print(char::fromInt(10).toString());
 }
 
 namespace Array {
@@ -84,5 +81,10 @@ namespace string {
     fromChars(copied)
   }
 }
+
+fn println(value: string): unit {
+  print(value.concat('\n'.toString()));
+}
+
 // -------- END PRELUDE --------"#;
-pub const PRELUDE_LINES: usize = 87;
+pub const PRELUDE_LINES: usize = 89;
