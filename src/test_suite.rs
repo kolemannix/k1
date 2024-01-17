@@ -10,7 +10,7 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P) -> Result<()> {
     let src_dir = path.parent().unwrap().to_str().unwrap();
     let src = std::fs::read_to_string(&path).expect("could not read source file for test");
     println!("{}", filename);
-    let out_dir = "nx-out/test_suite";
+    let out_dir = "bfl-out/test_suite";
     crate::compile_single_file_program(
         ctx,
         filename,
