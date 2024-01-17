@@ -128,7 +128,7 @@ pub fn compile_single_file_program<'ctx>(
 fn main() -> Result<()> {
     env_logger::init();
     let args = Args::parse();
-    println!("{:?}", args);
+    println!("{:#?}", args);
 
     static_assert_size!(parse::Definition, 16);
     static_assert_size!(parse::BlockStmt, 224); // Get down below 100

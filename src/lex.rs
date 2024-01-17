@@ -283,6 +283,7 @@ impl Span {
 }
 
 const TOKEN_FLAG_IS_WHITESPACE_PRECEEDED: u64 = 0x01;
+#[allow(unused)]
 const TOKEN_FLAG_IS_WHITESPACE_FOLLOWED: u64 = 0x02;
 
 #[derive(Debug, Clone, Copy)]
@@ -335,7 +336,7 @@ impl Lexer<'_> {
         let mut line_comment_start = 0;
         let mut is_string = false;
         let peeked_whitespace = self.peek().is_whitespace();
-        log::trace!("lex starting new token with prev_skip=false");
+        trace!("lex starting new token with prev_skip=false");
         loop {
             let (c, n) = self.peek_with_pos();
             trace!("LEX line={} char={} '{}' buf={}", self.line_index, n, c, tok_buf);
@@ -411,11 +412,11 @@ impl Lexer<'_> {
                                           //
                                           // TODO: Support escapes in char literal
                     let quote = self.next(); // eat closing '
-                    assert!(quote == '\''); // lmao that's meta
-                                            //
-                                            // `n` is the index of the opening quote
-                                            // n + 1 will be the index of the char we care about
-                                            // length will be 1
+                    assert_eq!(quote, '\''); // lmao that's meta
+                                             //
+                                             // `n` is the index of the opening quote
+                                             // n + 1 will be the index of the char we care about
+                                             // length will be 1
                     break Some(Token::new(
                         TokenKind::Char,
                         self.line_index,
@@ -519,10 +520,6 @@ impl Lexer<'_> {
             self.pos += 1;
         }
         c
-    }
-    fn next_with_pos(&mut self) -> (char, u32) {
-        let old_pos = self.pos;
-        (self.next(), old_pos)
     }
     fn peek(&self) -> char {
         self.content.clone().next().unwrap_or(EOF_CHAR)

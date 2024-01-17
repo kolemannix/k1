@@ -1,20 +1,21 @@
 #![allow(clippy::match_like_matches_macro)]
 
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt::{Display, Formatter, Write};
+use std::rc::Rc;
+
+use anyhow::bail;
+use colored::Colorize;
+use either::Either;
+use log::{debug, error, trace, Level};
+
 use crate::lex::{Span, TokenKind};
 use crate::parse::{self, IfExpr, IndexOperation, ParsedNamespace};
 use crate::parse::{
     AstId, AstModule, Block, BlockStmt, Definition, Expression, FnCall, FnDef, IdentifierId,
     Literal,
 };
-use anyhow::{bail, Result};
-use colored::Colorize;
-use log::{error, info, trace, warn};
-use std::collections::HashMap;
-use std::error::Error;
-
-use either::Either;
-use std::fmt::{Display, Formatter, Write};
-use std::rc::Rc;
 
 pub type ScopeId = u32;
 pub type FunctionId = u32;
@@ -1182,7 +1183,7 @@ impl TypedModule {
         namespaces: &[IdentifierId],
         span: Span,
     ) -> TyperResult<ScopeId> {
-        log::trace!(
+        trace!(
             "traverse_namespace_chain: {:?}",
             namespaces.iter().map(|id| self.get_ident_str(*id).to_string()).collect::<Vec<_>>()
         );
@@ -2172,7 +2173,7 @@ impl TypedModule {
                         fn_call.span,
                     );
                 } else {
-                    eprintln!("Solved params: {:?}", solved_params);
+                    debug!("Solved params: {:?}", solved_params);
                     solved_params
                 }
             }
@@ -2206,7 +2207,7 @@ impl TypedModule {
                     fn_call.span,
                 );
             };
-            info!(
+            debug!(
                 "Adding type param {}: {} to scope for specialized function {}",
                 &*self.get_ident_str(type_param.ident),
                 self.type_id_to_string(type_param.type_id),
@@ -2235,12 +2236,11 @@ impl TypedModule {
                 .map(|type_id| self.type_id_to_string(*type_id))
                 .collect::<Vec<_>>()
                 .join("_");
-            warn!("existing specialization for {} {}: {}", name, i, types_stringified);
+            debug!("existing specialization for {} {}: {}", name, i, types_stringified);
             if existing_specialization.specialized_type_params == type_ids {
-                log::info!(
+                debug!(
                     "Found existing specialization for function {} with types: {}",
-                    name,
-                    types_stringified
+                    name, types_stringified
                 );
                 let exprs = self.typecheck_call_arguments(
                     fn_call,
@@ -2621,7 +2621,7 @@ impl TypedModule {
             }
         }
     }
-    pub fn run(&mut self) -> Result<()> {
+    pub fn run(&mut self) -> anyhow::Result<()> {
         let mut errors: Vec<TyperError> = Vec::new();
         // TODO: 'Declare' everything first, will allow modules
         //        to declare their API without full typechecking
@@ -2636,9 +2636,11 @@ impl TypedModule {
             }
         }
         if !errors.is_empty() {
-            println!("{}", self);
+            if log::log_enabled!(Level::Debug) {
+                debug!("{}", self);
+            }
             println!("{:?}", errors);
-            bail!("Typechecking failed")
+            bail!("{} failed typechecking", self.ast.source.filename)
         }
         Ok(())
     }
@@ -2678,11 +2680,7 @@ impl Display for TypedModule {
 
 // Dumping
 impl TypedModule {
-    fn display_variable(
-        &self,
-        var: &Variable,
-        writ: &mut impl std::fmt::Write,
-    ) -> std::fmt::Result {
+    fn display_variable(&self, var: &Variable, writ: &mut impl Write) -> std::fmt::Result {
         if var.is_mutable {
             writ.write_str("mut ")?;
         }
@@ -2691,7 +2689,7 @@ impl TypedModule {
         self.display_type_id(var.type_id, writ)
     }
 
-    fn display_type_id(&self, ty: TypeId, writ: &mut impl std::fmt::Write) -> std::fmt::Result {
+    fn display_type_id(&self, ty: TypeId, writ: &mut impl Write) -> std::fmt::Result {
         match ty {
             UNIT_TYPE_ID => writ.write_str("()"),
             CHAR_TYPE_ID => writ.write_str("char"),
@@ -2716,7 +2714,7 @@ impl TypedModule {
         s
     }
 
-    fn write_type(&self, ty: &Type, writ: &mut impl std::fmt::Write) -> std::fmt::Result {
+    fn write_type(&self, ty: &Type, writ: &mut impl Write) -> std::fmt::Result {
         match ty {
             Type::Unit => writ.write_str("()"),
             Type::Char => writ.write_str("char"),
@@ -2758,7 +2756,7 @@ impl TypedModule {
     pub fn display_function(
         &self,
         function: &Function,
-        writ: &mut impl std::fmt::Write,
+        writ: &mut impl Write,
         display_block: bool,
     ) -> std::fmt::Result {
         if function.linkage == Linkage::External {
@@ -2790,11 +2788,7 @@ impl TypedModule {
         Ok(())
     }
 
-    fn display_block(
-        &self,
-        block: &TypedBlock,
-        writ: &mut impl std::fmt::Write,
-    ) -> std::fmt::Result {
+    fn display_block(&self, block: &TypedBlock, writ: &mut impl Write) -> std::fmt::Result {
         writ.write_str("{\n")?;
         for stmt in &block.statements {
             self.display_stmt(stmt, writ)?;
@@ -2803,7 +2797,7 @@ impl TypedModule {
         writ.write_str("}")
     }
 
-    fn display_stmt(&self, stmt: &TypedStmt, writ: &mut impl std::fmt::Write) -> std::fmt::Result {
+    fn display_stmt(&self, stmt: &TypedStmt, writ: &mut impl Write) -> std::fmt::Result {
         match stmt {
             TypedStmt::Expr(expr) => self.display_expr(expr, writ),
             TypedStmt::ValDef(val_def) => {
@@ -2832,11 +2826,7 @@ impl TypedModule {
         s
     }
 
-    pub fn display_expr(
-        &self,
-        expr: &TypedExpr,
-        writ: &mut impl std::fmt::Write,
-    ) -> std::fmt::Result {
+    pub fn display_expr(&self, expr: &TypedExpr, writ: &mut impl Write) -> std::fmt::Result {
         match expr {
             TypedExpr::Unit(_) => writ.write_str("()"),
             TypedExpr::Char(c, _) => writ.write_fmt(format_args!("'{}'", c)),
