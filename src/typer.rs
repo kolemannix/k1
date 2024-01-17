@@ -2639,8 +2639,7 @@ impl TypedModule {
             if log::log_enabled!(Level::Debug) {
                 debug!("{}", self);
             }
-            println!("{:?}", errors);
-            bail!("{} failed typechecking", self.ast.source.filename)
+            bail!("{} failed typechecking with {} errors", self.ast.source.filename, errors.len())
         }
         Ok(())
     }

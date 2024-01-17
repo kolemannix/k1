@@ -407,21 +407,20 @@ impl Lexer<'_> {
                     ));
                 } else if single_char_tok == TokenKind::SingleQuote {
                     self.advance(); // eat opening '
-                    let _c = self.next(); // eat the char itself
-                                          //
-                                          //
-                                          // TODO: Support escapes in char literal
-                    let quote = self.next(); // eat closing '
-                    assert_eq!(quote, '\''); // lmao that's meta
-                                             //
-                                             // `n` is the index of the opening quote
-                                             // n + 1 will be the index of the char we care about
-                                             // length will be 1
+                    let mut count = 1;
+                    loop {
+                        let c = self.next();
+                        count += 1;
+                        if c == '\'' {
+                            break;
+                        }
+                    }
+                    // `n` is the index of the opening quote
                     break Some(Token::new(
                         TokenKind::Char,
                         self.line_index,
-                        n + 1,
-                        1,
+                        n,
+                        count,
                         peeked_whitespace,
                     ));
                 } else if single_char_tok == TokenKind::Equals && next == '=' {
