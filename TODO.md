@@ -118,7 +118,7 @@ The project isn't mature enough yet to make this list but the spirit of the effo
   - charToString implemented in zig and linked
 - [ ] array bounds checking
 - [ ] Array.distinct in zig
-- [ ] Not equal != operator
+- [x] Not equal != operator
 - [x] Unary negation operator
 
 # Fibonacci todos (Aug 20)

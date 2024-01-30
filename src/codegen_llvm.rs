@@ -166,6 +166,7 @@ impl<'ctx> BuiltinTypes<'ctx> {
 struct LibcFunctions<'ctx> {
     printf: FunctionValue<'ctx>,
     exit: FunctionValue<'ctx>,
+    memcmp: FunctionValue<'ctx>,
 }
 
 pub struct Codegen<'ctx> {
@@ -375,6 +376,13 @@ impl<'ctx> Codegen<'ctx> {
             ctx.void_type().fn_type(&[builtin_types.i64.into()], false),
             Some(LlvmLinkage::External),
         );
+        let byte_ptr = ctx.i8_type().ptr_type(AddressSpace::default());
+        let memcmp = llvm_module.add_function(
+            "memcmp",
+            ctx.i32_type()
+                .fn_type(&[byte_ptr.into(), byte_ptr.into(), ctx.i64_type().into()], false),
+            Some(LlvmLinkage::External),
+        );
         Codegen {
             ctx,
             module,
@@ -385,7 +393,7 @@ impl<'ctx> Codegen<'ctx> {
             globals,
             llvm_functions: HashMap::new(),
             llvm_types: RefCell::new(HashMap::new()),
-            libc_functions: LibcFunctions { printf, exit },
+            libc_functions: LibcFunctions { printf, exit, memcmp },
             builtin_globals,
             builtin_types,
             default_address_space: AddressSpace::default(),
@@ -1509,6 +1517,91 @@ impl<'ctx> Codegen<'ctx> {
                 let _copied =
                     self.builder.build_memcpy(string_data, 1, array_data, 1, array_len).unwrap();
                 string.as_basic_value_enum()
+            }
+            IntrinsicFunctionType::StringEquals => {
+                let string1 =
+                    self.get_loaded_variable(function.params[0].variable_id).into_struct_value();
+                let string2 =
+                    self.get_loaded_variable(function.params[1].variable_id).into_struct_value();
+                let string1len = self.builtin_types.string_length(&self.builder, string1);
+                let string2len = self.builtin_types.string_length(&self.builder, string2);
+                let len_eq = self.builder.build_int_compare(
+                    IntPredicate::EQ,
+                    string1len,
+                    string2len,
+                    "len_eq",
+                );
+                let start_block = self.builder.get_insert_block().unwrap();
+                let current_fn = start_block.get_parent().unwrap();
+                let result = self.builder.build_alloca(self.builtin_types.boolean, "result");
+                self.builder.build_store(result, self.builtin_types.false_value);
+
+                let compare_block = self.ctx.append_basic_block(current_fn, "compare");
+                let finish_block = self.ctx.append_basic_block(current_fn, "finish");
+
+                // If lengths are equal, go to mem compare
+                self.builder.build_conditional_branch(len_eq, compare_block, finish_block);
+
+                self.builder.position_at_end(compare_block);
+                let empty_strings_block =
+                    self.ctx.append_basic_block(current_fn, "empty_strings_case");
+                let memcmp_block = self.ctx.append_basic_block(current_fn, "memcmp_case");
+                let len_is_zero = self.builder.build_int_compare(
+                    IntPredicate::EQ,
+                    string1len,
+                    self.builtin_types.i64.const_zero(),
+                    "len_is_zero",
+                );
+                self.builder.build_conditional_branch(
+                    len_is_zero,
+                    empty_strings_block,
+                    memcmp_block,
+                );
+
+                self.builder.position_at_end(empty_strings_block);
+                self.build_print_string_call(self.const_string("empty case"));
+                self.builder.build_store(result, self.builtin_types.true_value);
+                self.builder.build_unconditional_branch(finish_block);
+
+                self.builder.position_at_end(memcmp_block);
+                self.build_print_string_call(self.const_string("memcmp"));
+                let string1data = self.builtin_types.string_data(&self.builder, string1);
+                let string2data = self.builtin_types.string_data(&self.builder, string2);
+                // let memcmp_intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.memcmp").unwrap();
+                // let memcmp_function = memcmp_intrinsic
+                //     .get_declaration(
+                //         &self.llvm_module,
+                //         &[self
+                //             .ctx
+                //             .i8_type()
+                //             .ptr_type(self.default_address_space)
+                //             .as_basic_type_enum()],
+                //     )
+                //     .unwrap();
+                let memcmp_result_i32 = self
+                    .builder
+                    .build_call(
+                        self.libc_functions.memcmp,
+                        &[string1data.into(), string2data.into(), string1len.into()],
+                        "data_eq",
+                    )
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap()
+                    .into_int_value();
+                let is_zero = self.builder.build_int_compare(
+                    IntPredicate::EQ,
+                    memcmp_result_i32,
+                    self.ctx.i32_type().const_zero(),
+                    "is_zero",
+                );
+                self.builder.build_store(result, is_zero);
+                self.builder.build_unconditional_branch(finish_block);
+
+                self.builder.position_at_end(finish_block);
+                self.builder
+                    .build_load(self.builtin_types.boolean, result, "string_eq_result_value")
+                    .as_basic_value_enum()
             }
             IntrinsicFunctionType::ArrayLength => {
                 let array_arg =
