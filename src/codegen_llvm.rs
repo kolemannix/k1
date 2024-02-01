@@ -26,7 +26,7 @@ use inkwell::{AddressSpace, IntPredicate, OptimizationLevel};
 use log::trace;
 
 use crate::lex::Span;
-use crate::parse::IdentifierId;
+use crate::parse::{ForExprType, IdentifierId};
 use crate::typer::{Linkage as TyperLinkage, *};
 
 const STRING_LENGTH_FIELD_INDEX: u32 = 0;
@@ -1290,11 +1290,12 @@ impl<'ctx> Codegen<'ctx> {
                     }
                 }
             }
-            TypedExpr::Block(_block) => {
+            TypedExpr::Block(block) => {
                 // This is just a lexical scoping block, not a control-flow block, so doesn't need
                 // to correspond to an LLVM basic block
                 // We just need to codegen each statement and assign the return value to an alloca
-                todo!("codegen lexical block")
+                let block_value = self.codegen_block_statements(block).unwrap();
+                block_value
             }
             TypedExpr::FunctionCall(call) => self.codegen_function_call(call),
             TypedExpr::ArrayIndex(index_op) => {
@@ -1331,7 +1332,12 @@ impl<'ctx> Codegen<'ctx> {
                     self.module.expr_to_string(expr),
                     self.module.type_id_to_string(expr.get_type())
                 );
-                todo!("codegen for exprs")
+                match typed_for_expr.for_expr_type {
+                    ForExprType::Yield => unimplemented!("codegen for yield"),
+                    ForExprType::Do => {
+                        unimplemented!("codegen for do");
+                    }
+                }
             }
         }
     }

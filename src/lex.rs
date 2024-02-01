@@ -65,6 +65,8 @@ pub enum TokenKind {
     KeywordExtern,
     KeywordFor,
     KeywordIn,
+    KeywordDo,
+    KeywordYield,
 
     Slash,
     LineComment,
@@ -132,6 +134,8 @@ impl TokenKind {
             K::KeywordExtern => Some("extern"),
             K::KeywordFor => Some("for"),
             K::KeywordIn => Some("in"),
+            K::KeywordDo => Some("do"),
+            K::KeywordYield => Some("yield"),
 
             K::Slash => Some("/"),
             K::LineComment => Some("//"),
@@ -217,6 +221,8 @@ impl TokenKind {
             "extern" => Some(K::KeywordExtern),
             "for" => Some(K::KeywordFor),
             "in" => Some(K::KeywordIn),
+            "do" => Some(K::KeywordDo),
+            "yield" => Some(K::KeywordYield),
             "==" => Some(K::EqualsEquals),
             "!=" => Some(K::BangEquals),
             "<=" => Some(K::LessThanEqual),
@@ -238,6 +244,8 @@ impl TokenKind {
             K::KeywordExtern => true,
             K::KeywordFor => true,
             K::KeywordIn => true,
+            K::KeywordDo => true,
+            K::KeywordYield => true,
             _ => false,
         }
     }

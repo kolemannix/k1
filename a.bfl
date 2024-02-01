@@ -1,9 +1,27 @@
 fn main(): int {
   print("hello, world!");
   val xs: Array<int> = [1, 5, 9];
-  val squared = for it in xs { it * it };
-  for squared {
-    true
-  };
+  // for version
+
+  println("");
+  val squared = for it in [1, 5, 9] do { printInt(it * it); println("") };
+
+
+
+
+
+
+  // while version
+  // val squared = {
+  //   mut i = 0;
+  //   val iteree = [1, 5, 9];
+  //   val res: Array<bool> = [];
+  //   while i < iteree.length() {
+  //     val it = iteree[i];
+  //     let block_expr_val = { <block exprs> (it > 0) };
+  //     res.push(block_expr_val)
+  //     i = i + 1;
+  //   };
+  // };
   0
 }

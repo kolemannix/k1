@@ -341,11 +341,18 @@ pub struct WhileStmt {
     pub span: Span,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForExprType {
+    Yield,
+    Do,
+}
+
 #[derive(Debug, Clone)]
 pub struct ForExpr {
     pub iterable_expr: Box<Expression>,
     pub binding: Option<IdentifierId>,
     pub body_block: Block,
+    pub expr_type: ForExprType,
     pub span: Span,
 }
 
@@ -1133,12 +1140,22 @@ impl<'toks> Parser<'toks> {
                 None
             };
             let iterable_expr = self.expect_expression()?;
+            let expr_type_keyword = self.tokens.peek();
+            let for_expr_type = if expr_type_keyword.kind == K::KeywordYield {
+                Ok(ForExprType::Yield)
+            } else if expr_type_keyword.kind == K::KeywordDo {
+                Ok(ForExprType::Do)
+            } else {
+                Err(Parser::error("Expected yield or do keyword", expr_type_keyword))
+            }?;
+            self.tokens.advance();
             let body_expr = self.expect_block()?;
             let span = first.span.extended(body_expr.span);
             Ok(Some(Expression::For(ForExpr {
                 iterable_expr: Box::new(iterable_expr),
                 binding,
                 body_block: body_expr,
+                expr_type: for_expr_type,
                 span,
             })))
         } else if first.kind.is_prefix_operator() {
