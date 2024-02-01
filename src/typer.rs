@@ -11,7 +11,9 @@ use either::Either;
 use log::{debug, error, trace, Level};
 
 use crate::lex::{Span, TokenKind};
-use crate::parse::{self, IfExpr, IndexOperation, ParsedNamespace};
+use crate::parse::{
+    self, FnCallArg, FnCallTypeArg, ForExprType, IfExpr, IndexOperation, ParsedNamespace,
+};
 use crate::parse::{
     AstId, AstModule, Block, BlockStmt, Definition, Expression, FnCall, FnDef, IdentifierId,
     Literal,
@@ -408,6 +410,7 @@ pub struct TypedForExpr {
     pub binding: IdentifierId,
     pub body_block: Box<TypedBlock>,
     pub result_type_id: TypeId,
+    pub for_expr_type: ForExprType,
     pub span: Span,
 }
 
@@ -1751,52 +1754,168 @@ impl TypedModule {
                     );
                 };
 
-                // We need to 'bind' before eval of the body
-                let body_scope_id = self.scopes.add_child_scope(scope_id);
-                let binding_variable_id = self.add_variable(Variable {
-                    name: binding_ident,
-                    type_id: item_type,
-                    is_mutable: false,
-                    owner_scope: Some(body_scope_id),
-                });
-                self.scopes.add_variable(body_scope_id, binding_ident, binding_variable_id);
+                if for_expr.expr_type == ForExprType::Do {
+                    // We de-sugar the 'for ... do' expr into a typed while loop, synthesizing
+                    // a few local variables in order to achieve this.
+                    // I think these are broken scoping-wise and will collide with user code currently!
 
-                // TODO: we can hint to the block based on the expected type of the entire for expr
-                let body_block = self.eval_block(&for_expr.body_block, body_scope_id, None)?;
-                let result_type = match self.get_type(iteree_type) {
-                    Type::Optional(opt) => {
-                        let new_optional =
-                            Type::Optional(OptionalType { inner_type: body_block.expr_type });
-                        let new_type_id = self.add_type(new_optional);
-                        new_type_id
+                    let result_type = UNIT_TYPE_ID;
+                    let for_expr_scope = self.scopes.add_child_scope(scope_id);
+                    let counter_variable = self.add_variable(Variable {
+                        name: self.ast.ident_id("counter_uniq"),
+                        type_id: INT_TYPE_ID,
+                        is_mutable: true,
+                        owner_scope: Some(for_expr_scope),
+                    });
+                    let counter_variable_expr = TypedExpr::Variable(VariableExpr {
+                        type_id: INT_TYPE_ID,
+                        variable_id: counter_variable,
+                        span: for_expr.iterable_expr.get_span(),
+                    });
+                    let counter_def = TypedStmt::ValDef(Box::new(ValDef {
+                        variable_id: counter_variable,
+                        ty: INT_TYPE_ID,
+                        initializer: TypedExpr::Int(0, for_expr.body_block.span),
+                        span: for_expr.body_block.span,
+                    }));
+                    let iteree_variable = self.add_variable(Variable {
+                        name: self.ast.ident_id("iteree"),
+                        type_id: iteree_type,
+                        is_mutable: false,
+                        owner_scope: Some(for_expr_scope),
+                    });
+                    let iteree_def = TypedStmt::ValDef(Box::new(ValDef {
+                        variable_id: iteree_variable,
+                        ty: iteree_type,
+                        initializer: iterable_expr,
+                        span: for_expr.iterable_expr.get_span(),
+                    }));
+                    // We need to 'bind' before eval of the body
+                    let body_scope_id = self.scopes.add_child_scope(for_expr_scope);
+                    let mut for_expr_block = TypedBlock {
+                        expr_type: result_type,
+                        scope_id: for_expr_scope,
+                        statements: vec![counter_def, iteree_def],
+                        span: for_expr.body_block.span,
+                    };
+                    let binding_variable_id = self.add_variable(Variable {
+                        name: binding_ident,
+                        type_id: item_type,
+                        is_mutable: false,
+                        owner_scope: Some(body_scope_id),
+                    });
+                    self.scopes.add_variable(body_scope_id, binding_ident, binding_variable_id);
+                    let iteree_variable_expr = TypedExpr::Variable(VariableExpr {
+                        type_id: iteree_type,
+                        variable_id: iteree_variable,
+                        span: for_expr.iterable_expr.get_span(),
+                    });
+                    let val_def = TypedStmt::ValDef(Box::new(ValDef {
+                        variable_id: binding_variable_id,
+                        ty: item_type,
+                        initializer: TypedExpr::ArrayIndex(IndexOp {
+                            base_expr: Box::new(iteree_variable_expr.clone()),
+                            index_expr: Box::new(TypedExpr::Variable(VariableExpr {
+                                type_id: INT_TYPE_ID,
+                                variable_id: counter_variable,
+                                span: for_expr.iterable_expr.get_span(),
+                            })),
+                            result_type: item_type,
+                            span: for_expr.iterable_expr.get_span(),
+                        }),
+                        span: for_expr.iterable_expr.get_span(),
+                    }));
+
+                    // TODO: we can hint to the block based on the expected type of the entire for expr
+                    let mut body_block =
+                        self.eval_block(&for_expr.body_block, body_scope_id, None)?;
+                    // Prepend the val def to the body block
+                    body_block.statements.insert(0, val_def);
+                    // Append the counter increment to the body block
+                    let counter_increment_statement = TypedStmt::Assignment(Box::new(Assignment {
+                        destination: Box::new(counter_variable_expr.clone()),
+                        value: Box::new(TypedExpr::BinaryOp(BinaryOp {
+                            kind: BinaryOpKind::Add,
+                            ty: INT_TYPE_ID,
+                            lhs: Box::new(TypedExpr::Variable(VariableExpr {
+                                type_id: INT_TYPE_ID,
+                                variable_id: counter_variable,
+                                span: for_expr.iterable_expr.get_span(),
+                            })),
+                            rhs: Box::new(TypedExpr::Int(1, for_expr.iterable_expr.get_span())),
+                            span: for_expr.iterable_expr.get_span(),
+                        })),
+                        span: for_expr.iterable_expr.get_span(),
+                    }));
+                    body_block.statements.push(counter_increment_statement);
+
+                    let array_length_call = self.eval_function_call(
+                        &FnCall {
+                            name: self.ast.ident_id("length"),
+                            type_args: None,
+                            args: vec![FnCallArg {
+                                name: None,
+                                value: *for_expr.iterable_expr.clone(),
+                            }],
+                            namespaces: vec![self.ast.ident_id("Array")],
+                            span: for_expr.iterable_expr.get_span(),
+                        },
+                        None,
+                        scope_id,
+                    )?;
+                    let while_stmt = TypedStmt::WhileLoop(Box::new(TypedWhileLoop {
+                        cond: TypedExpr::BinaryOp(BinaryOp {
+                            kind: BinaryOpKind::Less,
+                            ty: BOOL_TYPE_ID,
+                            lhs: Box::new(counter_variable_expr.clone()),
+                            rhs: Box::new(array_length_call),
+                            span: for_expr.iterable_expr.get_span(),
+                        }),
+                        block: body_block,
+                        span: for_expr.span,
+                    }));
+
+                    for_expr_block.statements.push(while_stmt);
+
+                    // let for_expr = TypedForExpr {
+                    //     iterable_expr: Box::new(iterable_expr),
+                    //     binding: binding_ident,
+                    //     body_block: Box::new(body_block),
+                    //     for_expr_type: for_expr.expr_type,
+                    //     result_type_id: result_type,
+                    //     span,
+                    // };
+                    let final_expr = TypedExpr::Block(for_expr_block);
+                    eprintln!("{}", self.expr_to_string(&final_expr));
+                    Ok(final_expr)
+                } else {
+                    match self.get_type(iteree_type) {
+                        Type::Optional(opt) => {
+                            // let new_optional =
+                            //     Type::Optional(OptionalType { inner_type: body_block.expr_type });
+                            // let new_type_id = self.add_type(new_optional);
+                            todo!("for on optionals")
+                        }
+                        Type::Array(arr) => {
+                            // let new_array = Type::Array(ArrayType {
+                            //     element_type: body_block.expr_type,
+                            //     span: for_expr.span,
+                            // });
+                            // let new_type_id = self.add_type(new_array);
+                            // new_type_id
+                            todo!("for on arrays")
+                        }
+                        Type::String => {
+                            // let new_array = Type::Array(ArrayType {
+                            //     element_type: body_block.expr_type,
+                            //     span: for_expr.span,
+                            // });
+                            // let new_type_id = self.add_type(new_array);
+                            todo!("for on string")
+                        }
+                        _other => todo!("for on unknown"),
                     }
-                    Type::Array(arr) => {
-                        let new_array = Type::Array(ArrayType {
-                            element_type: body_block.expr_type,
-                            span: for_expr.span,
-                        });
-                        let new_type_id = self.add_type(new_array);
-                        new_type_id
-                    }
-                    Type::String => {
-                        let new_array = Type::Array(ArrayType {
-                            element_type: body_block.expr_type,
-                            span: for_expr.span,
-                        });
-                        let new_type_id = self.add_type(new_array);
-                        new_type_id
-                    }
-                    other => UNIT_TYPE_ID,
-                };
-                let span = for_expr.span;
-                let for_expr = TypedForExpr {
-                    iterable_expr: Box::new(iterable_expr),
-                    binding: binding_ident,
-                    body_block: Box::new(body_block),
-                    result_type_id: result_type,
-                    span,
-                };
-                Ok(TypedExpr::For(for_expr))
+                }
             }
         }
     }
@@ -3146,6 +3265,10 @@ impl TypedModule {
                 writ.write_str(" in ")?;
                 self.display_expr(&for_expr.iterable_expr, writ)?;
                 writ.write_str(" ")?;
+                writ.write_str(match for_expr.for_expr_type {
+                    ForExprType::Yield => "yield ",
+                    ForExprType::Do => "do ",
+                })?;
                 self.display_block(&for_expr.body_block, writ)
             }
         }
