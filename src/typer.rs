@@ -12,7 +12,8 @@ use log::{debug, error, trace, Level};
 
 use crate::lex::{Span, TokenKind};
 use crate::parse::{
-    self, FnCallArg, FnCallTypeArg, ForExprType, IfExpr, IndexOperation, ParsedNamespace,
+    self, FnCallArg, FnCallTypeArg, ForExpr, ForExprType, IfExpr, IndexOperation, ParsedNamespace,
+    ParsedTypeExpression,
 };
 use crate::parse::{
     AstId, AstModule, Block, BlockStmt, Definition, Expression, FnCall, FnDef, IdentifierId,
@@ -67,6 +68,7 @@ pub struct TypeExpression {
 #[derive(Debug, Clone)]
 pub struct ArrayType {
     pub element_type: TypeId,
+    // todo: Lose the span!
     pub span: Span,
 }
 
@@ -547,7 +549,6 @@ pub struct TypedWhileLoop {
     pub span: Span,
 }
 
-// TODO: When do we 'clone' a whole TypedStmt?
 #[derive(Debug, Clone)]
 pub enum TypedStmt {
     Expr(Box<TypedExpr>),
@@ -1740,184 +1741,291 @@ impl TypedModule {
                     span: optional_get.span,
                 }))
             }
-            Expression::For(for_expr) => {
-                let binding_ident = for_expr.binding.unwrap_or(self.ast.ident_id("it"));
-                let iterable_expr = self.eval_expr(&for_expr.iterable_expr, scope_id, None)?;
-                let iteree_type = iterable_expr.get_type();
-                let Some(item_type) = self.item_type_of_iterable(iteree_type) else {
-                    return make_fail(
-                        format!(
-                            "Type {} is not iterable",
-                            self.type_id_to_string(iterable_expr.get_type())
-                        ),
-                        for_expr.iterable_expr.get_span(),
-                    );
-                };
+            Expression::For(for_expr) => self.eval_for_expr(for_expr, scope_id, expected_type),
+        }
+    }
 
-                if for_expr.expr_type == ForExprType::Do {
-                    // We de-sugar the 'for ... do' expr into a typed while loop, synthesizing
-                    // a few local variables in order to achieve this.
-                    // I think these are broken scoping-wise and will collide with user code currently!
+    fn synth_variable_decl(
+        &mut self,
+        variable: Variable,
+        span: Span,
+        initializer: TypedExpr,
+    ) -> (VariableId, TypedStmt, TypedExpr) {
+        let type_id = variable.type_id;
+        let ident_id = variable.name;
+        let scope_id = variable.owner_scope;
+        let variable_id = self.add_variable(variable);
+        let expr = VariableExpr { type_id, variable_id, span };
+        let val_def =
+            TypedStmt::ValDef(Box::new(ValDef { variable_id, ty: type_id, initializer, span }));
+        self.scopes.add_variable(
+            scope_id.unwrap_or(self.scopes.get_root_scope_id()),
+            ident_id,
+            variable_id,
+        );
+        (variable_id, val_def, TypedExpr::Variable(expr))
+    }
 
-                    let result_type = UNIT_TYPE_ID;
-                    let for_expr_scope = self.scopes.add_child_scope(scope_id);
-                    let counter_variable = self.add_variable(Variable {
-                        name: self.ast.ident_id("counter_uniq"),
-                        type_id: INT_TYPE_ID,
-                        is_mutable: true,
-                        owner_scope: Some(for_expr_scope),
-                    });
-                    let counter_variable_expr = TypedExpr::Variable(VariableExpr {
-                        type_id: INT_TYPE_ID,
-                        variable_id: counter_variable,
-                        span: for_expr.iterable_expr.get_span(),
-                    });
-                    let counter_def = TypedStmt::ValDef(Box::new(ValDef {
-                        variable_id: counter_variable,
-                        ty: INT_TYPE_ID,
-                        initializer: TypedExpr::Int(0, for_expr.body_block.span),
-                        span: for_expr.body_block.span,
-                    }));
-                    let iteree_variable = self.add_variable(Variable {
-                        name: self.ast.ident_id("iteree"),
-                        type_id: iteree_type,
-                        is_mutable: false,
-                        owner_scope: Some(for_expr_scope),
-                    });
-                    let iteree_def = TypedStmt::ValDef(Box::new(ValDef {
-                        variable_id: iteree_variable,
-                        ty: iteree_type,
-                        initializer: iterable_expr,
-                        span: for_expr.iterable_expr.get_span(),
-                    }));
-                    // We need to 'bind' before eval of the body
-                    let body_scope_id = self.scopes.add_child_scope(for_expr_scope);
-                    let mut for_expr_block = TypedBlock {
-                        expr_type: result_type,
-                        scope_id: for_expr_scope,
-                        statements: vec![counter_def, iteree_def],
-                        span: for_expr.body_block.span,
-                    };
-                    let binding_variable_id = self.add_variable(Variable {
-                        name: binding_ident,
-                        type_id: item_type,
-                        is_mutable: false,
-                        owner_scope: Some(body_scope_id),
-                    });
-                    self.scopes.add_variable(body_scope_id, binding_ident, binding_variable_id);
-                    let iteree_variable_expr = TypedExpr::Variable(VariableExpr {
-                        type_id: iteree_type,
-                        variable_id: iteree_variable,
-                        span: for_expr.iterable_expr.get_span(),
-                    });
-                    let val_def = TypedStmt::ValDef(Box::new(ValDef {
-                        variable_id: binding_variable_id,
-                        ty: item_type,
-                        initializer: TypedExpr::ArrayIndex(IndexOp {
-                            base_expr: Box::new(iteree_variable_expr.clone()),
-                            index_expr: Box::new(TypedExpr::Variable(VariableExpr {
-                                type_id: INT_TYPE_ID,
-                                variable_id: counter_variable,
-                                span: for_expr.iterable_expr.get_span(),
-                            })),
-                            result_type: item_type,
-                            span: for_expr.iterable_expr.get_span(),
-                        }),
-                        span: for_expr.iterable_expr.get_span(),
-                    }));
+    fn eval_for_expr(
+        &mut self,
+        for_expr: &ForExpr,
+        scope_id: ScopeId,
+        _expected_type: Option<TypeId>,
+    ) -> TyperResult<TypedExpr> {
+        let binding_ident = for_expr.binding.unwrap_or(self.ast.ident_id("it"));
+        let iterable_expr = self.eval_expr(&for_expr.iterable_expr, scope_id, None)?;
+        let iteree_type = iterable_expr.get_type();
+        let Some(item_type) = self.item_type_of_iterable(iteree_type) else {
+            return make_fail(
+                format!(
+                    "Type {} is not iterable",
+                    self.type_id_to_string(iterable_expr.get_type())
+                ),
+                for_expr.iterable_expr.get_span(),
+            );
+        };
 
-                    // TODO: we can hint to the block based on the expected type of the entire for expr
-                    let mut body_block =
-                        self.eval_block(&for_expr.body_block, body_scope_id, None)?;
-                    // Prepend the val def to the body block
-                    body_block.statements.insert(0, val_def);
-                    // Append the counter increment to the body block
-                    let counter_increment_statement = TypedStmt::Assignment(Box::new(Assignment {
-                        destination: Box::new(counter_variable_expr.clone()),
-                        value: Box::new(TypedExpr::BinaryOp(BinaryOp {
-                            kind: BinaryOpKind::Add,
-                            ty: INT_TYPE_ID,
-                            lhs: Box::new(TypedExpr::Variable(VariableExpr {
-                                type_id: INT_TYPE_ID,
-                                variable_id: counter_variable,
-                                span: for_expr.iterable_expr.get_span(),
-                            })),
-                            rhs: Box::new(TypedExpr::Int(1, for_expr.iterable_expr.get_span())),
-                            span: for_expr.iterable_expr.get_span(),
-                        })),
-                        span: for_expr.iterable_expr.get_span(),
-                    }));
-                    body_block.statements.push(counter_increment_statement);
+        let is_do_block = for_expr.expr_type == ForExprType::Do;
 
-                    let array_length_call = self.eval_function_call(
+        // We de-sugar the 'for ... do' expr into a typed while loop, synthesizing
+        // a few local variables in order to achieve this.
+        // I think these are broken scoping-wise and will collide with user code currently!
+
+        let for_expr_scope = self.scopes.add_child_scope(scope_id);
+
+        let (counter_variable, counter_def, counter_variable_expr) = self.synth_variable_decl(
+            Variable {
+                name: self.ast.ident_id("counter_uniq"),
+                type_id: INT_TYPE_ID,
+                is_mutable: true,
+                owner_scope: Some(for_expr_scope),
+            },
+            for_expr.body_block.span,
+            TypedExpr::Int(0, for_expr.body_block.span),
+        );
+        let (_iteree_variable_id, iteree_def, iteree_variable_expr) = self.synth_variable_decl(
+            Variable {
+                name: self.ast.ident_id("iteree"),
+                type_id: iteree_type,
+                is_mutable: false,
+                owner_scope: Some(for_expr_scope),
+            },
+            for_expr.iterable_expr.get_span(),
+            iterable_expr,
+        );
+
+        let while_scope_id = self.scopes.add_child_scope(for_expr_scope);
+        let binding_variable_id = self.add_variable(Variable {
+            name: binding_ident,
+            type_id: item_type,
+            is_mutable: false,
+            owner_scope: Some(while_scope_id),
+        });
+        self.scopes.add_variable(while_scope_id, binding_ident, binding_variable_id);
+        let iteration_element_val_def = TypedStmt::ValDef(Box::new(ValDef {
+            variable_id: binding_variable_id,
+            ty: item_type,
+            initializer: TypedExpr::ArrayIndex(IndexOp {
+                base_expr: Box::new(iteree_variable_expr.clone()),
+                index_expr: Box::new(TypedExpr::Variable(VariableExpr {
+                    type_id: INT_TYPE_ID,
+                    variable_id: counter_variable,
+                    span: for_expr.body_block.span,
+                })),
+                result_type: item_type,
+                span: for_expr.body_block.span,
+            }),
+            span: for_expr.body_block.span,
+        }));
+
+        // TODO: we can hint to the block based on the expected type of the entire for expr
+        let body_scope_id = self.scopes.add_child_scope(while_scope_id);
+        let body_block = self.eval_block(&for_expr.body_block, body_scope_id, None)?;
+
+        let resulting_type = if is_do_block {
+            UNIT_TYPE_ID
+        } else {
+            match self.get_type(iteree_type) {
+                Type::Optional(_opt) => {
+                    let new_optional =
+                        Type::Optional(OptionalType { inner_type: body_block.expr_type });
+                    self.add_type(new_optional)
+                }
+                Type::Array(_arr) => {
+                    let new_array = Type::Array(ArrayType {
+                        element_type: body_block.expr_type,
+                        span: for_expr.span,
+                    });
+                    self.add_type(new_array)
+                }
+                Type::String => {
+                    let new_array = Type::Array(ArrayType {
+                        element_type: body_block.expr_type,
+                        span: for_expr.span,
+                    });
+                    self.add_type(new_array)
+                }
+                other => todo!("Unsupported iteree type: {}", self.type_to_string(other)),
+            }
+        };
+        let yield_decls = if !is_do_block {
+            let yield_variable = Variable {
+                name: self.ast.ident_id("yielded_coll"),
+                type_id: resulting_type,
+                is_mutable: false,
+                owner_scope: Some(for_expr_scope),
+            };
+
+            let yield_initializer = match self.get_type(resulting_type) {
+                Type::Array(_array_type) => TypedExpr::Array(ArrayLiteral {
+                    elements: vec![],
+                    type_id: resulting_type,
+                    span: for_expr.body_block.span,
+                }),
+                Type::Optional(_optional_type) => {
+                    TypedExpr::None(resulting_type, for_expr.body_block.span)
+                }
+                _ => todo!("unsupported resulting_type in for_expr yield"),
+            };
+            Some(self.synth_variable_decl(
+                yield_variable,
+                for_expr.body_block.span,
+                yield_initializer,
+            ))
+        } else {
+            None
+        };
+        let mut while_block = TypedBlock {
+            expr_type: UNIT_TYPE_ID,
+            scope_id: while_scope_id,
+            statements: Vec::new(),
+            span: for_expr.body_block.span,
+        };
+        // Prepend the val def to the body block
+        while_block.statements.push(iteration_element_val_def);
+        let (_user_block_val_id, user_block_val_def, user_block_val_expr) = self
+            .synth_variable_decl(
+                Variable {
+                    name: self.ast.ident_id("block_expr_val"),
+                    type_id: body_block.expr_type,
+                    is_mutable: false,
+                    owner_scope: Some(while_scope_id),
+                },
+                for_expr.body_block.span,
+                TypedExpr::Block(body_block),
+            );
+        while_block.statements.push(user_block_val_def);
+        // Append the counter increment to the body block
+        let counter_increment_statement = TypedStmt::Assignment(Box::new(Assignment {
+            destination: Box::new(counter_variable_expr.clone()),
+            value: Box::new(TypedExpr::BinaryOp(BinaryOp {
+                kind: BinaryOpKind::Add,
+                ty: INT_TYPE_ID,
+                lhs: Box::new(TypedExpr::Variable(VariableExpr {
+                    type_id: INT_TYPE_ID,
+                    variable_id: counter_variable,
+                    span: for_expr.iterable_expr.get_span(),
+                })),
+                rhs: Box::new(TypedExpr::Int(1, for_expr.iterable_expr.get_span())),
+                span: for_expr.iterable_expr.get_span(),
+            })),
+            span: for_expr.iterable_expr.get_span(),
+        }));
+        while_block.statements.push(counter_increment_statement);
+
+        // Either push to yield array or reassign our optional var
+        if let Some((yield_coll_variable_id, _yield_def, yield_expr)) = &yield_decls {
+            match self.get_type(resulting_type) {
+                Type::Array(_) => {
+                    let push_fn_call = self.eval_function_call(
                         &FnCall {
-                            name: self.ast.ident_id("length"),
+                            name: self.ast.ident_id("push"),
                             type_args: None,
-                            args: vec![FnCallArg {
-                                name: None,
-                                value: *for_expr.iterable_expr.clone(),
-                            }],
+                            // type_args: Some(vec![FnCallTypeArg {
+                            //     name: None,
+                            //     type_expr: ParsedTypeExpression::Int(for_expr.span),
+                            // }]),
+                            args: vec![
+                                FnCallArg {
+                                    name: None,
+                                    value: parse::Expression::Variable(parse::Variable {
+                                        ident: self.get_variable(*yield_coll_variable_id).name,
+                                        span: for_expr.body_block.span,
+                                    }),
+                                },
+                                FnCallArg {
+                                    name: None,
+                                    value: parse::Expression::Variable(parse::Variable {
+                                        ident: self.ast.ident_id("block_expr_val"),
+                                        span: for_expr.body_block.span,
+                                    }),
+                                },
+                            ],
                             namespaces: vec![self.ast.ident_id("Array")],
-                            span: for_expr.iterable_expr.get_span(),
+                            span: for_expr.body_block.span,
                         },
                         None,
-                        scope_id,
+                        while_scope_id,
                     )?;
-                    let while_stmt = TypedStmt::WhileLoop(Box::new(TypedWhileLoop {
-                        cond: TypedExpr::BinaryOp(BinaryOp {
-                            kind: BinaryOpKind::Less,
-                            ty: BOOL_TYPE_ID,
-                            lhs: Box::new(counter_variable_expr.clone()),
-                            rhs: Box::new(array_length_call),
-                            span: for_expr.iterable_expr.get_span(),
-                        }),
-                        block: body_block,
-                        span: for_expr.span,
-                    }));
-
-                    for_expr_block.statements.push(while_stmt);
-
-                    // let for_expr = TypedForExpr {
-                    //     iterable_expr: Box::new(iterable_expr),
-                    //     binding: binding_ident,
-                    //     body_block: Box::new(body_block),
-                    //     for_expr_type: for_expr.expr_type,
-                    //     result_type_id: result_type,
-                    //     span,
-                    // };
-                    let final_expr = TypedExpr::Block(for_expr_block);
-                    eprintln!("{}", self.expr_to_string(&final_expr));
-                    Ok(final_expr)
-                } else {
-                    match self.get_type(iteree_type) {
-                        Type::Optional(opt) => {
-                            // let new_optional =
-                            //     Type::Optional(OptionalType { inner_type: body_block.expr_type });
-                            // let new_type_id = self.add_type(new_optional);
-                            todo!("for on optionals")
-                        }
-                        Type::Array(arr) => {
-                            // let new_array = Type::Array(ArrayType {
-                            //     element_type: body_block.expr_type,
-                            //     span: for_expr.span,
-                            // });
-                            // let new_type_id = self.add_type(new_array);
-                            // new_type_id
-                            todo!("for on arrays")
-                        }
-                        Type::String => {
-                            // let new_array = Type::Array(ArrayType {
-                            //     element_type: body_block.expr_type,
-                            //     span: for_expr.span,
-                            // });
-                            // let new_type_id = self.add_type(new_array);
-                            todo!("for on string")
-                        }
-                        _other => todo!("for on unknown"),
-                    }
+                    while_block.statements.push(TypedStmt::Expr(Box::new(push_fn_call)));
                 }
+                Type::Optional(_) => {
+                    let some_val = TypedExpr::OptionalSome(OptionalSome {
+                        inner_expr: Box::new(user_block_val_expr),
+                        type_id: resulting_type,
+                    });
+                    let assignment = TypedStmt::Assignment(Box::new(Assignment {
+                        destination: Box::new(yield_expr.clone()),
+                        value: Box::new(some_val),
+                        span: for_expr.body_block.span,
+                    }));
+                    while_block.statements.push(assignment);
+                }
+                _ => {}
             }
         }
+
+        let array_length_call = self.eval_function_call(
+            &FnCall {
+                name: self.ast.ident_id("length"),
+                type_args: None,
+                args: vec![FnCallArg { name: None, value: *for_expr.iterable_expr.clone() }],
+                namespaces: vec![self.ast.ident_id("Array")],
+                span: for_expr.iterable_expr.get_span(),
+            },
+            None,
+            for_expr_scope,
+        )?;
+        let while_stmt = TypedStmt::WhileLoop(Box::new(TypedWhileLoop {
+            cond: TypedExpr::BinaryOp(BinaryOp {
+                kind: BinaryOpKind::Less,
+                ty: BOOL_TYPE_ID,
+                lhs: Box::new(counter_variable_expr.clone()),
+                rhs: Box::new(array_length_call),
+                span: for_expr.iterable_expr.get_span(),
+            }),
+            block: while_block,
+            span: for_expr.span,
+        }));
+
+        let mut for_expr_initial_statements = Vec::with_capacity(4);
+        for_expr_initial_statements.push(counter_def);
+        for_expr_initial_statements.push(iteree_def);
+        if let Some((_yield_id, yield_def, _yield_expr)) = yield_decls {
+            for_expr_initial_statements.push(yield_def);
+        }
+        let mut for_expr_block = TypedBlock {
+            expr_type: resulting_type,
+            scope_id: for_expr_scope,
+            statements: for_expr_initial_statements,
+            span: for_expr.body_block.span,
+        };
+
+        for_expr_block.statements.push(while_stmt);
+
+        let final_expr = TypedExpr::Block(for_expr_block);
+        eprintln!("{}", self.expr_to_string(&final_expr));
+        Ok(final_expr)
     }
 
     fn eval_equality_expr(
@@ -2716,9 +2824,9 @@ impl TypedModule {
             statements.push(stmt);
         }
 
-        let ir_block =
-            TypedBlock { expr_type: expr_type_of_block, scope_id: 0, statements, span: block.span };
-        Ok(ir_block)
+        let typed_block =
+            TypedBlock { expr_type: expr_type_of_block, scope_id, statements, span: block.span };
+        Ok(typed_block)
     }
 
     fn _get_scope_for_namespace(&self, namespace_ident: IdentifierId) -> ScopeId {
@@ -2978,6 +3086,67 @@ impl TypedModule {
         }
         Ok(())
     }
+}
+
+// lower impl
+impl TypedModule {
+    // pub fn lower(&mut self) -> ParseResult<()> {
+    //     // Question: do we only need to lower concrete code?
+    //     for function_id in 0..self.function_iter() {
+    //         self.lower_function(function_id)?;
+    //     }
+    //     Ok(())
+    // }
+    //
+    // fn lower_function(&mut self, function_id: FunctionId) -> TyperResult<()> {
+    //     let function = self.get_function(function_id);
+    //
+    //     // Lower the block of the function
+    //     let Some(block) = &function.block else {
+    //         return Ok(());
+    //     };
+    //     if let Some(lowered_block) = self.lower_block(block)? {
+    //         let function = self.get_function_mut(function_id);
+    //         function.block = Some(lowered_block);
+    //     };
+    //
+    //     // Maybe lower other things one day?
+    //
+    //     Ok(())
+    // }
+    //
+    // // If lowering is not a no-op, returns Some with the lowered block
+    // // This is to avoid unnecessary cloning
+    // fn lower_block(&mut self, block: &mut TypedBlock) -> TyperResult<()> {
+    //     let mut new_stmts: Vec<TypedStmt> = vec![];
+    //     for stmt in &block.statements {
+    //         if let Some(lowered_stmts) = self.lower_stmt(stmt)? {
+    //             updates.push()
+    //             let block = self.get_block_mut(block);
+    //             block.statements(lowered_stmt);
+    //         };
+    //     }
+    //     Ok(())
+    // }
+    //
+    // fn lower_stmt(&mut self, stmt: &TypedStmt) -> TyperResult<Vec<TypedStmt>> {
+    //     match stmt {
+    //         TypedStmt::Expr(expr) => {
+    //             self.lower_expr(expr)?;
+    //         }
+    //         TypedStmt::ValDef(val_def) => {
+    //             self.lower_expr(&mut val_def.initializer)?;
+    //         }
+    //         TypedStmt::Assignment(assignment) => {
+    //             self.lower_expr(&mut assignment.destination)?;
+    //             self.lower_expr(&mut assignment.value)?;
+    //         }
+    //         TypedStmt::WhileLoop(while_loop) => {
+    //             self.lower_expr(&mut while_loop.cond)?;
+    //             self.lower_block(&mut while_loop.block)?;
+    //         }
+    //     }
+    // }
 }
 
 impl Display for TypedModule {
