@@ -1,27 +1,31 @@
 fn main(): int {
   print("hello, world!");
   val xs: Array<int> = [1, 5, 9];
+
   // for version
-
   println("");
-  val squared = for it in [1, 5, 9] do { printInt(it * it); println("") };
+  val squares = for it in [1, 5, 9] yield { it * it };
+  // val squares: Array<int> = [];
+  // Array::push(squares, 1);
+  // Array::push(squares, 25);
+  // Array::push(squares, 81);
+  for squares do {
+    printInt(it);
+  };
 
-
-
-
-
-
-  // while version
+  // Desugared
   // val squared = {
-  //   mut i = 0;
-  //   val iteree = [1, 5, 9];
-  //   val res: Array<bool> = [];
-  //   while i < iteree.length() {
-  //     val it = iteree[i];
-  //     let block_expr_val = { <block exprs> (it > 0) };
-  //     res.push(block_expr_val)
-  //     i = i + 1;
-  //   };
+  //    mut i = 0;
+  //    val iteree = [1, 5, 9];
+  //    val yielded_coll: Array<bool> = [];
+  //    val yielded_coll: bool? = None;
+  //    while i < iteree.length() {
+  //      val it = iteree[i];
+  //      val block_expr_val = { <block exprs> (it > 0) };
+  //      i = i + 1;
+  //      // yielded_coll = Some(block_expr_val);
+  //      // yielded_coll.push(block_expr_val);
+  //    };
   // };
   0
 }
