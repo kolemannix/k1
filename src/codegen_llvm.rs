@@ -1559,12 +1559,12 @@ impl<'ctx> Codegen<'ctx> {
                 );
 
                 self.builder.position_at_end(empty_strings_block);
-                self.build_print_string_call(self.const_string("empty case"));
+                // self.build_print_string_call(self.const_string("empty strings case\n"));
                 self.builder.build_store(result, self.builtin_types.true_value);
                 self.builder.build_unconditional_branch(finish_block);
 
                 self.builder.position_at_end(memcmp_block);
-                self.build_print_string_call(self.const_string("memcmp"));
+                // self.build_print_string_call(self.const_string("memcmp case\n"));
                 let string1data = self.builtin_types.string_data(&self.builder, string1);
                 let string2data = self.builtin_types.string_data(&self.builder, string2);
                 // let memcmp_intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.memcmp").unwrap();
@@ -1599,6 +1599,7 @@ impl<'ctx> Codegen<'ctx> {
                 self.builder.build_unconditional_branch(finish_block);
 
                 self.builder.position_at_end(finish_block);
+                // self.build_print_string_call(self.const_string("finish_block"));
                 self.builder
                     .build_load(self.builtin_types.boolean, result, "string_eq_result_value")
                     .as_basic_value_enum()

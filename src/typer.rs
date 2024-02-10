@@ -1724,7 +1724,7 @@ impl TypedModule {
         let lhs = self.eval_expr(&binary_op.lhs, scope_id, None)?;
         let equals_expr = match self.get_type(lhs.get_type()) {
             Type::Unit | Type::Char | Type::Int | Type::Bool => {
-                // Treat as int values in codegen; int equality
+                // All these scalar types treated as IntValue s in codegen
                 let rhs = self.eval_expr(&binary_op.rhs, scope_id, Some(lhs.get_type()))?;
                 if rhs.get_type() == lhs.get_type() {
                     Ok(TypedExpr::BinaryOp(BinaryOp {
