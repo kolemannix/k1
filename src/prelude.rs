@@ -54,6 +54,7 @@ namespace Array {
 namespace string {
   intern fn fromChars(bytes: Array<char>): string
   intern fn length(self: string): int
+  intern fn equals(this: string, that: string): bool
   fn index_of(self: string, c: char): int {
     mut i = 0;
     mut ret = -1;
