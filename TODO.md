@@ -62,13 +62,12 @@ The project isn't mature enough yet to make this list but the spirit of the effo
 - [ ] Builtin maps
 - [ ] Fix namespaces to require full paths (currently busted must be unique names globally)
 - [ ] Type Ascriptions (literally can just pass expected_type into eval and do an addtl typecheck)
-- [ ] For iteration (we will just hardcode the iterable types)
 - [ ] Some debug info in LLVM IR (source snippets or line numbers?)
 - [ ] Single-arm match syntax with `is`; `if x is Some(y)` instead of `if let Some(y) = x`; if x is not Err(y) (replaces let-else)
 - [ ] Sum types (oneofs) (variants?) (tagged unions)
 - [ ] Errors
 - [ ] uint type
-- [ ] Generic type inference
+- [x] Generic type inference
 - [ ] Type literals would be fun
 - [ ] Syntax Shed
     - [ ] Function syntax change? (foo = fn (a, b, c): int { }
@@ -79,6 +78,12 @@ The project isn't mature enough yet to make this list but the spirit of the effo
 - [ ] Tuples
 - [ ] Pure lambdas with ->
 - [ ] Full-on closures with =>
+
+- [ ] For iteration (we will just hardcode the iterable types)
+  - [ ] 'do' version
+  - [ ] 'yield' version on array
+  - [ ] 'yield' version on string
+  - [ ] 'yield' version on optional
 
 - [x] DEBUG info
   - [x] on or off

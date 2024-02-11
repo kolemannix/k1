@@ -1523,6 +1523,7 @@ impl<'ctx> Codegen<'ctx> {
                     self.get_loaded_variable(function.params[0].variable_id).into_struct_value();
                 let string2 =
                     self.get_loaded_variable(function.params[1].variable_id).into_struct_value();
+                // self.build_print_string_call(self.const_string("string_eq_fn\n"));
                 let string1len = self.builtin_types.string_length(&self.builder, string1);
                 let string2len = self.builtin_types.string_length(&self.builder, string2);
                 let len_eq = self.builder.build_int_compare(
@@ -1858,7 +1859,7 @@ impl<'ctx> Codegen<'ctx> {
         function_id: FunctionId,
         function: &Function,
     ) -> FunctionValue<'ctx> {
-        trace!("codegen function {}", self.module.function_to_string(function, true));
+        trace!("codegen function\n{}", self.module.function_id_to_string(function_id, true));
 
         if let Some(function) = self.llvm_functions.get(&function_id) {
             return *function;
