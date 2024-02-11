@@ -1684,11 +1684,12 @@ impl TypedModule {
             }
             Expression::MethodCall(m_call) => {
                 let base_expr = self.eval_expr(&m_call.base, scope_id, None)?;
-                let call = self.eval_function_call(&m_call.call, Some(base_expr), scope_id)?;
+                let call =
+                    self.eval_function_call(&m_call.call, Some(base_expr), None, scope_id)?;
                 Ok(call)
             }
             Expression::FnCall(fn_call) => {
-                let call = self.eval_function_call(fn_call, None, scope_id)?;
+                let call = self.eval_function_call(fn_call, None, None, scope_id)?;
                 Ok(call)
             }
             Expression::OptionalGet(optional_get) => {
@@ -1728,7 +1729,7 @@ impl TypedModule {
                 let rhs = self.eval_expr(&binary_op.rhs, scope_id, Some(lhs.get_type()))?;
                 if rhs.get_type() == lhs.get_type() {
                     Ok(TypedExpr::BinaryOp(BinaryOp {
-                        kind: binary_op.op_kind,
+                        kind: BinaryOpKind::Equals,
                         ty: BOOL_TYPE_ID,
                         lhs: Box::new(lhs),
                         rhs: Box::new(rhs),
@@ -1760,8 +1761,29 @@ impl TypedModule {
             Type::Record(_record_defn) => {
                 todo!("record equality")
             }
-            Type::Array(_array) => {
-                todo!("array equality")
+            Type::Array(array) => {
+                // We need a cleaner way to generate _generic_ calls in typer
+                // known_type_args is a good start, but I think we need to be able to
+                // pass in pre-evaluated value args as well and pick up from there with specialization
+                let array_equality_call = self.eval_function_call(
+                    &FnCall {
+                        name: self.ast.ident_id("equals"),
+                        type_args: None,
+                        args: vec![
+                            parse::FnCallArg { name: None, value: *binary_op.lhs.clone() },
+                            parse::FnCallArg { name: None, value: *binary_op.rhs.clone() },
+                        ],
+                        namespaces: vec![self.ast.ident_id("Array")],
+                        span: binary_op.span,
+                    },
+                    None,
+                    Some(vec![TypeParam {
+                        ident: self.ast.ident_id("T"),
+                        type_id: array.element_type,
+                    }]),
+                    scope_id,
+                )?;
+                Ok(array_equality_call)
             }
             Type::Optional(_opt) => {
                 todo!("optional equality")
@@ -1769,8 +1791,21 @@ impl TypedModule {
             Type::Reference(_refer) => {
                 todo!("reference equality")
             }
-            Type::TypeVariable(_refer) => {
-                todo!("type variable equality")
+            Type::TypeVariable(type_var) => {
+                let rhs = self.eval_expr(&binary_op.rhs, scope_id, Some(lhs.get_type()))?;
+                if let Err(msg) = self.typecheck_types(lhs.get_type(), rhs.get_type()) {
+                    return make_fail(
+                        format!("Type mismatch on equality of 2 generic variables: {}", msg),
+                        binary_op.span,
+                    );
+                }
+                Ok(TypedExpr::BinaryOp(BinaryOp {
+                    kind: BinaryOpKind::Equals,
+                    ty: BOOL_TYPE_ID,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                    span: binary_op.span,
+                }))
             }
         }?;
         if binary_op.op_kind == BinaryOpKind::Equals {
@@ -2065,6 +2100,7 @@ impl TypedModule {
         &mut self,
         fn_call: &FnCall,
         this_expr: Option<TypedExpr>,
+        known_type_args: Option<Vec<TypeParam>>,
         scope_id: ScopeId,
     ) -> TyperResult<TypedExpr> {
         // Special case for Some() because it is parsed as a function call
@@ -2096,8 +2132,12 @@ impl TypedModule {
             let intrinsic_type = original_function.intrinsic_type;
 
             // We infer the type arguments, or evaluate them if the user has supplied them
-            let type_args =
-                self.infer_call_type_args(fn_call, function_id, this_expr.as_ref(), scope_id)?;
+            let type_args = match known_type_args {
+                Some(ta) => ta,
+                None => {
+                    self.infer_call_type_args(fn_call, function_id, this_expr.as_ref(), scope_id)?
+                }
+            };
 
             // We skip specialization if any of the type arguments are type variables: `any_type_vars`
             // because we could just be evaluating a generic function that calls another generic function,
@@ -2663,8 +2703,7 @@ impl TypedModule {
             None => return make_fail("function is missing implementation", fn_def.span),
         };
         // Add the body now
-        let function = self.get_function_mut(function_id);
-        function.block = body_block;
+        self.get_function_mut(function_id).block = body_block;
         Ok(function_id)
     }
     fn eval_namespace(
@@ -3015,9 +3054,10 @@ impl TypedModule {
         }
     }
 
-    pub fn function_to_string(&self, function: &Function, display_block: bool) -> String {
+    pub fn function_id_to_string(&self, function_id: FunctionId, display_block: bool) -> String {
+        let func = self.get_function(function_id);
         let mut s = String::new();
-        self.display_function(function, &mut s, display_block).unwrap();
+        self.display_function(func, &mut s, display_block).unwrap();
         s
     }
 }
