@@ -42,6 +42,21 @@ namespace Array {
   intern fn capacity<T>(self: Array<T>): int
   intern fn grow<T>(self: Array<T>): unit
   intern fn set_length<T>(self: Array<T>, new_length: int): unit
+  fn equals<T>(self: Array<T>, other: Array<T>): bool {
+    if self.length() != other.length() {
+      false
+    } else {
+      mut i = 0;
+      mut ret = true;
+      while (ret and i < self.length()) {
+        if self[i] != other[i] {
+          ret = false;
+        };
+        i = i + 1;
+      };
+      ret
+    }
+  }
   fn push<T>(self: Array<T>, elem: T): unit {
     val start_length = self.length<T>();
     if start_length == self.capacity<T>() {
