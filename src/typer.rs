@@ -1801,7 +1801,7 @@ impl TypedModule {
             for_expr.body_block.span,
             TypedExpr::Int(0, for_expr.body_block.span),
         );
-        let (_iteree_variable_id, iteree_def, iteree_variable_expr) = self.synth_variable_decl(
+        let (iteree_variable_id, iteree_def, iteree_variable_expr) = self.synth_variable_decl(
             Variable {
                 name: self.ast.ident_id("iteree"),
                 type_id: iteree_type,
@@ -1972,7 +1972,13 @@ impl TypedModule {
             &FnCall {
                 name: self.ast.ident_id("length"),
                 type_args: None,
-                args: vec![FnCallArg { name: None, value: *for_expr.iterable_expr.clone() }],
+                args: vec![FnCallArg {
+                    name: None,
+                    value: parse::Expression::Variable(parse::Variable {
+                        ident: self.get_variable(iteree_variable_id).name,
+                        span: for_expr.iterable_expr.get_span(),
+                    }),
+                }],
                 namespaces: vec![self.ast.ident_id("Array")],
                 span: for_expr.iterable_expr.get_span(),
             },
