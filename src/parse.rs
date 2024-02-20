@@ -9,9 +9,6 @@ use crate::lex::*;
 use crate::typer::{self, BinaryOpKind, Linkage, TypedExpr, UnaryOpKind};
 use TokenKind as K;
 
-use crate::lex::*;
-use crate::typer::{BinaryOpKind, Linkage, UnaryOpKind};
-
 pub type AstId = u32;
 
 #[cfg(test)]
