@@ -6,7 +6,7 @@ use log::trace;
 use string_interner::Symbol;
 
 use crate::lex::*;
-use crate::typer::{self, BinaryOpKind, Linkage, TypedExpr, UnaryOpKind};
+use crate::typer::{BinaryOpKind, Linkage, UnaryOpKind};
 use TokenKind as K;
 
 pub type AstId = u32;
