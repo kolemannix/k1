@@ -67,11 +67,10 @@
 - [ ] Pure lambdas with ->
 - [ ] Full-on closures with =>
 
-- [ ] For iteration (we will just hardcode the iterable types)
-  - [ ] 'do' version
-  - [ ] 'yield' version on array
-  - [ ] 'yield' version on string
-  - [ ] 'yield' version on optional
+- [-] For iteration (we will just hardcode the iterable types)
+  - [x] 'do' version
+  - [x] 'yield' version on array
+  - [?] 'yield' version on string
 
 - [x] DEBUG info
   - [x] on or off

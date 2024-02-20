@@ -12,8 +12,7 @@ use log::{debug, error, trace, Level};
 
 use crate::lex::{Span, TokenKind};
 use crate::parse::{
-    self, FnCallArg, FnCallTypeArg, ForExpr, ForExprType, IfExpr, IndexOperation, ParsedNamespace,
-    ParsedTypeExpression,
+    self, FnCallArg, ForExpr, ForExprType, IfExpr, IndexOperation, ParsedNamespace,
 };
 use crate::parse::{
     AstId, AstModule, Block, BlockStmt, Definition, Expression, FnCall, FnDef, IdentifierId,
@@ -919,9 +918,8 @@ impl TypedModule {
             Type::Bool => None,
             Type::String => Some(CHAR_TYPE_ID),
             Type::Array(arr) => Some(arr.element_type),
-            // We don't yet support generics in records
             Type::Record(_record) => None,
-            Type::Optional(opt) => Some(opt.inner_type),
+            Type::Optional(_opt) => None,
             Type::Reference(_refer) => None,
             Type::TypeVariable(_) => None,
         }
@@ -1903,7 +1901,7 @@ impl TypedModule {
         };
         // Prepend the val def to the body block
         while_block.statements.push(iteration_element_val_def);
-        let (_user_block_val_id, user_block_val_def, user_block_val_expr) = self
+        let (_user_block_val_id, user_block_val_def, _user_block_val_expr) = self
             .synth_variable_decl(
                 Variable {
                     name: self.ast.ident_id("block_expr_val"),
@@ -1933,29 +1931,25 @@ impl TypedModule {
         }));
         while_block.statements.push(counter_increment_statement);
 
-        // Either push to yield array or reassign our optional var
-        if let Some((yield_coll_variable_id, _yield_def, yield_expr)) = &yield_decls {
+        // push to yield array
+        if let Some((yield_coll_variable_id, _yield_def, _yield_expr)) = &yield_decls {
             match self.get_type(resulting_type) {
                 Type::Array(_) => {
                     let push_fn_call = self.eval_function_call(
                         &FnCall {
                             name: self.ast.ident_id("push"),
                             type_args: None,
-                            // type_args: Some(vec![FnCallTypeArg {
-                            //     name: None,
-                            //     type_expr: ParsedTypeExpression::Int(for_expr.span),
-                            // }]),
                             args: vec![
                                 FnCallArg {
                                     name: None,
-                                    value: parse::Expression::Variable(parse::Variable {
+                                    value: Expression::Variable(parse::Variable {
                                         ident: self.get_variable(*yield_coll_variable_id).name,
                                         span: for_expr.body_block.span,
                                     }),
                                 },
                                 FnCallArg {
                                     name: None,
-                                    value: parse::Expression::Variable(parse::Variable {
+                                    value: Expression::Variable(parse::Variable {
                                         ident: self.ast.ident_id("block_expr_val"),
                                         span: for_expr.body_block.span,
                                     }),
@@ -1965,21 +1959,10 @@ impl TypedModule {
                             span: for_expr.body_block.span,
                         },
                         None,
+                        Some(vec![TypeParam { ident: self.ast.ident_id("T"), type_id: item_type }]),
                         while_scope_id,
                     )?;
                     while_block.statements.push(TypedStmt::Expr(Box::new(push_fn_call)));
-                }
-                Type::Optional(_) => {
-                    let some_val = TypedExpr::OptionalSome(OptionalSome {
-                        inner_expr: Box::new(user_block_val_expr),
-                        type_id: resulting_type,
-                    });
-                    let assignment = TypedStmt::Assignment(Box::new(Assignment {
-                        destination: Box::new(yield_expr.clone()),
-                        value: Box::new(some_val),
-                        span: for_expr.body_block.span,
-                    }));
-                    while_block.statements.push(assignment);
                 }
                 _ => {}
             }
@@ -1994,6 +1977,7 @@ impl TypedModule {
                 span: for_expr.iterable_expr.get_span(),
             },
             None,
+            Some(vec![TypeParam { ident: self.ast.ident_id("T"), type_id: item_type }]),
             for_expr_scope,
         )?;
         let while_stmt = TypedStmt::WhileLoop(Box::new(TypedWhileLoop {
@@ -2011,8 +1995,8 @@ impl TypedModule {
         let mut for_expr_initial_statements = Vec::with_capacity(4);
         for_expr_initial_statements.push(counter_def);
         for_expr_initial_statements.push(iteree_def);
-        if let Some((_yield_id, yield_def, _yield_expr)) = yield_decls {
-            for_expr_initial_statements.push(yield_def);
+        if let Some((_yield_id, yield_def, _yield_expr)) = &yield_decls {
+            for_expr_initial_statements.push(yield_def.clone());
         }
         let mut for_expr_block = TypedBlock {
             expr_type: resulting_type,
@@ -2022,6 +2006,14 @@ impl TypedModule {
         };
 
         for_expr_block.statements.push(while_stmt);
+        if let Some((yielded_variable_id, _, _)) = &yield_decls {
+            let yield_expr = TypedExpr::Variable(VariableExpr {
+                type_id: resulting_type,
+                variable_id: *yielded_variable_id,
+                span: for_expr.body_block.span,
+            });
+            for_expr_block.statements.push(TypedStmt::Expr(Box::new(yield_expr)));
+        }
 
         let final_expr = TypedExpr::Block(for_expr_block);
         eprintln!("{}", self.expr_to_string(&final_expr));
@@ -2086,8 +2078,8 @@ impl TypedModule {
                         name: self.ast.ident_id("equals"),
                         type_args: None,
                         args: vec![
-                            parse::FnCallArg { name: None, value: *binary_op.lhs.clone() },
-                            parse::FnCallArg { name: None, value: *binary_op.rhs.clone() },
+                            FnCallArg { name: None, value: *binary_op.lhs.clone() },
+                            FnCallArg { name: None, value: *binary_op.rhs.clone() },
                         ],
                         namespaces: vec![self.ast.ident_id("Array")],
                         span: binary_op.span,
@@ -2107,7 +2099,7 @@ impl TypedModule {
             Type::Reference(_refer) => {
                 todo!("reference equality")
             }
-            Type::TypeVariable(type_var) => {
+            Type::TypeVariable(_type_var) => {
                 let rhs = self.eval_expr(&binary_op.rhs, scope_id, Some(lhs.get_type()))?;
                 if let Err(msg) = self.typecheck_types(lhs.get_type(), rhs.get_type()) {
                     return make_fail(
@@ -3295,7 +3287,7 @@ impl TypedModule {
         writ.write_str("{\n")?;
         for stmt in &block.statements {
             self.display_stmt(stmt, writ)?;
-            writ.write_str("\n")?;
+            writ.write_str(";\n")?;
         }
         writ.write_str("}")
     }
