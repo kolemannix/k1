@@ -12,7 +12,7 @@ use inkwell::debug_info::{
     AsDIScope, DICompileUnit, DIFile, DILocation, DIScope, DISubprogram, DIType, DWARFEmissionKind,
     DWARFSourceLanguage, DebugInfoBuilder,
 };
-use inkwell::module::{Linkage as LlvmLinkage, Module};
+use inkwell::module::{Linkage as LlvmLinkage, Module as LlvmModule};
 use inkwell::passes::{PassManager, PassManagerBuilder};
 use inkwell::targets::{InitializationConfig, Target, TargetMachine, TargetTriple};
 use inkwell::types::{
@@ -27,7 +27,7 @@ use log::trace;
 
 use crate::lex::Span;
 use crate::parse::IdentifierId;
-use crate::typer::{self, *};
+use crate::typer::{Linkage as TyperLinkage, *};
 
 const STRING_LENGTH_FIELD_INDEX: u32 = 0;
 const STRING_DATA_FIELD_INDEX: u32 = 1;
@@ -40,6 +40,7 @@ const WORD_SIZE_BITS: u64 = 64;
 
 #[derive(Debug, Copy, Clone)]
 struct LlvmPointerType<'ctx> {
+    #[allow(unused)]
     type_id: TypeId,
     pointer_type: BasicTypeEnum<'ctx>,
     pointee_type: BasicTypeEnum<'ctx>,
@@ -47,6 +48,7 @@ struct LlvmPointerType<'ctx> {
 
 #[derive(Debug, Copy, Clone)]
 struct LlvmValueType<'ctx> {
+    #[allow(unused)]
     type_id: TypeId,
     basic_type: BasicTypeEnum<'ctx>,
 }
@@ -76,6 +78,8 @@ impl<'ctx> LlvmType<'ctx> {
             LlvmType::Pointer(pointer) => *pointer,
         }
     }
+
+    #[allow(unused)]
     fn type_id(&self) -> TypeId {
         match self {
             LlvmType::Value(value) => value.type_id,
@@ -101,8 +105,6 @@ struct BuiltinTypes<'ctx> {
     false_value: IntValue<'ctx>,
     char: IntType<'ctx>,
     c_str: PointerType<'ctx>,
-    any_ptr: PointerType<'ctx>,
-    any_value: BasicTypeEnum<'ctx>,
     string_struct: StructType<'ctx>,
 }
 
@@ -164,12 +166,13 @@ impl<'ctx> BuiltinTypes<'ctx> {
 struct LibcFunctions<'ctx> {
     printf: FunctionValue<'ctx>,
     exit: FunctionValue<'ctx>,
+    memcmp: FunctionValue<'ctx>,
 }
 
 pub struct Codegen<'ctx> {
     ctx: &'ctx Context,
     pub module: Rc<TypedModule>,
-    llvm_module: inkwell::module::Module<'ctx>,
+    llvm_module: LlvmModule<'ctx>,
     llvm_machine: Option<TargetMachine>,
     builder: Builder<'ctx>,
     llvm_functions: HashMap<FunctionId, FunctionValue<'ctx>>,
@@ -189,8 +192,10 @@ pub struct Codegen<'ctx> {
 struct DebugContext<'ctx> {
     file: DIFile<'ctx>,
     debug_builder: DebugInfoBuilder<'ctx>,
+    #[allow(unused)]
     compile_unit: DICompileUnit<'ctx>,
     debug_stack: Vec<DebugStackEntry<'ctx>>,
+    #[allow(unused)]
     scopes: HashMap<ScopeId, DIScope<'ctx>>,
     strip_debug: bool,
 }
@@ -209,6 +214,7 @@ impl<'ctx> DebugContext<'ctx> {
 
 #[derive(Copy, Clone, Debug)]
 struct Pointer<'ctx> {
+    #[allow(unused)]
     pointee_type_id: TypeId,
     pointee_llvm_type: BasicTypeEnum<'ctx>,
     pointer: PointerValue<'ctx>,
@@ -234,7 +240,7 @@ fn i8_array_from_str<'ctx>(ctx: &'ctx Context, value: &str) -> ArrayValue<'ctx> 
 impl<'ctx> Codegen<'ctx> {
     fn init_debug(
         ctx: &'ctx Context,
-        llvm_module: &Module<'ctx>,
+        llvm_module: &LlvmModule<'ctx>,
         module: &TypedModule,
         optimize: bool,
         debug: bool,
@@ -360,8 +366,6 @@ impl<'ctx> Codegen<'ctx> {
             false_value: ctx.bool_type().const_int(0, false),
             char: char_type,
             c_str: char_type.ptr_type(AddressSpace::default()),
-            any_ptr: ctx.i64_type().ptr_type(AddressSpace::default()),
-            any_value: ctx.i64_type().as_basic_type_enum(),
             string_struct,
         };
 
@@ -370,6 +374,13 @@ impl<'ctx> Codegen<'ctx> {
         let exit = llvm_module.add_function(
             "exit",
             ctx.void_type().fn_type(&[builtin_types.i64.into()], false),
+            Some(LlvmLinkage::External),
+        );
+        let byte_ptr = ctx.i8_type().ptr_type(AddressSpace::default());
+        let memcmp = llvm_module.add_function(
+            "memcmp",
+            ctx.i32_type()
+                .fn_type(&[byte_ptr.into(), byte_ptr.into(), ctx.i64_type().into()], false),
             Some(LlvmLinkage::External),
         );
         Codegen {
@@ -382,7 +393,7 @@ impl<'ctx> Codegen<'ctx> {
             globals,
             llvm_functions: HashMap::new(),
             llvm_types: RefCell::new(HashMap::new()),
-            libc_functions: LibcFunctions { printf, exit },
+            libc_functions: LibcFunctions { printf, exit, memcmp },
             builtin_globals,
             builtin_types,
             default_address_space: AddressSpace::default(),
@@ -402,7 +413,7 @@ impl<'ctx> Codegen<'ctx> {
         locn
     }
 
-    fn get_ident_name(&self, id: IdentifierId) -> impl std::ops::Deref<Target = str> + '_ {
+    fn get_ident_name(&self, id: IdentifierId) -> impl Deref<Target = str> + '_ {
         self.module.ast.get_ident_str(id)
     }
 
@@ -441,13 +452,6 @@ impl<'ctx> Codegen<'ctx> {
             .unwrap();
         call.set_name("print_str_res");
         call
-    }
-
-    fn build_record_type(&self, record: &RecordDefn) -> StructType<'ctx> {
-        let field_types: Vec<_> =
-            record.fields.iter().map(|f| self.codegen_type(f.type_id).value_type()).collect();
-        let struct_type = self.ctx.struct_type(&field_types, false);
-        struct_type
     }
 
     fn build_optional_type(&self, optional_type: &OptionalType) -> StructType<'ctx> {
@@ -734,13 +738,6 @@ impl<'ctx> Codegen<'ctx> {
         }
     }
 
-    fn codegen_type_dereferenced(&self, type_id: TypeId) -> LlvmType<'ctx> {
-        match self.module.get_type(type_id) {
-            Type::Reference(reference) => self.codegen_type(reference.inner_type),
-            _other => self.codegen_type(type_id),
-        }
-    }
-
     /// This needs to return pointee type if its a pointer, for convenience
     fn codegen_type(&self, type_id: TypeId) -> LlvmType<'ctx> {
         trace!("codegen for type {}", self.module.type_id_to_string(type_id));
@@ -1013,7 +1010,7 @@ impl<'ctx> Codegen<'ctx> {
 
     fn codegen_expr(&mut self, expr: &TypedExpr, is_lvalue: bool) -> BasicValueEnum<'ctx> {
         self.set_debug_location(expr.get_span());
-        log::trace!("codegen expr\n{} (lvalue={is_lvalue})", self.module.expr_to_string(expr));
+        trace!("codegen expr\n{} (lvalue={is_lvalue})", self.module.expr_to_string(expr));
         match expr {
             TypedExpr::Variable(ir_var) => {
                 if let Some(pointer) = self.variables.get(&ir_var.variable_id) {
@@ -1162,7 +1159,7 @@ impl<'ctx> Codegen<'ctx> {
                 for (index, element_expr) in array.elements.iter().enumerate() {
                     let value = self.codegen_expr_rvalue(element_expr);
                     let index_value = self.ctx.i64_type().const_int(index as u64, true);
-                    log::trace!("storing element {} of array literal: {:?}", index, element_expr);
+                    trace!("storing element {} of array literal: {:?}", index, element_expr);
                     let ptr_at_index = unsafe {
                         self.builder.build_gep(element_type, array_data, &[index_value], "elem")
                     };
@@ -1223,7 +1220,7 @@ impl<'ctx> Codegen<'ctx> {
                         };
                         op.as_basic_value_enum().into()
                     }
-                    BinaryOpKind::Equals => {
+                    BinaryOpKind::Equals | BinaryOpKind::NotEquals => {
                         // I actually have no idea how I want to handle equality at this point
                         // Obviously we want some sort of value equality on user-defined types
                         // But here for builtin types maybe we just keep assuming everything
@@ -1232,7 +1229,11 @@ impl<'ctx> Codegen<'ctx> {
                         let rhs_int = self.codegen_expr_rvalue(&bin_op.rhs).into_int_value();
                         self.builder
                             .build_int_compare(
-                                IntPredicate::EQ,
+                                if bin_op.kind == BinaryOpKind::Equals {
+                                    IntPredicate::EQ
+                                } else {
+                                    IntPredicate::NE
+                                },
                                 lhs_int,
                                 rhs_int,
                                 &format!("{}", bin_op.kind),
@@ -1434,6 +1435,7 @@ impl<'ctx> Codegen<'ctx> {
         string_struct.as_basic_value_enum().into_struct_value()
     }
 
+    #[allow(unused)]
     fn const_string(&self, string: &str) -> StructValue<'ctx> {
         let char_data = self.ctx.const_string(string.as_bytes(), false);
         let empty_str =
@@ -1523,6 +1525,93 @@ impl<'ctx> Codegen<'ctx> {
                 let _copied =
                     self.builder.build_memcpy(string_data, 1, array_data, 1, array_len).unwrap();
                 string.as_basic_value_enum()
+            }
+            IntrinsicFunctionType::StringEquals => {
+                let string1 =
+                    self.get_loaded_variable(function.params[0].variable_id).into_struct_value();
+                let string2 =
+                    self.get_loaded_variable(function.params[1].variable_id).into_struct_value();
+                // self.build_print_string_call(self.const_string("string_eq_fn\n"));
+                let string1len = self.builtin_types.string_length(&self.builder, string1);
+                let string2len = self.builtin_types.string_length(&self.builder, string2);
+                let len_eq = self.builder.build_int_compare(
+                    IntPredicate::EQ,
+                    string1len,
+                    string2len,
+                    "len_eq",
+                );
+                let start_block = self.builder.get_insert_block().unwrap();
+                let current_fn = start_block.get_parent().unwrap();
+                let result = self.builder.build_alloca(self.builtin_types.boolean, "result");
+                self.builder.build_store(result, self.builtin_types.false_value);
+
+                let compare_block = self.ctx.append_basic_block(current_fn, "compare");
+                let finish_block = self.ctx.append_basic_block(current_fn, "finish");
+
+                // If lengths are equal, go to mem compare
+                self.builder.build_conditional_branch(len_eq, compare_block, finish_block);
+
+                self.builder.position_at_end(compare_block);
+                let empty_strings_block =
+                    self.ctx.append_basic_block(current_fn, "empty_strings_case");
+                let memcmp_block = self.ctx.append_basic_block(current_fn, "memcmp_case");
+                let len_is_zero = self.builder.build_int_compare(
+                    IntPredicate::EQ,
+                    string1len,
+                    self.builtin_types.i64.const_zero(),
+                    "len_is_zero",
+                );
+                self.builder.build_conditional_branch(
+                    len_is_zero,
+                    empty_strings_block,
+                    memcmp_block,
+                );
+
+                self.builder.position_at_end(empty_strings_block);
+                // self.build_print_string_call(self.const_string("empty strings case\n"));
+                self.builder.build_store(result, self.builtin_types.true_value);
+                self.builder.build_unconditional_branch(finish_block);
+
+                self.builder.position_at_end(memcmp_block);
+                // self.build_print_string_call(self.const_string("memcmp case\n"));
+                let string1data = self.builtin_types.string_data(&self.builder, string1);
+                let string2data = self.builtin_types.string_data(&self.builder, string2);
+                // let memcmp_intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.memcmp").unwrap();
+                // let memcmp_function = memcmp_intrinsic
+                //     .get_declaration(
+                //         &self.llvm_module,
+                //         &[self
+                //             .ctx
+                //             .i8_type()
+                //             .ptr_type(self.default_address_space)
+                //             .as_basic_type_enum()],
+                //     )
+                //     .unwrap();
+                let memcmp_result_i32 = self
+                    .builder
+                    .build_call(
+                        self.libc_functions.memcmp,
+                        &[string1data.into(), string2data.into(), string1len.into()],
+                        "data_eq",
+                    )
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap()
+                    .into_int_value();
+                let is_zero = self.builder.build_int_compare(
+                    IntPredicate::EQ,
+                    memcmp_result_i32,
+                    self.ctx.i32_type().const_zero(),
+                    "is_zero",
+                );
+                self.builder.build_store(result, is_zero);
+                self.builder.build_unconditional_branch(finish_block);
+
+                self.builder.position_at_end(finish_block);
+                // self.build_print_string_call(self.const_string("finish_block"));
+                self.builder
+                    .build_load(self.builtin_types.boolean, result, "string_eq_result_value")
+                    .as_basic_value_enum()
             }
             IntrinsicFunctionType::ArrayLength => {
                 let array_arg =
@@ -1778,7 +1867,7 @@ impl<'ctx> Codegen<'ctx> {
         function_id: FunctionId,
         function: &Function,
     ) -> FunctionValue<'ctx> {
-        trace!("codegen function {}", self.module.function_to_string(function, true));
+        trace!("codegen function\n{}", self.module.function_id_to_string(function_id, true));
 
         if let Some(function) = self.llvm_functions.get(&function_id) {
             return *function;
@@ -1802,9 +1891,9 @@ impl<'ctx> Codegen<'ctx> {
             _ => panic!("Unexpected function llvm type"),
         };
         let llvm_linkage = match function.linkage {
-            typer::Linkage::Standard => None,
-            typer::Linkage::External => Some(LlvmLinkage::External),
-            typer::Linkage::Intrinsic => None,
+            TyperLinkage::Standard => None,
+            TyperLinkage::External => Some(LlvmLinkage::External),
+            TyperLinkage::Intrinsic => None,
         };
         let fn_val = {
             let name = self.module.ast.get_ident_str(function.name);
@@ -1966,8 +2055,7 @@ impl<'ctx> Codegen<'ctx> {
         //     PassManager::create(&self.llvm_module);
         // function_pass_manager.add_verifier_pass();
 
-        let module_pass_manager: PassManager<inkwell::module::Module<'ctx>> =
-            PassManager::create(());
+        let module_pass_manager: PassManager<LlvmModule<'ctx>> = PassManager::create(());
         if optimize {
             module_pass_manager.add_cfg_simplification_pass();
             module_pass_manager.add_promote_memory_to_register_pass();

@@ -111,9 +111,9 @@ pub fn compile_single_file_program<'ctx>(
         "-o",
         &format!("{}/{}.out", out_dir, filename),
         "-L",
-        "nxlib/zig-out/lib",
+        "bfllib/zig-out/lib",
         "-l",
-        "nxlib",
+        "bfllib",
     ]);
     log::info!("Build Command: {:?}", build_cmd);
     let build_status = build_cmd.status().unwrap();
@@ -128,7 +128,7 @@ pub fn compile_single_file_program<'ctx>(
 fn main() -> Result<()> {
     env_logger::init();
     let args = Args::parse();
-    println!("{:?}", args);
+    println!("{:#?}", args);
 
     static_assert_size!(parse::Definition, 16);
     static_assert_size!(parse::BlockStmt, 224); // Get down below 100
@@ -138,7 +138,7 @@ fn main() -> Result<()> {
     println!("bfl Compiler v0.1.0");
     let src_path = &args.file;
     let no_prelude = args.no_prelude;
-    let out_dir = "nx-out";
+    let out_dir = "bfl-out";
 
     let ctx = Context::create();
     let src_path = src_path.canonicalize().unwrap();
