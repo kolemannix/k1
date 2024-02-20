@@ -17,6 +17,7 @@ namespace Files {
 fn printBool(value: bool): unit {
   if value { print("true") } else { print("false") }
 }
+
 fn assert(value: bool): unit {
   if !value { 
     print("ASSERT FAILED");
@@ -34,10 +35,6 @@ namespace char {
     _bfl_charToString(self)
   }
 }
-fn println(value: string): unit {
-  print(value);
-  print(char::fromInt(10).toString());
-}
 
 namespace Array {
   intern fn new<T>(len: int): Array<T>
@@ -45,6 +42,21 @@ namespace Array {
   intern fn capacity<T>(self: Array<T>): int
   intern fn grow<T>(self: Array<T>): unit
   intern fn set_length<T>(self: Array<T>, new_length: int): unit
+  fn equals<T>(self: Array<T>, other: Array<T>): bool {
+    if self.length() != other.length() {
+      false
+    } else {
+      mut i = 0;
+      mut ret = true;
+      while (ret and i < self.length()) {
+        if self[i] != other[i] {
+          ret = false;
+        };
+        i = i + 1;
+      };
+      ret
+    }
+  }
   fn push<T>(self: Array<T>, elem: T): unit {
     val start_length = self.length<T>();
     if start_length == self.capacity<T>() {
@@ -57,6 +69,7 @@ namespace Array {
 namespace string {
   intern fn fromChars(bytes: Array<char>): string
   intern fn length(self: string): int
+  intern fn equals(this: string, that: string): bool
   fn index_of(self: string, c: char): int {
     mut i = 0;
     mut ret = -1;
@@ -84,5 +97,10 @@ namespace string {
     fromChars(copied)
   }
 }
+
+fn println(value: string): unit {
+  print(value.concat('\n'.toString()));
+}
+
 // -------- END PRELUDE --------"#;
-pub const PRELUDE_LINES: usize = 87;
+pub const PRELUDE_LINES: usize = 89;

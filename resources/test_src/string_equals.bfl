@@ -1,0 +1,6 @@
+fn main(): int {
+  assert("abc" != "123");
+  assert("abc" != "abcc");
+  assert("abc" == "abc");
+  0
+}

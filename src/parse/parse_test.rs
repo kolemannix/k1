@@ -92,8 +92,9 @@ fn fn_args_literal() -> Result<(), String> {
     let result = parser.parse_expression();
     if let Ok(Some(Expression::FnCall(fn_call))) = result {
         let args = &fn_call.args;
-        assert_eq!(&*parser.get_ident_name(fn_call.name), "f");
-        assert_eq!(&*parser.get_ident_name(args[0].name.unwrap()), "myarg");
+        let idents = parser.identifiers.clone();
+        assert_eq!(idents.borrow().get_name(fn_call.name), "f");
+        assert_eq!(idents.borrow().get_name(args[0].name.unwrap()), "myarg");
         assert!(Expression::is_literal(&args[0].value));
         assert!(Expression::is_literal(&args[1].value));
         assert!(Expression::is_literal(&args[2].value));

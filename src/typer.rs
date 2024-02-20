@@ -1,20 +1,21 @@
 #![allow(clippy::match_like_matches_macro)]
 
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt::{Display, Formatter, Write};
+use std::rc::Rc;
+
+use anyhow::bail;
+use colored::Colorize;
+use either::Either;
+use log::{debug, error, trace, Level};
+
 use crate::lex::{Span, TokenKind};
 use crate::parse::{self, IfExpr, IndexOperation, ParsedNamespace};
 use crate::parse::{
     AstId, AstModule, Block, BlockStmt, Definition, Expression, FnCall, FnDef, IdentifierId,
     Literal,
 };
-use anyhow::{bail, Result};
-use colored::Colorize;
-use log::{error, info, trace, warn};
-use std::collections::HashMap;
-use std::error::Error;
-
-use either::Either;
-use std::fmt::{Display, Formatter, Write};
-use std::rc::Rc;
 
 pub type ScopeId = u32;
 pub type FunctionId = u32;
@@ -30,21 +31,21 @@ pub enum Linkage {
 }
 
 #[derive(Debug, Clone)]
-pub struct RecordDefnField {
+pub struct RecordTypeField {
     pub name: IdentifierId,
     pub type_id: TypeId,
     pub index: usize,
 }
 
 #[derive(Debug, Clone)]
-pub struct RecordDefn {
-    pub fields: Vec<RecordDefnField>,
+pub struct RecordType {
+    pub fields: Vec<RecordTypeField>,
     pub name_if_named: Option<IdentifierId>,
     pub span: Span,
 }
 
-impl RecordDefn {
-    pub fn find_field(&self, field_name: IdentifierId) -> Option<(usize, &RecordDefnField)> {
+impl RecordType {
+    pub fn find_field(&self, field_name: IdentifierId) -> Option<(usize, &RecordTypeField)> {
         self.fields.iter().enumerate().find(|(_, field)| field.name == field_name)
     }
 }
@@ -91,7 +92,7 @@ pub enum Type {
     Int,
     Bool,
     String,
-    Record(RecordDefn),
+    Record(RecordType),
     Array(ArrayType),
     Optional(OptionalType),
     Reference(ReferenceType),
@@ -138,14 +139,14 @@ impl Type {
         }
     }
 
-    pub fn as_record(&self) -> Option<&RecordDefn> {
+    pub fn as_record(&self) -> Option<&RecordType> {
         match self {
             Type::Record(record) => Some(record),
             _ => None,
         }
     }
 
-    pub fn expect_record(&self) -> &RecordDefn {
+    pub fn expect_record(&self) -> &RecordType {
         match self {
             Type::Record(record) => record,
             _ => panic!("expect_record called on: {:?}", self),
@@ -228,6 +229,7 @@ pub enum BinaryOpKind {
     And,
     Or,
     Equals,
+    NotEquals,
 }
 
 impl Display for BinaryOpKind {
@@ -244,6 +246,7 @@ impl Display for BinaryOpKind {
             BinaryOpKind::And => f.write_str("and"),
             BinaryOpKind::Or => f.write_str("or"),
             BinaryOpKind::Equals => f.write_str("=="),
+            BinaryOpKind::NotEquals => f.write_str("!="),
         }
     }
 }
@@ -254,7 +257,7 @@ impl BinaryOpKind {
         match self {
             B::Multiply | B::Divide => 100,
             B::Add | B::Subtract => 90,
-            B::Less | B::LessEqual | B::Greater | B::GreaterEqual | B::Equals => 80,
+            B::Less | B::LessEqual | B::Greater | B::GreaterEqual | B::Equals | B::NotEquals => 80,
             B::And => 70,
             B::Or => 66,
         }
@@ -271,6 +274,7 @@ impl BinaryOpKind {
             TokenKind::KeywordAnd => Some(BinaryOpKind::And),
             TokenKind::KeywordOr => Some(BinaryOpKind::Or),
             TokenKind::EqualsEquals => Some(BinaryOpKind::Equals),
+            TokenKind::BangEquals => Some(BinaryOpKind::NotEquals),
             _ => None,
         }
     }
@@ -282,7 +286,7 @@ impl BinaryOpKind {
             B::Multiply | B::Divide => true,
             B::Less | B::Greater | B::LessEqual | B::GreaterEqual => true,
             B::Or | B::And => true,
-            B::Equals => true,
+            B::Equals | B::NotEquals => true,
         }
     }
 }
@@ -714,6 +718,7 @@ pub enum IntrinsicFunctionType {
     ArraySetLength,
     ArrayCapacity,
     StringFromCharArray,
+    StringEquals,
 }
 
 impl IntrinsicFunctionType {
@@ -945,13 +950,13 @@ impl TypedModule {
             parse::ParsedTypeExpression::Bool(_) => Ok(BOOL_TYPE_ID),
             parse::ParsedTypeExpression::String(_) => Ok(STRING_TYPE_ID),
             parse::ParsedTypeExpression::Record(record_defn) => {
-                let mut fields: Vec<RecordDefnField> = Vec::new();
+                let mut fields: Vec<RecordTypeField> = Vec::new();
                 for (index, ast_field) in record_defn.fields.iter().enumerate() {
                     let ty = self.eval_type_expr(&ast_field.ty, scope_id)?;
-                    fields.push(RecordDefnField { name: ast_field.name, type_id: ty, index })
+                    fields.push(RecordTypeField { name: ast_field.name, type_id: ty, index })
                 }
                 let record_defn =
-                    RecordDefn { fields, name_if_named: None, span: record_defn.span };
+                    RecordType { fields, name_if_named: None, span: record_defn.span };
                 let type_id = self.add_type(Type::Record(record_defn));
                 Ok(type_id)
             }
@@ -1019,7 +1024,7 @@ impl TypedModule {
         }
     }
 
-    fn typecheck_record(&self, expected: &RecordDefn, actual: &RecordDefn) -> Result<(), String> {
+    fn typecheck_record(&self, expected: &RecordType, actual: &RecordType) -> Result<(), String> {
         if expected.fields.len() != actual.fields.len() {
             return Err(format!(
                 "expected record with {} fields, got {}",
@@ -1051,8 +1056,8 @@ impl TypedModule {
     #[allow(unused)]
     fn typecheck_record_duck(
         &self,
-        expected: &RecordDefn,
-        actual: &RecordDefn,
+        expected: &RecordType,
+        actual: &RecordType,
     ) -> Result<(), String> {
         for expected_field in &expected.fields {
             trace!("typechecking record field {:?}", expected_field);
@@ -1210,7 +1215,7 @@ impl TypedModule {
         namespaces: &[IdentifierId],
         span: Span,
     ) -> TyperResult<ScopeId> {
-        log::trace!(
+        trace!(
             "traverse_namespace_chain: {:?}",
             namespaces.iter().map(|id| self.get_ident_str(*id).to_string()).collect::<Vec<_>>()
         );
@@ -1530,7 +1535,7 @@ impl TypedModule {
                         .flatten();
                     let expected_type_id = expected_field.map(|(_, f)| f.type_id);
                     let expr = self.eval_expr(&ast_field.expr, scope_id, expected_type_id)?;
-                    field_defns.push(RecordDefnField {
+                    field_defns.push(RecordTypeField {
                         name: ast_field.name,
                         type_id: expr.get_type(),
                         index,
@@ -1541,7 +1546,7 @@ impl TypedModule {
                 // rather than make a duplicate type
                 let record_type_id = match expected_record {
                     None => {
-                        let record_type = RecordDefn {
+                        let record_type = RecordType {
                             fields: field_defns,
                             name_if_named: None,
                             span: ast_record.span,
@@ -1552,7 +1557,7 @@ impl TypedModule {
                     Some((expected_type_id, expected_record)) => {
                         match self.typecheck_record(
                             &expected_record,
-                            &RecordDefn {
+                            &RecordType {
                                 fields: field_defns,
                                 name_if_named: None,
                                 span: ast_record.span,
@@ -1574,6 +1579,12 @@ impl TypedModule {
             Expression::If(if_expr) => self.eval_if_expr(if_expr, scope_id, expected_type),
             Expression::BinaryOp(binary_op) => {
                 // Infer expected type to be type of operand1
+                match binary_op.op_kind {
+                    BinaryOpKind::Equals | BinaryOpKind::NotEquals => {
+                        return self.eval_equality_expr(binary_op, scope_id, expected_type)
+                    }
+                    _ => {}
+                };
                 let lhs = self.eval_expr(&binary_op.lhs, scope_id, None)?;
                 let rhs = self.eval_expr(&binary_op.rhs, scope_id, Some(lhs.get_type()))?;
 
@@ -1597,6 +1608,7 @@ impl TypedModule {
                     BinaryOpKind::And => lhs.get_type(),
                     BinaryOpKind::Or => lhs.get_type(),
                     BinaryOpKind::Equals => BOOL_TYPE_ID,
+                    BinaryOpKind::NotEquals => BOOL_TYPE_ID,
                 };
                 let expr = TypedExpr::BinaryOp(BinaryOp {
                     kind,
@@ -1700,11 +1712,12 @@ impl TypedModule {
             }
             Expression::MethodCall(m_call) => {
                 let base_expr = self.eval_expr(&m_call.base, scope_id, None)?;
-                let call = self.eval_function_call(&m_call.call, Some(base_expr), scope_id)?;
+                let call =
+                    self.eval_function_call(&m_call.call, Some(base_expr), None, scope_id)?;
                 Ok(call)
             }
             Expression::FnCall(fn_call) => {
-                let call = self.eval_function_call(fn_call, None, scope_id)?;
+                let call = self.eval_function_call(fn_call, None, None, scope_id)?;
                 Ok(call)
             }
             Expression::OptionalGet(optional_get) => {
@@ -1785,6 +1798,114 @@ impl TypedModule {
                 };
                 Ok(TypedExpr::For(for_expr))
             }
+        }
+    }
+
+    fn eval_equality_expr(
+        &mut self,
+        binary_op: &parse::BinaryOp,
+        scope_id: ScopeId,
+        _expected_type: Option<TypeId>,
+    ) -> TyperResult<TypedExpr> {
+        assert!(
+            binary_op.op_kind == BinaryOpKind::Equals
+                || binary_op.op_kind == BinaryOpKind::NotEquals
+        );
+        let lhs = self.eval_expr(&binary_op.lhs, scope_id, None)?;
+        let equals_expr = match self.get_type(lhs.get_type()) {
+            Type::Unit | Type::Char | Type::Int | Type::Bool => {
+                // All these scalar types treated as IntValue s in codegen
+                let rhs = self.eval_expr(&binary_op.rhs, scope_id, Some(lhs.get_type()))?;
+                if rhs.get_type() == lhs.get_type() {
+                    Ok(TypedExpr::BinaryOp(BinaryOp {
+                        kind: BinaryOpKind::Equals,
+                        ty: BOOL_TYPE_ID,
+                        lhs: Box::new(lhs),
+                        rhs: Box::new(rhs),
+                        span: binary_op.span,
+                    }))
+                } else {
+                    make_fail("Bad rhs type", binary_op.span)
+                }
+            }
+            Type::String => {
+                let rhs = self.eval_expr(&binary_op.rhs, scope_id, Some(lhs.get_type()))?;
+                if rhs.get_type() != STRING_TYPE_ID {
+                    make_fail("Expected string on rhs", binary_op.span)
+                } else {
+                    let string_scope =
+                        self.get_namespace_scope_for_ident(scope_id, self.ast.ident_id("string"));
+                    let string_equality_function = string_scope
+                        .find_function(self.ast.ident_id("equals"))
+                        .ok_or(make_err("Missing equality function for string", binary_op.span))?;
+                    let call_expr = TypedExpr::FunctionCall(Call {
+                        callee_function_id: string_equality_function,
+                        args: vec![lhs, rhs],
+                        ret_type: BOOL_TYPE_ID,
+                        span: binary_op.span,
+                    });
+                    Ok(call_expr)
+                }
+            }
+            Type::Record(_record_defn) => {
+                todo!("record equality")
+            }
+            Type::Array(array) => {
+                // We need a cleaner way to generate _generic_ calls in typer
+                // known_type_args is a good start, but I think we need to be able to
+                // pass in pre-evaluated value args as well and pick up from there with specialization
+                let array_equality_call = self.eval_function_call(
+                    &FnCall {
+                        name: self.ast.ident_id("equals"),
+                        type_args: None,
+                        args: vec![
+                            parse::FnCallArg { name: None, value: *binary_op.lhs.clone() },
+                            parse::FnCallArg { name: None, value: *binary_op.rhs.clone() },
+                        ],
+                        namespaces: vec![self.ast.ident_id("Array")],
+                        span: binary_op.span,
+                    },
+                    None,
+                    Some(vec![TypeParam {
+                        ident: self.ast.ident_id("T"),
+                        type_id: array.element_type,
+                    }]),
+                    scope_id,
+                )?;
+                Ok(array_equality_call)
+            }
+            Type::Optional(_opt) => {
+                todo!("optional equality")
+            }
+            Type::Reference(_refer) => {
+                todo!("reference equality")
+            }
+            Type::TypeVariable(type_var) => {
+                let rhs = self.eval_expr(&binary_op.rhs, scope_id, Some(lhs.get_type()))?;
+                if let Err(msg) = self.typecheck_types(lhs.get_type(), rhs.get_type()) {
+                    return make_fail(
+                        format!("Type mismatch on equality of 2 generic variables: {}", msg),
+                        binary_op.span,
+                    );
+                }
+                Ok(TypedExpr::BinaryOp(BinaryOp {
+                    kind: BinaryOpKind::Equals,
+                    ty: BOOL_TYPE_ID,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                    span: binary_op.span,
+                }))
+            }
+        }?;
+        if binary_op.op_kind == BinaryOpKind::Equals {
+            Ok(equals_expr)
+        } else {
+            Ok(TypedExpr::UnaryOp(UnaryOp {
+                kind: UnaryOpKind::BooleanNegation,
+                type_id: BOOL_TYPE_ID,
+                expr: Box::new(equals_expr),
+                span: binary_op.span,
+            }))
         }
     }
 
@@ -1886,6 +2007,17 @@ impl TypedModule {
         })))
     }
 
+    fn get_namespace_scope_for_ident(
+        &self,
+        scope_id: ScopeId,
+        identifier_id: IdentifierId,
+    ) -> &Scope {
+        let namespace_id = self.scopes.find_namespace(scope_id, identifier_id).unwrap();
+        let namespace = self.get_namespace(namespace_id).unwrap();
+        let scope = self.scopes.get_scope(namespace.scope_id);
+        scope
+    }
+
     /// Can 'shortcircuit' with Left if the function call to resolve
     /// is actually a builtin
     fn resolve_function_call(
@@ -1900,29 +2032,21 @@ impl TypedModule {
                 let type_id = base_expr.get_type();
                 let function_id = match self.get_type_dereferenced(type_id) {
                     Type::String => {
-                        // TODO: Abstract out a way to go from identifier to scope
-                        //       (name -> ident id -> namespace id -> namespace -> scope id -> scope
                         let string_ident_id = self.ast.ident_id("string");
-                        let string_namespace_id =
-                            self.scopes.find_namespace(calling_scope, string_ident_id).unwrap();
-                        let string_namespace = self.get_namespace(string_namespace_id).unwrap();
-                        let string_scope = self.scopes.get_scope(string_namespace.scope_id);
+                        let string_scope =
+                            self.get_namespace_scope_for_ident(calling_scope, string_ident_id);
                         string_scope.find_function(fn_call.name)
                     }
                     Type::Char => {
                         let char_ident_id = self.ast.ident_id("char");
-                        let char_namespace_id =
-                            self.scopes.find_namespace(calling_scope, char_ident_id).unwrap();
-                        let char_namespace = self.get_namespace(char_namespace_id).unwrap();
-                        let char_scope = self.scopes.get_scope(char_namespace.scope_id);
+                        let char_scope =
+                            self.get_namespace_scope_for_ident(calling_scope, char_ident_id);
                         char_scope.find_function(fn_call.name)
                     }
                     Type::Array(_array_type) => {
                         let array_ident_id = self.ast.ident_id("Array");
-                        let array_namespace_id =
-                            self.scopes.find_namespace(calling_scope, array_ident_id).unwrap();
-                        let array_namespace = self.get_namespace(array_namespace_id).unwrap();
-                        let array_scope = self.scopes.get_scope(array_namespace.scope_id);
+                        let array_scope =
+                            self.get_namespace_scope_for_ident(calling_scope, array_ident_id);
                         array_scope.find_function(fn_call.name)
                     }
                     Type::Optional(_optional_type) => {
@@ -1946,10 +2070,8 @@ impl TypedModule {
                                 record.span,
                             );
                         };
-                        let record_namespace_id =
-                            self.scopes.find_namespace(calling_scope, record_type_name).unwrap();
-                        let record_namespace = self.get_namespace(record_namespace_id).unwrap();
-                        let record_scope = self.scopes.get_scope(record_namespace.scope_id);
+                        let record_scope =
+                            self.get_namespace_scope_for_ident(calling_scope, record_type_name);
                         record_scope.find_function(fn_call.name)
                     }
                     _ => None,
@@ -2067,6 +2189,7 @@ impl TypedModule {
         &mut self,
         fn_call: &FnCall,
         this_expr: Option<TypedExpr>,
+        known_type_args: Option<Vec<TypeParam>>,
         scope_id: ScopeId,
     ) -> TyperResult<TypedExpr> {
         // Special case for Some() because it is parsed as a function call
@@ -2098,8 +2221,12 @@ impl TypedModule {
             let intrinsic_type = original_function.intrinsic_type;
 
             // We infer the type arguments, or evaluate them if the user has supplied them
-            let type_args =
-                self.infer_call_type_args(fn_call, function_id, this_expr.as_ref(), scope_id)?;
+            let type_args = match known_type_args {
+                Some(ta) => ta,
+                None => {
+                    self.infer_call_type_args(fn_call, function_id, this_expr.as_ref(), scope_id)?
+                }
+            };
 
             // We skip specialization if any of the type arguments are type variables: `any_type_vars`
             // because we could just be evaluating a generic function that calls another generic function,
@@ -2261,7 +2388,7 @@ impl TypedModule {
                         fn_call.span,
                     );
                 } else {
-                    eprintln!("Solved params: {:?}", solved_params);
+                    debug!("Solved params: {:?}", solved_params);
                     solved_params
                 }
             }
@@ -2295,7 +2422,7 @@ impl TypedModule {
                     fn_call.span,
                 );
             };
-            info!(
+            debug!(
                 "Adding type param {}: {} to scope for specialized function {}",
                 &*self.get_ident_str(type_param.ident),
                 self.type_id_to_string(type_param.type_id),
@@ -2324,12 +2451,11 @@ impl TypedModule {
                 .map(|type_id| self.type_id_to_string(*type_id))
                 .collect::<Vec<_>>()
                 .join("_");
-            warn!("existing specialization for {} {}: {}", name, i, types_stringified);
+            debug!("existing specialization for {} {}: {}", name, i, types_stringified);
             if existing_specialization.specialized_type_params == type_ids {
-                log::info!(
+                debug!(
                     "Found existing specialization for function {} with types: {}",
-                    name,
-                    types_stringified
+                    name, types_stringified
                 );
                 let exprs = self.typecheck_call_arguments(
                     fn_call,
@@ -2499,6 +2625,8 @@ impl TypedModule {
                 Some(IntrinsicFunctionType::StringLength)
             } else if fn_def.name == self.ast.ident_id("fromChars") {
                 Some(IntrinsicFunctionType::StringFromCharArray)
+            } else if fn_def.name == self.ast.ident_id("equals") {
+                Some(IntrinsicFunctionType::StringEquals)
             } else {
                 None
             }
@@ -2664,8 +2792,7 @@ impl TypedModule {
             None => return make_fail("function is missing implementation", fn_def.span),
         };
         // Add the body now
-        let function = self.get_function_mut(function_id);
-        function.block = body_block;
+        self.get_function_mut(function_id).block = body_block;
         Ok(function_id)
     }
     fn eval_namespace(
@@ -2710,7 +2837,7 @@ impl TypedModule {
             }
         }
     }
-    pub fn run(&mut self) -> Result<()> {
+    pub fn run(&mut self) -> anyhow::Result<()> {
         let mut errors: Vec<TyperError> = Vec::new();
         // TODO: 'Declare' everything first, will allow modules
         //        to declare their API without full typechecking
@@ -2725,9 +2852,10 @@ impl TypedModule {
             }
         }
         if !errors.is_empty() {
-            println!("{}", self);
-            println!("{:?}", errors);
-            bail!("Typechecking failed")
+            if log::log_enabled!(Level::Debug) {
+                debug!("{}", self);
+            }
+            bail!("{} failed typechecking with {} errors", self.ast.source.filename, errors.len())
         }
         Ok(())
     }
@@ -2767,11 +2895,7 @@ impl Display for TypedModule {
 
 // Dumping
 impl TypedModule {
-    fn display_variable(
-        &self,
-        var: &Variable,
-        writ: &mut impl std::fmt::Write,
-    ) -> std::fmt::Result {
+    fn display_variable(&self, var: &Variable, writ: &mut impl Write) -> std::fmt::Result {
         if var.is_mutable {
             writ.write_str("mut ")?;
         }
@@ -2780,7 +2904,7 @@ impl TypedModule {
         self.display_type_id(var.type_id, writ)
     }
 
-    fn display_type_id(&self, ty: TypeId, writ: &mut impl std::fmt::Write) -> std::fmt::Result {
+    fn display_type_id(&self, ty: TypeId, writ: &mut impl Write) -> std::fmt::Result {
         match ty {
             UNIT_TYPE_ID => writ.write_str("()"),
             CHAR_TYPE_ID => writ.write_str("char"),
@@ -2805,7 +2929,7 @@ impl TypedModule {
         s
     }
 
-    fn write_type(&self, ty: &Type, writ: &mut impl std::fmt::Write) -> std::fmt::Result {
+    fn write_type(&self, ty: &Type, writ: &mut impl Write) -> std::fmt::Result {
         match ty {
             Type::Unit => writ.write_str("()"),
             Type::Char => writ.write_str("char"),
@@ -2847,7 +2971,7 @@ impl TypedModule {
     pub fn display_function(
         &self,
         function: &Function,
-        writ: &mut impl std::fmt::Write,
+        writ: &mut impl Write,
         display_block: bool,
     ) -> std::fmt::Result {
         if function.linkage == Linkage::External {
@@ -2879,11 +3003,7 @@ impl TypedModule {
         Ok(())
     }
 
-    fn display_block(
-        &self,
-        block: &TypedBlock,
-        writ: &mut impl std::fmt::Write,
-    ) -> std::fmt::Result {
+    fn display_block(&self, block: &TypedBlock, writ: &mut impl Write) -> std::fmt::Result {
         writ.write_str("{\n")?;
         for stmt in &block.statements {
             self.display_stmt(stmt, writ)?;
@@ -2892,7 +3012,7 @@ impl TypedModule {
         writ.write_str("}")
     }
 
-    fn display_stmt(&self, stmt: &TypedStmt, writ: &mut impl std::fmt::Write) -> std::fmt::Result {
+    fn display_stmt(&self, stmt: &TypedStmt, writ: &mut impl Write) -> std::fmt::Result {
         match stmt {
             TypedStmt::Expr(expr) => self.display_expr(expr, writ),
             TypedStmt::ValDef(val_def) => {
@@ -2921,11 +3041,7 @@ impl TypedModule {
         s
     }
 
-    pub fn display_expr(
-        &self,
-        expr: &TypedExpr,
-        writ: &mut impl std::fmt::Write,
-    ) -> std::fmt::Result {
+    pub fn display_expr(&self, expr: &TypedExpr, writ: &mut impl Write) -> std::fmt::Result {
         match expr {
             TypedExpr::Unit(_) => writ.write_str("()"),
             TypedExpr::Char(c, _) => writ.write_fmt(format_args!("'{}'", c)),
@@ -3035,9 +3151,10 @@ impl TypedModule {
         }
     }
 
-    pub fn function_to_string(&self, function: &Function, display_block: bool) -> String {
+    pub fn function_id_to_string(&self, function_id: FunctionId, display_block: bool) -> String {
+        let func = self.get_function(function_id);
         let mut s = String::new();
-        self.display_function(function, &mut s, display_block).unwrap();
+        self.display_function(func, &mut s, display_block).unwrap();
         s
     }
 }

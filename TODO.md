@@ -1,15 +1,3 @@
-# bfl
-
-Just learning lang dev by implementing a toy language. The goal is to implement all the basics, but maybe
-with a few syntactic insights or pet ideas that I like. I am trying not to have any aspirations for this project
-except to explore the problem space of compiler development, and maybe to be able to do some of advent of code 2023 in this language
-
-# What? Why?
-
-The project isn't mature enough yet to make this list but the spirit of the effort is this: https://justforfunnoreally.dev/
-
-> The programmer, like the poet, works only slightly removed from pure thought-stuff. He builds his castles in the air, from air, creating by exertion of the imagination. Few media of creation are so flexible, so easy to polish and rework, so readily capable of realizing grand conceptual structures.... Yet the program construct, unlike the poet's words, is real in the sense that it moves and works, producing visible outputs separate from the construct itself. 
-
 # Up next maybe
 - [x] Records
   - [x] Syntax decision ({} vs .{} vs Point {})
@@ -62,13 +50,12 @@ The project isn't mature enough yet to make this list but the spirit of the effo
 - [ ] Builtin maps
 - [ ] Fix namespaces to require full paths (currently busted must be unique names globally)
 - [ ] Type Ascriptions (literally can just pass expected_type into eval and do an addtl typecheck)
-- [ ] For iteration (we will just hardcode the iterable types)
 - [ ] Some debug info in LLVM IR (source snippets or line numbers?)
 - [ ] Single-arm match syntax with `is`; `if x is Some(y)` instead of `if let Some(y) = x`; if x is not Err(y) (replaces let-else)
 - [ ] Sum types (oneofs) (variants?) (tagged unions)
 - [ ] Errors
 - [ ] uint type
-- [ ] Generic type inference
+- [x] Generic type inference
 - [ ] Type literals would be fun
 - [ ] Syntax Shed
     - [ ] Function syntax change? (foo = fn (a, b, c): int { }
@@ -79,6 +66,12 @@ The project isn't mature enough yet to make this list but the spirit of the effo
 - [ ] Tuples
 - [ ] Pure lambdas with ->
 - [ ] Full-on closures with =>
+
+- [ ] For iteration (we will just hardcode the iterable types)
+  - [ ] 'do' version
+  - [ ] 'yield' version on array
+  - [ ] 'yield' version on string
+  - [ ] 'yield' version on optional
 
 - [x] DEBUG info
   - [x] on or off
@@ -118,7 +111,7 @@ The project isn't mature enough yet to make this list but the spirit of the effo
   - charToString implemented in zig and linked
 - [ ] array bounds checking
 - [ ] Array.distinct in zig
-- [ ] Not equal != operator
+- [x] Not equal != operator
 - [x] Unary negation operator
 
 # Fibonacci todos (Aug 20)
