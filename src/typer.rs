@@ -384,6 +384,7 @@ pub struct FieldAccess {
     pub ty: TypeId,
     pub span: Span,
 }
+
 #[derive(Debug, Clone)]
 pub struct IndexOp {
     pub base_expr: Box<TypedExpr>,
@@ -744,6 +745,7 @@ pub struct Scope {
     parent: Option<ScopeId>,
     children: Vec<ScopeId>,
 }
+
 impl Scope {
     fn find_variable(&self, ident: IdentifierId) -> Option<VariableId> {
         self.variables.get(&ident).copied()
@@ -1127,7 +1129,7 @@ impl TypedModule {
                 return make_fail(
                     "Only literals are currently supported as constants",
                     const_expr.span,
-                )
+                );
             }
         };
         let variable_id = self.add_variable(Variable {
@@ -1368,7 +1370,7 @@ impl TypedModule {
                 self.eval_field_access(field_access, scope_id, true)
             }
             other => {
-                return make_fail(format!("Invalid assignment lhs: {:?}", other), other.get_span())
+                return make_fail(format!("Invalid assignment lhs: {:?}", other), other.get_span());
             }
         }
     }
@@ -1502,7 +1504,7 @@ impl TypedModule {
                                         self.type_to_string(other_ty)
                                     ),
                                     ast_record.span,
-                                )
+                                );
                             }
                         },
                         Type::Reference(refer) => match self.get_type(refer.inner_type) {
@@ -1514,7 +1516,7 @@ impl TypedModule {
                                         self.type_to_string(other_ty)
                                     ),
                                     ast_record.span,
-                                )
+                                );
                             }
                         },
                         other_ty => {
@@ -1524,7 +1526,7 @@ impl TypedModule {
                                     self.type_to_string(other_ty)
                                 ),
                                 ast_record.span,
-                            )
+                            );
                         }
                     }
                 } else {
@@ -1583,7 +1585,7 @@ impl TypedModule {
                 // Infer expected type to be type of operand1
                 match binary_op.op_kind {
                     BinaryOpKind::Equals | BinaryOpKind::NotEquals => {
-                        return self.eval_equality_expr(binary_op, scope_id, expected_type)
+                        return self.eval_equality_expr(binary_op, scope_id, expected_type);
                     }
                     _ => {}
                 };
@@ -1764,6 +1766,36 @@ impl TypedModule {
         (variable_id, val_def, TypedExpr::Variable(expr))
     }
 
+    fn synth_variable_parsed_expr(&self, variable_id: VariableId, span: Span) -> parse::Expression {
+        Expression::Variable(parse::Variable { ident: self.get_variable(variable_id).name, span })
+    }
+
+    fn synth_function_call(
+        &mut self,
+        namespaces: Vec<IdentifierId>,
+        name: IdentifierId,
+        known_type_args: Option<Vec<TypeId>>,
+        value_arg_exprs: Vec<parse::Expression>,
+        span: Span,
+        scope_id: ScopeId,
+    ) -> TyperResult<TypedExpr> {
+        self.eval_function_call(
+            &FnCall {
+                name,
+                type_args: None,
+                args: value_arg_exprs
+                    .into_iter()
+                    .map(|expr| FnCallArg { name: None, value: expr })
+                    .collect(),
+                namespaces,
+                span,
+            },
+            None,
+            known_type_args,
+            scope_id,
+        )
+    }
+
     fn eval_for_expr(
         &mut self,
         for_expr: &ForExpr,
@@ -1773,6 +1805,7 @@ impl TypedModule {
         let binding_ident = for_expr.binding.unwrap_or(self.ast.ident_id("it"));
         let iterable_expr = self.eval_expr(&for_expr.iterable_expr, scope_id, None)?;
         let iteree_type = iterable_expr.get_type();
+        let is_string_iteree = iteree_type == STRING_TYPE_ID;
         let Some(item_type) = self.item_type_of_iterable(iteree_type) else {
             return make_fail(
                 format!(
@@ -1791,26 +1824,64 @@ impl TypedModule {
 
         let for_expr_scope = self.scopes.add_child_scope(scope_id);
 
-        let (counter_variable, counter_def, counter_variable_expr) = self.synth_variable_decl(
-            Variable {
-                name: self.ast.ident_id("counter_uniq"),
-                type_id: INT_TYPE_ID,
-                is_mutable: true,
-                owner_scope: Some(for_expr_scope),
-            },
-            for_expr.body_block.span,
-            TypedExpr::Int(0, for_expr.body_block.span),
-        );
-        let (iteree_variable_id, iteree_def, iteree_variable_expr) = self.synth_variable_decl(
-            Variable {
-                name: self.ast.ident_id("iteree"),
-                type_id: iteree_type,
-                is_mutable: false,
-                owner_scope: Some(for_expr_scope),
-            },
-            for_expr.iterable_expr.get_span(),
-            iterable_expr,
-        );
+        let (counter_variable, counter_defn_stmt, counter_variable_expr) = self
+            .synth_variable_decl(
+                Variable {
+                    name: self.ast.ident_id("counter_uniq"),
+                    type_id: INT_TYPE_ID,
+                    is_mutable: true,
+                    owner_scope: Some(for_expr_scope),
+                },
+                for_expr.body_block.span,
+                TypedExpr::Int(0, for_expr.body_block.span),
+            );
+        let (iteree_variable_id, iteree_defn_stmt, iteree_variable_expr) = self
+            .synth_variable_decl(
+                Variable {
+                    name: self.ast.ident_id("iteree"),
+                    type_id: iteree_type,
+                    is_mutable: false,
+                    owner_scope: Some(for_expr_scope),
+                },
+                for_expr.iterable_expr.get_span(),
+                iterable_expr,
+            );
+        let iteree_length_call = if is_string_iteree {
+            self.synth_function_call(
+                vec![self.ast.ident_id("string")],
+                self.ast.ident_id("length"),
+                None,
+                vec![self.synth_variable_parsed_expr(
+                    iteree_variable_id,
+                    for_expr.iterable_expr.get_span(),
+                )],
+                for_expr.iterable_expr.get_span(),
+                for_expr_scope,
+            )?
+        } else {
+            self.synth_function_call(
+                vec![self.ast.ident_id("Array")],
+                self.ast.ident_id("length"),
+                Some(vec![item_type]),
+                vec![self.synth_variable_parsed_expr(
+                    iteree_variable_id,
+                    for_expr.iterable_expr.get_span(),
+                )],
+                for_expr.iterable_expr.get_span(),
+                for_expr_scope,
+            )?
+        };
+        let (iteree_length_variable_id, iteree_length_defn_stmt, iteree_length_variable_expr) =
+            self.synth_variable_decl(
+                Variable {
+                    name: self.ast.ident_id("iteree_length"),
+                    type_id: INT_TYPE_ID,
+                    is_mutable: false,
+                    owner_scope: Some(for_expr_scope),
+                },
+                for_expr.iterable_expr.get_span(),
+                iteree_length_call,
+            );
 
         let while_scope_id = self.scopes.add_child_scope(for_expr_scope);
         let binding_variable_id = self.add_variable(Variable {
@@ -1823,22 +1894,36 @@ impl TypedModule {
         let iteration_element_val_def = TypedStmt::ValDef(Box::new(ValDef {
             variable_id: binding_variable_id,
             ty: item_type,
-            initializer: TypedExpr::ArrayIndex(IndexOp {
-                base_expr: Box::new(iteree_variable_expr.clone()),
-                index_expr: Box::new(TypedExpr::Variable(VariableExpr {
-                    type_id: INT_TYPE_ID,
-                    variable_id: counter_variable,
+            initializer: if is_string_iteree {
+                TypedExpr::StringIndex(IndexOp {
+                    base_expr: Box::new(iteree_variable_expr.clone()),
+                    index_expr: Box::new(TypedExpr::Variable(VariableExpr {
+                        type_id: INT_TYPE_ID,
+                        variable_id: counter_variable,
+                        span: for_expr.body_block.span,
+                    })),
+                    result_type: item_type,
                     span: for_expr.body_block.span,
-                })),
-                result_type: item_type,
-                span: for_expr.body_block.span,
-            }),
+                })
+            } else {
+                TypedExpr::ArrayIndex(IndexOp {
+                    base_expr: Box::new(iteree_variable_expr.clone()),
+                    index_expr: Box::new(TypedExpr::Variable(VariableExpr {
+                        type_id: INT_TYPE_ID,
+                        variable_id: counter_variable,
+                        span: for_expr.body_block.span,
+                    })),
+                    result_type: item_type,
+                    span: for_expr.body_block.span,
+                })
+            },
             span: for_expr.body_block.span,
         }));
 
         // TODO: we can hint to the block based on the expected type of the entire for expr
         let body_scope_id = self.scopes.add_child_scope(while_scope_id);
         let body_block = self.eval_block(&for_expr.body_block, body_scope_id, None)?;
+        let body_block_result_type = body_block.expr_type;
 
         let resulting_type = if is_do_block {
             UNIT_TYPE_ID
@@ -1875,15 +1960,20 @@ impl TypedModule {
             };
 
             let yield_initializer = match self.get_type(resulting_type) {
-                Type::Array(_array_type) => TypedExpr::Array(ArrayLiteral {
-                    elements: vec![],
-                    type_id: resulting_type,
-                    span: for_expr.body_block.span,
-                }),
-                Type::Optional(_optional_type) => {
-                    TypedExpr::None(resulting_type, for_expr.body_block.span)
+                Type::Array(_array_type) => self.synth_function_call(
+                    vec![self.ast.ident_id("Array")],
+                    self.ast.ident_id("new"),
+                    Some(vec![body_block_result_type]),
+                    vec![self.synth_variable_parsed_expr(
+                        iteree_length_variable_id,
+                        for_expr.iterable_expr.get_span(),
+                    )],
+                    for_expr.body_block.span,
+                    for_expr_scope,
+                )?,
+                _ => {
+                    return make_fail("unsupported resulting_type in for_expr yield", for_expr.span)
                 }
-                _ => todo!("unsupported resulting_type in for_expr yield"),
             };
             Some(self.synth_variable_decl(
                 yield_variable,
@@ -1901,7 +1991,7 @@ impl TypedModule {
         };
         // Prepend the val def to the body block
         while_block.statements.push(iteration_element_val_def);
-        let (_user_block_val_id, user_block_val_def, _user_block_val_expr) = self
+        let (user_block_val_id, user_block_val_def, user_block_val_expr) = self
             .synth_variable_decl(
                 Variable {
                     name: self.ast.ident_id("block_expr_val"),
@@ -1913,6 +2003,28 @@ impl TypedModule {
                 TypedExpr::Block(body_block),
             );
         while_block.statements.push(user_block_val_def);
+
+        // push to yield array
+        if let Some((yield_coll_variable_id, _yield_def, yielded_coll_expr)) = &yield_decls {
+            match self.get_type(resulting_type) {
+                Type::Array(_) => {
+                    // yielded_coll[counter_uniq] = block_expr_val;
+                    let element_assign = TypedStmt::Assignment(Box::new(Assignment {
+                        destination: Box::new(TypedExpr::ArrayIndex(IndexOp {
+                            base_expr: Box::new(yielded_coll_expr.clone()),
+                            index_expr: Box::new(counter_variable_expr.clone()),
+                            result_type: body_block_result_type,
+                            span: for_expr.body_block.span,
+                        })),
+                        value: Box::new(user_block_val_expr),
+                        span: for_expr.body_block.span,
+                    }));
+                    while_block.statements.push(element_assign);
+                }
+                _ => {}
+            }
+        }
+
         // Append the counter increment to the body block
         let counter_increment_statement = TypedStmt::Assignment(Box::new(Assignment {
             destination: Box::new(counter_variable_expr.clone()),
@@ -1931,67 +2043,12 @@ impl TypedModule {
         }));
         while_block.statements.push(counter_increment_statement);
 
-        // push to yield array
-        if let Some((yield_coll_variable_id, _yield_def, _yield_expr)) = &yield_decls {
-            match self.get_type(resulting_type) {
-                Type::Array(_) => {
-                    let push_fn_call = self.eval_function_call(
-                        &FnCall {
-                            name: self.ast.ident_id("push"),
-                            type_args: None,
-                            args: vec![
-                                FnCallArg {
-                                    name: None,
-                                    value: Expression::Variable(parse::Variable {
-                                        ident: self.get_variable(*yield_coll_variable_id).name,
-                                        span: for_expr.body_block.span,
-                                    }),
-                                },
-                                FnCallArg {
-                                    name: None,
-                                    value: Expression::Variable(parse::Variable {
-                                        ident: self.ast.ident_id("block_expr_val"),
-                                        span: for_expr.body_block.span,
-                                    }),
-                                },
-                            ],
-                            namespaces: vec![self.ast.ident_id("Array")],
-                            span: for_expr.body_block.span,
-                        },
-                        None,
-                        Some(vec![TypeParam { ident: self.ast.ident_id("T"), type_id: item_type }]),
-                        while_scope_id,
-                    )?;
-                    while_block.statements.push(TypedStmt::Expr(Box::new(push_fn_call)));
-                }
-                _ => {}
-            }
-        }
-
-        let array_length_call = self.eval_function_call(
-            &FnCall {
-                name: self.ast.ident_id("length"),
-                type_args: None,
-                args: vec![FnCallArg {
-                    name: None,
-                    value: parse::Expression::Variable(parse::Variable {
-                        ident: self.get_variable(iteree_variable_id).name,
-                        span: for_expr.iterable_expr.get_span(),
-                    }),
-                }],
-                namespaces: vec![self.ast.ident_id("Array")],
-                span: for_expr.iterable_expr.get_span(),
-            },
-            None,
-            Some(vec![TypeParam { ident: self.ast.ident_id("T"), type_id: item_type }]),
-            for_expr_scope,
-        )?;
         let while_stmt = TypedStmt::WhileLoop(Box::new(TypedWhileLoop {
             cond: TypedExpr::BinaryOp(BinaryOp {
                 kind: BinaryOpKind::Less,
                 ty: BOOL_TYPE_ID,
                 lhs: Box::new(counter_variable_expr.clone()),
-                rhs: Box::new(array_length_call),
+                rhs: Box::new(iteree_length_variable_expr),
                 span: for_expr.iterable_expr.get_span(),
             }),
             block: while_block,
@@ -1999,8 +2056,9 @@ impl TypedModule {
         }));
 
         let mut for_expr_initial_statements = Vec::with_capacity(4);
-        for_expr_initial_statements.push(counter_def);
-        for_expr_initial_statements.push(iteree_def);
+        for_expr_initial_statements.push(counter_defn_stmt);
+        for_expr_initial_statements.push(iteree_defn_stmt);
+        for_expr_initial_statements.push(iteree_length_defn_stmt);
         if let Some((_yield_id, yield_def, _yield_expr)) = &yield_decls {
             for_expr_initial_statements.push(yield_def.clone());
         }
@@ -2079,22 +2137,12 @@ impl TypedModule {
                 // We need a cleaner way to generate _generic_ calls in typer
                 // known_type_args is a good start, but I think we need to be able to
                 // pass in pre-evaluated value args as well and pick up from there with specialization
-                let array_equality_call = self.eval_function_call(
-                    &FnCall {
-                        name: self.ast.ident_id("equals"),
-                        type_args: None,
-                        args: vec![
-                            FnCallArg { name: None, value: *binary_op.lhs.clone() },
-                            FnCallArg { name: None, value: *binary_op.rhs.clone() },
-                        ],
-                        namespaces: vec![self.ast.ident_id("Array")],
-                        span: binary_op.span,
-                    },
-                    None,
-                    Some(vec![TypeParam {
-                        ident: self.ast.ident_id("T"),
-                        type_id: array.element_type,
-                    }]),
+                let array_equality_call = self.synth_function_call(
+                    vec![self.ast.ident_id("Array")],
+                    self.ast.ident_id("equals"),
+                    Some(vec![array.element_type]),
+                    vec![*binary_op.lhs.clone(), *binary_op.rhs.clone()],
+                    binary_op.span,
                     scope_id,
                 )?;
                 Ok(array_equality_call)
@@ -2311,7 +2359,7 @@ impl TypedModule {
                                 self.type_id_to_string(type_id),
                             ),
                             fn_call.span,
-                        )
+                        );
                     }
                 }
             }
@@ -2414,7 +2462,7 @@ impl TypedModule {
         &mut self,
         fn_call: &FnCall,
         this_expr: Option<TypedExpr>,
-        known_type_args: Option<Vec<TypeParam>>,
+        known_type_args: Option<Vec<TypeId>>,
         scope_id: ScopeId,
     ) -> TyperResult<TypedExpr> {
         // Special case for Some() because it is parsed as a function call
@@ -2442,12 +2490,20 @@ impl TypedModule {
         let original_function = self.get_function(function_id);
         let original_params = original_function.params.clone();
 
-        let (function_to_call, typechecked_arguments) = if original_function.is_generic() {
+        let (function_to_call, typechecked_arguments) = if let Some(type_params) =
+            &original_function.type_params
+        {
             let intrinsic_type = original_function.intrinsic_type;
 
             // We infer the type arguments, or evaluate them if the user has supplied them
             let type_args = match known_type_args {
-                Some(ta) => ta,
+                Some(ta) => {
+                    // Need the ident
+                    ta.into_iter()
+                        .enumerate()
+                        .map(|(idx, type_id)| TypeParam { ident: type_params[idx].ident, type_id })
+                        .collect()
+                }
                 None => {
                     self.infer_call_type_args(fn_call, function_id, this_expr.as_ref(), scope_id)?
                 }

@@ -1,9 +1,4 @@
 fn main(): int {
-  print("hello, world!");
-  val xs: Array<int> = [1, 5, 9];
-
-  // for version
-  println("");
   val squares: Array<int> = for it in [1, 5, 9, 12] yield { it * it };
   assert(squares.length() == 4);
   assert(squares[0] == 1);
@@ -13,18 +8,19 @@ fn main(): int {
 
   // Desugared
   // val squares = {
-  //   val mut counter_uniq: int = 0
-  //   val iteree: Array<int> = [1, 5, 9]
-  //   val yielded_coll: Array<int> = []
-  //   while counter_uniq < length_2([1, 5, 9]) {
-  //     val it: int = iteree[counter_uniq]
+  //   val mut counter_uniq: int = 0;
+  //   val iteree: Array<int> = [1, 5, 9, 12];
+  //   val iteree_length: int = length_2(iteree);
+  //   val yielded_coll: Array<int> = new_2(iteree_length);
+  //   while counter_uniq < iteree_length {
+  //     val it: int = iteree[counter_uniq];
   //     val block_expr_val: int = {
-  //       it * it
-  //     }
-  //     counter_uniq = counter_uniq + 1
-  //     push_2(yielded_coll, block_expr_val)
-  //   }
-  //   yielded_coll
+  //       it * it;
+  //     };
+  //     yielded_coll[counter_uniq] = block_expr_val;
+  //     counter_uniq = counter_uniq + 1;
+  //   };
+  //   yielded_coll;
   // }
   0
 }
