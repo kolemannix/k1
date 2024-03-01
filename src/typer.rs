@@ -1747,22 +1747,23 @@ impl TypedModule {
 
     fn synth_variable_decl(
         &mut self,
-        variable: Variable,
+        mut variable: Variable,
         span: Span,
         initializer: TypedExpr,
     ) -> (VariableId, TypedStmt, TypedExpr) {
         let type_id = variable.type_id;
-        let ident_id = variable.name;
-        let scope_id = variable.owner_scope;
+        let scope_id = variable.owner_scope.unwrap_or(self.scopes.get_root_scope_id());
+        let new_ident_name = {
+            let ident_str = &*self.ast.get_ident_str(variable.name);
+            format!("__{}_{}", scope_id, ident_str)
+        };
+        let new_ident = self.ast.ident_id(&new_ident_name);
+        variable.name = new_ident;
         let variable_id = self.add_variable(variable);
         let expr = VariableExpr { type_id, variable_id, span };
         let val_def =
             TypedStmt::ValDef(Box::new(ValDef { variable_id, ty: type_id, initializer, span }));
-        self.scopes.add_variable(
-            scope_id.unwrap_or(self.scopes.get_root_scope_id()),
-            ident_id,
-            variable_id,
-        );
+        self.scopes.add_variable(scope_id, new_ident, variable_id);
         (variable_id, val_def, TypedExpr::Variable(expr))
     }
 
@@ -1827,7 +1828,7 @@ impl TypedModule {
         let (counter_variable, counter_defn_stmt, counter_variable_expr) = self
             .synth_variable_decl(
                 Variable {
-                    name: self.ast.ident_id("counter_uniq"),
+                    name: self.ast.ident_id("for_index"),
                     type_id: INT_TYPE_ID,
                     is_mutable: true,
                     owner_scope: Some(for_expr_scope),

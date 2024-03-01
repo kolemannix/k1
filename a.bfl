@@ -1,0 +1,10 @@
+fn main(): int {
+  val charCodes = for c in "asdf" yield {
+    c.toInt()
+  };
+  for i in charCodes do {
+    printInt(i);
+    println("");
+  };
+  0
+}
