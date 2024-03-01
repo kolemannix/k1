@@ -210,21 +210,20 @@ pub struct OptionalGet {
 
 #[derive(Debug, Clone)]
 pub enum Expression {
-    // TODO: examples of each AST expression as comments
-    BinaryOp(BinaryOp),
-    UnaryOp(UnaryOp),
-    Literal(Literal),
-    FnCall(FnCall),
-    Variable(Variable),
-    FieldAccess(FieldAccess),
-    MethodCall(MethodCall),
-    Block(Block),
-    If(IfExpr),
-    Record(Record),
-    IndexOperation(IndexOperation),
-    Array(ArrayExpr), // [1, 3, 5, 7]
-    OptionalGet(OptionalGet),
-    For(ForExpr),
+    BinaryOp(BinaryOp),             // a == b
+    UnaryOp(UnaryOp),               // !b, *b
+    Literal(Literal),               // 42, "asdf"
+    FnCall(FnCall),                 // square(1, 2)
+    Variable(Variable),             // x
+    FieldAccess(FieldAccess),       // x.b
+    MethodCall(MethodCall),         // x.load()
+    Block(Block),                   // { <expr>; <expr>; <expr> }
+    If(IfExpr),                     // if a else b
+    Record(Record),                 // { x: 1, y: 3 }
+    IndexOperation(IndexOperation), // xs[3]
+    Array(ArrayExpr),               // [1, 3, 5, 7]
+    OptionalGet(OptionalGet),       // foo!
+    For(ForExpr),                   // for i in [1,2,3] do println(i)
 }
 
 impl Expression {
