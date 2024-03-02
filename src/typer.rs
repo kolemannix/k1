@@ -1755,7 +1755,7 @@ impl TypedModule {
         let scope_id = variable.owner_scope.unwrap_or(self.scopes.get_root_scope_id());
         let new_ident_name = {
             let ident_str = &*self.ast.get_ident_str(variable.name);
-            format!("__{}_{}", scope_id, ident_str)
+            format!("__{}_{}", ident_str, scope_id)
         };
         let new_ident = self.ast.ident_id(&new_ident_name);
         variable.name = new_ident;
@@ -1776,7 +1776,7 @@ impl TypedModule {
         namespaces: Vec<IdentifierId>,
         name: IdentifierId,
         known_type_args: Option<Vec<TypeId>>,
-        value_arg_exprs: Vec<parse::Expression>,
+        value_arg_exprs: Vec<Expression>,
         span: Span,
         scope_id: ScopeId,
     ) -> TyperResult<TypedExpr> {
@@ -1992,7 +1992,7 @@ impl TypedModule {
         };
         // Prepend the val def to the body block
         while_block.statements.push(iteration_element_val_def);
-        let (user_block_val_id, user_block_val_def, user_block_val_expr) = self
+        let (_user_block_val_id, user_block_val_def, user_block_val_expr) = self
             .synth_variable_decl(
                 Variable {
                     name: self.ast.ident_id("block_expr_val"),
@@ -2005,11 +2005,11 @@ impl TypedModule {
             );
         while_block.statements.push(user_block_val_def);
 
-        // push to yield array
-        if let Some((yield_coll_variable_id, _yield_def, yielded_coll_expr)) = &yield_decls {
+        // Assign element to yielded array
+        if let Some((_yield_coll_variable_id, _yield_def, yielded_coll_expr)) = &yield_decls {
             match self.get_type(resulting_type) {
                 Type::Array(_) => {
-                    // yielded_coll[counter_uniq] = block_expr_val;
+                    // yielded_coll[index] = block_expr_val;
                     let element_assign = TypedStmt::Assignment(Box::new(Assignment {
                         destination: Box::new(TypedExpr::ArrayIndex(IndexOp {
                             base_expr: Box::new(yielded_coll_expr.clone()),
@@ -3340,51 +3340,71 @@ impl TypedModule {
         self.display_type_id(function.ret_type, writ)?;
         if display_block {
             if let Some(block) = &function.block {
-                self.display_block(block, writ)?;
+                self.display_block(block, writ, 0)?;
             }
         }
         Ok(())
     }
 
-    fn display_block(&self, block: &TypedBlock, writ: &mut impl Write) -> std::fmt::Result {
+    fn display_block(
+        &self,
+        block: &TypedBlock,
+        writ: &mut impl Write,
+        indentation: usize,
+    ) -> std::fmt::Result {
         writ.write_str("{\n")?;
-        for stmt in &block.statements {
-            self.display_stmt(stmt, writ)?;
-            writ.write_str(";\n")?;
+        for (idx, stmt) in block.statements.iter().enumerate() {
+            self.display_stmt(stmt, writ, indentation + 1)?;
+            if idx < block.statements.len() - 1 {
+                writ.write_str(";")?;
+            }
+            writ.write_str("\n")?;
         }
+        writ.write_str(&" ".repeat(indentation))?;
         writ.write_str("}")
     }
 
-    fn display_stmt(&self, stmt: &TypedStmt, writ: &mut impl Write) -> std::fmt::Result {
+    fn display_stmt(
+        &self,
+        stmt: &TypedStmt,
+        writ: &mut impl Write,
+        indentation: usize,
+    ) -> std::fmt::Result {
+        writ.write_str(&" ".repeat(indentation))?;
         match stmt {
-            TypedStmt::Expr(expr) => self.display_expr(expr, writ),
+            TypedStmt::Expr(expr) => self.display_expr(expr, writ, indentation),
             TypedStmt::ValDef(val_def) => {
                 writ.write_str("val ")?;
                 self.display_variable(self.get_variable(val_def.variable_id), writ)?;
                 writ.write_str(" = ")?;
-                self.display_expr(&val_def.initializer, writ)
+                self.display_expr(&val_def.initializer, writ, indentation)
             }
             TypedStmt::Assignment(assignment) => {
-                self.display_expr(&assignment.destination, writ)?;
+                self.display_expr(&assignment.destination, writ, 0)?;
                 writ.write_str(" = ")?;
-                self.display_expr(&assignment.value, writ)
+                self.display_expr(&assignment.value, writ, 0)
             }
             TypedStmt::WhileLoop(while_loop) => {
                 writ.write_str("while ")?;
-                self.display_expr(&while_loop.cond, writ)?;
+                self.display_expr(&while_loop.cond, writ, 0)?;
                 writ.write_str(" ")?;
-                self.display_block(&while_loop.block, writ)
+                self.display_block(&while_loop.block, writ, indentation + 1)
             }
         }
     }
 
     pub fn expr_to_string(&self, expr: &TypedExpr) -> String {
         let mut s = String::new();
-        self.display_expr(expr, &mut s).unwrap();
+        self.display_expr(expr, &mut s, 0).unwrap();
         s
     }
 
-    pub fn display_expr(&self, expr: &TypedExpr, writ: &mut impl Write) -> std::fmt::Result {
+    pub fn display_expr(
+        &self,
+        expr: &TypedExpr,
+        writ: &mut impl Write,
+        indentation: usize,
+    ) -> std::fmt::Result {
         match expr {
             TypedExpr::Unit(_) => writ.write_str("()"),
             TypedExpr::Char(c, _) => writ.write_fmt(format_args!("'{}'", c)),
@@ -3402,7 +3422,7 @@ impl TypedModule {
                     if idx > 0 {
                         writ.write_str(", ")?;
                     }
-                    self.display_expr(expr, writ)?;
+                    self.display_expr(expr, writ, indentation)?;
                 }
                 writ.write_str("]")
             }
@@ -3410,12 +3430,14 @@ impl TypedModule {
                 writ.write_str("{")?;
                 for (idx, field) in record.fields.iter().enumerate() {
                     if idx > 0 {
-                        writ.write_str(", ")?;
+                        writ.write_str(",\n")?;
+                        writ.write_str(&" ".repeat(indentation + 1))?;
                     }
                     writ.write_str(&self.get_ident_str(field.name))?;
                     writ.write_str(": ")?;
-                    self.display_expr(&field.expr, writ)?;
+                    self.display_expr(&field.expr, writ, indentation)?;
                 }
+                writ.write_str(&" ".repeat(indentation))?;
                 writ.write_str("}")
             }
             TypedExpr::Variable(v) => {
@@ -3423,20 +3445,20 @@ impl TypedModule {
                 writ.write_str(&self.get_ident_str(variable.name))
             }
             TypedExpr::RecordFieldAccess(field_access) => {
-                self.display_expr(&field_access.base, writ)?;
+                self.display_expr(&field_access.base, writ, indentation)?;
                 writ.write_str(".")?;
                 writ.write_str(&self.get_ident_str(field_access.target_field))
             }
             TypedExpr::ArrayIndex(array_index) => {
-                self.display_expr(&array_index.base_expr, writ)?;
+                self.display_expr(&array_index.base_expr, writ, indentation)?;
                 writ.write_str("[")?;
-                self.display_expr(&array_index.index_expr, writ)?;
+                self.display_expr(&array_index.index_expr, writ, indentation)?;
                 writ.write_str("]")
             }
             TypedExpr::StringIndex(string_index) => {
-                self.display_expr(&string_index.base_expr, writ)?;
+                self.display_expr(&string_index.base_expr, writ, indentation)?;
                 writ.write_str("[")?;
-                self.display_expr(&string_index.index_expr, writ)?;
+                self.display_expr(&string_index.index_expr, writ, indentation)?;
                 writ.write_str("]")
             }
             TypedExpr::FunctionCall(fn_call) => {
@@ -3447,53 +3469,53 @@ impl TypedModule {
                     if idx > 0 {
                         writ.write_str(", ")?;
                     }
-                    self.display_expr(arg, writ)?;
+                    self.display_expr(arg, writ, indentation)?;
                 }
                 writ.write_str(")")
             }
-            TypedExpr::Block(block) => self.display_block(block, writ),
+            TypedExpr::Block(block) => self.display_block(block, writ, indentation),
             TypedExpr::If(if_expr) => {
                 writ.write_str("if ")?;
-                self.display_expr(&if_expr.condition, writ)?;
+                self.display_expr(&if_expr.condition, writ, 0)?;
                 writ.write_str(" ")?;
-                self.display_block(&if_expr.consequent, writ)?;
+                self.display_block(&if_expr.consequent, writ, 0)?;
                 writ.write_str(" else ")?;
-                self.display_block(&if_expr.alternate, writ)?;
+                self.display_block(&if_expr.alternate, writ, 0)?;
                 Ok(())
             }
             TypedExpr::UnaryOp(unary_op) => {
                 writ.write_fmt(format_args!("{}", unary_op.kind))?;
-                self.display_expr(&unary_op.expr, writ)
+                self.display_expr(&unary_op.expr, writ, 0)
             }
             TypedExpr::BinaryOp(binary_op) => {
-                self.display_expr(&binary_op.lhs, writ)?;
+                self.display_expr(&binary_op.lhs, writ, 0)?;
                 writ.write_fmt(format_args!(" {} ", binary_op.kind))?;
-                self.display_expr(&binary_op.rhs, writ)
+                self.display_expr(&binary_op.rhs, writ, 0)
             }
             TypedExpr::OptionalSome(opt) => {
                 writ.write_str("Some(")?;
-                self.display_expr(&opt.inner_expr, writ)?;
+                self.display_expr(&opt.inner_expr, writ, 0)?;
                 writ.write_str(")")
             }
             TypedExpr::OptionalHasValue(opt) => {
-                self.display_expr(&opt, writ)?;
+                self.display_expr(&opt, writ, 0)?;
                 writ.write_str(".hasValue()")
             }
             TypedExpr::OptionalGet(opt) => {
-                self.display_expr(&opt.inner_expr, writ)?;
+                self.display_expr(&opt.inner_expr, writ, 0)?;
                 writ.write_str("!")
             }
             TypedExpr::For(for_expr) => {
                 writ.write_str("for ")?;
                 writ.write_str(&self.get_ident_str(for_expr.binding))?;
                 writ.write_str(" in ")?;
-                self.display_expr(&for_expr.iterable_expr, writ)?;
+                self.display_expr(&for_expr.iterable_expr, writ, 0)?;
                 writ.write_str(" ")?;
                 writ.write_str(match for_expr.for_expr_type {
                     ForExprType::Yield => "yield ",
                     ForExprType::Do => "do ",
                 })?;
-                self.display_block(&for_expr.body_block, writ)
+                self.display_block(&for_expr.body_block, writ, indentation + 1)
             }
         }
     }

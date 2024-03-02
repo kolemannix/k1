@@ -1,4 +1,5 @@
 use std::fmt;
+use std::fmt::{Display, Formatter};
 use std::str::Chars;
 
 use crate::typer::BinaryOpKind;
@@ -8,6 +9,21 @@ use TokenKind as K;
 pub const EOF_CHAR: char = '\0';
 pub const EOF_TOKEN: Token =
     Token { span: Span { file_id: 0, start: 0, end: 0, line: 0 }, kind: TokenKind::Eof, flags: 0 };
+
+#[derive(Debug)]
+pub struct LexError {
+    pub msg: String,
+    pub line_index: u32,
+}
+
+pub type LexResult<A> = anyhow::Result<A, LexError>;
+
+impl Display for LexError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_fmt(format_args!("LexError at line {}: {}", self.line_index, self.msg))
+    }
+}
+impl std::error::Error for LexError {}
 
 pub struct TokenIter<'toks> {
     iter: std::slice::Iter<'toks, Token>,
@@ -340,15 +356,20 @@ impl Lexer<'_> {
     pub fn make(input: &str) -> Lexer {
         Lexer { content: input.chars(), line_index: 0, pos: 0 }
     }
-    pub fn run(&mut self) -> Vec<Token> {
-        let mut tokens = Vec::with_capacity(1024);
-        while let Some(tok) = self.eat_token() {
-            tokens.push(tok);
-        }
-        tokens
+
+    fn err(&self, msg: impl Into<String>) -> LexError {
+        LexError { msg: msg.into(), line_index: self.line_index }
     }
 
-    fn eat_token(&mut self) -> Option<Token> {
+    pub fn run(&mut self) -> LexResult<Vec<Token>> {
+        let mut tokens = Vec::with_capacity(1024);
+        while let Some(tok) = self.eat_token()? {
+            tokens.push(tok);
+        }
+        Ok(tokens)
+    }
+
+    fn eat_token(&mut self) -> LexResult<Option<Token>> {
         let mut tok_buf = String::new();
         let mut tok_len = 0;
         let mut is_line_comment = false;
@@ -356,7 +377,7 @@ impl Lexer<'_> {
         let mut is_string = false;
         let peeked_whitespace = self.peek().is_whitespace();
         trace!("lex starting new token with prev_skip=false");
-        loop {
+        let token = loop {
             let (c, n) = self.peek_with_pos();
             trace!("LEX line={} char={} '{}' buf={}", self.line_index, n, c, tok_buf);
             if is_line_comment {
@@ -386,7 +407,7 @@ impl Lexer<'_> {
                         peeked_whitespace,
                     ));
                 } else if c == '\n' {
-                    panic!("No newlines inside strings")
+                    return Err(self.err("No newlines inside strings"));
                 } else {
                     tok_len += 1;
                     tok_buf.push(c);
@@ -499,8 +520,6 @@ impl Lexer<'_> {
                 }
             }
             if c.is_whitespace() && !tok_buf.is_empty() {
-                // No longer eat this so the next eat_token call can see it.
-                // self.advance();
                 if let Some(tok) = TokenKind::token_from_str(&tok_buf) {
                     break Some(Token::new(
                         tok,
@@ -520,6 +539,9 @@ impl Lexer<'_> {
                 }
             }
             if (tok_buf.is_empty() && is_ident_or_num_start(c)) || is_ident_char(c) {
+                if tok_buf.len() == 1 && tok_buf.chars().next() == Some('_') && c == '_' {
+                    return Err(self.err("Identifiers cannot begin with __"));
+                }
                 tok_len += 1;
                 tok_buf.push(c);
             } else if let Some(tok) = TokenKind::token_from_str(&tok_buf) {
@@ -534,7 +556,8 @@ impl Lexer<'_> {
                 ));
             }
             self.advance();
-        }
+        };
+        Ok(token)
     }
 
     fn next(&mut self) -> char {
@@ -578,9 +601,9 @@ mod test {
     use crate::lex::{Lexer, Span, TokenKind};
 
     #[test]
-    fn case1() {
+    fn case1() -> anyhow::Result<()> {
         let input = "val x = println(4)";
-        let result = Lexer::make(input).run();
+        let result = Lexer::make(input).run()?;
         let kinds: Vec<TokenKind> = result.iter().map(|t| t.kind).collect();
         assert_eq!(
             kinds,
@@ -593,13 +616,14 @@ mod test {
                 K::Ident,
                 K::CloseParen
             ]
-        )
+        );
+        Ok(())
     }
 
     #[test]
-    fn signed_int() {
+    fn signed_int() -> anyhow::Result<()> {
         let input = "-43";
-        let result = Lexer::make(input).run();
+        let result = Lexer::make(input).run()?;
         let kinds: Vec<TokenKind> = result.iter().map(|t| t.kind).collect();
         assert_eq!(kinds, vec![K::Minus, K::Ident]);
         assert_eq!(result[0].span.start, 0);
@@ -607,12 +631,13 @@ mod test {
         assert_eq!(result[1].span.start, 1);
         assert_eq!(result[1].span.end, 3);
         assert!(!result[1].is_whitespace_preceeded());
+        Ok(())
     }
 
     #[test]
-    fn minus_int() {
+    fn minus_int() -> anyhow::Result<()> {
         let input = "- 43";
-        let result = Lexer::make(input).run();
+        let result = Lexer::make(input).run()?;
         let kinds: Vec<TokenKind> = result.iter().map(|t| t.kind).collect();
         assert_eq!(kinds, vec![K::Minus, K::Ident]);
         assert_eq!(result[0].span.start, 0);
@@ -620,12 +645,13 @@ mod test {
         assert_eq!(result[1].span.start, 2);
         assert_eq!(result[1].span.end, 4);
         assert!(result[1].is_whitespace_preceeded());
+        Ok(())
     }
 
     #[test]
-    fn literal_string() {
+    fn literal_string() -> anyhow::Result<()> {
         let input = "val x = println(\"foobear\")";
-        let result = Lexer::make(input).run();
+        let result = Lexer::make(input).run()?;
         let kinds: Vec<TokenKind> = result.iter().map(|t| t.kind).collect();
         assert_eq!(
             kinds,
@@ -638,34 +664,37 @@ mod test {
                 K::String,
                 K::CloseParen
             ]
-        )
+        );
+        Ok(())
     }
 
     #[test]
-    fn ending_ident() {
+    fn ending_ident() -> anyhow::Result<()> {
         let input = "val x = a + b";
-        let result = Lexer::make(input).run();
+        let result = Lexer::make(input).run()?;
         let kinds: Vec<TokenKind> = result.iter().map(|t| t.kind).collect();
-        assert_eq!(kinds, vec![K::KeywordVal, K::Ident, K::Equals, K::Ident, K::Plus, K::Ident])
+        assert_eq!(kinds, vec![K::KeywordVal, K::Ident, K::Equals, K::Ident, K::Plus, K::Ident]);
+        Ok(())
     }
 
     #[test]
-    fn double_equals() {
+    fn double_equals() -> anyhow::Result<()> {
         let input = "a == b";
-        let result = Lexer::make(input).run();
+        let result = Lexer::make(input).run()?;
         let kinds: Vec<TokenKind> = result.iter().map(|t| t.kind).collect();
-        assert_eq!(kinds, vec![K::Ident, K::EqualsEquals, K::Ident])
+        assert_eq!(kinds, vec![K::Ident, K::EqualsEquals, K::Ident]);
+        Ok(())
     }
 
     #[test]
-    fn line_comment() {
+    fn line_comment() -> anyhow::Result<()> {
         let input = r#"// Hello, world
         val foo: int = 74;
         // <test harness> expected output
         //
         "#;
         let mut lexer = Lexer::make(input);
-        let result = lexer.run();
+        let result = lexer.run()?;
         let kinds: Vec<TokenKind> = result.iter().map(|t| t.kind).collect();
         assert_eq!(result[0].span, Span { start: 0, end: 14, line: 0, file_id: 0 });
         assert_eq!(&input[0..5], "// He");
@@ -683,6 +712,7 @@ mod test {
                 K::LineComment
             ],
             kinds
-        )
+        );
+        Ok(())
     }
 }
