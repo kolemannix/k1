@@ -144,13 +144,14 @@ pub struct UnaryOp {
 
 #[derive(Debug, Clone)]
 pub struct Variable {
-    pub ident: IdentifierId,
+    pub name: IdentifierId,
+    pub namespaces: Vec<IdentifierId>,
     pub span: Span,
 }
 
 impl Display for Variable {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("var#{}", self.ident))
+        f.write_fmt(format_args!("var#{}", self.name))
     }
 }
 
@@ -1185,11 +1186,11 @@ impl<'toks> Parser<'toks> {
                     trace!("Parsing namespaces {:?}", namespaces);
                     let (a, b, c) = self.tokens.peek_three();
                     trace!("Parsing namespaces peeked 3 {} {} {}", a.kind, b.kind, c.kind);
-                    if a.kind == K::Colon && b.kind == K::Colon && c.kind == K::Ident {
+                    if a.kind == K::Ident && b.kind == K::Colon && c.kind == K::Colon {
                         self.tokens.advance(); // ident
                         self.tokens.advance(); // colon
                         self.tokens.advance(); // colon
-                        namespaces.push(self.intern_ident_token(c));
+                        namespaces.push(self.intern_ident_token(a));
                     } else {
                         break;
                     }
@@ -1221,8 +1222,8 @@ impl<'toks> Parser<'toks> {
                 // The last thing it can be is a simple variable reference expression
                 self.tokens.advance();
                 Ok(Some(Expression::Variable(Variable {
-                    ident: self.intern_ident_token(first),
-                    // namespaces are ready when we need em here
+                    name: self.intern_ident_token(first),
+                    namespaces,
                     span: first.span,
                 })))
             }
@@ -1562,14 +1563,14 @@ impl<'toks> Parser<'toks> {
         self.tokens.advance();
         let ident = self.expect_eat_token(K::Ident)?;
         self.expect_eat_token(K::OpenBrace)?;
-        let mut functions = Vec::new();
-        while let Some(fn_def) = self.parse_function()? {
-            functions.push(Definition::FnDef(Box::new(fn_def)));
+        let mut definitions = Vec::new();
+        while let Some(def) = self.parse_definition()? {
+            definitions.push(def);
         }
         self.expect_eat_token(K::CloseBrace)?;
         Ok(Some(ParsedNamespace {
             name: self.intern_ident_token(ident),
-            definitions: functions,
+            definitions,
             ast_id: self.next_ast_id(),
         }))
     }

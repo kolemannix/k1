@@ -1280,8 +1280,8 @@ impl TypedModule {
         scope_id: ScopeId,
         is_assignment_lhs: bool,
     ) -> TyperResult<TypedExpr> {
-        let variable_id = self.scopes.find_variable(scope_id, variable.ident).ok_or(make_err(
-            format!("{} is not defined", &*self.get_ident_str(variable.ident)),
+        let variable_id = self.scopes.find_variable(scope_id, variable.name).ok_or(make_err(
+            format!("{} is not defined", &*self.get_ident_str(variable.name)),
             variable.span,
         ))?;
         let v = self.get_variable(variable_id);
@@ -1298,7 +1298,7 @@ impl TypedModule {
         });
         trace!(
             "variable {} had type {}",
-            &*self.get_ident_str(variable.ident),
+            &*self.get_ident_str(variable.name),
             self.type_id_to_string(v.type_id)
         );
         Ok(expr)
@@ -1768,7 +1768,11 @@ impl TypedModule {
     }
 
     fn synth_variable_parsed_expr(&self, variable_id: VariableId, span: Span) -> parse::Expression {
-        Expression::Variable(parse::Variable { ident: self.get_variable(variable_id).name, span })
+        Expression::Variable(parse::Variable {
+            name: self.get_variable(variable_id).name,
+            namespaces: Vec::new(),
+            span,
+        })
     }
 
     fn synth_function_call(
@@ -2081,7 +2085,7 @@ impl TypedModule {
         }
 
         let final_expr = TypedExpr::Block(for_expr_block);
-        eprintln!("{}", self.expr_to_string(&final_expr));
+        // eprintln!("{}", self.expr_to_string(&final_expr));
         Ok(final_expr)
     }
 
@@ -3089,11 +3093,13 @@ impl TypedModule {
         // We add the new namespace to the current scope
         let scope = self.scopes.get_scope_mut(scope_id);
         scope.add_namespace(ast_namespace.name, namespace_id);
-        for fn_def in &ast_namespace.definitions {
-            if let Definition::FnDef(fn_def) = fn_def {
+        for defn in &ast_namespace.definitions {
+            if let Definition::FnDef(fn_def) = defn {
                 self.eval_function(fn_def, ns_scope_id, None, false, None, None)?;
+            } else if let Definition::Namespace(ns) = defn {
+                self.eval_namespace(ns, ns_scope_id)?;
             } else {
-                panic!("Unsupported definition type inside namespace: {:?}", fn_def)
+                panic!("Unsupported definition type inside namespace: {:?}", defn)
             }
         }
         Ok(namespace_id)
