@@ -4,7 +4,7 @@ use std::ops::Deref;
 #[cfg(test)]
 fn set_up(input: &str) -> Parser<'static> {
     let mut lexer = Lexer::make(input);
-    let token_vec: &'static mut [Token] = lexer.run().leak();
+    let token_vec: &'static mut [Token] = lexer.run().unwrap().leak();
     println!("{:?}", token_vec);
     print_tokens(input, token_vec);
     let parser = Parser::make(token_vec, input.to_string(), ".".to_string(), input.to_string());
@@ -192,7 +192,7 @@ fn paren_expression() -> Result<(), ParseError> {
     let result = parser.parse_expression()?.unwrap();
     println!("{}", result);
     if let Expression::BinaryOp(bin_op) = &result {
-        assert!(bin_op.op_kind == BinaryOpKind::Multiply);
+        assert_eq!(bin_op.op_kind, BinaryOpKind::Multiply);
         return Ok(());
     }
     panic!()
@@ -205,7 +205,7 @@ fn while_loop_1() -> Result<(), ParseError> {
     let result = parser.parse_statement()?.unwrap();
     println!("{:?}", result);
     if let BlockStmt::While(while_stmt) = result {
-        assert!(while_stmt.block.stmts.len() == 3);
+        assert_eq!(while_stmt.block.stmts.len(), 3);
         return Ok(());
     }
     panic!()
@@ -236,8 +236,8 @@ fn generic_method_call_lhs_expr() -> Result<(), ParseError> {
     let result = parser.parse_expression()?.unwrap();
     let Expression::MethodCall(call) = result else { panic!() };
     let Expression::FnCall(fn_call) = call.base.deref() else { panic!() };
-    assert!(fn_call.name == parser.ident_id("getFn"));
-    assert!(call.call.name == parser.ident_id("baz"));
+    assert_eq!(fn_call.name, parser.ident_id("getFn"));
+    assert_eq!(call.call.name, parser.ident_id("baz"));
     assert!(call.call.type_args.unwrap()[0].type_expr.is_int());
     assert!(matches!(call.call.args[0].value, Expression::Literal(_)));
     Ok(())

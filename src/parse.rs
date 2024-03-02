@@ -1648,9 +1648,14 @@ pub fn parse_text(
     // log::info!("parser source:\n{}", &text);
 
     let mut lexer = Lexer::make(&full_source);
+    let tokens = lexer.run().map_err(|lex_error| ParseError {
+        expected: lex_error.msg,
+        token: EOF_TOKEN,
+        cause: None,
+    })?;
 
     let token_vec: Vec<Token> =
-        lexer.run().into_iter().filter(|token| token.kind != K::LineComment).collect();
+        tokens.into_iter().filter(|token| token.kind != K::LineComment).collect();
 
     let mut parser = Parser::make(&token_vec, full_source, directory, filename);
 
