@@ -1,11 +1,16 @@
 namespace Baz {
-  fn secret(): string {
-    "hello from baz"
+  namespace BazI {
+    fn name(): string  { "Baz::BazI" }
   }
 }
 
+namespace BazI {
+  fn name(): string { "_root::BazI" }
+}
+
 fn main(): int {
-  print(Baz::secret());
+  assert(Baz::BazI::name() == "Baz::BazI");
+  assert(BazI::name() == "_root::BazI");
+
   0
 }
-// "hello from baz"

@@ -125,7 +125,7 @@ fn dot_accessor() -> ParseResult<()> {
     let Expression::FieldAccess(acc2) = *acc.base else { panic!() };
     assert_eq!(acc2.target.0.to_usize(), 1);
     let Expression::Variable(v) = *acc2.base else { panic!() };
-    assert_eq!(v.ident.0.to_usize(), 0);
+    assert_eq!(v.name.0.to_usize(), 0);
     Ok(())
 }
 
@@ -259,5 +259,35 @@ fn char_value() -> ParseResult<()> {
     let result = parser.expect_expression()?;
     let x_byte = 'x' as u8;
     assert!(matches!(result, Expression::Literal(Literal::Char(b, _)) if b == x_byte));
+    Ok(())
+}
+
+#[test]
+fn namespaced_fncall() -> ParseResult<()> {
+    let input = "foo::bar::baz()";
+    let mut parser = set_up(input);
+    let result = parser.expect_expression()?;
+    let Expression::FnCall(fn_call) = result else {
+        dbg!(result);
+        panic!("not fncall")
+    };
+    assert_eq!(fn_call.namespaces[0], parser.ident_id("foo"));
+    assert_eq!(fn_call.namespaces[1], parser.ident_id("bar"));
+    assert_eq!(fn_call.name, parser.ident_id("baz"));
+    assert!(fn_call.args.is_empty());
+    Ok(())
+}
+#[test]
+fn namespaced_val() -> ParseResult<()> {
+    let input = "foo::bar::baz";
+    let mut parser = set_up(input);
+    let result = parser.expect_expression()?;
+    let Expression::Variable(variable) = result else {
+        dbg!(result);
+        panic!("not variable")
+    };
+    assert_eq!(variable.namespaces[0], parser.ident_id("foo"));
+    assert_eq!(variable.namespaces[1], parser.ident_id("bar"));
+    assert_eq!(variable.name, parser.ident_id("baz"));
     Ok(())
 }
