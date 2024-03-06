@@ -1,0 +1,10 @@
+fn main(): int {
+  val charCodes = for c in "asdf" yield {
+    c.toInt()
+  };
+  assert(charCodes[0] == 97);
+  assert(charCodes[1] == 115);
+  assert(charCodes[2] == 100);
+  assert(charCodes[3] == 102);
+  0
+}
