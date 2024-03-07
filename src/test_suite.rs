@@ -52,7 +52,7 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P) -> Result<()> {
 #[test]
 pub fn run_all() -> Result<()> {
     let ctx = Context::create();
-    let test_dir = "resources/test_src";
+    let test_dir = "test_src";
     let mut total = 0;
     let mut success = 0;
     let mut failures: Vec<String> = Vec::new();

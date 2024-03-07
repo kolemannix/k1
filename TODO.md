@@ -75,7 +75,9 @@
 - [-] For iteration (we will just hardcode the iterable types)
     - [x] 'do' version
     - [x] 'yield' version on array
-    - [?] 'yield' version on string
+    - [x] 'yield' version on string
+    - [x] Provide index var (it_index)
+    - [ ] Allow customizing index var name
 
 - [x] DEBUG info
     - [x] on or off
