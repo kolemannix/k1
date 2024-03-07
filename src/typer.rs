@@ -1750,14 +1750,17 @@ impl TypedModule {
         mut variable: Variable,
         span: Span,
         initializer: TypedExpr,
+        no_mangle: bool,
     ) -> (VariableId, TypedStmt, TypedExpr) {
         let type_id = variable.type_id;
         let scope_id = variable.owner_scope.unwrap_or(self.scopes.get_root_scope_id());
-        let new_ident_name = {
-            let ident_str = &*self.ast.get_ident_str(variable.name);
-            format!("__{}_{}", ident_str, scope_id)
+        let new_ident = if no_mangle {
+            variable.name
+        } else {
+            let new_ident_name =
+                { format!("__{}_{}", &*self.ast.get_ident_str(variable.name), scope_id) };
+            self.ast.ident_id(&new_ident_name)
         };
-        let new_ident = self.ast.ident_id(&new_ident_name);
         variable.name = new_ident;
         let variable_id = self.add_variable(variable);
         let expr = VariableExpr { type_id, variable_id, span };
@@ -1829,17 +1832,17 @@ impl TypedModule {
 
         let for_expr_scope = self.scopes.add_child_scope(scope_id);
 
-        let (counter_variable, counter_defn_stmt, counter_variable_expr) = self
-            .synth_variable_decl(
-                Variable {
-                    name: self.ast.ident_id("for_index"),
-                    type_id: INT_TYPE_ID,
-                    is_mutable: true,
-                    owner_scope: Some(for_expr_scope),
-                },
-                for_expr.body_block.span,
-                TypedExpr::Int(0, for_expr.body_block.span),
-            );
+        let (index_variable, index_defn_stmt, index_variable_expr) = self.synth_variable_decl(
+            Variable {
+                name: self.ast.ident_id("it_index"),
+                type_id: INT_TYPE_ID,
+                is_mutable: true,
+                owner_scope: Some(for_expr_scope),
+            },
+            for_expr.body_block.span,
+            TypedExpr::Int(0, for_expr.body_block.span),
+            true,
+        );
         let (iteree_variable_id, iteree_defn_stmt, iteree_variable_expr) = self
             .synth_variable_decl(
                 Variable {
@@ -1850,6 +1853,7 @@ impl TypedModule {
                 },
                 for_expr.iterable_expr.get_span(),
                 iterable_expr,
+                false,
             );
         let iteree_length_call = if is_string_iteree {
             self.synth_function_call(
@@ -1886,6 +1890,7 @@ impl TypedModule {
                 },
                 for_expr.iterable_expr.get_span(),
                 iteree_length_call,
+                false,
             );
 
         let while_scope_id = self.scopes.add_child_scope(for_expr_scope);
@@ -1904,7 +1909,7 @@ impl TypedModule {
                     base_expr: Box::new(iteree_variable_expr.clone()),
                     index_expr: Box::new(TypedExpr::Variable(VariableExpr {
                         type_id: INT_TYPE_ID,
-                        variable_id: counter_variable,
+                        variable_id: index_variable,
                         span: for_expr.body_block.span,
                     })),
                     result_type: item_type,
@@ -1915,7 +1920,7 @@ impl TypedModule {
                     base_expr: Box::new(iteree_variable_expr.clone()),
                     index_expr: Box::new(TypedExpr::Variable(VariableExpr {
                         type_id: INT_TYPE_ID,
-                        variable_id: counter_variable,
+                        variable_id: index_variable,
                         span: for_expr.body_block.span,
                     })),
                     result_type: item_type,
@@ -1984,6 +1989,7 @@ impl TypedModule {
                 yield_variable,
                 for_expr.body_block.span,
                 yield_initializer,
+                false,
             ))
         } else {
             None
@@ -2006,6 +2012,7 @@ impl TypedModule {
                 },
                 for_expr.body_block.span,
                 TypedExpr::Block(body_block),
+                false,
             );
         while_block.statements.push(user_block_val_def);
 
@@ -2017,7 +2024,7 @@ impl TypedModule {
                     let element_assign = TypedStmt::Assignment(Box::new(Assignment {
                         destination: Box::new(TypedExpr::ArrayIndex(IndexOp {
                             base_expr: Box::new(yielded_coll_expr.clone()),
-                            index_expr: Box::new(counter_variable_expr.clone()),
+                            index_expr: Box::new(index_variable_expr.clone()),
                             result_type: body_block_result_type,
                             span: for_expr.body_block.span,
                         })),
@@ -2030,15 +2037,15 @@ impl TypedModule {
             }
         }
 
-        // Append the counter increment to the body block
-        let counter_increment_statement = TypedStmt::Assignment(Box::new(Assignment {
-            destination: Box::new(counter_variable_expr.clone()),
+        // Append the index increment to the body block
+        let index_increment_statement = TypedStmt::Assignment(Box::new(Assignment {
+            destination: Box::new(index_variable_expr.clone()),
             value: Box::new(TypedExpr::BinaryOp(BinaryOp {
                 kind: BinaryOpKind::Add,
                 ty: INT_TYPE_ID,
                 lhs: Box::new(TypedExpr::Variable(VariableExpr {
                     type_id: INT_TYPE_ID,
-                    variable_id: counter_variable,
+                    variable_id: index_variable,
                     span: for_expr.iterable_expr.get_span(),
                 })),
                 rhs: Box::new(TypedExpr::Int(1, for_expr.iterable_expr.get_span())),
@@ -2046,13 +2053,13 @@ impl TypedModule {
             })),
             span: for_expr.iterable_expr.get_span(),
         }));
-        while_block.statements.push(counter_increment_statement);
+        while_block.statements.push(index_increment_statement);
 
         let while_stmt = TypedStmt::WhileLoop(Box::new(TypedWhileLoop {
             cond: TypedExpr::BinaryOp(BinaryOp {
                 kind: BinaryOpKind::Less,
                 ty: BOOL_TYPE_ID,
-                lhs: Box::new(counter_variable_expr.clone()),
+                lhs: Box::new(index_variable_expr.clone()),
                 rhs: Box::new(iteree_length_variable_expr),
                 span: for_expr.iterable_expr.get_span(),
             }),
@@ -2061,7 +2068,7 @@ impl TypedModule {
         }));
 
         let mut for_expr_initial_statements = Vec::with_capacity(4);
-        for_expr_initial_statements.push(counter_defn_stmt);
+        for_expr_initial_statements.push(index_defn_stmt);
         for_expr_initial_statements.push(iteree_defn_stmt);
         for_expr_initial_statements.push(iteree_length_defn_stmt);
         if let Some((_yield_id, yield_def, _yield_expr)) = &yield_decls {

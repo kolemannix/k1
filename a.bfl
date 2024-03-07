@@ -1,0 +1,6 @@
+fn main(): int {
+  for [1,2,3,4,444] do {
+    printInt(it_index);
+  };
+  0
+}
