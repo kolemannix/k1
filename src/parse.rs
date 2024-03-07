@@ -517,7 +517,7 @@ impl Definition {
 }
 
 #[derive(Debug)]
-pub struct AstModule {
+pub struct ParsedModule {
     pub name: String,
     pub name_id: IdentifierId,
     pub defs: Vec<Definition>,
@@ -529,7 +529,7 @@ pub struct AstModule {
     pub identifiers: Rc<RefCell<Identifiers>>,
 }
 
-impl AstModule {
+impl ParsedModule {
     pub fn ident_id(&self, ident: &str) -> IdentifierId {
         self.identifiers.borrow_mut().intern(ident)
     }
@@ -1590,7 +1590,7 @@ impl<'toks> Parser<'toks> {
         }
     }
 
-    fn parse_module(&mut self) -> ParseResult<AstModule> {
+    fn parse_module(&mut self) -> ParseResult<ParsedModule> {
         let mut defs: Vec<Definition> = vec![];
 
         while let Some(def) = self.parse_definition()? {
@@ -1600,7 +1600,7 @@ impl<'toks> Parser<'toks> {
         // Assumes a single dot in the filename
         let module_name = self.source.filename.split('.').next().unwrap().to_string();
         let ident = self.ident_id(&module_name);
-        Ok(AstModule {
+        Ok(ParsedModule {
             name: module_name,
             name_id: ident,
             defs,
@@ -1636,7 +1636,7 @@ pub fn parse_text(
     directory: String,
     filename: String,
     use_prelude: bool,
-) -> ParseResult<AstModule> {
+) -> ParseResult<ParsedModule> {
     let full_source: String = if use_prelude {
         let prelude = crate::prelude::PRELUDE_SOURCE;
         let mut modified_source = String::from(prelude);

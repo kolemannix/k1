@@ -15,8 +15,8 @@ use crate::parse::{
     self, FnCallArg, ForExpr, ForExprType, IfExpr, IndexOperation, ParsedNamespace,
 };
 use crate::parse::{
-    AstId, AstModule, Block, BlockStmt, Definition, Expression, FnCall, FnDef, IdentifierId,
-    Literal,
+    AstId, Block, BlockStmt, Definition, Expression, FnCall, FnDef, IdentifierId, Literal,
+    ParsedModule,
 };
 
 pub type ScopeId = u32;
@@ -788,7 +788,7 @@ fn make_fail<A, T: AsRef<str>>(message: T, span: Span) -> TyperResult<A> {
 }
 
 pub struct TypedModule {
-    pub ast: Rc<AstModule>,
+    pub ast: Rc<ParsedModule>,
     functions: Vec<Function>,
     pub variables: Vec<Variable>,
     pub types: Vec<Type>,
@@ -799,7 +799,7 @@ pub struct TypedModule {
 }
 
 impl TypedModule {
-    pub fn new(parsed_module: Rc<AstModule>) -> TypedModule {
+    pub fn new(parsed_module: Rc<ParsedModule>) -> TypedModule {
         let scopes = Scopes::make();
         let root_ident = parsed_module.ident_id("_root");
         let types = vec![Type::Unit, Type::Char, Type::Int, Type::Bool, Type::String];
@@ -3546,7 +3546,7 @@ mod test {
     use crate::parse::{parse_text, ParseResult};
     use crate::typer::*;
 
-    fn setup(src: &str, test_name: &str) -> ParseResult<AstModule> {
+    fn setup(src: &str, test_name: &str) -> ParseResult<ParsedModule> {
         parse_text(src.to_string(), ".".to_string(), test_name.to_string(), false)
     }
 
