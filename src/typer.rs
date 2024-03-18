@@ -12,11 +12,12 @@ use log::{debug, error, trace, Level};
 
 use crate::lex::{Span, TokenKind};
 use crate::parse::{
-    self, FnCallArg, ForExpr, ForExprType, IfExpr, IndexOperation, ParsedNamespace,
+    self, ExpressionId, FnCallArg, ForExpr, ForExprType, IfExpr, IndexOperation, ParsedNamespace,
+    ParsedTypeExpression,
 };
 use crate::parse::{
-    AstId, Block, BlockStmt, Definition, Expression, FnCall, FnDef, IdentifierId, Literal,
-    ParsedModule,
+    AstDefinitionId, Block, BlockStmt, Definition, FnCall, FnDef, IdentifierId, Literal,
+    ParsedExpression, ParsedModule,
 };
 
 pub type ScopeId = u32;
@@ -193,7 +194,7 @@ pub struct Function {
     pub intrinsic_type: Option<IntrinsicFunctionType>,
     pub linkage: Linkage,
     pub specializations: Vec<SpecializationRecord>,
-    pub ast_id: AstId,
+    pub ast_id: AstDefinitionId,
     pub span: Span,
 }
 
@@ -944,16 +945,16 @@ impl TypedModule {
 
     fn eval_type_expr(
         &mut self,
-        expr: &parse::ParsedTypeExpression,
+        expr: &ParsedTypeExpression,
         scope_id: ScopeId,
     ) -> TyperResult<TypeId> {
         let base = match expr {
-            parse::ParsedTypeExpression::Unit(_) => Ok(UNIT_TYPE_ID),
-            parse::ParsedTypeExpression::Char(_) => Ok(CHAR_TYPE_ID),
-            parse::ParsedTypeExpression::Int(_) => Ok(INT_TYPE_ID),
-            parse::ParsedTypeExpression::Bool(_) => Ok(BOOL_TYPE_ID),
-            parse::ParsedTypeExpression::String(_) => Ok(STRING_TYPE_ID),
-            parse::ParsedTypeExpression::Record(record_defn) => {
+            ParsedTypeExpression::Unit(_) => Ok(UNIT_TYPE_ID),
+            ParsedTypeExpression::Char(_) => Ok(CHAR_TYPE_ID),
+            ParsedTypeExpression::Int(_) => Ok(INT_TYPE_ID),
+            ParsedTypeExpression::Bool(_) => Ok(BOOL_TYPE_ID),
+            ParsedTypeExpression::String(_) => Ok(STRING_TYPE_ID),
+            ParsedTypeExpression::Record(record_defn) => {
                 let mut fields: Vec<RecordTypeField> = Vec::new();
                 for (index, ast_field) in record_defn.fields.iter().enumerate() {
                     let ty = self.eval_type_expr(&ast_field.ty, scope_id)?;
@@ -964,7 +965,7 @@ impl TypedModule {
                 let type_id = self.add_type(Type::Record(record_defn));
                 Ok(type_id)
             }
-            parse::ParsedTypeExpression::Name(ident, span) => {
+            ParsedTypeExpression::Name(ident, span) => {
                 let ty_ref = self.scopes.find_type(scope_id, *ident);
 
                 ty_ref.ok_or_else(|| {
@@ -983,7 +984,7 @@ impl TypedModule {
                     )
                 })
             }
-            parse::ParsedTypeExpression::TypeApplication(ty_app) => {
+            ParsedTypeExpression::TypeApplication(ty_app) => {
                 if self.ast.ident_id("Array") == ty_app.base {
                     if ty_app.params.len() == 1 {
                         let element_ty = self.eval_type_expr(&ty_app.params[0], scope_id)?;
@@ -1000,13 +1001,13 @@ impl TypedModule {
                     todo!("not supported: generic non builtin types")
                 }
             }
-            parse::ParsedTypeExpression::Optional(opt) => {
+            ParsedTypeExpression::Optional(opt) => {
                 let inner_ty = self.eval_type_expr(&opt.base, scope_id)?;
                 let optional_type = Type::Optional(OptionalType { inner_type: inner_ty });
                 let type_id = self.add_type(optional_type);
                 Ok(type_id)
             }
-            parse::ParsedTypeExpression::Reference(r) => {
+            ParsedTypeExpression::Reference(r) => {
                 let inner_ty = self.eval_type_expr(&r.base, scope_id)?;
                 let reference_type = Type::Reference(ReferenceType { inner_type: inner_ty });
                 let type_id = self.add_type(reference_type);
@@ -1016,7 +1017,7 @@ impl TypedModule {
         Ok(base)
     }
 
-    fn eval_const_type_expr(&mut self, expr: &parse::ParsedTypeExpression) -> TyperResult<TypeId> {
+    fn eval_const_type_expr(&mut self, expr: &ParsedTypeExpression) -> TyperResult<TypeId> {
         let ty = self.eval_type_expr(expr, self.scopes.get_root_scope_id())?;
         match ty {
             UNIT_TYPE_ID => Ok(ty),
@@ -1118,13 +1119,13 @@ impl TypedModule {
     fn eval_const(&mut self, const_expr: &parse::ConstVal) -> TyperResult<VariableId> {
         let scope_id = 0;
         let type_id = self.eval_const_type_expr(&const_expr.ty)?;
-        let expr = match &const_expr.value_expr {
-            Expression::Literal(Literal::Numeric(n, span)) => {
-                let num = self.parse_numeric(n).map_err(|msg| make_err(msg, *span))?;
+        let expr = match &*self.ast.get_expression(const_expr.value_expr) {
+            ParsedExpression::Literal(Literal::Numeric(n, span)) => {
+                let num = self.parse_numeric(&n).map_err(|msg| make_err(msg, *span))?;
                 TypedExpr::Int(num, const_expr.span)
             }
-            Expression::Literal(Literal::Bool(b, span)) => TypedExpr::Bool(*b, *span),
-            Expression::Literal(Literal::Char(c, span)) => TypedExpr::Char(*c, *span),
+            ParsedExpression::Literal(Literal::Bool(b, span)) => TypedExpr::Bool(*b, *span),
+            ParsedExpression::Literal(Literal::Char(c, span)) => TypedExpr::Char(*c, *span),
             _other => {
                 return make_fail(
                     "Only literals are currently supported as constants",
@@ -1245,12 +1246,12 @@ impl TypedModule {
         index_op: &IndexOperation,
         scope_id: ScopeId,
     ) -> TyperResult<TypedExpr> {
-        let index_expr = self.eval_expr(&index_op.index_expr, scope_id, Some(INT_TYPE_ID))?;
+        let index_expr = self.eval_expr(index_op.index_expr, scope_id, Some(INT_TYPE_ID))?;
         if index_expr.get_type() != INT_TYPE_ID {
             return make_fail("index type must be int", index_op.span);
         }
 
-        let base_expr = self.eval_expr(&index_op.target, scope_id, None)?;
+        let base_expr = self.eval_expr(index_op.target, scope_id, None)?;
         let target_type = base_expr.get_type();
         match target_type {
             STRING_TYPE_ID => Ok(TypedExpr::StringIndex(IndexOp {
@@ -1310,7 +1311,7 @@ impl TypedModule {
         scope_id: ScopeId,
         is_assignment_lhs: bool,
     ) -> TyperResult<TypedExpr> {
-        let mut base_expr = self.eval_expr(&field_access.base, scope_id, None)?;
+        let mut base_expr = self.eval_expr(field_access.base, scope_id, None)?;
         let type_id = base_expr.get_type();
         let maybe_record_type = match self.get_type(type_id) {
             Type::Reference(reference_type) => {
@@ -1359,14 +1360,16 @@ impl TypedModule {
 
     fn eval_assigment_lhs_expr(
         &mut self,
-        expr: &Expression,
+        expr: ExpressionId,
         scope_id: ScopeId,
         _expected_type: Option<TypeId>,
     ) -> TyperResult<TypedExpr> {
-        match expr {
-            Expression::IndexOperation(index_op) => self.eval_index_operation(index_op, scope_id),
-            Expression::Variable(variable) => self.eval_variable(variable, scope_id, true),
-            Expression::FieldAccess(field_access) => {
+        match &*self.ast.clone().get_expression(expr) {
+            ParsedExpression::IndexOperation(index_op) => {
+                self.eval_index_operation(index_op, scope_id)
+            }
+            ParsedExpression::Variable(variable) => self.eval_variable(variable, scope_id, true),
+            ParsedExpression::FieldAccess(field_access) => {
                 self.eval_field_access(field_access, scope_id, true)
             }
             other => {
@@ -1377,7 +1380,7 @@ impl TypedModule {
 
     fn eval_expr(
         &mut self,
-        expr: &Expression,
+        expr: ExpressionId,
         scope_id: ScopeId,
         expected_type: Option<TypeId>,
     ) -> TyperResult<TypedExpr> {
@@ -1418,12 +1421,15 @@ impl TypedModule {
                         self.type_id_to_string(base_result.get_type())
                     );
                     match self.typecheck_types(reference_type.inner_type, base_result.get_type()) {
-                        Ok(_) => Ok(TypedExpr::UnaryOp(UnaryOp {
-                            kind: UnaryOpKind::Reference,
-                            type_id: expected_type_id,
-                            expr: Box::new(base_result),
-                            span: expr.get_span(),
-                        })),
+                        Ok(_) => {
+                            let base_span = base_result.get_span();
+                            Ok(TypedExpr::UnaryOp(UnaryOp {
+                                kind: UnaryOpKind::Reference,
+                                type_id: expected_type_id,
+                                expr: Box::new(base_result),
+                                span: base_span,
+                            }))
+                        }
                         Err(_) => Ok(base_result),
                     }
                 }
@@ -1441,13 +1447,17 @@ impl TypedModule {
     /// a lot of code if we did a final check here before returning!
     fn eval_expr_inner(
         &mut self,
-        expr: &Expression,
+        expr: ExpressionId,
         scope_id: ScopeId,
         expected_type: Option<TypeId>,
     ) -> TyperResult<TypedExpr> {
-        trace!("eval_expr: {}: {:?}", expr, expected_type.map(|t| self.type_id_to_string(t)));
-        match expr {
-            Expression::Array(array_expr) => {
+        trace!(
+            "eval_expr: {}: {:?}",
+            *self.ast.get_expression(expr),
+            expected_type.map(|t| self.type_id_to_string(t))
+        );
+        match &*(self.ast.clone().get_expression(expr)) {
+            ParsedExpression::Array(array_expr) => {
                 let mut element_type: Option<TypeId> = match expected_type {
                     Some(type_id) => match self.get_type(type_id) {
                         Type::Array(arr) => Ok(Some(arr.element_type)),
@@ -1458,7 +1468,7 @@ impl TypedModule {
                 let elements: Vec<TypedExpr> = {
                     let mut elements = Vec::new();
                     for elem in &array_expr.elements {
-                        let ir_expr = self.eval_expr(elem, scope_id, element_type)?;
+                        let ir_expr = self.eval_expr(*elem, scope_id, element_type)?;
                         if element_type.is_none() {
                             element_type = Some(ir_expr.get_type())
                         };
@@ -1479,14 +1489,15 @@ impl TypedModule {
                     Some(t) => t,
                     None => {
                         let array_type = ArrayType { element_type, span: array_expr.span };
-                        let type_id = self.add_type(Type::Array(array_type));
-                        type_id
+                        self.add_type(Type::Array(array_type))
                     }
                 };
                 Ok(TypedExpr::Array(ArrayLiteral { elements, type_id, span: array_expr.span }))
             }
-            Expression::IndexOperation(index_op) => self.eval_index_operation(index_op, scope_id),
-            Expression::Record(ast_record) => {
+            ParsedExpression::IndexOperation(index_op) => {
+                self.eval_index_operation(index_op, scope_id)
+            }
+            ParsedExpression::Record(ast_record) => {
                 // FIXME: Let's factor out Structs and Records into separate things
                 //        records can be created on the fly and are just hashmap literals
                 //        Structs are structs
@@ -1538,7 +1549,7 @@ impl TypedModule {
                         .map(|(_, rec)| rec.find_field(ast_field.name))
                         .flatten();
                     let expected_type_id = expected_field.map(|(_, f)| f.type_id);
-                    let expr = self.eval_expr(&ast_field.expr, scope_id, expected_type_id)?;
+                    let expr = self.eval_expr(ast_field.expr, scope_id, expected_type_id)?;
                     field_defns.push(RecordTypeField {
                         name: ast_field.name,
                         type_id: expr.get_type(),
@@ -1580,8 +1591,8 @@ impl TypedModule {
                 trace!("generated record: {}", self.expr_to_string(&expr));
                 Ok(expr)
             }
-            Expression::If(if_expr) => self.eval_if_expr(if_expr, scope_id, expected_type),
-            Expression::BinaryOp(binary_op) => {
+            ParsedExpression::If(if_expr) => self.eval_if_expr(if_expr, scope_id, expected_type),
+            ParsedExpression::BinaryOp(binary_op) => {
                 // Infer expected type to be type of operand1
                 match binary_op.op_kind {
                     BinaryOpKind::Equals | BinaryOpKind::NotEquals => {
@@ -1589,8 +1600,8 @@ impl TypedModule {
                     }
                     _ => {}
                 };
-                let lhs = self.eval_expr(&binary_op.lhs, scope_id, None)?;
-                let rhs = self.eval_expr(&binary_op.rhs, scope_id, Some(lhs.get_type()))?;
+                let lhs = self.eval_expr(binary_op.lhs, scope_id, None)?;
+                let rhs = self.eval_expr(binary_op.rhs, scope_id, Some(lhs.get_type()))?;
 
                 // FIXME: Typechecker We are not really typechecking binary operations at all.
                 //        This is not enough; we need to check that the lhs is actually valid
@@ -1623,8 +1634,8 @@ impl TypedModule {
                 });
                 Ok(expr)
             }
-            Expression::UnaryOp(op) => {
-                let base_expr = self.eval_expr(&op.expr, scope_id, None)?;
+            ParsedExpression::UnaryOp(op) => {
+                let base_expr = self.eval_expr(op.expr, scope_id, None)?;
                 match op.op_kind {
                     UnaryOpKind::Dereference => {
                         let reference_type =
@@ -1670,8 +1681,8 @@ impl TypedModule {
                     }
                 }
             }
-            Expression::Literal(Literal::Unit(span)) => Ok(TypedExpr::Unit(*span)),
-            Expression::Literal(Literal::None(span)) => {
+            ParsedExpression::Literal(Literal::Unit(span)) => Ok(TypedExpr::Unit(*span)),
+            ParsedExpression::Literal(Literal::None(span)) => {
                 // If we are expecting an Option, I need to reach inside it to get the inner type
                 let expected_type = expected_type.ok_or(make_err(
                     "Cannot infer type of None literal without type hint",
@@ -1688,16 +1699,18 @@ impl TypedModule {
                 let type_id = self.add_type(none_type);
                 Ok(TypedExpr::None(type_id, *span))
             }
-            Expression::Literal(Literal::Char(byte, span)) => Ok(TypedExpr::Char(*byte, *span)),
-            Expression::Literal(Literal::Numeric(s, span)) => {
+            ParsedExpression::Literal(Literal::Char(byte, span)) => {
+                Ok(TypedExpr::Char(*byte, *span))
+            }
+            ParsedExpression::Literal(Literal::Numeric(s, span)) => {
                 let num = self.parse_numeric(s).map_err(|msg| make_err(msg, *span))?;
                 Ok(TypedExpr::Int(num, *span))
             }
-            Expression::Literal(Literal::Bool(b, span)) => {
+            ParsedExpression::Literal(Literal::Bool(b, span)) => {
                 let expr = TypedExpr::Bool(*b, *span);
                 Ok(expr)
             }
-            Expression::Literal(Literal::String(s, span)) => {
+            ParsedExpression::Literal(Literal::String(s, span)) => {
                 // So sad, we could just point to the source. BUT if we ever do escaping and things
                 // then the source string is not the same as the string the user meant; perhaps here
                 // is the place, or maybe in the parser, that we would actually do some work, which
@@ -1706,26 +1719,26 @@ impl TypedModule {
                 let expr = TypedExpr::Str(s.clone(), *span);
                 Ok(expr)
             }
-            Expression::Variable(variable) => self.eval_variable(variable, scope_id, false),
-            Expression::FieldAccess(field_access) => {
+            ParsedExpression::Variable(variable) => self.eval_variable(variable, scope_id, false),
+            ParsedExpression::FieldAccess(field_access) => {
                 self.eval_field_access(field_access, scope_id, false)
             }
-            Expression::Block(block) => {
+            ParsedExpression::Block(block) => {
                 let block = self.eval_block(block, scope_id, expected_type)?;
                 Ok(TypedExpr::Block(block))
             }
-            Expression::MethodCall(m_call) => {
-                let base_expr = self.eval_expr(&m_call.base, scope_id, None)?;
+            ParsedExpression::MethodCall(m_call) => {
+                let base_expr = self.eval_expr(m_call.base, scope_id, None)?;
                 let call =
                     self.eval_function_call(&m_call.call, Some(base_expr), None, scope_id)?;
                 Ok(call)
             }
-            Expression::FnCall(fn_call) => {
+            ParsedExpression::FnCall(fn_call) => {
                 let call = self.eval_function_call(fn_call, None, None, scope_id)?;
                 Ok(call)
             }
-            Expression::OptionalGet(optional_get) => {
-                let base = self.eval_expr_inner(&optional_get.base, scope_id, expected_type)?;
+            ParsedExpression::OptionalGet(optional_get) => {
+                let base = self.eval_expr_inner(optional_get.base, scope_id, expected_type)?;
                 let Type::Optional(optional_type) = self.get_type(base.get_type()) else {
                     return make_fail(
                         format!(
@@ -1741,10 +1754,16 @@ impl TypedModule {
                     span: optional_get.span,
                 }))
             }
-            Expression::For(for_expr) => self.eval_for_expr(for_expr, scope_id, expected_type),
+            ParsedExpression::For(for_expr) => {
+                // We have to make a copy since eval_for_expr synthesizes expressions which borrows
+                // from ast.expressions
+                let for_expr_copy = for_expr.clone();
+                self.eval_for_expr(&for_expr_copy, scope_id, expected_type)
+            }
         }
     }
 
+    /// no_mangle: Skip mangling if we want the variable to be accessible from user code
     fn synth_variable_decl(
         &mut self,
         mut variable: Variable,
@@ -1770,12 +1789,13 @@ impl TypedModule {
         (variable_id, val_def, TypedExpr::Variable(expr))
     }
 
-    fn synth_variable_parsed_expr(&self, variable_id: VariableId, span: Span) -> parse::Expression {
-        Expression::Variable(parse::Variable {
+    fn synth_variable_parsed_expr(&self, variable_id: VariableId, span: Span) -> ExpressionId {
+        let ast = self.ast.clone();
+        ast.add_expression(ParsedExpression::Variable(parse::Variable {
             name: self.get_variable(variable_id).name,
             namespaces: Vec::new(),
             span,
-        })
+        }))
     }
 
     fn synth_function_call(
@@ -1783,7 +1803,7 @@ impl TypedModule {
         namespaces: Vec<IdentifierId>,
         name: IdentifierId,
         known_type_args: Option<Vec<TypeId>>,
-        value_arg_exprs: Vec<Expression>,
+        value_arg_exprs: Vec<ExpressionId>,
         span: Span,
         scope_id: ScopeId,
     ) -> TyperResult<TypedExpr> {
@@ -1811,16 +1831,19 @@ impl TypedModule {
         _expected_type: Option<TypeId>,
     ) -> TyperResult<TypedExpr> {
         let binding_ident = for_expr.binding.unwrap_or(self.ast.ident_id("it"));
-        let iterable_expr = self.eval_expr(&for_expr.iterable_expr, scope_id, None)?;
+        let iterable_expr = self.eval_expr(for_expr.iterable_expr, scope_id, None)?;
         let iteree_type = iterable_expr.get_type();
         let is_string_iteree = iteree_type == STRING_TYPE_ID;
+        let iterable_span = iterable_expr.get_span();
+        let body_span = for_expr.body_block.span;
+
         let Some(item_type) = self.item_type_of_iterable(iteree_type) else {
             return make_fail(
                 format!(
                     "Type {} is not iterable",
                     self.type_id_to_string(iterable_expr.get_type())
                 ),
-                for_expr.iterable_expr.get_span(),
+                iterable_span,
             );
         };
 
@@ -1839,7 +1862,7 @@ impl TypedModule {
                 is_mutable: true,
                 owner_scope: Some(for_expr_scope),
             },
-            for_expr.body_block.span,
+            body_span,
             TypedExpr::Int(0, for_expr.body_block.span),
             true,
         );
@@ -1851,7 +1874,7 @@ impl TypedModule {
                     is_mutable: false,
                     owner_scope: Some(for_expr_scope),
                 },
-                for_expr.iterable_expr.get_span(),
+                iterable_span,
                 iterable_expr,
                 false,
             );
@@ -1860,11 +1883,8 @@ impl TypedModule {
                 vec![self.ast.ident_id("string")],
                 self.ast.ident_id("length"),
                 None,
-                vec![self.synth_variable_parsed_expr(
-                    iteree_variable_id,
-                    for_expr.iterable_expr.get_span(),
-                )],
-                for_expr.iterable_expr.get_span(),
+                vec![self.synth_variable_parsed_expr(iteree_variable_id, iterable_span)],
+                iterable_span,
                 for_expr_scope,
             )?
         } else {
@@ -1872,11 +1892,8 @@ impl TypedModule {
                 vec![self.ast.ident_id("Array")],
                 self.ast.ident_id("length"),
                 Some(vec![item_type]),
-                vec![self.synth_variable_parsed_expr(
-                    iteree_variable_id,
-                    for_expr.iterable_expr.get_span(),
-                )],
-                for_expr.iterable_expr.get_span(),
+                vec![self.synth_variable_parsed_expr(iteree_variable_id, iterable_span)],
+                iterable_span,
                 for_expr_scope,
             )?
         };
@@ -1888,7 +1905,7 @@ impl TypedModule {
                     is_mutable: false,
                     owner_scope: Some(for_expr_scope),
                 },
-                for_expr.iterable_expr.get_span(),
+                iterable_span,
                 iteree_length_call,
                 false,
             );
@@ -1910,10 +1927,10 @@ impl TypedModule {
                     index_expr: Box::new(TypedExpr::Variable(VariableExpr {
                         type_id: INT_TYPE_ID,
                         variable_id: index_variable,
-                        span: for_expr.body_block.span,
+                        span: body_span,
                     })),
                     result_type: item_type,
-                    span: for_expr.body_block.span,
+                    span: body_span,
                 })
             } else {
                 TypedExpr::ArrayIndex(IndexOp {
@@ -1921,13 +1938,13 @@ impl TypedModule {
                     index_expr: Box::new(TypedExpr::Variable(VariableExpr {
                         type_id: INT_TYPE_ID,
                         variable_id: index_variable,
-                        span: for_expr.body_block.span,
+                        span: body_span,
                     })),
                     result_type: item_type,
-                    span: for_expr.body_block.span,
+                    span: body_span,
                 })
             },
-            span: for_expr.body_block.span,
+            span: body_span,
         }));
 
         // TODO: we can hint to the block based on the expected type of the entire for expr
@@ -1974,23 +1991,15 @@ impl TypedModule {
                     vec![self.ast.ident_id("Array")],
                     self.ast.ident_id("new"),
                     Some(vec![body_block_result_type]),
-                    vec![self.synth_variable_parsed_expr(
-                        iteree_length_variable_id,
-                        for_expr.iterable_expr.get_span(),
-                    )],
-                    for_expr.body_block.span,
+                    vec![self.synth_variable_parsed_expr(iteree_length_variable_id, iterable_span)],
+                    body_span,
                     for_expr_scope,
                 )?,
                 _ => {
                     return make_fail("unsupported resulting_type in for_expr yield", for_expr.span)
                 }
             };
-            Some(self.synth_variable_decl(
-                yield_variable,
-                for_expr.body_block.span,
-                yield_initializer,
-                false,
-            ))
+            Some(self.synth_variable_decl(yield_variable, body_span, yield_initializer, false))
         } else {
             None
         };
@@ -1998,7 +2007,7 @@ impl TypedModule {
             expr_type: UNIT_TYPE_ID,
             scope_id: while_scope_id,
             statements: Vec::new(),
-            span: for_expr.body_block.span,
+            span: body_span,
         };
         // Prepend the val def to the body block
         while_block.statements.push(iteration_element_val_def);
@@ -2010,7 +2019,7 @@ impl TypedModule {
                     is_mutable: false,
                     owner_scope: Some(while_scope_id),
                 },
-                for_expr.body_block.span,
+                body_span,
                 TypedExpr::Block(body_block),
                 false,
             );
@@ -2026,10 +2035,10 @@ impl TypedModule {
                             base_expr: Box::new(yielded_coll_expr.clone()),
                             index_expr: Box::new(index_variable_expr.clone()),
                             result_type: body_block_result_type,
-                            span: for_expr.body_block.span,
+                            span: body_span,
                         })),
                         value: Box::new(user_block_val_expr),
-                        span: for_expr.body_block.span,
+                        span: body_span,
                     }));
                     while_block.statements.push(element_assign);
                 }
@@ -2046,12 +2055,12 @@ impl TypedModule {
                 lhs: Box::new(TypedExpr::Variable(VariableExpr {
                     type_id: INT_TYPE_ID,
                     variable_id: index_variable,
-                    span: for_expr.iterable_expr.get_span(),
+                    span: iterable_span,
                 })),
-                rhs: Box::new(TypedExpr::Int(1, for_expr.iterable_expr.get_span())),
-                span: for_expr.iterable_expr.get_span(),
+                rhs: Box::new(TypedExpr::Int(1, iterable_span)),
+                span: iterable_span,
             })),
-            span: for_expr.iterable_expr.get_span(),
+            span: iterable_span,
         }));
         while_block.statements.push(index_increment_statement);
 
@@ -2061,7 +2070,7 @@ impl TypedModule {
                 ty: BOOL_TYPE_ID,
                 lhs: Box::new(index_variable_expr.clone()),
                 rhs: Box::new(iteree_length_variable_expr),
-                span: for_expr.iterable_expr.get_span(),
+                span: iterable_span,
             }),
             block: while_block,
             span: for_expr.span,
@@ -2106,11 +2115,11 @@ impl TypedModule {
             binary_op.op_kind == BinaryOpKind::Equals
                 || binary_op.op_kind == BinaryOpKind::NotEquals
         );
-        let lhs = self.eval_expr(&binary_op.lhs, scope_id, None)?;
+        let lhs = self.eval_expr(binary_op.lhs, scope_id, None)?;
         let equals_expr = match self.get_type(lhs.get_type()) {
             Type::Unit | Type::Char | Type::Int | Type::Bool => {
                 // All these scalar types treated as IntValue s in codegen
-                let rhs = self.eval_expr(&binary_op.rhs, scope_id, Some(lhs.get_type()))?;
+                let rhs = self.eval_expr(binary_op.rhs, scope_id, Some(lhs.get_type()))?;
                 if rhs.get_type() == lhs.get_type() {
                     Ok(TypedExpr::BinaryOp(BinaryOp {
                         kind: BinaryOpKind::Equals,
@@ -2124,7 +2133,7 @@ impl TypedModule {
                 }
             }
             Type::String => {
-                let rhs = self.eval_expr(&binary_op.rhs, scope_id, Some(lhs.get_type()))?;
+                let rhs = self.eval_expr(binary_op.rhs, scope_id, Some(lhs.get_type()))?;
                 if rhs.get_type() != STRING_TYPE_ID {
                     make_fail("Expected string on rhs", binary_op.span)
                 } else {
@@ -2153,7 +2162,7 @@ impl TypedModule {
                     vec![self.ast.ident_id("Array")],
                     self.ast.ident_id("equals"),
                     Some(vec![array.element_type]),
-                    vec![*binary_op.lhs.clone(), *binary_op.rhs.clone()],
+                    vec![binary_op.lhs, binary_op.rhs],
                     binary_op.span,
                     scope_id,
                 )?;
@@ -2166,7 +2175,7 @@ impl TypedModule {
                 todo!("reference equality")
             }
             Type::TypeVariable(_type_var) => {
-                let rhs = self.eval_expr(&binary_op.rhs, scope_id, Some(lhs.get_type()))?;
+                let rhs = self.eval_expr(binary_op.rhs, scope_id, Some(lhs.get_type()))?;
                 if let Err(msg) = self.typecheck_types(lhs.get_type(), rhs.get_type()) {
                     return make_fail(
                         format!("Type mismatch on equality of 2 generic variables: {}", msg),
@@ -2200,7 +2209,7 @@ impl TypedModule {
         scope_id: ScopeId,
         expected_type: Option<TypeId>,
     ) -> TyperResult<TypedExpr> {
-        let mut condition = self.eval_expr(&if_expr.cond, scope_id, None)?;
+        let mut condition = self.eval_expr(if_expr.cond, scope_id, None)?;
         let consequent_scope_id = self.scopes.add_child_scope(scope_id);
         let mut consequent = if if_expr.optional_ident.is_some() {
             let condition_optional_type = match self.get_type(condition.get_type()) {
@@ -2208,7 +2217,7 @@ impl TypedModule {
                 _other => {
                     return make_fail(
                         "Condition type for if with binding must be an optional",
-                        if_expr.cond.get_span(),
+                        condition.get_span(),
                     );
                 }
             };
@@ -2229,7 +2238,7 @@ impl TypedModule {
             let original_condition = condition.clone();
             condition = TypedExpr::OptionalHasValue(Box::new(condition));
             let consequent_expr =
-                self.eval_expr(&if_expr.cons, consequent_scope_id, expected_type)?;
+                self.eval_expr(if_expr.cons, consequent_scope_id, expected_type)?;
             let mut consequent = self.transform_expr_to_block(consequent_expr, consequent_scope_id);
             consequent.statements.insert(
                 0,
@@ -2250,11 +2259,11 @@ impl TypedModule {
             if let Err(msg) = self.typecheck_types(BOOL_TYPE_ID, condition.get_type()) {
                 return make_fail(
                     format!("Invalid if condition type: {}. If you intended to use a binding optional if, you must supply a binding using |<ident>|", msg),
-                    if_expr.cond.get_span(),
+                    condition.get_span(),
                 );
             }
             let consequent_expr =
-                self.eval_expr(&if_expr.cons, consequent_scope_id, expected_type)?;
+                self.eval_expr(if_expr.cons, consequent_scope_id, expected_type)?;
             self.transform_expr_to_block(consequent_expr, consequent_scope_id)
         };
         let consequent_type = consequent.expr_type;
@@ -2265,7 +2274,7 @@ impl TypedModule {
             self.coerce_block_to_unit_block(&mut consequent);
         };
         let alternate_scope = self.scopes.add_child_scope(scope_id);
-        let alternate = if let Some(alt) = &if_expr.alt {
+        let alternate = if let Some(alt) = if_expr.alt {
             let expr = self.eval_expr(alt, alternate_scope, Some(consequent_type))?;
             self.transform_expr_to_block(expr, alternate_scope)
         } else {
@@ -2442,7 +2451,7 @@ impl TypedModule {
             if let Some(param) = matching_param {
                 let expected_type_for_param =
                     if skip_typecheck { None } else { Some(fn_param.type_id) };
-                let expr = self.eval_expr(&param.value, calling_scope, expected_type_for_param)?;
+                let expr = self.eval_expr(param.value, calling_scope, expected_type_for_param)?;
                 if !skip_typecheck {
                     if let Err(e) = self.typecheck_types(fn_param.type_id, expr.get_type()) {
                         return make_fail(
@@ -2451,7 +2460,7 @@ impl TypedModule {
                                 &*self.ast.get_ident_str(fn_call.name),
                                 e
                             ),
-                            param.value.get_span(),
+                            expr.get_span(),
                         );
                     }
                 }
@@ -2483,7 +2492,7 @@ impl TypedModule {
             if fn_call.args.len() != 1 {
                 return make_fail("Some() must have exactly one argument", fn_call.span);
             }
-            let arg = self.eval_expr_inner(&fn_call.args[0].value, scope_id, None)?;
+            let arg = self.eval_expr_inner(fn_call.args[0].value, scope_id, None)?;
             let type_id = arg.get_type();
             let optional_type = Type::Optional(OptionalType { inner_type: type_id });
             let type_id = self.add_type(optional_type);
@@ -2805,7 +2814,7 @@ impl TypedModule {
                     None => None,
                     Some(type_expr) => Some(self.eval_type_expr(type_expr, scope_id)?),
                 };
-                let value_expr = self.eval_expr(&val_def.value, scope_id, provided_type)?;
+                let value_expr = self.eval_expr(val_def.value, scope_id, provided_type)?;
                 let actual_type = value_expr.get_type();
                 let variable_type = if let Some(expected_type) = provided_type {
                     if let Err(msg) = self.typecheck_types(expected_type, actual_type) {
@@ -2836,8 +2845,8 @@ impl TypedModule {
             }
             BlockStmt::Assignment(assignment) => {
                 // let lhs = self.eval_expr(&assignment.lhs, scope_id, None)?;
-                let lhs = self.eval_assigment_lhs_expr(&assignment.lhs, scope_id, None)?;
-                let rhs = self.eval_expr(&assignment.rhs, scope_id, Some(lhs.get_type()))?;
+                let lhs = self.eval_assigment_lhs_expr(assignment.lhs, scope_id, None)?;
+                let rhs = self.eval_expr(assignment.rhs, scope_id, Some(lhs.get_type()))?;
                 if let Err(msg) = self.typecheck_types(lhs.get_type(), rhs.get_type()) {
                     return make_fail(
                         format!("Invalid types for assignment: {}", msg),
@@ -2852,11 +2861,11 @@ impl TypedModule {
                 Ok(expr)
             }
             BlockStmt::LoneExpression(expression) => {
-                let expr = self.eval_expr(expression, scope_id, expected_type)?;
+                let expr = self.eval_expr(*expression, scope_id, expected_type)?;
                 Ok(TypedStmt::Expr(Box::new(expr)))
             }
             BlockStmt::While(while_stmt) => {
-                let cond = self.eval_expr(&while_stmt.cond, scope_id, Some(BOOL_TYPE_ID))?;
+                let cond = self.eval_expr(while_stmt.cond, scope_id, Some(BOOL_TYPE_ID))?;
                 if let Err(e) = self.typecheck_types(BOOL_TYPE_ID, cond.get_type()) {
                     return make_fail(
                         format!("Invalid while condition type: {}", e),
@@ -3154,67 +3163,6 @@ impl TypedModule {
         }
         Ok(())
     }
-}
-
-// lower impl
-impl TypedModule {
-    // pub fn lower(&mut self) -> ParseResult<()> {
-    //     // Question: do we only need to lower concrete code?
-    //     for function_id in 0..self.function_iter() {
-    //         self.lower_function(function_id)?;
-    //     }
-    //     Ok(())
-    // }
-    //
-    // fn lower_function(&mut self, function_id: FunctionId) -> TyperResult<()> {
-    //     let function = self.get_function(function_id);
-    //
-    //     // Lower the block of the function
-    //     let Some(block) = &function.block else {
-    //         return Ok(());
-    //     };
-    //     if let Some(lowered_block) = self.lower_block(block)? {
-    //         let function = self.get_function_mut(function_id);
-    //         function.block = Some(lowered_block);
-    //     };
-    //
-    //     // Maybe lower other things one day?
-    //
-    //     Ok(())
-    // }
-    //
-    // // If lowering is not a no-op, returns Some with the lowered block
-    // // This is to avoid unnecessary cloning
-    // fn lower_block(&mut self, block: &mut TypedBlock) -> TyperResult<()> {
-    //     let mut new_stmts: Vec<TypedStmt> = vec![];
-    //     for stmt in &block.statements {
-    //         if let Some(lowered_stmts) = self.lower_stmt(stmt)? {
-    //             updates.push()
-    //             let block = self.get_block_mut(block);
-    //             block.statements(lowered_stmt);
-    //         };
-    //     }
-    //     Ok(())
-    // }
-    //
-    // fn lower_stmt(&mut self, stmt: &TypedStmt) -> TyperResult<Vec<TypedStmt>> {
-    //     match stmt {
-    //         TypedStmt::Expr(expr) => {
-    //             self.lower_expr(expr)?;
-    //         }
-    //         TypedStmt::ValDef(val_def) => {
-    //             self.lower_expr(&mut val_def.initializer)?;
-    //         }
-    //         TypedStmt::Assignment(assignment) => {
-    //             self.lower_expr(&mut assignment.destination)?;
-    //             self.lower_expr(&mut assignment.value)?;
-    //         }
-    //         TypedStmt::WhileLoop(while_loop) => {
-    //             self.lower_expr(&mut while_loop.cond)?;
-    //             self.lower_block(&mut while_loop.block)?;
-    //         }
-    //     }
-    // }
 }
 
 impl Display for TypedModule {
