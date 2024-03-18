@@ -9,14 +9,16 @@ use crate::lex::*;
 use crate::typer::{BinaryOpKind, Linkage, UnaryOpKind};
 use TokenKind as K;
 
-pub type AstId = u32;
+pub type AstDefinitionId = u32;
+pub type ExpressionId = u32;
+pub type StatementId = u32;
 
 #[cfg(test)]
 mod parse_test;
 
 #[derive(Debug, Clone)]
 pub struct ArrayExpr {
-    pub elements: Vec<Expression>,
+    pub elements: Vec<ExpressionId>,
     pub span: Span,
 }
 
@@ -100,7 +102,7 @@ impl Identifiers {
 #[derive(Debug, Clone)]
 pub struct FnCallArg {
     pub name: Option<IdentifierId>,
-    pub value: Expression,
+    pub value: ExpressionId,
 }
 
 #[derive(Debug, Clone)]
@@ -122,7 +124,7 @@ pub struct FnCall {
 pub struct ValDef {
     pub name: IdentifierId,
     pub type_id: Option<ParsedTypeExpression>,
-    pub value: Expression,
+    pub value: ExpressionId,
     pub is_mutable: bool,
     pub span: Span,
 }
@@ -130,15 +132,15 @@ pub struct ValDef {
 #[derive(Debug, Clone)]
 pub struct BinaryOp {
     pub op_kind: BinaryOpKind,
-    pub lhs: Box<Expression>,
-    pub rhs: Box<Expression>,
+    pub lhs: ExpressionId,
+    pub rhs: ExpressionId,
     pub span: Span,
 }
 
 #[derive(Debug, Clone)]
 pub struct UnaryOp {
     pub op_kind: UnaryOpKind,
-    pub expr: Box<Expression>,
+    pub expr: ExpressionId,
     pub span: Span,
 }
 
@@ -157,7 +159,7 @@ impl Display for Variable {
 
 #[derive(Debug, Clone)]
 pub struct FieldAccess {
-    pub base: Box<Expression>,
+    pub base: ExpressionId,
     pub target: IdentifierId,
     pub span: Span,
 }
@@ -165,7 +167,7 @@ pub struct FieldAccess {
 #[derive(Debug, Clone)]
 pub struct RecordField {
     pub name: IdentifierId,
-    pub expr: Expression,
+    pub expr: ExpressionId,
 }
 
 #[derive(Debug, Clone)]
@@ -181,8 +183,8 @@ pub struct Record {
 /// Example: users  [42]
 ///          ^target ^index_value
 pub struct IndexOperation {
-    pub target: Box<Expression>,
-    pub index_expr: Box<Expression>,
+    pub target: ExpressionId,
+    pub index_expr: ExpressionId,
     pub span: Span,
 }
 
@@ -198,19 +200,19 @@ impl Display for IndexOperation {
 
 #[derive(Debug, Clone)]
 pub struct MethodCall {
-    pub base: Box<Expression>,
+    pub base: ExpressionId,
     pub call: Box<FnCall>,
     pub span: Span,
 }
 
 #[derive(Debug, Clone)]
 pub struct OptionalGet {
-    pub base: Box<Expression>,
+    pub base: ExpressionId,
     pub span: Span,
 }
 
 #[derive(Debug, Clone)]
-pub enum Expression {
+pub enum ParsedExpression {
     BinaryOp(BinaryOp),             // a == b
     UnaryOp(UnaryOp),               // !b, *b
     Literal(Literal),               // 42, "asdf"
@@ -227,83 +229,83 @@ pub enum Expression {
     For(ForExpr),                   // for i in [1,2,3] do println(i)
 }
 
-impl Expression {
-    pub fn is_literal(e: &Expression) -> bool {
-        matches!(e, Expression::Literal(_))
+impl ParsedExpression {
+    pub fn is_literal(e: &ParsedExpression) -> bool {
+        matches!(e, ParsedExpression::Literal(_))
     }
     #[inline]
     pub fn get_span(&self) -> Span {
         match self {
-            Expression::BinaryOp(op) => op.span,
-            Expression::UnaryOp(op) => op.span,
-            Expression::Literal(lit) => lit.get_span(),
-            Expression::FnCall(call) => call.span,
-            Expression::Variable(var) => var.span,
-            Expression::FieldAccess(acc) => acc.span,
-            Expression::MethodCall(call) => call.span,
-            Expression::Block(block) => block.span,
-            Expression::If(if_expr) => if_expr.span,
-            Expression::Record(record) => record.span,
-            Expression::IndexOperation(op) => op.span,
-            Expression::Array(array_expr) => array_expr.span,
-            Expression::OptionalGet(optional_get) => optional_get.span,
-            Expression::For(for_expr) => for_expr.span,
+            ParsedExpression::BinaryOp(op) => op.span,
+            ParsedExpression::UnaryOp(op) => op.span,
+            ParsedExpression::Literal(lit) => lit.get_span(),
+            ParsedExpression::FnCall(call) => call.span,
+            ParsedExpression::Variable(var) => var.span,
+            ParsedExpression::FieldAccess(acc) => acc.span,
+            ParsedExpression::MethodCall(call) => call.span,
+            ParsedExpression::Block(block) => block.span,
+            ParsedExpression::If(if_expr) => if_expr.span,
+            ParsedExpression::Record(record) => record.span,
+            ParsedExpression::IndexOperation(op) => op.span,
+            ParsedExpression::Array(array_expr) => array_expr.span,
+            ParsedExpression::OptionalGet(optional_get) => optional_get.span,
+            ParsedExpression::For(for_expr) => for_expr.span,
         }
     }
 
     pub fn is_assignable(&self) -> bool {
         match self {
-            Expression::Variable(_var) => true,
-            Expression::IndexOperation(_op) => true,
-            Expression::FieldAccess(_acc) => true,
-            Expression::MethodCall(_call) => false,
-            Expression::BinaryOp(_op) => false,
-            Expression::UnaryOp(_op) => false,
-            Expression::Literal(_lit) => false,
-            Expression::FnCall(_call) => false,
-            Expression::Block(_block) => false,
-            Expression::If(_if_expr) => false,
-            Expression::Record(_record) => false,
-            Expression::Array(_array_expr) => false,
-            Expression::OptionalGet(_optional_get) => false,
-            Expression::For(_) => false,
+            ParsedExpression::Variable(_var) => true,
+            ParsedExpression::IndexOperation(_op) => true,
+            ParsedExpression::FieldAccess(_acc) => true,
+            ParsedExpression::MethodCall(_call) => false,
+            ParsedExpression::BinaryOp(_op) => false,
+            ParsedExpression::UnaryOp(_op) => false,
+            ParsedExpression::Literal(_lit) => false,
+            ParsedExpression::FnCall(_call) => false,
+            ParsedExpression::Block(_block) => false,
+            ParsedExpression::If(_if_expr) => false,
+            ParsedExpression::Record(_record) => false,
+            ParsedExpression::Array(_array_expr) => false,
+            ParsedExpression::OptionalGet(_optional_get) => false,
+            ParsedExpression::For(_) => false,
         }
     }
 }
 
-impl Display for Expression {
+impl Display for ParsedExpression {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Expression::BinaryOp(op) => {
+            ParsedExpression::BinaryOp(op) => {
                 f.write_fmt(format_args!("({} {} {})", op.lhs, op.op_kind, op.rhs))
             }
-            Expression::UnaryOp(op) => {
+            ParsedExpression::UnaryOp(op) => {
                 let _ = op.op_kind.fmt(f);
                 op.expr.fmt(f)
             }
-            Expression::Literal(lit) => lit.fmt(f),
-            Expression::FnCall(call) => std::fmt::Debug::fmt(call, f),
-            Expression::Variable(var) => var.fmt(f),
-            Expression::FieldAccess(acc) => std::fmt::Debug::fmt(acc, f),
-            Expression::MethodCall(call) => std::fmt::Debug::fmt(call, f),
-            Expression::Block(block) => std::fmt::Debug::fmt(block, f),
-            Expression::If(if_expr) => std::fmt::Debug::fmt(if_expr, f),
-            Expression::Record(record) => std::fmt::Debug::fmt(record, f),
-            Expression::IndexOperation(op) => op.fmt(f),
-            Expression::Array(array_expr) => std::fmt::Debug::fmt(array_expr, f),
-            Expression::OptionalGet(optional_get) => std::fmt::Debug::fmt(optional_get, f),
-            Expression::For(for_expr) => std::fmt::Debug::fmt(for_expr, f),
+            ParsedExpression::Literal(lit) => lit.fmt(f),
+            ParsedExpression::FnCall(call) => std::fmt::Debug::fmt(call, f),
+            ParsedExpression::Variable(var) => var.fmt(f),
+            ParsedExpression::FieldAccess(acc) => std::fmt::Debug::fmt(acc, f),
+            ParsedExpression::MethodCall(call) => std::fmt::Debug::fmt(call, f),
+            ParsedExpression::Block(block) => std::fmt::Debug::fmt(block, f),
+            ParsedExpression::If(if_expr) => std::fmt::Debug::fmt(if_expr, f),
+            ParsedExpression::Record(record) => std::fmt::Debug::fmt(record, f),
+            ParsedExpression::IndexOperation(op) => op.fmt(f),
+            ParsedExpression::Array(array_expr) => std::fmt::Debug::fmt(array_expr, f),
+            ParsedExpression::OptionalGet(optional_get) => std::fmt::Debug::fmt(optional_get, f),
+            ParsedExpression::For(for_expr) => std::fmt::Debug::fmt(for_expr, f),
         }
     }
 }
 
 enum ExprStackMember {
     Operator(BinaryOpKind, Span),
-    Expr(Expression),
+    Expr(ExpressionId),
 }
 
 impl ExprStackMember {
-    fn expect_expr(self) -> Expression {
+    fn expect_expr(self) -> ExpressionId {
         match self {
             ExprStackMember::Expr(expr) => expr,
             _ => panic!("expected expr"),
@@ -319,23 +321,23 @@ impl ExprStackMember {
 
 #[derive(Debug, Clone)]
 pub struct Assignment {
-    pub lhs: Expression,
-    pub rhs: Expression,
+    pub lhs: ExpressionId,
+    pub rhs: ExpressionId,
     pub span: Span,
 }
 
 #[derive(Debug, Clone)]
 pub struct IfExpr {
-    pub cond: Box<Expression>,
+    pub cond: ExpressionId,
     pub optional_ident: Option<(IdentifierId, Span)>,
-    pub cons: Box<Expression>,
-    pub alt: Option<Box<Expression>>,
+    pub cons: ExpressionId,
+    pub alt: Option<ExpressionId>,
     pub span: Span,
 }
 
 #[derive(Debug, Clone)]
 pub struct WhileStmt {
-    pub cond: Expression,
+    pub cond: ExpressionId,
     pub block: Block,
     /// Maybe its better not to store a span on nodes for which a span is trivially calculated
     pub span: Span,
@@ -349,7 +351,7 @@ pub enum ForExprType {
 
 #[derive(Debug, Clone)]
 pub struct ForExpr {
-    pub iterable_expr: Box<Expression>,
+    pub iterable_expr: ExpressionId,
     pub binding: Option<IdentifierId>,
     pub body_block: Block,
     pub expr_type: ForExprType,
@@ -358,9 +360,9 @@ pub struct ForExpr {
 
 #[derive(Debug, Clone)]
 pub enum BlockStmt {
-    ValDef(ValDef),             // val x = 42
-    Assignment(Assignment),     // x = 42
-    LoneExpression(Expression), // println("asdfasdf")
+    ValDef(ValDef),               // val x = 42
+    Assignment(Assignment),       // x = 42
+    LoneExpression(ExpressionId), // println("asdfasdf")
     While(WhileStmt),
 }
 
@@ -455,7 +457,7 @@ pub struct FnDef {
     pub block: Option<Block>,
     pub span: Span,
     pub linkage: Linkage,
-    pub ast_id: AstId,
+    pub ast_id: AstDefinitionId,
 }
 
 #[derive(Debug)]
@@ -469,9 +471,9 @@ pub struct FnArgDef {
 pub struct ConstVal {
     pub name: IdentifierId,
     pub ty: ParsedTypeExpression,
-    pub value_expr: Expression,
+    pub value_expr: ExpressionId,
     pub span: Span,
-    pub ast_id: AstId,
+    pub definition_id: AstDefinitionId,
 }
 
 #[derive(Debug)]
@@ -479,14 +481,14 @@ pub struct TypeDefn {
     pub name: IdentifierId,
     pub value_expr: ParsedTypeExpression,
     pub span: Span,
-    pub ast_id: AstId,
+    pub ast_id: AstDefinitionId,
 }
 
 #[derive(Debug)]
 pub struct ParsedNamespace {
     pub name: IdentifierId,
     pub definitions: Vec<Definition>,
-    pub ast_id: AstId,
+    pub ast_id: AstDefinitionId,
 }
 
 #[derive(Debug)]
@@ -506,13 +508,31 @@ impl Definition {
             Definition::Namespace(def) => def.name,
         }
     }
-    pub fn get_ast_id(&self) -> AstId {
+    pub fn get_ast_id(&self) -> AstDefinitionId {
         match self {
             Definition::FnDef(def) => def.ast_id,
-            Definition::Const(def) => def.ast_id,
+            Definition::Const(def) => def.definition_id,
             Definition::TypeDef(def) => def.ast_id,
             Definition::Namespace(def) => def.ast_id,
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct ParsedExpressionPool {
+    expressions: Vec<ParsedExpression>,
+}
+impl ParsedExpressionPool {
+    pub fn new() -> Self {
+        ParsedExpressionPool { expressions: Vec::new() }
+    }
+    pub fn add_expression(&mut self, expression: ParsedExpression) -> ExpressionId {
+        let id = self.expressions.len();
+        self.expressions.push(expression);
+        id as ExpressionId
+    }
+    pub fn get_expression(&self, id: ExpressionId) -> &ParsedExpression {
+        &self.expressions[id as usize]
     }
 }
 
@@ -527,6 +547,7 @@ pub struct ParsedModule {
     /// the entire AST module. Lets me wait to decide
     /// where things actually live
     pub identifiers: Rc<RefCell<Identifiers>>,
+    pub expressions: Rc<RefCell<ParsedExpressionPool>>,
 }
 
 impl ParsedModule {
@@ -537,7 +558,7 @@ impl ParsedModule {
         std::cell::Ref::map(self.identifiers.borrow(), |idents| idents.get_name(id))
     }
 
-    pub fn get_defn(&self, ast_id: AstId) -> &Definition {
+    pub fn get_defn(&self, ast_id: AstDefinitionId) -> &Definition {
         for defn in &self.defs {
             if defn.get_ast_id() == ast_id {
                 return defn;
@@ -554,6 +575,17 @@ impl ParsedModule {
 
     pub fn defns_iter(&self) -> impl Iterator<Item = &Definition> {
         self.defs.iter()
+    }
+
+    pub fn get_expression(
+        &self,
+        id: ExpressionId,
+    ) -> impl std::ops::Deref<Target = ParsedExpression> + '_ {
+        std::cell::Ref::map(self.expressions.borrow(), |e| e.get_expression(id))
+    }
+
+    pub fn add_expression(&self, expression: ParsedExpression) -> ExpressionId {
+        self.expressions.borrow_mut().add_expression(expression)
     }
 }
 
@@ -603,6 +635,7 @@ struct Parser<'toks> {
     tokens: TokenIter<'toks>,
     source: Rc<Source>,
     identifiers: Rc<RefCell<Identifiers>>,
+    expressions: Rc<RefCell<ParsedExpressionPool>>,
     ast_id_index: u32,
 }
 
@@ -614,6 +647,7 @@ impl<'toks> Parser<'toks> {
             tokens: TokenIter::make(tokens),
             source: Rc::new(Source { content: source, lines, directory, filename }),
             identifiers: Rc::new(RefCell::new(Identifiers::default())),
+            expressions: Rc::new(RefCell::new(ParsedExpressionPool::new())),
             ast_id_index: 0,
         }
     }
@@ -628,7 +662,7 @@ impl<'toks> Parser<'toks> {
 }
 
 impl<'toks> Parser<'toks> {
-    pub fn ident_id(&mut self, s: impl AsRef<str>) -> IdentifierId {
+    pub fn ident_id(&self, s: impl AsRef<str>) -> IdentifierId {
         self.identifiers.borrow_mut().intern(s.as_ref())
     }
 
@@ -706,6 +740,17 @@ impl<'toks> Parser<'toks> {
         let source = self.source.clone();
         let tok_chars = Source::get_span_content(&source, token.span);
         self.ident_id(tok_chars)
+    }
+
+    pub fn add_expression(&self, expression: ParsedExpression) -> ExpressionId {
+        self.expressions.borrow_mut().add_expression(expression)
+    }
+
+    pub fn get_expression(
+        &self,
+        id: ExpressionId,
+    ) -> impl std::ops::Deref<Target = ParsedExpression> + '_ {
+        std::cell::Ref::map(self.expressions.borrow(), |e| e.get_expression(id))
     }
 
     fn parse_literal(&mut self) -> ParseResult<Option<Literal>> {
@@ -933,7 +978,7 @@ impl<'toks> Parser<'toks> {
         Ok(Some(Record { fields, span }))
     }
 
-    fn parse_expression_with_postfix_ops(&mut self) -> ParseResult<Option<Expression>> {
+    fn parse_expression_with_postfix_ops(&mut self) -> ParseResult<Option<ExpressionId>> {
         let Some(mut result) = self.parse_base_expression()? else { return Ok(None) };
         // Looping for postfix ops inspired by Jakt's parser
         loop {
@@ -942,8 +987,12 @@ impl<'toks> Parser<'toks> {
                 // Optional uwrap `config!.url`
                 if next.kind == K::Bang {
                     self.tokens.advance();
-                    let span = result.get_span().extended(next.span);
-                    result = Expression::OptionalGet(OptionalGet { base: Box::new(result), span });
+                    let old_result = self.get_expression(result);
+                    let span = old_result.get_span().extended(next.span);
+                    result = self.add_expression(ParsedExpression::OptionalGet(OptionalGet {
+                        base: result,
+                        span,
+                    }));
                 } else if next.kind == K::Dot {
                     // Field access syntax; a.b
                     self.tokens.advance();
@@ -961,25 +1010,27 @@ impl<'toks> Parser<'toks> {
                             K::CloseParen,
                             Parser::expect_fn_arg,
                         )?;
-                        let span = result.get_span().extended(args_span);
-                        result = Expression::MethodCall(MethodCall {
-                            base: Box::new(result),
+                        let span = self.get_expression(result).get_span().extended(args_span);
+                        let name = self.intern_ident_token(target);
+                        result = self.add_expression(ParsedExpression::MethodCall(MethodCall {
+                            base: result,
                             call: Box::new(FnCall {
-                                name: self.intern_ident_token(target),
+                                name,
                                 type_args,
                                 args,
                                 namespaces: Vec::new(),
                                 span,
                             }),
                             span,
-                        });
+                        }));
                     } else {
-                        let span = result.get_span().extended(next.span);
-                        result = Expression::FieldAccess(FieldAccess {
-                            base: Box::new(result),
-                            target: self.intern_ident_token(target),
+                        let span = self.get_expression(result).get_span().extended(next.span);
+                        let target = self.intern_ident_token(target);
+                        result = self.add_expression(ParsedExpression::FieldAccess(FieldAccess {
+                            base: result,
+                            target,
                             span,
-                        });
+                        }));
                     }
                 } else if next.kind == K::OpenBracket {
                     self.tokens.advance();
@@ -989,12 +1040,13 @@ impl<'toks> Parser<'toks> {
                         self.parse_expression(),
                     )?;
                     let close = self.expect_eat_token(K::CloseBracket)?;
-                    let span = result.get_span().extended(close.span);
-                    result = Expression::IndexOperation(IndexOperation {
-                        target: Box::new(result),
-                        index_expr: Box::new(index_expr),
-                        span,
-                    });
+                    let span = self.get_expression(result).get_span().extended(close.span);
+                    result =
+                        self.add_expression(ParsedExpression::IndexOperation(IndexOperation {
+                            target: result,
+                            index_expr,
+                            span,
+                        }));
                 }
             } else {
                 return Ok(Some(result));
@@ -1006,11 +1058,11 @@ impl<'toks> Parser<'toks> {
         Parser::expect("block", self.peek(), self.parse_block())
     }
 
-    fn expect_expression(&mut self) -> ParseResult<Expression> {
+    fn expect_expression(&mut self) -> ParseResult<ExpressionId> {
         Parser::expect("expression", self.peek(), self.parse_expression())
     }
 
-    fn parse_expression(&mut self) -> ParseResult<Option<Expression>> {
+    fn parse_expression(&mut self) -> ParseResult<Option<ExpressionId>> {
         let Some(expr) = self.parse_expression_with_postfix_ops()? else {
             return Ok(None);
         };
@@ -1050,13 +1102,16 @@ impl<'toks> Parser<'toks> {
                 let ExprStackMember::Expr(lhs) = expr_stack.pop().unwrap() else {
                     panic!("expected expr on stack")
                 };
-                let new_span = lhs.get_span().extended(rhs.get_span());
-                let bin_op = Expression::BinaryOp(BinaryOp {
+                let new_span = self
+                    .get_expression(lhs)
+                    .get_span()
+                    .extended(self.get_expression(rhs).get_span());
+                let bin_op = self.add_expression(ParsedExpression::BinaryOp(BinaryOp {
                     op_kind,
-                    lhs: Box::new(lhs),
-                    rhs: Box::new(rhs),
+                    lhs,
+                    rhs,
                     span: new_span,
-                });
+                }));
                 expr_stack.push(ExprStackMember::Expr(bin_op))
             }
             expr_stack.push(ExprStackMember::Operator(op_kind, tok.span));
@@ -1076,16 +1131,21 @@ impl<'toks> Parser<'toks> {
             let ExprStackMember::Expr(lhs) = expr_stack.pop().unwrap() else {
                 panic!("expected expr")
             };
-            let new_span = lhs.get_span().extended(rhs.get_span());
-            expr_stack.push(ExprStackMember::Expr(Expression::BinaryOp(BinaryOp {
+            let new_span = self.extended_span(lhs, rhs);
+            let bin_op = self.add_expression(ParsedExpression::BinaryOp(BinaryOp {
                 op_kind,
-                lhs: Box::new(lhs),
-                rhs: Box::new(rhs),
+                lhs,
+                rhs,
                 span: new_span,
-            })));
+            }));
+            expr_stack.push(ExprStackMember::Expr(bin_op));
         }
         let final_expr = expr_stack.pop().unwrap().expect_expr();
         Ok(Some(final_expr))
+    }
+
+    fn extended_span(&self, expr1: ExpressionId, expr2: ExpressionId) -> Span {
+        self.get_expression(expr1).get_span().extended(self.get_expression(expr2).get_span())
     }
 
     fn parse_optional_type_args(&mut self) -> ParseResult<Option<Vec<FnCallTypeArg>>> {
@@ -1111,11 +1171,12 @@ impl<'toks> Parser<'toks> {
     }
 
     /// Base expression meaning no postfix or binary ops
-    fn parse_base_expression(&mut self) -> ParseResult<Option<Expression>> {
+    fn parse_base_expression(&mut self) -> ParseResult<Option<ExpressionId>> {
         let (first, second, third) = self.tokens.peek_three();
         trace!("parse_expression {} {}", first.kind, second.kind);
         if let Some(lit) = self.parse_literal()? {
-            return Ok(Some(Expression::Literal(lit)));
+            let literal_id = self.add_expression(ParsedExpression::Literal(lit));
+            return Ok(Some(literal_id));
         }
         if first.kind == K::OpenParen {
             self.tokens.advance();
@@ -1151,21 +1212,25 @@ impl<'toks> Parser<'toks> {
             self.tokens.advance();
             let body_expr = self.expect_block()?;
             let span = first.span.extended(body_expr.span);
-            Ok(Some(Expression::For(ForExpr {
-                iterable_expr: Box::new(iterable_expr),
+            Ok(Some(self.add_expression(ParsedExpression::For(ForExpr {
+                iterable_expr,
                 binding,
                 body_block: body_expr,
                 expr_type: for_expr_type,
                 span,
-            })))
+            }))))
         } else if first.kind.is_prefix_operator() {
             let Some(op_kind) = UnaryOpKind::from_tokenkind(first.kind) else {
                 return Err(Parser::error("unexpected prefix operator", first));
             };
             self.tokens.advance();
             let expr = self.expect_expression()?;
-            let span = first.span.extended(expr.get_span());
-            Ok(Some(Expression::UnaryOp(UnaryOp { expr: Box::new(expr), op_kind, span })))
+            let span = first.span.extended(self.get_expression(expr).get_span());
+            Ok(Some(self.add_expression(ParsedExpression::UnaryOp(UnaryOp {
+                expr,
+                op_kind,
+                span,
+            }))))
         } else if first.kind == K::Ident {
             // FnCall
             // Here we use is_whitespace_preceeded to distinguish between:
@@ -1211,21 +1276,23 @@ impl<'toks> Parser<'toks> {
                     K::CloseParen,
                     Parser::expect_fn_arg,
                 )?;
-                Ok(Some(Expression::FnCall(FnCall {
-                    name: self.intern_ident_token(first),
+                let name = self.intern_ident_token(first);
+                Ok(Some(self.add_expression(ParsedExpression::FnCall(FnCall {
+                    name,
                     type_args,
                     args,
                     namespaces,
                     span: first.span.extended(args_span),
-                })))
+                }))))
             } else {
                 // The last thing it can be is a simple variable reference expression
                 self.tokens.advance();
-                Ok(Some(Expression::Variable(Variable {
-                    name: self.intern_ident_token(first),
+                let name = self.intern_ident_token(first);
+                Ok(Some(self.add_expression(ParsedExpression::Variable(Variable {
+                    name,
                     namespaces,
                     span: first.span,
-                })))
+                }))))
             }
         } else if first.kind == K::OpenBrace {
             // The syntax {} means empty record, not empty block
@@ -1233,19 +1300,21 @@ impl<'toks> Parser<'toks> {
             trace!("parse_expr {:?} {:?} {:?}", first, second, third);
             if second.kind == K::CloseBrace {
                 let span = first.span.extended(second.span);
-                Ok(Some(Expression::Record(Record { fields: vec![], span })))
+                Ok(Some(
+                    self.add_expression(ParsedExpression::Record(Record { fields: vec![], span })),
+                ))
             } else if second.kind == K::Ident && third.kind == K::Colon {
                 let record = Parser::expect("record", first, self.parse_record())?;
-                Ok(Some(Expression::Record(record)))
+                Ok(Some(self.add_expression(ParsedExpression::Record(record))))
             } else {
                 match self.parse_block()? {
                     None => Err(Parser::error("block", self.peek())),
-                    Some(block) => Ok(Some(Expression::Block(block))),
+                    Some(block) => Ok(Some(self.add_expression(ParsedExpression::Block(block)))),
                 }
             }
         } else if first.kind == K::KeywordIf {
             let if_expr = Parser::expect("If Expression", first, self.parse_if_expr())?;
-            Ok(Some(Expression::If(if_expr)))
+            Ok(Some(self.add_expression(ParsedExpression::If(if_expr))))
         } else if first.kind == K::OpenBracket {
             // Array
             let start = self.expect_eat_token(K::OpenBracket)?;
@@ -1256,7 +1325,7 @@ impl<'toks> Parser<'toks> {
                 |p| Parser::expect("expression", start, p.parse_expression()),
             )?;
             let span = start.span.extended(span);
-            Ok(Some(Expression::Array(ArrayExpr { elements, span })))
+            Ok(Some(self.add_expression(ParsedExpression::Array(ArrayExpr { elements, span }))))
         } else {
             // More expression types
             Ok(None)
@@ -1281,7 +1350,8 @@ impl<'toks> Parser<'toks> {
         self.expect_eat_token(K::Equals)?;
         let initializer_expression =
             Parser::expect("expression", self.peek(), self.parse_expression())?;
-        let span = eaten_keyword.span.extended(initializer_expression.get_span());
+        let span =
+            eaten_keyword.span.extended(self.get_expression(initializer_expression).get_span());
         Ok(Some(ValDef {
             name: self.intern_ident_token(name_token),
             type_id: typ,
@@ -1301,26 +1371,26 @@ impl<'toks> Parser<'toks> {
         let typ = Parser::expect("type_expression", self.peek(), self.parse_type_expression())?;
         self.expect_eat_token(K::Equals)?;
         let value_expr = Parser::expect("expression", self.peek(), self.parse_expression())?;
-        let span = keyword_val_token.span.extended(value_expr.get_span());
+        let span = keyword_val_token.span.extended(self.get_expression(value_expr).get_span());
         Ok(Some(ConstVal {
             name: self.intern_ident_token(name_token),
             ty: typ,
             value_expr,
             span,
-            ast_id: self.next_ast_id(),
+            definition_id: self.next_definition_id(),
         }))
     }
 
-    fn parse_assignment(&mut self, lhs: Expression) -> ParseResult<Assignment> {
-        let _valid_lhs = match &lhs {
-            Expression::FieldAccess(_) => true,
-            Expression::Variable(_) => true,
-            Expression::IndexOperation(_) => true,
+    fn parse_assignment(&mut self, lhs: ExpressionId) -> ParseResult<Assignment> {
+        let _valid_lhs = match &*self.get_expression(lhs) {
+            ParsedExpression::FieldAccess(_) => true,
+            ParsedExpression::Variable(_) => true,
+            ParsedExpression::IndexOperation(_) => true,
             _ => false,
         };
         self.expect_eat_token(K::Equals)?;
         let rhs = self.expect_expression()?;
-        let span = lhs.get_span().extended(rhs.get_span());
+        let span = self.extended_span(lhs, rhs);
         Ok(Assignment { lhs, rhs, span })
     }
 
@@ -1403,19 +1473,17 @@ impl<'toks> Parser<'toks> {
         let alt = if else_peek.kind == K::KeywordElse {
             self.tokens.advance();
             let alt_result = Parser::expect("else block", else_peek, self.parse_expression())?;
-            Some(Box::new(alt_result))
+            Some(alt_result)
         } else {
             None
         };
-        let end_span = alt.as_ref().map(|a| a.get_span()).unwrap_or(consequent_expr.get_span());
+        let end_span = alt
+            .as_ref()
+            .map(|a| self.get_expression(*a).get_span())
+            .unwrap_or(self.get_expression(consequent_expr).get_span());
         let span = if_keyword.span.extended(end_span);
-        let if_expr = IfExpr {
-            cond: condition_expr.into(),
-            optional_ident,
-            cons: consequent_expr.into(),
-            alt,
-            span,
-        };
+        let if_expr =
+            IfExpr { cond: condition_expr, optional_ident, cons: consequent_expr, alt, span };
         Ok(Some(if_expr))
     }
 
@@ -1527,10 +1595,10 @@ impl<'toks> Parser<'toks> {
             block,
             span,
             linkage,
-            ast_id: self.next_ast_id(),
+            ast_id: self.next_definition_id(),
         }))
     }
-    fn next_ast_id(&mut self) -> AstId {
+    fn next_definition_id(&mut self) -> AstDefinitionId {
         let id = self.ast_id_index;
         self.ast_id_index += 1;
         id
@@ -1548,7 +1616,7 @@ impl<'toks> Parser<'toks> {
                 name: self.intern_ident_token(name),
                 value_expr: type_expr,
                 span,
-                ast_id: self.next_ast_id(),
+                ast_id: self.next_definition_id(),
             }))
         } else {
             Ok(None)
@@ -1571,7 +1639,7 @@ impl<'toks> Parser<'toks> {
         Ok(Some(ParsedNamespace {
             name: self.intern_ident_token(ident),
             definitions,
-            ast_id: self.next_ast_id(),
+            ast_id: self.next_definition_id(),
         }))
     }
 
@@ -1606,6 +1674,7 @@ impl<'toks> Parser<'toks> {
             defs,
             source: self.source.clone(),
             identifiers: self.identifiers.clone(),
+            expressions: self.expressions.clone(),
         })
     }
 }
