@@ -9,33 +9,6 @@ const BflString = packed struct {
         return self.data[0..self.len];
     }
 };
-fn BflArray(T: type) type {
-    return struct {
-        const Self = @This();
-        len: u64,
-        cap: u64,
-        data: [*]T,
-
-        fn push(self: *Self, value: T) void {
-            if (self.len + 1 > self.cap) {
-              self.grow();
-            }
-            self.data[self.len] = value;
-            self.len += 1;
-        }
-
-        fn grow(self: *Self) void {
-          const new_cap = self.cap * 2;
-          const data = allocator.alloc(T, new_cap);
-          @memcpy(data, self.data);
-          self.cap = new_cap;
-          self.data = data;
-        }
-    };
-}
-
-export const HELLO_WORLD = "Hello, World";
-// const s = BflString{ .len = 4, .data = [4]u8{ 'a', 's', 'd', 'f' } };
 
 export fn _bfl_charToString(c: u8) BflString {
     const data = allocator.alloc(u8, 1) catch unreachable;
