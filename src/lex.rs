@@ -247,6 +247,7 @@ impl TokenKind {
         }
     }
     pub fn is_keyword(&self) -> bool {
+        #[allow(clippy::match_like_matches_macro)]
         match self {
             K::KeywordFn => true,
             K::KeywordVal => true,
@@ -269,6 +270,7 @@ impl TokenKind {
         BinaryOpKind::from_tokenkind(*self).is_some()
     }
     pub fn is_prefix_operator(&self) -> bool {
+        #[allow(clippy::match_like_matches_macro)]
         match self {
             K::Asterisk => true,
             K::Bang => true,
@@ -277,6 +279,7 @@ impl TokenKind {
         }
     }
     pub fn is_postfix_operator(&self) -> bool {
+        #[allow(clippy::match_like_matches_macro)]
         match self {
             K::Dot => true,
             K::OpenBracket => true,
@@ -285,6 +288,7 @@ impl TokenKind {
         }
     }
     pub fn is_postfix_type_operator(&self) -> bool {
+        #[allow(clippy::match_like_matches_macro)]
         match self {
             K::QuestionMark => true,
             K::Asterisk => true,
@@ -539,7 +543,7 @@ impl Lexer<'_> {
                 }
             }
             if (tok_buf.is_empty() && is_ident_or_num_start(c)) || is_ident_char(c) {
-                if tok_buf.len() == 1 && tok_buf.chars().next() == Some('_') && c == '_' {
+                if tok_buf.len() == 1 && tok_buf.starts_with('_') && c == '_' {
                     return Err(self.err("Identifiers cannot begin with __"));
                 }
                 tok_len += 1;

@@ -1,5 +1,4 @@
 #![allow(clippy::match_like_matches_macro)]
-
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter, Write};
@@ -100,6 +99,7 @@ pub enum Type {
     Array(ArrayType),
     Optional(OptionalType),
     Reference(ReferenceType),
+    #[allow(clippy::enum_variant_names)]
     TypeVariable(TypeVariable),
 }
 
@@ -1548,8 +1548,7 @@ impl TypedModule {
                 for (index, ast_field) in ast_record.fields.iter().enumerate() {
                     let expected_field = expected_record
                         .as_ref()
-                        .map(|(_, rec)| rec.find_field(ast_field.name))
-                        .flatten();
+                        .and_then(|(_, rec)| rec.find_field(ast_field.name));
                     let expected_type_id = expected_field.map(|(_, f)| f.type_id);
                     let expr = self.eval_expr(ast_field.expr, scope_id, expected_type_id)?;
                     field_defns.push(RecordTypeField {
@@ -3461,7 +3460,7 @@ impl TypedModule {
                 writ.write_str(")")
             }
             TypedExpr::OptionalHasValue(opt) => {
-                self.display_expr(&opt, writ, 0)?;
+                self.display_expr(opt, writ, 0)?;
                 writ.write_str(".hasValue()")
             }
             TypedExpr::OptionalGet(opt) => {
