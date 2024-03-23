@@ -1456,7 +1456,9 @@ impl TypedModule {
             *self.ast.get_expression(expr),
             expected_type.map(|t| self.type_id_to_string(t))
         );
-        match &*(self.ast.clone().get_expression(expr)) {
+        let ast = self.ast.clone();
+        let expr = ast.get_expression(expr).clone();
+        let result = match &(expr) {
             ParsedExpression::Array(array_expr) => {
                 let mut element_type: Option<TypeId> = match expected_type {
                     Some(type_id) => match self.get_type(type_id) {
@@ -1757,10 +1759,10 @@ impl TypedModule {
             ParsedExpression::For(for_expr) => {
                 // We have to make a copy since eval_for_expr synthesizes expressions which borrows
                 // from ast.expressions
-                let for_expr_copy = for_expr.clone();
-                self.eval_for_expr(&for_expr_copy, scope_id, expected_type)
+                self.eval_for_expr(for_expr, scope_id, expected_type)
             }
-        }
+        };
+        result
     }
 
     /// no_mangle: Skip mangling if we want the variable to be accessible from user code
