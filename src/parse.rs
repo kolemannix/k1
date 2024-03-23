@@ -747,6 +747,10 @@ impl<'toks> Parser<'toks> {
         std::cell::Ref::map(self.expressions.borrow(), |e| e.get_expression(id))
     }
 
+    pub fn get_expression_span(&self, id: ExpressionId) -> Span {
+        self.expressions.borrow().get_expression(id).get_span()
+    }
+
     fn parse_literal(&mut self) -> ParseResult<Option<Literal>> {
         let (first, second) = self.tokens.peek_two();
         trace!("parse_literal {} {}", first.kind, second.kind);
@@ -981,8 +985,7 @@ impl<'toks> Parser<'toks> {
                 // Optional uwrap `config!.url`
                 if next.kind == K::Bang {
                     self.tokens.advance();
-                    let old_result = self.get_expression(result);
-                    let span = old_result.get_span().extended(next.span);
+                    let span = self.get_expression_span(result).extended(next.span);
                     result = self.add_expression(ParsedExpression::OptionalGet(OptionalGet {
                         base: result,
                         span,
