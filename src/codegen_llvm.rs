@@ -862,7 +862,7 @@ impl<'ctx> Codegen<'ctx> {
             variable_ptr,
             Some(self.debug.debug_builder.create_auto_variable(
                 self.debug.current_scope(),
-                &*self.get_ident_name(variable.name),
+                &self.get_ident_name(variable.name),
                 self.debug.file,
                 self.module.get_line_number(val.span),
                 self.get_debug_type(val.ty),
@@ -944,7 +944,7 @@ impl<'ctx> Codegen<'ctx> {
                     (&consequent_expr, consequent_final_block.unwrap()),
                     (&alternate_expr, alternate_final_block.unwrap()),
                 ]);
-                phi_value.as_basic_value().into()
+                phi_value.as_basic_value()
             }
             _ => self.builtin_types.unit_value.as_basic_value_enum(),
         }
@@ -1023,11 +1023,11 @@ impl<'ctx> Codegen<'ctx> {
                     } else {
                         let loaded = pointer.loaded_value(&self.builder);
                         trace!("codegen variable (rvalue) got loaded value {:?}", loaded);
-                        loaded.into()
+                        loaded
                     }
                 } else if let Some(global) = self.globals.get(&ir_var.variable_id) {
                     let value = global.get_initializer().unwrap();
-                    value.into()
+                    value
                 } else {
                     panic!(
                         "No pointer or global found for variable {}",
@@ -1083,7 +1083,7 @@ impl<'ctx> Codegen<'ctx> {
                     global_value.as_pointer_value(),
                     "str_struct",
                 );
-                loaded.into()
+                loaded
             }
             TypedExpr::Record(record) => {
                 let record_llvm_type =
@@ -1102,7 +1102,7 @@ impl<'ctx> Codegen<'ctx> {
                         .unwrap()
                         .into_struct_value();
                 }
-                struct_value.as_basic_value_enum().into()
+                struct_value.as_basic_value_enum()
             }
             TypedExpr::RecordFieldAccess(field_access) => {
                 if is_lvalue {
@@ -1152,7 +1152,7 @@ impl<'ctx> Codegen<'ctx> {
                 let element_type = self.codegen_type(array_type.element_type).value_type();
                 let array_len = self.builtin_types.i64.const_int(array.elements.len() as u64, true);
 
-                let array_capacity = array_len.clone();
+                let array_capacity = array_len;
                 let array_value = self.make_array(array_len, array_capacity, element_type, false);
                 let array_data = self.builtin_types.array_data(&self.builder, array_value);
                 // Store each element
@@ -1199,7 +1199,7 @@ impl<'ctx> Codegen<'ctx> {
                             panic!("Unsupported bin op kind returning int: {}", bin_op.kind)
                         }
                     };
-                    op_res.as_basic_value_enum().into()
+                    op_res.as_basic_value_enum()
                 }
                 BOOL_TYPE_ID => match bin_op.kind {
                     BinaryOpKind::And | BinaryOpKind::Or => {
@@ -1218,7 +1218,7 @@ impl<'ctx> Codegen<'ctx> {
                             ),
                             _ => panic!(),
                         };
-                        op.as_basic_value_enum().into()
+                        op.as_basic_value_enum()
                     }
                     BinaryOpKind::Equals | BinaryOpKind::NotEquals => {
                         // I actually have no idea how I want to handle equality at this point
@@ -1239,7 +1239,6 @@ impl<'ctx> Codegen<'ctx> {
                                 &format!("{}", bin_op.kind),
                             )
                             .as_basic_value_enum()
-                            .into()
                     }
 
                     BinaryOpKind::Less
@@ -1259,7 +1258,6 @@ impl<'ctx> Codegen<'ctx> {
                         self.builder
                             .build_int_compare(pred, lhs_int, rhs_int, &format!("{}", bin_op.kind))
                             .as_basic_value_enum()
-                            .into()
                     }
                     other => panic!("Unsupported binary operation {other:?} returning Bool"),
                 },
@@ -1623,7 +1621,7 @@ impl<'ctx> Codegen<'ctx> {
                 let array_arg =
                     self.get_loaded_variable(function.params[0].variable_id).into_pointer_value();
                 let array_type: LlvmPointerType =
-                    self.codegen_type(function.params[0].type_id).expect_pointer().clone();
+                    self.codegen_type(function.params[0].type_id).expect_pointer();
                 let array_struct = self
                     .builder
                     .build_load(
@@ -1632,7 +1630,7 @@ impl<'ctx> Codegen<'ctx> {
                         "array_struct",
                     )
                     .into_struct_value();
-                let length = self.builtin_types.array_length(&self.builder, array_struct).clone();
+                let length = self.builtin_types.array_length(&self.builder, array_struct);
                 length.as_basic_value_enum()
             }
             IntrinsicFunctionType::ArrayNew => {
@@ -1646,7 +1644,7 @@ impl<'ctx> Codegen<'ctx> {
                 // let ctlz_intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.ctlz").unwrap();
                 // let ctlz_function = ctlz_intrinsic.get_declaration(&self.llvm_module, &[self.ctx.i64_type().as_basic_type_enum()]).unwrap();
                 // let capacity = self.builder.build_call(ctlz_function, &[], "capacity");
-                let capacity = len.clone();
+                let capacity = len;
                 let array_struct = self.make_array(len, capacity, element_type.value_type(), true);
                 let array_ptr =
                     self.builder.build_malloc(array_struct.get_type(), "array_ptr").unwrap();
@@ -1855,7 +1853,7 @@ impl<'ctx> Codegen<'ctx> {
         );
         self.debug.debug_builder.create_function(
             self.debug.current_scope(),
-            &*self.module.ast.get_ident_str(function.name),
+            &self.module.ast.get_ident_str(function.name),
             None,
             self.debug.file,
             self.module.get_line_number(function.span),
@@ -1982,6 +1980,7 @@ impl<'ctx> Codegen<'ctx> {
         if let Some(start_block) = maybe_starting_block {
             self.builder.position_at_end(start_block);
         }
+        #[allow(clippy::single_match)]
         match function.intrinsic_type {
             // Workaround: ArrayNew returns a pointer to an alloca, so it needs to be inlined
             Some(IntrinsicFunctionType::ArrayNew) => {

@@ -87,7 +87,7 @@ fn record() -> Result<(), ParseError> {
 fn parse_eof() -> Result<(), ParseError> {
     let mut parser = set_up("");
     let result = parser.parse_expression()?;
-    assert!(matches!(result, None));
+    assert!(result.is_none());
     Ok(())
 }
 
@@ -100,9 +100,9 @@ fn fn_args_literal() -> Result<(), ParseError> {
         let idents = parser.identifiers.clone();
         assert_eq!(idents.borrow().get_name(fn_call.name), "f");
         assert_eq!(idents.borrow().get_name(args[0].name.unwrap()), "myarg");
-        assert!(ParsedExpression::is_literal(&*parser.get_expression(args[0].value)));
-        assert!(ParsedExpression::is_literal(&*parser.get_expression(args[1].value)));
-        assert!(ParsedExpression::is_literal(&*parser.get_expression(args[2].value)));
+        assert!(ParsedExpression::is_literal(&parser.get_expression(args[0].value)));
+        assert!(ParsedExpression::is_literal(&parser.get_expression(args[1].value)));
+        assert!(ParsedExpression::is_literal(&parser.get_expression(args[2].value)));
         assert_eq!(args.len(), 3);
     } else {
         panic!("fail");
@@ -232,7 +232,7 @@ fn generic_fn_call() -> Result<(), ParseError> {
 #[test]
 fn generic_method_call_lhs_expr() -> Result<(), ParseError> {
     let input = "getFn().baz<int>(42)";
-    let (mut parser, result) = test_single_expr(input)?;
+    let (parser, result) = test_single_expr(input)?;
     let ParsedExpression::MethodCall(call) = result else { panic!() };
     let ParsedExpression::FnCall(fn_call) = parser.get_expression(call.base).clone() else {
         panic!()

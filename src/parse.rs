@@ -420,10 +420,7 @@ pub enum ParsedTypeExpression {
 impl ParsedTypeExpression {
     #[inline]
     pub fn is_int(&self) -> bool {
-        match self {
-            ParsedTypeExpression::Int(_) => true,
-            _ => false,
-        }
+        matches!(self, ParsedTypeExpression::Int(_))
     }
     #[inline]
     pub fn get_span(&self) -> Span {
@@ -518,14 +515,11 @@ impl Definition {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct ParsedExpressionPool {
     expressions: Vec<ParsedExpression>,
 }
 impl ParsedExpressionPool {
-    pub fn new() -> Self {
-        ParsedExpressionPool { expressions: Vec::new() }
-    }
     pub fn add_expression(&mut self, expression: ParsedExpression) -> ExpressionId {
         let id = self.expressions.len();
         self.expressions.push(expression);
@@ -647,7 +641,7 @@ impl<'toks> Parser<'toks> {
             tokens: TokenIter::make(tokens),
             source: Rc::new(Source { content: source, lines, directory, filename }),
             identifiers: Rc::new(RefCell::new(Identifiers::default())),
-            expressions: Rc::new(RefCell::new(ParsedExpressionPool::new())),
+            expressions: Rc::new(RefCell::new(ParsedExpressionPool::default())),
             ast_id_index: 0,
         }
     }
@@ -676,7 +670,7 @@ impl<'toks> Parser<'toks> {
         use colored::*;
 
         if let Some(cause) = &parse_error.cause {
-            self.print_error(&cause);
+            self.print_error(cause);
         }
         println!(
             "{} on line {}. Expected '{}', but got '{}'",
