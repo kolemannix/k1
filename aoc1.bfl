@@ -32,9 +32,7 @@ fn main(): int {
   val digits: Array<Array<int>> = [];
   mut line = 0;
   mut first = true;
-  mut i = 0;
-  while i < input.length() {
-    val c = input[i];
+  for c in input do {
     val i_code = c.toInt();
     if i_code == NEW_LINE {
       line = line + 1;
@@ -48,22 +46,15 @@ fn main(): int {
         digits[line].push(as_digit(c));
       };
     };
-    i = i + 1;
   };
-  i = 0;
   mut sum = 0;
-  while i < digits.length() {
-//    val first: int? = first(digits[i]);
-//    val last: int? = last(digits[i]);
-    if first(digits[i]) |fst| {
-      if last(digits[i]) |lst| {
+  for digits do {
+    if first(it) |fst| {
+      if last(it) |lst| {
         val two_digit = fst * 10 + lst;
         sum = sum + two_digit;
-      }
+      };
     };
-//    val two_digit = first! * 10 + last!;
-//    sum = sum + two_digit;
-    i = i + 1;
   };
   print("sum is ");
   printInt(sum);
