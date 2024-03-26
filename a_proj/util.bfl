@@ -1,0 +1,9 @@
+fn hello(): string {
+  "Hello from root util"
+}
+
+namespace util {
+  fn util_hello(): string {
+    "Hello from util_hello!"
+  }
+}

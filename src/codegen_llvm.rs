@@ -245,11 +245,14 @@ impl<'ctx> Codegen<'ctx> {
         optimize: bool,
         debug: bool,
     ) -> DebugContext<'ctx> {
+        // We may need to create a DIBuilder per-file.
+        // For now let's use main file
+        let source = module.ast.sources.get_main();
         let (debug_builder, compile_unit) = llvm_module.create_debug_info_builder(
             false,
             DWARFSourceLanguage::C,
-            &module.ast.source.filename,
-            &module.ast.source.directory,
+            &source.filename,
+            &source.directory,
             "bfl_compiler",
             optimize,
             "",
@@ -320,7 +323,7 @@ impl<'ctx> Codegen<'ctx> {
         let builder = ctx.create_builder();
         let char_type = ctx.i8_type();
         let llvm_module = ctx.create_module(&module.ast.name);
-        llvm_module.set_source_file_name(&module.ast.source.filename);
+        llvm_module.set_source_file_name(&module.ast.sources.get_main().filename);
         // Example of linking an LLVM module
         // let stdlib_module = ctx
         //     .create_module_from_ir(MemoryBuffer::create_from_file(Path::new("nxlib/llvm")).unwrap())

@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fmt::{Display, Formatter, Write};
 use std::rc::Rc;
 
@@ -12,6 +13,7 @@ use TokenKind as K;
 pub type AstDefinitionId = u32;
 pub type ExpressionId = u32;
 pub type StatementId = u32;
+pub type FileId = u32;
 
 #[cfg(test)]
 mod parse_test;
@@ -530,21 +532,64 @@ impl ParsedExpressionPool {
     }
 }
 
+#[derive(Debug, Default)]
+pub struct Sources {
+    sources: HashMap<FileId, Rc<Source>>,
+}
+
+impl Sources {
+    pub fn add(&mut self, source: Rc<Source>) -> () {
+        self.sources.insert(source.file_id, source);
+    }
+
+    pub fn get_main(&self) -> &Source {
+        &self.sources.get(&0).unwrap()
+    }
+
+    pub fn get_line_for_span(&self, span: Span) -> &str {
+        self.sources.get(&span.file_id).unwrap().get_line_by_index(span.line)
+    }
+
+    pub fn get_span_content(&self, span: Span) -> &str {
+        self.sources.get(&span.file_id).unwrap().get_span_content(span)
+    }
+}
+
 #[derive(Debug)]
 pub struct ParsedModule {
     pub name: String,
     pub name_id: IdentifierId,
     pub defs: Vec<Definition>,
-    pub source: Rc<Source>,
+    pub sources: Sources,
     /// Using RefCell here just so we can mutably access
     /// the identifiers without having mutable access to
     /// the entire AST module. Lets me wait to decide
     /// where things actually live
+    ///
+    /// After reading the Roc codebase, I think the move
+    /// is to move away from these big structs and just have top-level functions
+    /// so we can be more granular about what is mutable when. You can create an 'Env'
+    /// struct to reduce the number of parameters, but this Env will also buffer from that problem sometimes
     pub identifiers: Rc<RefCell<Identifiers>>,
     pub expressions: Rc<RefCell<ParsedExpressionPool>>,
+    pub ast_id_index: u32,
 }
 
 impl ParsedModule {
+    pub fn make(name: String) -> ParsedModule {
+        let identifiers = Rc::new(RefCell::new(Identifiers::default()));
+        let name_id = identifiers.borrow_mut().intern(&name);
+        ParsedModule {
+            name,
+            name_id,
+            defs: Vec::new(),
+            sources: Sources::default(),
+            identifiers,
+            expressions: Rc::new(RefCell::new(ParsedExpressionPool::default())),
+            ast_id_index: 0,
+        }
+    }
+
     pub fn ident_id(&self, ident: &str) -> IdentifierId {
         self.identifiers.borrow_mut().intern(ident)
     }
@@ -607,6 +652,7 @@ impl std::error::Error for ParseError {}
 
 #[derive(Debug)]
 pub struct Source {
+    pub file_id: FileId,
     pub directory: String,
     pub filename: String,
     pub content: String,
@@ -616,6 +662,11 @@ pub struct Source {
 }
 
 impl Source {
+    pub fn make(file_id: FileId, directory: String, filename: String, content: String) -> Source {
+        let lines: Vec<_> = content.lines().map(|l| l.to_owned()).collect();
+        Source { file_id, directory, filename, content, lines }
+    }
+
     pub fn get_span_content(&self, span: Span) -> &str {
         &self.content[span.start as usize..span.end as usize]
     }
@@ -625,24 +676,27 @@ impl Source {
     }
 }
 
-struct Parser<'toks> {
+pub struct Parser<'toks, 'module> {
     tokens: TokenIter<'toks>,
     source: Rc<Source>,
+    // FIXME: Remove my copies of identifiers, expressions
     identifiers: Rc<RefCell<Identifiers>>,
     expressions: Rc<RefCell<ParsedExpressionPool>>,
-    ast_id_index: u32,
+    parsed_module: &'module mut ParsedModule,
 }
 
-impl<'toks> Parser<'toks> {
-    fn make(tokens: &'toks [Token], source: String, directory: String, filename: String) -> Parser {
-        // TODO: parse the lines ourselves
-        let lines: Vec<_> = source.lines().map(|l| l.to_owned()).collect();
+impl<'toks, 'module> Parser<'toks, 'module> {
+    pub fn make(
+        tokens: &'toks [Token],
+        source: Rc<Source>,
+        module: &'module mut ParsedModule,
+    ) -> Parser<'toks, 'module> {
         Parser {
             tokens: TokenIter::make(tokens),
-            source: Rc::new(Source { content: source, lines, directory, filename }),
-            identifiers: Rc::new(RefCell::new(Identifiers::default())),
-            expressions: Rc::new(RefCell::new(ParsedExpressionPool::default())),
-            ast_id_index: 0,
+            source,
+            identifiers: module.identifiers.clone(),
+            expressions: module.expressions.clone(),
+            parsed_module: module,
         }
     }
 
@@ -655,7 +709,7 @@ impl<'toks> Parser<'toks> {
     }
 }
 
-impl<'toks> Parser<'toks> {
+impl<'toks, 'module> Parser<'toks, 'module> {
     pub fn ident_id(&self, s: impl AsRef<str>) -> IdentifierId {
         self.identifiers.borrow_mut().intern(s.as_ref())
     }
@@ -1412,7 +1466,7 @@ impl<'toks> Parser<'toks> {
         parse: F,
     ) -> ParseResult<(Vec<T>, Span)>
     where
-        F: Fn(&mut Parser<'toks>) -> ParseResult<T>,
+        F: Fn(&mut Parser<'toks, 'module>) -> ParseResult<T>,
     {
         trace!("eat_delimited delim='{}' terminator='{}'", delim, terminator);
         // TODO @Allocation Use smallvec
@@ -1596,8 +1650,8 @@ impl<'toks> Parser<'toks> {
         }))
     }
     fn next_definition_id(&mut self) -> AstDefinitionId {
-        let id = self.ast_id_index;
-        self.ast_id_index += 1;
+        let id = self.parsed_module.ast_id_index;
+        self.parsed_module.ast_id_index += 1;
         id
     }
 
@@ -1655,24 +1709,16 @@ impl<'toks> Parser<'toks> {
         }
     }
 
-    fn parse_module(&mut self) -> ParseResult<ParsedModule> {
+    pub fn parse_module(&mut self) -> ParseResult<()> {
         let mut defs: Vec<Definition> = vec![];
 
         while let Some(def) = self.parse_definition()? {
             defs.push(def)
         }
-        // Drop the extension from the filename
-        // Assumes a single dot in the filename
-        let module_name = self.source.filename.split('.').next().unwrap().to_string();
-        let ident = self.ident_id(&module_name);
-        Ok(ParsedModule {
-            name: module_name,
-            name_id: ident,
-            defs,
-            source: self.source.clone(),
-            identifiers: self.identifiers.clone(),
-            expressions: self.expressions.clone(),
-        })
+        self.parsed_module.defs.extend(defs);
+        self.parsed_module.sources.add(self.source.clone());
+
+        Ok(())
     }
 }
 
@@ -1695,6 +1741,19 @@ pub fn print_tokens(content: &str, tokens: &[Token]) {
     println!()
 }
 
+pub fn lex_text(text: &str) -> ParseResult<Vec<Token>> {
+    let mut lexer = Lexer::make(text);
+    let tokens = lexer.run().map_err(|lex_error| ParseError {
+        expected: lex_error.msg,
+        token: EOF_TOKEN,
+        cause: None,
+    })?;
+
+    let token_vec: Vec<Token> =
+        tokens.into_iter().filter(|token| token.kind != K::LineComment).collect();
+    Ok(token_vec)
+}
+
 // Eventually I want to keep the tokens around, and return them from here somehow, either in the
 // ast::Module or just separately
 pub fn parse_text(
@@ -1712,25 +1771,23 @@ pub fn parse_text(
     } else {
         text
     };
-    // log::info!("parser source:\n{}", &text);
 
-    let mut lexer = Lexer::make(&full_source);
-    let tokens = lexer.run().map_err(|lex_error| ParseError {
-        expected: lex_error.msg,
-        token: EOF_TOKEN,
-        cause: None,
-    })?;
+    let file_id = 0;
 
-    let token_vec: Vec<Token> =
-        tokens.into_iter().filter(|token| token.kind != K::LineComment).collect();
+    let module_name = filename.split('.').next().unwrap().to_string();
+    let mut module = ParsedModule::make(module_name);
 
-    let mut parser = Parser::make(&token_vec, full_source, directory, filename);
+    let token_vec = lex_text(&full_source)?;
+    let source = Rc::new(Source::make(file_id, directory, filename, full_source));
+    let mut parser = Parser::make(&token_vec, source, &mut module);
 
     let result = parser.parse_module();
-    if let Err(e) = &result {
-        parser.print_error(e);
+    if let Err(e) = result {
+        parser.print_error(&e);
+        Err(e)
+    } else {
+        Ok(module)
     }
-    result
 }
 
 // pub fn print_ast(ast: &Module, identifiers: &Identifiers) -> Result<String, std::fmt::Error> {
