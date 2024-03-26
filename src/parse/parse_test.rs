@@ -1,21 +1,29 @@
 use crate::parse::*;
 
+fn module_from_string(input: &str) -> ParsedModule {
+    let source = Rc::new(Source::make(
+        "unit_test".to_string(),
+        "unit_test.bfl".to_string(),
+        input.to_string(),
+    ));
+    ParsedModule::make("unit_test".to_string(), source)
+}
+
 #[cfg(test)]
-fn set_up(input: &str) -> Parser<'static> {
-    let mut lexer = Lexer::make(input);
+fn set_up<'module>(module: &'module mut ParsedModule) -> Parser<'static, 'module> {
+    let mut lexer = Lexer::make(&module.source.content);
     let token_vec: &'static mut [Token] = lexer.run().unwrap().leak();
-    println!("{:?}", token_vec);
-    print_tokens(input, token_vec);
-    let parser = Parser::make(token_vec, input.to_string(), ".".to_string(), input.to_string());
+    let parser = Parser::make(token_vec, module);
     parser
 }
 
 #[cfg(test)]
-fn test_single_expr(input: &str) -> Result<(Parser<'static>, ParsedExpression), ParseError> {
-    let mut parser = set_up(input);
+fn test_single_expr(input: &str) -> Result<(ParsedModule, ParsedExpression), ParseError> {
+    let mut module = module_from_string(input);
+    let mut parser = set_up(&mut module);
     let expr_id = parser.expect_expression()?;
-    let expr = parser.get_expression(expr_id).clone();
-    Ok((parser, expr.clone()))
+    let expr = (*parser.get_expression(expr_id)).clone();
+    Ok((module, expr))
 }
 
 #[test]
@@ -51,7 +59,8 @@ fn string_literal() -> ParseResult<()> {
 
 #[test]
 fn infix() -> Result<(), ParseError> {
-    let mut parser = set_up("val x = a + b * doStuff(1, 2)");
+    let mut module = module_from_string("val x = a + b * doStuff(1, 2)");
+    let mut parser = set_up(&mut module);
     let result = parser.parse_statement()?;
     if let Some(BlockStmt::ValDef(ValDef { value: expr_id, .. })) = result {
         let ParsedExpression::BinaryOp(op) = &*parser.get_expression(expr_id) else { panic!() };
@@ -85,7 +94,8 @@ fn record() -> Result<(), ParseError> {
 
 #[test]
 fn parse_eof() -> Result<(), ParseError> {
-    let mut parser = set_up("");
+    let mut module = module_from_string("");
+    let mut parser = set_up(&mut module);
     let result = parser.parse_expression()?;
     assert!(result.is_none());
     Ok(())
@@ -114,7 +124,8 @@ fn fn_args_literal() -> Result<(), ParseError> {
 #[test]
 fn if_no_else() -> ParseResult<()> {
     let input = "if x a";
-    let mut parser = set_up(input);
+    let mut module = module_from_string(input);
+    let mut parser = set_up(&mut module);
     let result = parser.parse_expression()?.unwrap();
     println!("{result:?}");
     Ok(())
@@ -123,12 +134,12 @@ fn if_no_else() -> ParseResult<()> {
 #[test]
 fn dot_accessor() -> ParseResult<()> {
     let input = "a.b.c";
-    let (parser, result) = test_single_expr(input)?;
+    let (pm, result) = test_single_expr(input)?;
     let ParsedExpression::FieldAccess(acc) = result else { panic!() };
     assert_eq!(acc.target.0.to_usize(), 2);
-    let ParsedExpression::FieldAccess(acc2) = &*parser.get_expression(acc.base) else { panic!() };
+    let ParsedExpression::FieldAccess(acc2) = &*pm.get_expression(acc.base) else { panic!() };
     assert_eq!(acc2.target.0.to_usize(), 1);
-    let ParsedExpression::Variable(v) = &*parser.get_expression(acc2.base) else { panic!() };
+    let ParsedExpression::Variable(v) = &*pm.get_expression(acc2.base) else { panic!() };
     assert_eq!(v.name.0.to_usize(), 0);
     Ok(())
 }
@@ -136,7 +147,8 @@ fn dot_accessor() -> ParseResult<()> {
 #[test]
 fn type_parameter_single() -> ParseResult<()> {
     let input = "Array<int>";
-    let mut parser = set_up(input);
+    let mut module = module_from_string(input);
+    let mut parser = set_up(&mut module);
     let result = parser.parse_type_expression();
     assert!(matches!(result, Ok(Some(ParsedTypeExpression::TypeApplication(_)))));
     Ok(())
@@ -145,7 +157,8 @@ fn type_parameter_single() -> ParseResult<()> {
 #[test]
 fn type_parameter_multi() -> ParseResult<()> {
     let input = "Map<int, Array<int>>";
-    let mut parser = set_up(input);
+    let mut module = module_from_string(input);
+    let mut parser = set_up(&mut module);
     let result = parser.parse_type_expression();
     let Ok(Some(ParsedTypeExpression::TypeApplication(app))) = result else {
         panic!("Expected type application")
@@ -177,7 +190,8 @@ fn prelude_only() -> Result<(), ParseError> {
 #[test]
 fn precedence() -> Result<(), ParseError> {
     let input = "2 * 1 + 3";
-    let mut parser = set_up(input);
+    let mut module = module_from_string(input);
+    let mut parser = set_up(&mut module);
     let expr = parser.parse_expression()?.unwrap();
     let result = parser.get_expression(expr).clone();
     println!("{result}");
@@ -204,7 +218,8 @@ fn paren_expression() -> Result<(), ParseError> {
 #[test]
 fn while_loop_1() -> Result<(), ParseError> {
     let input = "while true { (); (); 42 }";
-    let mut parser = set_up(input);
+    let mut module = module_from_string(input);
+    let mut parser = set_up(&mut module);
     let result = parser.parse_statement()?.unwrap();
     if let BlockStmt::While(while_stmt) = result {
         assert_eq!(while_stmt.block.stmts.len(), 3);
@@ -216,7 +231,8 @@ fn while_loop_1() -> Result<(), ParseError> {
 #[test]
 fn cmp_operators() -> Result<(), ParseError> {
     let input = "a < b <= c > d >= e";
-    let mut parser = set_up(input);
+    let mut module = module_from_string(input);
+    let mut parser = set_up(&mut module);
     let _result = parser.parse_expression()?.unwrap();
     Ok(())
 }
@@ -250,7 +266,8 @@ fn generic_method_call_lhs_expr() -> Result<(), ParseError> {
 #[test]
 fn char_type() -> ParseResult<()> {
     let input = "char";
-    let mut parser = set_up(input);
+    let mut module = module_from_string(input);
+    let mut parser = set_up(&mut module);
     let result = parser.parse_type_expression()?.unwrap();
     assert!(matches!(result, ParsedTypeExpression::Char(_)));
     Ok(())

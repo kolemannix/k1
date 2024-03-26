@@ -788,9 +788,33 @@ fn make_fail<A, T: AsRef<str>>(message: T, span: Span) -> TyperResult<A> {
     Err(make_err(message, span))
 }
 
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum TypedDefinitionId {
+    FunctionId(FunctionId),
+    TypeId(TypeId),
+    NamespaceId(NamespaceId),
+}
+
+impl TypedDefinitionId {
+    fn as_function_id(&self) -> FunctionId {
+        match self {
+            TypedDefinitionId::FunctionId(f) => *f,
+            _ => panic!("Expected function id"),
+        }
+    }
+
+    fn as_namespace_id(&self) -> NamespaceId {
+        match self {
+            TypedDefinitionId::NamespaceId(n) => *n,
+            _ => panic!("Expected namespace id"),
+        }
+    }
+}
+
 pub struct TypedModule {
     pub ast: Rc<ParsedModule>,
     functions: Vec<Function>,
+    pub definition_mappings: HashMap<AstDefinitionId, TypedDefinitionId>,
     pub variables: Vec<Variable>,
     pub types: Vec<Type>,
     pub constants: Vec<Constant>,
@@ -807,6 +831,7 @@ impl TypedModule {
         TypedModule {
             ast: parsed_module,
             functions: Vec::new(),
+            definition_mappings: HashMap::new(),
             variables: Vec::new(),
             types,
             constants: Vec::new(),
@@ -835,12 +860,13 @@ impl TypedModule {
     }
 
     fn print_error(&self, message: impl AsRef<str>, span: Span) {
-        let adjusted_line = span.line as i32 - crate::prelude::PRELUDE_LINES as i32 + 1;
+        let adjusted_line = span.line + 1;
+        // let adjusted_line = span.line as i32 - crate::prelude::PRELUDE_LINES as i32 + 1;
         let line_no =
             if adjusted_line < 0 { "PRELUDE".to_string() } else { adjusted_line.to_string() };
         eprintln!("{} at {}:{}\n  -> {}", "error".red(), self.name(), line_no, message.as_ref());
-        eprintln!("{}", self.ast.source.get_line_by_index(span.line).red());
-        eprintln!(" -> {}", self.ast.source.get_span_content(span).red());
+        eprintln!("{}", self.ast.sources.get_line_for_span(span).red());
+        eprintln!(" -> {}", self.ast.sources.get_span_content(span).red());
     }
 
     pub fn name(&self) -> &str {
@@ -858,8 +884,8 @@ impl TypedModule {
     }
 
     // Should namespaces live in scopes instead of the module? Maybe scopes just have ident -> namespace_id
-    fn get_namespace(&self, namespace_id: NamespaceId) -> Option<&Namespace> {
-        self.namespaces.get(namespace_id as usize)
+    fn get_namespace(&self, namespace_id: NamespaceId) -> &Namespace {
+        &self.namespaces[namespace_id as usize]
     }
 
     pub fn get_type(&self, type_id: TypeId) -> &Type {
@@ -1235,7 +1261,7 @@ impl TypedModule {
                 ),
                 span,
             ))?;
-            let namespace = self.get_namespace(namespace_id).unwrap();
+            let namespace = self.get_namespace(namespace_id);
             cur_scope = namespace.scope_id;
         }
         Ok(cur_scope)
@@ -2308,7 +2334,7 @@ impl TypedModule {
         identifier_id: IdentifierId,
     ) -> &Scope {
         let namespace_id = self.scopes.find_namespace(scope_id, identifier_id).unwrap();
-        let namespace = self.get_namespace(namespace_id).unwrap();
+        let namespace = self.get_namespace(namespace_id);
         let scope = self.scopes.get_scope(namespace.scope_id);
         scope
     }
@@ -2392,6 +2418,9 @@ impl TypedModule {
                     &fn_call.namespaces,
                     fn_call.span,
                 )?;
+                eprintln!("FIND FUNCTION NAME {}", &*self.get_ident_str(fn_call.name));
+                // FIXME This needs to be a non-recursive lookup.
+                // util::hello() should look for hello immediately inside util, not util and up!!!
                 let function_id =
                     self.scopes.find_function(scope_to_search, fn_call.name).ok_or(make_err(
                         format!(
@@ -2778,11 +2807,12 @@ impl TypedModule {
                 fn_call.span,
             )
         };
-        let specialized_function_id = self.eval_function(
+
+        // TODO: new_name should really be calculated by specialize_function
+        let specialized_function_id = self.specialize_function(
             ast_def,
             self.scopes.get_root_scope_id(),
             Some(spec_fn_scope_id),
-            true,
             Some(self.ast.ident_id(&new_name)),
             intrinsic_type,
         )?;
@@ -2966,7 +2996,7 @@ impl TypedModule {
         }
     }
 
-    fn eval_function(
+    fn eval_function_predecl(
         &mut self,
         fn_def: &FnDef,
         parent_scope_id: ScopeId,
@@ -2986,10 +3016,9 @@ impl TypedModule {
         let is_generic =
             !specialize && fn_def.type_args.as_ref().map(|args| !args.is_empty()).unwrap_or(false);
         trace!(
-            "eval_function {} is_generic: {}, specialize: {} in scope: {}",
+            "eval_function {} is_generic: {} in scope: {}",
             &*self.get_ident_str(fn_def.name),
             is_generic,
-            specialize,
             parent_scope_id
         );
         let mut type_params: Option<Vec<TypeParam>> = None;
@@ -3065,7 +3094,6 @@ impl TypedModule {
             ast_id: fn_def.ast_id,
             span: fn_def.span,
         };
-        let is_extern = function.linkage == Linkage::External;
         let function_id = self.add_function(function);
 
         // We do not want to resolve specialized functions by name!
@@ -3074,7 +3102,30 @@ impl TypedModule {
         if !specialize {
             self.scopes.add_function(parent_scope_id, fn_def.name, function_id);
         }
-        let is_intrinsic = intrinsic_type.is_some();
+
+        eprintln!(
+            "Inserting definition mapping for id {} {}",
+            fn_def.ast_id,
+            &*self.get_ident_str(fn_def.name)
+        );
+        self.definition_mappings.insert(fn_def.ast_id, TypedDefinitionId::FunctionId(function_id));
+        Ok(function_id)
+    }
+
+    fn eval_function(&mut self, fn_def: &FnDef) -> TyperResult<FunctionId> {
+        let function_id = self
+            .definition_mappings
+            .get(&fn_def.ast_id)
+            .expect("function predecl lookup failed")
+            .as_function_id();
+
+        let function = self.get_function(function_id);
+        eprintln!("eval_function {}:{}", function.scope, &*self.ast.get_ident_str(fn_def.name));
+        let fn_scope_id = function.scope;
+        let given_ret_type = function.ret_type;
+        let is_extern = function.linkage == Linkage::External;
+
+        let is_intrinsic = function.intrinsic_type.is_some();
         let body_block = match &fn_def.block {
             Some(block_ast) => {
                 let block = self.eval_block(block_ast, fn_scope_id, Some(given_ret_type))?;
@@ -3095,62 +3146,132 @@ impl TypedModule {
             None => return make_fail("function is missing implementation", fn_def.span),
         };
         // Add the body now
-        self.get_function_mut(function_id).block = body_block;
+        if let Some(body_block) = body_block {
+            self.get_function_mut(function_id).block = Some(body_block);
+        }
         Ok(function_id)
     }
+
+    fn specialize_function(
+        &mut self,
+        fn_def: &FnDef,
+        parent_scope_id: ScopeId,
+        fn_scope_id: Option<ScopeId>,
+        new_name: Option<IdentifierId>,
+        // Used only during specialization; we already know the intrinsic type
+        // from the generic version so we just pass it in
+        known_intrinsic: Option<IntrinsicFunctionType>,
+    ) -> TyperResult<FunctionId> {
+        let decl_id = self.eval_function_predecl(
+            fn_def,
+            parent_scope_id,
+            fn_scope_id,
+            true,
+            new_name,
+            known_intrinsic,
+        )?;
+        self.eval_function(fn_def)?;
+        Ok(decl_id)
+    }
+
+    // GENERATE NICE SCOPE NAMES AND USE THEM IN ERROR MESSAGES / LOGS
+
     fn eval_namespace(
         &mut self,
         ast_namespace: &ParsedNamespace,
         scope_id: ScopeId,
+        declaration_phase: bool,
     ) -> TyperResult<NamespaceId> {
-        // We add the new namespace's scope as a child of the current scope
-        let ns_scope_id = self.scopes.add_child_scope(scope_id);
-        let namespace = Namespace { name: ast_namespace.name, scope_id: ns_scope_id };
-        let namespace_id = self.add_namespace(namespace);
+        // ONLY ADD THIS IN DECLARATION PHASE OTHERWISE WE DUPE EVERY NAMESPACE
+        let namespace_id = if declaration_phase {
+            let ns_scope_id = self.scopes.add_child_scope(scope_id);
+            let namespace = Namespace { name: ast_namespace.name, scope_id: ns_scope_id };
+            let namespace_id = self.add_namespace(namespace);
+
+            // We add the new namespace's scope as a child of the current scope
+            let scope = self.scopes.get_scope_mut(scope_id);
+            scope.add_namespace(ast_namespace.name, namespace_id);
+
+            self.definition_mappings
+                .insert(ast_namespace.ast_id, TypedDefinitionId::NamespaceId(namespace_id));
+
+            namespace_id
+        } else {
+            self.definition_mappings.get(&ast_namespace.ast_id).unwrap().as_namespace_id()
+        };
+        let ns_scope_id = self.get_namespace(namespace_id).scope_id;
         // We add the new namespace to the current scope
-        let scope = self.scopes.get_scope_mut(scope_id);
-        scope.add_namespace(ast_namespace.name, namespace_id);
         for defn in &ast_namespace.definitions {
             if let Definition::FnDef(fn_def) = defn {
-                self.eval_function(fn_def, ns_scope_id, None, false, None, None)?;
+                self.eval_definition(defn, ns_scope_id, declaration_phase)?;
             } else if let Definition::Namespace(ns) = defn {
-                self.eval_namespace(ns, ns_scope_id)?;
+                self.eval_definition(defn, ns_scope_id, declaration_phase)?;
             } else {
                 panic!("Unsupported definition type inside namespace: {:?}", defn)
             }
         }
         Ok(namespace_id)
     }
-    fn eval_definition(&mut self, def: &Definition, scope_id: ScopeId) -> TyperResult<()> {
+
+    fn eval_definition(
+        &mut self,
+        def: &Definition,
+        scope_id: ScopeId,
+        declaration_phase: bool,
+    ) -> TyperResult<()> {
         match def {
             Definition::Namespace(namespace) => {
-                self.eval_namespace(namespace, scope_id)?;
+                self.eval_namespace(namespace, scope_id, declaration_phase)?;
                 Ok(())
             }
             Definition::Const(const_val) => {
-                let _variable_id: VariableId = self.eval_const(const_val)?;
+                // We can just do consts in the declaration phase, so we skip them in the 2nd pass
+                if declaration_phase {
+                    let _variable_id: VariableId = self.eval_const(const_val)?;
+                }
                 Ok(())
             }
             Definition::FnDef(fn_def) => {
-                self.eval_function(fn_def, scope_id, None, false, None, None)?;
+                if declaration_phase {
+                    self.eval_function_predecl(fn_def, scope_id, None, false, None, None)?;
+                } else {
+                    self.eval_function(fn_def)?;
+                }
                 Ok(())
             }
             Definition::TypeDef(type_defn) => {
-                self.eval_type_defn(type_defn, scope_id)?;
-                let _typ = self.eval_type_expr(&type_defn.value_expr, scope_id)?;
+                // We can just do type defs in the declaration phase, so we skip them in the 2nd pass
+                if declaration_phase {
+                    self.eval_type_defn(type_defn, scope_id)?;
+                    let _typ = self.eval_type_expr(&type_defn.value_expr, scope_id)?;
+                }
                 Ok(())
             }
         }
     }
     pub fn run(&mut self) -> anyhow::Result<()> {
         let mut errors: Vec<TyperError> = Vec::new();
+
+        let scope_id = self.scopes.get_root_scope_id();
+
         // TODO: 'Declare' everything first, will allow modules
         //        to declare their API without full typechecking
         //        will also allow recursion without hacks
-
-        let scope_id = self.scopes.get_root_scope_id();
+        // predecl pass
         for defn in self.ast.clone().defns_iter() {
-            let result = self.eval_definition(defn, scope_id);
+            let result = self.eval_definition(defn, scope_id, true);
+            if let Err(e) = result {
+                self.print_error(&e.message, e.span);
+                errors.push(e);
+            }
+        }
+
+        if !errors.is_empty() {
+            bail!("{} failed declaration phase with {} errors", self.name(), errors.len())
+        }
+
+        for defn in self.ast.clone().defns_iter() {
+            let result = self.eval_definition(defn, scope_id, false);
             if let Err(e) = result {
                 self.print_error(&e.message, e.span);
                 errors.push(e);
@@ -3160,7 +3281,7 @@ impl TypedModule {
             if log::log_enabled!(Level::Debug) {
                 debug!("{}", self);
             }
-            bail!("{} failed typechecking with {} errors", self.ast.source.filename, errors.len())
+            bail!("{} failed typechecking with {} errors", self.name(), errors.len())
         }
         Ok(())
     }
