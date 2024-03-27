@@ -43,7 +43,7 @@ fn basic_fn() -> Result<(), ParseError> {
         "test_case.bfl".to_string(),
         src.to_string(),
     ));
-    let module = parse_text(source)?;
+    let module = parse_module(source)?;
     if let Some(Definition::FnDef(fndef)) = module.defs.first() {
         assert_eq!(*module.get_ident_str(fndef.name), *"basic")
     } else {
@@ -186,7 +186,7 @@ fn prelude_only() -> Result<(), ParseError> {
         "prelude.bfl".to_string(),
         fs::read_to_string("builtins/prelude.bfl").unwrap(),
     ));
-    let module = parse_text(prelude_source)?;
+    let module = parse_module(prelude_source)?;
     assert_eq!(&module.name, "prelude");
     assert_eq!(&module.sources.get_main().filename, "prelude.bfl");
     assert_eq!(&module.sources.get_main().directory, "builtins");

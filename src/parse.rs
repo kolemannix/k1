@@ -456,7 +456,7 @@ pub struct FnDef {
     pub block: Option<Block>,
     pub span: Span,
     pub linkage: Linkage,
-    pub ast_id: AstDefinitionId,
+    pub definition_id: AstDefinitionId,
 }
 
 #[derive(Debug)]
@@ -480,14 +480,14 @@ pub struct TypeDefn {
     pub name: IdentifierId,
     pub value_expr: ParsedTypeExpression,
     pub span: Span,
-    pub ast_id: AstDefinitionId,
+    pub definition_id: AstDefinitionId,
 }
 
 #[derive(Debug)]
 pub struct ParsedNamespace {
     pub name: IdentifierId,
     pub definitions: Vec<Definition>,
-    pub ast_id: AstDefinitionId,
+    pub definition_id: AstDefinitionId,
 }
 
 #[derive(Debug)]
@@ -496,6 +496,40 @@ pub enum Definition {
     Const(Box<ConstVal>),
     TypeDef(Box<TypeDefn>),
     Namespace(Box<ParsedNamespace>),
+}
+
+impl Definition {
+    pub fn definition_id(&self) -> AstDefinitionId {
+        match self {
+            Definition::FnDef(def) => def.definition_id,
+            Definition::Const(def) => def.definition_id,
+            Definition::TypeDef(def) => def.definition_id,
+            Definition::Namespace(def) => def.definition_id,
+        }
+    }
+
+    pub fn find_defn(&self, ast_id: AstDefinitionId) -> Option<&Definition> {
+        if self.definition_id() == ast_id {
+            return Some(self);
+        }
+        if let Definition::Namespace(ns) = self {
+            for defn in &ns.definitions {
+                if let Some(found) = defn.find_defn(ast_id) {
+                    return Some(found);
+                }
+            }
+            None
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn as_fn_def(&self) -> Option<&FnDef> {
+        match self {
+            Definition::FnDef(def) => Some(def),
+            _ => None,
+        }
+    }
 }
 
 impl Definition {
@@ -509,10 +543,10 @@ impl Definition {
     }
     pub fn get_ast_id(&self) -> AstDefinitionId {
         match self {
-            Definition::FnDef(def) => def.ast_id,
+            Definition::FnDef(def) => def.definition_id,
             Definition::Const(def) => def.definition_id,
-            Definition::TypeDef(def) => def.ast_id,
-            Definition::Namespace(def) => def.ast_id,
+            Definition::TypeDef(def) => def.definition_id,
+            Definition::Namespace(def) => def.definition_id,
         }
     }
 }
@@ -538,7 +572,7 @@ pub struct Sources {
 }
 
 impl Sources {
-    pub fn add(&mut self, source: Rc<Source>) -> () {
+    pub fn insert(&mut self, source: Rc<Source>) {
         self.sources.insert(source.file_id, source);
     }
 
@@ -601,16 +635,10 @@ impl ParsedModule {
         std::cell::Ref::map(self.identifiers.borrow(), |idents| idents.get_name(id))
     }
 
-    pub fn get_defn(&self, ast_id: AstDefinitionId) -> &Definition {
+    pub fn get_defn_by_id(&self, ast_id: AstDefinitionId) -> &Definition {
         for defn in &self.defs {
-            if defn.get_ast_id() == ast_id {
-                return defn;
-            } else if let Definition::Namespace(ns) = defn {
-                for inner_def in &ns.definitions {
-                    if inner_def.get_ast_id() == ast_id {
-                        return inner_def;
-                    }
-                }
+            if let Some(found) = defn.find_defn(ast_id) {
+                return found;
             }
         }
         panic!("failed to find defn with ast_id {}", ast_id);
@@ -695,7 +723,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         source: Rc<Source>,
         module: &'module mut ParsedModule,
     ) -> Parser<'toks, 'module> {
-        module.sources.add(source.clone());
+        module.sources.insert(source.clone());
         Parser {
             tokens: TokenIter::make(tokens),
             source,
@@ -723,9 +751,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let span = parse_error.span();
         let line_text = self.source.get_line_by_index(parse_error.span().line);
         let span_text = &self.source.get_span_content(span);
-        let adjusted_line = span.line as i32 - crate::prelude::PRELUDE_LINES as i32 + 1;
-        let line_no =
-            if adjusted_line < 0 { "PRELUDE".to_string() } else { adjusted_line.to_string() };
         use colored::*;
 
         if let Some(cause) = &parse_error.cause {
@@ -734,7 +759,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         println!(
             "{} on line {}. Expected '{}', but got '{}'",
             "parse error".red(),
-            line_no,
+            span.line_number(),
             parse_error.expected.blue(),
             parse_error.token.kind.as_ref().red()
         );
@@ -1651,7 +1676,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             block,
             span,
             linkage,
-            ast_id: self.next_definition_id(),
+            definition_id: self.next_definition_id(),
         }))
     }
     fn next_definition_id(&mut self) -> AstDefinitionId {
@@ -1672,7 +1697,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 name: self.intern_ident_token(name),
                 value_expr: type_expr,
                 span,
-                ast_id: self.next_definition_id(),
+                definition_id: self.next_definition_id(),
             }))
         } else {
             Ok(None)
@@ -1695,7 +1720,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(Some(ParsedNamespace {
             name: self.intern_ident_token(ident),
             definitions,
-            ast_id: self.next_definition_id(),
+            definition_id: self.next_definition_id(),
         }))
     }
 
@@ -1758,9 +1783,8 @@ pub fn lex_text(text: &str, file_id: FileId) -> ParseResult<Vec<Token>> {
     Ok(token_vec)
 }
 
-// Eventually I want to keep the tokens around, and return them from here somehow, either in the
-// ast::Module or just separately
-pub fn parse_text(source: Rc<Source>) -> ParseResult<ParsedModule> {
+#[cfg(test)]
+pub fn parse_module(source: Rc<Source>) -> ParseResult<ParsedModule> {
     let module_name = source.filename.split('.').next().unwrap().to_string();
     let mut module = ParsedModule::make(module_name);
 
