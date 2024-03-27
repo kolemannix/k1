@@ -754,6 +754,7 @@ pub struct Scope {
     types: HashMap<IdentifierId, TypeId>,
     parent: Option<ScopeId>,
     children: Vec<ScopeId>,
+    name: String,
 }
 
 impl Scope {
@@ -859,20 +860,8 @@ impl TypedModule {
         panic!()
     }
 
-    pub fn get_line_number(&self, span: Span) -> u32 {
-        if span.line < crate::prelude::PRELUDE_LINES as u32 {
-            // FIXME: Prelude needs to be in another file
-            0
-        } else {
-            span.line_number() - crate::prelude::PRELUDE_LINES as u32
-        }
-    }
-
     fn print_error(&self, message: impl AsRef<str>, span: Span) {
-        let adjusted_line = span.line + 1;
-        // let adjusted_line = span.line as i32 - crate::prelude::PRELUDE_LINES as i32 + 1;
-        let line_no =
-            if adjusted_line < 0 { "PRELUDE".to_string() } else { adjusted_line.to_string() };
+        let line_no = span.line + 1;
         let source = self.ast.sources.source_by_span(span);
         eprintln!(
             "{} at {}:{}\n  -> {}",
@@ -2819,7 +2808,7 @@ impl TypedModule {
         }
 
         let ast = self.ast.clone();
-        let Definition::FnDef(ast_def) = ast.get_defn(generic_function_ast_id) else {
+        let Definition::FnDef(ast_def) = ast.get_defn_by_id(generic_function_ast_id) else {
             self.internal_compiler_error(
                 "failed to get AST node for function specialization",
                 fn_call.span,
@@ -3109,7 +3098,7 @@ impl TypedModule {
             intrinsic_type,
             linkage: fn_def.linkage,
             specializations: Vec::new(),
-            ast_id: fn_def.ast_id,
+            ast_id: fn_def.definition_id,
             span: fn_def.span,
         };
         let function_id = self.add_function(function);
@@ -3119,55 +3108,55 @@ impl TypedModule {
         // They all have the same name but different types!!!
         if !specialize {
             self.scopes.add_function(parent_scope_id, fn_def.name, function_id);
+
+            self.definition_mappings
+                .insert(fn_def.definition_id, TypedDefinitionId::FunctionId(function_id));
+            trace!(
+                "Inserting AST definition mapping for id {} {}, specialize={specialize}",
+                fn_def.definition_id,
+                &*self.get_ident_str(fn_def.name)
+            );
         }
 
-        eprintln!(
-            "Inserting definition mapping for id {} {}",
-            fn_def.ast_id,
-            &*self.get_ident_str(fn_def.name)
-        );
-        self.definition_mappings.insert(fn_def.ast_id, TypedDefinitionId::FunctionId(function_id));
         Ok(function_id)
     }
 
-    fn eval_function(&mut self, fn_def: &FnDef) -> TyperResult<FunctionId> {
-        let function_id = self
-            .definition_mappings
-            .get(&fn_def.ast_id)
-            .expect("function predecl lookup failed")
-            .as_function_id();
-
-        let function = self.get_function(function_id);
-        eprintln!("eval_function {}:{}", function.scope, &*self.ast.get_ident_str(fn_def.name));
+    fn eval_function(&mut self, declaration_id: FunctionId) -> TyperResult<()> {
+        let function = self.get_function(declaration_id);
         let fn_scope_id = function.scope;
         let given_ret_type = function.ret_type;
         let is_extern = function.linkage == Linkage::External;
-
+        let ast_id = function.ast_id;
         let is_intrinsic = function.intrinsic_type.is_some();
-        let body_block = match &fn_def.block {
+
+        let ast = self.ast.clone();
+        let ast_fn_def =
+            ast.get_defn_by_id(ast_id).as_fn_def().expect("expected function definition");
+
+        let body_block = match &ast_fn_def.block {
             Some(block_ast) => {
                 let block = self.eval_block(block_ast, fn_scope_id, Some(given_ret_type))?;
                 if let Err(msg) = self.typecheck_types(given_ret_type, block.expr_type) {
                     return make_fail(
                         format!(
                             "Function {} return type mismatch: {}",
-                            &*self.get_ident_str(fn_def.name),
+                            &*self.get_ident_str(ast_fn_def.name),
                             msg
                         ),
-                        fn_def.span,
+                        ast_fn_def.span,
                     );
                 } else {
                     Some(block)
                 }
             }
             None if is_intrinsic || is_extern => None,
-            None => return make_fail("function is missing implementation", fn_def.span),
+            None => return make_fail("function is missing implementation", ast_fn_def.span),
         };
         // Add the body now
         if let Some(body_block) = body_block {
-            self.get_function_mut(function_id).block = Some(body_block);
+            self.get_function_mut(declaration_id).block = Some(body_block);
         }
-        Ok(function_id)
+        Ok(())
     }
 
     fn specialize_function(
@@ -3188,7 +3177,7 @@ impl TypedModule {
             new_name,
             known_intrinsic,
         )?;
-        self.eval_function(fn_def)?;
+        self.eval_function(decl_id)?;
         Ok(decl_id)
     }
 
@@ -3211,18 +3200,18 @@ impl TypedModule {
             scope.add_namespace(ast_namespace.name, namespace_id);
 
             self.definition_mappings
-                .insert(ast_namespace.ast_id, TypedDefinitionId::NamespaceId(namespace_id));
+                .insert(ast_namespace.definition_id, TypedDefinitionId::NamespaceId(namespace_id));
 
             namespace_id
         } else {
-            self.definition_mappings.get(&ast_namespace.ast_id).unwrap().as_namespace_id()
+            self.definition_mappings.get(&ast_namespace.definition_id).unwrap().as_namespace_id()
         };
         let ns_scope_id = self.get_namespace(namespace_id).scope_id;
         // We add the new namespace to the current scope
         for defn in &ast_namespace.definitions {
-            if let Definition::FnDef(fn_def) = defn {
+            if let Definition::FnDef(_fn_def) = defn {
                 self.eval_definition(defn, ns_scope_id, declaration_phase)?;
-            } else if let Definition::Namespace(ns) = defn {
+            } else if let Definition::Namespace(_ns) = defn {
                 self.eval_definition(defn, ns_scope_id, declaration_phase)?;
             } else {
                 panic!("Unsupported definition type inside namespace: {:?}", defn)
@@ -3253,7 +3242,12 @@ impl TypedModule {
                 if declaration_phase {
                     self.eval_function_predecl(fn_def, scope_id, None, false, None, None)?;
                 } else {
-                    self.eval_function(fn_def)?;
+                    let function_declaration_id = self
+                        .definition_mappings
+                        .get(&fn_def.definition_id)
+                        .expect("function predecl lookup failed")
+                        .as_function_id();
+                    self.eval_function(function_declaration_id)?;
                 }
                 Ok(())
             }
@@ -3631,11 +3625,11 @@ impl TypedModule {
 
 #[cfg(test)]
 mod test {
-    use crate::parse::{parse_text, ParseResult, Source};
+    use crate::parse::{parse_module, ParseResult, Source};
     use crate::typer::*;
 
     fn setup(src: &str, test_name: &str) -> ParseResult<ParsedModule> {
-        parse_text(Rc::new(Source::make(
+        parse_module(Rc::new(Source::make(
             0,
             "unit_test".to_string(),
             test_name.to_string(),

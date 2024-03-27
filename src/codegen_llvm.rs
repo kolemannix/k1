@@ -407,7 +407,7 @@ impl<'ctx> Codegen<'ctx> {
     fn set_debug_location(&self, span: Span) -> DILocation<'ctx> {
         let locn = self.debug.debug_builder.create_debug_location(
             self.ctx,
-            self.module.get_line_number(span),
+            span.line_number(),
             1,
             self.debug.current_scope(),
             None,
@@ -600,7 +600,7 @@ impl<'ctx> Codegen<'ctx> {
                                     self.debug.current_scope(),
                                     &self.get_ident_name(f.name),
                                     self.debug.file,
-                                    self.module.get_line_number(record.span),
+                                    record.span.line_number(),
                                     member_type.get_size_in_bits(),
                                     WORD_SIZE_BITS as u32,
                                     offset,
@@ -867,7 +867,7 @@ impl<'ctx> Codegen<'ctx> {
                 self.debug.current_scope(),
                 &self.get_ident_name(variable.name),
                 self.debug.file,
-                self.module.get_line_number(val.span),
+                val.span.line_number(),
                 self.get_debug_type(val.ty),
                 true,
                 0,
@@ -1859,11 +1859,11 @@ impl<'ctx> Codegen<'ctx> {
             &self.module.ast.get_ident_str(function.name),
             None,
             self.debug.file,
-            self.module.get_line_number(function.span),
+            function.span.line_number(),
             dbg_fn_type,
             false,
             true,
-            self.module.get_line_number(function.span),
+            function.span.line_number(),
             0,
             false,
         )
@@ -1937,7 +1937,7 @@ impl<'ctx> Codegen<'ctx> {
                 &param_name,
                 typed_param.position,
                 self.debug.file,
-                self.module.get_line_number(function.span),
+                function.span.line_number(),
                 arg_debug_type,
                 true,
                 0,
@@ -1969,9 +1969,10 @@ impl<'ctx> Codegen<'ctx> {
                 // The plan is to separate the notion of "expression blocks" from "control flow
                 // blocks" to make this all more reasonable
                 // Rust rejects "unreachable expression"
-                let value = self.codegen_block_statements(
-                    function.block.as_ref().expect("functions must have blocks by codegen"),
-                );
+                let function_block = function.block.as_ref().unwrap_or_else(|| {
+                    panic!("Function has no block {}", &*self.get_ident_name(function.name))
+                });
+                let value = self.codegen_block_statements(function_block);
                 let current_block = self.builder.get_insert_block().unwrap();
                 if current_block.get_terminator().is_none() {
                     let return_value =
