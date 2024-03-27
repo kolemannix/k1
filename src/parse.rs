@@ -542,8 +542,8 @@ impl Sources {
         self.sources.insert(source.file_id, source);
     }
 
-    pub fn get_main(&self) -> &Source {
-        &self.sources.get(&0).unwrap()
+    pub fn get_main(&self) -> Rc<Source> {
+        self.sources.get(&0).unwrap().clone()
     }
 
     pub fn get_line_for_span(&self, span: Span) -> &str {
@@ -552,6 +552,10 @@ impl Sources {
 
     pub fn get_span_content(&self, span: Span) -> &str {
         self.sources.get(&span.file_id).unwrap().get_span_content(span)
+    }
+
+    pub fn source_by_span(&self, span: Span) -> Rc<Source> {
+        self.sources.get(&span.file_id).unwrap().clone()
     }
 }
 
@@ -691,6 +695,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         source: Rc<Source>,
         module: &'module mut ParsedModule,
     ) -> Parser<'toks, 'module> {
+        module.sources.add(source.clone());
         Parser {
             tokens: TokenIter::make(tokens),
             source,
@@ -1716,7 +1721,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             defs.push(def)
         }
         self.parsed_module.defs.extend(defs);
-        self.parsed_module.sources.add(self.source.clone());
 
         Ok(())
     }
@@ -1741,8 +1745,8 @@ pub fn print_tokens(content: &str, tokens: &[Token]) {
     println!()
 }
 
-pub fn lex_text(text: &str) -> ParseResult<Vec<Token>> {
-    let mut lexer = Lexer::make(text);
+pub fn lex_text(text: &str, file_id: FileId) -> ParseResult<Vec<Token>> {
+    let mut lexer = Lexer::make(text, file_id);
     let tokens = lexer.run().map_err(|lex_error| ParseError {
         expected: lex_error.msg,
         token: EOF_TOKEN,
@@ -1756,29 +1760,11 @@ pub fn lex_text(text: &str) -> ParseResult<Vec<Token>> {
 
 // Eventually I want to keep the tokens around, and return them from here somehow, either in the
 // ast::Module or just separately
-pub fn parse_text(
-    text: String,
-    directory: String,
-    filename: String,
-    use_prelude: bool,
-) -> ParseResult<ParsedModule> {
-    let full_source: String = if use_prelude {
-        let prelude = crate::prelude::PRELUDE_SOURCE;
-        let mut modified_source = String::from(prelude);
-        modified_source.push('\n');
-        modified_source.push_str(&text);
-        modified_source
-    } else {
-        text
-    };
-
-    let file_id = 0;
-
-    let module_name = filename.split('.').next().unwrap().to_string();
+pub fn parse_text(source: Rc<Source>) -> ParseResult<ParsedModule> {
+    let module_name = source.filename.split('.').next().unwrap().to_string();
     let mut module = ParsedModule::make(module_name);
 
-    let token_vec = lex_text(&full_source)?;
-    let source = Rc::new(Source::make(file_id, directory, filename, full_source));
+    let token_vec = lex_text(&source.content, source.file_id)?;
     let mut parser = Parser::make(&token_vec, source, &mut module);
 
     let result = parser.parse_module();

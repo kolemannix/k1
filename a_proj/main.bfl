@@ -1,5 +1,5 @@
 fn main(): int {
-  print(hello());
-  print(util::hello());
+  println(hello());
+  println(util::util_hello());
   0
 }

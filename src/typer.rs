@@ -674,14 +674,23 @@ impl Scopes {
         scope.add_variable(ident, variable_id);
     }
 
-    fn find_function(&self, scope: ScopeId, ident: IdentifierId) -> Option<FunctionId> {
+    fn find_function(
+        &self,
+        scope: ScopeId,
+        ident: IdentifierId,
+        recurse: bool,
+    ) -> Option<FunctionId> {
         let scope = self.get_scope(scope);
         if let f @ Some(_r) = scope.find_function(ident) {
             return f;
         }
-        match scope.parent {
-            Some(parent) => self.find_function(parent, ident),
-            None => None,
+        if recurse {
+            match scope.parent {
+                Some(parent) => self.find_function(parent, ident, true),
+                None => None,
+            }
+        } else {
+            return None;
         }
     }
 
@@ -864,7 +873,14 @@ impl TypedModule {
         // let adjusted_line = span.line as i32 - crate::prelude::PRELUDE_LINES as i32 + 1;
         let line_no =
             if adjusted_line < 0 { "PRELUDE".to_string() } else { adjusted_line.to_string() };
-        eprintln!("{} at {}:{}\n  -> {}", "error".red(), self.name(), line_no, message.as_ref());
+        let source = self.ast.sources.source_by_span(span);
+        eprintln!(
+            "{} at {}:{}\n  -> {}",
+            "error".red(),
+            &source.filename,
+            line_no,
+            message.as_ref()
+        );
         eprintln!("{}", self.ast.sources.get_line_for_span(span).red());
         eprintln!(" -> {}", self.ast.sources.get_span_content(span).red());
     }
@@ -2413,16 +2429,18 @@ impl TypedModule {
             }
             None => {
                 // Resolve a non-method call
+                let is_namespaced_call = !fn_call.namespaces.is_empty();
                 let scope_to_search = self.traverse_namespace_chain(
                     calling_scope,
                     &fn_call.namespaces,
                     fn_call.span,
                 )?;
-                eprintln!("FIND FUNCTION NAME {}", &*self.get_ident_str(fn_call.name));
-                // FIXME This needs to be a non-recursive lookup.
-                // util::hello() should look for hello immediately inside util, not util and up!!!
-                let function_id =
-                    self.scopes.find_function(scope_to_search, fn_call.name).ok_or(make_err(
+                // Qualified lookups shouldn't recurse up the scopes; they should search only the references namespace
+                let recursive = !is_namespaced_call;
+                let function_id = self
+                    .scopes
+                    .find_function(scope_to_search, fn_call.name, recursive)
+                    .ok_or(make_err(
                         format!(
                             "Function not found: {} in scope: {:?}",
                             &*self.get_ident_str(fn_call.name),
@@ -2436,7 +2454,7 @@ impl TypedModule {
         return Ok(Either::Right(function_id));
     }
 
-    // I actually just want this to handle the 'self' order and zipping thing because I sometimes
+    // skip_typecheck: I actually just want this to handle the 'self' order and zipping thing because I sometimes
     // don't want these checked just yet because I'm using them for inference
     fn typecheck_call_arguments(
         &mut self,
@@ -3613,11 +3631,16 @@ impl TypedModule {
 
 #[cfg(test)]
 mod test {
-    use crate::parse::{parse_text, ParseResult};
+    use crate::parse::{parse_text, ParseResult, Source};
     use crate::typer::*;
 
     fn setup(src: &str, test_name: &str) -> ParseResult<ParsedModule> {
-        parse_text(src.to_string(), ".".to_string(), test_name.to_string(), false)
+        parse_text(Rc::new(Source::make(
+            0,
+            "unit_test".to_string(),
+            test_name.to_string(),
+            src.to_string(),
+        )))
     }
 
     #[test]

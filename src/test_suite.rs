@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Result};
 use inkwell::context::Context;
@@ -11,15 +11,14 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P) -> Result<()> {
     let src = std::fs::read_to_string(&path).expect("could not read source file for test");
     println!("{}", filename);
     let out_dir = "bfl-out/test_suite";
-    crate::compile_single_file_program(
+    crate::compile_directory_program(
         ctx,
-        filename,
         src_dir,
-        src.clone(),
         false,
         out_dir,
+        false,
         true,
-        true,
+        Some(|p: &PathBuf| *p == path),
     )
     .map_err(|err| anyhow!("\tTEST CASE FAILED COMPILE: {}. Reason: {}", filename, err))?;
     let last_line = src.lines().last().unwrap();

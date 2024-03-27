@@ -2028,7 +2028,7 @@ impl<'ctx> Codegen<'ctx> {
     pub fn optimize(&mut self, optimize: bool) -> CodegenResult<()> {
         Target::initialize_aarch64(&InitializationConfig::default());
         // let triple = TargetMachine::get_default_triple();
-        let triple = TargetTriple::create("arm64-apple-macosx14.0.0");
+        let triple = TargetTriple::create("arm64-apple-macosx14.4.0");
         let target = Target::from_triple(&triple).unwrap();
         if !self.debug.strip_debug {
             self.debug.debug_builder.finalize();
