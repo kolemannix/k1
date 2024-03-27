@@ -30,7 +30,7 @@ struct Args {
 
     /// Print LLVM to stdout
     #[arg(long, default_value_t = false)]
-    print_llvm: bool,
+    write_llvm: bool,
 
     /// No Optimize
     #[arg(long, default_value_t = false)]
@@ -64,22 +64,24 @@ macro_rules! static_assert_size {
 pub fn compile_directory_program<'ctx>(
     ctx: &'ctx Context,
     source_dir: impl AsRef<Path>,
-    no_prelude: bool,
+    args: Args,
     out_dir: impl AsRef<str>,
-    llvm_optimize: bool,
-    debug: bool,
+    sources_filter: Option<impl Fn(&PathBuf) -> bool>,
 ) -> Result<Codegen<'ctx>> {
     let source_path = source_dir.as_ref().to_owned();
     let module_name = source_path.file_name().unwrap().to_str().unwrap();
     let main_path = source_path.join("main.bfl");
     println!("main_path: {}", main_path.to_string_lossy());
     let out_dir = out_dir.as_ref();
-    let use_prelude = !no_prelude;
+    let use_prelude = !args.no_prelude;
 
     let mut module = ParsedModule::make(module_name.to_string());
 
     let dir_entries = {
-        let mut ents = fs::read_dir(&source_path)?.filter_map(|item| item.ok()).collect::<Vec<_>>();
+        let mut ents = fs::read_dir(&source_path)?
+            .filter_map(|item| item.ok())
+            .filter(|item| sources_filter.as_ref().map_or(true, |filter| filter(&item.path())))
+            .collect::<Vec<_>>();
         ents.sort_by(|ent1, ent2| {
             if ent1.file_name() == "main" {
                 Ordering::Less
@@ -102,7 +104,7 @@ pub fn compile_directory_program<'ctx>(
             content,
         ));
 
-        let token_vec = lex_text(&source.content)?;
+        let token_vec = lex_text(&source.content, source.file_id)?;
         let mut parser = crate::parse::Parser::make(&token_vec, source.clone(), &mut module);
 
         let result = parser.parse_module();
@@ -135,24 +137,32 @@ pub fn compile_directory_program<'ctx>(
 
     let irgen = Rc::new(typed_module);
     // println!("{irgen}");
+    let llvm_optimize = !args.no_llvm_opt;
 
-    let mut codegen: Codegen<'ctx> = Codegen::create(ctx, irgen, debug, llvm_optimize);
+    let mut codegen: Codegen<'ctx> = Codegen::create(ctx, irgen, args.debug, llvm_optimize);
     codegen.codegen_module();
     codegen.optimize(llvm_optimize)?;
 
-    let llvm_text = codegen.output_llvm_ir_text();
-
     // TODO: We could do this a lot more efficiently by just feeding the in-memory LLVM IR to clang
-    let mut f =
-        File::create(format!("{}/{}.ll", out_dir, module_name)).expect("Failed to create .ll file");
-    f.write_all(llvm_text.as_bytes()).unwrap();
+
+    if args.write_llvm {
+        let llvm_text = codegen.output_llvm_ir_text();
+        let mut f = File::create(format!("{}/{}.ll", out_dir, module_name))
+            .expect("Failed to create .ll file");
+        f.write_all(llvm_text.as_bytes()).unwrap();
+        println!("{}", codegen.output_llvm_ir_text());
+    }
+    if args.dump_module {
+        println!("{}", codegen.module);
+    }
 
     let mut build_cmd = std::process::Command::new("clang");
     build_cmd.args([
         // "-v",
-        if debug { "-g" } else { "" },
-        if debug { "-O0" } else { "-O3" },
+        if args.debug { "-g" } else { "" },
+        if args.debug { "-O0" } else { "-O3" },
         "-Woverride-module",
+        "-mmacosx-version-min=14.4",
         &format!("{}/{}.ll", out_dir, module_name),
         "-o",
         &format!("{}/{}.out", out_dir, module_name),
@@ -163,6 +173,7 @@ pub fn compile_directory_program<'ctx>(
     ]);
     log::info!("Build Command: {:?}", build_cmd);
     let build_status = build_cmd.status().unwrap();
+
     if !build_status.success() {
         eprintln!("Build failed!");
         std::process::exit(1)
@@ -186,11 +197,16 @@ pub fn compile_single_file_program<'ctx>(
     let out_dir = out_dir.as_ref();
     let use_prelude = !no_prelude;
     let source = fs::read_to_string(source_path.as_ref()).expect("could not read source directory");
-    let ast = parse::parse_text(source, source_dir.to_string(), filename.to_string(), use_prelude)
-        .unwrap_or_else(|e| {
-            eprintln!("Encountered ParseError on file '{}/{}': {:?}", source_dir, filename, e);
-            panic!("parse error");
-        });
+    let ast = parse::parse_text(Rc::new(Source::make(
+        0,
+        source_dir.to_string(),
+        filename.to_string(),
+        source,
+    )))
+    .unwrap_or_else(|e| {
+        eprintln!("Encountered ParseError on file '{}/{}': {:?}", source_dir, filename, e);
+        panic!("parse error");
+    });
     let ast = Rc::new(ast);
     let mut irgen = typer::TypedModule::new(ast);
     irgen.run()?;
@@ -251,14 +267,8 @@ fn main() -> Result<()> {
     let ctx = Context::create();
     let src_path = src_path.canonicalize().unwrap();
     let filename = src_path.file_name().unwrap().to_str().unwrap();
-    let codegen = compile_directory_program(
-        &ctx,
-        &src_path,
-        no_prelude,
-        out_dir,
-        !args.no_llvm_opt,
-        args.debug,
-    )?;
+    let codegen =
+        compile_directory_program(&ctx, &src_path, args, out_dir, None::<fn(&PathBuf) -> bool>)?;
     // let src_dir = src_path.parent().unwrap().to_str().unwrap();
     // let codegen = compile_single_file_program(
     //     &ctx,
@@ -270,12 +280,6 @@ fn main() -> Result<()> {
     //     !args.no_llvm_opt,
     //     args.debug,
     // )?;
-    if args.print_llvm {
-        println!("{}", codegen.output_llvm_ir_text());
-    }
-    if args.dump_module {
-        println!("{}", codegen.module);
-    }
 
     if args.run {
         let mut run_cmd = std::process::Command::new(format!("{}/{}.out", out_dir, filename));
