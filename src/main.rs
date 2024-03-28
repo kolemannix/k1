@@ -1,4 +1,3 @@
-use std::cmp::Ordering;
 use std::fs;
 use std::fs::File;
 use std::io::Write;
@@ -72,7 +71,7 @@ pub fn compile_module<'ctx>(
     args: &Args,
     out_dir: impl AsRef<str>,
 ) -> Result<Codegen<'ctx>> {
-    let src_path = &args.file;
+    let src_path = &args.file.canonicalize().unwrap();
     let is_dir = src_path.is_dir();
     let (src_dir, module_name) = if is_dir {
         let src_dir = src_path.canonicalize().unwrap();
@@ -82,6 +81,7 @@ pub fn compile_module<'ctx>(
         let src_dir = src_path.parent().unwrap().to_path_buf();
         (src_dir, src_path.file_stem().unwrap().to_str().unwrap().to_string())
     };
+
     let src_filter = if !is_dir { Some(|p: &Path| *p == *src_path) } else { None };
 
     let out_dir = out_dir.as_ref();
@@ -90,17 +90,11 @@ pub fn compile_module<'ctx>(
     let mut module = ParsedModule::make(module_name.to_string());
 
     let dir_entries = {
-        let mut ents = fs::read_dir(&src_dir)?
+        let mut ents = fs::read_dir(src_dir)?
             .filter_map(|item| item.ok())
             .filter(|item| src_filter.as_ref().map_or(true, |filter| filter(&item.path())))
             .collect::<Vec<_>>();
-        ents.sort_by(|ent1, ent2| {
-            if ent1.file_name() == "main" {
-                Ordering::Less
-            } else {
-                ent1.file_name().cmp(&ent2.file_name())
-            }
-        });
+        ents.sort_by(|ent1, ent2| ent1.file_name().cmp(&ent2.file_name()));
         ents
     };
     let mut parse_errors = Vec::new();
