@@ -1,0 +1,26 @@
+fn main(): int {
+  val squares: Array<int> = for it in [1, 5, 9, 12] yield { it * it };
+  assert(squares.length() == 4);
+  assert(squares[0] == 1);
+  assert(squares[1] == 25);
+  assert(squares[2] == 81);
+  assert(squares[3] == 144);
+
+  // Desugared
+  // val squares = {
+  //   val mut counter_uniq: int = 0;
+  //   val iteree: Array<int> = [1, 5, 9, 12];
+  //   val iteree_length: int = length_2(iteree);
+  //   val yielded_coll: Array<int> = new_2(iteree_length);
+  //   while counter_uniq < iteree_length {
+  //     val it: int = iteree[counter_uniq];
+  //     val block_expr_val: int = {
+  //       it * it;
+  //     };
+  //     yielded_coll[counter_uniq] = block_expr_val;
+  //     counter_uniq = counter_uniq + 1;
+  //   };
+  //   yielded_coll;
+  // }
+  0
+}

@@ -5,23 +5,27 @@ use inkwell::context::Context;
 use std::os::unix::prelude::ExitStatusExt;
 
 fn test_file<P: AsRef<Path>>(ctx: &Context, path: P) -> Result<()> {
-    let path = path.as_ref().canonicalize().unwrap();
-    let filename = path.file_name().unwrap().to_str().unwrap();
-    let src_dir = path.parent().unwrap().to_str().unwrap();
-    let src = std::fs::read_to_string(&path).expect("could not read source file for test");
-    println!("{}", filename);
     let out_dir = "bfl-out/test_suite";
-    crate::compile_single_file_program(
+    let filename = path.as_ref().file_name().unwrap().to_str().unwrap();
+    let codegen = crate::compile_module(
         ctx,
-        filename,
-        src_dir,
-        src.clone(),
-        false,
+        &crate::Args {
+            no_llvm_opt: true,
+            debug: true,
+            no_prelude: false,
+            write_llvm: true,
+            dump_module: false,
+            run: false,
+            file: path.as_ref().to_owned(),
+        },
         out_dir,
-        true,
-        true,
     )
     .map_err(|err| anyhow!("\tTEST CASE FAILED COMPILE: {}. Reason: {}", filename, err))?;
+
+    let path = path.as_ref().canonicalize().unwrap();
+    let src = std::fs::read_to_string(&path).expect("could not read source file for test");
+    println!("{}", codegen.name());
+
     let last_line = src.lines().last().unwrap();
     // We want expected output but we can't intercept or read what goes to stdout, so we just make
     // it expected return value for now
@@ -52,7 +56,7 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P) -> Result<()> {
 #[test]
 pub fn run_all() -> Result<()> {
     let ctx = Context::create();
-    let test_dir = "resources/test_src";
+    let test_dir = "test_src";
     let mut total = 0;
     let mut success = 0;
     let mut failures: Vec<String> = Vec::new();

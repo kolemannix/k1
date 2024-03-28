@@ -1,4 +1,3 @@
-pub const PRELUDE_SOURCE: &str = r#"
 extern fn _bfl_charToString(c: char): string
 extern fn _bfl_charToInt(c: char): int
 extern fn _bfl_intToChar(i: int): char
@@ -19,7 +18,7 @@ fn printBool(value: bool): unit {
 }
 
 fn assert(value: bool): unit {
-  if !value { 
+  if !value {
     print("ASSERT FAILED");
     exit(1)
   };
@@ -101,6 +100,3 @@ namespace string {
 fn println(value: string): unit {
   print(value.concat('\n'.toString()));
 }
-
-// -------- END PRELUDE --------"#;
-pub const PRELUDE_LINES: usize = 89;

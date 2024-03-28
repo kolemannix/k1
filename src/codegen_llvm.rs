@@ -26,7 +26,7 @@ use inkwell::{AddressSpace, IntPredicate, OptimizationLevel};
 use log::trace;
 
 use crate::lex::Span;
-use crate::parse::IdentifierId;
+use crate::parse::{ForExprType, IdentifierId};
 use crate::typer::{Linkage as TyperLinkage, *};
 
 const STRING_LENGTH_FIELD_INDEX: u32 = 0;
@@ -245,11 +245,14 @@ impl<'ctx> Codegen<'ctx> {
         optimize: bool,
         debug: bool,
     ) -> DebugContext<'ctx> {
+        // We may need to create a DIBuilder per-file.
+        // For now let's use main file
+        let source = module.ast.sources.get_main();
         let (debug_builder, compile_unit) = llvm_module.create_debug_info_builder(
             false,
             DWARFSourceLanguage::C,
-            &module.ast.source.filename,
-            &module.ast.source.directory,
+            &source.filename,
+            &source.directory,
             "bfl_compiler",
             optimize,
             "",
@@ -320,7 +323,7 @@ impl<'ctx> Codegen<'ctx> {
         let builder = ctx.create_builder();
         let char_type = ctx.i8_type();
         let llvm_module = ctx.create_module(&module.ast.name);
-        llvm_module.set_source_file_name(&module.ast.source.filename);
+        llvm_module.set_source_file_name(&module.ast.sources.get_main().filename);
         // Example of linking an LLVM module
         // let stdlib_module = ctx
         //     .create_module_from_ir(MemoryBuffer::create_from_file(Path::new("nxlib/llvm")).unwrap())
@@ -404,7 +407,7 @@ impl<'ctx> Codegen<'ctx> {
     fn set_debug_location(&self, span: Span) -> DILocation<'ctx> {
         let locn = self.debug.debug_builder.create_debug_location(
             self.ctx,
-            self.module.get_line_number(span),
+            span.line_number(),
             1,
             self.debug.current_scope(),
             None,
@@ -597,7 +600,7 @@ impl<'ctx> Codegen<'ctx> {
                                     self.debug.current_scope(),
                                     &self.get_ident_name(f.name),
                                     self.debug.file,
-                                    self.module.get_line_number(record.span),
+                                    record.span.line_number(),
                                     member_type.get_size_in_bits(),
                                     WORD_SIZE_BITS as u32,
                                     offset,
@@ -862,9 +865,9 @@ impl<'ctx> Codegen<'ctx> {
             variable_ptr,
             Some(self.debug.debug_builder.create_auto_variable(
                 self.debug.current_scope(),
-                &*self.get_ident_name(variable.name),
+                &self.get_ident_name(variable.name),
                 self.debug.file,
-                self.module.get_line_number(val.span),
+                val.span.line_number(),
                 self.get_debug_type(val.ty),
                 true,
                 0,
@@ -944,7 +947,7 @@ impl<'ctx> Codegen<'ctx> {
                     (&consequent_expr, consequent_final_block.unwrap()),
                     (&alternate_expr, alternate_final_block.unwrap()),
                 ]);
-                phi_value.as_basic_value().into()
+                phi_value.as_basic_value()
             }
             _ => self.builtin_types.unit_value.as_basic_value_enum(),
         }
@@ -1023,11 +1026,11 @@ impl<'ctx> Codegen<'ctx> {
                     } else {
                         let loaded = pointer.loaded_value(&self.builder);
                         trace!("codegen variable (rvalue) got loaded value {:?}", loaded);
-                        loaded.into()
+                        loaded
                     }
                 } else if let Some(global) = self.globals.get(&ir_var.variable_id) {
                     let value = global.get_initializer().unwrap();
-                    value.into()
+                    value
                 } else {
                     panic!(
                         "No pointer or global found for variable {}",
@@ -1083,7 +1086,7 @@ impl<'ctx> Codegen<'ctx> {
                     global_value.as_pointer_value(),
                     "str_struct",
                 );
-                loaded.into()
+                loaded
             }
             TypedExpr::Record(record) => {
                 let record_llvm_type =
@@ -1102,7 +1105,7 @@ impl<'ctx> Codegen<'ctx> {
                         .unwrap()
                         .into_struct_value();
                 }
-                struct_value.as_basic_value_enum().into()
+                struct_value.as_basic_value_enum()
             }
             TypedExpr::RecordFieldAccess(field_access) => {
                 if is_lvalue {
@@ -1152,7 +1155,7 @@ impl<'ctx> Codegen<'ctx> {
                 let element_type = self.codegen_type(array_type.element_type).value_type();
                 let array_len = self.builtin_types.i64.const_int(array.elements.len() as u64, true);
 
-                let array_capacity = array_len.clone();
+                let array_capacity = array_len;
                 let array_value = self.make_array(array_len, array_capacity, element_type, false);
                 let array_data = self.builtin_types.array_data(&self.builder, array_value);
                 // Store each element
@@ -1199,7 +1202,7 @@ impl<'ctx> Codegen<'ctx> {
                             panic!("Unsupported bin op kind returning int: {}", bin_op.kind)
                         }
                     };
-                    op_res.as_basic_value_enum().into()
+                    op_res.as_basic_value_enum()
                 }
                 BOOL_TYPE_ID => match bin_op.kind {
                     BinaryOpKind::And | BinaryOpKind::Or => {
@@ -1218,7 +1221,7 @@ impl<'ctx> Codegen<'ctx> {
                             ),
                             _ => panic!(),
                         };
-                        op.as_basic_value_enum().into()
+                        op.as_basic_value_enum()
                     }
                     BinaryOpKind::Equals | BinaryOpKind::NotEquals => {
                         // I actually have no idea how I want to handle equality at this point
@@ -1239,7 +1242,6 @@ impl<'ctx> Codegen<'ctx> {
                                 &format!("{}", bin_op.kind),
                             )
                             .as_basic_value_enum()
-                            .into()
                     }
 
                     BinaryOpKind::Less
@@ -1259,7 +1261,6 @@ impl<'ctx> Codegen<'ctx> {
                         self.builder
                             .build_int_compare(pred, lhs_int, rhs_int, &format!("{}", bin_op.kind))
                             .as_basic_value_enum()
-                            .into()
                     }
                     other => panic!("Unsupported binary operation {other:?} returning Bool"),
                 },
@@ -1290,11 +1291,12 @@ impl<'ctx> Codegen<'ctx> {
                     }
                 }
             }
-            TypedExpr::Block(_block) => {
+            TypedExpr::Block(block) => {
                 // This is just a lexical scoping block, not a control-flow block, so doesn't need
                 // to correspond to an LLVM basic block
                 // We just need to codegen each statement and assign the return value to an alloca
-                todo!("codegen lexical block")
+                let block_value = self.codegen_block_statements(block).unwrap();
+                block_value
             }
             TypedExpr::FunctionCall(call) => self.codegen_function_call(call),
             TypedExpr::ArrayIndex(index_op) => {
@@ -1323,6 +1325,19 @@ impl<'ctx> Codegen<'ctx> {
                         "string_index_rvalue",
                     );
                     elem_value
+                }
+            }
+            TypedExpr::For(typed_for_expr) => {
+                eprintln!(
+                    "codegen for expr: {}: {}",
+                    self.module.expr_to_string(expr),
+                    self.module.type_id_to_string(expr.get_type())
+                );
+                match typed_for_expr.for_expr_type {
+                    ForExprType::Yield => unimplemented!("codegen for yield"),
+                    ForExprType::Do => {
+                        unimplemented!("codegen for do");
+                    }
                 }
             }
         }
@@ -1609,7 +1624,7 @@ impl<'ctx> Codegen<'ctx> {
                 let array_arg =
                     self.get_loaded_variable(function.params[0].variable_id).into_pointer_value();
                 let array_type: LlvmPointerType =
-                    self.codegen_type(function.params[0].type_id).expect_pointer().clone();
+                    self.codegen_type(function.params[0].type_id).expect_pointer();
                 let array_struct = self
                     .builder
                     .build_load(
@@ -1618,7 +1633,7 @@ impl<'ctx> Codegen<'ctx> {
                         "array_struct",
                     )
                     .into_struct_value();
-                let length = self.builtin_types.array_length(&self.builder, array_struct).clone();
+                let length = self.builtin_types.array_length(&self.builder, array_struct);
                 length.as_basic_value_enum()
             }
             IntrinsicFunctionType::ArrayNew => {
@@ -1632,7 +1647,7 @@ impl<'ctx> Codegen<'ctx> {
                 // let ctlz_intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.ctlz").unwrap();
                 // let ctlz_function = ctlz_intrinsic.get_declaration(&self.llvm_module, &[self.ctx.i64_type().as_basic_type_enum()]).unwrap();
                 // let capacity = self.builder.build_call(ctlz_function, &[], "capacity");
-                let capacity = len.clone();
+                let capacity = len;
                 let array_struct = self.make_array(len, capacity, element_type.value_type(), true);
                 let array_ptr =
                     self.builder.build_malloc(array_struct.get_type(), "array_ptr").unwrap();
@@ -1841,14 +1856,14 @@ impl<'ctx> Codegen<'ctx> {
         );
         self.debug.debug_builder.create_function(
             self.debug.current_scope(),
-            &*self.module.ast.get_ident_str(function.name),
+            &self.module.ast.get_ident_str(function.name),
             None,
             self.debug.file,
-            self.module.get_line_number(function.span),
+            function.span.line_number(),
             dbg_fn_type,
             false,
             true,
-            self.module.get_line_number(function.span),
+            function.span.line_number(),
             0,
             false,
         )
@@ -1922,7 +1937,7 @@ impl<'ctx> Codegen<'ctx> {
                 &param_name,
                 typed_param.position,
                 self.debug.file,
-                self.module.get_line_number(function.span),
+                function.span.line_number(),
                 arg_debug_type,
                 true,
                 0,
@@ -1954,9 +1969,10 @@ impl<'ctx> Codegen<'ctx> {
                 // The plan is to separate the notion of "expression blocks" from "control flow
                 // blocks" to make this all more reasonable
                 // Rust rejects "unreachable expression"
-                let value = self.codegen_block_statements(
-                    function.block.as_ref().expect("functions must have blocks by codegen"),
-                );
+                let function_block = function.block.as_ref().unwrap_or_else(|| {
+                    panic!("Function has no block {}", &*self.get_ident_name(function.name))
+                });
+                let value = self.codegen_block_statements(function_block);
                 let current_block = self.builder.get_insert_block().unwrap();
                 if current_block.get_terminator().is_none() {
                     let return_value =
@@ -1968,6 +1984,7 @@ impl<'ctx> Codegen<'ctx> {
         if let Some(start_block) = maybe_starting_block {
             self.builder.position_at_end(start_block);
         }
+        #[allow(clippy::single_match)]
         match function.intrinsic_type {
             // Workaround: ArrayNew returns a pointer to an alloca, so it needs to be inlined
             Some(IntrinsicFunctionType::ArrayNew) => {
@@ -2012,7 +2029,7 @@ impl<'ctx> Codegen<'ctx> {
     pub fn optimize(&mut self, optimize: bool) -> CodegenResult<()> {
         Target::initialize_aarch64(&InitializationConfig::default());
         // let triple = TargetMachine::get_default_triple();
-        let triple = TargetTriple::create("arm64-apple-macosx14.0.0");
+        let triple = TargetTriple::create("arm64-apple-macosx14.4.0");
         let target = Target::from_triple(&triple).unwrap();
         if !self.debug.strip_debug {
             self.debug.debug_builder.finalize();
