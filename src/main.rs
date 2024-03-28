@@ -2,7 +2,7 @@ use std::fs;
 use std::fs::File;
 use std::io::Write;
 use std::os::unix::prelude::ExitStatusExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use anyhow::Result;
@@ -10,25 +10,25 @@ use clap::Parser;
 use inkwell::context::Context;
 
 use crate::codegen_llvm::Codegen;
+use crate::parse::{lex_text, ParsedModule, Source};
 
 mod codegen_llvm;
 mod lex;
 mod parse;
-mod prelude;
 #[cfg(test)]
 mod test_suite;
 mod typer;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
-struct Args {
+pub struct Args {
     /// No Prelude
     #[arg(short, long, default_value_t = false)]
     no_prelude: bool,
 
-    /// Print LLVM to stdout
-    #[arg(long, default_value_t = false)]
-    print_llvm: bool,
+    /// Output an LLVM IR file at out_dir/{module_name}.ll
+    #[arg(long, default_value_t = true)]
+    write_llvm: bool,
 
     /// No Optimize
     #[arg(long, default_value_t = false)]
@@ -59,57 +59,119 @@ macro_rules! static_assert_size {
     };
 }
 
-pub fn compile_single_file_program<'ctx>(
+/// If `args.file` points to a directory,
+/// - compile all files in the directory.
+/// - module name is the name of the directory.
+///
+/// If `args.file` points to a file,
+/// - compile that file only.
+/// - module name is the name of the file.
+pub fn compile_module<'ctx>(
     ctx: &'ctx Context,
-    filename: impl AsRef<str>,
-    source_dir: impl AsRef<str>,
-    source: impl AsRef<str>,
-    no_prelude: bool,
+    args: &Args,
     out_dir: impl AsRef<str>,
-    llvm_optimize: bool,
-    debug: bool,
 ) -> Result<Codegen<'ctx>> {
-    let filename = filename.as_ref();
-    let source_dir = source_dir.as_ref();
+    let src_path = &args.file.canonicalize().unwrap();
+    let is_dir = src_path.is_dir();
+    let (src_dir, module_name) = if is_dir {
+        let src_dir = src_path.canonicalize().unwrap();
+        let outname = src_dir.file_name().unwrap().to_str().unwrap().to_string();
+        (src_dir, outname)
+    } else {
+        let src_dir = src_path.parent().unwrap().to_path_buf();
+        (src_dir, src_path.file_stem().unwrap().to_str().unwrap().to_string())
+    };
+
+    let src_filter = if !is_dir { Some(|p: &Path| *p == *src_path) } else { None };
+
     let out_dir = out_dir.as_ref();
-    let use_prelude = !no_prelude;
-    let ast = parse::parse_text(
-        source.as_ref().to_string(),
-        source_dir.to_string(),
-        filename.to_string(),
-        use_prelude,
-    )
-    .unwrap_or_else(|e| {
-        eprintln!("Encountered ParseError on file '{}/{}': {:?}", source_dir, filename, e);
-        panic!("parse error");
-    });
-    let ast = Rc::new(ast);
-    let mut irgen = typer::TypedModule::new(ast);
-    irgen.run()?;
-    let irgen = Rc::new(irgen);
+    let use_prelude = !args.no_prelude;
+
+    let mut module = ParsedModule::make(module_name.to_string());
+
+    let dir_entries = {
+        let mut ents = fs::read_dir(src_dir)?
+            .filter_map(|item| item.ok())
+            .filter(|item| src_filter.as_ref().map_or(true, |filter| filter(&item.path())))
+            .collect::<Vec<_>>();
+        ents.sort_by(|ent1, ent2| ent1.file_name().cmp(&ent2.file_name()));
+        ents
+    };
+    let mut parse_errors = Vec::new();
+
+    let mut parse_file = |p: &Path, file_id: u32| {
+        let content = fs::read_to_string(p)?;
+        let name = p.file_name().unwrap();
+        println!("Parsing {}", name.to_string_lossy());
+        let source = Rc::new(Source::make(
+            file_id,
+            module_name.to_string(),
+            name.to_str().unwrap().to_string(),
+            content,
+        ));
+
+        let token_vec = lex_text(&source.content, source.file_id)?;
+        let mut parser = parse::Parser::make(&token_vec, source.clone(), &mut module);
+
+        let result = parser.parse_module();
+        if let Err(e) = result {
+            parser.print_error(&e);
+            parse_errors.push(e);
+        }
+        let res: Result<(), anyhow::Error> = Ok(());
+        res
+    };
+
+    if use_prelude {
+        let prelude_path: &Path = Path::new("builtins/prelude.bfl");
+        parse_file(prelude_path, 0)?;
+    }
+
+    for (idx, f) in dir_entries.iter().enumerate() {
+        let file_id = idx as u32 + 1;
+        parse_file(&f.path(), file_id)?;
+    }
+
+    if !parse_errors.is_empty() {
+        anyhow::bail!("Parsing failed")
+    }
+
+    let ast = Rc::new(module);
+
+    let mut typed_module = typer::TypedModule::new(ast);
+    typed_module.run()?;
+
+    let irgen = Rc::new(typed_module);
     // println!("{irgen}");
-    let mut codegen: Codegen<'ctx> = Codegen::create(ctx, irgen, debug, llvm_optimize);
+    let llvm_optimize = !args.no_llvm_opt;
+
+    let mut codegen: Codegen<'ctx> = Codegen::create(ctx, irgen, args.debug, llvm_optimize);
     codegen.codegen_module();
     codegen.optimize(llvm_optimize)?;
 
-    let llvm_text = codegen.output_llvm_ir_text();
-    let mut f =
-        File::create(format!("{}/{}.ll", out_dir, filename)).expect("Failed to create .ll file");
-    f.write_all(llvm_text.as_bytes()).unwrap();
-
     // TODO: We could do this a lot more efficiently by just feeding the in-memory LLVM IR to clang
 
-    // codegen.emit_object_file(out_dir)?;
+    if args.write_llvm {
+        let llvm_text = codegen.output_llvm_ir_text();
+        let mut f = File::create(format!("{}/{}.ll", out_dir, module_name))
+            .expect("Failed to create .ll file");
+        f.write_all(llvm_text.as_bytes()).unwrap();
+        // println!("{}", codegen.output_llvm_ir_text());
+    }
+    if args.dump_module {
+        println!("{}", codegen.module);
+    }
 
     let mut build_cmd = std::process::Command::new("clang");
     build_cmd.args([
         // "-v",
-        if debug { "-g" } else { "" },
-        if debug { "-O0" } else { "-O3" },
+        if args.debug { "-g" } else { "" },
+        if args.debug { "-O0" } else { "-O3" },
         "-Woverride-module",
-        &format!("{}/{}.ll", out_dir, filename),
+        "-mmacosx-version-min=14.4",
+        &format!("{}/{}.ll", out_dir, module_name),
         "-o",
-        &format!("{}/{}.out", out_dir, filename),
+        &format!("{}/{}.out", out_dir, module_name),
         "-L",
         "bfllib/zig-out/lib",
         "-l",
@@ -117,6 +179,7 @@ pub fn compile_single_file_program<'ctx>(
     ]);
     log::info!("Build Command: {:?}", build_cmd);
     let build_status = build_cmd.status().unwrap();
+
     if !build_status.success() {
         eprintln!("Build failed!");
         std::process::exit(1)
@@ -131,39 +194,20 @@ fn main() -> Result<()> {
     println!("{:#?}", args);
 
     static_assert_size!(parse::Definition, 16);
-    static_assert_size!(parse::BlockStmt, 224); // Get down below 100
-    static_assert_size!(parse::Expression, 104); // Get back down
+    static_assert_size!(parse::BlockStmt, 80); // Get down below 100
+    static_assert_size!(parse::ParsedExpression, 96); // Get back down
     static_assert_size!(typer::TypedExpr, 56);
     static_assert_size!(typer::TypedStmt, 16);
     println!("bfl Compiler v0.1.0");
-    let src_path = &args.file;
-    let no_prelude = args.no_prelude;
+
     let out_dir = "bfl-out";
 
     let ctx = Context::create();
-    let src_path = src_path.canonicalize().unwrap();
-    let filename = src_path.file_name().unwrap().to_str().unwrap();
-    let src_dir = src_path.parent().unwrap().to_str().unwrap();
-    let src = fs::read_to_string(&src_path).expect("could not read source directory");
-    let codegen = compile_single_file_program(
-        &ctx,
-        filename,
-        src_dir,
-        src,
-        no_prelude,
-        out_dir,
-        !args.no_llvm_opt,
-        args.debug,
-    )?;
-    if args.print_llvm {
-        println!("{}", codegen.output_llvm_ir_text());
-    }
-    if args.dump_module {
-        println!("{}", codegen.module);
-    }
+    let codegen = compile_module(&ctx, &args, out_dir)?;
+    let module_name = codegen.name();
 
     if args.run {
-        let mut run_cmd = std::process::Command::new(format!("{}/{}.out", out_dir, filename));
+        let mut run_cmd = std::process::Command::new(format!("{}/{}.out", out_dir, module_name));
         log::debug!("Run Command: {:?}", run_cmd);
         let run_status = run_cmd.status().unwrap();
 
