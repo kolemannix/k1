@@ -8,6 +8,7 @@ use anyhow::bail;
 use colored::Colorize;
 use either::Either;
 use log::{debug, error, trace, Level};
+use parse_display::Display;
 
 use crate::lex::{Span, TokenKind};
 use crate::parse::{
@@ -618,20 +619,29 @@ pub struct Scopes {
 }
 
 impl Scopes {
-    fn make() -> Self {
-        let scopes = vec![Scope::default()];
+    fn make(root_ident: IdentifierId) -> Self {
+        let scopes = vec![Scope::make(ScopeType::Namespace, Some(root_ident))];
         Scopes { scopes }
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (ScopeId, &Scope)> {
+        self.scopes.iter().enumerate().map(|(idx, s)| (idx as ScopeId, s))
     }
 
     pub fn get_root_scope_id(&self) -> ScopeId {
         0 as ScopeId
     }
 
-    fn add_scope_to_root(&mut self) -> ScopeId {
-        self.add_child_scope(0)
+    fn add_scope_to_root(&mut self, scope_type: ScopeType, name: Option<IdentifierId>) -> ScopeId {
+        self.add_child_scope(0, scope_type, name)
     }
-    fn add_child_scope(&mut self, parent_scope_id: ScopeId) -> ScopeId {
-        let scope = Scope { parent: Some(parent_scope_id), ..Scope::default() };
+    fn add_child_scope(
+        &mut self,
+        parent_scope_id: ScopeId,
+        scope_type: ScopeType,
+        name: Option<IdentifierId>,
+    ) -> ScopeId {
+        let scope = Scope { parent: Some(parent_scope_id), ..Scope::make(scope_type, name) };
         let id = self.scopes.len() as ScopeId;
         self.scopes.push(scope);
         let parent_scope = self.get_scope_mut(parent_scope_id);
@@ -746,7 +756,32 @@ impl IntrinsicFunctionType {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Display)]
+pub enum ScopeType {
+    FunctionScope,
+    LexicalBlock,
+    Namespace,
+    WhileBody,
+    IfBody,
+    ElseBody,
+    ForExpr,
+}
+
+impl ScopeType {
+    pub fn short_name(&self) -> &'static str {
+        match self {
+            ScopeType::FunctionScope => "fn",
+            ScopeType::LexicalBlock => "block",
+            ScopeType::Namespace => "ns",
+            ScopeType::WhileBody => "while",
+            ScopeType::IfBody => "if",
+            ScopeType::ElseBody => "else",
+            ScopeType::ForExpr => "for",
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct Scope {
     variables: HashMap<IdentifierId, VariableId>,
     functions: HashMap<IdentifierId, FunctionId>,
@@ -754,10 +789,25 @@ pub struct Scope {
     types: HashMap<IdentifierId, TypeId>,
     parent: Option<ScopeId>,
     children: Vec<ScopeId>,
-    name: String,
+    scope_type: ScopeType,
+    /// Name is just used for pretty-printing and debugging
+    name: Option<IdentifierId>,
 }
 
 impl Scope {
+    pub fn make(typ: ScopeType, name: Option<IdentifierId>) -> Scope {
+        Scope {
+            variables: HashMap::new(),
+            functions: HashMap::new(),
+            namespaces: HashMap::new(),
+            types: HashMap::new(),
+            parent: None,
+            children: Vec::new(),
+            scope_type: typ,
+            name,
+        }
+    }
+
     fn find_variable(&self, ident: IdentifierId) -> Option<VariableId> {
         self.variables.get(&ident).copied()
     }
@@ -835,9 +885,10 @@ pub struct TypedModule {
 
 impl TypedModule {
     pub fn new(parsed_module: Rc<ParsedModule>) -> TypedModule {
-        let scopes = Scopes::make();
         let root_ident = parsed_module.ident_id("_root");
         let types = vec![Type::Unit, Type::Char, Type::Int, Type::Bool, Type::String];
+        let scopes = Scopes::make(root_ident);
+        let namespaces = vec![Namespace { name: root_ident, scope_id: scopes.get_root_scope_id() }];
         TypedModule {
             ast: parsed_module,
             functions: Vec::new(),
@@ -845,9 +896,9 @@ impl TypedModule {
             variables: Vec::new(),
             types,
             constants: Vec::new(),
-            scopes: Scopes::make(),
+            scopes,
             errors: Vec::new(),
-            namespaces: vec![Namespace { name: root_ident, scope_id: scopes.get_root_scope_id() }],
+            namespaces,
         }
     }
 
@@ -1885,7 +1936,7 @@ impl TypedModule {
         // a few local variables in order to achieve this.
         // I think these are broken scoping-wise and will collide with user code currently!
 
-        let for_expr_scope = self.scopes.add_child_scope(scope_id);
+        let for_expr_scope = self.scopes.add_child_scope(scope_id, ScopeType::ForExpr, None);
 
         let (index_variable, index_defn_stmt, index_variable_expr) = self.synth_variable_decl(
             Variable {
@@ -1942,7 +1993,8 @@ impl TypedModule {
                 false,
             );
 
-        let while_scope_id = self.scopes.add_child_scope(for_expr_scope);
+        let while_scope_id =
+            self.scopes.add_child_scope(for_expr_scope, ScopeType::WhileBody, None);
         let binding_variable_id = self.add_variable(Variable {
             name: binding_ident,
             type_id: item_type,
@@ -1980,7 +2032,8 @@ impl TypedModule {
         }));
 
         // TODO: we can hint to the block based on the expected type of the entire for expr
-        let body_scope_id = self.scopes.add_child_scope(while_scope_id);
+        let body_scope_id =
+            self.scopes.add_child_scope(while_scope_id, ScopeType::LexicalBlock, None);
         let body_block = self.eval_block(&for_expr.body_block, body_scope_id, None)?;
         let body_block_result_type = body_block.expr_type;
 
@@ -2242,7 +2295,7 @@ impl TypedModule {
         expected_type: Option<TypeId>,
     ) -> TyperResult<TypedExpr> {
         let mut condition = self.eval_expr(if_expr.cond, scope_id, None)?;
-        let consequent_scope_id = self.scopes.add_child_scope(scope_id);
+        let consequent_scope_id = self.scopes.add_child_scope(scope_id, ScopeType::IfBody, None);
         let mut consequent = if if_expr.optional_ident.is_some() {
             let condition_optional_type = match self.get_type(condition.get_type()) {
                 Type::Optional(opt) => opt,
@@ -2305,7 +2358,7 @@ impl TypedModule {
         if if_expr.alt.is_none() {
             self.coerce_block_to_unit_block(&mut consequent);
         };
-        let alternate_scope = self.scopes.add_child_scope(scope_id);
+        let alternate_scope = self.scopes.add_child_scope(scope_id, ScopeType::ElseBody, None);
         let alternate = if let Some(alt) = if_expr.alt {
             let expr = self.eval_expr(alt, alternate_scope, Some(consequent_type))?;
             self.transform_expr_to_block(expr, alternate_scope)
@@ -2744,7 +2797,7 @@ impl TypedModule {
         this_expr: Option<TypedExpr>,
         calling_scope: ScopeId,
     ) -> TyperResult<(FunctionId, Vec<TypedExpr>)> {
-        let spec_fn_scope_id = self.scopes.add_scope_to_root();
+        let spec_fn_scope_id = self.scopes.add_scope_to_root(ScopeType::FunctionScope, None);
         let generic_function = self.get_function(generic_function_id);
         let generic_function_ast_id = generic_function.ast_id;
         let specializations = generic_function.specializations.clone();
@@ -2779,6 +2832,8 @@ impl TypedModule {
         new_name.push_str(
             &type_ids.iter().map(|type_id| type_id.to_string()).collect::<Vec<_>>().join("_"),
         );
+
+        self.scopes.get_scope_mut(spec_fn_scope_id).name = Some(self.ast.ident_id(&new_name));
 
         for (i, existing_specialization) in specializations.iter().enumerate() {
             // For now, naive comparison that all type ids are identical
@@ -3014,8 +3069,11 @@ impl TypedModule {
         // from the generic version so we just pass it in
         known_intrinsic: Option<IntrinsicFunctionType>,
     ) -> TyperResult<FunctionId> {
+        let name = new_name.unwrap_or(fn_def.name);
         let fn_scope_id = match fn_scope_id {
-            None => self.scopes.add_child_scope(parent_scope_id),
+            None => {
+                self.scopes.add_child_scope(parent_scope_id, ScopeType::FunctionScope, Some(name))
+            }
             Some(fn_scope_id) => fn_scope_id,
         };
 
@@ -3089,7 +3147,7 @@ impl TypedModule {
             Some(type_expr) => self.eval_type_expr(type_expr, fn_scope_id)?,
         };
         let function = Function {
-            name: new_name.unwrap_or(fn_def.name),
+            name,
             scope: fn_scope_id,
             ret_type: given_ret_type,
             params,
@@ -3191,7 +3249,11 @@ impl TypedModule {
     ) -> TyperResult<NamespaceId> {
         // ONLY ADD THIS IN DECLARATION PHASE OTHERWISE WE DUPE EVERY NAMESPACE
         let namespace_id = if declaration_phase {
-            let ns_scope_id = self.scopes.add_child_scope(scope_id);
+            let ns_scope_id = self.scopes.add_child_scope(
+                scope_id,
+                ScopeType::Namespace,
+                Some(ast_namespace.name),
+            );
             let namespace = Namespace { name: ast_namespace.name, scope_id: ns_scope_id };
             let namespace_id = self.add_namespace(namespace);
 
@@ -3323,8 +3385,14 @@ impl Display for TypedModule {
             f.write_str("\n")?;
         }
         f.write_str("--- Functions ---\n")?;
-        for (_, func) in self.functions.iter().enumerate() {
+        for (id, func) in self.functions.iter().enumerate() {
+            f.write_fmt(format_args!("{id:02} "))?;
             self.display_function(func, f, false)?;
+            f.write_str("\n")?;
+        }
+        f.write_str("--- Scopes ---\n")?;
+        for (_id, scope) in self.scopes.iter() {
+            self.display_scope(scope, f)?;
             f.write_str("\n")?;
         }
         Ok(())
@@ -3333,6 +3401,43 @@ impl Display for TypedModule {
 
 // Dumping
 impl TypedModule {
+    fn make_scope_name(&self, scope: &Scope, depth: usize) -> String {
+        let mut name = match scope.name {
+            Some(name) => (*self.get_ident_str(name)).to_string(),
+            None => scope.scope_type.short_name().to_string(),
+        };
+        if let Some(p) = scope.parent {
+            let parent_scope = self.scopes.get_scope(p);
+            name = format!("{}.{}", self.make_scope_name(parent_scope, depth + 1), name);
+        }
+        name
+    }
+
+    fn display_scope(&self, scope: &Scope, writ: &mut impl Write) -> std::fmt::Result {
+        let scope_name = self.make_scope_name(scope, 0);
+        writ.write_fmt(format_args!("{}\n", scope_name))?;
+
+        for (id, variable_id) in scope.variables.iter() {
+            let variable = self.get_variable(*variable_id);
+            writ.write_fmt(format_args!("\t{}", id))?;
+            self.display_variable(variable, writ)?;
+            writ.write_str("\n")?;
+        }
+        for function_id in scope.functions.values() {
+            let function = self.get_function(*function_id);
+            writ.write_str("\t")?;
+            self.display_function(function, writ, false)?;
+            writ.write_str("\n")?;
+        }
+        for (id, namespace_id) in scope.namespaces.iter() {
+            writ.write_fmt(format_args!("{} ", id))?;
+            let namespace = self.get_namespace(*namespace_id);
+            writ.write_str(&self.get_ident_str(namespace.name))?;
+            writ.write_str("\n")?;
+        }
+        Ok(())
+    }
+
     fn display_variable(&self, var: &Variable, writ: &mut impl Write) -> std::fmt::Result {
         if var.is_mutable {
             writ.write_str("mut ")?;

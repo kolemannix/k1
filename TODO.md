@@ -1,5 +1,22 @@
 # Up next maybe
 
+# Project Completion Checklist
+
+- [ ] Sum types
+- [ ] Make 'reference' heap-allocate and use https://github.com/ivmai/bdwgc for GC
+- [ ] Make codegen fail instead of panic
+- [ ] Type Ascriptions (literally can just pass expected_type into eval and do an addtl typecheck)
+- [ ] Single-arm match syntax with `is`; `if x is Some(y)` instead of `if let Some(y) = x`; if x is not Err(y) (replaces
+  let-else)
+- [ ] Pattern matching with `when x is ` (Roc-inspired)
+- [ ] Sum types (oneofs) (variants?) (tagged unions)
+- [ ] Errors (a builtin sum type?)
+- [ ] Optional coalescing accessor (x?.y) and ??
+- [ ] Pure lambdas with ->
+- [ ] Full-on closures with =>
+
+# Old todo list
+
 - [x] Records
     - [x] Syntax decision ({} vs .{} vs Point {})
     - [x] Parsing
@@ -43,22 +60,16 @@
 - [x] Implement builtin growable array
 - [x] Use aggregates in codegen, not pointers, for optionals
 - [x] Basic generic type inference in function calls
+- [x] Pretty print scopes
 - [ ] Precedence of dereference (and i guess unary ops in general) should be higher
 - [ ] Change our builtin int type to be 32 bits?
-- [ ] Make codegen fail instead of panic
 - [ ] Codegen 'variables' is broken (never cleared); use enter scope / exit scope w/ a stack of vecs or something
   instead (matters when a variable id is reused because the same function is called twice; I think we just overwrite it
   with the correct one but maybe nesting is a problem?)
-- [ ] Support multiple files (module ID in all IDs)
-- [ ] Builtin maps
+- [x] Support multiple files
 - [x] Fix namespaces to require full paths (currently busted must be unique names globally)
 - [x] Allow namespaces inside namespaces
-- [ ] Type Ascriptions (literally can just pass expected_type into eval and do an addtl typecheck)
-- [ ] Some debug info in LLVM IR (source snippets or line numbers?)
-- [ ] Single-arm match syntax with `is`; `if x is Some(y)` instead of `if let Some(y) = x`; if x is not Err(y) (replaces
-  let-else)
-- [ ] Sum types (oneofs) (variants?) (tagged unions)
-- [ ] Errors
+- [x] Some debug info in LLVM IR (source snippets or line numbers?)
 - [ ] uint type
 - [x] Generic type inference
 - [ ] Type literals would be fun
@@ -69,21 +80,18 @@
     - [ ] Parse trailing commas
 - [ ] Replace spans on typed ast with just ast node ids
 - [ ] Tuples
-- [ ] Pure lambdas with ->
-- [ ] Full-on closures with =>
 
 - [-] For iteration (we will just hardcode the iterable types)
     - [x] 'do' version
     - [x] 'yield' version on array
     - [x] 'yield' version on string
     - [x] Provide index var (it_index)
-    - [ ] Allow customizing index var name
 
 - [x] DEBUG info
     - [x] on or off
     - [x] flag types
     - [x] correct line nums
-    - [ ] correct spans (depends on multifile)
+    - [x] correct spans (depends on multifile)
     - [x] correct file path
     - [ ] Add lexical scopes for if and while
 
@@ -123,7 +131,7 @@
 - [x] Not equal != operator
 - [x] Unary negation operator
 
-# Fibonacci todos (Aug 20)
+# Fibonacci todos (Aug 23)
 
 - [x] Equality binop
 - [x] Precedence of binops; parens?
@@ -133,36 +141,26 @@
 
 # Hacks to fix
 
+- [ ] main entrypoint properly. Typing of main? How to get main args?
+- [ ] Replace vectors with smallvec where appropriate
 - [x] Fix line comments
 - [x] Maybe eventually actually free some memory? lol
 - [x] Rename IR to typed-ast, since it's a tree not instruction set. TAST?
 - [x] Make intrinsics like arrayIndex a real function in the LLVM IR?
 - [x] Fix line numbers to account for prelude
-- [ ] main entrypoint properly. Typing of main? How to get main args?
-- [ ] Replace vectors with smallvec where appropriate
 - [x] Fix unnecessary load of function args
 - [x] Proper println implementation. Fine to use printf internally for now but we should define our own func around it
 - [x] Implement Display instead of relying on Debug
 
-Design for
-
-- optionality
-- fallibility
-
 # Dev ex
 
-- [ ] Pretty-print AST
+- [x] Pretty-print AST
 - [x] Error Spans
 - [x] fancy output COLORS
 
 # Maybe later
 
-- [ ] Block-as-single-arg syntax (xs.map { y => } )
 - [x] Type Params
-- [ ] Unicode source
-- [ ] multiple parameter lists
-- [ ] Symbols like lisp or Clojure keywords would be really great; or just have string literal types?
-- [ ] Symbols are always interned and very fast. Also signal intent to use a symbol vs use strings
 
 # Resurrect project (March '23)
 
