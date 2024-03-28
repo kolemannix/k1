@@ -64,6 +64,20 @@ namespace Array {
     self[start_length] = elem;
     self.set_length<T>(start_length + 1);
   }
+
+
+  fn first<T>(self: Array<T>): T? {
+    if self.length() > 0 {
+      self[0]
+    } else None
+  }
+
+  fn last<T>(self: Array<T>): T? {
+    if self.length() > 0 {
+      self[self.length() - 1]
+    } else None
+  }
+
 }
 namespace string {
   intern fn fromChars(bytes: Array<char>): string
