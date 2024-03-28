@@ -1,15 +1,3 @@
-fn last<T>(arr: Array<T>): T? {
-  if arr.length() > 0 {
-    arr[arr.length() - 1]
-  } else None
-}
-
-fn first<T>(arr: Array<T>): T? {
-  if arr.length() > 0 {
-    arr[0]
-  } else None
-}
-
 fn is_digit(c: char): bool {
   val i_code = c.toInt();
   // TODO: lte gte
@@ -49,8 +37,8 @@ fn main(): int {
   };
   mut sum = 0;
   for digits do {
-    if first(it) |fst| {
-      if last(it) |lst| {
+    if it.first() |fst| {
+      if it.last() |lst| {
         val two_digit = fst * 10 + lst;
         sum = sum + two_digit;
       };
