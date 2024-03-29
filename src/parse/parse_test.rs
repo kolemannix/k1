@@ -19,11 +19,17 @@ fn set_up<'module>(input: &str, module: &'module mut ParsedModule) -> Parser<'st
 }
 
 fn test_single_expr(input: &str) -> Result<(ParsedModule, ParsedExpression), ParseError> {
+    test_single_expr_with_id(input).map(|(m, e, _)| (m, e))
+}
+
+fn test_single_expr_with_id(
+    input: &str,
+) -> Result<(ParsedModule, ParsedExpression, ExpressionId), ParseError> {
     let mut module = make_test_module();
     let mut parser = set_up(input, &mut module);
     let expr_id = parser.expect_expression()?;
     let expr = (*parser.get_expression(expr_id)).clone();
-    Ok((module, expr))
+    Ok((module, expr, expr_id))
 }
 
 #[test]
@@ -313,5 +319,24 @@ fn namespaced_val() -> ParseResult<()> {
     assert_eq!(variable.namespaces[0], parser.ident_id("foo"));
     assert_eq!(variable.namespaces[1], parser.ident_id("bar"));
     assert_eq!(variable.name, parser.ident_id("baz"));
+    Ok(())
+}
+
+#[test]
+fn type_hint() -> ParseResult<()> {
+    let input = "None: int?";
+    let (module, _expr, expr_id) = test_single_expr_with_id(input)?;
+    let type_hint = module.get_expression_type_hint(expr_id).unwrap();
+    assert_eq!(&format!("{}", &*type_hint), "int?");
+    Ok(())
+}
+
+#[test]
+fn type_hint_binop() -> ParseResult<()> {
+    let input = "(3!: int + 4: Array<bool>): int";
+    let (module, _expr, expr_id) = test_single_expr_with_id(input)?;
+    let type_hint = module.get_expression_type_hint(expr_id).unwrap();
+    assert_eq!(&format!("{}", &*type_hint), "int");
+
     Ok(())
 }
