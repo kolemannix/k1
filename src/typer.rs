@@ -3227,7 +3227,7 @@ impl TypedModule {
         // from the generic version so we just pass it in
         known_intrinsic: Option<IntrinsicFunctionType>,
     ) -> TyperResult<FunctionId> {
-        let decl_id = self.eval_function_predecl(
+        let specialized_function_id = self.eval_function_predecl(
             fn_def,
             parent_scope_id,
             fn_scope_id,
@@ -3235,11 +3235,9 @@ impl TypedModule {
             new_name,
             known_intrinsic,
         )?;
-        self.eval_function(decl_id)?;
-        Ok(decl_id)
+        self.eval_function(specialized_function_id)?;
+        Ok(specialized_function_id)
     }
-
-    // GENERATE NICE SCOPE NAMES AND USE THEM IN ERROR MESSAGES / LOGS
 
     fn eval_namespace(
         &mut self,
@@ -3328,10 +3326,6 @@ impl TypedModule {
 
         let scope_id = self.scopes.get_root_scope_id();
 
-        // TODO: 'Declare' everything first, will allow modules
-        //        to declare their API without full typechecking
-        //        will also allow recursion without hacks
-        // predecl pass
         for defn in self.ast.clone().defns_iter() {
             let result = self.eval_definition(defn, scope_id, true);
             if let Err(e) = result {
