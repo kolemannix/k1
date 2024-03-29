@@ -315,3 +315,27 @@ fn namespaced_val() -> ParseResult<()> {
     assert_eq!(variable.name, parser.ident_id("baz"));
     Ok(())
 }
+
+#[test]
+fn type_hint() -> ParseResult<()> {
+    let input = "None: int?";
+    let mut parser = set_up(input);
+    let result = parser.expect_expression()?;
+    let type_hint = result.type_hint.unwrap();
+    let ParsedTypeExpression::Optional(ParsedOptional { base, .. }) = type_hint else { panic!() };
+    let ParsedTypeExpression::Int(_) = *base else {
+        panic!();
+    };
+    Ok(())
+}
+
+#[test]
+fn type_hint_binop() -> ParseResult<()> {
+    let input = "(3!: int + 4: Array<bool>): int";
+    let mut parser = set_up(input);
+    let result = parser.expect_expression()?;
+    let type_hint = &result.type_hint.as_ref().unwrap();
+    eprintln!("{}", result);
+
+    Ok(())
+}

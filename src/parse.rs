@@ -441,6 +441,46 @@ impl ParsedTypeExpression {
     }
 }
 
+impl Display for ParsedTypeExpression {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ParsedTypeExpression::Unit(_) => f.write_str("unit"),
+            ParsedTypeExpression::Char(_) => f.write_str("char"),
+            ParsedTypeExpression::Int(_) => f.write_str("int"),
+            ParsedTypeExpression::Bool(_) => f.write_str("bool"),
+            ParsedTypeExpression::String(_) => f.write_str("string"),
+            ParsedTypeExpression::Record(record_type) => {
+                f.write_str("{ ")?;
+                for field in record_type.fields.iter() {
+                    field.name.fmt(f)?;
+                    f.write_str(": ")?;
+                    field.ty.fmt(f)?;
+                    f.write_str(", ")?;
+                }
+                f.write_str(" }")
+            }
+            ParsedTypeExpression::Name(ident, _) => ident.fmt(f),
+            ParsedTypeExpression::TypeApplication(tapp) => {
+                tapp.base.fmt(f)?;
+                f.write_str("<")?;
+                for tparam in tapp.params.iter() {
+                    tparam.fmt(f)?;
+                    f.write_str(", ")?;
+                }
+                f.write_str(">")
+            }
+            ParsedTypeExpression::Optional(opt) => {
+                opt.base.fmt(f)?;
+                f.write_str("?")
+            }
+            ParsedTypeExpression::Reference(refer) => {
+                refer.base.fmt(f)?;
+                f.write_str("*")
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct TypeParamDef {
     pub ident: IdentifierId,
@@ -554,8 +594,17 @@ impl Definition {
 #[derive(Debug, Default)]
 pub struct ParsedExpressionPool {
     expressions: Vec<ParsedExpression>,
+    type_hints: HashMap<ExpressionId, ParsedTypeExpression>,
 }
 impl ParsedExpressionPool {
+    pub fn add_type_hint(&mut self, id: ExpressionId, ty: ParsedTypeExpression) {
+        self.type_hints.insert(id, ty);
+    }
+
+    pub fn get_type_hint(&self, id: ExpressionId) -> Option<&ParsedTypeExpression> {
+        self.type_hints.get(&id)
+    }
+
     pub fn add_expression(&mut self, expression: ParsedExpression) -> ExpressionId {
         let id = self.expressions.len();
         self.expressions.push(expression);
@@ -1063,7 +1112,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     fn parse_expression_with_postfix_ops(&mut self) -> ParseResult<Option<ExpressionId>> {
         let Some(mut result) = self.parse_base_expression()? else { return Ok(None) };
         // Looping for postfix ops inspired by Jakt's parser
-        loop {
+        let with_postfix: ExpressionId = loop {
             let next = self.peek();
             if next.kind.is_postfix_operator() {
                 // Optional uwrap `config!.url`
@@ -1130,9 +1179,15 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                         }));
                 }
             } else {
-                return Ok(Some(result));
+                break result;
             }
+        };
+        if self.peek().kind == K::Colon {
+            self.tokens.advance();
+            let type_hint = self.expect_type_expression()?;
+            self.expressions.borrow_mut().add_type_hint(with_postfix, type_hint);
         }
+        Ok(Some(with_postfix))
     }
 
     fn expect_block(&mut self) -> ParseResult<Block> {
