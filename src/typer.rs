@@ -2,6 +2,7 @@
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter, Write};
+use std::ops::Deref;
 use std::rc::Rc;
 
 use anyhow::bail;
@@ -1454,9 +1455,7 @@ impl TypedModule {
             ParsedExpression::FieldAccess(field_access) => {
                 self.eval_field_access(field_access, scope_id, true)
             }
-            other => {
-                return make_fail(format!("Invalid assignment lhs: {:?}", other), other.get_span());
-            }
+            other => make_fail(format!("Invalid assignment lhs: {:?}", other), other.get_span()),
         }
     }
 
@@ -1466,6 +1465,14 @@ impl TypedModule {
         scope_id: ScopeId,
         expected_type: Option<TypeId>,
     ) -> TyperResult<TypedExpr> {
+        let ast = self.ast.clone();
+        let expected_type = match ast.get_expression_type_hint(expr) {
+            Some(t) => {
+                let type_id = self.eval_type_expr(t.deref(), scope_id)?;
+                Some(type_id)
+            }
+            None => expected_type,
+        };
         let base_result = self.eval_expr_inner(expr, scope_id, expected_type)?;
 
         if let TypedExpr::None(_type_id, _span) = base_result {
@@ -3239,84 +3246,86 @@ impl TypedModule {
         Ok(specialized_function_id)
     }
 
-    fn eval_namespace(
+    fn eval_namespace_decl(
         &mut self,
         ast_namespace: &ParsedNamespace,
         scope_id: ScopeId,
-        declaration_phase: bool,
     ) -> TyperResult<NamespaceId> {
-        // ONLY ADD THIS IN DECLARATION PHASE OTHERWISE WE DUPE EVERY NAMESPACE
-        let namespace_id = if declaration_phase {
-            let ns_scope_id = self.scopes.add_child_scope(
-                scope_id,
-                ScopeType::Namespace,
-                Some(ast_namespace.name),
-            );
-            let namespace = Namespace { name: ast_namespace.name, scope_id: ns_scope_id };
-            let namespace_id = self.add_namespace(namespace);
+        let ns_scope_id =
+            self.scopes.add_child_scope(scope_id, ScopeType::Namespace, Some(ast_namespace.name));
+        let namespace = Namespace { name: ast_namespace.name, scope_id: ns_scope_id };
+        let namespace_id = self.add_namespace(namespace);
 
-            // We add the new namespace's scope as a child of the current scope
-            let scope = self.scopes.get_scope_mut(scope_id);
-            scope.add_namespace(ast_namespace.name, namespace_id);
+        // We add the new namespace's scope as a child of the current scope
+        let scope = self.scopes.get_scope_mut(scope_id);
+        scope.add_namespace(ast_namespace.name, namespace_id);
 
-            self.definition_mappings
-                .insert(ast_namespace.definition_id, TypedDefinitionId::NamespaceId(namespace_id));
+        self.definition_mappings
+            .insert(ast_namespace.definition_id, TypedDefinitionId::NamespaceId(namespace_id));
 
-            namespace_id
-        } else {
-            self.definition_mappings.get(&ast_namespace.definition_id).unwrap().as_namespace_id()
-        };
-        let ns_scope_id = self.get_namespace(namespace_id).scope_id;
-        // We add the new namespace to the current scope
         for defn in &ast_namespace.definitions {
-            if let Definition::FnDef(_fn_def) = defn {
-                self.eval_definition(defn, ns_scope_id, declaration_phase)?;
-            } else if let Definition::Namespace(_ns) = defn {
-                self.eval_definition(defn, ns_scope_id, declaration_phase)?;
-            } else {
-                panic!("Unsupported definition type inside namespace: {:?}", defn)
-            }
+            self.eval_definition_declaration_phase(defn, ns_scope_id)?;
         }
         Ok(namespace_id)
     }
 
-    fn eval_definition(
+    fn eval_namespace(&mut self, ast_namespace: &ParsedNamespace) -> TyperResult<NamespaceId> {
+        let namespace_id =
+            self.definition_mappings.get(&ast_namespace.definition_id).unwrap().as_namespace_id();
+        let ns_scope_id = self.get_namespace(namespace_id).scope_id;
+        for defn in &ast_namespace.definitions {
+            self.eval_definition(defn, ns_scope_id)?;
+        }
+        Ok(namespace_id)
+    }
+
+    fn eval_definition_declaration_phase(
         &mut self,
         def: &Definition,
         scope_id: ScopeId,
-        declaration_phase: bool,
     ) -> TyperResult<()> {
         match def {
             Definition::Namespace(namespace) => {
-                self.eval_namespace(namespace, scope_id, declaration_phase)?;
+                self.eval_namespace_decl(namespace, scope_id)?;
                 Ok(())
             }
             Definition::Const(const_val) => {
-                // We can just do consts in the declaration phase, so we skip them in the 2nd pass
-                if declaration_phase {
-                    let _variable_id: VariableId = self.eval_const(const_val)?;
-                }
+                let _variable_id: VariableId = self.eval_const(const_val)?;
                 Ok(())
             }
             Definition::FnDef(fn_def) => {
-                if declaration_phase {
-                    self.eval_function_predecl(fn_def, scope_id, None, false, None, None)?;
-                } else {
-                    let function_declaration_id = self
-                        .definition_mappings
-                        .get(&fn_def.definition_id)
-                        .expect("function predecl lookup failed")
-                        .as_function_id();
-                    self.eval_function(function_declaration_id)?;
-                }
+                self.eval_function_predecl(fn_def, scope_id, None, false, None, None)?;
                 Ok(())
             }
             Definition::TypeDef(type_defn) => {
                 // We can just do type defs in the declaration phase, so we skip them in the 2nd pass
-                if declaration_phase {
-                    self.eval_type_defn(type_defn, scope_id)?;
-                    let _typ = self.eval_type_expr(&type_defn.value_expr, scope_id)?;
-                }
+                self.eval_type_defn(type_defn, scope_id)?;
+                Ok(())
+            }
+        }
+    }
+
+    fn eval_definition(&mut self, def: &Definition, _scope_id: ScopeId) -> TyperResult<()> {
+        match def {
+            Definition::Namespace(namespace) => {
+                self.eval_namespace(namespace)?;
+                Ok(())
+            }
+            Definition::Const(_const_val) => {
+                // Nothing to do in this phase for a const
+                Ok(())
+            }
+            Definition::FnDef(fn_def) => {
+                let function_declaration_id = self
+                    .definition_mappings
+                    .get(&fn_def.definition_id)
+                    .expect("function predecl lookup failed")
+                    .as_function_id();
+                self.eval_function(function_declaration_id)?;
+                Ok(())
+            }
+            Definition::TypeDef(_type_defn) => {
+                // Nothing to do in this phase for a type definition
                 Ok(())
             }
         }
@@ -3327,7 +3336,7 @@ impl TypedModule {
         let scope_id = self.scopes.get_root_scope_id();
 
         for defn in self.ast.clone().defns_iter() {
-            let result = self.eval_definition(defn, scope_id, true);
+            let result = self.eval_definition_declaration_phase(defn, scope_id);
             if let Err(e) = result {
                 self.print_error(&e.message, e.span);
                 errors.push(e);
@@ -3339,7 +3348,7 @@ impl TypedModule {
         }
 
         for defn in self.ast.clone().defns_iter() {
-            let result = self.eval_definition(defn, scope_id, false);
+            let result = self.eval_definition(defn, scope_id);
             if let Err(e) = result {
                 self.print_error(&e.message, e.span);
                 errors.push(e);

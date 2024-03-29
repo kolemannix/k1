@@ -1,5 +1,5 @@
 fn main(): int {
-  val b = Some(true);
+  val b = true: bool?;
   if b |x| {
     assert(x);
   };
