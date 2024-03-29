@@ -91,6 +91,11 @@ pub struct ReferenceType {
 }
 
 #[derive(Debug, Clone)]
+pub struct TagInstance {
+    pub ident: IdentifierId,
+}
+
+#[derive(Debug, Clone)]
 pub enum Type {
     Unit,
     Char,
@@ -103,9 +108,17 @@ pub enum Type {
     Reference(ReferenceType),
     #[allow(clippy::enum_variant_names)]
     TypeVariable(TypeVariable),
+    TagInstance(TagInstance),
 }
 
 impl Type {
+    pub(crate) fn as_tag_instance(&self) -> Option<&TagInstance> {
+        match self {
+            Type::TagInstance(tag) => Some(tag),
+            _ => None,
+        }
+    }
+
     pub fn as_reference(&self) -> Option<&ReferenceType> {
         match self {
             Type::Reference(r) => Some(r),
@@ -420,6 +433,12 @@ pub struct TypedForExpr {
 }
 
 #[derive(Debug, Clone)]
+pub struct TypedTagExpr {
+    pub name: IdentifierId,
+    pub type_id: TypeId,
+    pub span: Span,
+}
+#[derive(Debug, Clone)]
 pub enum TypedExpr {
     Unit(Span),
     Char(u8, Span),
@@ -443,6 +462,7 @@ pub enum TypedExpr {
     OptionalHasValue(Box<TypedExpr>),
     OptionalGet(OptionalGet),
     For(TypedForExpr),
+    Tag(TypedTagExpr),
 }
 
 // pub enum BuiltinType {
@@ -494,6 +514,7 @@ impl TypedExpr {
             TypedExpr::OptionalHasValue(_opt) => BOOL_TYPE_ID,
             TypedExpr::OptionalGet(opt_get) => opt_get.result_type_id,
             TypedExpr::For(for_expr) => for_expr.result_type_id,
+            TypedExpr::Tag(tag_expr) => tag_expr.type_id,
         }
     }
     #[inline]
@@ -520,6 +541,7 @@ impl TypedExpr {
             TypedExpr::OptionalHasValue(opt) => opt.get_span(),
             TypedExpr::OptionalGet(get) => get.span,
             TypedExpr::For(for_expr) => for_expr.span,
+            TypedExpr::Tag(tag_expr) => tag_expr.span,
         }
     }
 }
@@ -993,6 +1015,7 @@ impl TypedModule {
             Type::Optional(opt) => self.is_generic(opt.inner_type),
             Type::Reference(refer) => self.is_generic(refer.inner_type),
             Type::TypeVariable(_) => true,
+            Type::TagInstance(_) => false,
         }
     }
 
@@ -1008,6 +1031,7 @@ impl TypedModule {
             Type::Optional(_opt) => None,
             Type::Reference(_refer) => None,
             Type::TypeVariable(_) => None,
+            Type::TagInstance(_) => None,
         }
     }
 
@@ -1067,6 +1091,11 @@ impl TypedModule {
                     )
                 })
             }
+            ParsedTypeExpression::TagName(ident, _span) => {
+                // Make a type for this tag, if there isn't one
+                let tag_type_id = self.get_type_for_tag(*ident);
+                Ok(tag_type_id)
+            }
             ParsedTypeExpression::TypeApplication(ty_app) => {
                 if self.ast.ident_id("Array") == ty_app.base {
                     if ty_app.params.len() == 1 {
@@ -1098,6 +1127,20 @@ impl TypedModule {
             }
         }?;
         Ok(base)
+    }
+
+    // FIXME: Slow
+    fn get_type_for_tag(&mut self, tag_ident: IdentifierId) -> TypeId {
+        for (idx, typ) in self.types.iter().enumerate() {
+            if let Type::TagInstance(tag) = typ {
+                if tag.ident == tag_ident {
+                    return idx as TypeId;
+                }
+            }
+        }
+        let tag_type = Type::TagInstance(TagInstance { ident: tag_ident });
+        let tag_type_id = self.add_type(tag_type);
+        tag_type_id
     }
 
     fn eval_const_type_expr(&mut self, expr: &ParsedTypeExpression) -> TyperResult<TypeId> {
@@ -1849,6 +1892,15 @@ impl TypedModule {
                 // from ast.expressions
                 self.eval_for_expr(for_expr, scope_id, expected_type)
             }
+            ParsedExpression::Tag(tag_expr) => {
+                let type_id = self.get_type_for_tag(tag_expr.tag);
+                let typed_expr = TypedExpr::Tag(TypedTagExpr {
+                    name: tag_expr.tag,
+                    type_id,
+                    span: tag_expr.span,
+                });
+                Ok(typed_expr)
+            }
         };
         result
     }
@@ -2273,6 +2325,23 @@ impl TypedModule {
                         format!("Type mismatch on equality of 2 generic variables: {}", msg),
                         binary_op.span,
                     );
+                }
+                Ok(TypedExpr::BinaryOp(BinaryOp {
+                    kind: BinaryOpKind::Equals,
+                    ty: BOOL_TYPE_ID,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                    span: binary_op.span,
+                }))
+            }
+            Type::TagInstance(tag) => {
+                let tag_ident = tag.ident;
+                let rhs = self.eval_expr(binary_op.rhs, scope_id, None)?;
+                let Type::TagInstance(rhs_tag) = self.get_type(rhs.get_type()) else {
+                    return make_fail("Expected string on rhs", binary_op.span);
+                };
+                if rhs_tag.ident != tag_ident {
+                    return make_fail("Cannot compare different tags for equality", binary_op.span);
                 }
                 Ok(TypedExpr::BinaryOp(BinaryOp {
                     kind: BinaryOpKind::Equals,
@@ -3511,6 +3580,10 @@ impl TypedModule {
                 self.display_type_id(r.inner_type, writ)?;
                 writ.write_char('*')
             }
+            Type::TagInstance(tag) => {
+                writ.write_str(".")?;
+                writ.write_str(&*self.get_ident_str(tag.ident))
+            }
         }
     }
 
@@ -3719,6 +3792,10 @@ impl TypedModule {
                     ForExprType::Do => "do ",
                 })?;
                 self.display_block(&for_expr.body_block, writ, indentation + 1)
+            }
+            TypedExpr::Tag(tag_expr) => {
+                writ.write_str(".")?;
+                writ.write_str(&*self.get_ident_str(tag_expr.name))
             }
         }
     }
