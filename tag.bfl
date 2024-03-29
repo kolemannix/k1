@@ -1,0 +1,6 @@
+fn main(a: .A): int {
+  val a =.Red; // : Red <:< Tag
+  val a =.Red; // : Red <:< Tag
+  ("asdfasdf").Red
+  0
+}

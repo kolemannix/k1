@@ -5,7 +5,7 @@
 - [ ] Sum types
 - [ ] Make 'reference' heap-allocate and use https://github.com/ivmai/bdwgc for GC
 - [ ] Make codegen fail instead of panic
-- [ ] Type Ascriptions (literally can just pass expected_type into eval and do an addtl typecheck)
+- [x] Type Ascriptions (literally can just pass expected_type into eval and do an addtl typecheck)
 - [ ] Single-arm match syntax with `is`; `if x is Some(y)` instead of `if let Some(y) = x`; if x is not Err(y) (replaces
   let-else)
 - [ ] Pattern matching with `when x is ` (Roc-inspired)

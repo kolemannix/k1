@@ -738,6 +738,9 @@ impl<'ctx> Codegen<'ctx> {
                     )
                     .as_type()
             }
+            Type::TagInstance(tag_instance) => {
+                todo!("debug type for TagInstance")
+            }
         }
     }
 
@@ -1327,18 +1330,11 @@ impl<'ctx> Codegen<'ctx> {
                     elem_value
                 }
             }
-            TypedExpr::For(typed_for_expr) => {
-                eprintln!(
-                    "codegen for expr: {}: {}",
-                    self.module.expr_to_string(expr),
-                    self.module.type_id_to_string(expr.get_type())
-                );
-                match typed_for_expr.for_expr_type {
-                    ForExprType::Yield => unimplemented!("codegen for yield"),
-                    ForExprType::Do => {
-                        unimplemented!("codegen for do");
-                    }
-                }
+            TypedExpr::For(_typed_for_expr) => {
+                panic!("For loops should be desugared by codegen")
+            }
+            TypedExpr::Tag(_tag_expr) => {
+                todo!("Codegen for tag expr")
             }
         }
     }

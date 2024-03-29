@@ -215,6 +215,12 @@ pub struct OptionalGet {
 }
 
 #[derive(Debug, Clone)]
+pub struct TagExpr {
+    pub tag: IdentifierId,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
 pub enum ParsedExpression {
     BinaryOp(BinaryOp),             // a == b
     UnaryOp(UnaryOp),               // !b, *b
@@ -230,6 +236,7 @@ pub enum ParsedExpression {
     Array(ArrayExpr),               // [1, 3, 5, 7]
     OptionalGet(OptionalGet),       // foo!
     For(ForExpr),                   // for i in [1,2,3] do println(i)
+    Tag(TagExpr),                   // A
 }
 
 impl ParsedExpression {
@@ -253,6 +260,7 @@ impl ParsedExpression {
             ParsedExpression::Array(array_expr) => array_expr.span,
             ParsedExpression::OptionalGet(optional_get) => optional_get.span,
             ParsedExpression::For(for_expr) => for_expr.span,
+            ParsedExpression::Tag(tag_expr) => tag_expr.span,
         }
     }
 
@@ -272,6 +280,7 @@ impl ParsedExpression {
             ParsedExpression::Array(_array_expr) => false,
             ParsedExpression::OptionalGet(_optional_get) => false,
             ParsedExpression::For(_) => false,
+            ParsedExpression::Tag(_) => false,
         }
     }
 }
@@ -298,6 +307,7 @@ impl Display for ParsedExpression {
             ParsedExpression::Array(array_expr) => std::fmt::Debug::fmt(array_expr, f),
             ParsedExpression::OptionalGet(optional_get) => std::fmt::Debug::fmt(optional_get, f),
             ParsedExpression::For(for_expr) => std::fmt::Debug::fmt(for_expr, f),
+            ParsedExpression::Tag(tag_expr) => std::fmt::Debug::fmt(tag_expr, f),
         }
     }
 }
@@ -415,6 +425,7 @@ pub enum ParsedTypeExpression {
     String(Span),
     Record(RecordType),
     Name(IdentifierId, Span),
+    TagName(IdentifierId, Span),
     TypeApplication(TypeApplication),
     Optional(ParsedOptional),
     Reference(ParsedReference),
@@ -435,6 +446,7 @@ impl ParsedTypeExpression {
             ParsedTypeExpression::String(span) => *span,
             ParsedTypeExpression::Record(record) => record.span,
             ParsedTypeExpression::Name(_, span) => *span,
+            ParsedTypeExpression::TagName(_, span) => *span,
             ParsedTypeExpression::TypeApplication(app) => app.span,
             ParsedTypeExpression::Optional(opt) => opt.span,
             ParsedTypeExpression::Reference(r) => r.span,
@@ -461,6 +473,10 @@ impl Display for ParsedTypeExpression {
                 f.write_str(" }")
             }
             ParsedTypeExpression::Name(ident, _) => ident.fmt(f),
+            ParsedTypeExpression::TagName(ident, _) => {
+                f.write_str(".")?;
+                ident.fmt(f)
+            }
             ParsedTypeExpression::TypeApplication(tapp) => {
                 tapp.base.fmt(f)?;
                 f.write_str("<")?;
@@ -878,11 +894,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         self.expressions.borrow_mut().add_expression(expression)
     }
 
-    pub fn get_expression(
-        &self,
-        id: ExpressionId,
-    ) -> impl std::ops::Deref<Target = ParsedExpression> + '_ {
-        std::cell::Ref::map(self.expressions.borrow(), |e| e.get_expression(id))
+    pub fn get_expression(&self, id: ExpressionId) -> impl Deref<Target = ParsedExpression> + '_ {
+        Ref::map(self.expressions.borrow(), |e| e.get_expression(id))
     }
 
     pub fn get_expression_span(&self, id: ExpressionId) -> Span {
