@@ -94,7 +94,7 @@ pub fn compile_module<'ctx>(
             .filter_map(|item| item.ok())
             .filter(|item| src_filter.as_ref().map_or(true, |filter| filter(&item.path())))
             .collect::<Vec<_>>();
-        ents.sort_by(|ent1, ent2| ent1.file_name().cmp(&ent2.file_name()));
+        ents.sort_by_key(|ent1| ent1.file_name());
         ents
     };
     let mut parse_errors = Vec::new();
