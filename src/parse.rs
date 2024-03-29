@@ -1,6 +1,7 @@
-use std::cell::RefCell;
+use std::cell::{Ref, RefCell};
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter, Write};
+use std::ops::Deref;
 use std::rc::Rc;
 
 use log::trace;
@@ -680,8 +681,8 @@ impl ParsedModule {
     pub fn ident_id(&self, ident: &str) -> IdentifierId {
         self.identifiers.borrow_mut().intern(ident)
     }
-    pub fn get_ident_str(&self, id: IdentifierId) -> impl std::ops::Deref<Target = str> + '_ {
-        std::cell::Ref::map(self.identifiers.borrow(), |idents| idents.get_name(id))
+    pub fn get_ident_str(&self, id: IdentifierId) -> impl Deref<Target = str> + '_ {
+        Ref::map(self.identifiers.borrow(), |idents| idents.get_name(id))
     }
 
     pub fn get_defn_by_id(&self, ast_id: AstDefinitionId) -> &Definition {
@@ -697,15 +698,19 @@ impl ParsedModule {
         self.defs.iter()
     }
 
-    pub fn get_expression(
-        &self,
-        id: ExpressionId,
-    ) -> impl std::ops::Deref<Target = ParsedExpression> + '_ {
-        std::cell::Ref::map(self.expressions.borrow(), |e| e.get_expression(id))
+    pub fn get_expression(&self, id: ExpressionId) -> impl Deref<Target = ParsedExpression> + '_ {
+        Ref::map(self.expressions.borrow(), |e| e.get_expression(id))
     }
 
     pub fn add_expression(&self, expression: ParsedExpression) -> ExpressionId {
         self.expressions.borrow_mut().add_expression(expression)
+    }
+
+    pub fn get_expression_type_hint(&self, id: ExpressionId) -> Option<Ref<ParsedTypeExpression>> {
+        match Ref::filter_map(self.expressions.borrow(), |e| e.get_type_hint(id)) {
+            Err(_) => None,
+            Ok(r) => Some(r),
+        }
     }
 }
 
