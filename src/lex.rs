@@ -34,22 +34,30 @@ impl<'toks> TokenIter<'toks> {
     pub fn make(data: &'toks [Token]) -> TokenIter<'toks> {
         TokenIter { iter: data.iter() }
     }
+
+    #[inline]
     pub fn next(&mut self) -> Token {
         *self.iter.next().unwrap_or(&EOF_TOKEN)
     }
+    #[inline]
     pub fn advance(&mut self) {
         self.next();
     }
+    #[inline]
     pub fn peek(&self) -> Token {
         let peeked = self.iter.clone().next();
         *peeked.unwrap_or(&EOF_TOKEN)
     }
+
+    #[inline]
     pub fn peek_two(&self) -> (Token, Token) {
         let mut peek_iter = self.iter.clone();
         let p1 = *peek_iter.next().unwrap_or(&EOF_TOKEN);
         let p2 = *peek_iter.next().unwrap_or(&EOF_TOKEN);
         (p1, p2)
     }
+
+    #[inline]
     pub fn peek_three(&self) -> (Token, Token, Token) {
         let mut peek_iter = self.iter.clone();
         let p1 = *peek_iter.next().unwrap_or(&EOF_TOKEN);
@@ -63,7 +71,6 @@ impl<'toks> TokenIter<'toks> {
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub enum TokenKind {
     Ident,
-    TagIdent,
     String,
 
     Char,
@@ -187,9 +194,8 @@ impl TokenKind {
             K::DoubleQuote => Some("\""),
             K::SingleQuote => Some("'"),
 
-            K::Ident => Some("<ident>"),
-            K::TagIdent => Some(".<Ident>"),
-            K::String => Some("\"<str>\""),
+            K::Ident => None,
+            K::String => Some("\"?\""),
             K::Char => Some("'?'"),
 
             K::Eof => Some("<EOF>"),
@@ -372,22 +378,20 @@ impl Lexer<'_> {
 
     pub fn run(&mut self) -> LexResult<Vec<Token>> {
         let mut tokens = Vec::with_capacity(1024);
-        let mut prev_token: Option<TokenKind> = None;
-        while let Some(tok) = self.eat_token(prev_token)? {
-            prev_token = Some(tok.kind);
+        while let Some(tok) = self.eat_token()? {
             tokens.push(tok);
         }
         Ok(tokens)
     }
 
-    fn eat_token(&mut self, prev_kind: Option<TokenKind>) -> LexResult<Option<Token>> {
+    fn eat_token(&mut self) -> LexResult<Option<Token>> {
         let mut tok_buf = String::new();
         let mut tok_len = 0;
         let mut is_line_comment = false;
         let mut line_comment_start = 0;
         let mut is_string = false;
-        let mut buf_is_tag_ident = false;
         let peeked_whitespace = self.peek().is_whitespace();
+        trace!("lex starting new token with prev_skip=false");
         let token = loop {
             let (c, n) = self.peek_with_pos();
             trace!("LEX line={} char={} '{}' buf={}", self.line_index, n, c, tok_buf);
@@ -437,7 +441,7 @@ impl Lexer<'_> {
             if c == EOF_CHAR {
                 if !tok_buf.is_empty() {
                     break Some(Token::new(
-                        if buf_is_tag_ident { K::TagIdent } else { K::Ident },
+                        TokenKind::Ident,
                         self.line_index,
                         n - tok_len,
                         tok_len,
@@ -454,40 +458,13 @@ impl Lexer<'_> {
                     // Break without advancing; we'll have a clear buffer next time
                     // and will advance
                     break Some(Token::new(
-                        if buf_is_tag_ident { K::TagIdent } else { K::Ident },
+                        TokenKind::Ident,
                         self.line_index,
                         n - tok_len,
                         tok_len,
                         false,
                         self.file_id,
                     ));
-                } else if single_char_tok == TokenKind::Dot
-                    && is_ident_or_num_start(self.peek_two().1)
-                {
-                    // If we just finished a token that you can call a method on, we want a dot
-                    // Otherwise, we want a tag ident
-                    eprintln!("GOT DOT and prev_kind is {:?}", prev_kind);
-                    if prev_kind == Some(K::Ident)
-                        || prev_kind == Some(K::Char)
-                        || prev_kind == Some(K::String)
-                        || prev_kind == Some(K::CloseParen)
-                    {
-                        // Yield the dot
-                        self.advance();
-                        break Some(Token::new(
-                            single_char_tok,
-                            self.line_index,
-                            n,
-                            1,
-                            peeked_whitespace,
-                            self.file_id,
-                        ));
-                    } else {
-                        // Eat the dot and continue to get a TagIdent
-                        buf_is_tag_ident = true;
-                        self.advance();
-                        continue;
-                    }
                 } else if single_char_tok == TokenKind::SingleQuote {
                     self.advance(); // eat opening '
                     let mut count = 1;
@@ -580,7 +557,7 @@ impl Lexer<'_> {
                     ));
                 } else {
                     break Some(Token::new(
-                        if buf_is_tag_ident { K::TagIdent } else { K::Ident },
+                        TokenKind::Ident,
                         self.line_index,
                         n - tok_len,
                         tok_len,
@@ -590,19 +567,16 @@ impl Lexer<'_> {
                 }
             }
             if (tok_buf.is_empty() && is_ident_or_num_start(c)) || is_ident_char(c) {
-                // if tok_buf.is_empty() && c == '.' {
-                //     buf_is_tag_ident = true;
-                //     self.advance();
-                //     continue;
-                // }
                 if tok_buf.len() == 1 && tok_buf.starts_with('_') && c == '_' {
                     return Err(self.err("Identifiers cannot begin with __"));
                 }
                 tok_len += 1;
                 tok_buf.push(c);
-            } else if let Some(kind) = TokenKind::token_from_str(&tok_buf) {
+            } else if let Some(tok) = TokenKind::token_from_str(&tok_buf) {
+                // No longer eat this so the next eat_token call can see it.
+                // self.advance();
                 break Some(Token::new(
-                    kind,
+                    tok,
                     self.line_index,
                     n - tok_len,
                     tok_len,
@@ -643,7 +617,7 @@ impl Lexer<'_> {
 }
 
 fn is_ident_char(c: char) -> bool {
-    c.is_alphanumeric() || c == '_'
+    c.is_alphanumeric() || c == '_' || c == '.'
 }
 
 fn is_ident_or_num_start(c: char) -> bool {
@@ -729,18 +703,6 @@ mod test {
         let result = Lexer::make(input, 0).run()?;
         let kinds: Vec<TokenKind> = result.iter().map(|t| t.kind).collect();
         assert_eq!(kinds, vec![K::KeywordVal, K::Ident, K::Equals, K::Ident, K::Plus, K::Ident]);
-        Ok(())
-    }
-
-    #[test]
-    fn tag_ident() -> anyhow::Result<()> {
-        let input = ".Red";
-        let result = Lexer::make(input, 0).run()?;
-        let kinds: Vec<TokenKind> = result.iter().map(|t| t.kind).collect();
-        assert_eq!(kinds, vec![K::TagIdent]);
-        dbg!(result[0].span);
-        assert_eq!(result[0].span.start, 1);
-        assert_eq!(result[0].span.end, 4);
         Ok(())
     }
 

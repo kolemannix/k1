@@ -21,9 +21,10 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P) -> Result<()> {
         out_dir,
     )
     .map_err(|err| anyhow!("\tTEST CASE FAILED COMPILE: {}. Reason: {}", filename, err))?;
+    let module_name = codegen.name();
 
     let path = path.as_ref().canonicalize().unwrap();
-    let src = std::fs::read_to_string(&path).expect("could not read source file for test");
+    let src = std::fs::read_to_string(path).expect("could not read source file for test");
     println!("{}", codegen.name());
 
     let last_line = src.lines().last().unwrap();
@@ -36,7 +37,8 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P) -> Result<()> {
     } else {
         None
     };
-    let mut run_cmd = std::process::Command::new(format!("{}/{}.out", out_dir, filename));
+    eprintln!("running {}/{}.out", out_dir, module_name);
+    let mut run_cmd = std::process::Command::new(format!("{}/{}.out", out_dir, module_name));
     if let Some(exp) = expected_result {
         println!("\tExpected: {exp}");
     }

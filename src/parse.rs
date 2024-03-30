@@ -191,16 +191,6 @@ pub struct IndexOperation {
     pub span: Span,
 }
 
-impl Display for IndexOperation {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        self.target.fmt(f)?;
-        f.write_char('[')?;
-        self.index_expr.fmt(f)?;
-        f.write_char(']')?;
-        Ok(())
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct MethodCall {
     pub base: ExpressionId,
@@ -236,7 +226,7 @@ pub enum ParsedExpression {
     Array(ArrayExpr),               // [1, 3, 5, 7]
     OptionalGet(OptionalGet),       // foo!
     For(ForExpr),                   // for i in [1,2,3] do println(i)
-    Tag(TagExpr),                   // A
+    Tag(TagExpr),                   // .A
 }
 
 impl ParsedExpression {
@@ -281,33 +271,6 @@ impl ParsedExpression {
             ParsedExpression::OptionalGet(_optional_get) => false,
             ParsedExpression::For(_) => false,
             ParsedExpression::Tag(_) => false,
-        }
-    }
-}
-
-impl Display for ParsedExpression {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ParsedExpression::BinaryOp(op) => {
-                f.write_fmt(format_args!("({} {} {})", op.lhs, op.op_kind, op.rhs))
-            }
-            ParsedExpression::UnaryOp(op) => {
-                let _ = op.op_kind.fmt(f);
-                op.expr.fmt(f)
-            }
-            ParsedExpression::Literal(lit) => lit.fmt(f),
-            ParsedExpression::FnCall(call) => std::fmt::Debug::fmt(call, f),
-            ParsedExpression::Variable(var) => var.fmt(f),
-            ParsedExpression::FieldAccess(acc) => std::fmt::Debug::fmt(acc, f),
-            ParsedExpression::MethodCall(call) => std::fmt::Debug::fmt(call, f),
-            ParsedExpression::Block(block) => std::fmt::Debug::fmt(block, f),
-            ParsedExpression::If(if_expr) => std::fmt::Debug::fmt(if_expr, f),
-            ParsedExpression::Record(record) => std::fmt::Debug::fmt(record, f),
-            ParsedExpression::IndexOperation(op) => op.fmt(f),
-            ParsedExpression::Array(array_expr) => std::fmt::Debug::fmt(array_expr, f),
-            ParsedExpression::OptionalGet(optional_get) => std::fmt::Debug::fmt(optional_get, f),
-            ParsedExpression::For(for_expr) => std::fmt::Debug::fmt(for_expr, f),
-            ParsedExpression::Tag(tag_expr) => std::fmt::Debug::fmt(tag_expr, f),
         }
     }
 }
@@ -838,16 +801,24 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         println!("{span_text}");
     }
 
+    #[inline]
     fn peek(&self) -> Token {
         self.tokens.peek()
+    }
+
+    #[inline]
+    fn peek_two(&self) -> (Token, Token) {
+        self.tokens.peek_two()
     }
 
     fn chars_at(&self, start: u32, end: u32) -> &str {
         &self.source.content[start as usize..end as usize]
     }
+
     fn chars_at_span(&self, span: Span) -> &str {
         self.chars_at(span.start, span.end)
     }
+
     fn tok_chars(&self, tok: Token) -> &str {
         let s = self.chars_at_span(tok.span);
         trace!("{} chars '{}'", tok.kind, s);
@@ -1027,7 +998,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn parse_base_type_expression(&mut self) -> ParseResult<Option<ParsedTypeExpression>> {
-        let tok = self.peek();
+        let (tok, second) = self.peek_two();
         if tok.kind == K::Ident {
             let source = self.source.clone();
             let text_str = Source::get_span_content(&source, tok.span);
@@ -1066,6 +1037,15 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     Ok(Some(ParsedTypeExpression::Name(self.ident_id(text_str), tok.span)))
                 }
             }
+        } else if tok.kind == K::Dot && second.kind == K::Ident {
+            // Tag Literal Type
+            self.tokens.advance();
+            let tag_name = self.expect_eat_token(K::Ident)?;
+            let tag_name_ident = self.intern_ident_token(tag_name);
+            Ok(Some(ParsedTypeExpression::TagName(
+                tag_name_ident,
+                tok.span.extended(tag_name.span),
+            )))
         } else if tok.kind == K::OpenBrace {
             let open_brace = self.expect_eat_token(K::OpenBrace)?;
             let (fields, fields_span) =
@@ -1384,6 +1364,19 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 expr,
                 op_kind,
                 span,
+            }))))
+        } else if first.kind == K::Dot && second.kind == K::Ident {
+            // Tag Literal: .Red
+            self.tokens.advance();
+            self.tokens.advance();
+
+            if self.tok_chars(second).chars().next().unwrap().is_lowercase() {
+                return Err(Parser::error("Uppercase tag name", second));
+            }
+            let tag_name = self.intern_ident_token(second);
+            Ok(Some(self.add_expression(ParsedExpression::Tag(TagExpr {
+                tag: tag_name,
+                span: first.span.extended(second.span),
             }))))
         } else if first.kind == K::Ident {
             // FnCall
@@ -1821,6 +1814,53 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         self.parsed_module.defs.extend(defs);
 
         Ok(())
+    }
+}
+
+// Display
+impl ParsedModule {
+    pub fn expression_to_string(&self, expr: ExpressionId) -> String {
+        let mut buffer = String::new();
+        self.display_expression_id(expr, &mut buffer).unwrap();
+        buffer
+    }
+
+    pub fn display_expression_id(
+        &self,
+        expr: ExpressionId,
+        f: &mut impl Write,
+    ) -> std::fmt::Result {
+        match &*self.get_expression(expr) {
+            ParsedExpression::BinaryOp(op) => {
+                f.write_str("(")?;
+                self.display_expression_id(op.lhs, f)?;
+                f.write_fmt(format_args!(" {} ", op.op_kind))?;
+                self.display_expression_id(op.rhs, f)?;
+                f.write_str(")")
+            }
+            ParsedExpression::UnaryOp(op) => {
+                f.write_fmt(format_args!("{}", op.op_kind))?;
+                self.display_expression_id(op.expr, f)
+            }
+            ParsedExpression::Literal(lit) => f.write_fmt(format_args!("{}", lit)),
+            ParsedExpression::FnCall(call) => f.write_fmt(format_args!("{:?}", call)),
+            ParsedExpression::Variable(var) => f.write_fmt(format_args!("{}", var)),
+            ParsedExpression::FieldAccess(acc) => f.write_fmt(format_args!("{:?}", acc)),
+            ParsedExpression::MethodCall(call) => f.write_fmt(format_args!("{:?}", call)),
+            ParsedExpression::Block(block) => f.write_fmt(format_args!("{:?}", block)),
+            ParsedExpression::If(if_expr) => f.write_fmt(format_args!("{:?}", if_expr)),
+            ParsedExpression::Record(record) => f.write_fmt(format_args!("{:?}", record)),
+            ParsedExpression::IndexOperation(op) => f.write_fmt(format_args!("{:?}", op)),
+            ParsedExpression::Array(array_expr) => f.write_fmt(format_args!("{:?}", array_expr)),
+            ParsedExpression::OptionalGet(optional_get) => {
+                f.write_fmt(format_args!("{:?}", optional_get))
+            }
+            ParsedExpression::For(for_expr) => f.write_fmt(format_args!("{:?}", for_expr)),
+            ParsedExpression::Tag(tag_expr) => {
+                f.write_char('.')?;
+                f.write_str(&self.get_ident_str(tag_expr.tag))
+            }
+        }
     }
 }
 

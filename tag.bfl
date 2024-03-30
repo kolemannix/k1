@@ -1,6 +1,8 @@
+fn get_red(): .Red {
+  .Red
+}
+
 fn main(a: .A): int {
-  val a =.Red; // : Red <:< Tag
-  val a =.Red; // : Red <:< Tag
-  ("asdfasdf").Red
+  val a: .Red = get_red();
   0
 }
