@@ -26,7 +26,7 @@ use inkwell::{AddressSpace, IntPredicate, OptimizationLevel};
 use log::trace;
 
 use crate::lex::Span;
-use crate::parse::{ForExprType, IdentifierId};
+use crate::parse::IdentifierId;
 use crate::typer::{Linkage as TyperLinkage, *};
 
 const STRING_LENGTH_FIELD_INDEX: u32 = 0;
@@ -106,6 +106,7 @@ struct BuiltinTypes<'ctx> {
     char: IntType<'ctx>,
     c_str: PointerType<'ctx>,
     string_struct: StructType<'ctx>,
+    tag_type: IntType<'ctx>,
 }
 
 impl<'ctx> BuiltinTypes<'ctx> {
@@ -187,6 +188,7 @@ pub struct Codegen<'ctx> {
     builtin_types: BuiltinTypes<'ctx>,
     default_address_space: AddressSpace,
     debug: DebugContext<'ctx>,
+    tag_type_mappings: HashMap<TypeId, GlobalValue<'ctx>>,
 }
 
 struct DebugContext<'ctx> {
@@ -370,6 +372,7 @@ impl<'ctx> Codegen<'ctx> {
             char: char_type,
             c_str: char_type.ptr_type(AddressSpace::default()),
             string_struct,
+            tag_type: ctx.i64_type(),
         };
 
         let printf_type = ctx.i32_type().fn_type(&[builtin_types.c_str.into()], true);
@@ -386,6 +389,23 @@ impl<'ctx> Codegen<'ctx> {
                 .fn_type(&[byte_ptr.into(), byte_ptr.into(), ctx.i64_type().into()], false),
             Some(LlvmLinkage::External),
         );
+        let mut tag_type_value: u64 = 0;
+        let mut tag_type_mappings: HashMap<TypeId, GlobalValue<'ctx>> = HashMap::new();
+        for (type_id, typ) in module.types.iter().enumerate() {
+            if let Type::TagInstance(tag) = typ {
+                let value = builtin_types.tag_type.const_int(tag_type_value, false);
+                let name = module.ast.get_ident_str(tag.ident);
+                let global = llvm_module.add_global(
+                    builtin_types.tag_type,
+                    None,
+                    &format!("Tag.{}", &*name),
+                );
+                global.set_constant(true);
+                global.set_initializer(&value);
+                tag_type_mappings.insert(type_id as u32, global);
+                tag_type_value += 1;
+            }
+        }
         Codegen {
             ctx,
             module,
@@ -401,6 +421,7 @@ impl<'ctx> Codegen<'ctx> {
             builtin_types,
             default_address_space: AddressSpace::default(),
             debug: debug_context,
+            tag_type_mappings,
         }
     }
 
@@ -739,7 +760,17 @@ impl<'ctx> Codegen<'ctx> {
                     .as_type()
             }
             Type::TagInstance(tag_instance) => {
-                todo!("debug type for TagInstance")
+                let name = self.get_ident_name(tag_instance.ident);
+                self.debug
+                    .debug_builder
+                    .create_basic_type(
+                        &format!("Tag.{}", &*name),
+                        self.builtin_types.tag_type.get_bit_width() as u64,
+                        dw_ate_signed,
+                        0,
+                    )
+                    .unwrap()
+                    .as_type()
             }
         }
     }
@@ -834,6 +865,10 @@ impl<'ctx> Codegen<'ctx> {
                                 }
                                 .into()
                             }
+                            Type::TagInstance(_tag_instance) => LlvmType::Value(LlvmValueType {
+                                type_id,
+                                basic_type: self.builtin_types.tag_type.as_basic_type_enum(),
+                            }),
                             other => {
                                 panic!(
                                     "get_llvm_type for type dropped through unexpectedly: {:?}",
@@ -1333,8 +1368,9 @@ impl<'ctx> Codegen<'ctx> {
             TypedExpr::For(_typed_for_expr) => {
                 panic!("For loops should be desugared by codegen")
             }
-            TypedExpr::Tag(_tag_expr) => {
-                todo!("Codegen for tag expr")
+            TypedExpr::Tag(tag_expr) => {
+                let int_value = self.get_value_for_tag_type(tag_expr.type_id);
+                int_value.as_basic_value_enum()
             }
         }
     }
@@ -2104,5 +2140,10 @@ impl<'ctx> Codegen<'ctx> {
             unsafe { engine.run_function(self.llvm_module.get_last_function().unwrap(), &[]) };
         let res: u64 = return_value.as_int(true);
         Ok(res)
+    }
+    fn get_value_for_tag_type(&self, type_id: TypeId) -> IntValue<'ctx> {
+        let global = self.tag_type_mappings.get(&type_id).expect("tag type mapping value");
+        let ptr = global.as_pointer_value();
+        self.builder.build_load(self.builtin_types.tag_type, ptr, "tag_value").into_int_value()
     }
 }

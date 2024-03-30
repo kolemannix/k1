@@ -112,13 +112,6 @@ pub enum Type {
 }
 
 impl Type {
-    pub(crate) fn as_tag_instance(&self) -> Option<&TagInstance> {
-        match self {
-            Type::TagInstance(tag) => Some(tag),
-            _ => None,
-        }
-    }
-
     pub fn as_reference(&self) -> Option<&ReferenceType> {
         match self {
             Type::Reference(r) => Some(r),
@@ -1585,7 +1578,7 @@ impl TypedModule {
     ) -> TyperResult<TypedExpr> {
         trace!(
             "eval_expr: {}: {:?}",
-            *self.ast.get_expression(expr),
+            &self.ast.expression_to_string(expr),
             expected_type.map(|t| self.type_id_to_string(t))
         );
         let ast = self.ast.clone();
