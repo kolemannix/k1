@@ -326,7 +326,7 @@ fn type_hint() -> ParseResult<()> {
     let input = "None: int?";
     let (module, _expr, expr_id) = test_single_expr_with_id(input)?;
     let type_hint = module.get_expression_type_hint(expr_id).unwrap();
-    assert_eq!(&format!("{}", &*type_hint), "int?");
+    assert_eq!(module.type_expression_to_string(&type_hint), "int?");
     Ok(())
 }
 
@@ -335,7 +335,7 @@ fn type_hint_binop() -> ParseResult<()> {
     let input = "(3!: int + 4: Array<bool>): int";
     let (module, _expr, expr_id) = test_single_expr_with_id(input)?;
     let type_hint = module.get_expression_type_hint(expr_id).unwrap();
-    assert_eq!(&format!("{}", &*type_hint), "int");
+    assert_eq!(module.type_expression_to_string(&type_hint), "int");
     Ok(())
 }
 
@@ -345,6 +345,6 @@ fn tag_literals() -> ParseResult<()> {
     let (module, _expr, expr_id) = test_single_expr_with_id(input)?;
     let type_hint = module.get_expression_type_hint(expr_id).unwrap();
     assert_eq!(&module.expression_to_string(expr_id), ".Foo");
-    assert_eq!(&format!("{}", &*type_hint), ".1");
+    assert_eq!(module.type_expression_to_string(&type_hint), ".Foo");
     Ok(())
 }

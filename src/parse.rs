@@ -380,6 +380,19 @@ pub struct ParsedReference {
 }
 
 #[derive(Debug, Clone)]
+pub struct ParsedEnumVariant {
+    pub tag_name: IdentifierId,
+    pub payload_expression: Option<ParsedTypeExpression>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct ParsedEnumType {
+    pub variants: Vec<ParsedEnumVariant>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
 pub enum ParsedTypeExpression {
     Unit(Span),
     Char(Span),
@@ -392,6 +405,7 @@ pub enum ParsedTypeExpression {
     TypeApplication(TypeApplication),
     Optional(ParsedOptional),
     Reference(ParsedReference),
+    Enum(ParsedEnumType),
 }
 
 impl ParsedTypeExpression {
@@ -413,50 +427,7 @@ impl ParsedTypeExpression {
             ParsedTypeExpression::TypeApplication(app) => app.span,
             ParsedTypeExpression::Optional(opt) => opt.span,
             ParsedTypeExpression::Reference(r) => r.span,
-        }
-    }
-}
-
-impl Display for ParsedTypeExpression {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ParsedTypeExpression::Unit(_) => f.write_str("unit"),
-            ParsedTypeExpression::Char(_) => f.write_str("char"),
-            ParsedTypeExpression::Int(_) => f.write_str("int"),
-            ParsedTypeExpression::Bool(_) => f.write_str("bool"),
-            ParsedTypeExpression::String(_) => f.write_str("string"),
-            ParsedTypeExpression::Record(record_type) => {
-                f.write_str("{ ")?;
-                for field in record_type.fields.iter() {
-                    field.name.fmt(f)?;
-                    f.write_str(": ")?;
-                    field.ty.fmt(f)?;
-                    f.write_str(", ")?;
-                }
-                f.write_str(" }")
-            }
-            ParsedTypeExpression::Name(ident, _) => ident.fmt(f),
-            ParsedTypeExpression::TagName(ident, _) => {
-                f.write_str(".")?;
-                ident.fmt(f)
-            }
-            ParsedTypeExpression::TypeApplication(tapp) => {
-                tapp.base.fmt(f)?;
-                f.write_str("<")?;
-                for tparam in tapp.params.iter() {
-                    tparam.fmt(f)?;
-                    f.write_str(", ")?;
-                }
-                f.write_str(">")
-            }
-            ParsedTypeExpression::Optional(opt) => {
-                opt.base.fmt(f)?;
-                f.write_str("?")
-            }
-            ParsedTypeExpression::Reference(refer) => {
-                refer.base.fmt(f)?;
-                f.write_str("*")
-            }
+            ParsedTypeExpression::Enum(e) => e.span,
         }
     }
 }
@@ -999,7 +970,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn parse_base_type_expression(&mut self) -> ParseResult<Option<ParsedTypeExpression>> {
         let (tok, second) = self.peek_two();
-        if tok.kind == K::Ident {
+        if tok.kind == K::KeywordEnum {
+            let enumm = self.expect_enum_type_expression()?;
+            Ok(Some(ParsedTypeExpression::Enum(enumm)))
+        } else if tok.kind == K::Ident {
             let source = self.source.clone();
             let text_str = Source::get_span_content(&source, tok.span);
             if text_str == "unit" {
@@ -1060,6 +1034,46 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         } else {
             Ok(None)
         }
+    }
+
+    fn expect_enum_type_expression(&mut self) -> ParseResult<ParsedEnumType> {
+        let keyword = self.expect_eat_token(K::KeywordEnum)?;
+        let mut variants = Vec::new();
+        let mut first = true;
+        loop {
+            // Expect comma
+            if !first {
+                if self.peek().kind == K::Comma {
+                    self.tokens.advance();
+                } else {
+                    break;
+                }
+            }
+
+            let tag = self.peek();
+            if tag.kind != K::Ident {
+                return Err(Parser::error("Identifier for enum variant", tag));
+            }
+            let tag_name = self.intern_ident_token(tag);
+            self.tokens.advance();
+            let maybe_payload_paren = self.peek();
+            let payload_expression = if maybe_payload_paren.kind == K::OpenParen {
+                self.tokens.advance();
+                let payload_expr = self.expect_type_expression()?;
+                let _close_paren = self.expect_eat_token(K::CloseParen)?;
+                Some(payload_expr)
+            } else {
+                None
+            };
+            let span = payload_expression
+                .as_ref()
+                .map(|e| tag.span.extended(e.get_span()))
+                .unwrap_or(tag.span);
+            variants.push(ParsedEnumVariant { tag_name, payload_expression, span });
+            first = false;
+        }
+        let span = keyword.span.extended(variants.last().map(|v| v.span).unwrap_or(keyword.span));
+        Ok(ParsedEnumType { variants, span })
     }
 
     fn parse_fn_arg(&mut self) -> ParseResult<Option<FnCallArg>> {
@@ -1859,6 +1873,70 @@ impl ParsedModule {
             ParsedExpression::Tag(tag_expr) => {
                 f.write_char('.')?;
                 f.write_str(&self.get_ident_str(tag_expr.tag))
+            }
+        }
+    }
+
+    pub fn type_expression_to_string(&self, type_expr: &ParsedTypeExpression) -> String {
+        let mut buffer = String::new();
+        self.display_type_expression(type_expr, &mut buffer).unwrap();
+        buffer
+    }
+
+    pub fn display_type_expression(
+        &self,
+        ty_expr: &ParsedTypeExpression,
+        f: &mut impl Write,
+    ) -> std::fmt::Result {
+        match ty_expr {
+            ParsedTypeExpression::Unit(_) => f.write_str("unit"),
+            ParsedTypeExpression::Char(_) => f.write_str("char"),
+            ParsedTypeExpression::Int(_) => f.write_str("int"),
+            ParsedTypeExpression::Bool(_) => f.write_str("bool"),
+            ParsedTypeExpression::String(_) => f.write_str("string"),
+            ParsedTypeExpression::Record(record_type) => {
+                f.write_str("{ ")?;
+                for field in record_type.fields.iter() {
+                    f.write_str(&self.get_ident_str(field.name))?;
+                    f.write_str(": ")?;
+                    self.display_type_expression(ty_expr, f)?;
+                    f.write_str(", ")?;
+                }
+                f.write_str(" }")
+            }
+            ParsedTypeExpression::Name(ident, _) => f.write_str(&self.get_ident_str(*ident)),
+            ParsedTypeExpression::TagName(ident, _) => {
+                f.write_str(".")?;
+                f.write_str(&self.get_ident_str(*ident))
+            }
+            ParsedTypeExpression::TypeApplication(tapp) => {
+                f.write_str(&self.get_ident_str(tapp.base))?;
+                f.write_str("<")?;
+                for tparam in tapp.params.iter() {
+                    self.display_type_expression(tparam, f)?;
+                    f.write_str(", ")?;
+                }
+                f.write_str(">")
+            }
+            ParsedTypeExpression::Optional(opt) => {
+                self.display_type_expression(&opt.base, f)?;
+                f.write_str("?")
+            }
+            ParsedTypeExpression::Reference(refer) => {
+                self.display_type_expression(&refer.base, f)?;
+                f.write_str("*")
+            }
+            ParsedTypeExpression::Enum(e) => {
+                f.write_str("enum ")?;
+                for variant in &e.variants {
+                    f.write_str(&self.get_ident_str(variant.tag_name))?;
+                    if let Some(payload) = &variant.payload_expression {
+                        f.write_str("(")?;
+                        self.display_type_expression(payload, f)?;
+                        f.write_str(")")?;
+                    }
+                }
+                Ok(())
             }
         }
     }
