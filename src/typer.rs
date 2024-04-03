@@ -61,12 +61,6 @@ pub const BOOL_TYPE_ID: TypeId = 3;
 pub const STRING_TYPE_ID: TypeId = 4;
 
 #[derive(Debug, Clone)]
-pub struct TypeExpression {
-    pub type_id: TypeId,
-    pub span: Span,
-}
-
-#[derive(Debug, Clone)]
 pub struct ArrayType {
     pub element_type: TypeId,
     // todo: Lose the span!
@@ -96,6 +90,17 @@ pub struct TagInstance {
 }
 
 #[derive(Debug, Clone)]
+pub struct TypedEnumVariant {
+    tag_name: IdentifierId,
+    payload: Option<TypeId>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TypedEnum {
+    variants: Vec<TypedEnumVariant>,
+}
+
+#[derive(Debug, Clone)]
 pub enum Type {
     Unit,
     Char,
@@ -109,6 +114,7 @@ pub enum Type {
     #[allow(clippy::enum_variant_names)]
     TypeVariable(TypeVariable),
     TagInstance(TagInstance),
+    Enum(TypedEnum),
 }
 
 impl Type {
@@ -431,6 +437,14 @@ pub struct TypedTagExpr {
     pub type_id: TypeId,
     pub span: Span,
 }
+
+#[derive(Debug, Clone)]
+struct TypedEnumConstructor {
+    enum_type: TypeId,
+    variant_name: IdentifierId,
+    payload: Option<Box<ParsedExpression>>,
+}
+
 #[derive(Debug, Clone)]
 pub enum TypedExpr {
     Unit(Span),
@@ -456,6 +470,7 @@ pub enum TypedExpr {
     OptionalGet(OptionalGet),
     For(TypedForExpr),
     Tag(TypedTagExpr),
+    EnumConstructor(TypedEnumConstructor),
 }
 
 // pub enum BuiltinType {
@@ -1003,12 +1018,14 @@ impl TypedModule {
             Type::Bool => false,
             Type::String => false,
             Type::Array(arr) => self.is_generic(arr.element_type),
-            // We don't yet support generics in records
+            // We don't _yet_ support generics in records
             Type::Record(_record) => false,
             Type::Optional(opt) => self.is_generic(opt.inner_type),
             Type::Reference(refer) => self.is_generic(refer.inner_type),
             Type::TypeVariable(_) => true,
             Type::TagInstance(_) => false,
+            // We don't _yet_ support generics in records
+            Type::Enum(_) => false,
         }
     }
 
@@ -1025,6 +1042,7 @@ impl TypedModule {
             Type::Reference(_refer) => None,
             Type::TypeVariable(_) => None,
             Type::TagInstance(_) => None,
+            Type::Enum(_) => None,
         }
     }
 
@@ -1116,6 +1134,24 @@ impl TypedModule {
                 let inner_ty = self.eval_type_expr(&r.base, scope_id)?;
                 let reference_type = Type::Reference(ReferenceType { inner_type: inner_ty });
                 let type_id = self.add_type(reference_type);
+                Ok(type_id)
+            }
+            ParsedTypeExpression::Enum(e) => {
+                let mut variants = Vec::with_capacity(e.variants.len());
+                for v in e.variants.iter() {
+                    let payload_type_id = match &v.payload_expression {
+                        None => None,
+                        Some(payload_type_expr) => {
+                            let type_id = self.eval_type_expr(payload_type_expr, scope_id)?;
+                            Some(type_id)
+                        }
+                    };
+                    let variant =
+                        TypedEnumVariant { tag_name: v.tag_name, payload: payload_type_id };
+                    variants.push(variant);
+                }
+                let enum_type = Type::Enum(TypedEnum { variants });
+                let type_id = self.add_type(enum_type);
                 Ok(type_id)
             }
         }?;
@@ -1226,6 +1262,14 @@ impl TypedModule {
             }
             (Type::Reference(o1), Type::Reference(o2)) => {
                 self.typecheck_types(o1.inner_type, o2.inner_type)
+            }
+            (Type::Enum(e), Type::TagInstance(t)) => {
+                eprintln!(
+                    "typechecking enum vs a tag instance {} {}",
+                    self.type_id_to_string(expected),
+                    self.type_id_to_string(actual)
+                );
+                Err(format!("unimplemented"))
             }
             (exp, got) => Err(format!(
                 "Expected {} but got {}",
@@ -1495,6 +1539,76 @@ impl TypedModule {
         }
     }
 
+    /// Used for
+    /// - Auto Some()-boxing,
+    /// - auto-referencing,
+    /// - de-referencing,
+    /// - enum variant construction
+    /// This is a good place to do this because we just typechecked an expression, and
+    /// we know the expected type.
+    fn coerce_expression_to_expected_type(
+        &mut self,
+        expected_type_id: TypeId,
+        expression: TypedExpr,
+    ) -> TyperResult<TypedExpr> {
+        // For some reason, we skip coercion for 'None'. Need to run that down
+        if let TypedExpr::None(_type_id, _span) = expression {
+            return Ok(expression);
+        }
+        match self.get_type(expected_type_id) {
+            Type::Enum(e) => match &expression {
+                TypedExpr::Tag(tag_expr) => {
+                    let matching_variant = e.variants.iter().find(|v| v.tag_name == tag_expr.name);
+                    if let Some(matching_variant) = matching_variant {
+                        if let Some(p) = matching_variant.payload {
+                            eprintln!(
+                                "We do not have a matching variant: {}",
+                                self.type_id_to_string(p)
+                            );
+                            Ok(expression)
+                        } else {
+                            eprintln!("We have a matching variant: {:?}", matching_variant);
+                            TypedExpr::EnumConstructor(TypedEnumConstructor {
+                                enum_type: expected_type_id,
+                                variant_name: matching_variant.tag_name,
+                                payload: None,
+                            })
+                        }
+                    } else {
+                        // We 'fail' by just giving up the coercion and let typechecking fail
+                        // better
+                        Ok(expression)
+                    }
+                }
+                _ => Ok(expression),
+            },
+            Type::Optional(optional_type) => {
+                match self.typecheck_types(optional_type.inner_type, expression.get_type()) {
+                    Ok(_) => Ok(TypedExpr::OptionalSome(OptionalSome {
+                        inner_expr: Box::new(expression),
+                        type_id: expected_type_id,
+                    })),
+                    Err(_) => Ok(expression),
+                }
+            }
+            Type::Reference(reference_type) => {
+                match self.typecheck_types(reference_type.inner_type, expression.get_type()) {
+                    Ok(_) => {
+                        let base_span = expression.get_span();
+                        Ok(TypedExpr::UnaryOp(UnaryOp {
+                            kind: UnaryOpKind::Reference,
+                            type_id: expected_type_id,
+                            expr: Box::new(expression),
+                            span: base_span,
+                        }))
+                    }
+                    Err(_) => Ok(expression),
+                }
+            }
+            _ => Ok(expression),
+        }
+    }
+
     fn eval_expr(
         &mut self,
         expr: ExpressionId,
@@ -1511,55 +1625,8 @@ impl TypedModule {
         };
         let base_result = self.eval_expr_inner(expr, scope_id, expected_type)?;
 
-        if let TypedExpr::None(_type_id, _span) = base_result {
-            return Ok(base_result);
-        }
-        // Special case for some-boxing and auto-referencing
         if let Some(expected_type_id) = expected_type {
-            match self.get_type(expected_type_id) {
-                Type::Optional(optional_type) => {
-                    trace!(
-                        "some boxing: expected type is optional: {}",
-                        self.type_id_to_string(expected_type_id)
-                    );
-                    trace!("some boxing: value is: {}", self.expr_to_string(&base_result));
-                    trace!(
-                        "some boxing: value type is: {}",
-                        self.type_id_to_string(base_result.get_type())
-                    );
-                    match self.typecheck_types(optional_type.inner_type, base_result.get_type()) {
-                        Ok(_) => Ok(TypedExpr::OptionalSome(OptionalSome {
-                            inner_expr: Box::new(base_result),
-                            type_id: expected_type_id,
-                        })),
-                        Err(_) => Ok(base_result),
-                    }
-                }
-                Type::Reference(reference_type) => {
-                    trace!(
-                        "reference promotion: expected type is reference: {}",
-                        self.type_id_to_string(expected_type_id)
-                    );
-                    trace!(
-                        "reference promotion: value is: {}: {}",
-                        self.expr_to_string(&base_result),
-                        self.type_id_to_string(base_result.get_type())
-                    );
-                    match self.typecheck_types(reference_type.inner_type, base_result.get_type()) {
-                        Ok(_) => {
-                            let base_span = base_result.get_span();
-                            Ok(TypedExpr::UnaryOp(UnaryOp {
-                                kind: UnaryOpKind::Reference,
-                                type_id: expected_type_id,
-                                expr: Box::new(base_result),
-                                span: base_span,
-                            }))
-                        }
-                        Err(_) => Ok(base_result),
-                    }
-                }
-                _ => Ok(base_result),
-            }
+            self.coerce_expression_to_expected_type(expected_type_id, base_result)
         } else {
             Ok(base_result)
         }
@@ -2343,6 +2410,9 @@ impl TypedModule {
                     rhs: Box::new(rhs),
                     span: binary_op.span,
                 }))
+            }
+            Type::Enum(_e) => {
+                todo!("equality enum lhs")
             }
         }?;
         if binary_op.op_kind == BinaryOpKind::Equals {
@@ -3434,7 +3504,7 @@ impl Display for TypedModule {
         f.write_str("--- TYPES ---\n")?;
         for (id, ty) in self.types.iter().enumerate() {
             f.write_fmt(format_args!("{} ", id))?;
-            self.write_type(ty, f)?;
+            self.display_type(ty, f)?;
             f.write_str("\n")?;
         }
         f.write_str("--- Namespaces ---\n")?;
@@ -3521,7 +3591,7 @@ impl TypedModule {
             STRING_TYPE_ID => writ.write_str("string"),
             type_id => {
                 let ty = self.get_type(type_id);
-                self.write_type(ty, writ)
+                self.display_type(ty, writ)
             }
         }
     }
@@ -3533,11 +3603,11 @@ impl TypedModule {
 
     pub fn type_to_string(&self, ty: &Type) -> String {
         let mut s = String::new();
-        self.write_type(ty, &mut s).unwrap();
+        self.display_type(ty, &mut s).unwrap();
         s
     }
 
-    fn write_type(&self, ty: &Type, writ: &mut impl Write) -> std::fmt::Result {
+    fn display_type(&self, ty: &Type, writ: &mut impl Write) -> std::fmt::Result {
         match ty {
             Type::Unit => writ.write_str("()"),
             Type::Char => writ.write_str("char"),
@@ -3575,7 +3645,23 @@ impl TypedModule {
             }
             Type::TagInstance(tag) => {
                 writ.write_str(".")?;
-                writ.write_str(&*self.get_ident_str(tag.ident))
+                writ.write_str(&self.get_ident_str(tag.ident))
+            }
+            Type::Enum(e) => {
+                writ.write_str("enum ")?;
+                for (idx, v) in e.variants.iter().enumerate() {
+                    writ.write_str(&self.get_ident_str(v.tag_name))?;
+                    if let Some(payload) = &v.payload {
+                        writ.write_str("(")?;
+                        self.display_type_id(*payload, writ)?;
+                        writ.write_str(")")?;
+                    }
+                    let last = idx == e.variants.len() - 1;
+                    if !last {
+                        writ.write_str(", ")?;
+                    }
+                }
+                Ok(())
             }
         }
     }

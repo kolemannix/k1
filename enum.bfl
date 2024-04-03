@@ -1,0 +1,6 @@
+
+fn main(): int {
+  mut v: enum Yes, No = .No;
+  v = .Yes;
+  0
+}

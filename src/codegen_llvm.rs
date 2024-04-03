@@ -772,6 +772,9 @@ impl<'ctx> Codegen<'ctx> {
                     .unwrap()
                     .as_type()
             }
+            Type::Enum(_e) => {
+                todo!("Debug Info for enum is gonna be a DOOZY")
+            }
         }
     }
 

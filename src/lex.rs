@@ -92,6 +92,7 @@ pub enum TokenKind {
     KeywordIn,
     KeywordDo,
     KeywordYield,
+    KeywordEnum,
 
     Slash,
     LineComment,
@@ -161,6 +162,7 @@ impl TokenKind {
             K::KeywordIn => Some("in"),
             K::KeywordDo => Some("do"),
             K::KeywordYield => Some("yield"),
+            K::KeywordEnum => Some("enum"),
 
             K::Slash => Some("/"),
             K::LineComment => Some("//"),
@@ -248,6 +250,7 @@ impl TokenKind {
             "in" => Some(K::KeywordIn),
             "do" => Some(K::KeywordDo),
             "yield" => Some(K::KeywordYield),
+            "enum" => Some(K::KeywordEnum),
             "==" => Some(K::EqualsEquals),
             "!=" => Some(K::BangEquals),
             "<=" => Some(K::LessThanEqual),
@@ -272,6 +275,7 @@ impl TokenKind {
             K::KeywordIn => true,
             K::KeywordDo => true,
             K::KeywordYield => true,
+            K::KeywordEnum => true,
             _ => false,
         }
     }
