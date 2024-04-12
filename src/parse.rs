@@ -591,6 +591,10 @@ impl Sources {
     pub fn source_by_span(&self, span: Span) -> Rc<Source> {
         self.sources.get(&span.file_id).unwrap().clone()
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = (FileId, impl Deref<Target = Source> + '_)> {
+        self.sources.iter().map(|(file_id, source)| (*file_id, source.clone()))
+    }
 }
 
 #[derive(Debug)]
