@@ -99,13 +99,13 @@ pub fn compile_module<'ctx>(
     };
     let mut parse_errors = Vec::new();
 
-    let mut parse_file = |p: &Path, file_id: u32| {
-        let content = fs::read_to_string(p)?;
-        let name = p.file_name().unwrap();
-        println!("Parsing {}", name.to_string_lossy());
+    let mut parse_file = |path: &Path, file_id: u32| {
+        let content = fs::read_to_string(path)?;
+        let name = path.file_name().unwrap();
+        eprintln!("Parsing {}", name.to_string_lossy());
         let source = Rc::new(Source::make(
             file_id,
-            module_name.to_string(),
+            path.canonicalize().unwrap().parent().unwrap().to_str().unwrap().to_string(),
             name.to_str().unwrap().to_string(),
             content,
         ));
@@ -142,7 +142,6 @@ pub fn compile_module<'ctx>(
     typed_module.run()?;
 
     let irgen = Rc::new(typed_module);
-    // println!("{irgen}");
     let llvm_optimize = !args.no_llvm_opt;
 
     let mut codegen: Codegen<'ctx> = Codegen::create(ctx, irgen, args.debug, llvm_optimize);

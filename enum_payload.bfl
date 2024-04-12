@@ -1,0 +1,6 @@
+type Maybe = enum Nope, Certainly(char) // layout: { u64, u8 }, size: 16, align: 8
+
+fn main(): int {
+  val asdf = .Certainly('x');
+  0
+}

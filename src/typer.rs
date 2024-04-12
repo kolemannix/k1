@@ -91,13 +91,15 @@ pub struct TagInstance {
 
 #[derive(Debug, Clone)]
 pub struct TypedEnumVariant {
-    tag_name: IdentifierId,
-    payload: Option<TypeId>,
+    pub tag_name: IdentifierId,
+    pub index: u32,
+    pub payload: Option<TypeId>,
 }
 
 #[derive(Debug, Clone)]
 pub struct TypedEnum {
-    variants: Vec<TypedEnumVariant>,
+    pub variants: Vec<TypedEnumVariant>,
+    pub name_if_named: Option<IdentifierId>,
 }
 
 #[derive(Debug, Clone)]
@@ -136,6 +138,14 @@ impl Type {
             _ => None,
         }
     }
+
+    pub fn expect_enum(&self) -> &TypedEnum {
+        match self {
+            Type::Enum(e) => e,
+            _ => panic!("expected enum type"),
+        }
+    }
+
     pub fn expect_optional(&self) -> &OptionalType {
         match self {
             Type::Optional(opt) => opt,
@@ -439,10 +449,12 @@ pub struct TypedTagExpr {
 }
 
 #[derive(Debug, Clone)]
-struct TypedEnumConstructor {
-    enum_type: TypeId,
-    variant_name: IdentifierId,
-    payload: Option<Box<ParsedExpression>>,
+pub struct TypedEnumConstructor {
+    pub type_id: TypeId,
+    pub variant_name: IdentifierId,
+    pub variant_index: u32,
+    pub payload: Option<Box<TypedExpr>>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -468,7 +480,6 @@ pub enum TypedExpr {
     OptionalSome(OptionalSome),
     OptionalHasValue(Box<TypedExpr>),
     OptionalGet(OptionalGet),
-    For(TypedForExpr),
     Tag(TypedTagExpr),
     EnumConstructor(TypedEnumConstructor),
 }
@@ -521,8 +532,8 @@ impl TypedExpr {
             TypedExpr::OptionalSome(opt) => opt.type_id,
             TypedExpr::OptionalHasValue(_opt) => BOOL_TYPE_ID,
             TypedExpr::OptionalGet(opt_get) => opt_get.result_type_id,
-            TypedExpr::For(for_expr) => for_expr.result_type_id,
             TypedExpr::Tag(tag_expr) => tag_expr.type_id,
+            TypedExpr::EnumConstructor(enum_cons) => enum_cons.type_id,
         }
     }
     #[inline]
@@ -548,8 +559,8 @@ impl TypedExpr {
             TypedExpr::OptionalSome(opt) => opt.inner_expr.get_span(),
             TypedExpr::OptionalHasValue(opt) => opt.get_span(),
             TypedExpr::OptionalGet(get) => get.span,
-            TypedExpr::For(for_expr) => for_expr.span,
             TypedExpr::Tag(tag_expr) => tag_expr.span,
+            TypedExpr::EnumConstructor(e) => e.span,
         }
     }
 }
@@ -960,7 +971,7 @@ impl TypedModule {
         &self.ast.name
     }
 
-    fn get_ident_str(&self, id: IdentifierId) -> impl std::ops::Deref<Target = str> + '_ {
+    fn get_ident_str(&self, id: IdentifierId) -> impl Deref<Target = str> + '_ {
         self.ast.get_ident_str(id)
     }
 
@@ -1052,7 +1063,15 @@ impl TypedModule {
             Type::Record(record_defn) => {
                 // Add the name to this record defn so it can have associated
                 // methods and constants
+                // FIXME: This name needs to be fully qualified!
                 record_defn.name_if_named = Some(defn.name);
+                Ok(type_id)
+            }
+            Type::Enum(enum_defn) => {
+                // Add the name to this enum defn so it can have associated
+                // methods and constants
+                // FIXME: This name needs to be fully qualified!
+                enum_defn.name_if_named = Some(defn.name);
                 Ok(type_id)
             }
             _ => make_fail("Invalid rhs for named type definition", defn.value_expr.get_span()),
@@ -1138,7 +1157,7 @@ impl TypedModule {
             }
             ParsedTypeExpression::Enum(e) => {
                 let mut variants = Vec::with_capacity(e.variants.len());
-                for v in e.variants.iter() {
+                for (index, v) in e.variants.iter().enumerate() {
                     let payload_type_id = match &v.payload_expression {
                         None => None,
                         Some(payload_type_expr) => {
@@ -1146,11 +1165,14 @@ impl TypedModule {
                             Some(type_id)
                         }
                     };
-                    let variant =
-                        TypedEnumVariant { tag_name: v.tag_name, payload: payload_type_id };
+                    let variant = TypedEnumVariant {
+                        tag_name: v.tag_name,
+                        index: index as u32,
+                        payload: payload_type_id,
+                    };
                     variants.push(variant);
                 }
-                let enum_type = Type::Enum(TypedEnum { variants });
+                let enum_type = Type::Enum(TypedEnum { variants, name_if_named: None });
                 let type_id = self.add_type(enum_type);
                 Ok(type_id)
             }
@@ -1263,7 +1285,7 @@ impl TypedModule {
             (Type::Reference(o1), Type::Reference(o2)) => {
                 self.typecheck_types(o1.inner_type, o2.inner_type)
             }
-            (Type::Enum(e), Type::TagInstance(t)) => {
+            (Type::Enum(_e), Type::TagInstance(_t)) => {
                 eprintln!(
                     "typechecking enum vs a tag instance {} {}",
                     self.type_id_to_string(expected),
@@ -1550,10 +1572,10 @@ impl TypedModule {
         &mut self,
         expected_type_id: TypeId,
         expression: TypedExpr,
-    ) -> TyperResult<TypedExpr> {
+    ) -> TypedExpr {
         // For some reason, we skip coercion for 'None'. Need to run that down
         if let TypedExpr::None(_type_id, _span) = expression {
-            return Ok(expression);
+            return expression;
         }
         match self.get_type(expected_type_id) {
             Type::Enum(e) => match &expression {
@@ -1565,47 +1587,50 @@ impl TypedModule {
                                 "We do not have a matching variant: {}",
                                 self.type_id_to_string(p)
                             );
-                            Ok(expression)
+                            expression
                         } else {
                             eprintln!("We have a matching variant: {:?}", matching_variant);
+                            let span = tag_expr.span;
                             TypedExpr::EnumConstructor(TypedEnumConstructor {
-                                enum_type: expected_type_id,
+                                type_id: expected_type_id,
                                 variant_name: matching_variant.tag_name,
+                                variant_index: matching_variant.index,
                                 payload: None,
+                                span,
                             })
                         }
                     } else {
                         // We 'fail' by just giving up the coercion and let typechecking fail
                         // better
-                        Ok(expression)
+                        expression
                     }
                 }
-                _ => Ok(expression),
+                _ => expression,
             },
             Type::Optional(optional_type) => {
                 match self.typecheck_types(optional_type.inner_type, expression.get_type()) {
-                    Ok(_) => Ok(TypedExpr::OptionalSome(OptionalSome {
+                    Ok(_) => TypedExpr::OptionalSome(OptionalSome {
                         inner_expr: Box::new(expression),
                         type_id: expected_type_id,
-                    })),
-                    Err(_) => Ok(expression),
+                    }),
+                    Err(_) => expression,
                 }
             }
             Type::Reference(reference_type) => {
                 match self.typecheck_types(reference_type.inner_type, expression.get_type()) {
                     Ok(_) => {
                         let base_span = expression.get_span();
-                        Ok(TypedExpr::UnaryOp(UnaryOp {
+                        TypedExpr::UnaryOp(UnaryOp {
                             kind: UnaryOpKind::Reference,
                             type_id: expected_type_id,
                             expr: Box::new(expression),
                             span: base_span,
-                        }))
+                        })
                     }
-                    Err(_) => Ok(expression),
+                    Err(_) => expression,
                 }
             }
-            _ => Ok(expression),
+            _ => expression,
         }
     }
 
@@ -1626,7 +1651,8 @@ impl TypedModule {
         let base_result = self.eval_expr_inner(expr, scope_id, expected_type)?;
 
         if let Some(expected_type_id) = expected_type {
-            self.coerce_expression_to_expected_type(expected_type_id, base_result)
+            let coerced = self.coerce_expression_to_expected_type(expected_type_id, base_result);
+            Ok(coerced)
         } else {
             Ok(base_result)
         }
@@ -3860,21 +3886,19 @@ impl TypedModule {
                 self.display_expr(&opt.inner_expr, writ, 0)?;
                 writ.write_str("!")
             }
-            TypedExpr::For(for_expr) => {
-                writ.write_str("for ")?;
-                writ.write_str(&self.get_ident_str(for_expr.binding))?;
-                writ.write_str(" in ")?;
-                self.display_expr(&for_expr.iterable_expr, writ, 0)?;
-                writ.write_str(" ")?;
-                writ.write_str(match for_expr.for_expr_type {
-                    ForExprType::Yield => "yield ",
-                    ForExprType::Do => "do ",
-                })?;
-                self.display_block(&for_expr.body_block, writ, indentation + 1)
-            }
             TypedExpr::Tag(tag_expr) => {
                 writ.write_str(".")?;
                 writ.write_str(&*self.get_ident_str(tag_expr.name))
+            }
+            TypedExpr::EnumConstructor(enum_constr) => {
+                writ.write_str(".")?;
+                writ.write_str(&*self.get_ident_str(enum_constr.variant_name))?;
+                if let Some(payload) = &enum_constr.payload {
+                    writ.write_str("(")?;
+                    self.display_expr(payload, writ, indentation)?;
+                    writ.write_str(")")?;
+                }
+                Ok(())
             }
         }
     }
