@@ -1619,7 +1619,7 @@ impl<'ctx> Codegen<'ctx> {
     fn codegen_intrinsic(
         &mut self,
         intrinsic_type: IntrinsicFunctionType,
-        function: &Function,
+        function: &TypedFunction,
     ) -> BasicValueEnum<'ctx> {
         match intrinsic_type {
             IntrinsicFunctionType::Exit => {
@@ -1967,7 +1967,7 @@ impl<'ctx> Codegen<'ctx> {
         last
     }
 
-    fn push_function_debug_info(&mut self, function: &Function) -> DISubprogram<'ctx> {
+    fn push_function_debug_info(&mut self, function: &TypedFunction) -> DISubprogram<'ctx> {
         let return_type = self.get_debug_type(function.ret_type);
         let dbg_param_types = &function
             .params
@@ -2002,7 +2002,7 @@ impl<'ctx> Codegen<'ctx> {
     fn codegen_function(
         &mut self,
         function_id: FunctionId,
-        function: &Function,
+        function: &TypedFunction,
     ) -> FunctionValue<'ctx> {
         trace!("codegen function\n{}", self.module.function_id_to_string(function_id, true));
 

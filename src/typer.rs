@@ -215,7 +215,7 @@ pub struct SpecializationRecord {
 }
 
 #[derive(Debug, Clone)]
-pub struct Function {
+pub struct TypedFunction {
     pub name: IdentifierId,
     pub scope: ScopeId,
     pub ret_type: TypeId,
@@ -229,7 +229,7 @@ pub struct Function {
     pub span: Span,
 }
 
-impl Function {
+impl TypedFunction {
     pub fn is_generic(&self) -> bool {
         match &self.type_params {
             None => false,
@@ -922,7 +922,7 @@ impl TypedDefinitionId {
 
 pub struct TypedModule {
     pub ast: Rc<ParsedModule>,
-    functions: Vec<Function>,
+    functions: Vec<TypedFunction>,
     pub definition_mappings: HashMap<AstDefinitionId, TypedDefinitionId>,
     pub variables: Vec<Variable>,
     pub types: Vec<Type>,
@@ -930,6 +930,17 @@ pub struct TypedModule {
     pub scopes: Scopes,
     pub errors: Vec<TyperError>,
     pub namespaces: Vec<Namespace>,
+    pub abilities: Vec<Ability>,
+    pub implementations: Vec<((TypeId, AbilityId), FunctionId)>,
+}
+
+pub type AbilityId = u32;
+
+pub const ABILITY_EQUALS_ID: AbilityId = 0;
+pub const ABILITY_HASH_ID: AbilityId = 1;
+
+pub struct Ability {
+    pub functions: Vec<TypedFunction>,
 }
 
 impl TypedModule {
@@ -948,10 +959,12 @@ impl TypedModule {
             scopes,
             errors: Vec::new(),
             namespaces,
+            abilities: Vec::new(),
+            implementations: Vec::new(),
         }
     }
 
-    pub fn function_iter(&self) -> impl Iterator<Item = (FunctionId, &Function)> {
+    pub fn function_iter(&self) -> impl Iterator<Item = (FunctionId, &TypedFunction)> {
         self.functions.iter().enumerate().map(|(idx, f)| (idx as FunctionId, f))
     }
 
@@ -1358,7 +1371,7 @@ impl TypedModule {
         &self.variables[id as usize]
     }
 
-    fn add_function(&mut self, function: Function) -> FunctionId {
+    fn add_function(&mut self, function: TypedFunction) -> FunctionId {
         let id = self.functions.len();
         self.functions.push(function);
         id as u32
@@ -1370,11 +1383,11 @@ impl TypedModule {
         id as u32
     }
 
-    pub fn get_function(&self, function_id: FunctionId) -> &Function {
+    pub fn get_function(&self, function_id: FunctionId) -> &TypedFunction {
         &self.functions[function_id as usize]
     }
 
-    pub fn get_function_mut(&mut self, function_id: FunctionId) -> &mut Function {
+    pub fn get_function_mut(&mut self, function_id: FunctionId) -> &mut TypedFunction {
         &mut self.functions[function_id as usize]
     }
 
@@ -3355,7 +3368,7 @@ impl TypedModule {
             None => UNIT_TYPE_ID,
             Some(type_expr) => self.eval_type_expr(type_expr, fn_scope_id)?,
         };
-        let function = Function {
+        let function = TypedFunction {
             name,
             scope: fn_scope_id,
             ret_type: given_ret_type,
@@ -3738,7 +3751,7 @@ impl TypedModule {
 
     pub fn display_function(
         &self,
-        function: &Function,
+        function: &TypedFunction,
         writ: &mut impl Write,
         display_block: bool,
     ) -> std::fmt::Result {
