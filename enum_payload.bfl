@@ -1,6 +1,8 @@
-type Maybe = enum Nope, Certainly(char) // layout: { u64, u8 }, size: 16, align: 8
+type Maybe = enum Nope, Certainly(char), Absolutely(string) // layout: { u64, u8 }, size: 16, align: 8
 
 fn main(): int {
-  val asdf = .Certainly('x');
+  val asdf: Maybe = .Certainly('x');
+  val second: Maybe = .Nope;
+  val third: Maybe = .Absolutely("asdf");
   0
 }
