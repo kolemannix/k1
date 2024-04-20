@@ -211,22 +211,30 @@ pub struct TagExpr {
 }
 
 #[derive(Debug, Clone)]
+pub struct ParsedEnumConstructor {
+    pub tag: IdentifierId,
+    pub payload: ExpressionId,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
 pub enum ParsedExpression {
-    BinaryOp(BinaryOp),             // a == b
-    UnaryOp(UnaryOp),               // !b, *b
-    Literal(Literal),               // 42, "asdf"
-    FnCall(FnCall),                 // square(1, 2)
-    Variable(Variable),             // x
-    FieldAccess(FieldAccess),       // x.b
-    MethodCall(MethodCall),         // x.load()
-    Block(Block),                   // { <expr>; <expr>; <expr> }
-    If(IfExpr),                     // if a else b
-    Record(Record),                 // { x: 1, y: 3 }
-    IndexOperation(IndexOperation), // xs[3]
-    Array(ArrayExpr),               // [1, 3, 5, 7]
-    OptionalGet(OptionalGet),       // foo!
-    For(ForExpr),                   // for i in [1,2,3] do println(i)
-    Tag(TagExpr),                   // .A
+    BinaryOp(BinaryOp),                     // a == b
+    UnaryOp(UnaryOp),                       // !b, *b
+    Literal(Literal),                       // 42, "asdf"
+    FnCall(FnCall),                         // square(1, 2)
+    Variable(Variable),                     // x
+    FieldAccess(FieldAccess),               // x.b
+    MethodCall(MethodCall),                 // x.load()
+    Block(Block),                           // { <expr>; <expr>; <expr> }
+    If(IfExpr),                             // if a else b
+    Record(Record),                         // { x: 1, y: 3 }
+    IndexOperation(IndexOperation),         // xs[3]
+    Array(ArrayExpr),                       // [1, 3, 5, 7]
+    OptionalGet(OptionalGet),               // foo!
+    For(ForExpr),                           // for i in [1,2,3] do println(i)
+    Tag(TagExpr),                           // .A
+    EnumConstructor(ParsedEnumConstructor), // .A(<expr>)
 }
 
 impl ParsedExpression {
@@ -251,6 +259,7 @@ impl ParsedExpression {
             ParsedExpression::OptionalGet(optional_get) => optional_get.span,
             ParsedExpression::For(for_expr) => for_expr.span,
             ParsedExpression::Tag(tag_expr) => tag_expr.span,
+            ParsedExpression::EnumConstructor(e) => e.span,
         }
     }
 
@@ -271,6 +280,7 @@ impl ParsedExpression {
             ParsedExpression::OptionalGet(_optional_get) => false,
             ParsedExpression::For(_) => false,
             ParsedExpression::Tag(_) => false,
+            ParsedExpression::EnumConstructor(_) => false,
         }
     }
 }
@@ -1392,10 +1402,26 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 return Err(Parser::error("Uppercase tag name", second));
             }
             let tag_name = self.intern_ident_token(second);
-            Ok(Some(self.add_expression(ParsedExpression::Tag(TagExpr {
-                tag: tag_name,
-                span: first.span.extended(second.span),
-            }))))
+
+            if third.kind == K::OpenParen {
+                // Enum Constructor
+                self.tokens.advance();
+                let payload = self.expect_expression()?;
+                let close_paren = self.expect_eat_token(K::CloseParen)?;
+                Ok(Some(self.add_expression(ParsedExpression::EnumConstructor(
+                    ParsedEnumConstructor {
+                        tag: tag_name,
+                        payload,
+                        span: first.span.extended(close_paren.span),
+                    },
+                ))))
+            } else {
+                // Tag Literal
+                Ok(Some(self.add_expression(ParsedExpression::Tag(TagExpr {
+                    tag: tag_name,
+                    span: first.span.extended(second.span),
+                }))))
+            }
         } else if first.kind == K::Ident {
             // FnCall
             // Here we use is_whitespace_preceeded to distinguish between:
@@ -1877,6 +1903,13 @@ impl ParsedModule {
             ParsedExpression::Tag(tag_expr) => {
                 f.write_char('.')?;
                 f.write_str(&self.get_ident_str(tag_expr.tag))
+            }
+            ParsedExpression::EnumConstructor(e) => {
+                f.write_char('.')?;
+                f.write_str(&self.get_ident_str(e.tag))?;
+                f.write_str("(")?;
+                self.display_expression_id(e.payload, f)?;
+                f.write_str(")")
             }
         }
     }

@@ -146,6 +146,13 @@ impl Type {
         }
     }
 
+    pub fn as_enum(&self) -> Option<&TypedEnum> {
+        match self {
+            Type::Enum(e) => Some(e),
+            _ => None,
+        }
+    }
+
     pub fn expect_optional(&self) -> &OptionalType {
         match self {
             Type::Optional(opt) => opt,
@@ -1158,6 +1165,9 @@ impl TypedModule {
             ParsedTypeExpression::Enum(e) => {
                 let mut variants = Vec::with_capacity(e.variants.len());
                 for (index, v) in e.variants.iter().enumerate() {
+                    // Ensure there's a type for this tag as a workaround for codegen
+                    // since codegen looks at `types` to enumerate all the tags in the program
+                    self.get_type_for_tag(v.tag_name);
                     let payload_type_id = match &v.payload_expression {
                         None => None,
                         Some(payload_type_expr) => {
@@ -1986,6 +1996,40 @@ impl TypedModule {
                     span: tag_expr.span,
                 });
                 Ok(typed_expr)
+            }
+            ParsedExpression::EnumConstructor(e) => {
+                let expected_type = expected_type
+                    .ok_or(make_err("Could not infer enum type from context", e.span))?;
+                let enum_type = self
+                    .get_type(expected_type)
+                    .as_enum()
+                    .ok_or(make_err("Expected an enum type", e.span))?;
+                let typed_variant =
+                    enum_type.variants.iter().find(|variant| variant.tag_name == e.tag).ok_or(
+                        make_err(
+                            format!(
+                                "No variant {} exists in enum {}",
+                                &*self.get_ident_str(e.tag),
+                                self.type_id_to_string(expected_type)
+                            ),
+                            e.span,
+                        ),
+                    )?;
+                let variant_payload = typed_variant.payload.ok_or(make_err(
+                    format!("Variant {} does not take a payload", &*self.ast.get_ident_str(e.tag)),
+                    e.span,
+                ))?;
+                let variant_index = typed_variant.index;
+                let variant_name = typed_variant.tag_name;
+                // drop(typed_variant);
+                let payload_expr = self.eval_expr(e.payload, scope_id, Some(variant_payload))?;
+                Ok(TypedExpr::EnumConstructor(TypedEnumConstructor {
+                    type_id: expected_type,
+                    payload: Some(Box::new(payload_expr)),
+                    variant_index,
+                    variant_name,
+                    span: e.span,
+                }))
             }
         };
         result

@@ -536,6 +536,58 @@ impl<'ctx> Codegen<'ctx> {
         )
     }
 
+    fn get_size_of_type_in_bits(&self, type_id: TypeId) -> u64 {
+        self.get_debug_type(type_id).get_size_in_bits()
+    }
+
+    fn make_debug_struct_type(
+        &self,
+        name: &str,
+        span: Span,
+        field_types: &[(impl AsRef<str>, DIType<'ctx>)],
+    ) -> DIType<'ctx> {
+        let mut offset = 0;
+        let mut final_size = 0;
+        let fields = &field_types
+            .iter()
+            .map(|(field_name, member_type)| {
+                let t = self.debug.debug_builder.create_member_type(
+                    self.debug.current_scope(),
+                    field_name.as_ref(),
+                    self.debug.current_file(),
+                    span.line_number(),
+                    member_type.get_size_in_bits(),
+                    WORD_SIZE_BITS as u32,
+                    offset,
+                    0,
+                    *member_type,
+                );
+                // FIXME: for debug offset, what about padding
+                offset += member_type.get_size_in_bits();
+                final_size = offset + member_type.get_size_in_bits();
+                t.as_type()
+            })
+            .collect::<Vec<_>>();
+        self.debug
+            .debug_builder
+            .create_struct_type(
+                self.debug.current_scope(),
+                name,
+                self.debug.current_file(),
+                span.line_number(),
+                final_size,
+                WORD_SIZE_BITS as u32,
+                0,
+                None,
+                fields,
+                0,
+                None,
+                name,
+            )
+            .as_type()
+    }
+
+    // FIXME: cache these
     fn get_debug_type(&self, type_id: TypeId) -> DIType<'ctx> {
         let _dw_ate_address = 0x01;
         let dw_ate_boolean = 0x02;
@@ -556,7 +608,7 @@ impl<'ctx> Codegen<'ctx> {
             Type::Bool => self
                 .debug
                 .debug_builder
-                .create_basic_type("bool", 8, dw_ate_boolean, 0)
+                .create_basic_type("bool", 1, dw_ate_boolean, 0)
                 .unwrap()
                 .as_type(),
             Type::Char => self
@@ -581,218 +633,80 @@ impl<'ctx> Codegen<'ctx> {
                 )
                 .unwrap()
                 .as_type(),
-            Type::String => self
-                .debug
-                .debug_builder
-                .create_struct_type(
-                    self.debug.current_scope(),
+            Type::String => {
+                let data_ptr_type = self
+                    .debug
+                    .debug_builder
+                    .create_pointer_type(
+                        "string_data",
+                        self.get_debug_type(CHAR_TYPE_ID),
+                        WORD_SIZE_BITS,
+                        WORD_SIZE_BITS as u32,
+                        self.default_address_space,
+                    )
+                    .as_type();
+                self.make_debug_struct_type(
                     "string",
-                    self.debug.current_file(),
-                    0,
-                    128,
-                    128,
-                    0,
-                    None,
-                    &[
-                        self.debug
-                            .debug_builder
-                            .create_member_type(
-                                self.debug.current_scope(),
-                                "string_length",
-                                self.debug.current_file(),
-                                0,
-                                WORD_SIZE_BITS,
-                                WORD_SIZE_BITS as u32,
-                                0,
-                                0,
-                                self.get_debug_type(INT_TYPE_ID),
-                            )
-                            .as_type(),
-                        self.debug
-                            .debug_builder
-                            .create_member_type(
-                                self.debug.current_scope(),
-                                "string_data",
-                                self.debug.current_file(),
-                                0,
-                                WORD_SIZE_BITS,
-                                WORD_SIZE_BITS as u32,
-                                WORD_SIZE_BITS,
-                                0,
-                                self.debug
-                                    .debug_builder
-                                    .create_pointer_type(
-                                        "string_data",
-                                        self.get_debug_type(CHAR_TYPE_ID),
-                                        WORD_SIZE_BITS,
-                                        WORD_SIZE_BITS as u32,
-                                        self.default_address_space,
-                                    )
-                                    .as_type(),
-                            )
-                            .as_type(),
-                    ],
-                    0,
-                    None,
-                    "string",
+                    Span::NONE,
+                    &[("length", self.get_debug_type(INT_TYPE_ID)), ("data", data_ptr_type)],
                 )
-                .as_type(),
+            }
             Type::Record(record) => {
                 // FIXME: We need to compute actual physical size at some point
                 //        Probably here in codegen? But maybe in typecheck?
                 //        What about a struct of our own, called CodegenedType or something,
                 //        that includes the LLVM type, the Debug type, and the size, and other stuff
                 //        we might want to know about a type
-                let size = 0;
                 let name = record
                     .name_if_named
                     .map(|ident| self.get_ident_name(ident).to_string())
                     .unwrap_or("<anon_record>".to_string());
-                let mut offset = 0;
-                self.debug
-                    .debug_builder
-                    .create_struct_type(
-                        self.debug.current_scope(),
-                        &name,
-                        self.debug.current_file(),
-                        record.span.line_number(),
-                        size,
-                        size as u32,
-                        0,
-                        None,
-                        &record
-                            .fields
-                            .iter()
-                            .map(|f| {
-                                let member_type = self.get_debug_type(f.type_id);
-                                let t = self.debug.debug_builder.create_member_type(
-                                    self.debug.current_scope(),
-                                    &self.get_ident_name(f.name),
-                                    self.debug.current_file(),
-                                    record.span.line_number(),
-                                    member_type.get_size_in_bits(),
-                                    WORD_SIZE_BITS as u32,
-                                    offset,
-                                    0,
-                                    member_type,
-                                );
-                                offset += member_type.get_size_in_bits();
-                                t.as_type()
-                            })
-                            .collect::<Vec<_>>(),
-                        0,
-                        None,
-                        &name,
-                    )
-                    .as_type()
+                let fields = record
+                    .fields
+                    .iter()
+                    .map(|f| {
+                        let member_type = self.get_debug_type(f.type_id);
+                        (self.get_ident_name(f.name).to_string(), member_type)
+                    })
+                    .collect::<Vec<_>>();
+                self.make_debug_struct_type(&name, record.span, &fields)
             }
             Type::TypeVariable(v) => {
-                println!("{}", self.module);
+                eprintln!("{}", self.module);
                 panic!("codegen was asked to make debug info for a type variable {:?}", v)
             }
             Type::Array(array) => {
                 let element_type = self.get_debug_type(array.element_type);
-                let array_struct_ditype = self
-                    .debug
-                    .debug_builder
-                    .create_struct_type(
-                        self.debug.current_scope(),
-                        &self.module.type_id_to_string(type_id),
-                        self.debug.current_file(),
-                        0,
-                        WORD_SIZE_BITS * 3,
-                        WORD_SIZE_BITS as u32,
-                        0,
-                        None,
-                        &[
-                            self.debug
-                                .debug_builder
-                                .create_member_type(
-                                    self.debug.current_scope(),
-                                    "length",
-                                    self.debug.current_file(),
-                                    0,
-                                    WORD_SIZE_BITS,
-                                    WORD_SIZE_BITS as u32,
-                                    0,
-                                    0,
-                                    self.get_debug_type(INT_TYPE_ID),
-                                )
-                                .as_type(),
-                            self.debug
-                                .debug_builder
-                                .create_member_type(
-                                    self.debug.current_scope(),
-                                    "capacity",
-                                    self.debug.current_file(),
-                                    0,
-                                    WORD_SIZE_BITS,
-                                    WORD_SIZE_BITS as u32,
-                                    WORD_SIZE_BITS,
-                                    0,
-                                    self.get_debug_type(INT_TYPE_ID),
-                                )
-                                .as_type(),
-                            self.debug
-                                .debug_builder
-                                .create_member_type(
-                                    self.debug.current_scope(),
-                                    "data_ptr",
-                                    self.debug.current_file(),
-                                    0,
-                                    WORD_SIZE_BITS,
-                                    WORD_SIZE_BITS as u32,
-                                    128,
-                                    0,
-                                    self.debug
-                                        .debug_builder
-                                        .create_pointer_type(
-                                            "array_data",
-                                            element_type,
-                                            WORD_SIZE_BITS,
-                                            WORD_SIZE_BITS as u32,
-                                            self.default_address_space,
-                                        )
-                                        .as_type(),
-                                )
-                                .as_type(),
-                        ],
-                        0,
-                        None,
-                        &self.module.type_id_to_string(type_id),
-                    )
-                    .as_type();
-                self.debug
-                    .debug_builder
-                    .create_pointer_type(
-                        &self.module.type_id_to_string(type_id),
-                        array_struct_ditype,
-                        WORD_SIZE_BITS,
-                        WORD_SIZE_BITS as u32,
-                        self.default_address_space,
-                    )
-                    .as_type()
+                let fields = &[
+                    ("length", self.get_debug_type(INT_TYPE_ID)),
+                    ("capacity", self.get_debug_type(INT_TYPE_ID)),
+                    (
+                        "data_ptr",
+                        self.debug
+                            .debug_builder
+                            .create_pointer_type(
+                                "array_data",
+                                element_type,
+                                WORD_SIZE_BITS,
+                                WORD_SIZE_BITS as u32,
+                                self.default_address_space,
+                            )
+                            .as_type(),
+                    ),
+                ];
+                self.make_debug_struct_type(
+                    &self.module.type_id_to_string(type_id),
+                    array.span,
+                    fields,
+                )
             }
-            Type::Optional(_optional) => {
+            Type::Optional(optional) => {
                 let name = format!("optional_{}", self.module.type_id_to_string(type_id));
-                // TODO: We are punting on the debug type definition for optionals right now
-                self.debug
-                    .debug_builder
-                    .create_struct_type(
-                        self.debug.current_scope(),
-                        &name,
-                        self.debug.current_file(),
-                        0,
-                        128,
-                        128,
-                        0,
-                        None,
-                        &[],
-                        0,
-                        None,
-                        &name,
-                    )
-                    .as_type()
+                let fields = &[
+                    ("discriminant", self.get_debug_type(BOOL_TYPE_ID)),
+                    ("payload", self.get_debug_type(optional.inner_type)),
+                ];
+                self.make_debug_struct_type(&name, Span::NONE, fields)
             }
             Type::Reference(reference_type) => {
                 let name = format!("{}*", self.module.type_id_to_string(type_id));
@@ -820,7 +734,7 @@ impl<'ctx> Codegen<'ctx> {
                     .unwrap()
                     .as_type()
             }
-            Type::Enum(_e) => {
+            Type::Enum(e) => {
                 let name = format!("enum_{}", self.module.type_id_to_string(type_id));
                 // TODO: We are punting on the debug type definition for enums right now
                 //       We handle the tag as a u64 but not the payload
@@ -956,38 +870,47 @@ impl<'ctx> Codegen<'ctx> {
                                 basic_type: self.builtin_types.tag_type.as_basic_type_enum(),
                             }),
                             Type::Enum(enum_type) => {
-                                let mut max_variant_size = 0;
+                                let mut payload_section_size = 0;
                                 let mut variant_types =
                                     Vec::with_capacity(enum_type.variants.len());
                                 let discriminant_field = self.builtin_types.tag_type;
-                                for (_idx, variant) in enum_type.variants.iter().enumerate() {
-                                    let overall_type = self.ctx.opaque_struct_type(
-                                        &*self.get_ident_name(variant.tag_name),
-                                    );
-                                    if let Some(payload) = variant.payload {
-                                        let variant_payload_type = self.codegen_type(payload);
-                                        let overall_type = self.ctx.opaque_struct_type(
+                                for variant in enum_type.variants.iter() {
+                                    let variant_struct_type =
+                                        self.ctx.opaque_struct_type(&format!(
+                                            "{}_{}",
                                             &*self.get_ident_name(variant.tag_name),
-                                        );
-                                        // todo track max size
-                                        overall_type.set_body(
+                                            variant
+                                                .payload
+                                                .map(|p| p.to_string())
+                                                .unwrap_or("".to_string()),
+                                        ));
+                                    if let Some(payload_type_id) = variant.payload {
+                                        let variant_payload_type =
+                                            self.codegen_type(payload_type_id);
+                                        variant_struct_type.set_body(
                                             &[
                                                 discriminant_field.as_basic_type_enum(),
                                                 variant_payload_type.value_type(),
                                             ],
                                             false,
                                         );
-                                        max_variant_size = 8;
+                                        let size = self.get_size_of_type_in_bits(payload_type_id);
+                                        if size > payload_section_size {
+                                            payload_section_size = size;
+                                        }
                                     } else {
-                                        overall_type.set_body(
+                                        variant_struct_type.set_body(
                                             &[discriminant_field.as_basic_type_enum()],
                                             false,
                                         );
                                     };
-                                    variant_types.push(overall_type);
+                                    variant_types.push(variant_struct_type);
                                 }
                                 // use max variant size
-                                let union_padding = self.ctx.i8_type().array_type(max_variant_size);
+                                let union_padding = self
+                                    .ctx
+                                    .custom_width_int_type(1)
+                                    .array_type(payload_section_size as u32);
                                 let discriminant_field = self.builtin_types.tag_type;
                                 let base_type = self.ctx.struct_type(
                                     &[
@@ -1508,9 +1431,6 @@ impl<'ctx> Codegen<'ctx> {
                 let llvm_type = self.codegen_type(enum_constr.type_id);
                 let enum_type = llvm_type.expect_enum();
                 let variant_tag_name = enum_constr.variant_name;
-
-                let typed_enum = self.module.get_type(enum_constr.type_id).expect_enum();
-                let typed_variant = &typed_enum.variants[enum_constr.variant_index as usize];
 
                 let llvm_variant = enum_type.variant_structs[enum_constr.variant_index as usize];
 
