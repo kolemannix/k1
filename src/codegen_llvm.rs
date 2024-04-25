@@ -27,6 +27,7 @@ use log::trace;
 
 use crate::lex::Span;
 use crate::parse::{FileId, IdentifierId};
+use crate::typer::scopes::ScopeId;
 use crate::typer::{Linkage as TyperLinkage, *};
 
 const STRING_LENGTH_FIELD_INDEX: u32 = 0;
@@ -116,16 +117,6 @@ impl<'ctx> LlvmType<'ctx> {
             LlvmType::Value(value) => value.basic_type,
             LlvmType::Pointer(pointer) => pointer.pointer_type,
             LlvmType::EnumType(e) => e.base_struct_type.as_basic_type_enum(),
-        }
-    }
-
-    // I think we need a static size of, this is just a sizeof instruction; it gives back an Llvm IntValue
-    // that doesn't have a value at compile time
-    fn rt_size_of(&self) -> IntValue<'ctx> {
-        match self {
-            LlvmType::Value(value) => value.basic_type.size_of().expect("size"),
-            LlvmType::Pointer(pointer) => pointer.pointer_type.size_of().expect("size"),
-            LlvmType::EnumType(e) => e.base_struct_type.size_of().unwrap(),
         }
     }
 }
@@ -734,7 +725,7 @@ impl<'ctx> Codegen<'ctx> {
                     .unwrap()
                     .as_type()
             }
-            Type::Enum(e) => {
+            Type::Enum(_e) => {
                 let name = format!("enum_{}", self.module.type_id_to_string(type_id));
                 // TODO: We are punting on the debug type definition for enums right now
                 //       We handle the tag as a u64 but not the payload
@@ -2145,7 +2136,7 @@ impl<'ctx> Codegen<'ctx> {
             }
         }
         for (id, function) in self.module.clone().function_iter() {
-            if !function.is_generic() {
+            if !function.is_generic() && !function.is_ability {
                 self.codegen_function(id, function);
             }
         }
