@@ -93,6 +93,8 @@ pub enum TokenKind {
     KeywordDo,
     KeywordYield,
     KeywordEnum,
+    KeywordAbility,
+    KeywordImpl,
 
     Slash,
     LineComment,
@@ -163,6 +165,8 @@ impl TokenKind {
             K::KeywordDo => Some("do"),
             K::KeywordYield => Some("yield"),
             K::KeywordEnum => Some("enum"),
+            K::KeywordAbility => Some("ability"),
+            K::KeywordImpl => Some("impl"),
 
             K::Slash => Some("/"),
             K::LineComment => Some("//"),
@@ -251,6 +255,8 @@ impl TokenKind {
             "do" => Some(K::KeywordDo),
             "yield" => Some(K::KeywordYield),
             "enum" => Some(K::KeywordEnum),
+            "ability" => Some(K::KeywordAbility),
+            "impl" => Some(K::KeywordImpl),
             "==" => Some(K::EqualsEquals),
             "!=" => Some(K::BangEquals),
             "<=" => Some(K::LessThanEqual),
@@ -276,6 +282,8 @@ impl TokenKind {
             K::KeywordDo => true,
             K::KeywordYield => true,
             K::KeywordEnum => true,
+            K::KeywordAbility => true,
+            K::KeywordImpl => true,
             _ => false,
         }
     }
@@ -322,6 +330,10 @@ pub struct Span {
 
 impl Span {
     pub const NONE: Span = Span { file_id: 0, start: 0, end: 0, line: 0 };
+
+    pub fn len(&self) -> u32 {
+        self.end - self.start
+    }
 
     pub fn line_number(&self) -> u32 {
         self.line + 1
