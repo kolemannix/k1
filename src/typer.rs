@@ -1093,7 +1093,12 @@ impl TypedModule {
         }
     }
 
-    fn typecheck_record(&self, expected: &RecordType, actual: &RecordType) -> Result<(), String> {
+    fn typecheck_record(
+        &self,
+        expected: &RecordType,
+        actual: &RecordType,
+        scope_id: ScopeId,
+    ) -> Result<(), String> {
         if expected.fields.len() != actual.fields.len() {
             return Err(format!(
                 "expected record with {} fields, got {}",
@@ -1107,7 +1112,7 @@ impl TypedModule {
             else {
                 return Err(format!("expected record to have field {}", expected_field.name));
             };
-            self.typecheck_types(expected_field.type_id, matching_field.type_id)?;
+            self.typecheck_types(expected_field.type_id, matching_field.type_id, scope_id)?;
         }
         Ok(())
     }
@@ -1127,6 +1132,7 @@ impl TypedModule {
         &self,
         expected: &RecordType,
         actual: &RecordType,
+        scope_id: ScopeId,
     ) -> Result<(), String> {
         for expected_field in &expected.fields {
             trace!("typechecking record field {:?}", expected_field);
@@ -1134,12 +1140,17 @@ impl TypedModule {
             else {
                 return Err(format!("expected field {}", expected_field.name));
             };
-            self.typecheck_types(matching_field.type_id, expected_field.type_id)?;
+            self.typecheck_types(matching_field.type_id, expected_field.type_id, scope_id)?;
         }
         Ok(())
     }
 
-    fn typecheck_types(&self, expected: TypeId, actual: TypeId) -> Result<(), String> {
+    fn typecheck_types(
+        &self,
+        expected: TypeId,
+        actual: TypeId,
+        scope_id: ScopeId,
+    ) -> Result<(), String> {
         trace!(
             "typecheck expect {} actual {}",
             self.type_id_to_string(expected),
@@ -1150,11 +1161,11 @@ impl TypedModule {
         }
         match (self.get_type(expected), self.get_type(actual)) {
             (Type::Optional(o1), Type::Optional(o2)) => {
-                self.typecheck_types(o1.inner_type, o2.inner_type)
+                self.typecheck_types(o1.inner_type, o2.inner_type, scope_id)
             }
-            (Type::Record(r1), Type::Record(r2)) => self.typecheck_record(r1, r2),
+            (Type::Record(r1), Type::Record(r2)) => self.typecheck_record(r1, r2, scope_id),
             (Type::Array(a1), Type::Array(a2)) => {
-                self.typecheck_types(a1.element_type, a2.element_type)
+                self.typecheck_types(a1.element_type, a2.element_type, scope_id)
             }
             (Type::TypeVariable(t1), Type::TypeVariable(t2)) => {
                 // This is broken; should be more robust than just same identifier; we need to know the scope
@@ -1170,7 +1181,7 @@ impl TypedModule {
                 }
             }
             (Type::Reference(o1), Type::Reference(o2)) => {
-                self.typecheck_types(o1.inner_type, o2.inner_type)
+                self.typecheck_types(o1.inner_type, o2.inner_type, scope_id)
             }
             (Type::Enum(_e), Type::TagInstance(_t)) => {
                 eprintln!(
@@ -1466,6 +1477,7 @@ impl TypedModule {
         &mut self,
         expected_type_id: TypeId,
         expression: TypedExpr,
+        scope_id: ScopeId,
     ) -> TypedExpr {
         // For some reason, we skip coercion for 'None'. Need to run that down
         if let TypedExpr::None(_type_id, _span) = expression {
@@ -1502,7 +1514,11 @@ impl TypedModule {
                 _ => expression,
             },
             Type::Optional(optional_type) => {
-                match self.typecheck_types(optional_type.inner_type, expression.get_type()) {
+                match self.typecheck_types(
+                    optional_type.inner_type,
+                    expression.get_type(),
+                    scope_id,
+                ) {
                     Ok(_) => TypedExpr::OptionalSome(OptionalSome {
                         inner_expr: Box::new(expression),
                         type_id: expected_type_id,
@@ -1511,7 +1527,11 @@ impl TypedModule {
                 }
             }
             Type::Reference(reference_type) => {
-                match self.typecheck_types(reference_type.inner_type, expression.get_type()) {
+                match self.typecheck_types(
+                    reference_type.inner_type,
+                    expression.get_type(),
+                    scope_id,
+                ) {
                     Ok(_) => {
                         let base_span = expression.get_span();
                         TypedExpr::UnaryOp(UnaryOp {
@@ -1545,7 +1565,8 @@ impl TypedModule {
         let base_result = self.eval_expr_inner(expr, scope_id, expected_type)?;
 
         if let Some(expected_type_id) = expected_type {
-            let coerced = self.coerce_expression_to_expected_type(expected_type_id, base_result);
+            let coerced =
+                self.coerce_expression_to_expected_type(expected_type_id, base_result, scope_id);
             Ok(coerced)
         } else {
             Ok(base_result)
@@ -1690,6 +1711,7 @@ impl TypedModule {
                                 name_if_named: None,
                                 span: ast_record.span,
                             },
+                            scope_id,
                         ) {
                             Ok(_) => Ok(expected_type_id),
                             Err(s) => {
@@ -1719,7 +1741,7 @@ impl TypedModule {
                 // FIXME: Typechecker We are not really typechecking binary operations at all.
                 //        This is not enough; we need to check that the lhs is actually valid
                 //        for this operation first
-                if self.typecheck_types(lhs.get_type(), rhs.get_type()).is_err() {
+                if self.typecheck_types(lhs.get_type(), rhs.get_type(), scope_id).is_err() {
                     return make_fail("operand types did not match", binary_op.span);
                 }
 
@@ -1785,7 +1807,7 @@ impl TypedModule {
                         }))
                     }
                     UnaryOpKind::BooleanNegation => {
-                        self.typecheck_types(BOOL_TYPE_ID, base_expr.get_type())
+                        self.typecheck_types(BOOL_TYPE_ID, base_expr.get_type(), scope_id)
                             .map_err(|s| make_error(s, op.span))?;
                         Ok(TypedExpr::UnaryOp(UnaryOp {
                             kind: UnaryOpKind::BooleanNegation,
@@ -2377,7 +2399,7 @@ impl TypedModule {
             }
             Type::TypeVariable(_type_var) => {
                 let rhs = self.eval_expr(binary_op.rhs, scope_id, Some(lhs.get_type()))?;
-                if let Err(msg) = self.typecheck_types(lhs.get_type(), rhs.get_type()) {
+                if let Err(msg) = self.typecheck_types(lhs.get_type(), rhs.get_type(), scope_id) {
                     return make_fail(
                         format!("Type mismatch on equality of 2 generic variables: {}", msg),
                         binary_op.span,
@@ -2477,7 +2499,7 @@ impl TypedModule {
             consequent
         } else {
             // If there is no binding, the condition must be a boolean
-            if let Err(msg) = self.typecheck_types(BOOL_TYPE_ID, condition.get_type()) {
+            if let Err(msg) = self.typecheck_types(BOOL_TYPE_ID, condition.get_type(), scope_id) {
                 return make_fail(
                     format!("Invalid if condition type: {}. If you intended to use a binding optional if, you must supply a binding using |<ident>|", msg),
                     condition.get_span(),
@@ -2506,7 +2528,8 @@ impl TypedModule {
                 span: if_expr.span,
             }
         };
-        if let Err(msg) = self.typecheck_types(consequent.expr_type, alternate.expr_type) {
+        if let Err(msg) = self.typecheck_types(consequent.expr_type, alternate.expr_type, scope_id)
+        {
             return make_fail(
                 format!("else branch type did not match then branch type: {}", msg),
                 alternate.span,
@@ -2651,7 +2674,9 @@ impl TypedModule {
             if is_self {
                 if let Some(this) = this_expr {
                     if !skip_typecheck {
-                        if let Err(e) = self.typecheck_types(first.type_id, this.get_type()) {
+                        if let Err(e) =
+                            self.typecheck_types(first.type_id, this.get_type(), calling_scope)
+                        {
                             return make_fail(
                                 format!(
                                     "Invalid parameter type for 'self' to function {}: {}",
@@ -2679,7 +2704,9 @@ impl TypedModule {
                     if skip_typecheck { None } else { Some(fn_param.type_id) };
                 let expr = self.eval_expr(param.value, calling_scope, expected_type_for_param)?;
                 if !skip_typecheck {
-                    if let Err(e) = self.typecheck_types(fn_param.type_id, expr.get_type()) {
+                    if let Err(e) =
+                        self.typecheck_types(fn_param.type_id, expr.get_type(), calling_scope)
+                    {
                         return make_fail(
                             format!(
                                 "Invalid parameter type passed to function {}: {}",
@@ -2890,9 +2917,11 @@ impl TypedModule {
                         let existing_solution =
                             solved_params.iter().find(|p| p.ident == solved_param.ident);
                         if let Some(existing_solution) = existing_solution {
-                            if let Err(msg) = self
-                                .typecheck_types(existing_solution.type_id, solved_param.type_id)
-                            {
+                            if let Err(msg) = self.typecheck_types(
+                                existing_solution.type_id,
+                                solved_param.type_id,
+                                calling_scope,
+                            ) {
                                 return make_fail(
                                     format!(
                                         "Conflicting type parameters for type param {} in call to {}: {}",
@@ -3043,7 +3072,7 @@ impl TypedModule {
                 let value_expr = self.eval_expr(val_def.value, scope_id, provided_type)?;
                 let actual_type = value_expr.get_type();
                 let variable_type = if let Some(expected_type) = provided_type {
-                    if let Err(msg) = self.typecheck_types(expected_type, actual_type) {
+                    if let Err(msg) = self.typecheck_types(expected_type, actual_type, scope_id) {
                         return make_fail(
                             format!("Local variable type mismatch: {}", msg),
                             val_def.span,
@@ -3073,7 +3102,7 @@ impl TypedModule {
                 // let lhs = self.eval_expr(&assignment.lhs, scope_id, None)?;
                 let lhs = self.eval_assigment_lhs_expr(assignment.lhs, scope_id, None)?;
                 let rhs = self.eval_expr(assignment.rhs, scope_id, Some(lhs.get_type()))?;
-                if let Err(msg) = self.typecheck_types(lhs.get_type(), rhs.get_type()) {
+                if let Err(msg) = self.typecheck_types(lhs.get_type(), rhs.get_type(), scope_id) {
                     return make_fail(
                         format!("Invalid types for assignment: {}", msg),
                         assignment.span,
@@ -3092,7 +3121,7 @@ impl TypedModule {
             }
             BlockStmt::While(while_stmt) => {
                 let cond = self.eval_expr(while_stmt.cond, scope_id, Some(BOOL_TYPE_ID))?;
-                if let Err(e) = self.typecheck_types(BOOL_TYPE_ID, cond.get_type()) {
+                if let Err(e) = self.typecheck_types(BOOL_TYPE_ID, cond.get_type(), scope_id) {
                     return make_fail(
                         format!("Invalid while condition type: {}", e),
                         cond.get_span(),
@@ -3372,7 +3401,8 @@ impl TypedModule {
         let body_block = match &ast_fn_def.block {
             Some(block_ast) => {
                 let block = self.eval_block(block_ast, fn_scope_id, Some(given_ret_type))?;
-                if let Err(msg) = self.typecheck_types(given_ret_type, block.expr_type) {
+                if let Err(msg) = self.typecheck_types(given_ret_type, block.expr_type, fn_scope_id)
+                {
                     return make_fail(
                         format!(
                             "Function {} return type mismatch: {}",
@@ -3618,9 +3648,11 @@ impl TypedModule {
             for (index, specialized_param) in specialized.params.iter().enumerate() {
                 let generic_param = &generic.params[index];
                 // This isn't gonna work yet since it doesn't understand the Self substitution
-                if let Err(msg) =
-                    self.typecheck_types(generic_param.type_id, specialized_param.type_id)
-                {
+                if let Err(msg) = self.typecheck_types(
+                    generic_param.type_id,
+                    specialized_param.type_id,
+                    spec_fn_scope_id,
+                ) {
                     return make_fail(format!("didn't match! {msg}"), impl_parsed_fn.span);
                 }
             }
