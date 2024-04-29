@@ -126,9 +126,9 @@ namespace string {
   }
 }
 
-impl Equals for string {
-  intern fn equals(self: string, that: string): bool
-}
+//impl Equals for string {
+//  intern fn equals(self: string, that: string): bool
+//}
 
 fn println(value: string): unit {
   print(value.concat('\n'.toString()));

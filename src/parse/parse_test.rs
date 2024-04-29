@@ -50,12 +50,8 @@ fn basic_fn() -> Result<(), ParseError> {
         src.to_string(),
     ));
     let module = parse_module(source)?;
-    if let Some(Definition::FnDef(fndef)) = module.defs.first() {
-        assert_eq!(*module.get_ident_str(fndef.name), *"basic")
-    } else {
-        println!("defs {:?}", module.defs);
-        panic!("no definitions for basic_fn")
-    }
+    let fndef = module.get_function(0);
+    assert_eq!(fndef.name, module.ident_id("basic"));
     Ok(())
 }
 
@@ -139,7 +135,6 @@ fn if_no_else() -> ParseResult<()> {
     let mut module = make_test_module();
     let mut parser = set_up(input, &mut module);
     let result = parser.parse_expression()?.unwrap();
-    println!("{result:?}");
     Ok(())
 }
 
@@ -196,7 +191,7 @@ fn prelude_only() -> Result<(), ParseError> {
     assert_eq!(&module.name, "prelude");
     assert_eq!(&module.sources.get_main().filename, "prelude.bfl");
     assert_eq!(&module.sources.get_main().directory, "builtins");
-    assert!(!module.defs.is_empty());
+    assert!(!module.get_root_namespace().definitions.is_empty());
     Ok(())
 }
 

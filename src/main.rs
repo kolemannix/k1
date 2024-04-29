@@ -192,7 +192,6 @@ fn main() -> Result<()> {
     let args = Args::parse();
     println!("{:#?}", args);
 
-    static_assert_size!(parse::Definition, 16);
     static_assert_size!(parse::BlockStmt, 80); // Get down below 100
     static_assert_size!(parse::ParsedExpression, 96); // Get back down
     static_assert_size!(typer::TypedExpr, 56);
