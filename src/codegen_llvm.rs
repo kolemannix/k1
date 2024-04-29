@@ -2136,7 +2136,7 @@ impl<'ctx> Codegen<'ctx> {
             }
         }
         for (id, function) in self.module.clone().function_iter() {
-            if !function.is_generic() && !function.is_ability {
+            if function.should_codegen() {
                 self.codegen_function(id, function);
             }
         }

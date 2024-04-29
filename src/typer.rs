@@ -17,11 +17,12 @@ use scopes::*;
 
 use crate::lex::{Span, TokenKind};
 use crate::parse::{
-    self, ExpressionId, FnCallArg, ForExpr, ForExprType, IfExpr, IndexOperation, ParsedAbility,
-    ParsedAbilityImplementation, ParsedNamespace, ParsedTypeExpression,
+    self, ExpressionId, FnCallArg, ForExpr, ForExprType, IfExpr, IndexOperation, ParsedAbilityId,
+    ParsedAbilityImplId, ParsedConstantId, ParsedDefinitionId, ParsedFunctionId, ParsedNamespaceId,
+    ParsedTypeDefnId, ParsedTypeExpression,
 };
 use crate::parse::{
-    AstDefinitionId, Block, BlockStmt, Definition, FnCall, IdentifierId, Literal, ParsedExpression,
+    AstDefinitionId, Block, BlockStmt, FnCall, IdentifierId, Literal, ParsedExpression,
     ParsedFunction, ParsedModule,
 };
 
@@ -238,6 +239,7 @@ pub struct SpecializationParams {
     pub fn_scope_id: ScopeId,
     pub new_name: IdentifierId,
     pub known_intrinsic: Option<IntrinsicFunctionType>,
+    pub generic_parent_function: FunctionId,
     pub is_ability_impl: bool,
 }
 
@@ -246,6 +248,31 @@ pub struct SpecializationRecord {
     pub specialized_type_params: Vec<TypeId>,
     pub specialized_function_id: FunctionId,
     pub specialized_params: Vec<FnArgDefn>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum TypedFunctionMetadata {
+    Standard(ParsedFunctionId),
+    Specialization { generic_parsed_function_id: ParsedFunctionId, generic_defn: FunctionId },
+    AbilityDefn(ParsedFunctionId),
+    AbilityImpl { generic_defn: FunctionId, impl_parsed_function_id: ParsedFunctionId },
+}
+impl TypedFunctionMetadata {
+    /// If this function has a corresponding parsed_function_id, return it.
+    /// In the case of a specialized generic function, it will not.
+    fn parsed_function_id(&self) -> ParsedFunctionId {
+        match self {
+            TypedFunctionMetadata::Standard(pfi) => *pfi,
+            TypedFunctionMetadata::Specialization { generic_parsed_function_id, .. } => {
+                *generic_parsed_function_id
+            }
+            TypedFunctionMetadata::AbilityDefn(pfi) => *pfi,
+            TypedFunctionMetadata::AbilityImpl {
+                impl_parsed_function_id: parsed_function_id,
+                ..
+            } => *parsed_function_id,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -259,16 +286,19 @@ pub struct TypedFunction {
     pub intrinsic_type: Option<IntrinsicFunctionType>,
     pub linkage: Linkage,
     pub specializations: Vec<SpecializationRecord>,
-    pub ast_id: AstDefinitionId,
+    pub metadata: TypedFunctionMetadata,
     pub span: Span,
-    // nocommit: I'm not sure if this is better or a type param of Self!
-    // I don't like it at all but we need a way to skip codegen of these
-    // at least for now. Codegen probably shouldn't iterate through all functions
-    // It should probably iterate through "real functions" and just look up by id
-    pub is_ability: bool,
 }
 
 impl TypedFunction {
+    pub fn should_codegen(&self) -> bool {
+        match self.metadata {
+            TypedFunctionMetadata::Standard(_) => !self.is_generic(),
+            TypedFunctionMetadata::Specialization { .. } => true,
+            TypedFunctionMetadata::AbilityDefn(_) => false,
+            TypedFunctionMetadata::AbilityImpl { .. } => true,
+        }
+    }
     pub fn is_generic(&self) -> bool {
         match &self.type_params {
             None => false,
@@ -751,7 +781,6 @@ pub struct AbilityImplementation {
 pub struct TypedModule {
     pub ast: Rc<ParsedModule>,
     functions: Vec<TypedFunction>,
-    pub definition_mappings: HashMap<AstDefinitionId, TypedDefinitionId>,
     pub variables: Vec<Variable>,
     pub types: Vec<Type>,
     pub constants: Vec<Constant>,
@@ -760,6 +789,8 @@ pub struct TypedModule {
     pub namespaces: Vec<Namespace>,
     pub abilities: Vec<TypedAbility>,
     pub implementations: Vec<AbilityImplementation>,
+    pub function_ast_mappings: HashMap<ParsedFunctionId, FunctionId>,
+    pub namespace_ast_mappings: HashMap<ParsedNamespaceId, NamespaceId>,
 }
 
 impl TypedModule {
@@ -771,7 +802,6 @@ impl TypedModule {
         TypedModule {
             ast: parsed_module,
             functions: Vec::new(),
-            definition_mappings: HashMap::new(),
             variables: Vec::new(),
             types,
             constants: Vec::new(),
@@ -780,6 +810,8 @@ impl TypedModule {
             namespaces,
             abilities: Vec::new(),
             implementations: Vec::new(),
+            function_ast_mappings: HashMap::new(),
+            namespace_ast_mappings: HashMap::new(),
         }
     }
 
@@ -906,26 +938,35 @@ impl TypedModule {
         &self.abilities[ability_id as usize]
     }
 
-    fn eval_type_defn(&mut self, defn: &parse::TypeDefn, scope_id: ScopeId) -> TyperResult<TypeId> {
-        let type_id = self.eval_type_expr(&defn.value_expr, scope_id)?;
+    fn eval_type_defn(
+        &mut self,
+        parsed_type_defn_id: ParsedTypeDefnId,
+        scope_id: ScopeId,
+    ) -> TyperResult<TypeId> {
+        let ast = self.ast.clone();
+        let parsed_type_defn = ast.get_type_defn(parsed_type_defn_id);
+        let type_id = self.eval_type_expr(&parsed_type_defn.value_expr, scope_id)?;
         match self.get_type_mut(type_id) {
             Type::Record(record_defn) => {
                 // Add the name to this record defn so it can have associated
                 // methods and constants
                 // FIXME: This name needs to be fully qualified!
-                record_defn.name_if_named = Some(defn.name);
+                record_defn.name_if_named = Some(parsed_type_defn.name);
                 Ok(type_id)
             }
             Type::Enum(enum_defn) => {
                 // Add the name to this enum defn so it can have associated
                 // methods and constants
                 // FIXME: This name needs to be fully qualified!
-                enum_defn.name_if_named = Some(defn.name);
+                enum_defn.name_if_named = Some(parsed_type_defn.name);
                 Ok(type_id)
             }
-            _ => make_fail("Invalid rhs for named type definition", defn.value_expr.get_span()),
+            _ => make_fail(
+                "Invalid rhs for named type definition",
+                parsed_type_defn.value_expr.get_span(),
+            ),
         }?;
-        self.scopes.add_type(scope_id, defn.name, type_id);
+        self.scopes.add_type(scope_id, parsed_type_defn.name, type_id);
         Ok(type_id)
     }
 
@@ -1147,31 +1188,38 @@ impl TypedModule {
         }
     }
 
-    fn eval_const(&mut self, const_expr: &parse::ConstVal) -> TyperResult<VariableId> {
+    fn eval_const(&mut self, parsed_constant_id: ParsedConstantId) -> TyperResult<VariableId> {
+        let ast = self.ast.clone();
+        let parsed_constant = ast.get_constant(parsed_constant_id);
         let scope_id = 0;
-        let type_id = self.eval_const_type_expr(&const_expr.ty)?;
-        let expr = match &*self.ast.get_expression(const_expr.value_expr) {
+        let type_id = self.eval_const_type_expr(&parsed_constant.ty)?;
+        let expr = match &*self.ast.get_expression(parsed_constant.value_expr) {
             ParsedExpression::Literal(Literal::Numeric(n, span)) => {
                 let num = self.parse_numeric(n).map_err(|msg| make_error(msg, *span))?;
-                TypedExpr::Int(num, const_expr.span)
+                TypedExpr::Int(num, parsed_constant.span)
             }
             ParsedExpression::Literal(Literal::Bool(b, span)) => TypedExpr::Bool(*b, *span),
             ParsedExpression::Literal(Literal::Char(c, span)) => TypedExpr::Char(*c, *span),
             _other => {
                 return make_fail(
                     "Only literals are currently supported as constants",
-                    const_expr.span,
+                    parsed_constant.span,
                 );
             }
         };
         let variable_id = self.add_variable(Variable {
-            name: const_expr.name,
+            name: parsed_constant.name,
             type_id,
             is_mutable: false,
             owner_scope: None,
         });
-        self.constants.push(Constant { variable_id, expr, ty: type_id, span: const_expr.span });
-        self.scopes.add_variable(scope_id, const_expr.name, variable_id);
+        self.constants.push(Constant {
+            variable_id,
+            expr,
+            ty: type_id,
+            span: parsed_constant.span,
+        });
+        self.scopes.add_variable(scope_id, parsed_constant.name, variable_id);
         Ok(variable_id)
     }
 
@@ -2230,7 +2278,7 @@ impl TypedModule {
         self.implementations
             .iter()
             .find(|imple| imple.type_id == type_id && imple.ability_id == ability_id)
-            .ok_or(make_error("Missing implementation", span_for_error))
+            .ok_or(make_error("Missing ability implementation", span_for_error))
     }
 
     fn eval_equality_expr(
@@ -2887,9 +2935,10 @@ impl TypedModule {
     ) -> TyperResult<(FunctionId, Vec<TypedExpr>)> {
         let spec_fn_scope_id = self.scopes.add_scope_to_root(ScopeType::FunctionScope, None);
         let generic_function = self.get_function(generic_function_id);
-        let generic_function_ast_id = generic_function.ast_id;
+        let generic_function_metadata = generic_function.metadata;
         let specializations = generic_function.specializations.clone();
         let name = String::from(&*self.get_ident_str(generic_function.name));
+        // drop(generic_function);
         let mut new_name = name.clone();
         // Add type_args to scope and typecheck them against the actual params
         for type_param in inferred_or_passed_type_args.iter() {
@@ -2950,21 +2999,15 @@ impl TypedModule {
             }
         }
 
-        let ast = self.ast.clone();
-        let Definition::FnDef(ast_def) = ast.get_defn_by_id(generic_function_ast_id) else {
-            self.internal_compiler_error(
-                "failed to get AST node for function specialization",
-                fn_call.span,
-            )
-        };
-
         // TODO: new_name should really be calculated by specialize_function
+        let generic_function_ast_id = generic_function_metadata.parsed_function_id();
         let specialized_function_id = self.specialize_function(
-            ast_def,
+            generic_function_ast_id,
             SpecializationParams {
                 fn_scope_id: spec_fn_scope_id,
                 new_name: self.ast.ident_id(&new_name),
                 known_intrinsic: intrinsic_type,
+                generic_parent_function: generic_function_id,
                 is_ability_impl: false,
             },
         )?;
@@ -3162,13 +3205,15 @@ impl TypedModule {
 
     fn eval_function_predecl(
         &mut self,
-        parsed_function: &ParsedFunction,
+        parsed_function_id: ParsedFunctionId,
         // Note: messy: parent_scope_id is only used if not specializing
         parent_scope_id: ScopeId,
         specialization_params: Option<SpecializationParams>,
         is_ability_decl: bool,
     ) -> TyperResult<FunctionId> {
         let specialize = specialization_params.is_some();
+        let ast = self.ast.clone();
+        let parsed_function = ast.get_function(parsed_function_id);
         let name = specialization_params
             .as_ref()
             .map(|params| params.new_name)
@@ -3259,6 +3304,23 @@ impl TypedModule {
             None => UNIT_TYPE_ID,
             Some(type_expr) => self.eval_type_expr(type_expr, fn_scope_id)?,
         };
+        let metadata = if is_ability_decl {
+            TypedFunctionMetadata::AbilityDefn(parsed_function_id)
+        } else if let Some(spec_params) = specialization_params {
+            if spec_params.is_ability_impl {
+                TypedFunctionMetadata::AbilityImpl {
+                    generic_defn: spec_params.generic_parent_function,
+                    impl_parsed_function_id: parsed_function_id,
+                }
+            } else {
+                TypedFunctionMetadata::Specialization {
+                    generic_parsed_function_id: parsed_function_id,
+                    generic_defn: parsed_function_id,
+                }
+            }
+        } else {
+            TypedFunctionMetadata::Standard(parsed_function_id)
+        };
         let function = TypedFunction {
             name,
             scope: fn_scope_id,
@@ -3269,9 +3331,8 @@ impl TypedModule {
             intrinsic_type,
             linkage: parsed_function.linkage,
             specializations: Vec::new(),
-            ast_id: parsed_function.definition_id,
+            metadata,
             span: parsed_function.span,
-            is_ability: is_ability_decl,
         };
         let function_id = self.add_function(function);
 
@@ -3283,39 +3344,30 @@ impl TypedModule {
 
             trace!(
                 "Inserting AST definition mapping for id {} {}, specialize={specialize}",
-                parsed_function.definition_id,
+                parsed_function.id,
                 &*self.get_ident_str(parsed_function.name)
             );
         }
-        // If we're specializing there are 2 cases
-        // - Regular: in which case we don't need to add a definition_mapping since there already is one for the declared function
-        // - Ability impl: In this, we actually do need one since the ability impl gets its own declaration and needs to be looked up
-        let is_ability_impl = specialization_params.is_some_and(|params| params.is_ability_impl);
-        if !specialize || is_ability_impl {
-            if is_ability_impl {
-                eprintln!(
-                    "Adding a definition mapping for {}",
-                    self.function_id_to_string(function_id, true)
-                );
-            }
-            self.definition_mappings
-                .insert(parsed_function.definition_id, TypedDefinitionId::Function(function_id));
+
+        // Only if this isn't a specialization, add the ast mapping
+        if let TypedFunctionMetadata::Specialization { .. } = metadata {
+        } else {
+            self.function_ast_mappings.insert(metadata.parsed_function_id(), function_id);
         }
 
         Ok(function_id)
     }
 
-    fn eval_function(&mut self, declaration_id: FunctionId) -> TyperResult<()> {
+    fn eval_function_body(&mut self, declaration_id: FunctionId) -> TyperResult<()> {
         let function = self.get_function(declaration_id);
         let fn_scope_id = function.scope;
         let given_ret_type = function.ret_type;
         let is_extern = function.linkage == Linkage::External;
-        let ast_id = function.ast_id;
+        let ast_id = function.metadata.parsed_function_id();
         let is_intrinsic = function.intrinsic_type.is_some();
 
         let ast = self.ast.clone();
-        let ast_fn_def =
-            ast.get_defn_by_id(ast_id).as_fn_def().expect("expected function definition");
+        let ast_fn_def = ast.get_function(ast_id);
 
         let body_block = match &ast_fn_def.block {
             Some(block_ast) => {
@@ -3345,25 +3397,27 @@ impl TypedModule {
 
     fn specialize_function(
         &mut self,
-        fn_def: &ParsedFunction,
+        parsed_function_id: ParsedFunctionId,
         specialization_params: SpecializationParams,
     ) -> TyperResult<FunctionId> {
         let specialized_function_id = self.eval_function_predecl(
-            fn_def,
+            parsed_function_id,
             // This scope is unused when specializing, so we just pass the root
             self.scopes.get_root_scope_id(),
             Some(specialization_params),
             false,
         )?;
-        self.eval_function(specialized_function_id)?;
+        self.eval_function_body(specialized_function_id)?;
         Ok(specialized_function_id)
     }
 
     fn eval_namespace_decl(
         &mut self,
-        ast_namespace: &ParsedNamespace,
+        parsed_namespace_id: ParsedNamespaceId,
         scope_id: ScopeId,
     ) -> TyperResult<NamespaceId> {
+        let ast = self.ast.clone();
+        let ast_namespace = ast.get_namespace(parsed_namespace_id);
         let ns_scope_id =
             self.scopes.add_child_scope(scope_id, ScopeType::Namespace, Some(ast_namespace.name));
         let namespace = Namespace { name: ast_namespace.name, scope_id: ns_scope_id };
@@ -3373,56 +3427,56 @@ impl TypedModule {
         let scope = self.scopes.get_scope_mut(scope_id);
         scope.add_namespace(ast_namespace.name, namespace_id);
 
-        self.definition_mappings
-            .insert(ast_namespace.definition_id, TypedDefinitionId::Namespace(namespace_id));
+        self.namespace_ast_mappings.insert(ast_namespace.id, namespace_id);
 
         for defn in &ast_namespace.definitions {
-            self.eval_definition_declaration_phase(defn, ns_scope_id)?;
+            self.eval_definition_declaration_phase(*defn, ns_scope_id)?;
         }
         Ok(namespace_id)
     }
 
-    fn eval_namespace(&mut self, ast_namespace: &ParsedNamespace) -> TyperResult<NamespaceId> {
-        let namespace_id =
-            self.definition_mappings.get(&ast_namespace.definition_id).unwrap().as_namespace_id();
+    fn eval_namespace(&mut self, ast_namespace_id: ParsedNamespaceId) -> TyperResult<NamespaceId> {
+        let ast = self.ast.clone();
+        let ast_namespace = ast.get_namespace(ast_namespace_id);
+        let namespace_id = *self.namespace_ast_mappings.get(&ast_namespace.id).unwrap();
         let ns_scope_id = self.get_namespace(namespace_id).scope_id;
         for defn in &ast_namespace.definitions {
-            self.eval_definition(defn, ns_scope_id)?;
+            self.eval_definition(*defn, ns_scope_id)?;
         }
         Ok(namespace_id)
     }
 
     fn eval_definition_declaration_phase(
         &mut self,
-        def: &Definition,
+        defn_id: ParsedDefinitionId,
         scope_id: ScopeId,
     ) -> TyperResult<()> {
-        match def {
-            Definition::Namespace(namespace) => {
-                self.eval_namespace_decl(namespace, scope_id)?;
+        match defn_id {
+            ParsedDefinitionId::Namespace(namespace_id) => {
+                self.eval_namespace_decl(namespace_id, scope_id)?;
                 Ok(())
             }
-            Definition::Const(const_val) => {
-                let _variable_id: VariableId = self.eval_const(const_val)?;
+            ParsedDefinitionId::Constant(constant_id) => {
+                let _variable_id: VariableId = self.eval_const(constant_id)?;
                 Ok(())
             }
-            Definition::FnDef(fn_def) => {
-                self.eval_function_predecl(fn_def, scope_id, None, false)?;
+            ParsedDefinitionId::Function(parsed_function_id) => {
+                self.eval_function_predecl(parsed_function_id, scope_id, None, false)?;
                 Ok(())
             }
-            Definition::TypeDef(type_defn) => {
+            ParsedDefinitionId::TypeDefn(type_defn_id) => {
                 // We can just do type defs in the declaration phase, so we skip them in the 2nd pass
-                self.eval_type_defn(type_defn, scope_id)?;
+                self.eval_type_defn(type_defn_id, scope_id)?;
                 Ok(())
             }
-            Definition::Ability(ability_defn) => {
+            ParsedDefinitionId::Ability(parsed_ability_id) => {
                 // Typechecking an ability definition means declaring the functions, registering the ability,
                 // and the fact that it contains those functions. Also making sure they are valid? Do they have to take
                 // at least one Self arg?
-                self.eval_ability_defn(ability_defn, scope_id)?;
+                self.eval_ability_defn(parsed_ability_id, scope_id)?;
                 Ok(())
             }
-            Definition::AbilityImpl(_ability_impl) => {
+            ParsedDefinitionId::AbilityImpl(_ability_impl) => {
                 // Nothing to do in this phase for impls
                 Ok(())
             }
@@ -3431,9 +3485,11 @@ impl TypedModule {
 
     fn eval_ability_defn(
         &mut self,
-        parsed_ability: &ParsedAbility,
+        parsed_ability_id: ParsedAbilityId,
         scope_id: ScopeId,
     ) -> TyperResult<()> {
+        let ast = self.ast.clone();
+        let parsed_ability = ast.get_ability(parsed_ability_id);
         let ability_scope_id =
             self.scopes.add_child_scope(scope_id, ScopeType::Namespace, Some(parsed_ability.name));
         // Open up the scope for the ability, and add type variable "Self" into scope
@@ -3445,17 +3501,17 @@ impl TypedModule {
         self.scopes.get_scope_mut(ability_scope_id).add_type(self_ident_id, self_type_id);
         let mut typed_functions: Vec<TypedAbilityFunctionRef> =
             Vec::with_capacity(parsed_ability.functions.len());
-        for parsed_function in parsed_ability.functions.iter() {
+        for parsed_function_id in parsed_ability.functions.iter() {
             let function_id =
-                self.eval_function_predecl(parsed_function, ability_scope_id, None, true)?;
-            typed_functions
-                .push(TypedAbilityFunctionRef { function_name: parsed_function.name, function_id });
+                self.eval_function_predecl(*parsed_function_id, ability_scope_id, None, true)?;
+            let function_name = self.ast.get_function(*parsed_function_id).name;
+            typed_functions.push(TypedAbilityFunctionRef { function_name, function_id });
         }
         let typed_ability = TypedAbility {
             name: parsed_ability.name,
             functions: typed_functions,
             scope_id: ability_scope_id,
-            ast_id: parsed_ability.definition_id,
+            ast_id: parsed_ability.id,
         };
         let ability_id = self.add_ability(typed_ability);
         self.scopes
@@ -3466,9 +3522,11 @@ impl TypedModule {
 
     fn eval_ability_impl(
         &mut self,
-        parsed_ability_implementation: &ParsedAbilityImplementation,
+        parsed_ability_impl_id: ParsedAbilityImplId,
         scope_id: ScopeId,
     ) -> TyperResult<()> {
+        let ast = self.ast.clone();
+        let parsed_ability_implementation = ast.get_ability_impl(parsed_ability_impl_id);
         let ability_name = parsed_ability_implementation.ability_name;
         let Some(ability_id) = self.scopes.get_root_scope().find_ability(ability_name) else {
             return make_fail(
@@ -3503,10 +3561,15 @@ impl TypedModule {
         let mut typed_functions = Vec::new();
         // Note(clone): TypedAbilityFunctionRef is super cheap to clone
         for ability_function_ref in &ability.functions.clone() {
-            let Some(impl_parsed_fn) = parsed_ability_implementation
-                .functions
-                .iter()
-                .find(|f| f.name == ability_function_ref.function_name)
+            let Some(impl_parsed_fn) =
+                parsed_ability_implementation.functions.iter().find_map(|&fn_id| {
+                    let the_fn = ast.get_function(fn_id);
+                    if the_fn.name == ability_function_ref.function_name {
+                        Some(the_fn)
+                    } else {
+                        None
+                    }
+                })
             else {
                 return make_fail(
                     format!(
@@ -3539,11 +3602,12 @@ impl TypedModule {
             // TODO: bind other type variables
 
             let function_impl = self.specialize_function(
-                impl_parsed_fn,
+                impl_parsed_fn.id,
                 SpecializationParams {
                     fn_scope_id: spec_fn_scope_id,
                     new_name: impl_parsed_fn.name,
                     known_intrinsic: None,
+                    generic_parent_function: ability_function_ref.function_id,
                     is_ability_impl: true,
                 },
             )?;
@@ -3553,6 +3617,7 @@ impl TypedModule {
             let generic = self.get_function(ability_function_ref.function_id);
             for (index, specialized_param) in specialized.params.iter().enumerate() {
                 let generic_param = &generic.params[index];
+                // This isn't gonna work yet since it doesn't understand the Self substitution
                 if let Err(msg) =
                     self.typecheck_types(generic_param.type_id, specialized_param.type_id)
                 {
@@ -3570,34 +3635,33 @@ impl TypedModule {
         Ok(())
     }
 
-    fn eval_definition(&mut self, def: &Definition, scope_id: ScopeId) -> TyperResult<()> {
+    fn eval_definition(&mut self, def: ParsedDefinitionId, scope_id: ScopeId) -> TyperResult<()> {
         match def {
-            Definition::Namespace(namespace) => {
+            ParsedDefinitionId::Namespace(namespace) => {
                 self.eval_namespace(namespace)?;
                 Ok(())
             }
-            Definition::Const(_const_val) => {
+            ParsedDefinitionId::Constant(_const_val) => {
                 // Nothing to do in this phase for a const
                 Ok(())
             }
-            Definition::FnDef(fn_def) => {
+            ParsedDefinitionId::Function(parsed_function_id) => {
                 let function_declaration_id = self
-                    .definition_mappings
-                    .get(&fn_def.definition_id)
-                    .expect("function predecl lookup failed")
-                    .as_function_id();
-                self.eval_function(function_declaration_id)?;
+                    .function_ast_mappings
+                    .get(&parsed_function_id)
+                    .expect("function predecl lookup failed");
+                self.eval_function_body(*function_declaration_id)?;
                 Ok(())
             }
-            Definition::TypeDef(_type_defn) => {
+            ParsedDefinitionId::TypeDefn(_type_defn) => {
                 // Nothing to do in this phase for a type definition
                 Ok(())
             }
-            Definition::Ability(_ability) => {
+            ParsedDefinitionId::Ability(_ability) => {
                 // Nothing to do in this phase for an ability
                 Ok(())
             }
-            Definition::AbilityImpl(ability_impl) => {
+            ParsedDefinitionId::AbilityImpl(ability_impl) => {
                 self.eval_ability_impl(ability_impl, scope_id)?;
                 Ok(())
             }
@@ -3608,8 +3672,8 @@ impl TypedModule {
 
         let scope_id = self.scopes.get_root_scope_id();
 
-        for defn in self.ast.clone().defns_iter() {
-            let result = self.eval_definition_declaration_phase(defn, scope_id);
+        for &parsed_definition_id in self.ast.clone().get_root_namespace().definitions.iter() {
+            let result = self.eval_definition_declaration_phase(parsed_definition_id, scope_id);
             if let Err(e) = result {
                 self.print_error(&e.message, e.span);
                 errors.push(e);
@@ -3620,8 +3684,8 @@ impl TypedModule {
             bail!("{} failed declaration phase with {} errors", self.name(), errors.len())
         }
 
-        for defn in self.ast.clone().defns_iter() {
-            let result = self.eval_definition(defn, scope_id);
+        for &parsed_definition_id in self.ast.clone().get_root_namespace().definitions.iter() {
+            let result = self.eval_definition(parsed_definition_id, scope_id);
             if let Err(e) = result {
                 self.print_error(&e.message, e.span);
                 errors.push(e);
