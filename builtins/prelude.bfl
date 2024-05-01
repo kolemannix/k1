@@ -73,7 +73,7 @@ namespace Array {
 }
 
 // TODO: hard mode, with a type param
-// impl Equals for Array<T> {
+// impl<T> Equals for Array<T> {
 //   fn equals(self: Array<T>, other: Array<T>): bool {
 //     if self.length() != other.length() {
 //       false
