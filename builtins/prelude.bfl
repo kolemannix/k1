@@ -11,10 +11,6 @@ ability Hash {
   fn hash(self: Self): int
 }
 
-ability Default {
-  fn default(): Self
-}
-
 intern fn printInt(value: int): unit
 intern fn print(value: string): unit
 intern fn exit(code: int): unit
