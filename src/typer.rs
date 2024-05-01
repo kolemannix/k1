@@ -2387,20 +2387,6 @@ impl TypedModule {
                         span: binary_op.span,
                     });
                     Ok(call_expr)
-
-                    // old impl
-                    // let string_scope =
-                    //     self.get_namespace_scope_for_ident(scope_id, self.ast.ident_id("string"));
-                    // let string_equality_function = string_scope
-                    //     .find_function(self.ast.ident_id("equals"))
-                    //     .ok_or(make_err("Missing equality function for string", binary_op.span))?;
-                    // let call_expr = TypedExpr::FunctionCall(Call {
-                    //     callee_function_id: string_equality_function,
-                    //     args: vec![lhs, rhs],
-                    //     ret_type: BOOL_TYPE_ID,
-                    //     span: binary_op.span,
-                    // });
-                    // Ok(call_expr)
                 }
             }
             Type::Record(_record_defn) => {
@@ -3611,10 +3597,6 @@ impl TypedModule {
             }
         }
 
-        // - Does it implement every function
-        //   - correct name
-        //   - correct signature
-        //   - correct return type
         let ability = self.get_ability(ability_id);
         let ability_scope_id = ability.scope_id;
         let mut typed_functions = Vec::new();
@@ -3653,13 +3635,6 @@ impl TypedModule {
                 .get_scope_mut(spec_fn_scope_id)
                 .add_type(self.ast.ident_id("Self"), target_type);
 
-            // FIXME big: All the work we do here that is also done before specializing normal functions
-            //       should be done inside specialize_function so it is not duplicated
-            //       This includes binding other type variables,
-            //       maybe resolving the intrinsic type? Let's see if that works already
-
-            // TODO: bind other type variables
-
             let function_impl = self.specialize_function(
                 impl_parsed_fn.id,
                 SpecializationParams {
@@ -3671,21 +3646,50 @@ impl TypedModule {
                 },
             )?;
 
-            // Hold on a second; does it match?
             let specialized = self.get_function(function_impl);
             let generic = self.get_function(ability_function_ref.function_id);
+            if specialized.params.len() != generic.params.len() {
+                return make_fail(
+                    format!(
+                        "Invalid implementation of {} in ability {}: wrong number of parameters",
+                        &*self.ast.get_ident_str(ability_function_ref.function_name),
+                        &*self.ast.get_ident_str(ability_name)
+                    ),
+                    impl_parsed_fn.span,
+                );
+            }
             for (index, specialized_param) in specialized.params.iter().enumerate() {
                 let generic_param = &generic.params[index];
-                // This isn't gonna work yet since it doesn't understand the Self substitution
                 if let Err(msg) = self.typecheck_types(
                     generic_param.type_id,
                     specialized_param.type_id,
                     spec_fn_scope_id,
                 ) {
-                    return make_fail(format!("didn't match! {msg}"), impl_parsed_fn.span);
+                    return make_fail(
+                        format!(
+                            "Invalid implementation of {} in ability {} for parameter {}: {}",
+                            &*self.ast.get_ident_str(ability_function_ref.function_name),
+                            &*self.ast.get_ident_str(ability_name),
+                            &*self.ast.get_ident_str(generic_param.name),
+                            msg
+                        ),
+                        impl_parsed_fn.span,
+                    );
                 }
             }
-            // Also check return type
+            if let Err(msg) =
+                self.typecheck_types(generic.ret_type, specialized.ret_type, spec_fn_scope_id)
+            {
+                return make_fail(
+                    format!(
+                        "Invalid implementation of '{}' in ability '{}': Wrong return type: {}",
+                        &*self.ast.get_ident_str(ability_function_ref.function_name),
+                        &*self.ast.get_ident_str(ability_name),
+                        msg
+                    ),
+                    impl_parsed_fn.span,
+                );
+            }
 
             typed_functions.push(function_impl);
         }
