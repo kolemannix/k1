@@ -60,7 +60,7 @@ impl TypedModule {
 
         for (id, variable_id) in scope.variables.iter() {
             let variable = self.get_variable(*variable_id);
-            writ.write_fmt(format_args!("\t{}", id))?;
+            writ.write_fmt(format_args!("\t{} ", id))?;
             self.display_variable(variable, writ)?;
             writ.write_str("\n")?;
         }
@@ -68,6 +68,16 @@ impl TypedModule {
             let function = self.get_function(*function_id);
             writ.write_str("\t")?;
             self.display_function(function, writ, false)?;
+            writ.write_str("\n")?;
+        }
+        if !scope.types.is_empty() {
+            writ.write_str("\tTYPES\n")?;
+        }
+        for (ident, type_id) in scope.types.iter() {
+            writ.write_str("\t")?;
+            writ.write_str(&self.get_ident_str(*ident))?;
+            writ.write_str(" := ")?;
+            self.display_type_id(*type_id, writ)?;
             writ.write_str("\n")?;
         }
         for (id, namespace_id) in scope.namespaces.iter() {

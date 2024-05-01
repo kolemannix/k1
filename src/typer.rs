@@ -205,7 +205,7 @@ pub struct TypedAbility {
     pub name: IdentifierId,
     pub functions: Vec<TypedAbilityFunctionRef>,
     pub scope_id: ScopeId,
-    pub ast_id: AstDefinitionId,
+    pub ast_id: ParsedAbilityId,
 }
 
 impl TypedAbility {
@@ -1168,8 +1168,6 @@ impl TypedModule {
                 self.typecheck_types(a1.element_type, a2.element_type, scope_id)
             }
             (Type::TypeVariable(t1), Type::TypeVariable(t2)) => {
-                // This is broken; should be more robust than just same identifier; we need to know the scope
-                // so that we can resolve these type variables IF they point to something and typecheck those types
                 if t1.identifier_id == t2.identifier_id {
                     Ok(())
                 } else {
@@ -1191,11 +1189,42 @@ impl TypedModule {
                 );
                 Err("unimplemented".to_string())
             }
-            (exp, got) => Err(format!(
-                "Expected {} but got {}",
-                self.type_to_string(exp),
-                self.type_to_string(got)
-            )),
+            (exp, act) => {
+                // Resolve type variables
+                if let Type::TypeVariable(expected_type_var) = exp {
+                    if let Some(expected_resolved) =
+                        self.scopes.find_type(scope_id, expected_type_var.identifier_id)
+                    {
+                        // We will recursively just resolve to the same type variable without this check
+                        // this check requires us to make progress. Doesn't prevent cycles though I guess
+                        if expected_resolved != expected {
+                            println!(
+                                "Expected '{}' resolved to {}",
+                                &*self.ast.get_ident_str(expected_type_var.identifier_id),
+                                self.type_id_to_string(expected_resolved)
+                            );
+                            return self.typecheck_types(expected_resolved, actual, scope_id);
+                        }
+                    }
+                }
+                if let Type::TypeVariable(actual_type_var) = act {
+                    if let Some(actual_resolved) =
+                        self.scopes.find_type(scope_id, actual_type_var.identifier_id)
+                    {
+                        // We will recursively just resolve to the same type variable without this check
+                        // this check requires us to make progress. Doesn't prevent cycles though I guess
+                        if actual_resolved != actual {
+                            return self.typecheck_types(expected, actual_resolved, scope_id);
+                        }
+                        return self.typecheck_types(expected, actual_resolved, scope_id);
+                    }
+                }
+                Err(format!(
+                    "Expected {} but got {}",
+                    self.type_to_string(exp),
+                    self.type_to_string(act)
+                ))
+            }
         }
     }
 
