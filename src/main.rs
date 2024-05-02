@@ -139,7 +139,12 @@ pub fn compile_module<'ctx>(
     let ast = Rc::new(module);
 
     let mut typed_module = typer::TypedModule::new(ast);
-    typed_module.run()?;
+    if let Err(e) = typed_module.run() {
+        if args.dump_module {
+            println!("{}", typed_module);
+        }
+        return Err(e);
+    };
 
     let irgen = Rc::new(typed_module);
     let llvm_optimize = !args.no_llvm_opt;
@@ -157,6 +162,7 @@ pub fn compile_module<'ctx>(
         f.write_all(llvm_text.as_bytes()).unwrap();
         // println!("{}", codegen.output_llvm_ir_text());
     }
+
     if args.dump_module {
         println!("{}", codegen.module);
     }

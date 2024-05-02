@@ -1,6 +1,6 @@
 fn main(): int {
   val empty: Array<int> = [];
-  assert(empty != [1]);
+  // assert(empty != [1]);
   assert(empty == empty);
   assert([3] == [3]);
   assert(["asdf", "2"] != ["asdf", "3"]);

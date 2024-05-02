@@ -42,7 +42,7 @@ impl Display for TypedModule {
 
 // Dumping
 impl TypedModule {
-    fn make_scope_name(&self, scope: &Scope) -> String {
+    pub fn make_scope_name(&self, scope: &Scope) -> String {
         let mut name = match scope.name {
             Some(name) => (*self.get_ident_str(name)).to_string(),
             None => scope.scope_type.short_name().to_string(),

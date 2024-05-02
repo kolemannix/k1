@@ -72,24 +72,45 @@ namespace Array {
   }
 }
 
-// TODO: hard mode, with a type param
-// impl<T> Equals for Array<T> {
-//   fn equals(self: Array<T>, other: Array<T>): bool {
-//     if self.length() != other.length() {
-//       false
-//     } else {
-//       mut i = 0;
-//       mut ret = true;
-//       while (ret and i < self.length()) {
-//         if self[i] != other[i] {
-//           ret = false;
-//         };
-//         i = i + 1;
-//       };
-//       ret
-//     }
-//   }
-// }
+impl Equals for Array<int> {
+  fn equals(self: Array<int>, other: Array<int>): bool {
+    if self.length() != other.length() {
+      false
+    } else {
+      mut i = 0;
+      mut ret = true;
+      while (ret and i < self.length()) {
+        if self[i] != other[i] {
+          ret = false;
+        };
+        i = i + 1;
+      };
+      ret
+    }
+  }
+}
+
+impl Equals for string {
+  intern fn equals(self: string, that: string): bool
+}
+
+impl Equals for Array<string> {
+  fn equals(self: Array<string>, other: Array<string>): bool {
+    if self.length() != other.length() {
+      false
+    } else {
+      mut i = 0;
+      mut ret = true;
+      while (ret and i < self.length()) {
+        if self[i] != other[i] {
+          ret = false;
+        };
+        i = i + 1;
+      };
+      ret
+    }
+  }
+}
 
 namespace string {
   intern fn fromChars(bytes: Array<char>): string
@@ -120,10 +141,6 @@ namespace string {
     };
     fromChars(copied)
   }
-}
-
-impl Equals for string {
-  intern fn equals(self: string, that: string): bool
 }
 
 fn println(value: string): unit {
