@@ -68,13 +68,12 @@ pub const STRING_TYPE_ID: TypeId = 4;
 #[derive(Debug, Clone)]
 pub struct ArrayType {
     pub element_type: TypeId,
-    // todo: Lose the span!
-    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
 pub struct TypeVariable {
     identifier_id: IdentifierId,
+    scope_id: ScopeId,
     /// This is where trait bounds would go
     _constraints: Option<Vec<()>>,
 }
@@ -696,7 +695,7 @@ pub struct Variable {
     pub name: IdentifierId,
     pub type_id: TypeId,
     pub is_mutable: bool,
-    pub owner_scope: Option<ScopeId>,
+    pub owner_scope: ScopeId,
 }
 
 #[derive(Debug)]
@@ -851,7 +850,46 @@ impl TypedModule {
         &self.namespaces[namespace_id as usize]
     }
 
+    fn type_eq(&self, type1: &Type, type2: &Type) -> bool {
+        match (type1, type2) {
+            (Type::Unit, Type::Unit) => true,
+            (Type::Char, Type::Char) => true,
+            (Type::Int, Type::Int) => true,
+            (Type::Bool, Type::Bool) => true,
+            (Type::String, Type::String) => true,
+            (Type::Record(r1), Type::Record(r2)) => {
+                // TODO: member-by-member comparison
+                false
+            }
+            (Type::Array(a1), Type::Array(a2)) => a1.element_type == a2.element_type,
+            (Type::Optional(o1), Type::Optional(o2)) => o1.inner_type == o2.inner_type,
+            (Type::Reference(r1), Type::Reference(r2)) => r1.inner_type == r2.inner_type,
+            (Type::TypeVariable(t1), Type::TypeVariable(t2)) => {
+                if t1.identifier_id == t2.identifier_id {
+                    dbg!(
+                        self.make_scope_name(self.scopes.get_scope(t1.scope_id)),
+                        self.make_scope_name(self.scopes.get_scope(t2.scope_id))
+                    );
+                }
+                //t1.identifier_id == t2.identifier_id && t1.scope_id == t2.scope_id
+                //false
+                todo!("Figure out exactly how to do equality on type variables and test it good")
+            }
+            (Type::TagInstance(t1), Type::TagInstance(t2)) => t1.ident == t2.ident,
+            (Type::Enum(e1), Type::Enum(e2)) => {
+                // TODO: variant-by-variant comparison
+                false
+            }
+            _ => false,
+        }
+    }
+
     fn add_type(&mut self, typ: Type) -> TypeId {
+        for (existing_type_id, existing_type) in self.types.iter().enumerate() {
+            if self.type_eq(existing_type, &typ) {
+                return existing_type_id as TypeId;
+            }
+        }
         let id = self.types.len();
         self.types.push(typ);
         id as u32
@@ -1014,7 +1052,7 @@ impl TypedModule {
                 if self.ast.ident_id("Array") == ty_app.base {
                     if ty_app.params.len() == 1 {
                         let element_ty = self.eval_type_expr(&ty_app.params[0], scope_id)?;
-                        let array_ty = ArrayType { span: ty_app.span, element_type: element_ty };
+                        let array_ty = ArrayType { element_type: element_ty };
                         let type_id = self.add_type(Type::Array(array_ty));
                         Ok(type_id)
                     } else {
@@ -1231,7 +1269,7 @@ impl TypedModule {
     fn eval_const(&mut self, parsed_constant_id: ParsedConstantId) -> TyperResult<VariableId> {
         let ast = self.ast.clone();
         let parsed_constant = ast.get_constant(parsed_constant_id);
-        let scope_id = 0;
+        let root_scope_id = self.scopes.get_root_scope_id();
         let type_id = self.eval_const_type_expr(&parsed_constant.ty)?;
         let expr = match &*self.ast.get_expression(parsed_constant.value_expr) {
             ParsedExpression::Literal(Literal::Numeric(n, span)) => {
@@ -1251,7 +1289,7 @@ impl TypedModule {
             name: parsed_constant.name,
             type_id,
             is_mutable: false,
-            owner_scope: None,
+            owner_scope: root_scope_id,
         });
         self.constants.push(Constant {
             variable_id,
@@ -1259,7 +1297,7 @@ impl TypedModule {
             ty: type_id,
             span: parsed_constant.span,
         });
-        self.scopes.add_variable(scope_id, parsed_constant.name, variable_id);
+        self.scopes.add_variable(root_scope_id, parsed_constant.name, variable_id);
         Ok(variable_id)
     }
 
@@ -1652,7 +1690,7 @@ impl TypedModule {
                 let type_id = match expected_type {
                     Some(t) => t,
                     None => {
-                        let array_type = ArrayType { element_type, span: array_expr.span };
+                        let array_type = ArrayType { element_type };
                         self.add_type(Type::Array(array_type))
                     }
                 };
@@ -1985,7 +2023,7 @@ impl TypedModule {
         no_mangle: bool,
     ) -> (VariableId, TypedStmt, TypedExpr) {
         let type_id = variable.type_id;
-        let scope_id = variable.owner_scope.unwrap_or(self.scopes.get_root_scope_id());
+        let scope_id = variable.owner_scope;
         let new_ident = if no_mangle {
             variable.name
         } else {
@@ -2073,7 +2111,7 @@ impl TypedModule {
                 name: self.ast.ident_id("it_index"),
                 type_id: INT_TYPE_ID,
                 is_mutable: true,
-                owner_scope: Some(for_expr_scope),
+                owner_scope: for_expr_scope,
             },
             body_span,
             TypedExpr::Int(0, for_expr.body_block.span),
@@ -2085,7 +2123,7 @@ impl TypedModule {
                     name: self.ast.ident_id("iteree"),
                     type_id: iteree_type,
                     is_mutable: false,
-                    owner_scope: Some(for_expr_scope),
+                    owner_scope: for_expr_scope,
                 },
                 iterable_span,
                 iterable_expr,
@@ -2116,7 +2154,7 @@ impl TypedModule {
                     name: self.ast.ident_id("iteree_length"),
                     type_id: INT_TYPE_ID,
                     is_mutable: false,
-                    owner_scope: Some(for_expr_scope),
+                    owner_scope: for_expr_scope,
                 },
                 iterable_span,
                 iteree_length_call,
@@ -2129,7 +2167,7 @@ impl TypedModule {
             name: binding_ident,
             type_id: item_type,
             is_mutable: false,
-            owner_scope: Some(while_scope_id),
+            owner_scope: while_scope_id,
         });
         self.scopes.add_variable(while_scope_id, binding_ident, binding_variable_id);
         let iteration_element_val_def = TypedStmt::ValDef(Box::new(ValDef {
@@ -2177,17 +2215,11 @@ impl TypedModule {
                     self.add_type(new_optional)
                 }
                 Type::Array(_arr) => {
-                    let new_array = Type::Array(ArrayType {
-                        element_type: body_block.expr_type,
-                        span: for_expr.span,
-                    });
+                    let new_array = Type::Array(ArrayType { element_type: body_block.expr_type });
                     self.add_type(new_array)
                 }
                 Type::String => {
-                    let new_array = Type::Array(ArrayType {
-                        element_type: body_block.expr_type,
-                        span: for_expr.span,
-                    });
+                    let new_array = Type::Array(ArrayType { element_type: body_block.expr_type });
                     self.add_type(new_array)
                 }
                 other => todo!("Unsupported iteree type: {}", self.type_to_string(other)),
@@ -2198,7 +2230,7 @@ impl TypedModule {
                 name: self.ast.ident_id("yielded_coll"),
                 type_id: resulting_type,
                 is_mutable: false,
-                owner_scope: Some(for_expr_scope),
+                owner_scope: for_expr_scope,
             };
 
             let yield_initializer = match self.get_type(resulting_type) {
@@ -2232,7 +2264,7 @@ impl TypedModule {
                     name: self.ast.ident_id("block_expr_val"),
                     type_id: body_block.expr_type,
                     is_mutable: false,
-                    owner_scope: Some(while_scope_id),
+                    owner_scope: while_scope_id,
                 },
                 body_span,
                 TypedExpr::Block(body_block),
@@ -2329,7 +2361,14 @@ impl TypedModule {
         self.implementations
             .iter()
             .find(|imple| imple.type_id == type_id && imple.ability_id == ability_id)
-            .ok_or(make_error("Missing ability implementation", span_for_error))
+            .ok_or(make_error(
+                format!(
+                    "Missing ability implementation for {} {}",
+                    type_id,
+                    self.type_id_to_string(type_id)
+                ),
+                span_for_error,
+            ))
     }
 
     fn eval_equality_expr(
@@ -2343,7 +2382,8 @@ impl TypedModule {
                 || binary_op.op_kind == BinaryOpKind::NotEquals
         );
         let lhs = self.eval_expr(binary_op.lhs, scope_id, None)?;
-        let equals_expr = match self.get_type(lhs.get_type()) {
+        let lhs_type_id = lhs.get_type();
+        let equals_expr = match self.get_type(lhs_type_id) {
             Type::Unit | Type::Char | Type::Int | Type::Bool => {
                 // All these scalar types treated as IntValue s in codegen
                 let rhs = self.eval_expr(binary_op.rhs, scope_id, Some(lhs.get_type()))?;
@@ -2358,59 +2398,6 @@ impl TypedModule {
                 } else {
                     make_fail("Bad rhs type", binary_op.span)
                 }
-            }
-            Type::String => {
-                let rhs = self.eval_expr(binary_op.rhs, scope_id, Some(lhs.get_type()))?;
-                if rhs.get_type() != STRING_TYPE_ID {
-                    make_fail("Expected string on rhs", binary_op.span)
-                } else {
-                    // Look in the root scope only
-                    let equals_ability_id = self
-                        .scopes
-                        .get_root_scope()
-                        .find_ability(self.ast.ident_id("Equals"))
-                        .unwrap();
-
-                    let implementation = self.expect_ability_implementation(
-                        equals_ability_id,
-                        STRING_TYPE_ID,
-                        binary_op.span,
-                    )?;
-                    let ability = self.get_ability(equals_ability_id);
-                    let equals_index =
-                        ability.find_function_by_name(self.ast.ident_id("equals")).unwrap().0;
-                    let equals_implementation_function_id = implementation.functions[equals_index];
-                    let call_expr = TypedExpr::FunctionCall(Call {
-                        callee_function_id: equals_implementation_function_id,
-                        args: vec![lhs, rhs],
-                        ret_type: BOOL_TYPE_ID,
-                        span: binary_op.span,
-                    });
-                    Ok(call_expr)
-                }
-            }
-            Type::Record(_record_defn) => {
-                todo!("record equality")
-            }
-            Type::Array(array) => {
-                // We need a cleaner way to generate _generic_ calls in typer
-                // known_type_args is a good start, but I think we need to be able to
-                // pass in pre-evaluated value args as well and pick up from there with specialization
-                let array_equality_call = self.synth_function_call(
-                    vec![self.ast.ident_id("Array")],
-                    self.ast.ident_id("equals"),
-                    Some(vec![array.element_type]),
-                    vec![binary_op.lhs, binary_op.rhs],
-                    binary_op.span,
-                    scope_id,
-                )?;
-                Ok(array_equality_call)
-            }
-            Type::Optional(_opt) => {
-                todo!("optional equality")
-            }
-            Type::Reference(_refer) => {
-                todo!("reference equality")
             }
             Type::TypeVariable(_type_var) => {
                 let rhs = self.eval_expr(binary_op.rhs, scope_id, Some(lhs.get_type()))?;
@@ -2445,8 +2432,35 @@ impl TypedModule {
                     span: binary_op.span,
                 }))
             }
-            Type::Enum(_e) => {
-                todo!("equality enum lhs")
+            _other_lhs_type => {
+                let rhs = self.eval_expr(binary_op.rhs, scope_id, Some(lhs.get_type()))?;
+                if rhs.get_type() != lhs_type_id {
+                    make_fail("Expected lhs and rhs to match", binary_op.span)
+                } else {
+                    // Look in the root scope only
+                    let equals_ability_id = self
+                        .scopes
+                        .get_root_scope()
+                        .find_ability(self.ast.ident_id("Equals"))
+                        .unwrap();
+
+                    let implementation = self.expect_ability_implementation(
+                        equals_ability_id,
+                        lhs_type_id,
+                        binary_op.span,
+                    )?;
+                    let ability = self.get_ability(equals_ability_id);
+                    let equals_index =
+                        ability.find_function_by_name(self.ast.ident_id("equals")).unwrap().0;
+                    let equals_implementation_function_id = implementation.functions[equals_index];
+                    let call_expr = TypedExpr::FunctionCall(Call {
+                        callee_function_id: equals_implementation_function_id,
+                        args: vec![lhs, rhs],
+                        ret_type: BOOL_TYPE_ID, // TODO: We should assert that equals does return a bool so we don't emit invalid bytecode
+                        span: binary_op.span,
+                    });
+                    Ok(call_expr)
+                }
             }
         }?;
         if binary_op.op_kind == BinaryOpKind::Equals {
@@ -2488,7 +2502,7 @@ impl TypedModule {
                 type_id: inner_type,
                 is_mutable: false,
                 // This should be the scope of the consequent expr
-                owner_scope: Some(scope_id),
+                owner_scope: scope_id,
             };
             let narrowed_variable_id = self.add_variable(narrowed_variable);
             let consequent_scope = self.scopes.get_scope_mut(consequent_scope_id);
@@ -3102,7 +3116,7 @@ impl TypedModule {
                     is_mutable: val_def.is_mutable,
                     name: val_def.name,
                     type_id: variable_type,
-                    owner_scope: Some(scope_id),
+                    owner_scope: scope_id,
                 });
                 let val_def_stmt = TypedStmt::ValDef(Box::new(ValDef {
                     ty: variable_type,
@@ -3285,8 +3299,11 @@ impl TypedModule {
         if is_generic {
             let mut the_type_params = Vec::new();
             for type_parameter in parsed_function.type_args.as_ref().unwrap().iter() {
-                let type_variable =
-                    TypeVariable { identifier_id: type_parameter.ident, _constraints: None };
+                let type_variable = TypeVariable {
+                    identifier_id: type_parameter.ident,
+                    scope_id: fn_scope_id,
+                    _constraints: None,
+                };
                 let type_variable_id = self.add_type(Type::TypeVariable(type_variable));
                 let fn_scope = self.scopes.get_scope_mut(fn_scope_id);
                 let type_param =
@@ -3317,7 +3334,7 @@ impl TypedModule {
                 name: fn_arg.name,
                 type_id,
                 is_mutable: false,
-                owner_scope: Some(fn_scope_id),
+                owner_scope: fn_scope_id,
             };
             let variable_id = self.add_variable(variable);
             params.push(FnArgDefn {
@@ -3522,7 +3539,14 @@ impl TypedModule {
                 Ok(())
             }
             ParsedDefinitionId::AbilityImpl(_ability_impl) => {
-                // Nothing to do in this phase for impls
+                // Nothing to do in this phase for impls <- Wrong!
+                // FIXME: Not true! We need to insert stub implementations, skipping the bodies, so that
+                //        we have order-independence. Example:
+
+                //        I need to know that string will impl equals after the declaration pass, so that
+                //        I can typecheck functions that may call equals on string order-independently!
+
+                //        but I do not need to know the function body of that impl yet.
                 Ok(())
             }
         }
@@ -3541,6 +3565,7 @@ impl TypedModule {
         let self_ident_id = self.ast.ident_id("Self");
         let self_type_id = self.add_type(Type::TypeVariable(TypeVariable {
             identifier_id: self_ident_id,
+            scope_id: ability_scope_id,
             _constraints: None,
         }));
         self.scopes.get_scope_mut(ability_scope_id).add_type(self_ident_id, self_type_id);

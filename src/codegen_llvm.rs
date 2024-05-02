@@ -687,7 +687,7 @@ impl<'ctx> Codegen<'ctx> {
                 ];
                 self.make_debug_struct_type(
                     &self.module.type_id_to_string(type_id),
-                    array.span,
+                    Span::NONE,
                     fields,
                 )
             }
