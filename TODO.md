@@ -2,29 +2,36 @@
 
 # Project Completion Checklist
 
-- [ ] Sum types
+- [ ] Sum types (enums / tagged unions)
+  - [x] Syntax
+  - [x] Construction/repr
+  - [ ] Check variant instruction w/ bool / cast
+  - [ ] Later, pattern match on variants
+- [x] Abilities
+- [ ] Ability derivation
 - [ ] Make 'reference' heap-allocate and use https://github.com/ivmai/bdwgc for GC
 - [ ] Make codegen fail instead of panic
 - [x] Type Ascriptions (literally can just pass expected_type into eval and do an addtl typecheck)
 - [ ] Single-arm match syntax with `is`; `if x is Some(y)` instead of `if let Some(y) = x`; if x is not Err(y) (replaces
-  let-else)
+      let-else)
 - [ ] Pattern matching with `when x is ` (Roc-inspired)
-- [ ] Sum types (oneofs) (variants?) (tagged unions)
 - [ ] Errors (a builtin sum type?)
 - [ ] Optional coalescing accessor (x?.y) and ??
 - [ ] Pure lambdas with ->
 - [ ] Full-on closures with =>
+- [ ] Replace spans on typed ast with just ast node ids (128 bits to 32 bits per span)
+- [ ] Make demo readme
 
 # Old todo list
 
 - [x] Records
-    - [x] Syntax decision ({} vs .{} vs Point {})
-    - [x] Parsing
-    - [x] Typechecking
-    - [x] codegen static as LLVM structs
-    - [x] Accessor syntax
-    - [x] Accessor ir
-    - [x] Accessor codegen
+  - [x] Syntax decision ({} vs .{} vs Point {})
+  - [x] Parsing
+  - [x] Typechecking
+  - [x] codegen static as LLVM structs
+  - [x] Accessor syntax
+  - [x] Accessor ir
+  - [x] Accessor codegen
 - [x] Identifier cleanup and interning
 - [x] Actual scoping
 - [x] Real prelude so we can more easily add runtime/stl functions (for array)
@@ -41,15 +48,15 @@
 - [x] Replace .length on string and array with a MethodCall node (adding empty parens ())
 - [x] Change Array repr to a struct w/ length so we have length
 - [x] Strings
-    - [x] String literals cant have spaces lol
-    - [x] print(string)
-    - [x] hardcoded via codegen
-    - [x] string.length
-    - [x] string[i] (int)
-    - [x] char
-    - [x] string[i] (char)
-    - [x] add string.length function
-    - [x] char.to_string()
+  - [x] String literals cant have spaces lol
+  - [x] print(string)
+  - [x] hardcoded via codegen
+  - [x] string.length
+  - [x] string[i] (int)
+  - [x] char
+  - [x] string[i] (char)
+  - [x] add string.length function
+  - [x] char.to_string()
 - [x] Concatenate strings (in userland; slow)
 - [x] Infer val types
 - [x] Extern keyword, then
@@ -64,8 +71,8 @@
 - [ ] Precedence of dereference (and i guess unary ops in general) should be higher
 - [ ] Change our builtin int type to be 32 bits?
 - [ ] Codegen 'variables' is broken (never cleared); use enter scope / exit scope w/ a stack of vecs or something
-  instead (matters when a variable id is reused because the same function is called twice; I think we just overwrite it
-  with the correct one but maybe nesting is a problem?)
+      instead (matters when a variable id is reused because the same function is called twice; I think we just overwrite it
+      with the correct one but maybe nesting is a problem?)
 - [x] Support multiple files
 - [x] Fix namespaces to require full paths (currently busted must be unique names globally)
 - [x] Allow namespaces inside namespaces
@@ -74,26 +81,25 @@
 - [x] Generic type inference
 - [ ] Type literals would be fun
 - [ ] Syntax Shed
-    - [ ] Function syntax change? (foo = fn (a, b, c): int { }
-    - [ ] Ditch semicolons? (this technically introduces significant whitespace; need newline token)
-    - [ ] from qualifier-focused to name -focused
-    - [ ] Parse trailing commas
-- [ ] Replace spans on typed ast with just ast node ids
+  - [ ] Function syntax change? (foo = fn (a, b, c): int { }
+  - [ ] from qualifier-focused to name -focused
+  - [ ] Parse trailing commas
 - [ ] Tuples
 
 - [-] For iteration (we will just hardcode the iterable types)
-    - [x] 'do' version
-    - [x] 'yield' version on array
-    - [x] 'yield' version on string
-    - [x] Provide index var (it_index)
+
+  - [x] 'do' version
+  - [x] 'yield' version on array
+  - [x] 'yield' version on string
+  - [x] Provide index var (it_index)
 
 - [x] DEBUG info
-    - [x] on or off
-    - [x] flag types
-    - [x] correct line nums
-    - [x] correct spans (depends on multifile)
-    - [x] correct file path
-    - [ ] Add lexical scopes for if and while
+  - [x] on or off
+  - [x] flag types
+  - [x] correct line nums
+  - [x] correct spans (depends on multifile)
+  - [x] correct file path
+  - [ ] Add lexical scopes for if and while
 
 # Optionals
 
@@ -125,7 +131,7 @@
 - [ ] Early return
 - [x] Implicit return of unit if no return statement
 - [x] string.indexOf
-    - charToString implemented in zig and linked
+  - charToString implemented in zig and linked
 - [ ] array bounds checking
 - [ ] Array.distinct in zig
 - [x] Not equal != operator
@@ -176,4 +182,3 @@
 - [x] Add spans to AST
 - [x] Add spans to IR
 - [x] Implement IF expressions
-
