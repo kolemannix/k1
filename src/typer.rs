@@ -22,8 +22,7 @@ use crate::parse::{
     ParsedTypeDefnId, ParsedTypeExpression,
 };
 use crate::parse::{
-    AstDefinitionId, Block, BlockStmt, FnCall, IdentifierId, Literal, ParsedExpression,
-    ParsedFunction, ParsedModule,
+    Block, BlockStmt, FnCall, IdentifierId, Literal, ParsedExpression, ParsedFunction, ParsedModule,
 };
 
 pub type FunctionId = u32;
@@ -507,16 +506,6 @@ pub struct OptionalGet {
 }
 
 #[derive(Debug, Clone)]
-pub struct TypedForExpr {
-    pub iterable_expr: Box<TypedExpr>,
-    pub binding: IdentifierId,
-    pub body_block: Box<TypedBlock>,
-    pub result_type_id: TypeId,
-    pub for_expr_type: ForExprType,
-    pub span: Span,
-}
-
-#[derive(Debug, Clone)]
 pub struct TypedTagExpr {
     pub name: IdentifierId,
     pub type_id: TypeId,
@@ -625,12 +614,6 @@ pub struct ValDef {
     pub variable_id: VariableId,
     pub ty: TypeId,
     pub initializer: TypedExpr,
-    pub span: Span,
-}
-
-#[derive(Debug, Clone)]
-pub struct ReturnStmt {
-    pub expr: TypedExpr,
     pub span: Span,
 }
 
@@ -745,30 +728,6 @@ fn make_fail<A, T: AsRef<str>>(message: T, span: Span) -> TyperResult<A> {
     Err(make_error(message, span))
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub enum TypedDefinitionId {
-    Function(FunctionId),
-    Type(TypeId),
-    Namespace(NamespaceId),
-    Ability(AbilityId),
-}
-
-impl TypedDefinitionId {
-    fn as_function_id(&self) -> FunctionId {
-        match self {
-            TypedDefinitionId::Function(f) => *f,
-            _ => panic!("Expected function id"),
-        }
-    }
-
-    fn as_namespace_id(&self) -> NamespaceId {
-        match self {
-            TypedDefinitionId::Namespace(n) => *n,
-            _ => panic!("Expected namespace id"),
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct AbilityImplementation {
     pub type_id: TypeId,
@@ -858,27 +817,37 @@ impl TypedModule {
             (Type::Bool, Type::Bool) => true,
             (Type::String, Type::String) => true,
             (Type::Record(r1), Type::Record(r2)) => {
-                // TODO: member-by-member comparison
-                false
+                if r1.fields.len() != r2.fields.len() {
+                    return false;
+                }
+                for (index, f1) in r1.fields.iter().enumerate() {
+                    let f2 = &r2.fields[index];
+                    let mismatch = f1.name != f2.name || f1.type_id != f2.type_id;
+                    if mismatch {
+                        return false;
+                    }
+                }
+                return true;
             }
             (Type::Array(a1), Type::Array(a2)) => a1.element_type == a2.element_type,
             (Type::Optional(o1), Type::Optional(o2)) => o1.inner_type == o2.inner_type,
             (Type::Reference(r1), Type::Reference(r2)) => r1.inner_type == r2.inner_type,
             (Type::TypeVariable(t1), Type::TypeVariable(t2)) => {
-                if t1.identifier_id == t2.identifier_id {
-                    dbg!(
-                        self.make_scope_name(self.scopes.get_scope(t1.scope_id)),
-                        self.make_scope_name(self.scopes.get_scope(t2.scope_id))
-                    );
-                }
-                //t1.identifier_id == t2.identifier_id && t1.scope_id == t2.scope_id
-                //false
-                todo!("Figure out exactly how to do equality on type variables and test it good")
+                t1.identifier_id == t2.identifier_id && t1.scope_id == t2.scope_id
             }
             (Type::TagInstance(t1), Type::TagInstance(t2)) => t1.ident == t2.ident,
             (Type::Enum(e1), Type::Enum(e2)) => {
-                // TODO: variant-by-variant comparison
-                false
+                if e1.variants.len() != e2.variants.len() {
+                    return false;
+                }
+                for (index, v1) in e1.variants.iter().enumerate() {
+                    let v2 = &e2.variants[index];
+                    let mismatch = v1.tag_name != v2.tag_name || v1.payload != v2.payload;
+                    if mismatch {
+                        return false;
+                    }
+                }
+                true
             }
             _ => false,
         }
@@ -1236,11 +1205,6 @@ impl TypedModule {
                         // We will recursively just resolve to the same type variable without this check
                         // this check requires us to make progress. Doesn't prevent cycles though I guess
                         if expected_resolved != expected {
-                            println!(
-                                "Expected '{}' resolved to {}",
-                                &*self.ast.get_ident_str(expected_type_var.identifier_id),
-                                self.type_id_to_string(expected_resolved)
-                            );
                             return self.typecheck_types(expected_resolved, actual, scope_id);
                         }
                     }
