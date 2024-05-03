@@ -11,7 +11,6 @@ use crate::lex::*;
 use crate::typer::{BinaryOpKind, Linkage, UnaryOpKind};
 use TokenKind as K;
 
-pub type AstDefinitionId = u32;
 pub type ParsedTypeDefnId = u32;
 pub type ParsedFunctionId = u32;
 pub type ParsedConstantId = u32;
@@ -19,7 +18,6 @@ pub type ParsedAbilityId = u32;
 pub type ParsedAbilityImplId = u32;
 pub type ParsedNamespaceId = u32;
 pub type ExpressionId = u32;
-pub type StatementId = u32;
 pub type FileId = u32;
 
 #[cfg(test)]

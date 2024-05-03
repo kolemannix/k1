@@ -134,7 +134,7 @@ fn if_no_else() -> ParseResult<()> {
     let input = "if x a";
     let mut module = make_test_module();
     let mut parser = set_up(input, &mut module);
-    let result = parser.parse_expression()?.unwrap();
+    let _result = parser.parse_expression()?.unwrap();
     Ok(())
 }
 

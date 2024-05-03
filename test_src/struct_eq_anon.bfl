@@ -1,0 +1,12 @@
+impl Equals for { a: int } {
+  fn equals(this: { a: int }, that: { a: int }): bool {
+    this.a == that.a
+  }
+}
+fn main(): int {
+  val asdf = { a: 3 };
+  val asdf2 = { a: 4 };
+  assert(asdf != asdf2);
+  assert({a: 4} == asdf2);
+  0
+}
