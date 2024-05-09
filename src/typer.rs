@@ -1,8 +1,9 @@
 #![allow(clippy::match_like_matches_macro)]
+pub mod derive;
 pub mod dump;
 pub mod scopes;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::error::Error;
 use std::fmt::{Display, Formatter, Write};
 use std::ops::Deref;
@@ -17,8 +18,9 @@ use scopes::*;
 
 use crate::lex::{Span, TokenKind};
 use crate::parse::{
-    self, ExpressionId, FnCallArg, ForExpr, ForExprType, IfExpr, IndexOperation, ParsedAbilityId,
-    ParsedAbilityImplId, ParsedConstantId, ParsedDefinitionId, ParsedFunctionId, ParsedNamespaceId,
+    self, FnCallArg, ForExpr, ForExprType, IfExpr, IndexOperation, ParsedAbilityId,
+    ParsedAbilityImplId, ParsedConstantId, ParsedDefinitionId, ParsedExpressionId,
+    ParsedFunctionId, ParsedNamespaceId, ParsedPatternExpression, ParsedPatternId,
     ParsedTypeDefnId, ParsedTypeExpression,
 };
 use crate::parse::{
@@ -216,6 +218,39 @@ impl TypedAbility {
 }
 
 #[derive(Debug, Clone)]
+pub struct TypedEnumPattern {
+    pub enum_type_id: TypeId,
+    pub variant_tag_name: IdentifierId,
+    pub variant_index: u32,
+    pub payload: Option<Box<TypedPattern>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TypedRecordPattern {
+    pub record_type_id: TypeId,
+    pub fields: Vec<(IdentifierId, TypedPattern)>,
+}
+
+// <pattern> ::= <literal> | <variable> | <enum> | <record>
+// <literal> ::= "(" ")" | "\"" <ident> "\"" | [0-9]+ | "'" [a-z] "'" | "None"
+// <variable> ::= <ident>
+// <ident> ::= [a-z]*
+// <enum> ::= "." <ident> ( "(" <pattern> ")" )?
+// <record> ::= "{" ( <ident> ": " <pattern> ","? )* "}"
+#[derive(Debug, Clone)]
+pub enum TypedPattern {
+    LiteralUnit,
+    LiteralChar(u8),
+    LiteralInt(i64),
+    LiteralBool(bool),
+    LiteralString(String),
+    LiteralNone,
+    Variable(IdentifierId),
+    Enum(TypedEnumPattern),
+    Record(TypedRecordPattern),
+}
+
+#[derive(Debug, Clone)]
 pub struct TypedBlock {
     // If this block is just an expression, the type of the expression
     pub expr_type: TypeId,
@@ -378,17 +413,6 @@ impl BinaryOpKind {
             TokenKind::EqualsEquals => Some(BinaryOpKind::Equals),
             TokenKind::BangEquals => Some(BinaryOpKind::NotEquals),
             _ => None,
-        }
-    }
-
-    pub fn is_integer_op(&self) -> bool {
-        use BinaryOpKind as B;
-        match self {
-            B::Add | B::Subtract => true,
-            B::Multiply | B::Divide => true,
-            B::Less | B::Greater | B::LessEqual | B::GreaterEqual => true,
-            B::Or | B::And => true,
-            B::Equals | B::NotEquals => true,
         }
     }
 }
@@ -729,7 +753,7 @@ fn make_fail<A, T: AsRef<str>>(message: T, span: Span) -> TyperResult<A> {
 }
 
 #[derive(Debug, Clone)]
-pub struct AbilityImplementation {
+pub struct TypedAbilityImplementation {
     pub type_id: TypeId,
     pub ability_id: AbilityId,
     /// In order they are defined in the ability; currently we only ever have one
@@ -746,7 +770,7 @@ pub struct TypedModule {
     pub errors: Vec<TyperError>,
     pub namespaces: Vec<Namespace>,
     pub abilities: Vec<TypedAbility>,
-    pub implementations: Vec<AbilityImplementation>,
+    pub implementations: Vec<TypedAbilityImplementation>,
     pub function_ast_mappings: HashMap<ParsedFunctionId, FunctionId>,
     pub namespace_ast_mappings: HashMap<ParsedNamespaceId, NamespaceId>,
 }
@@ -1097,6 +1121,132 @@ impl TypedModule {
             BOOL_TYPE_ID => Ok(ty),
             STRING_TYPE_ID => Ok(ty),
             _ => make_fail("Only scalar types allowed in constants", expr.get_span()),
+        }
+    }
+
+    fn eval_pattern(
+        &self,
+        pat_expr: ParsedPatternId,
+        target_type_id: TypeId,
+        scope_id: ScopeId,
+    ) -> TyperResult<TypedPattern> {
+        let ast = self.ast.clone();
+        let parsed_pattern_expr = ast.get_pattern(pat_expr);
+        match &*parsed_pattern_expr {
+            ParsedPatternExpression::Literal(literal_expr_id) => {
+                match ast.get_expression(*literal_expr_id).expect_literal() {
+                    Literal::None(_) => match self.get_type(target_type_id) {
+                        Type::Optional(_) => Ok(TypedPattern::LiteralNone),
+                        _ => make_fail(
+                            "unrelated type will never match none",
+                            self.ast.get_pattern_span(pat_expr),
+                        ),
+                    },
+                    Literal::Unit(_) => match self.get_type(target_type_id) {
+                        Type::Unit => Ok(TypedPattern::LiteralUnit),
+                        _ => make_fail(
+                            "unrelated type will never match unit",
+                            self.ast.get_pattern_span(pat_expr),
+                        ),
+                    },
+                    Literal::Char(c, _) => match self.get_type(target_type_id) {
+                        Type::Char => Ok(TypedPattern::LiteralChar(*c)),
+                        _ => make_fail(
+                            "unrelated type will never match char",
+                            self.ast.get_pattern_span(pat_expr),
+                        ),
+                    },
+                    Literal::Numeric(i, span) => {
+                        let i64_value =
+                            self.parse_numeric(i).map_err(|msg| make_error(msg, *span))?;
+                        match self.get_type(target_type_id) {
+                            Type::Int => Ok(TypedPattern::LiteralInt(i64_value)),
+                            _ => make_fail(
+                                "unrelated type will never match int",
+                                self.ast.get_pattern_span(pat_expr),
+                            ),
+                        }
+                    }
+                    Literal::Bool(b, _) => match self.get_type(target_type_id) {
+                        Type::Bool => Ok(TypedPattern::LiteralBool(*b)),
+                        _ => make_fail(
+                            "unrelated type will never match bool",
+                            self.ast.get_pattern_span(pat_expr),
+                        ),
+                    },
+                    // Clone would go away if we intern string literals
+                    // But I think this is where we'd interpolate and handle escapes and stuff so maybe there's always going
+                    // to be an allocation here. Should be same handling as non-pattern string literals
+                    Literal::String(s, _) => match self.get_type(target_type_id) {
+                        Type::String => Ok(TypedPattern::LiteralString(s.clone())),
+                        _ => make_fail(
+                            "unrelated type will never match string",
+                            self.ast.get_pattern_span(pat_expr),
+                        ),
+                    },
+                }
+            }
+            ParsedPatternExpression::Variable(ident_id, _span) => {
+                Ok(TypedPattern::Variable(*ident_id))
+            }
+            ParsedPatternExpression::Enum(enum_pattern) => {
+                let Some(enum_type) = self.get_type(target_type_id).as_enum() else {
+                    return make_fail("Impossible pattern: Expected enum type", enum_pattern.span);
+                };
+                let Some(matching_variant) =
+                    enum_type.variants.iter().find(|v| v.tag_name == enum_pattern.variant_tag)
+                else {
+                    return make_fail(
+                        "Impossible pattern: Enum variant not found",
+                        enum_pattern.span,
+                    );
+                };
+
+                let payload_pattern = match &enum_pattern.payload_pattern {
+                    None => None,
+                    Some(payload_expr) => {
+                        let payload_type_id = matching_variant.payload.ok_or(make_error(
+                            "Impossible pattern: Enum variant has no payload",
+                            enum_pattern.span,
+                        ))?;
+                        let payload_pattern =
+                            self.eval_pattern(*payload_expr, payload_type_id, scope_id)?;
+                        Some(Box::new(payload_pattern))
+                    }
+                };
+
+                let enum_pattern = TypedEnumPattern {
+                    enum_type_id: target_type_id,
+                    variant_index: matching_variant.index,
+                    variant_tag_name: matching_variant.tag_name,
+                    payload: payload_pattern,
+                };
+                Ok(TypedPattern::Enum(enum_pattern))
+            }
+            ParsedPatternExpression::Record(record_pattern) => {
+                let ast = self.ast.clone();
+                let target_type = self.get_type(target_type_id);
+                let expected_record = target_type.as_record().ok_or_else(|| {
+                    make_error("Impossible pattern: Expected record type", record_pattern.span)
+                })?;
+                let mut fields = Vec::with_capacity(record_pattern.fields.len());
+                for (field_name, field_parsed_pattern_id) in &record_pattern.fields {
+                    let expected_field = expected_record
+                        .fields
+                        .iter()
+                        .find(|f| f.name == *field_name)
+                        .ok_or(make_error(
+                            format!("Impossible pattern: Record has no field named {}", field_name),
+                            ast.get_pattern_span(*field_parsed_pattern_id),
+                        ))?;
+                    let field_type_id = expected_field.type_id;
+                    let field_pattern =
+                        self.eval_pattern(*field_parsed_pattern_id, field_type_id, scope_id)?;
+                    fields.push((*field_name, field_pattern));
+                }
+                let record_pattern = TypedRecordPattern { record_type_id: target_type_id, fields };
+                Ok(TypedPattern::Record(record_pattern))
+            }
         }
     }
 
@@ -1481,7 +1631,7 @@ impl TypedModule {
 
     fn eval_assigment_lhs_expr(
         &mut self,
-        expr: ExpressionId,
+        expr: ParsedExpressionId,
         scope_id: ScopeId,
         _expected_type: Option<TypeId>,
     ) -> TyperResult<TypedExpr> {
@@ -1581,7 +1731,7 @@ impl TypedModule {
 
     fn eval_expr(
         &mut self,
-        expr: ExpressionId,
+        expr: ParsedExpressionId,
         scope_id: ScopeId,
         expected_type: Option<TypeId>,
     ) -> TyperResult<TypedExpr> {
@@ -1611,7 +1761,7 @@ impl TypedModule {
     /// a lot of code if we did a final check here before returning!
     fn eval_expr_inner(
         &mut self,
-        expr: ExpressionId,
+        expr: ParsedExpressionId,
         scope_id: ScopeId,
         expected_type: Option<TypeId>,
     ) -> TyperResult<TypedExpr> {
@@ -1621,6 +1771,9 @@ impl TypedModule {
             expected_type.map(|t| self.type_id_to_string(t))
         );
         let ast = self.ast.clone();
+        // FIXME WE ARE CLONING EVERY SINGLE EXPRESSION
+        // because we have to synthesize parsed expressions sometimes which we can't do
+        // without mutably borrowing the whole AST
         let expr = ast.get_expression(expr).clone();
         let result = match &(expr) {
             ParsedExpression::Array(array_expr) => {
@@ -1927,8 +2080,6 @@ impl TypedModule {
                 }))
             }
             ParsedExpression::For(for_expr) => {
-                // We have to make a copy since eval_for_expr synthesizes expressions which borrows
-                // from ast.expressions
                 self.eval_for_expr(for_expr, scope_id, expected_type)
             }
             ParsedExpression::Tag(tag_expr) => {
@@ -1974,8 +2125,266 @@ impl TypedModule {
                     span: e.span,
                 }))
             }
+            ParsedExpression::Is(is_expr) => {
+                // If the 'is' is attached to an if/else, that is handled by if/else
+                let unit_expression = self.ast.add_expression(parse::ParsedExpression::Literal(
+                    parse::Literal::Unit(is_expr.span),
+                ));
+                let as_match_expr = parse::ParsedMatchExpression {
+                    target_expression: is_expr.target_expression,
+                    cases: vec![parse::MatchCase {
+                        pattern: is_expr.pattern_expression,
+                        expression: unit_expression,
+                    }],
+                    span: is_expr.span,
+                };
+                let match_expr_id =
+                    self.ast.add_expression(parse::ParsedExpression::Match(as_match_expr));
+                self.eval_expr(match_expr_id, scope_id, expected_type)
+            }
+            ParsedExpression::Match(match_expr) => {
+                let target_expr = self.eval_expr(match_expr.target_expression, scope_id, None)?;
+
+                if match_expr.cases.is_empty() {
+                    return Err(make_error(
+                        "Match expression with no arms",
+                        target_expr.get_span(),
+                    ));
+                }
+
+                let match_block_scope_id =
+                    self.scopes.add_child_scope(scope_id, ScopeType::LexicalBlock, None);
+
+                // Mangled; not a user-facing binding
+                let variable = Variable {
+                    name: self.ast.ident_id("match_target"),
+                    type_id: target_expr.get_type(),
+                    is_mutable: false,
+                    owner_scope: scope_id,
+                };
+                let (target_expr_variable_id, target_expr_decl_stmt, _target_expr_variable_expr) =
+                    self.synth_variable_decl(variable, target_expr.get_span(), target_expr, false);
+
+                let arms =
+                    self.eval_match_arms(target_expr_variable_id, &match_expr.cases, scope_id)?;
+
+                // TODO: Typecheck the rest of the arms
+                let match_result_type = arms[0].0.get_type();
+                let mut resulting_block = TypedBlock {
+                    expr_type: match_result_type,
+                    scope_id: match_block_scope_id,
+                    statements: vec![target_expr_decl_stmt],
+                    span: match_expr.span,
+                };
+                // nocommit VecDeque creation
+                let if_chain = self.chain_match_cases(
+                    match_result_type,
+                    VecDeque::from(arms),
+                    match_block_scope_id,
+                );
+                resulting_block.statements.push(TypedStmt::Expr(Box::new(if_chain)));
+                let result = TypedExpr::Block(resulting_block);
+                eprintln!("{}", self.expr_to_string(&result));
+                Ok(result)
+            }
         };
         result
+    }
+
+    fn chain_match_cases(
+        &self,
+        match_result_type: TypeId,
+        mut cases: VecDeque<(TypedExpr, TypedBlock)>,
+        scope_id: ScopeId,
+    ) -> TypedExpr {
+        // nocommit what a mess with making blocks and shit. We need some sort of switch construct
+        // that doesn't involve nesting if/elses and all this boxing and crap
+        // Also why does TypedIf need to have blocks as its consequent/alternate? Could it be exprs?
+
+        if cases.is_empty() {
+            TypedExpr::Block(TypedModule::make_unit_block(scope_id, Span::NONE))
+        } else {
+            let (condition_expr, block) = cases.pop_front().unwrap();
+            let res = self.chain_match_cases(match_result_type, cases, scope_id);
+            let mut alternate = TypedModule::make_unit_block(scope_id, res.get_span());
+            alternate.statements = vec![TypedStmt::Expr(Box::new(res))];
+            TypedExpr::If(Box::new(TypedIf {
+                span: condition_expr.get_span(),
+                condition: condition_expr,
+                consequent: block,
+                alternate,
+                ty: match_result_type,
+            }))
+        }
+    }
+
+    fn eval_match_arms(
+        &mut self,
+        target_expr_variable_id: VariableId,
+        cases: &[parse::MatchCase],
+        scope_id: ScopeId,
+    ) -> TyperResult<Vec<(TypedExpr, TypedBlock)>> {
+        let target_expr_type_id = self.get_variable(target_expr_variable_id).type_id;
+
+        // What does this compile to? A series of ifs OR a switch (which we don't have yet). Ideally in the LLVM its a switch
+        // You jump based on the variant, then pattern match again?
+        // when my_enum is {
+        //   MyEnum::PointNone => { ... },
+        //   MyEnum::Point2d(p2d) => {
+        //     // desugared
+        //     if MyEnum.tag == MyEnum::Point2d {
+        //       myEnumCasted = MyEnum as MyEnum::Point2d;
+        // when p2d is { x: Some(x), y: Some(y)} {
+        //
+        // }
+        //       x = myEnumCasted.x;
+        //       y = myEnumCasted.y;
+        //       pattern match recursively
+        //       when x is Some(x) {
+        //         when y is Some(y) {
+        //           bind only x and y
+        //           exec user code block
+        //         }
+        //       }
+        //   } else < check next pattern >,
+        // }
+
+        // I think this is just gonna be a big ole synthesis loop over the patterns, failing
+        // when we see garbage, and spitting out a big ol' if-else chain. Pattern matching
+        // is really super simple sugar turns out. It makes sense that its really just collapsing
+        // a whole lot of conditionals down into a very expressive thing.
+
+        // Oh and we need to bind the variables
+        // And we need to check for exhaustiveness, which will be fun, should keep in mind but not do in 1st implementation
+
+        // Our repr is an if-else chain but we'd rather it be a switch one day. We'll build it later
+        // by walking the cases
+
+        let mut typed_cases: Vec<(TypedExpr, TypedBlock)> = Vec::new();
+
+        // Let's start with enum + variables, but using recursion already
+        for parsed_case in cases.iter() {
+            let typed_pattern =
+                self.eval_pattern(parsed_case.pattern, target_expr_type_id, scope_id)?;
+            let child_scope = self.scopes.add_child_scope(scope_id, ScopeType::MatchArm, None);
+            let (bool_expr, cons_block) =
+                self.eval_match_arm(&typed_pattern, target_expr_variable_id, child_scope)?;
+            typed_cases.push((bool_expr, cons_block));
+        }
+        Ok(typed_cases)
+    }
+
+    /// Outputs I need
+    /// - A boolean expr
+    /// - A block seeded with a variable decl statement for each variable to be bound
+    fn eval_match_arm(
+        &mut self,
+        pattern: &TypedPattern,
+        target_expr_variable_id: VariableId,
+        !! Need a parsed block here to eval inside the one I make with bindings
+        !! For 'is' expressions it can be if (<pattern>) true else false
+        consequent_scope: ScopeId,
+    ) -> TyperResult<(TypedExpr, TypedBlock)> {
+        // FIXME: spans in this whole function are unsolved
+        let default_span = Span::NONE;
+        let target_expr_type_id = self.get_variable(target_expr_variable_id).type_id;
+
+        let mut cons_block = TypedBlock {
+            // TO BE FILLED IN; consider using a 'poison' type id instead
+            expr_type: UNIT_TYPE_ID,
+            scope_id: consequent_scope,
+            statements: vec![],
+            // span TO BE FILLED IN by caller
+            span: default_span,
+        };
+
+        let target_expr_variable_expr = TypedExpr::Variable(VariableExpr {
+            variable_id: target_expr_variable_id,
+            type_id: target_expr_type_id,
+            span: default_span,
+        });
+        let pattern_bool_expr = match pattern {
+            TypedPattern::Record(_record_pattern) => {
+                todo!("Record pattern matching")
+            }
+            // TypedPattern::Record(record_pattern) => {
+            //     for (field_name, field_pattern) in record_pattern.fields.iter() {
+            //         // Need to synth a variable decl for these
+            //         let target_value = TypedExpr::RecordFieldAccess(TypedRecordFieldAccess {
+            //             target: Box::new(target_expr.clone()),
+            //             field_name: field_pattern.field_name,
+            //             span: field_pattern.span,
+            //         });
+            //         let resulting_expr = self.eval_match_arm(field_pattern, target_value)?;
+            //         self.scopes
+            //             .get_scope_mut(child_scope)
+            //             .add_variable(field_name, resulting_expr);
+            //     }
+            // }
+            TypedPattern::Enum(enum_pattern) => {
+                todo!("Enum pattern matching")
+            }
+            TypedPattern::Variable(variable_ident) => {
+                let variable = Variable {
+                    name: *variable_ident,
+                    type_id: target_expr_type_id,
+                    is_mutable: false,
+                    owner_scope: consequent_scope,
+                };
+                // I think we need target_expr as a variable_id so we can refer to it without cloning
+                // This will probably re-evaluate it; we can test it later. Test with side-effecting match targets
+                let (_variable_id, typed_stmt, _typed_expr) = self.synth_variable_decl(
+                    variable,
+                    default_span,
+                    TypedExpr::Variable(VariableExpr {
+                        variable_id: target_expr_variable_id,
+                        type_id: target_expr_type_id,
+                        span: default_span,
+                    }),
+                    true,
+                );
+                cons_block.statements.push(typed_stmt);
+
+                // How do I say OK yes matched and transfer control to the block that goes with this pattern.
+                // For now, I'll emit a true literal
+                Ok(TypedExpr::Bool(true, Span::NONE))
+            }
+            TypedPattern::LiteralUnit => Ok(TypedExpr::Bool(true, default_span)),
+            TypedPattern::LiteralChar(byte) => Ok(TypedExpr::BinaryOp(BinaryOp {
+                kind: BinaryOpKind::Equals,
+                ty: BOOL_TYPE_ID,
+                lhs: Box::new(target_expr_variable_expr),
+                rhs: Box::new(TypedExpr::Char(*byte, default_span)),
+                span: default_span,
+            })),
+            TypedPattern::LiteralInt(i64_value) => Ok(TypedExpr::BinaryOp(BinaryOp {
+                kind: BinaryOpKind::Equals,
+                ty: BOOL_TYPE_ID,
+                lhs: Box::new(target_expr_variable_expr),
+                rhs: Box::new(TypedExpr::Int(*i64_value, default_span)),
+                span: default_span,
+            })),
+            TypedPattern::LiteralBool(bool_value) => Ok(TypedExpr::BinaryOp(BinaryOp {
+                kind: BinaryOpKind::Equals,
+                ty: BOOL_TYPE_ID,
+                lhs: Box::new(target_expr_variable_expr),
+                rhs: Box::new(TypedExpr::Bool(*bool_value, default_span)),
+                span: default_span,
+            })),
+            TypedPattern::LiteralString(string_value) => self.synth_equals_call(
+                target_expr_variable_expr,
+                TypedExpr::Str(string_value.clone(), default_span),
+                default_span,
+            ),
+            TypedPattern::LiteralNone => Ok(TypedExpr::BinaryOp(BinaryOp {
+                kind: BinaryOpKind::Equals,
+                ty: BOOL_TYPE_ID,
+                lhs: Box::new(target_expr_variable_expr),
+                rhs: Box::new(TypedExpr::None(target_expr_type_id, default_span)),
+                span: default_span,
+            })),
+        }?;
+        Ok((pattern_bool_expr, cons_block))
     }
 
     /// no_mangle: Skip mangling if we want the variable to be accessible from user code
@@ -2004,7 +2413,11 @@ impl TypedModule {
         (variable_id, val_def, TypedExpr::Variable(expr))
     }
 
-    fn synth_variable_parsed_expr(&self, variable_id: VariableId, span: Span) -> ExpressionId {
+    fn synth_variable_parsed_expr(
+        &self,
+        variable_id: VariableId,
+        span: Span,
+    ) -> ParsedExpressionId {
         let ast = self.ast.clone();
         ast.add_expression(ParsedExpression::Variable(parse::Variable {
             name: self.get_variable(variable_id).name,
@@ -2018,7 +2431,7 @@ impl TypedModule {
         namespaces: Vec<IdentifierId>,
         name: IdentifierId,
         known_type_args: Option<Vec<TypeId>>,
-        value_arg_exprs: Vec<ExpressionId>,
+        value_arg_exprs: Vec<ParsedExpressionId>,
         span: Span,
         scope_id: ScopeId,
     ) -> TyperResult<TypedExpr> {
@@ -2321,7 +2734,7 @@ impl TypedModule {
         ability_id: AbilityId,
         type_id: TypeId,
         span_for_error: Span,
-    ) -> TyperResult<&AbilityImplementation> {
+    ) -> TyperResult<&TypedAbilityImplementation> {
         self.implementations
             .iter()
             .find(|imple| imple.type_id == type_id && imple.ability_id == ability_id)
@@ -2401,28 +2814,7 @@ impl TypedModule {
                 if rhs.get_type() != lhs_type_id {
                     make_fail("Expected lhs and rhs to match", binary_op.span)
                 } else {
-                    // Look in the root scope only
-                    let equals_ability_id = self
-                        .scopes
-                        .get_root_scope()
-                        .find_ability(self.ast.ident_id("Equals"))
-                        .unwrap();
-
-                    let implementation = self.expect_ability_implementation(
-                        equals_ability_id,
-                        lhs_type_id,
-                        binary_op.span,
-                    )?;
-                    let ability = self.get_ability(equals_ability_id);
-                    let equals_index =
-                        ability.find_function_by_name(self.ast.ident_id("equals")).unwrap().0;
-                    let equals_implementation_function_id = implementation.functions[equals_index];
-                    let call_expr = TypedExpr::FunctionCall(Call {
-                        callee_function_id: equals_implementation_function_id,
-                        args: vec![lhs, rhs],
-                        ret_type: BOOL_TYPE_ID, // TODO: We should assert that equals does return a bool so we don't emit invalid bytecode
-                        span: binary_op.span,
-                    });
+                    let call_expr = self.synth_equals_call(lhs, rhs, binary_op.span)?;
                     Ok(call_expr)
                 }
             }
@@ -2437,6 +2829,29 @@ impl TypedModule {
                 span: binary_op.span,
             }))
         }
+    }
+
+    fn synth_equals_call(
+        &self,
+        lhs: TypedExpr,
+        rhs: TypedExpr,
+        span: Span,
+    ) -> TyperResult<TypedExpr> {
+        let equals_ability_id =
+            self.scopes.get_root_scope().find_ability(self.ast.ident_id("Equals")).unwrap();
+
+        let implementation =
+            self.expect_ability_implementation(equals_ability_id, lhs.get_type(), span)?;
+        let ability = self.get_ability(equals_ability_id);
+        let equals_index = ability.find_function_by_name(self.ast.ident_id("equals")).unwrap().0;
+        let equals_implementation_function_id = implementation.functions[equals_index];
+        let call_expr = TypedExpr::FunctionCall(Call {
+            callee_function_id: equals_implementation_function_id,
+            args: vec![lhs, rhs],
+            ret_type: BOOL_TYPE_ID, // TODO: We should assert that equals does return a bool so we don't emit invalid bytecode
+            span,
+        });
+        Ok(call_expr)
     }
 
     fn eval_if_expr(
@@ -2514,12 +2929,7 @@ impl TypedModule {
             let expr = self.eval_expr(alt, alternate_scope, Some(consequent_type))?;
             self.transform_expr_to_block(expr, alternate_scope)
         } else {
-            TypedBlock {
-                expr_type: UNIT_TYPE_ID,
-                scope_id: alternate_scope,
-                statements: vec![TypedStmt::Expr(Box::new(TypedExpr::unit_literal(if_expr.span)))],
-                span: if_expr.span,
-            }
+            TypedModule::make_unit_block(alternate_scope, if_expr.span)
         };
         if let Err(msg) = self.typecheck_types(consequent.expr_type, alternate.expr_type, scope_id)
         {
@@ -2536,6 +2946,15 @@ impl TypedModule {
             ty: overall_type,
             span: if_expr.span,
         })))
+    }
+
+    fn make_unit_block(scope_id: ScopeId, span: Span) -> TypedBlock {
+        TypedBlock {
+            expr_type: UNIT_TYPE_ID,
+            scope_id,
+            statements: vec![TypedStmt::Expr(Box::new(TypedExpr::unit_literal(span)))],
+            span,
+        }
     }
 
     fn get_namespace_scope_for_ident(
@@ -2995,9 +3414,6 @@ impl TypedModule {
         self.scopes.get_scope_mut(spec_fn_scope_id).name = Some(self.ast.ident_id(&new_name));
 
         for (i, existing_specialization) in specializations.iter().enumerate() {
-            // For now, naive comparison that all type ids are identical
-            // There may be some scenarios where they are _equivalent_ but not identical
-            // But I'm not sure
             let types_stringified = existing_specialization
                 .specialized_type_params
                 .iter()
@@ -3021,7 +3437,7 @@ impl TypedModule {
             }
         }
 
-        // TODO: new_name should really be calculated by specialize_function
+        // TODO: new_name should maybe be calculated by specialize_function
         let generic_function_ast_id = generic_function_metadata.parsed_function_id();
         let specialized_function_id = self.specialize_function(
             generic_function_ast_id,
@@ -3366,12 +3782,6 @@ impl TypedModule {
         // They all have the same name but different types!!!
         if !specialize {
             self.scopes.add_function(parent_scope_id, parsed_function.name, function_id);
-
-            trace!(
-                "Inserting AST definition mapping for id {} {}, specialize={specialize}",
-                parsed_function.id,
-                &*self.get_ident_str(parsed_function.name)
-            );
         }
 
         // Only if this isn't a specialization, add the ast mapping
@@ -3428,7 +3838,7 @@ impl TypedModule {
     ) -> TyperResult<FunctionId> {
         let specialized_function_id = self.eval_function_predecl(
             parsed_function_id,
-            // This scope is unused when specializing, so we just pass the root
+            // messy: This scope is unused when specializing, so we just pass the root
             self.scopes.get_root_scope_id(),
             Some(specialization_params),
             false,
@@ -3586,6 +3996,12 @@ impl TypedModule {
             }
         }
 
+        if parsed_ability_implementation.auto {
+            let ability_implementation = self.derive_ability_impl(ability_id, target_type)?;
+            self.implementations.push(ability_implementation);
+            return Ok(());
+        }
+
         let ability = self.get_ability(ability_id);
         let ability_scope_id = ability.scope_id;
         let mut typed_functions = Vec::new();
@@ -3683,8 +4099,11 @@ impl TypedModule {
             typed_functions.push(function_impl);
         }
 
-        let ability_implementation =
-            AbilityImplementation { type_id: target_type, ability_id, functions: typed_functions };
+        let ability_implementation = TypedAbilityImplementation {
+            type_id: target_type,
+            ability_id,
+            functions: typed_functions,
+        };
         self.implementations.push(ability_implementation);
         Ok(())
     }

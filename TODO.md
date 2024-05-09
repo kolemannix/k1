@@ -2,19 +2,27 @@
 
 # Project Completion Checklist
 
+- [ ] Pattern Matching
+  - [ ] Single-arm match evals to boolean
+  - [ ] Literals
+  - [ ] Variables
+  - [ ] Optional None
+  - [ ] Optional Bind
+  - [ ] Records
+  - [ ] Enums
+  - [ ] Multi-case
 - [ ] Sum types (enums / tagged unions)
   - [x] Syntax
   - [x] Construction/repr
-  - [ ] Check variant instruction w/ bool / cast
+  - [ ] First, hard cast to variant (`expect`)
   - [ ] Later, pattern match on variants
 - [x] Abilities
+  - [ ] Ability impl decl bugfix
 - [ ] Ability derivation
+  - [ ] I think you have to cache and commit the generated code, or you get the slow proc macros or slow implicit derivation problems that Scala has
 - [ ] Make 'reference' heap-allocate and use https://github.com/ivmai/bdwgc for GC
 - [ ] Make codegen fail instead of panic
-- [x] Type Ascriptions (literally can just pass expected_type into eval and do an addtl typecheck)
-- [ ] Single-arm match syntax with `is`; `if x is Some(y)` instead of `if let Some(y) = x`; if x is not Err(y) (replaces
-      let-else)
-- [ ] Pattern matching with `when x is ` (Roc-inspired)
+- [x] Type Ascriptions
 - [ ] Errors (a builtin sum type?)
 - [ ] Optional coalescing accessor (x?.y) and ??
 - [ ] Pure lambdas with ->

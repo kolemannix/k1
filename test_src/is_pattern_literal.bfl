@@ -1,0 +1,23 @@
+fn main(): int {
+  // Unit
+  val u = ();
+  assert(u is ());
+
+  val i = 42;
+  assert(!(i is 41));
+  assert(i is 42);
+
+  val s = "hello";
+  assert(s is "hello");
+  assert(!(s is "world"));
+
+  val c = 'x';
+  assert(c is 'x');
+  assert(!(c is 'f'));
+
+  val b = true;
+  assert(!(b is false));
+  assert(b is true);
+
+  0
+}

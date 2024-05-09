@@ -24,7 +24,7 @@ fn test_single_expr(input: &str) -> Result<(ParsedModule, ParsedExpression), Par
 
 fn test_single_expr_with_id(
     input: &str,
-) -> Result<(ParsedModule, ParsedExpression, ExpressionId), ParseError> {
+) -> Result<(ParsedModule, ParsedExpression, ParsedExpressionId), ParseError> {
     let mut module = make_test_module();
     let mut parser = set_up(input, &mut module);
     let expr_id = parser.expect_expression()?;
