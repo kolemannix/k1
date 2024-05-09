@@ -1,8 +1,9 @@
 impl Equals for { a: int } {
-  fn equals(this: { a: int }, that: { a: int }): bool {
-    this.a == that.a
+  fn equals(self: { a: int }, other: { a: int }): bool {
+    self.a == other.a
   }
 }
+
 fn main(): int {
   val asdf = { a: 3 };
   val asdf2 = { a: 4 };

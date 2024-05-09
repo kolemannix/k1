@@ -7,6 +7,10 @@ ability Equals {
   fn equals(self: Self, other: Self): bool
 }
 
+ability Show {
+  fn show(self: Self): string
+}
+
 ability Hash {
   fn hash(self: Self): int
 }

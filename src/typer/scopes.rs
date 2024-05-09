@@ -16,6 +16,7 @@ pub enum ScopeType {
     IfBody,
     ElseBody,
     ForExpr,
+    MatchArm,
 }
 
 impl ScopeType {
@@ -28,6 +29,7 @@ impl ScopeType {
             ScopeType::IfBody => "if",
             ScopeType::ElseBody => "else",
             ScopeType::ForExpr => "for",
+            ScopeType::MatchArm => "match_arm",
         }
     }
 }
