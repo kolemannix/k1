@@ -25,8 +25,8 @@ fn test_single_expr(input: &str) -> Result<(ParsedModule, ParsedExpression), Par
 fn test_single_type_expr(input: &str) -> Result<(ParsedModule, ParsedTypeExpression), ParseError> {
     let mut module = make_test_module();
     let mut parser = set_up(input, &mut module);
-    let expr_id = parser.expect_expression()?;
-    let expr = (*module.type_expressions.get_expression(expr_id)).clone();
+    let type_expr_id = parser.expect_type_expression()?;
+    let expr = (*module.type_expressions.get_expression(type_expr_id)).clone();
     Ok((module, expr))
 }
 

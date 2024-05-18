@@ -23,7 +23,7 @@ use crate::parse::{
     ParsedTypeExpression, ParsedTypeExpressionId, Sources,
 };
 use crate::parse::{
-    Block, BlockStmt, FnCall, IdentifierId, Literal, ParsedExpression, ParsedFunction, ParsedModule,
+    Block, BlockStmt, FnCall, IdentifierId, Literal, ParsedExpression, ParsedModule,
 };
 
 pub type FunctionId = u32;
@@ -271,6 +271,11 @@ impl TypedBlock {
         self.expr_type = stmt.get_type();
         self.span = self.span.extended(stmt.get_span());
         self.statements.push(stmt);
+    }
+    fn push_statements(&mut self, stmts: Vec<TypedStmt>) {
+        for stmt in stmts {
+            self.push_stmt(stmt);
+        }
     }
     fn push_expr(&mut self, expr: TypedExpr) {
         self.push_stmt(TypedStmt::Expr(Box::new(expr)))
@@ -777,11 +782,6 @@ fn make_error<T: AsRef<str>>(message: T, span: Span) -> TyperError {
 
 fn make_fail<A, T: AsRef<str>>(message: T, span: Span) -> TyperResult<A> {
     Err(make_error(message, span))
-}
-
-fn internal_compiler_error(sources: &Sources, message: impl AsRef<str>, span: Span) -> ! {
-    print_error(sources, message, span);
-    panic!()
 }
 
 fn print_error(sources: &Sources, message: impl AsRef<str>, span: Span) {
@@ -1449,16 +1449,6 @@ impl TypedModule {
         self.constants.push(Constant { variable_id, expr, ty: type_id, span: constant_span });
         self.scopes.add_variable(root_scope_id, constant_name, variable_id);
         Ok(variable_id)
-    }
-
-    fn add_variable(variables: &mut Vec<Variable>, variable: Variable) -> VariableId {
-        let id = variables.len();
-        variables.push(variable);
-        id as u32
-    }
-
-    pub fn get_variable(variables: &Vec<Variable>, id: VariableId) -> &Variable {
-        &variables[id as usize]
     }
 
     fn add_function(&mut self, function: TypedFunction) -> FunctionId {
@@ -2316,52 +2306,50 @@ impl TypedModule {
         for parsed_case in cases.iter() {
             let typed_pattern =
                 self.eval_pattern(parsed_case.pattern, target_expr_type_id, match_scope_id)?;
-            let (pre_stmts, bool_expr, cons_block) = self.eval_match_arm(
+            let mut arm_block = self.synth_block(vec![], match_scope_id);
+            let (pre_stmts, bool_expr) = self.eval_match_arm(
                 &typed_pattern,
                 target_expr_variable_id,
-                parsed_case.expression,
+                &mut arm_block,
                 match_scope_id,
-                expected_arm_type_id,
             )?;
 
-            expected_arm_type_id = Some(cons_block.expr_type);
-            typed_cases.push((pre_stmts, bool_expr, cons_block));
+            // Once we've evaluated the arm, we can eval the consequent expression inside of it,
+            // since the bindings are now in scope inside arm_block
+            let arm_expr =
+                self.eval_expr(parsed_case.expression, arm_block.scope_id, expected_arm_type_id)?;
+            arm_block.push_expr(arm_expr);
+
+            expected_arm_type_id = Some(arm_block.expr_type);
+            typed_cases.push((pre_stmts, bool_expr, arm_block));
         }
         Ok(typed_cases)
     }
 
     /// For each match case we output
     /// 1) a series of statements to bind variables that are used by the condition
+    /// TODO: These conditions should be in their own block; currently they pollute the match block
     /// 2) an expr that is expected to a boolean, representing the condition of the branch,
     /// 3) a 'consequent block' which is the code we run if the condition is true.
     fn eval_match_arm(
         &mut self,
         pattern: &TypedPattern,
         target_expr_variable_id: VariableId,
-        arm_expr: ParsedExpressionId,
+        arm_block: &mut TypedBlock,
         match_scope_id: ScopeId,
-        expected_arm_type_id: Option<TypeId>,
-    ) -> TyperResult<(Vec<TypedStmt>, TypedExpr, TypedBlock)> {
+    ) -> TyperResult<(Vec<TypedStmt>, TypedExpr)> {
         // FIXME: spans in this whole function are unsolved
         let default_span = Span::NONE;
         let target_expr_type_id = self.variables.get_variable(target_expr_variable_id).type_id;
-        let unit_dummy_arm_expr = self
-            .ast
-            .expressions
-            .add_expression(ParsedExpression::Literal(Literal::Unit(default_span)));
 
         let target_expr_variable_expr = TypedExpr::Variable(VariableExpr {
             variable_id: target_expr_variable_id,
             type_id: target_expr_type_id,
             span: default_span,
         });
-        let make_single_expr_block = |m: &mut Self, expr: TypedExpr| {
-            m.synth_block(vec![TypedStmt::Expr(Box::new(expr))], match_scope_id)
-        };
         match pattern {
             TypedPattern::Record(record_pattern) => {
-                let mut cons_block = self.synth_block(vec![], match_scope_id);
-                let arm_scope_id = cons_block.scope_id;
+                let arm_scope_id = arm_block.scope_id;
                 let mut boolean_exprs: Vec<TypedExpr> =
                     Vec::with_capacity(record_pattern.fields.len());
                 let mut statements: Vec<TypedStmt> =
@@ -2374,6 +2362,9 @@ impl TypedModule {
                         ty: pattern_field.field_type_id,
                         span: default_span,
                     });
+                    // I'm putting condition variables in the match scope id, but they really belong in the arms condition scope id, which
+                    // we'll make later. This is just more hygenic since the variables needed for each arms condition shouldn't be visible
+                    // to the other arms, even though mangled and unique... Maybe this is better because its harmless and more efficient, idk
                     let field_member_variable = Variable {
                         name: pattern_field.field_name, // Will be mangled
                         type_id: pattern_field.field_type_id,
@@ -2389,16 +2380,16 @@ impl TypedModule {
                         );
                     statements.push(target_value_decl_stmt);
 
+                    // let mut field_arm_cons_block = self.synth_block(vec![], arm_scope_id);
                     // This will add a variable to the scope if needed!
-                    let (_condition_stmts, condition, cons_block) = self.eval_match_arm(
+                    let (_condition_stmts, condition) = self.eval_match_arm(
                         &pattern_field.field_pattern,
                         target_value_variable_id,
-                        unit_dummy_arm_expr,
+                        arm_block,
                         arm_scope_id,
-                        None,
                     )?;
                     // Needed for nested record patterns
-                    statements.extend(cons_block.statements);
+                    // arm_block.push_statements(field_arm_cons_block.statements);
 
                     boolean_exprs.push(condition);
                 }
@@ -2414,20 +2405,17 @@ impl TypedModule {
                         })
                     })
                     .unwrap();
-                let expr = self.eval_expr(arm_expr, match_scope_id, expected_arm_type_id)?;
-                cons_block.push_expr(expr);
-                Ok((statements, final_condition, cons_block))
+                Ok((statements, final_condition))
             }
             TypedPattern::Enum(_enum_pattern) => {
                 todo!("Enum pattern matching")
             }
             TypedPattern::Variable(variable_ident) => {
-                let mut cons_block = self.synth_block(vec![], match_scope_id);
                 let variable = Variable {
                     name: *variable_ident,
                     type_id: target_expr_type_id,
                     is_mutable: false,
-                    owner_scope: cons_block.scope_id,
+                    owner_scope: arm_block.scope_id,
                 };
 
                 let (_variable_id, binding_stmt, _typed_expr) = self.synth_variable_decl(
@@ -2436,29 +2424,17 @@ impl TypedModule {
                     target_expr_variable_expr,
                     true,
                 );
-                cons_block.push_stmt(binding_stmt);
-                let expr = self.eval_expr(arm_expr, match_scope_id, expected_arm_type_id)?;
-                cons_block.push_expr(expr);
-
+                arm_block.push_stmt(binding_stmt);
                 // `true` because variable patterns always match
-                Ok((vec![], TypedExpr::Bool(true, Span::NONE), cons_block))
+                Ok((vec![], TypedExpr::Bool(true, Span::NONE)))
             }
-            TypedPattern::LiteralUnit => {
-                let expr = self.eval_expr(arm_expr, match_scope_id, expected_arm_type_id)?;
-                Ok((
-                    vec![],
-                    TypedExpr::Bool(true, default_span),
-                    make_single_expr_block(self, expr),
-                ))
-            }
+            TypedPattern::LiteralUnit => Ok((vec![], TypedExpr::Bool(true, default_span))),
             TypedPattern::LiteralChar(byte) => {
                 let bin_op = self.synth_equals_binop(
                     target_expr_variable_expr,
                     TypedExpr::Char(*byte, default_span),
                 );
-                let expr = self.eval_expr(arm_expr, match_scope_id, expected_arm_type_id)?;
-                let block = make_single_expr_block(self, expr);
-                Ok((vec![], bin_op, block))
+                Ok((vec![], bin_op))
             }
             TypedPattern::LiteralInt(i64_value) => {
                 let bin_op = BinaryOp {
@@ -2468,18 +2444,14 @@ impl TypedModule {
                     rhs: Box::new(TypedExpr::Int(*i64_value, default_span)),
                     span: default_span,
                 };
-                let expr = self.eval_expr(arm_expr, match_scope_id, expected_arm_type_id)?;
-                let block = make_single_expr_block(self, expr);
-                Ok((vec![], TypedExpr::BinaryOp(bin_op), block))
+                Ok((vec![], TypedExpr::BinaryOp(bin_op)))
             }
             TypedPattern::LiteralBool(bool_value) => {
                 let bin_op = self.synth_equals_binop(
                     target_expr_variable_expr,
                     TypedExpr::Bool(*bool_value, default_span),
                 );
-                let expr = self.eval_expr(arm_expr, match_scope_id, expected_arm_type_id)?;
-                let block = make_single_expr_block(self, expr);
-                Ok((vec![], bin_op, block))
+                Ok((vec![], bin_op))
             }
             TypedPattern::LiteralString(string_value) => {
                 let condition = self.synth_equals_call(
@@ -2487,27 +2459,16 @@ impl TypedModule {
                     TypedExpr::Str(string_value.clone(), default_span),
                     default_span,
                 )?;
-                let expr = self.eval_expr(arm_expr, match_scope_id, expected_arm_type_id)?;
-                let block = make_single_expr_block(self, expr);
-                Ok((vec![], condition, block))
+                Ok((vec![], condition))
             }
             TypedPattern::LiteralNone => {
                 let bin_op = self.synth_equals_binop(
                     target_expr_variable_expr,
                     TypedExpr::None(target_expr_type_id, default_span),
                 );
-                let expr = self.eval_expr(arm_expr, match_scope_id, expected_arm_type_id)?;
-                let block = make_single_expr_block(self, expr);
-                Ok((vec![], bin_op, block))
+                Ok((vec![], bin_op))
             }
-            TypedPattern::Wildcard => {
-                let expr = self.eval_expr(arm_expr, match_scope_id, expected_arm_type_id)?;
-                Ok((
-                    vec![],
-                    TypedExpr::Bool(true, default_span),
-                    make_single_expr_block(self, expr),
-                ))
-            }
+            TypedPattern::Wildcard => Ok((vec![], TypedExpr::Bool(true, default_span))),
         }
     }
 
@@ -3040,7 +3001,6 @@ impl TypedModule {
         if let ParsedExpression::Is(is_expr) = cond {
             let cond_pattern_id = is_expr.pattern;
             let cond_expr_id = is_expr.target_expression;
-            drop(is_expr);
             let alternate_expr = match if_expr.alt {
                 None => {
                     let id = self
