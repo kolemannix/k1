@@ -18,6 +18,7 @@ pub type ParsedAbilityId = u32;
 pub type ParsedAbilityImplId = u32;
 pub type ParsedNamespaceId = u32;
 pub type ParsedExpressionId = u32;
+pub type ParsedTypeExpressionId = u32;
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
 pub struct ParsedPatternId(u32);
@@ -129,7 +130,7 @@ pub struct FnCallArg {
 #[derive(Debug, Clone)]
 pub struct FnCallTypeArg {
     pub name: Option<IdentifierId>,
-    pub type_expr: ParsedTypeExpression,
+    pub type_expr: ParsedTypeExpressionId,
 }
 
 #[derive(Debug, Clone)]
@@ -144,7 +145,7 @@ pub struct FnCall {
 #[derive(Debug, Clone)]
 pub struct ValDef {
     pub name: IdentifierId,
-    pub type_id: Option<ParsedTypeExpression>,
+    pub type_expr: Option<ParsedTypeExpressionId>,
     pub value: ParsedExpressionId,
     pub is_mutable: bool,
     pub span: Span,
@@ -238,7 +239,7 @@ pub struct ParsedEnumConstructor {
 #[derive(Debug, Clone)]
 pub struct ParsedIsExpression {
     pub target_expression: ParsedExpressionId,
-    pub pattern_expression: ParsedPatternId,
+    pub pattern: ParsedPatternId,
     pub span: Span,
 }
 
@@ -293,47 +294,63 @@ impl ParsedExpression {
     #[inline]
     pub fn get_span(&self) -> Span {
         match self {
-            ParsedExpression::BinaryOp(op) => op.span,
-            ParsedExpression::UnaryOp(op) => op.span,
-            ParsedExpression::Literal(lit) => lit.get_span(),
-            ParsedExpression::FnCall(call) => call.span,
-            ParsedExpression::Variable(var) => var.span,
-            ParsedExpression::FieldAccess(acc) => acc.span,
-            ParsedExpression::MethodCall(call) => call.span,
-            ParsedExpression::Block(block) => block.span,
-            ParsedExpression::If(if_expr) => if_expr.span,
-            ParsedExpression::Record(record) => record.span,
-            ParsedExpression::IndexOperation(op) => op.span,
-            ParsedExpression::Array(array_expr) => array_expr.span,
-            ParsedExpression::OptionalGet(optional_get) => optional_get.span,
-            ParsedExpression::For(for_expr) => for_expr.span,
-            ParsedExpression::Tag(tag_expr) => tag_expr.span,
-            ParsedExpression::EnumConstructor(e) => e.span,
-            ParsedExpression::Is(is_expr) => is_expr.span,
-            ParsedExpression::Match(match_expr) => match_expr.span,
+            Self::BinaryOp(op) => op.span,
+            Self::UnaryOp(op) => op.span,
+            Self::Literal(lit) => lit.get_span(),
+            Self::FnCall(call) => call.span,
+            Self::Variable(var) => var.span,
+            Self::FieldAccess(acc) => acc.span,
+            Self::MethodCall(call) => call.span,
+            Self::Block(block) => block.span,
+            Self::If(if_expr) => if_expr.span,
+            Self::Record(record) => record.span,
+            Self::IndexOperation(op) => op.span,
+            Self::Array(array_expr) => array_expr.span,
+            Self::OptionalGet(optional_get) => optional_get.span,
+            Self::For(for_expr) => for_expr.span,
+            Self::Tag(tag_expr) => tag_expr.span,
+            Self::EnumConstructor(e) => e.span,
+            Self::Is(is_expr) => is_expr.span,
+            Self::Match(match_expr) => match_expr.span,
         }
     }
 
     pub fn is_assignable(&self) -> bool {
         match self {
-            ParsedExpression::Variable(_var) => true,
-            ParsedExpression::IndexOperation(_op) => true,
-            ParsedExpression::FieldAccess(_acc) => true,
-            ParsedExpression::MethodCall(_call) => false,
-            ParsedExpression::BinaryOp(_op) => false,
-            ParsedExpression::UnaryOp(_op) => false,
-            ParsedExpression::Literal(_lit) => false,
-            ParsedExpression::FnCall(_call) => false,
-            ParsedExpression::Block(_block) => false,
-            ParsedExpression::If(_if_expr) => false,
-            ParsedExpression::Record(_record) => false,
-            ParsedExpression::Array(_array_expr) => false,
-            ParsedExpression::OptionalGet(_optional_get) => false,
-            ParsedExpression::For(_) => false,
-            ParsedExpression::Tag(_) => false,
-            ParsedExpression::EnumConstructor(_) => false,
-            ParsedExpression::Is(_) => false,
-            ParsedExpression::Match(_) => false,
+            Self::Variable(_var) => true,
+            Self::IndexOperation(_op) => true,
+            Self::FieldAccess(_acc) => true,
+            Self::MethodCall(_call) => false,
+            Self::BinaryOp(_op) => false,
+            Self::UnaryOp(_op) => false,
+            Self::Literal(_lit) => false,
+            Self::FnCall(_call) => false,
+            Self::Block(_block) => false,
+            Self::If(_if_expr) => false,
+            Self::Record(_record) => false,
+            Self::Array(_array_expr) => false,
+            Self::OptionalGet(_optional_get) => false,
+            Self::For(_) => false,
+            Self::Tag(_) => false,
+            Self::EnumConstructor(_) => false,
+            Self::Is(_) => false,
+            Self::Match(_) => false,
+        }
+    }
+
+    pub fn as_match(&self) -> Option<&ParsedMatchExpression> {
+        if let Self::Match(v) = self {
+            Some(v)
+        } else {
+            None
+        }
+    }
+
+    pub fn as_index_operation(&self) -> Option<&IndexOperation> {
+        if let Self::IndexOperation(v) = self {
+            Some(v)
+        } else {
+            None
         }
     }
 }
@@ -379,16 +396,17 @@ pub struct ParsedEnumPattern {
 // <enum> ::= "." <ident> ( "(" <pattern> ")" )?
 // <record> ::= "{" ( <ident> ": " <pattern> ","? )* "}"
 #[derive(Debug, Clone)]
-pub enum ParsedPatternExpression {
+pub enum ParsedPattern {
     Literal(ParsedExpressionId),
     Variable(IdentifierId, Span),
     Record(ParsedRecordPattern),
     Enum(ParsedEnumPattern),
+    Wildcard(Span),
     // Tag(TagExpr),
     // Array(ArrayExpr),
 }
 
-impl ParsedPatternExpression {}
+impl ParsedPattern {}
 
 #[derive(Debug, Clone)]
 pub struct Assignment {
@@ -446,7 +464,7 @@ pub struct Block {
 #[derive(Debug, Clone)]
 pub struct RecordTypeField {
     pub name: IdentifierId,
-    pub ty: ParsedTypeExpression,
+    pub ty: ParsedTypeExpressionId,
 }
 
 #[derive(Debug, Clone)]
@@ -458,26 +476,26 @@ pub struct RecordType {
 #[derive(Debug, Clone)]
 pub struct TypeApplication {
     pub base: IdentifierId,
-    pub params: Vec<ParsedTypeExpression>,
+    pub params: Vec<ParsedTypeExpressionId>,
     pub span: Span,
 }
 
 #[derive(Debug, Clone)]
 pub struct ParsedOptional {
-    pub base: Box<ParsedTypeExpression>,
+    pub base: ParsedTypeExpressionId,
     pub span: Span,
 }
 
 #[derive(Debug, Clone)]
 pub struct ParsedReference {
-    pub base: Box<ParsedTypeExpression>,
+    pub base: ParsedTypeExpressionId,
     pub span: Span,
 }
 
 #[derive(Debug, Clone)]
 pub struct ParsedEnumVariant {
     pub tag_name: IdentifierId,
-    pub payload_expression: Option<ParsedTypeExpression>,
+    pub payload_expression: Option<ParsedTypeExpressionId>,
     pub span: Span,
 }
 
@@ -543,38 +561,38 @@ pub struct ParsedFunction {
     pub name: IdentifierId,
     pub type_args: Option<Vec<TypeParamDef>>,
     pub args: Vec<FnArgDef>,
-    pub ret_type: Option<ParsedTypeExpression>,
+    pub ret_type: Option<ParsedTypeExpressionId>,
     pub block: Option<Block>,
     pub span: Span,
     pub linkage: Linkage,
     pub id: ParsedFunctionId,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FnArgDef {
     pub name: IdentifierId,
-    pub ty: ParsedTypeExpression,
+    pub ty: ParsedTypeExpressionId,
     pub span: Span,
 }
 
 #[derive(Debug)]
 pub struct ParsedConstant {
     pub name: IdentifierId,
-    pub ty: ParsedTypeExpression,
+    pub ty: ParsedTypeExpressionId,
     pub value_expr: ParsedExpressionId,
     pub span: Span,
     pub id: ParsedConstantId,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ParsedTypeDefn {
     pub name: IdentifierId,
-    pub value_expr: ParsedTypeExpression,
+    pub value_expr: ParsedTypeExpressionId,
     pub span: Span,
     pub id: ParsedTypeDefnId,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ParsedAbility {
     pub name: IdentifierId,
     pub functions: Vec<ParsedFunctionId>,
@@ -582,17 +600,17 @@ pub struct ParsedAbility {
     pub id: ParsedAbilityId,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ParsedAbilityImplementation {
     pub ability_name: IdentifierId,
-    pub target_type: ParsedTypeExpression,
+    pub target_type: ParsedTypeExpressionId,
     pub functions: Vec<ParsedFunctionId>,
     pub id: ParsedAbilityImplId,
     pub auto: bool,
     pub span: Span,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ParsedNamespace {
     pub name: IdentifierId,
     pub definitions: Vec<ParsedDefinitionId>,
@@ -602,15 +620,15 @@ pub struct ParsedNamespace {
 #[derive(Debug, Default)]
 pub struct ParsedExpressionPool {
     expressions: Vec<ParsedExpression>,
-    type_hints: HashMap<ParsedExpressionId, ParsedTypeExpression>,
+    type_hints: HashMap<ParsedExpressionId, ParsedTypeExpressionId>,
 }
 impl ParsedExpressionPool {
-    pub fn add_type_hint(&mut self, id: ParsedExpressionId, ty: ParsedTypeExpression) {
+    pub fn add_type_hint(&mut self, id: ParsedExpressionId, ty: ParsedTypeExpressionId) {
         self.type_hints.insert(id, ty);
     }
 
-    pub fn get_type_hint(&self, id: ParsedExpressionId) -> Option<&ParsedTypeExpression> {
-        self.type_hints.get(&id)
+    pub fn get_type_hint(&self, id: ParsedExpressionId) -> Option<ParsedTypeExpressionId> {
+        self.type_hints.get(&id).copied()
     }
 
     pub fn add_expression(&mut self, expression: ParsedExpression) -> ParsedExpressionId {
@@ -620,6 +638,36 @@ impl ParsedExpressionPool {
     }
     pub fn get_expression(&self, id: ParsedExpressionId) -> &ParsedExpression {
         &self.expressions[id as usize]
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct ParsedTypeExpressionPool {
+    type_expressions: Vec<ParsedTypeExpression>,
+}
+impl ParsedTypeExpressionPool {
+    pub fn add_expression(&mut self, expression: ParsedTypeExpression) -> ParsedTypeExpressionId {
+        let id = self.type_expressions.len();
+        self.type_expressions.push(expression);
+        id as ParsedExpressionId
+    }
+    pub fn get_expression(&self, id: ParsedTypeExpressionId) -> &ParsedTypeExpression {
+        &self.type_expressions[id as usize]
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct ParsedPatternPool {
+    patterns: Vec<ParsedPattern>,
+}
+impl ParsedPatternPool {
+    pub fn add_pattern(&mut self, pattern: ParsedPattern) -> ParsedPatternId {
+        let id = self.patterns.len();
+        self.patterns.push(pattern);
+        ParsedPatternId(id as u32)
+    }
+    pub fn get_pattern(&self, id: ParsedPatternId) -> &ParsedPattern {
+        &self.patterns[id.0 as usize]
     }
 }
 
@@ -675,8 +723,9 @@ pub struct ParsedModule {
     /// so we can be more granular about what is mutable when. You can create an 'Env'
     /// struct to reduce the number of parameters, but this Env will also suffer from that problem sometimes
     pub identifiers: Rc<RefCell<Identifiers>>,
-    pub expressions: Rc<RefCell<ParsedExpressionPool>>,
-    pub pattern_expressions: Rc<RefCell<Vec<ParsedPatternExpression>>>,
+    pub expressions: ParsedExpressionPool,
+    pub type_expressions: ParsedTypeExpressionPool,
+    pub patterns: ParsedPatternPool,
 }
 
 impl ParsedModule {
@@ -694,8 +743,9 @@ impl ParsedModule {
             ability_impls: Vec::new(),
             sources: Sources::default(),
             identifiers,
-            expressions: Rc::new(RefCell::new(ParsedExpressionPool::default())),
-            pattern_expressions: Rc::new(RefCell::new(Vec::new())),
+            expressions: ParsedExpressionPool::default(),
+            type_expressions: ParsedTypeExpressionPool::default(),
+            patterns: ParsedPatternPool::default(),
         }
     }
 
@@ -732,31 +782,15 @@ impl ParsedModule {
         id
     }
 
-    pub fn add_pattern_expression(
-        &self,
-        pattern_expression: ParsedPatternExpression,
-    ) -> ParsedPatternId {
-        let mut pattern_expressions = self.pattern_expressions.borrow_mut();
-        let id = pattern_expressions.len();
-        pattern_expressions.push(pattern_expression);
-        ParsedPatternId(id as u32)
-    }
-
-    pub fn get_pattern(
-        &self,
-        id: ParsedPatternId,
-    ) -> impl Deref<Target = ParsedPatternExpression> + '_ {
-        Ref::map(self.pattern_expressions.borrow(), |e| &e[id.0 as usize])
-    }
-
     pub fn get_pattern_span(&self, id: ParsedPatternId) -> Span {
-        match &*self.get_pattern(id) {
-            ParsedPatternExpression::Literal(literal_id) => {
-                self.get_expression(*literal_id).get_span()
+        match self.patterns.get_pattern(id) {
+            ParsedPattern::Literal(literal_id) => {
+                self.expressions.get_expression(*literal_id).get_span()
             }
-            ParsedPatternExpression::Enum(enum_pattern) => enum_pattern.span,
-            ParsedPatternExpression::Variable(_var_pattern, span) => *span,
-            ParsedPatternExpression::Record(record_pattern) => record_pattern.span,
+            ParsedPattern::Enum(enum_pattern) => enum_pattern.span,
+            ParsedPattern::Variable(_var_pattern, span) => *span,
+            ParsedPattern::Record(record_pattern) => record_pattern.span,
+            ParsedPattern::Wildcard(span) => *span,
         }
     }
 
@@ -811,25 +845,15 @@ impl ParsedModule {
         &self.namespaces[0]
     }
 
-    pub fn get_expression(
-        &self,
-        id: ParsedExpressionId,
-    ) -> impl Deref<Target = ParsedExpression> + '_ {
-        Ref::map(self.expressions.borrow(), |e| e.get_expression(id))
-    }
-
-    pub fn add_expression(&self, expression: ParsedExpression) -> ParsedExpressionId {
-        self.expressions.borrow_mut().add_expression(expression)
-    }
-
     pub fn get_expression_type_hint(
         &self,
         id: ParsedExpressionId,
-    ) -> Option<Ref<ParsedTypeExpression>> {
-        match Ref::filter_map(self.expressions.borrow(), |e| e.get_type_hint(id)) {
-            Err(_) => None,
-            Ok(r) => Some(r),
-        }
+    ) -> Option<ParsedTypeExpressionId> {
+        self.expressions.get_type_hint(id)
+    }
+
+    pub fn get_type_expression_span(&self, type_expression_id: ParsedTypeExpressionId) -> Span {
+        self.type_expressions.get_expression(type_expression_id).get_span()
     }
 }
 
@@ -902,11 +926,7 @@ impl Source {
 pub struct Parser<'toks, 'module> {
     tokens: TokenIter<'toks>,
     source: Rc<Source>,
-    // FIXME: Remove my copies of identifiers, expressions
-    identifiers: Rc<RefCell<Identifiers>>,
-    expressions: Rc<RefCell<ParsedExpressionPool>>,
-    pattern_expressions: Rc<RefCell<Vec<ParsedPatternExpression>>>,
-    parsed_module: &'module mut ParsedModule,
+    pub module: &'module mut ParsedModule,
 }
 
 impl<'toks, 'module> Parser<'toks, 'module> {
@@ -916,14 +936,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         module: &'module mut ParsedModule,
     ) -> Parser<'toks, 'module> {
         module.sources.insert(source.clone());
-        Parser {
-            tokens: TokenIter::make(tokens),
-            source,
-            identifiers: module.identifiers.clone(),
-            expressions: module.expressions.clone(),
-            pattern_expressions: module.pattern_expressions.clone(),
-            parsed_module: module,
-        }
+        Parser { tokens: TokenIter::make(tokens), source, module }
     }
 
     fn expect<A>(what: &str, current: Token, value: ParseResult<Option<A>>) -> ParseResult<A> {
@@ -934,39 +947,78 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         }
     }
 
-    fn expect_pattern_expression(&mut self) -> ParseResult<ParsedPatternId> {
-        // Let's start with the simplest pattern expression
-        // Integer literal
+    fn expect_pattern(&mut self) -> ParseResult<ParsedPatternId> {
+        let first = self.peek();
         if let Some(literal_id) = self.parse_literal()? {
-            let pattern = ParsedPatternExpression::Literal(literal_id);
-            let id = self.parsed_module.add_pattern_expression(pattern);
+            let pattern = ParsedPattern::Literal(literal_id);
+            let id = self.module.patterns.add_pattern(pattern);
             Ok(id)
-        } else if self.peek().kind == K::Dot {
-            //asdfasdf
+        } else if first.kind == K::OpenBrace {
+            // Record
+            let open_brace = self.tokens.next();
+            let mut fields = Vec::new();
+            while self.peek().kind != K::CloseBrace {
+                let ident_token = self.expect_eat_token(K::Ident)?;
+                let ident = self.intern_ident_token(ident_token);
+                let maybe_colon = self.peek();
+                let pattern_id = if maybe_colon.kind == K::Colon {
+                    self.tokens.advance();
+                    self.expect_pattern()?
+                } else {
+                    // Assume variable binding pattern with same name as field
+                    let pattern = ParsedPattern::Variable(ident, ident_token.span);
+                    self.module.patterns.add_pattern(pattern)
+                };
+                fields.push((ident, pattern_id));
+                let next = self.peek();
+                if next.kind == K::Comma {
+                    self.tokens.advance();
+                } else if next.kind != K::CloseBrace {
+                    return Err(ParseError {
+                        expected: "comma or close brace".to_string(),
+                        token: next,
+                        cause: None,
+                    });
+                }
+            }
+            let end = self.expect_eat_token(K::CloseBrace)?;
+            let pattern = ParsedRecordPattern { fields, span: open_brace.span.extended(end.span) };
+            let pattern_id = self.module.patterns.add_pattern(ParsedPattern::Record(pattern));
+            Ok(pattern_id)
+        } else if first.kind == K::Dot {
             let dot = self.tokens.next();
             let ident_token = self.expect_eat_token(K::Ident)?;
             let ident = self.intern_ident_token(ident_token);
             let (payload_pattern, span) = if self.peek().kind == K::OpenParen {
                 self.tokens.advance();
-                let payload_pattern_id = self.expect_pattern_expression()?;
+                let payload_pattern_id = self.expect_pattern()?;
                 let close_paren = self.expect_eat_token(K::CloseParen)?;
                 (Some(payload_pattern_id), dot.span.extended(close_paren.span))
             } else {
                 (None, ident_token.span)
             };
             let pattern_id =
-                self.parsed_module.add_pattern_expression(ParsedPatternExpression::Enum(
-                    ParsedEnumPattern { variant_tag: ident, payload_pattern, span },
-                ));
+                self.module.patterns.add_pattern(ParsedPattern::Enum(ParsedEnumPattern {
+                    variant_tag: ident,
+                    payload_pattern,
+                    span,
+                }));
             Ok(pattern_id)
-        } else if self.peek().kind == K::Ident {
+        } else if first.kind == K::Ident {
             // Variable
             let ident_token = self.expect_eat_token(K::Ident)?;
             let ident = self.intern_ident_token(ident_token);
-            let pattern_id = self
-                .parsed_module
-                .add_pattern_expression(ParsedPatternExpression::Variable(ident, ident_token.span));
-            Ok(pattern_id)
+            if ident == self.ident_id("_") {
+                let pattern_id =
+                    self.module.patterns.add_pattern(ParsedPattern::Wildcard(ident_token.span));
+                Ok(pattern_id)
+            } else {
+                let pattern_id = self
+                    .module
+                    .patterns
+                    .add_pattern(ParsedPattern::Variable(ident, ident_token.span));
+                Ok(pattern_id)
+            }
         } else {
             Err(Parser::error("Expected pattern expression", self.peek()))
         }
@@ -975,7 +1027,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
 impl<'toks, 'module> Parser<'toks, 'module> {
     pub fn ident_id(&self, s: impl AsRef<str>) -> IdentifierId {
-        self.identifiers.borrow_mut().intern(s.as_ref())
+        self.module.identifiers.borrow_mut().intern(s.as_ref())
     }
 
     pub fn print_error(&self, parse_error: &ParseError) {
@@ -1066,19 +1118,16 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         self.ident_id(tok_chars)
     }
 
-    pub fn add_expression(&self, expression: ParsedExpression) -> ParsedExpressionId {
-        self.expressions.borrow_mut().add_expression(expression)
+    pub fn add_expression(&mut self, expression: ParsedExpression) -> ParsedExpressionId {
+        self.module.expressions.add_expression(expression)
     }
 
-    pub fn get_expression(
-        &self,
-        id: ParsedExpressionId,
-    ) -> impl Deref<Target = ParsedExpression> + '_ {
-        Ref::map(self.expressions.borrow(), |e| e.get_expression(id))
+    pub fn get_expression(&self, id: ParsedExpressionId) -> &ParsedExpression {
+        self.module.expressions.get_expression(id)
     }
 
     pub fn get_expression_span(&self, id: ParsedExpressionId) -> Span {
-        self.expressions.borrow().get_expression(id).get_span()
+        self.module.expressions.get_expression(id).get_span()
     }
 
     fn parse_literal(&mut self) -> ParseResult<Option<ParsedExpressionId>> {
@@ -1186,11 +1235,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(Some(RecordTypeField { name: ident_id, ty: typ_expr }))
     }
 
-    fn expect_type_expression(&mut self) -> ParseResult<ParsedTypeExpression> {
+    fn expect_type_expression(&mut self) -> ParseResult<ParsedTypeExpressionId> {
         Parser::expect("type_expression", self.peek(), self.parse_type_expression())
     }
 
-    fn parse_type_expression(&mut self) -> ParseResult<Option<ParsedTypeExpression>> {
+    fn parse_type_expression(&mut self) -> ParseResult<Option<ParsedTypeExpressionId>> {
         let Some(result) = self.parse_base_type_expression()? else {
             return Ok(None);
         };
@@ -1199,17 +1248,21 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             if next.kind == K::QuestionMark {
                 // Optional Type
                 self.tokens.advance();
-                Ok(Some(ParsedTypeExpression::Optional(ParsedOptional {
-                    base: Box::new(result),
-                    span: next.span,
-                })))
+                Ok(Some(self.module.type_expressions.add_expression(
+                    ParsedTypeExpression::Optional(ParsedOptional {
+                        base: result,
+                        span: next.span,
+                    }),
+                )))
             } else if next.kind == K::Asterisk {
                 // Reference Type
                 self.tokens.advance();
-                Ok(Some(ParsedTypeExpression::Reference(ParsedReference {
-                    base: Box::new(result),
-                    span: next.span,
-                })))
+                Ok(Some(self.module.type_expressions.add_expression(
+                    ParsedTypeExpression::Reference(ParsedReference {
+                        base: result,
+                        span: next.span,
+                    }),
+                )))
             } else {
                 panic!("unhandled postfix type operator {:?}", next.kind);
             }
@@ -1218,29 +1271,51 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         }
     }
 
-    fn parse_base_type_expression(&mut self) -> ParseResult<Option<ParsedTypeExpression>> {
+    fn parse_base_type_expression(&mut self) -> ParseResult<Option<ParsedTypeExpressionId>> {
         let (tok, second) = self.peek_two();
         if tok.kind == K::KeywordEnum {
             let enumm = self.expect_enum_type_expression()?;
-            Ok(Some(ParsedTypeExpression::Enum(enumm)))
+            let type_expr_id =
+                self.module.type_expressions.add_expression(ParsedTypeExpression::Enum(enumm));
+            Ok(Some(type_expr_id))
         } else if tok.kind == K::Ident {
             let source = self.source.clone();
             let text_str = Source::get_span_content(&source, tok.span);
             if text_str == "unit" {
                 self.tokens.advance();
-                Ok(Some(ParsedTypeExpression::Unit(tok.span)))
+                Ok(Some(
+                    self.module
+                        .type_expressions
+                        .add_expression(ParsedTypeExpression::Unit(tok.span)),
+                ))
             } else if text_str == "string" {
                 self.tokens.advance();
-                Ok(Some(ParsedTypeExpression::String(tok.span)))
+                Ok(Some(
+                    self.module
+                        .type_expressions
+                        .add_expression(ParsedTypeExpression::String(tok.span)),
+                ))
             } else if text_str == "int" {
                 self.tokens.advance();
-                Ok(Some(ParsedTypeExpression::Int(tok.span)))
+                Ok(Some(
+                    self.module
+                        .type_expressions
+                        .add_expression(ParsedTypeExpression::Int(tok.span)),
+                ))
             } else if text_str == "bool" {
                 self.tokens.advance();
-                Ok(Some(ParsedTypeExpression::Bool(tok.span)))
+                Ok(Some(
+                    self.module
+                        .type_expressions
+                        .add_expression(ParsedTypeExpression::Bool(tok.span)),
+                ))
             } else if text_str == "char" {
                 self.tokens.advance();
-                Ok(Some(ParsedTypeExpression::Char(tok.span)))
+                Ok(Some(
+                    self.module
+                        .type_expressions
+                        .add_expression(ParsedTypeExpression::Char(tok.span)),
+                ))
             } else {
                 self.tokens.advance();
                 let next = self.tokens.peek();
@@ -1252,13 +1327,17 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                             Parser::expect_type_expression(p)
                         })?;
                     let ident = self.intern_ident_token(tok);
-                    Ok(Some(ParsedTypeExpression::TypeApplication(TypeApplication {
-                        base: ident,
-                        params: type_parameters,
-                        span: tok.span.extended(params_span),
-                    })))
+                    Ok(Some(self.module.type_expressions.add_expression(
+                        ParsedTypeExpression::TypeApplication(TypeApplication {
+                            base: ident,
+                            params: type_parameters,
+                            span: tok.span.extended(params_span),
+                        }),
+                    )))
                 } else {
-                    Ok(Some(ParsedTypeExpression::Name(self.ident_id(text_str), tok.span)))
+                    Ok(Some(self.module.type_expressions.add_expression(
+                        ParsedTypeExpression::Name(self.ident_id(text_str), tok.span),
+                    )))
                 }
             }
         } else if tok.kind == K::Dot && second.kind == K::Ident {
@@ -1266,10 +1345,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             self.tokens.advance();
             let tag_name = self.expect_eat_token(K::Ident)?;
             let tag_name_ident = self.intern_ident_token(tag_name);
-            Ok(Some(ParsedTypeExpression::TagName(
+            Ok(Some(self.module.type_expressions.add_expression(ParsedTypeExpression::TagName(
                 tag_name_ident,
                 tok.span.extended(tag_name.span),
-            )))
+            ))))
         } else if tok.kind == K::OpenBrace {
             let open_brace = self.expect_eat_token(K::OpenBrace)?;
             let (fields, fields_span) =
@@ -1280,7 +1359,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             let mut record_span = tok.span;
             record_span.end = fields_span.end;
             let record = RecordType { fields, span: record_span };
-            Ok(Some(ParsedTypeExpression::Record(record)))
+            Ok(Some(
+                self.module.type_expressions.add_expression(ParsedTypeExpression::Record(record)),
+            ))
         } else {
             Ok(None)
         }
@@ -1315,10 +1396,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             } else {
                 None
             };
-            let span = payload_expression
-                .as_ref()
-                .map(|e| tag.span.extended(e.get_span()))
-                .unwrap_or(tag.span);
+            let span = match payload_expression {
+                None => tag.span,
+                Some(expr) => self.module.type_expressions.get_expression(expr).get_span(),
+            };
             variants.push(ParsedEnumVariant { tag_name, payload_expression, span });
             first = false;
         }
@@ -1447,7 +1528,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         if self.peek().kind == K::Colon {
             self.tokens.advance();
             let type_hint = self.expect_type_expression()?;
-            self.expressions.borrow_mut().add_type_hint(with_postfix, type_hint);
+            self.module.expressions.add_type_hint(with_postfix, type_hint);
         }
         Ok(Some(with_postfix))
     }
@@ -1541,13 +1622,13 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         };
         if self.peek().kind == K::KeywordIs {
             self.tokens.advance();
-            let pattern = self.expect_pattern_expression()?;
+            let pattern = self.expect_pattern()?;
 
             let original_span = self.get_expression(expr).get_span();
-            let pattern_span = self.parsed_module.get_pattern_span(pattern);
+            let pattern_span = self.module.get_pattern_span(pattern);
             let is_expression_id = self.add_expression(ParsedExpression::Is(ParsedIsExpression {
                 target_expression: expr,
-                pattern_expression: pattern,
+                pattern,
                 span: original_span.extended(pattern_span),
             }));
             Ok(Some(is_expression_id))
@@ -1793,7 +1874,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             eaten_keyword.span.extended(self.get_expression(initializer_expression).get_span());
         Ok(Some(ValDef {
             name: self.intern_ident_token(name_token),
-            type_id: typ,
+            type_expr: typ,
             value: initializer_expression,
             is_mutable: mutable,
             span,
@@ -1812,13 +1893,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let value_expr = Parser::expect("expression", self.peek(), self.parse_expression())?;
         let span = keyword_val_token.span.extended(self.get_expression(value_expr).get_span());
         let name = self.intern_ident_token(name_token);
-        let constant_id = self.parsed_module.add_constant(ParsedConstant {
-            name,
-            ty: typ,
-            value_expr,
-            span,
-            id: 0,
-        });
+        let constant_id =
+            self.module.add_constant(ParsedConstant { name, ty: typ, value_expr, span, id: 0 });
         Ok(Some(constant_id))
     }
 
@@ -1840,7 +1916,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let name_token = self.expect_eat_token(K::Ident)?;
         self.expect_eat_token(K::Colon)?;
         let typ = Parser::expect("type_expression", self.peek(), self.parse_type_expression())?;
-        let span = name_token.span.extended(typ.get_span());
+        let span =
+            name_token.span.extended(self.module.type_expressions.get_expression(typ).get_span());
         Ok(FnArgDef { name: self.intern_ident_token(name_token), ty: typ, span })
     }
 
@@ -2028,7 +2105,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let block = self.parse_block()?;
         let mut span = fn_keyword.span;
         span.end = block.as_ref().map(|b| b.span.end).unwrap_or(args_span.end);
-        let function_id = self.parsed_module.add_function(ParsedFunction {
+        let function_id = self.module.add_function(ParsedFunction {
             name: func_name_id,
             type_args: type_arguments,
             args,
@@ -2055,7 +2132,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         }
         let close_token = self.expect_eat_token(K::CloseBrace)?;
         let span = keyword_ability.span.extended(close_token.span);
-        let ability_id = self.parsed_module.add_ability(ParsedAbility {
+        let ability_id = self.module.add_ability(ParsedAbility {
             name: name_identifier,
             functions,
             span,
@@ -2092,7 +2169,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
         let ability_name_ident = self.intern_ident_token(ability_name);
         let span = keyword_impl.span.extended(final_token.span);
-        let ability_impl_id = self.parsed_module.add_ability_impl(ParsedAbilityImplementation {
+        let ability_impl_id = self.module.add_ability_impl(ParsedAbilityImplementation {
             ability_name: ability_name_ident,
             target_type,
             functions,
@@ -2111,14 +2188,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let name = self.expect_eat_token(K::Ident)?;
         let equals = self.expect_eat_token(K::Equals)?;
         let type_expr = Parser::expect("Type expression", equals, self.parse_type_expression())?;
-        let span = keyword_type.span.extended(type_expr.get_span());
+        let span = keyword_type.span.extended(self.module.get_type_expression_span(type_expr));
         let name = self.intern_ident_token(name);
-        let type_defn_id = self.parsed_module.add_typedefn(ParsedTypeDefn {
-            name,
-            value_expr: type_expr,
-            span,
-            id: 0,
-        });
+        let type_defn_id =
+            self.module.add_typedefn(ParsedTypeDefn { name, value_expr: type_expr, span, id: 0 });
         Ok(Some(type_defn_id))
     }
 
@@ -2136,8 +2209,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         }
         self.expect_eat_token(K::CloseBrace)?;
         let name = self.intern_ident_token(ident);
-        let namespace_id =
-            self.parsed_module.add_namespace(ParsedNamespace { name, definitions, id: 0 });
+        let namespace_id = self.module.add_namespace(ParsedNamespace { name, definitions, id: 0 });
         Ok(Some(namespace_id))
     }
 
@@ -2161,14 +2233,14 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     pub fn parse_module(&mut self) -> ParseResult<()> {
-        let root_namespace_id = if self.parsed_module.namespaces.is_empty() {
-            self.parsed_module.add_namespace(ParsedNamespace {
+        let root_namespace_id = if self.module.namespaces.is_empty() {
+            self.module.add_namespace(ParsedNamespace {
                 name: self.ident_id("_root"),
                 definitions: Vec::new(),
                 id: 0,
             })
         } else {
-            self.parsed_module.get_root_namespace().id
+            self.module.get_root_namespace().id
         };
 
         let mut new_definitions: Vec<ParsedDefinitionId> = vec![];
@@ -2179,7 +2251,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             return Err(Parser::error("End or definition", self.tokens.peek()));
         }
 
-        self.parsed_module.get_namespace_mut(root_namespace_id).definitions.extend(new_definitions);
+        self.module.get_namespace_mut(root_namespace_id).definitions.extend(new_definitions);
 
         Ok(())
     }
@@ -2198,7 +2270,7 @@ impl ParsedModule {
         expr: ParsedExpressionId,
         f: &mut impl Write,
     ) -> std::fmt::Result {
-        match &*self.get_expression(expr) {
+        match self.expressions.get_expression(expr) {
             ParsedExpression::BinaryOp(op) => {
                 f.write_str("(")?;
                 self.display_expression_id(op.lhs, f)?;
@@ -2238,7 +2310,7 @@ impl ParsedModule {
             ParsedExpression::Is(is_expr) => {
                 self.display_expression_id(is_expr.target_expression, f)?;
                 f.write_str(" is ")?;
-                self.display_pattern_expression_id(is_expr.pattern_expression, f)
+                self.display_pattern_expression_id(is_expr.pattern, f)
             }
             ParsedExpression::Match(match_expr) => {
                 f.write_str("when ")?;
@@ -2263,18 +2335,18 @@ impl ParsedModule {
         f.write_str("<pattern expr todo>")
     }
 
-    pub fn type_expression_to_string(&self, type_expr: &ParsedTypeExpression) -> String {
+    pub fn type_expression_to_string(&self, type_expr_id: ParsedTypeExpressionId) -> String {
         let mut buffer = String::new();
-        self.display_type_expression(type_expr, &mut buffer).unwrap();
+        self.display_type_expression_id(type_expr_id, &mut buffer).unwrap();
         buffer
     }
 
-    pub fn display_type_expression(
+    pub fn display_type_expression_id(
         &self,
-        ty_expr: &ParsedTypeExpression,
+        ty_expr_id: ParsedTypeExpressionId,
         f: &mut impl Write,
     ) -> std::fmt::Result {
-        match ty_expr {
+        match self.type_expressions.get_expression(ty_expr_id) {
             ParsedTypeExpression::Unit(_) => f.write_str("unit"),
             ParsedTypeExpression::Char(_) => f.write_str("char"),
             ParsedTypeExpression::Int(_) => f.write_str("int"),
@@ -2285,7 +2357,7 @@ impl ParsedModule {
                 for field in record_type.fields.iter() {
                     f.write_str(&self.get_ident_str(field.name))?;
                     f.write_str(": ")?;
-                    self.display_type_expression(ty_expr, f)?;
+                    self.display_type_expression_id(ty_expr_id, f)?;
                     f.write_str(", ")?;
                 }
                 f.write_str(" }")
@@ -2299,17 +2371,17 @@ impl ParsedModule {
                 f.write_str(&self.get_ident_str(tapp.base))?;
                 f.write_str("<")?;
                 for tparam in tapp.params.iter() {
-                    self.display_type_expression(tparam, f)?;
+                    self.display_type_expression_id(*tparam, f)?;
                     f.write_str(", ")?;
                 }
                 f.write_str(">")
             }
             ParsedTypeExpression::Optional(opt) => {
-                self.display_type_expression(&opt.base, f)?;
+                self.display_type_expression_id(opt.base, f)?;
                 f.write_str("?")
             }
             ParsedTypeExpression::Reference(refer) => {
-                self.display_type_expression(&refer.base, f)?;
+                self.display_type_expression_id(refer.base, f)?;
                 f.write_str("*")
             }
             ParsedTypeExpression::Enum(e) => {
@@ -2318,7 +2390,7 @@ impl ParsedModule {
                     f.write_str(&self.get_ident_str(variant.tag_name))?;
                     if let Some(payload) = &variant.payload_expression {
                         f.write_str("(")?;
-                        self.display_type_expression(payload, f)?;
+                        self.display_type_expression_id(*payload, f)?;
                         f.write_str(")")?;
                     }
                 }

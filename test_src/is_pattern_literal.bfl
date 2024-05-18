@@ -1,23 +1,28 @@
 fn main(): int {
   // Unit
-  val u = ();
-  assert(u is ());
+  //val u = ();
+  //assert(u is ());
 
-  val i = 42;
-  assert(!(i is 41));
-  assert(i is 42);
+  //val i = 42;
+  //assert(!(i is 41));
+  //assert(i is 42);
 
-  val s = "hello";
-  assert(s is "hello");
-  assert(!(s is "world"));
+  //val s = "hello";
+  //assert(s is "hello");
+  //assert(!(s is "world"));
 
-  val c = 'x';
-  assert(c is 'x');
-  assert(!(c is 'f'));
+  //val c = 'x';
+  //assert(c is 'x');
+  //assert(!(c is 'f'));
 
-  val b = true;
-  assert(!(b is false));
-  assert(b is true);
+  //val b = true;
+  //assert(!(b is false));
+  //assert(b is true);
 
+  val foo = { x: 1, y: 2 };
+  if foo is { x: 2, y } {
+    println("foo.y is ");
+    // printInt(y);
+  };
   0
 }

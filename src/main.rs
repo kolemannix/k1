@@ -87,7 +87,7 @@ pub fn compile_module<'ctx>(
     let out_dir = out_dir.as_ref();
     let use_prelude = !args.no_prelude;
 
-    let mut module = ParsedModule::make(module_name.to_string());
+    let mut parsed_module = ParsedModule::make(module_name.to_string());
 
     let dir_entries = {
         let mut ents = fs::read_dir(src_dir)?
@@ -111,7 +111,7 @@ pub fn compile_module<'ctx>(
         ));
 
         let token_vec = lex_text(&source.content, source.file_id)?;
-        let mut parser = parse::Parser::make(&token_vec, source.clone(), &mut module);
+        let mut parser = parse::Parser::make(&token_vec, source.clone(), &mut parsed_module);
 
         let result = parser.parse_module();
         if let Err(e) = result {
@@ -136,9 +136,7 @@ pub fn compile_module<'ctx>(
         anyhow::bail!("Parsing failed")
     }
 
-    let ast = Rc::new(module);
-
-    let mut typed_module = typer::TypedModule::new(ast);
+    let mut typed_module = typer::TypedModule::new(parsed_module);
     if let Err(e) = typed_module.run() {
         if args.dump_module {
             println!("{}", typed_module);
@@ -198,8 +196,8 @@ fn main() -> Result<()> {
     let args = Args::parse();
     println!("{:#?}", args);
 
-    static_assert_size!(parse::BlockStmt, 80); // Get down below 100
-    static_assert_size!(parse::ParsedExpression, 96); // Get back down
+    static_assert_size!(parse::BlockStmt, 64); // Get down below 100 // We did it!
+    static_assert_size!(parse::ParsedExpression, 96); // Get back down ideally below 50
     static_assert_size!(typer::TypedExpr, 56);
     static_assert_size!(typer::TypedStmt, 16);
     println!("bfl Compiler v0.1.0");
