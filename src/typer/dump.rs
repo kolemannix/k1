@@ -8,7 +8,7 @@ impl Display for TypedModule {
         f.write_str(&self.ast.name)?;
         f.write_str("\n")?;
         f.write_str("--- TYPES ---\n")?;
-        for (id, ty) in self.types.iter().enumerate() {
+        for (id, ty) in self.types.iter() {
             f.write_fmt(format_args!("{} ", id))?;
             self.display_type(ty, f)?;
             f.write_str("\n")?;
@@ -20,7 +20,7 @@ impl Display for TypedModule {
             f.write_str("\n")?;
         }
         f.write_str("--- Variables ---\n")?;
-        for (id, variable) in self.variables.iter().enumerate() {
+        for (id, variable) in self.variables.iter() {
             f.write_fmt(format_args!("{id:02} "))?;
             self.display_variable(variable, f)?;
             f.write_str("\n")?;
@@ -59,7 +59,7 @@ impl TypedModule {
         writ.write_fmt(format_args!("{}\n", scope_name))?;
 
         for (id, variable_id) in scope.variables.iter() {
-            let variable = self.get_variable(*variable_id);
+            let variable = self.variables.get_variable(*variable_id);
             writ.write_fmt(format_args!("\t{} ", id))?;
             self.display_variable(variable, writ)?;
             writ.write_str("\n")?;
@@ -106,14 +106,14 @@ impl TypedModule {
             BOOL_TYPE_ID => writ.write_str("bool"),
             STRING_TYPE_ID => writ.write_str("string"),
             type_id => {
-                let ty = self.get_type(type_id);
+                let ty = self.types.get_type(type_id);
                 self.display_type(ty, writ)
             }
         }
     }
 
     pub fn type_id_to_string(&self, type_id: TypeId) -> String {
-        let ty = self.get_type(type_id);
+        let ty = self.types.get_type(type_id);
         self.type_to_string(ty)
     }
 
@@ -136,7 +136,7 @@ impl TypedModule {
                     if index > 0 {
                         writ.write_str(", ")?;
                     }
-                    writ.write_str(&self.get_ident_str(field.name))?;
+                    writ.write_str(self.ast.identifiers.borrow().get_name(field.name))?;
                     writ.write_str(": ")?;
                     self.display_type_id(field.type_id, writ)?;
                 }
@@ -149,7 +149,7 @@ impl TypedModule {
             }
             Type::TypeVariable(tv) => {
                 writ.write_str("$")?;
-                writ.write_str(&self.get_ident_str(tv.identifier_id))
+                writ.write_str(self.ast.identifiers.borrow().get_name(tv.identifier_id))
             }
             Type::Optional(opt) => {
                 self.display_type_id(opt.inner_type, writ)?;
@@ -161,12 +161,12 @@ impl TypedModule {
             }
             Type::TagInstance(tag) => {
                 writ.write_str(".")?;
-                writ.write_str(&self.get_ident_str(tag.ident))
+                writ.write_str(self.ast.identifiers.borrow().get_name(tag.ident))
             }
             Type::Enum(e) => {
                 writ.write_str("enum ")?;
                 for (idx, v) in e.variants.iter().enumerate() {
-                    writ.write_str(&self.get_ident_str(v.tag_name))?;
+                    writ.write_str(self.ast.identifiers.borrow().get_name(v.tag_name))?;
                     if let Some(payload) = &v.payload {
                         writ.write_str("(")?;
                         self.display_type_id(*payload, writ)?;
@@ -217,6 +217,12 @@ impl TypedModule {
         Ok(())
     }
 
+    pub fn block_to_string(&self, block: &TypedBlock) -> String {
+        let mut s = String::new();
+        self.display_block(block, &mut s, 0).unwrap();
+        s
+    }
+
     fn display_block(
         &self,
         block: &TypedBlock,
@@ -232,7 +238,8 @@ impl TypedModule {
             writ.write_str("\n")?;
         }
         writ.write_str(&" ".repeat(indentation))?;
-        writ.write_str("}")
+        writ.write_str("}: ")?;
+        self.display_type_id(block.expr_type, writ)
     }
 
     fn display_stmt(
@@ -246,7 +253,7 @@ impl TypedModule {
             TypedStmt::Expr(expr) => self.display_expr(expr, writ, indentation),
             TypedStmt::ValDef(val_def) => {
                 writ.write_str("val ")?;
-                self.display_variable(self.get_variable(val_def.variable_id), writ)?;
+                self.display_variable(self.variables.get_variable(val_def.variable_id), writ)?;
                 writ.write_str(" = ")?;
                 self.display_expr(&val_def.initializer, writ, indentation)
             }
@@ -312,7 +319,7 @@ impl TypedModule {
                 writ.write_str("}")
             }
             TypedExpr::Variable(v) => {
-                let variable = self.get_variable(v.variable_id);
+                let variable = self.variables.get_variable(v.variable_id);
                 writ.write_str(&self.get_ident_str(variable.name))
             }
             TypedExpr::RecordFieldAccess(field_access) => {
@@ -347,33 +354,33 @@ impl TypedModule {
             TypedExpr::Block(block) => self.display_block(block, writ, indentation),
             TypedExpr::If(if_expr) => {
                 writ.write_str("if ")?;
-                self.display_expr(&if_expr.condition, writ, 0)?;
+                self.display_expr(&if_expr.condition, writ, indentation)?;
                 writ.write_str(" ")?;
-                self.display_block(&if_expr.consequent, writ, 0)?;
+                self.display_block(&if_expr.consequent, writ, indentation)?;
                 writ.write_str(" else ")?;
-                self.display_block(&if_expr.alternate, writ, 0)?;
+                self.display_block(&if_expr.alternate, writ, indentation)?;
                 Ok(())
             }
             TypedExpr::UnaryOp(unary_op) => {
                 writ.write_fmt(format_args!("{}", unary_op.kind))?;
-                self.display_expr(&unary_op.expr, writ, 0)
+                self.display_expr(&unary_op.expr, writ, indentation)
             }
             TypedExpr::BinaryOp(binary_op) => {
-                self.display_expr(&binary_op.lhs, writ, 0)?;
+                self.display_expr(&binary_op.lhs, writ, indentation)?;
                 writ.write_fmt(format_args!(" {} ", binary_op.kind))?;
-                self.display_expr(&binary_op.rhs, writ, 0)
+                self.display_expr(&binary_op.rhs, writ, indentation)
             }
             TypedExpr::OptionalSome(opt) => {
                 writ.write_str("Some(")?;
-                self.display_expr(&opt.inner_expr, writ, 0)?;
+                self.display_expr(&opt.inner_expr, writ, indentation)?;
                 writ.write_str(")")
             }
             TypedExpr::OptionalHasValue(opt) => {
-                self.display_expr(opt, writ, 0)?;
+                self.display_expr(opt, writ, indentation)?;
                 writ.write_str(".hasValue()")
             }
             TypedExpr::OptionalGet(opt) => {
-                self.display_expr(&opt.inner_expr, writ, 0)?;
+                self.display_expr(&opt.inner_expr, writ, indentation)?;
                 writ.write_str("!")
             }
             TypedExpr::Tag(tag_expr) => {

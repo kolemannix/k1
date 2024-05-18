@@ -31,7 +31,7 @@ fn printBool(value: bool): unit {
 
 fn assert(value: bool): unit {
   if !value {
-    print("ASSERT FAILED");
+    println("ASSERT FAILED");
     exit(1)
   };
 }

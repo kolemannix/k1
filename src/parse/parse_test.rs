@@ -22,13 +22,21 @@ fn test_single_expr(input: &str) -> Result<(ParsedModule, ParsedExpression), Par
     test_single_expr_with_id(input).map(|(m, e, _)| (m, e))
 }
 
+fn test_single_type_expr(input: &str) -> Result<(ParsedModule, ParsedTypeExpression), ParseError> {
+    let mut module = make_test_module();
+    let mut parser = set_up(input, &mut module);
+    let expr_id = parser.expect_expression()?;
+    let expr = (*module.type_expressions.get_expression(expr_id)).clone();
+    Ok((module, expr))
+}
+
 fn test_single_expr_with_id(
     input: &str,
 ) -> Result<(ParsedModule, ParsedExpression, ParsedExpressionId), ParseError> {
     let mut module = make_test_module();
     let mut parser = set_up(input, &mut module);
     let expr_id = parser.expect_expression()?;
-    let expr = (*parser.get_expression(expr_id)).clone();
+    let expr = (*module.expressions.get_expression(expr_id)).clone();
     Ok((module, expr, expr_id))
 }
 
@@ -71,19 +79,30 @@ fn infix() -> Result<(), ParseError> {
     let mut parser = set_up("val x = a + b * doStuff(1, 2)", &mut module);
     let result = parser.parse_statement()?;
     if let Some(BlockStmt::ValDef(ValDef { value: expr_id, .. })) = result {
-        let ParsedExpression::BinaryOp(op) = &*parser.get_expression(expr_id) else { panic!() };
+        let ParsedExpression::BinaryOp(op) = module.expressions.get_expression(expr_id) else {
+            panic!()
+        };
         assert_eq!(op.op_kind, BinaryOpKind::Add);
-        assert!(matches!(*parser.get_expression(op.lhs), ParsedExpression::Variable(_)));
+        assert!(matches!(
+            *module.expressions.get_expression(op.lhs),
+            ParsedExpression::Variable(_)
+        ));
         if let ParsedExpression::BinaryOp(BinaryOp {
             op_kind: operation,
             lhs: operand1,
             rhs: operand2,
             ..
-        }) = &*parser.get_expression(op.rhs)
+        }) = &*module.expressions.get_expression(op.rhs)
         {
             assert_eq!(*operation, BinaryOpKind::Multiply);
-            assert!(matches!(*parser.get_expression(*operand1), ParsedExpression::Variable(_)));
-            assert!(matches!(*parser.get_expression(*operand2), ParsedExpression::FnCall(_)));
+            assert!(matches!(
+                *module.expressions.get_expression(*operand1),
+                ParsedExpression::Variable(_)
+            ));
+            assert!(matches!(
+                *module.expressions.get_expression(*operand2),
+                ParsedExpression::FnCall(_)
+            ));
         } else {
             panic!("Expected nested infix ops; got {:?}", result);
         }
@@ -112,15 +131,15 @@ fn parse_eof() -> Result<(), ParseError> {
 #[test]
 fn fn_args_literal() -> Result<(), ParseError> {
     let input = "f(myarg = 42,42,\"abc\")";
-    let (parser, result) = test_single_expr(input)?;
+    let (module, result) = test_single_expr(input)?;
     if let ParsedExpression::FnCall(fn_call) = result {
         let args = &fn_call.args;
-        let idents = parser.identifiers.clone();
+        let idents = module.identifiers.clone();
         assert_eq!(idents.borrow().get_name(fn_call.name), "f");
         assert_eq!(idents.borrow().get_name(args[0].name.unwrap()), "myarg");
-        assert!(ParsedExpression::is_literal(&parser.get_expression(args[0].value)));
-        assert!(ParsedExpression::is_literal(&parser.get_expression(args[1].value)));
-        assert!(ParsedExpression::is_literal(&parser.get_expression(args[2].value)));
+        assert!(ParsedExpression::is_literal(&module.expressions.get_expression(args[0].value)));
+        assert!(ParsedExpression::is_literal(&module.expressions.get_expression(args[1].value)));
+        assert!(ParsedExpression::is_literal(&module.expressions.get_expression(args[2].value)));
         assert_eq!(args.len(), 3);
     } else {
         panic!("fail");
@@ -144,37 +163,38 @@ fn dot_accessor() -> ParseResult<()> {
     let (pm, result) = test_single_expr(input)?;
     let ParsedExpression::FieldAccess(access_op) = result else { panic!() };
     assert_eq!(&*pm.get_ident_str(access_op.target), "c");
-    let ParsedExpression::FieldAccess(acc2) = &*pm.get_expression(access_op.base) else { panic!() };
+    let ParsedExpression::FieldAccess(acc2) = pm.expressions.get_expression(access_op.base) else {
+        panic!()
+    };
     assert_eq!(&*pm.get_ident_str(acc2.target), "b");
-    let ParsedExpression::Variable(v) = &*pm.get_expression(acc2.base) else { panic!() };
+    let ParsedExpression::Variable(v) = pm.expressions.get_expression(acc2.base) else { panic!() };
     assert_eq!(&*pm.get_ident_str(v.name), "a");
     Ok(())
 }
 
 #[test]
 fn type_parameter_single() -> ParseResult<()> {
-    let input = "Array<int>";
-    let mut module = make_test_module();
-    let mut parser = set_up(input, &mut module);
-    let result = parser.parse_type_expression();
-    assert!(matches!(result, Ok(Some(ParsedTypeExpression::TypeApplication(_)))));
+    let (mut _module, type_expr) = test_single_type_expr("Array<int>")?;
+    assert!(matches!(type_expr, ParsedTypeExpression::TypeApplication(_)));
     Ok(())
 }
 
 #[test]
 fn type_parameter_multi() -> ParseResult<()> {
-    let input = "Map<int, Array<int>>";
-    let mut module = make_test_module();
-    let mut parser = set_up(input, &mut module);
-    let result = parser.parse_type_expression();
-    let Ok(Some(ParsedTypeExpression::TypeApplication(app))) = result else {
+    let (module, type_expr) = test_single_type_expr("Map<int, Array<int>>")?;
+    let ParsedTypeExpression::TypeApplication(app) = type_expr else {
         panic!("Expected type application")
     };
     assert_eq!(app.params.len(), 2);
-    let ParsedTypeExpression::TypeApplication(inner_app) = &app.params[1] else {
+    let ParsedTypeExpression::TypeApplication(inner_app) =
+        module.type_expressions.get_expression(app.params[1])
+    else {
         panic!("Expected second param to be a type application");
     };
-    assert!(matches!(inner_app.params[0], ParsedTypeExpression::Int(_)));
+    assert!(matches!(
+        module.type_expressions.get_expression(inner_app.params[0]),
+        ParsedTypeExpression::Int(_)
+    ));
     Ok(())
 }
 
@@ -198,13 +218,14 @@ fn prelude_only() -> Result<(), ParseError> {
 #[test]
 fn precedence() -> Result<(), ParseError> {
     let input = "2 * 1 + 3";
-    let mut module = make_test_module();
-    let mut parser = set_up(input, &mut module);
-    let expr = parser.parse_expression()?.unwrap();
-    let result = parser.get_expression(expr).clone();
+    let (module, result) = test_single_expr(input)?;
     let ParsedExpression::BinaryOp(bin_op) = result else { panic!() };
-    let ParsedExpression::BinaryOp(lhs) = &*parser.get_expression(bin_op.lhs) else { panic!() };
-    let ParsedExpression::Literal(rhs) = &*parser.get_expression(bin_op.rhs) else { panic!() };
+    let ParsedExpression::BinaryOp(lhs) = module.expressions.get_expression(bin_op.lhs) else {
+        panic!()
+    };
+    let ParsedExpression::Literal(rhs) = module.expressions.get_expression(bin_op.rhs) else {
+        panic!()
+    };
     assert_eq!(bin_op.op_kind, BinaryOpKind::Add);
     assert_eq!(lhs.op_kind, BinaryOpKind::Multiply);
     assert!(matches!(rhs, Literal::Numeric(_, _)));
@@ -257,14 +278,17 @@ fn generic_method_call_lhs_expr() -> Result<(), ParseError> {
     let input = "getFn().baz<int>(42)";
     let (parser, result) = test_single_expr(input)?;
     let ParsedExpression::MethodCall(call) = result else { panic!() };
-    let ParsedExpression::FnCall(fn_call) = parser.get_expression(call.base).clone() else {
+    let ParsedExpression::FnCall(fn_call) = parser.expressions.get_expression(call.base).clone()
+    else {
         panic!()
     };
     assert_eq!(fn_call.name, parser.ident_id("getFn"));
     assert_eq!(call.call.name, parser.ident_id("baz"));
-    assert!(call.call.type_args.unwrap()[0].type_expr.is_int());
+    let type_arg =
+        parser.type_expressions.get_expression(call.call.type_args.unwrap()[0].type_expr);
+    assert!(type_arg.is_int());
     assert!(matches!(
-        &*parser.get_expression(call.call.args[0].value),
+        &*parser.expressions.get_expression(call.call.args[0].value),
         ParsedExpression::Literal(_)
     ));
     Ok(())
@@ -272,10 +296,7 @@ fn generic_method_call_lhs_expr() -> Result<(), ParseError> {
 
 #[test]
 fn char_type() -> ParseResult<()> {
-    let input = "char";
-    let mut module = make_test_module();
-    let mut parser = set_up(input, &mut module);
-    let result = parser.parse_type_expression()?.unwrap();
+    let (_module, result) = test_single_type_expr("char")?;
     assert!(matches!(result, ParsedTypeExpression::Char(_)));
     Ok(())
 }
@@ -321,7 +342,7 @@ fn type_hint() -> ParseResult<()> {
     let input = "None: int?";
     let (module, _expr, expr_id) = test_single_expr_with_id(input)?;
     let type_hint = module.get_expression_type_hint(expr_id).unwrap();
-    assert_eq!(module.type_expression_to_string(&type_hint), "int?");
+    assert_eq!(module.type_expression_to_string(type_hint), "int?");
     Ok(())
 }
 
@@ -330,7 +351,7 @@ fn type_hint_binop() -> ParseResult<()> {
     let input = "(3!: int + 4: Array<bool>): int";
     let (module, _expr, expr_id) = test_single_expr_with_id(input)?;
     let type_hint = module.get_expression_type_hint(expr_id).unwrap();
-    assert_eq!(module.type_expression_to_string(&type_hint), "int");
+    assert_eq!(module.type_expression_to_string(type_hint), "int");
     Ok(())
 }
 
@@ -340,6 +361,6 @@ fn tag_literals() -> ParseResult<()> {
     let (module, _expr, expr_id) = test_single_expr_with_id(input)?;
     let type_hint = module.get_expression_type_hint(expr_id).unwrap();
     assert_eq!(&module.expression_to_string(expr_id), ".Foo");
-    assert_eq!(module.type_expression_to_string(&type_hint), ".Foo");
+    assert_eq!(module.type_expression_to_string(type_hint), ".Foo");
     Ok(())
 }

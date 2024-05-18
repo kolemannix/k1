@@ -338,7 +338,6 @@ impl<'ctx> Codegen<'ctx> {
             .sources
             .iter()
             .map(|(file_id, source)| {
-                eprintln!("FILES ARE: {:?} {:?}", source.filename, source.directory);
                 (file_id, debug_builder.create_file(&source.filename, &source.directory))
             })
             .collect();
@@ -430,7 +429,7 @@ impl<'ctx> Codegen<'ctx> {
         );
         let mut tag_type_value: u64 = 0;
         let mut tag_type_mappings: HashMap<IdentifierId, GlobalValue<'ctx>> = HashMap::new();
-        for typ in module.types.iter() {
+        for (_type_id, typ) in module.types.iter() {
             if let Type::TagInstance(tag) = typ {
                 let value = builtin_types.tag_type.const_int(tag_type_value, false);
                 let name = module.ast.get_ident_str(tag.ident);
@@ -589,7 +588,7 @@ impl<'ctx> Codegen<'ctx> {
         let dw_ate_unsigned = 0x07;
         let _dw_ate_unsigned_char = 0x08;
 
-        match self.module.get_type(type_id) {
+        match self.module.types.get_type(type_id) {
             Type::Unit => self
                 .debug
                 .debug_builder
@@ -805,7 +804,7 @@ impl<'ctx> Codegen<'ctx> {
                     None => {
                         // Generate and store the type in here
                         let module = self.module.clone();
-                        let ty = module.get_type(type_id);
+                        let ty = module.types.get_type(type_id);
                         let generated: LlvmType = match ty {
                             Type::Optional(optional) => LlvmValueType {
                                 type_id,
@@ -937,7 +936,7 @@ impl<'ctx> Codegen<'ctx> {
     fn codegen_val(&mut self, val: &ValDef) -> PointerValue<'ctx> {
         let value = self.codegen_expr_rvalue(&val.initializer);
         let variable_type = self.codegen_type(val.ty);
-        let variable = self.module.get_variable(val.variable_id);
+        let variable = self.module.variables.get_variable(val.variable_id);
         let variable_ptr = self
             .builder
             .build_alloca(variable_type.value_type(), &self.get_ident_name(variable.name));
@@ -1236,7 +1235,7 @@ impl<'ctx> Codegen<'ctx> {
                 }
             }
             TypedExpr::Array(array) => {
-                let Type::Array(array_type) = self.module.get_type(array.type_id) else {
+                let Type::Array(array_type) = self.module.types.get_type(array.type_id) else {
                     panic!("expected array type for array");
                 };
                 let element_type = self.codegen_type(array_type.element_type).value_type();
@@ -1755,7 +1754,7 @@ impl<'ctx> Codegen<'ctx> {
             }
             IntrinsicFunctionType::ArrayNew => {
                 let array_type_id = function.ret_type;
-                let array_type = self.module.get_type(array_type_id);
+                let array_type = self.module.types.get_type(array_type_id);
                 let element_type = self.codegen_type(array_type.expect_array().element_type);
                 let len = self.get_loaded_variable(function.params[0].variable_id).into_int_value();
 
@@ -1807,7 +1806,7 @@ impl<'ctx> Codegen<'ctx> {
                 // self.build_print_string_call(self.const_string("growing array\n"));
                 let old_data = self.builtin_types.array_data(&self.builder, array);
                 let element_type_id =
-                    self.module.get_type(self_param.type_id).expect_array().element_type;
+                    self.module.types.get_type(self_param.type_id).expect_array().element_type;
                 let new_data_type = self.codegen_type(element_type_id);
                 let new_data = self
                     .builder
