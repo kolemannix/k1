@@ -2,12 +2,17 @@
 
 # Project Completion Checklist
 
+- [ ] QoL before rest of pattern matching
+  - [ ] Move spans into SoA on AST
+  - [ ] Use ast nodes on Typed\* instead of copies of spans
+  - [ ] Codegen fail instead of panic
 - [ ] Pattern Matching
   - [x] Single-arm match evals to boolean
   - [x] Literals
   - [x] Variables
   - [ ] Optional None
-  - [ ] Optional Some
+  - [x] Optional Some
+  - [ ] Exhaustiveness checking
   - [x] Records
   - [ ] Enums
   - [ ] Multi-case
@@ -16,21 +21,18 @@
   - [x] Construction/repr
   - [ ] First, hard cast to variant (`expect`)
   - [ ] Later, pattern match on variants
-- [ ] TypedIf allow exprs instead of requiring blocks
-- [ ] Allow if with no else for codegen?
-- [ ] Remove binding 'if' since we have pattern matching
+- [x] TypedIf allow exprs instead of requiring blocks (did not do; instead improved handling of unit blocks)
+- [x] Remove binding 'if' since we have pattern matching
 - [x] Abilities
   - [ ] Ability impl decl bugfix (ability impls need to be seen in the decl phase)
 - [ ] Ability derivation
   - [ ] I think you have to cache and commit the generated code, or you get the slow proc macros or slow implicit derivation problems that Scala has
 - [ ] Figure out the pointer/reference story, maybe use https://github.com/ivmai/bdwgc for GC
-- [ ] Make codegen fail instead of panic
 - [x] Type Ascriptions
 - [ ] Errors (a builtin sum type?)
 - [ ] Optional coalescing accessor (x?.y) and ??
 - [ ] Pure lambdas with ->
 - [ ] Full-on closures with =>
-- [ ] Replace spans on typed ast with just ast node ids (128 bits to 32 bits per span)
 - [ ] Make demo readme
 
 # Old todo list

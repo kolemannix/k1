@@ -363,7 +363,6 @@ impl TypedModule {
                 writ.write_str(" ")?;
                 self.display_block(&if_expr.consequent, writ, indentation)?;
                 if !if_expr.alternate.is_unit_block() {
-                    println!("{:?}", if_expr.alternate);
                     writ.write_str(" else ")?;
                     self.display_block(&if_expr.alternate, writ, indentation)?;
                 }
@@ -374,11 +373,9 @@ impl TypedModule {
                 self.display_expr(&unary_op.expr, writ, indentation)
             }
             TypedExpr::BinaryOp(binary_op) => {
-                writ.write_str("(")?;
                 self.display_expr(&binary_op.lhs, writ, indentation)?;
                 writ.write_fmt(format_args!(" {} ", binary_op.kind))?;
-                self.display_expr(&binary_op.rhs, writ, indentation)?;
-                writ.write_str(")")
+                self.display_expr(&binary_op.rhs, writ, indentation)
             }
             TypedExpr::OptionalSome(opt) => {
                 writ.write_str("Some(")?;
