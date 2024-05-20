@@ -3,6 +3,18 @@ extern fn _bfl_charToInt(c: char): int
 extern fn _bfl_intToChar(i: int): char
 extern fn _bfl_readFileToString(path: string): string
 
+ability Equals {
+  fn equals(self: Self, other: Self): bool
+}
+
+ability Show {
+  fn show(self: Self): string
+}
+
+ability Hash {
+  fn hash(self: Self): int
+}
+
 intern fn printInt(value: int): unit
 intern fn print(value: string): unit
 intern fn exit(code: int): unit
@@ -19,7 +31,7 @@ fn printBool(value: bool): unit {
 
 fn assert(value: bool): unit {
   if !value {
-    print("ASSERT FAILED");
+    println("ASSERT FAILED");
     exit(1)
   };
 }
@@ -41,21 +53,6 @@ namespace Array {
   intern fn capacity<T>(self: Array<T>): int
   intern fn grow<T>(self: Array<T>): unit
   intern fn set_length<T>(self: Array<T>, new_length: int): unit
-  fn equals<T>(self: Array<T>, other: Array<T>): bool {
-    if self.length() != other.length() {
-      false
-    } else {
-      mut i = 0;
-      mut ret = true;
-      while (ret and i < self.length()) {
-        if self[i] != other[i] {
-          ret = false;
-        };
-        i = i + 1;
-      };
-      ret
-    }
-  }
   fn push<T>(self: Array<T>, elem: T): unit {
     val start_length = self.length<T>();
     if start_length == self.capacity<T>() {
@@ -77,12 +74,51 @@ namespace Array {
       self[self.length() - 1]
     } else None
   }
-
 }
+
+impl Equals for Array<int> {
+  fn equals(self: Array<int>, other: Array<int>): bool {
+    if self.length() != other.length() {
+      false
+    } else {
+      mut i = 0;
+      mut ret = true;
+      while (ret and i < self.length()) {
+        if self[i] != other[i] {
+          ret = false;
+        };
+        i = i + 1;
+      };
+      ret
+    }
+  }
+}
+
+impl Equals for string {
+  intern fn equals(self: string, that: string): bool
+}
+
+impl Equals for Array<string> {
+  fn equals(self: Array<string>, other: Array<string>): bool {
+    if self.length() != other.length() {
+      false
+    } else {
+      mut i = 0;
+      mut ret = true;
+      while (ret and i < self.length()) {
+        if self[i] != other[i] {
+          ret = false;
+        };
+        i = i + 1;
+      };
+      ret
+    }
+  }
+}
+
 namespace string {
   intern fn fromChars(bytes: Array<char>): string
   intern fn length(self: string): int
-  intern fn equals(this: string, that: string): bool
   fn index_of(self: string, c: char): int {
     mut i = 0;
     mut ret = -1;

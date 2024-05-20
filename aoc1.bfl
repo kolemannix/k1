@@ -37,8 +37,8 @@ fn main(): int {
   };
   mut sum = 0;
   for digits do {
-    if it.first() |fst| {
-      if it.last() |lst| {
+    if it.first() is Some(fst) {
+      if it.last() is Some(lst) {
         val two_digit = fst * 10 + lst;
         sum = sum + two_digit;
       };

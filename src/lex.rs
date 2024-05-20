@@ -34,22 +34,30 @@ impl<'toks> TokenIter<'toks> {
     pub fn make(data: &'toks [Token]) -> TokenIter<'toks> {
         TokenIter { iter: data.iter() }
     }
+
+    #[inline]
     pub fn next(&mut self) -> Token {
         *self.iter.next().unwrap_or(&EOF_TOKEN)
     }
+    #[inline]
     pub fn advance(&mut self) {
         self.next();
     }
+    #[inline]
     pub fn peek(&self) -> Token {
         let peeked = self.iter.clone().next();
         *peeked.unwrap_or(&EOF_TOKEN)
     }
+
+    #[inline]
     pub fn peek_two(&self) -> (Token, Token) {
         let mut peek_iter = self.iter.clone();
         let p1 = *peek_iter.next().unwrap_or(&EOF_TOKEN);
         let p2 = *peek_iter.next().unwrap_or(&EOF_TOKEN);
         (p1, p2)
     }
+
+    #[inline]
     pub fn peek_three(&self) -> (Token, Token, Token) {
         let mut peek_iter = self.iter.clone();
         let p1 = *peek_iter.next().unwrap_or(&EOF_TOKEN);
@@ -84,6 +92,11 @@ pub enum TokenKind {
     KeywordIn,
     KeywordDo,
     KeywordYield,
+    KeywordEnum,
+    KeywordAbility,
+    KeywordImpl,
+    KeywordAuto,
+    KeywordIs,
 
     Slash,
     LineComment,
@@ -153,6 +166,11 @@ impl TokenKind {
             K::KeywordIn => Some("in"),
             K::KeywordDo => Some("do"),
             K::KeywordYield => Some("yield"),
+            K::KeywordEnum => Some("enum"),
+            K::KeywordAbility => Some("ability"),
+            K::KeywordImpl => Some("impl"),
+            K::KeywordAuto => Some("auto"),
+            K::KeywordIs => Some("is"),
 
             K::Slash => Some("/"),
             K::LineComment => Some("//"),
@@ -240,6 +258,11 @@ impl TokenKind {
             "in" => Some(K::KeywordIn),
             "do" => Some(K::KeywordDo),
             "yield" => Some(K::KeywordYield),
+            "enum" => Some(K::KeywordEnum),
+            "ability" => Some(K::KeywordAbility),
+            "impl" => Some(K::KeywordImpl),
+            "auto" => Some(K::KeywordAuto),
+            "is" => Some(K::KeywordIs),
             "==" => Some(K::EqualsEquals),
             "!=" => Some(K::BangEquals),
             "<=" => Some(K::LessThanEqual),
@@ -264,6 +287,11 @@ impl TokenKind {
             K::KeywordIn => true,
             K::KeywordDo => true,
             K::KeywordYield => true,
+            K::KeywordEnum => true,
+            K::KeywordAbility => true,
+            K::KeywordImpl => true,
+            K::KeywordAuto => true,
+            K::KeywordIs => true,
             _ => false,
         }
     }
@@ -310,6 +338,10 @@ pub struct Span {
 
 impl Span {
     pub const NONE: Span = Span { file_id: 0, start: 0, end: 0, line: 0 };
+
+    pub fn len(&self) -> u32 {
+        self.end - self.start
+    }
 
     pub fn line_number(&self) -> u32 {
         self.line + 1

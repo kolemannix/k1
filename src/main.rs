@@ -87,7 +87,7 @@ pub fn compile_module<'ctx>(
     let out_dir = out_dir.as_ref();
     let use_prelude = !args.no_prelude;
 
-    let mut module = ParsedModule::make(module_name.to_string());
+    let mut parsed_module = ParsedModule::make(module_name.to_string());
 
     let dir_entries = {
         let mut ents = fs::read_dir(src_dir)?
@@ -99,19 +99,19 @@ pub fn compile_module<'ctx>(
     };
     let mut parse_errors = Vec::new();
 
-    let mut parse_file = |p: &Path, file_id: u32| {
-        let content = fs::read_to_string(p)?;
-        let name = p.file_name().unwrap();
-        println!("Parsing {}", name.to_string_lossy());
+    let mut parse_file = |path: &Path, file_id: u32| {
+        let content = fs::read_to_string(path)?;
+        let name = path.file_name().unwrap();
+        eprintln!("Parsing {}", name.to_string_lossy());
         let source = Rc::new(Source::make(
             file_id,
-            module_name.to_string(),
+            path.canonicalize().unwrap().parent().unwrap().to_str().unwrap().to_string(),
             name.to_str().unwrap().to_string(),
             content,
         ));
 
         let token_vec = lex_text(&source.content, source.file_id)?;
-        let mut parser = parse::Parser::make(&token_vec, source.clone(), &mut module);
+        let mut parser = parse::Parser::make(&token_vec, source.clone(), &mut parsed_module);
 
         let result = parser.parse_module();
         if let Err(e) = result {
@@ -136,13 +136,15 @@ pub fn compile_module<'ctx>(
         anyhow::bail!("Parsing failed")
     }
 
-    let ast = Rc::new(module);
-
-    let mut typed_module = typer::TypedModule::new(ast);
-    typed_module.run()?;
+    let mut typed_module = typer::TypedModule::new(parsed_module);
+    if let Err(e) = typed_module.run() {
+        if args.dump_module {
+            println!("{}", typed_module);
+        }
+        return Err(e);
+    };
 
     let irgen = Rc::new(typed_module);
-    // println!("{irgen}");
     let llvm_optimize = !args.no_llvm_opt;
 
     let mut codegen: Codegen<'ctx> = Codegen::create(ctx, irgen, args.debug, llvm_optimize);
@@ -158,6 +160,7 @@ pub fn compile_module<'ctx>(
         f.write_all(llvm_text.as_bytes()).unwrap();
         // println!("{}", codegen.output_llvm_ir_text());
     }
+
     if args.dump_module {
         println!("{}", codegen.module);
     }
@@ -193,9 +196,8 @@ fn main() -> Result<()> {
     let args = Args::parse();
     println!("{:#?}", args);
 
-    static_assert_size!(parse::Definition, 16);
-    static_assert_size!(parse::BlockStmt, 80); // Get down below 100
-    static_assert_size!(parse::ParsedExpression, 96); // Get back down
+    static_assert_size!(parse::BlockStmt, 64); // Get down below 100 // We did it!
+    static_assert_size!(parse::ParsedExpression, 96); // Get back down ideally below 50
     static_assert_size!(typer::TypedExpr, 56);
     static_assert_size!(typer::TypedStmt, 16);
     println!("bfl Compiler v0.1.0");
