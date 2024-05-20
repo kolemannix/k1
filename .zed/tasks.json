@@ -1,0 +1,25 @@
+// Static tasks configuration.
+//
+// Example:
+[
+  {
+    "label": "Cargo Check",
+    "command": "cargo check",
+    // "cwd": "null",
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false,
+    "reveal": "always"
+  },
+  {
+    "label": "Cargo Test",
+    "command": "cargo test",
+    // "cwd": "null",
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false,
+    "reveal": "always"
+  },
+  {
+    "label": "Run file",
+    "command": "./run $ZED_FILE"
+  }
+]

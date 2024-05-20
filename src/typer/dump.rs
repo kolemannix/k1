@@ -1,0 +1,416 @@
+use std::fmt::{Display, Formatter, Write};
+
+use super::*;
+
+impl Display for TypedModule {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Module ")?;
+        f.write_str(&self.ast.name)?;
+        f.write_str("\n")?;
+        f.write_str("--- TYPES ---\n")?;
+        for (id, ty) in self.types.iter() {
+            f.write_fmt(format_args!("{} ", id))?;
+            self.display_type(ty, f)?;
+            f.write_str("\n")?;
+        }
+        f.write_str("--- Namespaces ---\n")?;
+        for (id, namespace) in self.namespaces.iter().enumerate() {
+            f.write_fmt(format_args!("{} ", id))?;
+            f.write_str(&self.get_ident_str(namespace.name))?;
+            f.write_str("\n")?;
+        }
+        f.write_str("--- Variables ---\n")?;
+        for (id, variable) in self.variables.iter() {
+            f.write_fmt(format_args!("{id:02} "))?;
+            self.display_variable(variable, f)?;
+            f.write_str("\n")?;
+        }
+        f.write_str("--- Functions ---\n")?;
+        for (id, func) in self.functions.iter().enumerate() {
+            f.write_fmt(format_args!("{id:02} "))?;
+            self.display_function(func, f, false)?;
+            f.write_str("\n")?;
+        }
+        f.write_str("--- Scopes ---\n")?;
+        for (_id, scope) in self.scopes.iter() {
+            self.display_scope(scope, f)?;
+            f.write_str("\n")?;
+        }
+        Ok(())
+    }
+}
+
+// Dumping
+impl TypedModule {
+    pub fn make_scope_name(&self, scope: &Scope) -> String {
+        let mut name = match scope.name {
+            Some(name) => (*self.get_ident_str(name)).to_string(),
+            None => scope.scope_type.short_name().to_string(),
+        };
+        if let Some(p) = scope.parent {
+            let parent_scope = self.scopes.get_scope(p);
+            name = format!("{}.{}", self.make_scope_name(parent_scope), name);
+        }
+        name
+    }
+
+    fn display_scope(&self, scope: &Scope, writ: &mut impl Write) -> std::fmt::Result {
+        let scope_name = self.make_scope_name(scope);
+        writ.write_fmt(format_args!("{}\n", scope_name))?;
+
+        for (id, variable_id) in scope.variables.iter() {
+            let variable = self.variables.get_variable(*variable_id);
+            writ.write_fmt(format_args!("\t{} ", id))?;
+            self.display_variable(variable, writ)?;
+            writ.write_str("\n")?;
+        }
+        for function_id in scope.functions.values() {
+            let function = self.get_function(*function_id);
+            writ.write_str("\t")?;
+            self.display_function(function, writ, false)?;
+            writ.write_str("\n")?;
+        }
+        if !scope.types.is_empty() {
+            writ.write_str("\tTYPES\n")?;
+        }
+        for (ident, type_id) in scope.types.iter() {
+            writ.write_str("\t")?;
+            writ.write_str(&self.get_ident_str(*ident))?;
+            writ.write_str(" := ")?;
+            self.display_type_id(*type_id, writ)?;
+            writ.write_str("\n")?;
+        }
+        for (id, namespace_id) in scope.namespaces.iter() {
+            writ.write_fmt(format_args!("{} ", id))?;
+            let namespace = self.get_namespace(*namespace_id);
+            writ.write_str(&self.get_ident_str(namespace.name))?;
+            writ.write_str("\n")?;
+        }
+        Ok(())
+    }
+
+    fn display_variable(&self, var: &Variable, writ: &mut impl Write) -> std::fmt::Result {
+        if var.is_mutable {
+            writ.write_str("mut ")?;
+        }
+        writ.write_str(&self.get_ident_str(var.name))?;
+        writ.write_str(": ")?;
+        self.display_type_id(var.type_id, writ)
+    }
+
+    fn display_type_id(&self, ty: TypeId, writ: &mut impl Write) -> std::fmt::Result {
+        match ty {
+            UNIT_TYPE_ID => writ.write_str("()"),
+            CHAR_TYPE_ID => writ.write_str("char"),
+            INT_TYPE_ID => writ.write_str("int"),
+            BOOL_TYPE_ID => writ.write_str("bool"),
+            STRING_TYPE_ID => writ.write_str("string"),
+            type_id => {
+                let ty = self.types.get_type(type_id);
+                self.display_type(ty, writ)
+            }
+        }
+    }
+
+    pub fn type_id_to_string(&self, type_id: TypeId) -> String {
+        let ty = self.types.get_type(type_id);
+        self.type_to_string(ty)
+    }
+
+    pub fn type_to_string(&self, ty: &Type) -> String {
+        let mut s = String::new();
+        self.display_type(ty, &mut s).unwrap();
+        s
+    }
+
+    fn display_type(&self, ty: &Type, writ: &mut impl Write) -> std::fmt::Result {
+        match ty {
+            Type::Unit => writ.write_str("()"),
+            Type::Char => writ.write_str("char"),
+            Type::Int => writ.write_str("int"),
+            Type::Bool => writ.write_str("bool"),
+            Type::String => writ.write_str("string"),
+            Type::Record(record) => {
+                writ.write_str("{")?;
+                for (index, field) in record.fields.iter().enumerate() {
+                    if index > 0 {
+                        writ.write_str(", ")?;
+                    }
+                    writ.write_str(self.ast.identifiers.borrow().get_name(field.name))?;
+                    writ.write_str(": ")?;
+                    self.display_type_id(field.type_id, writ)?;
+                }
+                writ.write_str("}")
+            }
+            Type::Array(array) => {
+                writ.write_str("Array<")?;
+                self.display_type_id(array.element_type, writ)?;
+                writ.write_str(">")
+            }
+            Type::TypeVariable(tv) => {
+                writ.write_str("$")?;
+                writ.write_str(self.ast.identifiers.borrow().get_name(tv.identifier_id))
+            }
+            Type::Optional(opt) => {
+                self.display_type_id(opt.inner_type, writ)?;
+                writ.write_char('?')
+            }
+            Type::Reference(r) => {
+                self.display_type_id(r.inner_type, writ)?;
+                writ.write_char('*')
+            }
+            Type::TagInstance(tag) => {
+                writ.write_str(".")?;
+                writ.write_str(self.ast.identifiers.borrow().get_name(tag.ident))
+            }
+            Type::Enum(e) => {
+                writ.write_str("enum ")?;
+                for (idx, v) in e.variants.iter().enumerate() {
+                    writ.write_str(self.ast.identifiers.borrow().get_name(v.tag_name))?;
+                    if let Some(payload) = &v.payload {
+                        writ.write_str("(")?;
+                        self.display_type_id(*payload, writ)?;
+                        writ.write_str(")")?;
+                    }
+                    let last = idx == e.variants.len() - 1;
+                    if !last {
+                        writ.write_str(", ")?;
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+
+    pub fn display_function(
+        &self,
+        function: &TypedFunction,
+        writ: &mut impl Write,
+        display_block: bool,
+    ) -> std::fmt::Result {
+        if function.linkage == Linkage::External {
+            writ.write_str("extern ")?;
+        }
+        if function.linkage == Linkage::Intrinsic {
+            writ.write_str("intern ")?;
+        }
+
+        writ.write_str("fn ")?;
+        writ.write_str(&self.get_ident_str(function.name))?;
+        writ.write_str("(")?;
+        for (idx, param) in function.params.iter().enumerate() {
+            if idx > 0 {
+                writ.write_str(", ")?;
+            }
+            writ.write_str(&self.get_ident_str(param.name))?;
+            writ.write_str(": ")?;
+            self.display_type_id(param.type_id, writ)?;
+        }
+        writ.write_str(")")?;
+        writ.write_str(": ")?;
+        self.display_type_id(function.ret_type, writ)?;
+        if display_block {
+            if let Some(block) = &function.block {
+                self.display_block(block, writ, 0)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn block_to_string(&self, block: &TypedBlock) -> String {
+        let mut s = String::new();
+        self.display_block(block, &mut s, 0).unwrap();
+        s
+    }
+
+    fn display_block(
+        &self,
+        block: &TypedBlock,
+        writ: &mut impl Write,
+        indentation: usize,
+    ) -> std::fmt::Result {
+        if block.statements.len() == 1 {
+            if let TypedStmt::Expr(expr) = &block.statements[0] {
+                return self.display_expr(expr, writ, indentation);
+            }
+        }
+        writ.write_str("{\n")?;
+        for (idx, stmt) in block.statements.iter().enumerate() {
+            self.display_stmt(stmt, writ, indentation + 1)?;
+            if idx < block.statements.len() - 1 {
+                writ.write_str(";")?;
+            }
+            writ.write_str("\n")?;
+        }
+        writ.write_str(&" ".repeat(indentation))?;
+        writ.write_str("}: ")?;
+        self.display_type_id(block.expr_type, writ)
+    }
+
+    fn display_stmt(
+        &self,
+        stmt: &TypedStmt,
+        writ: &mut impl Write,
+        indentation: usize,
+    ) -> std::fmt::Result {
+        writ.write_str(&" ".repeat(indentation))?;
+        match stmt {
+            TypedStmt::Expr(expr) => self.display_expr(expr, writ, indentation),
+            TypedStmt::ValDef(val_def) => {
+                writ.write_str("val ")?;
+                self.display_variable(self.variables.get_variable(val_def.variable_id), writ)?;
+                writ.write_str(" = ")?;
+                self.display_expr(&val_def.initializer, writ, indentation)
+            }
+            TypedStmt::Assignment(assignment) => {
+                self.display_expr(&assignment.destination, writ, 0)?;
+                writ.write_str(" = ")?;
+                self.display_expr(&assignment.value, writ, 0)
+            }
+            TypedStmt::WhileLoop(while_loop) => {
+                writ.write_str("while ")?;
+                self.display_expr(&while_loop.cond, writ, 0)?;
+                writ.write_str(" ")?;
+                self.display_block(&while_loop.block, writ, indentation + 1)
+            }
+        }
+    }
+
+    pub fn expr_to_string(&self, expr: &TypedExpr) -> String {
+        let mut s = String::new();
+        self.display_expr(expr, &mut s, 0).unwrap();
+        s
+    }
+
+    pub fn display_expr(
+        &self,
+        expr: &TypedExpr,
+        writ: &mut impl Write,
+        indentation: usize,
+    ) -> std::fmt::Result {
+        match expr {
+            TypedExpr::Unit(_) => writ.write_str("()"),
+            TypedExpr::Char(c, _) => writ.write_fmt(format_args!("'{}'", c)),
+            TypedExpr::Int(i, _) => writ.write_fmt(format_args!("{}", i)),
+            TypedExpr::Bool(b, _) => writ.write_fmt(format_args!("{}", b)),
+            TypedExpr::Str(s, _) => writ.write_fmt(format_args!("\"{}\"", s)),
+            TypedExpr::None(typ, _) => {
+                writ.write_str("None<")?;
+                self.display_type_id(*typ, writ)?;
+                writ.write_str(">")
+            }
+            TypedExpr::Array(array) => {
+                writ.write_str("[")?;
+                for (idx, expr) in array.elements.iter().enumerate() {
+                    if idx > 0 {
+                        writ.write_str(", ")?;
+                    }
+                    self.display_expr(expr, writ, indentation)?;
+                }
+                writ.write_str("]")
+            }
+            TypedExpr::Record(record) => {
+                writ.write_str("{")?;
+                for (idx, field) in record.fields.iter().enumerate() {
+                    if idx > 0 {
+                        writ.write_str(",\n")?;
+                        writ.write_str(&" ".repeat(indentation + 1))?;
+                    }
+                    writ.write_str(&self.get_ident_str(field.name))?;
+                    writ.write_str(": ")?;
+                    self.display_expr(&field.expr, writ, indentation)?;
+                }
+                writ.write_str(&" ".repeat(indentation))?;
+                writ.write_str("}")
+            }
+            TypedExpr::Variable(v) => {
+                let variable = self.variables.get_variable(v.variable_id);
+                writ.write_str(&self.get_ident_str(variable.name))
+            }
+            TypedExpr::RecordFieldAccess(field_access) => {
+                self.display_expr(&field_access.base, writ, indentation)?;
+                writ.write_str(".")?;
+                writ.write_str(&self.get_ident_str(field_access.target_field))
+            }
+            TypedExpr::ArrayIndex(array_index) => {
+                self.display_expr(&array_index.base_expr, writ, indentation)?;
+                writ.write_str("[")?;
+                self.display_expr(&array_index.index_expr, writ, indentation)?;
+                writ.write_str("]")
+            }
+            TypedExpr::StringIndex(string_index) => {
+                self.display_expr(&string_index.base_expr, writ, indentation)?;
+                writ.write_str("[")?;
+                self.display_expr(&string_index.index_expr, writ, indentation)?;
+                writ.write_str("]")
+            }
+            TypedExpr::FunctionCall(fn_call) => {
+                let function = self.get_function(fn_call.callee_function_id);
+                writ.write_str(&self.get_ident_str(function.name))?;
+                writ.write_str("(")?;
+                for (idx, arg) in fn_call.args.iter().enumerate() {
+                    if idx > 0 {
+                        writ.write_str(", ")?;
+                    }
+                    self.display_expr(arg, writ, indentation)?;
+                }
+                writ.write_str(")")
+            }
+            TypedExpr::Block(block) => self.display_block(block, writ, indentation),
+            TypedExpr::If(if_expr) => {
+                writ.write_str("if ")?;
+                self.display_expr(&if_expr.condition, writ, indentation)?;
+                writ.write_str(" ")?;
+                self.display_block(&if_expr.consequent, writ, indentation)?;
+                if !if_expr.alternate.is_unit_block() {
+                    writ.write_str(" else ")?;
+                    self.display_block(&if_expr.alternate, writ, indentation)?;
+                }
+                Ok(())
+            }
+            TypedExpr::UnaryOp(unary_op) => {
+                writ.write_fmt(format_args!("{}", unary_op.kind))?;
+                self.display_expr(&unary_op.expr, writ, indentation)
+            }
+            TypedExpr::BinaryOp(binary_op) => {
+                self.display_expr(&binary_op.lhs, writ, indentation)?;
+                writ.write_fmt(format_args!(" {} ", binary_op.kind))?;
+                self.display_expr(&binary_op.rhs, writ, indentation)
+            }
+            TypedExpr::OptionalSome(opt) => {
+                writ.write_str("Some(")?;
+                self.display_expr(&opt.inner_expr, writ, indentation)?;
+                writ.write_str(")")
+            }
+            TypedExpr::OptionalHasValue(opt) => {
+                self.display_expr(opt, writ, indentation)?;
+                writ.write_str(".hasValue()")
+            }
+            TypedExpr::OptionalGet(opt) => {
+                self.display_expr(&opt.inner_expr, writ, indentation)?;
+                writ.write_str("!")
+            }
+            TypedExpr::Tag(tag_expr) => {
+                writ.write_str(".")?;
+                writ.write_str(&self.get_ident_str(tag_expr.name))
+            }
+            TypedExpr::EnumConstructor(enum_constr) => {
+                writ.write_str(".")?;
+                writ.write_str(&self.get_ident_str(enum_constr.variant_name))?;
+                if let Some(payload) = &enum_constr.payload {
+                    writ.write_str("(")?;
+                    self.display_expr(payload, writ, indentation)?;
+                    writ.write_str(")")?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    pub fn function_id_to_string(&self, function_id: FunctionId, display_block: bool) -> String {
+        let func = self.get_function(function_id);
+        let mut s = String::new();
+        self.display_function(func, &mut s, display_block).unwrap();
+        s
+    }
+}

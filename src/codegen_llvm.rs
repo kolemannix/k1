@@ -26,7 +26,8 @@ use inkwell::{AddressSpace, IntPredicate, OptimizationLevel};
 use log::trace;
 
 use crate::lex::Span;
-use crate::parse::{ForExprType, IdentifierId};
+use crate::parse::{FileId, IdentifierId};
+use crate::typer::scopes::ScopeId;
 use crate::typer::{Linkage as TyperLinkage, *};
 
 const STRING_LENGTH_FIELD_INDEX: u32 = 0;
@@ -53,9 +54,17 @@ struct LlvmValueType<'ctx> {
     basic_type: BasicTypeEnum<'ctx>,
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
+struct LlvmEnumType<'ctx> {
+    type_id: TypeId,
+    base_struct_type: StructType<'ctx>,
+    variant_structs: Vec<StructType<'ctx>>,
+}
+
+#[derive(Debug, Clone)]
 enum LlvmType<'ctx> {
     Value(LlvmValueType<'ctx>),
+    EnumType(LlvmEnumType<'ctx>),
     Pointer(LlvmPointerType<'ctx>),
 }
 
@@ -71,11 +80,26 @@ impl<'ctx> From<LlvmPointerType<'ctx>> for LlvmType<'ctx> {
     }
 }
 
+impl<'ctx> From<LlvmEnumType<'ctx>> for LlvmType<'ctx> {
+    fn from(value: LlvmEnumType<'ctx>) -> Self {
+        LlvmType::EnumType(value)
+    }
+}
+
 impl<'ctx> LlvmType<'ctx> {
     pub fn expect_pointer(&self) -> LlvmPointerType<'ctx> {
         match self {
             LlvmType::Value(value) => panic!("expected pointer on value: {:?}", value),
             LlvmType::Pointer(pointer) => *pointer,
+            LlvmType::EnumType(_) => panic!("expected pointer on enum"),
+        }
+    }
+
+    pub fn expect_enum(&self) -> &LlvmEnumType<'ctx> {
+        match self {
+            LlvmType::Value(value) => panic!("expected enum on value: {:?}", value),
+            LlvmType::Pointer(_pointer) => panic!("expected enum on pointer"),
+            LlvmType::EnumType(e) => e,
         }
     }
 
@@ -84,6 +108,7 @@ impl<'ctx> LlvmType<'ctx> {
         match self {
             LlvmType::Value(value) => value.type_id,
             LlvmType::Pointer(pointer) => pointer.type_id,
+            LlvmType::EnumType(e) => e.type_id,
         }
     }
 
@@ -91,6 +116,7 @@ impl<'ctx> LlvmType<'ctx> {
         match self {
             LlvmType::Value(value) => value.basic_type,
             LlvmType::Pointer(pointer) => pointer.pointer_type,
+            LlvmType::EnumType(e) => e.base_struct_type.as_basic_type_enum(),
         }
     }
 }
@@ -106,6 +132,7 @@ struct BuiltinTypes<'ctx> {
     char: IntType<'ctx>,
     c_str: PointerType<'ctx>,
     string_struct: StructType<'ctx>,
+    tag_type: IntType<'ctx>,
 }
 
 impl<'ctx> BuiltinTypes<'ctx> {
@@ -187,10 +214,11 @@ pub struct Codegen<'ctx> {
     builtin_types: BuiltinTypes<'ctx>,
     default_address_space: AddressSpace,
     debug: DebugContext<'ctx>,
+    tag_type_mappings: HashMap<IdentifierId, GlobalValue<'ctx>>,
 }
 
 struct DebugContext<'ctx> {
-    file: DIFile<'ctx>,
+    files: HashMap<FileId, DIFile<'ctx>>,
     debug_builder: DebugInfoBuilder<'ctx>,
     #[allow(unused)]
     compile_unit: DICompileUnit<'ctx>,
@@ -201,14 +229,17 @@ struct DebugContext<'ctx> {
 }
 
 impl<'ctx> DebugContext<'ctx> {
-    fn push_scope(&mut self, scope: DIScope<'ctx>) {
-        self.debug_stack.push(DebugStackEntry { scope });
+    fn push_scope(&mut self, scope: DIScope<'ctx>, file: DIFile<'ctx>) {
+        self.debug_stack.push(DebugStackEntry { scope, file });
     }
     fn pop_scope(&mut self) {
         self.debug_stack.pop();
     }
     fn current_scope(&self) -> DIScope<'ctx> {
         self.debug_stack.last().unwrap().scope
+    }
+    fn current_file(&self) -> DIFile<'ctx> {
+        self.debug_stack.last().unwrap().file
     }
 }
 
@@ -230,6 +261,7 @@ type CodegenResult<T> = Result<T>;
 
 struct DebugStackEntry<'ctx> {
     scope: DIScope<'ctx>,
+    file: DIFile<'ctx>,
 }
 
 fn i8_array_from_str<'ctx>(ctx: &'ctx Context, value: &str) -> ArrayValue<'ctx> {
@@ -301,16 +333,24 @@ impl<'ctx> Codegen<'ctx> {
         llvm_module.add_global_metadata("llvm.module.flags", &md3).unwrap();
         llvm_module.add_global_metadata("llvm.module.flags", &md4).unwrap();
 
-        let di_file = compile_unit.get_file();
+        let di_files: HashMap<FileId, DIFile> = module
+            .ast
+            .sources
+            .iter()
+            .map(|(file_id, source)| {
+                (file_id, debug_builder.create_file(&source.filename, &source.directory))
+            })
+            .collect();
         let mut debug = DebugContext {
-            file: di_file,
+            files: di_files,
             debug_builder,
             compile_unit,
             debug_stack: Vec::new(),
             scopes: HashMap::new(),
             strip_debug: !debug,
         };
-        debug.push_scope(di_file.as_debug_info_scope());
+        // May need to restore this
+        debug.push_scope(compile_unit.as_debug_info_scope(), compile_unit.get_file());
         debug
     }
 
@@ -370,6 +410,7 @@ impl<'ctx> Codegen<'ctx> {
             char: char_type,
             c_str: char_type.ptr_type(AddressSpace::default()),
             string_struct,
+            tag_type: ctx.i64_type(),
         };
 
         let printf_type = ctx.i32_type().fn_type(&[builtin_types.c_str.into()], true);
@@ -386,6 +427,23 @@ impl<'ctx> Codegen<'ctx> {
                 .fn_type(&[byte_ptr.into(), byte_ptr.into(), ctx.i64_type().into()], false),
             Some(LlvmLinkage::External),
         );
+        let mut tag_type_value: u64 = 0;
+        let mut tag_type_mappings: HashMap<IdentifierId, GlobalValue<'ctx>> = HashMap::new();
+        for (_type_id, typ) in module.types.iter() {
+            if let Type::TagInstance(tag) = typ {
+                let value = builtin_types.tag_type.const_int(tag_type_value, false);
+                let name = module.ast.get_ident_str(tag.ident);
+                let global = llvm_module.add_global(
+                    builtin_types.tag_type,
+                    None,
+                    &format!("Tag.{}", &*name),
+                );
+                global.set_constant(true);
+                global.set_initializer(&value);
+                tag_type_mappings.insert(tag.ident, global);
+                tag_type_value += 1;
+            }
+        }
         Codegen {
             ctx,
             module,
@@ -401,6 +459,7 @@ impl<'ctx> Codegen<'ctx> {
             builtin_types,
             default_address_space: AddressSpace::default(),
             debug: debug_context,
+            tag_type_mappings,
         }
     }
 
@@ -467,6 +526,58 @@ impl<'ctx> Codegen<'ctx> {
         )
     }
 
+    fn get_size_of_type_in_bits(&self, type_id: TypeId) -> u64 {
+        self.get_debug_type(type_id).get_size_in_bits()
+    }
+
+    fn make_debug_struct_type(
+        &self,
+        name: &str,
+        span: Span,
+        field_types: &[(impl AsRef<str>, DIType<'ctx>)],
+    ) -> DIType<'ctx> {
+        let mut offset = 0;
+        let mut final_size = 0;
+        let fields = &field_types
+            .iter()
+            .map(|(field_name, member_type)| {
+                let t = self.debug.debug_builder.create_member_type(
+                    self.debug.current_scope(),
+                    field_name.as_ref(),
+                    self.debug.current_file(),
+                    span.line_number(),
+                    member_type.get_size_in_bits(),
+                    WORD_SIZE_BITS as u32,
+                    offset,
+                    0,
+                    *member_type,
+                );
+                // FIXME: for debug offset, what about padding
+                offset += member_type.get_size_in_bits();
+                final_size = offset + member_type.get_size_in_bits();
+                t.as_type()
+            })
+            .collect::<Vec<_>>();
+        self.debug
+            .debug_builder
+            .create_struct_type(
+                self.debug.current_scope(),
+                name,
+                self.debug.current_file(),
+                span.line_number(),
+                final_size,
+                WORD_SIZE_BITS as u32,
+                0,
+                None,
+                fields,
+                0,
+                None,
+                name,
+            )
+            .as_type()
+    }
+
+    // FIXME: cache these
     fn get_debug_type(&self, type_id: TypeId) -> DIType<'ctx> {
         let _dw_ate_address = 0x01;
         let dw_ate_boolean = 0x02;
@@ -474,10 +585,10 @@ impl<'ctx> Codegen<'ctx> {
         let _dw_ate_float = 0x04;
         let dw_ate_signed = 0x05;
         let dw_ate_char = 0x06;
-        let _dw_ate_unsigned = 0x07;
+        let dw_ate_unsigned = 0x07;
         let _dw_ate_unsigned_char = 0x08;
 
-        match self.module.get_type(type_id) {
+        match self.module.types.get_type(type_id) {
             Type::Unit => self
                 .debug
                 .debug_builder
@@ -487,7 +598,7 @@ impl<'ctx> Codegen<'ctx> {
             Type::Bool => self
                 .debug
                 .debug_builder
-                .create_basic_type("bool", 8, dw_ate_boolean, 0)
+                .create_basic_type("bool", 1, dw_ate_boolean, 0)
                 .unwrap()
                 .as_type(),
             Type::Char => self
@@ -512,218 +623,80 @@ impl<'ctx> Codegen<'ctx> {
                 )
                 .unwrap()
                 .as_type(),
-            Type::String => self
-                .debug
-                .debug_builder
-                .create_struct_type(
-                    self.debug.current_scope(),
+            Type::String => {
+                let data_ptr_type = self
+                    .debug
+                    .debug_builder
+                    .create_pointer_type(
+                        "string_data",
+                        self.get_debug_type(CHAR_TYPE_ID),
+                        WORD_SIZE_BITS,
+                        WORD_SIZE_BITS as u32,
+                        self.default_address_space,
+                    )
+                    .as_type();
+                self.make_debug_struct_type(
                     "string",
-                    self.debug.file,
-                    0,
-                    128,
-                    128,
-                    0,
-                    None,
-                    &[
-                        self.debug
-                            .debug_builder
-                            .create_member_type(
-                                self.debug.current_scope(),
-                                "string_length",
-                                self.debug.file,
-                                0,
-                                WORD_SIZE_BITS,
-                                WORD_SIZE_BITS as u32,
-                                0,
-                                0,
-                                self.get_debug_type(INT_TYPE_ID),
-                            )
-                            .as_type(),
-                        self.debug
-                            .debug_builder
-                            .create_member_type(
-                                self.debug.current_scope(),
-                                "string_data",
-                                self.debug.file,
-                                0,
-                                WORD_SIZE_BITS,
-                                WORD_SIZE_BITS as u32,
-                                WORD_SIZE_BITS,
-                                0,
-                                self.debug
-                                    .debug_builder
-                                    .create_pointer_type(
-                                        "string_data",
-                                        self.get_debug_type(CHAR_TYPE_ID),
-                                        WORD_SIZE_BITS,
-                                        WORD_SIZE_BITS as u32,
-                                        self.default_address_space,
-                                    )
-                                    .as_type(),
-                            )
-                            .as_type(),
-                    ],
-                    0,
-                    None,
-                    "string",
+                    Span::NONE,
+                    &[("length", self.get_debug_type(INT_TYPE_ID)), ("data", data_ptr_type)],
                 )
-                .as_type(),
+            }
             Type::Record(record) => {
                 // FIXME: We need to compute actual physical size at some point
                 //        Probably here in codegen? But maybe in typecheck?
                 //        What about a struct of our own, called CodegenedType or something,
                 //        that includes the LLVM type, the Debug type, and the size, and other stuff
                 //        we might want to know about a type
-                let size = 0;
                 let name = record
                     .name_if_named
                     .map(|ident| self.get_ident_name(ident).to_string())
                     .unwrap_or("<anon_record>".to_string());
-                let mut offset = 0;
-                self.debug
-                    .debug_builder
-                    .create_struct_type(
-                        self.debug.current_scope(),
-                        &name,
-                        self.debug.file,
-                        record.span.line_number(),
-                        size,
-                        size as u32,
-                        0,
-                        None,
-                        &record
-                            .fields
-                            .iter()
-                            .map(|f| {
-                                let member_type = self.get_debug_type(f.type_id);
-                                let t = self.debug.debug_builder.create_member_type(
-                                    self.debug.current_scope(),
-                                    &self.get_ident_name(f.name),
-                                    self.debug.file,
-                                    record.span.line_number(),
-                                    member_type.get_size_in_bits(),
-                                    WORD_SIZE_BITS as u32,
-                                    offset,
-                                    0,
-                                    member_type,
-                                );
-                                offset += member_type.get_size_in_bits();
-                                t.as_type()
-                            })
-                            .collect::<Vec<_>>(),
-                        0,
-                        None,
-                        &name,
-                    )
-                    .as_type()
+                let fields = record
+                    .fields
+                    .iter()
+                    .map(|f| {
+                        let member_type = self.get_debug_type(f.type_id);
+                        (self.get_ident_name(f.name).to_string(), member_type)
+                    })
+                    .collect::<Vec<_>>();
+                self.make_debug_struct_type(&name, record.span, &fields)
             }
             Type::TypeVariable(v) => {
-                println!("{}", self.module);
+                eprintln!("{}", self.module);
                 panic!("codegen was asked to make debug info for a type variable {:?}", v)
             }
             Type::Array(array) => {
                 let element_type = self.get_debug_type(array.element_type);
-                let array_struct_ditype = self
-                    .debug
-                    .debug_builder
-                    .create_struct_type(
-                        self.debug.current_scope(),
-                        &self.module.type_id_to_string(type_id),
-                        self.debug.file,
-                        0,
-                        WORD_SIZE_BITS * 3,
-                        WORD_SIZE_BITS as u32,
-                        0,
-                        None,
-                        &[
-                            self.debug
-                                .debug_builder
-                                .create_member_type(
-                                    self.debug.current_scope(),
-                                    "length",
-                                    self.debug.file,
-                                    0,
-                                    WORD_SIZE_BITS,
-                                    WORD_SIZE_BITS as u32,
-                                    0,
-                                    0,
-                                    self.get_debug_type(INT_TYPE_ID),
-                                )
-                                .as_type(),
-                            self.debug
-                                .debug_builder
-                                .create_member_type(
-                                    self.debug.current_scope(),
-                                    "capacity",
-                                    self.debug.file,
-                                    0,
-                                    WORD_SIZE_BITS,
-                                    WORD_SIZE_BITS as u32,
-                                    WORD_SIZE_BITS,
-                                    0,
-                                    self.get_debug_type(INT_TYPE_ID),
-                                )
-                                .as_type(),
-                            self.debug
-                                .debug_builder
-                                .create_member_type(
-                                    self.debug.current_scope(),
-                                    "data_ptr",
-                                    self.debug.file,
-                                    0,
-                                    WORD_SIZE_BITS,
-                                    WORD_SIZE_BITS as u32,
-                                    128,
-                                    0,
-                                    self.debug
-                                        .debug_builder
-                                        .create_pointer_type(
-                                            "array_data",
-                                            element_type,
-                                            WORD_SIZE_BITS,
-                                            WORD_SIZE_BITS as u32,
-                                            self.default_address_space,
-                                        )
-                                        .as_type(),
-                                )
-                                .as_type(),
-                        ],
-                        0,
-                        None,
-                        &self.module.type_id_to_string(type_id),
-                    )
-                    .as_type();
-                self.debug
-                    .debug_builder
-                    .create_pointer_type(
-                        &self.module.type_id_to_string(type_id),
-                        array_struct_ditype,
-                        WORD_SIZE_BITS,
-                        WORD_SIZE_BITS as u32,
-                        self.default_address_space,
-                    )
-                    .as_type()
+                let fields = &[
+                    ("length", self.get_debug_type(INT_TYPE_ID)),
+                    ("capacity", self.get_debug_type(INT_TYPE_ID)),
+                    (
+                        "data_ptr",
+                        self.debug
+                            .debug_builder
+                            .create_pointer_type(
+                                "array_data",
+                                element_type,
+                                WORD_SIZE_BITS,
+                                WORD_SIZE_BITS as u32,
+                                self.default_address_space,
+                            )
+                            .as_type(),
+                    ),
+                ];
+                self.make_debug_struct_type(
+                    &self.module.type_id_to_string(type_id),
+                    Span::NONE,
+                    fields,
+                )
             }
-            Type::Optional(_optional) => {
+            Type::Optional(optional) => {
                 let name = format!("optional_{}", self.module.type_id_to_string(type_id));
-                // TODO: We are punting on the debug type definition for optionals right now
-                self.debug
-                    .debug_builder
-                    .create_struct_type(
-                        self.debug.current_scope(),
-                        &name,
-                        self.debug.file,
-                        0,
-                        128,
-                        128,
-                        0,
-                        None,
-                        &[],
-                        0,
-                        None,
-                        &name,
-                    )
-                    .as_type()
+                let fields = &[
+                    ("discriminant", self.get_debug_type(BOOL_TYPE_ID)),
+                    ("payload", self.get_debug_type(optional.inner_type)),
+                ];
+                self.make_debug_struct_type(&name, Span::NONE, fields)
             }
             Type::Reference(reference_type) => {
                 let name = format!("{}*", self.module.type_id_to_string(type_id));
@@ -738,10 +711,61 @@ impl<'ctx> Codegen<'ctx> {
                     )
                     .as_type()
             }
+            Type::TagInstance(tag_instance) => {
+                let name = self.get_ident_name(tag_instance.ident);
+                self.debug
+                    .debug_builder
+                    .create_basic_type(
+                        &format!("Tag.{}", &*name),
+                        self.builtin_types.tag_type.get_bit_width() as u64,
+                        dw_ate_signed,
+                        0,
+                    )
+                    .unwrap()
+                    .as_type()
+            }
+            Type::Enum(_e) => {
+                let name = format!("enum_{}", self.module.type_id_to_string(type_id));
+                // TODO: We are punting on the debug type definition for enums right now
+                //       We handle the tag as a u64 but not the payload
+
+                self.debug
+                    .debug_builder
+                    .create_struct_type(
+                        self.debug.current_scope(),
+                        &name,
+                        self.debug.current_file(),
+                        0,
+                        64,
+                        64,
+                        0,
+                        None,
+                        &[self
+                            .debug
+                            .debug_builder
+                            .create_member_type(
+                                self.debug.current_scope(),
+                                "tag",
+                                self.debug.current_file(),
+                                0,
+                                WORD_SIZE_BITS,
+                                WORD_SIZE_BITS as u32,
+                                0,
+                                dw_ate_unsigned,
+                                self.get_debug_type(INT_TYPE_ID),
+                            )
+                            .as_type()],
+                        0,
+                        None,
+                        &name,
+                    )
+                    .as_type()
+            }
         }
     }
 
-    /// This needs to return pointee type if its a pointer, for convenience
+    // Now the we have EnumType which has stuf in it (a vec), LlvmType is not Copy
+    // And we should return a reference here instead of an owned one
     fn codegen_type(&self, type_id: TypeId) -> LlvmType<'ctx> {
         trace!("codegen for type {}", self.module.type_id_to_string(type_id));
         match type_id {
@@ -775,12 +799,12 @@ impl<'ctx> Codegen<'ctx> {
                 .into()
             }
             type_id => {
-                let result = self.llvm_types.borrow().get(&type_id).copied();
+                let result = self.llvm_types.borrow().get(&type_id).cloned();
                 match result {
                     None => {
                         // Generate and store the type in here
                         let module = self.module.clone();
-                        let ty = module.get_type(type_id);
+                        let ty = module.types.get_type(type_id);
                         let generated: LlvmType = match ty {
                             Type::Optional(optional) => LlvmValueType {
                                 type_id,
@@ -831,6 +855,68 @@ impl<'ctx> Codegen<'ctx> {
                                 }
                                 .into()
                             }
+                            Type::TagInstance(_tag_instance) => LlvmType::Value(LlvmValueType {
+                                type_id,
+                                basic_type: self.builtin_types.tag_type.as_basic_type_enum(),
+                            }),
+                            Type::Enum(enum_type) => {
+                                let mut payload_section_size = 0;
+                                let mut variant_types =
+                                    Vec::with_capacity(enum_type.variants.len());
+                                let discriminant_field = self.builtin_types.tag_type;
+                                for variant in enum_type.variants.iter() {
+                                    let variant_struct_type =
+                                        self.ctx.opaque_struct_type(&format!(
+                                            "{}_{}",
+                                            &*self.get_ident_name(variant.tag_name),
+                                            variant
+                                                .payload
+                                                .map(|p| p.to_string())
+                                                .unwrap_or("".to_string()),
+                                        ));
+                                    if let Some(payload_type_id) = variant.payload {
+                                        let variant_payload_type =
+                                            self.codegen_type(payload_type_id);
+                                        variant_struct_type.set_body(
+                                            &[
+                                                discriminant_field.as_basic_type_enum(),
+                                                variant_payload_type.value_type(),
+                                            ],
+                                            false,
+                                        );
+                                        let size = self.get_size_of_type_in_bits(payload_type_id);
+                                        if size > payload_section_size {
+                                            payload_section_size = size;
+                                        }
+                                    } else {
+                                        variant_struct_type.set_body(
+                                            &[discriminant_field.as_basic_type_enum()],
+                                            false,
+                                        );
+                                    };
+                                    variant_types.push(variant_struct_type);
+                                }
+                                // use max variant size
+                                let union_padding = self
+                                    .ctx
+                                    .custom_width_int_type(1)
+                                    .array_type(payload_section_size as u32);
+                                let discriminant_field = self.builtin_types.tag_type;
+                                let base_type = self.ctx.struct_type(
+                                    &[
+                                        discriminant_field.as_basic_type_enum(),
+                                        union_padding.as_basic_type_enum(),
+                                    ],
+                                    false,
+                                );
+
+                                LlvmEnumType {
+                                    type_id,
+                                    base_struct_type: base_type,
+                                    variant_structs: variant_types,
+                                }
+                                .into()
+                            }
                             other => {
                                 panic!(
                                     "get_llvm_type for type dropped through unexpectedly: {:?}",
@@ -838,7 +924,7 @@ impl<'ctx> Codegen<'ctx> {
                                 )
                             }
                         };
-                        self.llvm_types.borrow_mut().insert(type_id, generated);
+                        self.llvm_types.borrow_mut().insert(type_id, generated.clone());
                         generated
                     }
                     Some(basic_ty) => basic_ty,
@@ -850,7 +936,7 @@ impl<'ctx> Codegen<'ctx> {
     fn codegen_val(&mut self, val: &ValDef) -> PointerValue<'ctx> {
         let value = self.codegen_expr_rvalue(&val.initializer);
         let variable_type = self.codegen_type(val.ty);
-        let variable = self.module.get_variable(val.variable_id);
+        let variable = self.module.variables.get_variable(val.variable_id);
         let variable_ptr = self
             .builder
             .build_alloca(variable_type.value_type(), &self.get_ident_name(variable.name));
@@ -866,7 +952,7 @@ impl<'ctx> Codegen<'ctx> {
             Some(self.debug.debug_builder.create_auto_variable(
                 self.debug.current_scope(),
                 &self.get_ident_name(variable.name),
-                self.debug.file,
+                self.debug.current_file(),
                 val.span.line_number(),
                 self.get_debug_type(val.ty),
                 true,
@@ -1149,7 +1235,7 @@ impl<'ctx> Codegen<'ctx> {
                 }
             }
             TypedExpr::Array(array) => {
-                let Type::Array(array_type) = self.module.get_type(array.type_id) else {
+                let Type::Array(array_type) = self.module.types.get_type(array.type_id) else {
                     panic!("expected array type for array");
                 };
                 let element_type = self.codegen_type(array_type.element_type).value_type();
@@ -1327,18 +1413,48 @@ impl<'ctx> Codegen<'ctx> {
                     elem_value
                 }
             }
-            TypedExpr::For(typed_for_expr) => {
-                eprintln!(
-                    "codegen for expr: {}: {}",
-                    self.module.expr_to_string(expr),
-                    self.module.type_id_to_string(expr.get_type())
-                );
-                match typed_for_expr.for_expr_type {
-                    ForExprType::Yield => unimplemented!("codegen for yield"),
-                    ForExprType::Do => {
-                        unimplemented!("codegen for do");
-                    }
+            TypedExpr::Tag(tag_expr) => {
+                let int_value = self.get_value_for_tag_type(tag_expr.name);
+                int_value.as_basic_value_enum()
+            }
+            TypedExpr::EnumConstructor(enum_constr) => {
+                let llvm_type = self.codegen_type(enum_constr.type_id);
+                let enum_type = llvm_type.expect_enum();
+                let variant_tag_name = enum_constr.variant_name;
+
+                let llvm_variant = enum_type.variant_structs[enum_constr.variant_index as usize];
+
+                let enum_ptr = self.builder.build_alloca(llvm_variant, "enum_constr");
+
+                // Store the tag_value in the first slot
+                let tag_value = self.get_value_for_tag_type(variant_tag_name);
+                let tag_pointer = self
+                    .builder
+                    .build_struct_gep(
+                        llvm_variant,
+                        enum_ptr,
+                        0,
+                        &format!("enum_tag_{}", &*self.get_ident_name(variant_tag_name)),
+                    )
+                    .unwrap();
+                self.builder.build_store(tag_pointer, tag_value);
+
+                if let Some(payload) = &enum_constr.payload {
+                    let value = self.codegen_expr_rvalue(payload);
+                    let payload_pointer = self
+                        .builder
+                        .build_struct_gep(
+                            llvm_variant,
+                            enum_ptr,
+                            1,
+                            &format!("enum_payload_{}", &*self.get_ident_name(variant_tag_name)),
+                        )
+                        .unwrap();
+                    self.builder.build_store(payload_pointer, value);
                 }
+
+                let loaded_value = self.builder.build_load(llvm_variant, enum_ptr, "enum_value");
+                loaded_value
             }
         }
     }
@@ -1493,7 +1609,7 @@ impl<'ctx> Codegen<'ctx> {
     fn codegen_intrinsic(
         &mut self,
         intrinsic_type: IntrinsicFunctionType,
-        function: &Function,
+        function: &TypedFunction,
     ) -> BasicValueEnum<'ctx> {
         match intrinsic_type {
             IntrinsicFunctionType::Exit => {
@@ -1638,7 +1754,7 @@ impl<'ctx> Codegen<'ctx> {
             }
             IntrinsicFunctionType::ArrayNew => {
                 let array_type_id = function.ret_type;
-                let array_type = self.module.get_type(array_type_id);
+                let array_type = self.module.types.get_type(array_type_id);
                 let element_type = self.codegen_type(array_type.expect_array().element_type);
                 let len = self.get_loaded_variable(function.params[0].variable_id).into_int_value();
 
@@ -1690,7 +1806,7 @@ impl<'ctx> Codegen<'ctx> {
                 // self.build_print_string_call(self.const_string("growing array\n"));
                 let old_data = self.builtin_types.array_data(&self.builder, array);
                 let element_type_id =
-                    self.module.get_type(self_param.type_id).expect_array().element_type;
+                    self.module.types.get_type(self_param.type_id).expect_array().element_type;
                 let new_data_type = self.codegen_type(element_type_id);
                 let new_data = self
                     .builder
@@ -1841,24 +1957,25 @@ impl<'ctx> Codegen<'ctx> {
         last
     }
 
-    fn get_function_debug_info(&mut self, function: &Function) -> DISubprogram<'ctx> {
+    fn push_function_debug_info(&mut self, function: &TypedFunction) -> DISubprogram<'ctx> {
         let return_type = self.get_debug_type(function.ret_type);
         let dbg_param_types = &function
             .params
             .iter()
             .map(|fn_param| self.get_debug_type(fn_param.type_id))
             .collect::<Vec<_>>();
+        let function_file = self.debug.files.get(&function.span.file_id).unwrap();
         let dbg_fn_type = self.debug.debug_builder.create_subroutine_type(
-            self.debug.file,
+            *function_file,
             Some(return_type),
             dbg_param_types,
             0,
         );
-        self.debug.debug_builder.create_function(
+        let di_subprogram = self.debug.debug_builder.create_function(
             self.debug.current_scope(),
             &self.module.ast.get_ident_str(function.name),
             None,
-            self.debug.file,
+            *function_file,
             function.span.line_number(),
             dbg_fn_type,
             false,
@@ -1866,13 +1983,16 @@ impl<'ctx> Codegen<'ctx> {
             function.span.line_number(),
             0,
             false,
-        )
+        );
+
+        self.debug.push_scope(di_subprogram.as_debug_info_scope(), *function_file);
+        di_subprogram
     }
 
     fn codegen_function(
         &mut self,
         function_id: FunctionId,
-        function: &Function,
+        function: &TypedFunction,
     ) -> FunctionValue<'ctx> {
         trace!("codegen function\n{}", self.module.function_id_to_string(function_id, true));
 
@@ -1913,8 +2033,7 @@ impl<'ctx> Codegen<'ctx> {
             return fn_val;
         }
 
-        let di_subprogram = self.get_function_debug_info(function);
-        self.debug.push_scope(di_subprogram.as_debug_info_scope());
+        let di_subprogram = self.push_function_debug_info(function);
 
         let entry_block = self.ctx.append_basic_block(fn_val, "entry");
         self.builder.position_at_end(entry_block);
@@ -1936,7 +2055,7 @@ impl<'ctx> Codegen<'ctx> {
                 self.debug.current_scope(),
                 &param_name,
                 typed_param.position,
-                self.debug.file,
+                self.debug.current_file(),
                 function.span.line_number(),
                 arg_debug_type,
                 true,
@@ -2016,7 +2135,7 @@ impl<'ctx> Codegen<'ctx> {
             }
         }
         for (id, function) in self.module.clone().function_iter() {
-            if !function.is_generic() {
+            if function.should_codegen() {
                 self.codegen_function(id, function);
             }
         }
@@ -2108,5 +2227,11 @@ impl<'ctx> Codegen<'ctx> {
             unsafe { engine.run_function(self.llvm_module.get_last_function().unwrap(), &[]) };
         let res: u64 = return_value.as_int(true);
         Ok(res)
+    }
+
+    fn get_value_for_tag_type(&self, identifier_id: IdentifierId) -> IntValue<'ctx> {
+        let global = self.tag_type_mappings.get(&identifier_id).expect("tag type mapping value");
+        let ptr = global.as_pointer_value();
+        self.builder.build_load(self.builtin_types.tag_type, ptr, "tag_value").into_int_value()
     }
 }

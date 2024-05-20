@@ -1,0 +1,11 @@
+fn main(): int {
+  mut v: enum Yes, No = .No; // layout: u64
+   if v == .No {
+     print("No");
+   };
+  v = .Yes;
+  // if v == .Yes {
+  //   print("Yes");
+  // };
+  0
+}
