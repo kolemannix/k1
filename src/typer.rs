@@ -238,6 +238,12 @@ pub struct TypedRecordPattern {
     pub fields: Vec<TypedRecordPatternField>,
 }
 
+#[derive(Debug, Clone)]
+pub struct TypedSomePattern {
+    pub optional_type_id: TypeId,
+    pub inner_pattern: Box<TypedPattern>,
+}
+
 // <pattern> ::= <literal> | <variable> | <enum> | <record>
 // <literal> ::= "(" ")" | "\"" <ident> "\"" | [0-9]+ | "'" [a-z] "'" | "None"
 // <variable> ::= <ident>
@@ -252,6 +258,7 @@ pub enum TypedPattern {
     LiteralBool(bool),
     LiteralString(String),
     LiteralNone,
+    Some(TypedSomePattern),
     Variable(IdentifierId),
     Enum(TypedEnumPattern),
     Record(TypedRecordPattern),
@@ -279,6 +286,17 @@ impl TypedBlock {
     }
     fn push_expr(&mut self, expr: TypedExpr) {
         self.push_stmt(TypedStmt::Expr(Box::new(expr)))
+    }
+
+    pub fn is_unit_block(&self) -> bool {
+        if self.statements.len() == 1 {
+            if let TypedStmt::Expr(expr) = &self.statements[0] {
+                if let TypedExpr::Unit(_) = &**expr {
+                    return true;
+                }
+            }
+        }
+        false
     }
 }
 
@@ -1230,6 +1248,24 @@ impl TypedModule {
                 }
             }
             ParsedPattern::Variable(ident_id, _span) => Ok(TypedPattern::Variable(*ident_id)),
+            ParsedPattern::Some(some_pattern) => {
+                let Some(optional_type_id) = self.types.get_type(target_type_id).as_optional()
+                else {
+                    return make_fail(
+                        "Impossible pattern: Expected optional type",
+                        some_pattern.span,
+                    );
+                };
+                let inner_pattern = self.eval_pattern(
+                    some_pattern.inner_pattern,
+                    optional_type_id.inner_type,
+                    scope_id,
+                )?;
+                Ok(TypedPattern::Some(TypedSomePattern {
+                    inner_pattern: Box::new(inner_pattern),
+                    optional_type_id: target_type_id,
+                }))
+            }
             ParsedPattern::Enum(enum_pattern) => {
                 let Some(enum_type) = self.types.get_type(target_type_id).as_enum() else {
                     return make_fail("Impossible pattern: Expected enum type", enum_pattern.span);
@@ -1481,16 +1517,13 @@ impl TypedModule {
     // If the expr is already a block, do nothing
     // If it is not, make a new block with just this expression inside.
     // Used main for if/else
-    fn transform_expr_to_block(expr: TypedExpr, block_scope: ScopeId) -> TypedBlock {
+    fn coerce_expr_to_block(&mut self, expr: TypedExpr, expr_scope: ScopeId) -> TypedBlock {
         match expr {
             TypedExpr::Block(b) => b,
             expr => {
-                let ret_type = expr.get_type();
-                let span = expr.get_span();
                 let statement = TypedStmt::Expr(Box::new(expr));
                 let statements = vec![statement];
-
-                TypedBlock { expr_type: ret_type, scope_id: block_scope, statements, span }
+                self.synth_block(statements, expr_scope)
             }
         }
     }
@@ -1498,7 +1531,7 @@ impl TypedModule {
     fn coerce_block_to_unit_block(&mut self, block: &mut TypedBlock) {
         let span = block.statements.last().map(|s| s.get_span()).unwrap_or(block.span);
         let unit_literal = TypedExpr::unit_literal(span);
-        block.statements.push(TypedStmt::Expr(Box::new(unit_literal)));
+        block.push_expr(unit_literal);
         block.expr_type = UNIT_TYPE_ID;
     }
 
@@ -2220,7 +2253,7 @@ impl TypedModule {
             match_result_type,
             VecDeque::from(the_arms),
             match_block_scope_id,
-        );
+        )?;
         resulting_block.statements.extend(pre_stmts);
         resulting_block.push_stmt(TypedStmt::Expr(Box::new(if_chain)));
         eprintln!("match result\n{}", self.block_to_string(&resulting_block));
@@ -2229,30 +2262,44 @@ impl TypedModule {
     }
 
     fn chain_match_cases(
-        &self,
+        &mut self,
         match_result_type: TypeId,
         mut cases: VecDeque<(TypedExpr, TypedBlock)>,
         scope_id: ScopeId,
-    ) -> TypedExpr {
-        // nocommit what a mess with making blocks and shit. We need some sort of switch construct
-        // that doesn't involve nesting if/elses and all this boxing and crap
-        // Also why does TypedIf need to have blocks as its consequent/alternate? Could it be exprs?
-
+    ) -> TyperResult<TypedExpr> {
         if cases.is_empty() {
             // Use 'assert unreachable' instead of unit
-            TypedExpr::Unit(Span::NONE)
+            let false_expr = self.ast.expressions.add_expression(parse::ParsedExpression::Literal(
+                parse::Literal::Bool(false, Span::NONE),
+            ));
+            self.synth_function_call(
+                vec![],
+                self.ast.ident_id("assert"),
+                None,
+                vec![false_expr],
+                Span::NONE,
+                scope_id,
+            )
         } else {
             let (condition_expr, block) = cases.pop_front().unwrap();
-            let res = self.chain_match_cases(match_result_type, cases, scope_id);
-            let mut alternate = TypedModule::make_unit_block(scope_id, res.get_span());
-            alternate.statements = vec![TypedStmt::Expr(Box::new(res))];
-            TypedExpr::If(Box::new(TypedIf {
-                span: condition_expr.get_span(),
-                condition: condition_expr,
-                consequent: block,
-                alternate,
-                ty: match_result_type,
-            }))
+            // Optimize out 'if true' and 'if false'
+            if let TypedExpr::Bool(b, _) = condition_expr {
+                if b {
+                    Ok(TypedExpr::Block(block))
+                } else {
+                    self.chain_match_cases(match_result_type, cases, scope_id)
+                }
+            } else {
+                let res = self.chain_match_cases(match_result_type, cases, scope_id)?;
+                let alternate = self.coerce_expr_to_block(res, scope_id);
+                Ok(TypedExpr::If(Box::new(TypedIf {
+                    span: condition_expr.get_span(),
+                    condition: condition_expr,
+                    consequent: block,
+                    alternate,
+                    ty: match_result_type,
+                })))
+            }
         }
     }
 
@@ -2264,40 +2311,6 @@ impl TypedModule {
         expected_type_id: Option<TypeId>,
     ) -> TyperResult<Vec<(Vec<TypedStmt>, TypedExpr, TypedBlock)>> {
         let target_expr_type_id = self.variables.get_variable(target_expr_variable_id).type_id;
-
-        // What does this compile to? A series of ifs OR a switch (which we don't have yet). Ideally in the LLVM its a switch
-        // You jump based on the variant, then pattern match again?
-        // when my_enum is {
-        //   MyEnum::PointNone => { ... },
-        //   MyEnum::Point2d(p2d) => {
-        //     // desugared
-        //     if MyEnum.tag == MyEnum::Point2d {
-        //       myEnumCasted = MyEnum as MyEnum::Point2d;
-        // when p2d is { x: Some(x), y: Some(y)} {
-        //
-        // }
-        //       x = myEnumCasted.x;
-        //       y = myEnumCasted.y;
-        //       pattern match recursively
-        //       when x is Some(x) {
-        //         when y is Some(y) {
-        //           bind only x and y
-        //           exec user code block
-        //         }
-        //       }
-        //   } else < check next pattern >,
-        // }
-
-        // I think this is just gonna be a big ole synthesis loop over the patterns, failing
-        // when we see garbage, and spitting out a big ol' if-else chain. Pattern matching
-        // is really super simple sugar turns out. It makes sense that its really just collapsing
-        // a whole lot of conditionals down into a very expressive thing.
-
-        // Oh and we need to bind the variables
-        // And we need to check for exhaustiveness, which will be fun, should keep in mind but not do in 1st implementation
-
-        // Our repr is an if-else chain but we'd rather it be a switch one day. We'll build it later
-        // by walking the cases
 
         let mut typed_cases: Vec<(Vec<TypedStmt>, TypedExpr, TypedBlock)> = Vec::new();
 
@@ -2330,7 +2343,6 @@ impl TypedModule {
     /// 1) a series of statements to bind variables that are used by the condition
     /// TODO: These conditions should be in their own block; currently they pollute the match block
     /// 2) an expr that is expected to a boolean, representing the condition of the branch,
-    /// 3) a 'consequent block' which is the code we run if the condition is true.
     fn eval_match_arm(
         &mut self,
         pattern: &TypedPattern,
@@ -2349,10 +2361,9 @@ impl TypedModule {
         });
         match pattern {
             TypedPattern::Record(record_pattern) => {
-                let arm_scope_id = arm_block.scope_id;
                 let mut boolean_exprs: Vec<TypedExpr> =
                     Vec::with_capacity(record_pattern.fields.len());
-                let mut statements: Vec<TypedStmt> =
+                let mut condition_statements: Vec<TypedStmt> =
                     Vec::with_capacity(record_pattern.fields.len());
                 for pattern_field in record_pattern.fields.iter() {
                     let target_value = TypedExpr::RecordFieldAccess(FieldAccess {
@@ -2378,18 +2389,15 @@ impl TypedModule {
                             target_value,
                             false,
                         );
-                    statements.push(target_value_decl_stmt);
+                    condition_statements.push(target_value_decl_stmt);
 
-                    // let mut field_arm_cons_block = self.synth_block(vec![], arm_scope_id);
-                    // This will add a variable to the scope if needed!
-                    let (_condition_stmts, condition) = self.eval_match_arm(
+                    let (inner_condition_stmts, condition) = self.eval_match_arm(
                         &pattern_field.field_pattern,
                         target_value_variable_id,
                         arm_block,
-                        arm_scope_id,
+                        arm_block.scope_id,
                     )?;
-                    // Needed for nested record patterns
-                    // arm_block.push_statements(field_arm_cons_block.statements);
+                    condition_statements.extend(inner_condition_stmts);
 
                     boolean_exprs.push(condition);
                 }
@@ -2405,7 +2413,47 @@ impl TypedModule {
                         })
                     })
                     .unwrap();
-                Ok((statements, final_condition))
+                Ok((condition_statements, final_condition))
+            }
+            TypedPattern::Some(some_pattern) => {
+                let contained_type =
+                    self.types.get_type(some_pattern.optional_type_id).expect_optional().inner_type;
+                let inner_value = TypedExpr::OptionalGet(OptionalGet {
+                    inner_expr: Box::new(target_expr_variable_expr.clone()),
+                    result_type_id: contained_type,
+                    span: default_span,
+                });
+                let (optional_value_variable_id, binding_stmt, _typed_expr) = self
+                    .synth_variable_decl(
+                        Variable {
+                            name: self.ast.ident_id("optional_get"),
+                            owner_scope: arm_block.scope_id,
+                            type_id: contained_type,
+                            is_mutable: false,
+                        },
+                        default_span,
+                        inner_value,
+                        false,
+                    );
+                let (inner_condition_stmts, inner_condition) = self.eval_match_arm(
+                    &some_pattern.inner_pattern,
+                    optional_value_variable_id,
+                    arm_block,
+                    arm_block.scope_id,
+                )?;
+                //arm_block.statements.extend(condition_stmts);
+                let mut condition_statements = vec![binding_stmt];
+                condition_statements.extend(inner_condition_stmts);
+                let has_value_expr =
+                    TypedExpr::OptionalHasValue(Box::new(target_expr_variable_expr.clone()));
+                let final_condition = TypedExpr::BinaryOp(BinaryOp {
+                    kind: BinaryOpKind::And,
+                    ty: BOOL_TYPE_ID,
+                    lhs: Box::new(has_value_expr),
+                    rhs: Box::new(inner_condition),
+                    span: default_span,
+                });
+                Ok((condition_statements, final_condition))
             }
             TypedPattern::Enum(_enum_pattern) => {
                 todo!("Enum pattern matching")
@@ -3028,66 +3076,21 @@ impl TypedModule {
             // eprintln!("desugared if to match {}", self.ast.expression_to_string(match_expr_id));
             return self.eval_match_expr(match_expr_id, scope_id, expected_type);
         }
+        //
+        // End of match desugar case
 
-        let mut condition = self.eval_expr(if_expr.cond, scope_id, None)?;
+        let condition = self.eval_expr(if_expr.cond, scope_id, None)?;
 
-        // TODO: Delete 'binding if' because we have (if x is <pattern>) now
-        let consequent_scope_id = self.scopes.add_child_scope(scope_id, ScopeType::IfBody, None);
-        let mut consequent = if if_expr.optional_ident.is_some() {
-            let condition_optional_type = match self.types.get_type(condition.get_type()) {
-                Type::Optional(opt) => opt,
-                _other => {
-                    return make_fail(
-                        "Condition type for if with binding must be an optional",
-                        condition.get_span(),
-                    );
-                }
-            };
-            let inner_type = condition_optional_type.inner_type;
-            let (binding, binding_span) = if_expr.optional_ident.expect("We already checked this");
-            // Make a variable with the identifier binding from the expr
-            // That is the non-optional type of the condition's type
-            let narrowed_variable = Variable {
-                name: binding,
-                type_id: inner_type,
-                is_mutable: false,
-                // This should be the scope of the consequent expr
-                owner_scope: scope_id,
-            };
-            let narrowed_variable_id = self.variables.add_variable(narrowed_variable);
-            let consequent_scope = self.scopes.get_scope_mut(consequent_scope_id);
-            consequent_scope.add_variable(binding, narrowed_variable_id);
-            let original_condition = condition.clone();
-            condition = TypedExpr::OptionalHasValue(Box::new(condition));
-            let consequent_expr =
-                self.eval_expr(if_expr.cons, consequent_scope_id, expected_type)?;
-            let mut consequent =
-                TypedModule::transform_expr_to_block(consequent_expr, consequent_scope_id);
-            consequent.statements.insert(
-                0,
-                TypedStmt::ValDef(Box::new(ValDef {
-                    variable_id: narrowed_variable_id,
-                    ty: inner_type,
-                    initializer: TypedExpr::OptionalGet(OptionalGet {
-                        inner_expr: Box::new(original_condition),
-                        result_type_id: inner_type,
-                        span: binding_span,
-                    }),
-                    span: binding_span,
-                })),
-            );
-            consequent
-        } else {
+        let mut consequent = {
             // If there is no binding, the condition must be a boolean
             if let Err(msg) = self.typecheck_types(BOOL_TYPE_ID, condition.get_type(), scope_id) {
                 return make_fail(
-                    format!("Invalid if condition type: {}. If you intended to use a binding optional if, you must supply a binding using |<ident>|", msg),
+                    format!("Invalid if condition type: {}.", msg),
                     condition.get_span(),
                 );
             }
-            let consequent_expr =
-                self.eval_expr(if_expr.cons, consequent_scope_id, expected_type)?;
-            TypedModule::transform_expr_to_block(consequent_expr, consequent_scope_id)
+            let consequent_expr = self.eval_expr(if_expr.cons, scope_id, expected_type)?;
+            self.coerce_expr_to_block(consequent_expr, scope_id)
         };
         let consequent_type = consequent.expr_type;
         // De-sugar if without else:
@@ -3096,12 +3099,11 @@ impl TypedModule {
         if if_expr.alt.is_none() {
             self.coerce_block_to_unit_block(&mut consequent);
         };
-        let alternate_scope = self.scopes.add_child_scope(scope_id, ScopeType::ElseBody, None);
         let alternate = if let Some(alt) = if_expr.alt {
-            let expr = self.eval_expr(alt, alternate_scope, Some(consequent_type))?;
-            TypedModule::transform_expr_to_block(expr, alternate_scope)
+            let expr = self.eval_expr(alt, scope_id, Some(consequent_type))?;
+            self.coerce_expr_to_block(expr, scope_id)
         } else {
-            TypedModule::make_unit_block(alternate_scope, if_expr.span)
+            self.make_unit_block(scope_id, if_expr.span)
         };
         if let Err(msg) = self.typecheck_types(consequent.expr_type, alternate.expr_type, scope_id)
         {
@@ -3120,13 +3122,15 @@ impl TypedModule {
         })))
     }
 
-    fn make_unit_block(scope_id: ScopeId, span: Span) -> TypedBlock {
-        TypedBlock {
-            expr_type: UNIT_TYPE_ID,
-            scope_id,
-            statements: vec![TypedStmt::Expr(Box::new(TypedExpr::unit_literal(span)))],
-            span,
-        }
+    fn synth_unit_expr(&self, span: Span) -> TypedExpr {
+        TypedExpr::unit_literal(span)
+    }
+
+    fn make_unit_block(&mut self, scope_id: ScopeId, span: Span) -> TypedBlock {
+        let unit_expr = self.synth_unit_expr(span);
+        let mut b = self.synth_block(vec![], scope_id);
+        b.push_expr(unit_expr);
+        b
     }
 
     fn get_namespace_scope_for_ident(

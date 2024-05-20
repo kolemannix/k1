@@ -43,5 +43,17 @@ fn main(): int {
     assert(y == "asdf");
   };
 
+  // Record pattern where inner has condition statements
+  val bar = { x: Some(1) };
+  if bar is { x: Some(x) } {
+    assert(x == 1);
+  };
+
+  // Optionals
+  val opt = Some({ x: 1 });
+  if opt is Some({ x: 2 }) {
+    ()
+  } else assert(true);
+
   0
 }

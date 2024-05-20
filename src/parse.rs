@@ -388,6 +388,12 @@ pub struct ParsedEnumPattern {
     pub span: Span,
 }
 
+#[derive(Debug, Clone)]
+pub struct ParsedSomePattern {
+    pub inner_pattern: ParsedPatternId,
+    pub span: Span,
+}
+
 // https://bnfplayground.pauliankline.com/?bnf=%3Cpattern%3E%20%3A%3A%3D%20%3Cliteral%3E%20%7C%20%3Cvariable%3E%20%7C%20%3Cenum%3E%20%7C%20%3Crecord%3E%0A%3Cliteral%3E%20%3A%3A%3D%20%22(%22%20%22)%22%20%7C%20%22%5C%22%22%20%3Cident%3E%20%22%5C%22%22%20%7C%20%5B0-9%5D%2B%20%7C%20%22%27%22%20%5Ba-z%5D%20%22%27%22%20%7C%20%22None%22%0A%3Cvariable%3E%20%3A%3A%3D%20%3Cident%3E%0A%3Cident%3E%20%3A%3A%3D%20%5Ba-z%5D*%0A%3Cenum%3E%20%3A%3A%3D%20%22.%22%20%3Cident%3E%20(%20%22(%22%20%3Cpattern%3E%20%22)%22%20)%3F%0A%3Crecord%3E%20%3A%3A%3D%20%22%7B%22%20(%20%3Cident%3E%20%22%3A%20%22%20%3Cpattern%3E%20%22%2C%22%3F%20)*%20%22%7D%22%20&name=
 // <pattern> ::= <literal> | <variable> | <enum> | <record>
 // <literal> ::= "(" ")" | "\"" <ident> "\"" | [0-9]+ | "'" [a-z] "'" | "None"
@@ -402,6 +408,7 @@ pub enum ParsedPattern {
     Record(ParsedRecordPattern),
     Enum(ParsedEnumPattern),
     Wildcard(Span),
+    Some(ParsedSomePattern),
     // Tag(TagExpr),
     // Array(ArrayExpr),
 }
@@ -418,7 +425,6 @@ pub struct Assignment {
 #[derive(Debug, Clone)]
 pub struct IfExpr {
     pub cond: ParsedExpressionId,
-    pub optional_ident: Option<(IdentifierId, Span)>,
     pub cons: ParsedExpressionId,
     pub alt: Option<ParsedExpressionId>,
     pub span: Span,
@@ -791,6 +797,7 @@ impl ParsedModule {
             ParsedPattern::Variable(_var_pattern, span) => *span,
             ParsedPattern::Record(record_pattern) => record_pattern.span,
             ParsedPattern::Wildcard(span) => *span,
+            ParsedPattern::Some(some_pattern) => some_pattern.span,
         }
     }
 
@@ -1008,9 +1015,19 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             // Variable
             let ident_token = self.expect_eat_token(K::Ident)?;
             let ident = self.intern_ident_token(ident_token);
-            if ident == self.ident_id("_") {
+            if &*self.module.get_ident_str(ident) == "_" {
                 let pattern_id =
                     self.module.patterns.add_pattern(ParsedPattern::Wildcard(ident_token.span));
+                Ok(pattern_id)
+            } else if &*self.module.get_ident_str(ident) == "Some" {
+                self.expect_eat_token(K::OpenParen)?;
+                let inner_pattern = self.expect_pattern()?;
+                let close = self.expect_eat_token(K::CloseParen)?;
+                let span = first.span.extended(close.span);
+                let pattern_id = self
+                    .module
+                    .patterns
+                    .add_pattern(ParsedPattern::Some(ParsedSomePattern { inner_pattern, span }));
                 Ok(pattern_id)
             } else {
                 let pattern_id = self
@@ -1977,14 +1994,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let Some(if_keyword) = self.eat_token(TokenKind::KeywordIf) else { return Ok(None) };
         let condition_expr =
             Parser::expect("conditional expression", if_keyword, self.parse_expression())?;
-        let optional_ident = if self.peek().kind == K::Pipe {
-            self.tokens.advance();
-            let ident = self.expect_eat_token(K::Ident)?;
-            self.expect_eat_token(K::Pipe)?;
-            Some((self.intern_ident_token(ident), ident.span))
-        } else {
-            None
-        };
         let consequent_expr =
             Parser::expect("block following condition", if_keyword, self.parse_expression())?;
         let else_peek = self.peek();
@@ -2000,8 +2009,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             .map(|a| self.get_expression(*a).get_span())
             .unwrap_or(self.get_expression(consequent_expr).get_span());
         let span = if_keyword.span.extended(end_span);
-        let if_expr =
-            IfExpr { cond: condition_expr, optional_ident, cons: consequent_expr, alt, span };
+        let if_expr = IfExpr { cond: condition_expr, cons: consequent_expr, alt, span };
         Ok(Some(if_expr))
     }
 

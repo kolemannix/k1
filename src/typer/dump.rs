@@ -229,6 +229,11 @@ impl TypedModule {
         writ: &mut impl Write,
         indentation: usize,
     ) -> std::fmt::Result {
+        if block.statements.len() == 1 {
+            if let TypedStmt::Expr(expr) = &block.statements[0] {
+                return self.display_expr(expr, writ, indentation);
+            }
+        }
         writ.write_str("{\n")?;
         for (idx, stmt) in block.statements.iter().enumerate() {
             self.display_stmt(stmt, writ, indentation + 1)?;
@@ -357,8 +362,11 @@ impl TypedModule {
                 self.display_expr(&if_expr.condition, writ, indentation)?;
                 writ.write_str(" ")?;
                 self.display_block(&if_expr.consequent, writ, indentation)?;
-                writ.write_str(" else ")?;
-                self.display_block(&if_expr.alternate, writ, indentation)?;
+                if !if_expr.alternate.is_unit_block() {
+                    println!("{:?}", if_expr.alternate);
+                    writ.write_str(" else ")?;
+                    self.display_block(&if_expr.alternate, writ, indentation)?;
+                }
                 Ok(())
             }
             TypedExpr::UnaryOp(unary_op) => {
@@ -366,9 +374,11 @@ impl TypedModule {
                 self.display_expr(&unary_op.expr, writ, indentation)
             }
             TypedExpr::BinaryOp(binary_op) => {
+                writ.write_str("(")?;
                 self.display_expr(&binary_op.lhs, writ, indentation)?;
                 writ.write_fmt(format_args!(" {} ", binary_op.kind))?;
-                self.display_expr(&binary_op.rhs, writ, indentation)
+                self.display_expr(&binary_op.rhs, writ, indentation)?;
+                writ.write_str(")")
             }
             TypedExpr::OptionalSome(opt) => {
                 writ.write_str("Some(")?;
