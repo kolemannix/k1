@@ -3,12 +3,12 @@
 # Project Completion Checklist
 
 - [ ] Pattern Matching
-  - [ ] Single-arm match evals to boolean
-  - [ ] Literals
-  - [ ] Variables
+  - [x] Single-arm match evals to boolean
+  - [x] Literals
+  - [x] Variables
   - [ ] Optional None
-  - [ ] Optional Bind
-  - [ ] Records
+  - [ ] Optional Some
+  - [x] Records
   - [ ] Enums
   - [ ] Multi-case
 - [ ] Sum types (enums / tagged unions)
@@ -16,11 +16,14 @@
   - [x] Construction/repr
   - [ ] First, hard cast to variant (`expect`)
   - [ ] Later, pattern match on variants
+- [ ] TypedIf allow exprs instead of requiring blocks
+- [ ] Allow if with no else for codegen?
+- [ ] Remove binding 'if' since we have pattern matching
 - [x] Abilities
-  - [ ] Ability impl decl bugfix
+  - [ ] Ability impl decl bugfix (ability impls need to be seen in the decl phase)
 - [ ] Ability derivation
   - [ ] I think you have to cache and commit the generated code, or you get the slow proc macros or slow implicit derivation problems that Scala has
-- [ ] Make 'reference' heap-allocate and use https://github.com/ivmai/bdwgc for GC
+- [ ] Figure out the pointer/reference story, maybe use https://github.com/ivmai/bdwgc for GC
 - [ ] Make codegen fail instead of panic
 - [x] Type Ascriptions
 - [ ] Errors (a builtin sum type?)

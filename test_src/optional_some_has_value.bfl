@@ -1,6 +1,6 @@
 fn main(): int {
   val b = true: bool?;
-  if b |x| {
+  if b is Some(x) {
     assert(x);
   };
   assert(b.hasValue());
