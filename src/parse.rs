@@ -282,7 +282,7 @@ pub struct ParsedIsExpression {
 }
 
 #[derive(Debug, Clone)]
-pub struct MatchCase {
+pub struct ParsedMatchCase {
     pub pattern: ParsedPatternId,
     pub expression: ParsedExpressionId,
 }
@@ -290,7 +290,7 @@ pub struct MatchCase {
 #[derive(Debug, Clone)]
 pub struct ParsedMatchExpression {
     pub target_expression: ParsedExpressionId,
-    pub cases: Vec<MatchCase>,
+    pub cases: Vec<ParsedMatchCase>,
     pub span: Span,
 }
 
@@ -1744,9 +1744,39 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     /// Base expression meaning no postfix or binary ops
     fn parse_base_expression(&mut self) -> ParseResult<Option<ParsedExpressionId>> {
         let (first, second, third) = self.tokens.peek_three();
-        trace!("parse_expression {} {}", first.kind, second.kind);
+        trace!("parse_base_expression {} {} {}", first.kind, second.kind, third.kind);
         if let Some(literal_id) = self.parse_literal()? {
             Ok(Some(literal_id))
+        } else if first.kind == K::KeywordWhen {
+            let when_keyword = self.tokens.next();
+            let target_expression = self.expect_expression()?;
+
+            self.expect_eat_token(K::OpenBrace)?;
+
+            let mut cases = Vec::new();
+            while self.peek().kind != K::CloseBrace {
+                let arm_pattern_id = self.expect_pattern()?;
+
+                self.expect_eat_token(K::Minus)?;
+                self.expect_eat_token(K::CloseAngle)?;
+
+                let arm_expr_id = self.expect_expression()?;
+                cases.push(ParsedMatchCase { pattern: arm_pattern_id, expression: arm_expr_id });
+                let next = self.peek();
+                if next.kind == K::Comma {
+                    self.tokens.advance();
+                } else if next.kind != K::CloseBrace {
+                    return Err(ParseError {
+                        expected: "comma or close brace".to_string(),
+                        token: next,
+                        cause: None,
+                    });
+                }
+            }
+            let close = self.expect_eat_token(K::CloseBrace)?;
+            let span = when_keyword.span.extended(close.span);
+            let match_expr = ParsedMatchExpression { target_expression, cases, span };
+            Ok(Some(self.add_expression(ParsedExpression::Match(match_expr))))
         } else if first.kind == K::OpenParen {
             self.tokens.advance();
             let expr = self.expect_expression()?;
@@ -2401,7 +2431,7 @@ impl ParsedModule {
                 f.write_str("when ")?;
                 self.display_expression_id(match_expr.target_expression, f)?;
                 f.write_str(" is {")?;
-                for MatchCase { pattern, expression } in match_expr.cases.iter() {
+                for ParsedMatchCase { pattern, expression } in match_expr.cases.iter() {
                     f.write_str(" | ")?;
                     self.display_pattern_expression_id(*pattern, f)?;
                     f.write_str(" => ")?;

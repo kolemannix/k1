@@ -2229,12 +2229,16 @@ impl TypedModule {
                 let false_expression = self.ast.expressions.add_expression(
                     parse::ParsedExpression::Literal(parse::Literal::Bool(false, is_expr.span)),
                 );
-                let true_case =
-                    parse::MatchCase { pattern: is_expr.pattern, expression: true_expression };
+                let true_case = parse::ParsedMatchCase {
+                    pattern: is_expr.pattern,
+                    expression: true_expression,
+                };
                 let wildcard_pattern =
                     self.ast.patterns.add_pattern(parse::ParsedPattern::Wildcard(is_expr.span));
-                let false_case =
-                    parse::MatchCase { pattern: wildcard_pattern, expression: false_expression };
+                let false_case = parse::ParsedMatchCase {
+                    pattern: wildcard_pattern,
+                    expression: false_expression,
+                };
                 let as_match_expr = parse::ParsedMatchExpression {
                     target_expression: is_expr.target_expression,
                     cases: vec![true_case, false_case],
@@ -2373,7 +2377,7 @@ impl TypedModule {
     fn eval_match_arms(
         &mut self,
         target_expr: VariableExpr,
-        cases: &[parse::MatchCase],
+        cases: &[parse::ParsedMatchCase],
         match_scope_id: ScopeId,
         expected_type_id: Option<TypeId>,
     ) -> TyperResult<Vec<(Vec<TypedStmt>, TypedExpr, TypedBlock)>> {
@@ -2484,8 +2488,8 @@ impl TypedModule {
                     result_type_id: contained_type,
                     span: some_pattern.span,
                 });
-                let (optional_value_variable_id, binding_stmt, optional_value_variable_expr) = self
-                    .synth_variable_decl(
+                let (_optional_value_variable_id, binding_stmt, optional_value_variable_expr) =
+                    self.synth_variable_decl(
                         Variable {
                             name: self.ast.ident_id("optional_get"),
                             owner_scope: arm_block.scope_id,
@@ -3131,8 +3135,8 @@ impl TypedModule {
             let wildcard_pattern_id =
                 self.ast.patterns.add_pattern(parse::ParsedPattern::Wildcard(if_expr.span));
             let cases = vec![
-                parse::MatchCase { pattern: cond_pattern_id, expression: if_expr.cons },
-                parse::MatchCase { pattern: wildcard_pattern_id, expression: alternate_expr },
+                parse::ParsedMatchCase { pattern: cond_pattern_id, expression: if_expr.cons },
+                parse::ParsedMatchCase { pattern: wildcard_pattern_id, expression: alternate_expr },
             ];
             let match_expr = parse::ParsedMatchExpression {
                 target_expression: cond_expr_id,

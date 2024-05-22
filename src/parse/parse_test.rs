@@ -14,6 +14,7 @@ fn set_up<'module>(input: &str, module: &'module mut ParsedModule) -> Parser<'st
     ));
     let mut lexer = Lexer::make(&source.content, 0);
     let token_vec: &'static mut [Token] = lexer.run().unwrap().leak();
+    println!("{:#?}", token_vec);
     let parser = Parser::make(token_vec, source, module);
     parser
 }
@@ -362,5 +363,19 @@ fn tag_literals() -> ParseResult<()> {
     let type_hint = module.get_expression_type_hint(expr_id).unwrap();
     assert_eq!(&module.expression_to_string(expr_id), ".Foo");
     assert_eq!(module.type_expression_to_string(type_hint), ".Foo");
+    Ok(())
+}
+
+#[test]
+fn when_pattern() -> ParseResult<()> {
+    let input = r#"
+        when x {
+           { x: 1, y: 2 } -> 1,
+           { x: 2, y: 2 } -> { 2 },
+           _ -> { 3 },
+        };
+"#;
+    let (module, _expr, expr_id) = test_single_expr_with_id(input)?;
+    println!("{}", &module.expression_to_string(expr_id));
     Ok(())
 }
