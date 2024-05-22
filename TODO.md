@@ -3,9 +3,10 @@
 # Project Completion Checklist
 
 - [ ] QoL before rest of pattern matching
-  - [ ] Move spans into SoA on AST
   - [ ] Use ast nodes on Typed\* instead of copies of spans
+  - [ ] Move spans into SoA on AST
   - [ ] Codegen fail instead of panic
+  - [ ] Rename record to struct
 - [ ] Pattern Matching
   - [x] Single-arm match evals to boolean
   - [x] Literals
@@ -16,11 +17,12 @@
   - [x] Records
   - [ ] Enums
   - [ ] Multi-case
-- [ ] Sum types (enums / tagged unions)
+- [ ] Enums types (enums / tagged unions)
   - [x] Syntax
   - [x] Construction/repr
   - [ ] First, hard cast to variant (`expect`)
   - [ ] Later, pattern match on variants
+  - [ ] Built-in .as<Tag> and .is<Tag> functionality!!
 - [x] TypedIf allow exprs instead of requiring blocks (did not do; instead improved handling of unit blocks)
 - [x] Remove binding 'if' since we have pattern matching
 - [x] Abilities

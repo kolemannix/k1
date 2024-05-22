@@ -11,15 +11,22 @@ use crate::lex::*;
 use crate::typer::{BinaryOpKind, Linkage, UnaryOpKind};
 use TokenKind as K;
 
-pub type ParsedTypeDefnId = u32;
-pub type ParsedFunctionId = u32;
-pub type ParsedConstantId = u32;
-pub type ParsedAbilityId = u32;
-pub type ParsedAbilityImplId = u32;
-pub type ParsedNamespaceId = u32;
-pub type ParsedExpressionId = u32;
-pub type ParsedTypeExpressionId = u32;
-
+#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
+pub struct ParsedTypeDefnId(u32);
+#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
+pub struct ParsedFunctionId(u32);
+#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
+pub struct ParsedConstantId(u32);
+#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
+pub struct ParsedAbilityId(u32);
+#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
+pub struct ParsedAbilityImplId(u32);
+#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
+pub struct ParsedNamespaceId(u32);
+#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
+pub struct ParsedExpressionId(u32);
+#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
+pub struct ParsedTypeExpressionId(u32);
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
 pub struct ParsedPatternId(u32);
 
@@ -28,14 +35,45 @@ pub type FileId = u32;
 #[cfg(test)]
 mod parse_test;
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub enum ParsedDefinitionId {
+#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
+pub enum ParsedId {
     Function(ParsedFunctionId),
     TypeDefn(ParsedTypeDefnId),
     Namespace(ParsedNamespaceId),
     Ability(ParsedAbilityId),
     AbilityImpl(ParsedAbilityImplId),
     Constant(ParsedConstantId),
+    Expression(ParsedExpressionId),
+    TypeExpression(ParsedTypeExpressionId),
+    Pattern(ParsedPatternId),
+}
+
+impl From<ParsedTypeExpressionId> for ParsedId {
+    fn from(id: ParsedTypeExpressionId) -> Self {
+        ParsedId::TypeExpression(id)
+    }
+}
+
+impl From<ParsedExpressionId> for ParsedId {
+    fn from(id: ParsedExpressionId) -> Self {
+        ParsedId::Expression(id)
+    }
+}
+
+impl ParsedId {
+    pub fn is_definition(&self) -> bool {
+        match self {
+            ParsedId::Function(_) => true,
+            ParsedId::TypeDefn(_) => true,
+            ParsedId::Ability(_) => true,
+            ParsedId::AbilityImpl(_) => true,
+            ParsedId::Constant(_) => true,
+            ParsedId::Namespace(_) => true,
+            ParsedId::Expression(_) => false,
+            ParsedId::TypeExpression(_) => false,
+            ParsedId::Pattern(_) => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -619,8 +657,9 @@ pub struct ParsedAbilityImplementation {
 #[derive(Debug, Clone)]
 pub struct ParsedNamespace {
     pub name: IdentifierId,
-    pub definitions: Vec<ParsedDefinitionId>,
+    pub definitions: Vec<ParsedId>,
     pub id: ParsedNamespaceId,
+    pub span: Span,
 }
 
 #[derive(Debug, Default)]
@@ -640,10 +679,10 @@ impl ParsedExpressionPool {
     pub fn add_expression(&mut self, expression: ParsedExpression) -> ParsedExpressionId {
         let id = self.expressions.len();
         self.expressions.push(expression);
-        id as ParsedExpressionId
+        ParsedExpressionId(id as u32)
     }
     pub fn get_expression(&self, id: ParsedExpressionId) -> &ParsedExpression {
-        &self.expressions[id as usize]
+        &self.expressions[id.0 as usize]
     }
 }
 
@@ -655,10 +694,10 @@ impl ParsedTypeExpressionPool {
     pub fn add_expression(&mut self, expression: ParsedTypeExpression) -> ParsedTypeExpressionId {
         let id = self.type_expressions.len();
         self.type_expressions.push(expression);
-        id as ParsedExpressionId
+        ParsedTypeExpressionId(id as u32)
     }
     pub fn get_expression(&self, id: ParsedTypeExpressionId) -> &ParsedTypeExpression {
-        &self.type_expressions[id as usize]
+        &self.type_expressions[id.0 as usize]
     }
 }
 
@@ -763,26 +802,27 @@ impl ParsedModule {
     }
 
     pub fn get_function(&self, id: ParsedFunctionId) -> &ParsedFunction {
-        &self.functions[id as usize]
+        &self.functions[id.0 as usize]
     }
 
     pub fn add_function(&mut self, mut function: ParsedFunction) -> ParsedFunctionId {
-        let id = self.functions.len() as ParsedFunctionId;
+        let id = self.functions.len();
+        let id = ParsedFunctionId(id as u32);
         function.id = id;
         self.functions.push(function);
         id
     }
 
     pub fn get_namespace(&self, id: ParsedNamespaceId) -> &ParsedNamespace {
-        &self.namespaces[id as usize]
+        &self.namespaces[id.0 as usize]
     }
 
     pub fn get_namespace_mut(&mut self, id: ParsedNamespaceId) -> &mut ParsedNamespace {
-        &mut self.namespaces[id as usize]
+        &mut self.namespaces[id.0 as usize]
     }
 
     pub fn add_namespace(&mut self, mut namespace: ParsedNamespace) -> ParsedNamespaceId {
-        let id = self.namespaces.len() as ParsedNamespaceId;
+        let id = ParsedNamespaceId(self.namespaces.len() as u32);
         namespace.id = id;
         self.namespaces.push(namespace);
         id
@@ -802,47 +842,47 @@ impl ParsedModule {
     }
 
     pub fn get_constant(&self, id: ParsedConstantId) -> &ParsedConstant {
-        &self.constants[id as usize]
+        &self.constants[id.0 as usize]
     }
 
     pub fn add_constant(&mut self, mut constant: ParsedConstant) -> ParsedConstantId {
-        let id = self.constants.len() as ParsedConstantId;
+        let id = ParsedConstantId(self.constants.len() as u32);
         constant.id = id;
         self.constants.push(constant);
         id
     }
 
     pub fn get_ability(&self, id: ParsedAbilityId) -> &ParsedAbility {
-        &self.abilities[id as usize]
+        &self.abilities[id.0 as usize]
     }
 
     pub fn add_ability(&mut self, mut ability: ParsedAbility) -> ParsedAbilityId {
-        let id = self.abilities.len() as ParsedAbilityId;
+        let id = ParsedAbilityId(self.abilities.len() as u32);
         ability.id = id;
         self.abilities.push(ability);
         id
     }
 
     pub fn get_ability_impl(&self, id: ParsedAbilityImplId) -> &ParsedAbilityImplementation {
-        &self.ability_impls[id as usize]
+        &self.ability_impls[id.0 as usize]
     }
 
     pub fn add_ability_impl(
         &mut self,
         mut ability_impl: ParsedAbilityImplementation,
     ) -> ParsedAbilityImplId {
-        let id = self.ability_impls.len() as ParsedAbilityImplId;
+        let id = ParsedAbilityImplId(self.ability_impls.len() as u32);
         ability_impl.id = id;
         self.ability_impls.push(ability_impl);
         id
     }
 
     pub fn get_type_defn(&self, id: ParsedTypeDefnId) -> &ParsedTypeDefn {
-        &self.type_defns[id as usize]
+        &self.type_defns[id.0 as usize]
     }
 
     pub fn add_typedefn(&mut self, mut type_defn: ParsedTypeDefn) -> ParsedTypeDefnId {
-        let id = self.type_defns.len() as ParsedTypeDefnId;
+        let id = ParsedTypeDefnId(self.type_defns.len() as u32);
         type_defn.id = id;
         self.type_defns.push(type_defn);
         id
@@ -861,6 +901,27 @@ impl ParsedModule {
 
     pub fn get_type_expression_span(&self, type_expression_id: ParsedTypeExpressionId) -> Span {
         self.type_expressions.get_expression(type_expression_id).get_span()
+    }
+
+    pub fn get_span_for_maybe_id(&self, parsed_id: Option<ParsedId>) -> Span {
+        match parsed_id {
+            Some(parsed_id) => self.get_span_for_id(parsed_id),
+            None => Span::NONE,
+        }
+    }
+
+    pub fn get_span_for_id(&self, parsed_id: ParsedId) -> Span {
+        match parsed_id {
+            ParsedId::Function(id) => self.get_function(id).span,
+            ParsedId::Namespace(id) => self.get_namespace(id).span,
+            ParsedId::Constant(id) => self.get_constant(id).span,
+            ParsedId::Ability(id) => self.get_ability(id).span,
+            ParsedId::AbilityImpl(id) => self.get_ability_impl(id).span,
+            ParsedId::TypeDefn(id) => self.get_type_defn(id).span,
+            ParsedId::Expression(id) => self.expressions.get_expression(id).get_span(),
+            ParsedId::TypeExpression(id) => self.get_type_expression_span(id),
+            ParsedId::Pattern(id) => self.get_pattern_span(id),
+        }
     }
 }
 
@@ -1910,8 +1971,13 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let value_expr = Parser::expect("expression", self.peek(), self.parse_expression())?;
         let span = keyword_val_token.span.extended(self.get_expression(value_expr).get_span());
         let name = self.intern_ident_token(name_token);
-        let constant_id =
-            self.module.add_constant(ParsedConstant { name, ty: typ, value_expr, span, id: 0 });
+        let constant_id = self.module.add_constant(ParsedConstant {
+            name,
+            ty: typ,
+            value_expr,
+            span,
+            id: ParsedConstantId(0),
+        });
         Ok(Some(constant_id))
     }
 
@@ -2121,7 +2187,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             block,
             span,
             linkage,
-            id: 0,
+            id: ParsedFunctionId(0),
         });
         Ok(Some(function_id))
     }
@@ -2144,7 +2210,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             name: name_identifier,
             functions,
             span,
-            id: 0,
+            id: ParsedAbilityId(0),
         });
         Ok(Some(ability_id))
     }
@@ -2181,7 +2247,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             ability_name: ability_name_ident,
             target_type,
             functions,
-            id: 0,
+            id: ParsedAbilityImplId(0),
             auto,
             span,
         });
@@ -2198,14 +2264,18 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let type_expr = Parser::expect("Type expression", equals, self.parse_type_expression())?;
         let span = keyword_type.span.extended(self.module.get_type_expression_span(type_expr));
         let name = self.intern_ident_token(name);
-        let type_defn_id =
-            self.module.add_typedefn(ParsedTypeDefn { name, value_expr: type_expr, span, id: 0 });
+        let type_defn_id = self.module.add_typedefn(ParsedTypeDefn {
+            name,
+            value_expr: type_expr,
+            span,
+            id: ParsedTypeDefnId(0),
+        });
         Ok(Some(type_defn_id))
     }
 
     fn parse_namespace(&mut self) -> ParseResult<Option<ParsedNamespaceId>> {
-        let next = self.peek();
-        if next.kind != K::KeywordNamespace {
+        let keyword = self.peek();
+        if keyword.kind != K::KeywordNamespace {
             return Ok(None);
         };
         self.tokens.advance();
@@ -2215,26 +2285,32 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         while let Some(def) = self.parse_definition()? {
             definitions.push(def);
         }
-        self.expect_eat_token(K::CloseBrace)?;
+        let close = self.expect_eat_token(K::CloseBrace)?;
         let name = self.intern_ident_token(ident);
-        let namespace_id = self.module.add_namespace(ParsedNamespace { name, definitions, id: 0 });
+        let span = keyword.span.extended(close.span);
+        let namespace_id = self.module.add_namespace(ParsedNamespace {
+            name,
+            definitions,
+            id: ParsedNamespaceId(0),
+            span,
+        });
         Ok(Some(namespace_id))
     }
 
-    fn parse_definition(&mut self) -> ParseResult<Option<ParsedDefinitionId>> {
+    fn parse_definition(&mut self) -> ParseResult<Option<ParsedId>> {
         if let Some(ns) = self.parse_namespace()? {
-            Ok(Some(ParsedDefinitionId::Namespace(ns)))
+            Ok(Some(ParsedId::Namespace(ns)))
         } else if let Some(constant_id) = self.parse_const()? {
             self.expect_eat_token(K::Semicolon)?;
-            Ok(Some(ParsedDefinitionId::Constant(constant_id)))
+            Ok(Some(ParsedId::Constant(constant_id)))
         } else if let Some(function_id) = self.parse_function()? {
-            Ok(Some(ParsedDefinitionId::Function(function_id)))
+            Ok(Some(ParsedId::Function(function_id)))
         } else if let Some(type_defn_id) = self.parse_typedef()? {
-            Ok(Some(ParsedDefinitionId::TypeDefn(type_defn_id)))
+            Ok(Some(ParsedId::TypeDefn(type_defn_id)))
         } else if let Some(ability_id) = self.parse_ability_defn()? {
-            Ok(Some(ParsedDefinitionId::Ability(ability_id)))
+            Ok(Some(ParsedId::Ability(ability_id)))
         } else if let Some(ability_impl_id) = self.parse_ability_impl()? {
-            Ok(Some(ParsedDefinitionId::AbilityImpl(ability_impl_id)))
+            Ok(Some(ParsedId::AbilityImpl(ability_impl_id)))
         } else {
             Ok(None)
         }
@@ -2245,13 +2321,14 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             self.module.add_namespace(ParsedNamespace {
                 name: self.ident_id("_root"),
                 definitions: Vec::new(),
-                id: 0,
+                id: ParsedNamespaceId(0),
+                span: self.peek().span,
             })
         } else {
             self.module.get_root_namespace().id
         };
 
-        let mut new_definitions: Vec<ParsedDefinitionId> = vec![];
+        let mut new_definitions: Vec<ParsedId> = vec![];
         while let Some(def) = self.parse_definition()? {
             new_definitions.push(def)
         }

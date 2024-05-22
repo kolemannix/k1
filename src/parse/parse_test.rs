@@ -58,7 +58,7 @@ fn basic_fn() -> Result<(), ParseError> {
         src.to_string(),
     ));
     let module = parse_module(source)?;
-    let fndef = module.get_function(0);
+    let fndef = module.functions.first().unwrap();
     assert_eq!(fndef.name, module.ident_id("basic"));
     Ok(())
 }

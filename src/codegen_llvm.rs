@@ -641,12 +641,11 @@ impl<'ctx> Codegen<'ctx> {
                     &[("length", self.get_debug_type(INT_TYPE_ID)), ("data", data_ptr_type)],
                 )
             }
-            Type::Record(record) => {
-                // FIXME: We need to compute actual physical size at some point
-                //        Probably here in codegen? But maybe in typecheck?
-                //        What about a struct of our own, called CodegenedType or something,
+            t @ Type::Record(record) => {
+                // FIXME: What about a struct of our own, called CodegenedType or something,
                 //        that includes the LLVM type, the Debug type, and the size, and other stuff
                 //        we might want to know about a type
+                //        It's bad that the source of truth for the size of a type is the Dwarf type
                 let name = record
                     .name_if_named
                     .map(|ident| self.get_ident_name(ident).to_string())
@@ -659,7 +658,8 @@ impl<'ctx> Codegen<'ctx> {
                         (self.get_ident_name(f.name).to_string(), member_type)
                     })
                     .collect::<Vec<_>>();
-                self.make_debug_struct_type(&name, record.span, &fields)
+                let span = self.module.ast.get_span_for_maybe_id(t.ast_node());
+                self.make_debug_struct_type(&name, span, &fields)
             }
             Type::TypeVariable(v) => {
                 eprintln!("{}", self.module);
