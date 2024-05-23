@@ -97,6 +97,7 @@ pub enum TokenKind {
     KeywordImpl,
     KeywordAuto,
     KeywordIs,
+    KeywordWhen,
 
     Slash,
     LineComment,
@@ -171,6 +172,7 @@ impl TokenKind {
             K::KeywordImpl => Some("impl"),
             K::KeywordAuto => Some("auto"),
             K::KeywordIs => Some("is"),
+            K::KeywordWhen => Some("when"),
 
             K::Slash => Some("/"),
             K::LineComment => Some("//"),
@@ -262,6 +264,7 @@ impl TokenKind {
             "ability" => Some(K::KeywordAbility),
             "impl" => Some(K::KeywordImpl),
             "auto" => Some(K::KeywordAuto),
+            "when" => Some(K::KeywordWhen),
             "is" => Some(K::KeywordIs),
             "==" => Some(K::EqualsEquals),
             "!=" => Some(K::BangEquals),
@@ -292,6 +295,7 @@ impl TokenKind {
             K::KeywordImpl => true,
             K::KeywordAuto => true,
             K::KeywordIs => true,
+            K::KeywordWhen => true,
             _ => false,
         }
     }

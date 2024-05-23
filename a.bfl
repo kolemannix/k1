@@ -1,0 +1,16 @@
+fn check_point(point: { x: int, y: int }): string {
+  when point {
+    { x: 1, y: 2 } -> "hi",
+    _ -> "bye"
+  }
+}
+fn main(): int {
+  val point = { x: 1, y: 2 };
+  val s = check_point(point);
+  val s2 = check_point({ x: 3, y: 4 });
+
+  print(s);
+  print(s2);
+
+  0
+}
