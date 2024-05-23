@@ -1,0 +1,8 @@
+#!/bin/bash
+# Show output and commands
+set -x
+# Exit on errors
+set -e
+export RUST_BACKTRACE=1
+filename=$(basename $1 .bfl)
+cargo run -- --debug --no-llvm-opt $1; lldb bfl-out/$filename.out
