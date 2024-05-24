@@ -40,21 +40,21 @@ pub enum Linkage {
 }
 
 #[derive(Debug, Clone)]
-pub struct RecordTypeField {
+pub struct StructTypeField {
     pub name: IdentifierId,
     pub type_id: TypeId,
     pub index: u32,
 }
 
 #[derive(Debug, Clone)]
-pub struct RecordType {
-    pub fields: Vec<RecordTypeField>,
+pub struct StructType {
+    pub fields: Vec<StructTypeField>,
     pub name_if_named: Option<IdentifierId>,
     pub ast_node: ParsedId,
 }
 
-impl RecordType {
-    pub fn find_field(&self, field_name: IdentifierId) -> Option<(usize, &RecordTypeField)> {
+impl StructType {
+    pub fn find_field(&self, field_name: IdentifierId) -> Option<(usize, &StructTypeField)> {
         self.fields.iter().enumerate().find(|(_, field)| field.name == field_name)
     }
 }
@@ -113,7 +113,7 @@ pub enum Type {
     Int,
     Bool,
     String,
-    Record(RecordType),
+    Struct(StructType),
     Array(ArrayType),
     Optional(OptionalType),
     Reference(ReferenceType),
@@ -127,7 +127,7 @@ impl Type {
     pub fn ast_node(&self) -> Option<ParsedId> {
         match self {
             Type::Unit | Type::Char | Type::Int | Type::Bool | Type::String => None,
-            Type::Record(t) => Some(t.ast_node),
+            Type::Struct(t) => Some(t.ast_node),
             _ => None,
             // Type::Optional(t) => t.ast_node,
             // Type::Reference(t) => t.ast_node,
@@ -191,17 +191,17 @@ impl Type {
         }
     }
 
-    pub fn as_record(&self) -> Option<&RecordType> {
+    pub fn as_struct(&self) -> Option<&StructType> {
         match self {
-            Type::Record(record) => Some(record),
+            Type::Struct(struc) => Some(struc),
             _ => None,
         }
     }
 
-    pub fn expect_record(&self) -> &RecordType {
+    pub fn expect_struct(&self) -> &StructType {
         match self {
-            Type::Record(record) => record,
-            _ => panic!("expect_record called on: {:?}", self),
+            Type::Struct(struc) => struc,
+            _ => panic!("expect_struct called on: {:?}", self),
         }
     }
 }
@@ -239,7 +239,7 @@ pub struct TypedEnumPattern {
 }
 
 #[derive(Debug, Clone)]
-pub struct TypedRecordPatternField {
+pub struct TypedStructPatternField {
     pub field_name: IdentifierId,
     pub field_pattern: TypedPattern,
     pub field_index: u32,
@@ -247,9 +247,9 @@ pub struct TypedRecordPatternField {
 }
 
 #[derive(Debug, Clone)]
-pub struct TypedRecordPattern {
-    pub record_type_id: TypeId,
-    pub fields: Vec<TypedRecordPatternField>,
+pub struct TypedStructPattern {
+    pub struct_type_id: TypeId,
+    pub fields: Vec<TypedStructPatternField>,
     pub span: Span,
 }
 
@@ -266,12 +266,12 @@ pub struct VariablePattern {
     pub span: Span,
 }
 
-// <pattern> ::= <literal> | <variable> | <enum> | <record>
+// <pattern> ::= <literal> | <variable> | <enum> | <struc>
 // <literal> ::= "(" ")" | "\"" <ident> "\"" | [0-9]+ | "'" [a-z] "'" | "None"
 // <variable> ::= <ident>
 // <ident> ::= [a-z]*
 // <enum> ::= "." <ident> ( "(" <pattern> ")" )?
-// <record> ::= "{" ( <ident> ": " <pattern> ","? )* "}"
+// <struc> ::= "{" ( <ident> ": " <pattern> ","? )* "}"
 #[derive(Debug, Clone)]
 pub enum TypedPattern {
     LiteralUnit(Span),
@@ -283,7 +283,7 @@ pub enum TypedPattern {
     Some(TypedSomePattern),
     Variable(VariablePattern),
     Enum(TypedEnumPattern),
-    Record(TypedRecordPattern),
+    Struct(TypedStructPattern),
     Wildcard(Span),
 }
 
@@ -342,7 +342,7 @@ pub struct SpecializationParams {
 }
 
 #[derive(Debug, Clone)]
-pub struct SpecializationRecord {
+pub struct SpecializationStruct {
     pub specialized_type_params: Vec<TypeId>,
     pub specialized_function_id: FunctionId,
     pub specialized_params: Vec<FnArgDefn>,
@@ -383,7 +383,7 @@ pub struct TypedFunction {
     pub block: Option<TypedBlock>,
     pub intrinsic_type: Option<IntrinsicFunctionType>,
     pub linkage: Linkage,
-    pub specializations: Vec<SpecializationRecord>,
+    pub specializations: Vec<SpecializationStruct>,
     pub metadata: TypedFunctionMetadata,
     pub span: Span,
 }
@@ -536,14 +536,14 @@ pub struct Call {
 }
 
 #[derive(Debug, Clone)]
-pub struct RecordField {
+pub struct StructField {
     pub name: IdentifierId,
     pub expr: TypedExpr,
 }
 
 #[derive(Debug, Clone)]
-pub struct Record {
-    pub fields: Vec<RecordField>,
+pub struct Struct {
+    pub fields: Vec<StructField>,
     pub type_id: TypeId,
     pub span: Span,
 }
@@ -618,10 +618,10 @@ pub enum TypedExpr {
     Int(i64, Span),
     Str(String, Span),
     None(TypeId, Span),
-    Record(Record),
+    Struct(Struct),
     Array(ArrayLiteral),
     Variable(VariableExpr),
-    RecordFieldAccess(FieldAccess),
+    StructFieldAccess(FieldAccess),
     BinaryOp(BinaryOp),
     UnaryOp(UnaryOp),
     Block(TypedBlock),
@@ -651,10 +651,10 @@ impl TypedExpr {
             TypedExpr::Str(_, _) => STRING_TYPE_ID,
             TypedExpr::Int(_, _) => INT_TYPE_ID,
             TypedExpr::Bool(_, _) => BOOL_TYPE_ID,
-            TypedExpr::Record(record) => record.type_id,
+            TypedExpr::Struct(struc) => struc.type_id,
             TypedExpr::Array(arr) => arr.type_id,
             TypedExpr::Variable(var) => var.type_id,
-            TypedExpr::RecordFieldAccess(field_access) => field_access.ty,
+            TypedExpr::StructFieldAccess(field_access) => field_access.ty,
             TypedExpr::BinaryOp(binary_op) => binary_op.ty,
             TypedExpr::UnaryOp(unary_op) => unary_op.type_id,
             TypedExpr::Block(b) => b.expr_type,
@@ -678,10 +678,10 @@ impl TypedExpr {
             TypedExpr::Int(_, span) => *span,
             TypedExpr::Str(_, span) => *span,
             TypedExpr::None(_, span) => *span,
-            TypedExpr::Record(record) => record.span,
+            TypedExpr::Struct(struc) => struc.span,
             TypedExpr::Array(array) => array.span,
             TypedExpr::Variable(var) => var.span,
-            TypedExpr::RecordFieldAccess(field_access) => field_access.span,
+            TypedExpr::StructFieldAccess(field_access) => field_access.span,
             TypedExpr::BinaryOp(binary_op) => binary_op.span,
             TypedExpr::UnaryOp(unary_op) => unary_op.span,
             TypedExpr::Block(b) => b.span,
@@ -926,8 +926,8 @@ impl Types {
             Type::Bool => false,
             Type::String => false,
             Type::Array(arr) => self.is_type_generic(arr.element_type),
-            // We don't _yet_ support generics in records
-            Type::Record(_record) => false,
+            // We don't _yet_ support generics in structs
+            Type::Struct(_struct) => false,
             Type::Optional(opt) => self.is_type_generic(opt.inner_type),
             Type::Reference(refer) => self.is_type_generic(refer.inner_type),
             Type::TypeVariable(_) => true,
@@ -945,7 +945,7 @@ impl Types {
             Type::Bool => None,
             Type::String => Some(CHAR_TYPE_ID),
             Type::Array(arr) => Some(arr.element_type),
-            Type::Record(_record) => None,
+            Type::Struct(_struct) => None,
             Type::Optional(_opt) => None,
             Type::Reference(_refer) => None,
             Type::TypeVariable(_) => None,
@@ -1030,7 +1030,7 @@ impl TypedModule {
             (Type::Int, Type::Int) => true,
             (Type::Bool, Type::Bool) => true,
             (Type::String, Type::String) => true,
-            (Type::Record(r1), Type::Record(r2)) => {
+            (Type::Struct(r1), Type::Struct(r2)) => {
                 if r1.fields.len() != r2.fields.len() {
                     return false;
                 }
@@ -1085,11 +1085,11 @@ impl TypedModule {
         let parsed_type_defn = self.ast.get_type_defn(parsed_type_defn_id).clone();
         let type_id = self.eval_type_expr(parsed_type_defn.value_expr, scope_id)?;
         match self.types.get_type_mut(type_id) {
-            Type::Record(record_defn) => {
-                // Add the name to this record defn so it can have associated
+            Type::Struct(struct_defn) => {
+                // Add the name to this struc defn so it can have associated
                 // methods and constants
                 // FIXME: This name needs to be fully qualified!
-                record_defn.name_if_named = Some(parsed_type_defn.name);
+                struct_defn.name_if_named = Some(parsed_type_defn.name);
                 Ok(type_id)
             }
             Type::Enum(enum_defn) => {
@@ -1119,20 +1119,20 @@ impl TypedModule {
             ParsedTypeExpression::Int(_) => Ok(INT_TYPE_ID),
             ParsedTypeExpression::Bool(_) => Ok(BOOL_TYPE_ID),
             ParsedTypeExpression::String(_) => Ok(STRING_TYPE_ID),
-            ParsedTypeExpression::Record(record_defn) => {
-                let record_defn = record_defn.clone();
-                let mut fields: Vec<RecordTypeField> = Vec::new();
-                for (index, ast_field) in record_defn.fields.iter().enumerate() {
+            ParsedTypeExpression::Struct(struct_defn) => {
+                let struct_defn = struct_defn.clone();
+                let mut fields: Vec<StructTypeField> = Vec::new();
+                for (index, ast_field) in struct_defn.fields.iter().enumerate() {
                     let ty = self.eval_type_expr(ast_field.ty, scope_id)?;
-                    fields.push(RecordTypeField {
+                    fields.push(StructTypeField {
                         name: ast_field.name,
                         type_id: ty,
                         index: index as u32,
                     })
                 }
-                let record_defn =
-                    RecordType { fields, name_if_named: None, ast_node: type_expr_id.into() };
-                let type_id = self.types.add_type(Type::Record(record_defn));
+                let struct_defn =
+                    StructType { fields, name_if_named: None, ast_node: type_expr_id.into() };
+                let type_id = self.types.add_type(Type::Struct(struct_defn));
                 Ok(type_id)
             }
             ParsedTypeExpression::Name(ident, span) => {
@@ -1348,68 +1348,68 @@ impl TypedModule {
                 };
                 Ok(TypedPattern::Enum(enum_pattern))
             }
-            ParsedPattern::Record(record_pattern) => {
+            ParsedPattern::Struct(struct_pattern) => {
                 let target_type = self.types.get_type(target_type_id);
-                let expected_record = target_type.as_record().ok_or_else(|| {
-                    make_error("Impossible pattern: Expected record type", record_pattern.span)
+                let expected_struct = target_type.as_struct().ok_or_else(|| {
+                    make_error("Impossible pattern: Expected struc type", struct_pattern.span)
                 })?;
-                let mut fields = Vec::with_capacity(record_pattern.fields.len());
-                for (field_name, field_parsed_pattern_id) in &record_pattern.fields {
-                    let expected_field = expected_record
+                let mut fields = Vec::with_capacity(struct_pattern.fields.len());
+                for (field_name, field_parsed_pattern_id) in &struct_pattern.fields {
+                    let expected_field = expected_struct
                         .fields
                         .iter()
                         .find(|f| f.name == *field_name)
                         .ok_or(make_error(
-                            format!("Impossible pattern: Record has no field named {}", field_name),
+                            format!("Impossible pattern: Struct has no field named {}", field_name),
                             self.ast.get_pattern_span(*field_parsed_pattern_id),
                         ))?;
                     let field_type_id = expected_field.type_id;
                     let field_pattern =
                         self.eval_pattern(*field_parsed_pattern_id, field_type_id, scope_id)?;
-                    fields.push(TypedRecordPatternField {
+                    fields.push(TypedStructPatternField {
                         field_name: *field_name,
                         field_pattern,
                         field_index: expected_field.index,
                         field_type_id: expected_field.type_id,
                     });
                 }
-                let record_pattern = TypedRecordPattern {
-                    record_type_id: target_type_id,
+                let struct_pattern = TypedStructPattern {
+                    struct_type_id: target_type_id,
                     fields,
-                    span: record_pattern.span,
+                    span: struct_pattern.span,
                 };
-                Ok(TypedPattern::Record(record_pattern))
+                Ok(TypedPattern::Struct(struct_pattern))
             }
         }
     }
 
-    fn typecheck_record(
+    fn typecheck_struct(
         &self,
-        expected: &RecordType,
-        actual: &RecordType,
+        expected: &StructType,
+        actual: &StructType,
         scope_id: ScopeId,
     ) -> Result<(), String> {
         if expected.fields.len() != actual.fields.len() {
             return Err(format!(
-                "expected record with {} fields, got {}",
+                "expected struc with {} fields, got {}",
                 expected.fields.len(),
                 actual.fields.len()
             ));
         }
         for expected_field in &expected.fields {
-            trace!("typechecking record field {:?}", expected_field);
+            trace!("typechecking struc field {:?}", expected_field);
             let Some(matching_field) = actual.fields.iter().find(|f| f.name == expected_field.name)
             else {
-                return Err(format!("expected record to have field {}", expected_field.name));
+                return Err(format!("expected struc to have field {}", expected_field.name));
             };
             self.typecheck_types(expected_field.type_id, matching_field.type_id, scope_id)?;
         }
         Ok(())
     }
 
-    /// This implements 'duck-typing' for records, which is really cool
+    /// This implements 'duck-typing' for structs, which is really cool
     /// but I do not want to do this by default since the codegen involves
-    /// either v-tables or monomorphization of functions that accept records
+    /// either v-tables or monomorphization of functions that accept structs
     /// Maybe a <: syntax to opt-in to dynamic stuff like this, read as "conforms to"
     /// input <: {quack: () -> ()} means that it has at least a quack function
     /// fn takes_quacker = (input <: {quack: () -> ()}) -> ()
@@ -1418,14 +1418,14 @@ impl TypedModule {
     /// it has them at least as strongly. If an optional is expected, actual can optional or required
     /// If a required is expected, actual must be required, etc. Basically TypeScripts structural typing
     #[allow(unused)]
-    fn typecheck_record_duck(
+    fn typecheck_struct_duck(
         &self,
-        expected: &RecordType,
-        actual: &RecordType,
+        expected: &StructType,
+        actual: &StructType,
         scope_id: ScopeId,
     ) -> Result<(), String> {
         for expected_field in &expected.fields {
-            trace!("typechecking record field {:?}", expected_field);
+            trace!("typechecking struc field {:?}", expected_field);
             let Some(matching_field) = actual.fields.iter().find(|f| f.name == expected_field.name)
             else {
                 return Err(format!("expected field {}", expected_field.name));
@@ -1453,7 +1453,7 @@ impl TypedModule {
             (Type::Optional(o1), Type::Optional(o2)) => {
                 self.typecheck_types(o1.inner_type, o2.inner_type, scope_id)
             }
-            (Type::Record(r1), Type::Record(r2)) => self.typecheck_record(r1, r2, scope_id),
+            (Type::Struct(r1), Type::Struct(r2)) => self.typecheck_struct(r1, r2, scope_id),
             (Type::Array(a1), Type::Array(a2)) => {
                 self.typecheck_types(a1.element_type, a2.element_type, scope_id)
             }
@@ -1681,11 +1681,11 @@ impl TypedModule {
     ) -> TyperResult<TypedExpr> {
         let mut base_expr = self.eval_expr(field_access.base, scope_id, None)?;
         let type_id = base_expr.get_type();
-        let maybe_record_type = match self.types.get_type(type_id) {
+        let maybe_struct_type = match self.types.get_type(type_id) {
             Type::Reference(reference_type) => {
-                // Auto de-reference records for  field access
-                let maybe_record = self.types.get_type(reference_type.inner_type).as_record();
-                if !is_assignment_lhs && maybe_record.is_some() {
+                // Auto de-reference structs for  field access
+                let maybe_struct = self.types.get_type(reference_type.inner_type).as_struct();
+                if !is_assignment_lhs && maybe_struct.is_some() {
                     // Dereference the base expression
                     base_expr = TypedExpr::UnaryOp(UnaryOp {
                         kind: UnaryOpKind::Dereference,
@@ -1694,15 +1694,15 @@ impl TypedModule {
                         expr: Box::new(base_expr),
                     });
                 }
-                maybe_record
+                maybe_struct
             }
-            Type::Record(record_type) => Some(record_type),
+            Type::Struct(struct_type) => Some(struct_type),
             _ => None,
         };
-        let Some(record_type) = maybe_record_type else {
+        let Some(struct_type) = maybe_struct_type else {
             return make_fail_span(
                 format!(
-                    "Cannot access field {} on non-record type: {}",
+                    "Cannot access field {} on non-struc type: {}",
                     self.ast.identifiers.borrow().get_name(field_access.target),
                     self.type_id_to_string(base_expr.get_type())
                 ),
@@ -1710,14 +1710,14 @@ impl TypedModule {
             );
         };
         let (field_index, target_field) =
-            record_type.find_field(field_access.target).ok_or(make_error(
+            struct_type.find_field(field_access.target).ok_or(make_error(
                 format!(
-                    "Field {} not found on record type",
+                    "Field {} not found on struc type",
                     &*self.ast.get_ident_str(field_access.target)
                 ),
                 field_access.span,
             ))?;
-        Ok(TypedExpr::RecordFieldAccess(FieldAccess {
+        Ok(TypedExpr::StructFieldAccess(FieldAccess {
             base: Box::new(base_expr),
             target_field: field_access.target,
             target_field_index: field_index as u32,
@@ -1895,82 +1895,82 @@ impl TypedModule {
             ParsedExpression::IndexOperation(index_op) => {
                 self.eval_index_operation(&index_op.clone(), scope_id)
             }
-            ParsedExpression::Record(ast_record) => {
-                // FIXME: Let's factor out Structs and Records into separate things
-                //        records can be created on the fly and are just hashmap literals
+            ParsedExpression::Struct(ast_struct) => {
+                // FIXME: Let's factor out Structs and Structs into separate things
+                //        structs can be created on the fly and are just hashmap literals
                 //        Structs are structs
                 let mut field_values = Vec::new();
                 let mut field_defns = Vec::new();
-                let ast_record = ast_record.clone();
-                let expected_record = if let Some(expected_type) = expected_type {
+                let ast_struct = ast_struct.clone();
+                let expected_struct = if let Some(expected_type) = expected_type {
                     match self.types.get_type(expected_type) {
-                        Type::Record(record) => Some((expected_type, record.clone())),
+                        Type::Struct(struc) => Some((expected_type, struc.clone())),
                         Type::Optional(opt) => match self.types.get_type(opt.inner_type) {
-                            Type::Record(record) => Some((opt.inner_type, record.clone())),
+                            Type::Struct(struc) => Some((opt.inner_type, struc.clone())),
                             other_ty => {
                                 return make_fail_span(
                                     format!(
-                                        "Got record literal but expected {}",
+                                        "Got struc literal but expected {}",
                                         self.type_to_string(other_ty)
                                     ),
-                                    ast_record.span,
+                                    ast_struct.span,
                                 );
                             }
                         },
                         Type::Reference(refer) => match self.types.get_type(refer.inner_type) {
-                            Type::Record(record) => Some((refer.inner_type, record.clone())),
+                            Type::Struct(struc) => Some((refer.inner_type, struc.clone())),
                             other_ty => {
                                 return make_fail_span(
                                     format!(
-                                        "Got record literal but expected {}",
+                                        "Got struc literal but expected {}",
                                         self.type_to_string(other_ty)
                                     ),
-                                    ast_record.span,
+                                    ast_struct.span,
                                 );
                             }
                         },
                         other_ty => {
                             return make_fail_span(
                                 format!(
-                                    "Got record literal but expected {}",
+                                    "Got struc literal but expected {}",
                                     self.type_to_string(other_ty)
                                 ),
-                                ast_record.span,
+                                ast_struct.span,
                             );
                         }
                     }
                 } else {
                     None
                 };
-                for (index, ast_field) in ast_record.fields.iter().enumerate() {
-                    let expected_field = expected_record
+                for (index, ast_field) in ast_struct.fields.iter().enumerate() {
+                    let expected_field = expected_struct
                         .as_ref()
                         .and_then(|(_, rec)| rec.find_field(ast_field.name));
                     let expected_type_id = expected_field.map(|(_, f)| f.type_id);
                     let expr = self.eval_expr(ast_field.expr, scope_id, expected_type_id)?;
-                    field_defns.push(RecordTypeField {
+                    field_defns.push(StructTypeField {
                         name: ast_field.name,
                         type_id: expr.get_type(),
                         index: index as u32,
                     });
-                    field_values.push(RecordField { name: ast_field.name, expr });
+                    field_values.push(StructField { name: ast_field.name, expr });
                 }
                 // We can use 'expected type' here to just go ahead and typecheck or fail
                 // rather than make a duplicate type
-                let record_type_id = match expected_record {
+                let struct_type_id = match expected_struct {
                     None => {
-                        let record_type = RecordType {
+                        let struct_type = StructType {
                             fields: field_defns,
                             name_if_named: None,
                             ast_node: expr_id.into(),
                         };
-                        let anon_record_type_id = self.types.add_type(Type::Record(record_type));
-                        Ok(anon_record_type_id)
+                        let anon_struct_type_id = self.types.add_type(Type::Struct(struct_type));
+                        Ok(anon_struct_type_id)
                     }
-                    Some((expected_type_id, expected_record)) => {
-                        match self.typecheck_record(
-                            &expected_record,
-                            &RecordType {
+                    Some((expected_type_id, expected_struct)) => {
+                        match self.typecheck_struct(
+                            &expected_struct,
+                            &StructType {
                                 fields: field_defns,
                                 name_if_named: None,
                                 ast_node: expr_id.into(),
@@ -1979,16 +1979,16 @@ impl TypedModule {
                         ) {
                             Ok(_) => Ok(expected_type_id),
                             Err(s) => make_fail_span(
-                                format!("Invalid record type: {}", s),
-                                ast_record.span,
+                                format!("Invalid struc type: {}", s),
+                                ast_struct.span,
                             ),
                         }
                     }
                 }?;
-                let typed_record =
-                    Record { fields: field_values, span: ast_record.span, type_id: record_type_id };
-                let expr = TypedExpr::Record(typed_record);
-                trace!("generated record: {}", self.expr_to_string(&expr));
+                let typed_struct =
+                    Struct { fields: field_values, span: ast_struct.span, type_id: struct_type_id };
+                let expr = TypedExpr::Struct(typed_struct);
+                trace!("generated struc: {}", self.expr_to_string(&expr));
                 Ok(expr)
             }
             ParsedExpression::If(if_expr) => {
@@ -2422,18 +2422,18 @@ impl TypedModule {
         let target_expr_type_id = target_expr_variable_expr.type_id;
 
         match pattern {
-            TypedPattern::Record(record_pattern) => {
+            TypedPattern::Struct(struct_pattern) => {
                 let mut boolean_exprs: Vec<TypedExpr> =
-                    Vec::with_capacity(record_pattern.fields.len());
+                    Vec::with_capacity(struct_pattern.fields.len());
                 let mut condition_statements: Vec<TypedStmt> =
-                    Vec::with_capacity(record_pattern.fields.len());
-                for pattern_field in record_pattern.fields.iter() {
-                    let target_value = TypedExpr::RecordFieldAccess(FieldAccess {
+                    Vec::with_capacity(struct_pattern.fields.len());
+                for pattern_field in struct_pattern.fields.iter() {
+                    let target_value = TypedExpr::StructFieldAccess(FieldAccess {
                         base: Box::new(TypedExpr::Variable(target_expr_variable_expr.clone())),
                         target_field: pattern_field.field_name,
                         target_field_index: pattern_field.field_index,
                         ty: pattern_field.field_type_id,
-                        span: record_pattern.span,
+                        span: struct_pattern.span,
                     });
                     // I'm putting condition variables in the match scope id, but they really belong in the arms condition scope id, which
                     // we'll make later. This is just more hygenic since the variables needed for each arms condition shouldn't be visible
@@ -2445,9 +2445,9 @@ impl TypedModule {
                         owner_scope: match_scope_id,
                     };
                     let (
-                        record_member_value_variable_id,
+                        struct_member_value_variable_id,
                         target_value_decl_stmt,
-                        record_member_value_expr,
+                        struct_member_value_expr,
                     ) = self.synth_variable_decl(
                         field_member_variable,
                         target_value.get_span(),
@@ -2458,7 +2458,7 @@ impl TypedModule {
 
                     let (inner_condition_stmts, condition) = self.eval_match_arm(
                         &pattern_field.field_pattern,
-                        record_member_value_expr.expect_variable(),
+                        struct_member_value_expr.expect_variable(),
                         arm_block,
                         arm_block.scope_id,
                     )?;
@@ -2474,7 +2474,7 @@ impl TypedModule {
                             ty: BOOL_TYPE_ID,
                             lhs: Box::new(acc),
                             rhs: Box::new(expr),
-                            span: record_pattern.span,
+                            span: struct_pattern.span,
                         })
                     })
                     .unwrap();
@@ -3260,19 +3260,19 @@ impl TypedModule {
                             None
                         }
                     }
-                    Type::Record(record) => {
+                    Type::Struct(struc) => {
                         // Need to distinguish between instances of 'named'
-                        // records and anonymous ones
-                        let Some(record_type_name) = record.name_if_named else {
+                        // structs and anonymous ones
+                        let Some(struct_type_name) = struc.name_if_named else {
                             return make_fail_ast_id(
                                 &self.ast,
-                                "Anonymous records currently have no methods",
-                                record.ast_node,
+                                "Anonymous structs currently have no methods",
+                                struc.ast_node,
                             );
                         };
-                        let record_scope =
-                            self.get_namespace_scope_for_ident(calling_scope, record_type_name);
-                        record_scope.find_function(fn_call.name)
+                        let struct_scope =
+                            self.get_namespace_scope_for_ident(calling_scope, struct_type_name);
+                        struct_scope.find_function(fn_call.name)
                     }
                     _ => None,
                 };
@@ -3702,7 +3702,7 @@ impl TypedModule {
             },
         )?;
         let specialized_params = self.get_function(specialized_function_id).params.clone();
-        self.get_function_mut(generic_function_id).specializations.push(SpecializationRecord {
+        self.get_function_mut(generic_function_id).specializations.push(SpecializationStruct {
             specialized_function_id,
             specialized_type_params: type_ids,
             specialized_params: specialized_params.clone(),

@@ -658,17 +658,17 @@ impl<'ctx> Codegen<'ctx> {
                     &[("length", self.get_debug_type(INT_TYPE_ID)?), ("data", data_ptr_type)],
                 ))
             }
-            t @ Type::Record(record) => {
+            t @ Type::Struct(struc) => {
                 // FIXME: What about a struct of our own, called CodegenedType or something,
                 //        that includes the LLVM type, the Debug type, and the size, and other stuff
                 //        we might want to know about a type
                 //        It's bad that the source of truth for the size of a type is the Dwarf type
-                let name = record
+                let name = struc
                     .name_if_named
                     .map(|ident| self.get_ident_name(ident).to_string())
-                    .unwrap_or("<anon_record>".to_string());
+                    .unwrap_or("<anon_struct>".to_string());
                 let mut fields = Vec::new();
-                for f in record.fields.iter() {
+                for f in struc.fields.iter() {
                     let member_type = self.get_debug_type(f.type_id)?;
                     fields.push((self.get_ident_name(f.name).to_string(), member_type));
                 }
@@ -833,10 +833,10 @@ impl<'ctx> Codegen<'ctx> {
                                     .as_basic_type_enum(),
                             }
                             .into()),
-                            Type::Record(record) => {
-                                trace!("generating llvm type for record type {type_id}");
-                                let mut field_types = Vec::with_capacity(record.fields.len());
-                                for field in &record.fields {
+                            Type::Struct(struc) => {
+                                trace!("generating llvm type for struc type {type_id}");
+                                let mut field_types = Vec::with_capacity(struc.fields.len());
+                                for field in &struc.fields {
                                     let field_type = self.codegen_type(field.type_id)?;
                                     field_types.push(field_type.value_type());
                                 }
@@ -1192,7 +1192,7 @@ impl<'ctx> Codegen<'ctx> {
                 Ok(value.as_basic_value_enum())
             }
             TypedExpr::Str(string_value, _) => {
-                // We will make them records (structs) with an array pointer and a length for now
+                // We will make them structs (structs) with an array pointer and a length for now
                 let global_str_data = self.llvm_module.add_global(
                     self.builtin_types.char.array_type(string_value.len() as u32),
                     None,
@@ -1215,11 +1215,11 @@ impl<'ctx> Codegen<'ctx> {
                 );
                 Ok(loaded)
             }
-            TypedExpr::Record(record) => {
-                let record_llvm_type =
-                    self.codegen_type(record.type_id)?.value_type().into_struct_type();
-                let mut struct_value = record_llvm_type.get_undef();
-                for (idx, field) in record.fields.iter().enumerate() {
+            TypedExpr::Struct(struc) => {
+                let struct_llvm_type =
+                    self.codegen_type(struc.type_id)?.value_type().into_struct_type();
+                let mut struct_value = struct_llvm_type.get_undef();
+                for (idx, field) in struc.fields.iter().enumerate() {
                     let value = self.codegen_expr_rvalue(&field.expr)?;
                     struct_value = self
                         .builder
@@ -1227,31 +1227,31 @@ impl<'ctx> Codegen<'ctx> {
                             struct_value,
                             value,
                             idx as u32,
-                            &format!("record_init_{}", idx),
+                            &format!("struct_init_{}", idx),
                         )
                         .unwrap()
                         .into_struct_value();
                 }
                 Ok(struct_value.as_basic_value_enum())
             }
-            TypedExpr::RecordFieldAccess(field_access) => {
+            TypedExpr::StructFieldAccess(field_access) => {
                 if is_lvalue {
                     // Codegen a pointer to the field's storage location
-                    let record_pointer =
+                    let struct_pointer =
                         self.codegen_expr(&field_access.base, false)?.into_pointer_value();
-                    let record_type = self
+                    let struct_type = self
                         .codegen_type(field_access.base.get_type())?
                         .expect_pointer()
                         .pointee_type;
-                    // let record_pointee = record_type.expect_pointer().pointee_type;
+                    // let struct_pointee = struct_type.expect_pointer().pointee_type;
                     let field_ptr = self
                         .builder
                         .build_struct_gep(
-                            record_type,
-                            record_pointer,
+                            struct_type,
+                            struct_pointer,
                             field_access.target_field_index,
                             &format!(
-                                "record.{}",
+                                "struc.{}",
                                 &*self.module.ast.get_ident_str(field_access.target_field)
                             ),
                         )
@@ -1259,15 +1259,15 @@ impl<'ctx> Codegen<'ctx> {
                     Ok(field_ptr.as_basic_value_enum())
                 } else {
                     // Codegen the field's loaded, dereferenced value
-                    let record = self.codegen_expr_rvalue(&field_access.base)?;
-                    let record_struct = record.into_struct_value();
+                    let struc = self.codegen_expr_rvalue(&field_access.base)?;
+                    let struct_struct = struc.into_struct_value();
                     let field_value = self
                         .builder
                         .build_extract_value(
-                            record_struct,
+                            struct_struct,
                             field_access.target_field_index,
                             &format!(
-                                "record.{}",
+                                "struc.{}",
                                 &*self.module.ast.get_ident_str(field_access.target_field)
                             ),
                         )
@@ -1962,7 +1962,7 @@ impl<'ctx> Codegen<'ctx> {
                             //self.builder.build_store(des, value.loaded_value(&self.builder))
                             last = Some(self.builtin_types.unit_value.as_basic_value_enum())
                         }
-                        TypedExpr::RecordFieldAccess(_field_access) => {
+                        TypedExpr::StructFieldAccess(_field_access) => {
                             // We use codegen_expr with is_lvalue = true to get the pointer to the accessed field
                             let field_ptr = self
                                 .codegen_expr(&assignment.destination, true)?

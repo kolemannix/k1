@@ -225,7 +225,7 @@ pub struct FieldAccess {
 }
 
 #[derive(Debug, Clone)]
-pub struct RecordField {
+pub struct StructField {
     pub name: IdentifierId,
     pub expr: ParsedExpressionId,
 }
@@ -234,8 +234,8 @@ pub struct RecordField {
 /// Example:
 /// { foo: 1, bar: false }
 ///   ^................^ fields
-pub struct Record {
-    pub fields: Vec<RecordField>,
+pub struct Struct {
+    pub fields: Vec<StructField>,
     pub span: Span,
 }
 
@@ -305,7 +305,7 @@ pub enum ParsedExpression {
     MethodCall(MethodCall),                 // x.load()
     Block(Block),                           // { <expr>; <expr>; <expr> }
     If(IfExpr),                             // if a else b
-    Record(Record),                         // { x: 1, y: 3 }
+    Struct(Struct),                         // { x: 1, y: 3 }
     IndexOperation(IndexOperation),         // xs[3]
     Array(ArrayExpr),                       // [1, 3, 5, 7]
     OptionalGet(OptionalGet),               // foo!
@@ -341,7 +341,7 @@ impl ParsedExpression {
             Self::MethodCall(call) => call.span,
             Self::Block(block) => block.span,
             Self::If(if_expr) => if_expr.span,
-            Self::Record(record) => record.span,
+            Self::Struct(struc) => struc.span,
             Self::IndexOperation(op) => op.span,
             Self::Array(array_expr) => array_expr.span,
             Self::OptionalGet(optional_get) => optional_get.span,
@@ -365,7 +365,7 @@ impl ParsedExpression {
             Self::FnCall(_call) => false,
             Self::Block(_block) => false,
             Self::If(_if_expr) => false,
-            Self::Record(_record) => false,
+            Self::Struct(_struct) => false,
             Self::Array(_array_expr) => false,
             Self::OptionalGet(_optional_get) => false,
             Self::For(_) => false,
@@ -414,7 +414,7 @@ impl ExprStackMember {
 }
 
 #[derive(Debug, Clone)]
-pub struct ParsedRecordPattern {
+pub struct ParsedStructPattern {
     pub fields: Vec<(IdentifierId, ParsedPatternId)>,
     pub span: Span,
 }
@@ -432,18 +432,18 @@ pub struct ParsedSomePattern {
     pub span: Span,
 }
 
-// https://bnfplayground.pauliankline.com/?bnf=%3Cpattern%3E%20%3A%3A%3D%20%3Cliteral%3E%20%7C%20%3Cvariable%3E%20%7C%20%3Cenum%3E%20%7C%20%3Crecord%3E%0A%3Cliteral%3E%20%3A%3A%3D%20%22(%22%20%22)%22%20%7C%20%22%5C%22%22%20%3Cident%3E%20%22%5C%22%22%20%7C%20%5B0-9%5D%2B%20%7C%20%22%27%22%20%5Ba-z%5D%20%22%27%22%20%7C%20%22None%22%0A%3Cvariable%3E%20%3A%3A%3D%20%3Cident%3E%0A%3Cident%3E%20%3A%3A%3D%20%5Ba-z%5D*%0A%3Cenum%3E%20%3A%3A%3D%20%22.%22%20%3Cident%3E%20(%20%22(%22%20%3Cpattern%3E%20%22)%22%20)%3F%0A%3Crecord%3E%20%3A%3A%3D%20%22%7B%22%20(%20%3Cident%3E%20%22%3A%20%22%20%3Cpattern%3E%20%22%2C%22%3F%20)*%20%22%7D%22%20&name=
-// <pattern> ::= <literal> | <variable> | <enum> | <record>
+// https://bnfplayground.pauliankline.com/?bnf=%3Cpattern%3E%20%3A%3A%3D%20%3Cliteral%3E%20%7C%20%3Cvariable%3E%20%7C%20%3Cenum%3E%20%7C%20%3Cstruct%3E%0A%3Cliteral%3E%20%3A%3A%3D%20%22(%22%20%22)%22%20%7C%20%22%5C%22%22%20%3Cident%3E%20%22%5C%22%22%20%7C%20%5B0-9%5D%2B%20%7C%20%22%27%22%20%5Ba-z%5D%20%22%27%22%20%7C%20%22None%22%0A%3Cvariable%3E%20%3A%3A%3D%20%3Cident%3E%0A%3Cident%3E%20%3A%3A%3D%20%5Ba-z%5D*%0A%3Cenum%3E%20%3A%3A%3D%20%22.%22%20%3Cident%3E%20(%20%22(%22%20%3Cpattern%3E%20%22)%22%20)%3F%0A%3Cstruct%3E%20%3A%3A%3D%20%22%7B%22%20(%20%3Cident%3E%20%22%3A%20%22%20%3Cpattern%3E%20%22%2C%22%3F%20)*%20%22%7D%22%20&name=
+// <pattern> ::= <literal> | <variable> | <enum> | <struct>
 // <literal> ::= "(" ")" | "\"" <ident> "\"" | [0-9]+ | "'" [a-z] "'" | "None"
 // <variable> ::= <ident>
 // <ident> ::= [a-z]*
 // <enum> ::= "." <ident> ( "(" <pattern> ")" )?
-// <record> ::= "{" ( <ident> ": " <pattern> ","? )* "}"
+// <struct> ::= "{" ( <ident> ": " <pattern> ","? )* "}"
 #[derive(Debug, Clone)]
 pub enum ParsedPattern {
     Literal(ParsedExpressionId),
     Variable(IdentifierId, Span),
-    Record(ParsedRecordPattern),
+    Struct(ParsedStructPattern),
     Enum(ParsedEnumPattern),
     Wildcard(Span),
     Some(ParsedSomePattern),
@@ -506,14 +506,14 @@ pub struct Block {
 }
 
 #[derive(Debug, Clone)]
-pub struct RecordTypeField {
+pub struct StructTypeField {
     pub name: IdentifierId,
     pub ty: ParsedTypeExpressionId,
 }
 
 #[derive(Debug, Clone)]
-pub struct RecordType {
-    pub fields: Vec<RecordTypeField>,
+pub struct StructType {
+    pub fields: Vec<StructTypeField>,
     pub span: Span,
 }
 
@@ -556,7 +556,7 @@ pub enum ParsedTypeExpression {
     Int(Span),
     Bool(Span),
     String(Span),
-    Record(RecordType),
+    Struct(StructType),
     Name(IdentifierId, Span),
     TagName(IdentifierId, Span),
     TypeApplication(TypeApplication),
@@ -583,7 +583,7 @@ impl ParsedTypeExpression {
             ParsedTypeExpression::Int(span) => *span,
             ParsedTypeExpression::Bool(span) => *span,
             ParsedTypeExpression::String(span) => *span,
-            ParsedTypeExpression::Record(record) => record.span,
+            ParsedTypeExpression::Struct(struc) => struc.span,
             ParsedTypeExpression::Name(_, span) => *span,
             ParsedTypeExpression::TagName(_, span) => *span,
             ParsedTypeExpression::TypeApplication(app) => app.span,
@@ -835,7 +835,7 @@ impl ParsedModule {
             }
             ParsedPattern::Enum(enum_pattern) => enum_pattern.span,
             ParsedPattern::Variable(_var_pattern, span) => *span,
-            ParsedPattern::Record(record_pattern) => record_pattern.span,
+            ParsedPattern::Struct(struct_pattern) => struct_pattern.span,
             ParsedPattern::Wildcard(span) => *span,
             ParsedPattern::Some(some_pattern) => some_pattern.span,
         }
@@ -1022,7 +1022,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             let id = self.module.patterns.add_pattern(pattern);
             Ok(id)
         } else if first.kind == K::OpenBrace {
-            // Record
+            // Struct
             let open_brace = self.tokens.next();
             let mut fields = Vec::new();
             while self.peek().kind != K::CloseBrace {
@@ -1050,8 +1050,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 }
             }
             let end = self.expect_eat_token(K::CloseBrace)?;
-            let pattern = ParsedRecordPattern { fields, span: open_brace.span.extended(end.span) };
-            let pattern_id = self.module.patterns.add_pattern(ParsedPattern::Record(pattern));
+            let pattern = ParsedStructPattern { fields, span: open_brace.span.extended(end.span) };
+            let pattern_id = self.module.patterns.add_pattern(ParsedPattern::Struct(pattern));
             Ok(pattern_id)
         } else if first.kind == K::Dot {
             let dot = self.tokens.next();
@@ -1304,13 +1304,13 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         };
     }
 
-    fn parse_record_type_field(&mut self) -> ParseResult<Option<RecordTypeField>> {
+    fn parse_struct_type_field(&mut self) -> ParseResult<Option<StructTypeField>> {
         let name_token = self.expect_eat_token(K::Ident)?;
         let ident_id = self.intern_ident_token(name_token);
         self.expect_eat_token(K::Colon)?;
         let typ_expr =
             Parser::expect("Type expression", self.peek(), self.parse_type_expression())?;
-        Ok(Some(RecordTypeField { name: ident_id, ty: typ_expr }))
+        Ok(Some(StructTypeField { name: ident_id, ty: typ_expr }))
     }
 
     fn expect_type_expression(&mut self) -> ParseResult<ParsedTypeExpressionId> {
@@ -1430,15 +1430,15 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         } else if tok.kind == K::OpenBrace {
             let open_brace = self.expect_eat_token(K::OpenBrace)?;
             let (fields, fields_span) =
-                self.eat_delimited("Record fields", K::Comma, K::CloseBrace, |p| {
-                    let field_res = Parser::parse_record_type_field(p);
-                    Parser::expect("Record Field", open_brace, field_res)
+                self.eat_delimited("Struct fields", K::Comma, K::CloseBrace, |p| {
+                    let field_res = Parser::parse_struct_type_field(p);
+                    Parser::expect("Struct Field", open_brace, field_res)
                 })?;
-            let mut record_span = tok.span;
-            record_span.end = fields_span.end;
-            let record = RecordType { fields, span: record_span };
+            let mut struct_span = tok.span;
+            struct_span.end = fields_span.end;
+            let struc = StructType { fields, span: struct_span };
             Ok(Some(
-                self.module.type_expressions.add_expression(ParsedTypeExpression::Record(record)),
+                self.module.type_expressions.add_expression(ParsedTypeExpression::Struct(struc)),
             ))
         } else {
             Ok(None)
@@ -1515,19 +1515,19 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Parser::expect("fn_arg", self.peek(), res)
     }
 
-    fn parse_record(&mut self) -> ParseResult<Option<Record>> {
+    fn parse_struct(&mut self) -> ParseResult<Option<Struct>> {
         let Some(open_brace) = self.eat_token(K::OpenBrace) else {
             return Ok(None);
         };
         let (fields, fields_span) =
-            self.eat_delimited("Record values", K::Comma, K::CloseBrace, |parser| {
+            self.eat_delimited("Struct values", K::Comma, K::CloseBrace, |parser| {
                 let name = parser.expect_eat_token(K::Ident)?;
                 parser.expect_eat_token(K::Colon)?;
                 let expr = Parser::expect("expression", parser.peek(), parser.parse_expression())?;
-                Ok(RecordField { name: parser.intern_ident_token(name), expr })
+                Ok(StructField { name: parser.intern_ident_token(name), expr })
             })?;
         let span = open_brace.span.extended(fields_span);
-        Ok(Some(Record { fields, span }))
+        Ok(Some(Struct { fields, span }))
     }
 
     fn parse_expression_with_postfix_ops(&mut self) -> ParseResult<Option<ParsedExpressionId>> {
@@ -1923,17 +1923,17 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 }))))
             }
         } else if first.kind == K::OpenBrace {
-            // The syntax {} means empty record, not empty block
+            // The syntax {} means empty struct, not empty block
             // If you want a void or empty block, the required syntax is { () }
             trace!("parse_expr {:?} {:?} {:?}", first, second, third);
             if second.kind == K::CloseBrace {
                 let span = first.span.extended(second.span);
                 Ok(Some(
-                    self.add_expression(ParsedExpression::Record(Record { fields: vec![], span })),
+                    self.add_expression(ParsedExpression::Struct(Struct { fields: vec![], span })),
                 ))
             } else if second.kind == K::Ident && third.kind == K::Colon {
-                let record = Parser::expect("record", first, self.parse_record())?;
-                Ok(Some(self.add_expression(ParsedExpression::Record(record))))
+                let struc = Parser::expect("struct", first, self.parse_struct())?;
+                Ok(Some(self.add_expression(ParsedExpression::Struct(struc))))
             } else {
                 match self.parse_block()? {
                     None => Err(Parser::error("block", self.peek())),
@@ -2404,7 +2404,7 @@ impl ParsedModule {
             ParsedExpression::MethodCall(call) => f.write_fmt(format_args!("{:?}", call)),
             ParsedExpression::Block(block) => f.write_fmt(format_args!("{:?}", block)),
             ParsedExpression::If(if_expr) => f.write_fmt(format_args!("{:?}", if_expr)),
-            ParsedExpression::Record(record) => f.write_fmt(format_args!("{:?}", record)),
+            ParsedExpression::Struct(struc) => f.write_fmt(format_args!("{:?}", struc)),
             ParsedExpression::IndexOperation(op) => f.write_fmt(format_args!("{:?}", op)),
             ParsedExpression::Array(array_expr) => f.write_fmt(format_args!("{:?}", array_expr)),
             ParsedExpression::OptionalGet(optional_get) => {
@@ -2467,9 +2467,9 @@ impl ParsedModule {
             ParsedTypeExpression::Int(_) => f.write_str("int"),
             ParsedTypeExpression::Bool(_) => f.write_str("bool"),
             ParsedTypeExpression::String(_) => f.write_str("string"),
-            ParsedTypeExpression::Record(record_type) => {
+            ParsedTypeExpression::Struct(struct_type) => {
                 f.write_str("{ ")?;
-                for field in record_type.fields.iter() {
+                for field in struct_type.fields.iter() {
                     f.write_str(&self.get_ident_str(field.name))?;
                     f.write_str(": ")?;
                     self.display_type_expression_id(ty_expr_id, f)?;

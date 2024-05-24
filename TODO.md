@@ -5,7 +5,7 @@
 - [ ] QoL before rest of pattern matching
   - [ ] Move spans into SoA on AST
   - [x] Codegen fail instead of panic
-  - [ ] Rename record to struct
+  - [x] Rename record to struct
   - [ ] ? Use ast nodes on Typed\* instead of copies of spans
 - [ ] Pattern Matching
   - [x] Single-arm match evals to boolean
@@ -126,8 +126,8 @@
 - [x] Runtime repr for int
 - [x] Runtime repr for char
 - [x] Runtime repr for string
-- [x] record
-- [x] array of optional records
+- [x] struct
+- [x] array of optional structs
 
 # Optionals Round 2
 
@@ -135,7 +135,7 @@
 - [x] has value from userland (currently only happens by desugaring))
 - [x] unwrap from userland (I think this can just be a prelude function not intrinsic)
 - [x] test with optional array elements
-- [x] test with optional record fields
+- [x] test with optional struct fields
 - [x] test with optional function args
 - [x] Explicit Some() expression
 
