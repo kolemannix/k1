@@ -130,9 +130,9 @@ impl TypedModule {
             Type::Int => writ.write_str("int"),
             Type::Bool => writ.write_str("bool"),
             Type::String => writ.write_str("string"),
-            Type::Record(record) => {
+            Type::Struct(struc) => {
                 writ.write_str("{")?;
-                for (index, field) in record.fields.iter().enumerate() {
+                for (index, field) in struc.fields.iter().enumerate() {
                     if index > 0 {
                         writ.write_str(", ")?;
                     }
@@ -309,9 +309,9 @@ impl TypedModule {
                 }
                 writ.write_str("]")
             }
-            TypedExpr::Record(record) => {
+            TypedExpr::Struct(struc) => {
                 writ.write_str("{")?;
-                for (idx, field) in record.fields.iter().enumerate() {
+                for (idx, field) in struc.fields.iter().enumerate() {
                     if idx > 0 {
                         writ.write_str(",\n")?;
                         writ.write_str(&" ".repeat(indentation + 1))?;
@@ -327,7 +327,7 @@ impl TypedModule {
                 let variable = self.variables.get_variable(v.variable_id);
                 writ.write_str(&self.get_ident_str(variable.name))
             }
-            TypedExpr::RecordFieldAccess(field_access) => {
+            TypedExpr::StructFieldAccess(field_access) => {
                 self.display_expr(&field_access.base, writ, indentation)?;
                 writ.write_str(".")?;
                 writ.write_str(&self.get_ident_str(field_access.target_field))

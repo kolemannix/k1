@@ -114,9 +114,9 @@ fn infix() -> Result<(), ParseError> {
 }
 
 #[test]
-fn record() -> Result<(), ParseError> {
+fn struct_1() -> Result<(), ParseError> {
     let (_parser, result) = test_single_expr("{ a: 4, b: x[42], c: true }")?;
-    assert!(matches!(result, ParsedExpression::Record(_)));
+    assert!(matches!(result, ParsedExpression::Struct(_)));
     Ok(())
 }
 
