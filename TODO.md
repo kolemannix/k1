@@ -3,10 +3,10 @@
 # Project Completion Checklist
 
 - [ ] QoL before rest of pattern matching
-  - [ ] Use ast nodes on Typed\* instead of copies of spans
   - [ ] Move spans into SoA on AST
-  - [ ] Codegen fail instead of panic
+  - [x] Codegen fail instead of panic
   - [ ] Rename record to struct
+  - [ ] ? Use ast nodes on Typed\* instead of copies of spans
 - [ ] Pattern Matching
   - [x] Single-arm match evals to boolean
   - [x] Literals

@@ -144,11 +144,14 @@ pub fn compile_module<'ctx>(
         return Err(e);
     };
 
-    let irgen = Rc::new(typed_module);
+    let typed_module = Rc::new(typed_module);
     let llvm_optimize = !args.no_llvm_opt;
 
-    let mut codegen: Codegen<'ctx> = Codegen::create(ctx, irgen, args.debug, llvm_optimize);
-    codegen.codegen_module();
+    let mut codegen: Codegen<'ctx> = Codegen::create(ctx, typed_module, args.debug, llvm_optimize);
+    if let Err(e) = codegen.codegen_module() {
+        let (num, line) = codegen.module.ast.sources.get_line_for_span(e.span);
+        eprintln!("Codegen error at line {}: '{}'", num, line);
+    }
     codegen.optimize(llvm_optimize)?;
 
     // TODO: We could do this a lot more efficiently by just feeding the in-memory LLVM IR to clang
