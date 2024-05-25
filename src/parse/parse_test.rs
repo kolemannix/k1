@@ -12,7 +12,7 @@ fn set_up<'module>(input: &str, module: &'module mut ParsedModule) -> Parser<'st
         "unit_test.bfl".to_string(),
         input.to_string(),
     ));
-    let mut lexer = Lexer::make(&source.content, 0);
+    let mut lexer = Lexer::make(&source.content, &mut module.spans, 0);
     let token_vec: &'static mut [Token] = lexer.run().unwrap().leak();
     println!("{:#?}", token_vec);
     let parser = Parser::make(token_vec, source, module);
@@ -27,7 +27,7 @@ fn test_single_type_expr(input: &str) -> Result<(ParsedModule, ParsedTypeExpress
     let mut module = make_test_module();
     let mut parser = set_up(input, &mut module);
     let type_expr_id = parser.expect_type_expression()?;
-    let expr = (*module.type_expressions.get_expression(type_expr_id)).clone();
+    let expr = (*module.type_expressions.get(type_expr_id)).clone();
     Ok((module, expr))
 }
 
@@ -66,11 +66,14 @@ fn basic_fn() -> Result<(), ParseError> {
 
 #[test]
 fn string_literal() -> ParseResult<()> {
-    let (_parser, result) = test_single_expr(r#""hello world""#)?;
-    let ParsedExpression::Literal(Literal::String(s, span)) = result else { panic!() };
+    let (module, result) = test_single_expr(r#""hello world""#)?;
+    let ParsedExpression::Literal(Literal::String(s, span_id)) = result else { panic!() };
+    let span = module.spans.get(span_id);
+    // TODO: We need to store 2 spans, one for the whole literal construct including quotes and one for the string itself
     assert_eq!(&s, "hello world");
     assert_eq!(span.start, 1);
-    assert_eq!(span.end, 12);
+    assert_eq!(span.len, 11);
+    assert_eq!(span.end(), 12);
     Ok(())
 }
 
@@ -188,12 +191,12 @@ fn type_parameter_multi() -> ParseResult<()> {
     };
     assert_eq!(app.params.len(), 2);
     let ParsedTypeExpression::TypeApplication(inner_app) =
-        module.type_expressions.get_expression(app.params[1])
+        module.type_expressions.get(app.params[1])
     else {
         panic!("Expected second param to be a type application");
     };
     assert!(matches!(
-        module.type_expressions.get_expression(inner_app.params[0]),
+        module.type_expressions.get(inner_app.params[0]),
         ParsedTypeExpression::Int(_)
     ));
     Ok(())
@@ -285,8 +288,7 @@ fn generic_method_call_lhs_expr() -> Result<(), ParseError> {
     };
     assert_eq!(fn_call.name, parser.ident_id("getFn"));
     assert_eq!(call.call.name, parser.ident_id("baz"));
-    let type_arg =
-        parser.type_expressions.get_expression(call.call.type_args.unwrap()[0].type_expr);
+    let type_arg = parser.type_expressions.get(call.call.type_args.unwrap()[0].type_expr);
     assert!(type_arg.is_int());
     assert!(matches!(
         &*parser.expressions.get_expression(call.call.args[0].value),

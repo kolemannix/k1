@@ -110,7 +110,7 @@ pub fn compile_module<'ctx>(
             content,
         ));
 
-        let token_vec = lex_text(&source.content, source.file_id)?;
+        let token_vec = lex_text(&mut parsed_module.spans, &source.content, source.file_id)?;
         let mut parser = parse::Parser::make(&token_vec, source.clone(), &mut parsed_module);
 
         let result = parser.parse_module();
@@ -149,8 +149,8 @@ pub fn compile_module<'ctx>(
 
     let mut codegen: Codegen<'ctx> = Codegen::create(ctx, typed_module, args.debug, llvm_optimize);
     if let Err(e) = codegen.codegen_module() {
-        let (num, line) = codegen.module.ast.sources.get_line_for_span(e.span);
-        eprintln!("Codegen error at line {}: '{}'", num, line);
+        parse::print_error_location(&codegen.module.ast.spans, &codegen.module.ast.sources, e.span);
+        eprintln!("Codegen error: {}", e.message);
     }
     codegen.optimize(llvm_optimize)?;
 
@@ -199,9 +199,9 @@ fn main() -> Result<()> {
     let args = Args::parse();
     println!("{:#?}", args);
 
-    static_assert_size!(parse::BlockStmt, 64); // Get down below 100 // We did it!
-    static_assert_size!(parse::ParsedExpression, 96); // Get back down ideally below 50
-    static_assert_size!(typer::TypedExpr, 56);
+    static_assert_size!(parse::BlockStmt, 40); // Get down below 100 // We did it!
+    static_assert_size!(parse::ParsedExpression, 80); // Get back down ideally below 50
+    static_assert_size!(typer::TypedExpr, 48);
     static_assert_size!(typer::TypedStmt, 16);
     println!("bfl Compiler v0.1.0");
 

@@ -15,7 +15,7 @@ use log::{debug, trace, Level};
 
 use scopes::*;
 
-use crate::lex::{Span, TokenKind};
+use crate::lex::{SpanId, Spans, TokenKind};
 use crate::parse::{
     self, FnCallArg, ForExpr, ForExprType, IfExpr, IndexOperation, ParsedAbilityId,
     ParsedAbilityImplId, ParsedConstantId, ParsedExpressionId, ParsedFunctionId, ParsedId,
@@ -235,7 +235,7 @@ pub struct TypedEnumPattern {
     pub variant_tag_name: IdentifierId,
     pub variant_index: u32,
     pub payload: Option<Box<TypedPattern>>,
-    pub span: Span,
+    pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
@@ -250,20 +250,20 @@ pub struct TypedStructPatternField {
 pub struct TypedStructPattern {
     pub struct_type_id: TypeId,
     pub fields: Vec<TypedStructPatternField>,
-    pub span: Span,
+    pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
 pub struct TypedSomePattern {
     pub optional_type_id: TypeId,
     pub inner_pattern: Box<TypedPattern>,
-    pub span: Span,
+    pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
 pub struct VariablePattern {
     pub ident: IdentifierId,
-    pub span: Span,
+    pub span: SpanId,
 }
 
 // <pattern> ::= <literal> | <variable> | <enum> | <struc>
@@ -274,17 +274,17 @@ pub struct VariablePattern {
 // <struc> ::= "{" ( <ident> ": " <pattern> ","? )* "}"
 #[derive(Debug, Clone)]
 pub enum TypedPattern {
-    LiteralUnit(Span),
-    LiteralChar(u8, Span),
-    LiteralInt(i64, Span),
-    LiteralBool(bool, Span),
-    LiteralString(String, Span),
-    LiteralNone(Span),
+    LiteralUnit(SpanId),
+    LiteralChar(u8, SpanId),
+    LiteralInt(i64, SpanId),
+    LiteralBool(bool, SpanId),
+    LiteralString(String, SpanId),
+    LiteralNone(SpanId),
     Some(TypedSomePattern),
     Variable(VariablePattern),
     Enum(TypedEnumPattern),
     Struct(TypedStructPattern),
-    Wildcard(Span),
+    Wildcard(SpanId),
 }
 
 #[derive(Debug, Clone)]
@@ -292,20 +292,13 @@ pub struct TypedBlock {
     pub expr_type: TypeId,
     pub scope_id: ScopeId,
     pub statements: Vec<TypedStmt>,
-    pub span: Span,
+    pub span: SpanId,
 }
 
 impl TypedBlock {
     fn push_stmt(&mut self, stmt: TypedStmt) {
         self.expr_type = stmt.get_type();
-        self.span = self.span.extended(stmt.get_span());
         self.statements.push(stmt);
-    }
-
-    fn push_statements(&mut self, stmts: Vec<TypedStmt>) {
-        for stmt in stmts {
-            self.push_stmt(stmt);
-        }
     }
 
     fn push_expr(&mut self, expr: TypedExpr) {
@@ -330,7 +323,7 @@ pub struct FnArgDefn {
     pub variable_id: VariableId,
     pub position: u32,
     pub type_id: TypeId,
-    pub span: Span,
+    pub span: SpanId,
 }
 
 pub struct SpecializationParams {
@@ -385,7 +378,7 @@ pub struct TypedFunction {
     pub linkage: Linkage,
     pub specializations: Vec<SpecializationStruct>,
     pub metadata: TypedFunctionMetadata,
-    pub span: Span,
+    pub span: SpanId,
 }
 
 impl TypedFunction {
@@ -415,7 +408,7 @@ pub struct TypeParam {
 pub struct VariableExpr {
     pub variable_id: VariableId,
     pub type_id: TypeId,
-    pub span: Span,
+    pub span: SpanId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -488,7 +481,7 @@ pub struct BinaryOp {
     pub ty: TypeId,
     pub lhs: Box<TypedExpr>,
     pub rhs: Box<TypedExpr>,
-    pub span: Span,
+    pub span: SpanId,
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
@@ -524,7 +517,7 @@ pub struct UnaryOp {
     pub kind: UnaryOpKind,
     pub type_id: TypeId,
     pub expr: Box<TypedExpr>,
-    pub span: Span,
+    pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
@@ -532,7 +525,7 @@ pub struct Call {
     pub callee_function_id: FunctionId,
     pub args: Vec<TypedExpr>,
     pub ret_type: TypeId,
-    pub span: Span,
+    pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
@@ -545,14 +538,14 @@ pub struct StructField {
 pub struct Struct {
     pub fields: Vec<StructField>,
     pub type_id: TypeId,
-    pub span: Span,
+    pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
 pub struct ArrayLiteral {
     pub elements: Vec<TypedExpr>,
     pub type_id: TypeId,
-    pub span: Span,
+    pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
@@ -561,7 +554,7 @@ pub struct TypedIf {
     pub consequent: TypedBlock,
     pub alternate: TypedBlock,
     pub ty: TypeId,
-    pub span: Span,
+    pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
@@ -570,7 +563,7 @@ pub struct FieldAccess {
     pub target_field: IdentifierId,
     pub target_field_index: u32,
     pub ty: TypeId,
-    pub span: Span,
+    pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
@@ -578,7 +571,7 @@ pub struct IndexOp {
     pub base_expr: Box<TypedExpr>,
     pub index_expr: Box<TypedExpr>,
     pub result_type: TypeId,
-    pub span: Span,
+    pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
@@ -591,14 +584,14 @@ pub struct OptionalSome {
 pub struct OptionalGet {
     pub inner_expr: Box<TypedExpr>,
     pub result_type_id: TypeId,
-    pub span: Span,
+    pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
 pub struct TypedTagExpr {
     pub name: IdentifierId,
     pub type_id: TypeId,
-    pub span: Span,
+    pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
@@ -607,17 +600,17 @@ pub struct TypedEnumConstructor {
     pub variant_name: IdentifierId,
     pub variant_index: u32,
     pub payload: Option<Box<TypedExpr>>,
-    pub span: Span,
+    pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
 pub enum TypedExpr {
-    Unit(Span),
-    Char(u8, Span),
-    Bool(bool, Span),
-    Int(i64, Span),
-    Str(String, Span),
-    None(TypeId, Span),
+    Unit(SpanId),
+    Char(u8, SpanId),
+    Bool(bool, SpanId),
+    Int(i64, SpanId),
+    Str(String, SpanId),
+    None(TypeId, SpanId),
     Struct(Struct),
     Array(ArrayLiteral),
     Variable(VariableExpr),
@@ -638,10 +631,6 @@ pub enum TypedExpr {
 }
 
 impl TypedExpr {
-    pub fn unit_literal(span: Span) -> TypedExpr {
-        TypedExpr::Unit(span)
-    }
-
     #[inline]
     pub fn get_type(&self) -> TypeId {
         match self {
@@ -670,7 +659,7 @@ impl TypedExpr {
         }
     }
     #[inline]
-    pub fn get_span(&self) -> Span {
+    pub fn get_span(&self) -> SpanId {
         match self {
             TypedExpr::Unit(span) => *span,
             TypedExpr::Char(_, span) => *span,
@@ -711,21 +700,21 @@ pub struct ValDef {
     pub variable_id: VariableId,
     pub ty: TypeId,
     pub initializer: TypedExpr,
-    pub span: Span,
+    pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
 pub struct Assignment {
     pub destination: Box<TypedExpr>,
     pub value: Box<TypedExpr>,
-    pub span: Span,
+    pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
 pub struct TypedWhileLoop {
     pub cond: TypedExpr,
     pub block: TypedBlock,
-    pub span: Span,
+    pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
@@ -738,7 +727,7 @@ pub enum TypedStmt {
 
 impl TypedStmt {
     #[inline]
-    pub fn get_span(&self) -> Span {
+    pub fn get_span(&self) -> SpanId {
         match self {
             TypedStmt::Expr(e) => e.get_span(),
             TypedStmt::ValDef(v) => v.span,
@@ -760,18 +749,18 @@ impl TypedStmt {
 #[derive(Debug)]
 pub struct TyperError {
     message: String,
-    span: Span,
+    span: SpanId,
 }
 
 impl TyperError {
-    fn make(message: impl AsRef<str>, span: Span) -> TyperError {
+    fn make(message: impl AsRef<str>, span: SpanId) -> TyperError {
         TyperError { message: message.as_ref().to_owned(), span }
     }
 }
 
 impl Display for TyperError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("error on line {}: {}", self.span.line, self.message))
+        f.write_fmt(format_args!("typer error {}: {:?}", self.message, self))
     }
 }
 
@@ -792,7 +781,7 @@ pub struct Constant {
     pub variable_id: VariableId,
     pub expr: TypedExpr,
     pub ty: TypeId,
-    pub span: Span,
+    pub span: SpanId,
 }
 
 pub struct Namespace {
@@ -826,11 +815,11 @@ impl IntrinsicFunctionType {
     }
 }
 
-fn make_error<T: AsRef<str>>(message: T, span: Span) -> TyperError {
+fn make_error<T: AsRef<str>>(message: T, span: SpanId) -> TyperError {
     TyperError::make(message.as_ref(), span)
 }
 
-fn make_fail_span<A, T: AsRef<str>>(message: T, span: Span) -> TyperResult<A> {
+fn make_fail_span<A, T: AsRef<str>>(message: T, span: SpanId) -> TyperResult<A> {
     Err(make_error(message, span))
 }
 
@@ -843,13 +832,9 @@ fn make_fail_ast_id<A, T: AsRef<str>>(
     Err(make_error(message, span))
 }
 
-fn print_error(sources: &Sources, message: impl AsRef<str>, span: Span) {
-    let line_no = span.line + 1;
-    let source = sources.source_by_span(span);
-    eprintln!("{} at {}:{}\n  -> {}", "error".red(), &source.filename, line_no, message.as_ref());
-    let (_line_start, line_text) = sources.get_line_for_span(span);
-    eprintln!("{}", line_text.red());
-    eprintln!(" -> {}", sources.get_span_content(span).red());
+fn print_error(spans: &Spans, sources: &Sources, message: impl AsRef<str>, span: SpanId) {
+    parse::print_error_location(spans, sources, span);
+    eprintln!("\t{}", message.as_ref());
 }
 
 #[derive(Debug, Clone)]
@@ -1113,7 +1098,7 @@ impl TypedModule {
         type_expr_id: ParsedTypeExpressionId,
         scope_id: ScopeId,
     ) -> TyperResult<TypeId> {
-        let base = match self.ast.type_expressions.get_expression(type_expr_id) {
+        let base = match self.ast.type_expressions.get(type_expr_id) {
             ParsedTypeExpression::Unit(_) => Ok(UNIT_TYPE_ID),
             ParsedTypeExpression::Char(_) => Ok(CHAR_TYPE_ID),
             ParsedTypeExpression::Int(_) => Ok(INT_TYPE_ID),
@@ -1573,25 +1558,24 @@ impl TypedModule {
         match expr {
             TypedExpr::Block(b) => b,
             expr => {
-                let statement = TypedStmt::Expr(Box::new(expr));
-                let statements = vec![statement];
-                self.synth_block(statements, expr_scope)
+                let expr_span = expr.get_span();
+                let statements = vec![TypedStmt::Expr(Box::new(expr))];
+                self.synth_block(statements, expr_scope, expr_span)
             }
         }
     }
 
     fn coerce_block_to_unit_block(&mut self, block: &mut TypedBlock) {
         let span = block.statements.last().map(|s| s.get_span()).unwrap_or(block.span);
-        let unit_literal = TypedExpr::unit_literal(span);
+        let unit_literal = TypedExpr::Unit(span);
         block.push_expr(unit_literal);
-        block.expr_type = UNIT_TYPE_ID;
     }
 
     fn traverse_namespace_chain(
         &self,
         scope_id: ScopeId,
         namespaces: &[IdentifierId],
-        span: Span,
+        span: SpanId,
     ) -> TyperResult<ScopeId> {
         trace!(
             "traverse_namespace_chain: {:?}",
@@ -2326,12 +2310,12 @@ impl TypedModule {
         match_result_type: TypeId,
         mut cases: VecDeque<(TypedExpr, TypedBlock)>,
         scope_id: ScopeId,
-        span_if_no_cases: Span,
+        span_if_no_cases: SpanId,
     ) -> TyperResult<TypedExpr> {
         if cases.is_empty() {
             // Use 'assert unreachable' instead of unit
             let false_expr = self.ast.expressions.add_expression(parse::ParsedExpression::Literal(
-                parse::Literal::Bool(false, Span::NONE),
+                parse::Literal::Bool(false, span_if_no_cases),
             ));
             self.synth_function_call(
                 vec![],
@@ -2388,7 +2372,9 @@ impl TypedModule {
         for parsed_case in cases.iter() {
             let typed_pattern =
                 self.eval_pattern(parsed_case.pattern, target_expr.type_id, match_scope_id)?;
-            let mut arm_block = self.synth_block(vec![], match_scope_id);
+            let arm_expr_span =
+                self.ast.expressions.get_expression(parsed_case.expression).get_span();
+            let mut arm_block = self.synth_block(vec![], match_scope_id, arm_expr_span);
             let (pre_stmts, bool_expr) = self.eval_match_arm(
                 &typed_pattern,
                 target_expr.clone(),
@@ -2400,6 +2386,11 @@ impl TypedModule {
             // since the bindings are now in scope inside arm_block
             let arm_expr =
                 self.eval_expr(parsed_case.expression, arm_block.scope_id, expected_arm_type_id)?;
+
+            // We really could reconsider all of this span stuff
+            // because there's really no new source locations being created here
+            // A synthesized block could probably just have its span set to the span of the ast node
+            // that generated it.
             arm_block.push_expr(arm_expr);
 
             expected_arm_type_id = Some(arm_block.expr_type);
@@ -2445,7 +2436,7 @@ impl TypedModule {
                         owner_scope: match_scope_id,
                     };
                     let (
-                        struct_member_value_variable_id,
+                        _struct_member_value_variable_id,
                         target_value_decl_stmt,
                         struct_member_value_expr,
                     ) = self.synth_variable_decl(
@@ -2541,13 +2532,14 @@ impl TypedModule {
                 );
                 arm_block.push_stmt(binding_stmt);
                 // `true` because variable patterns always match
-                Ok((vec![], TypedExpr::Bool(true, Span::NONE)))
+                Ok((vec![], TypedExpr::Bool(true, variable_pattern.span)))
             }
             TypedPattern::LiteralUnit(span) => Ok((vec![], TypedExpr::Bool(true, *span))),
             TypedPattern::LiteralChar(byte, span) => {
                 let bin_op = self.synth_equals_binop(
                     TypedExpr::Variable(target_expr_variable_expr),
                     TypedExpr::Char(*byte, *span),
+                    *span,
                 );
                 Ok((vec![], bin_op))
             }
@@ -2565,6 +2557,7 @@ impl TypedModule {
                 let bin_op = self.synth_equals_binop(
                     TypedExpr::Variable(target_expr_variable_expr),
                     TypedExpr::Bool(*bool_value, *span),
+                    *span,
                 );
                 Ok((vec![], bin_op))
             }
@@ -2580,6 +2573,7 @@ impl TypedModule {
                 let bin_op = self.synth_equals_binop(
                     TypedExpr::Variable(target_expr_variable_expr),
                     TypedExpr::None(target_expr_type_id, *span),
+                    *span,
                 );
                 Ok((vec![], bin_op))
             }
@@ -2587,30 +2581,33 @@ impl TypedModule {
         }
     }
 
-    fn synth_equals_binop(&self, lhs: TypedExpr, rhs: TypedExpr) -> TypedExpr {
+    fn synth_equals_binop(&self, lhs: TypedExpr, rhs: TypedExpr, span: SpanId) -> TypedExpr {
         TypedExpr::BinaryOp(BinaryOp {
             kind: BinaryOpKind::Equals,
             ty: BOOL_TYPE_ID,
-            span: lhs.get_span().extended(rhs.get_span()),
+            span,
             lhs: Box::new(lhs),
             rhs: Box::new(rhs),
         })
     }
 
-    fn synth_block(&mut self, statements: Vec<TypedStmt>, parent_scope: ScopeId) -> TypedBlock {
+    fn synth_block(
+        &mut self,
+        statements: Vec<TypedStmt>,
+        parent_scope: ScopeId,
+        span: SpanId,
+    ) -> TypedBlock {
         let expr_type = match statements.last() {
             Some(stmt) => stmt.get_type(),
             _ => UNIT_TYPE_ID,
         };
-        let span_start = statements.first().map(|stmt| stmt.get_span()).unwrap_or(Span::NONE);
-        let span_end = statements.last().map(|stmt| stmt.get_span()).unwrap_or(Span::NONE);
         let block_scope_id =
             self.scopes.add_child_scope(parent_scope, ScopeType::LexicalBlock, None);
         let block = TypedBlock {
             expr_type,
             statements: statements.to_vec(),
             scope_id: block_scope_id,
-            span: span_start.extended(span_end),
+            span,
         };
         block
     }
@@ -2619,7 +2616,7 @@ impl TypedModule {
     fn synth_variable_decl(
         &mut self,
         mut variable: Variable,
-        span: Span,
+        span: SpanId,
         initializer: TypedExpr,
         no_mangle: bool,
     ) -> (VariableId, TypedStmt, TypedExpr) {
@@ -2646,7 +2643,7 @@ impl TypedModule {
         ast: &mut ParsedModule,
         variables: &Variables,
         variable_id: VariableId,
-        span: Span,
+        span: SpanId,
     ) -> ParsedExpressionId {
         ast.expressions.add_expression(ParsedExpression::Variable(parse::Variable {
             name: variables.get_variable(variable_id).name,
@@ -2661,7 +2658,7 @@ impl TypedModule {
         name: IdentifierId,
         known_type_args: Option<Vec<TypeId>>,
         value_arg_exprs: Vec<ParsedExpressionId>,
-        span: Span,
+        span: SpanId,
         scope_id: ScopeId,
     ) -> TyperResult<TypedExpr> {
         self.eval_function_call(
@@ -2987,7 +2984,7 @@ impl TypedModule {
         &self,
         ability_id: AbilityId,
         type_id: TypeId,
-        span_for_error: Span,
+        span_for_error: SpanId,
     ) -> TyperResult<&TypedAbilityImplementation> {
         self.implementations
             .iter()
@@ -3092,7 +3089,7 @@ impl TypedModule {
         &self,
         lhs: TypedExpr,
         rhs: TypedExpr,
-        span: Span,
+        span: SpanId,
     ) -> TyperResult<TypedExpr> {
         let equals_ability_id =
             self.scopes.get_root_scope().find_ability(self.ast.ident_id("Equals")).unwrap();
@@ -3195,14 +3192,9 @@ impl TypedModule {
         })))
     }
 
-    fn synth_unit_expr(&self, span: Span) -> TypedExpr {
-        TypedExpr::unit_literal(span)
-    }
-
-    fn make_unit_block(&mut self, scope_id: ScopeId, span: Span) -> TypedBlock {
-        let unit_expr = self.synth_unit_expr(span);
-        let mut b = self.synth_block(vec![], scope_id);
-        b.push_expr(unit_expr);
+    fn make_unit_block(&mut self, scope_id: ScopeId, span: SpanId) -> TypedBlock {
+        let unit_expr = TypedExpr::Unit(span);
+        let b = self.synth_block(vec![TypedStmt::Expr(Box::new(unit_expr))], scope_id, span);
         b
     }
 
@@ -4415,7 +4407,7 @@ impl TypedModule {
         for &parsed_definition_id in self.ast.get_root_namespace().definitions.clone().iter() {
             let result = self.eval_definition_declaration_phase(parsed_definition_id, scope_id);
             if let Err(e) = result {
-                print_error(&self.ast.sources, &e.message, e.span);
+                print_error(&self.ast.spans, &self.ast.sources, &e.message, e.span);
                 errors.push(e);
             }
         }
@@ -4427,7 +4419,7 @@ impl TypedModule {
         for &parsed_definition_id in self.ast.get_root_namespace().definitions.clone().iter() {
             let result = self.eval_definition(parsed_definition_id, scope_id);
             if let Err(e) = result {
-                print_error(&self.ast.sources, &e.message, e.span);
+                print_error(&self.ast.spans, &self.ast.sources, &e.message, e.span);
                 errors.push(e);
             }
         }
@@ -4460,13 +4452,14 @@ mod test {
     #[test]
     fn const_definition_1() -> anyhow::Result<()> {
         let src = r"val x: int = 420;";
-        let module = setup(src, "const_definition_1.nx")?;
-        let mut ir = TypedModule::new(module);
-        ir.run()?;
-        let i1 = &ir.constants[0];
-        if let TypedExpr::Int(i, span) = i1.expr {
+        let parsed_module = setup(src, "const_definition_1.nx")?;
+        let mut module = TypedModule::new(parsed_module);
+        module.run()?;
+        let i1 = &module.constants[0];
+        if let TypedExpr::Int(i, span_id) = i1.expr {
+            let span = module.ast.spans.get(span_id);
             assert_eq!(i, 420);
-            assert_eq!(span.end, 16);
+            assert_eq!(span.end(), 16);
             assert_eq!(span.start, 0);
             Ok(())
         } else {
