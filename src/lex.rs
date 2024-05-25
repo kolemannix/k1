@@ -8,8 +8,7 @@ use log::trace;
 use TokenKind as K;
 
 pub const EOF_CHAR: char = '\0';
-pub const EOF_TOKEN: Token =
-    Token { span: Span { file_id: 0, start: 0, end: 0, line: 0 }, kind: TokenKind::Eof, flags: 0 };
+pub const EOF_TOKEN: Token = Token { span: SpanId::NONE, kind: TokenKind::Eof, flags: 0 };
 
 #[derive(Debug)]
 pub struct LexError {
@@ -18,6 +17,43 @@ pub struct LexError {
 }
 
 pub type LexResult<A> = anyhow::Result<A, LexError>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SpanId(u32);
+impl SpanId {
+    pub const NONE: SpanId = SpanId(0);
+}
+
+#[derive(Debug)]
+pub struct Spans {
+    spans: Vec<Span>,
+}
+
+impl Spans {
+    pub fn new() -> Spans {
+        Spans { spans: vec![Span::NONE] }
+    }
+
+    pub fn default_span_id(&self) -> SpanId {
+        SpanId::NONE
+    }
+
+    pub fn add(&mut self, span: Span) -> SpanId {
+        let id = self.spans.len();
+        self.spans.push(span);
+        SpanId(id as u32)
+    }
+
+    pub fn get(&self, id: SpanId) -> Span {
+        self.spans[id.0 as usize]
+    }
+
+    pub fn extend(&mut self, span1: SpanId, span2: SpanId) -> SpanId {
+        let span1 = self.get(span1);
+        let span2 = self.get(span2);
+        self.add(span1.extended(span2))
+    }
+}
 
 impl Display for LexError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -336,24 +372,21 @@ impl TokenKind {
 pub struct Span {
     pub file_id: u32,
     pub start: u32,
-    pub end: u32,
-    pub line: u32,
+    pub len: u32,
 }
 
 impl Span {
-    pub const NONE: Span = Span { file_id: 0, start: 0, end: 0, line: 0 };
+    pub const NONE: Span = Span { file_id: 0, start: 0, len: 0 };
 
-    pub fn len(&self) -> u32 {
-        self.end - self.start
-    }
-
-    pub fn line_number(&self) -> u32 {
-        self.line + 1
+    pub fn end(&self) -> u32 {
+        self.start + self.len
     }
 
     pub fn extended(&self, other: Span) -> Span {
         let mut copied = *self;
-        copied.end = other.end;
+        let new_end = other.end();
+        let new_len = new_end - copied.start;
+        copied.len = new_len;
         copied
     }
 }
@@ -364,40 +397,37 @@ const TOKEN_FLAG_IS_WHITESPACE_FOLLOWED: u64 = 0x02;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Token {
-    pub span: Span,
+    pub span: SpanId,
     pub kind: TokenKind,
     pub flags: u64,
 }
 
 impl Token {
-    pub fn new(
-        kind: TokenKind,
-        line_index: u32,
-        start: u32,
-        len: u32,
-        whitespace_preceeded: bool,
-        file_id: FileId,
-    ) -> Token {
-        let span = Span { start, end: start + len, line: line_index, file_id };
+    pub fn new(kind: TokenKind, span_id: SpanId, whitespace_preceeded: bool) -> Token {
         let flags = if whitespace_preceeded { TOKEN_FLAG_IS_WHITESPACE_PRECEEDED } else { 0 };
 
-        Token { span, kind, flags }
+        Token { span: span_id, kind, flags }
     }
     pub fn is_whitespace_preceeded(&self) -> bool {
         self.flags & TOKEN_FLAG_IS_WHITESPACE_PRECEEDED == TOKEN_FLAG_IS_WHITESPACE_PRECEEDED
     }
 }
 
-pub struct Lexer<'a> {
+pub struct Lexer<'a, 'spans> {
     pub file_id: FileId,
     content: Chars<'a>,
+    pub spans: &'spans mut Spans,
     pub line_index: u32,
     pub pos: u32,
 }
 
-impl Lexer<'_> {
-    pub fn make(input: &str, file_id: FileId) -> Lexer {
-        Lexer { file_id, content: input.chars(), line_index: 0, pos: 0 }
+impl<'content, 'spans> Lexer<'content, 'spans> {
+    pub fn make(
+        input: &'content str,
+        spans: &'spans mut Spans,
+        file_id: FileId,
+    ) -> Lexer<'content, 'spans> {
+        Lexer { file_id, content: input.chars(), spans, line_index: 0, pos: 0 }
     }
 
     fn err(&self, msg: impl Into<String>) -> LexError {
@@ -412,6 +442,10 @@ impl Lexer<'_> {
         Ok(tokens)
     }
 
+    fn add_span(&mut self, start: u32, len: u32) -> SpanId {
+        self.spans.add(Span { start, len, file_id: self.file_id })
+    }
+
     fn eat_token(&mut self) -> LexResult<Option<Token>> {
         let mut tok_buf = String::new();
         let mut tok_len = 0;
@@ -419,6 +453,10 @@ impl Lexer<'_> {
         let mut line_comment_start = 0;
         let mut is_string = false;
         let peeked_whitespace = self.peek().is_whitespace();
+        let make_token = |lex: &mut Lexer, kind: TokenKind, start: u32, len: u32| {
+            let span = lex.add_span(start, len);
+            Token::new(kind, span, peeked_whitespace)
+        };
         trace!("lex starting new token with prev_skip=false");
         let token = loop {
             let (c, n) = self.peek_with_pos();
@@ -426,15 +464,7 @@ impl Lexer<'_> {
             if is_line_comment {
                 if c == '\n' || c == EOF_CHAR {
                     let len = n - line_comment_start - 1;
-                    // TODO: make a new_token closure
-                    let comment_tok = Token::new(
-                        K::LineComment,
-                        self.line_index,
-                        line_comment_start,
-                        len,
-                        peeked_whitespace,
-                        self.file_id,
-                    );
+                    let comment_tok = make_token(self, K::LineComment, line_comment_start, len);
                     break Some(comment_tok);
                 } else {
                     self.advance();
@@ -444,14 +474,7 @@ impl Lexer<'_> {
             if is_string {
                 if c == '"' {
                     self.advance();
-                    break Some(Token::new(
-                        K::String,
-                        self.line_index,
-                        n - tok_len,
-                        tok_len,
-                        peeked_whitespace,
-                        self.file_id,
-                    ));
+                    break Some(make_token(self, K::String, n - tok_len, tok_len));
                 } else if c == '\n' {
                     return Err(self.err("No newlines inside strings"));
                 } else {
@@ -468,14 +491,7 @@ impl Lexer<'_> {
             }
             if c == EOF_CHAR {
                 if !tok_buf.is_empty() {
-                    break Some(Token::new(
-                        TokenKind::Ident,
-                        self.line_index,
-                        n - tok_len,
-                        tok_len,
-                        peeked_whitespace,
-                        self.file_id,
-                    ));
+                    break Some(make_token(self, K::Ident, n - tok_len, tok_len));
                 } else {
                     break None;
                 }
@@ -485,77 +501,38 @@ impl Lexer<'_> {
                 if !tok_buf.is_empty() {
                     // Break without advancing; we'll have a clear buffer next time
                     // and will advance
-                    break Some(Token::new(
-                        TokenKind::Ident,
-                        self.line_index,
-                        n - tok_len,
-                        tok_len,
-                        false,
-                        self.file_id,
-                    ));
-                } else if single_char_tok == TokenKind::SingleQuote {
+
+                    // Watch out for peeked_whitespace regressions in this case; we were passing 'false'
+                    // but I think it should be just using the current value
+                    break Some(make_token(self, K::Ident, n - tok_len, tok_len));
+                } else if single_char_tok == K::SingleQuote {
                     self.advance(); // eat opening '
-                    let mut count = 1;
+                    let mut len = 1;
                     loop {
                         let c = self.next();
-                        count += 1;
+                        len += 1;
                         if c == '\'' {
                             break;
                         }
                     }
                     // `n` is the index of the opening quote
-                    break Some(Token::new(
-                        TokenKind::Char,
-                        self.line_index,
-                        n,
-                        count,
-                        peeked_whitespace,
-                        self.file_id,
-                    ));
+                    break Some(make_token(self, TokenKind::Char, n, len));
                 } else if single_char_tok == TokenKind::Equals && next == '=' {
                     self.advance();
                     self.advance();
-                    break Some(Token::new(
-                        K::EqualsEquals,
-                        self.line_index,
-                        n,
-                        2,
-                        peeked_whitespace,
-                        self.file_id,
-                    ));
+                    break Some(make_token(self, K::EqualsEquals, n, 2));
                 } else if single_char_tok == TokenKind::Bang && next == '=' {
                     self.advance();
                     self.advance();
-                    break Some(Token::new(
-                        K::BangEquals,
-                        self.line_index,
-                        n,
-                        2,
-                        peeked_whitespace,
-                        self.file_id,
-                    ));
+                    break Some(make_token(self, K::BangEquals, n, 2));
                 } else if single_char_tok == TokenKind::OpenAngle && next == '=' {
                     self.advance();
                     self.advance();
-                    break Some(Token::new(
-                        K::LessThanEqual,
-                        self.line_index,
-                        n,
-                        2,
-                        peeked_whitespace,
-                        self.file_id,
-                    ));
+                    break Some(make_token(self, K::LessThanEqual, n, 2));
                 } else if single_char_tok == TokenKind::CloseAngle && next == '=' {
                     self.advance();
                     self.advance();
-                    break Some(Token::new(
-                        K::GreaterThanEqual,
-                        self.line_index,
-                        n,
-                        2,
-                        peeked_whitespace,
-                        self.file_id,
-                    ));
+                    break Some(make_token(self, K::GreaterThanEqual, n, 2));
                 } else if single_char_tok == TokenKind::Slash && next == '/' {
                     is_line_comment = true;
                     line_comment_start = n;
@@ -563,35 +540,14 @@ impl Lexer<'_> {
                     self.advance();
                 } else {
                     self.advance();
-                    break Some(Token::new(
-                        single_char_tok,
-                        self.line_index,
-                        n,
-                        1,
-                        peeked_whitespace,
-                        self.file_id,
-                    ));
+                    break Some(make_token(self, single_char_tok, n, 1));
                 }
             }
             if c.is_whitespace() && !tok_buf.is_empty() {
                 if let Some(tok) = TokenKind::token_from_str(&tok_buf) {
-                    break Some(Token::new(
-                        tok,
-                        self.line_index,
-                        n - tok_len,
-                        tok_len,
-                        peeked_whitespace,
-                        self.file_id,
-                    ));
+                    break Some(make_token(self, tok, n - tok_len, tok_len));
                 } else {
-                    break Some(Token::new(
-                        TokenKind::Ident,
-                        self.line_index,
-                        n - tok_len,
-                        tok_len,
-                        peeked_whitespace,
-                        self.file_id,
-                    ));
+                    break Some(make_token(self, TokenKind::Ident, n - tok_len, tok_len));
                 }
             }
             if (tok_buf.is_empty() && is_ident_or_num_start(c)) || is_ident_char(c) {
@@ -603,14 +559,7 @@ impl Lexer<'_> {
             } else if let Some(tok) = TokenKind::token_from_str(&tok_buf) {
                 // No longer eat this so the next eat_token call can see it.
                 // self.advance();
-                break Some(Token::new(
-                    tok,
-                    self.line_index,
-                    n - tok_len,
-                    tok_len,
-                    peeked_whitespace,
-                    self.file_id,
-                ));
+                break Some(make_token(self, tok, n - tok_len, tok_len));
             }
             self.advance();
         };
@@ -654,16 +603,30 @@ fn is_ident_or_num_start(c: char) -> bool {
 
 #[cfg(test)]
 mod test {
-    use crate::lex::TokenKind as K;
     use crate::lex::{Lexer, Span, TokenKind};
+    use crate::lex::{Spans, TokenKind as K};
+
+    use super::Token;
+
+    fn set_up(input: &str) -> anyhow::Result<(Spans, Vec<Token>)> {
+        let mut spans = Spans::new();
+        let token_vec = Lexer::make(input, &mut spans, 0).run()?;
+        Ok((spans, token_vec))
+    }
+
+    fn expect_token_kinds(input: &str, expected: Vec<TokenKind>) -> anyhow::Result<()> {
+        let mut spans = Spans::new();
+        let result = Lexer::make(input, &mut spans, 0).run()?;
+        let kinds: Vec<TokenKind> = result.iter().map(|t| t.kind).collect();
+        assert_eq!(kinds, expected);
+        Ok(())
+    }
 
     #[test]
     fn case1() -> anyhow::Result<()> {
         let input = "val x = println(4)";
-        let result = Lexer::make(input, 0).run()?;
-        let kinds: Vec<TokenKind> = result.iter().map(|t| t.kind).collect();
-        assert_eq!(
-            kinds,
+        expect_token_kinds(
+            input,
             vec![
                 K::KeywordVal,
                 K::Ident,
@@ -671,47 +634,53 @@ mod test {
                 K::Ident,
                 K::OpenParen,
                 K::Ident,
-                K::CloseParen
-            ]
-        );
-        Ok(())
+                K::CloseParen,
+            ],
+        )
     }
 
     #[test]
     fn signed_int() -> anyhow::Result<()> {
         let input = "-43";
-        let result = Lexer::make(input, 0).run()?;
-        let kinds: Vec<TokenKind> = result.iter().map(|t| t.kind).collect();
+        let (spans, tokens) = set_up(input)?;
+        let kinds: Vec<TokenKind> = tokens.iter().map(|t| t.kind).collect();
         assert_eq!(kinds, vec![K::Minus, K::Ident]);
-        assert_eq!(result[0].span.start, 0);
-        assert_eq!(result[0].span.end, 1);
-        assert_eq!(result[1].span.start, 1);
-        assert_eq!(result[1].span.end, 3);
-        assert!(!result[1].is_whitespace_preceeded());
+        let span0 = spans.get(tokens[0].span);
+        assert_eq!(span0.start, 0);
+        assert_eq!(span0.len, 1);
+        assert_eq!(span0.end(), 1);
+        let span1 = spans.get(tokens[1].span);
+        assert_eq!(span1.start, 1);
+        assert_eq!(span1.len, 2);
+        assert_eq!(span1.end(), 3);
+        assert!(!tokens[1].is_whitespace_preceeded());
         Ok(())
     }
 
     #[test]
     fn minus_int() -> anyhow::Result<()> {
         let input = "- 43";
-        let result = Lexer::make(input, 0).run()?;
-        let kinds: Vec<TokenKind> = result.iter().map(|t| t.kind).collect();
+        let (spans, tokens) = set_up(input)?;
+        let kinds: Vec<TokenKind> = tokens.iter().map(|t| t.kind).collect();
         assert_eq!(kinds, vec![K::Minus, K::Ident]);
-        assert_eq!(result[0].span.start, 0);
-        assert_eq!(result[0].span.end, 1);
-        assert_eq!(result[1].span.start, 2);
-        assert_eq!(result[1].span.end, 4);
-        assert!(result[1].is_whitespace_preceeded());
+        let span0 = spans.get(tokens[0].span);
+        assert_eq!(span0.start, 0);
+        assert_eq!(span0.len, 1);
+        assert_eq!(span0.end(), 1);
+
+        let span1 = spans.get(tokens[1].span);
+        assert_eq!(span1.start, 2);
+        assert_eq!(span1.len, 2);
+        assert_eq!(span1.end(), 4);
+        assert!(tokens[1].is_whitespace_preceeded());
         Ok(())
     }
 
     #[test]
     fn literal_string() -> anyhow::Result<()> {
         let input = "val x = println(\"foobear\")";
-        let result = Lexer::make(input, 0).run()?;
-        let kinds: Vec<TokenKind> = result.iter().map(|t| t.kind).collect();
-        assert_eq!(
-            kinds,
+        expect_token_kinds(
+            input,
             vec![
                 K::KeywordVal,
                 K::Ident,
@@ -719,28 +688,24 @@ mod test {
                 K::Ident,
                 K::OpenParen,
                 K::String,
-                K::CloseParen
-            ]
-        );
-        Ok(())
+                K::CloseParen,
+            ],
+        )
     }
 
     #[test]
     fn ending_ident() -> anyhow::Result<()> {
         let input = "val x = a + b";
-        let result = Lexer::make(input, 0).run()?;
-        let kinds: Vec<TokenKind> = result.iter().map(|t| t.kind).collect();
-        assert_eq!(kinds, vec![K::KeywordVal, K::Ident, K::Equals, K::Ident, K::Plus, K::Ident]);
-        Ok(())
+        expect_token_kinds(
+            input,
+            vec![K::KeywordVal, K::Ident, K::Equals, K::Ident, K::Plus, K::Ident],
+        )
     }
 
     #[test]
     fn double_equals() -> anyhow::Result<()> {
         let input = "a == b";
-        let result = Lexer::make(input, 0).run()?;
-        let kinds: Vec<TokenKind> = result.iter().map(|t| t.kind).collect();
-        assert_eq!(kinds, vec![K::Ident, K::EqualsEquals, K::Ident]);
-        Ok(())
+        expect_token_kinds(input, vec![K::Ident, K::EqualsEquals, K::Ident])
     }
 
     #[test]
@@ -750,10 +715,9 @@ mod test {
         // <test harness> expected output
         //
         "#;
-        let mut lexer = Lexer::make(input, 0);
-        let result = lexer.run()?;
-        let kinds: Vec<TokenKind> = result.iter().map(|t| t.kind).collect();
-        assert_eq!(result[0].span, Span { start: 0, end: 14, line: 0, file_id: 0 });
+        let (spans, tokens) = set_up(input)?;
+        let kinds: Vec<TokenKind> = tokens.iter().map(|t| t.kind).collect();
+        assert_eq!(spans.get(tokens[0].span), Span { start: 0, len: 14, file_id: 0 });
         assert_eq!(&input[0..5], "// He");
         assert_eq!(
             vec![

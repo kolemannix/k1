@@ -26,7 +26,7 @@ use inkwell::values::{
 use inkwell::{AddressSpace, IntPredicate, OptimizationLevel};
 use log::trace;
 
-use crate::lex::Span;
+use crate::lex::SpanId;
 use crate::parse::{FileId, IdentifierId};
 use crate::typer::scopes::ScopeId;
 use crate::typer::{Linkage as TyperLinkage, *};
@@ -43,14 +43,14 @@ const WORD_SIZE_BITS: u64 = 64;
 #[derive(Debug)]
 pub struct CodegenError {
     pub message: String,
-    pub span: Span,
+    pub span: SpanId,
 }
 
 type CodegenResult<T> = Result<T, CodegenError>;
 
 impl Display for CodegenError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("error on line {}: {}", self.span.line, self.message))
+        f.write_fmt(format_args!("error in span {:?}: {}", self.span, self.message))
     }
 }
 
@@ -478,11 +478,15 @@ impl<'ctx> Codegen<'ctx> {
         }
     }
 
-    fn set_debug_location(&self, span: Span) -> DILocation<'ctx> {
+    fn set_debug_location(&self, span: SpanId) -> DILocation<'ctx> {
+        let span = self.module.ast.spans.get(span);
+        let line = self.module.ast.sources.get_line_for_span(span).expect("No line for span");
+        dbg!(line, span);
+        let column = span.start - line.start_char;
         let locn = self.debug.debug_builder.create_debug_location(
             self.ctx,
-            span.line_number(),
-            1,
+            line.line_index + 1,
+            column,
             self.debug.current_scope(),
             None,
         );
@@ -545,14 +549,21 @@ impl<'ctx> Codegen<'ctx> {
         Ok(self.get_debug_type(type_id)?.get_size_in_bits())
     }
 
+    fn get_line_number(&self, span: SpanId) -> u32 {
+        let span = self.module.ast.spans.get(span);
+        let line = self.module.ast.sources.get_line_for_span(span).expect("No line for span");
+        line.line_index + 1
+    }
+
     fn make_debug_struct_type(
         &self,
         name: &str,
-        span: Span,
+        span: SpanId,
         field_types: &[(impl AsRef<str>, DIType<'ctx>)],
     ) -> DIType<'ctx> {
         let mut offset = 0;
         let mut final_size = 0;
+        let line_number = self.get_line_number(span);
         let fields = &field_types
             .iter()
             .map(|(field_name, member_type)| {
@@ -560,7 +571,7 @@ impl<'ctx> Codegen<'ctx> {
                     self.debug.current_scope(),
                     field_name.as_ref(),
                     self.debug.current_file(),
-                    span.line_number(),
+                    line_number,
                     member_type.get_size_in_bits(),
                     WORD_SIZE_BITS as u32,
                     offset,
@@ -579,7 +590,7 @@ impl<'ctx> Codegen<'ctx> {
                 self.debug.current_scope(),
                 name,
                 self.debug.current_file(),
-                span.line_number(),
+                line_number,
                 final_size,
                 WORD_SIZE_BITS as u32,
                 0,
@@ -654,7 +665,7 @@ impl<'ctx> Codegen<'ctx> {
                     .as_type();
                 Ok(self.make_debug_struct_type(
                     "string",
-                    Span::NONE,
+                    SpanId::NONE,
                     &[("length", self.get_debug_type(INT_TYPE_ID)?), ("data", data_ptr_type)],
                 ))
             }
@@ -703,7 +714,7 @@ impl<'ctx> Codegen<'ctx> {
                 ];
                 Ok(self.make_debug_struct_type(
                     &self.module.type_id_to_string(type_id),
-                    Span::NONE,
+                    SpanId::NONE,
                     fields,
                 ))
             }
@@ -713,7 +724,7 @@ impl<'ctx> Codegen<'ctx> {
                     ("discriminant", self.get_debug_type(BOOL_TYPE_ID)?),
                     ("payload", self.get_debug_type(optional.inner_type)?),
                 ];
-                Ok(self.make_debug_struct_type(&name, Span::NONE, fields))
+                Ok(self.make_debug_struct_type(&name, SpanId::NONE, fields))
             }
             Type::Reference(reference_type) => {
                 let name = format!("{}*", self.module.type_id_to_string(type_id));
@@ -986,7 +997,7 @@ impl<'ctx> Codegen<'ctx> {
                 self.debug.current_scope(),
                 &self.get_ident_name(variable.name),
                 self.debug.current_file(),
-                val.span.line_number(),
+                self.get_line_number(val.span),
                 self.get_debug_type(val.ty)?,
                 true,
                 0,
@@ -2021,7 +2032,11 @@ impl<'ctx> Codegen<'ctx> {
             .iter()
             .map(|fn_param| self.get_debug_type(fn_param.type_id))
             .collect::<CodegenResult<Vec<_>>>()?;
-        let function_file = self.debug.files.get(&function.span.file_id).unwrap();
+        let span = self.module.ast.spans.get(function.span);
+        let function_line_number =
+            self.module.ast.sources.get_line_for_span(span).expect("line for span").line_index + 1;
+        let function_scope_start_line_number = function_line_number;
+        let function_file = self.debug.files.get(&span.file_id).unwrap();
         let dbg_fn_type = self.debug.debug_builder.create_subroutine_type(
             *function_file,
             Some(return_type),
@@ -2033,11 +2048,11 @@ impl<'ctx> Codegen<'ctx> {
             &self.module.ast.get_ident_str(function.name),
             None,
             *function_file,
-            function.span.line_number(),
+            function_line_number,
             dbg_fn_type,
             false,
             true,
-            function.span.line_number(),
+            function_scope_start_line_number,
             0,
             false,
         );
@@ -2056,6 +2071,14 @@ impl<'ctx> Codegen<'ctx> {
         if let Some(function) = self.llvm_functions.get(&function_id) {
             return Ok(*function);
         }
+        let function_line_number = self
+            .module
+            .ast
+            .sources
+            .get_line_for_span(self.module.ast.spans.get(function.span))
+            .expect("line for span")
+            .line_index
+            + 1;
         if function.is_generic() {
             panic!("Cannot codegen generic function: {}", &*self.get_ident_name(function.name));
         }
@@ -2114,7 +2137,7 @@ impl<'ctx> Codegen<'ctx> {
                 &param_name,
                 typed_param.position,
                 self.debug.current_file(),
-                function.span.line_number(),
+                function_line_number,
                 arg_debug_type,
                 true,
                 0,

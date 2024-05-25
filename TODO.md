@@ -6,7 +6,6 @@
   - [ ] Move spans into SoA on AST
   - [x] Codegen fail instead of panic
   - [x] Rename record to struct
-  - [ ] ? Use ast nodes on Typed\* instead of copies of spans
 - [ ] Pattern Matching
   - [x] Single-arm match evals to boolean
   - [x] Literals
