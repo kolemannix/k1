@@ -6,12 +6,8 @@ fn make_test_module() -> ParsedModule {
 }
 
 fn set_up<'module>(input: &str, module: &'module mut ParsedModule) -> Parser<'static, 'module> {
-    let source = Rc::new(Source::make(
-        0,
-        "unit_test".to_string(),
-        "unit_test.bfl".to_string(),
-        input.to_string(),
-    ));
+    let source =
+        Source::make(0, "unit_test".to_string(), "unit_test.bfl".to_string(), input.to_string());
     let mut lexer = Lexer::make(&source.content, &mut module.spans, 0);
     let token_vec: &'static mut [Token] = lexer.run().unwrap().leak();
     println!("{:#?}", token_vec);
@@ -52,15 +48,11 @@ fn basic_fn() -> Result<(), ParseError> {
       y = add(42, 42);
       add(x, y)
     }"#;
-    let source = Rc::new(Source::make(
-        0,
-        "test_src".to_string(),
-        "test_case.bfl".to_string(),
-        src.to_string(),
-    ));
-    let module = parse_module(source)?;
+    let source =
+        Source::make(0, "test_src".to_string(), "test_case.bfl".to_string(), src.to_string());
+    let mut module = test_parse_module(source)?;
     let fndef = module.functions.first().unwrap();
-    assert_eq!(fndef.name, module.ident_id("basic"));
+    assert_eq!(fndef.name, module.identifiers.intern("basic"));
     Ok(())
 }
 
@@ -138,9 +130,9 @@ fn fn_args_literal() -> Result<(), ParseError> {
     let (module, result) = test_single_expr(input)?;
     if let ParsedExpression::FnCall(fn_call) = result {
         let args = &fn_call.args;
-        let idents = module.identifiers.clone();
-        assert_eq!(idents.borrow().get_name(fn_call.name), "f");
-        assert_eq!(idents.borrow().get_name(args[0].name.unwrap()), "myarg");
+        let idents = &module.identifiers;
+        assert_eq!(idents.get_name(fn_call.name), "f");
+        assert_eq!(idents.get_name(args[0].name.unwrap()), "myarg");
         assert!(ParsedExpression::is_literal(&module.expressions.get_expression(args[0].value)));
         assert!(ParsedExpression::is_literal(&module.expressions.get_expression(args[1].value)));
         assert!(ParsedExpression::is_literal(&module.expressions.get_expression(args[2].value)));
@@ -164,15 +156,18 @@ fn if_no_else() -> ParseResult<()> {
 #[test]
 fn dot_accessor() -> ParseResult<()> {
     let input = "a.b.c";
-    let (pm, result) = test_single_expr(input)?;
+    let (module, result) = test_single_expr(input)?;
     let ParsedExpression::FieldAccess(access_op) = result else { panic!() };
-    assert_eq!(&*pm.get_ident_str(access_op.target), "c");
-    let ParsedExpression::FieldAccess(acc2) = pm.expressions.get_expression(access_op.base) else {
+    assert_eq!(module.identifiers.get_name(access_op.target), "c");
+    let ParsedExpression::FieldAccess(acc2) = module.expressions.get_expression(access_op.base)
+    else {
         panic!()
     };
-    assert_eq!(&*pm.get_ident_str(acc2.target), "b");
-    let ParsedExpression::Variable(v) = pm.expressions.get_expression(acc2.base) else { panic!() };
-    assert_eq!(&*pm.get_ident_str(v.name), "a");
+    assert_eq!(module.identifiers.get_name(acc2.target), "b");
+    let ParsedExpression::Variable(v) = module.expressions.get_expression(acc2.base) else {
+        panic!()
+    };
+    assert_eq!(module.identifiers.get_name(v.name), "a");
     Ok(())
 }
 
@@ -205,13 +200,13 @@ fn type_parameter_multi() -> ParseResult<()> {
 #[test]
 fn prelude_only() -> Result<(), ParseError> {
     env_logger::init();
-    let prelude_source = Rc::new(Source::make(
+    let prelude_source = Source::make(
         0,
         "builtins".to_string(),
         "prelude.bfl".to_string(),
         fs::read_to_string("builtins/prelude.bfl").unwrap(),
-    ));
-    let module = parse_module(prelude_source)?;
+    );
+    let module = test_parse_module(prelude_source)?;
     assert_eq!(&module.name, "prelude");
     assert_eq!(&module.sources.get_main().filename, "prelude.bfl");
     assert_eq!(&module.sources.get_main().directory, "builtins");
@@ -280,14 +275,14 @@ fn generic_fn_call() -> Result<(), ParseError> {
 #[test]
 fn generic_method_call_lhs_expr() -> Result<(), ParseError> {
     let input = "getFn().baz<int>(42)";
-    let (parser, result) = test_single_expr(input)?;
+    let (mut parser, result) = test_single_expr(input)?;
     let ParsedExpression::MethodCall(call) = result else { panic!() };
     let ParsedExpression::FnCall(fn_call) = parser.expressions.get_expression(call.base).clone()
     else {
         panic!()
     };
-    assert_eq!(fn_call.name, parser.ident_id("getFn"));
-    assert_eq!(call.call.name, parser.ident_id("baz"));
+    assert_eq!(fn_call.name, parser.identifiers.intern("getFn"));
+    assert_eq!(call.call.name, parser.identifiers.intern("baz"));
     let type_arg = parser.type_expressions.get(call.call.type_args.unwrap()[0].type_expr);
     assert!(type_arg.is_int());
     assert!(matches!(
@@ -315,28 +310,28 @@ fn char_value() -> ParseResult<()> {
 #[test]
 fn namespaced_fncall() -> ParseResult<()> {
     let input = "foo::bar::baz()";
-    let (parser, result) = test_single_expr(input)?;
+    let (mut parser, result) = test_single_expr(input)?;
     let ParsedExpression::FnCall(fn_call) = result else {
         dbg!(result);
         panic!("not fncall")
     };
-    assert_eq!(fn_call.namespaces[0], parser.ident_id("foo"));
-    assert_eq!(fn_call.namespaces[1], parser.ident_id("bar"));
-    assert_eq!(fn_call.name, parser.ident_id("baz"));
+    assert_eq!(fn_call.namespaces[0], parser.identifiers.intern("foo"));
+    assert_eq!(fn_call.namespaces[1], parser.identifiers.intern("bar"));
+    assert_eq!(fn_call.name, parser.identifiers.intern("baz"));
     assert!(fn_call.args.is_empty());
     Ok(())
 }
 #[test]
 fn namespaced_val() -> ParseResult<()> {
     let input = "foo::bar::baz";
-    let (parser, result) = test_single_expr(input)?;
+    let (mut parser, result) = test_single_expr(input)?;
     let ParsedExpression::Variable(variable) = result else {
         dbg!(result);
         panic!("not variable")
     };
-    assert_eq!(variable.namespaces[0], parser.ident_id("foo"));
-    assert_eq!(variable.namespaces[1], parser.ident_id("bar"));
-    assert_eq!(variable.name, parser.ident_id("baz"));
+    assert_eq!(variable.namespaces[0], parser.identifiers.intern("foo"));
+    assert_eq!(variable.namespaces[1], parser.identifiers.intern("bar"));
+    assert_eq!(variable.name, parser.identifiers.intern("baz"));
     Ok(())
 }
 

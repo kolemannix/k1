@@ -7,20 +7,19 @@ use std::os::unix::prelude::ExitStatusExt;
 fn test_file<P: AsRef<Path>>(ctx: &Context, path: P) -> Result<()> {
     let out_dir = "bfl-out/test_suite";
     let filename = path.as_ref().file_name().unwrap().to_str().unwrap();
-    let codegen = crate::compile_module(
-        ctx,
-        &crate::Args {
-            no_llvm_opt: true,
-            debug: true,
-            no_prelude: false,
-            write_llvm: true,
-            dump_module: false,
-            run: false,
-            file: path.as_ref().to_owned(),
-        },
-        out_dir,
-    )
-    .map_err(|err| anyhow!("\tTEST CASE FAILED COMPILE: {}. Reason: {}", filename, err))?;
+    let args = crate::Args {
+        no_llvm_opt: true,
+        debug: true,
+        no_prelude: false,
+        write_llvm: true,
+        dump_module: false,
+        run: false,
+        file: path.as_ref().to_owned(),
+        gui: false,
+    };
+    let typed_module = crate::compile_module(&args)
+        .map_err(|err| anyhow!("\tTEST CASE FAILED COMPILE: {}. Reason: {}", filename, err))?;
+    let codegen = crate::codegen_module(&args, ctx, &typed_module, out_dir)?;
     let module_name = codegen.name();
 
     let path = path.as_ref().canonicalize().unwrap();

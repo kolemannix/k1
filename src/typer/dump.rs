@@ -136,7 +136,7 @@ impl TypedModule {
                     if index > 0 {
                         writ.write_str(", ")?;
                     }
-                    writ.write_str(self.ast.identifiers.borrow().get_name(field.name))?;
+                    writ.write_str(self.ast.identifiers.get_name(field.name))?;
                     writ.write_str(": ")?;
                     self.display_type_id(field.type_id, writ)?;
                 }
@@ -149,7 +149,7 @@ impl TypedModule {
             }
             Type::TypeVariable(tv) => {
                 writ.write_str("$")?;
-                writ.write_str(self.ast.identifiers.borrow().get_name(tv.identifier_id))
+                writ.write_str(self.ast.identifiers.get_name(tv.identifier_id))
             }
             Type::Optional(opt) => {
                 self.display_type_id(opt.inner_type, writ)?;
@@ -161,12 +161,12 @@ impl TypedModule {
             }
             Type::TagInstance(tag) => {
                 writ.write_str(".")?;
-                writ.write_str(self.ast.identifiers.borrow().get_name(tag.ident))
+                writ.write_str(self.ast.identifiers.get_name(tag.ident))
             }
             Type::Enum(e) => {
                 writ.write_str("enum ")?;
                 for (idx, v) in e.variants.iter().enumerate() {
-                    writ.write_str(self.ast.identifiers.borrow().get_name(v.tag_name))?;
+                    writ.write_str(self.ast.identifiers.get_name(v.tag_name))?;
                     if let Some(payload) = &v.payload {
                         writ.write_str("(")?;
                         self.display_type_id(*payload, writ)?;

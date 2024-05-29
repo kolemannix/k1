@@ -4,7 +4,6 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::ops::Deref;
 use std::path::Path;
-use std::rc::Rc;
 
 use inkwell::attributes::AttributeLoc;
 use inkwell::builder::Builder;
@@ -213,9 +212,9 @@ struct LibcFunctions<'ctx> {
     memcmp: FunctionValue<'ctx>,
 }
 
-pub struct Codegen<'ctx> {
+pub struct Codegen<'ctx, 'module> {
     ctx: &'ctx Context,
-    pub module: Rc<TypedModule>,
+    pub module: &'module TypedModule,
     llvm_module: LlvmModule<'ctx>,
     llvm_machine: Option<TargetMachine>,
     builder: Builder<'ctx>,
@@ -284,7 +283,7 @@ fn i8_array_from_str<'ctx>(ctx: &'ctx Context, value: &str) -> ArrayValue<'ctx> 
     ctx.const_string(bytes, false)
 }
 
-impl<'ctx> Codegen<'ctx> {
+impl<'ctx, 'module> Codegen<'ctx, 'module> {
     fn init_debug(
         ctx: &'ctx Context,
         llvm_module: &LlvmModule<'ctx>,
@@ -371,10 +370,10 @@ impl<'ctx> Codegen<'ctx> {
 
     pub fn create(
         ctx: &'ctx Context,
-        module: Rc<TypedModule>,
+        module: &'module TypedModule,
         debug: bool,
         optimize: bool,
-    ) -> Codegen<'ctx> {
+    ) -> Codegen<'ctx, 'module> {
         let builder = ctx.create_builder();
         let char_type = ctx.i8_type();
         let llvm_module = ctx.create_module(&module.ast.name);
@@ -447,7 +446,7 @@ impl<'ctx> Codegen<'ctx> {
         for (_type_id, typ) in module.types.iter() {
             if let Type::TagInstance(tag) = typ {
                 let value = builtin_types.tag_type.const_int(tag_type_value, false);
-                let name = module.ast.get_ident_str(tag.ident);
+                let name = module.ast.identifiers.get_name(tag.ident);
                 let global = llvm_module.add_global(
                     builtin_types.tag_type,
                     None,
@@ -481,7 +480,6 @@ impl<'ctx> Codegen<'ctx> {
     fn set_debug_location(&self, span: SpanId) -> DILocation<'ctx> {
         let span = self.module.ast.spans.get(span);
         let line = self.module.ast.sources.get_line_for_span(span).expect("No line for span");
-        dbg!(line, span);
         let column = span.start - line.start_char;
         let locn = self.debug.debug_builder.create_debug_location(
             self.ctx,
@@ -495,7 +493,7 @@ impl<'ctx> Codegen<'ctx> {
     }
 
     fn get_ident_name(&self, id: IdentifierId) -> impl Deref<Target = str> + '_ {
-        self.module.ast.get_ident_str(id)
+        self.module.ast.identifiers.get_name(id)
     }
 
     fn build_print_int_call(&mut self, int_value: BasicValueEnum<'ctx>) -> BasicValueEnum<'ctx> {
@@ -834,8 +832,7 @@ impl<'ctx> Codegen<'ctx> {
                 match result {
                     None => {
                         // Generate and store the type in here
-                        let module = self.module.clone();
-                        let ty = module.types.get_type(type_id);
+                        let ty = self.module.types.get_type(type_id);
                         let generated: LlvmType = match ty {
                             Type::Optional(optional) => Ok(LlvmValueType {
                                 type_id,
@@ -1263,7 +1260,7 @@ impl<'ctx> Codegen<'ctx> {
                             field_access.target_field_index,
                             &format!(
                                 "struc.{}",
-                                &*self.module.ast.get_ident_str(field_access.target_field)
+                                &*self.module.ast.identifiers.get_name(field_access.target_field)
                             ),
                         )
                         .unwrap();
@@ -1279,7 +1276,7 @@ impl<'ctx> Codegen<'ctx> {
                             field_access.target_field_index,
                             &format!(
                                 "struc.{}",
-                                &*self.module.ast.get_ident_str(field_access.target_field)
+                                &*self.module.ast.identifiers.get_name(field_access.target_field)
                             ),
                         )
                         .unwrap();
@@ -1514,8 +1511,7 @@ impl<'ctx> Codegen<'ctx> {
         }
     }
     fn codegen_function_call(&mut self, call: &Call) -> CodegenResult<BasicValueEnum<'ctx>> {
-        let ir_module = self.module.clone();
-        let callee = ir_module.get_function(call.callee_function_id);
+        let callee = self.module.get_function(call.callee_function_id);
 
         let function_value = self.codegen_function(call.callee_function_id, callee)?;
 
@@ -2045,7 +2041,7 @@ impl<'ctx> Codegen<'ctx> {
         );
         let di_subprogram = self.debug.debug_builder.create_function(
             self.debug.current_scope(),
-            &self.module.ast.get_ident_str(function.name),
+            &self.module.ast.identifiers.get_name(function.name),
             None,
             *function_file,
             function_line_number,
@@ -2104,7 +2100,7 @@ impl<'ctx> Codegen<'ctx> {
             TyperLinkage::Intrinsic => None,
         };
         let fn_val = {
-            let name = self.module.ast.get_ident_str(function.name);
+            let name = self.module.ast.identifiers.get_name(function.name);
             self.llvm_module.add_function(&name, fn_ty, llvm_linkage)
         };
 
@@ -2121,7 +2117,7 @@ impl<'ctx> Codegen<'ctx> {
         for (i, param) in fn_val.get_param_iter().enumerate() {
             let typed_param = &function.params[i];
             let ty = self.codegen_type(typed_param.type_id)?;
-            let param_name = self.module.ast.get_ident_str(typed_param.name);
+            let param_name = self.module.ast.identifiers.get_name(typed_param.name);
             trace!(
                 "Got LLVM type for variable {}: {} (from {})",
                 &*param_name,
@@ -2215,7 +2211,7 @@ impl<'ctx> Codegen<'ctx> {
                 _ => todo!("constant must be int"),
             }
         }
-        for (id, function) in self.module.clone().function_iter() {
+        for (id, function) in self.module.function_iter() {
             if function.should_codegen() {
                 self.codegen_function(id, function)?;
             }
@@ -2287,6 +2283,7 @@ impl<'ctx> Codegen<'ctx> {
         Ok(())
     }
 
+    #[allow(unused)]
     pub fn emit_object_file(&self, rel_destination_dir: &str) -> anyhow::Result<()> {
         let filename = format!("{}.o", self.name());
         let machine =
@@ -2303,6 +2300,7 @@ impl<'ctx> Codegen<'ctx> {
         self.llvm_module.print_to_string().to_string()
     }
 
+    #[allow(unused)]
     pub fn interpret_module(&self) -> anyhow::Result<u64> {
         let engine = self.llvm_module.create_jit_execution_engine(OptimizationLevel::None).unwrap();
         let return_value =
