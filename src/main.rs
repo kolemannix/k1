@@ -1,25 +1,29 @@
+use std::ffi::CString;
 use std::fs;
 use std::fs::File;
 use std::io::Write;
 use std::os::unix::prelude::ExitStatusExt;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
+use std::sync::{Arc, RwLock};
+use std::thread::JoinHandle;
 
 use anyhow::Result;
 use clap::Parser;
 use inkwell::context::Context;
+use typer::TypedModule;
 
 use crate::codegen_llvm::Codegen;
 use crate::parse::{lex_text, ParsedModule, Source};
 
 mod codegen_llvm;
+mod gui;
 mod lex;
 mod parse;
 #[cfg(test)]
 mod test_suite;
 mod typer;
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[command(author, version, about, long_about = None)]
 pub struct Args {
     /// No Prelude
@@ -46,6 +50,10 @@ pub struct Args {
     #[arg(long, default_value_t = false)]
     run: bool,
 
+    /// GUI
+    #[arg(long, default_value_t = false)]
+    gui: bool,
+
     /// File
     file: PathBuf,
 }
@@ -66,11 +74,7 @@ macro_rules! static_assert_size {
 /// If `args.file` points to a file,
 /// - compile that file only.
 /// - module name is the name of the file.
-pub fn compile_module<'ctx>(
-    ctx: &'ctx Context,
-    args: &Args,
-    out_dir: impl AsRef<str>,
-) -> Result<Codegen<'ctx>> {
+pub fn compile_module(args: &Args) -> Result<TypedModule> {
     let src_path = &args.file.canonicalize().unwrap();
     let is_dir = src_path.is_dir();
     let (src_dir, module_name) = if is_dir {
@@ -84,7 +88,6 @@ pub fn compile_module<'ctx>(
 
     let src_filter = if !is_dir { Some(|p: &Path| *p == *src_path) } else { None };
 
-    let out_dir = out_dir.as_ref();
     let use_prelude = !args.no_prelude;
 
     let mut parsed_module = ParsedModule::make(module_name.to_string());
@@ -103,15 +106,15 @@ pub fn compile_module<'ctx>(
         let content = fs::read_to_string(path)?;
         let name = path.file_name().unwrap();
         eprintln!("Parsing {}", name.to_string_lossy());
-        let source = Rc::new(Source::make(
+        let source = Source::make(
             file_id,
             path.canonicalize().unwrap().parent().unwrap().to_str().unwrap().to_string(),
             name.to_str().unwrap().to_string(),
             content,
-        ));
+        );
 
         let token_vec = lex_text(&mut parsed_module.spans, &source.content, source.file_id)?;
-        let mut parser = parse::Parser::make(&token_vec, source.clone(), &mut parsed_module);
+        let mut parser = parse::Parser::make(&token_vec, source, &mut parsed_module);
 
         let result = parser.parse_module();
         if let Err(e) = result {
@@ -144,17 +147,27 @@ pub fn compile_module<'ctx>(
         return Err(e);
     };
 
-    let typed_module = Rc::new(typed_module);
-    let llvm_optimize = !args.no_llvm_opt;
+    Ok(typed_module)
+}
 
-    let mut codegen: Codegen<'ctx> = Codegen::create(ctx, typed_module, args.debug, llvm_optimize);
+fn codegen_module<'ctx, 'module>(
+    args: &Args,
+    ctx: &'ctx Context,
+    typed_module: &'module TypedModule,
+    out_dir: impl AsRef<str>,
+) -> Result<Codegen<'ctx, 'module>> {
+    let llvm_optimize = !args.no_llvm_opt;
+    let out_dir = out_dir.as_ref();
+    let module_name = typed_module.name().to_string();
+
+    let mut codegen = Codegen::create(ctx, &typed_module, args.debug, llvm_optimize);
     if let Err(e) = codegen.codegen_module() {
         parse::print_error_location(&codegen.module.ast.spans, &codegen.module.ast.sources, e.span);
         eprintln!("Codegen error: {}", e.message);
     }
     codegen.optimize(llvm_optimize)?;
 
-    // TODO: We could do this a lot more efficiently by just feeding the in-memory LLVM IR to clang
+    // TODO: We could do this a lot more efficiently by just feeding the in-memory LLVM IR to libclang or whatever the library version is called.
 
     if args.write_llvm {
         let llvm_text = codegen.output_llvm_ir_text();
@@ -207,11 +220,49 @@ fn main() -> Result<()> {
 
     let out_dir = "bfl-out";
 
-    let ctx = Context::create();
-    let codegen = compile_module(&ctx, &args, out_dir)?;
-    let module_name = codegen.name();
+    // If gui mode:
+    // - Create a new thread to compile the module
+    // - Run gui loop from this thread
+    // - On frame or channel push, get module snapshot and render it
+    // - Put module inside a RwLock, just try to read it from the gui thread
+
+    let shared_module: Arc<RwLock<Option<TypedModule>>> = Arc::new(RwLock::new(None));
+
+    // OH instead of a RwLock, we could just use a channel to send the module to the gui thread
+    // Or we could just spawn a thread whenever we need to compile a module, and then send the module back to the main thread
+    let shared_module_clone = shared_module.clone();
+    let args_clone = args.clone();
+    let compile_thread: JoinHandle<()> = std::thread::spawn(move || {
+        let Ok(module) = compile_module(&args_clone) else {
+            return;
+        };
+        let llvm_ctx = Context::create();
+        println!("2");
+        shared_module_clone.write().unwrap().replace(module);
+        println!("3");
+
+        let module_read = shared_module_clone.read().unwrap();
+        println!("4");
+        let module = module_read.as_ref().unwrap();
+        println!("5");
+        let Ok(_codegen) = codegen_module(&args_clone, &llvm_ctx, module, out_dir) else { return };
+
+        std::thread::sleep(std::time::Duration::from_secs(100));
+    });
 
     if args.run {
+        println!("waiting on compile thread");
+        loop {
+            let module = shared_module.try_read();
+            if module.is_ok() && module.unwrap().is_some() {
+                break;
+            } else {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            }
+        }
+        let module = shared_module.read().unwrap();
+        let module_name = module.as_ref().unwrap().name();
+        println!("done waiting on compile thread");
         let mut run_cmd = std::process::Command::new(format!("{}/{}.out", out_dir, module_name));
         log::debug!("Run Command: {:?}", run_cmd);
         let run_status = run_cmd.status().unwrap();
@@ -225,5 +276,65 @@ fn main() -> Result<()> {
             }
         }
     }
-    Ok(())
+
+    if args.gui {
+        let mut gui = gui::Gui::init();
+        use raylib::prelude::*;
+        let thread = gui.rl_thread.clone();
+        let font: Font = gui
+            .rl
+            .load_font(&thread, "/Users/knix/Library/Fonts/JetBrainsMono-Regular.ttf")
+            .expect("font load");
+
+        let mut scroll_index = 0;
+        let mut active = 0;
+
+        while !gui.rl.window_should_close() {
+            let mut d = gui.rl.begin_drawing(&thread);
+            // d.gui_set_font(&font);
+
+            let lock = shared_module.try_read();
+            let Ok(module_option_guard) = lock else {
+                continue;
+            };
+            let module = module_option_guard.as_ref().expect("Expected module by now?");
+
+            let name = module.name();
+
+            d.clear_background(raylib::color::Color::WHITE);
+            d.draw_text(name, 12, 12, 20, raylib::color::Color::BLACK);
+            d.draw_fps(500, 10);
+            let index = d.gui_list_view(
+                Rectangle { x: 100.0, y: 100.0, width: 500.0, height: 500.0 },
+                Some(rstr!("hello;goodbye;wat")),
+                &mut scroll_index,
+                &mut active,
+            );
+            let b = d.gui_label_button(
+                Rectangle { x: 30.0, y: 30.0, width: 200.0, height: 100.0 },
+                Some(rstr!("Run;Compile")),
+            );
+            if b {
+                println!("Run again");
+            }
+            // d.gui_list_view_ex(bounds, text, focus, scroll_index, active)
+
+            for (idx, (id, f)) in module.function_iter().enumerate() {
+                let name = CString::new(module.ast.identifiers.get_name(f.name)).unwrap();
+                d.gui_label(Rectangle::new(0.0, 0.0, 100.0, 50.0), Some(name.as_c_str()));
+                // d.draw_text_ex(
+                //     &font,
+                //     module.ast.identifiers.get_name(f.name),
+                //     Vector2 { x: 20.0, y: 20.0 + (20.0 * idx as f32) },
+                //     12.0,
+                //     1.0,
+                //     Color::GRAY,
+                // );
+            }
+        }
+        Ok(())
+    } else {
+        compile_thread.join().unwrap();
+        Ok(())
+    }
 }

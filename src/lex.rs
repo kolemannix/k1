@@ -24,7 +24,7 @@ impl SpanId {
     pub const NONE: SpanId = SpanId(0);
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Spans {
     spans: Vec<Span>,
 }
