@@ -36,6 +36,12 @@
 - [ ] Full-on closures with =>
 - [ ] Make demo readme
 
+# GUI checklist
+
+- [ ] Render typed module, incrementally with each definition typed
+- [ ] See all types
+- [ ] One day allow updating or adding a definition
+
 # Old todo list
 
 - [x] Records
