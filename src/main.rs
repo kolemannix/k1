@@ -6,6 +6,7 @@ use std::os::unix::prelude::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::thread::JoinHandle;
+use std::time::Instant;
 
 use anyhow::Result;
 use clap::Parser;
@@ -75,6 +76,7 @@ macro_rules! static_assert_size {
 /// - compile that file only.
 /// - module name is the name of the file.
 pub fn compile_module(args: &Args) -> Result<TypedModule> {
+    let start_parse = std::time::Instant::now();
     let src_path = &args.file.canonicalize().unwrap();
     let is_dir = src_path.is_dir();
     let (src_dir, module_name) = if is_dir {
@@ -139,6 +141,10 @@ pub fn compile_module(args: &Args) -> Result<TypedModule> {
         anyhow::bail!("Parsing failed")
     }
 
+    let type_start = Instant::now();
+    let parsing_elapsed = type_start.duration_since(start_parse);
+    println!("parsing took {}ms", parsing_elapsed.as_millis());
+
     let mut typed_module = typer::TypedModule::new(parsed_module);
     if let Err(e) = typed_module.run() {
         if args.dump_module {
@@ -146,6 +152,8 @@ pub fn compile_module(args: &Args) -> Result<TypedModule> {
         }
         return Err(e);
     };
+    let typing_elapsed = type_start.elapsed();
+    println!("typing took {}ms", typing_elapsed.as_millis());
 
     Ok(typed_module)
 }
@@ -156,6 +164,7 @@ fn codegen_module<'ctx, 'module>(
     typed_module: &'module TypedModule,
     out_dir: impl AsRef<str>,
 ) -> Result<Codegen<'ctx, 'module>> {
+    let start_time = std::time::Instant::now();
     let llvm_optimize = !args.no_llvm_opt;
     let out_dir = out_dir.as_ref();
     let module_name = typed_module.name().to_string();
@@ -204,6 +213,8 @@ fn codegen_module<'ctx, 'module>(
         std::process::exit(1)
     }
 
+    let elapsed = start_time.elapsed();
+    println!("codegen took {}ms", elapsed.as_millis());
     Ok(codegen)
 }
 
@@ -226,115 +237,82 @@ fn main() -> Result<()> {
     // - On frame or channel push, get module snapshot and render it
     // - Put module inside a RwLock, just try to read it from the gui thread
 
-    let shared_module: Arc<RwLock<Option<TypedModule>>> = Arc::new(RwLock::new(None));
+    let module_handle: Arc<RwLock<Option<TypedModule>>> = Arc::new(RwLock::new(None));
 
     // OH instead of a RwLock, we could just use a channel to send the module to the gui thread
     // Or we could just spawn a thread whenever we need to compile a module, and then send the module back to the main thread
-    let shared_module_clone = shared_module.clone();
+    let shared_module_clone = module_handle.clone();
     let args_clone = args.clone();
+    let (compile_sender, compile_receiver) = std::sync::mpsc::sync_channel::<()>(16);
+    // compile_sender.send(())?;
     let compile_thread: JoinHandle<()> = std::thread::spawn(move || {
-        let Ok(module) = compile_module(&args_clone) else {
-            return;
-        };
-        let llvm_ctx = Context::create();
-        println!("2");
-        shared_module_clone.write().unwrap().replace(module);
-        println!("3");
+        while let Ok(()) = compile_receiver.recv() {
+            let Ok(module) = compile_module(&args_clone) else {
+                return;
+            };
+            let llvm_ctx = Context::create();
+            shared_module_clone.write().unwrap().replace(module);
 
-        let module_read = shared_module_clone.read().unwrap();
-        println!("4");
-        let module = module_read.as_ref().unwrap();
-        println!("5");
-        let Ok(_codegen) = codegen_module(&args_clone, &llvm_ctx, module, out_dir) else { return };
-
-        std::thread::sleep(std::time::Duration::from_secs(100));
+            let module_read = shared_module_clone.read().unwrap();
+            let module = module_read.as_ref().unwrap();
+            let Ok(_codegen) = codegen_module(&args_clone, &llvm_ctx, module, out_dir) else {
+                return;
+            };
+        }
     });
 
-    if args.run {
+    let (run_sender, run_receiver) = std::sync::mpsc::sync_channel::<()>(16);
+    let run_module_handle = module_handle.clone();
+    let run_thread: JoinHandle<()> = std::thread::spawn(move || {
+        while let Ok(()) = run_receiver.recv() {
+            let module_read = run_module_handle.read().unwrap();
+            let Some(module) = module_read.as_ref() else {
+                println!("Cannot run; no module");
+                continue;
+            };
+            run_compiled_program(out_dir, module.name());
+        }
+    });
+
+    if args.run && !args.gui {
         println!("waiting on compile thread");
         loop {
-            let module = shared_module.try_read();
+            let module = module_handle.try_read();
             if module.is_ok() && module.unwrap().is_some() {
                 break;
             } else {
-                std::thread::sleep(std::time::Duration::from_secs(1));
+                std::thread::sleep(std::time::Duration::from_millis(100));
             }
         }
-        let module = shared_module.read().unwrap();
+        let module = module_handle.read().unwrap();
         let module_name = module.as_ref().unwrap().name();
         println!("done waiting on compile thread");
-        let mut run_cmd = std::process::Command::new(format!("{}/{}.out", out_dir, module_name));
-        log::debug!("Run Command: {:?}", run_cmd);
-        let run_status = run_cmd.status().unwrap();
+        run_compiled_program(out_dir, module_name);
+        Ok(())
+    } else if args.gui {
+        let mut gui = gui::Gui::init(module_handle.clone(), compile_sender, run_sender);
 
-        match run_status.code() {
-            Some(code) => {
-                println!("Program exited with code: {}", code);
-            }
-            None => {
-                println!("Program was terminated with signal: {:?}", run_status.signal());
-            }
-        }
-    }
+        gui.run_loop();
 
-    if args.gui {
-        let mut gui = gui::Gui::init();
-        use raylib::prelude::*;
-        let thread = gui.rl_thread.clone();
-        let font: Font = gui
-            .rl
-            .load_font(&thread, "/Users/knix/Library/Fonts/JetBrainsMono-Regular.ttf")
-            .expect("font load");
-
-        let mut scroll_index = 0;
-        let mut active = 0;
-
-        while !gui.rl.window_should_close() {
-            let mut d = gui.rl.begin_drawing(&thread);
-            // d.gui_set_font(&font);
-
-            let lock = shared_module.try_read();
-            let Ok(module_option_guard) = lock else {
-                continue;
-            };
-            let module = module_option_guard.as_ref().expect("Expected module by now?");
-
-            let name = module.name();
-
-            d.clear_background(raylib::color::Color::WHITE);
-            d.draw_text(name, 12, 12, 20, raylib::color::Color::BLACK);
-            d.draw_fps(500, 10);
-            let index = d.gui_list_view(
-                Rectangle { x: 100.0, y: 100.0, width: 500.0, height: 500.0 },
-                Some(rstr!("hello;goodbye;wat")),
-                &mut scroll_index,
-                &mut active,
-            );
-            let b = d.gui_label_button(
-                Rectangle { x: 30.0, y: 30.0, width: 200.0, height: 100.0 },
-                Some(rstr!("Run;Compile")),
-            );
-            if b {
-                println!("Run again");
-            }
-            // d.gui_list_view_ex(bounds, text, focus, scroll_index, active)
-
-            for (idx, (id, f)) in module.function_iter().enumerate() {
-                let name = CString::new(module.ast.identifiers.get_name(f.name)).unwrap();
-                d.gui_label(Rectangle::new(0.0, 0.0, 100.0, 50.0), Some(name.as_c_str()));
-                // d.draw_text_ex(
-                //     &font,
-                //     module.ast.identifiers.get_name(f.name),
-                //     Vector2 { x: 20.0, y: 20.0 + (20.0 * idx as f32) },
-                //     12.0,
-                //     1.0,
-                //     Color::GRAY,
-                // );
-            }
-        }
         Ok(())
     } else {
         compile_thread.join().unwrap();
         Ok(())
+    }
+}
+
+// Eventually, we want to return output and exit code to the application
+fn run_compiled_program(out_dir: &str, module_name: &str) {
+    let mut run_cmd = std::process::Command::new(format!("{}/{}.out", out_dir, module_name));
+    log::debug!("Run Command: {:?}", run_cmd);
+    let run_status = run_cmd.status().unwrap();
+
+    match run_status.code() {
+        Some(code) => {
+            println!("Program exited with code: {}", code);
+        }
+        None => {
+            println!("Program was terminated with signal: {:?}", run_status.signal());
+        }
     }
 }
