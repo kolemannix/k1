@@ -182,6 +182,12 @@ impl TypedModule {
         }
     }
 
+    pub fn function_to_string(&self, function: &TypedFunction, display_block: bool) -> String {
+        let mut string = String::new();
+        self.display_function(function, &mut string, display_block);
+        string
+    }
+
     pub fn display_function(
         &self,
         function: &TypedFunction,
