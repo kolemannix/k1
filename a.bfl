@@ -1,7 +1,7 @@
 fn check_point(point: { x: int, y: int }): string {
   when point {
     { x: 1, y: 2 } -> "hi",
-    _ -> "bye bye bye!"
+    _ -> "bye"
   }
 }
 fn new_fn(): unit { () }

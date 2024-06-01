@@ -2,20 +2,21 @@
 
 # Project Completion Checklist
 
-- [ ] QoL before rest of pattern matching
-  - [ ] Move spans into SoA on AST
+- [x] QoL before rest of pattern matching
   - [x] Codegen fail instead of panic
   - [x] Rename record to struct
+  - [x] Start gui
+  - [ ] Remove ! for negation; switch to 'not'
 - [ ] Pattern Matching
   - [x] Single-arm match evals to boolean
   - [x] Literals
   - [x] Variables
-  - [ ] Optional None
+  - [x] Optional None
   - [x] Optional Some
-  - [ ] Exhaustiveness checking
   - [x] Records
   - [ ] Enums
-  - [ ] Multi-case
+  - [-] Multi-case
+  - [ ] Exhaustiveness checking
 - [ ] Enums types (enums / tagged unions)
   - [x] Syntax
   - [x] Construction/repr
@@ -38,9 +39,10 @@
 
 # GUI checklist
 
-- [ ] Render typed module, incrementally with each definition typed
-- [ ] See all types
-- [ ] One day allow updating or adding a definition
+- [x] Get render loop working with access to module, ability to trigger compile, run
+- [ ] Render namespaces, use recursion over namespace for all functionality?
+- [ ] Search for a type?
+- [ ] One day allow updating or adding a single definition
 
 # Old todo list
 
