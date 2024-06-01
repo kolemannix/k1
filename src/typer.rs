@@ -630,6 +630,12 @@ pub enum TypedExpr {
     EnumConstructor(TypedEnumConstructor),
 }
 
+impl From<VariableExpr> for TypedExpr {
+    fn from(value: VariableExpr) -> Self {
+        TypedExpr::Variable(value)
+    }
+}
+
 impl TypedExpr {
     #[inline]
     pub fn get_type(&self) -> TypeId {
@@ -2474,7 +2480,7 @@ impl TypedModule {
                 let contained_type =
                     self.types.get_type(some_pattern.optional_type_id).expect_optional().inner_type;
                 let inner_value = TypedExpr::OptionalGet(OptionalGet {
-                    inner_expr: Box::new(TypedExpr::Variable(target_expr_variable_expr.clone())),
+                    inner_expr: Box::new(target_expr_variable_expr.clone().into()),
                     result_type_id: contained_type,
                     span: some_pattern.span,
                 });
@@ -2515,7 +2521,7 @@ impl TypedModule {
                 let variable_ident = variable_pattern.ident;
                 let (_variable_id, binding_stmt, _typed_expr) = self.synth_variable_decl(
                     variable_ident,
-                    TypedExpr::Variable(target_expr_variable_expr),
+                    target_expr_variable_expr.into(),
                     true,
                     false,
                     arm_block.scope_id,
@@ -2527,7 +2533,7 @@ impl TypedModule {
             TypedPattern::LiteralUnit(span) => Ok((vec![], TypedExpr::Bool(true, *span))),
             TypedPattern::LiteralChar(byte, span) => {
                 let bin_op = self.synth_equals_binop(
-                    TypedExpr::Variable(target_expr_variable_expr),
+                    target_expr_variable_expr.into(),
                     TypedExpr::Char(*byte, *span),
                     *span,
                 );
@@ -2537,7 +2543,7 @@ impl TypedModule {
                 let bin_op = BinaryOp {
                     kind: BinaryOpKind::Equals,
                     ty: BOOL_TYPE_ID,
-                    lhs: Box::new(TypedExpr::Variable(target_expr_variable_expr)),
+                    lhs: Box::new(target_expr_variable_expr.into()),
                     rhs: Box::new(TypedExpr::Int(*i64_value, *span)),
                     span: *span,
                 };
@@ -2545,7 +2551,7 @@ impl TypedModule {
             }
             TypedPattern::LiteralBool(bool_value, span) => {
                 let bin_op = self.synth_equals_binop(
-                    TypedExpr::Variable(target_expr_variable_expr),
+                    target_expr_variable_expr.into(),
                     TypedExpr::Bool(*bool_value, *span),
                     *span,
                 );
@@ -2553,19 +2559,22 @@ impl TypedModule {
             }
             TypedPattern::LiteralString(string_value, span) => {
                 let condition = self.synth_equals_call(
-                    TypedExpr::Variable(target_expr_variable_expr),
+                    target_expr_variable_expr.into(),
                     TypedExpr::Str(string_value.clone(), *span),
                     *span,
                 )?;
                 Ok((vec![], condition))
             }
             TypedPattern::LiteralNone(span) => {
-                let bin_op = self.synth_equals_binop(
-                    TypedExpr::Variable(target_expr_variable_expr),
-                    TypedExpr::None(target_expr_type_id, *span),
-                    *span,
-                );
-                Ok((vec![], bin_op))
+                let option_has_value =
+                    TypedExpr::OptionalHasValue(Box::new(target_expr_variable_expr.into()));
+                let optional_is_none = TypedExpr::UnaryOp(UnaryOp {
+                    kind: UnaryOpKind::BooleanNegation,
+                    type_id: BOOL_TYPE_ID,
+                    expr: Box::new(option_has_value),
+                    span: *span,
+                });
+                Ok((vec![], optional_is_none))
             }
             TypedPattern::Wildcard(span) => Ok((vec![], TypedExpr::Bool(true, *span))),
         }

@@ -244,7 +244,9 @@ fn main() -> Result<()> {
     let shared_module_clone = module_handle.clone();
     let args_clone = args.clone();
     let (compile_sender, compile_receiver) = std::sync::mpsc::sync_channel::<()>(16);
-    // compile_sender.send(())?;
+    if args.run {
+        compile_sender.send(())?;
+    }
     let compile_thread: JoinHandle<()> = std::thread::spawn(move || {
         while let Ok(()) = compile_receiver.recv() {
             let Ok(module) = compile_module(&args_clone) else {
