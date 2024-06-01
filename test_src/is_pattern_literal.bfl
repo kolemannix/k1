@@ -19,6 +19,10 @@ fn main(): int {
   assert(!(b is false));
   assert(b is true);
 
+  val opt = Some(42);
+  assert(opt is Some(_));
+  assert(!(opt is None));
+
   val foo = { x: 1, y: "asdf" };
   // Wildcard pattern
   if foo is _ {
