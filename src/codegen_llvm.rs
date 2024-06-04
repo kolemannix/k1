@@ -23,7 +23,7 @@ use inkwell::values::{
     IntValue, PointerValue, StructValue,
 };
 use inkwell::{AddressSpace, IntPredicate, OptimizationLevel};
-use log::trace;
+use log::{debug, trace};
 
 use crate::lex::SpanId;
 use crate::parse::{FileId, IdentifierId};
@@ -70,11 +70,17 @@ struct LlvmValueType<'ctx> {
     basic_type: BasicTypeEnum<'ctx>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct EnumVariantStructType<'ctx> {
+    struct_type: StructType<'ctx>,
+    size_bits: u32,
+}
+
 #[derive(Debug, Clone)]
 struct LlvmEnumType<'ctx> {
     type_id: TypeId,
     base_struct_type: StructType<'ctx>,
-    variant_structs: Vec<StructType<'ctx>>,
+    variant_structs: Vec<EnumVariantStructType<'ctx>>,
 }
 
 #[derive(Debug, Clone)]
@@ -111,7 +117,7 @@ impl<'ctx> LlvmType<'ctx> {
         }
     }
 
-    pub fn expect_enum(&self) -> &LlvmEnumType<'ctx> {
+    pub fn expect_enum(self) -> LlvmEnumType<'ctx> {
         match self {
             LlvmType::Value(value) => panic!("expected enum on value: {:?}", value),
             LlvmType::Pointer(_pointer) => panic!("expected enum on pointer"),
@@ -203,6 +209,10 @@ impl<'ctx> BuiltinTypes<'ctx> {
             .build_extract_value(string_struct, STRING_DATA_FIELD_INDEX, "string_data")
             .unwrap()
             .into_pointer_value()
+    }
+
+    fn padding_type(&self, size_bits: u32) -> inkwell::types::BasicTypeEnum<'ctx> {
+        self.ctx.custom_width_int_type(size_bits).as_basic_type_enum()
     }
 }
 
@@ -543,8 +553,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         ))
     }
 
-    fn get_size_of_type_in_bits(&self, type_id: TypeId) -> CodegenResult<u64> {
-        Ok(self.get_debug_type(type_id)?.get_size_in_bits())
+    fn get_size_of_type_in_bits(&self, type_id: TypeId) -> CodegenResult<u32> {
+        Ok(self.get_debug_type(type_id)?.get_size_in_bits() as u32)
     }
 
     fn get_line_number(&self, span: SpanId) -> u32 {
@@ -899,49 +909,84 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                                 }))
                             }
                             Type::Enum(enum_type) => {
-                                let mut payload_section_size = 0;
-                                let mut variant_types =
+                                let mut payload_section_size: u32 = 0;
+                                let mut variant_structs =
                                     Vec::with_capacity(enum_type.variants.len());
                                 let discriminant_field = self.builtin_types.tag_type;
+                                let discriminant_bit_width = discriminant_field.get_bit_width();
                                 for variant in enum_type.variants.iter() {
-                                    let variant_struct_type =
-                                        self.ctx.opaque_struct_type(&format!(
+                                    let variant_size: u32;
+                                    let variant_struct =
+                                        if let Some(payload_type_id) = variant.payload {
+                                            let variant_payload_type =
+                                                self.codegen_type(payload_type_id)?;
+                                            let s = self.ctx.struct_type(
+                                                &[
+                                                    discriminant_field.as_basic_type_enum(),
+                                                    variant_payload_type.value_type(),
+                                                ],
+                                                false,
+                                            );
+                                            variant_size =
+                                                self.get_size_of_type_in_bits(payload_type_id)?;
+                                            if variant_size > payload_section_size {
+                                                payload_section_size = variant_size;
+                                            }
+                                            s
+                                        } else {
+                                            let s = self.ctx.struct_type(
+                                                &[discriminant_field.as_basic_type_enum()],
+                                                false,
+                                            );
+                                            variant_size = 0;
+                                            s
+                                        };
+                                    variant_structs.push(EnumVariantStructType {
+                                        struct_type: variant_struct,
+                                        size_bits: variant_size,
+                                    });
+                                }
+                                let full_enum_size = discriminant_bit_width + payload_section_size;
+
+                                // Now that we know the full size, go back and pad each variant struct
+                                for (index, variant_struct) in
+                                    variant_structs.iter_mut().enumerate()
+                                {
+                                    let size_diff_bits =
+                                        payload_section_size - variant_struct.size_bits;
+                                    let mut fields = variant_struct.struct_type.get_field_types();
+                                    if size_diff_bits != 0 {
+                                        let padding =
+                                            self.builtin_types.padding_type(size_diff_bits as u32);
+                                        fields.push(padding.as_basic_type_enum());
+                                        debug!(
+                                            "Padding variant {} with {}",
+                                            variant_struct.struct_type, padding
+                                        );
+                                        let variant = &enum_type.variants[index];
+                                        let struct_name = &format!(
                                             "{}_{}",
                                             &*self.get_ident_name(variant.tag_name),
                                             variant
                                                 .payload
                                                 .map(|p| p.to_string())
                                                 .unwrap_or("".to_string()),
-                                        ));
-                                    if let Some(payload_type_id) = variant.payload {
-                                        let variant_payload_type =
-                                            self.codegen_type(payload_type_id)?;
-                                        variant_struct_type.set_body(
-                                            &[
-                                                discriminant_field.as_basic_type_enum(),
-                                                variant_payload_type.value_type(),
-                                            ],
-                                            false,
                                         );
-                                        let size =
-                                            self.get_size_of_type_in_bits(payload_type_id)?;
-                                        if size > payload_section_size {
-                                            payload_section_size = size;
-                                        }
+                                        let variant_struct_type =
+                                            self.make_named_struct(struct_name, &fields);
+                                        variant_struct.struct_type = variant_struct_type;
                                     } else {
-                                        variant_struct_type.set_body(
-                                            &[discriminant_field.as_basic_type_enum()],
-                                            false,
+                                        debug!(
+                                            "Not padding variant {}",
+                                            variant_struct.struct_type,
                                         );
-                                    };
-                                    variant_types.push(variant_struct_type);
+                                    }
                                 }
-                                // use max variant size
-                                let union_padding = self
-                                    .ctx
-                                    .custom_width_int_type(1)
-                                    .array_type(payload_section_size as u32);
+
                                 let discriminant_field = self.builtin_types.tag_type;
+                                let union_padding =
+                                    self.builtin_types.padding_type(payload_section_size);
+
                                 let base_type = self.ctx.struct_type(
                                     &[
                                         discriminant_field.as_basic_type_enum(),
@@ -953,7 +998,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                                 Ok(LlvmEnumType {
                                     type_id,
                                     base_struct_type: base_type,
-                                    variant_structs: variant_types,
+                                    variant_structs,
                                 }
                                 .into())
                             }
@@ -972,6 +1017,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 }
             }
         }
+    }
+
+    fn make_named_struct(&self, name: &str, fields: &[BasicTypeEnum<'ctx>]) -> StructType<'ctx> {
+        let struc = self.ctx.opaque_struct_type(name);
+        struc.set_body(fields, false);
+        struc
     }
 
     fn codegen_val(&mut self, val: &ValDef) -> CodegenResult<PointerValue<'ctx>> {
@@ -1474,7 +1525,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let enum_type = llvm_type.expect_enum();
                 let variant_tag_name = enum_constr.variant_name;
 
-                let llvm_variant = enum_type.variant_structs[enum_constr.variant_index as usize];
+                let llvm_variant =
+                    enum_type.variant_structs[enum_constr.variant_index as usize].struct_type;
 
                 let enum_ptr = self.builder.build_alloca(llvm_variant, "enum_constr");
 
@@ -1508,8 +1560,53 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let loaded_value = self.builder.build_load(llvm_variant, enum_ptr, "enum_value");
                 Ok(loaded_value)
             }
+            TypedExpr::EnumIsVariant(enum_is_variant) => {
+                let tag_value = self.get_value_for_tag_type(enum_is_variant.variant_name);
+                let enum_value =
+                    self.codegen_expr_rvalue(&enum_is_variant.target_expr)?.into_struct_value();
+                let enum_tag_value = self.get_enum_tag(enum_value);
+                let is_equal = self.builder.build_int_compare(
+                    IntPredicate::EQ,
+                    enum_tag_value,
+                    tag_value,
+                    "is_variant",
+                );
+                Ok(is_equal.as_basic_value_enum())
+            }
+            TypedExpr::EnumGetPayload(enum_get_payload) => {
+                let enum_type =
+                    self.codegen_type(enum_get_payload.target_expr.get_type())?.expect_enum();
+                let enum_value =
+                    self.codegen_expr_rvalue(&enum_get_payload.target_expr)?.into_struct_value();
+                let variant_type =
+                    &enum_type.variant_structs[enum_get_payload.variant_index as usize];
+                let value_payload = self.get_enum_payload(variant_type.struct_type, enum_value);
+                Ok(value_payload)
+            }
         }
     }
+
+    fn get_enum_tag(&self, enum_value: StructValue<'ctx>) -> IntValue<'ctx> {
+        self.builder.build_extract_value(enum_value, 0, "get_tag").unwrap().into_int_value()
+    }
+
+    fn get_enum_payload(
+        &self,
+        variant_type: StructType<'ctx>,
+        enum_value: StructValue<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        let ptr = self.builder.build_alloca(variant_type, "");
+        self.builder.build_store(ptr, enum_value);
+        let payload_ptr =
+            self.builder.build_struct_gep(variant_type, ptr, 1, "get_payload_ptr").unwrap();
+        let payload_value = self.builder.build_load(
+            variant_type.get_field_type_at_index(1).unwrap(),
+            payload_ptr,
+            "get_payload",
+        );
+        payload_value
+    }
+
     fn codegen_function_call(&mut self, call: &Call) -> CodegenResult<BasicValueEnum<'ctx>> {
         let callee = self.module.get_function(call.callee_function_id);
 
