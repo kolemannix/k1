@@ -13,11 +13,12 @@
   - [x] Variables
   - [x] Optional None
   - [x] Optional Some
+  - [ ] ! Make sure binary AND doesn't evaluate its rhs if lhs is false!
   - [x] Records
   - [ ] Enums
   - [-] Multi-case
   - [ ] Exhaustiveness checking
-- [ ] Enums types (enums / tagged unions)
+- [ ] Enum types (enums / tagged unions)
   - [x] Syntax
   - [x] Construction/repr
   - [ ] First, hard cast to variant (`expect`)

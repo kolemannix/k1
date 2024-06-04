@@ -410,6 +410,18 @@ impl TypedModule {
                 }
                 Ok(())
             }
+            TypedExpr::EnumIsVariant(is_variant_expr) => {
+                self.display_expr(&is_variant_expr.target_expr, writ, indentation)?;
+                writ.write_str(".is<")?;
+                writ.write_str(self.ast.identifiers.get_name(is_variant_expr.variant_name))?;
+                writ.write_str(">()")
+            }
+            TypedExpr::EnumGetPayload(as_variant_expr) => {
+                self.display_expr(&as_variant_expr.target_expr, writ, indentation)?;
+                writ.write_str(".as<")?;
+                writ.write_str(self.ast.identifiers.get_name(as_variant_expr.variant_name))?;
+                writ.write_str(">()")
+            }
         }
     }
 

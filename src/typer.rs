@@ -3,6 +3,7 @@ pub mod derive;
 pub mod dump;
 pub mod scopes;
 
+use std::any::Any;
 use std::collections::{HashMap, VecDeque};
 use std::error::Error;
 use std::fmt::{Display, Formatter, Write};
@@ -604,6 +605,23 @@ pub struct TypedEnumConstructor {
 }
 
 #[derive(Debug, Clone)]
+pub struct GetEnumPayload {
+    pub target_expr: Box<TypedExpr>,
+    pub payload_type_id: TypeId,
+    pub variant_name: IdentifierId,
+    pub variant_index: u32,
+    pub span: SpanId,
+}
+
+#[derive(Debug, Clone)]
+pub struct TypedEnumIsVariantExpr {
+    pub target_expr: Box<TypedExpr>,
+    pub variant_name: IdentifierId,
+    pub variant_index: u32,
+    pub span: SpanId,
+}
+
+#[derive(Debug, Clone)]
 pub enum TypedExpr {
     Unit(SpanId),
     Char(u8, SpanId),
@@ -628,6 +646,8 @@ pub enum TypedExpr {
     OptionalGet(OptionalGet),
     Tag(TypedTagExpr),
     EnumConstructor(TypedEnumConstructor),
+    EnumIsVariant(TypedEnumIsVariantExpr),
+    EnumGetPayload(GetEnumPayload),
 }
 
 impl From<VariableExpr> for TypedExpr {
@@ -662,6 +682,8 @@ impl TypedExpr {
             TypedExpr::OptionalGet(opt_get) => opt_get.result_type_id,
             TypedExpr::Tag(tag_expr) => tag_expr.type_id,
             TypedExpr::EnumConstructor(enum_cons) => enum_cons.type_id,
+            TypedExpr::EnumIsVariant(_is_variant) => BOOL_TYPE_ID,
+            TypedExpr::EnumGetPayload(as_variant) => as_variant.payload_type_id,
         }
     }
     #[inline]
@@ -689,6 +711,8 @@ impl TypedExpr {
             TypedExpr::OptionalGet(get) => get.span,
             TypedExpr::Tag(tag_expr) => tag_expr.span,
             TypedExpr::EnumConstructor(e) => e.span,
+            TypedExpr::EnumIsVariant(is_variant) => is_variant.span,
+            TypedExpr::EnumGetPayload(as_variant) => as_variant.span,
         }
     }
 
@@ -2420,8 +2444,6 @@ impl TypedModule {
         arm_block: &mut TypedBlock,
         match_scope_id: ScopeId,
     ) -> TyperResult<(Vec<TypedStmt>, TypedExpr)> {
-        let target_expr_type_id = target_expr_variable_expr.type_id;
-
         match pattern {
             TypedPattern::Struct(struct_pattern) => {
                 let mut boolean_exprs: Vec<TypedExpr> =
@@ -2499,7 +2521,6 @@ impl TypedModule {
                     arm_block,
                     arm_block.scope_id,
                 )?;
-                //arm_block.statements.extend(condition_stmts);
                 let mut condition_statements = vec![binding_stmt];
                 condition_statements.extend(inner_condition_stmts);
                 let has_value_expr = TypedExpr::OptionalHasValue(Box::new(TypedExpr::Variable(
@@ -2514,8 +2535,66 @@ impl TypedModule {
                 });
                 Ok((condition_statements, final_condition))
             }
-            TypedPattern::Enum(_enum_pattern) => {
-                todo!("Enum pattern matching")
+            TypedPattern::Enum(enum_pattern) => {
+                // Check tag, that's our condition. Recurse on nested pattern if true
+                let is_variant_condition = TypedExpr::EnumIsVariant(TypedEnumIsVariantExpr {
+                    target_expr: Box::new(target_expr_variable_expr.clone().into()),
+                    variant_name: enum_pattern.variant_tag_name,
+                    variant_index: enum_pattern.variant_index,
+                    span: enum_pattern.span,
+                });
+                let mut condition_statements = vec![];
+                let (inner_condition_stmts, inner_condition) = if let Some(payload_pattern) =
+                    enum_pattern.payload.as_ref()
+                {
+                    let enum_type = self.types.get_type(enum_pattern.enum_type_id).expect_enum();
+                    let variant = &enum_type.variants[enum_pattern.variant_index as usize];
+                    let Some(payload_type_id) = variant.payload else {
+                        return make_fail_span(
+                            "Impossible pattern: variant does not have payload",
+                            enum_pattern.span,
+                        );
+                    };
+                    let payload_value = TypedExpr::EnumGetPayload(GetEnumPayload {
+                        target_expr: Box::new(target_expr_variable_expr.into()),
+                        payload_type_id,
+                        variant_name: variant.tag_name,
+                        variant_index: variant.index,
+                        span: enum_pattern.span,
+                    });
+                    let payload_value_synth_name = self.ast.identifiers.intern("payload");
+                    let (_, payload_value_stmt, payload_value_variable_expr) = self
+                        .synth_variable_decl(
+                            payload_value_synth_name,
+                            payload_value,
+                            false,
+                            false,
+                            arm_block.scope_id,
+                        );
+                    let mut stmts = vec![payload_value_stmt];
+                    let (inner_pattern_stmts, cond) = self.eval_match_arm(
+                        &payload_pattern,
+                        payload_value_variable_expr.expect_variable(),
+                        arm_block,
+                        arm_block.scope_id,
+                    )?;
+                    stmts.extend(inner_pattern_stmts);
+                    (stmts, Some(cond))
+                } else {
+                    (vec![], None)
+                };
+                condition_statements.extend(inner_condition_stmts);
+                let final_condition = match inner_condition {
+                    None => is_variant_condition,
+                    Some(inner_condition) => TypedExpr::BinaryOp(BinaryOp {
+                        kind: BinaryOpKind::And,
+                        ty: BOOL_TYPE_ID,
+                        lhs: Box::new(is_variant_condition),
+                        rhs: Box::new(inner_condition),
+                        span: enum_pattern.span,
+                    }),
+                };
+                Ok((condition_statements, final_condition))
             }
             TypedPattern::Variable(variable_pattern) => {
                 let variable_ident = variable_pattern.ident;
@@ -2625,7 +2704,8 @@ impl TypedModule {
         let new_ident = if no_mangle {
             name
         } else {
-            let new_ident_name = format!("__{}_{}", name, owner_scope);
+            let new_ident_name =
+                format!("__{}_{}", self.ast.identifiers.get_name(name), owner_scope);
             self.ast.identifiers.intern(new_ident_name)
         };
         let variable =
@@ -2937,8 +3017,8 @@ impl TypedModule {
             .find(|imple| imple.type_id == type_id && imple.ability_id == ability_id)
             .ok_or(make_error(
                 format!(
-                    "Missing ability implementation for {} {}",
-                    type_id,
+                    "Missing ability '{}' implementation for '{}'",
+                    self.ast.identifiers.get_name(self.get_ability(ability_id).name),
                     self.type_id_to_string(type_id)
                 ),
                 span_for_error,

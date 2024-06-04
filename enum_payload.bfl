@@ -4,20 +4,12 @@ fn main(): int {
   val foo: Maybe = .B('x');
   // nocommit: Test with side-effecting match targets
   if foo is .B(x) {
-    assert(x == 'x');
+    print("y")asdfasdf;
+    print(x.toString());
+    //assert(x == 'x');
   } else {
-    assert(false);
+    print("n");
+    //assert(false);
   };
-
-  // Desugared
-  // val cond1 = {
-  //   val is_b = foo.tag == .B;
-  // }
-  // if cond {
-  //   val x = foo.value; // EnumGetPayload or smth
-  //   assert(x == 'x')
-  // } else {
-  //   assert(false)
-  // }
   0
 }
