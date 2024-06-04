@@ -3,10 +3,6 @@ extern fn _bfl_charToInt(c: char): int
 extern fn _bfl_intToChar(i: int): char
 extern fn _bfl_readFileToString(path: string): string
 
-fn hello_world(): string {
-  "Hello, world!"
-}
-
 ability Equals {
   fn equals(self: Self, other: Self): bool
 }

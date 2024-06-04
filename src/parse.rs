@@ -970,13 +970,15 @@ pub fn print_error_location(spans: &Spans, sources: &Sources, span_id: SpanId) {
         println!("Error: could not find line for span {:?}", span);
         return;
     };
+    eprintln!("Got line {} '{}' for span: {:?}", line.line_index, &line.content, span);
 
     use colored::*;
 
     let thingies = "^".repeat(span.len as usize);
-    let code = format!("{}\n\t{thingies}", &line.content);
+    let spaces = " ".repeat((span.start - line.start_char) as usize);
+    let code = format!("  ->{}\n  ->{spaces}{thingies}", &line.content);
     println!(
-        "{} at {}/{}:{}\n\n\t{code}",
+        "  {} at {}/{}:{}\n\n{code}",
         "Error".red(),
         source.directory,
         source.filename,
@@ -1049,7 +1051,8 @@ impl Source {
 
     pub fn get_line_for_span(&self, span: Span) -> Option<&Line> {
         self.lines.iter().find(|line| {
-            line.start_char <= span.start && span.start < line.start_char + line.end_char() as u32
+            let line_end = line.end_char() as u32;
+            line.start_char <= span.start && line_end >= span.start
         })
     }
 }

@@ -244,9 +244,7 @@ fn main() -> Result<()> {
     let shared_module_clone = module_handle.clone();
     let args_clone = args.clone();
     let (compile_sender, compile_receiver) = std::sync::mpsc::sync_channel::<()>(16);
-    if args.run {
-        compile_sender.send(())?;
-    }
+    compile_sender.send(())?;
     let compile_thread: JoinHandle<()> = std::thread::spawn(move || {
         while let Ok(()) = compile_receiver.recv() {
             let Ok(module) = compile_module(&args_clone) else {
@@ -257,8 +255,12 @@ fn main() -> Result<()> {
 
             let module_read = shared_module_clone.read().unwrap();
             let module = module_read.as_ref().unwrap();
-            let Ok(_codegen) = codegen_module(&args_clone, &llvm_ctx, module, out_dir) else {
-                return;
+            let _codegen = match codegen_module(&args_clone, &llvm_ctx, module, out_dir) {
+                Ok(codegen) => codegen,
+                Err(err) => {
+                    eprintln!("Codegen error: {}", err);
+                    return;
+                }
             };
         }
     });
@@ -298,7 +300,15 @@ fn main() -> Result<()> {
 
         Ok(())
     } else {
-        compile_thread.join().unwrap();
+        println!("waiting on compile thread");
+        loop {
+            let module = module_handle.try_read();
+            if module.is_ok() && module.unwrap().is_some() {
+                break;
+            } else {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        }
         Ok(())
     }
 }
