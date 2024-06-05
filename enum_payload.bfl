@@ -4,7 +4,7 @@ fn main(): int {
   val foo: Maybe = .B('x');
   // nocommit: Test with side-effecting match targets
   if foo is .B(x) {
-    print("y")asdfasdf;
+    print(".");
     print(x.toString());
     //assert(x == 'x');
   } else {
