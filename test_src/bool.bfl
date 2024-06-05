@@ -3,5 +3,6 @@ fn main(x: int): int {
   val f: bool = false;
   t or f;
   t and f;
+  printBool(t or f);
   0
 }
