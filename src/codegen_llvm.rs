@@ -235,7 +235,10 @@ impl<'ctx> BuiltinTypes<'ctx> {
     }
 
     fn padding_type(&self, size_bits: u32) -> inkwell::types::BasicTypeEnum<'ctx> {
-        self.ctx.custom_width_int_type(size_bits).as_basic_type_enum()
+        debug_assert!(size_bits % 8 == 0);
+        let byte_count = size_bits / 8;
+        self.ctx.custom_width_int_type(8).array_type(byte_count).as_basic_type_enum()
+        //self.ctx.custom_width_int_type(size_bits).as_basic_type_enum()
     }
 }
 
@@ -1062,7 +1065,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         unsafe {
             let mut length = 0;
             let buf = LLVMDITypeGetName(di_type.as_mut_ptr(), &mut length);
-            String::from_raw_parts(buf as *mut u8, length, 512)
+            let slice: &[u8] = std::slice::from_raw_parts(buf as *const u8, length);
+            String::from_utf8_lossy(slice).to_string()
         }
     }
 
@@ -1646,10 +1650,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         variant_type: StructType<'ctx>,
         enum_value: StructValue<'ctx>,
     ) -> BasicValueEnum<'ctx> {
-        let ptr = self.builder.build_alloca(variant_type, "");
+        let ptr = self.builder.build_alloca(enum_value.get_type(), "enum_ptr_for_payload");
         self.builder.build_store(ptr, enum_value);
+        let casted_ptr = self
+            .builder
+            .build_bitcast(ptr, variant_type.ptr_type(AddressSpace::default()), "variant_cast")
+            .into_pointer_value();
         let payload_ptr =
-            self.builder.build_struct_gep(variant_type, ptr, 1, "get_payload_ptr").unwrap();
+            self.builder.build_struct_gep(variant_type, casted_ptr, 1, "get_payload_ptr").unwrap();
         let payload_value = self.builder.build_load(
             variant_type.get_field_type_at_index(1).unwrap(),
             payload_ptr,
