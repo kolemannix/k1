@@ -183,6 +183,7 @@ struct BuiltinTypes<'ctx> {
     boolean: IntType<'ctx>,
     true_value: IntValue<'ctx>,
     false_value: IntValue<'ctx>,
+    i1: IntType<'ctx>,
     char: IntType<'ctx>,
     c_str: PointerType<'ctx>,
     string_struct: StructType<'ctx>,
@@ -464,11 +465,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let builtin_types = BuiltinTypes {
             ctx,
             i64: ctx.i64_type(),
-            unit: ctx.bool_type(),
-            unit_value: ctx.bool_type().const_int(0, false),
-            boolean: ctx.bool_type(),
-            true_value: ctx.bool_type().const_int(1, false),
-            false_value: ctx.bool_type().const_int(0, false),
+            unit: ctx.i8_type(),
+            unit_value: ctx.i8_type().const_int(0, false),
+            // If we switch bools to i8, we need to cast to i1 for branches
+            // If we keep i1, we need to do more alignment / padding work
+            boolean: ctx.i8_type(),
+            true_value: ctx.i8_type().const_int(1, false),
+            false_value: ctx.i8_type().const_int(0, false),
+            i1: ctx.bool_type(),
             char: char_type,
             c_str: char_type.ptr_type(AddressSpace::default()),
             string_struct,
@@ -1129,7 +1133,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
         // Entry block
         let condition = self.codegen_expr_rvalue(&ir_if.condition)?;
-        let condition_value = condition.into_int_value();
+        let condition_value = self.bool_to_i1(condition.into_int_value(), "cond_i1");
         self.builder.build_conditional_branch(condition_value, consequent_block, alternate_block);
 
         // Consequent Block
@@ -1233,9 +1237,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             IntPredicate::NE,
             discriminator_value,
             self.builtin_types.false_value,
-            "is_some",
+            "is_some_cmp",
         );
-        is_some.as_basic_value_enum()
+        let is_some_bool = self.i1_to_bool(is_some, "is_some");
+        is_some_bool.as_basic_value_enum()
     }
     fn codegen_optional_get(&mut self, optional_value: StructValue<'ctx>) -> BasicValueEnum<'ctx> {
         // This is UNSAFE we don't check the discriminator. The actual unwrap method
@@ -1465,24 +1470,20 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         Ok(op.as_basic_value_enum())
                     }
                     BinaryOpKind::Equals | BinaryOpKind::NotEquals => {
-                        // I actually have no idea how I want to handle equality at this point
-                        // Obviously we want some sort of value equality on user-defined types
-                        // But here for builtin types maybe we just keep assuming everything
-                        // is represented as an int value
                         let lhs_int = self.codegen_expr_rvalue(&bin_op.lhs)?.into_int_value();
                         let rhs_int = self.codegen_expr_rvalue(&bin_op.rhs)?.into_int_value();
+                        let cmp_result = self.builder.build_int_compare(
+                            if bin_op.kind == BinaryOpKind::Equals {
+                                IntPredicate::EQ
+                            } else {
+                                IntPredicate::NE
+                            },
+                            lhs_int,
+                            rhs_int,
+                            &format!("{}_i1", bin_op.kind),
+                        );
                         Ok(self
-                            .builder
-                            .build_int_compare(
-                                if bin_op.kind == BinaryOpKind::Equals {
-                                    IntPredicate::EQ
-                                } else {
-                                    IntPredicate::NE
-                                },
-                                lhs_int,
-                                rhs_int,
-                                &format!("{}", bin_op.kind),
-                            )
+                            .i1_to_bool(cmp_result, &format!("{}_res", bin_op.kind))
                             .as_basic_value_enum())
                     }
 
@@ -1500,9 +1501,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             BinaryOpKind::GreaterEqual => IntPredicate::SGE,
                             _ => unreachable!("unexpected binop kind"),
                         };
+                        let i1_compare = self.builder.build_int_compare(
+                            pred,
+                            lhs_int,
+                            rhs_int,
+                            &format!("{}_i1", bin_op.kind),
+                        );
                         Ok(self
-                            .builder
-                            .build_int_compare(pred, lhs_int, rhs_int, &format!("{}", bin_op.kind))
+                            .i1_to_bool(i1_compare, &format!("{}_res", bin_op.kind))
                             .as_basic_value_enum())
                     }
                     other => panic!("Unsupported binary operation {other:?} returning Bool"),
@@ -1528,9 +1534,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         Ok(value_location.as_basic_value_enum())
                     }
                     UnaryOpKind::BooleanNegation => {
-                        let int_value = value.into_int_value();
-                        let int_value_negated = self.builder.build_not(int_value, "bool_not");
-                        Ok(int_value_negated.as_basic_value_enum())
+                        let truncated = self.bool_to_i1(value.into_int_value(), "bool_trunc4neg");
+                        let negated = self.builder.build_not(truncated, "i1_negated");
+                        let promoted = self.i1_to_bool(negated, "negated");
+                        Ok(promoted.as_basic_value_enum())
                     }
                 }
             }
@@ -1624,9 +1631,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     IntPredicate::EQ,
                     enum_tag_value,
                     tag_value,
-                    "is_variant",
+                    "is_variant_cmp",
                 );
-                Ok(is_equal.as_basic_value_enum())
+                let is_equal_bool = self.i1_to_bool(is_equal, "is_variant");
+                Ok(is_equal_bool.as_basic_value_enum())
             }
             TypedExpr::EnumGetPayload(enum_get_payload) => {
                 let enum_type =
@@ -1639,6 +1647,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(value_payload)
             }
         }
+    }
+
+    fn bool_to_i1(&self, bool: IntValue<'ctx>, name: &str) -> IntValue<'ctx> {
+        self.builder.build_int_truncate(bool, self.builtin_types.i1, name)
+    }
+
+    fn i1_to_bool(&self, i1: IntValue<'ctx>, name: &str) -> IntValue<'ctx> {
+        self.builder.build_int_cast(i1, self.builtin_types.boolean, name)
     }
 
     fn get_enum_tag(&self, enum_value: StructValue<'ctx>) -> IntValue<'ctx> {
@@ -2160,8 +2176,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
                     self.builder.position_at_end(loop_entry_block);
                     let cond = self.codegen_expr_rvalue(&while_stmt.cond)?.into_int_value();
+                    let cond_i1 = self.bool_to_i1(cond, "while_cond");
 
-                    self.builder.build_conditional_branch(cond, loop_body_block, loop_end_block);
+                    self.builder.build_conditional_branch(cond_i1, loop_body_block, loop_end_block);
 
                     self.builder.position_at_end(loop_body_block);
                     self.codegen_block_statements(&while_stmt.block)?;

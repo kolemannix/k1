@@ -15,14 +15,14 @@
   - [x] Optional Some
   - [ ] ! Make sure binary AND doesn't evaluate its rhs if lhs is false!
   - [x] Records
-  - [ ] Enums
+  - [x] Enums
   - [-] Multi-case
   - [ ] Exhaustiveness checking
 - [ ] Enum types (enums / tagged unions)
   - [x] Syntax
   - [x] Construction/repr
+  - [x] Later, pattern match on variants
   - [ ] First, hard cast to variant (`expect`)
-  - [ ] Later, pattern match on variants
   - [ ] Built-in .as<Tag> and .is<Tag> functionality!!
 - [x] TypedIf allow exprs instead of requiring blocks (did not do; instead improved handling of unit blocks)
 - [x] Remove binding 'if' since we have pattern matching
