@@ -236,9 +236,24 @@ impl<'ctx> BuiltinTypes<'ctx> {
     }
 
     fn padding_type(&self, size_bits: u32) -> inkwell::types::BasicTypeEnum<'ctx> {
-        debug_assert!(size_bits % 8 == 0);
-        let byte_count = size_bits / 8;
-        self.ctx.custom_width_int_type(8).array_type(byte_count).as_basic_type_enum()
+        let mut padding_members: Vec<BasicTypeEnum<'ctx>> = vec![];
+        let mut remaining_bits = size_bits;
+        while remaining_bits > 64 {
+            padding_members.push(self.ctx.i64_type().into());
+            remaining_bits -= 64;
+        }
+        while remaining_bits > 32 {
+            padding_members.push(self.ctx.i32_type().into());
+            remaining_bits -= 32;
+        }
+        while remaining_bits > 8 {
+            padding_members.push(self.ctx.i8_type().into());
+            remaining_bits -= 8;
+        }
+        self.ctx.struct_type(&padding_members, true).as_basic_type_enum()
+        // debug_assert!(size_bits % 8 == 0);
+        // let byte_count = size_bits / 8;
+        // self.ctx.custom_width_int_type(8).array_type(byte_count).as_basic_type_enum()
         //self.ctx.custom_width_int_type(size_bits).as_basic_type_enum()
     }
 }
@@ -543,7 +558,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         locn
     }
 
-    fn get_ident_name(&self, id: IdentifierId) -> impl Deref<Target = str> + '_ {
+    fn get_ident_name(&self, id: IdentifierId) -> &str {
         self.module.ast.identifiers.get_name(id)
     }
 
@@ -1666,14 +1681,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         variant_type: StructType<'ctx>,
         enum_value: StructValue<'ctx>,
     ) -> BasicValueEnum<'ctx> {
-        let ptr = self.builder.build_alloca(enum_value.get_type(), "enum_ptr_for_payload");
+        let ptr = self.builder.build_alloca(variant_type, "enum_ptr_for_payload");
         self.builder.build_store(ptr, enum_value);
-        let casted_ptr = self
-            .builder
-            .build_bitcast(ptr, variant_type.ptr_type(AddressSpace::default()), "variant_cast")
-            .into_pointer_value();
+        // let casted_ptr = self
+        //     .builder
+        //     .build_bitcast(ptr, variant_type.ptr_type(AddressSpace::default()), "variant_cast")
+        //     .into_pointer_value();
         let payload_ptr =
-            self.builder.build_struct_gep(variant_type, casted_ptr, 1, "get_payload_ptr").unwrap();
+            self.builder.build_struct_gep(variant_type, ptr, 1, "get_payload_ptr").unwrap();
         let payload_value = self.builder.build_load(
             variant_type.get_field_type_at_index(1).unwrap(),
             payload_ptr,
