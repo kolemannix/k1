@@ -1,8 +1,8 @@
 fn main(): int {
-  mut v: enum Yes, No = .No; // layout: u64
-   if v is .No {
-     println("No");
-   };
+  mut v: enum Yes, No = .No;
+  if v is .No {
+    println("No");
+  };
   v = .Yes;
   if v is .Yes {
     println("Yes");

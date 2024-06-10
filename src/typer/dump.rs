@@ -106,14 +106,14 @@ impl TypedModule {
             BOOL_TYPE_ID => writ.write_str("bool"),
             STRING_TYPE_ID => writ.write_str("string"),
             type_id => {
-                let ty = self.types.get_type(type_id);
+                let ty = self.types.get(type_id);
                 self.display_type(ty, writ)
             }
         }
     }
 
     pub fn type_id_to_string(&self, type_id: TypeId) -> String {
-        let ty = self.types.get_type(type_id);
+        let ty = self.types.get(type_id);
         self.type_to_string(ty)
     }
 
@@ -179,12 +179,21 @@ impl TypedModule {
                 }
                 Ok(())
             }
+            Type::EnumVariant(ev) => {
+                writ.write_str(self.ast.identifiers.get_name(ev.tag_name))?;
+                if let Some(payload) = &ev.payload {
+                    writ.write_str("(")?;
+                    self.display_type_id(*payload, writ)?;
+                    writ.write_str(")")?;
+                }
+                Ok(())
+            }
         }
     }
 
     pub fn function_to_string(&self, function: &TypedFunction, display_block: bool) -> String {
         let mut string = String::new();
-        self.display_function(function, &mut string, display_block);
+        self.display_function(function, &mut string, display_block).unwrap();
         string
     }
 
@@ -412,15 +421,19 @@ impl TypedModule {
             }
             TypedExpr::EnumIsVariant(is_variant_expr) => {
                 self.display_expr(&is_variant_expr.target_expr, writ, indentation)?;
-                writ.write_str(".is<")?;
+                writ.write_str(".is<.")?;
                 writ.write_str(self.ast.identifiers.get_name(is_variant_expr.variant_name))?;
+                writ.write_str(">()")
+            }
+            TypedExpr::EnumCast(enum_cast) => {
+                self.display_expr(&enum_cast.base, writ, indentation)?;
+                writ.write_str(".is<.")?;
+                writ.write_str(self.ast.identifiers.get_name(enum_cast.variant_name))?;
                 writ.write_str(">()")
             }
             TypedExpr::EnumGetPayload(as_variant_expr) => {
                 self.display_expr(&as_variant_expr.target_expr, writ, indentation)?;
-                writ.write_str(".as<")?;
-                writ.write_str(self.ast.identifiers.get_name(as_variant_expr.variant_name))?;
-                writ.write_str(">()")
+                writ.write_str(".payload")
             }
         }
     }

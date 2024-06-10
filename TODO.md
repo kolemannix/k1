@@ -7,6 +7,8 @@
   - [x] Rename record to struct
   - [x] Start gui
   - [ ] Remove ! for negation; switch to 'not'
+- [ ] Panic/Exit for option unwrap, bad enum cast, etc
+- [ ] Match expected errors from test programs
 - [ ] Pattern Matching
   - [x] Single-arm match evals to boolean
   - [x] Literals
@@ -22,8 +24,9 @@
   - [x] Syntax
   - [x] Construction/repr
   - [x] Later, pattern match on variants
+  - [ ] Make referencable types for each variant
   - [ ] First, hard cast to variant (`expect`)
-  - [ ] Built-in .as<Tag> and .is<Tag> functionality!!
+  - [ ] Built-in .as<Tag> or panic
 - [x] TypedIf allow exprs instead of requiring blocks (did not do; instead improved handling of unit blocks)
 - [x] Remove binding 'if' since we have pattern matching
 - [x] Abilities
