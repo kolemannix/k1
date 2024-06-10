@@ -3,7 +3,6 @@ pub mod derive;
 pub mod dump;
 pub mod scopes;
 
-use std::any::Any;
 use std::collections::{HashMap, VecDeque};
 use std::error::Error;
 use std::fmt::{Display, Formatter, Write};
@@ -29,9 +28,21 @@ use crate::parse::{
 
 pub type FunctionId = u32;
 pub type VariableId = u32;
-pub type TypeId = u32;
 pub type NamespaceId = u32;
 pub type AbilityId = u32;
+
+#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
+pub struct TypeId(u32);
+
+impl TypeId {
+    pub const PENDING: TypeId = TypeId(u32::MAX);
+}
+
+impl Display for TypeId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0.to_string())
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Linkage {
@@ -60,11 +71,11 @@ impl StructType {
     }
 }
 
-pub const UNIT_TYPE_ID: TypeId = 0;
-pub const CHAR_TYPE_ID: TypeId = 1;
-pub const INT_TYPE_ID: TypeId = 2;
-pub const BOOL_TYPE_ID: TypeId = 3;
-pub const STRING_TYPE_ID: TypeId = 4;
+pub const UNIT_TYPE_ID: TypeId = TypeId(0);
+pub const CHAR_TYPE_ID: TypeId = TypeId(1);
+pub const INT_TYPE_ID: TypeId = TypeId(2);
+pub const BOOL_TYPE_ID: TypeId = TypeId(3);
+pub const STRING_TYPE_ID: TypeId = TypeId(4);
 
 #[derive(Debug, Clone)]
 pub struct ArrayType {
@@ -90,12 +101,14 @@ pub struct ReferenceType {
 }
 
 #[derive(Debug, Clone)]
-pub struct TagInstance {
+pub struct TagInstanceType {
     pub ident: IdentifierId,
 }
 
 #[derive(Debug, Clone)]
 pub struct TypedEnumVariant {
+    pub enum_type_id: TypeId,
+    pub my_type_id: TypeId,
     pub tag_name: IdentifierId,
     pub index: u32,
     pub payload: Option<TypeId>,
@@ -105,6 +118,15 @@ pub struct TypedEnumVariant {
 pub struct TypedEnum {
     pub variants: Vec<TypedEnumVariant>,
     pub name_if_named: Option<IdentifierId>,
+}
+
+impl TypedEnum {
+    pub fn variant_by_name(&self, name: IdentifierId) -> Option<&TypedEnumVariant> {
+        self.variants.iter().find(|v| v.tag_name == name)
+    }
+    pub fn variant_by_index(&self, index: u32) -> Option<&TypedEnumVariant> {
+        self.variants.iter().find(|v| v.index == index)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -120,8 +142,11 @@ pub enum Type {
     Reference(ReferenceType),
     #[allow(clippy::enum_variant_names)]
     TypeVariable(TypeVariable),
-    TagInstance(TagInstance),
+    TagInstance(TagInstanceType),
     Enum(TypedEnum),
+    // Enum variants are proper types of their own, for lots
+    // of reasons that make programming nice. Unlike in Rust :()
+    EnumVariant(TypedEnumVariant),
 }
 
 impl Type {
@@ -157,10 +182,17 @@ impl Type {
         }
     }
 
-    pub fn expect_enum(&self) -> &TypedEnum {
+    pub fn expect_enum_mut(&mut self) -> &mut TypedEnum {
         match self {
             Type::Enum(e) => e,
             _ => panic!("expected enum type"),
+        }
+    }
+
+    pub fn expect_enum_variant_mut(&mut self) -> &mut TypedEnumVariant {
+        match self {
+            Type::EnumVariant(v) => v,
+            _ => panic!("expected enum variant type"),
         }
     }
 
@@ -168,6 +200,13 @@ impl Type {
         match self {
             Type::Enum(e) => Some(e),
             _ => None,
+        }
+    }
+
+    pub fn expect_enum(&self) -> &TypedEnum {
+        match self {
+            Type::Enum(e) => e,
+            _ => panic!("expected enum"),
         }
     }
 
@@ -203,6 +242,13 @@ impl Type {
         match self {
             Type::Struct(struc) => struc,
             _ => panic!("expect_struct called on: {:?}", self),
+        }
+    }
+
+    fn as_tag(&self) -> Option<&TagInstanceType> {
+        match self {
+            Type::TagInstance(tag) => Some(tag),
+            _ => None,
         }
     }
 }
@@ -622,6 +668,15 @@ pub struct TypedEnumIsVariantExpr {
 }
 
 #[derive(Debug, Clone)]
+pub struct TypedEnumCast {
+    pub base: Box<TypedExpr>,
+    pub variant_type_id: TypeId,
+    pub variant_name: IdentifierId,
+    pub variant_index: u32,
+    pub span: SpanId,
+}
+
+#[derive(Debug, Clone)]
 pub enum TypedExpr {
     Unit(SpanId),
     Char(u8, SpanId),
@@ -648,6 +703,7 @@ pub enum TypedExpr {
     EnumConstructor(TypedEnumConstructor),
     EnumIsVariant(TypedEnumIsVariantExpr),
     EnumGetPayload(GetEnumPayload),
+    EnumCast(TypedEnumCast),
 }
 
 impl From<VariableExpr> for TypedExpr {
@@ -684,6 +740,7 @@ impl TypedExpr {
             TypedExpr::EnumConstructor(enum_cons) => enum_cons.type_id,
             TypedExpr::EnumIsVariant(_is_variant) => BOOL_TYPE_ID,
             TypedExpr::EnumGetPayload(as_variant) => as_variant.payload_type_id,
+            TypedExpr::EnumCast(c) => c.variant_type_id,
         }
     }
     #[inline]
@@ -713,6 +770,7 @@ impl TypedExpr {
             TypedExpr::EnumConstructor(e) => e.span,
             TypedExpr::EnumIsVariant(is_variant) => is_variant.span,
             TypedExpr::EnumGetPayload(as_variant) => as_variant.span,
+            TypedExpr::EnumCast(c) => c.span,
         }
     }
 
@@ -903,38 +961,38 @@ pub struct Types {
 
 impl Types {
     fn add_type(&mut self, typ: Type) -> TypeId {
-        for (existing_type_id, existing_type) in self.types.iter().enumerate() {
+        for (existing_type_id, existing_type) in self.iter() {
             if TypedModule::type_eq(existing_type, &typ) {
-                return existing_type_id as TypeId;
+                return existing_type_id;
             }
         }
         let id = self.types.len();
         self.types.push(typ);
-        id as u32
+        TypeId(id as u32)
     }
 
-    pub fn get_type(&self, type_id: TypeId) -> &Type {
-        &self.types[type_id as usize]
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = (TypeId, &Type)> {
-        self.types.iter().enumerate().map(|(i, t)| (i as TypeId, t))
-    }
-
-    pub fn get_type_dereferenced(&self, type_id: TypeId) -> &Type {
-        match self.get_type(type_id) {
-            Type::Reference(r) => self.get_type(r.inner_type),
-            _ => self.get_type(type_id),
-        }
+    pub fn get(&self, type_id: TypeId) -> &Type {
+        &self.types[type_id.0 as usize]
     }
 
     pub fn get_type_mut(&mut self, type_id: TypeId) -> &mut Type {
-        &mut self.types[type_id as usize]
+        &mut self.types[type_id.0 as usize]
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (TypeId, &Type)> {
+        self.types.iter().enumerate().map(|(i, t)| (TypeId(i as u32), t))
+    }
+
+    pub fn get_type_dereferenced(&self, type_id: TypeId) -> &Type {
+        match self.get(type_id) {
+            Type::Reference(r) => self.get(r.inner_type),
+            _ => self.get(type_id),
+        }
     }
 
     /// Recursively checks if given type contains any type variables
     fn is_type_generic(&self, type_id: TypeId) -> bool {
-        match self.get_type(type_id) {
+        match self.get(type_id) {
             Type::Unit => false,
             Type::Char => false,
             Type::Int => false,
@@ -949,11 +1007,12 @@ impl Types {
             Type::TagInstance(_) => false,
             // We don't _yet_ support generics in enums
             Type::Enum(_) => false,
+            Type::EnumVariant(_) => false,
         }
     }
 
     fn item_type_of_iterable(&self, type_id: TypeId) -> Option<TypeId> {
-        match self.get_type(type_id) {
+        match self.get(type_id) {
             Type::Unit => None,
             Type::Char => None,
             Type::Int => None,
@@ -966,19 +1025,20 @@ impl Types {
             Type::TypeVariable(_) => None,
             Type::TagInstance(_) => None,
             Type::Enum(_) => None,
+            Type::EnumVariant(_) => None,
         }
     }
 
     // FIXME: Slow
     fn get_type_for_tag(&mut self, tag_ident: IdentifierId) -> TypeId {
-        for (idx, typ) in self.types.iter().enumerate() {
+        for (type_id, typ) in self.iter() {
             if let Type::TagInstance(tag) = typ {
                 if tag.ident == tag_ident {
-                    return idx as TypeId;
+                    return type_id;
                 }
             }
         }
-        let tag_type = Type::TagInstance(TagInstance { ident: tag_ident });
+        let tag_type = Type::TagInstance(TagInstanceType { ident: tag_ident });
         let tag_type_id = self.add_type(tag_type);
         tag_type_id
     }
@@ -1196,6 +1256,9 @@ impl TypedModule {
             }
             ParsedTypeExpression::Enum(e) => {
                 let e = e.clone();
+                let enum_type = Type::Enum(TypedEnum { variants: Vec::new(), name_if_named: None });
+                let enum_type_id = self.types.add_type(enum_type);
+
                 let mut variants = Vec::with_capacity(e.variants.len());
                 for (index, v) in e.variants.iter().enumerate() {
                     // Ensure there's a type for this tag as a workaround for codegen
@@ -1209,15 +1272,55 @@ impl TypedModule {
                         }
                     };
                     let variant = TypedEnumVariant {
+                        enum_type_id,
+                        my_type_id: TypeId::PENDING,
                         tag_name: v.tag_name,
                         index: index as u32,
                         payload: payload_type_id,
                     };
-                    variants.push(variant);
+                    let variant_id = self.types.add_type(Type::EnumVariant(variant));
+                    let variant = self.types.get_type_mut(variant_id).expect_enum_variant_mut();
+                    variant.my_type_id = variant_id;
+                    variants.push(variant.clone());
                 }
-                let enum_type = Type::Enum(TypedEnum { variants, name_if_named: None });
-                let type_id = self.types.add_type(enum_type);
-                Ok(type_id)
+                self.types.get_type_mut(enum_type_id).expect_enum_mut().variants = variants;
+                Ok(enum_type_id)
+            }
+            ParsedTypeExpression::DotMemberAccess(dot_acc) => {
+                let dot_acc = dot_acc.clone();
+                let base_type = self.eval_type_expr(dot_acc.base, scope_id)?;
+                match self.types.get(base_type) {
+                    // You can do dot access on enums to get their variants
+                    Type::Enum(e) => {
+                        let Some(matching_variant) =
+                            e.variants.iter().find(|v| v.tag_name == dot_acc.member_name)
+                        else {
+                            return make_fail_ast_id(
+                                &self.ast,
+                                "Variant <todo> does not exist on Enum <todo>",
+                                type_expr_id.into(),
+                            );
+                        };
+                        let variant_type = matching_variant.my_type_id;
+                        Ok(variant_type)
+                    }
+                    // You can do dot access on structs to get their members!
+                    Type::Struct(_s) => todo!("struct member access"),
+                    // You can do dot access on Array to get its element type
+                    Type::Array(_a) => todo!("array member access"),
+                    // You can do dot access on Optionals to get out their 'inner' types
+                    Type::Optional(_o) => todo!(),
+                    // You can do dot access on References to get out their 'inner' types
+                    Type::Reference(_r) => todo!(),
+                    _other => {
+                        return make_fail_ast_id(
+                            &self.ast,
+                            "Invalid type for '.' access",
+                            type_expr_id.into(),
+                        )
+                    } // You can do dot access on function names (which are not type expressions yet)
+                      // to talk about their return types (and argument types?)
+                }
             }
         }?;
         Ok(base)
@@ -1252,21 +1355,21 @@ impl TypedModule {
             ParsedPattern::Wildcard(span) => Ok(TypedPattern::Wildcard(*span)),
             ParsedPattern::Literal(literal_expr_id) => {
                 match self.ast.expressions.get_expression(*literal_expr_id).expect_literal() {
-                    Literal::None(span) => match self.types.get_type(target_type_id) {
+                    Literal::None(span) => match self.types.get(target_type_id) {
                         Type::Optional(_) => Ok(TypedPattern::LiteralNone(*span)),
                         _ => make_fail_span(
                             "unrelated type will never match none",
                             self.ast.get_pattern_span(pat_expr),
                         ),
                     },
-                    Literal::Unit(span) => match self.types.get_type(target_type_id) {
+                    Literal::Unit(span) => match self.types.get(target_type_id) {
                         Type::Unit => Ok(TypedPattern::LiteralUnit(*span)),
                         _ => make_fail_span(
                             "unrelated type will never match unit",
                             self.ast.get_pattern_span(pat_expr),
                         ),
                     },
-                    Literal::Char(c, span) => match self.types.get_type(target_type_id) {
+                    Literal::Char(c, span) => match self.types.get(target_type_id) {
                         Type::Char => Ok(TypedPattern::LiteralChar(*c, *span)),
                         _ => make_fail_span(
                             "unrelated type will never match char",
@@ -1276,7 +1379,7 @@ impl TypedModule {
                     Literal::Numeric(i, span) => {
                         let i64_value =
                             TypedModule::parse_numeric(i).map_err(|msg| make_error(msg, *span))?;
-                        match self.types.get_type(target_type_id) {
+                        match self.types.get(target_type_id) {
                             Type::Int => Ok(TypedPattern::LiteralInt(i64_value, *span)),
                             _ => make_fail_span(
                                 "unrelated type will never match int",
@@ -1284,7 +1387,7 @@ impl TypedModule {
                             ),
                         }
                     }
-                    Literal::Bool(b, span) => match self.types.get_type(target_type_id) {
+                    Literal::Bool(b, span) => match self.types.get(target_type_id) {
                         Type::Bool => Ok(TypedPattern::LiteralBool(*b, *span)),
                         _ => make_fail_span(
                             "unrelated type will never match bool",
@@ -1294,7 +1397,7 @@ impl TypedModule {
                     // Clone would go away if we intern string literals
                     // But I think this is where we'd interpolate and handle escapes and stuff so maybe there's always going
                     // to be an allocation here. Should be same handling as non-pattern string literals
-                    Literal::String(s, span) => match self.types.get_type(target_type_id) {
+                    Literal::String(s, span) => match self.types.get(target_type_id) {
                         Type::String => Ok(TypedPattern::LiteralString(s.clone(), *span)),
                         _ => make_fail_span(
                             "unrelated type will never match string",
@@ -1307,8 +1410,7 @@ impl TypedModule {
                 Ok(TypedPattern::Variable(VariablePattern { ident: *ident_id, span: *span }))
             }
             ParsedPattern::Some(some_pattern) => {
-                let Some(optional_type_id) = self.types.get_type(target_type_id).as_optional()
-                else {
+                let Some(optional_type_id) = self.types.get(target_type_id).as_optional() else {
                     return make_fail_span(
                         "Impossible pattern: Expected optional type",
                         some_pattern.span,
@@ -1326,7 +1428,7 @@ impl TypedModule {
                 }))
             }
             ParsedPattern::Enum(enum_pattern) => {
-                let Some(enum_type) = self.types.get_type(target_type_id).as_enum() else {
+                let Some(enum_type) = self.types.get(target_type_id).as_enum() else {
                     return make_fail_span(
                         "Impossible pattern: Expected enum type",
                         enum_pattern.span,
@@ -1364,7 +1466,7 @@ impl TypedModule {
                 Ok(TypedPattern::Enum(enum_pattern))
             }
             ParsedPattern::Struct(struct_pattern) => {
-                let target_type = self.types.get_type(target_type_id);
+                let target_type = self.types.get(target_type_id);
                 let expected_struct = target_type.as_struct().ok_or_else(|| {
                     make_error("Impossible pattern: Expected struc type", struct_pattern.span)
                 })?;
@@ -1464,7 +1566,7 @@ impl TypedModule {
         if expected == actual {
             return Ok(());
         }
-        match (self.types.get_type(expected), self.types.get_type(actual)) {
+        match (self.types.get(expected), self.types.get(actual)) {
             (Type::Optional(o1), Type::Optional(o2)) => {
                 self.typecheck_types(o1.inner_type, o2.inner_type, scope_id)
             }
@@ -1648,7 +1750,7 @@ impl TypedModule {
                 span: index_op.span,
             })),
             target_type_id => {
-                let target_type = self.types.get_type(target_type_id);
+                let target_type = self.types.get(target_type_id);
                 match target_type {
                     Type::Array(array_type) => Ok(TypedExpr::ArrayIndex(IndexOp {
                         base_expr: Box::new(base_expr),
@@ -1698,11 +1800,11 @@ impl TypedModule {
     ) -> TyperResult<TypedExpr> {
         let mut base_expr = self.eval_expr(field_access.base, scope_id, None)?;
         let type_id = base_expr.get_type();
-        let maybe_struct_type = match self.types.get_type(type_id) {
+        let base_type = match self.types.get(type_id) {
             Type::Reference(reference_type) => {
-                // Auto de-reference structs for  field access
-                let maybe_struct = self.types.get_type(reference_type.inner_type).as_struct();
-                if !is_assignment_lhs && maybe_struct.is_some() {
+                // Auto de-reference everything for field access
+                let inner_type = self.types.get(reference_type.inner_type);
+                if !is_assignment_lhs {
                     // Dereference the base expression
                     base_expr = TypedExpr::UnaryOp(UnaryOp {
                         kind: UnaryOpKind::Dereference,
@@ -1711,36 +1813,64 @@ impl TypedModule {
                         expr: Box::new(base_expr),
                     });
                 }
-                maybe_struct
+                inner_type
             }
-            Type::Struct(struct_type) => Some(struct_type),
-            _ => None,
+            other => other,
         };
-        let Some(struct_type) = maybe_struct_type else {
-            return make_fail_span(
+        match base_type {
+            Type::Struct(struct_type) => {
+                let (field_index, target_field) =
+                    struct_type.find_field(field_access.target).ok_or(make_error(
+                        format!(
+                            "Field {} not found on struct type",
+                            &*self.ast.identifiers.get_name(field_access.target)
+                        ),
+                        field_access.span,
+                    ))?;
+                Ok(TypedExpr::StructFieldAccess(FieldAccess {
+                    base: Box::new(base_expr),
+                    target_field: field_access.target,
+                    target_field_index: field_index as u32,
+                    ty: target_field.type_id,
+                    span: field_access.span,
+                }))
+            }
+            Type::EnumVariant(ev) => {
+                if self.ast.identifiers.get_name(field_access.target) != "payload" {
+                    return make_fail_span(
+                        &format!(
+                            "Field {} does not exist; try .payload",
+                            self.ast.identifiers.get_name(field_access.target)
+                        ),
+                        field_access.span,
+                    );
+                }
+                let Some(payload_type_id) = ev.payload else {
+                    return make_fail_span(
+                        &format!(
+                            "Variant {} has no payload",
+                            self.ast.identifiers.get_name(ev.tag_name)
+                        ),
+                        field_access.span,
+                    );
+                };
+                Ok(TypedExpr::EnumGetPayload(GetEnumPayload {
+                    target_expr: Box::new(base_expr),
+                    payload_type_id,
+                    variant_name: ev.tag_name,
+                    variant_index: ev.index,
+                    span: field_access.span,
+                }))
+            }
+            _ => make_fail_span(
                 format!(
-                    "Cannot access field {} on non-struc type: {}",
+                    "Cannot access field {} on type: {}",
                     self.ast.identifiers.get_name(field_access.target),
                     self.type_id_to_string(base_expr.get_type())
                 ),
                 field_access.span,
-            );
-        };
-        let (field_index, target_field) =
-            struct_type.find_field(field_access.target).ok_or(make_error(
-                format!(
-                    "Field {} not found on struc type",
-                    &*self.ast.identifiers.get_name(field_access.target)
-                ),
-                field_access.span,
-            ))?;
-        Ok(TypedExpr::StructFieldAccess(FieldAccess {
-            base: Box::new(base_expr),
-            target_field: field_access.target,
-            target_field_index: field_index as u32,
-            ty: target_field.type_id,
-            span: field_access.span,
-        }))
+            ),
+        }
     }
 
     fn eval_assignment_lhs_expr(
@@ -1767,6 +1897,7 @@ impl TypedModule {
     /// - Auto Some()-boxing,
     /// - auto-referencing,
     /// - de-referencing,
+    /// - enum construction
     /// - enum variant construction
     /// This is a good place to do this because we just typechecked an expression, and
     /// we know the expected type.
@@ -1780,15 +1911,42 @@ impl TypedModule {
         if let TypedExpr::None(_type_id, _span) = expression {
             return expression;
         }
-        match self.types.get_type(expected_type_id) {
+        match self.types.get(expected_type_id) {
+            // TODO: DRY up identical enum and enum_variant cases
+            Type::EnumVariant(ev) => match &expression {
+                TypedExpr::Tag(tag_expr) => {
+                    if ev.tag_name == tag_expr.name {
+                        if let Some(_p) = ev.payload {
+                            expression
+                        } else {
+                            eprintln!("We have a matching variant for coercion: {:?}", ev);
+                            let span = tag_expr.span;
+                            TypedExpr::EnumConstructor(TypedEnumConstructor {
+                                type_id: expected_type_id,
+                                variant_name: ev.tag_name,
+                                variant_index: ev.index,
+                                payload: None,
+                                span,
+                            })
+                        }
+                    } else {
+                        // We 'fail' by just giving up the coercion and let typechecking fail
+                        // better
+                        expression
+                    }
+                }
+                _ => expression,
+            },
             Type::Enum(e) => match &expression {
                 TypedExpr::Tag(tag_expr) => {
-                    let matching_variant = e.variants.iter().find(|v| v.tag_name == tag_expr.name);
-                    if let Some(matching_variant) = matching_variant {
+                    if let Some(matching_variant) = e.variant_by_name(tag_expr.name) {
                         if let Some(_p) = matching_variant.payload {
                             expression
                         } else {
-                            eprintln!("We have a matching variant: {:?}", matching_variant);
+                            eprintln!(
+                                "We have a matching variant for coercion: {:?}",
+                                matching_variant
+                            );
                             let span = tag_expr.span;
                             TypedExpr::EnumConstructor(TypedEnumConstructor {
                                 type_id: expected_type_id,
@@ -1880,7 +2038,7 @@ impl TypedModule {
         let result = match expr {
             ParsedExpression::Array(array_expr) => {
                 let mut element_type: Option<TypeId> = match expected_type {
-                    Some(type_id) => match self.types.get_type(type_id) {
+                    Some(type_id) => match self.types.get(type_id) {
                         Type::Array(arr) => Ok(Some(arr.element_type)),
                         _ => Ok(None),
                     },
@@ -1920,9 +2078,9 @@ impl TypedModule {
                 let mut field_defns = Vec::new();
                 let ast_struct = ast_struct.clone();
                 let expected_struct = if let Some(expected_type) = expected_type {
-                    match self.types.get_type(expected_type) {
+                    match self.types.get(expected_type) {
                         Type::Struct(struc) => Some((expected_type, struc.clone())),
-                        Type::Optional(opt) => match self.types.get_type(opt.inner_type) {
+                        Type::Optional(opt) => match self.types.get(opt.inner_type) {
                             Type::Struct(struc) => Some((opt.inner_type, struc.clone())),
                             other_ty => {
                                 return make_fail_span(
@@ -1934,7 +2092,7 @@ impl TypedModule {
                                 );
                             }
                         },
-                        Type::Reference(refer) => match self.types.get_type(refer.inner_type) {
+                        Type::Reference(refer) => match self.types.get(refer.inner_type) {
                             Type::Struct(struc) => Some((refer.inner_type, struc.clone())),
                             other_ty => {
                                 return make_fail_span(
@@ -2060,7 +2218,7 @@ impl TypedModule {
                 match op.op_kind {
                     UnaryOpKind::Dereference => {
                         let reference_type =
-                            self.types.get_type(base_expr.get_type()).as_reference().ok_or(
+                            self.types.get(base_expr.get_type()).as_reference().ok_or(
                                 make_error(
                                     format!(
                                         "Cannot dereference non-reference type: {}",
@@ -2112,7 +2270,7 @@ impl TypedModule {
                     *span,
                 ))?;
                 let expected_type =
-                    self.types.get_type(expected_type).as_optional().ok_or(make_error(
+                    self.types.get(expected_type).as_optional().ok_or(make_error(
                         format!(
                             "Expected optional type for None literal but got {:?}",
                             expected_type
@@ -2177,7 +2335,7 @@ impl TypedModule {
             ParsedExpression::OptionalGet(optional_get) => {
                 let span = optional_get.span;
                 let base = self.eval_expr_inner(optional_get.base, scope_id, expected_type)?;
-                let Type::Optional(optional_type) = self.types.get_type(base.get_type()) else {
+                let Type::Optional(optional_type) = self.types.get(base.get_type()) else {
                     return make_fail_span(
                         format!(
                             "Cannot get value with ! from non-optional type: {}",
@@ -2208,25 +2366,25 @@ impl TypedModule {
                 let span = e.span;
                 let expected_type = expected_type
                     .ok_or(make_error("Could not infer enum type from context", e.span))?;
-                let enum_type = self
-                    .types
-                    .get_type(expected_type)
-                    .as_enum()
-                    .ok_or(make_error("Expected an enum type", e.span))?;
-                let typed_variant =
-                    enum_type.variants.iter().find(|variant| variant.tag_name == e.tag).ok_or(
-                        make_error(
-                            format!(
-                                "No variant {} exists in enum {}",
-                                &*self.ast.identifiers.get_name(e.tag),
-                                self.type_id_to_string(expected_type)
-                            ),
-                            e.span,
-                        ),
-                    )?;
+                let enum_type = {
+                    let expected_type = self.types.get(expected_type);
+                    match expected_type {
+                        Type::Enum(e) => Ok(e),
+                        Type::EnumVariant(ev) => Ok(self.types.get(ev.enum_type_id).expect_enum()),
+                        _ => Err(make_error("Expected an enum type", e.span)),
+                    }
+                }?;
+                let typed_variant = enum_type.variant_by_name(e.tag).ok_or(make_error(
+                    format!(
+                        "No variant {} exists in enum {}",
+                        &*self.ast.identifiers.get_name(e.tag),
+                        self.type_id_to_string(expected_type)
+                    ),
+                    e.span,
+                ))?;
                 let variant_payload = typed_variant.payload.ok_or(make_error(
                     format!(
-                        "Variant {} does not take a payload",
+                        "Variant {} does not have a payload",
                         &*self.ast.identifiers.get_name(e.tag)
                     ),
                     e.span,
@@ -2500,7 +2658,7 @@ impl TypedModule {
             }
             TypedPattern::Some(some_pattern) => {
                 let contained_type =
-                    self.types.get_type(some_pattern.optional_type_id).expect_optional().inner_type;
+                    self.types.get(some_pattern.optional_type_id).expect_optional().inner_type;
                 let inner_value = TypedExpr::OptionalGet(OptionalGet {
                     inner_expr: Box::new(target_expr_variable_expr.clone().into()),
                     result_type_id: contained_type,
@@ -2547,8 +2705,8 @@ impl TypedModule {
                 let (inner_condition_stmts, inner_condition) = if let Some(payload_pattern) =
                     enum_pattern.payload.as_ref()
                 {
-                    let enum_type = self.types.get_type(enum_pattern.enum_type_id).expect_enum();
-                    let variant = &enum_type.variants[enum_pattern.variant_index as usize];
+                    let enum_type = self.types.get(enum_pattern.enum_type_id).expect_enum();
+                    let variant = enum_type.variant_by_index(enum_pattern.variant_index).unwrap();
                     let Some(payload_type_id) = variant.payload else {
                         return make_fail_span(
                             "Impossible pattern: variant does not have payload",
@@ -2861,7 +3019,7 @@ impl TypedModule {
         let resulting_type = if is_do_block {
             UNIT_TYPE_ID
         } else {
-            match self.types.get_type(iteree_type) {
+            match self.types.get(iteree_type) {
                 Type::Optional(_opt) => {
                     let new_optional =
                         Type::Optional(OptionalType { inner_type: body_block.expr_type });
@@ -2881,7 +3039,7 @@ impl TypedModule {
             }
         };
         let yield_decls = if !is_do_block {
-            let yield_initializer = match self.types.get_type(resulting_type) {
+            let yield_initializer = match self.types.get(resulting_type) {
                 Type::Array(_array_type) => self.synth_function_call(
                     vec![self.ast.identifiers.get("Array").unwrap()],
                     self.ast.identifiers.get("new").unwrap(),
@@ -2929,7 +3087,7 @@ impl TypedModule {
 
         // Assign element to yielded array
         if let Some((_yield_coll_variable_id, _yield_def, yielded_coll_expr)) = &yield_decls {
-            match self.types.get_type(resulting_type) {
+            match self.types.get(resulting_type) {
                 Type::Array(_) => {
                     // yielded_coll[index] = block_expr_val;
                     let element_assign = TypedStmt::Assignment(Box::new(Assignment {
@@ -3037,7 +3195,7 @@ impl TypedModule {
         );
         let lhs = self.eval_expr(binary_op.lhs, scope_id, None)?;
         let lhs_type_id = lhs.get_type();
-        let equals_expr = match self.types.get_type(lhs_type_id) {
+        let equals_expr = match self.types.get(lhs_type_id) {
             Type::Unit | Type::Char | Type::Int | Type::Bool => {
                 // All these scalar types treated as IntValue s in codegen
                 let rhs = self.eval_expr(binary_op.rhs, scope_id, Some(lhs.get_type()))?;
@@ -3072,7 +3230,7 @@ impl TypedModule {
             Type::TagInstance(tag) => {
                 let tag_ident = tag.ident;
                 let rhs = self.eval_expr(binary_op.rhs, scope_id, None)?;
-                let Type::TagInstance(rhs_tag) = self.types.get_type(rhs.get_type()) else {
+                let Type::TagInstance(rhs_tag) = self.types.get(rhs.get_type()) else {
                     return make_fail_span("Expected string on rhs", binary_op.span);
                 };
                 if rhs_tag.ident != tag_ident {
@@ -3242,16 +3400,44 @@ impl TypedModule {
     /// Can 'shortcircuit' with Left if the function call to resolve
     /// is actually a builtin
     fn resolve_function_call(
-        &self,
+        &mut self,
         fn_call: &FnCall,
         this_expr: Option<&TypedExpr>,
         calling_scope: ScopeId,
     ) -> TyperResult<Either<TypedExpr, FunctionId>> {
+        // Special case for Some() because it is parsed as a function call
+        // but should result in a special expression
+        if "Some" == self.ast.identifiers.get_name(fn_call.name) {
+            if fn_call.args.len() != 1 {
+                return make_fail_span("Some() must have exactly one argument", fn_call.span);
+            }
+            let arg = self.eval_expr_inner(fn_call.args[0].value, calling_scope, None)?;
+            let type_id = arg.get_type();
+            let optional_type = Type::Optional(OptionalType { inner_type: type_id });
+            let type_id = self.types.add_type(optional_type);
+            return Ok(Either::Left(TypedExpr::OptionalSome(OptionalSome {
+                inner_expr: Box::new(arg),
+                type_id,
+            })));
+        }
+
         let function_id = match this_expr {
             Some(base_expr) => {
                 // Resolve a method call
                 let type_id = base_expr.get_type();
                 let function_id = match self.types.get_type_dereferenced(type_id) {
+                    Type::Optional(_optional_type) => {
+                        if fn_call.name == self.ast.identifiers.get("hasValue").unwrap()
+                            && fn_call.args.is_empty()
+                            && fn_call.type_args.is_none()
+                        {
+                            return Ok(Either::Left(TypedExpr::OptionalHasValue(Box::new(
+                                base_expr.clone(),
+                            ))));
+                        } else {
+                            None
+                        }
+                    }
                     Type::String => {
                         let string_ident_id = self.ast.identifiers.get("string").unwrap();
                         let string_scope =
@@ -3270,18 +3456,6 @@ impl TypedModule {
                             self.get_namespace_scope_for_ident(calling_scope, array_ident_id);
                         array_scope.find_function(fn_call.name)
                     }
-                    Type::Optional(_optional_type) => {
-                        if fn_call.name == self.ast.identifiers.get("hasValue").unwrap()
-                            && fn_call.args.is_empty()
-                            && fn_call.type_args.is_none()
-                        {
-                            return Ok(Either::Left(TypedExpr::OptionalHasValue(Box::new(
-                                base_expr.clone(),
-                            ))));
-                        } else {
-                            None
-                        }
-                    }
                     Type::Struct(struc) => {
                         // Need to distinguish between instances of 'named'
                         // structs and anonymous ones
@@ -3295,6 +3469,50 @@ impl TypedModule {
                         let struct_scope =
                             self.get_namespace_scope_for_ident(calling_scope, struct_type_name);
                         struct_scope.find_function(fn_call.name)
+                    }
+                    Type::Enum(e) => {
+                        if fn_call.name == self.ast.identifiers.get("as").unwrap() {
+                            // Enum cast
+                            if fn_call.args.len() != 0 {
+                                return make_fail_span(".as takes no arguments", fn_call.span);
+                            }
+                            let Some(type_args) = fn_call.type_args.as_ref() else {
+                                return make_fail_span(
+                                    ".as requires a type parameter with desired variant tag",
+                                    fn_call.span,
+                                );
+                            };
+                            let Some(tag_name_arg) = type_args.get(0) else {
+                                return make_fail_span(
+                                    ".as requires a type parameter with desired variant tag",
+                                    fn_call.span,
+                                );
+                            };
+
+                            // TODO(clone): We have to eval a type expr
+                            let e = e.clone();
+                            let type_id =
+                                self.eval_type_expr(tag_name_arg.type_expr, calling_scope)?;
+                            let Some(tag_type) = self.types.get(type_id).as_tag() else {
+                                return make_fail_span(
+                                    ".as requires a type parameter with desired variant tag",
+                                    fn_call.span,
+                                );
+                            };
+                            let tag_name = tag_type.ident;
+                            let Some(matching_variant) = e.variant_by_name(tag_name) else {
+                                return make_fail_span("No variant for tag", fn_call.span);
+                            };
+                            return Ok(Either::Left(TypedExpr::EnumCast(TypedEnumCast {
+                                base: Box::new(base_expr.clone()),
+                                variant_type_id: matching_variant.my_type_id,
+                                variant_name: matching_variant.tag_name,
+                                variant_index: matching_variant.index,
+                                span: fn_call.span,
+                            })));
+                        } else {
+                            None
+                        }
                     }
                     _ => None,
                 };
@@ -3458,22 +3676,6 @@ impl TypedModule {
             fn_call.args.is_empty() || known_value_args.is_none(),
             "cannot pass both typed value args and parsed value args to eval_function_call"
         );
-        // Special case for Some() because it is parsed as a function call
-        // but should result in a special expression
-        if fn_call.name == self.ast.identifiers.intern("Some") {
-            if fn_call.args.len() != 1 {
-                return make_fail_span("Some() must have exactly one argument", fn_call.span);
-            }
-            let arg = self.eval_expr_inner(fn_call.args[0].value, scope_id, None)?;
-            let type_id = arg.get_type();
-            let optional_type = Type::Optional(OptionalType { inner_type: type_id });
-            let type_id = self.types.add_type(optional_type);
-            return Ok(TypedExpr::OptionalSome(OptionalSome {
-                inner_expr: Box::new(arg),
-                type_id,
-            }));
-        }
-
         let function_id = match self.resolve_function_call(fn_call, this_expr.as_ref(), scope_id)? {
             Either::Left(expr) => return Ok(expr),
             Either::Right(function_id) => function_id,
@@ -3621,7 +3823,7 @@ impl TypedModule {
 
                     // This 'match' is where we would ideally implement some actual
                     // recursive type unification algorithm rather than hardcode 2 cases
-                    let maybe_solved_param = match self.types.get_type(param.type_id) {
+                    let maybe_solved_param = match self.types.get(param.type_id) {
                         Type::TypeVariable(tv) => {
                             // If the type param is used in the type of the argument, we can infer
                             // the type param from the type of the argument
@@ -3630,10 +3832,9 @@ impl TypedModule {
                         Type::Array(array_type) => {
                             // If the type param is used in the element type of an array, we can infer
                             // the type param from the type of the array
-                            if let Type::TypeVariable(tv) =
-                                self.types.get_type(array_type.element_type)
+                            if let Type::TypeVariable(tv) = self.types.get(array_type.element_type)
                             {
-                                if let Type::Array(at) = self.types.get_type(expr.get_type()) {
+                                if let Type::Array(at) = self.types.get(expr.get_type()) {
                                     Some(TypeParam {
                                         ident: tv.identifier_id,
                                         type_id: at.element_type,
@@ -3706,7 +3907,7 @@ impl TypedModule {
         let mut new_name = name.clone();
         // Add type_args to scope and typecheck them against the actual params
         for type_param in inferred_or_passed_type_args.iter() {
-            if let Type::TypeVariable(tv) = self.types.get_type(type_param.type_id) {
+            if let Type::TypeVariable(tv) = self.types.get(type_param.type_id) {
                 return make_fail_span(
                     format!(
                         "Cannot specialize function with type variable: {}",

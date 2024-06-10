@@ -1,5 +1,4 @@
-use std::ffi::CString;
-use std::fs;
+use std::borrow::BorrowMut;
 use std::fs::File;
 use std::io::Write;
 use std::os::unix::prelude::ExitStatusExt;
@@ -7,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::thread::JoinHandle;
 use std::time::Instant;
+use std::{fs, thread};
 
 use anyhow::Result;
 use clap::Parser;
@@ -164,7 +164,6 @@ fn codegen_module<'ctx, 'module>(
     typed_module: &'module TypedModule,
     out_dir: impl AsRef<str>,
 ) -> Result<Codegen<'ctx, 'module>> {
-    let start_time = std::time::Instant::now();
     let llvm_optimize = !args.no_llvm_opt;
     let out_dir = out_dir.as_ref();
     let module_name = typed_module.name().to_string();
@@ -173,6 +172,7 @@ fn codegen_module<'ctx, 'module>(
     if let Err(e) = codegen.codegen_module() {
         parse::print_error_location(&codegen.module.ast.spans, &codegen.module.ast.sources, e.span);
         eprintln!("Codegen error: {}", e.message);
+        anyhow::bail!(e)
     }
     codegen.optimize(llvm_optimize)?;
 
@@ -190,6 +190,7 @@ fn codegen_module<'ctx, 'module>(
         println!("{}", codegen.module);
     }
 
+    let clang_time = std::time::Instant::now();
     let mut build_cmd = std::process::Command::new("clang");
     build_cmd.args([
         // "-v",
@@ -200,8 +201,10 @@ fn codegen_module<'ctx, 'module>(
         &format!("{}/{}.ll", out_dir, module_name),
         "-o",
         &format!("{}/{}.out", out_dir, module_name),
+        // "-L",
+        // "bfllib/zig-out/lib",
         "-L",
-        "bfllib/zig-out/lib",
+        "bfllib",
         "-l",
         "bfllib",
     ]);
@@ -213,8 +216,8 @@ fn codegen_module<'ctx, 'module>(
         std::process::exit(1)
     }
 
-    let elapsed = start_time.elapsed();
-    println!("codegen took {}ms", elapsed.as_millis());
+    let elapsed = clang_time.elapsed();
+    println!("codegen phase 'clang' took {}ms", elapsed.as_millis());
     Ok(codegen)
 }
 
@@ -245,38 +248,44 @@ fn main() -> Result<()> {
     let args_clone = args.clone();
     let (compile_sender, compile_receiver) = std::sync::mpsc::sync_channel::<()>(16);
     compile_sender.send(())?;
-    let compile_thread: JoinHandle<()> = std::thread::spawn(move || {
-        while let Ok(()) = compile_receiver.recv() {
-            let Ok(module) = compile_module(&args_clone) else {
-                return;
-            };
-            let llvm_ctx = Context::create();
-            shared_module_clone.write().unwrap().replace(module);
-
-            let module_read = shared_module_clone.read().unwrap();
-            let module = module_read.as_ref().unwrap();
-            let _codegen = match codegen_module(&args_clone, &llvm_ctx, module, out_dir) {
-                Ok(codegen) => codegen,
-                Err(err) => {
-                    eprintln!("Codegen error: {}", err);
+    let compile_thread: JoinHandle<()> = thread::Builder::new()
+        .name("compile".to_string())
+        .spawn(move || {
+            while let Ok(()) = compile_receiver.recv() {
+                let Ok(module) = compile_module(&args_clone) else {
                     return;
-                }
-            };
-        }
-    });
+                };
+                let llvm_ctx = Context::create();
+                shared_module_clone.write().unwrap().replace(module);
+
+                let module_read = shared_module_clone.read().unwrap();
+                let module = module_read.as_ref().unwrap();
+                let _codegen = match codegen_module(&args_clone, &llvm_ctx, module, out_dir) {
+                    Ok(codegen) => codegen,
+                    Err(err) => {
+                        eprintln!("Codegen error: {}", err);
+                        return;
+                    }
+                };
+            }
+        })
+        .unwrap();
 
     let (run_sender, run_receiver) = std::sync::mpsc::sync_channel::<()>(16);
     let run_module_handle = module_handle.clone();
-    let run_thread: JoinHandle<()> = std::thread::spawn(move || {
-        while let Ok(()) = run_receiver.recv() {
-            let module_read = run_module_handle.read().unwrap();
-            let Some(module) = module_read.as_ref() else {
-                println!("Cannot run; no module");
-                continue;
-            };
-            run_compiled_program(out_dir, module.name());
-        }
-    });
+    let run_thread: JoinHandle<()> = thread::Builder::new()
+        .name("run".to_string())
+        .spawn(move || {
+            while let Ok(()) = run_receiver.recv() {
+                let module_read = run_module_handle.read().unwrap();
+                let Some(module) = module_read.as_ref() else {
+                    println!("Cannot run; no module");
+                    continue;
+                };
+                run_compiled_program(out_dir, module.name());
+            }
+        })
+        .unwrap();
 
     if args.run && !args.gui {
         println!("waiting on compile thread");
@@ -285,7 +294,7 @@ fn main() -> Result<()> {
             if module.is_ok() && module.unwrap().is_some() {
                 break;
             } else {
-                std::thread::sleep(std::time::Duration::from_millis(100));
+                thread::sleep(std::time::Duration::from_millis(100));
             }
         }
         let module = module_handle.read().unwrap();
@@ -306,7 +315,7 @@ fn main() -> Result<()> {
             if module.is_ok() && module.unwrap().is_some() {
                 break;
             } else {
-                std::thread::sleep(std::time::Duration::from_millis(100));
+                thread::sleep(std::time::Duration::from_millis(100));
             }
         }
         Ok(())

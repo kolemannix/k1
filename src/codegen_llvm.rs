@@ -6,6 +6,7 @@ use std::ops::Deref;
 use std::path::Path;
 
 use inkwell::attributes::AttributeLoc;
+use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::debug_info::{
@@ -54,6 +55,14 @@ impl Display for CodegenError {
 }
 
 impl Error for CodegenError {}
+
+#[derive(Debug, Copy, Clone)]
+struct BranchSetup<'ctx> {
+    function: FunctionValue<'ctx>,
+    origin_block: BasicBlock<'ctx>,
+    then_block: BasicBlock<'ctx>,
+    else_block: BasicBlock<'ctx>,
+}
 
 #[derive(Debug, Copy, Clone)]
 struct LlvmPointerType<'ctx> {
@@ -788,7 +797,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             type_id => {
                 // Generate and store the type in here
-                let ty = self.module.types.get_type(type_id);
+                let ty = self.module.types.get(type_id);
                 match ty {
                     Type::Optional(optional) => {
                         Ok(self.build_optional_type(type_id, &optional)?.into())
@@ -1064,6 +1073,13 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             di_type: debug_union_type,
                         }
                         .into())
+                    }
+                    Type::EnumVariant(ev) => {
+                        let parent_enum = self.codegen_type(ev.enum_type_id)?.expect_enum();
+                        // Let's try this for now; we may have to represent this differently
+                        // as a LlvmStructType
+                        // let variant = parent_enum.variant_structs[ev.index];
+                        Ok(parent_enum.into())
                     }
                     other => Err(CodegenError {
                         message: format!(
@@ -1410,7 +1426,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 }
             }
             TypedExpr::Array(array) => {
-                let Type::Array(array_type) = self.module.types.get_type(array.type_id) else {
+                let Type::Array(array_type) = self.module.types.get(array.type_id) else {
                     panic!("expected array type for array");
                 };
                 let element_type = self.codegen_type(array_type.element_type)?.value_type();
@@ -1468,18 +1484,27 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 BOOL_TYPE_ID => match bin_op.kind {
                     BinaryOpKind::And | BinaryOpKind::Or => {
                         let lhs_int = self.codegen_expr_rvalue(&bin_op.lhs)?.into_int_value();
-                        let rhs_int = self.codegen_expr_rvalue(&bin_op.rhs)?.into_int_value();
                         let op = match bin_op.kind {
                             BinaryOpKind::And => {
+                                let rhs_int =
+                                    self.codegen_expr_rvalue(&bin_op.rhs)?.into_int_value();
                                 self.builder.build_and(lhs_int, rhs_int, "bool_and")
                             }
-                            BinaryOpKind::Or => self.builder.build_or(lhs_int, rhs_int, "bool_or"),
-                            BinaryOpKind::Equals => self.builder.build_int_compare(
-                                IntPredicate::EQ,
-                                lhs_int,
-                                rhs_int,
-                                "bool_eq",
-                            ),
+                            BinaryOpKind::Or => {
+                                let rhs_int =
+                                    self.codegen_expr_rvalue(&bin_op.rhs)?.into_int_value();
+                                self.builder.build_or(lhs_int, rhs_int, "bool_or")
+                            }
+                            BinaryOpKind::Equals => {
+                                let rhs_int =
+                                    self.codegen_expr_rvalue(&bin_op.rhs)?.into_int_value();
+                                self.builder.build_int_compare(
+                                    IntPredicate::EQ,
+                                    lhs_int,
+                                    rhs_int,
+                                    "bool_eq",
+                                )
+                            }
                             _ => panic!(),
                         };
                         Ok(op.as_basic_value_enum())
@@ -1638,18 +1663,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(loaded_value)
             }
             TypedExpr::EnumIsVariant(enum_is_variant) => {
-                let tag_value = self.get_value_for_tag_type(enum_is_variant.variant_name);
                 let enum_value =
                     self.codegen_expr_rvalue(&enum_is_variant.target_expr)?.into_struct_value();
-                let enum_tag_value = self.get_enum_tag(enum_value);
-                let is_equal = self.builder.build_int_compare(
-                    IntPredicate::EQ,
-                    enum_tag_value,
-                    tag_value,
-                    "is_variant_cmp",
-                );
-                let is_equal_bool = self.i1_to_bool(is_equal, "is_variant");
-                Ok(is_equal_bool.as_basic_value_enum())
+                let is_variant_bool =
+                    self.codegen_enum_is_variant(enum_value, enum_is_variant.variant_name);
+                Ok(is_variant_bool.as_basic_value_enum())
             }
             TypedExpr::EnumGetPayload(enum_get_payload) => {
                 let enum_type =
@@ -1661,7 +1679,57 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let value_payload = self.get_enum_payload(variant_type.struct_type, enum_value);
                 Ok(value_payload)
             }
+            TypedExpr::EnumCast(enum_cast) => {
+                let enum_value = self.codegen_expr_rvalue(&enum_cast.base)?.into_struct_value();
+                let is_variant_bool =
+                    self.codegen_enum_is_variant(enum_value, enum_cast.variant_name);
+
+                let cond = self.bool_to_i1(is_variant_bool, "enum_cast_check");
+                let branch = self.build_conditional_branch(cond, "cast_fail", "cast_post");
+
+                self.builder.position_at_end(branch.then_block);
+                let trap_intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.trap").unwrap();
+                let trap_function = trap_intrinsic.get_declaration(&self.llvm_module, &[]).unwrap();
+                self.builder.build_call(trap_function, &[], "trap");
+                self.builder.build_unreachable();
+
+                // Return to main block
+                self.builder.position_at_end(branch.else_block);
+                // Ultimately, this cast is a no-op
+                Ok(enum_value.as_basic_value_enum())
+            }
         }
+    }
+
+    fn build_conditional_branch(
+        &mut self,
+        cond: IntValue<'ctx>,
+        then_name: &str,
+        else_name: &str,
+    ) -> BranchSetup<'ctx> {
+        let origin_block = self.builder.get_insert_block().unwrap();
+        let current_fn = origin_block.get_parent().unwrap();
+        let then_block = self.ctx.append_basic_block(current_fn, then_name);
+        let else_block = self.ctx.append_basic_block(current_fn, else_name);
+        self.builder.build_conditional_branch(cond, then_block, else_block);
+        BranchSetup { function: current_fn, origin_block, then_block, else_block }
+    }
+
+    fn codegen_enum_is_variant(
+        &mut self,
+        enum_value: StructValue<'ctx>,
+        variant_name: IdentifierId,
+    ) -> IntValue<'ctx> {
+        let tag_value = self.get_value_for_tag_type(variant_name);
+        let enum_tag_value = self.get_enum_tag(enum_value);
+        let is_equal = self.builder.build_int_compare(
+            IntPredicate::EQ,
+            enum_tag_value,
+            tag_value,
+            "is_variant_cmp",
+        );
+        let is_equal_bool = self.i1_to_bool(is_equal, "is_variant");
+        is_equal_bool
     }
 
     fn bool_to_i1(&self, bool: IntValue<'ctx>, name: &str) -> IntValue<'ctx> {
@@ -1907,32 +1975,26 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     string2len,
                     "len_eq",
                 );
-                let start_block = self.builder.get_insert_block().unwrap();
-                let current_fn = start_block.get_parent().unwrap();
                 let result = self.builder.build_alloca(self.builtin_types.boolean, "result");
                 self.builder.build_store(result, self.builtin_types.false_value);
 
-                let compare_block = self.ctx.append_basic_block(current_fn, "compare");
-                let finish_block = self.ctx.append_basic_block(current_fn, "finish");
-
                 // If lengths are equal, go to mem compare
-                self.builder.build_conditional_branch(len_eq, compare_block, finish_block);
+                let compare_finish_branch =
+                    self.build_conditional_branch(len_eq, "compare", "finish");
+                let compare_block = compare_finish_branch.then_block;
+                let finish_block = compare_finish_branch.else_block;
 
                 self.builder.position_at_end(compare_block);
-                let empty_strings_block =
-                    self.ctx.append_basic_block(current_fn, "empty_strings_case");
-                let memcmp_block = self.ctx.append_basic_block(current_fn, "memcmp_case");
                 let len_is_zero = self.builder.build_int_compare(
                     IntPredicate::EQ,
                     string1len,
                     self.builtin_types.i64.const_zero(),
                     "len_is_zero",
                 );
-                self.builder.build_conditional_branch(
-                    len_is_zero,
-                    empty_strings_block,
-                    memcmp_block,
-                );
+                let compare_cases_branch =
+                    self.build_conditional_branch(len_is_zero, "empty_strings_case", "memcmp_case");
+                let empty_strings_block = compare_cases_branch.then_block;
+                let memcmp_block = compare_cases_branch.else_block;
 
                 self.builder.position_at_end(empty_strings_block);
                 // self.build_print_string_call(self.const_string("empty strings case\n"));
@@ -1943,17 +2005,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 // self.build_print_string_call(self.const_string("memcmp case\n"));
                 let string1data = self.builtin_types.string_data(&self.builder, string1);
                 let string2data = self.builtin_types.string_data(&self.builder, string2);
-                // let memcmp_intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.memcmp").unwrap();
-                // let memcmp_function = memcmp_intrinsic
-                //     .get_declaration(
-                //         &self.llvm_module,
-                //         &[self
-                //             .ctx
-                //             .i8_type()
-                //             .ptr_type(self.default_address_space)
-                //             .as_basic_type_enum()],
-                //     )
-                //     .unwrap();
                 let memcmp_result_i32 = self
                     .builder
                     .build_call(
@@ -1999,7 +2050,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             IntrinsicFunctionType::ArrayNew => {
                 let array_type_id = function.ret_type;
-                let array_type = self.module.types.get_type(array_type_id);
+                let array_type = self.module.types.get(array_type_id);
                 let element_type = self.codegen_type(array_type.expect_array().element_type)?;
                 let len = self.get_loaded_variable(function.params[0].variable_id).into_int_value();
 
@@ -2051,7 +2102,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 // self.build_print_string_call(self.const_string("growing array\n"));
                 let old_data = self.builtin_types.array_data(&self.builder, array);
                 let element_type_id =
-                    self.module.types.get_type(self_param.type_id).expect_array().element_type;
+                    self.module.types.get(self_param.type_id).expect_array().element_type;
                 let new_data_type = self.codegen_type(element_type_id)?;
                 let new_data = self
                     .builder
@@ -2386,6 +2437,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     }
 
     pub fn codegen_module(&mut self) -> CodegenResult<()> {
+        let start = std::time::Instant::now();
         for constant in &self.module.constants {
             match constant.expr {
                 TypedExpr::Int(i64, _) => {
@@ -2404,6 +2456,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.codegen_function(id, function)?;
             }
         }
+        println!("codegen phase 'ir' took {}ms", start.elapsed().as_millis());
         Ok(())
     }
 
@@ -2412,6 +2465,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     }
 
     pub fn optimize(&mut self, optimize: bool) -> anyhow::Result<()> {
+        let start = std::time::Instant::now();
         Target::initialize_aarch64(&InitializationConfig::default());
         // let triple = TargetMachine::get_default_triple();
         let triple = TargetTriple::create("arm64-apple-macosx14.4.0");
@@ -2467,6 +2521,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         machine.add_analysis_passes(&module_pass_manager);
 
         self.llvm_machine = Some(machine);
+
+        println!("codegen phase 'optimize' took {}ms", start.elapsed().as_millis());
 
         Ok(())
     }
