@@ -1,0 +1,18 @@
+type E = enum A(int), B, C
+namespace E {
+  fn value(self: E): int {
+    when self {
+      .A(i) -> i,
+      .B -> 2,
+      .C -> 3
+    }
+  }
+}
+fn main(): int {
+  val x: E = .A(42);
+  val y: E.A = .A(42);
+  printInt(y.payload);
+  assert(x.value() == y.value());
+  // val a = x.as<E.A>();
+  0
+}

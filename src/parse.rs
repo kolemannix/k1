@@ -147,8 +147,8 @@ pub struct Identifiers {
     intern_pool: string_interner::StringInterner,
 }
 impl Identifiers {
-    pub const BUILTIN_IDENTS: [&'static str; 6] =
-        ["unit", "char", "string", "length", "iteree", "it_index"];
+    pub const BUILTIN_IDENTS: [&'static str; 7] =
+        ["unit", "char", "string", "length", "iteree", "it_index", "as"];
 
     pub fn intern(&mut self, s: impl AsRef<str>) -> IdentifierId {
         let s = self.intern_pool.get_or_intern(&s);
@@ -567,6 +567,13 @@ pub struct ParsedEnumType {
 }
 
 #[derive(Debug, Clone)]
+pub struct ParsedDotMemberAccess {
+    pub base: ParsedTypeExpressionId,
+    pub member_name: IdentifierId,
+    pub span: SpanId,
+}
+
+#[derive(Debug, Clone)]
 pub enum ParsedTypeExpression {
     Unit(SpanId),
     Char(SpanId),
@@ -580,6 +587,7 @@ pub enum ParsedTypeExpression {
     Optional(ParsedOptional),
     Reference(ParsedReference),
     Enum(ParsedEnumType),
+    DotMemberAccess(ParsedDotMemberAccess),
 }
 
 impl ParsedTypeExpression {
@@ -607,6 +615,7 @@ impl ParsedTypeExpression {
             ParsedTypeExpression::Optional(opt) => opt.span,
             ParsedTypeExpression::Reference(r) => r.span,
             ParsedTypeExpression::Enum(e) => e.span,
+            ParsedTypeExpression::DotMemberAccess(a) => a.span,
         }
     }
 }
@@ -970,8 +979,6 @@ pub fn print_error_location(spans: &Spans, sources: &Sources, span_id: SpanId) {
         println!("Error: could not find line for span {:?}", span);
         return;
     };
-    eprintln!("Got line {} '{}' for span: {:?}", line.line_index, &line.content, span);
-
     use colored::*;
 
     let thingies = "^".repeat(span.len as usize);
@@ -1389,29 +1396,51 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn parse_type_expression(&mut self) -> ParseResult<Option<ParsedTypeExpressionId>> {
-        let Some(result) = self.parse_base_type_expression()? else {
+        let Some(mut result) = self.parse_base_type_expression()? else {
             return Ok(None);
         };
-        let next = self.peek();
-        if next.kind.is_postfix_type_operator() {
-            if next.kind == K::QuestionMark {
-                // Optional Type
-                self.tokens.advance();
-                Ok(Some(self.module.type_expressions.add(ParsedTypeExpression::Optional(
-                    ParsedOptional { base: result, span: next.span },
-                ))))
-            } else if next.kind == K::Asterisk {
-                // Reference Type
-                self.tokens.advance();
-                Ok(Some(self.module.type_expressions.add(ParsedTypeExpression::Reference(
-                    ParsedReference { base: result, span: next.span },
-                ))))
+        loop {
+            let next = self.peek();
+            if next.kind.is_postfix_type_operator() {
+                if next.kind == K::Dot {
+                    self.tokens.advance();
+                    let ident_token = self.expect_eat_token(K::Ident)?;
+                    let ident = self.intern_ident_token(ident_token);
+                    let span = self.extend_span(
+                        self.module.get_type_expression_span(result),
+                        ident_token.span,
+                    );
+                    let new = ParsedTypeExpression::DotMemberAccess(ParsedDotMemberAccess {
+                        base: result,
+                        member_name: ident,
+                        span,
+                    });
+                    let new_id = self.module.type_expressions.add(new);
+                    result = new_id;
+                } else if next.kind == K::QuestionMark {
+                    // Optional Type
+                    // For now, we say you can't nest options, at least syntactically, by not recursing / looping
+                    self.tokens.advance();
+                    result = self.module.type_expressions.add(ParsedTypeExpression::Optional(
+                        ParsedOptional { base: result, span: next.span },
+                    ));
+                    break;
+                } else if next.kind == K::Asterisk {
+                    // Reference Type
+                    // For now, we say you can't nest references, at least syntactically, by not recursing / looping
+                    self.tokens.advance();
+                    result = self.module.type_expressions.add(ParsedTypeExpression::Reference(
+                        ParsedReference { base: result, span: next.span },
+                    ));
+                    break;
+                } else {
+                    panic!("unhandled postfix type operator {:?}", next.kind);
+                }
             } else {
-                panic!("unhandled postfix type operator {:?}", next.kind);
+                break;
             }
-        } else {
-            Ok(Some(result))
         }
+        Ok(Some(result))
     }
 
     fn parse_base_type_expression(&mut self) -> ParseResult<Option<ParsedTypeExpressionId>> {
@@ -2565,6 +2594,11 @@ impl ParsedModule {
                 }
                 Ok(())
             }
+            ParsedTypeExpression::DotMemberAccess(acc) => {
+                self.display_type_expression_id(acc.base, f)?;
+                f.write_char('.')?;
+                f.write_str(self.identifiers.get_name(acc.member_name))
+            }
         }
     }
 }
@@ -2598,19 +2632,3 @@ pub fn test_parse_module(source: Source) -> ParseResult<ParsedModule> {
         Ok(module)
     }
 }
-
-// pub fn print_ast(ast: &Module, identifiers: &Identifiers) -> Result<String, std::fmt::Error> {
-//     let mut output = String::new();
-//     output.write_str(&ast.name)?;
-//     output.write_str("\n")?;
-//     for def in &ast.defs {
-//         match def {
-//             Definition::Type(type_def) => output
-//                 .write_fmt(format_args!("Type {} {:?}", type_def.name, type_def.value_expr))?,
-//             Definition::FnDef(fn_def) => {
-//                 output.write_fmt(format_args!("Function {} {:?}", fn_def.name, fn_def.))?
-//             }
-//         }
-//     }
-//     output
-// }
