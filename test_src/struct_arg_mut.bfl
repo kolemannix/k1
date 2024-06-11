@@ -18,6 +18,6 @@ fn main(): int {
   assert((*x).getValue() == 42);
   x.setValue(41);
   assert((*x).getValue() == 41);
-  assert(!x.y);
+  assert(not x.y);
   0
 }

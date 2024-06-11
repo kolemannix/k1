@@ -551,7 +551,7 @@ impl Display for UnaryOpKind {
 impl UnaryOpKind {
     pub fn from_tokenkind(kind: TokenKind) -> Option<UnaryOpKind> {
         match kind {
-            TokenKind::Bang => Some(UnaryOpKind::BooleanNegation),
+            TokenKind::KeywordNot => Some(UnaryOpKind::BooleanNegation),
             TokenKind::Ampersand => Some(UnaryOpKind::Reference),
             TokenKind::Asterisk => Some(UnaryOpKind::Dereference),
             _ => None,
