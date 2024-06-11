@@ -6,9 +6,12 @@
   - [x] Codegen fail instead of panic
   - [x] Rename record to struct
   - [x] Start gui
-  - [ ] Remove ! for negation; switch to 'not'
-- [ ] Panic/Exit for option unwrap, bad enum cast, etc
-- [ ] Match expected errors from test programs
+  - [x] Remove ! for negation; switch to 'not'
+- [ ] Exit for option unwrap
+- [x] Exit for bad enum cast
+- [x] Match expected errors from test programs
+- [ ] 'Switch' in IR
+- [ ] 'dump' directive on block
 - [ ] Pattern Matching
   - [x] Single-arm match evals to boolean
   - [x] Literals
@@ -20,21 +23,23 @@
   - [x] Enums
   - [-] Multi-case
   - [ ] Exhaustiveness checking
-- [ ] Enum types (enums / tagged unions)
+- [x] Enum types (enums / tagged unions)
   - [x] Syntax
   - [x] Construction/repr
   - [x] Later, pattern match on variants
-  - [ ] Make referencable types for each variant
-  - [ ] First, hard cast to variant (`expect`)
-  - [ ] Built-in .as<Tag> or panic
+  - [x] Make first-class types for each variant
+  - [x] First, hard cast to variant (`as<.Tag>`)
+  - [x] Built-in .as<Tag> or panic
+  - [ ] Enum methods
 - [x] TypedIf allow exprs instead of requiring blocks (did not do; instead improved handling of unit blocks)
 - [x] Remove binding 'if' since we have pattern matching
 - [x] Abilities
   - [ ] Ability impl decl bugfix (ability impls need to be seen in the decl phase)
 - [ ] Ability derivation
-  - [ ] I think you have to cache and commit the generated code, or you get the slow proc macros or slow implicit derivation problems that Scala has
+  - [ ] I think you have to cache and commit the generated code, or you get the slow proc macros or slow implicit derivation problems that Scala has. This is first-class codegen, not 'macros'?
 - [ ] Figure out the pointer/reference story, maybe use https://github.com/ivmai/bdwgc for GC
 - [x] Type Ascriptions
+- [ ] Enforce unique function name in namespace!
 - [ ] Errors (a builtin sum type?)
 - [ ] Optional coalescing accessor (x?.y) and ??
 - [ ] Pure lambdas with ->

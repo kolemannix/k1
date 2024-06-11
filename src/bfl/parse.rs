@@ -802,6 +802,7 @@ pub struct ParsedModule {
     pub expressions: ParsedExpressionPool,
     pub type_expressions: ParsedTypeExpressionPool,
     pub patterns: ParsedPatternPool,
+    pub errors: Vec<ParseError>,
 }
 
 impl ParsedModule {
@@ -823,6 +824,7 @@ impl ParsedModule {
             expressions: ParsedExpressionPool::default(),
             type_expressions: ParsedTypeExpressionPool::default(),
             patterns: ParsedPatternPool::default(),
+            errors: Vec::new(),
         }
     }
 
@@ -952,7 +954,7 @@ impl ParsedModule {
 
 pub type ParseResult<A> = anyhow::Result<A, ParseError>;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ParseError {
     pub expected: String,
     pub token: Token,
@@ -2442,11 +2444,24 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         };
 
         let mut new_definitions: Vec<ParsedId> = vec![];
+        loop {
+            match self.parse_definition() {
+                Ok(Some(def)) => new_definitions.push(def),
+                Err(err) => {
+                    self.module.errors.push(err);
+                    // For now, break on first parse error
+                    break;
+                }
+                Ok(None) => break,
+            }
+        }
         while let Some(def) = self.parse_definition()? {
             new_definitions.push(def)
         }
         if self.tokens.peek().kind != K::Eof {
-            return Err(Parser::error("End or definition", self.tokens.peek()));
+            let err = Parser::error("End or definition", self.tokens.peek());
+            self.module.errors.push(err.clone());
+            return Err(err);
         }
 
         self.module.get_namespace_mut(root_namespace_id).definitions.extend(new_definitions);
