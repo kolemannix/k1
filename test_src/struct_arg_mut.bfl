@@ -21,3 +21,4 @@ fn main(): int {
   assert(not x.y);
   0
 }
+//exitcode: 0

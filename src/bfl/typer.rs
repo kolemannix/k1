@@ -1919,7 +1919,7 @@ impl TypedModule {
                         if let Some(_p) = ev.payload {
                             expression
                         } else {
-                            eprintln!("We have a matching variant for coercion: {:?}", ev);
+                            debug!("We have a matching variant for coercion: {:?}", ev);
                             let span = tag_expr.span;
                             TypedExpr::EnumConstructor(TypedEnumConstructor {
                                 type_id: expected_type_id,
@@ -1943,7 +1943,7 @@ impl TypedModule {
                         if let Some(_p) = matching_variant.payload {
                             expression
                         } else {
-                            eprintln!(
+                            debug!(
                                 "We have a matching variant for coercion: {:?}",
                                 matching_variant
                             );
@@ -2227,7 +2227,7 @@ impl TypedModule {
                                     op.span,
                                 ),
                             )?;
-                        eprintln!(
+                        debug!(
                             "DEREFERENCING: {}: {}",
                             self.expr_to_string(&base_expr),
                             self.type_id_to_string(base_expr.get_type())
@@ -2393,6 +2393,11 @@ impl TypedModule {
                 let variant_name = typed_variant.tag_name;
                 // drop(typed_variant);
                 let payload_expr = self.eval_expr(e.payload, scope_id, Some(variant_payload))?;
+                if let Err(msg) =
+                    self.typecheck_types(variant_payload, payload_expr.get_type(), scope_id)
+                {
+                    return make_fail_span(&format!("Payload type mismatch: {}", msg), span);
+                };
                 Ok(TypedExpr::EnumConstructor(TypedEnumConstructor {
                     type_id: expected_type,
                     payload: Some(Box::new(payload_expr)),
@@ -2494,7 +2499,7 @@ impl TypedModule {
         )?;
         resulting_block.statements.extend(pre_stmts);
         resulting_block.push_stmt(TypedStmt::Expr(Box::new(if_chain)));
-        eprintln!("match result\n{}", self.block_to_string(&resulting_block));
+        // eprintln!("match result\n{}", self.block_to_string(&resulting_block));
         let result = TypedExpr::Block(resulting_block);
         Ok(result)
     }
@@ -4698,34 +4703,30 @@ impl TypedModule {
         }
     }
     pub fn run(&mut self) -> anyhow::Result<()> {
-        let mut errors: Vec<TyperError> = Vec::new();
-
         let scope_id = self.scopes.get_root_scope_id();
 
         for &parsed_definition_id in self.ast.get_root_namespace().definitions.clone().iter() {
             let result = self.eval_definition_declaration_phase(parsed_definition_id, scope_id);
             if let Err(e) = result {
                 print_error(&self.ast.spans, &self.ast.sources, &e.message, e.span);
-                errors.push(e);
+                self.errors.push(e);
             }
         }
 
-        if !errors.is_empty() {
-            bail!("{} failed declaration phase with {} errors", self.name(), errors.len())
+        if !self.errors.is_empty() {
+            bail!("{} failed declaration phase with {} errors", self.name(), self.errors.len())
         }
 
         for &parsed_definition_id in self.ast.get_root_namespace().definitions.clone().iter() {
             let result = self.eval_definition(parsed_definition_id, scope_id);
             if let Err(e) = result {
                 print_error(&self.ast.spans, &self.ast.sources, &e.message, e.span);
-                errors.push(e);
+                self.errors.push(e);
             }
         }
-        if !errors.is_empty() {
-            if log::log_enabled!(Level::Debug) {
-                debug!("{}", self);
-            }
-            bail!("{} failed typechecking with {} errors", self.name(), errors.len())
+        if !self.errors.is_empty() {
+            debug!("{}", self);
+            bail!("{} failed typechecking with {} errors", self.name(), self.errors.len())
         }
         Ok(())
     }

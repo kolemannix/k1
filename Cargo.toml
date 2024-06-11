@@ -2,6 +2,11 @@
 name = "bfl"
 version = "0.1.0"
 edition = "2021"
+default-run = "compiler"
+
+[lib]
+name = "bfl"
+path = "src/bfl/lib.rs"
 
 [dependencies]
 anyhow = "1.0.69"
@@ -19,3 +24,11 @@ string-interner = "0.14.0"
 zstd-sys = "2.0.8"
 either = "1.9.0"
 raylib = "5.0.1"
+
+[[bin]]
+name = "test_suite"
+path = "src/bin/test_suite.rs"
+
+[[bin]]
+name = "compiler"
+path = "src/bin/compiler_main.rs"
