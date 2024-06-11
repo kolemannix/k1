@@ -135,6 +135,7 @@ pub enum TokenKind {
     KeywordIs,
     KeywordWhen,
     KeywordAs,
+    KeywordNot,
 
     Slash,
     LineComment,
@@ -211,6 +212,7 @@ impl TokenKind {
             K::KeywordIs => Some("is"),
             K::KeywordWhen => Some("when"),
             K::KeywordAs => Some("as"),
+            K::KeywordNot => Some("not"),
 
             K::Slash => Some("/"),
             K::LineComment => Some("//"),
@@ -303,6 +305,7 @@ impl TokenKind {
             "impl" => Some(K::KeywordImpl),
             "auto" => Some(K::KeywordAuto),
             "when" => Some(K::KeywordWhen),
+            "not" => Some(K::KeywordNot),
             "as" => Some(K::KeywordAs),
             "is" => Some(K::KeywordIs),
             "==" => Some(K::EqualsEquals),
@@ -336,6 +339,7 @@ impl TokenKind {
             K::KeywordIs => true,
             K::KeywordWhen => true,
             K::KeywordAs => true,
+            K::KeywordNot => true,
             _ => false,
         }
     }
@@ -346,7 +350,7 @@ impl TokenKind {
         #[allow(clippy::match_like_matches_macro)]
         match self {
             K::Asterisk => true,
-            K::Bang => true,
+            K::KeywordNot => true,
             K::Ampersand => true,
             _ => false,
         }

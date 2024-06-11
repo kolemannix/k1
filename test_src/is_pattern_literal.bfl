@@ -4,24 +4,24 @@ fn main(): int {
   assert(u is ());
 
   val i = 42;
-  assert(!(i is 41));
+  assert(not (i is 41));
   assert(i is 42);
 
   val s = "hello";
   assert(s is "hello");
-  assert(!(s is "world"));
+  assert(not (s is "world"));
 
   val c = 'x';
   assert(c is 'x');
-  assert(!(c is 'f'));
+  assert(not (c is 'f'));
 
   val b = true;
-  assert(!(b is false));
+  assert(not (b is false));
   assert(b is true);
 
   val opt = Some(42);
   assert(opt is Some(_));
-  assert(!(opt is None));
+  assert(not (opt is None));
 
   val foo = { x: 1, y: "asdf" };
   // Wildcard pattern
