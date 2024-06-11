@@ -24,7 +24,7 @@ use inkwell::values::{
     IntValue, PointerValue, StructValue,
 };
 use inkwell::{AddressSpace, IntPredicate, OptimizationLevel};
-use log::{debug, trace};
+use log::{debug, info, trace};
 
 use crate::lex::SpanId;
 use crate::parse::{FileId, IdentifierId};
@@ -247,15 +247,15 @@ impl<'ctx> BuiltinTypes<'ctx> {
     fn padding_type(&self, size_bits: u32) -> inkwell::types::BasicTypeEnum<'ctx> {
         let mut padding_members: Vec<BasicTypeEnum<'ctx>> = vec![];
         let mut remaining_bits = size_bits;
-        while remaining_bits > 64 {
+        while remaining_bits >= 64 {
             padding_members.push(self.ctx.i64_type().into());
             remaining_bits -= 64;
         }
-        while remaining_bits > 32 {
+        while remaining_bits >= 32 {
             padding_members.push(self.ctx.i32_type().into());
             remaining_bits -= 32;
         }
-        while remaining_bits > 8 {
+        while remaining_bits >= 8 {
             padding_members.push(self.ctx.i8_type().into());
             remaining_bits -= 8;
         }
@@ -1685,17 +1685,18 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     self.codegen_enum_is_variant(enum_value, enum_cast.variant_name);
 
                 let cond = self.bool_to_i1(is_variant_bool, "enum_cast_check");
-                let branch = self.build_conditional_branch(cond, "cast_fail", "cast_post");
+                let branch = self.build_conditional_branch(cond, "cast_post", "cast_fail");
 
-                self.builder.position_at_end(branch.then_block);
+                // cast_fail
+                self.builder.position_at_end(branch.else_block);
                 let trap_intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.trap").unwrap();
                 let trap_function = trap_intrinsic.get_declaration(&self.llvm_module, &[]).unwrap();
                 self.builder.build_call(trap_function, &[], "trap");
                 self.builder.build_unreachable();
 
-                // Return to main block
-                self.builder.position_at_end(branch.else_block);
-                // Ultimately, this cast is a no-op
+                // cast_post
+                self.builder.position_at_end(branch.then_block);
+                // Ultimately, this cast is currently a no-op
                 Ok(enum_value.as_basic_value_enum())
             }
         }
@@ -2456,7 +2457,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.codegen_function(id, function)?;
             }
         }
-        println!("codegen phase 'ir' took {}ms", start.elapsed().as_millis());
+        info!("codegen phase 'ir' took {}ms", start.elapsed().as_millis());
         Ok(())
     }
 
@@ -2522,7 +2523,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
         self.llvm_machine = Some(machine);
 
-        println!("codegen phase 'optimize' took {}ms", start.elapsed().as_millis());
+        info!("codegen phase 'optimize' took {}ms", start.elapsed().as_millis());
 
         Ok(())
     }

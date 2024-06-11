@@ -1,12 +1,6 @@
-fn printBool(b: bool): unit {
-  if b print("true") else print("false");
-  ()
-}
-
 fn main(): int {
   val boolArray: Array<bool> = [false,true];
-  printBool(boolArray[0]);
-  printBool(boolArray[1]);
+  assert(boolArray[0] == false);
+  assert(boolArray[1] == true);
   0
 }
-// 0, 1
