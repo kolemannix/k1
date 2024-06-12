@@ -10,7 +10,7 @@ use std::{fs, thread};
 use crate::parse::print_error_location;
 use crate::typer::TypedModule;
 use crate::{gui, parse, typer};
-use anyhow::Result;
+use anyhow::{bail, Result};
 use inkwell::context::Context;
 use log::info;
 
@@ -162,49 +162,27 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
         return Err(CompileModuleError { parsed_module: None, module: Some(typed_module) });
     };
     let typing_elapsed = type_start.elapsed();
+    if args.dump_module {
+        println!("{}", typed_module);
+    }
     info!("typing took {}ms", typing_elapsed.as_millis());
 
     Ok(typed_module)
 }
 
-pub fn codegen_module<'ctx, 'module>(
-    args: &Args,
-    ctx: &'ctx Context,
-    typed_module: &'module TypedModule,
-    out_dir: impl AsRef<str>,
-) -> Result<Codegen<'ctx, 'module>> {
-    let llvm_optimize = !args.no_llvm_opt;
-    let out_dir = out_dir.as_ref();
-    let module_name = typed_module.name().to_string();
-
-    let mut codegen = Codegen::create(ctx, &typed_module, args.debug, llvm_optimize);
-    if let Err(e) = codegen.codegen_module() {
-        print_error_location(&codegen.module.ast.spans, &codegen.module.ast.sources, e.span);
-        eprintln!("Codegen error: {}", e.message);
-        anyhow::bail!(e)
-    }
-    codegen.optimize(llvm_optimize)?;
-
-    // TODO: We could do this a lot more efficiently by just feeding the in-memory LLVM IR to libclang or whatever the library version is called.
-
-    if args.write_llvm {
-        let llvm_text = codegen.output_llvm_ir_text();
-        let mut f = File::create(format!("{}/{}.ll", out_dir, module_name))
-            .expect("Failed to create .ll file");
-        f.write_all(llvm_text.as_bytes()).unwrap();
-        // println!("{}", codegen.output_llvm_ir_text());
-    }
-
-    if args.dump_module {
-        println!("{}", codegen.module);
-    }
-
+pub fn write_executable<'ctx, 'module>(
+    debug: bool,
+    out_dir: &str,
+    module_name: &str,
+) -> Result<()> {
     let clang_time = std::time::Instant::now();
     let mut build_cmd = std::process::Command::new("clang");
+
+    // TODO: We could do this a lot more efficiently by just feeding the in-memory LLVM IR to libclang or whatever the library version is called.
     build_cmd.args([
         // "-v",
-        if args.debug { "-g" } else { "" },
-        if args.debug { "-O0" } else { "-O3" },
+        if debug { "-g" } else { "" },
+        if debug { "-O0" } else { "-O3" },
         "-Woverride-module",
         "-mmacosx-version-min=14.4",
         &format!("{}/{}.ll", out_dir, module_name),
@@ -218,15 +196,49 @@ pub fn codegen_module<'ctx, 'module>(
         "bfllib",
     ]);
     log::info!("Build Command: {:?}", build_cmd);
-    let build_status = build_cmd.status().unwrap();
+    let build_status = build_cmd.status()?;
 
     if !build_status.success() {
         eprintln!("Build failed!");
-        std::process::exit(1)
+        bail!("build_executable with clang failed");
     }
 
     let elapsed = clang_time.elapsed();
     info!("codegen phase 'clang' took {}ms", elapsed.as_millis());
+    Ok(())
+}
+
+pub fn codegen_module<'ctx, 'module>(
+    args: &Args,
+    ctx: &'ctx Context,
+    typed_module: &'module TypedModule,
+    out_dir: impl AsRef<str>,
+    do_write_executable: bool,
+) -> Result<Codegen<'ctx, 'module>> {
+    let llvm_optimize = !args.no_llvm_opt;
+    let out_dir = out_dir.as_ref();
+
+    let mut codegen = Codegen::create(ctx, &typed_module, args.debug, llvm_optimize);
+    let module_name = codegen.name().to_string();
+    if let Err(e) = codegen.codegen_module() {
+        print_error_location(&codegen.module.ast.spans, &codegen.module.ast.sources, e.span);
+        eprintln!("Codegen error: {}", e.message);
+        anyhow::bail!(e)
+    }
+    codegen.optimize(llvm_optimize)?;
+
+    if args.write_llvm {
+        let llvm_text = codegen.output_llvm_ir_text();
+        let mut f = File::create(format!("{}/{}.ll", out_dir, &module_name))
+            .expect("Failed to create .ll file");
+        f.write_all(llvm_text.as_bytes()).unwrap();
+        // println!("{}", codegen.output_llvm_ir_text());
+    }
+
+    if do_write_executable {
+        write_executable(args.debug, out_dir, &module_name)?;
+    }
+
     Ok(codegen)
 }
 

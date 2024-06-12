@@ -1090,12 +1090,21 @@ impl TypedModule {
         &self.ast.name
     }
 
-    fn get_ident_str(&self, id: IdentifierId) -> impl Deref<Target = str> + '_ {
+    pub fn get_ident_str(&self, id: IdentifierId) -> &str {
         self.ast.identifiers.get_name(id)
     }
 
-    fn get_namespace(&self, namespace_id: NamespaceId) -> &Namespace {
+    pub fn get_identifier(&self, name: &str) -> Option<IdentifierId> {
+        self.ast.identifiers.get(name)
+    }
+
+    pub fn get_namespace(&self, namespace_id: NamespaceId) -> &Namespace {
         &self.namespaces[namespace_id as usize]
+    }
+
+    pub fn get_main_function_id(&self) -> Option<FunctionId> {
+        let main = self.get_identifier("main").unwrap();
+        self.scopes.get_root_scope().find_function(main)
     }
 
     fn type_eq(type1: &Type, type2: &Type) -> bool {
