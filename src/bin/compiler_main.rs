@@ -29,7 +29,7 @@ fn main() {
         let module_name = module.name();
         info!("done waiting on compile thread");
         let llvm_ctx = inkwell::context::Context::create();
-        let _codegen = match compiler::codegen_module(&args, &llvm_ctx, &module, out_dir) {
+        let _codegen = match compiler::codegen_module(&args, &llvm_ctx, &module, out_dir, true) {
             Ok(codegen) => codegen,
             Err(_err) => {
                 std::process::exit(1);
@@ -61,7 +61,7 @@ fn main() {
                 let module = module_read.as_ref().unwrap();
                 let llvm_ctx = inkwell::context::Context::create();
                 let _codegen =
-                    match compiler::codegen_module(&args_clone, &llvm_ctx, module, out_dir) {
+                    match compiler::codegen_module(&args_clone, &llvm_ctx, module, out_dir, true) {
                         Ok(codegen) => codegen,
                         Err(err) => {
                             eprintln!("Codegen error: {}", err);

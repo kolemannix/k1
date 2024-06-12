@@ -5,6 +5,7 @@ use std::fmt::{Display, Formatter};
 use std::ops::Deref;
 use std::path::Path;
 
+use anyhow::bail;
 use inkwell::attributes::AttributeLoc;
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
@@ -13,6 +14,7 @@ use inkwell::debug_info::{
     AsDIScope, DICompileUnit, DIFile, DILocation, DIScope, DISubprogram, DIType, DWARFEmissionKind,
     DWARFSourceLanguage, DebugInfoBuilder,
 };
+use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::module::{Linkage as LlvmLinkage, Module as LlvmModule};
 use inkwell::passes::{PassManager, PassManagerBuilder};
 use inkwell::targets::{InitializationConfig, Target, TargetMachine, TargetTriple};
@@ -58,8 +60,8 @@ impl Error for CodegenError {}
 
 #[derive(Debug, Copy, Clone)]
 struct BranchSetup<'ctx> {
-    function: FunctionValue<'ctx>,
-    origin_block: BasicBlock<'ctx>,
+    _function: FunctionValue<'ctx>,
+    _origin_block: BasicBlock<'ctx>,
     then_block: BasicBlock<'ctx>,
     else_block: BasicBlock<'ctx>,
 }
@@ -403,11 +405,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             ctx.metadata_string("Debug Info Version").into(),
             ctx.i32_type().const_int(3, false).into(),
         ]);
-        let md3 = ctx.metadata_node(&[
-            ctx.i32_type().const_int(1, false).into(),
-            ctx.metadata_string("PIC Level").into(),
-            ctx.i32_type().const_int(2, false).into(),
-        ]);
+        // let md3 = ctx.metadata_node(&[
+        //     ctx.i32_type().const_int(1, false).into(),
+        //     ctx.metadata_string("PIC Level").into(),
+        //     ctx.i32_type().const_int(2, false).into(),
+        // ]);
         let md4 = ctx.metadata_node(&[
             ctx.i32_type().const_int(1, false).into(),
             ctx.metadata_string("PIE Level").into(),
@@ -416,7 +418,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         llvm_module.add_global_metadata("llvm.module.flags", &md0).unwrap();
         llvm_module.add_global_metadata("llvm.module.flags", &md1).unwrap();
         llvm_module.add_global_metadata("llvm.module.flags", &md2).unwrap();
-        llvm_module.add_global_metadata("llvm.module.flags", &md3).unwrap();
+        // llvm_module.add_global_metadata("llvm.module.flags", &md3).unwrap();
         llvm_module.add_global_metadata("llvm.module.flags", &md4).unwrap();
 
         let di_files: HashMap<FileId, DIFile> = module
@@ -1713,7 +1715,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let then_block = self.ctx.append_basic_block(current_fn, then_name);
         let else_block = self.ctx.append_basic_block(current_fn, else_name);
         self.builder.build_conditional_branch(cond, then_block, else_block);
-        BranchSetup { function: current_fn, origin_block, then_block, else_block }
+        BranchSetup { _function: current_fn, _origin_block: origin_block, then_block, else_block }
     }
 
     fn codegen_enum_is_variant(
@@ -2545,11 +2547,25 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         self.llvm_module.print_to_string().to_string()
     }
 
-    #[allow(unused)]
     pub fn interpret_module(&self) -> anyhow::Result<u64> {
         let engine = self.llvm_module.create_jit_execution_engine(OptimizationLevel::None).unwrap();
-        let return_value =
-            unsafe { engine.run_function(self.llvm_module.get_last_function().unwrap(), &[]) };
+        let bfllib_module = self
+            .ctx
+            .create_module_from_ir(
+                MemoryBuffer::create_from_file(Path::new("bfllib/bfllib.ll")).unwrap(),
+            )
+            .unwrap();
+        self.llvm_module.link_in_module(bfllib_module).unwrap();
+        // let stdlib_module = ctx
+        //     .create_module_from_ir(MemoryBuffer::create_from_file(Path::new("nxlib/llvm")).unwrap())
+        //     .unwrap();
+        // llvm_module.link_in_module(stdlib_module).unwrap();
+        let Some(main_fn_id) = self.module.get_main_function_id() else {
+            bail!("No main function")
+        };
+        let llvm_function = self.llvm_functions.get(&main_fn_id).unwrap();
+        eprintln!("Interpreting {}", self.module.name());
+        let return_value = unsafe { engine.run_function(*llvm_function, &[]) };
         let res: u64 = return_value.as_int(true);
         Ok(res)
     }
