@@ -7,6 +7,7 @@
   - [x] Rename record to struct
   - [x] Start gui
   - [x] Remove ! for negation; switch to 'not'
+- [ ] Get LLVM interpreter working (for test suite)
 - [ ] Exit for option unwrap
 - [x] Exit for bad enum cast
 - [x] Match expected errors from test programs

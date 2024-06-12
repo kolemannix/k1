@@ -1,9 +1,24 @@
-use std::path::Path;
+use std::{
+    path::Path,
+    sync::{
+        atomic::{AtomicU32, AtomicUsize, Ordering},
+        Mutex,
+    },
+};
 
 use anyhow::{bail, Result};
 use bfl::compiler;
+use clap::Parser;
 use inkwell::context::Context;
 use std::os::unix::prelude::ExitStatusExt;
+
+#[derive(Parser, Debug, Clone)]
+#[command(author, version, about, long_about = None)]
+pub struct TestSuiteClapArgs {
+    /// If true, uses an LLVM Intrerpreter. Otherwise, builds and runs real executables
+    #[arg(short, long, default_value_t = true, action = clap::ArgAction::Set)]
+    pub interpret: bool,
+}
 
 #[derive(Debug)]
 enum TestExpectation {
@@ -33,7 +48,7 @@ fn get_test_expectation(test_file: &Path) -> TestExpectation {
     }
 }
 
-fn test_file<P: AsRef<Path>>(ctx: &Context, path: P) -> Result<()> {
+fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<()> {
     let out_dir = "bfl-out/test_suite";
     let filename = path.as_ref().file_name().unwrap().to_str().unwrap();
     let args = bfl::compiler::Args {
@@ -80,24 +95,49 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P) -> Result<()> {
         Ok(typed_module) => {
             let name = typed_module.name();
             if let TestExpectation::ExitCode(code) = expectation {
-                let _codegen = compiler::codegen_module(&args, ctx, &typed_module, out_dir)?;
+                let output_executable = !interpret;
+                let codegen = compiler::codegen_module(
+                    &args,
+                    ctx,
+                    &typed_module,
+                    out_dir,
+                    output_executable,
+                )?;
 
-                let mut run_cmd = std::process::Command::new(format!("{}/{}.out", out_dir, name));
-                let run_status = run_cmd.status().unwrap();
-                if let Some(signal) = run_status.signal() {
-                    if signal == 5 {
-                        bail!("TEST CASE {} TERMINATED BY TRAP SIGNAL: {}", name, signal);
-                    } else {
-                        bail!("TEST CASE {} TERMINATED BY SIGNAL: {}", name, signal);
+                if interpret {
+                    match codegen.interpret_module() {
+                        Err(e) => bail!("TEST CASE {} INTERPRET FAILED: {}", name, e),
+                        Ok(res) => {
+                            let result_code = res as i32;
+                            if result_code != code {
+                                bail!(
+                                    "TEST CASE {} FAILED WRONG EXIT CODE: exp {}, actual {}",
+                                    name,
+                                    code,
+                                    result_code,
+                                );
+                            }
+                        }
                     }
-                };
-                if run_status.code() != Some(code) {
-                    bail!(
-                        "TEST CASE {} FAILED WRONG EXIT CODE: exp {}, actual {}",
-                        name,
-                        code,
-                        run_status.code().unwrap(),
-                    );
+                } else {
+                    let mut run_cmd =
+                        std::process::Command::new(format!("{}/{}.out", out_dir, name));
+                    let run_status = run_cmd.status().unwrap();
+                    if let Some(signal) = run_status.signal() {
+                        if signal == 5 {
+                            bail!("TEST CASE {} TERMINATED BY TRAP SIGNAL: {}", name, signal);
+                        } else {
+                            bail!("TEST CASE {} TERMINATED BY SIGNAL: {}", name, signal);
+                        }
+                    };
+                    if run_status.code() != Some(code) {
+                        bail!(
+                            "TEST CASE {} FAILED WRONG EXIT CODE: exp {}, actual {}",
+                            name,
+                            code,
+                            run_status.code().unwrap(),
+                        );
+                    }
                 }
             } else {
                 bail!("Expected failed compilation but actually succeeded")
@@ -108,9 +148,8 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P) -> Result<()> {
 }
 
 pub fn main() -> Result<()> {
-    let ctx = Context::create();
+    let test_suite_args = TestSuiteClapArgs::parse();
     let test_dir = "test_src";
-    let mut failures: Vec<String> = Vec::new();
     let mut all_tests = Vec::new();
     for dir_entry in std::fs::read_dir(test_dir)? {
         let dir_entry = dir_entry?;
@@ -123,19 +162,29 @@ pub fn main() -> Result<()> {
             }
         }
     }
-    let mut total = 0;
-    let mut success = 0;
-    for test in all_tests.iter() {
-        let result = test_file(&ctx, test.as_path());
-        if result.is_ok() {
-            success += 1;
-        } else {
-            failures.push(test.as_path().file_name().unwrap().to_str().unwrap().to_string());
-            eprintln!("Test failed: {}", result.unwrap_err());
+    let total: usize = all_tests.len();
+    let success = AtomicUsize::new(0);
+    let failures = Mutex::new(Vec::with_capacity(total));
+    // TODO: grouping by n to bound threads created
+    std::thread::scope(|scope| {
+        for test in all_tests.iter() {
+            scope.spawn(|| {
+                let ctx = Context::create();
+                let result = test_file(&ctx, test.as_path(), test_suite_args.interpret);
+                if result.is_ok() {
+                    success.fetch_add(1, Ordering::Relaxed);
+                } else {
+                    let mut failures = failures.lock().unwrap();
+                    failures
+                        .push(test.as_path().file_name().unwrap().to_str().unwrap().to_string());
+                    eprintln!("Test failed: {}", result.unwrap_err());
+                }
+            });
         }
-        total += 1;
-    }
+    });
+    let success = success.into_inner();
     if success != total {
+        let failures = failures.lock().unwrap();
         eprintln!("Failed tests:\n{}", failures.join("\n"));
         bail!("{} tests failed", total - success);
     } else {

@@ -4,6 +4,6 @@ fn main(): int {
   val x: E = .A(42);
   val y = .A(42): E.A;
   val x_as_a = x.as<.A>();
-  assert(x_as_a.payload == y.payload);
+  assert(not x_as_a.payload == y.payload);
   0
 }
