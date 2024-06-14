@@ -983,7 +983,10 @@ pub fn print_error_location(spans: &Spans, sources: &Sources, span_id: SpanId) {
     };
     use colored::*;
 
-    let thingies = "^".repeat(span.len as usize);
+    // If the span is longer than the line, just highlight the whole line
+    let highlight_length =
+        if span.len as usize > line.content.len() { line.content.len() } else { span.len as usize };
+    let thingies = "^".repeat(highlight_length);
     let spaces = " ".repeat((span.start - line.start_char) as usize);
     let code = format!("  ->{}\n  ->{spaces}{thingies}", &line.content);
     println!(

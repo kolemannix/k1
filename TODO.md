@@ -7,7 +7,7 @@
   - [x] Rename record to struct
   - [x] Start gui
   - [x] Remove ! for negation; switch to 'not'
-- [ ] Get LLVM interpreter working (for test suite)
+- [x] Get LLVM interpreter working (for test suite)
 - [ ] Exit for option unwrap
 - [x] Exit for bad enum cast
 - [x] Match expected errors from test programs
@@ -32,20 +32,32 @@
   - [x] First, hard cast to variant (`as<.Tag>`)
   - [x] Built-in .as<Tag> or panic
   - [ ] Enum methods
+- [ ] Recursive structs and enums (with indirection)
+- [ ] Generic structs and enums
 - [x] TypedIf allow exprs instead of requiring blocks (did not do; instead improved handling of unit blocks)
 - [x] Remove binding 'if' since we have pattern matching
 - [x] Abilities
   - [ ] Ability impl decl bugfix (ability impls need to be seen in the decl phase)
-- [ ] Ability derivation
-  - [ ] I think you have to cache and commit the generated code, or you get the slow proc macros or slow implicit derivation problems that Scala has. This is first-class codegen, not 'macros'?
-- [ ] Figure out the pointer/reference story, maybe use https://github.com/ivmai/bdwgc for GC
 - [x] Type Ascriptions
-- [ ] Enforce unique function name in namespace!
-- [ ] Errors (a builtin sum type?)
+- [x] Enforce unique function name in namespace!
 - [ ] Optional coalescing accessor (x?.y) and ??
 - [ ] Pure lambdas with ->
 - [ ] Full-on closures with =>
 - [ ] Make demo readme
+
+## Error story
+- [ ] A simple stdlib enum?
+
+## Ability Derivation
+- [ ] Ability derivation
+  - [ ] I think you have to cache and commit the generated code, or you get the slow proc macros or slow implicit derivation problems that Scala has. This is first-class codegen, not 'macros'?
+
+## Memory Management story
+- [ ] Figure out the pointer/reference story
+  - I want to do a minimal runtime with a user-visible heap, semi-auto memory management. Write the heap and main fn in C, call bfl main from the 'runtime' main, which sets up a basic heap based on settings or something user-visible.
+  This will let us intern strings, etc. Kinda like the JVM, except its not
+  a VM, just a native runtime.
+  - If we introduce simple implicits for context passing, we can use this to pass heaps around
 
 # GUI checklist
 

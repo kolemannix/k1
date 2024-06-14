@@ -4332,9 +4332,10 @@ impl TypedModule {
 
         // We do not want to resolve specialized functions by name!
         // So don't add them to any scope.
-        // They all have the same name but different types!!!
         if !specialize {
-            self.scopes.add_function(parent_scope_id, parsed_function_name, function_id);
+            if !self.scopes.add_function(parent_scope_id, parsed_function_name, function_id) {
+                return make_fail_span(&format!("Function name is taken"), parsed_function_span);
+            }
         }
 
         // Only if this isn't a specialization, add the ast mapping
@@ -4416,7 +4417,9 @@ impl TypedModule {
 
         // We add the new namespace's scope as a child of the current scope
         let scope = self.scopes.get_scope_mut(scope_id);
-        scope.add_namespace(ast_namespace.name, namespace_id);
+        if !scope.add_namespace(ast_namespace.name, namespace_id) {
+            return make_fail_span(&format!("Namespace name is taken"), ast_namespace.span);
+        }
 
         self.namespace_ast_mappings.insert(ast_namespace.id, namespace_id);
 
