@@ -1,0 +1,30 @@
+fn unique(arr: Array<char>): bool {
+  val seen = []: Array<char>;
+  mut ret = true;
+  for c in arr do {
+      for s in seen do {
+          if c == s {
+              ret = false;
+          }
+      };
+      seen.push(c);
+  };
+  ret
+}
+
+fn main(): int {
+  val input = "bvwbjplbgvbhsrlpgdmjqwftvncz";
+  mut i = 0;
+  mut done = false;
+  for input do {
+      if not done {
+        val i = it_index;
+        val sub = [input[i], input[i + 1], input[i + 2], input[i + 3]];
+        if unique(sub) {
+          printInt(i + 4);
+          done = true
+        };
+     }
+  };
+  0
+}

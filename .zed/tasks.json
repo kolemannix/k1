@@ -20,6 +20,6 @@
   },
   {
     "label": "Run file",
-    "command": "./run $ZED_FILE"
+    "command": "./run.sh $ZED_FILE"
   }
 ]

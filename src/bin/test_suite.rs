@@ -185,7 +185,7 @@ pub fn main() -> Result<()> {
     let success = success.into_inner();
     if success != total {
         let failures = failures.lock().unwrap();
-        eprintln!("Failed tests:\n{}", failures.join("\n"));
+        eprintln!("\n-----------------------------------\nFailed tests:\n{}", failures.join("\n"));
         bail!("{} tests failed", total - success);
     } else {
         eprintln!("Ran {} tests, {} succeeded", total, success);

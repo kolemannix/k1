@@ -1,10 +1,16 @@
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
+// #pragma pack(1)
 typedef struct {
   uint64_t len;
   char *data;
 } BflString;
+// #pragma pack()
+
+_Static_assert (sizeof(BflString) == 16, "BflString size");
 
 BflString _bfl_charToString(char c) {
   char *data = malloc(1);
@@ -16,8 +22,15 @@ BflString _bfl_charToString(char c) {
   return string;
 }
 
+// Passing struct; not guaranteed ABI
+// One day pass by reference OR pass each field
 BflString _bfl_readFileToString(BflString filename) {
-    FILE* file = fopen(filename.data, "r");
+    char* as_cstring = malloc(filename.len + 1);
+    // snprintf(as_cstring, filename.len, "%s", filename.data);
+    memcpy(as_cstring, filename.data, filename.len);
+    as_cstring[filename.len] = '\0';
+
+    FILE* file = fopen(as_cstring, "r");
     fseek(file, 0, SEEK_END);
     long fsize = ftell(file);
     char* buf = malloc(fsize);
@@ -29,6 +42,7 @@ BflString _bfl_readFileToString(BflString filename) {
         .data = buf
     };
     fclose(file);
+    free(as_cstring);
     return string;
 }
 
