@@ -138,12 +138,13 @@ impl Scopes {
         }
     }
 
+    #[must_use]
     pub fn add_function(
         &mut self,
         scope_id: ScopeId,
         identifier: IdentifierId,
         function_id: FunctionId,
-    ) {
+    ) -> bool {
         self.get_scope_mut(scope_id).add_function(identifier, function_id)
     }
 
@@ -193,14 +194,17 @@ impl Scope {
         }
     }
 
-    pub fn find_variable(&self, ident: IdentifierId) -> Option<VariableId> {
-        self.variables.get(&ident).copied()
-    }
     pub fn add_variable(&mut self, ident: IdentifierId, value: VariableId) {
+        // nocommit unique name, or understand shadowing rules
         self.variables.insert(ident, value);
     }
 
+    pub fn find_variable(&self, ident: IdentifierId) -> Option<VariableId> {
+        self.variables.get(&ident).copied()
+    }
+
     pub fn add_type(&mut self, ident: IdentifierId, ty: TypeId) {
+        // nocommit unique name
         self.types.insert(ident, ty);
     }
 
@@ -208,26 +212,41 @@ impl Scope {
         self.types.get(&ident).copied()
     }
 
-    pub fn add_function(&mut self, ident: IdentifierId, function_id: FunctionId) {
-        self.functions.insert(ident, function_id);
+    #[must_use]
+    pub fn add_function(&mut self, ident: IdentifierId, function_id: FunctionId) -> bool {
+        // nocommit unique name
+        if self.functions.contains_key(&ident) {
+            false
+        } else {
+            self.functions.insert(ident, function_id);
+            true
+        }
     }
 
     pub fn find_function(&self, ident: IdentifierId) -> Option<FunctionId> {
         self.functions.get(&ident).copied()
     }
 
-    pub fn add_namespace(&mut self, ident: IdentifierId, namespace_id: NamespaceId) {
-        self.namespaces.insert(ident, namespace_id);
+    #[must_use]
+    pub fn add_namespace(&mut self, ident: IdentifierId, namespace_id: NamespaceId) -> bool {
+        if self.namespaces.contains_key(&ident) {
+            false
+        } else {
+            self.namespaces.insert(ident, namespace_id);
+            true
+        }
     }
 
     pub fn find_namespace(&self, ident: IdentifierId) -> Option<NamespaceId> {
         self.namespaces.get(&ident).copied()
     }
 
+    pub fn add_ability(&mut self, ident: IdentifierId, ability_id: AbilityId) {
+        // nocommit unique name
+        self.abilities.insert(ident, ability_id);
+    }
+
     pub fn find_ability(&self, ident: IdentifierId) -> Option<AbilityId> {
         self.abilities.get(&ident).copied()
-    }
-    pub fn add_ability(&mut self, ident: IdentifierId, ability_id: AbilityId) {
-        self.abilities.insert(ident, ability_id);
     }
 }
