@@ -1,8 +1,17 @@
+fn should_not_run(): bool {
+    assert(false);
+    true
+}
+
 fn main(x: int): int {
-  val t: bool = true;
-  val f: bool = false;
-  t or f;
-  t and f;
-  printBool(t or f);
+  val t = true;
+  val f = false;
+  assert(not (t and f));
+
+  // Short-circuiting is guaranteed
+  if (false and should_not_run()) {
+      ()
+  };
+
   0
 }
