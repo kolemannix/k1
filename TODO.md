@@ -11,7 +11,6 @@
 - [ ] Exit for option unwrap
 - [x] Exit for bad enum cast
 - [x] Match expected errors from test programs
-- [ ] 'Switch' in IR
 - [ ] 'dump' directive on block
 - [ ] Pattern Matching
   - [x] Single-arm match evals to boolean
@@ -19,7 +18,7 @@
   - [x] Variables
   - [x] Optional None
   - [x] Optional Some
-  - [ ] ! Make sure binary AND doesn't evaluate its rhs if lhs is false!
+  - [x] Make sure binary AND doesn't evaluate its rhs if lhs is false!
   - [x] Records
   - [x] Enums
   - [-] Multi-case
@@ -42,7 +41,7 @@
 - [x] Enforce unique function name in namespace!
 - [ ] Optional coalescing accessor (x?.y) and ??
 - [ ] Pure lambdas with ->
-- [ ] Full-on closures with =>
+- [ ] No closures for now
 - [ ] Make demo readme
 
 ## Error story
