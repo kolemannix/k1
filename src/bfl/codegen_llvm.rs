@@ -60,8 +60,6 @@ impl Error for CodegenError {}
 
 #[derive(Debug, Copy, Clone)]
 struct BranchSetup<'ctx> {
-    _function: FunctionValue<'ctx>,
-    _origin_block: BasicBlock<'ctx>,
     then_block: BasicBlock<'ctx>,
     else_block: BasicBlock<'ctx>,
 }
@@ -1485,24 +1483,52 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 }
                 BOOL_TYPE_ID => match bin_op.kind {
                     BinaryOpKind::And | BinaryOpKind::Or => {
-                        let lhs_int = self.codegen_expr_rvalue(&bin_op.lhs)?.into_int_value();
+                        let lhs = self.codegen_expr_rvalue(&bin_op.lhs)?.into_int_value();
                         let op = match bin_op.kind {
                             BinaryOpKind::And => {
-                                let rhs_int =
-                                    self.codegen_expr_rvalue(&bin_op.rhs)?.into_int_value();
-                                self.builder.build_and(lhs_int, rhs_int, "bool_and")
+                                let lhs_i1 = self.bool_to_i1(lhs, "lhs_for_cmp");
+                                let short_circuit_branch = self.build_conditional_branch(
+                                    lhs_i1,
+                                    "rhs_check",
+                                    "short_circuit",
+                                );
+                                let phi_destination = self.append_basic_block("and_result");
+
+                                // label: rhs_check; lhs was true
+                                self.builder.position_at_end(short_circuit_branch.then_block);
+                                let rhs = self.codegen_expr_rvalue(&bin_op.rhs)?.into_int_value();
+                                self.builder.build_unconditional_branch(phi_destination);
+                                // return rhs
+
+                                // label: short_circuit; lhs was false
+                                self.builder.position_at_end(short_circuit_branch.else_block);
+                                self.builder.build_unconditional_branch(phi_destination);
+                                // return lhs aka false
+
+                                // label: and_result
+                                self.builder.position_at_end(phi_destination);
+                                let result =
+                                    self.builder.build_phi(self.builtin_types.boolean, "bool_and");
+                                result.add_incoming(&[
+                                    (&rhs, short_circuit_branch.then_block),
+                                    (
+                                        &self.builtin_types.false_value,
+                                        short_circuit_branch.else_block,
+                                    ),
+                                ]);
+                                result.as_basic_value().into_int_value()
                             }
                             BinaryOpKind::Or => {
                                 let rhs_int =
                                     self.codegen_expr_rvalue(&bin_op.rhs)?.into_int_value();
-                                self.builder.build_or(lhs_int, rhs_int, "bool_or")
+                                self.builder.build_or(lhs, rhs_int, "bool_or")
                             }
                             BinaryOpKind::Equals => {
                                 let rhs_int =
                                     self.codegen_expr_rvalue(&bin_op.rhs)?.into_int_value();
                                 self.builder.build_int_compare(
                                     IntPredicate::EQ,
-                                    lhs_int,
+                                    lhs,
                                     rhs_int,
                                     "bool_eq",
                                 )
@@ -1710,12 +1736,17 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         then_name: &str,
         else_name: &str,
     ) -> BranchSetup<'ctx> {
+        let then_block = self.append_basic_block(then_name);
+        let else_block = self.append_basic_block(else_name);
+        self.builder.build_conditional_branch(cond, then_block, else_block);
+        BranchSetup { then_block, else_block }
+    }
+
+    fn append_basic_block(&mut self, name: &str) -> BasicBlock<'ctx> {
         let origin_block = self.builder.get_insert_block().unwrap();
         let current_fn = origin_block.get_parent().unwrap();
-        let then_block = self.ctx.append_basic_block(current_fn, then_name);
-        let else_block = self.ctx.append_basic_block(current_fn, else_name);
-        self.builder.build_conditional_branch(cond, then_block, else_block);
-        BranchSetup { _function: current_fn, _origin_block: origin_block, then_block, else_block }
+        let block = self.ctx.append_basic_block(current_fn, name);
+        block
     }
 
     fn codegen_enum_is_variant(
