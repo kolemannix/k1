@@ -11,15 +11,21 @@
     "reveal": "always"
   },
   {
-    "label": "Cargo Test",
-    "command": "cargo test",
+    "label": "Run file",
+    "command": "./run.sh",
+    "args": ["$ZED_FILE"]
+  },
+  {
+    "label": "Build BFLLib",
+    "command": "./build_bfllib.sh"
+  },
+  {
+    "label": "BFL Test",
+    "command": "./test.sh",
+    "args": [],
     // "cwd": "null",
     "use_new_terminal": false,
     "allow_concurrent_runs": false,
     "reveal": "always"
-  },
-  {
-    "label": "Run file",
-    "command": "./run.sh $ZED_FILE"
   }
 ]

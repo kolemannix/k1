@@ -23,7 +23,7 @@ use inkwell::types::{
 };
 use inkwell::values::{
     ArrayValue, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue,
-    IntValue, PointerValue, StructValue,
+    InstructionValue, IntValue, PointerValue, StructValue,
 };
 use inkwell::{AddressSpace, IntPredicate, OptimizationLevel};
 use log::{debug, info, trace};
@@ -1255,10 +1255,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             .unwrap();
         Ok(struct_value.as_basic_value_enum())
     }
-    fn codegen_optional_has_value(
-        &mut self,
-        optional_value: StructValue<'ctx>,
-    ) -> BasicValueEnum<'ctx> {
+    fn codegen_optional_has_value(&mut self, optional_value: StructValue<'ctx>) -> IntValue<'ctx> {
         let discriminator_value = self
             .builder
             .build_extract_value(optional_value, 0, "discrim_value")
@@ -1271,7 +1268,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             "is_some_cmp",
         );
         let is_some_bool = self.i1_to_bool(is_some, "is_some");
-        is_some_bool.as_basic_value_enum()
+        is_some_bool
     }
     fn codegen_optional_get(&mut self, optional_value: StructValue<'ctx>) -> BasicValueEnum<'ctx> {
         // This is UNSAFE we don't check the discriminator. The actual unwrap method
@@ -1321,11 +1318,33 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             TypedExpr::OptionalHasValue(optional_expr) => {
                 let optional_value = self.codegen_expr_rvalue(optional_expr)?;
-                Ok(self.codegen_optional_has_value(optional_value.into_struct_value()))
+                Ok(self
+                    .codegen_optional_has_value(optional_value.into_struct_value())
+                    .as_basic_value_enum())
             }
             TypedExpr::OptionalGet(opt_get) => {
-                let optional_value = self.codegen_expr_rvalue(&opt_get.inner_expr)?;
-                Ok(self.codegen_optional_get(optional_value.into_struct_value()))
+                if opt_get.checked {
+                    let optional_value = self.codegen_expr_rvalue(&opt_get.inner_expr)?;
+                    let has_value =
+                        self.codegen_optional_has_value(optional_value.into_struct_value());
+                    let has_value_i1 = self.bool_to_i1(has_value, "unwrap_check");
+                    let branch =
+                        self.build_conditional_branch(has_value_i1, "unwrap_ok", "unwrap_crash");
+
+                    // label: unwrap_crash
+                    self.builder.position_at_end(branch.else_block);
+                    self.build_bfl_crash("get on empty optional", opt_get.span);
+
+                    // label: unwrap_ok
+                    self.builder.position_at_end(branch.then_block);
+                    let payload = self.codegen_optional_get(optional_value.into_struct_value());
+
+                    Ok(payload)
+                } else {
+                    let optional_value = self.codegen_expr_rvalue(&opt_get.inner_expr)?;
+                    let payload = self.codegen_optional_get(optional_value.into_struct_value());
+                    Ok(payload)
+                }
             }
             TypedExpr::Unit(_) => Ok(self.builtin_types.unit_value.as_basic_value_enum()),
             TypedExpr::Char(byte, _) => {
@@ -1346,12 +1365,15 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let global_str_data = self.llvm_module.add_global(
                     self.builtin_types.char.array_type(string_value.len() as u32),
                     None,
-                    "str_data",
+                    "string_lit_data",
                 );
                 global_str_data.set_initializer(&i8_array_from_str(self.ctx, string_value));
                 global_str_data.set_constant(true);
-                let global_value =
-                    self.llvm_module.add_global(self.builtin_types.string_struct, None, "str");
+                let global_value = self.llvm_module.add_global(
+                    self.builtin_types.string_struct,
+                    None,
+                    "string_lit",
+                );
                 global_value.set_constant(true);
                 let value = self.builtin_types.string_struct.const_named_struct(&[
                     self.builtin_types.i64.const_int(string_value.len() as u64, true).into(),
@@ -1717,10 +1739,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
                 // cast_fail
                 self.builder.position_at_end(branch.else_block);
-                let trap_intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.trap").unwrap();
-                let trap_function = trap_intrinsic.get_declaration(&self.llvm_module, &[]).unwrap();
-                self.builder.build_call(trap_function, &[], "trap");
-                self.builder.build_unreachable();
+                // TODO: We can call @llvm.expect.i1 in order
+                // to help branch prediction and indicate that failure is 'cold'
+                self.build_bfl_crash("bad enum cast", enum_cast.span);
 
                 // cast_post
                 self.builder.position_at_end(branch.then_block);
@@ -1728,6 +1749,24 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(enum_value.as_basic_value_enum())
             }
         }
+    }
+
+    fn build_bfl_crash(&self, msg: &str, span_id: SpanId) -> InstructionValue {
+        let msg_string = self.const_string_ptr(&msg, "crash_msg");
+        let span = self.module.ast.spans.get(span_id);
+        let line = self.module.ast.sources.get_line_for_span(span).unwrap();
+        let filename = self
+            .const_string_ptr(&self.module.ast.sources.source_by_span(span).filename, "filename");
+        self.builder.build_call(
+            self.llvm_module.get_function("_bfl_crash").unwrap(),
+            &[
+                msg_string.into(),
+                filename.into(),
+                self.builtin_types.i64.const_int(line.line_index as u64 + 1, false).into(),
+            ],
+            "crash",
+        );
+        self.builder.build_unreachable()
     }
 
     fn build_conditional_branch(
@@ -1905,13 +1944,19 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     }
 
     #[allow(unused)]
-    fn const_string(&self, string: &str) -> StructValue<'ctx> {
+    fn const_string_ptr(&self, string: &str, name: &str) -> PointerValue<'ctx> {
         let char_data = self.ctx.const_string(string.as_bytes(), false);
-        let empty_str =
-            self.make_string(self.builtin_types.i64.const_int(string.len() as u64, false));
-        let string_data_ptr = self.builtin_types.string_data(&self.builder, empty_str);
-        self.builder.build_store(string_data_ptr, char_data);
-        empty_str
+        let length_value = self.builtin_types.i64.const_int(string.len() as u64, false);
+        let char_data_global =
+            self.llvm_module.add_global(char_data.get_type(), None, &format!("{name}_data"));
+        char_data_global.set_initializer(&char_data);
+        let string_struct = self.builtin_types.string_struct.const_named_struct(&[
+            length_value.as_basic_value_enum(),
+            char_data_global.as_pointer_value().as_basic_value_enum(),
+        ]);
+        let g = self.llvm_module.add_global(self.builtin_types.string_struct, None, name);
+        g.set_initializer(&string_struct);
+        g.as_pointer_value()
     }
 
     fn make_array(
@@ -2510,7 +2555,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             self.llvm_module.strip_debug_info();
         }
         self.llvm_module.verify().map_err(|err| {
-            eprintln!("{}", self.llvm_module.to_string());
+            // eprintln!("{}", self.llvm_module.to_string());
             anyhow::anyhow!("Module '{}' failed validation: {}", self.name(), err.to_string_lossy())
         })?;
         let machine = target
@@ -2587,10 +2632,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             )
             .unwrap();
         self.llvm_module.link_in_module(bfllib_module).unwrap();
-        // let stdlib_module = ctx
-        //     .create_module_from_ir(MemoryBuffer::create_from_file(Path::new("nxlib/llvm")).unwrap())
-        //     .unwrap();
-        // llvm_module.link_in_module(stdlib_module).unwrap();
         let Some(main_fn_id) = self.module.get_main_function_id() else {
             bail!("No main function")
         };

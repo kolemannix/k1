@@ -2,6 +2,7 @@ extern fn _bfl_charToString(c: char): string
 extern fn _bfl_charToInt(c: char): int
 extern fn _bfl_intToChar(i: int): char
 extern fn _bfl_readFileToString(path: string): string
+extern fn _bfl_crash(reason: string*, file: string*, line: int): unit
 
 ability Equals {
   fn equals(self: Self, other: Self): bool

@@ -1,0 +1,20 @@
+fn main(): int {
+    val b = false;
+
+    when b {
+        true -> print("T"),
+        _ -> print("F"),
+    };
+
+    // Exhaustiveness AND uselessness
+    // (x, y, z): [(true, true, _), (false, true, "123")]
+    when { x: true, y: true, z: "asdf" } {
+        { x: true, y: true } -> true,
+        // x: [false], y: []
+        { x: false, y: true, z: "123" } -> true,
+        { x: true, y: false } -> true,
+        Unhandled case: x: false, y: _
+    }
+
+    0
+}
