@@ -100,6 +100,7 @@ struct LlvmEnumType<'ctx> {
 struct LlvmStructType<'ctx> {
     type_id: TypeId,
     struct_type: StructType<'ctx>,
+    #[allow(unused)]
     fields: Vec<LlvmType<'ctx>>,
     di_type: DIType<'ctx>,
 }
