@@ -2605,6 +2605,10 @@ impl TypedModule {
 
         // Exhaustiveness checking
 
+        //  Warnings for pattern matching
+        //  LUC MARANGET
+        //  We'll try to construct a pattern input that does not get matched. We'll remember which patterns handle which inputs, such that we can
+        // also report useless patterns. If any input gets through, that is our witness of in-exhaustiveness
         // let mut unhandled_cases = match self.types.get(target_expr.type_id) {
         //     Type::Unit => vec!["()"],
         //     Type::Char => {
