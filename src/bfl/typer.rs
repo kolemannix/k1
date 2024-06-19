@@ -6,12 +6,11 @@ pub mod scopes;
 use std::collections::{HashMap, VecDeque};
 use std::error::Error;
 use std::fmt::{Display, Formatter, Write};
-use std::ops::Deref;
 
 use anyhow::bail;
 use colored::Colorize;
 use either::Either;
-use log::{debug, trace, Level};
+use log::{debug, trace};
 
 use scopes::*;
 
@@ -632,6 +631,7 @@ pub struct OptionalGet {
     pub inner_expr: Box<TypedExpr>,
     pub result_type_id: TypeId,
     pub span: SpanId,
+    pub checked: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -674,6 +674,14 @@ pub struct TypedEnumCast {
     pub variant_name: IdentifierId,
     pub variant_index: u32,
     pub span: SpanId,
+}
+
+#[derive(Debug, Clone)]
+struct TypedMatchCase {
+    pattern: TypedPattern,
+    pre_stmts: Vec<TypedStmt>,
+    condition: TypedExpr,
+    arm_block: TypedBlock,
 }
 
 #[derive(Debug, Clone)]
@@ -2357,6 +2365,7 @@ impl TypedModule {
                     inner_expr: Box::new(base),
                     result_type_id: optional_type.inner_type,
                     span,
+                    checked: true,
                 }))
             }
             ParsedExpression::For(for_expr) => {
@@ -2486,7 +2495,7 @@ impl TypedModule {
             expected_type_id,
         )?;
 
-        let match_result_type = arms[0].2.expr_type;
+        let match_result_type = arms[0].arm_block.expr_type;
         let mut resulting_block = TypedBlock {
             expr_type: match_result_type,
             scope_id: match_block_scope_id,
@@ -2494,21 +2503,20 @@ impl TypedModule {
             span: match_expr_span,
         };
         let mut pre_stmts: Vec<TypedStmt> = Vec::new();
-        let mut the_arms = Vec::new();
-        for (stmts, condition, cons) in arms.into_iter() {
-            pre_stmts.extend(stmts);
-            the_arms.push((condition, cons));
+        let mut the_arms = VecDeque::new();
+        for match_case in arms.into_iter() {
+            pre_stmts.extend(match_case.pre_stmts);
+            the_arms.push_back((match_case.condition, match_case.arm_block));
         }
-        // nocommit VecDeque creation
         let if_chain = self.chain_match_cases(
             match_result_type,
-            VecDeque::from(the_arms),
+            the_arms,
             match_block_scope_id,
             match_expr_span,
         )?;
         resulting_block.statements.extend(pre_stmts);
         resulting_block.push_stmt(TypedStmt::Expr(Box::new(if_chain)));
-        // eprintln!("match result\n{}", self.block_to_string(&resulting_block));
+        debug!("match result\n{}", self.block_to_string(&resulting_block));
         let result = TypedExpr::Block(resulting_block);
         Ok(result)
     }
@@ -2521,8 +2529,8 @@ impl TypedModule {
         span_if_no_cases: SpanId,
     ) -> TyperResult<TypedExpr> {
         if cases.is_empty() {
-            // Use 'assert unreachable' instead of unit
             let false_expr = TypedExpr::Bool(false, span_if_no_cases);
+            // TODO: use 'crash' w/ match error message!
             self.synth_function_call(
                 vec![],
                 self.ast.identifiers.get("assert").unwrap(),
@@ -2570,38 +2578,82 @@ impl TypedModule {
         cases: &[parse::ParsedMatchCase],
         match_scope_id: ScopeId,
         expected_type_id: Option<TypeId>,
-    ) -> TyperResult<Vec<(Vec<TypedStmt>, TypedExpr, TypedBlock)>> {
-        let mut typed_cases: Vec<(Vec<TypedStmt>, TypedExpr, TypedBlock)> = Vec::new();
+    ) -> TyperResult<Vec<TypedMatchCase>> {
+        let mut typed_cases: Vec<TypedMatchCase> = Vec::new();
 
         let mut expected_arm_type_id = expected_type_id;
 
         for parsed_case in cases.iter() {
-            let typed_pattern =
+            let pattern =
                 self.eval_pattern(parsed_case.pattern, target_expr.type_id, match_scope_id)?;
             let arm_expr_span =
                 self.ast.expressions.get_expression(parsed_case.expression).get_span();
             let mut arm_block = self.synth_block(vec![], match_scope_id, arm_expr_span);
-            let (pre_stmts, bool_expr) = self.eval_match_arm(
-                &typed_pattern,
-                target_expr.clone(),
-                &mut arm_block,
-                match_scope_id,
-            )?;
+            let (pre_stmts, condition) =
+                self.eval_match_arm(&pattern, target_expr.clone(), &mut arm_block, match_scope_id)?;
 
-            // Once we've evaluated the arm, we can eval the consequent expression inside of it,
+            // Once we've evaluated the arm pattern, we can eval the consequent expression inside of it,
             // since the bindings are now in scope inside arm_block
             let arm_expr =
                 self.eval_expr(parsed_case.expression, arm_block.scope_id, expected_arm_type_id)?;
 
-            // We really could reconsider all of this span stuff
-            // because there's really no new source locations being created here
-            // A synthesized block could probably just have its span set to the span of the ast node
-            // that generated it.
             arm_block.push_expr(arm_expr);
 
             expected_arm_type_id = Some(arm_block.expr_type);
-            typed_cases.push((pre_stmts, bool_expr, arm_block));
+            typed_cases.push(TypedMatchCase { pattern, pre_stmts, condition, arm_block });
         }
+
+        // Exhaustiveness checking
+
+        // let mut unhandled_cases = match self.types.get(target_expr.type_id) {
+        //     Type::Unit => vec!["()"],
+        //     Type::Char => {
+        //         vec![]
+        //     }
+        //     Type::Int => {
+        //         vec![]
+        //     }
+        //     Type::Bool => {
+        //         vec!["true", "false"]
+        //     }
+        //     Type::String => vec![],
+        //     Type::Struct(_) => vec![],
+        //     Type::Array(_) => vec![],
+        //     Type::Optional(_) => {
+        //         vec!["Some", "None"]
+        //     }
+        //     Type::Reference(_) => todo!(),
+        //     Type::TypeVariable(_) => todo!(),
+        //     Type::TagInstance(_) => todo!(),
+        //     Type::Enum(_) => todo!(),
+        //     Type::EnumVariant(_) => todo!(),
+        // };
+        // for c in typed_cases.iter() {
+        //     match &c.pattern {
+        //         TypedPattern::LiteralBool(b, _) => {
+        //             unhandled_cases.retain(|c2| -> bool {
+        //                 if *b && *c2 == "true" {
+        //                     false
+        //                 } else if !*b && *c2 == "false" {
+        //                     false
+        //                 } else {
+        //                     true
+        //                 }
+        //             });
+        //         }
+        //         TypedPattern::Variable(_) => unhandled_cases.clear(),
+        //         TypedPattern::Wildcard(_) => unhandled_cases.clear(),
+        //         _ => todo!("exhaustiveness checking for all matchable types"),
+        //     }
+        // }
+        // if !unhandled_cases.is_empty() {
+        //     return make_fail_span(
+        //         &format!("Unhandled cases: {:?}", unhandled_cases),
+        //         target_expr.span,
+        //     );
+        // }
+        // End Exhaustiveness checking
+
         Ok(typed_cases)
     }
 
@@ -2673,10 +2725,13 @@ impl TypedModule {
             TypedPattern::Some(some_pattern) => {
                 let contained_type =
                     self.types.get(some_pattern.optional_type_id).expect_optional().inner_type;
+
+                // Unchecked since the matching codegen ensures the optional has a value
                 let inner_value = TypedExpr::OptionalGet(OptionalGet {
                     inner_expr: Box::new(target_expr_variable_expr.clone().into()),
                     result_type_id: contained_type,
                     span: some_pattern.span,
+                    checked: false,
                 });
                 let optional_get_ident = self.ast.identifiers.intern("optional_get");
                 let (_optional_value_variable_id, binding_stmt, optional_value_variable_expr) =

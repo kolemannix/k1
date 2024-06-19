@@ -1,0 +1,8 @@
+type Point = { x: int, y: int? }
+
+fn main(): int {
+  val n: Point? = None;
+  assert(n!.x == 1);
+  0
+}
+//abortmsg: get on empty optional

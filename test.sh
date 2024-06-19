@@ -5,4 +5,4 @@ set -x
 set -e
 cargo test
 export RUST_BACKTRACE=1
-cargo run --bin test_suite -- --interpret=true
+cargo run --bin test_suite -- $1

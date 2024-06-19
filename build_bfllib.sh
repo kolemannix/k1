@@ -5,4 +5,4 @@ set -x
 set -e
 export RUST_BACKTRACE=1
 
-clang -shared -Wall -o bfllib/libbfllib.a bfllib/bfllib.c
+clang -g -shared -Wall -o bfllib/libbfllib.a bfllib/bfllib.c
