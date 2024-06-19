@@ -225,7 +225,10 @@ pub fn codegen_module<'ctx, 'module>(
         eprintln!("Codegen error: {}", e.message);
         anyhow::bail!(e)
     }
-    codegen.optimize(llvm_optimize)?;
+    if let Err(e) = codegen.optimize(llvm_optimize) {
+        eprintln!("Codegen error: {}", e.to_string());
+        anyhow::bail!(e)
+    };
 
     if args.write_llvm {
         let llvm_text = codegen.output_llvm_ir_text();

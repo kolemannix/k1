@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+
 // #pragma pack(1)
 typedef struct {
   uint64_t len;
@@ -11,6 +12,11 @@ typedef struct {
 // #pragma pack()
 
 _Static_assert (sizeof(BflString) == 16, "BflString size");
+
+void _bfl_crash(BflString* reason, BflString* filename, uint64_t line) {
+    fprintf(stderr, "%.*s at %.*s:%llu\n", (int)reason->len, reason->data, (int)filename->len, filename->data, line);
+    abort();
+}
 
 BflString _bfl_charToString(char c) {
   char *data = malloc(1);

@@ -8,8 +8,8 @@
   - [x] Start gui
   - [x] Remove ! for negation; switch to 'not'
 - [x] Get LLVM interpreter working (for test suite)
-- [ ] Exit for option unwrap
-- [x] Exit for bad enum cast
+- [x] 'crash' w/ line no for option unwrap
+- [x] 'crash' w/ line no for bad enum cast
 - [x] Match expected errors from test programs
 - [ ] 'dump' directive on block
 - [ ] Pattern Matching
@@ -30,6 +30,7 @@
   - [x] Make first-class types for each variant
   - [x] First, hard cast to variant (`as<.Tag>`)
   - [x] Built-in .as<Tag> or panic
+  - [ ] syntax: optional pipe separator
   - [ ] Enum methods
 - [ ] Recursive structs and enums (with indirection)
 - [ ] Generic structs and enums

@@ -1,7 +1,7 @@
 use std::{
     path::Path,
     sync::{
-        atomic::{AtomicU32, AtomicUsize, Ordering},
+        atomic::{AtomicUsize, Ordering},
         Mutex,
     },
 };
@@ -9,6 +9,7 @@ use std::{
 use anyhow::{bail, Result};
 use bfl::compiler;
 use clap::Parser;
+use colored::Colorize;
 use inkwell::context::Context;
 use std::os::unix::prelude::ExitStatusExt;
 
@@ -16,15 +17,44 @@ use std::os::unix::prelude::ExitStatusExt;
 #[command(author, version, about, long_about = None)]
 pub struct TestSuiteClapArgs {
     /// If true, uses an LLVM Intrerpreter. Otherwise, builds and runs real executables
-    #[arg(short, long, default_value_t = true, action = clap::ArgAction::Set)]
+    #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
     pub interpret: bool,
+
+    /// Run in parallel if true
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    pub parallel: bool,
+
+    /// Filters test cases by name substring
+    pub filter: Option<String>,
 }
 
 #[derive(Debug)]
 enum TestExpectation {
     ExitCode(i32),
-    CompileErrorMessage { message: String },
-    CompileErrorLine { line: u32 },
+    CompileErrorMessage {
+        message: String,
+    },
+    AbortErrorMessage {
+        message: String,
+    },
+    #[allow(unused)]
+    CompileErrorLine {
+        line: u32,
+    },
+}
+impl TestExpectation {
+    fn exit_code(&self) -> Option<i32> {
+        match self {
+            Self::ExitCode(c) => Some(*c),
+            _ => None,
+        }
+    }
+    fn abort_message(&self) -> Option<&str> {
+        match self {
+            Self::AbortErrorMessage { message } => Some(message),
+            _ => None,
+        }
+    }
 }
 
 fn get_test_expectation(test_file: &Path) -> TestExpectation {
@@ -36,6 +66,7 @@ fn get_test_expectation(test_file: &Path) -> TestExpectation {
     // it expected return value for now
     let error_message_prefix = "//errmsg: ";
     let exit_code_prefix = "//exitcode: ";
+    let abort_msg_prefix = "//abortmsg: ";
     if last_line.starts_with(error_message_prefix) {
         let expected_error: String = last_line.chars().skip(error_message_prefix.len()).collect();
         TestExpectation::CompileErrorMessage { message: expected_error }
@@ -43,6 +74,9 @@ fn get_test_expectation(test_file: &Path) -> TestExpectation {
         let s: String = last_line.chars().skip(exit_code_prefix.len()).collect();
         let as_i32: i32 = s.parse().unwrap();
         TestExpectation::ExitCode(as_i32)
+    } else if last_line.starts_with(abort_msg_prefix) {
+        let expected_error: String = last_line.chars().skip(abort_msg_prefix.len()).collect();
+        TestExpectation::AbortErrorMessage { message: expected_error }
     } else {
         TestExpectation::ExitCode(0)
     }
@@ -71,20 +105,22 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
                     TestExpectation::CompileErrorMessage { message } => {
                         // Check for message!
                         if !err.to_string().contains(&message) {
-                            bail!(
-                                "{}: Failed with unexpected message: {}",
-                                filename,
-                                err.to_string()
-                            )
+                            bail!("{filename}: Failed with unexpected message: {}", err.to_string())
                         }
                     }
                     TestExpectation::CompileErrorLine { .. } => {
                         unimplemented!("error line test")
                     }
+                    TestExpectation::AbortErrorMessage { .. } => {
+                        bail!(
+                            "{filename}: Expected abort but got compile error: {}",
+                            err.to_string()
+                        )
+                    }
                     TestExpectation::ExitCode(expected_code) => bail!(
-                        "{}: Expected exit code {} but got compile error",
-                        filename,
+                        "{filename}: Expected exit code {} but got compile error: {}",
                         expected_code,
+                        err.to_string()
                     ),
                 }
             }
@@ -94,7 +130,11 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
         },
         Ok(typed_module) => {
             let name = typed_module.name();
-            if let TestExpectation::ExitCode(code) = expectation {
+            let expect_exit = matches!(
+                expectation,
+                TestExpectation::ExitCode(_) | TestExpectation::AbortErrorMessage { .. }
+            );
+            if expect_exit {
                 let output_executable = !interpret;
                 let codegen = compiler::codegen_module(
                     &args,
@@ -106,15 +146,13 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
 
                 if interpret {
                     match codegen.interpret_module() {
-                        Err(e) => bail!("TEST CASE {} INTERPRET FAILED: {}", name, e),
+                        Err(e) => bail!("{name} interpret failed: {e}"),
                         Ok(res) => {
                             let result_code = res as i32;
-                            if result_code != code {
+                            let expected_code = expectation.exit_code();
+                            if Some(result_code) != expected_code {
                                 bail!(
-                                    "TEST CASE {} FAILED WRONG EXIT CODE: exp {}, actual {}",
-                                    name,
-                                    code,
-                                    result_code,
+                                    "{name} failed wrong exit code: exp {expected_code:?}, actual {result_code}",
                                 );
                             }
                         }
@@ -122,25 +160,52 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
                 } else {
                     let mut run_cmd =
                         std::process::Command::new(format!("{}/{}.out", out_dir, name));
-                    let run_status = run_cmd.status().unwrap();
-                    if let Some(signal) = run_status.signal() {
-                        if signal == 5 {
-                            bail!("TEST CASE {} TERMINATED BY TRAP SIGNAL: {}", name, signal);
-                        } else {
-                            bail!("TEST CASE {} TERMINATED BY SIGNAL: {}", name, signal);
+                    let run_result = run_cmd.output();
+                    match run_result {
+                        Err(e) => {
+                            bail!(".output() failed with {e:?}")
                         }
-                    };
-                    if run_status.code() != Some(code) {
-                        bail!(
-                            "TEST CASE {} FAILED WRONG EXIT CODE: exp {}, actual {}",
-                            name,
-                            code,
-                            run_status.code().unwrap(),
-                        );
+                        Ok(output) => {
+                            let run_status = output.status;
+                            if let Some(signal) = run_status.signal() {
+                                if signal == 5 {
+                                    bail!("{name} terminated by trap signal: {signal}");
+                                } else if signal == 6 {
+                                    if let Some(expected_abort_message) =
+                                        expectation.abort_message()
+                                    {
+                                        let stderr_str = String::from_utf8_lossy(&output.stderr);
+                                        let stderr_lines = stderr_str.lines();
+                                        match stderr_lines.last() {
+                                            None =>
+                                            bail!(
+                                                "{name} Expected abortmsg {expected_abort_message} but got abort with no output",
+                                            ),
+                                            Some(abort_msg) => {
+                                                if !abort_msg.contains(expected_abort_message) {
+                                                    bail!(
+                                                        "{name} abort message '{abort_msg}' did not match expected message: {expected_abort_message}"
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    bail!("{name} terminated by signal: {signal}");
+                                }
+                            };
+                            if run_status.code() != expectation.exit_code() {
+                                bail!(
+                                    "{name} failed wrong exit code: exp {:?}, actual {:?}",
+                                    expectation.exit_code(),
+                                    run_status.code(),
+                                );
+                            }
+                        }
                     }
                 }
             } else {
-                bail!("Expected failed compilation but actually succeeded")
+                bail!("{name} Expected failed compilation but actually succeeded")
             }
         }
     };
@@ -158,30 +223,57 @@ pub fn main() -> Result<()> {
         if metadata.is_file() {
             let extension = path.extension().unwrap();
             if extension == "bfl" {
-                all_tests.push(path.to_path_buf())
+                match test_suite_args.filter.as_ref() {
+                    None => all_tests.push(path.to_path_buf()),
+                    Some(f) => {
+                        let name_stem = path.file_stem().unwrap().to_string_lossy();
+                        if name_stem.contains(&*f) {
+                            all_tests.push(path.to_path_buf())
+                        }
+                    }
+                }
             }
         }
     }
     let total: usize = all_tests.len();
     let success = AtomicUsize::new(0);
     let failures = Mutex::new(Vec::with_capacity(total));
+
     // TODO: grouping by n to bound threads created
-    std::thread::scope(|scope| {
+    let parallel = test_suite_args.parallel;
+    if parallel {
+        std::thread::scope(|scope| {
+            for test in all_tests.iter() {
+                scope.spawn(|| {
+                    let ctx = Context::create();
+                    let result = test_file(&ctx, test.as_path(), test_suite_args.interpret);
+                    let filename = test.as_path().file_name().unwrap().to_str().unwrap();
+                    if result.is_ok() {
+                        eprintln!("{filename:040} {}", "PASS".green());
+                        success.fetch_add(1, Ordering::Relaxed);
+                    } else {
+                        let mut failures = failures.lock().unwrap();
+                        failures.push(
+                            test.as_path().file_name().unwrap().to_str().unwrap().to_string(),
+                        );
+                        eprintln!("{filename:040} {}: {}", "FAIL".red(), result.unwrap_err());
+                    }
+                });
+            }
+        });
+    } else {
         for test in all_tests.iter() {
-            scope.spawn(|| {
-                let ctx = Context::create();
-                let result = test_file(&ctx, test.as_path(), test_suite_args.interpret);
-                if result.is_ok() {
-                    success.fetch_add(1, Ordering::Relaxed);
-                } else {
-                    let mut failures = failures.lock().unwrap();
-                    failures
-                        .push(test.as_path().file_name().unwrap().to_str().unwrap().to_string());
-                    eprintln!("Test failed: {}", result.unwrap_err());
-                }
-            });
+            let ctx = Context::create();
+            let result = test_file(&ctx, test.as_path(), test_suite_args.interpret);
+            if result.is_ok() {
+                success.fetch_add(1, Ordering::Relaxed);
+            } else {
+                let mut failures = failures.lock().unwrap();
+                failures.push(test.as_path().file_name().unwrap().to_str().unwrap().to_string());
+                eprintln!("Test failed: {}", result.unwrap_err());
+            }
         }
-    });
+    }
     let success = success.into_inner();
     if success != total {
         let failures = failures.lock().unwrap();
