@@ -2,14 +2,12 @@ use std::fs::File;
 use std::io::Write;
 use std::os::unix::prelude::ExitStatusExt;
 use std::path::Path;
-use std::sync::{Arc, RwLock};
-use std::thread::JoinHandle;
 use std::time::Instant;
-use std::{fs, thread};
+use std::{fs};
 
 use crate::parse::print_error_location;
 use crate::typer::TypedModule;
-use crate::{gui, parse, typer};
+use crate::{parse};
 use anyhow::{bail, Result};
 use inkwell::context::Context;
 use log::info;
