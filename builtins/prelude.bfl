@@ -2,7 +2,7 @@ extern fn _bfl_charToString(c: char): string
 extern fn _bfl_charToInt(c: char): int
 extern fn _bfl_intToChar(i: int): char
 extern fn _bfl_readFileToString(path: string): string
-extern fn _bfl_crash(reason: string*, file: string*, line: int): unit
+extern fn _bfl_crash(reason: string*, file: string*, line: int): never
 
 ability Equals {
   fn equals(self: Self, other: Self): bool
@@ -19,6 +19,10 @@ ability Hash {
 intern fn printInt(value: int): unit
 intern fn print(value: string): unit
 intern fn exit(code: int): unit
+
+intern fn compilerFile(): string
+intern fn compilerLine(): int
+fn crash(msg: string): never
 
 namespace Files {
   fn readToString(path: string): string {

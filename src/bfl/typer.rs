@@ -117,6 +117,7 @@ pub struct TypedEnumVariant {
 pub struct TypedEnum {
     pub variants: Vec<TypedEnumVariant>,
     pub name_if_named: Option<IdentifierId>,
+    pub ast_node: ParsedId,
 }
 
 impl TypedEnum {
@@ -898,6 +899,8 @@ pub enum IntrinsicFunctionType {
     ArrayCapacity,
     StringFromCharArray,
     StringEquals,
+    CompilerFile,
+    CompilerLine
 }
 
 impl IntrinsicFunctionType {
@@ -1273,7 +1276,11 @@ impl TypedModule {
             }
             ParsedTypeExpression::Enum(e) => {
                 let e = e.clone();
-                let enum_type = Type::Enum(TypedEnum { variants: Vec::new(), name_if_named: None });
+                let enum_type = Type::Enum(TypedEnum {
+                    variants: Vec::new(),
+                    name_if_named: None,
+                    ast_node: type_expr_id.into(),
+                });
                 let enum_type_id = self.types.add_type(enum_type);
 
                 let mut variants = Vec::with_capacity(e.variants.len());
@@ -1605,7 +1612,17 @@ impl TypedModule {
             (Type::Reference(o1), Type::Reference(o2)) => {
                 self.typecheck_types(o1.inner_type, o2.inner_type, scope_id)
             }
-            (Type::Enum(_e), Type::TagInstance(_t)) => Err("unimplemented".to_string()),
+            (Type::Enum(_expected_enum), Type::EnumVariant(actual_variant)) => {
+                if actual_variant.enum_type_id == expected {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "expected enum {} but got variant {} of a different enum",
+                        self.type_id_to_string(expected),
+                        self.get_ident_str(actual_variant.tag_name)
+                    ))
+                }
+            }
             (exp, act) => {
                 // Resolve type variables
                 if let Type::TypeVariable(expected_type_var) = exp {
@@ -2088,9 +2105,6 @@ impl TypedModule {
                 self.eval_index_operation(&index_op.clone(), scope_id)
             }
             ParsedExpression::Struct(ast_struct) => {
-                // FIXME: Let's factor out Structs and Structs into separate things
-                //        structs can be created on the fly and are just hashmap literals
-                //        Structs are structs
                 let mut field_values = Vec::new();
                 let mut field_defns = Vec::new();
                 let ast_struct = ast_struct.clone();
@@ -2102,7 +2116,7 @@ impl TypedModule {
                             other_ty => {
                                 return make_fail_span(
                                     format!(
-                                        "Got struc literal but expected {}",
+                                        "Got struct literal but expected {}",
                                         self.type_to_string(other_ty)
                                     ),
                                     ast_struct.span,
@@ -2114,7 +2128,7 @@ impl TypedModule {
                             other_ty => {
                                 return make_fail_span(
                                     format!(
-                                        "Got struc literal but expected {}",
+                                        "Got struct literal but expected {}",
                                         self.type_to_string(other_ty)
                                     ),
                                     ast_struct.span,
@@ -2124,7 +2138,7 @@ impl TypedModule {
                         other_ty => {
                             return make_fail_span(
                                 format!(
-                                    "Got struc literal but expected {}",
+                                    "Got struct literal but expected {}",
                                     self.type_to_string(other_ty)
                                 ),
                                 ast_struct.span,
@@ -2531,6 +2545,10 @@ impl TypedModule {
         if cases.is_empty() {
             let false_expr = TypedExpr::Bool(false, span_if_no_cases);
             // TODO: use 'crash' w/ match error message!
+            This is needed because we can't codegen matches without a
+                catchall right now due to mismatching phi types.
+                    We can also make 'crash' return 'never' and introduce
+                that type
             self.synth_function_call(
                 vec![],
                 self.ast.identifiers.get("assert").unwrap(),
@@ -3472,7 +3490,7 @@ impl TypedModule {
 
     /// Can 'shortcircuit' with Left if the function call to resolve
     /// is actually a builtin
-    fn resolve_function_call(
+    fn resolve_parsed_function_call(
         &mut self,
         fn_call: &FnCall,
         this_expr: Option<&TypedExpr>,
@@ -3584,8 +3602,29 @@ impl TypedModule {
                                 span: fn_call.span,
                             })));
                         } else {
-                            None
+                            let Some(enum_type_name) = e.name_if_named else {
+                                return make_fail_span(
+                                    "Anonymous enums currently have no methods",
+                                    fn_call.span,
+                                );
+                            };
+                            let enum_scope =
+                                self.get_namespace_scope_for_ident(calling_scope, enum_type_name);
+                            enum_scope.find_function(fn_call.name)
                         }
+                    }
+                    Type::EnumVariant(ev) => {
+                        let parent_enum_name =
+                            self.types.get(ev.enum_type_id).expect_enum().name_if_named;
+                        let Some(enum_type_name) = parent_enum_name else {
+                            return make_fail_span(
+                                "Anonymous enums currently have no methods",
+                                fn_call.span,
+                            );
+                        };
+                        let enum_scope =
+                            self.get_namespace_scope_for_ident(calling_scope, enum_type_name);
+                        enum_scope.find_function(fn_call.name)
                     }
                     _ => None,
                 };
@@ -3594,7 +3633,7 @@ impl TypedModule {
                     None => {
                         return make_fail_span(
                             format!(
-                                "Method {} does not exist on type {:?}",
+                                "Method {} does not exist on type {}",
                                 &*self.get_ident_str(fn_call.name),
                                 self.type_id_to_string(type_id),
                             ),
@@ -3749,10 +3788,11 @@ impl TypedModule {
             fn_call.args.is_empty() || known_value_args.is_none(),
             "cannot pass both typed value args and parsed value args to eval_function_call"
         );
-        let function_id = match self.resolve_function_call(fn_call, this_expr.as_ref(), scope_id)? {
-            Either::Left(expr) => return Ok(expr),
-            Either::Right(function_id) => function_id,
-        };
+        let function_id =
+            match self.resolve_parsed_function_call(fn_call, this_expr.as_ref(), scope_id)? {
+                Either::Left(expr) => return Ok(expr),
+                Either::Right(function_id) => function_id,
+            };
 
         // Now that we have resolved to a function id, we need to specialize it if generic
         let original_function = self.get_function(function_id);
