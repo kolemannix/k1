@@ -21,8 +21,7 @@
   - [x] Make sure binary AND doesn't evaluate its rhs if lhs is false!
   - [x] Records
   - [x] Enums
-  - [-] Multi-case
-  - [ ] Exhaustiveness checking
+  - [x] Multi-case
 - [x] Enum types (enums / tagged unions)
   - [x] Syntax
   - [x] Construction/repr
@@ -30,8 +29,10 @@
   - [x] Make first-class types for each variant
   - [x] First, hard cast to variant (`as<.Tag>`)
   - [x] Built-in .as<Tag> or panic
-  - [ ] syntax: optional pipe separator
+  - [x] syntax: optional pipe separator
   - [ ] Enum methods
+- [ ] Fix scoping by using a fully-qualified identifier id that includes a namespace path
+rather than just a name, where appropriate. For example, we resolve methods on types just by finding a namespace with the same name as the type. We need to find a namespace with the same fully-qualified name as the type!
 - [ ] Recursive structs and enums (with indirection)
 - [ ] Generic structs and enums
 - [x] TypedIf allow exprs instead of requiring blocks (did not do; instead improved handling of unit blocks)
@@ -41,6 +42,7 @@
 - [x] Type Ascriptions
 - [x] Enforce unique function name in namespace!
 - [ ] Optional coalescing accessor (x?.y) and ??
+- [ ] Enum Exhaustiveness checking
 - [ ] Pure lambdas with ->
 - [ ] No closures for now
 - [ ] Make demo readme
