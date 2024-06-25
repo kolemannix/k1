@@ -1,0 +1,5 @@
+fn main(): int {
+  assert(compilerFile() == "compiler_file.bfl");
+  assert(compilerLine() == 3);
+  0
+}

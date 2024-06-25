@@ -148,7 +148,8 @@ impl Scopes {
         self.get_scope_mut(scope_id).add_function(identifier, function_id)
     }
 
-    pub fn add_type(&mut self, scope_id: ScopeId, ident: IdentifierId, ty: TypeId) {
+    #[must_use]
+    pub fn add_type(&mut self, scope_id: ScopeId, ident: IdentifierId, ty: TypeId) -> bool {
         self.get_scope_mut(scope_id).add_type(ident, ty)
     }
 
@@ -195,7 +196,10 @@ impl Scope {
     }
 
     pub fn add_variable(&mut self, ident: IdentifierId, value: VariableId) {
-        // nocommit unique name, or understand shadowing rules
+        // This accomplishes shadowing by overwriting the name in the scope.
+        // I think this is ok because ther variable itself by variable id
+        // is not lost, in case we wanted to do some analysis.
+        // Still might need to mark it shadowed
         self.variables.insert(ident, value);
     }
 
@@ -203,9 +207,14 @@ impl Scope {
         self.variables.get(&ident).copied()
     }
 
-    pub fn add_type(&mut self, ident: IdentifierId, ty: TypeId) {
-        // nocommit unique name
-        self.types.insert(ident, ty);
+    #[must_use]
+    pub fn add_type(&mut self, ident: IdentifierId, ty: TypeId) -> bool {
+        if self.types.contains_key(&ident) {
+            false
+        } else {
+            self.types.insert(ident, ty);
+            true
+        }
     }
 
     pub fn find_type(&self, ident: IdentifierId) -> Option<TypeId> {
@@ -214,7 +223,6 @@ impl Scope {
 
     #[must_use]
     pub fn add_function(&mut self, ident: IdentifierId, function_id: FunctionId) -> bool {
-        // nocommit unique name
         if self.functions.contains_key(&ident) {
             false
         } else {

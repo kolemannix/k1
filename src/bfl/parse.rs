@@ -509,7 +509,7 @@ pub struct ForExpr {
 }
 
 #[derive(Debug, Clone)]
-pub enum BlockStmt {
+pub enum ParsedStmt {
     ValDef(ValDef),                     // val x = 42
     Assignment(Assignment),             // x = 42
     LoneExpression(ParsedExpressionId), // println("asdfasdf")
@@ -518,7 +518,7 @@ pub enum BlockStmt {
 
 #[derive(Debug, Clone)]
 pub struct Block {
-    pub stmts: Vec<BlockStmt>,
+    pub stmts: Vec<ParsedStmt>,
     pub span: SpanId,
 }
 
@@ -707,8 +707,13 @@ impl ParsedExpressionPool {
         self.expressions.push(expression);
         ParsedExpressionId(id as u32)
     }
-    pub fn get_expression(&self, id: ParsedExpressionId) -> &ParsedExpression {
+
+    pub fn get(&self, id: ParsedExpressionId) -> &ParsedExpression {
         &self.expressions[id.0 as usize]
+    }
+
+    pub fn get_span(&self, id: ParsedExpressionId) -> SpanId {
+        self.get(id).get_span()
     }
 }
 
@@ -857,14 +862,21 @@ impl ParsedModule {
 
     pub fn get_pattern_span(&self, id: ParsedPatternId) -> SpanId {
         match self.patterns.get_pattern(id) {
-            ParsedPattern::Literal(literal_id) => {
-                self.expressions.get_expression(*literal_id).get_span()
-            }
+            ParsedPattern::Literal(literal_id) => self.expressions.get(*literal_id).get_span(),
             ParsedPattern::Enum(enum_pattern) => enum_pattern.span,
             ParsedPattern::Variable(_var_pattern, span) => *span,
             ParsedPattern::Struct(struct_pattern) => struct_pattern.span,
             ParsedPattern::Wildcard(span) => *span,
             ParsedPattern::Some(some_pattern) => some_pattern.span,
+        }
+    }
+
+    pub fn get_stmt_span(&self, stmt: &ParsedStmt) -> SpanId {
+        match stmt {
+            ParsedStmt::ValDef(v) => v.span,
+            ParsedStmt::Assignment(a) => a.span,
+            ParsedStmt::LoneExpression(expr_id) => self.expressions.get_span(*expr_id),
+            ParsedStmt::While(w) => w.span,
         }
     }
 
@@ -945,7 +957,7 @@ impl ParsedModule {
             ParsedId::Ability(id) => self.get_ability(id).span,
             ParsedId::AbilityImpl(id) => self.get_ability_impl(id).span,
             ParsedId::TypeDefn(id) => self.get_type_defn(id).span,
-            ParsedId::Expression(id) => self.expressions.get_expression(id).get_span(),
+            ParsedId::Expression(id) => self.expressions.get_span(id),
             ParsedId::TypeExpression(id) => self.get_type_expression_span(id),
             ParsedId::Pattern(id) => self.get_pattern_span(id),
         }
@@ -1006,6 +1018,9 @@ pub struct Line {
 }
 
 impl Line {
+    pub fn line_number(&self) -> u32 {
+        self.line_index + 1
+    }
     pub fn end_char(&self) -> u32 {
         // TODO(unicode): Assuming ascii for now
         self.start_char + self.content.len() as u32
@@ -1283,11 +1298,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     pub fn get_expression(&self, id: ParsedExpressionId) -> &ParsedExpression {
-        self.module.expressions.get_expression(id)
+        self.module.expressions.get(id)
     }
 
     pub fn get_expression_span(&self, id: ParsedExpressionId) -> SpanId {
-        self.module.expressions.get_expression(id).get_span()
+        self.module.expressions.get(id).get_span()
     }
 
     fn parse_literal(&mut self) -> ParseResult<Option<ParsedExpressionId>> {
@@ -2211,14 +2226,14 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(Some(WhileStmt { cond, block, span }))
     }
 
-    fn parse_statement(&mut self) -> ParseResult<Option<BlockStmt>> {
+    fn parse_statement(&mut self) -> ParseResult<Option<ParsedStmt>> {
         trace!("eat_statement {:?}", self.peek());
         if let Some(while_loop) = self.parse_while_loop()? {
-            Ok(Some(BlockStmt::While(while_loop)))
+            Ok(Some(ParsedStmt::While(while_loop)))
         } else if let Some(mut_def) = self.parse_mut()? {
-            Ok(Some(BlockStmt::ValDef(mut_def)))
+            Ok(Some(ParsedStmt::ValDef(mut_def)))
         } else if let Some(val_def) = self.parse_val(false)? {
-            Ok(Some(BlockStmt::ValDef(val_def)))
+            Ok(Some(ParsedStmt::ValDef(val_def)))
         } else if let Some(expr) = self.parse_expression()? {
             let peeked = self.peek();
             // Assignment:
@@ -2226,9 +2241,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             // - Build assignment
             if peeked.kind == K::Equals {
                 let assgn = self.parse_assignment(expr)?;
-                Ok(Some(BlockStmt::Assignment(assgn)))
+                Ok(Some(ParsedStmt::Assignment(assgn)))
             } else {
-                Ok(Some(BlockStmt::LoneExpression(expr)))
+                Ok(Some(ParsedStmt::LoneExpression(expr)))
             }
         } else {
             Ok(None)
@@ -2490,7 +2505,7 @@ impl ParsedModule {
         expr: ParsedExpressionId,
         f: &mut impl Write,
     ) -> std::fmt::Result {
-        match self.expressions.get_expression(expr) {
+        match self.expressions.get(expr) {
             ParsedExpression::BinaryOp(op) => {
                 f.write_str("(")?;
                 self.display_expression_id(op.lhs, f)?;

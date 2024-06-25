@@ -1,0 +1,13 @@
+fn main(): int {
+  val x: int = if false {
+    crash("Uh oh!")
+  } else {
+    0
+  };
+  val y: int = if true {
+    0
+  } else {
+    crash("Uh oh!")
+  };
+  x + y
+}

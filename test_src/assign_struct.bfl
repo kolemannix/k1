@@ -3,8 +3,13 @@ type Range = { min: int, max: int }
 fn main(): int {
   val x: Range* = { min: 4, max: 11 };
   x.min = 2;
-  printInt(x.min);
   assert(x.min == 2);
+
+  // Checks that field access on non-pointer also works
+  // (tricky codegen thing)
+  val y = { min: 3 };
+  assert(y.min == 3);
+  assert({ min: 3}.min == 3);
+
   0
 }
-// 2
