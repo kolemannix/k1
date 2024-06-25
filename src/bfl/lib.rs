@@ -5,7 +5,7 @@ pub mod lex;
 pub mod parse;
 pub mod typer;
 
-static_assert_size!(parse::BlockStmt, 40); // Get down below 100 // We did it!
+static_assert_size!(parse::ParsedStmt, 40); // Get down below 100 // We did it!
 static_assert_size!(parse::ParsedExpression, 80); // Get back down ideally below 50
 static_assert_size!(typer::TypedExpr, 48);
 static_assert_size!(typer::TypedStmt, 16);

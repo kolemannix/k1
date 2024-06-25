@@ -1,0 +1,20 @@
+type Foo = { x: int}
+type Alias = Foo
+
+namespace Outer {
+  type Foo = { x: int }
+  namespace Foo {
+    fn value(self: Foo): int { self.x + 3 }
+  }
+}
+
+// namespace Foo {
+//   fn value(self: Foo): int { self.x }
+// }
+
+
+fn main(): int {
+  val x: Foo = {x:1};
+  printInt(x.value());
+  0
+}

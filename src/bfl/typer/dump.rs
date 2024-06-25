@@ -99,17 +99,8 @@ impl TypedModule {
     }
 
     fn display_type_id(&self, ty: TypeId, writ: &mut impl Write) -> std::fmt::Result {
-        match ty {
-            UNIT_TYPE_ID => writ.write_str("()"),
-            CHAR_TYPE_ID => writ.write_str("char"),
-            INT_TYPE_ID => writ.write_str("int"),
-            BOOL_TYPE_ID => writ.write_str("bool"),
-            STRING_TYPE_ID => writ.write_str("string"),
-            type_id => {
-                let ty = self.types.get(type_id);
-                self.display_type(ty, writ)
-            }
-        }
+        let ty = self.types.get(ty);
+        self.display_type(ty, writ)
     }
 
     pub fn type_id_to_string(&self, type_id: TypeId) -> String {
@@ -131,6 +122,10 @@ impl TypedModule {
             Type::Bool => writ.write_str("bool"),
             Type::String => writ.write_str("string"),
             Type::Struct(struc) => {
+                if let Some(defn_info) = struc.type_defn_info.as_ref() {
+                    writ.write_str(self.get_ident_str(defn_info.name))?;
+                    writ.write_str(" = ")?;
+                }
                 writ.write_str("{")?;
                 for (index, field) in struc.fields.iter().enumerate() {
                     if index > 0 {
@@ -164,6 +159,10 @@ impl TypedModule {
                 writ.write_str(self.ast.identifiers.get_name(tag.ident))
             }
             Type::Enum(e) => {
+                if let Some(defn_info) = e.type_defn_info.as_ref() {
+                    writ.write_str(self.get_ident_str(defn_info.name))?;
+                    writ.write_str(" = ")?;
+                }
                 writ.write_str("enum ")?;
                 for (idx, v) in e.variants.iter().enumerate() {
                     writ.write_str(self.ast.identifiers.get_name(v.tag_name))?;
@@ -188,6 +187,7 @@ impl TypedModule {
                 }
                 Ok(())
             }
+            Type::Never => writ.write_str("never"),
         }
     }
 
