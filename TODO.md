@@ -9,12 +9,13 @@
 - [x] 'crash' w/ line no for option unwrap
 - [x] 'crash' w/ line no for bad enum cast
 - [x] Match expected errors from test programs
+- [ ] floating point f32 and f64
 - [ ] 'never' type
   - [x] typechecking / codegen
   - [x] if/else
   - [ ] match
 - [ ] 'dump' directive on block
-- [ ] Pattern Matching
+- [x] Pattern Matching
   - [x] Single-arm match evals to boolean
   - [x] Literals
   - [x] Variables
@@ -44,7 +45,7 @@ rather than just a name, where appropriate. For example, we resolve methods on t
 - [x] Type Ascriptions
 - [x] Enforce unique function name in namespace!
 - [ ] Optional coalescing accessor (x?.y) and ??
-- [ ] Enum Exhaustiveness checking
+- [ ] Exhaustive pattern matching
 - [ ] Pure lambdas with ->
 - [ ] No closures for now
 - [ ] Make demo readme
