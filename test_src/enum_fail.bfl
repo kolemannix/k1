@@ -1,9 +1,7 @@
 type E = enum A(int) | B | C
 
 fn main(): int {
-
   val x: E = .A(true);
-
   0
 }
 //errmsg: Payload type mismatch: Expected int but got bool

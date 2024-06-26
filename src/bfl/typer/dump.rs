@@ -54,7 +54,13 @@ impl TypedModule {
         name
     }
 
-    fn display_scope(&self, scope: &Scope, writ: &mut impl Write) -> std::fmt::Result {
+    pub fn scope_to_string(&self, scope: &Scope) -> String {
+        let mut s = String::new();
+        self.display_scope(scope, &mut s).unwrap();
+        s
+    }
+
+    pub fn display_scope(&self, scope: &Scope, writ: &mut impl Write) -> std::fmt::Result {
         let scope_name = self.make_scope_name(scope);
         writ.write_fmt(format_args!("{}\n", scope_name))?;
 
@@ -173,7 +179,7 @@ impl TypedModule {
                     }
                     let last = idx == e.variants.len() - 1;
                     if !last {
-                        writ.write_str(", ")?;
+                        writ.write_str(" | ")?;
                     }
                 }
                 Ok(())

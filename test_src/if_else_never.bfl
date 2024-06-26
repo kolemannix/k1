@@ -1,13 +1,18 @@
-fn main(): int {
-  val x: int = if false {
+fn doIt(b: bool): int {
+  val x: int = if not b {
     crash("Uh oh!")
   } else {
     0
   };
-  val y: int = if true {
+  val y: int = if b {
     0
   } else {
     crash("Uh oh!")
   };
   x + y
+}
+
+fn main(): int {
+  assert(doIt(true) == 0);
+  0
 }
