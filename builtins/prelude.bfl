@@ -20,8 +20,6 @@ intern fn printInt(value: int): unit
 intern fn print(value: string): unit
 intern fn exit(code: int): unit
 
-// fn compilerFile(): string
-// fn compilerLine(): int
 fn crash(msg: string): never {
   _bfl_crash(&msg, &compilerFile(), compilerLine());
 }

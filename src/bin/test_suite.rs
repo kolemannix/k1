@@ -214,6 +214,7 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
 
 pub fn main() -> Result<()> {
     let test_suite_args = TestSuiteClapArgs::parse();
+    eprintln!("{:#?}", test_suite_args);
     let test_dir = "test_src";
     let mut all_tests = Vec::new();
     for dir_entry in std::fs::read_dir(test_dir)? {
@@ -235,12 +236,22 @@ pub fn main() -> Result<()> {
             }
         }
     }
+
+    let parallel = test_suite_args.parallel;
+
+    if !parallel {
+        all_tests.sort_by(|p1, p2| {
+            let p1 = p1.file_name().unwrap().to_str().unwrap();
+            let p2 = p2.file_name().unwrap().to_str().unwrap();
+            p1.cmp(p2)
+        });
+    }
+
     let total: usize = all_tests.len();
     let success = AtomicUsize::new(0);
     let failures = Mutex::new(Vec::with_capacity(total));
 
     // TODO: grouping by n to bound threads created
-    let parallel = test_suite_args.parallel;
     if parallel {
         std::thread::scope(|scope| {
             for test in all_tests.iter() {
@@ -265,7 +276,9 @@ pub fn main() -> Result<()> {
         for test in all_tests.iter() {
             let ctx = Context::create();
             let result = test_file(&ctx, test.as_path(), test_suite_args.interpret);
+            let filename = test.as_path().file_name().unwrap().to_str().unwrap();
             if result.is_ok() {
+                eprintln!("{filename:040} {}", "PASS".green());
                 success.fetch_add(1, Ordering::Relaxed);
             } else {
                 let mut failures = failures.lock().unwrap();

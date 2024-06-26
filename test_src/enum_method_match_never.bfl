@@ -1,0 +1,20 @@
+type E = enum A(int) | B
+namespace E {
+  fn value_if_a(self: E): int {
+    when self {
+      | .A(i) -> i
+      | .B -> crash("This is a B!")
+    }
+  }
+}
+fn main(): int {
+  val x: E = .A(42);
+  val y: E.A = .A(42);
+  assert(x.value_if_a() == y.value_if_a());
+  val b: E = .B;
+  assert(b.value_if_a() == 0);
+  // TODO: codegen bug if done this way
+  // assert((.B: E).value_if_a() == 0);
+  0
+}
+//abortmsg: This is a B!

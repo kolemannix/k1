@@ -1540,7 +1540,13 @@ impl TypedModule {
             ParsedPattern::Struct(struct_pattern) => {
                 let target_type = self.types.get(target_type_id);
                 let expected_struct = target_type.as_struct().ok_or_else(|| {
-                    make_error("Impossible pattern: Expected struc type", struct_pattern.span)
+                    make_error(
+                        &format!(
+                            "Impossible pattern: Match target '{}' is not a struct",
+                            self.type_to_string(target_type)
+                        ),
+                        struct_pattern.span,
+                    )
                 })?;
                 let mut fields = Vec::with_capacity(struct_pattern.fields.len());
                 for (field_name, field_parsed_pattern_id) in &struct_pattern.fields {
@@ -2658,6 +2664,22 @@ impl TypedModule {
             let arm_expr =
                 self.eval_expr(parsed_case.expression, arm_block.scope_id, expected_arm_type_id)?;
 
+            if let Some(expected_arm_type_id) = expected_arm_type_id.as_ref() {
+                // Never is divergent so need not contribute to the overall type of the pattern
+                if arm_expr.get_type() != NEVER_TYPE_ID {
+                    if let Err(msg) = self.typecheck_types(
+                        *expected_arm_type_id,
+                        arm_expr.get_type(),
+                        match_scope_id,
+                    ) {
+                        return make_fail_span(
+                            &format!("Mismatching type for match case: {}", msg),
+                            arm_expr_span,
+                        );
+                    }
+                }
+            }
+
             arm_block.push_expr(arm_expr);
 
             expected_arm_type_id = Some(arm_block.expr_type);
@@ -3738,8 +3760,8 @@ impl TypedModule {
                     None => {
                         return make_fail_span(
                             format!(
-                                "Method {} does not exist on type {}",
-                                &*self.get_ident_str(fn_call.name),
+                                "Method '{}' does not exist on type {}",
+                                &*self.get_ident_str(fn_call.name).blue(),
                                 self.type_id_to_string(type_id),
                             ),
                             fn_call.span,
