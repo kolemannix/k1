@@ -2481,7 +2481,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             new_definitions.push(def)
         }
         if self.tokens.peek().kind != K::Eof {
-            let err = Parser::error("End or definition", self.tokens.peek());
+            let err = Parser::error("End of file or start of new definition", self.tokens.peek());
             self.module.errors.push(err.clone());
             return Err(err);
         }

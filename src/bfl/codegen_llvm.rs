@@ -1679,7 +1679,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     self.builder.build_store(payload_pointer, value);
                 }
 
-                let loaded_value = self.builder.build_load(llvm_variant, enum_ptr, "enum_value");
+                let loaded_value =
+                    self.builder.build_load(enum_type.base_struct_type, enum_ptr, "enum_value");
                 Ok(loaded_value.into())
             }
             TypedExpr::EnumIsVariant(enum_is_variant) => {
