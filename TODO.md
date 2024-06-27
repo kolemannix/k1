@@ -10,10 +10,10 @@
 - [x] 'crash' w/ line no for bad enum cast
 - [x] Match expected errors from test programs
 - [ ] floating point f32 and f64
-- [ ] 'never' type
+- [x] 'never' type
   - [x] typechecking / codegen
   - [x] if/else
-  - [ ] match
+  - [x] match
 - [ ] 'dump' directive on block
 - [x] Pattern Matching
   - [x] Single-arm match evals to boolean
@@ -44,6 +44,7 @@ rather than just a name, where appropriate. For example, we resolve methods on t
   - [ ] Ability impl decl bugfix (ability impls need to be seen in the decl phase)
 - [x] Type Ascriptions
 - [x] Enforce unique function name in namespace!
+- [x] Optional coalescing binary operator '?'
 - [ ] Optional coalescing accessor (x?.y) and ??
 - [ ] Exhaustive pattern matching
 - [ ] Pure lambdas with ->

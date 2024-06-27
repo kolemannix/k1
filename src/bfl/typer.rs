@@ -503,6 +503,7 @@ pub enum BinaryOpKind {
     Or,
     Equals,
     NotEquals,
+    OptionalElse,
 }
 
 impl Display for BinaryOpKind {
@@ -520,6 +521,7 @@ impl Display for BinaryOpKind {
             BinaryOpKind::Or => f.write_str("or"),
             BinaryOpKind::Equals => f.write_str("=="),
             BinaryOpKind::NotEquals => f.write_str("!="),
+            BinaryOpKind::OptionalElse => f.write_str("?"),
         }
     }
 }
@@ -533,6 +535,7 @@ impl BinaryOpKind {
             B::Less | B::LessEqual | B::Greater | B::GreaterEqual | B::Equals | B::NotEquals => 80,
             B::And => 70,
             B::Or => 66,
+            B::OptionalElse => 65,
         }
     }
 
@@ -548,7 +551,26 @@ impl BinaryOpKind {
             TokenKind::KeywordOr => Some(BinaryOpKind::Or),
             TokenKind::EqualsEquals => Some(BinaryOpKind::Equals),
             TokenKind::BangEquals => Some(BinaryOpKind::NotEquals),
+            TokenKind::QuestionMark => Some(BinaryOpKind::OptionalElse),
             _ => None,
+        }
+    }
+
+    fn is_symmetric_binop(&self) -> bool {
+        match self {
+            BinaryOpKind::Add => true,
+            BinaryOpKind::Subtract => true,
+            BinaryOpKind::Multiply => true,
+            BinaryOpKind::Divide => true,
+            BinaryOpKind::Less => true,
+            BinaryOpKind::LessEqual => true,
+            BinaryOpKind::Greater => true,
+            BinaryOpKind::GreaterEqual => true,
+            BinaryOpKind::And => true,
+            BinaryOpKind::Or => true,
+            BinaryOpKind::Equals => true,
+            BinaryOpKind::NotEquals => true,
+            BinaryOpKind::OptionalElse => false,
         }
     }
 }
@@ -1774,13 +1796,13 @@ impl TypedModule {
     // If the expr is already a block, do nothing
     // If it is not, make a new block with just this expression inside.
     // Used main for if/else
-    fn coerce_expr_to_block(&mut self, expr: TypedExpr, expr_scope: ScopeId) -> TypedBlock {
+    fn coerce_expr_to_block(&mut self, expr: TypedExpr, scope: ScopeId) -> TypedBlock {
         match expr {
             TypedExpr::Block(b) => b,
             expr => {
                 let expr_span = expr.get_span();
                 let statements = vec![TypedStmt::Expr(Box::new(expr))];
-                self.synth_block(statements, expr_scope, expr_span)
+                self.synth_block(statements, scope, expr_span)
             }
         }
     }
@@ -2262,19 +2284,71 @@ impl TypedModule {
                     BinaryOpKind::Equals | BinaryOpKind::NotEquals => {
                         return self.eval_equality_expr(&binary_op, scope_id, expected_type);
                     }
+                    BinaryOpKind::OptionalElse => {
+                        // LHS must be an optional and RHS must be its contained type
+                        let lhs = self.eval_expr(binary_op.lhs, scope_id, None)?;
+                        let Some(lhs_optional) = self.types.get(lhs.get_type()).as_optional()
+                        else {
+                            return make_fail_span(&format!("'else' operator can only be used on an optional; type was '{}'", self.type_id_to_string(lhs.get_type())), binary_op.span);
+                        };
+                        let lhs_inner = lhs_optional.inner_type;
+
+                        let rhs = self.eval_expr(binary_op.rhs, scope_id, Some(lhs_inner))?;
+                        let rhs_type = rhs.get_type();
+                        if let Err(msg) = self.typecheck_types(lhs_inner, rhs_type, scope_id) {
+                            return make_fail_span(
+                                &format!("'else' value incompatible with optional: {}", msg),
+                                binary_op.span,
+                            );
+                        }
+                        let mut coalesce_block = self.synth_block(vec![], scope_id, binary_op.span);
+                        let lhs_variable_name = self.ast.identifiers.intern("optelse_lhs");
+                        let (_lhs_variable_id, lhs_decl_stmt, lhs_variable_expr) = self
+                            .synth_variable_decl(
+                                lhs_variable_name,
+                                lhs,
+                                false,
+                                false,
+                                coalesce_block.scope_id,
+                            );
+                        let lhs_has_value =
+                            TypedExpr::OptionalHasValue(Box::new(lhs_variable_expr.clone()));
+                        let lhs_unwrap_expr = TypedExpr::OptionalGet(OptionalGet {
+                            inner_expr: Box::new(lhs_variable_expr),
+                            result_type_id: lhs_inner,
+                            span: binary_op.span,
+                            checked: false,
+                        });
+                        let if_else = TypedExpr::If(Box::new(TypedIf {
+                            condition: lhs_has_value,
+                            consequent: self
+                                .coerce_expr_to_block(lhs_unwrap_expr, coalesce_block.scope_id),
+                            alternate: self.coerce_expr_to_block(rhs, coalesce_block.scope_id),
+                            ty: rhs_type,
+                            span: binary_op.span,
+                        }));
+                        coalesce_block.push_stmt(lhs_decl_stmt);
+                        coalesce_block.push_expr(if_else);
+                        eprintln!("{}", self.block_to_string(&coalesce_block));
+                        return Ok(TypedExpr::Block(coalesce_block));
+                    }
                     _ => {}
                 };
                 let lhs = self.eval_expr(binary_op.lhs, scope_id, None)?;
-                let rhs = self.eval_expr(binary_op.rhs, scope_id, Some(lhs.get_type()))?;
+                let kind = binary_op.op_kind;
+                let expected_rhs_type =
+                    if kind.is_symmetric_binop() { Some(lhs.get_type()) } else { None };
+                let rhs = self.eval_expr(binary_op.rhs, scope_id, expected_rhs_type)?;
 
                 // FIXME: Typechecker We are not really typechecking binary operations at all.
                 //        This is not enough; we need to check that the lhs is actually valid
                 //        for this operation first
-                if self.typecheck_types(lhs.get_type(), rhs.get_type(), scope_id).is_err() {
-                    return make_fail_span("operand types did not match", binary_op.span);
+                if kind.is_symmetric_binop() {
+                    if self.typecheck_types(lhs.get_type(), rhs.get_type(), scope_id).is_err() {
+                        return make_fail_span("operand types did not match", binary_op.span);
+                    }
                 }
 
-                let kind = binary_op.op_kind;
                 let result_type = match kind {
                     BinaryOpKind::Add => lhs.get_type(),
                     BinaryOpKind::Subtract => lhs.get_type(),
@@ -2286,8 +2360,11 @@ impl TypedModule {
                     BinaryOpKind::GreaterEqual => BOOL_TYPE_ID,
                     BinaryOpKind::And => lhs.get_type(),
                     BinaryOpKind::Or => lhs.get_type(),
-                    BinaryOpKind::Equals => BOOL_TYPE_ID,
-                    BinaryOpKind::NotEquals => BOOL_TYPE_ID,
+                    BinaryOpKind::Equals => panic!("equals should be special-cased by now"),
+                    BinaryOpKind::NotEquals => panic!("not equals should be special-cased by now"),
+                    BinaryOpKind::OptionalElse => {
+                        panic!("optional else should be special-cased by now")
+                    }
                 };
                 let expr = TypedExpr::BinaryOp(BinaryOp {
                     kind,
