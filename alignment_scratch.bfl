@@ -1,0 +1,4 @@
+fn main(): int {
+  val x = { a: 'x', b: 'x', c: 'x', z: 'x' };
+  0
+}
