@@ -34,8 +34,6 @@
   - [x] Built-in .as<Tag> or panic
   - [x] syntax: optional pipe separator
   - [x] Enum methods
-- [ ] Fix scoping by using a fully-qualified identifier id that includes a namespace path
-rather than just a name, where appropriate. For example, we resolve methods on types just by finding a namespace with the same name as the type. We need to find a namespace with the same fully-qualified name as the type!
 - [ ] Recursive structs and enums (with indirection)
 - [ ] Generic structs and enums
 - [x] TypedIf allow exprs instead of requiring blocks (did not do; instead improved handling of unit blocks)
