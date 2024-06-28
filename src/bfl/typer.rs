@@ -2329,7 +2329,6 @@ impl TypedModule {
                         }));
                         coalesce_block.push_stmt(lhs_decl_stmt);
                         coalesce_block.push_expr(if_else);
-                        eprintln!("{}", self.block_to_string(&coalesce_block));
                         return Ok(TypedExpr::Block(coalesce_block));
                     }
                     _ => {}
