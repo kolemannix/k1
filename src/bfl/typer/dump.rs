@@ -194,6 +194,12 @@ impl TypedModule {
                 Ok(())
             }
             Type::Never => writ.write_str("never"),
+            Type::OpaqueAlias(opaque) => {
+                writ.write_str(self.get_ident_str(opaque.type_defn_info.name))?;
+                writ.write_str("(")?;
+                self.display_type_id(opaque.aliasee, writ)?;
+                writ.write_str(")")
+            }
         }
     }
 

@@ -1,0 +1,10 @@
+
+type Turtle = { child: Turtle* }
+
+fn main(): int {
+  val x: Foo = 42;
+
+  0
+}
+
+type Foo = { x: Entry }
