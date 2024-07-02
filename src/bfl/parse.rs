@@ -57,6 +57,12 @@ impl From<ParsedExpressionId> for ParsedId {
     }
 }
 
+impl From<ParsedTypeDefnId> for ParsedId {
+    fn from(id: ParsedTypeDefnId) -> Self {
+        ParsedId::TypeDefn(id)
+    }
+}
+
 impl ParsedId {
     pub fn is_definition(&self) -> bool {
         match self {
@@ -573,6 +579,11 @@ pub struct ParsedDotMemberAccess {
     pub span: SpanId,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypeModifier {
+    Alias,
+}
+
 #[derive(Debug, Clone)]
 pub enum ParsedTypeExpression {
     Unit(SpanId),
@@ -660,6 +671,7 @@ pub struct ParsedTypeDefn {
     pub value_expr: ParsedTypeExpressionId,
     pub span: SpanId,
     pub id: ParsedTypeDefnId,
+    pub is_alias: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1461,6 +1473,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             }
         }
         Ok(Some(result))
+    }
+
+    fn get_token_chars(&self, token: Token) -> &str {
+        Parser::tok_chars(&self.module.spans, self.source(), token)
     }
 
     fn parse_base_type_expression(&mut self) -> ParseResult<Option<ParsedTypeExpressionId>> {
@@ -2394,6 +2410,23 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let Some(keyword_type) = keyword_type else {
             return Ok(None);
         };
+
+        // Parse modifiers
+        let mut modifiers = vec![];
+        loop {
+            let name_or_modifier = self.peek();
+            if name_or_modifier.kind != K::Ident {
+                break;
+            }
+            let text = self.get_token_chars(name_or_modifier);
+            if text == "alias" {
+                modifiers.push(TypeModifier::Alias);
+                self.tokens.advance()
+            } else {
+                break;
+            }
+        }
+
         let name = self.expect_eat_token(K::Ident)?;
         let equals = self.expect_eat_token(K::Equals)?;
         let type_expr = Parser::expect("Type expression", equals, self.parse_type_expression())?;
@@ -2405,6 +2438,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             value_expr: type_expr,
             span,
             id: ParsedTypeDefnId(0),
+            is_alias: false,
         });
         Ok(Some(type_defn_id))
     }

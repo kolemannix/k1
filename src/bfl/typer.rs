@@ -139,6 +139,13 @@ impl TypedEnum {
 }
 
 #[derive(Debug, Clone)]
+pub struct OpaqueTypeAlias {
+    pub ast_id: ParsedTypeDefnId,
+    pub aliasee: TypeId,
+    pub type_defn_info: TypeDefnInfo,
+}
+
+#[derive(Debug, Clone)]
 pub enum Type {
     Unit,
     Char,
@@ -157,6 +164,7 @@ pub enum Type {
     // of reasons that make programming nice. Unlike in Rust :()
     EnumVariant(TypedEnumVariant),
     Never,
+    OpaqueAlias(OpaqueTypeAlias),
 }
 
 impl Type {
@@ -172,6 +180,7 @@ impl Type {
             Type::Enum(e) => Some(e.ast_node),
             Type::EnumVariant(_ev) => None,
             Type::Never => None,
+            Type::OpaqueAlias(opaque) => Some(opaque.ast_id.into()),
         }
     }
 
@@ -280,6 +289,7 @@ impl Type {
             Type::Enum(e) => e.type_defn_info.as_ref(),
             Type::EnumVariant(_) => None,
             Type::Never => None,
+            Type::OpaqueAlias(opaque) => Some(&opaque.type_defn_info),
         }
     }
 }
@@ -1018,21 +1028,37 @@ impl Variables {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Symbol {
+    pub namespace: NamespaceId,
+    pub identifier: IdentifierId,
+}
+
 #[derive(Default, Debug)]
 pub struct Types {
     types: Vec<Type>,
 }
 
 impl Types {
-    fn add_type(&mut self, typ: Type) -> TypeId {
-        for (existing_type_id, existing_type) in self.iter() {
-            if TypedModule::type_eq(existing_type, &typ) {
-                return existing_type_id;
+    fn add_type_ext(&mut self, typ: Type, dedupe: bool) -> TypeId {
+        if dedupe {
+            for (existing_type_id, existing_type) in self.iter() {
+                if TypedModule::type_eq(existing_type, &typ) {
+                    return existing_type_id;
+                }
             }
         }
         let id = self.types.len();
         self.types.push(typ);
         TypeId(id as u32)
+    }
+
+    fn add_type_no_dedupe(&mut self, typ: Type) -> TypeId {
+        self.add_type_ext(typ, false)
+    }
+
+    fn add_type(&mut self, typ: Type) -> TypeId {
+        self.add_type_ext(typ, true)
     }
 
     pub fn get(&self, type_id: TypeId) -> &Type {
@@ -1073,6 +1099,7 @@ impl Types {
             Type::Enum(_) => false,
             Type::EnumVariant(_) => false,
             Type::Never => false,
+            Type::OpaqueAlias(opaque) => self.is_type_generic(opaque.aliasee),
         }
     }
 
@@ -1092,6 +1119,7 @@ impl Types {
             Type::Enum(_) => None,
             Type::EnumVariant(_) => None,
             Type::Never => None,
+            Type::OpaqueAlias(_opaque) => None,
         }
     }
 
@@ -1240,6 +1268,15 @@ impl TypedModule {
         scope_id: ScopeId,
     ) -> TyperResult<TypeId> {
         let parsed_type_defn = self.ast.get_type_defn(parsed_type_defn_id).clone();
+        let is_pending =
+            self.scopes.find_pending_type_defn(scope_id, parsed_type_defn.name).is_some();
+        if !is_pending {
+            eprintln!(
+                "Short-circuit for already defined type: {}",
+                self.get_ident_str(parsed_type_defn.name)
+            );
+            return Ok(self.scopes.find_type(scope_id, parsed_type_defn.name).unwrap());
+        }
         let type_id = self.eval_type_expr(parsed_type_defn.value_expr, scope_id)?;
         match self.types.get_type_mut(type_id) {
             Type::Struct(struct_defn) => {
@@ -1252,6 +1289,7 @@ impl TypedModule {
                     Some(TypeDefnInfo { name: parsed_type_defn.name, scope: scope_id });
                 Ok(type_id)
             }
+            Type::Array(_array) => Ok(type_id),
             _ => make_fail_span(
                 "Invalid rhs for named type definition",
                 self.ast.get_type_expression_span(parsed_type_defn.value_expr),
@@ -1294,17 +1332,35 @@ impl TypedModule {
                 let type_id = self.types.add_type(Type::Struct(struct_defn));
                 Ok(type_id)
             }
-            ParsedTypeExpression::Name(ident, span) => {
-                if Some(*ident) == self.get_identifier("never") {
+            ParsedTypeExpression::Name(name, span) => {
+                if Some(*name) == self.get_identifier("never") {
                     Ok(NEVER_TYPE_ID)
                 } else {
-                    let ty_ref = self.scopes.find_type(scope_id, *ident);
-                    ty_ref.ok_or_else(|| {
-                        make_error(
-                            format!("No type named {} is in scope", self.get_ident_str(*ident)),
-                            *span,
-                        )
-                    })
+                    let name = *name;
+                    match self.scopes.find_type(scope_id, name) {
+                        Some(named_type) => Ok(named_type),
+                        None => match self.scopes.find_pending_type_defn(scope_id, name) {
+                            None => make_fail_span(
+                                format!("No type named {} is in scope", self.get_ident_str(name)),
+                                *span,
+                            ),
+                            Some(pending_defn_id) => {
+                                eprintln!(
+                                    "Recursing into pending type defn {}",
+                                    self.get_ident_str(
+                                        self.ast.get_type_defn(pending_defn_id).name
+                                    )
+                                );
+                                let type_id = self.eval_type_defn(pending_defn_id, scope_id)?;
+                                let removed = self.scopes.remove_pending_type_defn(scope_id, name);
+                                if !removed {
+                                    panic!("Failed to remove pending type defn");
+                                }
+                                // nocommit Delete the pending type defn
+                                Ok(type_id)
+                            }
+                        },
+                    }
                 }
             }
             ParsedTypeExpression::TagName(ident, _span) => {
@@ -4782,14 +4838,21 @@ impl TypedModule {
                 Ok(())
             }
             ParsedId::TypeDefn(type_defn_id) => {
-                // We can just do type defs in the declaration phase, so we skip them in the 2nd pass
-                self.eval_type_defn(type_defn_id, scope_id)?;
-                Ok(())
+                let parsed_type_defn = self.ast.get_type_defn(type_defn_id).clone();
+                let added = self
+                    .scopes
+                    .get_scope_mut(scope_id)
+                    .add_pending_type_defn(parsed_type_defn.name, type_defn_id);
+                if !added {
+                    make_fail_span(
+                        &format!("Type {} exists", self.get_ident_str(parsed_type_defn.name)),
+                        parsed_type_defn.span,
+                    )
+                } else {
+                    Ok(())
+                }
             }
             ParsedId::Ability(parsed_ability_id) => {
-                // Typechecking an ability definition means declaring the functions, registering the ability,
-                // and the fact that it contains those functions. Also making sure they are valid? Do they have to take
-                // at least one Self arg?
                 self.eval_ability_defn(parsed_ability_id, scope_id)?;
                 Ok(())
             }
@@ -5024,8 +5087,8 @@ impl TypedModule {
                 self.eval_function_body(*function_declaration_id)?;
                 Ok(())
             }
-            ParsedId::TypeDefn(_type_defn) => {
-                // Nothing to do in this phase for a type definition
+            ParsedId::TypeDefn(type_defn_id) => {
+                let _type_id = self.eval_type_defn(type_defn_id, scope_id)?;
                 Ok(())
             }
             ParsedId::Ability(_ability) => {
