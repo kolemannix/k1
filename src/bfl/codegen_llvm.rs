@@ -1257,6 +1257,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             .as_type();
                         Ok(LlvmVoidType { void_type: self.ctx.void_type(), di_type }.into())
                     }
+                    Type::OpaqueAlias(opaque) => self.codegen_type(opaque.aliasee),
                     other => Err(CodegenError {
                         message: format!(
                             "codegen_type for type dropped through unexpectedly: {:?}",

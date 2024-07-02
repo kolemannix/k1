@@ -34,6 +34,13 @@
   - [x] Built-in .as<Tag> or panic
   - [x] syntax: optional pipe separator
   - [x] Enum methods
+- [ ] Type cleanup
+  - named struct and enum fix
+  - Newtypes (opaque)
+  - Aliases
+  - Order of eval (topology through defer/skip)
+- Recursive types (depends on type cleanup)
+- Require named args; and allow anonymous
 - [ ] Recursive structs and enums (with indirection)
 - [ ] Generic structs and enums
 - [x] TypedIf allow exprs instead of requiring blocks (did not do; instead improved handling of unit blocks)
