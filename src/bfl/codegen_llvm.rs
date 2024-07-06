@@ -725,7 +725,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             .ctx
             .struct_type(&[boolean_type.value_basic_type(), inner_type.value_basic_type()], false);
         let size = SizeInfo::size_of_aggregate(&[boolean_type.size_info(), inner_type.size_info()]);
-        // FIXME: Do our own padding, so we have correct offset to pass in
+        // FIXME(padding): Do our own padding, so we have correct offset to pass in
         let di_type = self.make_debug_struct_type(
             &format!("optional_{}", type_id.to_string()),
             SpanId::NONE,
@@ -1269,11 +1269,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
         }?;
         self.llvm_types.borrow_mut().insert(type_id, codegened_type.clone());
-        eprintln!(
-            "Size of '{}': {:?}",
-            self.module.type_id_to_string(type_id),
-            codegened_type.size_info()
-        );
+        // eprintln!(
+        //     "Size of '{}': {:?}",
+        //     self.module.type_id_to_string(type_id),
+        //     codegened_type.size_info()
+        // );
         Ok(codegened_type)
     }
 
@@ -1859,6 +1859,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     }
                     BinaryOpKind::And => self.builder.build_and(lhs_value, rhs_value, "and"),
                     BinaryOpKind::Or => self.builder.build_or(lhs_value, rhs_value, "or"),
+                    BinaryOpKind::Rem => {
+                        self.builder.build_int_signed_rem(lhs_value, rhs_value, "rem")
+                    }
                     BinaryOpKind::Equals => {
                         self.builder.build_int_compare(IntPredicate::EQ, lhs_value, rhs_value, "eq")
                     }

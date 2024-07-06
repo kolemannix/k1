@@ -582,6 +582,7 @@ pub struct ParsedDotMemberAccess {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TypeModifier {
     Alias,
+    Opaque,
 }
 
 #[derive(Debug, Clone)]
@@ -666,12 +667,43 @@ pub struct ParsedConstant {
 }
 
 #[derive(Debug, Clone)]
+pub struct ParsedTypeDefnFlags(u32);
+impl ParsedTypeDefnFlags {
+    pub fn new(alias: bool, opaque: bool) -> Self {
+        let mut s = Self(0);
+        if alias {
+            s.set_alias();
+        }
+        if opaque {
+            s.set_opaque();
+        }
+        s
+    }
+
+    pub fn set_alias(&mut self) {
+        self.0 |= 1;
+    }
+
+    pub fn set_opaque(&mut self) {
+        self.0 |= 2;
+    }
+
+    pub fn is_alias(&self) -> bool {
+        self.0 & 1 != 0
+    }
+
+    pub fn is_opaque(&self) -> bool {
+        self.0 & 2 != 0
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct ParsedTypeDefn {
     pub name: IdentifierId,
     pub value_expr: ParsedTypeExpressionId,
     pub span: SpanId,
     pub id: ParsedTypeDefnId,
-    pub is_alias: bool,
+    pub flags: ParsedTypeDefnFlags,
 }
 
 #[derive(Debug, Clone)]
@@ -2412,7 +2444,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         };
 
         // Parse modifiers
-        let mut modifiers = vec![];
+        let mut flags = ParsedTypeDefnFlags::new(false, false);
         loop {
             let name_or_modifier = self.peek();
             if name_or_modifier.kind != K::Ident {
@@ -2420,7 +2452,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             }
             let text = self.get_token_chars(name_or_modifier);
             if text == "alias" {
-                modifiers.push(TypeModifier::Alias);
+                flags.set_alias();
+                self.tokens.advance()
+            } else if text == "opaque" {
+                flags.set_opaque();
                 self.tokens.advance()
             } else {
                 break;
@@ -2437,8 +2472,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             name,
             value_expr: type_expr,
             span,
-            id: ParsedTypeDefnId(0),
-            is_alias: false,
+            id: ParsedTypeDefnId(0), // The id is set by add_typedefn
+            flags,
         });
         Ok(Some(type_defn_id))
     }

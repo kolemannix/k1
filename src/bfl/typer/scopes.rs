@@ -4,7 +4,7 @@ use parse_display::Display;
 use std::collections::HashMap;
 
 use crate::{
-    parse::{ParsedTypeDefn, ParsedTypeDefnId},
+    parse::ParsedTypeDefnId,
     typer::{AbilityId, FunctionId, IdentifierId, NamespaceId, TypeId, VariableId},
 };
 
@@ -42,9 +42,14 @@ pub struct Scopes {
 }
 
 impl Scopes {
-    pub fn make(root_ident: IdentifierId) -> Self {
-        let scopes = vec![Scope::make(ScopeType::Namespace, Some(root_ident))];
-        Scopes { scopes }
+    pub fn make() -> Self {
+        Scopes { scopes: Vec::new() }
+    }
+
+    pub fn add_root_scope(&mut self, name: Option<IdentifierId>) -> ScopeId {
+        debug_assert!(self.scopes.is_empty());
+        self.scopes.push(Scope::make(ScopeType::Namespace, name));
+        0 as ScopeId
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (ScopeId, &Scope)> {
@@ -203,6 +208,7 @@ pub struct Scope {
     pub namespaces: HashMap<IdentifierId, NamespaceId>,
     pub types: HashMap<IdentifierId, TypeId>,
     pub abilities: HashMap<IdentifierId, AbilityId>,
+    // FIXME(padding): Add abilities here so they participate in the type defn phase
     pub pending_type_defns: HashMap<IdentifierId, ParsedTypeDefnId>,
     pub parent: Option<ScopeId>,
     pub children: Vec<ScopeId>,

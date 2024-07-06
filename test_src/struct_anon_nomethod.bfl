@@ -1,0 +1,26 @@
+type Point = { x: int, y: int }
+namespace Point {
+  fn sum(self: Point): int {
+      self.x + self.y
+  }
+}
+
+type alias Point2 = { x: int, y: int }
+namespace Point2 {
+  fn sum(self: Point2): int {
+    self.x + self.y
+  }
+}
+
+fn main(): int {
+  // Should work because Point is a proper type
+  val p: Point = { x: 0, y: 0 };
+  p.sum();
+
+  // Should not work because Point2 is a type alias
+  val p2: Point2 = { x: 0, y: 0 };
+  p2.sum();
+
+  0
+}
+// errormsg: Anonymous structs currently have no methods

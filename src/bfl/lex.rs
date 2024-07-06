@@ -140,6 +140,7 @@ pub enum TokenKind {
     Slash,
     LineComment,
 
+    // Symbols
     OpenParen,
     CloseParen,
     OpenBracket,
@@ -159,6 +160,7 @@ pub enum TokenKind {
     QuestionMark,
     Pipe,
     Ampersand,
+    Percent,
 
     DoubleQuote,
     SingleQuote,
@@ -236,6 +238,7 @@ impl TokenKind {
             K::QuestionMark => Some("?"),
             K::Pipe => Some("|"),
             K::Ampersand => Some("&"),
+            K::Percent => Some("%"),
 
             K::Plus => Some("+"),
             K::Minus => Some("-"),
@@ -278,6 +281,7 @@ impl TokenKind {
             '?' => Some(K::QuestionMark),
             '|' => Some(K::Pipe),
             '&' => Some(K::Ampersand),
+            '%' => Some(K::Percent),
             _ => None,
         }
     }

@@ -1,0 +1,16 @@
+type alias opaque UserId = int
+namespace UserId {
+  // TODO: The type equivalence int == UserId is available
+  //      only in this namespace.
+  // So we can write constructors
+}
+type alias opaque CaseId = int
+
+fn main(): int {
+  val user_id: UserId = 0;
+  val case_id: CaseId = 0;
+  user_id == case_id;
+
+  0
+}
+// errormsg: Local variable type mismatch: Expected 'UserId(int)' but got int

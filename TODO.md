@@ -1,3 +1,5 @@
+## Videos
+
 # Project Completion Checklist
 
 - [x] QoL before rest of pattern matching
@@ -9,7 +11,6 @@
 - [x] 'crash' w/ line no for option unwrap
 - [x] 'crash' w/ line no for bad enum cast
 - [x] Match expected errors from test programs
-- [ ] floating point f32 and f64
 - [x] 'never' type
   - [x] typechecking / codegen
   - [x] if/else
@@ -34,14 +35,13 @@
   - [x] Built-in .as<Tag> or panic
   - [x] syntax: optional pipe separator
   - [x] Enum methods
-- [ ] Type cleanup
-  - named struct and enum fix
+- [x] Type cleanup
+  - [x] Order of eval (topology through defer/skip)
+  - [x] named struct and enum fix
   - Newtypes (opaque)
-  - Aliases
-  - Order of eval (topology through defer/skip)
-- Recursive types (depends on type cleanup)
+  - [x] Aliases
+- [ ] Recursive types (depends on type cleanup)
 - Require named args; and allow anonymous
-- [ ] Recursive structs and enums (with indirection)
 - [ ] Generic structs and enums
 - [x] TypedIf allow exprs instead of requiring blocks (did not do; instead improved handling of unit blocks)
 - [x] Remove binding 'if' since we have pattern matching
@@ -50,9 +50,18 @@
 - [x] Type Ascriptions
 - [x] Enforce unique function name in namespace!
 - [x] Optional coalescing binary operator '?'
-- [ ] Optional coalescing accessor (x?.y) and ??
+- [ ] More type expressions! (this was a big part of my original point)
+  - [ ] Intersect structs
+  - [ ] Union structs
+  - [ ] return type of function
+  - [ ] inner type of optional
+- [ ] floating point f32 and f64
+- [ ] Optional coalescing accessor (x?.y)
+- [ ] Typecheck the binary ops
+- [ ] Rest of the binary ops
 - [ ] Exhaustive pattern matching
 - [ ] Pure lambdas with ->
+- [ ] slices
 - [ ] No closures for now
 - [ ] Make demo readme
 
@@ -61,7 +70,7 @@
 
 ## Ability Derivation
 - [ ] Ability derivation
-  - [ ] I think you have to cache and commit the generated code, or you get the slow proc macros or slow implicit derivation problems that Scala has. This is first-class codegen, not 'macros'?
+- [ ] I think you have to cache and commit the generated code, or you get the slow proc macros or slow implicit derivation problems that Scala has. This is first-class codegen, not 'macros'?
 
 ## Memory Management story
 - [ ] Figure out the pointer/reference story
