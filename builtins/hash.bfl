@@ -1,0 +1,80 @@
+type Elem = { key: int, value: int }
+type HashMap = {
+  size: int,
+  slots: Array<Elem?>,
+}
+
+namespace HashMap {
+  fn new(): HashMap {
+    // Fixme: why doesn't this infer?
+    // val slots: Array<Elem> = Array::new(16);
+    val slots = Array::new<Elem?>(16);
+    { size: 0, slots: slots }
+  }
+
+  fn insert(self: HashMap*, key: int, value: int): unit {
+    val index = key % self.slots.length();
+    val elem = { key: key, value: value };
+    val slot = self.slots[index];
+    when slot {
+      | None -> {
+        self.slots[index] = Some(elem);
+        self.size = self.size + 1;
+      }
+      | Some({ key: existingKey, value: _ }) -> {
+        if existingKey == key {
+          self.slots[index] = Some(elem);
+        } else {
+          mut probe_index = index;
+          mut done = false;
+          while not done {
+            probe_index = probe_index + 1;
+            if probe_index == self.slots.length() {
+              probe_index = 0;
+            };
+            if self.slots[probe_index] is None {
+              self.slots[probe_index] = Some(elem);
+              self.size = self.size + 1;
+              done = true;
+            };
+          };
+        }
+      }
+    }
+  }
+
+  fn dump(self: HashMap): unit {
+    print("Capacity: ");
+    printInt(self.slots.capacity());
+    println("");
+    for self.slots do {
+      printInt(it_index);
+      print(" ");
+      when it {
+        | None -> println("empty")
+        | Some({ key, value }) -> {
+          printInt(key);
+          print(" -> ");
+          printInt(value);
+          println("");
+        }
+      }
+    }
+  }
+
+}
+
+
+fn test(): unit {
+  val myMap: HashMap* = &HashMap::new();
+  myMap.insert(1, 2);
+  myMap.insert(1, 3);
+  myMap.insert(2, 4);
+  myMap.insert(18, 4);
+  (*myMap).dump();
+}
+
+fn main(): int {
+  test();
+  0
+}
