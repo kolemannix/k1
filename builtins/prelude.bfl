@@ -4,6 +4,11 @@ extern fn _bfl_intToChar(i: int): char
 extern fn _bfl_readFileToString(path: string): string
 extern fn _bfl_crash(reason: string*, file: string*, line: int): never
 
+type alias opaque RawPointer = int
+
+// extern fn _bfl_malloc(size: int): RawPointer
+// extern fn _bfl_free(ptr: RawPointer): unit
+
 ability Equals {
   fn equals(self: Self, other: Self): bool
 }

@@ -1,16 +1,12 @@
-fn is_digit(c: char): bool {
+fn as_digit(c: char): int? {
   val i_code = c.toInt();
-  // TODO: lte gte
-  val ret = i_code > 47 and i_code < 58;
-  ret
+  val ret = i_code >= 48 and i_code <= 57;
+  if ret {
+    i_code - 48
+  } else {
+    None
+  }
 }
-
-fn as_digit(c: char): int {
-  val i_code = c.toInt();
-  i_code - 48
-}
-
-val NEW_LINE: int = 10;
 
 fn main(): int {
   val input = Files::readToString("/Users/knix/dev/bfl/dogfood/aoc/1.txt");
@@ -22,16 +18,16 @@ fn main(): int {
   mut first = true;
   for c in input do {
     val i_code = c.toInt();
-    if i_code == NEW_LINE {
+    if c == '\n' {
       line = line + 1;
       first = true;
     };
-    if is_digit(c) {
+    if as_digit(c) is Some(i) {
       if first {
-        digits.push([as_digit(c)]);
+        digits.push([i]);
         first = false;
       } else {
-        digits[line].push(as_digit(c));
+        digits[line].push(i);
       };
     };
   };

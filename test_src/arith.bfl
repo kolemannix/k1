@@ -1,9 +1,23 @@
 fn main(): int {
   val x = (1 * 100 * 2) / 3;
+  assert(x == 66);
+
+  assert(50 >= 50);
+  assert(51 >= 50);
+
+  assert(50 <= 50);
+  assert(49 <= 50);
+
   val y = x - 14;
+
   assert(y == 52);
   assert(y > 51);
   assert(y < 53);
+
+  assert(2 % 2 == 0);
+  assert(2 % 3 == 2);
+  assert(-1 % 2 == -1);
+  assert(-10 % 2 == 0);
+
   0
 }
-// 0

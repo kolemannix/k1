@@ -40,7 +40,7 @@ impl Display for TypedModule {
     }
 }
 
-// Dumping
+/// Dumping impl
 impl TypedModule {
     pub fn make_scope_name(&self, scope: &Scope) -> String {
         let mut name = match scope.name {
@@ -389,7 +389,7 @@ impl TypedModule {
                 self.display_expr(&if_expr.condition, writ, indentation)?;
                 writ.write_str(" ")?;
                 self.display_block(&if_expr.consequent, writ, indentation)?;
-                if !if_expr.alternate.is_unit_block() {
+                if !if_expr.alternate.is_single_unit_block() {
                     writ.write_str(" else ")?;
                     self.display_block(&if_expr.alternate, writ, indentation)?;
                 }

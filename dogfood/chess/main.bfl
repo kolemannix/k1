@@ -1,0 +1,113 @@
+type Square = enum
+  Blank
+  | Pawn
+  | Knight
+  | Bishop
+  | Rook
+  | Queen
+  | King
+
+fn as_digit(c: char): int? {
+  val i_code = c.toInt();
+  val ret = i_code >= 48 and i_code <= 57;
+  if ret {
+    i_code - 48
+  } else {
+    None
+  }
+}
+
+fn from_xy(x: int, y: int): int {
+  x + y * 8
+}
+fn from_name(s: string): int {
+  val file = when s[0] {
+    | 'a' -> 0
+    | 'b' -> 1
+    | 'c' -> 2
+    | 'd' -> 3
+    | 'e' -> 4
+    | 'f' -> 5
+    | 'g' -> 6
+    | 'h' -> 7
+  };
+  val rank = as_digit(s[1])! - 1;
+  file + rank * 8
+}
+
+fn dump(board: Array<Square>): unit {
+  for square in board do {
+    when square {
+      | .Blank -> print("-")
+      | .Pawn -> print("P")
+      | .Knight -> print("N")
+      | .Bishop -> print("B")
+      | .Rook -> print("R")
+      | .Queen -> print("Q")
+      | .King -> print("K")
+    };
+    if it_index % 8 == 7 {
+      println("");
+    };
+  }
+}
+
+fn startPos(): Array<Square> {
+  val board: Array<Square> = Array::new<Square>(64);
+  for board do {
+    board[it_index] = .Blank;
+  };
+  board[0] = .Rook;
+  board[1] = .Knight;
+  board[2] = .Bishop;
+  board[3] = .Queen;
+  board[4] = .King;
+  board[5] = .Bishop;
+  board[6] = .Knight;
+  board[7] = .Rook;
+  board[8] = .Pawn;
+  board[9] = .Pawn;
+  board[10] = .Pawn;
+  board[11] = .Pawn;
+  board[12] = .Pawn;
+  board[13] = .Pawn;
+  board[14] = .Pawn;
+  board[15] = .Pawn;
+  board[48] = .Pawn;
+  board[49] = .Pawn;
+  board[50] = .Pawn;
+  board[51] = .Pawn;
+  board[52] = .Pawn;
+  board[53] = .Pawn;
+  board[54] = .Pawn;
+  board[55] = .Pawn;
+  board[56] = .Rook;
+  board[57] = .Knight;
+  board[58] = .Bishop;
+  board[59] = .Queen;
+  board[60] = .King;
+  board[61] = .Bishop;
+  board[62] = .Knight;
+  board[63] = .Rook;
+  board
+}
+
+fn main(): int {
+  val board: Array<Square> = startPos();
+  dump(board);
+
+  val move1 = {
+    from: from_name("e2"),
+    to: from_name("e4")
+  };
+  printInt(move1.from);
+  println("");
+  printInt(move1.to);
+
+  board[move1.to] = board[move1.from];
+  board[move1.from] = .Blank;
+  println("");
+  dump(board);
+
+  0
+}

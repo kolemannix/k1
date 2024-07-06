@@ -72,6 +72,14 @@ pub struct StructType {
 }
 
 impl StructType {
+    pub fn is_named(&self) -> bool {
+        self.type_defn_info.is_some()
+    }
+
+    pub fn is_anonymous(&self) -> bool {
+        self.type_defn_info.is_none()
+    }
+
     pub fn find_field(&self, field_name: IdentifierId) -> Option<(usize, &StructTypeField)> {
         self.fields.iter().enumerate().find(|(_, field)| field.name == field_name)
     }
@@ -393,15 +401,8 @@ impl TypedBlock {
         self.push_stmt(TypedStmt::Expr(Box::new(expr)))
     }
 
-    pub fn is_unit_block(&self) -> bool {
-        if self.statements.len() == 1 {
-            if let TypedStmt::Expr(expr) = &self.statements[0] {
-                if let TypedExpr::Unit(_) = &**expr {
-                    return true;
-                }
-            }
-        }
-        false
+    pub fn is_single_unit_block(&self) -> bool {
+        self.statements.len() == 1 && self.statements[0].is_unit_expr()
     }
 }
 
@@ -505,6 +506,7 @@ pub enum BinaryOpKind {
     Subtract,
     Multiply,
     Divide,
+    Rem,
     Less,
     LessEqual,
     Greater,
@@ -523,6 +525,7 @@ impl Display for BinaryOpKind {
             BinaryOpKind::Subtract => f.write_char('-'),
             BinaryOpKind::Multiply => f.write_char('*'),
             BinaryOpKind::Divide => f.write_char('/'),
+            BinaryOpKind::Rem => f.write_char('%'),
             BinaryOpKind::Less => f.write_char('<'),
             BinaryOpKind::Greater => f.write_char('>'),
             BinaryOpKind::LessEqual => f.write_str("<="),
@@ -540,6 +543,7 @@ impl BinaryOpKind {
     pub fn precedence(&self) -> usize {
         use BinaryOpKind as B;
         match self {
+            B::Rem => 101,
             B::Multiply | B::Divide => 100,
             B::Add | B::Subtract => 90,
             B::Less | B::LessEqual | B::Greater | B::GreaterEqual | B::Equals | B::NotEquals => 80,
@@ -557,11 +561,14 @@ impl BinaryOpKind {
             TokenKind::Slash => Some(BinaryOpKind::Divide),
             TokenKind::OpenAngle => Some(BinaryOpKind::Less),
             TokenKind::CloseAngle => Some(BinaryOpKind::Greater),
+            TokenKind::LessThanEqual => Some(BinaryOpKind::LessEqual),
+            TokenKind::GreaterThanEqual => Some(BinaryOpKind::GreaterEqual),
             TokenKind::KeywordAnd => Some(BinaryOpKind::And),
             TokenKind::KeywordOr => Some(BinaryOpKind::Or),
             TokenKind::EqualsEquals => Some(BinaryOpKind::Equals),
             TokenKind::BangEquals => Some(BinaryOpKind::NotEquals),
             TokenKind::QuestionMark => Some(BinaryOpKind::OptionalElse),
+            TokenKind::Percent => Some(BinaryOpKind::Rem),
             _ => None,
         }
     }
@@ -572,6 +579,7 @@ impl BinaryOpKind {
             BinaryOpKind::Subtract => true,
             BinaryOpKind::Multiply => true,
             BinaryOpKind::Divide => true,
+            BinaryOpKind::Rem => true,
             BinaryOpKind::Less => true,
             BinaryOpKind::LessEqual => true,
             BinaryOpKind::Greater => true,
@@ -906,6 +914,15 @@ impl TypedStmt {
             TypedStmt::WhileLoop(_) => UNIT_TYPE_ID,
         }
     }
+
+    pub fn is_unit_expr(&self) -> bool {
+        if let TypedStmt::Expr(expr) = self {
+            if let TypedExpr::Unit(_) = **expr {
+                return true;
+            }
+        }
+        return false;
+    }
 }
 
 #[derive(Debug)]
@@ -985,6 +1002,15 @@ fn make_fail_span<A, T: AsRef<str>>(message: T, span: SpanId) -> TyperResult<A> 
     Err(make_error(message, span))
 }
 
+macro_rules! ferr {
+    ($span:expr, $($format_args:expr),*) => {
+        {
+            let s: String = format!($($format_args),*);
+            make_fail_span(&s, $span)
+        }
+    };
+}
+
 fn make_fail_ast_id<A, T: AsRef<str>>(
     ast: &ParsedModule,
     message: T,
@@ -1037,6 +1063,7 @@ pub struct Symbol {
 #[derive(Default, Debug)]
 pub struct Types {
     types: Vec<Type>,
+    type_defn_mapping: HashMap<ParsedTypeDefnId, TypeId>,
 }
 
 impl Types {
@@ -1053,10 +1080,6 @@ impl Types {
         TypeId(id as u32)
     }
 
-    fn add_type_no_dedupe(&mut self, typ: Type) -> TypeId {
-        self.add_type_ext(typ, false)
-    }
-
     fn add_type(&mut self, typ: Type) -> TypeId {
         self.add_type_ext(typ, true)
     }
@@ -1065,7 +1088,7 @@ impl Types {
         &self.types[type_id.0 as usize]
     }
 
-    pub fn get_type_mut(&mut self, type_id: TypeId) -> &mut Type {
+    pub fn get_mut(&mut self, type_id: TypeId) -> &mut Type {
         &mut self.types[type_id.0 as usize]
     }
 
@@ -1123,6 +1146,14 @@ impl Types {
         }
     }
 
+    fn add_type_defn_mapping(&mut self, type_defn_id: ParsedTypeDefnId, type_id: TypeId) -> bool {
+        self.type_defn_mapping.insert(type_defn_id, type_id).is_none()
+    }
+
+    fn find_type_defn_mapping(&mut self, type_defn_id: ParsedTypeDefnId) -> Option<TypeId> {
+        self.type_defn_mapping.get(&type_defn_id).copied()
+    }
+
     // FIXME: Slow
     fn get_type_for_tag(&mut self, tag_ident: IdentifierId) -> TypeId {
         for (type_id, typ) in self.iter() {
@@ -1154,10 +1185,10 @@ pub struct TypedModule {
 }
 
 impl TypedModule {
-    pub fn new(mut parsed_module: ParsedModule) -> TypedModule {
-        let root_ident = parsed_module.identifiers.intern("_root");
+    pub fn new(parsed_module: ParsedModule) -> TypedModule {
         let types = Types {
             types: vec![Type::Unit, Type::Char, Type::Int, Type::Bool, Type::String, Type::Never],
+            type_defn_mapping: HashMap::new(),
         };
         debug_assert!(matches!(*types.get(UNIT_TYPE_ID), Type::Unit));
         debug_assert!(matches!(*types.get(CHAR_TYPE_ID), Type::Char));
@@ -1165,8 +1196,8 @@ impl TypedModule {
         debug_assert!(matches!(*types.get(BOOL_TYPE_ID), Type::Bool));
         debug_assert!(matches!(*types.get(STRING_TYPE_ID), Type::String));
         debug_assert!(matches!(*types.get(NEVER_TYPE_ID), Type::Never));
-        let scopes = Scopes::make(root_ident);
-        let namespaces = vec![Namespace { name: root_ident, scope_id: scopes.get_root_scope_id() }];
+        let scopes = Scopes::make();
+        let namespaces = Vec::new();
         TypedModule {
             ast: parsed_module,
             functions: Vec::new(),
@@ -1203,6 +1234,10 @@ impl TypedModule {
         &self.namespaces[namespace_id as usize]
     }
 
+    pub fn get_namespace_scope(&self, namespace_id: NamespaceId) -> &Scope {
+        self.scopes.get_scope(self.get_namespace(namespace_id).scope_id)
+    }
+
     pub fn get_main_function_id(&self) -> Option<FunctionId> {
         let main = self.get_identifier("main").unwrap();
         self.scopes.get_root_scope().find_function(main)
@@ -1216,6 +1251,9 @@ impl TypedModule {
             (Type::Bool, Type::Bool) => true,
             (Type::String, Type::String) => true,
             (Type::Struct(r1), Type::Struct(r2)) => {
+                if r1.is_named() || r2.is_named() {
+                    return false;
+                }
                 if r1.fields.len() != r2.fields.len() {
                     return false;
                 }
@@ -1268,33 +1306,63 @@ impl TypedModule {
         scope_id: ScopeId,
     ) -> TyperResult<TypeId> {
         let parsed_type_defn = self.ast.get_type_defn(parsed_type_defn_id).clone();
-        let is_pending =
-            self.scopes.find_pending_type_defn(scope_id, parsed_type_defn.name).is_some();
-        if !is_pending {
+        let existing_defn = self.types.find_type_defn_mapping(parsed_type_defn_id);
+        if let Some(existing_defn) = existing_defn {
             eprintln!(
                 "Short-circuit for already defined type: {}",
                 self.get_ident_str(parsed_type_defn.name)
             );
-            return Ok(self.scopes.find_type(scope_id, parsed_type_defn.name).unwrap());
+            return Ok(existing_defn);
         }
-        let type_id = self.eval_type_expr(parsed_type_defn.value_expr, scope_id)?;
-        match self.types.get_type_mut(type_id) {
-            Type::Struct(struct_defn) => {
-                struct_defn.type_defn_info =
-                    Some(TypeDefnInfo { name: parsed_type_defn.name, scope: scope_id });
-                Ok(type_id)
+        // The type defn info is about a lot more than just definition site.
+        // It differentiates between simple names for shapes of structs and
+        // structs with an actual named-based identity that can have methods, implement traits, etc.
+        let passed_type_defn_info = if parsed_type_defn.flags.is_alias() {
+            None
+        } else {
+            Some(TypeDefnInfo { name: parsed_type_defn.name, scope: scope_id })
+        };
+        let rhs_type_id =
+            self.eval_type_expr(parsed_type_defn.value_expr, scope_id, passed_type_defn_info)?;
+        let type_id = if parsed_type_defn.flags.is_alias() {
+            if parsed_type_defn.flags.is_opaque() {
+                // Opaque alias
+                eprintln!(
+                    "Generating an opaque alias for a {}",
+                    self.type_id_to_string(rhs_type_id)
+                );
+                let alias = OpaqueTypeAlias {
+                    ast_id: parsed_type_defn_id.into(),
+                    aliasee: rhs_type_id,
+                    type_defn_info: TypeDefnInfo { name: parsed_type_defn.name, scope: scope_id },
+                };
+                Ok(self.types.add_type(Type::OpaqueAlias(alias)))
+            } else {
+                // Transparent alias
+                match self.types.get(rhs_type_id) {
+                    Type::Never => {
+                        make_fail_span("Why would you alias 'never'", parsed_type_defn.span)
+                    }
+                    _ => {
+                        eprintln!(
+                            "Creating transparent alias type defn for type: {}",
+                            self.type_id_to_string(rhs_type_id)
+                        );
+                        Ok(rhs_type_id)
+                    }
+                }
             }
-            Type::Enum(enum_defn) => {
-                enum_defn.type_defn_info =
-                    Some(TypeDefnInfo { name: parsed_type_defn.name, scope: scope_id });
-                Ok(type_id)
+        } else {
+            // 'New type' territory; must be a named struct/enum
+            match self.types.get(rhs_type_id) {
+                Type::Struct(_s) => Ok(rhs_type_id),
+                Type::Enum(_e) => Ok(rhs_type_id),
+                _other => {
+                    ferr!(parsed_type_defn.span, "Non-alias type definition must be a struct or enum; perhaps you meant to create an alias `type alias [opaque] <name> = <type>;`")
+                }
             }
-            Type::Array(_array) => Ok(type_id),
-            _ => make_fail_span(
-                "Invalid rhs for named type definition",
-                self.ast.get_type_expression_span(parsed_type_defn.value_expr),
-            ),
         }?;
+        self.types.add_type_defn_mapping(parsed_type_defn_id, type_id);
         if !self.scopes.add_type(scope_id, parsed_type_defn.name, type_id) {
             make_fail_span(
                 &format!("Type {} exists", self.get_ident_str(parsed_type_defn.name)),
@@ -1309,6 +1377,9 @@ impl TypedModule {
         &mut self,
         type_expr_id: ParsedTypeExpressionId,
         scope_id: ScopeId,
+        // If this is a type definition, this is the type definition info
+        // that should be attached to the type
+        type_defn_info: Option<TypeDefnInfo>,
     ) -> TyperResult<TypeId> {
         let base = match self.ast.type_expressions.get(type_expr_id) {
             ParsedTypeExpression::Unit(_) => Ok(UNIT_TYPE_ID),
@@ -1320,7 +1391,7 @@ impl TypedModule {
                 let struct_defn = struct_defn.clone();
                 let mut fields: Vec<StructTypeField> = Vec::new();
                 for (index, ast_field) in struct_defn.fields.iter().enumerate() {
-                    let ty = self.eval_type_expr(ast_field.ty, scope_id)?;
+                    let ty = self.eval_type_expr(ast_field.ty, scope_id, None)?;
                     fields.push(StructTypeField {
                         name: ast_field.name,
                         type_id: ty,
@@ -1328,7 +1399,7 @@ impl TypedModule {
                     })
                 }
                 let struct_defn =
-                    StructType { fields, type_defn_info: None, ast_node: type_expr_id.into() };
+                    StructType { fields, type_defn_info, ast_node: type_expr_id.into() };
                 let type_id = self.types.add_type(Type::Struct(struct_defn));
                 Ok(type_id)
             }
@@ -1356,7 +1427,6 @@ impl TypedModule {
                                 if !removed {
                                     panic!("Failed to remove pending type defn");
                                 }
-                                // nocommit Delete the pending type defn
                                 Ok(type_id)
                             }
                         },
@@ -1371,7 +1441,7 @@ impl TypedModule {
             ParsedTypeExpression::TypeApplication(ty_app) => {
                 if self.ast.identifiers.get_name(ty_app.base) == "Array" {
                     if ty_app.params.len() == 1 {
-                        let element_ty = self.eval_type_expr(ty_app.params[0], scope_id)?;
+                        let element_ty = self.eval_type_expr(ty_app.params[0], scope_id, None)?;
                         let array_ty = ArrayType { element_type: element_ty };
                         let type_id = self.types.add_type(Type::Array(array_ty));
                         Ok(type_id)
@@ -1383,13 +1453,13 @@ impl TypedModule {
                 }
             }
             ParsedTypeExpression::Optional(opt) => {
-                let inner_ty = self.eval_type_expr(opt.base, scope_id)?;
+                let inner_ty = self.eval_type_expr(opt.base, scope_id, None)?;
                 let optional_type = Type::Optional(OptionalType { inner_type: inner_ty });
                 let type_id = self.types.add_type(optional_type);
                 Ok(type_id)
             }
             ParsedTypeExpression::Reference(r) => {
-                let inner_ty = self.eval_type_expr(r.base, scope_id)?;
+                let inner_ty = self.eval_type_expr(r.base, scope_id, None)?;
                 let reference_type = Type::Reference(ReferenceType { inner_type: inner_ty });
                 let type_id = self.types.add_type(reference_type);
                 Ok(type_id)
@@ -1398,7 +1468,7 @@ impl TypedModule {
                 let e = e.clone();
                 let enum_type = Type::Enum(TypedEnum {
                     variants: Vec::new(),
-                    type_defn_info: None,
+                    type_defn_info,
                     ast_node: type_expr_id.into(),
                 });
                 let enum_type_id = self.types.add_type(enum_type);
@@ -1411,7 +1481,8 @@ impl TypedModule {
                     let payload_type_id = match &v.payload_expression {
                         None => None,
                         Some(payload_type_expr) => {
-                            let type_id = self.eval_type_expr(*payload_type_expr, scope_id)?;
+                            let type_id =
+                                self.eval_type_expr(*payload_type_expr, scope_id, None)?;
                             Some(type_id)
                         }
                     };
@@ -1423,16 +1494,16 @@ impl TypedModule {
                         payload: payload_type_id,
                     };
                     let variant_id = self.types.add_type(Type::EnumVariant(variant));
-                    let variant = self.types.get_type_mut(variant_id).expect_enum_variant_mut();
+                    let variant = self.types.get_mut(variant_id).expect_enum_variant_mut();
                     variant.my_type_id = variant_id;
                     variants.push(variant.clone());
                 }
-                self.types.get_type_mut(enum_type_id).expect_enum_mut().variants = variants;
+                self.types.get_mut(enum_type_id).expect_enum_mut().variants = variants;
                 Ok(enum_type_id)
             }
             ParsedTypeExpression::DotMemberAccess(dot_acc) => {
                 let dot_acc = dot_acc.clone();
-                let base_type = self.eval_type_expr(dot_acc.base, scope_id)?;
+                let base_type = self.eval_type_expr(dot_acc.base, scope_id, None)?;
                 match self.types.get(base_type) {
                     // You can do dot access on enums to get their variants
                     Type::Enum(e) => {
@@ -1453,9 +1524,9 @@ impl TypedModule {
                     // You can do dot access on Array to get its element type
                     Type::Array(_a) => todo!("array member access"),
                     // You can do dot access on Optionals to get out their 'inner' types
-                    Type::Optional(_o) => todo!(),
+                    Type::Optional(_o) => todo!("optional dot access for inner type"),
                     // You can do dot access on References to get out their 'inner' types
-                    Type::Reference(_r) => todo!(),
+                    Type::Reference(_r) => todo!("reference dot access for referenced type"),
                     _other => {
                         return make_fail_ast_id(
                             &self.ast,
@@ -1474,7 +1545,7 @@ impl TypedModule {
         &mut self,
         parsed_type_expr: ParsedTypeExpressionId,
     ) -> TyperResult<TypeId> {
-        let ty = self.eval_type_expr(parsed_type_expr, self.scopes.get_root_scope_id())?;
+        let ty = self.eval_type_expr(parsed_type_expr, self.scopes.get_root_scope_id(), None)?;
         match ty {
             UNIT_TYPE_ID => Ok(ty),
             CHAR_TYPE_ID => Ok(ty),
@@ -1864,10 +1935,11 @@ impl TypedModule {
     }
 
     fn coerce_block_to_unit_block(&mut self, block: &mut TypedBlock) {
-        // FIXME: Check if already unit
-        let span = block.statements.last().map(|s| s.get_span()).unwrap_or(block.span);
-        let unit_literal = TypedExpr::Unit(span);
-        block.push_expr(unit_literal);
+        if block.expr_type != UNIT_TYPE_ID {
+            let span = block.statements.last().map(|s| s.get_span()).unwrap_or(block.span);
+            let unit_literal = TypedExpr::Unit(span);
+            block.push_expr(unit_literal);
+        }
     }
 
     fn traverse_namespace_chain(
@@ -2066,6 +2138,7 @@ impl TypedModule {
     /// - de-referencing,
     /// - enum construction
     /// - enum variant construction
+    /// - Opaque type instance construction if in definition namespace
     /// This is a good place to do this because we just typechecked an expression, and
     /// we know the expected type.
     fn coerce_expression_to_expected_type(
@@ -2174,7 +2247,7 @@ impl TypedModule {
     ) -> TyperResult<TypedExpr> {
         let expected_type = match self.ast.expressions.get_type_hint(expr) {
             Some(t) => {
-                let type_id = self.eval_type_expr(t, scope_id)?;
+                let type_id = self.eval_type_expr(t, scope_id, None)?;
                 Some(type_id)
             }
             None => expected_type,
@@ -2409,6 +2482,7 @@ impl TypedModule {
                     BinaryOpKind::Subtract => lhs.get_type(),
                     BinaryOpKind::Multiply => lhs.get_type(),
                     BinaryOpKind::Divide => lhs.get_type(),
+                    BinaryOpKind::Rem => lhs.get_type(),
                     BinaryOpKind::Less => BOOL_TYPE_ID,
                     BinaryOpKind::LessEqual => BOOL_TYPE_ID,
                     BinaryOpKind::Greater => BOOL_TYPE_ID,
@@ -3838,7 +3912,7 @@ impl TypedModule {
                             // TODO(clone): We have to eval a type expr
                             let e = e.clone();
                             let type_id =
-                                self.eval_type_expr(tag_name_arg.type_expr, calling_scope)?;
+                                self.eval_type_expr(tag_name_arg.type_expr, calling_scope, None)?;
                             let Some(tag_type) = self.types.get(type_id).as_tag() else {
                                 return make_fail_span(
                                     ".as requires a type parameter with desired variant tag",
@@ -4173,7 +4247,7 @@ impl TypedModule {
                 for (idx, type_arg) in type_args.iter().enumerate() {
                     let param = &generic_type_params[idx];
                     // TODO: This is where we'd apply constraints
-                    let type_id = self.eval_type_expr(type_arg.type_expr, calling_scope)?;
+                    let type_id = self.eval_type_expr(type_arg.type_expr, calling_scope, None)?;
                     checked_params.push(TypeParam { ident: param.ident, type_id });
                 }
                 checked_params
@@ -4394,7 +4468,7 @@ impl TypedModule {
             ParsedStmt::ValDef(val_def) => {
                 let provided_type = match val_def.type_expr.as_ref() {
                     None => None,
-                    Some(&type_expr) => Some(self.eval_type_expr(type_expr, scope_id)?),
+                    Some(&type_expr) => Some(self.eval_type_expr(type_expr, scope_id, None)?),
                 };
                 let value_expr = self.eval_expr(val_def.value, scope_id, provided_type)?;
                 let actual_type = value_expr.get_type();
@@ -4551,7 +4625,7 @@ impl TypedModule {
         } else {
             panic!(
                 "Functions must be defined within a namespace or ability scope: {:?}",
-                &*self.get_ident_str(fn_name)
+                self.get_ident_str(fn_name)
             )
         };
         match result {
@@ -4632,7 +4706,7 @@ impl TypedModule {
         // Typecheck arguments
         let mut params = Vec::new();
         for (idx, fn_arg) in parsed_function_args.iter().enumerate() {
-            let type_id = self.eval_type_expr(fn_arg.ty, fn_scope_id)?;
+            let type_id = self.eval_type_expr(fn_arg.ty, fn_scope_id, None)?;
             if specialize {
                 trace!(
                     "Specializing argument: {} got {}",
@@ -4676,7 +4750,7 @@ impl TypedModule {
         };
         let given_ret_type = match parsed_function_ret_type {
             None => UNIT_TYPE_ID,
-            Some(type_expr) => self.eval_type_expr(type_expr, fn_scope_id)?,
+            Some(type_expr) => self.eval_type_expr(type_expr, fn_scope_id, None)?,
         };
         let metadata = if is_ability_decl {
             TypedFunctionMetadata::AbilityDefn(parsed_function_id)
@@ -4784,95 +4858,6 @@ impl TypedModule {
         Ok(specialized_function_id)
     }
 
-    fn eval_namespace_decl(
-        &mut self,
-        parsed_namespace_id: ParsedNamespaceId,
-        scope_id: ScopeId,
-    ) -> TyperResult<NamespaceId> {
-        let ast_namespace = self.ast.get_namespace(parsed_namespace_id).clone();
-        let ns_scope_id =
-            self.scopes.add_child_scope(scope_id, ScopeType::Namespace, Some(ast_namespace.name));
-        let namespace = Namespace { name: ast_namespace.name, scope_id: ns_scope_id };
-        let namespace_id = self.add_namespace(namespace);
-
-        // We add the new namespace's scope as a child of the current scope
-        let scope = self.scopes.get_scope_mut(scope_id);
-        if !scope.add_namespace(ast_namespace.name, namespace_id) {
-            return make_fail_span(&format!("Namespace name is taken"), ast_namespace.span);
-        }
-
-        self.namespace_ast_mappings.insert(ast_namespace.id, namespace_id);
-
-        for defn in &ast_namespace.definitions {
-            self.eval_definition_declaration_phase(*defn, ns_scope_id)?;
-        }
-        Ok(namespace_id)
-    }
-
-    fn eval_namespace(&mut self, ast_namespace_id: ParsedNamespaceId) -> TyperResult<NamespaceId> {
-        let ast_namespace = self.ast.get_namespace(ast_namespace_id).clone();
-        let namespace_id = *self.namespace_ast_mappings.get(&ast_namespace.id).unwrap();
-        let ns_scope_id = self.get_namespace(namespace_id).scope_id;
-        for defn in &ast_namespace.definitions {
-            self.eval_definition(*defn, ns_scope_id)?;
-        }
-        Ok(namespace_id)
-    }
-
-    fn eval_definition_declaration_phase(
-        &mut self,
-        defn_id: ParsedId,
-        scope_id: ScopeId,
-    ) -> TyperResult<()> {
-        match defn_id {
-            ParsedId::Namespace(namespace_id) => {
-                self.eval_namespace_decl(namespace_id, scope_id)?;
-                Ok(())
-            }
-            ParsedId::Constant(constant_id) => {
-                let _variable_id: VariableId = self.eval_const(constant_id)?;
-                Ok(())
-            }
-            ParsedId::Function(parsed_function_id) => {
-                self.eval_function_predecl(parsed_function_id, scope_id, None, false)?;
-                Ok(())
-            }
-            ParsedId::TypeDefn(type_defn_id) => {
-                let parsed_type_defn = self.ast.get_type_defn(type_defn_id).clone();
-                let added = self
-                    .scopes
-                    .get_scope_mut(scope_id)
-                    .add_pending_type_defn(parsed_type_defn.name, type_defn_id);
-                if !added {
-                    make_fail_span(
-                        &format!("Type {} exists", self.get_ident_str(parsed_type_defn.name)),
-                        parsed_type_defn.span,
-                    )
-                } else {
-                    Ok(())
-                }
-            }
-            ParsedId::Ability(parsed_ability_id) => {
-                self.eval_ability_defn(parsed_ability_id, scope_id)?;
-                Ok(())
-            }
-            ParsedId::AbilityImpl(_ability_impl) => {
-                // Nothing to do in this phase for impls <- Wrong!
-                // FIXME: Not true! We need to insert stub implementations, skipping the bodies, so that
-                //        we have order-independence. Example:
-
-                //        I need to know that string will impl equals after the declaration pass, so that
-                //        I can typecheck functions that may call equals on string order-independently!
-
-                //        but I do not need to know the function body of that impl yet.
-                Ok(())
-            }
-            other_id => {
-                panic!("Was asked to eval definition of a non-definition ast node {:?}", other_id)
-            }
-        }
-    }
-
     fn eval_ability_defn(
         &mut self,
         parsed_ability_id: ParsedAbilityId,
@@ -4909,9 +4894,19 @@ impl TypedModule {
             ast_id: parsed_ability.id,
         };
         let ability_id = self.add_ability(typed_ability);
-        self.scopes
+        let added = self
+            .scopes
             .get_scope_mut(self.scopes.get_root_scope_id())
             .add_ability(parsed_ability.name, ability_id);
+        if !added {
+            return make_fail_span(
+                &format!(
+                    "Ability with name {} already exists",
+                    self.get_ident_str(parsed_ability.name)
+                ),
+                parsed_ability.span,
+            );
+        }
         Ok(())
     }
 
@@ -4930,7 +4925,7 @@ impl TypedModule {
             );
         };
         let target_type =
-            self.eval_type_expr(parsed_ability_implementation.target_type, scope_id)?;
+            self.eval_type_expr(parsed_ability_implementation.target_type, scope_id, None)?;
 
         // Scoping / orphan / coherence: For now, let's globally allow only one implementation per (Ability, Target Type) pair
         // Check for existing implementation
@@ -5069,6 +5064,124 @@ impl TypedModule {
         Ok(())
     }
 
+    fn eval_namespace_type_defn_phase(
+        &mut self,
+        parsed_namespace_id: ParsedNamespaceId,
+    ) -> TyperResult<()> {
+        let namespace_id = *self.namespace_ast_mappings.get(&parsed_namespace_id).unwrap();
+        let namespace_scope_id = self.get_namespace(namespace_id).scope_id;
+        for &parsed_definition_id in
+            self.ast.get_namespace(parsed_namespace_id).definitions.clone().iter()
+        {
+            if let ParsedId::TypeDefn(type_defn_id) = parsed_definition_id {
+                let parsed_type_defn = self.ast.get_type_defn(type_defn_id).clone();
+                let added = self
+                    .scopes
+                    .get_scope_mut(namespace_scope_id)
+                    .add_pending_type_defn(parsed_type_defn.name, type_defn_id);
+                if !added {
+                    return ferr!(
+                        parsed_type_defn.span,
+                        "Type {} exists",
+                        self.get_ident_str(parsed_type_defn.name)
+                    );
+                }
+            }
+            if let ParsedId::Namespace(namespace_id) = parsed_definition_id {
+                self.eval_namespace_type_defn_phase(namespace_id)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn eval_namespace_type_eval_phase(
+        &mut self,
+        parsed_namespace_id: ParsedNamespaceId,
+    ) -> TyperResult<()> {
+        let namespace_id = self.namespace_ast_mappings.get(&parsed_namespace_id).unwrap();
+        let namespace = self.get_namespace(*namespace_id);
+        let namespace_scope_id = namespace.scope_id;
+        let parsed_namespace = self.ast.get_namespace(parsed_namespace_id);
+
+        for parsed_defn_id in parsed_namespace.definitions.clone().iter() {
+            if let ParsedId::TypeDefn(type_defn_id) = parsed_defn_id {
+                self.eval_type_defn(*type_defn_id, namespace_scope_id)?;
+            }
+            if let ParsedId::Namespace(namespace_id) = parsed_defn_id {
+                self.eval_namespace_type_eval_phase(*namespace_id)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn eval_namespace_declaration_phase(
+        &mut self,
+        parsed_namespace_id: ParsedNamespaceId,
+    ) -> TyperResult<()> {
+        let parsed_namespace = self.ast.get_namespace(parsed_namespace_id);
+        let namespace_id = self.namespace_ast_mappings.get(&parsed_namespace_id).unwrap();
+        let namespace = self.get_namespace(*namespace_id);
+        let namespace_scope_id = namespace.scope_id;
+        for defn in &parsed_namespace.definitions.clone() {
+            self.eval_definition_declaration_phase(*defn, namespace_scope_id)?;
+        }
+        Ok(())
+    }
+
+    fn eval_namespace(&mut self, ast_namespace_id: ParsedNamespaceId) -> TyperResult<NamespaceId> {
+        let ast_namespace = self.ast.get_namespace(ast_namespace_id).clone();
+        let namespace_id = *self.namespace_ast_mappings.get(&ast_namespace.id).unwrap();
+        let ns_scope_id = self.get_namespace(namespace_id).scope_id;
+        for defn in &ast_namespace.definitions {
+            self.eval_definition(*defn, ns_scope_id)?;
+        }
+        Ok(namespace_id)
+    }
+
+    fn eval_definition_declaration_phase(
+        &mut self,
+        defn_id: ParsedId,
+        scope_id: ScopeId,
+    ) -> TyperResult<()> {
+        match defn_id {
+            ParsedId::Namespace(namespace_id) => {
+                self.eval_namespace_declaration_phase(namespace_id)?;
+                Ok(())
+            }
+            ParsedId::Constant(constant_id) => {
+                let _variable_id: VariableId = self.eval_const(constant_id)?;
+                Ok(())
+            }
+            ParsedId::Function(parsed_function_id) => {
+                self.eval_function_predecl(parsed_function_id, scope_id, None, false)?;
+                Ok(())
+            }
+            ParsedId::TypeDefn(_type_defn_id) => {
+                // Handled by prior phase
+                Ok(())
+            }
+            ParsedId::Ability(parsed_ability_id) => {
+                // FIXME: Move to type defn phase
+                self.eval_ability_defn(parsed_ability_id, scope_id)?;
+                Ok(())
+            }
+            ParsedId::AbilityImpl(_ability_impl) => {
+                // Nothing to do in this phase for impls <- Wrong!
+                // FIXME: Not true! We need to insert stub implementations, skipping the bodies, so that
+                //        we have order-independence. Example:
+
+                //        I need to know that string will impl equals after the declaration pass, so that
+                //        I can typecheck functions that may call equals on string order-independently!
+
+                //        but I do not need to know the function body of that impl.
+                Ok(())
+            }
+            other_id => {
+                panic!("Was asked to eval definition of a non-definition ast node {:?}", other_id)
+            }
+        }
+    }
+
     fn eval_definition(&mut self, def: ParsedId, scope_id: ScopeId) -> TyperResult<()> {
         match def {
             ParsedId::Namespace(namespace) => {
@@ -5104,23 +5217,119 @@ impl TypedModule {
             }
         }
     }
-    pub fn run(&mut self) -> anyhow::Result<()> {
-        let scope_id = self.scopes.get_root_scope_id();
 
+    fn create_namespace(
+        &mut self,
+        parsed_namespace_id: ParsedNamespaceId,
+        parent_scope: Option<ScopeId>,
+    ) -> TyperResult<NamespaceId> {
+        let ast_namespace = self.ast.get_namespace(parsed_namespace_id);
+        let name = ast_namespace.name;
+        let span = ast_namespace.span;
+
+        match parent_scope {
+            None => {
+                let root_scope_id = self.scopes.add_root_scope(Some(name));
+                let namespace = Namespace { name, scope_id: root_scope_id };
+                let namespace_id = self.add_namespace(namespace);
+
+                self.namespace_ast_mappings.insert(parsed_namespace_id, namespace_id);
+                Ok(namespace_id)
+            }
+            Some(parent_scope_id) => {
+                let ns_scope_id =
+                    self.scopes.add_child_scope(parent_scope_id, ScopeType::Namespace, Some(name));
+
+                let namespace = Namespace { name, scope_id: ns_scope_id };
+                let namespace_id = self.add_namespace(namespace);
+
+                let parent_scope = self.scopes.get_scope_mut(parent_scope_id);
+                if !parent_scope.add_namespace(name, namespace_id) {
+                    return ferr!(
+                        span,
+                        "Namespace name {} is taken",
+                        self.get_ident_str(name).blue()
+                    );
+                }
+
+                self.namespace_ast_mappings.insert(parsed_namespace_id, namespace_id);
+                Ok(namespace_id)
+            }
+        }
+    }
+
+    fn eval_namespace_ns_phase(
+        &mut self,
+        parsed_namespace_id: ParsedNamespaceId,
+        parent_scope: Option<ScopeId>,
+    ) -> TyperResult<NamespaceId> {
+        let ast_namespace = self.ast.get_namespace(parsed_namespace_id).clone();
+        let namespace_id = self.create_namespace(parsed_namespace_id, parent_scope)?;
+
+        let namespace_scope_id = self.get_namespace(namespace_id).scope_id;
+
+        for defn in &ast_namespace.definitions {
+            if let ParsedId::Namespace(namespace_id) = defn {
+                let _namespace_id =
+                    self.eval_namespace_ns_phase(*namespace_id, Some(namespace_scope_id))?;
+            }
+        }
+        Ok(namespace_id)
+    }
+
+    pub fn run(&mut self) -> anyhow::Result<()> {
+        let root_scope_id = self.scopes.get_root_scope_id();
+
+        let root_namespace_id = self.ast.get_root_namespace().id;
+
+        // Namespace phase
+        let ns_phase_res = self.eval_namespace_ns_phase(root_namespace_id, None);
+        if let Err(e) = ns_phase_res {
+            // TODO: I'm not sure if we can just keep going if this fails; the namespaces
+            // won't even have scopes so a lot of things just won't work, and
+            // may result in internal compiler errors instead of helpful ones
+            print_error(&self.ast.spans, &self.ast.sources, &e.message, e.span);
+            self.errors.push(e);
+        }
+
+        if !self.errors.is_empty() {
+            bail!(
+                "{} failed namespace declaration phase with {} errors",
+                self.name(),
+                self.errors.len()
+            )
+        }
+
+        // Pending Type declaration phase
+        let type_defn_result = self.eval_namespace_type_defn_phase(root_namespace_id);
+        if let Err(e) = type_defn_result {
+            print_error(&self.ast.spans, &self.ast.sources, &e.message, e.span);
+            self.errors.push(e);
+        }
+
+        // Type evaluation phase
+        let type_eval_result = self.eval_namespace_type_eval_phase(root_namespace_id);
+        if let Err(e) = type_eval_result {
+            print_error(&self.ast.spans, &self.ast.sources, &e.message, e.span);
+            self.errors.push(e);
+        }
+
+        // Everything else declaration phase
         for &parsed_definition_id in self.ast.get_root_namespace().definitions.clone().iter() {
-            let result = self.eval_definition_declaration_phase(parsed_definition_id, scope_id);
+            let result =
+                self.eval_definition_declaration_phase(parsed_definition_id, root_scope_id);
             if let Err(e) = result {
                 print_error(&self.ast.spans, &self.ast.sources, &e.message, e.span);
                 self.errors.push(e);
             }
         }
-
         if !self.errors.is_empty() {
             bail!("{} failed declaration phase with {} errors", self.name(), self.errors.len())
         }
 
+        // Everything else evaluation phase
         for &parsed_definition_id in self.ast.get_root_namespace().definitions.clone().iter() {
-            let result = self.eval_definition(parsed_definition_id, scope_id);
+            let result = self.eval_definition(parsed_definition_id, root_scope_id);
             if let Err(e) = result {
                 print_error(&self.ast.spans, &self.ast.sources, &e.message, e.span);
                 self.errors.push(e);

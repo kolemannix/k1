@@ -1,0 +1,11 @@
+type alias PointList = Array<Point>
+type alias Point = { x: int, y: int }
+
+ability ToPoint {
+  fn to_point(self: Self): Point
+}
+
+fn main(): int {
+    val x: Point = { x: 1, y: 2 };
+    0
+}

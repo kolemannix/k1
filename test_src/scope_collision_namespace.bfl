@@ -1,4 +1,4 @@
-type Foo = { x: int}
+type Foo = { x: int }
 type Alias = Foo
 
 namespace Outer {
@@ -8,13 +8,13 @@ namespace Outer {
   }
 }
 
-// namespace Foo {
-//   fn value(self: Foo): int { self.x }
-// }
+namespace Foo {
+  fn value(self: Foo): int { self.x }
+}
 
 
 fn main(): int {
-  val x: Foo = {x:1};
-  printInt(x.value());
+  val x: Alias = {x:1};
+  assert(x.value() == 1);
   0
 }
