@@ -13,4 +13,4 @@ fn main(): int {
 
   0
 }
-// errormsg: Local variable type mismatch: Expected 'UserId(int)' but got int
+//errmsg: Local variable type mismatch: Expected UserId(int) but got int

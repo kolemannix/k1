@@ -23,4 +23,4 @@ fn main(): int {
 
   0
 }
-// errormsg: Anonymous structs currently have no methods
+//errmsg: Anonymous structs currently have no methods
