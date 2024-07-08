@@ -1838,6 +1838,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
                 Ok(enum_value.as_basic_value_enum().into())
             }
+            TypedExpr::NoOpCast(cast) => {
+                let value = self.codegen_expr_basic_value(&cast.base)?;
+                Ok(value.into())
+            }
         }
     }
 

@@ -61,6 +61,8 @@ pub struct StructTypeField {
 pub struct TypeDefnInfo {
     pub name: IdentifierId,
     pub scope: ScopeId,
+    // If there's a corresponding namespace for this type defn, this is it
+    pub companion_namespace: Option<NamespaceId>,
 }
 
 #[derive(Debug, Clone)]
@@ -749,6 +751,13 @@ pub struct TypedEnumCast {
 }
 
 #[derive(Debug, Clone)]
+pub struct NoOpCast {
+    pub base: Box<TypedExpr>,
+    pub type_id: TypeId,
+    pub span: SpanId,
+}
+
+#[derive(Debug, Clone)]
 struct TypedMatchCase {
     // Will be used when we do exhaustive matching
     #[allow(unused)]
@@ -786,6 +795,7 @@ pub enum TypedExpr {
     EnumIsVariant(TypedEnumIsVariantExpr),
     EnumGetPayload(GetEnumPayload),
     EnumCast(TypedEnumCast),
+    NoOpCast(NoOpCast),
 }
 
 impl From<VariableExpr> for TypedExpr {
@@ -823,6 +833,7 @@ impl TypedExpr {
             TypedExpr::EnumIsVariant(_is_variant) => BOOL_TYPE_ID,
             TypedExpr::EnumGetPayload(as_variant) => as_variant.payload_type_id,
             TypedExpr::EnumCast(c) => c.variant_type_id,
+            TypedExpr::NoOpCast(c) => c.type_id,
         }
     }
     #[inline]
@@ -853,6 +864,7 @@ impl TypedExpr {
             TypedExpr::EnumIsVariant(is_variant) => is_variant.span,
             TypedExpr::EnumGetPayload(as_variant) => as_variant.span,
             TypedExpr::EnumCast(c) => c.span,
+            TypedExpr::NoOpCast(c) => c.span,
         }
     }
 
@@ -1308,33 +1320,50 @@ impl TypedModule {
         let parsed_type_defn = self.ast.get_type_defn(parsed_type_defn_id).clone();
         let existing_defn = self.types.find_type_defn_mapping(parsed_type_defn_id);
         if let Some(existing_defn) = existing_defn {
-            eprintln!(
-                "Short-circuit for already defined type: {}",
-                self.get_ident_str(parsed_type_defn.name)
-            );
             return Ok(existing_defn);
         }
+
+        // Find companion namespace if exists and update type_defn_info
+        let companion_namespace_id =
+            self.scopes.get_scope(scope_id).find_namespace(parsed_type_defn.name);
+        if companion_namespace_id.is_some() {
+            eprintln!(
+                "Found companion namespace for {}",
+                self.get_ident_str(parsed_type_defn.name)
+            );
+        }
+
         // The type defn info is about a lot more than just definition site.
         // It differentiates between simple names for shapes of structs and
         // structs with an actual named-based identity that can have methods, implement traits, etc.
-        let passed_type_defn_info = if parsed_type_defn.flags.is_alias() {
-            None
-        } else {
-            Some(TypeDefnInfo { name: parsed_type_defn.name, scope: scope_id })
+        let type_defn_info = TypeDefnInfo {
+            name: parsed_type_defn.name,
+            scope: scope_id,
+            companion_namespace: companion_namespace_id,
         };
+
+        // We only pass down type defn info if it's an alias but not an opaque one! We want the defn info to live
+        // on the opaque type, not the wrapped type.
+        let passed_type_defn_info =
+            if parsed_type_defn.flags.is_alias() && !parsed_type_defn.flags.is_opaque() {
+                None
+            } else {
+                Some(type_defn_info.clone())
+            };
         let rhs_type_id =
             self.eval_type_expr(parsed_type_defn.value_expr, scope_id, passed_type_defn_info)?;
         let type_id = if parsed_type_defn.flags.is_alias() {
             if parsed_type_defn.flags.is_opaque() {
                 // Opaque alias
                 eprintln!(
-                    "Generating an opaque alias for a {}",
-                    self.type_id_to_string(rhs_type_id)
+                    "Generating an opaque alias for a {} with companion namespace {:?}",
+                    self.type_id_to_string(rhs_type_id),
+                    type_defn_info.companion_namespace
                 );
                 let alias = OpaqueTypeAlias {
                     ast_id: parsed_type_defn_id.into(),
                     aliasee: rhs_type_id,
-                    type_defn_info: TypeDefnInfo { name: parsed_type_defn.name, scope: scope_id },
+                    type_defn_info,
                 };
                 Ok(self.types.add_type(Type::OpaqueAlias(alias)))
             } else {
@@ -1826,6 +1855,10 @@ impl TypedModule {
                     ))
                 }
             }
+            // (Type::OpaqueAlias(opaque), other) => {
+            //     eprintln!("Expecting opaque, got other");
+            //     Err("opaque".to_string())
+            // }
             (exp, act) => {
                 // Resolve type variables
                 if let Type::TypeVariable(expected_type_var) = exp {
@@ -2147,7 +2180,7 @@ impl TypedModule {
         expression: TypedExpr,
         scope_id: ScopeId,
     ) -> TypedExpr {
-        // For some reason, we skip coercion for 'None'. Need to run that down
+        // FIXME: For some reason, we skip coercion for 'None'. Need to run that down
         if let TypedExpr::None(_type_id, _span) = expression {
             return expression;
         }
@@ -2235,8 +2268,71 @@ impl TypedModule {
                     Err(_) => expression,
                 }
             }
-            _ => expression,
+            Type::OpaqueAlias(opaque) => {
+                if !self
+                    .is_inside_companion_scope(opaque.type_defn_info.companion_namespace, scope_id)
+                {
+                    return expression;
+                }
+                let Ok(_) = self.typecheck_types(opaque.aliasee, expression.get_type(), scope_id)
+                else {
+                    return expression;
+                };
+                debug!(
+                    "coerce into opaque from {} to {}",
+                    self.type_id_to_string(expression.get_type()),
+                    self.type_id_to_string(expected_type_id)
+                );
+                TypedExpr::NoOpCast(NoOpCast {
+                    span: expression.get_span(),
+                    base: Box::new(expression),
+                    type_id: expected_type_id,
+                })
+            }
+            _other => match self.types.get(expression.get_type()) {
+                Type::OpaqueAlias(expression_opaque) => {
+                    if !self.is_inside_companion_scope(
+                        expression_opaque.type_defn_info.companion_namespace,
+                        scope_id,
+                    ) {
+                        return expression;
+                    }
+                    let Ok(_) =
+                        self.typecheck_types(expected_type_id, expression_opaque.aliasee, scope_id)
+                    else {
+                        return expression;
+                    };
+                    debug!(
+                        "coerce out of opaque from {} to {}",
+                        self.type_id_to_string(expression.get_type()),
+                        self.type_id_to_string(expression_opaque.aliasee)
+                    );
+                    TypedExpr::NoOpCast(NoOpCast {
+                        span: expression.get_span(),
+                        base: Box::new(expression),
+                        type_id: expression_opaque.aliasee,
+                    })
+                }
+                _ => expression,
+            },
         }
+    }
+
+    fn is_inside_companion_scope(
+        &self,
+        companion_namespace: Option<NamespaceId>,
+        scope_id: ScopeId,
+    ) -> bool {
+        if let Some(companion_namespace) = companion_namespace {
+            self.is_scope_inside_namespace(companion_namespace, scope_id)
+        } else {
+            false
+        }
+    }
+
+    fn is_scope_inside_namespace(&self, namespace_id: NamespaceId, scope_id: ScopeId) -> bool {
+        let ns_scope_id = self.get_namespace(namespace_id).scope_id;
+        self.scopes.scope_has_ancestor(scope_id, ns_scope_id)
     }
 
     fn eval_expr(
@@ -3882,13 +3978,18 @@ impl TypedModule {
                                 struc.ast_node,
                             );
                         };
-                        let struct_scope = self.get_namespace_scope_in_immediate_scope(
-                            struct_defn_info.scope,
-                            struct_defn_info.name,
-                        );
-                        struct_scope
-                            .map(|struct_scope| struct_scope.find_function(fn_call.name))
-                            .flatten()
+                        let Some(struct_companion_ns) = struct_defn_info.companion_namespace else {
+                            return make_fail_ast_id(
+                                &self.ast,
+                                &format!(
+                                    "Struct {} has no companion namespace",
+                                    self.get_ident_str(struct_defn_info.name).blue()
+                                ),
+                                struc.ast_node,
+                            );
+                        };
+                        let struct_scope = self.get_namespace_scope(struct_companion_ns);
+                        struct_scope.find_function(fn_call.name)
                     }
                     Type::Enum(e) => {
                         if fn_call.name == self.ast.identifiers.get("as").unwrap() {
@@ -3937,11 +4038,18 @@ impl TypedModule {
                                     fn_call.span,
                                 );
                             };
-                            let enum_scope = self.get_namespace_scope_in_immediate_scope(
-                                enum_defn_info.scope,
-                                enum_defn_info.name,
-                            );
-                            enum_scope.map(|s| s.find_function(fn_call.name)).flatten()
+                            let Some(enum_companion_ns) = enum_defn_info.companion_namespace else {
+                                return make_fail_ast_id(
+                                    &self.ast,
+                                    &format!(
+                                        "Enum {} has no companion namespace",
+                                        self.get_ident_str(enum_defn_info.name).blue()
+                                    ),
+                                    e.ast_node,
+                                );
+                            };
+                            let enum_scope = self.get_namespace_scope(enum_companion_ns);
+                            enum_scope.find_function(fn_call.name)
                         }
                     }
                     Type::EnumVariant(ev) => {
@@ -3958,6 +4066,17 @@ impl TypedModule {
                             parent_enum_info.name,
                         );
                         enum_scope.map(|s| s.find_function(fn_call.name)).flatten()
+                    }
+                    Type::OpaqueAlias(opaque) => {
+                        let opaque_scope = self.get_namespace_scope_in_immediate_scope(
+                            opaque.type_defn_info.scope,
+                            opaque.type_defn_info.name,
+                        );
+                        if let Some(opaque_scope) = opaque_scope {
+                            opaque_scope.find_function(fn_call.name)
+                        } else {
+                            None
+                        }
                     }
                     _ => None,
                 };

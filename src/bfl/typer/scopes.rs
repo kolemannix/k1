@@ -199,6 +199,20 @@ impl Scopes {
             }
         }
     }
+
+    pub fn scope_has_ancestor(&self, scope_id: ScopeId, ancestor: ScopeId) -> bool {
+        let scope = self.get_scope(scope_id);
+        match scope.parent {
+            Some(parent) => {
+                if parent == ancestor {
+                    true
+                } else {
+                    self.scope_has_ancestor(parent, ancestor)
+                }
+            }
+            None => false,
+        }
+    }
 }
 
 #[derive(Debug)]

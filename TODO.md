@@ -38,7 +38,7 @@
 - [x] Type cleanup
   - [x] Order of eval (topology through defer/skip)
   - [x] named struct and enum fix
-  - Newtypes (opaque)
+  - [ ] Newtypes (opaque)
   - [x] Aliases
 - [ ] Recursive types (depends on type cleanup)
 - Require named args; and allow anonymous
