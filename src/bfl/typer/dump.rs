@@ -447,6 +447,11 @@ impl TypedModule {
                 self.display_expr(&as_variant_expr.target_expr, writ, indentation)?;
                 writ.write_str(".payload")
             }
+            TypedExpr::NoOpCast(cast) => {
+                self.display_expr(&cast.base, writ, indentation)?;
+                writ.write_str(": ")?;
+                self.display_type_id(cast.type_id, writ)
+            }
         }
     }
 

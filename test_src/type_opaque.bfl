@@ -3,14 +3,18 @@ namespace UserId {
   // TODO: The type equivalence int == UserId is available
   //      only in this namespace.
   // So we can write constructors
+  fn make(value: int): UserId {
+    value
+  }
+
+  fn toInt(self: UserId): int {
+    self
+  }
+
 }
-type alias opaque CaseId = int
 
 fn main(): int {
-  val user_id: UserId = 0;
-  val case_id: CaseId = 0;
-  user_id == case_id;
-
+  val user_id: UserId = UserId::make(11);
+  assert(user_id.toInt() == 11);
   0
 }
-//errmsg: Local variable type mismatch: Expected UserId(int) but got int
