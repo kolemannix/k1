@@ -1722,6 +1722,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         let promoted = self.i1_to_bool(negated, "negated");
                         Ok(promoted.as_basic_value_enum().into())
                     }
+                    UnaryOpKind::ReferenceToInt => {
+                        let as_int = self.builder.build_ptr_to_int(
+                            value.into_pointer_value(),
+                            self.builtin_types.int,
+                            "ptr_as_int",
+                        );
+                        Ok(as_int.as_basic_value_enum().into())
+                    }
                 }
             }
             TypedExpr::Block(block) => {
@@ -2243,33 +2251,33 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     fn codegen_intrinsic(
         &mut self,
-        intrinsic_type: IntrinsicFunctionType,
+        intrinsic_type: IntrinsicFunction,
         function: &TypedFunction,
     ) -> CodegenResult<BasicValueEnum<'ctx>> {
         match intrinsic_type {
-            IntrinsicFunctionType::Exit => {
+            IntrinsicFunction::Exit => {
                 let first_arg = self.get_loaded_variable(function.params[0].variable_id);
                 self.builder.build_call(self.libc_functions.exit, &[first_arg.into()], "exit");
                 Ok(self.builtin_types.unit_value.as_basic_value_enum())
             }
-            IntrinsicFunctionType::PrintInt => {
+            IntrinsicFunction::PrintInt => {
                 let first_arg = self.get_loaded_variable(function.params[0].variable_id);
                 self.build_print_int_call(first_arg);
                 Ok(self.builtin_types.unit_value.as_basic_value_enum())
             }
-            IntrinsicFunctionType::PrintString => {
+            IntrinsicFunction::PrintString => {
                 let string_arg =
                     self.get_loaded_variable(function.params[0].variable_id).into_struct_value();
                 self.build_print_string_call(string_arg);
                 Ok(self.builtin_types.unit_value.as_basic_value_enum())
             }
-            IntrinsicFunctionType::StringLength => {
+            IntrinsicFunction::StringLength => {
                 let string_arg =
                     self.get_loaded_variable(function.params[0].variable_id).into_struct_value();
                 let length = self.builtin_types.string_length(&self.builder, string_arg);
                 Ok(length.as_basic_value_enum())
             }
-            IntrinsicFunctionType::StringFromCharArray => {
+            IntrinsicFunction::StringFromCharArray => {
                 let array =
                     self.get_loaded_variable(function.params[0].variable_id).into_pointer_value();
                 let array_type =
@@ -2284,7 +2292,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     self.builder.build_memcpy(string_data, 1, array_data, 1, array_len).unwrap();
                 Ok(string.as_basic_value_enum())
             }
-            IntrinsicFunctionType::StringEquals => {
+            IntrinsicFunction::StringEquals => {
                 let string1 =
                     self.get_loaded_variable(function.params[0].variable_id).into_struct_value();
                 let string2 =
@@ -2355,7 +2363,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     .build_load(self.builtin_types.boolean, result, "string_eq_result_value")
                     .as_basic_value_enum())
             }
-            IntrinsicFunctionType::ArrayLength => {
+            IntrinsicFunction::ArrayLength => {
                 let array_arg =
                     self.get_loaded_variable(function.params[0].variable_id).into_pointer_value();
                 let array_type: LlvmPointerType =
@@ -2371,7 +2379,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let length = self.builtin_types.array_length(&self.builder, array_struct);
                 Ok(length.as_basic_value_enum())
             }
-            IntrinsicFunctionType::ArrayNew => {
+            IntrinsicFunction::ArrayNew => {
                 let array_type_id = function.ret_type;
                 let array_type = self.module.types.get(array_type_id);
                 let element_type = self.codegen_type(array_type.expect_array().element_type)?;
@@ -2390,7 +2398,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.builder.build_store(array_ptr, array_struct);
                 Ok(array_ptr.as_basic_value_enum())
             }
-            IntrinsicFunctionType::ArrayGrow => {
+            IntrinsicFunction::ArrayGrow => {
                 // We need to resize the array and copy the elements into the new memory
                 let self_param = &function.params[0];
                 let array_ptr =
@@ -2451,7 +2459,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.builder.build_free(old_data);
                 Ok(self.builtin_types.unit_value.as_basic_value_enum())
             }
-            IntrinsicFunctionType::ArrayCapacity => {
+            IntrinsicFunction::ArrayCapacity => {
                 let array_arg =
                     self.get_loaded_variable(function.params[0].variable_id).into_pointer_value();
                 let array_struct_type = self
@@ -2469,7 +2477,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     .as_basic_value_enum();
                 Ok(capacity_value)
             }
-            IntrinsicFunctionType::ArraySetLength => {
+            IntrinsicFunction::ArraySetLength => {
                 let array_arg =
                     self.get_loaded_variable(function.params[0].variable_id).into_pointer_value();
                 let array_struct_type = self
@@ -2494,6 +2502,16 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     .unwrap();
                 self.builder.build_store(array_arg, updated_array);
                 Ok(self.builtin_types.unit_value.as_basic_value_enum())
+            }
+            IntrinsicFunction::RawPointerToReference => {
+                let raw_pointer_input =
+                    self.get_loaded_variable(function.params[0].variable_id).into_int_value();
+                let actual_ptr = self.builder.build_int_to_ptr(
+                    raw_pointer_input,
+                    self.builtin_types.int.ptr_type(AddressSpace::default()),
+                    "ptr",
+                );
+                Ok(actual_ptr.as_basic_value_enum())
             }
         }
     }
@@ -2743,7 +2761,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         #[allow(clippy::single_match)]
         match function.intrinsic_type {
             // Workaround: ArrayNew returns a pointer to an alloca, so it needs to be inlined
-            Some(IntrinsicFunctionType::ArrayNew) => {
+            Some(IntrinsicFunction::ArrayNew) => {
                 // Always inline
                 fn_val.add_attribute(
                     AttributeLoc::Function,

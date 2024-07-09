@@ -1,8 +1,5 @@
 type alias opaque UserId = int
 namespace UserId {
-  // TODO: The type equivalence int == UserId is available
-  //      only in this namespace.
-  // So we can write constructors
   fn make(value: int): UserId {
     value
   }

@@ -4,10 +4,19 @@ extern fn _bfl_intToChar(i: int): char
 extern fn _bfl_readFileToString(path: string): string
 extern fn _bfl_crash(reason: string*, file: string*, line: int): never
 
-type alias opaque RawPointer = int
-
 // extern fn _bfl_malloc(size: int): RawPointer
 // extern fn _bfl_free(ptr: RawPointer): unit
+
+//type alias opaque string = { len: int, data: RawPointer }
+
+// Must have type id 6; do not reorder!
+type alias opaque RawPointer = int
+namespace RawPointer {
+  intern fn asUnsafe<T>(self: RawPointer): T*
+  fn toIntUnsafe(self: RawPointer): int { self }
+
+  fn fromIntUnsafe(value: int): RawPointer { value }
+}
 
 ability Equals {
   fn equals(self: Self, other: Self): bool

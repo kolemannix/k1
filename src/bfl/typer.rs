@@ -19,7 +19,7 @@ use crate::parse::{
     self, ForExpr, ForExprType, IfExpr, IndexOperation, ParsedAbilityId, ParsedAbilityImplId,
     ParsedConstantId, ParsedExpressionId, ParsedFunctionId, ParsedId, ParsedNamespaceId,
     ParsedPattern, ParsedPatternId, ParsedTypeDefnId, ParsedTypeExpression, ParsedTypeExpressionId,
-    Sources,
+    ParsedUnaryOpKind, Sources,
 };
 use crate::parse::{
     Block, FnCall, IdentifierId, Literal, ParsedExpression, ParsedModule, ParsedStmt,
@@ -93,6 +93,7 @@ pub const INT_TYPE_ID: TypeId = TypeId(2);
 pub const BOOL_TYPE_ID: TypeId = TypeId(3);
 pub const STRING_TYPE_ID: TypeId = TypeId(4);
 pub const NEVER_TYPE_ID: TypeId = TypeId(5);
+pub const RAW_POINTER_TYPE_ID: TypeId = TypeId(6);
 
 #[derive(Debug, Clone)]
 pub struct ArrayType {
@@ -420,7 +421,7 @@ pub struct FnArgDefn {
 pub struct SpecializationParams {
     pub fn_scope_id: ScopeId,
     pub new_name: IdentifierId,
-    pub known_intrinsic: Option<IntrinsicFunctionType>,
+    pub known_intrinsic: Option<IntrinsicFunction>,
     pub generic_parent_function: FunctionId,
     pub is_ability_impl: bool,
 }
@@ -465,7 +466,7 @@ pub struct TypedFunction {
     pub params: Vec<FnArgDefn>,
     pub type_params: Option<Vec<TypeParam>>,
     pub block: Option<TypedBlock>,
-    pub intrinsic_type: Option<IntrinsicFunctionType>,
+    pub intrinsic_type: Option<IntrinsicFunction>,
     pub linkage: Linkage,
     pub specializations: Vec<SpecializationStruct>,
     pub metadata: TypedFunctionMetadata,
@@ -609,25 +610,16 @@ pub enum UnaryOpKind {
     BooleanNegation,
     Reference,
     Dereference,
+    ReferenceToInt,
 }
 
 impl Display for UnaryOpKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            UnaryOpKind::BooleanNegation => f.write_char('!'),
+            UnaryOpKind::BooleanNegation => f.write_str("not "),
             UnaryOpKind::Reference => f.write_char('&'),
             UnaryOpKind::Dereference => f.write_char('*'),
-        }
-    }
-}
-
-impl UnaryOpKind {
-    pub fn from_tokenkind(kind: TokenKind) -> Option<UnaryOpKind> {
-        match kind {
-            TokenKind::KeywordNot => Some(UnaryOpKind::BooleanNegation),
-            TokenKind::Ampersand => Some(UnaryOpKind::Reference),
-            TokenKind::Asterisk => Some(UnaryOpKind::Dereference),
-            _ => None,
+            UnaryOpKind::ReferenceToInt => f.write_str("(*int)"),
         }
     }
 }
@@ -981,7 +973,7 @@ pub struct Namespace {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum IntrinsicFunctionType {
+pub enum IntrinsicFunction {
     Exit,
     PrintInt,
     PrintString,
@@ -993,14 +985,15 @@ pub enum IntrinsicFunctionType {
     ArrayCapacity,
     StringFromCharArray,
     StringEquals,
+    RawPointerToReference,
 }
 
-impl IntrinsicFunctionType {
-    pub fn from_function_name(value: &str) -> Option<Self> {
+impl IntrinsicFunction {
+    pub fn from_root_function_name(value: &str) -> Option<Self> {
         match value {
-            "printInt" => Some(IntrinsicFunctionType::PrintInt),
-            "print" => Some(IntrinsicFunctionType::PrintString),
-            "exit" => Some(IntrinsicFunctionType::Exit),
+            "printInt" => Some(IntrinsicFunction::PrintInt),
+            "print" => Some(IntrinsicFunction::PrintString),
+            "exit" => Some(IntrinsicFunction::Exit),
             _ => None,
         }
     }
@@ -2604,7 +2597,7 @@ impl TypedModule {
                 let op = op.clone();
                 let base_expr = self.eval_expr(op.expr, scope_id, None)?;
                 match op.op_kind {
-                    UnaryOpKind::Dereference => {
+                    ParsedUnaryOpKind::Dereference => {
                         let reference_type =
                             self.types.get(base_expr.get_type()).as_reference().ok_or(
                                 make_error(
@@ -2627,7 +2620,7 @@ impl TypedModule {
                             span: op.span,
                         }))
                     }
-                    UnaryOpKind::Reference => {
+                    ParsedUnaryOpKind::Reference => {
                         let type_id = self.types.add_type(Type::Reference(ReferenceType {
                             inner_type: base_expr.get_type(),
                         }));
@@ -2638,7 +2631,7 @@ impl TypedModule {
                             span: op.span,
                         }))
                     }
-                    UnaryOpKind::BooleanNegation => {
+                    ParsedUnaryOpKind::BooleanNegation => {
                         self.typecheck_types(BOOL_TYPE_ID, base_expr.get_type(), scope_id)
                             .map_err(|s| make_error(s, op.span))?;
                         Ok(TypedExpr::UnaryOp(UnaryOp {
@@ -3931,6 +3924,19 @@ impl TypedModule {
             Some(base_expr) => {
                 // Resolve a method call
                 let type_id = base_expr.get_type();
+                if let Type::Reference(_r) = self.types.get(type_id) {
+                    if fn_call.name == self.ast.identifiers.get("asRawPointer").unwrap()
+                        && fn_call.args.is_empty()
+                        && fn_call.type_args.is_none()
+                    {
+                        return Ok(Either::Left(TypedExpr::UnaryOp(UnaryOp {
+                            kind: UnaryOpKind::ReferenceToInt,
+                            type_id: RAW_POINTER_TYPE_ID,
+                            expr: Box::new(base_expr.clone()),
+                            span: fn_call.span,
+                        })));
+                    };
+                };
                 let function_id = match self.types.get_type_dereferenced(type_id) {
                     Type::Optional(_optional_type) => {
                         if fn_call.name == self.ast.identifiers.get("hasValue").unwrap()
@@ -3972,10 +3978,9 @@ impl TypedModule {
                         // Need to distinguish between instances of 'named'
                         // structs and anonymous ones
                         let Some(struct_defn_info) = struc.type_defn_info.as_ref() else {
-                            return make_fail_ast_id(
-                                &self.ast,
+                            return make_fail_span(
                                 "Anonymous structs currently have no methods",
-                                struc.ast_node,
+                                fn_call.span,
                             );
                         };
                         let Some(struct_companion_ns) = struct_defn_info.companion_namespace else {
@@ -4462,7 +4467,7 @@ impl TypedModule {
         fn_call: &FnCall,
         inferred_or_passed_type_args: Vec<TypeParam>,
         generic_function_id: FunctionId,
-        intrinsic_type: Option<IntrinsicFunctionType>,
+        intrinsic_type: Option<IntrinsicFunction>,
         this_expr: Option<TypedExpr>,
         calling_scope: ScopeId,
         pre_evaled_value_args: Option<Vec<TypedExpr>>,
@@ -4693,32 +4698,32 @@ impl TypedModule {
         fn_name: IdentifierId,
         fn_args: &[FnArgDefn],
         scope_id: ScopeId,
-    ) -> Result<IntrinsicFunctionType, String> {
+    ) -> Result<IntrinsicFunction, String> {
         trace!("resolve_intrinsic_function_type for {}", &*self.get_ident_str(fn_name));
         let result = if let Some(current_namespace) =
             self.namespaces.iter().find(|ns| ns.scope_id == scope_id)
         {
             if Some(current_namespace.name) == { self.ast.identifiers.get("string") } {
                 if Some(fn_name) == { self.ast.identifiers.get("length") } {
-                    Some(IntrinsicFunctionType::StringLength)
+                    Some(IntrinsicFunction::StringLength)
                 } else if Some(fn_name) == { self.ast.identifiers.get("fromChars") } {
-                    Some(IntrinsicFunctionType::StringFromCharArray)
+                    Some(IntrinsicFunction::StringFromCharArray)
                 } else if Some(fn_name) == { self.ast.identifiers.get("equals") } {
-                    Some(IntrinsicFunctionType::StringEquals)
+                    Some(IntrinsicFunction::StringEquals)
                 } else {
                     None
                 }
             } else if Some(current_namespace.name) == { self.ast.identifiers.get("Array") } {
                 if Some(fn_name) == { self.ast.identifiers.get("length") } {
-                    Some(IntrinsicFunctionType::ArrayLength)
+                    Some(IntrinsicFunction::ArrayLength)
                 } else if Some(fn_name) == { self.ast.identifiers.get("capacity") } {
-                    Some(IntrinsicFunctionType::ArrayCapacity)
+                    Some(IntrinsicFunction::ArrayCapacity)
                 } else if Some(fn_name) == { self.ast.identifiers.get("grow") } {
-                    Some(IntrinsicFunctionType::ArrayGrow)
+                    Some(IntrinsicFunction::ArrayGrow)
                 } else if Some(fn_name) == { self.ast.identifiers.get("new") } {
-                    Some(IntrinsicFunctionType::ArrayNew)
+                    Some(IntrinsicFunction::ArrayNew)
                 } else if Some(fn_name) == { self.ast.identifiers.get("set_length") } {
-                    Some(IntrinsicFunctionType::ArraySetLength)
+                    Some(IntrinsicFunction::ArraySetLength)
                 } else {
                     None
                 }
@@ -4726,15 +4731,21 @@ impl TypedModule {
                 // Future Char intrinsics
                 None
             } else if Some(current_namespace.name) == { self.ast.identifiers.get("_root") } {
-                let function_name = &*self.get_ident_str(fn_name);
-                IntrinsicFunctionType::from_function_name(function_name)
+                let function_name = self.get_ident_str(fn_name);
+                IntrinsicFunction::from_root_function_name(function_name)
+            } else if Some(current_namespace.name) == self.ast.identifiers.get("RawPointer") {
+                if Some(fn_name) == self.ast.identifiers.get("asUnsafe") {
+                    Some(IntrinsicFunction::RawPointerToReference)
+                } else {
+                    None
+                }
             } else {
                 None
             }
         } else if let Some(ability) = self.abilities.iter().find(|ab| ab.scope_id == scope_id) {
             if Some(ability.name) == self.ast.identifiers.get("Equals") {
                 if fn_args.first().unwrap().type_id == STRING_TYPE_ID {
-                    Some(IntrinsicFunctionType::StringEquals)
+                    Some(IntrinsicFunction::StringEquals)
                 } else {
                     None
                 }
