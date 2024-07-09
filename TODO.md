@@ -50,6 +50,12 @@
 - [x] Type Ascriptions
 - [x] Enforce unique function name in namespace!
 - [x] Optional coalescing binary operator '?'
+- [x] Raw Pointer
+  - [x] from int64
+  - [x] to int64
+  - [x] from reference
+  - [x] to reference
+- [ ] sizeOf
 - [ ] More type expressions! (this was a big part of my original point)
   - [ ] Intersect structs
   - [ ] Union structs
@@ -57,6 +63,7 @@
   - [ ] inner type of optional
 - [ ] floating point f32 and f64
 - [ ] Optional coalescing accessor (x?.y)
+- [ ] Prevent function overloading in same namespace
 - [ ] Typecheck the binary ops
 - [ ] Rest of the binary ops
 - [ ] Exhaustive pattern matching

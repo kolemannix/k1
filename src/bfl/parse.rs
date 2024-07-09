@@ -5,7 +5,7 @@ use log::trace;
 use string_interner::Symbol;
 
 use crate::lex::*;
-use crate::typer::{BinaryOpKind, Linkage, UnaryOpKind};
+use crate::typer::{BinaryOpKind, Linkage};
 use TokenKind as K;
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
@@ -153,8 +153,8 @@ pub struct Identifiers {
     intern_pool: string_interner::StringInterner,
 }
 impl Identifiers {
-    pub const BUILTIN_IDENTS: [&'static str; 7] =
-        ["unit", "char", "string", "length", "iteree", "it_index", "as"];
+    pub const BUILTIN_IDENTS: [&'static str; 8] =
+        ["unit", "char", "string", "length", "iteree", "it_index", "as", "asRawPointer"];
 
     pub fn intern(&mut self, s: impl AsRef<str>) -> IdentifierId {
         let s = self.intern_pool.get_or_intern(&s);
@@ -220,9 +220,37 @@ pub struct BinaryOp {
     pub span: SpanId,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParsedUnaryOpKind {
+    BooleanNegation,
+    Reference,
+    Dereference,
+}
+
+impl Display for ParsedUnaryOpKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ParsedUnaryOpKind::BooleanNegation => f.write_str("not "),
+            ParsedUnaryOpKind::Reference => f.write_char('&'),
+            ParsedUnaryOpKind::Dereference => f.write_char('*'),
+        }
+    }
+}
+
+impl ParsedUnaryOpKind {
+    pub fn from_tokenkind(kind: TokenKind) -> Option<ParsedUnaryOpKind> {
+        match kind {
+            TokenKind::KeywordNot => Some(ParsedUnaryOpKind::BooleanNegation),
+            TokenKind::Ampersand => Some(ParsedUnaryOpKind::Reference),
+            TokenKind::Asterisk => Some(ParsedUnaryOpKind::Dereference),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct UnaryOp {
-    pub op_kind: UnaryOpKind,
+    pub op_kind: ParsedUnaryOpKind,
     pub expr: ParsedExpressionId,
     pub span: SpanId,
 }
@@ -1967,7 +1995,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 span,
             }))))
         } else if first.kind.is_prefix_operator() {
-            let Some(op_kind) = UnaryOpKind::from_tokenkind(first.kind) else {
+            let Some(op_kind) = ParsedUnaryOpKind::from_tokenkind(first.kind) else {
                 return Err(Parser::error("unexpected prefix operator", first));
             };
             self.tokens.advance();
