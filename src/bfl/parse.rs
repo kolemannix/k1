@@ -661,7 +661,7 @@ impl ParsedTypeExpression {
 }
 
 #[derive(Debug, Clone)]
-pub struct TypeParamDef {
+pub struct ParsedTypeParamDefn {
     pub ident: IdentifierId,
     pub span: SpanId,
 }
@@ -669,7 +669,7 @@ pub struct TypeParamDef {
 #[derive(Debug, Clone)]
 pub struct ParsedFunction {
     pub name: IdentifierId,
-    pub type_args: Option<Vec<TypeParamDef>>,
+    pub type_args: Option<Vec<ParsedTypeParamDefn>>,
     pub args: Vec<FnArgDef>,
     pub ret_type: Option<ParsedTypeExpressionId>,
     pub block: Option<Block>,
@@ -729,6 +729,7 @@ impl ParsedTypeDefnFlags {
 pub struct ParsedTypeDefn {
     pub name: IdentifierId,
     pub value_expr: ParsedTypeExpressionId,
+    pub type_params: Vec<ParsedTypeParamDefn>,
     pub span: SpanId,
     pub id: ParsedTypeDefnId,
     pub flags: ParsedTypeDefnFlags,
@@ -2338,10 +2339,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(Some(Block { stmts: block_statements, span }))
     }
 
-    fn expect_type_param(&mut self) -> ParseResult<TypeParamDef> {
+    fn expect_type_param(&mut self) -> ParseResult<ParsedTypeParamDefn> {
         let s = self.expect_eat_token(K::Ident)?;
         let ident_id = self.intern_ident_token(s);
-        Ok(TypeParamDef { ident: ident_id, span: s.span })
+        Ok(ParsedTypeParamDefn { ident: ident_id, span: s.span })
     }
 
     fn parse_function(&mut self) -> ParseResult<Option<ParsedFunctionId>> {
@@ -2370,7 +2371,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         };
         let func_name = self.expect_eat_token(K::Ident)?;
         let func_name_id = self.intern_ident_token(func_name);
-        let type_arguments: Option<Vec<TypeParamDef>> =
+        let type_arguments: Option<Vec<ParsedTypeParamDefn>> =
             if let TokenKind::OpenAngle = self.peek().kind {
                 self.tokens.advance();
                 let (type_args, _type_arg_span) = self.eat_delimited(
@@ -2465,7 +2466,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(Some(ability_impl_id))
     }
 
-    fn parse_typedef(&mut self) -> ParseResult<Option<ParsedTypeDefnId>> {
+    fn parse_type_defn(&mut self) -> ParseResult<Option<ParsedTypeDefnId>> {
         let keyword_type = self.eat_token(K::KeywordType);
         let Some(keyword_type) = keyword_type else {
             return Ok(None);
@@ -2491,6 +2492,20 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         }
 
         let name = self.expect_eat_token(K::Ident)?;
+
+        let type_params: Vec<ParsedTypeParamDefn> = if let TokenKind::OpenAngle = self.peek().kind {
+            self.tokens.advance();
+            let (type_args, _type_arg_span) = self.eat_delimited(
+                "Type arguments",
+                TokenKind::Comma,
+                TokenKind::CloseAngle,
+                Parser::expect_type_param,
+            )?;
+            type_args
+        } else {
+            Vec::new()
+        };
+
         let equals = self.expect_eat_token(K::Equals)?;
         let type_expr = Parser::expect("Type expression", equals, self.parse_type_expression())?;
         let span =
@@ -2500,6 +2515,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             name,
             value_expr: type_expr,
             span,
+            type_params,
             id: ParsedTypeDefnId(0), // The id is set by add_typedefn
             flags,
         });
@@ -2538,7 +2554,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             Ok(Some(ParsedId::Constant(constant_id)))
         } else if let Some(function_id) = self.parse_function()? {
             Ok(Some(ParsedId::Function(function_id)))
-        } else if let Some(type_defn_id) = self.parse_typedef()? {
+        } else if let Some(type_defn_id) = self.parse_type_defn()? {
             Ok(Some(ParsedId::TypeDefn(type_defn_id)))
         } else if let Some(ability_id) = self.parse_ability_defn()? {
             Ok(Some(ParsedId::Ability(ability_id)))

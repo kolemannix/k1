@@ -130,7 +130,7 @@ impl TypedModule {
             Type::Struct(struc) => {
                 if let Some(defn_info) = struc.type_defn_info.as_ref() {
                     writ.write_str(self.get_ident_str(defn_info.name))?;
-                    writ.write_str(" = ")?;
+                    writ.write_str("(")?;
                 }
                 writ.write_str("{")?;
                 for (index, field) in struc.fields.iter().enumerate() {
@@ -141,7 +141,11 @@ impl TypedModule {
                     writ.write_str(": ")?;
                     self.display_type_id(field.type_id, writ)?;
                 }
-                writ.write_str("}")
+                writ.write_str("}")?;
+                if let Some(defn_info) = struc.type_defn_info.as_ref() {
+                    writ.write_str(")")?;
+                };
+                Ok(())
             }
             Type::Array(array) => {
                 writ.write_str("Array<")?;
@@ -167,7 +171,7 @@ impl TypedModule {
             Type::Enum(e) => {
                 if let Some(defn_info) = e.type_defn_info.as_ref() {
                     writ.write_str(self.get_ident_str(defn_info.name))?;
-                    writ.write_str(" = ")?;
+                    writ.write_str("(")?;
                 }
                 writ.write_str("enum ")?;
                 for (idx, v) in e.variants.iter().enumerate() {
@@ -181,6 +185,9 @@ impl TypedModule {
                     if !last {
                         writ.write_str(" | ")?;
                     }
+                }
+                if let Some(defn_info) = e.type_defn_info.as_ref() {
+                    writ.write_str(")")?;
                 }
                 Ok(())
             }
@@ -198,6 +205,22 @@ impl TypedModule {
                 writ.write_str(self.get_ident_str(opaque.type_defn_info.name))?;
                 writ.write_str("(")?;
                 self.display_type_id(opaque.aliasee, writ)?;
+                writ.write_str(")")
+            }
+            Type::Generic(gen) => {
+                writ.write_str(self.get_ident_str(gen.type_defn_info.name))?;
+                writ.write_str("<")?;
+                for (idx, param) in gen.params.iter().enumerate() {
+                    writ.write_str(self.get_ident_str(param.name))?;
+                    let last = idx == gen.params.len() - 1;
+                    if !last {
+                        writ.write_str(" | ")?;
+                    }
+                    writ.write_str(", ")?;
+                }
+                writ.write_str(">")?;
+                writ.write_str("(")?;
+                self.display_type_id(gen.inner, writ)?;
                 writ.write_str(")")
             }
         }
