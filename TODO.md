@@ -38,11 +38,11 @@
 - [x] Type cleanup
   - [x] Order of eval (topology through defer/skip)
   - [x] named struct and enum fix
-  - [ ] Newtypes (opaque)
+  - [x] Newtypes (opaque)
   - [x] Aliases
-- [ ] Recursive types (depends on type cleanup)
-- Require named args; and allow anonymous
 - [ ] Generic structs and enums
+- [ ] Recursive types
+- Require named args; and allow anonymous
 - [x] TypedIf allow exprs instead of requiring blocks (did not do; instead improved handling of unit blocks)
 - [x] Remove binding 'if' since we have pattern matching
 - [x] Abilities
@@ -67,9 +67,8 @@
 - [ ] Typecheck the binary ops
 - [ ] Rest of the binary ops
 - [ ] Exhaustive pattern matching
-- [ ] Pure lambdas with ->
+- [ ] Pure lambdas with -> (not closures)
 - [ ] slices
-- [ ] No closures for now
 - [ ] Make demo readme
 
 ## Error story

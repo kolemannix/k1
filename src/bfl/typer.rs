@@ -19,7 +19,7 @@ use crate::parse::{
     self, ForExpr, ForExprType, IfExpr, IndexOperation, ParsedAbilityId, ParsedAbilityImplId,
     ParsedConstantId, ParsedExpressionId, ParsedFunctionId, ParsedId, ParsedNamespaceId,
     ParsedPattern, ParsedPatternId, ParsedTypeDefnId, ParsedTypeExpression, ParsedTypeExpressionId,
-    ParsedUnaryOpKind, Sources,
+    ParsedUnaryOpKind, Sources, TypeApplication,
 };
 use crate::parse::{
     Block, FnCall, IdentifierId, Literal, ParsedExpression, ParsedModule, ParsedStmt,
@@ -157,6 +157,20 @@ pub struct OpaqueTypeAlias {
 }
 
 #[derive(Debug, Clone)]
+pub struct GenericTypeParam {
+    name: IdentifierId,
+    type_id: TypeId,
+}
+
+#[derive(Debug, Clone)]
+pub struct GenericType {
+    pub params: Vec<GenericTypeParam>,
+    pub inner: TypeId,
+    pub ast_id: ParsedTypeDefnId,
+    pub type_defn_info: TypeDefnInfo,
+}
+
+#[derive(Debug, Clone)]
 pub enum Type {
     Unit,
     Char,
@@ -176,6 +190,8 @@ pub enum Type {
     EnumVariant(TypedEnumVariant),
     Never,
     OpaqueAlias(OpaqueTypeAlias),
+    // nocommit: Can you have an opaque generic?
+    Generic(GenericType),
 }
 
 impl Type {
@@ -192,6 +208,7 @@ impl Type {
             Type::EnumVariant(_ev) => None,
             Type::Never => None,
             Type::OpaqueAlias(opaque) => Some(opaque.ast_id.into()),
+            Type::Generic(gen) => Some(gen.ast_id.into()),
         }
     }
 
@@ -301,6 +318,7 @@ impl Type {
             Type::EnumVariant(_) => None,
             Type::Never => None,
             Type::OpaqueAlias(opaque) => Some(&opaque.type_defn_info),
+            Type::Generic(gen) => Some(&gen.type_defn_info),
         }
     }
 }
@@ -1109,25 +1127,34 @@ impl Types {
     }
 
     /// Recursively checks if given type contains any type variables
-    fn is_type_generic(&self, type_id: TypeId) -> bool {
+    /// TODO: Cache whether or not a type is generic on insertion into the type pool
+    fn does_type_reference_type_variables(&self, type_id: TypeId) -> bool {
         match self.get(type_id) {
             Type::Unit => false,
             Type::Char => false,
             Type::Int => false,
             Type::Bool => false,
             Type::String => false,
-            Type::Array(arr) => self.is_type_generic(arr.element_type),
+            Type::Array(arr) => self.does_type_reference_type_variables(arr.element_type),
             // We don't _yet_ support generics in structs
-            Type::Struct(_struct) => false,
-            Type::Optional(opt) => self.is_type_generic(opt.inner_type),
-            Type::Reference(refer) => self.is_type_generic(refer.inner_type),
+            Type::Struct(struc) => {
+                for field in struc.fields.iter() {
+                    if self.does_type_reference_type_variables(field.type_id) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            Type::Optional(opt) => self.does_type_reference_type_variables(opt.inner_type),
+            Type::Reference(refer) => self.does_type_reference_type_variables(refer.inner_type),
             Type::TypeVariable(_) => true,
             Type::TagInstance(_) => false,
             // We don't _yet_ support generics in enums
             Type::Enum(_) => false,
             Type::EnumVariant(_) => false,
             Type::Never => false,
-            Type::OpaqueAlias(opaque) => self.is_type_generic(opaque.aliasee),
+            Type::OpaqueAlias(opaque) => self.does_type_reference_type_variables(opaque.aliasee),
+            Type::Generic(_gen) => true,
         }
     }
 
@@ -1148,6 +1175,7 @@ impl Types {
             Type::EnumVariant(_) => None,
             Type::Never => None,
             Type::OpaqueAlias(_opaque) => None,
+            Type::Generic(_gen) => None,
         }
     }
 
@@ -1335,23 +1363,63 @@ impl TypedModule {
             companion_namespace: companion_namespace_id,
         };
 
-        // We only pass down type defn info if it's an alias but not an opaque one! We want the defn info to live
-        // on the opaque type, not the wrapped type.
-        let passed_type_defn_info =
-            if parsed_type_defn.flags.is_alias() && !parsed_type_defn.flags.is_opaque() {
-                None
-            } else {
-                Some(type_defn_info.clone())
-            };
+        let has_type_params = !parsed_type_defn.type_params.is_empty();
+
+        let passed_type_defn_info = if has_type_params
+            || (parsed_type_defn.flags.is_alias() && !parsed_type_defn.flags.is_opaque())
+        {
+            None
+        } else {
+            Some(type_defn_info.clone())
+        };
+
+        let defn_scope_id =
+            self.scopes.add_child_scope(scope_id, ScopeType::TypeDefn, Some(parsed_type_defn.name));
+        let our_scope = self.scopes.get_scope_mut(defn_scope_id);
+
+        let mut type_params: Vec<GenericTypeParam> =
+            Vec::with_capacity(parsed_type_defn.type_params.len());
+        for type_param in parsed_type_defn.type_params.iter() {
+            let type_variable = Type::TypeVariable(TypeVariable {
+                identifier_id: type_param.ident,
+                scope_id: defn_scope_id,
+                _constraints: None,
+            });
+            let type_variable_id = self.types.add_type(type_variable);
+            type_params
+                .push(GenericTypeParam { name: type_param.ident, type_id: type_variable_id });
+            let added = our_scope.add_type(type_param.ident, type_variable_id);
+            if !added {
+                return ferr!(
+                    type_param.span,
+                    "Type variable name '{}' is taken",
+                    self.get_ident_str(type_param.ident).blue()
+                );
+            }
+        }
+
         let rhs_type_id =
-            self.eval_type_expr(parsed_type_defn.value_expr, scope_id, passed_type_defn_info)?;
-        let type_id = if parsed_type_defn.flags.is_alias() {
+            self.eval_type_expr(parsed_type_defn.value_expr, defn_scope_id, passed_type_defn_info)?;
+        let type_id = if has_type_params {
+            eprintln!(
+                "Generating a generic wrapper for a {} with companion namespace {:?}",
+                self.type_id_to_string(rhs_type_id),
+                type_defn_info.companion_namespace
+            );
+            let gen = GenericType {
+                params: type_params,
+                ast_id: parsed_type_defn_id.into(),
+                inner: rhs_type_id,
+                type_defn_info,
+            };
+            Ok(self.types.add_type(Type::Generic(gen)))
+        } else if parsed_type_defn.flags.is_alias() {
             if parsed_type_defn.flags.is_opaque() {
                 // Opaque alias
                 eprintln!(
                     "Generating an opaque alias for a {} with companion namespace {:?}",
                     self.type_id_to_string(rhs_type_id),
-                    type_defn_info.companion_namespace
+                    type_defn_info.companion_namespace,
                 );
                 let alias = OpaqueTypeAlias {
                     ast_id: parsed_type_defn_id.into(),
@@ -1471,7 +1539,7 @@ impl TypedModule {
                         make_fail_span("Expected 1 type parameter for Array", ty_app.span)
                     }
                 } else {
-                    todo!("not supported: generic non builtin types")
+                    self.eval_type_application(type_expr_id, scope_id)
                 }
             }
             ParsedTypeExpression::Optional(opt) => {
@@ -1561,6 +1629,79 @@ impl TypedModule {
             }
         }?;
         Ok(base)
+    }
+
+    fn eval_type_application(
+        &mut self,
+        ty_app_id: ParsedTypeExpressionId,
+        scope_id: ScopeId,
+    ) -> TyperResult<TypeId> {
+        let ParsedTypeExpression::TypeApplication(ty_app) =
+            self.ast.type_expressions.get(ty_app_id)
+        else {
+            panic!("Expected TypeApplication")
+        };
+        let ty_app = ty_app.clone();
+        match self.scopes.find_type(scope_id, ty_app.base) {
+            None => {
+                return ferr!(
+                    ty_app.span,
+                    "No type named '{}' is in scope",
+                    self.get_ident_str(ty_app.base).blue()
+                )
+            }
+            Some(type_id) => {
+                let mut evaled_type_params: Vec<TypeId> = Vec::with_capacity(ty_app.params.len());
+                for parsed_param in ty_app.params.clone().iter() {
+                    let param_type_id = self.eval_type_expr(*parsed_param, scope_id, None)?;
+                    evaled_type_params.push(param_type_id);
+                }
+                let Type::Generic(gen) = self.types.get(type_id) else {
+                    return ferr!(
+                        ty_app.span,
+                        "Type '{}' does not take type parameters",
+                        self.get_ident_str(ty_app.base)
+                    );
+                };
+                let inner = self.types.get(gen.inner);
+                let specialized_type = match inner {
+                    Type::Struct(struc) => {
+                        let mut new_fields = struc.fields.clone();
+                        for field in new_fields.iter_mut() {
+                            // FIXME: make this a recursive find/replace of all the instances of gen.params to their
+                            // corresponding evaled_type_params
+                            // [T]
+                            // [Array<int>]
+                            let generic_param = gen
+                                .params
+                                .iter()
+                                .enumerate()
+                                .find(|(_, gen_param)| gen_param.type_id == field.type_id);
+                            match generic_param {
+                                None => {}
+                                Some((param_index, generic_param)) => {
+                                    let corresponding_type = evaled_type_params[param_index];
+                                    field.type_id = corresponding_type;
+                                }
+                            }
+                        }
+                        let specialized_struct = StructType {
+                            fields: new_fields,
+                            type_defn_info: None,
+                            ast_node: ty_app_id.into(),
+                        };
+                        // nocommit: Ensure specializations are deduped by add_type
+                        self.types.add_type(Type::Struct(specialized_struct))
+                    }
+                    Type::Optional(_) => todo!("generic instantiation of optional"),
+                    Type::Reference(_) => todo!("generic instantiation of reference"),
+                    Type::Enum(e) => todo!("generic instantiation of enum"),
+                    Type::TypeVariable(t) => todo!("generic instantiation of naked type variable"),
+                    _ => todo!("Weird generic type"),
+                };
+                Ok(specialized_type)
+            }
+        }
     }
 
     fn eval_const_type_expr(
@@ -4299,7 +4440,7 @@ impl TypedModule {
                 // actually specialized everything
                 let mut fully_concrete = true;
                 for TypeParam { type_id, .. } in type_args.iter() {
-                    if self.types.is_type_generic(*type_id) {
+                    if self.types.does_type_reference_type_variables(*type_id) {
                         fully_concrete = false
                     }
                 }
