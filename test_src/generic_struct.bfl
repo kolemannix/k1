@@ -1,0 +1,28 @@
+type Box<T> = { value: T }
+type MBox<T, U> = { t: T?, u: U }
+namespace MBox {
+  fn t<T, U>(self: MBox<T, U>): T? {
+    self.t
+  }
+}
+
+fn main(): int {
+  // Consider f(a, b) call syntax
+  val b: Box<int> = { value: 0 };
+  val c: Box<bool> = { value: true };
+  val c2: Box<bool> = { value: false };
+  val c3: Box<bool?> = { value: false };
+  val c4: Box<bool*> = { value: &false };
+  assert(b.value == 0);
+  assert(c.value == true);
+  assert(c2.value == false);
+  assert(c3.value! == false);
+  assert((*c4.value) == false);
+
+  val m: MBox<int, bool> = { t: 0, u: true };
+  assert(m.t! == 0);
+  assert(m.u == true);
+  m.t<int, bool>();
+
+  b.value
+}

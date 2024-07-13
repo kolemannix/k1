@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fmt::{Display, Formatter, Write};
 
 use log::trace;
+use string_interner::backend::StringBackend;
 use string_interner::Symbol;
 
 use crate::lex::*;
@@ -24,6 +25,11 @@ pub struct ParsedNamespaceId(u32);
 pub struct ParsedExpressionId(u32);
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
 pub struct ParsedTypeExpressionId(u32);
+impl ParsedTypeExpressionId {
+    pub const fn zero() -> ParsedTypeExpressionId {
+        ParsedTypeExpressionId(0)
+    }
+}
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
 pub struct ParsedPatternId(u32);
 
@@ -150,7 +156,7 @@ impl Display for IdentifierId {
 // and u32 symbols
 #[derive(Debug, Clone)]
 pub struct Identifiers {
-    intern_pool: string_interner::StringInterner,
+    intern_pool: string_interner::StringInterner<StringBackend>,
 }
 impl Identifiers {
     pub const BUILTIN_IDENTS: [&'static str; 8] =

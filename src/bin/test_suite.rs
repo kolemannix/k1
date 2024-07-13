@@ -255,21 +255,25 @@ pub fn main() -> Result<()> {
     if parallel {
         std::thread::scope(|scope| {
             for test in all_tests.iter() {
-                scope.spawn(|| {
-                    let ctx = Context::create();
-                    let result = test_file(&ctx, test.as_path(), test_suite_args.interpret);
-                    let filename = test.as_path().file_name().unwrap().to_str().unwrap();
-                    if result.is_ok() {
-                        eprintln!("{filename:040} {}", "PASS".green());
-                        success.fetch_add(1, Ordering::Relaxed);
-                    } else {
-                        let mut failures = failures.lock().unwrap();
-                        failures.push(
-                            test.as_path().file_name().unwrap().to_str().unwrap().to_string(),
-                        );
-                        eprintln!("{filename:040} {}: {}", "FAIL".red(), result.unwrap_err());
-                    }
-                });
+                let filename = test.as_path().file_name().unwrap().to_str().unwrap();
+                std::thread::Builder::new()
+                    .name(filename.to_string())
+                    .spawn_scoped(scope, || {
+                        let ctx = Context::create();
+                        let filename = filename.to_string();
+                        let result = test_file(&ctx, test.as_path(), test_suite_args.interpret);
+                        if result.is_ok() {
+                            eprintln!("{filename:040} {}", "PASS".green());
+                            success.fetch_add(1, Ordering::Relaxed);
+                        } else {
+                            let mut failures = failures.lock().unwrap();
+                            failures.push(
+                                test.as_path().file_name().unwrap().to_str().unwrap().to_string(),
+                            );
+                            eprintln!("{filename:040} {}: {}", "FAIL".red(), result.unwrap_err());
+                        }
+                    })
+                    .unwrap();
             }
         });
     } else {

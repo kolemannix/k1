@@ -179,10 +179,10 @@ impl Scopes {
         &self,
         scope_id: ScopeId,
         ident: IdentifierId,
-    ) -> Option<ParsedTypeDefnId> {
+    ) -> Option<(ParsedTypeDefnId, ScopeId)> {
         let scope = self.get_scope(scope_id);
-        if let v @ Some(_r) = scope.find_pending_type_defn(ident) {
-            return v;
+        if let Some(defn) = scope.find_pending_type_defn(ident) {
+            return Some((defn, scope_id));
         }
         match scope.parent {
             Some(parent) => self.find_pending_type_defn(parent, ident),

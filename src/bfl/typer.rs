@@ -19,11 +19,12 @@ use crate::parse::{
     self, ForExpr, ForExprType, IfExpr, IndexOperation, ParsedAbilityId, ParsedAbilityImplId,
     ParsedConstantId, ParsedExpressionId, ParsedFunctionId, ParsedId, ParsedNamespaceId,
     ParsedPattern, ParsedPatternId, ParsedTypeDefnId, ParsedTypeExpression, ParsedTypeExpressionId,
-    ParsedUnaryOpKind, Sources, TypeApplication,
+    ParsedUnaryOpKind, Sources,
 };
 use crate::parse::{
     Block, FnCall, IdentifierId, Literal, ParsedExpression, ParsedModule, ParsedStmt,
 };
+use crate::static_assert_size;
 
 pub type FunctionId = u32;
 pub type VariableId = u32;
@@ -63,6 +64,7 @@ pub struct TypeDefnInfo {
     pub scope: ScopeId,
     // If there's a corresponding namespace for this type defn, this is it
     pub companion_namespace: Option<NamespaceId>,
+    pub generic_parent: Option<TypeId>,
 }
 
 #[derive(Debug, Clone)]
@@ -168,6 +170,7 @@ pub struct GenericType {
     pub inner: TypeId,
     pub ast_id: ParsedTypeDefnId,
     pub type_defn_info: TypeDefnInfo,
+    pub specializations: HashMap<Vec<TypeId>, TypeId>,
 }
 
 #[derive(Debug, Clone)]
@@ -190,7 +193,6 @@ pub enum Type {
     EnumVariant(TypedEnumVariant),
     Never,
     OpaqueAlias(OpaqueTypeAlias),
-    // nocommit: Can you have an opaque generic?
     Generic(GenericType),
 }
 
@@ -235,6 +237,13 @@ impl Type {
         match self {
             Type::Enum(e) => e,
             _ => panic!("expected enum type"),
+        }
+    }
+
+    pub fn expect_enum_variant(&self) -> &TypedEnumVariant {
+        match self {
+            Type::EnumVariant(v) => v,
+            _ => panic!("expected enum variant type"),
         }
     }
 
@@ -1098,9 +1107,36 @@ impl Types {
                 }
             }
         }
-        let id = self.types.len();
-        self.types.push(typ);
-        TypeId(id as u32)
+        match typ {
+            Type::Enum(mut e) => {
+                // Enums and variants are self-referential
+                // so we handle them specially
+                let next_type_id = self.next_type_id();
+                let enum_type_id = TypeId(next_type_id.0 + e.variants.len() as u32);
+
+                for v in e.variants.iter_mut() {
+                    let variant_id = TypeId(next_type_id.0 + v.index);
+                    v.my_type_id = variant_id;
+                    v.enum_type_id = enum_type_id;
+                    self.types.push(Type::EnumVariant(v.clone()));
+                }
+
+                self.types.push(Type::Enum(e));
+                enum_type_id
+            }
+            Type::EnumVariant(_ev) => {
+                panic!("EnumVariant cannot be directly interned; intern the Enum instead")
+            }
+            _ => {
+                let type_id = self.next_type_id();
+                self.types.push(typ);
+                type_id
+            }
+        }
+    }
+
+    fn next_type_id(&self) -> TypeId {
+        TypeId(self.types.len() as u32)
     }
 
     fn add_type(&mut self, typ: Type) -> TypeId {
@@ -1307,6 +1343,11 @@ impl TypedModule {
             }
             (Type::TagInstance(t1), Type::TagInstance(t2)) => t1.ident == t2.ident,
             (Type::Enum(e1), Type::Enum(e2)) => {
+                // nocommit: This prevents us from ever not re-specializing generic enums.
+                // We should handle that by caching specializations, I think
+                if e1.type_defn_info.is_some() || e2.type_defn_info.is_some() {
+                    return false;
+                }
                 if e1.variants.len() != e2.variants.len() {
                     return false;
                 }
@@ -1361,6 +1402,7 @@ impl TypedModule {
             name: parsed_type_defn.name,
             scope: scope_id,
             companion_namespace: companion_namespace_id,
+            generic_parent: None,
         };
 
         let has_type_params = !parsed_type_defn.type_params.is_empty();
@@ -1411,6 +1453,7 @@ impl TypedModule {
                 ast_id: parsed_type_defn_id.into(),
                 inner: rhs_type_id,
                 type_defn_info,
+                specializations: HashMap::new(),
             };
             Ok(self.types.add_type(Type::Generic(gen)))
         } else if parsed_type_defn.flags.is_alias() {
@@ -1453,6 +1496,12 @@ impl TypedModule {
             }
         }?;
         self.types.add_type_defn_mapping(parsed_type_defn_id, type_id);
+        eprintln!(
+            "Adding type defn {} to scope {}",
+            self.get_ident_str(parsed_type_defn.name),
+            scope_id
+        );
+
         if !self.scopes.add_type(scope_id, parsed_type_defn.name, type_id) {
             make_fail_span(
                 &format!("Type {} exists", self.get_ident_str(parsed_type_defn.name)),
@@ -1505,14 +1554,15 @@ impl TypedModule {
                                 format!("No type named {} is in scope", self.get_ident_str(name)),
                                 *span,
                             ),
-                            Some(pending_defn_id) => {
+                            Some((pending_defn_id, pending_defn_scope_id)) => {
                                 eprintln!(
                                     "Recursing into pending type defn {}",
                                     self.get_ident_str(
                                         self.ast.get_type_defn(pending_defn_id).name
                                     )
                                 );
-                                let type_id = self.eval_type_defn(pending_defn_id, scope_id)?;
+                                let type_id =
+                                    self.eval_type_defn(pending_defn_id, pending_defn_scope_id)?;
                                 let removed = self.scopes.remove_pending_type_defn(scope_id, name);
                                 if !removed {
                                     panic!("Failed to remove pending type defn");
@@ -1556,18 +1606,11 @@ impl TypedModule {
             }
             ParsedTypeExpression::Enum(e) => {
                 let e = e.clone();
-                let enum_type = Type::Enum(TypedEnum {
-                    variants: Vec::new(),
-                    type_defn_info,
-                    ast_node: type_expr_id.into(),
-                });
-                let enum_type_id = self.types.add_type(enum_type);
-
                 let mut variants = Vec::with_capacity(e.variants.len());
                 for (index, v) in e.variants.iter().enumerate() {
-                    // Ensure there's a type for this tag as a workaround for codegen
-                    // since codegen looks at `types` to enumerate all the tags in the program
+                    // Hack: Ensure there's a type for this tag
                     self.types.get_type_for_tag(v.tag_name);
+
                     let payload_type_id = match &v.payload_expression {
                         None => None,
                         Some(payload_type_expr) => {
@@ -1577,18 +1620,20 @@ impl TypedModule {
                         }
                     };
                     let variant = TypedEnumVariant {
-                        enum_type_id,
+                        enum_type_id: TypeId::PENDING,
                         my_type_id: TypeId::PENDING,
                         tag_name: v.tag_name,
                         index: index as u32,
                         payload: payload_type_id,
                     };
-                    let variant_id = self.types.add_type(Type::EnumVariant(variant));
-                    let variant = self.types.get_mut(variant_id).expect_enum_variant_mut();
-                    variant.my_type_id = variant_id;
-                    variants.push(variant.clone());
+                    variants.push(variant);
                 }
-                self.types.get_mut(enum_type_id).expect_enum_mut().variants = variants;
+                let enum_type = Type::Enum(TypedEnum {
+                    variants,
+                    type_defn_info,
+                    ast_node: type_expr_id.into(),
+                });
+                let enum_type_id = self.types.add_type(enum_type);
                 Ok(enum_type_id)
             }
             ParsedTypeExpression::DotMemberAccess(dot_acc) => {
@@ -1663,44 +1708,152 @@ impl TypedModule {
                         self.get_ident_str(ty_app.base)
                     );
                 };
-                let inner = self.types.get(gen.inner);
-                let specialized_type = match inner {
-                    Type::Struct(struc) => {
-                        let mut new_fields = struc.fields.clone();
-                        for field in new_fields.iter_mut() {
-                            // FIXME: make this a recursive find/replace of all the instances of gen.params to their
-                            // corresponding evaled_type_params
-                            // [T]
-                            // [Array<int>]
-                            let generic_param = gen
-                                .params
-                                .iter()
-                                .enumerate()
-                                .find(|(_, gen_param)| gen_param.type_id == field.type_id);
-                            match generic_param {
-                                None => {}
-                                Some((param_index, generic_param)) => {
-                                    let corresponding_type = evaled_type_params[param_index];
-                                    field.type_id = corresponding_type;
-                                }
+                let gen = gen.clone();
+                let mut type_defn_info = gen.type_defn_info.clone();
+                type_defn_info.generic_parent = Some(gen.inner);
+                let specialized_type = match gen.specializations.get(&evaled_type_params) {
+                    Some(existing) => *existing,
+                    None => {
+                        let specialized_type = self.substitute_in_type(
+                            gen.inner,
+                            Some(gen.type_defn_info.clone()),
+                            &evaled_type_params,
+                            &gen.params,
+                            ty_app_id,
+                        );
+                        match self.types.get_mut(type_id) {
+                            Type::Generic(gen) => {
+                                gen.specializations.insert(evaled_type_params, specialized_type);
                             }
-                        }
-                        let specialized_struct = StructType {
-                            fields: new_fields,
-                            type_defn_info: None,
-                            ast_node: ty_app_id.into(),
+                            _ => {}
                         };
-                        // nocommit: Ensure specializations are deduped by add_type
-                        self.types.add_type(Type::Struct(specialized_struct))
+                        specialized_type
                     }
-                    Type::Optional(_) => todo!("generic instantiation of optional"),
-                    Type::Reference(_) => todo!("generic instantiation of reference"),
-                    Type::Enum(e) => todo!("generic instantiation of enum"),
-                    Type::TypeVariable(t) => todo!("generic instantiation of naked type variable"),
-                    _ => todo!("Weird generic type"),
                 };
                 Ok(specialized_type)
             }
+        }
+    }
+
+    fn substitute_in_type(
+        &mut self,
+        type_id: TypeId,
+        defn_info: Option<TypeDefnInfo>,
+        passed_params: &[TypeId],
+        generic_params: &[GenericTypeParam],
+        parsed_expression_id: ParsedTypeExpressionId,
+    ) -> TypeId {
+        let typ = self.types.get(type_id);
+        match typ {
+            Type::Struct(struc) => {
+                let mut new_fields = struc.fields.clone();
+                let mut any_change = false;
+                for field in new_fields.iter_mut() {
+                    let new_field_type_id = self.substitute_in_type(
+                        field.type_id,
+                        None,
+                        passed_params,
+                        generic_params,
+                        parsed_expression_id,
+                    );
+                    if new_field_type_id != field.type_id {
+                        any_change = true;
+                    }
+                    field.type_id = new_field_type_id;
+                }
+                if any_change {
+                    let specialized_struct = StructType {
+                        fields: new_fields,
+                        type_defn_info: defn_info,
+                        ast_node: parsed_expression_id.into(),
+                    };
+                    self.types.add_type(Type::Struct(specialized_struct))
+                } else {
+                    type_id
+                }
+            }
+            Type::Optional(opt) => {
+                let opt_inner = opt.inner_type;
+                let new_inner = self.substitute_in_type(
+                    opt_inner,
+                    None,
+                    passed_params,
+                    generic_params,
+                    parsed_expression_id,
+                );
+                if new_inner != opt_inner {
+                    let specialized_optional = OptionalType { inner_type: new_inner };
+                    self.types.add_type(Type::Optional(specialized_optional))
+                } else {
+                    type_id
+                }
+            }
+            Type::Reference(reference) => {
+                let ref_inner = reference.inner_type;
+                let new_inner = self.substitute_in_type(
+                    ref_inner,
+                    None,
+                    passed_params,
+                    generic_params,
+                    parsed_expression_id,
+                );
+                if new_inner != ref_inner {
+                    let specialized_optional = OptionalType { inner_type: new_inner };
+                    self.types.add_type(Type::Optional(specialized_optional))
+                } else {
+                    type_id
+                }
+            }
+            Type::Enum(e) => {
+                let mut new_variants = e.variants.clone();
+                let mut any_changed = false;
+                for variant in new_variants.iter_mut() {
+                    let new_payload_id = match variant.payload {
+                        None => None,
+                        Some(payload_type_id) => Some(self.substitute_in_type(
+                            payload_type_id,
+                            None,
+                            passed_params,
+                            generic_params,
+                            parsed_expression_id,
+                        )),
+                    };
+                    if new_payload_id != variant.payload {
+                        any_changed = true;
+                        variant.payload = new_payload_id;
+                    }
+                }
+                if any_changed {
+                    let new_enum = TypedEnum {
+                        variants: new_variants,
+                        ast_node: parsed_expression_id.into(),
+                        type_defn_info: defn_info,
+                    };
+                    let new_enum_id = self.types.add_type(Type::Enum(new_enum));
+                    new_enum_id
+                } else {
+                    type_id
+                }
+            }
+            Type::TypeVariable(_t) => {
+                let generic_param = generic_params
+                    .iter()
+                    .enumerate()
+                    .find(|(_, gen_param)| gen_param.type_id == type_id);
+                match generic_param {
+                    None => type_id,
+                    Some((param_index, _generic_param)) => {
+                        let corresponding_type = passed_params[param_index];
+                        eprintln!(
+                            "SUBSTITUTING {} for {}",
+                            self.type_id_to_string(corresponding_type),
+                            self.type_id_to_string(type_id)
+                        );
+                        corresponding_type
+                    }
+                }
+            }
+            _ => todo!("Weird generic type"),
         }
     }
 
@@ -4991,6 +5144,7 @@ impl TypedModule {
                 is_mutable: false,
                 owner_scope: fn_scope_id,
             };
+
             let variable_id = self.variables.add_variable(variable);
             params.push(FnArgDefn {
                 name: fn_arg.name,
@@ -5471,8 +5625,8 @@ impl TypedModule {
                 self.eval_function_body(*function_declaration_id)?;
                 Ok(())
             }
-            ParsedId::TypeDefn(type_defn_id) => {
-                let _type_id = self.eval_type_defn(type_defn_id, scope_id)?;
+            ParsedId::TypeDefn(_type_defn_id) => {
+                // Done in prior phase
                 Ok(())
             }
             ParsedId::Ability(_ability) => {

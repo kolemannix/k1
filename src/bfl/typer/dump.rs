@@ -142,7 +142,7 @@ impl TypedModule {
                     self.display_type_id(field.type_id, writ)?;
                 }
                 writ.write_str("}")?;
-                if let Some(defn_info) = struc.type_defn_info.as_ref() {
+                if let Some(_defn_info) = struc.type_defn_info.as_ref() {
                     writ.write_str(")")?;
                 };
                 Ok(())
@@ -186,7 +186,7 @@ impl TypedModule {
                         writ.write_str(" | ")?;
                     }
                 }
-                if let Some(defn_info) = e.type_defn_info.as_ref() {
+                if let Some(_defn_info) = e.type_defn_info.as_ref() {
                     writ.write_str(")")?;
                 }
                 Ok(())
