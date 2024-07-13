@@ -12,6 +12,24 @@ namespace HashMap {
     { size: 0, slots: slots }
   }
 
+  // C FNV-1a hash
+  // #define FNV_PRIME 0x100000001b3
+  // #define FNV_OFFSET 0xcbf29ce48422325UL
+  // uint64_t hash_fnvl(const char *data, size_t length)
+  // uint64_t hash_value = FNV_OFFSET;
+  // for (int i=0; i < length; i+) {
+  // hash_value *= FNV_PRIME;
+  // hash_value ~ data[1];
+  // }
+  fn fnv1a_hash(key: int): int {
+    val FNV_PRIME = 1099511628211;
+    val FNV_OFFSET = 14695981039346656037;
+    val hash_value = FNV_OFFSET;
+    hash_value = hash_value * FNV_PRIME;
+    hash_value = hash_value ^ key;
+    hash_value
+  }
+
   fn insert(self: HashMap*, key: int, value: int): unit {
     val index = key % self.slots.length();
     val elem = { key: key, value: value };

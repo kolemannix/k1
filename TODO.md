@@ -28,8 +28,7 @@
   - [x] Multi-case
 - [x] Enum types (enums / tagged unions)
   - [x] Syntax
-  - [x] Construction/repr
-  - [x] Later, pattern match on variants
+  - [x] Construction/repr - [x] Later, pattern match on variants
   - [x] Make first-class types for each variant
   - [x] First, hard cast to variant (`as<.Tag>`)
   - [x] Built-in .as<Tag> or panic
@@ -56,6 +55,7 @@
   - [x] from reference
   - [x] to reference
 - [ ] sizeOf
+- [ ] Mark types as trivially copyable or not
 - [ ] More type expressions! (this was a big part of my original point)
   - [ ] Intersect structs
   - [ ] Union structs
