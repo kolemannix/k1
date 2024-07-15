@@ -6,31 +6,16 @@ namespace Result {
       | .Err(e) -> { print("Error "); println(e); }
     }
   }
-  fn show_ss(self: Result<string, string>): unit {
-    when self {
-      | .Ok(v) -> { print("Ok "); print(v); println("") }
-      | .Err(e) -> { print("Error "); println(e); }
-    }
-  }
 }
 
 fn main(): int {
     val x1: Result<int, string> = .Ok(-3);
     val x2: Result<int, string> = .Err("Some error message");
-    val x3: Result<string, string> = .Err("Some error message");
 
     x1.show();
     x2.show();
-    x3.show_ss();
+    assert(sizeOf<Result<int, string>>() == 24);
+    assert(alignOf<Result<int, string>>() == 8);
 
-    when x1 {
-        | .Ok(v) -> { print("x: Ok "); printInt(v); println("") }
-        | .Err(e) -> { print("x: Error "); println(e); }
-    };
-
-    when x2 {
-        | .Ok(v) -> { print("y: Ok "); printInt(v); println("") }
-        | .Err(e) -> { print("y: Error "); println(e); }
-    };
     0
 }

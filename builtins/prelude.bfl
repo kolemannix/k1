@@ -18,6 +18,9 @@ namespace RawPointer {
   fn fromIntUnsafe(value: int): RawPointer { value }
 }
 
+intern fn sizeOf<T>(): int
+intern fn alignOf<T>(): int
+
 ability Equals {
   fn equals(self: Self, other: Self): bool
 }
