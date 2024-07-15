@@ -2095,7 +2095,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     fn codegen_function_call(&mut self, call: &Call) -> CodegenResult<LlvmValue<'ctx>> {
         let callee = self.module.get_function(call.callee_function_id);
 
-        if !callee.should_codegen() && callee.intrinsic_type.is_some() {
+        if !callee.should_codegen_function() && callee.intrinsic_type.is_some() {
             return self.codegen_intrinsic_inline(callee.intrinsic_type.unwrap(), call);
         }
 
@@ -2291,6 +2291,35 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let align_bytes = size.align_bits / 8;
                 let align_value = self.builtin_types.int.const_int(align_bytes as u64, false);
                 Ok(align_value.as_basic_value_enum().into())
+            }
+            IntrinsicFunction::BitNot => {
+                let input_value = self.codegen_expr_basic_value(&call.args[0])?.into_int_value();
+                let not_value = self.builder.build_not(input_value, "not");
+                Ok(not_value.as_basic_value_enum().into())
+            }
+            IntrinsicFunction::BitAnd
+            | IntrinsicFunction::BitXor
+            | IntrinsicFunction::BitOr
+            | IntrinsicFunction::BitShiftLeft
+            | IntrinsicFunction::BitShiftRight => {
+                // We only support signed 64 bit integers for now
+                let is_operand_signed = true;
+                let sign_extend = is_operand_signed;
+                let lhs = self.codegen_expr_basic_value(&call.args[0])?.into_int_value();
+                let rhs = self.codegen_expr_basic_value(&call.args[1])?.into_int_value();
+                let result = match intrinsic_type {
+                    IntrinsicFunction::BitAnd => self.builder.build_and(lhs, rhs, "and"),
+                    IntrinsicFunction::BitXor => self.builder.build_xor(lhs, rhs, "xor"),
+                    IntrinsicFunction::BitOr => self.builder.build_or(lhs, rhs, "or"),
+                    IntrinsicFunction::BitShiftLeft => {
+                        self.builder.build_left_shift(lhs, rhs, "shl")
+                    }
+                    IntrinsicFunction::BitShiftRight => {
+                        self.builder.build_right_shift(lhs, rhs, sign_extend, "shr")
+                    }
+                    _ => unreachable!(),
+                };
+                Ok(result.as_basic_value_enum().into())
             }
             _ => {
                 panic!("Unexpected intrinsic type for inline gen")
@@ -2845,7 +2874,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
         }
         for (id, function) in self.module.function_iter() {
-            if function.should_codegen() {
+            if function.should_codegen_function() {
                 self.codegen_function(id, function)?;
             }
         }

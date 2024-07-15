@@ -500,10 +500,9 @@ pub struct TypedFunction {
 }
 
 impl TypedFunction {
-    pub fn should_codegen(&self) -> bool {
+    pub fn should_codegen_function(&self) -> bool {
         match self.intrinsic_type {
-            Some(IntrinsicFunction::SizeOf) => false,
-            Some(IntrinsicFunction::AlignOf) => false,
+            Some(intrinsic) if intrinsic.is_inlined() => false,
             _ => match self.metadata {
                 TypedFunctionMetadata::Standard(_) => !self.is_generic(),
                 TypedFunctionMetadata::Specialization { .. } => true,
@@ -1016,6 +1015,39 @@ pub enum IntrinsicFunction {
     RawPointerToReference,
     SizeOf,
     AlignOf,
+    BitNot,
+    BitAnd,
+    BitOr,
+    BitXor,
+    BitShiftLeft,
+    BitShiftRight,
+}
+
+impl IntrinsicFunction {
+    fn is_inlined(self: Self) -> bool {
+        match self {
+            IntrinsicFunction::Exit => false,
+            IntrinsicFunction::PrintInt => false,
+            IntrinsicFunction::PrintString => false,
+            IntrinsicFunction::StringLength => false,
+            IntrinsicFunction::ArrayLength => false,
+            IntrinsicFunction::ArrayNew => false,
+            IntrinsicFunction::ArrayGrow => false,
+            IntrinsicFunction::ArraySetLength => false,
+            IntrinsicFunction::ArrayCapacity => false,
+            IntrinsicFunction::StringFromCharArray => false,
+            IntrinsicFunction::StringEquals => false,
+            IntrinsicFunction::RawPointerToReference => false,
+            IntrinsicFunction::SizeOf => true,
+            IntrinsicFunction::AlignOf => true,
+            IntrinsicFunction::BitNot => true,
+            IntrinsicFunction::BitAnd => true,
+            IntrinsicFunction::BitOr => true,
+            IntrinsicFunction::BitXor => true,
+            IntrinsicFunction::BitShiftLeft => true,
+            IntrinsicFunction::BitShiftRight => true,
+        }
+    }
 }
 
 fn make_error<T: AsRef<str>>(message: T, span: SpanId) -> TyperError {
@@ -2946,8 +2978,6 @@ impl TypedModule {
                     ))?;
                 let inner_type = expected_type.inner_type;
                 let none_type = Type::Optional(OptionalType { inner_type });
-                // FIXME: We'll re-create the type for optional int, bool, etc over and over. Instead of add_type it should be
-                //        self.get_or_add_type()
                 let type_id = self.types.add_type(none_type);
                 Ok(TypedExpr::None(type_id, *span))
             }
@@ -4990,6 +5020,12 @@ impl TypedModule {
         scope_id: ScopeId,
     ) -> Result<IntrinsicFunction, String> {
         trace!("resolve_intrinsic_function_type for {}", &*self.get_ident_str(fn_name));
+        // FIXME: This is a broken way of resolving these builtin namespaces
+        // since it doesn't require that we're in the root scope. We really should just
+        // do a top-down thing like "are we in _root -> ?" "are we in _root -> Array", "root -> string", etc
+
+        // This current one is also really slow because in the common case, we iterate all namespaces needlessly
+        // since we rely on this namespaces.find()
         let result = if let Some(current_namespace) =
             self.namespaces.iter().find(|ns| ns.scope_id == scope_id)
         {
@@ -5035,6 +5071,16 @@ impl TypedModule {
                     Some(IntrinsicFunction::RawPointerToReference)
                 } else {
                     None
+                }
+            } else if Some(current_namespace.name) == self.ast.identifiers.get("Bits") {
+                match self.get_ident_str(fn_name) {
+                    "not" => Some(IntrinsicFunction::BitNot),
+                    "and" => Some(IntrinsicFunction::BitAnd),
+                    "or" => Some(IntrinsicFunction::BitOr),
+                    "xor" => Some(IntrinsicFunction::BitXor),
+                    "shiftLeft" => Some(IntrinsicFunction::BitShiftLeft),
+                    "shiftRight" => Some(IntrinsicFunction::BitShiftRight),
+                    _ => None,
                 }
             } else {
                 None

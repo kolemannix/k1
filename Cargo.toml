@@ -4,9 +4,6 @@ version = "0.1.0"
 edition = "2021"
 default-run = "compiler"
 
-[build]
-rustflags = ["-Z", "threads=8"]
-
 [lib]
 name = "bfl"
 path = "src/bfl/lib.rs"
