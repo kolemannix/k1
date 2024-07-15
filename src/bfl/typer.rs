@@ -24,7 +24,6 @@ use crate::parse::{
 use crate::parse::{
     Block, FnCall, IdentifierId, Literal, ParsedExpression, ParsedModule, ParsedStmt,
 };
-use crate::static_assert_size;
 
 pub type FunctionId = u32;
 pub type VariableId = u32;
@@ -491,7 +490,7 @@ pub struct TypedFunction {
     pub scope: ScopeId,
     pub ret_type: TypeId,
     pub params: Vec<FnArgDefn>,
-    pub type_params: Option<Vec<TypeParam>>,
+    pub type_params: Vec<TypeParam>,
     pub block: Option<TypedBlock>,
     pub intrinsic_type: Option<IntrinsicFunction>,
     pub linkage: Linkage,
@@ -502,18 +501,19 @@ pub struct TypedFunction {
 
 impl TypedFunction {
     pub fn should_codegen(&self) -> bool {
-        match self.metadata {
-            TypedFunctionMetadata::Standard(_) => !self.is_generic(),
-            TypedFunctionMetadata::Specialization { .. } => true,
-            TypedFunctionMetadata::AbilityDefn(_) => false,
-            TypedFunctionMetadata::AbilityImpl { .. } => true,
+        match self.intrinsic_type {
+            Some(IntrinsicFunction::SizeOf) => false,
+            Some(IntrinsicFunction::AlignOf) => false,
+            _ => match self.metadata {
+                TypedFunctionMetadata::Standard(_) => !self.is_generic(),
+                TypedFunctionMetadata::Specialization { .. } => true,
+                TypedFunctionMetadata::AbilityDefn(_) => false,
+                TypedFunctionMetadata::AbilityImpl { .. } => true,
+            },
         }
     }
     pub fn is_generic(&self) -> bool {
-        match &self.type_params {
-            None => false,
-            Some(vec) => !vec.is_empty(),
-        }
+        !self.type_params.is_empty()
     }
 }
 
@@ -663,6 +663,7 @@ pub struct UnaryOp {
 pub struct Call {
     pub callee_function_id: FunctionId,
     pub args: Vec<TypedExpr>,
+    pub type_args: Vec<TypeParam>,
     pub ret_type: TypeId,
     pub span: SpanId,
 }
@@ -1013,17 +1014,8 @@ pub enum IntrinsicFunction {
     StringFromCharArray,
     StringEquals,
     RawPointerToReference,
-}
-
-impl IntrinsicFunction {
-    pub fn from_root_function_name(value: &str) -> Option<Self> {
-        match value {
-            "printInt" => Some(IntrinsicFunction::PrintInt),
-            "print" => Some(IntrinsicFunction::PrintString),
-            "exit" => Some(IntrinsicFunction::Exit),
-            _ => None,
-        }
-    }
+    SizeOf,
+    AlignOf,
 }
 
 fn make_error<T: AsRef<str>>(message: T, span: SpanId) -> TyperError {
@@ -4035,6 +4027,7 @@ impl TypedModule {
         let call_expr = TypedExpr::FunctionCall(Call {
             callee_function_id: equals_implementation_function_id,
             args: vec![lhs, rhs],
+            type_args: Vec::new(),
             ret_type: BOOL_TYPE_ID, // TODO: We should assert that equals does return a bool so we don't emit invalid bytecode
             span,
         });
@@ -4549,84 +4542,90 @@ impl TypedModule {
         let original_function = self.get_function(function_id);
         let original_params = original_function.params.clone();
 
-        let (function_to_call, typechecked_arguments) = match &original_function.type_params {
-            None => (
-                function_id,
-                self.typecheck_call_arguments(
-                    fn_call,
-                    this_expr,
-                    &original_params,
-                    known_value_args,
-                    scope_id,
-                    false,
-                )?,
-            ),
-            Some(type_params) => {
-                let intrinsic_type = original_function.intrinsic_type;
-
-                // We infer the type arguments, or just use them if the user has supplied them
-                let type_args = match known_type_args {
-                    Some(ta) => {
-                        // Need the ident
-                        ta.into_iter()
-                            .enumerate()
-                            .map(|(idx, type_id)| TypeParam {
-                                ident: type_params[idx].ident,
-                                type_id,
-                            })
-                            .collect()
-                    }
-                    None => self.infer_call_type_args(
+        let (function_to_call, typechecked_arguments, type_args) =
+            match original_function.type_params.is_empty() {
+                true => (
+                    function_id,
+                    self.typecheck_call_arguments(
                         fn_call,
-                        function_id,
-                        this_expr.as_ref(),
-                        // We shouldn't have to clone this because we should always
-                        // pass the type args if we pass the known value args
-                        known_value_args.clone(),
-                        scope_id,
-                    )?,
-                };
-
-                // We skip specialization if any of the type arguments are type variables: `any_type_vars`
-                // because we could just be evaluating a generic function that calls another generic function,
-                // in which case we don't want to generate a 'specialized' function where we haven't
-                // actually specialized everything
-                let mut fully_concrete = true;
-                for TypeParam { type_id, .. } in type_args.iter() {
-                    if self.types.does_type_reference_type_variables(*type_id) {
-                        fully_concrete = false
-                    }
-                }
-                if !fully_concrete {
-                    (
-                        function_id,
-                        self.typecheck_call_arguments(
-                            fn_call,
-                            this_expr,
-                            &original_params,
-                            known_value_args,
-                            scope_id,
-                            false,
-                        )?,
-                    )
-                } else {
-                    self.get_specialized_function_for_call(
-                        fn_call,
-                        type_args,
-                        function_id,
-                        intrinsic_type,
                         this_expr,
-                        scope_id,
+                        &original_params,
                         known_value_args,
-                    )?
+                        scope_id,
+                        false,
+                    )?,
+                    Vec::new(),
+                ),
+                false => {
+                    let type_params = &original_function.type_params;
+                    let intrinsic_type = original_function.intrinsic_type;
+
+                    // We infer the type arguments, or just use them if the user has supplied them
+                    let type_args = match known_type_args {
+                        Some(ta) => {
+                            // Need the ident
+                            ta.into_iter()
+                                .enumerate()
+                                .map(|(idx, type_id)| TypeParam {
+                                    ident: type_params[idx].ident,
+                                    type_id,
+                                })
+                                .collect()
+                        }
+                        None => self.infer_call_type_args(
+                            fn_call,
+                            function_id,
+                            this_expr.as_ref(),
+                            // We shouldn't have to clone this because we should always
+                            // pass the type args if we pass the known value args
+                            known_value_args.clone(),
+                            scope_id,
+                        )?,
+                    };
+
+                    // We skip specialization if any of the type arguments are type variables: `any_type_vars`
+                    // because we could just be evaluating a generic function that calls another generic function,
+                    // in which case we don't want to generate a 'specialized' function where we haven't
+                    // actually specialized everything
+                    let mut fully_concrete = true;
+                    for TypeParam { type_id, .. } in type_args.iter() {
+                        if self.types.does_type_reference_type_variables(*type_id) {
+                            fully_concrete = false
+                        }
+                    }
+                    if !fully_concrete {
+                        (
+                            function_id,
+                            self.typecheck_call_arguments(
+                                fn_call,
+                                this_expr,
+                                &original_params,
+                                known_value_args,
+                                scope_id,
+                                false,
+                            )?,
+                            type_args,
+                        )
+                    } else {
+                        let (function_id, args) = self.get_specialized_function_for_call(
+                            fn_call,
+                            &type_args,
+                            function_id,
+                            intrinsic_type,
+                            this_expr,
+                            scope_id,
+                            known_value_args,
+                        )?;
+                        (function_id, args, type_args)
+                    }
                 }
-            }
-        };
+            };
 
         let function_ret_type = self.get_function(function_to_call).ret_type;
         let call = Call {
             callee_function_id: function_to_call,
             args: typechecked_arguments,
+            type_args,
             ret_type: function_ret_type,
             span: fn_call.span,
         };
@@ -4642,11 +4641,8 @@ impl TypedModule {
         calling_scope: ScopeId,
     ) -> TyperResult<Vec<TypeParam>> {
         let generic_function = self.get_function(generic_function_id);
-        let generic_type_params = generic_function
-            .type_params
-            .as_ref()
-            .cloned()
-            .expect("expected function to be generic");
+        let generic_type_params = generic_function.type_params.clone();
+        debug_assert!(!generic_type_params.is_empty());
         let generic_name = generic_function.name;
         let generic_params = generic_function.params.clone();
         let type_params = match &fn_call.type_args {
@@ -4759,7 +4755,7 @@ impl TypedModule {
     fn get_specialized_function_for_call(
         &mut self,
         fn_call: &FnCall,
-        inferred_or_passed_type_args: Vec<TypeParam>,
+        inferred_or_passed_type_args: &Vec<TypeParam>,
         generic_function_id: FunctionId,
         intrinsic_type: Option<IntrinsicFunction>,
         this_expr: Option<TypedExpr>,
@@ -5022,11 +5018,18 @@ impl TypedModule {
                     None
                 }
             } else if Some(current_namespace.name) == { self.ast.identifiers.get("char") } {
-                // Future Char intrinsics
+                // Future Char builtins
                 None
             } else if Some(current_namespace.name) == { self.ast.identifiers.get("_root") } {
                 let function_name = self.get_ident_str(fn_name);
-                IntrinsicFunction::from_root_function_name(function_name)
+                match function_name {
+                    "printInt" => Some(IntrinsicFunction::PrintInt),
+                    "print" => Some(IntrinsicFunction::PrintString),
+                    "exit" => Some(IntrinsicFunction::Exit),
+                    "sizeOf" => Some(IntrinsicFunction::SizeOf),
+                    "alignOf" => Some(IntrinsicFunction::AlignOf),
+                    _ => None,
+                }
             } else if Some(current_namespace.name) == self.ast.identifiers.get("RawPointer") {
                 if Some(fn_name) == self.ast.identifiers.get("asUnsafe") {
                     Some(IntrinsicFunction::RawPointerToReference)
@@ -5093,18 +5096,9 @@ impl TypedModule {
             self.scopes.get_scope(fn_scope_id).parent.unwrap_or(self.scopes.get_root_scope_id());
 
         // Instantiate type arguments
-        let is_generic = !specialize
-            && parsed_function.type_args.as_ref().map(|args| !args.is_empty()).unwrap_or(false);
-        trace!(
-            "eval_function {} is_generic: {} in scope: {}",
-            &*self.get_ident_str(parsed_function.name),
-            is_generic,
-            parent_scope_id
-        );
-        let mut type_params: Option<Vec<TypeParam>> = None;
-        if is_generic {
-            let mut the_type_params = Vec::new();
-            for type_parameter in parsed_function.type_args.as_ref().unwrap().iter() {
+        let mut type_params: Vec<TypeParam> = Vec::with_capacity(parsed_function.type_args.len());
+        if !specialize {
+            for type_parameter in parsed_function.type_args.iter() {
                 let type_variable = TypeVariable {
                     identifier_id: type_parameter.ident,
                     scope_id: fn_scope_id,
@@ -5114,18 +5108,17 @@ impl TypedModule {
                 let fn_scope = self.scopes.get_scope_mut(fn_scope_id);
                 let type_param =
                     TypeParam { ident: type_parameter.ident, type_id: type_variable_id };
-                the_type_params.push(type_param);
+                type_params.push(type_param);
                 if !fn_scope.add_type(type_parameter.ident, type_variable_id) {
                     return make_fail_span("Generic type {} already exists", type_parameter.span);
                 }
             }
-            type_params = Some(the_type_params);
-            trace!(
-                "Added type arguments to function {} scope {:?}",
-                &*self.get_ident_str(parsed_function.name),
-                self.scopes.get_scope(fn_scope_id)
-            );
         }
+        trace!(
+            "Added type arguments to function {} scope {:?}",
+            &*self.get_ident_str(parsed_function.name),
+            self.scopes.get_scope(fn_scope_id)
+        );
 
         // Typecheck arguments
         let mut params = Vec::new();

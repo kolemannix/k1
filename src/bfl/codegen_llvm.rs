@@ -16,8 +16,8 @@ use inkwell::debug_info::{
 };
 use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::module::{Linkage as LlvmLinkage, Module as LlvmModule};
-use inkwell::passes::{PassManager, PassManagerBuilder};
-use inkwell::targets::{InitializationConfig, Target, TargetMachine, TargetTriple};
+use inkwell::passes::PassManager;
+use inkwell::targets::{InitializationConfig, Target, TargetMachine};
 use inkwell::types::{
     AnyType, AnyTypeEnum, BasicMetadataTypeEnum, BasicType, BasicTypeEnum, IntType, PointerType,
     StructType, VoidType,
@@ -47,6 +47,18 @@ const WORD_SIZE_BITS: u64 = 64;
 pub struct CodegenError {
     pub message: String,
     pub span: SpanId,
+}
+
+macro_rules! err {
+    ($span:expr, $($format_args:expr),*) => {
+        {
+            let s: String = format!($($format_args),*);
+            Err(CodegenError {
+                message: s,
+                span: $span,
+            })
+        }
+    };
 }
 
 type CodegenResult<T> = Result<T, CodegenError>;
@@ -377,7 +389,7 @@ pub struct Codegen<'ctx, 'module> {
     ctx: &'ctx Context,
     pub module: &'module TypedModule,
     llvm_module: LlvmModule<'ctx>,
-    llvm_machine: Option<TargetMachine>,
+    llvm_machine: TargetMachine,
     builder: Builder<'ctx>,
     llvm_functions: HashMap<FunctionId, FunctionValue<'ctx>>,
     llvm_types: RefCell<HashMap<TypeId, LlvmType<'ctx>>>,
@@ -548,7 +560,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     ) -> Codegen<'ctx, 'module> {
         let builder = ctx.create_builder();
         let char_type = ctx.i8_type();
-        let llvm_module = ctx.create_module(&module.ast.name);
+        let mut llvm_module = ctx.create_module(&module.ast.name);
         llvm_module.set_source_file_name(&module.ast.sources.get_main().filename);
         // Example of linking an LLVM module
         // let stdlib_module = ctx
@@ -557,6 +569,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         // llvm_module.link_in_module(stdlib_module).unwrap();
 
         let debug_context = Codegen::init_debug(ctx, &llvm_module, &module, optimize, debug);
+
+        let machine = Codegen::set_up_machine(&mut llvm_module);
 
         let pointers = HashMap::new();
         let format_int_str = {
@@ -642,7 +656,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             ctx,
             module,
             llvm_module,
-            llvm_machine: None,
+            llvm_machine: machine,
             builder,
             variables: pointers,
             globals,
@@ -653,6 +667,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             builtin_types,
             debug: debug_context,
             tag_type_mappings,
+        }
+    }
+
+    fn size_info(&self, typ: &dyn AnyType) -> SizeInfo {
+        let td = self.llvm_machine.get_target_data();
+        SizeInfo {
+            size_bits: td.get_bit_size(typ) as u32,
+            align_bits: td.get_preferred_alignment(typ) * 8,
         }
     }
 
@@ -726,6 +748,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             .struct_type(&[boolean_type.value_basic_type(), inner_type.value_basic_type()], false);
         let size = SizeInfo::size_of_aggregate(&[boolean_type.size_info(), inner_type.size_info()]);
         // FIXME(padding): Do our own padding, so we have correct offset to pass in
+        // Followup: We can now get the layout info from LLVM directly, so should be able
+        // to resolve all sizing / layout todos
         let di_type = self.make_debug_struct_type(
             &format!("optional_{}", type_id.to_string()),
             SpanId::NONE,
@@ -957,15 +981,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         .into())
                     }
                     t @ Type::TypeVariable(v) => {
-                        println!("{}", self.module);
                         let span = self.module.ast.get_span_for_maybe_id(t.ast_node());
-                        Err(CodegenError {
-                            message: format!(
-                                "codegen was asked to codegen a type variable {:?}",
-                                v
-                            ),
-                            span,
-                        })
+                        err!(span, "codegen was asked to codegen a type variable {:?}", v)
                     }
                     Type::Array(array) => {
                         let element_type = self.codegen_type(array.element_type)?;
@@ -2078,6 +2095,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     fn codegen_function_call(&mut self, call: &Call) -> CodegenResult<LlvmValue<'ctx>> {
         let callee = self.module.get_function(call.callee_function_id);
 
+        if !callee.should_codegen() && callee.intrinsic_type.is_some() {
+            return self.codegen_intrinsic_inline(callee.intrinsic_type.unwrap(), call);
+        }
+
         let function_value = self.codegen_function(call.callee_function_id, callee)?;
 
         let args: CodegenResult<Vec<BasicMetadataValueEnum<'ctx>>> = call
@@ -2249,7 +2270,35 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         self.variables.get(&variable_id).unwrap().loaded_value(&self.builder)
     }
 
-    fn codegen_intrinsic(
+    fn codegen_intrinsic_inline(
+        &mut self,
+        intrinsic_type: IntrinsicFunction,
+        call: &Call,
+    ) -> CodegenResult<LlvmValue<'ctx>> {
+        match intrinsic_type {
+            IntrinsicFunction::SizeOf => {
+                let type_param = &call.type_args[0];
+                let llvm_type = self.codegen_type(type_param.type_id)?;
+                let size = self.size_info(&llvm_type.value_any_type());
+                let size_bytes = size.size_bits / 8;
+                let size_value = self.builtin_types.int.const_int(size_bytes as u64, false);
+                Ok(size_value.as_basic_value_enum().into())
+            }
+            IntrinsicFunction::AlignOf => {
+                let type_param = &call.type_args[0];
+                let llvm_type = self.codegen_type(type_param.type_id)?;
+                let size = self.size_info(&llvm_type.value_any_type());
+                let align_bytes = size.align_bits / 8;
+                let align_value = self.builtin_types.int.const_int(align_bytes as u64, false);
+                Ok(align_value.as_basic_value_enum().into())
+            }
+            _ => {
+                panic!("Unexpected intrinsic type for inline gen")
+            }
+        }
+    }
+
+    fn codegen_intrinsic_function_body(
         &mut self,
         intrinsic_type: IntrinsicFunction,
         function: &TypedFunction,
@@ -2513,6 +2562,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 );
                 Ok(actual_ptr.as_basic_value_enum())
             }
+            _ => {
+                panic!("Unexpected intrinsic type for actual llvm function {:?}", intrinsic_type)
+            }
         }
     }
     // This needs to return either a basic value or an instruction value (in the case of early return)
@@ -2640,6 +2692,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         if let Some(function) = self.llvm_functions.get(&function_id) {
             return Ok(*function);
         }
+
         let function_line_number = self
             .module
             .ast
@@ -2728,7 +2781,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         match function.intrinsic_type {
             Some(intrinsic_type) => {
                 trace!("codegen intrinsic {:?} fn {:?}", intrinsic_type, function);
-                let value = self.codegen_intrinsic(intrinsic_type, function)?.as_basic_value_enum();
+                let value = self
+                    .codegen_intrinsic_function_body(intrinsic_type, function)?
+                    .as_basic_value_enum();
                 self.builder.build_return(Some(&value));
             }
             None => {
@@ -2749,7 +2804,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                                 self.builder.build_return(Some(&basic_value))
                             }
                             LlvmValue::Never(_instr) => self.builder.build_unreachable(),
-                            // LlvmValue::Void(_instr) => self.builder.build_return(None),
                         };
                     }
                 }
@@ -2803,21 +2857,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         self.module.name()
     }
 
-    pub fn optimize(&mut self, optimize: bool) -> anyhow::Result<()> {
-        let start = std::time::Instant::now();
-        Target::initialize_aarch64(&InitializationConfig::default());
-        // let triple = TargetMachine::get_default_triple();
-        let triple = TargetTriple::create("arm64-apple-macosx14.4.0");
+    fn set_up_machine(module: &mut LlvmModule) -> TargetMachine {
+        // Target::initialize_aarch64(&InitializationConfig::default());
+        Target::initialize_native(&InitializationConfig::default()).unwrap();
+        let triple = TargetMachine::get_default_triple();
+        // let triple = TargetTriple::create("arm64-apple-macosx14.4.0");
         let target = Target::from_triple(&triple).unwrap();
-        if !self.debug.strip_debug {
-            self.debug.debug_builder.finalize();
-        } else {
-            self.llvm_module.strip_debug_info();
-        }
-        self.llvm_module.verify().map_err(|err| {
-            eprintln!("{}", self.llvm_module.to_string());
-            anyhow::anyhow!("Module '{}' failed validation: {}", self.name(), err.to_string_lossy())
-        })?;
         let machine = target
             .create_target_machine(
                 &triple,
@@ -2829,24 +2874,32 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             )
             .unwrap();
 
-        self.llvm_module.set_data_layout(&machine.get_target_data().get_data_layout());
-        self.llvm_module.set_triple(&triple);
-        let pass_manager_b = PassManagerBuilder::create();
-        pass_manager_b.set_optimization_level(OptimizationLevel::Aggressive);
-        // pass_manager_b.populate_function_pass_manager(&function_pass_manager);
-        // pass_manager_b.populate_module_pass_manager(&module_pass_manager);
-        // The PassManager::create function works for Module and Function. If module,
-        // the expected input is (). If function, the expected input is a Module
-        // add_verifier_pass
-        // let function_pass_manager: PassManager<FunctionValue<'ctx>> =
-        //     PassManager::create(&self.llvm_module);
-        // function_pass_manager.add_verifier_pass();
+        module.set_data_layout(&machine.get_target_data().get_data_layout());
+        module.set_triple(&triple);
+
+        machine
+    }
+
+    pub fn optimize(&mut self, optimize: bool) -> anyhow::Result<()> {
+        let start = std::time::Instant::now();
+
+        if !self.debug.strip_debug {
+            self.debug.debug_builder.finalize();
+        } else {
+            self.llvm_module.strip_debug_info();
+        }
+        self.llvm_module.verify().map_err(|err| {
+            eprintln!("{}", self.llvm_module.to_string());
+            anyhow::anyhow!("Module '{}' failed validation: {}", self.name(), err.to_string_lossy())
+        })?;
 
         let module_pass_manager: PassManager<LlvmModule<'ctx>> = PassManager::create(());
         if optimize {
             module_pass_manager.add_cfg_simplification_pass();
             module_pass_manager.add_promote_memory_to_register_pass();
             module_pass_manager.add_instruction_combining_pass();
+            module_pass_manager.add_sccp_pass();
+            module_pass_manager.add_aggressive_dce_pass();
         }
 
         // Workaround: We have to inline always because ArrayNew returns a pointer to an alloca
@@ -2855,11 +2908,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         module_pass_manager.add_function_attrs_pass();
         module_pass_manager.add_verifier_pass();
 
+        self.llvm_machine.add_analysis_passes(&module_pass_manager);
+
         module_pass_manager.run_on(&self.llvm_module);
-
-        machine.add_analysis_passes(&module_pass_manager);
-
-        self.llvm_machine = Some(machine);
 
         info!("codegen phase 'optimize' took {}ms", start.elapsed().as_millis());
 
@@ -2869,8 +2920,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     #[allow(unused)]
     pub fn emit_object_file(&self, rel_destination_dir: &str) -> anyhow::Result<()> {
         let filename = format!("{}.o", self.name());
-        let machine =
-            self.llvm_machine.as_ref().expect("Cannot emit object file before optimizing");
+        let machine = &self.llvm_machine;
         let path = Path::new(rel_destination_dir).join(Path::new(&filename));
         log::info!("Outputting object file to {}", path.to_str().unwrap());
         machine

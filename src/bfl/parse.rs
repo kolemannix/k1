@@ -675,7 +675,7 @@ pub struct ParsedTypeParamDefn {
 #[derive(Debug, Clone)]
 pub struct ParsedFunction {
     pub name: IdentifierId,
-    pub type_args: Option<Vec<ParsedTypeParamDefn>>,
+    pub type_args: Vec<ParsedTypeParamDefn>,
     pub args: Vec<FnArgDef>,
     pub ret_type: Option<ParsedTypeExpressionId>,
     pub block: Option<Block>,
@@ -2377,7 +2377,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         };
         let func_name = self.expect_eat_token(K::Ident)?;
         let func_name_id = self.intern_ident_token(func_name);
-        let type_arguments: Option<Vec<ParsedTypeParamDefn>> =
+        let type_arguments: Vec<ParsedTypeParamDefn> =
             if let TokenKind::OpenAngle = self.peek().kind {
                 self.tokens.advance();
                 let (type_args, _type_arg_span) = self.eat_delimited(
@@ -2386,9 +2386,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     TokenKind::CloseAngle,
                     Parser::expect_type_param,
                 )?;
-                Some(type_args)
+                type_args
             } else {
-                None
+                Vec::new()
             };
         self.expect_eat_token(K::OpenParen)?;
         let (args, args_span) = self.eat_fndef_args()?;
