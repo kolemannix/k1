@@ -63,8 +63,8 @@
 - [ ] floating point f32 and f64
 - [ ] Optional coalescing accessor (x?.y)
 - [ ] Prevent function overloading in same namespace
-- [ ] Typecheck the binary ops
-- [ ] Bitwise ops
+- [x] Typecheck the binary ops
+- [x] Bitwise ops
 - [ ] Exhaustive pattern matching
 - [ ] Pure lambdas with -> (not closures)
 - [ ] slices (windows? segments?)
