@@ -1,0 +1,4 @@
+fn main(): int {
+  false > true;
+  0
+}

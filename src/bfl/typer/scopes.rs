@@ -224,7 +224,7 @@ pub struct Scope {
     pub namespaces: HashMap<IdentifierId, NamespaceId>,
     pub types: HashMap<IdentifierId, TypeId>,
     pub abilities: HashMap<IdentifierId, AbilityId>,
-    // FIXME(padding): Add abilities here so they participate in the type defn phase
+    // FIXME: Add abilities here so they participate in the type defn phase
     pub pending_type_defns: HashMap<IdentifierId, ParsedTypeDefnId>,
     pub parent: Option<ScopeId>,
     pub children: Vec<ScopeId>,

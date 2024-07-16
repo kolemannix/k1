@@ -15,7 +15,6 @@
   - [x] typechecking / codegen
   - [x] if/else
   - [x] match
-- [ ] 'dump' directive on block
 - [x] Pattern Matching
   - [x] Single-arm match evals to boolean
   - [x] Literals
@@ -39,7 +38,7 @@
   - [x] named struct and enum fix
   - [x] Newtypes (opaque)
   - [x] Aliases
-- [ ] Generic structs and enums
+- [x] Generic structs and enums
 - [ ] Recursive types
 - Require named args; and allow anonymous
 - [x] TypedIf allow exprs instead of requiring blocks (did not do; instead improved handling of unit blocks)
@@ -54,7 +53,7 @@
   - [x] to int64
   - [x] from reference
   - [x] to reference
-- [ ] sizeOf
+- [x] sizeOf
 - [ ] Mark types as trivially copyable or not
 - [ ] More type expressions! (this was a big part of my original point)
   - [ ] Intersect structs
@@ -65,10 +64,10 @@
 - [ ] Optional coalescing accessor (x?.y)
 - [ ] Prevent function overloading in same namespace
 - [ ] Typecheck the binary ops
-- [ ] Rest of the binary ops
+- [ ] Bitwise ops
 - [ ] Exhaustive pattern matching
 - [ ] Pure lambdas with -> (not closures)
-- [ ] slices
+- [ ] slices (windows? segments?)
 - [ ] Make demo readme
 
 ## Error story

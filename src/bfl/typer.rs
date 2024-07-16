@@ -531,6 +531,7 @@ pub struct VariableExpr {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryOpKind {
+    // Integer operations
     Add,
     Subtract,
     Multiply,
@@ -540,10 +541,16 @@ pub enum BinaryOpKind {
     LessEqual,
     Greater,
     GreaterEqual,
+
+    // Boolean operations
     And,
     Or,
+
+    // Equality
     Equals,
     NotEquals,
+
+    // Other
     OptionalElse,
 }
 
@@ -2815,101 +2822,7 @@ impl TypedModule {
             }
             ParsedExpression::BinaryOp(binary_op) => {
                 let binary_op = binary_op.clone();
-                // Infer expected type to be type of operand1
-                match binary_op.op_kind {
-                    BinaryOpKind::Equals | BinaryOpKind::NotEquals => {
-                        return self.eval_equality_expr(&binary_op, scope_id, expected_type);
-                    }
-                    BinaryOpKind::OptionalElse => {
-                        // LHS must be an optional and RHS must be its contained type
-                        let lhs = self.eval_expr(binary_op.lhs, scope_id, None)?;
-                        let Some(lhs_optional) = self.types.get(lhs.get_type()).as_optional()
-                        else {
-                            return make_fail_span(&format!("'else' operator can only be used on an optional; type was '{}'", self.type_id_to_string(lhs.get_type())), binary_op.span);
-                        };
-                        let lhs_inner = lhs_optional.inner_type;
-
-                        let rhs = self.eval_expr(binary_op.rhs, scope_id, Some(lhs_inner))?;
-                        let rhs_type = rhs.get_type();
-                        if let Err(msg) = self.typecheck_types(lhs_inner, rhs_type, scope_id) {
-                            return make_fail_span(
-                                &format!("'else' value incompatible with optional: {}", msg),
-                                binary_op.span,
-                            );
-                        }
-                        let mut coalesce_block = self.synth_block(vec![], scope_id, binary_op.span);
-                        let lhs_variable_name = self.ast.identifiers.intern("optelse_lhs");
-                        let (_lhs_variable_id, lhs_decl_stmt, lhs_variable_expr) = self
-                            .synth_variable_decl(
-                                lhs_variable_name,
-                                lhs,
-                                false,
-                                false,
-                                coalesce_block.scope_id,
-                            );
-                        let lhs_has_value =
-                            TypedExpr::OptionalHasValue(Box::new(lhs_variable_expr.clone()));
-                        let lhs_unwrap_expr = TypedExpr::OptionalGet(OptionalGet {
-                            inner_expr: Box::new(lhs_variable_expr),
-                            result_type_id: lhs_inner,
-                            span: binary_op.span,
-                            checked: false,
-                        });
-                        let if_else = TypedExpr::If(Box::new(TypedIf {
-                            condition: lhs_has_value,
-                            consequent: self
-                                .coerce_expr_to_block(lhs_unwrap_expr, coalesce_block.scope_id),
-                            alternate: self.coerce_expr_to_block(rhs, coalesce_block.scope_id),
-                            ty: rhs_type,
-                            span: binary_op.span,
-                        }));
-                        coalesce_block.push_stmt(lhs_decl_stmt);
-                        coalesce_block.push_expr(if_else);
-                        return Ok(TypedExpr::Block(coalesce_block));
-                    }
-                    _ => {}
-                };
-                let lhs = self.eval_expr(binary_op.lhs, scope_id, None)?;
-                let kind = binary_op.op_kind;
-                let expected_rhs_type =
-                    if kind.is_symmetric_binop() { Some(lhs.get_type()) } else { None };
-                let rhs = self.eval_expr(binary_op.rhs, scope_id, expected_rhs_type)?;
-
-                // FIXME: Typechecker We are not really typechecking binary operations at all.
-                //        This is not enough; we need to check that the lhs is actually valid
-                //        for this operation first
-                if kind.is_symmetric_binop() {
-                    if self.typecheck_types(lhs.get_type(), rhs.get_type(), scope_id).is_err() {
-                        return make_fail_span("operand types did not match", binary_op.span);
-                    }
-                }
-
-                let result_type = match kind {
-                    BinaryOpKind::Add => lhs.get_type(),
-                    BinaryOpKind::Subtract => lhs.get_type(),
-                    BinaryOpKind::Multiply => lhs.get_type(),
-                    BinaryOpKind::Divide => lhs.get_type(),
-                    BinaryOpKind::Rem => lhs.get_type(),
-                    BinaryOpKind::Less => BOOL_TYPE_ID,
-                    BinaryOpKind::LessEqual => BOOL_TYPE_ID,
-                    BinaryOpKind::Greater => BOOL_TYPE_ID,
-                    BinaryOpKind::GreaterEqual => BOOL_TYPE_ID,
-                    BinaryOpKind::And => lhs.get_type(),
-                    BinaryOpKind::Or => lhs.get_type(),
-                    BinaryOpKind::Equals => panic!("equals should be special-cased by now"),
-                    BinaryOpKind::NotEquals => panic!("not equals should be special-cased by now"),
-                    BinaryOpKind::OptionalElse => {
-                        panic!("optional else should be special-cased by now")
-                    }
-                };
-                let expr = TypedExpr::BinaryOp(BinaryOp {
-                    kind,
-                    ty: result_type,
-                    lhs: Box::new(lhs),
-                    rhs: Box::new(rhs),
-                    span: binary_op.span,
-                });
-                Ok(expr)
+                self.eval_binary_op(&binary_op, scope_id, expected_type)
             }
             ParsedExpression::UnaryOp(op) => {
                 let op = op.clone();
@@ -3950,8 +3863,174 @@ impl TypedModule {
             ))
     }
 
+    fn eval_binary_op(
+        &mut self,
+        binary_op: &parse::BinaryOp,
+        scope_id: ScopeId,
+        expected_type: Option<TypeId>,
+    ) -> TyperResult<TypedExpr> {
+        fn is_scalar_for_equals(type_id: TypeId) -> bool {
+            match type_id {
+                UNIT_TYPE_ID | CHAR_TYPE_ID | INT_TYPE_ID | BOOL_TYPE_ID => true,
+                _other => false,
+            }
+        }
+        // Special cases: Equality, and OptionalElse
+        match binary_op.op_kind {
+            BinaryOpKind::Equals | BinaryOpKind::NotEquals => {
+                let lhs = self.eval_expr(binary_op.lhs, scope_id, None)?;
+                if !is_scalar_for_equals(lhs.get_type()) {
+                    return self.eval_equality_expr(lhs, &binary_op, scope_id, expected_type);
+                }
+            }
+            BinaryOpKind::OptionalElse => {
+                // LHS must be an optional and RHS must be its contained type
+                let lhs = self.eval_expr(binary_op.lhs, scope_id, None)?;
+                let Some(lhs_optional) = self.types.get(lhs.get_type()).as_optional() else {
+                    return make_fail_span(
+                        &format!(
+                            "'else' operator can only be used on an optional; type was '{}'",
+                            self.type_id_to_string(lhs.get_type())
+                        ),
+                        binary_op.span,
+                    );
+                };
+                let lhs_inner = lhs_optional.inner_type;
+
+                let rhs = self.eval_expr(binary_op.rhs, scope_id, Some(lhs_inner))?;
+                let rhs_type = rhs.get_type();
+                if let Err(msg) = self.typecheck_types(lhs_inner, rhs_type, scope_id) {
+                    return make_fail_span(
+                        &format!("'else' value incompatible with optional: {}", msg),
+                        binary_op.span,
+                    );
+                }
+                let mut coalesce_block = self.synth_block(vec![], scope_id, binary_op.span);
+                let lhs_variable_name = self.ast.identifiers.intern("optelse_lhs");
+                let (_lhs_variable_id, lhs_decl_stmt, lhs_variable_expr) = self
+                    .synth_variable_decl(
+                        lhs_variable_name,
+                        lhs,
+                        false,
+                        false,
+                        coalesce_block.scope_id,
+                    );
+                let lhs_has_value =
+                    TypedExpr::OptionalHasValue(Box::new(lhs_variable_expr.clone()));
+                let lhs_unwrap_expr = TypedExpr::OptionalGet(OptionalGet {
+                    inner_expr: Box::new(lhs_variable_expr),
+                    result_type_id: lhs_inner,
+                    span: binary_op.span,
+                    checked: false,
+                });
+                let if_else = TypedExpr::If(Box::new(TypedIf {
+                    condition: lhs_has_value,
+                    consequent: self.coerce_expr_to_block(lhs_unwrap_expr, coalesce_block.scope_id),
+                    alternate: self.coerce_expr_to_block(rhs, coalesce_block.scope_id),
+                    ty: rhs_type,
+                    span: binary_op.span,
+                }));
+                coalesce_block.push_stmt(lhs_decl_stmt);
+                coalesce_block.push_expr(if_else);
+                return Ok(TypedExpr::Block(coalesce_block));
+            }
+            _ => {}
+        };
+
+        // Rest of the binary ops
+
+        let lhs = self.eval_expr(binary_op.lhs, scope_id, None)?;
+        let kind = binary_op.op_kind;
+        let result_type = match lhs.get_type() {
+            // TODO: all "int-like" go here; i64, u64, i32, u8, etc
+            INT_TYPE_ID => match kind {
+                BinaryOpKind::Add => Ok(INT_TYPE_ID),
+                BinaryOpKind::Subtract => Ok(INT_TYPE_ID),
+                BinaryOpKind::Multiply => Ok(INT_TYPE_ID),
+                BinaryOpKind::Divide => Ok(INT_TYPE_ID),
+                BinaryOpKind::Rem => Ok(INT_TYPE_ID),
+                BinaryOpKind::Less => Ok(BOOL_TYPE_ID),
+                BinaryOpKind::LessEqual => Ok(BOOL_TYPE_ID),
+                BinaryOpKind::Greater => Ok(BOOL_TYPE_ID),
+                BinaryOpKind::GreaterEqual => Ok(BOOL_TYPE_ID),
+                BinaryOpKind::And => ferr!(binary_op.span, "Invalid left-hand side for and"),
+                BinaryOpKind::Or => ferr!(binary_op.span, "Invalid left-hand side for or"),
+                BinaryOpKind::Equals => Ok(BOOL_TYPE_ID),
+                BinaryOpKind::NotEquals => Ok(BOOL_TYPE_ID),
+                _ => unreachable!(),
+            },
+            BOOL_TYPE_ID => match kind {
+                BinaryOpKind::Add
+                | BinaryOpKind::Subtract
+                | BinaryOpKind::Multiply
+                | BinaryOpKind::Divide
+                | BinaryOpKind::Rem
+                | BinaryOpKind::Less
+                | BinaryOpKind::LessEqual
+                | BinaryOpKind::Greater
+                | BinaryOpKind::GreaterEqual => {
+                    ferr!(binary_op.span, "Invalid operation on bool: {}", kind)
+                }
+                BinaryOpKind::And => Ok(BOOL_TYPE_ID),
+                BinaryOpKind::Or => Ok(BOOL_TYPE_ID),
+                BinaryOpKind::Equals => Ok(BOOL_TYPE_ID),
+                BinaryOpKind::NotEquals => Ok(BOOL_TYPE_ID),
+                BinaryOpKind::OptionalElse => unreachable!(),
+            },
+            CHAR_TYPE_ID => match kind {
+                BinaryOpKind::Add
+                | BinaryOpKind::Subtract
+                | BinaryOpKind::Multiply
+                | BinaryOpKind::Divide
+                | BinaryOpKind::Rem
+                | BinaryOpKind::Less
+                | BinaryOpKind::LessEqual
+                | BinaryOpKind::Greater
+                | BinaryOpKind::GreaterEqual
+                | BinaryOpKind::And
+                | BinaryOpKind::Or => ferr!(binary_op.span, "Invalid operation on char: {}", kind),
+                BinaryOpKind::Equals => Ok(BOOL_TYPE_ID),
+                BinaryOpKind::NotEquals => Ok(BOOL_TYPE_ID),
+                BinaryOpKind::OptionalElse => unreachable!(),
+            },
+            UNIT_TYPE_ID => match kind {
+                BinaryOpKind::Equals => Ok(BOOL_TYPE_ID),
+                BinaryOpKind::NotEquals => Ok(BOOL_TYPE_ID),
+                _ => ferr!(binary_op.span, "Invalid operation on unit: {}", kind),
+            },
+            _other => {
+                ferr!(binary_op.span, "Invalid left-hand side of binary operation {}", kind)
+            }
+        }?;
+
+        // At this point I think all operations are symmetric but we'll leave this here
+        // to signal that invariant and in case things change
+        let expected_rhs_type = if kind.is_symmetric_binop() { Some(lhs.get_type()) } else { None };
+        let rhs = self.eval_expr(binary_op.rhs, scope_id, expected_rhs_type)?;
+
+        if kind.is_symmetric_binop() {
+            // We already confirmed that the LHS is valid for this operation, and
+            // if the op is symmetric, we just have to check the RHS matches
+            if self.typecheck_types(lhs.get_type(), rhs.get_type(), scope_id).is_err() {
+                return make_fail_span("operand types did not match", binary_op.span);
+            }
+        } else {
+            panic!("Unexpected asymmetric binop down here {}", kind)
+        }
+
+        let expr = TypedExpr::BinaryOp(BinaryOp {
+            kind,
+            ty: result_type,
+            lhs: Box::new(lhs),
+            rhs: Box::new(rhs),
+            span: binary_op.span,
+        });
+        Ok(expr)
+    }
+
     fn eval_equality_expr(
         &mut self,
+        lhs: TypedExpr,
         binary_op: &parse::BinaryOp,
         scope_id: ScopeId,
         _expected_type: Option<TypeId>,
@@ -3960,24 +4039,9 @@ impl TypedModule {
             binary_op.op_kind == BinaryOpKind::Equals
                 || binary_op.op_kind == BinaryOpKind::NotEquals
         );
-        let lhs = self.eval_expr(binary_op.lhs, scope_id, None)?;
+        // let lhs = self.eval_expr(binary_op.lhs, scope_id, None)?;
         let lhs_type_id = lhs.get_type();
         let equals_expr = match self.types.get(lhs_type_id) {
-            Type::Unit | Type::Char | Type::Int | Type::Bool => {
-                // All these scalar types treated as IntValue s in codegen
-                let rhs = self.eval_expr(binary_op.rhs, scope_id, Some(lhs.get_type()))?;
-                if rhs.get_type() == lhs.get_type() {
-                    Ok(TypedExpr::BinaryOp(BinaryOp {
-                        kind: BinaryOpKind::Equals,
-                        ty: BOOL_TYPE_ID,
-                        lhs: Box::new(lhs),
-                        rhs: Box::new(rhs),
-                        span: binary_op.span,
-                    }))
-                } else {
-                    make_fail_span("Bad rhs type", binary_op.span)
-                }
-            }
             Type::TypeVariable(_type_var) => {
                 let rhs = self.eval_expr(binary_op.rhs, scope_id, Some(lhs.get_type()))?;
                 if let Err(msg) = self.typecheck_types(lhs.get_type(), rhs.get_type(), scope_id) {
@@ -4013,6 +4077,9 @@ impl TypedModule {
                     rhs: Box::new(rhs),
                     span: binary_op.span,
                 }))
+            }
+            Type::Unit | Type::Char | Type::Int | Type::Bool => {
+                panic!("Scalar ints shouldnt be passed to eval_equality_expr")
             }
             _other_lhs_type => {
                 let rhs = self.eval_expr(binary_op.rhs, scope_id, Some(lhs.get_type()))?;
