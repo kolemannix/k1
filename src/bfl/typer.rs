@@ -94,7 +94,15 @@ pub const INT_TYPE_ID: TypeId = TypeId(2);
 pub const BOOL_TYPE_ID: TypeId = TypeId(3);
 pub const STRING_TYPE_ID: TypeId = TypeId(4);
 pub const NEVER_TYPE_ID: TypeId = TypeId(5);
-pub const RAW_POINTER_TYPE_ID: TypeId = TypeId(6);
+pub const U8_TYPE_ID: TypeId = TypeId(6);
+pub const U16_TYPE_ID: TypeId = TypeId(7);
+pub const U32_TYPE_ID: TypeId = TypeId(8);
+pub const U64_TYPE_ID: TypeId = TypeId(9);
+pub const I8_TYPE_ID: TypeId = TypeId(10);
+pub const I16_TYPE_ID: TypeId = TypeId(11);
+pub const I32_TYPE_ID: TypeId = TypeId(12);
+pub const I64_TYPE_ID: TypeId = TypeId(13);
+pub const RAW_POINTER_TYPE_ID: TypeId = TypeId(14);
 
 #[derive(Debug, Clone)]
 pub struct ArrayType {
@@ -172,11 +180,41 @@ pub struct GenericType {
     pub specializations: HashMap<Vec<TypeId>, TypeId>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntegerType {
+    U8,
+    U16,
+    U32,
+    U64,
+    I8,
+    I16,
+    I32,
+    I64,
+}
+
+impl IntegerType {
+    pub fn bit_width(&self) -> u32 {
+        match self {
+            IntegerType::U8 | IntegerType::I8 => 8,
+            IntegerType::U16 | IntegerType::I16 => 16,
+            IntegerType::U32 | IntegerType::I32 => 32,
+            IntegerType::U64 | IntegerType::I64 => 64,
+        }
+    }
+
+    pub fn is_signed(&self) -> bool {
+        match self {
+            IntegerType::U8 | IntegerType::U16 | IntegerType::U32 | IntegerType::U64 => false,
+            IntegerType::I8 | IntegerType::I16 | IntegerType::I32 | IntegerType::I64 => true,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Type {
     Unit,
     Char,
-    Int,
+    Integer(IntegerType),
     Bool,
     String,
     Struct(StructType),
@@ -198,7 +236,7 @@ pub enum Type {
 impl Type {
     pub fn ast_node(&self) -> Option<ParsedId> {
         match self {
-            Type::Unit | Type::Char | Type::Int | Type::Bool | Type::String => None,
+            Type::Unit | Type::Char | Type::Integer(_) | Type::Bool | Type::String => None,
             Type::Struct(t) => Some(t.ast_node),
             Type::Array(_a) => None,
             Type::Optional(_t) => None,
@@ -313,7 +351,7 @@ impl Type {
         match self {
             Type::Unit => None,
             Type::Char => None,
-            Type::Int => None,
+            Type::Integer(_) => None,
             Type::Bool => None,
             Type::String => None,
             Type::Struct(s) => s.type_defn_info.as_ref(),
@@ -793,6 +831,23 @@ struct TypedMatchCase {
     arm_block: TypedBlock,
 }
 
+pub enum TypedIntegerValue {
+    U8(u8),
+    U16(u16),
+    U32(u32),
+    U64(u64),
+    I8(i8),
+    I16(i16),
+    I32(i32),
+    I64(i64),
+}
+
+pub struct IntegerExpr {
+    pub value: TypedIntegerValue,
+    pub type_id: TypeId,
+    pub span: SpanId,
+}
+
 #[derive(Debug, Clone)]
 pub enum TypedExpr {
     Unit(SpanId),
@@ -1199,7 +1254,7 @@ impl Types {
         match self.get(type_id) {
             Type::Unit => false,
             Type::Char => false,
-            Type::Int => false,
+            Type::Integer(_) => false,
             Type::Bool => false,
             Type::String => false,
             Type::Array(arr) => self.does_type_reference_type_variables(arr.element_type),
@@ -1229,7 +1284,7 @@ impl Types {
         match self.get(type_id) {
             Type::Unit => None,
             Type::Char => None,
-            Type::Int => None,
+            Type::Integer(_) => None,
             Type::Bool => None,
             Type::String => Some(CHAR_TYPE_ID),
             Type::Array(arr) => Some(arr.element_type),
@@ -1287,15 +1342,23 @@ pub struct TypedModule {
 impl TypedModule {
     pub fn new(parsed_module: ParsedModule) -> TypedModule {
         let types = Types {
-            types: vec![Type::Unit, Type::Char, Type::Int, Type::Bool, Type::String, Type::Never],
+            types: vec![Type::Unit, Type::Char, Type::Bool, Type::String, Type::Never],
             type_defn_mapping: HashMap::new(),
         };
         debug_assert!(matches!(*types.get(UNIT_TYPE_ID), Type::Unit));
         debug_assert!(matches!(*types.get(CHAR_TYPE_ID), Type::Char));
-        debug_assert!(matches!(*types.get(INT_TYPE_ID), Type::Int));
         debug_assert!(matches!(*types.get(BOOL_TYPE_ID), Type::Bool));
         debug_assert!(matches!(*types.get(STRING_TYPE_ID), Type::String));
         debug_assert!(matches!(*types.get(NEVER_TYPE_ID), Type::Never));
+        debug_assert!(matches!(*types.get(U8_TYPE_ID), Type::Integer(IntegerType::U8)));
+        debug_assert!(matches!(*types.get(U16_TYPE_ID), Type::Integer(IntegerType::U16)));
+        debug_assert!(matches!(*types.get(U32_TYPE_ID), Type::Integer(IntegerType::U32)));
+        debug_assert!(matches!(*types.get(U64_TYPE_ID), Type::Integer(IntegerType::U64)));
+        debug_assert!(matches!(*types.get(I8_TYPE_ID), Type::Integer(IntegerType::I8)));
+        debug_assert!(matches!(*types.get(I16_TYPE_ID), Type::Integer(IntegerType::I16)));
+        debug_assert!(matches!(*types.get(I32_TYPE_ID), Type::Integer(IntegerType::I32)));
+        debug_assert!(matches!(*types.get(I64_TYPE_ID), Type::Integer(IntegerType::I64)));
+
         let scopes = Scopes::make();
         let namespaces = Vec::new();
         TypedModule {
@@ -1347,7 +1410,7 @@ impl TypedModule {
         match (type1, type2) {
             (Type::Unit, Type::Unit) => true,
             (Type::Char, Type::Char) => true,
-            (Type::Int, Type::Int) => true,
+            (Type::Integer(int1), Type::Integer(int2)) => int1 == int2,
             (Type::Bool, Type::Bool) => true,
             (Type::String, Type::String) => true,
             (Type::Struct(r1), Type::Struct(r2)) => {
@@ -1555,6 +1618,7 @@ impl TypedModule {
             ParsedTypeExpression::Unit(_) => Ok(UNIT_TYPE_ID),
             ParsedTypeExpression::Char(_) => Ok(CHAR_TYPE_ID),
             ParsedTypeExpression::Int(_) => Ok(INT_TYPE_ID),
+            ParsedTypeExpression::Integer(_) => Ok(INT_TYPE_ID),
             ParsedTypeExpression::Bool(_) => Ok(BOOL_TYPE_ID),
             ParsedTypeExpression::String(_) => Ok(STRING_TYPE_ID),
             ParsedTypeExpression::Struct(struct_defn) => {
@@ -1942,7 +2006,11 @@ impl TypedModule {
                         let i64_value =
                             TypedModule::parse_numeric(i).map_err(|msg| make_error(msg, *span))?;
                         match self.types.get(target_type_id) {
-                            Type::Int => Ok(TypedPattern::LiteralInt(i64_value, *span)),
+                            // Most compilers seem to represent int literals as really big
+                            // integers and then do the narrowing when they know the type
+                            Type::Integer(integer_type) => {
+                                Ok(TypedPattern::LiteralInt(i64_value, *span))
+                            }
                             _ => make_fail_span(
                                 "unrelated type will never match int",
                                 self.ast.get_pattern_span(pat_expr),
