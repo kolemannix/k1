@@ -619,11 +619,28 @@ pub enum TypeModifier {
     Opaque,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u8)]
+pub enum NumericWidth {
+    B8,
+    B16,
+    B32,
+    B64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ParsedNumericType {
+    pub width: NumericWidth,
+    pub signed: bool,
+    pub span: SpanId,
+}
+
 #[derive(Debug, Clone)]
 pub enum ParsedTypeExpression {
     Unit(SpanId),
     Char(SpanId),
     Int(SpanId),
+    Integer(ParsedNumericType),
     Bool(SpanId),
     String(SpanId),
     Struct(StructType),
@@ -652,6 +669,7 @@ impl ParsedTypeExpression {
             ParsedTypeExpression::Unit(span) => *span,
             ParsedTypeExpression::Char(span) => *span,
             ParsedTypeExpression::Int(span) => *span,
+            ParsedTypeExpression::Integer(num) => num.span,
             ParsedTypeExpression::Bool(span) => *span,
             ParsedTypeExpression::String(span) => *span,
             ParsedTypeExpression::Struct(struc) => struc.span,
@@ -1562,13 +1580,23 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 Ok(Some(self.module.type_expressions.add(ParsedTypeExpression::String(first.span))))
             } else if ident_chars == "int" {
                 self.tokens.advance();
-                Ok(Some(self.module.type_expressions.add(ParsedTypeExpression::Int(first.span))))
+                Ok(Some(self.module.type_expressions.add(ParsedTypeExpression::Integer(
+                    ParsedNumericType { width: NumericWidth::B64, signed: true, span: first.span },
+                ))))
             } else if ident_chars == "bool" {
                 self.tokens.advance();
                 Ok(Some(self.module.type_expressions.add(ParsedTypeExpression::Bool(first.span))))
             } else if ident_chars == "char" {
                 self.tokens.advance();
                 Ok(Some(self.module.type_expressions.add(ParsedTypeExpression::Char(first.span))))
+            } else if ident_chars == "u8" {
+                Ok(Some(self.module.type_expressions.add(ParsedTypeExpression::Integer(
+                    ParsedNumericType { width: NumericWidth::B8, signed: false, span: first.span },
+                ))))
+            } else if ident_chars == "u64" {
+                Ok(Some(self.module.type_expressions.add(ParsedTypeExpression::Integer(
+                    ParsedNumericType { width: NumericWidth::B64, signed: false, span: first.span },
+                ))))
             } else {
                 self.tokens.advance();
                 let next = self.tokens.peek();
@@ -2704,6 +2732,19 @@ impl ParsedModule {
             ParsedTypeExpression::Unit(_) => f.write_str("unit"),
             ParsedTypeExpression::Char(_) => f.write_str("char"),
             ParsedTypeExpression::Int(_) => f.write_str("int"),
+            ParsedTypeExpression::Integer(n) => {
+                let s = match (n.signed, n.width) {
+                    (true, NumericWidth::B8) => "i8",
+                    (true, NumericWidth::B16) => "i16",
+                    (true, NumericWidth::B32) => "i32",
+                    (true, NumericWidth::B64) => "i64",
+                    (false, NumericWidth::B8) => "u8",
+                    (false, NumericWidth::B16) => "u16",
+                    (false, NumericWidth::B32) => "u32",
+                    (false, NumericWidth::B64) => "u64",
+                };
+                f.write_str(s)
+            }
             ParsedTypeExpression::Bool(_) => f.write_str("bool"),
             ParsedTypeExpression::String(_) => f.write_str("string"),
             ParsedTypeExpression::Struct(struct_type) => {

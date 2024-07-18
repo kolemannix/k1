@@ -1,5 +1,3 @@
-## Videos
-
 # Project Completion Checklist
 
 - [x] QoL before rest of pattern matching
@@ -40,7 +38,7 @@
   - [x] Aliases
 - [x] Generic structs and enums
 - [ ] Recursive types
-- Require named args; and allow anonymous
+- [ ] Require named fncall args; and allow anonymous w/ declaration like Jakt
 - [x] TypedIf allow exprs instead of requiring blocks (did not do; instead improved handling of unit blocks)
 - [x] Remove binding 'if' since we have pattern matching
 - [x] Abilities
@@ -54,7 +52,13 @@
   - [x] from reference
   - [x] to reference
 - [x] sizeOf
+- [ ] Rest of the int sizes
+-   [ ] 8
+-   [ ] 16
+-   [ ] 32
+-   [ ] 64
 - [ ] Mark types as trivially copyable or not
+- [ ] Remove custom size/align code and use LLVM's
 - [ ] More type expressions! (this was a big part of my original point)
   - [ ] Intersect structs
   - [ ] Union structs
@@ -72,6 +76,7 @@
 
 ## Error story
 - [ ] A simple stdlib enum?
+- [ ]
 
 ## Ability Derivation
 - [ ] Ability derivation

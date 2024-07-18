@@ -1,0 +1,4 @@
+fn main(): int {
+  val b: u8 = 255;
+  0
+}
