@@ -309,6 +309,13 @@ impl Type {
         }
     }
 
+    pub fn expect_generic(&self) -> &GenericType {
+        match self {
+            Type::Generic(g) => g,
+            _ => panic!("expect_generic called on: {:?}", self),
+        }
+    }
+
     pub fn defn_info(&self) -> Option<&TypeDefnInfo> {
         match self {
             Type::Unit => None,
@@ -1728,18 +1735,18 @@ impl TypedModule {
             }
             Some(type_id) => {
                 let mut evaled_type_params: Vec<TypeId> = Vec::with_capacity(ty_app.params.len());
-                for parsed_param in ty_app.params.clone().iter() {
-                    let param_type_id = self.eval_type_expr(*parsed_param, scope_id, None)?;
-                    evaled_type_params.push(param_type_id);
-                }
-                let Type::Generic(gen) = self.types.get(type_id) else {
+                let Type::Generic(_) = self.types.get(type_id) else {
                     return ferr!(
                         ty_app.span,
                         "Type '{}' does not take type parameters",
                         self.get_ident_str(ty_app.base)
                     );
                 };
-                let gen = gen.clone();
+                for parsed_param in ty_app.params.clone().iter() {
+                    let param_type_id = self.eval_type_expr(*parsed_param, scope_id, None)?;
+                    evaled_type_params.push(param_type_id);
+                }
+                let gen = self.types.get(type_id).expect_generic().clone();
                 let mut type_defn_info = gen.type_defn_info.clone();
                 type_defn_info.generic_parent = Some(gen.inner);
                 let specialized_type = match gen.specializations.get(&evaled_type_params) {
@@ -1747,7 +1754,7 @@ impl TypedModule {
                     None => {
                         let specialized_type = self.substitute_in_type(
                             gen.inner,
-                            Some(gen.type_defn_info.clone()),
+                            Some(type_defn_info.clone()),
                             &evaled_type_params,
                             &gen.params,
                             ty_app_id,
@@ -1829,8 +1836,8 @@ impl TypedModule {
                     parsed_expression_id,
                 );
                 if new_inner != ref_inner {
-                    let specialized_optional = OptionalType { inner_type: new_inner };
-                    self.types.add_type(Type::Optional(specialized_optional))
+                    let specialized_reference = ReferenceType { inner_type: new_inner };
+                    self.types.add_type(Type::Reference(specialized_reference))
                 } else {
                     type_id
                 }
