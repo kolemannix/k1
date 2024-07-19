@@ -54,6 +54,7 @@
   - [x] from reference
   - [x] to reference
 - [x] sizeOf
+- [ ] Reject too many function args
 - [ ] Mark types as trivially copyable or not
 - [ ] More type expressions! (this was a big part of my original point)
   - [ ] Intersect structs

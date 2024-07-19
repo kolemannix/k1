@@ -261,6 +261,7 @@ pub fn main() -> Result<()> {
                     .spawn_scoped(scope, || {
                         let ctx = Context::create();
                         let filename = filename.to_string();
+                        eprintln!("{filename:040}...");
                         let result = test_file(&ctx, test.as_path(), test_suite_args.interpret);
                         if result.is_ok() {
                             eprintln!("{filename:040} {}", "PASS".green());
@@ -279,8 +280,9 @@ pub fn main() -> Result<()> {
     } else {
         for test in all_tests.iter() {
             let ctx = Context::create();
-            let result = test_file(&ctx, test.as_path(), test_suite_args.interpret);
             let filename = test.as_path().file_name().unwrap().to_str().unwrap();
+            eprintln!("{filename:040}...");
+            let result = test_file(&ctx, test.as_path(), test_suite_args.interpret);
             if result.is_ok() {
                 eprintln!("{filename:040} {}", "PASS".green());
                 success.fetch_add(1, Ordering::Relaxed);
