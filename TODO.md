@@ -57,6 +57,7 @@
 -   [ ] 16
 -   [ ] 32
 -   [ ] 64
+- [ ] Reject too many function args
 - [ ] Mark types as trivially copyable or not
 - [ ] Remove custom size/align code and use LLVM's
 - [ ] More type expressions! (this was a big part of my original point)
