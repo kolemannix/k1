@@ -53,10 +53,16 @@
   - [x] to reference
 - [x] sizeOf
 - [ ] Rest of the int sizes
--   [ ] 8
--   [ ] 16
--   [ ] 32
--   [ ] 64
+  - [x] 8
+  - [x] 16
+  - [x] 32
+  - [x] 64
+  - [ ] reject invalid values
+  - [ ] implement infallible coercions
+  - [ ] implement cast
+  - [ ] hex literals?
+  - [ ] binary literals?
+  - [ ] type suffixes on literals 123u32, 4u8, etc
 - [ ] Reject too many function args
 - [ ] Mark types as trivially copyable or not
 - [ ] Remove custom size/align code and use LLVM's

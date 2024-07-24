@@ -365,6 +365,7 @@ impl TokenKind {
             K::Dot => true,
             K::OpenBracket => true,
             K::Bang => true,
+            K::KeywordAs => true,
             _ => false,
         }
     }

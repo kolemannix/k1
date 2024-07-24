@@ -2,7 +2,11 @@ extern fn _bfl_charToString(c: char): string
 extern fn _bfl_charToInt(c: char): int
 extern fn _bfl_intToChar(i: int): char
 extern fn _bfl_readFileToString(path: string): string
-extern fn _bfl_crash(reason: string*, file: string*, line: int): never
+extern fn _bfl_crash(reason: string*, file: string*, line: u64): never
+
+type alias int = i64
+type alias uint = u64
+type alias byte = u8
 
 // extern fn _bfl_malloc(size: int): RawPointer
 // extern fn _bfl_free(ptr: RawPointer): unit
@@ -10,12 +14,12 @@ extern fn _bfl_crash(reason: string*, file: string*, line: int): never
 //type alias opaque string = { len: int, data: RawPointer }
 
 // Must have type id 6; do not reorder!
-type alias opaque RawPointer = int
+type alias opaque RawPointer = u64
 namespace RawPointer {
   intern fn asUnsafe<T>(self: RawPointer): T*
-  fn toIntUnsafe(self: RawPointer): int { self }
+  fn toIntUnsafe(self: RawPointer): u64 { self }
 
-  fn fromIntUnsafe(value: int): RawPointer { value }
+  fn fromIntUnsafe(value: u64): RawPointer { value }
 }
 
 intern fn sizeOf<T>(): int
@@ -39,12 +43,12 @@ ability Show {
 }
 
 ability Hash {
-  fn hash(self: Self): int
+  fn hash(self: Self): u64
 }
 
-intern fn printInt(value: int): unit
+intern fn printInt(value: i64): unit
 intern fn print(value: string): unit
-intern fn exit(code: int): unit
+intern fn exit(code: i64): unit
 
 fn crash(msg: string): never {
   _bfl_crash(&msg, &compilerFile(), compilerLine());
@@ -79,11 +83,11 @@ namespace char {
 }
 
 namespace Array {
-  intern fn new<T>(len: int): Array<T>
-  intern fn length<T>(self: Array<T>): int
-  intern fn capacity<T>(self: Array<T>): int
+  intern fn new<T>(len: u64): Array<T>
+  intern fn length<T>(self: Array<T>): u64
+  intern fn capacity<T>(self: Array<T>): u64
   intern fn grow<T>(self: Array<T>): unit
-  intern fn set_length<T>(self: Array<T>, new_length: int): unit
+  intern fn set_length<T>(self: Array<T>, new_length: u64): unit
   fn push<T>(self: Array<T>, elem: T): unit {
     val start_length = self.length<T>();
     if start_length == self.capacity<T>() {
@@ -108,11 +112,12 @@ namespace Array {
 }
 
 impl Equals for Array<int> {
+  // todo: Obviously this should be a memcmp
   fn equals(self: Array<int>, other: Array<int>): bool {
     if self.length() != other.length() {
       false
     } else {
-      mut i = 0;
+      mut i: u64 = 0;
       mut ret = true;
       while (ret and i < self.length()) {
         if self[i] != other[i] {
@@ -134,7 +139,7 @@ impl Equals for Array<string> {
     if self.length() != other.length() {
       false
     } else {
-      mut i = 0;
+      mut i: u64 = 0;
       mut ret = true;
       while (ret and i < self.length()) {
         if self[i] != other[i] {
@@ -149,22 +154,27 @@ impl Equals for Array<string> {
 
 namespace string {
   intern fn fromChars(bytes: Array<char>): string
-  intern fn length(self: string): int
-  fn index_of(self: string, c: char): int {
-    mut i = 0;
-    mut ret = -1;
-    while (ret == -1 and i < self.length()) {
+  intern fn length(self: string): u64
+  fn index_of(self: string, c: char): i64 {
+    mut i: u64 = 0;
+    mut found = false;
+    while ((not found) and i < self.length()) {
       if (self[i] == c) {
-        ret = i;
+        found = true;
+      } else {
+        i = i + 1;
       };
-      i = i + 1;
     };
-    ret
+    if found {
+      i as i64
+    } else {
+      -1
+    }
   }
   fn concat(self: string, other: string): string {
     val new_length = self.length() + other.length();
     val copied = Array::new<char>(new_length);
-    mut i = 0;
+    mut i: u64 = 0;
     while (i < self.length()) {
       copied[i] = self[i];
       i = i + 1;

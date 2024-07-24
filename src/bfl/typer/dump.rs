@@ -9,25 +9,25 @@ impl Display for TypedModule {
         f.write_str("\n")?;
         f.write_str("--- TYPES ---\n")?;
         for (id, ty) in self.types.iter() {
-            f.write_fmt(format_args!("{} ", id))?;
+            write!(f, "{} ", id)?;
             self.display_type(ty, f)?;
             f.write_str("\n")?;
         }
         f.write_str("--- Namespaces ---\n")?;
         for (id, namespace) in self.namespaces.iter().enumerate() {
-            f.write_fmt(format_args!("{} ", id))?;
+            write!(f, "{} ", id)?;
             f.write_str(&self.get_ident_str(namespace.name))?;
             f.write_str("\n")?;
         }
         f.write_str("--- Variables ---\n")?;
         for (id, variable) in self.variables.iter() {
-            f.write_fmt(format_args!("{id:02} "))?;
+            write!(f, "{id:02} ")?;
             self.display_variable(variable, f)?;
             f.write_str("\n")?;
         }
         f.write_str("--- Functions ---\n")?;
         for (id, func) in self.functions.iter().enumerate() {
-            f.write_fmt(format_args!("{id:02} "))?;
+            write!(f, "{id:02} ")?;
             self.display_function(func, f, false)?;
             f.write_str("\n")?;
         }
@@ -62,11 +62,11 @@ impl TypedModule {
 
     pub fn display_scope(&self, scope: &Scope, writ: &mut impl Write) -> std::fmt::Result {
         let scope_name = self.make_scope_name(scope);
-        writ.write_fmt(format_args!("{}\n", scope_name))?;
+        write!(writ, "{}\n", scope_name)?;
 
         for (id, variable_id) in scope.variables.iter() {
             let variable = self.variables.get_variable(*variable_id);
-            writ.write_fmt(format_args!("\t{} ", id))?;
+            write!(writ, "\t{} ", id)?;
             self.display_variable(variable, writ)?;
             writ.write_str("\n")?;
         }
@@ -87,7 +87,7 @@ impl TypedModule {
             writ.write_str("\n")?;
         }
         for (id, namespace_id) in scope.namespaces.iter() {
-            writ.write_fmt(format_args!("{} ", id))?;
+            write!(writ, "{} ", id)?;
             let namespace = self.get_namespace(*namespace_id);
             writ.write_str(&self.get_ident_str(namespace.name))?;
             writ.write_str("\n")?;
@@ -124,7 +124,6 @@ impl TypedModule {
         match ty {
             Type::Unit => writ.write_str("()"),
             Type::Char => writ.write_str("char"),
-            Type::Int => writ.write_str("int"),
             Type::Integer(int_type) => {
                 match int_type {
                     IntegerType::U8 => writ.write_str("u8")?,
@@ -353,10 +352,10 @@ impl TypedModule {
     ) -> std::fmt::Result {
         match expr {
             TypedExpr::Unit(_) => writ.write_str("()"),
-            TypedExpr::Char(c, _) => writ.write_fmt(format_args!("'{}'", c)),
-            TypedExpr::Int(i, _) => writ.write_fmt(format_args!("{}", i)),
-            TypedExpr::Bool(b, _) => writ.write_fmt(format_args!("{}", b)),
-            TypedExpr::Str(s, _) => writ.write_fmt(format_args!("\"{}\"", s)),
+            TypedExpr::Char(c, _) => write!(writ, "'{}'", c),
+            TypedExpr::Integer(int) => write!(writ, "{}", int.value),
+            TypedExpr::Bool(b, _) => write!(writ, "{}", b),
+            TypedExpr::Str(s, _) => write!(writ, "\"{}\"", s),
             TypedExpr::None(typ, _) => {
                 writ.write_str("None<")?;
                 self.display_type_id(*typ, writ)?;
@@ -437,7 +436,7 @@ impl TypedModule {
             }
             TypedExpr::BinaryOp(binary_op) => {
                 self.display_expr(&binary_op.lhs, writ, indentation)?;
-                writ.write_fmt(format_args!(" {} ", binary_op.kind))?;
+                write!(writ, " {} ", binary_op.kind)?;
                 self.display_expr(&binary_op.rhs, writ, indentation)
             }
             TypedExpr::OptionalSome(opt) => {
@@ -473,20 +472,14 @@ impl TypedModule {
                 writ.write_str(self.ast.identifiers.get_name(is_variant_expr.variant_name))?;
                 writ.write_str(">()")
             }
-            TypedExpr::EnumCast(enum_cast) => {
-                self.display_expr(&enum_cast.base, writ, indentation)?;
-                writ.write_str(".is<.")?;
-                writ.write_str(self.ast.identifiers.get_name(enum_cast.variant_name))?;
-                writ.write_str(">()")
+            TypedExpr::Cast(cast) => {
+                self.display_expr(&cast.base_expr, writ, indentation)?;
+                write!(writ, " as({}) ", cast.cast_type)?;
+                self.display_type_id(cast.target_type_id, writ)
             }
             TypedExpr::EnumGetPayload(as_variant_expr) => {
                 self.display_expr(&as_variant_expr.target_expr, writ, indentation)?;
                 writ.write_str(".payload")
-            }
-            TypedExpr::NoOpCast(cast) => {
-                self.display_expr(&cast.base, writ, indentation)?;
-                writ.write_str(": ")?;
-                self.display_type_id(cast.type_id, writ)
             }
         }
     }
