@@ -3,6 +3,7 @@ pub mod derive;
 pub mod dump;
 pub mod scopes;
 
+use std::cmp::Ordering;
 use std::collections::{HashMap, VecDeque};
 use std::error::Error;
 use std::fmt::{Display, Formatter, Write};
@@ -16,10 +17,10 @@ use scopes::*;
 
 use crate::lex::{SpanId, Spans, TokenKind};
 use crate::parse::{
-    self, ForExpr, ForExprType, IfExpr, IndexOperation, ParsedAbilityId, ParsedAbilityImplId,
-    ParsedConstantId, ParsedExpressionId, ParsedFunctionId, ParsedId, ParsedNamespaceId,
-    ParsedPattern, ParsedPatternId, ParsedTypeDefnId, ParsedTypeExpression, ParsedTypeExpressionId,
-    ParsedUnaryOpKind, Sources,
+    self, ForExpr, ForExprType, IfExpr, IndexOperation, NumericWidth, ParsedAbilityId,
+    ParsedAbilityImplId, ParsedConstantId, ParsedExpressionId, ParsedFunctionId, ParsedId,
+    ParsedNamespaceId, ParsedPattern, ParsedPatternId, ParsedTypeDefnId, ParsedTypeExpression,
+    ParsedTypeExpressionId, ParsedUnaryOpKind, Sources,
 };
 use crate::parse::{
     Block, FnCall, IdentifierId, Literal, ParsedExpression, ParsedModule, ParsedStmt,
@@ -90,19 +91,18 @@ impl StructType {
 
 pub const UNIT_TYPE_ID: TypeId = TypeId(0);
 pub const CHAR_TYPE_ID: TypeId = TypeId(1);
-pub const INT_TYPE_ID: TypeId = TypeId(2);
-pub const BOOL_TYPE_ID: TypeId = TypeId(3);
-pub const STRING_TYPE_ID: TypeId = TypeId(4);
-pub const NEVER_TYPE_ID: TypeId = TypeId(5);
-pub const U8_TYPE_ID: TypeId = TypeId(6);
-pub const U16_TYPE_ID: TypeId = TypeId(7);
-pub const U32_TYPE_ID: TypeId = TypeId(8);
-pub const U64_TYPE_ID: TypeId = TypeId(9);
-pub const I8_TYPE_ID: TypeId = TypeId(10);
-pub const I16_TYPE_ID: TypeId = TypeId(11);
-pub const I32_TYPE_ID: TypeId = TypeId(12);
-pub const I64_TYPE_ID: TypeId = TypeId(13);
-pub const RAW_POINTER_TYPE_ID: TypeId = TypeId(14);
+pub const BOOL_TYPE_ID: TypeId = TypeId(2);
+pub const STRING_TYPE_ID: TypeId = TypeId(3);
+pub const NEVER_TYPE_ID: TypeId = TypeId(4);
+pub const U8_TYPE_ID: TypeId = TypeId(5);
+pub const U16_TYPE_ID: TypeId = TypeId(6);
+pub const U32_TYPE_ID: TypeId = TypeId(7);
+pub const U64_TYPE_ID: TypeId = TypeId(8);
+pub const I8_TYPE_ID: TypeId = TypeId(9);
+pub const I16_TYPE_ID: TypeId = TypeId(10);
+pub const I32_TYPE_ID: TypeId = TypeId(11);
+pub const I64_TYPE_ID: TypeId = TypeId(12);
+pub const RAW_POINTER_TYPE_ID: TypeId = TypeId(13);
 
 #[derive(Debug, Clone)]
 pub struct ArrayType {
@@ -192,7 +192,35 @@ pub enum IntegerType {
     I64,
 }
 
+impl Display for IntegerType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            IntegerType::U8 => write!(f, "u8"),
+            IntegerType::U16 => write!(f, "u16"),
+            IntegerType::U32 => write!(f, "u32"),
+            IntegerType::U64 => write!(f, "u64"),
+            IntegerType::I8 => write!(f, "i8"),
+            IntegerType::I16 => write!(f, "i16"),
+            IntegerType::I32 => write!(f, "i32"),
+            IntegerType::I64 => write!(f, "i64"),
+        }
+    }
+}
+
 impl IntegerType {
+    pub fn type_id(&self) -> TypeId {
+        match self {
+            IntegerType::U8 => U8_TYPE_ID,
+            IntegerType::U16 => U16_TYPE_ID,
+            IntegerType::U32 => U32_TYPE_ID,
+            IntegerType::U64 => U64_TYPE_ID,
+            IntegerType::I8 => I8_TYPE_ID,
+            IntegerType::I16 => I16_TYPE_ID,
+            IntegerType::I32 => I32_TYPE_ID,
+            IntegerType::I64 => I64_TYPE_ID,
+        }
+    }
+
     pub fn bit_width(&self) -> u32 {
         match self {
             IntegerType::U8 | IntegerType::I8 => 8,
@@ -374,6 +402,13 @@ impl Type {
             Type::Generic(gen) => Some(&gen.type_defn_info),
         }
     }
+
+    pub fn expect_integer(&self) -> &IntegerType {
+        match self {
+            Type::Integer(int) => int,
+            _ => panic!("expect_integer called on: {:?}", self),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -446,7 +481,7 @@ pub struct VariablePattern {
 pub enum TypedPattern {
     LiteralUnit(SpanId),
     LiteralChar(u8, SpanId),
-    LiteralInt(i64, SpanId),
+    LiteralInteger(TypedIntegerValue, SpanId),
     LiteralBool(bool, SpanId),
     LiteralString(String, SpanId),
     LiteralNone(SpanId),
@@ -838,6 +873,7 @@ struct TypedMatchCase {
     arm_block: TypedBlock,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TypedIntegerValue {
     U8(u8),
     U16(u16),
@@ -849,9 +885,85 @@ pub enum TypedIntegerValue {
     I64(i64),
 }
 
-pub struct IntegerExpr {
+impl TypedIntegerValue {
+    pub fn as_u64(&self) -> u64 {
+        match self {
+            TypedIntegerValue::U8(v) => *v as u64,
+            TypedIntegerValue::U16(v) => *v as u64,
+            TypedIntegerValue::U32(v) => *v as u64,
+            TypedIntegerValue::U64(v) => *v,
+            TypedIntegerValue::I8(v) => *v as u64,
+            TypedIntegerValue::I16(v) => *v as u64,
+            TypedIntegerValue::I32(v) => *v as u64,
+            TypedIntegerValue::I64(v) => *v as u64,
+        }
+    }
+}
+
+impl Display for TypedIntegerValue {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TypedIntegerValue::U8(v) => write!(f, "{}u8", v),
+            TypedIntegerValue::U16(v) => write!(f, "{}u16", v),
+            TypedIntegerValue::U32(v) => write!(f, "{}u32", v),
+            TypedIntegerValue::U64(v) => write!(f, "{}u64", v),
+            TypedIntegerValue::I8(v) => write!(f, "{}i8", v),
+            TypedIntegerValue::I16(v) => write!(f, "{}i16", v),
+            TypedIntegerValue::I32(v) => write!(f, "{}i32", v),
+            TypedIntegerValue::I64(v) => write!(f, "{}i64", v),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TypedIntegerExpr {
     pub value: TypedIntegerValue,
-    pub type_id: TypeId,
+    pub span: SpanId,
+}
+
+impl TypedIntegerExpr {
+    pub fn type_id(&self) -> TypeId {
+        match self.value {
+            TypedIntegerValue::U8(_) => U8_TYPE_ID,
+            TypedIntegerValue::U16(_) => U16_TYPE_ID,
+            TypedIntegerValue::U32(_) => U32_TYPE_ID,
+            TypedIntegerValue::U64(_) => U64_TYPE_ID,
+            TypedIntegerValue::I8(_) => I8_TYPE_ID,
+            TypedIntegerValue::I16(_) => I16_TYPE_ID,
+            TypedIntegerValue::I32(_) => I32_TYPE_ID,
+            TypedIntegerValue::I64(_) => I64_TYPE_ID,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum CastType {
+    IntegerExtend,
+    IntegerTruncate,
+    Integer8ToChar,
+    IntegerExtendFromChar,
+    EnumVariant,
+    KnownNoOp,
+}
+
+impl Display for CastType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CastType::IntegerExtend => write!(f, "iext"),
+            CastType::IntegerTruncate => write!(f, "itrunc"),
+            CastType::Integer8ToChar => write!(f, "i8tochar"),
+            CastType::IntegerExtendFromChar => write!(f, "iextfromchar"),
+            CastType::EnumVariant => write!(f, "enum"),
+            CastType::KnownNoOp => write!(f, "noop"),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TypedCast {
+    pub cast_type: CastType,
+    pub base_expr: Box<TypedExpr>,
+    pub target_type_id: TypeId,
     pub span: SpanId,
 }
 
@@ -860,7 +972,7 @@ pub enum TypedExpr {
     Unit(SpanId),
     Char(u8, SpanId),
     Bool(bool, SpanId),
-    Int(i64, SpanId),
+    Integer(TypedIntegerExpr),
     Str(String, SpanId),
     None(TypeId, SpanId),
     Struct(Struct),
@@ -882,8 +994,7 @@ pub enum TypedExpr {
     EnumConstructor(TypedEnumConstructor),
     EnumIsVariant(TypedEnumIsVariantExpr),
     EnumGetPayload(GetEnumPayload),
-    EnumCast(TypedEnumCast),
-    NoOpCast(NoOpCast),
+    Cast(TypedCast),
 }
 
 impl From<VariableExpr> for TypedExpr {
@@ -900,7 +1011,7 @@ impl TypedExpr {
             TypedExpr::Unit(_) => UNIT_TYPE_ID,
             TypedExpr::Char(_, _) => CHAR_TYPE_ID,
             TypedExpr::Str(_, _) => STRING_TYPE_ID,
-            TypedExpr::Int(_, _) => INT_TYPE_ID,
+            TypedExpr::Integer(integer) => integer.type_id(),
             TypedExpr::Bool(_, _) => BOOL_TYPE_ID,
             TypedExpr::Struct(struc) => struc.type_id,
             TypedExpr::Array(arr) => arr.type_id,
@@ -920,8 +1031,7 @@ impl TypedExpr {
             TypedExpr::EnumConstructor(enum_cons) => enum_cons.type_id,
             TypedExpr::EnumIsVariant(_is_variant) => BOOL_TYPE_ID,
             TypedExpr::EnumGetPayload(as_variant) => as_variant.payload_type_id,
-            TypedExpr::EnumCast(c) => c.variant_type_id,
-            TypedExpr::NoOpCast(c) => c.type_id,
+            TypedExpr::Cast(c) => c.target_type_id,
         }
     }
     #[inline]
@@ -930,7 +1040,7 @@ impl TypedExpr {
             TypedExpr::Unit(span) => *span,
             TypedExpr::Char(_, span) => *span,
             TypedExpr::Bool(_, span) => *span,
-            TypedExpr::Int(_, span) => *span,
+            TypedExpr::Integer(int) => int.span,
             TypedExpr::Str(_, span) => *span,
             TypedExpr::None(_, span) => *span,
             TypedExpr::Struct(struc) => struc.span,
@@ -951,8 +1061,7 @@ impl TypedExpr {
             TypedExpr::EnumConstructor(e) => e.span,
             TypedExpr::EnumIsVariant(is_variant) => is_variant.span,
             TypedExpr::EnumGetPayload(as_variant) => as_variant.span,
-            TypedExpr::EnumCast(c) => c.span,
-            TypedExpr::NoOpCast(c) => c.span,
+            TypedExpr::Cast(c) => c.span,
         }
     }
 
@@ -1349,7 +1458,21 @@ pub struct TypedModule {
 impl TypedModule {
     pub fn new(parsed_module: ParsedModule) -> TypedModule {
         let types = Types {
-            types: vec![Type::Unit, Type::Char, Type::Bool, Type::String, Type::Never],
+            types: vec![
+                Type::Unit,
+                Type::Char,
+                Type::Bool,
+                Type::String,
+                Type::Never,
+                Type::Integer(IntegerType::U8),
+                Type::Integer(IntegerType::U16),
+                Type::Integer(IntegerType::U32),
+                Type::Integer(IntegerType::U64),
+                Type::Integer(IntegerType::I8),
+                Type::Integer(IntegerType::I16),
+                Type::Integer(IntegerType::I32),
+                Type::Integer(IntegerType::I64),
+            ],
             type_defn_mapping: HashMap::new(),
         };
         debug_assert!(matches!(*types.get(UNIT_TYPE_ID), Type::Unit));
@@ -1624,8 +1747,16 @@ impl TypedModule {
         let base = match self.ast.type_expressions.get(type_expr_id) {
             ParsedTypeExpression::Unit(_) => Ok(UNIT_TYPE_ID),
             ParsedTypeExpression::Char(_) => Ok(CHAR_TYPE_ID),
-            ParsedTypeExpression::Int(_) => Ok(INT_TYPE_ID),
-            ParsedTypeExpression::Integer(_) => Ok(INT_TYPE_ID),
+            ParsedTypeExpression::Integer(num_type) => match (num_type.width, num_type.signed) {
+                (NumericWidth::B8, false) => Ok(U8_TYPE_ID),
+                (NumericWidth::B16, false) => Ok(U16_TYPE_ID),
+                (NumericWidth::B32, false) => Ok(U32_TYPE_ID),
+                (NumericWidth::B64, false) => Ok(U64_TYPE_ID),
+                (NumericWidth::B8, true) => Ok(I8_TYPE_ID),
+                (NumericWidth::B16, true) => Ok(I16_TYPE_ID),
+                (NumericWidth::B32, true) => Ok(I32_TYPE_ID),
+                (NumericWidth::B64, true) => Ok(I64_TYPE_ID),
+            },
             ParsedTypeExpression::Bool(_) => Ok(BOOL_TYPE_ID),
             ParsedTypeExpression::String(_) => Ok(STRING_TYPE_ID),
             ParsedTypeExpression::Struct(struct_defn) => {
@@ -1967,7 +2098,7 @@ impl TypedModule {
         match ty {
             UNIT_TYPE_ID => Ok(ty),
             CHAR_TYPE_ID => Ok(ty),
-            INT_TYPE_ID => Ok(ty),
+            I64_TYPE_ID => Ok(ty),
             BOOL_TYPE_ID => Ok(ty),
             STRING_TYPE_ID => Ok(ty),
             _ => make_fail_span(
@@ -2009,14 +2140,16 @@ impl TypedModule {
                             self.ast.get_pattern_span(pat_expr),
                         ),
                     },
-                    Literal::Numeric(i, span) => {
-                        let i64_value =
-                            TypedModule::parse_numeric(i).map_err(|msg| make_error(msg, *span))?;
+                    Literal::Integer(int) => {
+                        let value = self.eval_integer_value(
+                            &int.text,
+                            int.span,
+                            scope_id,
+                            Some(target_type_id),
+                        )?;
                         match self.types.get(target_type_id) {
-                            // Most compilers seem to represent int literals as really big
-                            // integers and then do the narrowing when they know the type
-                            Type::Integer(integer_type) => {
-                                Ok(TypedPattern::LiteralInt(i64_value, *span))
+                            Type::Integer(_integer_type) => {
+                                Ok(TypedPattern::LiteralInteger(value, int.span))
                             }
                             _ => make_fail_span(
                                 "unrelated type will never match int",
@@ -2295,9 +2428,14 @@ impl TypedModule {
         let constant_span = parsed_constant.span;
         let root_scope_id = self.scopes.get_root_scope_id();
         let expr = match self.ast.expressions.get(parsed_constant.value_expr) {
-            ParsedExpression::Literal(Literal::Numeric(n, span)) => {
-                let num = TypedModule::parse_numeric(n).map_err(|msg| make_error(msg, *span))?;
-                TypedExpr::Int(num, parsed_constant.span)
+            ParsedExpression::Literal(Literal::Integer(integer)) => {
+                let value = self.eval_integer_value(
+                    &integer.text,
+                    integer.span,
+                    root_scope_id,
+                    Some(type_id),
+                )?;
+                TypedExpr::Integer(TypedIntegerExpr { value, span: integer.span })
             }
             ParsedExpression::Literal(Literal::Bool(b, span)) => TypedExpr::Bool(*b, *span),
             ParsedExpression::Literal(Literal::Char(c, span)) => TypedExpr::Char(*c, *span),
@@ -2337,13 +2475,6 @@ impl TypedModule {
 
     pub fn get_function_mut(&mut self, function_id: FunctionId) -> &mut TypedFunction {
         &mut self.functions[function_id as usize]
-    }
-
-    fn parse_numeric(s: &str) -> Result<i64, String> {
-        // Eventually we need to find out what type of number literal this is.
-        // For now we only support i64
-        let num: i64 = s.parse().map_err(|_e| "Failed to parse signed numeric literal")?;
-        Ok(num)
     }
 
     // If the expr is already a block, do nothing
@@ -2400,9 +2531,9 @@ impl TypedModule {
         index_op: &IndexOperation,
         scope_id: ScopeId,
     ) -> TyperResult<TypedExpr> {
-        let index_expr = self.eval_expr(index_op.index_expr, scope_id, Some(INT_TYPE_ID))?;
-        if index_expr.get_type() != INT_TYPE_ID {
-            return make_fail_span("index type must be int", index_op.span);
+        let index_expr = self.eval_expr(index_op.index_expr, scope_id, Some(U64_TYPE_ID))?;
+        if index_expr.get_type() != U64_TYPE_ID {
+            return make_fail_span("index type must be u64", index_op.span);
         }
 
         let base_expr = self.eval_expr(index_op.target, scope_id, None)?;
@@ -2426,6 +2557,89 @@ impl TypedModule {
                     _ => make_fail_span("index base must be an array", index_op.span),
                 }
             }
+        }
+    }
+
+    fn eval_integer_value(
+        &self,
+        parsed_text: &str,
+        span: SpanId,
+        _scope_id: ScopeId,
+        expected_type_id: Option<TypeId>,
+    ) -> TyperResult<TypedIntegerValue> {
+        // let minus_start = parsed_text.starts_with('-');
+        let expected_int_type = match expected_type_id {
+            None => IntegerType::I64,
+            Some(U8_TYPE_ID) => IntegerType::U8,
+            Some(U16_TYPE_ID) => IntegerType::U16,
+            Some(U32_TYPE_ID) => IntegerType::U32,
+            Some(U64_TYPE_ID) => IntegerType::U64,
+            Some(I8_TYPE_ID) => IntegerType::I8,
+            Some(I16_TYPE_ID) => IntegerType::I16,
+            Some(I32_TYPE_ID) => IntegerType::I32,
+            Some(I64_TYPE_ID) => IntegerType::I64,
+            // Parse as i64 and let typechecking fail
+            Some(_) => IntegerType::I64,
+        };
+        macro_rules! parse_int {
+            ($int_type:ident, $rust_int_type:ty, $base: expr, $offset: expr) => {{
+                let result = <$rust_int_type>::from_str_radix(&parsed_text[$offset..], $base);
+                result.map(|int| TypedIntegerValue::$int_type(int))
+            }};
+        }
+        if parsed_text.starts_with("0x") {
+            let hex_base = 16;
+            let offset = 2;
+            let value: Result<TypedIntegerValue, std::num::ParseIntError> = match expected_int_type
+            {
+                IntegerType::U8 => parse_int!(U8, u8, hex_base, offset),
+                IntegerType::U16 => parse_int!(U16, u16, hex_base, offset),
+                IntegerType::U32 => parse_int!(U32, u32, hex_base, offset),
+                IntegerType::U64 => parse_int!(U64, u64, hex_base, offset),
+                IntegerType::I8 => parse_int!(I8, i8, hex_base, offset),
+                IntegerType::I16 => parse_int!(I16, i16, hex_base, offset),
+                IntegerType::I32 => parse_int!(I32, i32, hex_base, offset),
+                IntegerType::I64 => parse_int!(I64, i64, hex_base, offset),
+            };
+            let value = value
+                .map_err(|e| make_error(&format!("Invalid hex {expected_int_type}: {e}"), span))?;
+            Ok(value)
+        } else if parsed_text.starts_with("0b") {
+            let bin_base = 2;
+            let offset = 2;
+            let value: Result<TypedIntegerValue, std::num::ParseIntError> = match expected_int_type
+            {
+                IntegerType::U8 => parse_int!(U8, u8, bin_base, offset),
+                IntegerType::U16 => parse_int!(U16, u16, bin_base, offset),
+                IntegerType::U32 => parse_int!(U32, u32, bin_base, offset),
+                IntegerType::U64 => parse_int!(U64, u64, bin_base, offset),
+                IntegerType::I8 => parse_int!(I8, i8, bin_base, offset),
+                IntegerType::I16 => parse_int!(I16, i16, bin_base, offset),
+                IntegerType::I32 => parse_int!(I32, i32, bin_base, offset),
+                IntegerType::I64 => parse_int!(I64, i64, bin_base, offset),
+            };
+            let value = value.map_err(|e| {
+                make_error(&format!("Invalid binary {expected_int_type}: {e}"), span)
+            })?;
+            Ok(value)
+        } else {
+            let dec_base = 10;
+            let offset = 0;
+            let value: Result<TypedIntegerValue, std::num::ParseIntError> = match expected_int_type
+            {
+                IntegerType::U8 => parse_int!(U8, u8, dec_base, offset),
+                IntegerType::U16 => parse_int!(U16, u16, dec_base, offset),
+                IntegerType::U32 => parse_int!(U32, u32, dec_base, offset),
+                IntegerType::U64 => parse_int!(U64, u64, dec_base, offset),
+                IntegerType::I8 => parse_int!(I8, i8, dec_base, offset),
+                IntegerType::I16 => parse_int!(I16, i16, dec_base, offset),
+                IntegerType::I32 => parse_int!(I32, i32, dec_base, offset),
+                IntegerType::I64 => parse_int!(I64, i64, dec_base, offset),
+            };
+            let value = value.map_err(|e| {
+                make_error(&format!("Invalid integer {expected_int_type}: {e}"), span)
+            })?;
+            Ok(value)
         }
     }
 
@@ -2676,10 +2890,11 @@ impl TypedModule {
                     self.type_id_to_string(expression.get_type()),
                     self.type_id_to_string(expected_type_id)
                 );
-                TypedExpr::NoOpCast(NoOpCast {
+                TypedExpr::Cast(TypedCast {
                     span: expression.get_span(),
-                    base: Box::new(expression),
-                    type_id: expected_type_id,
+                    base_expr: Box::new(expression),
+                    target_type_id: expected_type_id,
+                    cast_type: CastType::KnownNoOp,
                 })
             }
             _other => match self.types.get(expression.get_type()) {
@@ -2700,10 +2915,11 @@ impl TypedModule {
                         self.type_id_to_string(expression.get_type()),
                         self.type_id_to_string(expression_opaque.aliasee)
                     );
-                    TypedExpr::NoOpCast(NoOpCast {
+                    TypedExpr::Cast(TypedCast {
+                        target_type_id: expression_opaque.aliasee,
+                        cast_type: CastType::KnownNoOp,
                         span: expression.get_span(),
-                        base: Box::new(expression),
-                        type_id: expression_opaque.aliasee,
+                        base_expr: Box::new(expression),
                     })
                 }
                 _ => expression,
@@ -2972,9 +3188,10 @@ impl TypedModule {
             ParsedExpression::Literal(Literal::Char(byte, span)) => {
                 Ok(TypedExpr::Char(*byte, *span))
             }
-            ParsedExpression::Literal(Literal::Numeric(s, span)) => {
-                let num = TypedModule::parse_numeric(s).map_err(|msg| make_error(msg, *span))?;
-                Ok(TypedExpr::Int(num, *span))
+            ParsedExpression::Literal(Literal::Integer(int)) => {
+                let value =
+                    self.eval_integer_value(&int.text, int.span, scope_id, expected_type)?;
+                Ok(TypedExpr::Integer(TypedIntegerExpr { value, span: int.span }))
             }
             ParsedExpression::Literal(Literal::Bool(b, span)) => {
                 let expr = TypedExpr::Bool(*b, *span);
@@ -3126,6 +3343,64 @@ impl TypedModule {
             }
             ParsedExpression::Match(_match_expr) => {
                 self.eval_match_expr(expr_id, scope_id, expected_type)
+            }
+            ParsedExpression::AsCast(cast) => {
+                let cast = cast.clone();
+                let base_expr = self.eval_expr(cast.base_expr, scope_id, None)?;
+                let base_expr_type = base_expr.get_type();
+                let target_type = self.eval_type_expr(cast.dest_type, scope_id, None)?;
+                let cast_type = match self.types.get(base_expr_type) {
+                    Type::Integer(from_integer_type) => match self.types.get(target_type) {
+                        Type::Integer(to_integer_type) => {
+                            let cast_type = match from_integer_type
+                                .bit_width()
+                                .cmp(&to_integer_type.bit_width())
+                            {
+                                Ordering::Less => CastType::IntegerExtend,
+                                Ordering::Greater => CastType::IntegerTruncate,
+                                Ordering::Equal => CastType::KnownNoOp,
+                            };
+                            Ok(cast_type)
+                        }
+                        Type::Char => {
+                            if from_integer_type.bit_width() == 8 {
+                                Ok(CastType::Integer8ToChar)
+                            } else {
+                                ferr!(
+                                    cast.span,
+                                    "Cannot cast integer '{}' to char, must be 8 bits",
+                                    from_integer_type
+                                )
+                            }
+                        }
+                        _ => ferr!(
+                            cast.span,
+                            "Cannot cast integer '{}' to '{}'",
+                            from_integer_type,
+                            self.type_id_to_string(target_type).blue()
+                        ),
+                    },
+                    Type::Char => match self.types.get(target_type) {
+                        Type::Integer(_to_integer_type) => Ok(CastType::IntegerExtendFromChar),
+                        _ => ferr!(
+                            cast.span,
+                            "Cannot cast char to '{}'",
+                            self.type_id_to_string(target_type).blue()
+                        ),
+                    },
+                    _ => ferr!(
+                        cast.span,
+                        "Cannot cast '{}' to '{}'",
+                        self.type_id_to_string(base_expr_type).blue(),
+                        self.type_id_to_string(target_type).blue()
+                    ),
+                }?;
+                Ok(TypedExpr::Cast(TypedCast {
+                    base_expr: Box::new(base_expr),
+                    target_type_id: target_type,
+                    cast_type,
+                    span: cast.span,
+                }))
             }
         };
         result
@@ -3531,12 +3806,15 @@ impl TypedModule {
                 );
                 Ok((vec![], bin_op))
             }
-            TypedPattern::LiteralInt(i64_value, span) => {
+            TypedPattern::LiteralInteger(int_value, span) => {
                 let bin_op = BinaryOp {
                     kind: BinaryOpKind::Equals,
                     ty: BOOL_TYPE_ID,
                     lhs: Box::new(target_expr_variable_expr.into()),
-                    rhs: Box::new(TypedExpr::Int(*i64_value, *span)),
+                    rhs: Box::new(TypedExpr::Integer(TypedIntegerExpr {
+                        value: int_value.clone(),
+                        span: *span,
+                    })),
                     span: *span,
                 };
                 Ok((vec![], TypedExpr::BinaryOp(bin_op)))
@@ -3679,13 +3957,15 @@ impl TypedModule {
 
         // We de-sugar the 'for ... do' expr into a typed while loop, synthesizing
         // a few local variables in order to achieve this.
-        // I think these are broken scoping-wise and will collide with user code currently!
 
         let for_expr_scope = self.scopes.add_child_scope(scope_id, ScopeType::ForExpr, None);
 
         let (index_variable, index_defn_stmt, index_variable_expr) = self.synth_variable_decl(
             self.ast.identifiers.get("it_index").unwrap(),
-            TypedExpr::Int(0, for_expr.body_block.span),
+            TypedExpr::Integer(TypedIntegerExpr {
+                value: TypedIntegerValue::U64(0),
+                span: for_expr.body_block.span,
+            }),
             true,
             true,
             for_expr_scope,
@@ -3743,7 +4023,7 @@ impl TypedModule {
                 TypedExpr::StringIndex(IndexOp {
                     base_expr: Box::new(iteree_variable_expr.clone()),
                     index_expr: Box::new(TypedExpr::Variable(VariableExpr {
-                        type_id: INT_TYPE_ID,
+                        type_id: U64_TYPE_ID,
                         variable_id: index_variable,
                         span: body_span,
                     })),
@@ -3754,7 +4034,7 @@ impl TypedModule {
                 TypedExpr::ArrayIndex(IndexOp {
                     base_expr: Box::new(iteree_variable_expr.clone()),
                     index_expr: Box::new(TypedExpr::Variable(VariableExpr {
-                        type_id: INT_TYPE_ID,
+                        type_id: U64_TYPE_ID,
                         variable_id: index_variable,
                         span: body_span,
                     })),
@@ -3866,13 +4146,16 @@ impl TypedModule {
             destination: Box::new(index_variable_expr.clone()),
             value: Box::new(TypedExpr::BinaryOp(BinaryOp {
                 kind: BinaryOpKind::Add,
-                ty: INT_TYPE_ID,
+                ty: U64_TYPE_ID,
                 lhs: Box::new(TypedExpr::Variable(VariableExpr {
-                    type_id: INT_TYPE_ID,
+                    type_id: U64_TYPE_ID,
                     variable_id: index_variable,
                     span: iterable_span,
                 })),
-                rhs: Box::new(TypedExpr::Int(1, iterable_span)),
+                rhs: Box::new(TypedExpr::Integer(TypedIntegerExpr {
+                    value: TypedIntegerValue::U64(1),
+                    span: iterable_span,
+                })),
                 span: iterable_span,
             })),
             span: iterable_span,
@@ -3946,7 +4229,9 @@ impl TypedModule {
     ) -> TyperResult<TypedExpr> {
         fn is_scalar_for_equals(type_id: TypeId) -> bool {
             match type_id {
-                UNIT_TYPE_ID | CHAR_TYPE_ID | INT_TYPE_ID | BOOL_TYPE_ID => true,
+                UNIT_TYPE_ID | CHAR_TYPE_ID | U8_TYPE_ID | U16_TYPE_ID | U32_TYPE_ID
+                | U64_TYPE_ID | I8_TYPE_ID | I16_TYPE_ID | I32_TYPE_ID | I64_TYPE_ID
+                | BOOL_TYPE_ID => true,
                 _other => false,
             }
         }
@@ -4016,14 +4301,14 @@ impl TypedModule {
 
         let lhs = self.eval_expr(binary_op.lhs, scope_id, None)?;
         let kind = binary_op.op_kind;
-        let result_type = match lhs.get_type() {
-            // TODO: all "int-like" go here; i64, u64, i32, u8, etc
-            INT_TYPE_ID => match kind {
-                BinaryOpKind::Add => Ok(INT_TYPE_ID),
-                BinaryOpKind::Subtract => Ok(INT_TYPE_ID),
-                BinaryOpKind::Multiply => Ok(INT_TYPE_ID),
-                BinaryOpKind::Divide => Ok(INT_TYPE_ID),
-                BinaryOpKind::Rem => Ok(INT_TYPE_ID),
+        let lhs_type_id = lhs.get_type();
+        let result_type = match self.types.get(lhs_type_id) {
+            Type::Integer(_integer_type) => match kind {
+                BinaryOpKind::Add => Ok(lhs_type_id),
+                BinaryOpKind::Subtract => Ok(lhs_type_id),
+                BinaryOpKind::Multiply => Ok(lhs_type_id),
+                BinaryOpKind::Divide => Ok(lhs_type_id),
+                BinaryOpKind::Rem => Ok(lhs_type_id),
                 BinaryOpKind::Less => Ok(BOOL_TYPE_ID),
                 BinaryOpKind::LessEqual => Ok(BOOL_TYPE_ID),
                 BinaryOpKind::Greater => Ok(BOOL_TYPE_ID),
@@ -4034,7 +4319,7 @@ impl TypedModule {
                 BinaryOpKind::NotEquals => Ok(BOOL_TYPE_ID),
                 _ => unreachable!(),
             },
-            BOOL_TYPE_ID => match kind {
+            Type::Bool => match kind {
                 BinaryOpKind::Add
                 | BinaryOpKind::Subtract
                 | BinaryOpKind::Multiply
@@ -4052,7 +4337,7 @@ impl TypedModule {
                 BinaryOpKind::NotEquals => Ok(BOOL_TYPE_ID),
                 BinaryOpKind::OptionalElse => unreachable!(),
             },
-            CHAR_TYPE_ID => match kind {
+            Type::Char => match kind {
                 BinaryOpKind::Add
                 | BinaryOpKind::Subtract
                 | BinaryOpKind::Multiply
@@ -4068,7 +4353,7 @@ impl TypedModule {
                 BinaryOpKind::NotEquals => Ok(BOOL_TYPE_ID),
                 BinaryOpKind::OptionalElse => unreachable!(),
             },
-            UNIT_TYPE_ID => match kind {
+            Type::Unit => match kind {
                 BinaryOpKind::Equals => Ok(BOOL_TYPE_ID),
                 BinaryOpKind::NotEquals => Ok(BOOL_TYPE_ID),
                 _ => ferr!(binary_op.span, "Invalid operation on unit: {}", kind),
@@ -4153,7 +4438,7 @@ impl TypedModule {
                     span: binary_op.span,
                 }))
             }
-            Type::Unit | Type::Char | Type::Int | Type::Bool => {
+            Type::Unit | Type::Char | Type::Integer(_) | Type::Bool => {
                 panic!("Scalar ints shouldnt be passed to eval_equality_expr")
             }
             _other_lhs_type => {
@@ -4372,7 +4657,10 @@ impl TypedModule {
                 }
                 let span = self.ast.spans.get(fn_call.span);
                 let line = self.ast.sources.get_line_for_span(span).unwrap();
-                let int_expr = TypedExpr::Int(line.line_number() as i64, fn_call.span);
+                let int_expr = TypedExpr::Integer(TypedIntegerExpr {
+                    value: TypedIntegerValue::U64(line.line_number() as u64),
+                    span: fn_call.span,
+                });
                 return Ok(Either::Left(int_expr));
             }
             _ => {}
@@ -4488,11 +4776,10 @@ impl TypedModule {
                             let Some(matching_variant) = e.variant_by_name(tag_name) else {
                                 return make_fail_span("No variant for tag", fn_call.span);
                             };
-                            return Ok(Either::Left(TypedExpr::EnumCast(TypedEnumCast {
-                                base: Box::new(base_expr.clone()),
-                                variant_type_id: matching_variant.my_type_id,
-                                variant_name: matching_variant.tag_name,
-                                variant_index: matching_variant.index,
+                            return Ok(Either::Left(TypedExpr::Cast(TypedCast {
+                                base_expr: Box::new(base_expr.clone()),
+                                cast_type: CastType::EnumVariant,
+                                target_type_id: matching_variant.my_type_id,
                                 span: fn_call.span,
                             })));
                         } else {
@@ -5965,16 +6252,16 @@ mod test {
 
     #[test]
     fn const_definition_1() -> anyhow::Result<()> {
-        let src = r"val x: int = 420;";
+        let src = r"val x: i64 = 420;";
         let parsed_module = setup(src, "const_definition_1.nx")?;
         let mut module = TypedModule::new(parsed_module);
         module.run()?;
         let i1 = &module.constants[0];
-        if let TypedExpr::Int(i, span_id) = i1.expr {
-            let span = module.ast.spans.get(span_id);
-            assert_eq!(i, 420);
+        if let TypedExpr::Integer(int_expr) = &i1.expr {
+            let span = module.ast.spans.get(int_expr.span);
+            assert_eq!(int_expr.value, TypedIntegerValue::I64(420));
             assert_eq!(span.end(), 16);
-            assert_eq!(span.start, 0);
+            assert_eq!(span.start, 13);
             Ok(())
         } else {
             panic!("{i1:?} was not an int")
@@ -5984,13 +6271,14 @@ mod test {
     #[test]
     fn fn_definition_1() -> anyhow::Result<()> {
         let src = r#"
-        fn foo(): int {
+        fn foo(): u64 {
           1
         }
-        fn basic(x: int, y: int): int {
-          val x: int = 0; mut y: int = 1;
+        fn basic(x: u64, y: u64): u64 {
+          val x: u64 = 0;
+          mut y: u64 = 1;
           y = { 1; 2; 3 };
-          y = 42 + 42;
+          y = (42: u64) + 42;
           foo()
         }"#;
         let module = setup(src, "basic_fn.nx")?;

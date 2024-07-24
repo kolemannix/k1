@@ -40,10 +40,10 @@ fn test_single_expr_with_id(
 #[test]
 fn basic_fn() -> Result<(), ParseError> {
     let src = r#"
-    fn basic(x: int, y: int): int {
+    fn basic(x: u64, y: u64): u64 {
       println(42, 42, 42);
-      val x: int = 0;
-      mut y: int = 1;
+      val x = 0;
+      mut y = 2;
       y = { 1; 2; 3 };
       y = add(42, 42);
       add(x, y)
@@ -159,14 +159,14 @@ fn dot_accessor() -> ParseResult<()> {
 
 #[test]
 fn type_parameter_single() -> ParseResult<()> {
-    let (mut _module, type_expr) = test_single_type_expr("Array<int>")?;
+    let (mut _module, type_expr) = test_single_type_expr("Array<unit>")?;
     assert!(matches!(type_expr, ParsedTypeExpression::TypeApplication(_)));
     Ok(())
 }
 
 #[test]
 fn type_parameter_multi() -> ParseResult<()> {
-    let (module, type_expr) = test_single_type_expr("Map<int, Array<int>>")?;
+    let (module, type_expr) = test_single_type_expr("Map<unit, Array<unit>>")?;
     let ParsedTypeExpression::TypeApplication(app) = type_expr else {
         panic!("Expected type application")
     };
@@ -178,7 +178,7 @@ fn type_parameter_multi() -> ParseResult<()> {
     };
     assert!(matches!(
         module.type_expressions.get(inner_app.params[0]),
-        ParsedTypeExpression::Int(_)
+        ParsedTypeExpression::Unit(_)
     ));
     Ok(())
 }
@@ -209,7 +209,7 @@ fn precedence() -> Result<(), ParseError> {
     let ParsedExpression::Literal(rhs) = module.expressions.get(bin_op.rhs) else { panic!() };
     assert_eq!(bin_op.op_kind, BinaryOpKind::Add);
     assert_eq!(lhs.op_kind, BinaryOpKind::Multiply);
-    assert!(matches!(rhs, Literal::Numeric(_, _)));
+    assert!(matches!(rhs, Literal::Integer(_)));
     Ok(())
 }
 
@@ -256,7 +256,7 @@ fn generic_fn_call() -> Result<(), ParseError> {
 
 #[test]
 fn generic_method_call_lhs_expr() -> Result<(), ParseError> {
-    let input = "getFn().baz<int>(42)";
+    let input = "getFn().baz<u64>(42)";
     let (mut parser, result) = test_single_expr(input)?;
     let ParsedExpression::MethodCall(call) = result else { panic!() };
     let ParsedExpression::FnCall(fn_call) = parser.expressions.get(call.base).clone() else {
@@ -265,7 +265,7 @@ fn generic_method_call_lhs_expr() -> Result<(), ParseError> {
     assert_eq!(fn_call.name, parser.identifiers.intern("getFn"));
     assert_eq!(call.call.name, parser.identifiers.intern("baz"));
     let type_arg = parser.type_expressions.get(call.call.type_args.unwrap()[0].type_expr);
-    assert!(type_arg.is_int());
+    assert!(type_arg.is_integer());
     assert!(matches!(
         &*parser.expressions.get(call.call.args[0].value),
         ParsedExpression::Literal(_)
@@ -318,10 +318,10 @@ fn namespaced_val() -> ParseResult<()> {
 
 #[test]
 fn type_hint() -> ParseResult<()> {
-    let input = "None: int?";
+    let input = "None: u64?";
     let (module, _expr, expr_id) = test_single_expr_with_id(input)?;
     let type_hint = module.get_expression_type_hint(expr_id).unwrap();
-    assert_eq!(module.type_expression_to_string(type_hint), "int?");
+    assert_eq!(module.type_expression_to_string(type_hint), "u64?");
     Ok(())
 }
 

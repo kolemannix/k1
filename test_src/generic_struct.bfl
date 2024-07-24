@@ -22,7 +22,7 @@ fn main(): int {
   val m: MBox<int, bool> = { t: 0, u: true };
   assert(m.t! == 0);
   assert(m.u == true);
-  assert(m.t<int, bool>() == 0);
+  assert(m.t<int, bool>()! == 0);
 
   b.value
 }

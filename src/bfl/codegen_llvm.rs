@@ -775,14 +775,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             .ctx
             .struct_type(&[boolean_type.value_basic_type(), inner_type.value_basic_type()], false);
         let size = self.size_info(&struct_type);
-        eprintln!(
-            "Our Size of optional: {}, llvms: {}",
-            size.size_bits,
-            self.size_info(&struct_type).size_bits
-        );
-        // FIXME(padding): Do our own padding, so we have correct offset to pass in
-        // Followup: We can now get the layout info from LLVM directly, so should be able
-        // to resolve all sizing / layout todos
         let di_type = self.make_debug_struct_type(
             &format!("optional_{}", type_id.to_string()),
             &struct_type,
@@ -881,58 +873,70 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         if let Some(result) = result {
             return Ok(result);
         };
+        let make_value_integer_type =
+            |name: &str,
+             type_id: TypeId,
+             int_type: IntType<'ctx>,
+             encoding: llvm_sys::debuginfo::LLVMDWARFTypeEncoding| {
+                let size = self.size_info(&int_type);
+                LlvmType::Value(LlvmValueType {
+                    type_id,
+                    basic_type: int_type.as_basic_type_enum(),
+                    size,
+                    di_type: self
+                        .debug
+                        .debug_builder
+                        .create_basic_type(name, size.size_bits as u64, encoding, 0)
+                        .unwrap()
+                        .as_type(),
+                })
+            };
         let codegened_type = match type_id {
-            UNIT_TYPE_ID => Ok(LlvmValueType {
-                type_id: UNIT_TYPE_ID,
-                basic_type: self.builtin_types.unit.as_basic_type_enum(),
-                size: self.size_info(&self.builtin_types.unit),
-                di_type: self
-                    .debug
-                    .debug_builder
-                    .create_basic_type(
-                        "unit",
-                        self.builtin_types.unit.get_bit_width() as u64,
-                        dw_ate_boolean,
-                        0,
-                    )
-                    .unwrap()
-                    .as_type(),
+            UNIT_TYPE_ID => Ok(make_value_integer_type(
+                "unit",
+                UNIT_TYPE_ID,
+                self.builtin_types.unit,
+                dw_ate_boolean,
+            )),
+            CHAR_TYPE_ID => Ok(make_value_integer_type(
+                "char",
+                CHAR_TYPE_ID,
+                self.builtin_types.char,
+                dw_ate_char,
+            )),
+            U8_TYPE_ID => {
+                Ok(make_value_integer_type("u8", U8_TYPE_ID, self.ctx.i8_type(), dw_ate_unsigned))
             }
-            .into()),
-            CHAR_TYPE_ID => Ok(LlvmValueType {
-                type_id: CHAR_TYPE_ID,
-                basic_type: self.builtin_types.char.as_basic_type_enum(),
-                size: self.size_info(&self.builtin_types.char),
-                di_type: self
-                    .debug
-                    .debug_builder
-                    .create_basic_type(
-                        "char",
-                        self.builtin_types.char.get_bit_width() as u64,
-                        dw_ate_char,
-                        0,
-                    )
-                    .unwrap()
-                    .as_type(),
+            U16_TYPE_ID => Ok(make_value_integer_type(
+                "u16",
+                U16_TYPE_ID,
+                self.ctx.i16_type(),
+                dw_ate_unsigned,
+            )),
+            U32_TYPE_ID => Ok(make_value_integer_type(
+                "u32",
+                U32_TYPE_ID,
+                self.ctx.i32_type(),
+                dw_ate_unsigned,
+            )),
+            U64_TYPE_ID => Ok(make_value_integer_type(
+                "u64",
+                U64_TYPE_ID,
+                self.ctx.i64_type(),
+                dw_ate_unsigned,
+            )),
+            I8_TYPE_ID => {
+                Ok(make_value_integer_type("i8", I8_TYPE_ID, self.ctx.i8_type(), dw_ate_signed))
             }
-            .into()),
-            INT_TYPE_ID => Ok(LlvmValueType {
-                type_id: INT_TYPE_ID,
-                basic_type: self.builtin_types.int.as_basic_type_enum(),
-                size: self.size_info(&self.builtin_types.int),
-                di_type: self
-                    .debug
-                    .debug_builder
-                    .create_basic_type(
-                        "int",
-                        self.builtin_types.int.get_bit_width() as u64,
-                        dw_ate_signed,
-                        0,
-                    )
-                    .unwrap()
-                    .as_type(),
+            I16_TYPE_ID => {
+                Ok(make_value_integer_type("i16", I16_TYPE_ID, self.ctx.i16_type(), dw_ate_signed))
             }
-            .into()),
+            I32_TYPE_ID => {
+                Ok(make_value_integer_type("i32", I32_TYPE_ID, self.ctx.i32_type(), dw_ate_signed))
+            }
+            I64_TYPE_ID => {
+                Ok(make_value_integer_type("i64", I64_TYPE_ID, self.ctx.i64_type(), dw_ate_signed))
+            }
             BOOL_TYPE_ID => Ok(LlvmValueType {
                 type_id: BOOL_TYPE_ID,
                 basic_type: self.builtin_types.boolean.as_basic_type_enum(),
@@ -962,7 +966,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     &[
                         StructDebugMember {
                             name: "length",
-                            di_type: self.get_debug_type(INT_TYPE_ID)?,
+                            di_type: self.get_debug_type(U64_TYPE_ID)?,
                         },
                         StructDebugMember { name: "data", di_type: data_ptr_type },
                     ],
@@ -1035,7 +1039,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         // This badly duplicates the shape of 'array'
                         // This is why it would be amazing to have the tools in the source
                         // language to define types like this; basically we just need Pointer<T>
-                        let int_type = self.codegen_type(INT_TYPE_ID)?;
+                        let int_type = self.codegen_type(U64_TYPE_ID)?;
                         let struct_di_type = self.make_debug_struct_type(
                             &name,
                             &struct_type,
@@ -1656,14 +1660,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 true => Ok(self.builtin_types.true_value.as_basic_value_enum().into()),
                 false => Ok(self.builtin_types.false_value.as_basic_value_enum().into()),
             },
-            TypedExpr::Int(int_value, _) => {
-                // LLVM only has unsigned values, the instructions are what provide the semantics
-                // of signed vs unsigned
-                let value = self.builtin_types.int.const_int(*int_value as u64, false);
-                Ok(value.as_basic_value_enum().into())
+            TypedExpr::Integer(integer) => {
+                let value = self.codegen_integer_value(integer)?;
+                Ok(value.into())
             }
             TypedExpr::Str(string_value, _) => {
-                // We will make them structs (structs) with an array pointer and a length for now
                 let global_str_data = self.llvm_module.add_global(
                     self.builtin_types.char.array_type(string_value.len() as u32),
                     None,
@@ -1877,38 +1878,77 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let value_payload = self.get_enum_payload(variant_type.struct_type, enum_value);
                 Ok(value_payload.into())
             }
-            TypedExpr::EnumCast(enum_cast) => {
-                let enum_value =
-                    self.codegen_expr_basic_value(&enum_cast.base)?.into_struct_value();
-                let is_variant_bool =
-                    self.codegen_enum_is_variant(enum_value, enum_cast.variant_name);
+            TypedExpr::Cast(cast) => {
+                match cast.cast_type {
+                    CastType::EnumVariant => {
+                        let enum_value =
+                            self.codegen_expr_basic_value(&cast.base_expr)?.into_struct_value();
+                        let variant =
+                            self.module.types.get(cast.target_type_id).expect_enum_variant();
+                        let is_variant_bool =
+                            self.codegen_enum_is_variant(enum_value, variant.tag_name);
 
-                let cond = self.bool_to_i1(is_variant_bool, "enum_cast_check");
-                let branch = self.build_conditional_branch(cond, "cast_post", "cast_fail");
+                        let cond = self.bool_to_i1(is_variant_bool, "enum_cast_check");
+                        let branch = self.build_conditional_branch(cond, "cast_post", "cast_fail");
 
-                // cast_fail
-                self.builder.position_at_end(branch.else_block);
-                // TODO: We can call @llvm.expect.i1 in order
-                // to help branch prediction and indicate that failure is 'cold'
-                self.build_bfl_crash("bad enum cast", enum_cast.span);
+                        // cast_fail
+                        self.builder.position_at_end(branch.else_block);
+                        // TODO: We can call @llvm.expect.i1 in order
+                        // to help branch prediction and indicate that failure is 'cold'
+                        self.build_bfl_crash("bad enum cast", cast.span);
 
-                // cast_post
-                self.builder.position_at_end(branch.then_block);
-                // Ultimately, this cast is currently a no-op
-                // So we don't need to emit any instructions in cast_post
+                        // cast_post
+                        self.builder.position_at_end(branch.then_block);
+                        // Ultimately, this cast is currently a no-op
+                        // So we don't need to emit any instructions in cast_post
 
-                Ok(enum_value.as_basic_value_enum().into())
-            }
-            TypedExpr::NoOpCast(cast) => {
-                let value = self.codegen_expr_basic_value(&cast.base)?;
-                Ok(value.into())
+                        Ok(enum_value.as_basic_value_enum().into())
+                    }
+                    CastType::KnownNoOp | CastType::Integer8ToChar => {
+                        let value = self.codegen_expr_basic_value(&cast.base_expr)?;
+                        Ok(value.into())
+                    }
+                    CastType::IntegerExtend | CastType::IntegerExtendFromChar => {
+                        let value = self.codegen_expr_basic_value(&cast.base_expr)?;
+                        let int_value = value.into_int_value();
+                        let llvm_type = self.codegen_type(cast.target_type_id)?;
+                        let integer_type =
+                            self.module.types.get(cast.target_type_id).expect_integer();
+                        let value: IntValue<'ctx> = if integer_type.is_signed() {
+                            self.builder.build_int_s_extend(
+                                int_value,
+                                llvm_type.value_basic_type().into_int_type(),
+                                "extend_cast",
+                            )
+                        } else {
+                            self.builder.build_int_z_extend(
+                                int_value,
+                                llvm_type.value_basic_type().into_int_type(),
+                                "extend_cast",
+                            )
+                        };
+                        Ok(value.as_basic_value_enum().into())
+                    }
+                    CastType::IntegerTruncate => {
+                        let value = self.codegen_expr_basic_value(&cast.base_expr)?;
+                        let int_value = value.into_int_value();
+                        let int_type = self.codegen_type(cast.target_type_id)?;
+                        let truncated_value = self.builder.build_int_truncate(
+                            int_value,
+                            int_type.value_basic_type().into_int_type(),
+                            "trunc_cast",
+                        );
+                        Ok(truncated_value.as_basic_value_enum().into())
+                    }
+                }
             }
         }
     }
 
     fn codegen_binop(&mut self, bin_op: &BinaryOp) -> CodegenResult<LlvmValue<'ctx>> {
-        match bin_op.ty {
-            INT_TYPE_ID => {
+        match self.module.types.get(bin_op.ty) {
+            Type::Integer(integer_type) => {
+                let signed = integer_type.is_signed();
                 let lhs_value = self.codegen_expr_basic_value(&bin_op.lhs)?.into_int_value();
                 let rhs_value = self.codegen_expr_basic_value(&bin_op.rhs)?.into_int_value();
                 let op_res = match bin_op.kind {
@@ -1920,12 +1960,20 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         self.builder.build_int_mul(lhs_value, rhs_value, "mul")
                     }
                     BinaryOpKind::Divide => {
-                        self.builder.build_int_signed_div(lhs_value, rhs_value, "sdiv")
+                        if signed {
+                            self.builder.build_int_signed_div(lhs_value, rhs_value, "sdiv")
+                        } else {
+                            self.builder.build_int_unsigned_div(lhs_value, rhs_value, "udiv")
+                        }
                     }
                     BinaryOpKind::And => self.builder.build_and(lhs_value, rhs_value, "and"),
                     BinaryOpKind::Or => self.builder.build_or(lhs_value, rhs_value, "or"),
                     BinaryOpKind::Rem => {
-                        self.builder.build_int_signed_rem(lhs_value, rhs_value, "rem")
+                        if signed {
+                            self.builder.build_int_signed_rem(lhs_value, rhs_value, "srem")
+                        } else {
+                            self.builder.build_int_unsigned_rem(lhs_value, rhs_value, "urem")
+                        }
                     }
                     BinaryOpKind::Equals => {
                         self.builder.build_int_compare(IntPredicate::EQ, lhs_value, rhs_value, "eq")
@@ -1936,7 +1984,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 };
                 Ok(op_res.as_basic_value_enum().into())
             }
-            BOOL_TYPE_ID => match bin_op.kind {
+            Type::Bool => match bin_op.kind {
                 BinaryOpKind::And | BinaryOpKind::Or => {
                     let lhs = self.codegen_expr_basic_value(&bin_op.lhs)?.into_int_value();
                     let op = match bin_op.kind {
@@ -2034,10 +2082,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 }
                 other => panic!("Unsupported binary operation {other:?} returning Bool"),
             },
-            STRING_TYPE_ID => panic!("No string-returning binary ops yet"),
-            UNIT_TYPE_ID => panic!("No unit-returning binary ops"),
-            CHAR_TYPE_ID => panic!("No char-returning binary ops"),
-            other => todo!("codegen for binary ops on user-defined types: {other}"),
+            Type::String => panic!("No string-returning binary ops yet"),
+            Type::Unit => panic!("No unit-returning binary ops"),
+            Type::Char => panic!("No char-returning binary ops"),
+            _other => todo!("codegen for binary ops on other types"),
         }
     }
 
@@ -2897,17 +2945,36 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         Ok(fn_val)
     }
 
+    fn codegen_integer_value(
+        &self,
+        integer: &TypedIntegerExpr,
+    ) -> CodegenResult<BasicValueEnum<'ctx>> {
+        let llvm_ty = self.codegen_type(integer.type_id())?;
+        let llvm_int_ty = llvm_ty.value_basic_type().into_int_type();
+        let Type::Integer(int_type) = self.module.types.get(llvm_ty.type_id()) else { panic!() };
+        let llvm_value = if int_type.is_signed() {
+            llvm_int_ty.const_int(integer.value.as_u64(), true)
+        } else {
+            llvm_int_ty.const_int(integer.value.as_u64(), false)
+        };
+        Ok(llvm_value.as_basic_value_enum())
+    }
+
     pub fn codegen_module(&mut self) -> CodegenResult<()> {
         let start = std::time::Instant::now();
         for constant in &self.module.constants {
-            match constant.expr {
-                TypedExpr::Int(i64, _) => {
-                    let llvm_ty = self.builtin_types.int;
-                    let llvm_val =
-                        self.llvm_module.add_global(llvm_ty, Some(AddressSpace::default()), "");
-                    llvm_val.set_constant(true);
-                    llvm_val.set_initializer(&llvm_ty.const_int(i64 as u64, false));
-                    self.globals.insert(constant.variable_id, llvm_val);
+            match &constant.expr {
+                TypedExpr::Integer(integer) => {
+                    let llvm_value = self.codegen_integer_value(integer)?;
+                    let variable = self.module.variables.get_variable(constant.variable_id);
+                    let llvm_global = self.llvm_module.add_global(
+                        llvm_value.get_type(),
+                        Some(AddressSpace::default()),
+                        self.module.get_ident_str(variable.name),
+                    );
+                    llvm_global.set_constant(true);
+                    llvm_global.set_initializer(&llvm_value);
+                    self.globals.insert(constant.variable_id, llvm_global);
                 }
                 _ => todo!("constant must be int"),
             }
