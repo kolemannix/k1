@@ -1,16 +1,15 @@
 fn main(): int {
   val xs = Array::new<int>(5);
-//  val xs = [0,0,0,0,0];
-  mut i = 0;
+  mut i = 0: u64;
   while i < xs.length<int>() {
     xs[i] = 4;
     i = i + 1;
   };
-  printInt(xs[0]);
-  printInt(xs[1]);
-  printInt(xs[2]);
-  printInt(xs[3]);
-  printInt(xs[4]);
+  assert(xs[0] == 4);
+  assert(xs[1] == 4);
+  assert(xs[2] == 4);
+  assert(xs[3] == 4);
+  assert(xs[4] == 4);
   // in lldb: parray `xs->length` xs->data_ptr
   0
 }

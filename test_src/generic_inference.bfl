@@ -1,4 +1,4 @@
-fn combinedLength<T>(x: Array<T>, y: Array<T>): int {
+fn combinedLength<T>(x: Array<T>, y: Array<T>): u64 {
   x.length() + y.length()
 }
 

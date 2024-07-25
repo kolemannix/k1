@@ -20,10 +20,12 @@ inkwell = { git = "https://github.com/TheDan64/inkwell", branch = "master", feat
 log = "0.4.17"
 parse-display = "0.8.0"
 smallvec = "1.10.0"
-string-interner = "0.14.0"
+string-interner = "0.17.0"
 zstd-sys = "2.0.8"
 either = "1.9.0"
 raylib = "5.0.1"
+component = "0.1.1"
+rust-analyzer = "0.0.1"
 
 [[bin]]
 name = "test_suite"
@@ -32,3 +34,10 @@ path = "src/bin/test_suite.rs"
 [[bin]]
 name = "compiler"
 path = "src/bin/compiler_main.rs"
+
+[profile.dev]
+debug = 0
+strip = "debuginfo"
+
+[profile.release]
+panic = "abort"

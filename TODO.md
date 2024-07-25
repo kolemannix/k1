@@ -1,5 +1,3 @@
-## Videos
-
 # Project Completion Checklist
 
 - [x] QoL before rest of pattern matching
@@ -15,7 +13,6 @@
   - [x] typechecking / codegen
   - [x] if/else
   - [x] match
-- [ ] 'dump' directive on block
 - [x] Pattern Matching
   - [x] Single-arm match evals to boolean
   - [x] Literals
@@ -28,8 +25,7 @@
   - [x] Multi-case
 - [x] Enum types (enums / tagged unions)
   - [x] Syntax
-  - [x] Construction/repr
-  - [x] Later, pattern match on variants
+  - [x] Construction/repr - [x] Later, pattern match on variants
   - [x] Make first-class types for each variant
   - [x] First, hard cast to variant (`as<.Tag>`)
   - [x] Built-in .as<Tag> or panic
@@ -38,11 +34,11 @@
 - [x] Type cleanup
   - [x] Order of eval (topology through defer/skip)
   - [x] named struct and enum fix
-  - [ ] Newtypes (opaque)
+  - [x] Newtypes (opaque)
   - [x] Aliases
-- [ ] Recursive types (depends on type cleanup)
-- Require named args; and allow anonymous
-- [ ] Generic structs and enums
+- [x] Generic structs and enums
+- [ ] Recursive types
+- [ ] Require named fncall args; and allow anonymous w/ declaration like Jakt
 - [x] TypedIf allow exprs instead of requiring blocks (did not do; instead improved handling of unit blocks)
 - [x] Remove binding 'if' since we have pattern matching
 - [x] Abilities
@@ -55,7 +51,21 @@
   - [x] to int64
   - [x] from reference
   - [x] to reference
-- [ ] sizeOf
+- [x] sizeOf
+- [ ] Rest of the int sizes
+  - [x] 8
+  - [x] 16
+  - [x] 32
+  - [x] 64
+  - [x] reject invalid values
+  - [ ] implement infallible coercions
+  - [x] implement cast
+  - [ ] hex literals?
+  - [ ] binary literals?
+  - [ ] type suffixes on literals 123u32, 4u8, etc
+- [ ] Reject too many function args
+- [ ] Mark types as trivially copyable or not
+- [ ] Remove custom size/align code and use LLVM's
 - [ ] More type expressions! (this was a big part of my original point)
   - [ ] Intersect structs
   - [ ] Union structs
@@ -64,16 +74,16 @@
 - [ ] floating point f32 and f64
 - [ ] Optional coalescing accessor (x?.y)
 - [ ] Prevent function overloading in same namespace
-- [ ] Typecheck the binary ops
-- [ ] Rest of the binary ops
+- [x] Typecheck the binary ops
+- [x] Bitwise ops
 - [ ] Exhaustive pattern matching
-- [ ] Pure lambdas with ->
-- [ ] slices
-- [ ] No closures for now
+- [ ] Pure lambdas with -> (not closures)
+- [ ] slices (windows? segments?)
 - [ ] Make demo readme
 
 ## Error story
 - [ ] A simple stdlib enum?
+- [ ]
 
 ## Ability Derivation
 - [ ] Ability derivation

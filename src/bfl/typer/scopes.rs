@@ -20,6 +20,7 @@ pub enum ScopeType {
     ElseBody,
     ForExpr,
     MatchArm,
+    TypeDefn,
 }
 
 impl ScopeType {
@@ -33,6 +34,7 @@ impl ScopeType {
             ScopeType::ElseBody => "else",
             ScopeType::ForExpr => "for",
             ScopeType::MatchArm => "match_arm",
+            ScopeType::TypeDefn => "type_defn",
         }
     }
 }
@@ -177,10 +179,10 @@ impl Scopes {
         &self,
         scope_id: ScopeId,
         ident: IdentifierId,
-    ) -> Option<ParsedTypeDefnId> {
+    ) -> Option<(ParsedTypeDefnId, ScopeId)> {
         let scope = self.get_scope(scope_id);
-        if let v @ Some(_r) = scope.find_pending_type_defn(ident) {
-            return v;
+        if let Some(defn) = scope.find_pending_type_defn(ident) {
+            return Some((defn, scope_id));
         }
         match scope.parent {
             Some(parent) => self.find_pending_type_defn(parent, ident),
@@ -222,7 +224,7 @@ pub struct Scope {
     pub namespaces: HashMap<IdentifierId, NamespaceId>,
     pub types: HashMap<IdentifierId, TypeId>,
     pub abilities: HashMap<IdentifierId, AbilityId>,
-    // FIXME(padding): Add abilities here so they participate in the type defn phase
+    // FIXME: Add abilities here so they participate in the type defn phase
     pub pending_type_defns: HashMap<IdentifierId, ParsedTypeDefnId>,
     pub parent: Option<ScopeId>,
     pub children: Vec<ScopeId>,

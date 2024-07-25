@@ -2,7 +2,7 @@ type E = enum A(int) | B(int) | C
 
 fn main(): int {
   val x: E = .A(42);
-  val x_as_b = x.as<.B>();
+  val x_as_b = x as E.B;
   assert(x_as_b.payload == 1);
   0
 }

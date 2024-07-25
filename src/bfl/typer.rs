@@ -3,6 +3,7 @@ pub mod derive;
 pub mod dump;
 pub mod scopes;
 
+use std::cmp::Ordering;
 use std::collections::{HashMap, VecDeque};
 use std::error::Error;
 use std::fmt::{Display, Formatter, Write};
@@ -16,10 +17,10 @@ use scopes::*;
 
 use crate::lex::{SpanId, Spans, TokenKind};
 use crate::parse::{
-    self, ForExpr, ForExprType, IfExpr, IndexOperation, ParsedAbilityId, ParsedAbilityImplId,
-    ParsedConstantId, ParsedExpressionId, ParsedFunctionId, ParsedId, ParsedNamespaceId,
-    ParsedPattern, ParsedPatternId, ParsedTypeDefnId, ParsedTypeExpression, ParsedTypeExpressionId,
-    ParsedUnaryOpKind, Sources,
+    self, ForExpr, ForExprType, IfExpr, IndexOperation, NumericWidth, ParsedAbilityId,
+    ParsedAbilityImplId, ParsedConstantId, ParsedExpressionId, ParsedFunctionId, ParsedId,
+    ParsedNamespaceId, ParsedPattern, ParsedPatternId, ParsedTypeDefnId, ParsedTypeExpression,
+    ParsedTypeExpressionId, ParsedUnaryOpKind, Sources,
 };
 use crate::parse::{
     Block, FnCall, IdentifierId, Literal, ParsedExpression, ParsedModule, ParsedStmt,
@@ -63,6 +64,7 @@ pub struct TypeDefnInfo {
     pub scope: ScopeId,
     // If there's a corresponding namespace for this type defn, this is it
     pub companion_namespace: Option<NamespaceId>,
+    pub generic_parent: Option<TypeId>,
 }
 
 #[derive(Debug, Clone)]
@@ -89,11 +91,18 @@ impl StructType {
 
 pub const UNIT_TYPE_ID: TypeId = TypeId(0);
 pub const CHAR_TYPE_ID: TypeId = TypeId(1);
-pub const INT_TYPE_ID: TypeId = TypeId(2);
-pub const BOOL_TYPE_ID: TypeId = TypeId(3);
-pub const STRING_TYPE_ID: TypeId = TypeId(4);
-pub const NEVER_TYPE_ID: TypeId = TypeId(5);
-pub const RAW_POINTER_TYPE_ID: TypeId = TypeId(6);
+pub const BOOL_TYPE_ID: TypeId = TypeId(2);
+pub const STRING_TYPE_ID: TypeId = TypeId(3);
+pub const NEVER_TYPE_ID: TypeId = TypeId(4);
+pub const U8_TYPE_ID: TypeId = TypeId(5);
+pub const U16_TYPE_ID: TypeId = TypeId(6);
+pub const U32_TYPE_ID: TypeId = TypeId(7);
+pub const U64_TYPE_ID: TypeId = TypeId(8);
+pub const I8_TYPE_ID: TypeId = TypeId(9);
+pub const I16_TYPE_ID: TypeId = TypeId(10);
+pub const I32_TYPE_ID: TypeId = TypeId(11);
+pub const I64_TYPE_ID: TypeId = TypeId(12);
+pub const RAW_POINTER_TYPE_ID: TypeId = TypeId(13);
 
 #[derive(Debug, Clone)]
 pub struct ArrayType {
@@ -157,10 +166,83 @@ pub struct OpaqueTypeAlias {
 }
 
 #[derive(Debug, Clone)]
+pub struct GenericTypeParam {
+    name: IdentifierId,
+    type_id: TypeId,
+}
+
+#[derive(Debug, Clone)]
+pub struct GenericType {
+    pub params: Vec<GenericTypeParam>,
+    pub inner: TypeId,
+    pub ast_id: ParsedTypeDefnId,
+    pub type_defn_info: TypeDefnInfo,
+    pub specializations: HashMap<Vec<TypeId>, TypeId>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntegerType {
+    U8,
+    U16,
+    U32,
+    U64,
+    I8,
+    I16,
+    I32,
+    I64,
+}
+
+impl Display for IntegerType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            IntegerType::U8 => write!(f, "u8"),
+            IntegerType::U16 => write!(f, "u16"),
+            IntegerType::U32 => write!(f, "u32"),
+            IntegerType::U64 => write!(f, "u64"),
+            IntegerType::I8 => write!(f, "i8"),
+            IntegerType::I16 => write!(f, "i16"),
+            IntegerType::I32 => write!(f, "i32"),
+            IntegerType::I64 => write!(f, "i64"),
+        }
+    }
+}
+
+impl IntegerType {
+    pub fn type_id(&self) -> TypeId {
+        match self {
+            IntegerType::U8 => U8_TYPE_ID,
+            IntegerType::U16 => U16_TYPE_ID,
+            IntegerType::U32 => U32_TYPE_ID,
+            IntegerType::U64 => U64_TYPE_ID,
+            IntegerType::I8 => I8_TYPE_ID,
+            IntegerType::I16 => I16_TYPE_ID,
+            IntegerType::I32 => I32_TYPE_ID,
+            IntegerType::I64 => I64_TYPE_ID,
+        }
+    }
+
+    pub fn bit_width(&self) -> u32 {
+        match self {
+            IntegerType::U8 | IntegerType::I8 => 8,
+            IntegerType::U16 | IntegerType::I16 => 16,
+            IntegerType::U32 | IntegerType::I32 => 32,
+            IntegerType::U64 | IntegerType::I64 => 64,
+        }
+    }
+
+    pub fn is_signed(&self) -> bool {
+        match self {
+            IntegerType::U8 | IntegerType::U16 | IntegerType::U32 | IntegerType::U64 => false,
+            IntegerType::I8 | IntegerType::I16 | IntegerType::I32 | IntegerType::I64 => true,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub enum Type {
     Unit,
     Char,
-    Int,
+    Integer(IntegerType),
     Bool,
     String,
     Struct(StructType),
@@ -176,12 +258,13 @@ pub enum Type {
     EnumVariant(TypedEnumVariant),
     Never,
     OpaqueAlias(OpaqueTypeAlias),
+    Generic(GenericType),
 }
 
 impl Type {
     pub fn ast_node(&self) -> Option<ParsedId> {
         match self {
-            Type::Unit | Type::Char | Type::Int | Type::Bool | Type::String => None,
+            Type::Unit | Type::Char | Type::Integer(_) | Type::Bool | Type::String => None,
             Type::Struct(t) => Some(t.ast_node),
             Type::Array(_a) => None,
             Type::Optional(_t) => None,
@@ -192,6 +275,7 @@ impl Type {
             Type::EnumVariant(_ev) => None,
             Type::Never => None,
             Type::OpaqueAlias(opaque) => Some(opaque.ast_id.into()),
+            Type::Generic(gen) => Some(gen.ast_id.into()),
         }
     }
 
@@ -218,6 +302,13 @@ impl Type {
         match self {
             Type::Enum(e) => e,
             _ => panic!("expected enum type"),
+        }
+    }
+
+    pub fn expect_enum_variant(&self) -> &TypedEnumVariant {
+        match self {
+            Type::EnumVariant(v) => v,
+            _ => panic!("expected enum variant type"),
         }
     }
 
@@ -284,11 +375,18 @@ impl Type {
         }
     }
 
+    pub fn expect_generic(&self) -> &GenericType {
+        match self {
+            Type::Generic(g) => g,
+            _ => panic!("expect_generic called on: {:?}", self),
+        }
+    }
+
     pub fn defn_info(&self) -> Option<&TypeDefnInfo> {
         match self {
             Type::Unit => None,
             Type::Char => None,
-            Type::Int => None,
+            Type::Integer(_) => None,
             Type::Bool => None,
             Type::String => None,
             Type::Struct(s) => s.type_defn_info.as_ref(),
@@ -301,6 +399,14 @@ impl Type {
             Type::EnumVariant(_) => None,
             Type::Never => None,
             Type::OpaqueAlias(opaque) => Some(&opaque.type_defn_info),
+            Type::Generic(gen) => Some(&gen.type_defn_info),
+        }
+    }
+
+    pub fn expect_integer(&self) -> &IntegerType {
+        match self {
+            Type::Integer(int) => int,
+            _ => panic!("expect_integer called on: {:?}", self),
         }
     }
 }
@@ -375,7 +481,7 @@ pub struct VariablePattern {
 pub enum TypedPattern {
     LiteralUnit(SpanId),
     LiteralChar(u8, SpanId),
-    LiteralInt(i64, SpanId),
+    LiteralInteger(TypedIntegerValue, SpanId),
     LiteralBool(bool, SpanId),
     LiteralString(String, SpanId),
     LiteralNone(SpanId),
@@ -464,7 +570,7 @@ pub struct TypedFunction {
     pub scope: ScopeId,
     pub ret_type: TypeId,
     pub params: Vec<FnArgDefn>,
-    pub type_params: Option<Vec<TypeParam>>,
+    pub type_params: Vec<TypeParam>,
     pub block: Option<TypedBlock>,
     pub intrinsic_type: Option<IntrinsicFunction>,
     pub linkage: Linkage,
@@ -474,19 +580,19 @@ pub struct TypedFunction {
 }
 
 impl TypedFunction {
-    pub fn should_codegen(&self) -> bool {
-        match self.metadata {
-            TypedFunctionMetadata::Standard(_) => !self.is_generic(),
-            TypedFunctionMetadata::Specialization { .. } => true,
-            TypedFunctionMetadata::AbilityDefn(_) => false,
-            TypedFunctionMetadata::AbilityImpl { .. } => true,
+    pub fn should_codegen_function(&self) -> bool {
+        match self.intrinsic_type {
+            Some(intrinsic) if intrinsic.is_inlined() => false,
+            _ => match self.metadata {
+                TypedFunctionMetadata::Standard(_) => !self.is_generic(),
+                TypedFunctionMetadata::Specialization { .. } => true,
+                TypedFunctionMetadata::AbilityDefn(_) => false,
+                TypedFunctionMetadata::AbilityImpl { .. } => true,
+            },
         }
     }
     pub fn is_generic(&self) -> bool {
-        match &self.type_params {
-            None => false,
-            Some(vec) => !vec.is_empty(),
-        }
+        !self.type_params.is_empty()
     }
 }
 
@@ -505,6 +611,7 @@ pub struct VariableExpr {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryOpKind {
+    // Integer operations
     Add,
     Subtract,
     Multiply,
@@ -514,10 +621,16 @@ pub enum BinaryOpKind {
     LessEqual,
     Greater,
     GreaterEqual,
+
+    // Boolean operations
     And,
     Or,
+
+    // Equality
     Equals,
     NotEquals,
+
+    // Other
     OptionalElse,
 }
 
@@ -636,6 +749,7 @@ pub struct UnaryOp {
 pub struct Call {
     pub callee_function_id: FunctionId,
     pub args: Vec<TypedExpr>,
+    pub type_args: Vec<TypeParam>,
     pub ret_type: TypeId,
     pub span: SpanId,
 }
@@ -759,12 +873,106 @@ struct TypedMatchCase {
     arm_block: TypedBlock,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypedIntegerValue {
+    U8(u8),
+    U16(u16),
+    U32(u32),
+    U64(u64),
+    I8(i8),
+    I16(i16),
+    I32(i32),
+    I64(i64),
+}
+
+impl TypedIntegerValue {
+    pub fn as_u64(&self) -> u64 {
+        match self {
+            TypedIntegerValue::U8(v) => *v as u64,
+            TypedIntegerValue::U16(v) => *v as u64,
+            TypedIntegerValue::U32(v) => *v as u64,
+            TypedIntegerValue::U64(v) => *v,
+            TypedIntegerValue::I8(v) => *v as u64,
+            TypedIntegerValue::I16(v) => *v as u64,
+            TypedIntegerValue::I32(v) => *v as u64,
+            TypedIntegerValue::I64(v) => *v as u64,
+        }
+    }
+}
+
+impl Display for TypedIntegerValue {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TypedIntegerValue::U8(v) => write!(f, "{}u8", v),
+            TypedIntegerValue::U16(v) => write!(f, "{}u16", v),
+            TypedIntegerValue::U32(v) => write!(f, "{}u32", v),
+            TypedIntegerValue::U64(v) => write!(f, "{}u64", v),
+            TypedIntegerValue::I8(v) => write!(f, "{}i8", v),
+            TypedIntegerValue::I16(v) => write!(f, "{}i16", v),
+            TypedIntegerValue::I32(v) => write!(f, "{}i32", v),
+            TypedIntegerValue::I64(v) => write!(f, "{}i64", v),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TypedIntegerExpr {
+    pub value: TypedIntegerValue,
+    pub span: SpanId,
+}
+
+impl TypedIntegerExpr {
+    pub fn type_id(&self) -> TypeId {
+        match self.value {
+            TypedIntegerValue::U8(_) => U8_TYPE_ID,
+            TypedIntegerValue::U16(_) => U16_TYPE_ID,
+            TypedIntegerValue::U32(_) => U32_TYPE_ID,
+            TypedIntegerValue::U64(_) => U64_TYPE_ID,
+            TypedIntegerValue::I8(_) => I8_TYPE_ID,
+            TypedIntegerValue::I16(_) => I16_TYPE_ID,
+            TypedIntegerValue::I32(_) => I32_TYPE_ID,
+            TypedIntegerValue::I64(_) => I64_TYPE_ID,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum CastType {
+    IntegerExtend,
+    IntegerTruncate,
+    Integer8ToChar,
+    IntegerExtendFromChar,
+    EnumVariant,
+    KnownNoOp,
+}
+
+impl Display for CastType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CastType::IntegerExtend => write!(f, "iext"),
+            CastType::IntegerTruncate => write!(f, "itrunc"),
+            CastType::Integer8ToChar => write!(f, "i8tochar"),
+            CastType::IntegerExtendFromChar => write!(f, "iextfromchar"),
+            CastType::EnumVariant => write!(f, "enum"),
+            CastType::KnownNoOp => write!(f, "noop"),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TypedCast {
+    pub cast_type: CastType,
+    pub base_expr: Box<TypedExpr>,
+    pub target_type_id: TypeId,
+    pub span: SpanId,
+}
+
 #[derive(Debug, Clone)]
 pub enum TypedExpr {
     Unit(SpanId),
     Char(u8, SpanId),
     Bool(bool, SpanId),
-    Int(i64, SpanId),
+    Integer(TypedIntegerExpr),
     Str(String, SpanId),
     None(TypeId, SpanId),
     Struct(Struct),
@@ -786,8 +994,7 @@ pub enum TypedExpr {
     EnumConstructor(TypedEnumConstructor),
     EnumIsVariant(TypedEnumIsVariantExpr),
     EnumGetPayload(GetEnumPayload),
-    EnumCast(TypedEnumCast),
-    NoOpCast(NoOpCast),
+    Cast(TypedCast),
 }
 
 impl From<VariableExpr> for TypedExpr {
@@ -804,7 +1011,7 @@ impl TypedExpr {
             TypedExpr::Unit(_) => UNIT_TYPE_ID,
             TypedExpr::Char(_, _) => CHAR_TYPE_ID,
             TypedExpr::Str(_, _) => STRING_TYPE_ID,
-            TypedExpr::Int(_, _) => INT_TYPE_ID,
+            TypedExpr::Integer(integer) => integer.type_id(),
             TypedExpr::Bool(_, _) => BOOL_TYPE_ID,
             TypedExpr::Struct(struc) => struc.type_id,
             TypedExpr::Array(arr) => arr.type_id,
@@ -824,8 +1031,7 @@ impl TypedExpr {
             TypedExpr::EnumConstructor(enum_cons) => enum_cons.type_id,
             TypedExpr::EnumIsVariant(_is_variant) => BOOL_TYPE_ID,
             TypedExpr::EnumGetPayload(as_variant) => as_variant.payload_type_id,
-            TypedExpr::EnumCast(c) => c.variant_type_id,
-            TypedExpr::NoOpCast(c) => c.type_id,
+            TypedExpr::Cast(c) => c.target_type_id,
         }
     }
     #[inline]
@@ -834,7 +1040,7 @@ impl TypedExpr {
             TypedExpr::Unit(span) => *span,
             TypedExpr::Char(_, span) => *span,
             TypedExpr::Bool(_, span) => *span,
-            TypedExpr::Int(_, span) => *span,
+            TypedExpr::Integer(int) => int.span,
             TypedExpr::Str(_, span) => *span,
             TypedExpr::None(_, span) => *span,
             TypedExpr::Struct(struc) => struc.span,
@@ -855,8 +1061,7 @@ impl TypedExpr {
             TypedExpr::EnumConstructor(e) => e.span,
             TypedExpr::EnumIsVariant(is_variant) => is_variant.span,
             TypedExpr::EnumGetPayload(as_variant) => as_variant.span,
-            TypedExpr::EnumCast(c) => c.span,
-            TypedExpr::NoOpCast(c) => c.span,
+            TypedExpr::Cast(c) => c.span,
         }
     }
 
@@ -986,15 +1191,39 @@ pub enum IntrinsicFunction {
     StringFromCharArray,
     StringEquals,
     RawPointerToReference,
+    SizeOf,
+    AlignOf,
+    BitNot,
+    BitAnd,
+    BitOr,
+    BitXor,
+    BitShiftLeft,
+    BitShiftRight,
 }
 
 impl IntrinsicFunction {
-    pub fn from_root_function_name(value: &str) -> Option<Self> {
-        match value {
-            "printInt" => Some(IntrinsicFunction::PrintInt),
-            "print" => Some(IntrinsicFunction::PrintString),
-            "exit" => Some(IntrinsicFunction::Exit),
-            _ => None,
+    fn is_inlined(self: Self) -> bool {
+        match self {
+            IntrinsicFunction::Exit => false,
+            IntrinsicFunction::PrintInt => false,
+            IntrinsicFunction::PrintString => false,
+            IntrinsicFunction::StringLength => false,
+            IntrinsicFunction::ArrayLength => false,
+            IntrinsicFunction::ArrayNew => false,
+            IntrinsicFunction::ArrayGrow => false,
+            IntrinsicFunction::ArraySetLength => false,
+            IntrinsicFunction::ArrayCapacity => false,
+            IntrinsicFunction::StringFromCharArray => false,
+            IntrinsicFunction::StringEquals => false,
+            IntrinsicFunction::RawPointerToReference => false,
+            IntrinsicFunction::SizeOf => true,
+            IntrinsicFunction::AlignOf => true,
+            IntrinsicFunction::BitNot => true,
+            IntrinsicFunction::BitAnd => true,
+            IntrinsicFunction::BitOr => true,
+            IntrinsicFunction::BitXor => true,
+            IntrinsicFunction::BitShiftLeft => true,
+            IntrinsicFunction::BitShiftRight => true,
         }
     }
 }
@@ -1080,9 +1309,36 @@ impl Types {
                 }
             }
         }
-        let id = self.types.len();
-        self.types.push(typ);
-        TypeId(id as u32)
+        match typ {
+            Type::Enum(mut e) => {
+                // Enums and variants are self-referential
+                // so we handle them specially
+                let next_type_id = self.next_type_id();
+                let enum_type_id = TypeId(next_type_id.0 + e.variants.len() as u32);
+
+                for v in e.variants.iter_mut() {
+                    let variant_id = TypeId(next_type_id.0 + v.index);
+                    v.my_type_id = variant_id;
+                    v.enum_type_id = enum_type_id;
+                    self.types.push(Type::EnumVariant(v.clone()));
+                }
+
+                self.types.push(Type::Enum(e));
+                enum_type_id
+            }
+            Type::EnumVariant(_ev) => {
+                panic!("EnumVariant cannot be directly interned; intern the Enum instead")
+            }
+            _ => {
+                let type_id = self.next_type_id();
+                self.types.push(typ);
+                type_id
+            }
+        }
+    }
+
+    fn next_type_id(&self) -> TypeId {
+        TypeId(self.types.len() as u32)
     }
 
     fn add_type(&mut self, typ: Type) -> TypeId {
@@ -1109,25 +1365,34 @@ impl Types {
     }
 
     /// Recursively checks if given type contains any type variables
-    fn is_type_generic(&self, type_id: TypeId) -> bool {
+    /// TODO: Cache whether or not a type is generic on insertion into the type pool
+    fn does_type_reference_type_variables(&self, type_id: TypeId) -> bool {
         match self.get(type_id) {
             Type::Unit => false,
             Type::Char => false,
-            Type::Int => false,
+            Type::Integer(_) => false,
             Type::Bool => false,
             Type::String => false,
-            Type::Array(arr) => self.is_type_generic(arr.element_type),
+            Type::Array(arr) => self.does_type_reference_type_variables(arr.element_type),
             // We don't _yet_ support generics in structs
-            Type::Struct(_struct) => false,
-            Type::Optional(opt) => self.is_type_generic(opt.inner_type),
-            Type::Reference(refer) => self.is_type_generic(refer.inner_type),
+            Type::Struct(struc) => {
+                for field in struc.fields.iter() {
+                    if self.does_type_reference_type_variables(field.type_id) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            Type::Optional(opt) => self.does_type_reference_type_variables(opt.inner_type),
+            Type::Reference(refer) => self.does_type_reference_type_variables(refer.inner_type),
             Type::TypeVariable(_) => true,
             Type::TagInstance(_) => false,
             // We don't _yet_ support generics in enums
             Type::Enum(_) => false,
             Type::EnumVariant(_) => false,
             Type::Never => false,
-            Type::OpaqueAlias(opaque) => self.is_type_generic(opaque.aliasee),
+            Type::OpaqueAlias(opaque) => self.does_type_reference_type_variables(opaque.aliasee),
+            Type::Generic(_gen) => true,
         }
     }
 
@@ -1135,7 +1400,7 @@ impl Types {
         match self.get(type_id) {
             Type::Unit => None,
             Type::Char => None,
-            Type::Int => None,
+            Type::Integer(_) => None,
             Type::Bool => None,
             Type::String => Some(CHAR_TYPE_ID),
             Type::Array(arr) => Some(arr.element_type),
@@ -1148,6 +1413,7 @@ impl Types {
             Type::EnumVariant(_) => None,
             Type::Never => None,
             Type::OpaqueAlias(_opaque) => None,
+            Type::Generic(_gen) => None,
         }
     }
 
@@ -1192,15 +1458,37 @@ pub struct TypedModule {
 impl TypedModule {
     pub fn new(parsed_module: ParsedModule) -> TypedModule {
         let types = Types {
-            types: vec![Type::Unit, Type::Char, Type::Int, Type::Bool, Type::String, Type::Never],
+            types: vec![
+                Type::Unit,
+                Type::Char,
+                Type::Bool,
+                Type::String,
+                Type::Never,
+                Type::Integer(IntegerType::U8),
+                Type::Integer(IntegerType::U16),
+                Type::Integer(IntegerType::U32),
+                Type::Integer(IntegerType::U64),
+                Type::Integer(IntegerType::I8),
+                Type::Integer(IntegerType::I16),
+                Type::Integer(IntegerType::I32),
+                Type::Integer(IntegerType::I64),
+            ],
             type_defn_mapping: HashMap::new(),
         };
         debug_assert!(matches!(*types.get(UNIT_TYPE_ID), Type::Unit));
         debug_assert!(matches!(*types.get(CHAR_TYPE_ID), Type::Char));
-        debug_assert!(matches!(*types.get(INT_TYPE_ID), Type::Int));
         debug_assert!(matches!(*types.get(BOOL_TYPE_ID), Type::Bool));
         debug_assert!(matches!(*types.get(STRING_TYPE_ID), Type::String));
         debug_assert!(matches!(*types.get(NEVER_TYPE_ID), Type::Never));
+        debug_assert!(matches!(*types.get(U8_TYPE_ID), Type::Integer(IntegerType::U8)));
+        debug_assert!(matches!(*types.get(U16_TYPE_ID), Type::Integer(IntegerType::U16)));
+        debug_assert!(matches!(*types.get(U32_TYPE_ID), Type::Integer(IntegerType::U32)));
+        debug_assert!(matches!(*types.get(U64_TYPE_ID), Type::Integer(IntegerType::U64)));
+        debug_assert!(matches!(*types.get(I8_TYPE_ID), Type::Integer(IntegerType::I8)));
+        debug_assert!(matches!(*types.get(I16_TYPE_ID), Type::Integer(IntegerType::I16)));
+        debug_assert!(matches!(*types.get(I32_TYPE_ID), Type::Integer(IntegerType::I32)));
+        debug_assert!(matches!(*types.get(I64_TYPE_ID), Type::Integer(IntegerType::I64)));
+
         let scopes = Scopes::make();
         let namespaces = Vec::new();
         TypedModule {
@@ -1252,7 +1540,7 @@ impl TypedModule {
         match (type1, type2) {
             (Type::Unit, Type::Unit) => true,
             (Type::Char, Type::Char) => true,
-            (Type::Int, Type::Int) => true,
+            (Type::Integer(int1), Type::Integer(int2)) => int1 == int2,
             (Type::Bool, Type::Bool) => true,
             (Type::String, Type::String) => true,
             (Type::Struct(r1), Type::Struct(r2)) => {
@@ -1279,6 +1567,11 @@ impl TypedModule {
             }
             (Type::TagInstance(t1), Type::TagInstance(t2)) => t1.ident == t2.ident,
             (Type::Enum(e1), Type::Enum(e2)) => {
+                // nocommit: This prevents us from ever not re-specializing generic enums.
+                // We should handle that by caching specializations, I think
+                if e1.type_defn_info.is_some() || e2.type_defn_info.is_some() {
+                    return false;
+                }
                 if e1.variants.len() != e2.variants.len() {
                     return false;
                 }
@@ -1333,25 +1626,67 @@ impl TypedModule {
             name: parsed_type_defn.name,
             scope: scope_id,
             companion_namespace: companion_namespace_id,
+            generic_parent: None,
         };
 
-        // We only pass down type defn info if it's an alias but not an opaque one! We want the defn info to live
-        // on the opaque type, not the wrapped type.
-        let passed_type_defn_info =
-            if parsed_type_defn.flags.is_alias() && !parsed_type_defn.flags.is_opaque() {
-                None
-            } else {
-                Some(type_defn_info.clone())
-            };
+        let has_type_params = !parsed_type_defn.type_params.is_empty();
+
+        let passed_type_defn_info = if has_type_params
+            || (parsed_type_defn.flags.is_alias() && !parsed_type_defn.flags.is_opaque())
+        {
+            None
+        } else {
+            Some(type_defn_info.clone())
+        };
+
+        let defn_scope_id =
+            self.scopes.add_child_scope(scope_id, ScopeType::TypeDefn, Some(parsed_type_defn.name));
+        let our_scope = self.scopes.get_scope_mut(defn_scope_id);
+
+        let mut type_params: Vec<GenericTypeParam> =
+            Vec::with_capacity(parsed_type_defn.type_params.len());
+        for type_param in parsed_type_defn.type_params.iter() {
+            let type_variable = Type::TypeVariable(TypeVariable {
+                identifier_id: type_param.ident,
+                scope_id: defn_scope_id,
+                _constraints: None,
+            });
+            let type_variable_id = self.types.add_type(type_variable);
+            type_params
+                .push(GenericTypeParam { name: type_param.ident, type_id: type_variable_id });
+            let added = our_scope.add_type(type_param.ident, type_variable_id);
+            if !added {
+                return ferr!(
+                    type_param.span,
+                    "Type variable name '{}' is taken",
+                    self.get_ident_str(type_param.ident).blue()
+                );
+            }
+        }
+
         let rhs_type_id =
-            self.eval_type_expr(parsed_type_defn.value_expr, scope_id, passed_type_defn_info)?;
-        let type_id = if parsed_type_defn.flags.is_alias() {
+            self.eval_type_expr(parsed_type_defn.value_expr, defn_scope_id, passed_type_defn_info)?;
+        let type_id = if has_type_params {
+            eprintln!(
+                "Generating a generic wrapper for a {} with companion namespace {:?}",
+                self.type_id_to_string(rhs_type_id),
+                type_defn_info.companion_namespace
+            );
+            let gen = GenericType {
+                params: type_params,
+                ast_id: parsed_type_defn_id.into(),
+                inner: rhs_type_id,
+                type_defn_info,
+                specializations: HashMap::new(),
+            };
+            Ok(self.types.add_type(Type::Generic(gen)))
+        } else if parsed_type_defn.flags.is_alias() {
             if parsed_type_defn.flags.is_opaque() {
                 // Opaque alias
                 eprintln!(
                     "Generating an opaque alias for a {} with companion namespace {:?}",
                     self.type_id_to_string(rhs_type_id),
-                    type_defn_info.companion_namespace
+                    type_defn_info.companion_namespace,
                 );
                 let alias = OpaqueTypeAlias {
                     ast_id: parsed_type_defn_id.into(),
@@ -1385,6 +1720,12 @@ impl TypedModule {
             }
         }?;
         self.types.add_type_defn_mapping(parsed_type_defn_id, type_id);
+        eprintln!(
+            "Adding type defn {} to scope {}",
+            self.get_ident_str(parsed_type_defn.name),
+            scope_id
+        );
+
         if !self.scopes.add_type(scope_id, parsed_type_defn.name, type_id) {
             make_fail_span(
                 &format!("Type {} exists", self.get_ident_str(parsed_type_defn.name)),
@@ -1406,7 +1747,16 @@ impl TypedModule {
         let base = match self.ast.type_expressions.get(type_expr_id) {
             ParsedTypeExpression::Unit(_) => Ok(UNIT_TYPE_ID),
             ParsedTypeExpression::Char(_) => Ok(CHAR_TYPE_ID),
-            ParsedTypeExpression::Int(_) => Ok(INT_TYPE_ID),
+            ParsedTypeExpression::Integer(num_type) => match (num_type.width, num_type.signed) {
+                (NumericWidth::B8, false) => Ok(U8_TYPE_ID),
+                (NumericWidth::B16, false) => Ok(U16_TYPE_ID),
+                (NumericWidth::B32, false) => Ok(U32_TYPE_ID),
+                (NumericWidth::B64, false) => Ok(U64_TYPE_ID),
+                (NumericWidth::B8, true) => Ok(I8_TYPE_ID),
+                (NumericWidth::B16, true) => Ok(I16_TYPE_ID),
+                (NumericWidth::B32, true) => Ok(I32_TYPE_ID),
+                (NumericWidth::B64, true) => Ok(I64_TYPE_ID),
+            },
             ParsedTypeExpression::Bool(_) => Ok(BOOL_TYPE_ID),
             ParsedTypeExpression::String(_) => Ok(STRING_TYPE_ID),
             ParsedTypeExpression::Struct(struct_defn) => {
@@ -1437,14 +1787,15 @@ impl TypedModule {
                                 format!("No type named {} is in scope", self.get_ident_str(name)),
                                 *span,
                             ),
-                            Some(pending_defn_id) => {
+                            Some((pending_defn_id, pending_defn_scope_id)) => {
                                 eprintln!(
                                     "Recursing into pending type defn {}",
                                     self.get_ident_str(
                                         self.ast.get_type_defn(pending_defn_id).name
                                     )
                                 );
-                                let type_id = self.eval_type_defn(pending_defn_id, scope_id)?;
+                                let type_id =
+                                    self.eval_type_defn(pending_defn_id, pending_defn_scope_id)?;
                                 let removed = self.scopes.remove_pending_type_defn(scope_id, name);
                                 if !removed {
                                     panic!("Failed to remove pending type defn");
@@ -1471,7 +1822,7 @@ impl TypedModule {
                         make_fail_span("Expected 1 type parameter for Array", ty_app.span)
                     }
                 } else {
-                    todo!("not supported: generic non builtin types")
+                    self.eval_type_application(type_expr_id, scope_id)
                 }
             }
             ParsedTypeExpression::Optional(opt) => {
@@ -1488,18 +1839,11 @@ impl TypedModule {
             }
             ParsedTypeExpression::Enum(e) => {
                 let e = e.clone();
-                let enum_type = Type::Enum(TypedEnum {
-                    variants: Vec::new(),
-                    type_defn_info,
-                    ast_node: type_expr_id.into(),
-                });
-                let enum_type_id = self.types.add_type(enum_type);
-
                 let mut variants = Vec::with_capacity(e.variants.len());
                 for (index, v) in e.variants.iter().enumerate() {
-                    // Ensure there's a type for this tag as a workaround for codegen
-                    // since codegen looks at `types` to enumerate all the tags in the program
+                    // Hack: Ensure there's a type for this tag
                     self.types.get_type_for_tag(v.tag_name);
+
                     let payload_type_id = match &v.payload_expression {
                         None => None,
                         Some(payload_type_expr) => {
@@ -1509,18 +1853,20 @@ impl TypedModule {
                         }
                     };
                     let variant = TypedEnumVariant {
-                        enum_type_id,
+                        enum_type_id: TypeId::PENDING,
                         my_type_id: TypeId::PENDING,
                         tag_name: v.tag_name,
                         index: index as u32,
                         payload: payload_type_id,
                     };
-                    let variant_id = self.types.add_type(Type::EnumVariant(variant));
-                    let variant = self.types.get_mut(variant_id).expect_enum_variant_mut();
-                    variant.my_type_id = variant_id;
-                    variants.push(variant.clone());
+                    variants.push(variant);
                 }
-                self.types.get_mut(enum_type_id).expect_enum_mut().variants = variants;
+                let enum_type = Type::Enum(TypedEnum {
+                    variants,
+                    type_defn_info,
+                    ast_node: type_expr_id.into(),
+                });
+                let enum_type_id = self.types.add_type(enum_type);
                 Ok(enum_type_id)
             }
             ParsedTypeExpression::DotMemberAccess(dot_acc) => {
@@ -1563,6 +1909,187 @@ impl TypedModule {
         Ok(base)
     }
 
+    fn eval_type_application(
+        &mut self,
+        ty_app_id: ParsedTypeExpressionId,
+        scope_id: ScopeId,
+    ) -> TyperResult<TypeId> {
+        let ParsedTypeExpression::TypeApplication(ty_app) =
+            self.ast.type_expressions.get(ty_app_id)
+        else {
+            panic!("Expected TypeApplication")
+        };
+        let ty_app = ty_app.clone();
+        match self.scopes.find_type(scope_id, ty_app.base) {
+            None => {
+                return ferr!(
+                    ty_app.span,
+                    "No type named '{}' is in scope",
+                    self.get_ident_str(ty_app.base).blue()
+                )
+            }
+            Some(type_id) => {
+                let mut evaled_type_params: Vec<TypeId> = Vec::with_capacity(ty_app.params.len());
+                let Type::Generic(_) = self.types.get(type_id) else {
+                    return ferr!(
+                        ty_app.span,
+                        "Type '{}' does not take type parameters",
+                        self.get_ident_str(ty_app.base)
+                    );
+                };
+                for parsed_param in ty_app.params.clone().iter() {
+                    let param_type_id = self.eval_type_expr(*parsed_param, scope_id, None)?;
+                    evaled_type_params.push(param_type_id);
+                }
+                let gen = self.types.get(type_id).expect_generic().clone();
+                let mut type_defn_info = gen.type_defn_info.clone();
+                type_defn_info.generic_parent = Some(gen.inner);
+                let specialized_type = match gen.specializations.get(&evaled_type_params) {
+                    Some(existing) => *existing,
+                    None => {
+                        let specialized_type = self.substitute_in_type(
+                            gen.inner,
+                            Some(type_defn_info.clone()),
+                            &evaled_type_params,
+                            &gen.params,
+                            ty_app_id,
+                        );
+                        match self.types.get_mut(type_id) {
+                            Type::Generic(gen) => {
+                                gen.specializations.insert(evaled_type_params, specialized_type);
+                            }
+                            _ => {}
+                        };
+                        specialized_type
+                    }
+                };
+                Ok(specialized_type)
+            }
+        }
+    }
+
+    fn substitute_in_type(
+        &mut self,
+        type_id: TypeId,
+        defn_info: Option<TypeDefnInfo>,
+        passed_params: &[TypeId],
+        generic_params: &[GenericTypeParam],
+        parsed_expression_id: ParsedTypeExpressionId,
+    ) -> TypeId {
+        let typ = self.types.get(type_id);
+        match typ {
+            Type::Struct(struc) => {
+                let mut new_fields = struc.fields.clone();
+                let mut any_change = false;
+                for field in new_fields.iter_mut() {
+                    let new_field_type_id = self.substitute_in_type(
+                        field.type_id,
+                        None,
+                        passed_params,
+                        generic_params,
+                        parsed_expression_id,
+                    );
+                    if new_field_type_id != field.type_id {
+                        any_change = true;
+                    }
+                    field.type_id = new_field_type_id;
+                }
+                if any_change {
+                    let specialized_struct = StructType {
+                        fields: new_fields,
+                        type_defn_info: defn_info,
+                        ast_node: parsed_expression_id.into(),
+                    };
+                    self.types.add_type(Type::Struct(specialized_struct))
+                } else {
+                    type_id
+                }
+            }
+            Type::Optional(opt) => {
+                let opt_inner = opt.inner_type;
+                let new_inner = self.substitute_in_type(
+                    opt_inner,
+                    None,
+                    passed_params,
+                    generic_params,
+                    parsed_expression_id,
+                );
+                if new_inner != opt_inner {
+                    let specialized_optional = OptionalType { inner_type: new_inner };
+                    self.types.add_type(Type::Optional(specialized_optional))
+                } else {
+                    type_id
+                }
+            }
+            Type::Reference(reference) => {
+                let ref_inner = reference.inner_type;
+                let new_inner = self.substitute_in_type(
+                    ref_inner,
+                    None,
+                    passed_params,
+                    generic_params,
+                    parsed_expression_id,
+                );
+                if new_inner != ref_inner {
+                    let specialized_reference = ReferenceType { inner_type: new_inner };
+                    self.types.add_type(Type::Reference(specialized_reference))
+                } else {
+                    type_id
+                }
+            }
+            Type::Enum(e) => {
+                let mut new_variants = e.variants.clone();
+                let mut any_changed = false;
+                for variant in new_variants.iter_mut() {
+                    let new_payload_id = match variant.payload {
+                        None => None,
+                        Some(payload_type_id) => Some(self.substitute_in_type(
+                            payload_type_id,
+                            None,
+                            passed_params,
+                            generic_params,
+                            parsed_expression_id,
+                        )),
+                    };
+                    if new_payload_id != variant.payload {
+                        any_changed = true;
+                        variant.payload = new_payload_id;
+                    }
+                }
+                if any_changed {
+                    let new_enum = TypedEnum {
+                        variants: new_variants,
+                        ast_node: parsed_expression_id.into(),
+                        type_defn_info: defn_info,
+                    };
+                    let new_enum_id = self.types.add_type(Type::Enum(new_enum));
+                    new_enum_id
+                } else {
+                    type_id
+                }
+            }
+            Type::TypeVariable(_t) => {
+                let generic_param = generic_params
+                    .iter()
+                    .enumerate()
+                    .find(|(_, gen_param)| gen_param.type_id == type_id);
+                match generic_param {
+                    None => type_id,
+                    Some((param_index, _generic_param)) => {
+                        let corresponding_type = passed_params[param_index];
+                        eprintln!(
+                            "SUBSTITUTING {} for {}",
+                            self.type_id_to_string(corresponding_type),
+                            self.type_id_to_string(type_id)
+                        );
+                        corresponding_type
+                    }
+                }
+            }
+            _ => todo!("Weird generic type"),
+        }
+    }
+
     fn eval_const_type_expr(
         &mut self,
         parsed_type_expr: ParsedTypeExpressionId,
@@ -1571,7 +2098,7 @@ impl TypedModule {
         match ty {
             UNIT_TYPE_ID => Ok(ty),
             CHAR_TYPE_ID => Ok(ty),
-            INT_TYPE_ID => Ok(ty),
+            I64_TYPE_ID => Ok(ty),
             BOOL_TYPE_ID => Ok(ty),
             STRING_TYPE_ID => Ok(ty),
             _ => make_fail_span(
@@ -1613,11 +2140,17 @@ impl TypedModule {
                             self.ast.get_pattern_span(pat_expr),
                         ),
                     },
-                    Literal::Numeric(i, span) => {
-                        let i64_value =
-                            TypedModule::parse_numeric(i).map_err(|msg| make_error(msg, *span))?;
+                    Literal::Integer(int) => {
+                        let value = self.eval_integer_value(
+                            &int.text,
+                            int.span,
+                            scope_id,
+                            Some(target_type_id),
+                        )?;
                         match self.types.get(target_type_id) {
-                            Type::Int => Ok(TypedPattern::LiteralInt(i64_value, *span)),
+                            Type::Integer(_integer_type) => {
+                                Ok(TypedPattern::LiteralInteger(value, int.span))
+                            }
                             _ => make_fail_span(
                                 "unrelated type will never match int",
                                 self.ast.get_pattern_span(pat_expr),
@@ -1895,9 +2428,14 @@ impl TypedModule {
         let constant_span = parsed_constant.span;
         let root_scope_id = self.scopes.get_root_scope_id();
         let expr = match self.ast.expressions.get(parsed_constant.value_expr) {
-            ParsedExpression::Literal(Literal::Numeric(n, span)) => {
-                let num = TypedModule::parse_numeric(n).map_err(|msg| make_error(msg, *span))?;
-                TypedExpr::Int(num, parsed_constant.span)
+            ParsedExpression::Literal(Literal::Integer(integer)) => {
+                let value = self.eval_integer_value(
+                    &integer.text,
+                    integer.span,
+                    root_scope_id,
+                    Some(type_id),
+                )?;
+                TypedExpr::Integer(TypedIntegerExpr { value, span: integer.span })
             }
             ParsedExpression::Literal(Literal::Bool(b, span)) => TypedExpr::Bool(*b, *span),
             ParsedExpression::Literal(Literal::Char(c, span)) => TypedExpr::Char(*c, *span),
@@ -1937,13 +2475,6 @@ impl TypedModule {
 
     pub fn get_function_mut(&mut self, function_id: FunctionId) -> &mut TypedFunction {
         &mut self.functions[function_id as usize]
-    }
-
-    fn parse_numeric(s: &str) -> Result<i64, String> {
-        // Eventually we need to find out what type of number literal this is.
-        // For now we only support i64
-        let num: i64 = s.parse().map_err(|_e| "Failed to parse signed numeric literal")?;
-        Ok(num)
     }
 
     // If the expr is already a block, do nothing
@@ -2000,9 +2531,9 @@ impl TypedModule {
         index_op: &IndexOperation,
         scope_id: ScopeId,
     ) -> TyperResult<TypedExpr> {
-        let index_expr = self.eval_expr(index_op.index_expr, scope_id, Some(INT_TYPE_ID))?;
-        if index_expr.get_type() != INT_TYPE_ID {
-            return make_fail_span("index type must be int", index_op.span);
+        let index_expr = self.eval_expr(index_op.index_expr, scope_id, Some(U64_TYPE_ID))?;
+        if index_expr.get_type() != U64_TYPE_ID {
+            return make_fail_span("index type must be u64", index_op.span);
         }
 
         let base_expr = self.eval_expr(index_op.target, scope_id, None)?;
@@ -2026,6 +2557,89 @@ impl TypedModule {
                     _ => make_fail_span("index base must be an array", index_op.span),
                 }
             }
+        }
+    }
+
+    fn eval_integer_value(
+        &self,
+        parsed_text: &str,
+        span: SpanId,
+        _scope_id: ScopeId,
+        expected_type_id: Option<TypeId>,
+    ) -> TyperResult<TypedIntegerValue> {
+        // let minus_start = parsed_text.starts_with('-');
+        let expected_int_type = match expected_type_id {
+            None => IntegerType::I64,
+            Some(U8_TYPE_ID) => IntegerType::U8,
+            Some(U16_TYPE_ID) => IntegerType::U16,
+            Some(U32_TYPE_ID) => IntegerType::U32,
+            Some(U64_TYPE_ID) => IntegerType::U64,
+            Some(I8_TYPE_ID) => IntegerType::I8,
+            Some(I16_TYPE_ID) => IntegerType::I16,
+            Some(I32_TYPE_ID) => IntegerType::I32,
+            Some(I64_TYPE_ID) => IntegerType::I64,
+            // Parse as i64 and let typechecking fail
+            Some(_) => IntegerType::I64,
+        };
+        macro_rules! parse_int {
+            ($int_type:ident, $rust_int_type:ty, $base: expr, $offset: expr) => {{
+                let result = <$rust_int_type>::from_str_radix(&parsed_text[$offset..], $base);
+                result.map(|int| TypedIntegerValue::$int_type(int))
+            }};
+        }
+        if parsed_text.starts_with("0x") {
+            let hex_base = 16;
+            let offset = 2;
+            let value: Result<TypedIntegerValue, std::num::ParseIntError> = match expected_int_type
+            {
+                IntegerType::U8 => parse_int!(U8, u8, hex_base, offset),
+                IntegerType::U16 => parse_int!(U16, u16, hex_base, offset),
+                IntegerType::U32 => parse_int!(U32, u32, hex_base, offset),
+                IntegerType::U64 => parse_int!(U64, u64, hex_base, offset),
+                IntegerType::I8 => parse_int!(I8, i8, hex_base, offset),
+                IntegerType::I16 => parse_int!(I16, i16, hex_base, offset),
+                IntegerType::I32 => parse_int!(I32, i32, hex_base, offset),
+                IntegerType::I64 => parse_int!(I64, i64, hex_base, offset),
+            };
+            let value = value
+                .map_err(|e| make_error(&format!("Invalid hex {expected_int_type}: {e}"), span))?;
+            Ok(value)
+        } else if parsed_text.starts_with("0b") {
+            let bin_base = 2;
+            let offset = 2;
+            let value: Result<TypedIntegerValue, std::num::ParseIntError> = match expected_int_type
+            {
+                IntegerType::U8 => parse_int!(U8, u8, bin_base, offset),
+                IntegerType::U16 => parse_int!(U16, u16, bin_base, offset),
+                IntegerType::U32 => parse_int!(U32, u32, bin_base, offset),
+                IntegerType::U64 => parse_int!(U64, u64, bin_base, offset),
+                IntegerType::I8 => parse_int!(I8, i8, bin_base, offset),
+                IntegerType::I16 => parse_int!(I16, i16, bin_base, offset),
+                IntegerType::I32 => parse_int!(I32, i32, bin_base, offset),
+                IntegerType::I64 => parse_int!(I64, i64, bin_base, offset),
+            };
+            let value = value.map_err(|e| {
+                make_error(&format!("Invalid binary {expected_int_type}: {e}"), span)
+            })?;
+            Ok(value)
+        } else {
+            let dec_base = 10;
+            let offset = 0;
+            let value: Result<TypedIntegerValue, std::num::ParseIntError> = match expected_int_type
+            {
+                IntegerType::U8 => parse_int!(U8, u8, dec_base, offset),
+                IntegerType::U16 => parse_int!(U16, u16, dec_base, offset),
+                IntegerType::U32 => parse_int!(U32, u32, dec_base, offset),
+                IntegerType::U64 => parse_int!(U64, u64, dec_base, offset),
+                IntegerType::I8 => parse_int!(I8, i8, dec_base, offset),
+                IntegerType::I16 => parse_int!(I16, i16, dec_base, offset),
+                IntegerType::I32 => parse_int!(I32, i32, dec_base, offset),
+                IntegerType::I64 => parse_int!(I64, i64, dec_base, offset),
+            };
+            let value = value.map_err(|e| {
+                make_error(&format!("Invalid integer {expected_int_type}: {e}"), span)
+            })?;
+            Ok(value)
         }
     }
 
@@ -2276,10 +2890,11 @@ impl TypedModule {
                     self.type_id_to_string(expression.get_type()),
                     self.type_id_to_string(expected_type_id)
                 );
-                TypedExpr::NoOpCast(NoOpCast {
+                TypedExpr::Cast(TypedCast {
                     span: expression.get_span(),
-                    base: Box::new(expression),
-                    type_id: expected_type_id,
+                    base_expr: Box::new(expression),
+                    target_type_id: expected_type_id,
+                    cast_type: CastType::KnownNoOp,
                 })
             }
             _other => match self.types.get(expression.get_type()) {
@@ -2300,10 +2915,11 @@ impl TypedModule {
                         self.type_id_to_string(expression.get_type()),
                         self.type_id_to_string(expression_opaque.aliasee)
                     );
-                    TypedExpr::NoOpCast(NoOpCast {
+                    TypedExpr::Cast(TypedCast {
+                        target_type_id: expression_opaque.aliasee,
+                        cast_type: CastType::KnownNoOp,
                         span: expression.get_span(),
-                        base: Box::new(expression),
-                        type_id: expression_opaque.aliasee,
+                        base_expr: Box::new(expression),
                     })
                 }
                 _ => expression,
@@ -2497,101 +3113,7 @@ impl TypedModule {
             }
             ParsedExpression::BinaryOp(binary_op) => {
                 let binary_op = binary_op.clone();
-                // Infer expected type to be type of operand1
-                match binary_op.op_kind {
-                    BinaryOpKind::Equals | BinaryOpKind::NotEquals => {
-                        return self.eval_equality_expr(&binary_op, scope_id, expected_type);
-                    }
-                    BinaryOpKind::OptionalElse => {
-                        // LHS must be an optional and RHS must be its contained type
-                        let lhs = self.eval_expr(binary_op.lhs, scope_id, None)?;
-                        let Some(lhs_optional) = self.types.get(lhs.get_type()).as_optional()
-                        else {
-                            return make_fail_span(&format!("'else' operator can only be used on an optional; type was '{}'", self.type_id_to_string(lhs.get_type())), binary_op.span);
-                        };
-                        let lhs_inner = lhs_optional.inner_type;
-
-                        let rhs = self.eval_expr(binary_op.rhs, scope_id, Some(lhs_inner))?;
-                        let rhs_type = rhs.get_type();
-                        if let Err(msg) = self.typecheck_types(lhs_inner, rhs_type, scope_id) {
-                            return make_fail_span(
-                                &format!("'else' value incompatible with optional: {}", msg),
-                                binary_op.span,
-                            );
-                        }
-                        let mut coalesce_block = self.synth_block(vec![], scope_id, binary_op.span);
-                        let lhs_variable_name = self.ast.identifiers.intern("optelse_lhs");
-                        let (_lhs_variable_id, lhs_decl_stmt, lhs_variable_expr) = self
-                            .synth_variable_decl(
-                                lhs_variable_name,
-                                lhs,
-                                false,
-                                false,
-                                coalesce_block.scope_id,
-                            );
-                        let lhs_has_value =
-                            TypedExpr::OptionalHasValue(Box::new(lhs_variable_expr.clone()));
-                        let lhs_unwrap_expr = TypedExpr::OptionalGet(OptionalGet {
-                            inner_expr: Box::new(lhs_variable_expr),
-                            result_type_id: lhs_inner,
-                            span: binary_op.span,
-                            checked: false,
-                        });
-                        let if_else = TypedExpr::If(Box::new(TypedIf {
-                            condition: lhs_has_value,
-                            consequent: self
-                                .coerce_expr_to_block(lhs_unwrap_expr, coalesce_block.scope_id),
-                            alternate: self.coerce_expr_to_block(rhs, coalesce_block.scope_id),
-                            ty: rhs_type,
-                            span: binary_op.span,
-                        }));
-                        coalesce_block.push_stmt(lhs_decl_stmt);
-                        coalesce_block.push_expr(if_else);
-                        return Ok(TypedExpr::Block(coalesce_block));
-                    }
-                    _ => {}
-                };
-                let lhs = self.eval_expr(binary_op.lhs, scope_id, None)?;
-                let kind = binary_op.op_kind;
-                let expected_rhs_type =
-                    if kind.is_symmetric_binop() { Some(lhs.get_type()) } else { None };
-                let rhs = self.eval_expr(binary_op.rhs, scope_id, expected_rhs_type)?;
-
-                // FIXME: Typechecker We are not really typechecking binary operations at all.
-                //        This is not enough; we need to check that the lhs is actually valid
-                //        for this operation first
-                if kind.is_symmetric_binop() {
-                    if self.typecheck_types(lhs.get_type(), rhs.get_type(), scope_id).is_err() {
-                        return make_fail_span("operand types did not match", binary_op.span);
-                    }
-                }
-
-                let result_type = match kind {
-                    BinaryOpKind::Add => lhs.get_type(),
-                    BinaryOpKind::Subtract => lhs.get_type(),
-                    BinaryOpKind::Multiply => lhs.get_type(),
-                    BinaryOpKind::Divide => lhs.get_type(),
-                    BinaryOpKind::Rem => lhs.get_type(),
-                    BinaryOpKind::Less => BOOL_TYPE_ID,
-                    BinaryOpKind::LessEqual => BOOL_TYPE_ID,
-                    BinaryOpKind::Greater => BOOL_TYPE_ID,
-                    BinaryOpKind::GreaterEqual => BOOL_TYPE_ID,
-                    BinaryOpKind::And => lhs.get_type(),
-                    BinaryOpKind::Or => lhs.get_type(),
-                    BinaryOpKind::Equals => panic!("equals should be special-cased by now"),
-                    BinaryOpKind::NotEquals => panic!("not equals should be special-cased by now"),
-                    BinaryOpKind::OptionalElse => {
-                        panic!("optional else should be special-cased by now")
-                    }
-                };
-                let expr = TypedExpr::BinaryOp(BinaryOp {
-                    kind,
-                    ty: result_type,
-                    lhs: Box::new(lhs),
-                    rhs: Box::new(rhs),
-                    span: binary_op.span,
-                });
-                Ok(expr)
+                self.eval_binary_op(&binary_op, scope_id, expected_type)
             }
             ParsedExpression::UnaryOp(op) => {
                 let op = op.clone();
@@ -2660,17 +3182,16 @@ impl TypedModule {
                     ))?;
                 let inner_type = expected_type.inner_type;
                 let none_type = Type::Optional(OptionalType { inner_type });
-                // FIXME: We'll re-create the type for optional int, bool, etc over and over. Instead of add_type it should be
-                //        self.get_or_add_type()
                 let type_id = self.types.add_type(none_type);
                 Ok(TypedExpr::None(type_id, *span))
             }
             ParsedExpression::Literal(Literal::Char(byte, span)) => {
                 Ok(TypedExpr::Char(*byte, *span))
             }
-            ParsedExpression::Literal(Literal::Numeric(s, span)) => {
-                let num = TypedModule::parse_numeric(s).map_err(|msg| make_error(msg, *span))?;
-                Ok(TypedExpr::Int(num, *span))
+            ParsedExpression::Literal(Literal::Integer(int)) => {
+                let value =
+                    self.eval_integer_value(&int.text, int.span, scope_id, expected_type)?;
+                Ok(TypedExpr::Integer(TypedIntegerExpr { value, span: int.span }))
             }
             ParsedExpression::Literal(Literal::Bool(b, span)) => {
                 let expr = TypedExpr::Bool(*b, *span);
@@ -2822,6 +3343,87 @@ impl TypedModule {
             }
             ParsedExpression::Match(_match_expr) => {
                 self.eval_match_expr(expr_id, scope_id, expected_type)
+            }
+            ParsedExpression::AsCast(cast) => {
+                let cast = cast.clone();
+                let base_expr = self.eval_expr(cast.base_expr, scope_id, None)?;
+                let base_expr_type = base_expr.get_type();
+                let target_type = self.eval_type_expr(cast.dest_type, scope_id, None)?;
+                let cast_type = match self.types.get(base_expr_type) {
+                    Type::Integer(from_integer_type) => match self.types.get(target_type) {
+                        Type::Integer(to_integer_type) => {
+                            let cast_type = match from_integer_type
+                                .bit_width()
+                                .cmp(&to_integer_type.bit_width())
+                            {
+                                Ordering::Less => CastType::IntegerExtend,
+                                Ordering::Greater => CastType::IntegerTruncate,
+                                Ordering::Equal => CastType::KnownNoOp,
+                            };
+                            Ok(cast_type)
+                        }
+                        Type::Char => {
+                            if from_integer_type.bit_width() == 8 {
+                                Ok(CastType::Integer8ToChar)
+                            } else {
+                                ferr!(
+                                    cast.span,
+                                    "Cannot cast integer '{}' to char, must be 8 bits",
+                                    from_integer_type
+                                )
+                            }
+                        }
+                        _ => ferr!(
+                            cast.span,
+                            "Cannot cast integer '{}' to '{}'",
+                            from_integer_type,
+                            self.type_id_to_string(target_type).blue()
+                        ),
+                    },
+                    Type::Char => match self.types.get(target_type) {
+                        Type::Integer(_to_integer_type) => Ok(CastType::IntegerExtendFromChar),
+                        _ => ferr!(
+                            cast.span,
+                            "Cannot cast char to '{}'",
+                            self.type_id_to_string(target_type).blue()
+                        ),
+                    },
+                    Type::Enum(_e) => {
+                        match self.types.get(target_type) {
+                            Type::EnumVariant(variant) => {
+                                // Enum cast to variant
+                                if variant.enum_type_id == base_expr_type {
+                                    Ok(CastType::EnumVariant)
+                                } else {
+                                    ferr!(
+                                        cast.span,
+                                        "Cannot cast enum '{}' to '{}'",
+                                        self.type_id_to_string(base_expr_type).blue(),
+                                        self.type_id_to_string(variant.enum_type_id).blue()
+                                    )
+                                }
+                            }
+                            _ => ferr!(
+                                cast.span,
+                                "Cannot cast enum '{}' to '{}'",
+                                self.type_id_to_string(base_expr_type).blue(),
+                                self.type_id_to_string(target_type).blue()
+                            ),
+                        }
+                    }
+                    _ => ferr!(
+                        cast.span,
+                        "Cannot cast '{}' to '{}'",
+                        self.type_id_to_string(base_expr_type).blue(),
+                        self.type_id_to_string(target_type).blue()
+                    ),
+                }?;
+                Ok(TypedExpr::Cast(TypedCast {
+                    base_expr: Box::new(base_expr),
+                    target_type_id: target_type,
+                    cast_type,
+                    span: cast.span,
+                }))
             }
         };
         result
@@ -3227,12 +3829,15 @@ impl TypedModule {
                 );
                 Ok((vec![], bin_op))
             }
-            TypedPattern::LiteralInt(i64_value, span) => {
+            TypedPattern::LiteralInteger(int_value, span) => {
                 let bin_op = BinaryOp {
                     kind: BinaryOpKind::Equals,
                     ty: BOOL_TYPE_ID,
                     lhs: Box::new(target_expr_variable_expr.into()),
-                    rhs: Box::new(TypedExpr::Int(*i64_value, *span)),
+                    rhs: Box::new(TypedExpr::Integer(TypedIntegerExpr {
+                        value: int_value.clone(),
+                        span: *span,
+                    })),
                     span: *span,
                 };
                 Ok((vec![], TypedExpr::BinaryOp(bin_op)))
@@ -3375,13 +3980,15 @@ impl TypedModule {
 
         // We de-sugar the 'for ... do' expr into a typed while loop, synthesizing
         // a few local variables in order to achieve this.
-        // I think these are broken scoping-wise and will collide with user code currently!
 
         let for_expr_scope = self.scopes.add_child_scope(scope_id, ScopeType::ForExpr, None);
 
         let (index_variable, index_defn_stmt, index_variable_expr) = self.synth_variable_decl(
             self.ast.identifiers.get("it_index").unwrap(),
-            TypedExpr::Int(0, for_expr.body_block.span),
+            TypedExpr::Integer(TypedIntegerExpr {
+                value: TypedIntegerValue::U64(0),
+                span: for_expr.body_block.span,
+            }),
             true,
             true,
             for_expr_scope,
@@ -3439,7 +4046,7 @@ impl TypedModule {
                 TypedExpr::StringIndex(IndexOp {
                     base_expr: Box::new(iteree_variable_expr.clone()),
                     index_expr: Box::new(TypedExpr::Variable(VariableExpr {
-                        type_id: INT_TYPE_ID,
+                        type_id: U64_TYPE_ID,
                         variable_id: index_variable,
                         span: body_span,
                     })),
@@ -3450,7 +4057,7 @@ impl TypedModule {
                 TypedExpr::ArrayIndex(IndexOp {
                     base_expr: Box::new(iteree_variable_expr.clone()),
                     index_expr: Box::new(TypedExpr::Variable(VariableExpr {
-                        type_id: INT_TYPE_ID,
+                        type_id: U64_TYPE_ID,
                         variable_id: index_variable,
                         span: body_span,
                     })),
@@ -3562,13 +4169,16 @@ impl TypedModule {
             destination: Box::new(index_variable_expr.clone()),
             value: Box::new(TypedExpr::BinaryOp(BinaryOp {
                 kind: BinaryOpKind::Add,
-                ty: INT_TYPE_ID,
+                ty: U64_TYPE_ID,
                 lhs: Box::new(TypedExpr::Variable(VariableExpr {
-                    type_id: INT_TYPE_ID,
+                    type_id: U64_TYPE_ID,
                     variable_id: index_variable,
                     span: iterable_span,
                 })),
-                rhs: Box::new(TypedExpr::Int(1, iterable_span)),
+                rhs: Box::new(TypedExpr::Integer(TypedIntegerExpr {
+                    value: TypedIntegerValue::U64(1),
+                    span: iterable_span,
+                })),
                 span: iterable_span,
             })),
             span: iterable_span,
@@ -3634,8 +4244,176 @@ impl TypedModule {
             ))
     }
 
+    fn eval_binary_op(
+        &mut self,
+        binary_op: &parse::BinaryOp,
+        scope_id: ScopeId,
+        expected_type: Option<TypeId>,
+    ) -> TyperResult<TypedExpr> {
+        fn is_scalar_for_equals(type_id: TypeId) -> bool {
+            match type_id {
+                UNIT_TYPE_ID | CHAR_TYPE_ID | U8_TYPE_ID | U16_TYPE_ID | U32_TYPE_ID
+                | U64_TYPE_ID | I8_TYPE_ID | I16_TYPE_ID | I32_TYPE_ID | I64_TYPE_ID
+                | BOOL_TYPE_ID => true,
+                _other => false,
+            }
+        }
+        // Special cases: Equality, and OptionalElse
+        match binary_op.op_kind {
+            BinaryOpKind::Equals | BinaryOpKind::NotEquals => {
+                let lhs = self.eval_expr(binary_op.lhs, scope_id, None)?;
+                if !is_scalar_for_equals(lhs.get_type()) {
+                    return self.eval_equality_expr(lhs, &binary_op, scope_id, expected_type);
+                }
+            }
+            BinaryOpKind::OptionalElse => {
+                // LHS must be an optional and RHS must be its contained type
+                let lhs = self.eval_expr(binary_op.lhs, scope_id, None)?;
+                let Some(lhs_optional) = self.types.get(lhs.get_type()).as_optional() else {
+                    return make_fail_span(
+                        &format!(
+                            "'else' operator can only be used on an optional; type was '{}'",
+                            self.type_id_to_string(lhs.get_type())
+                        ),
+                        binary_op.span,
+                    );
+                };
+                let lhs_inner = lhs_optional.inner_type;
+
+                let rhs = self.eval_expr(binary_op.rhs, scope_id, Some(lhs_inner))?;
+                let rhs_type = rhs.get_type();
+                if let Err(msg) = self.typecheck_types(lhs_inner, rhs_type, scope_id) {
+                    return make_fail_span(
+                        &format!("'else' value incompatible with optional: {}", msg),
+                        binary_op.span,
+                    );
+                }
+                let mut coalesce_block = self.synth_block(vec![], scope_id, binary_op.span);
+                let lhs_variable_name = self.ast.identifiers.intern("optelse_lhs");
+                let (_lhs_variable_id, lhs_decl_stmt, lhs_variable_expr) = self
+                    .synth_variable_decl(
+                        lhs_variable_name,
+                        lhs,
+                        false,
+                        false,
+                        coalesce_block.scope_id,
+                    );
+                let lhs_has_value =
+                    TypedExpr::OptionalHasValue(Box::new(lhs_variable_expr.clone()));
+                let lhs_unwrap_expr = TypedExpr::OptionalGet(OptionalGet {
+                    inner_expr: Box::new(lhs_variable_expr),
+                    result_type_id: lhs_inner,
+                    span: binary_op.span,
+                    checked: false,
+                });
+                let if_else = TypedExpr::If(Box::new(TypedIf {
+                    condition: lhs_has_value,
+                    consequent: self.coerce_expr_to_block(lhs_unwrap_expr, coalesce_block.scope_id),
+                    alternate: self.coerce_expr_to_block(rhs, coalesce_block.scope_id),
+                    ty: rhs_type,
+                    span: binary_op.span,
+                }));
+                coalesce_block.push_stmt(lhs_decl_stmt);
+                coalesce_block.push_expr(if_else);
+                return Ok(TypedExpr::Block(coalesce_block));
+            }
+            _ => {}
+        };
+
+        // Rest of the binary ops
+
+        let lhs = self.eval_expr(binary_op.lhs, scope_id, None)?;
+        let kind = binary_op.op_kind;
+        let lhs_type_id = lhs.get_type();
+        let result_type = match self.types.get(lhs_type_id) {
+            Type::Integer(_integer_type) => match kind {
+                BinaryOpKind::Add => Ok(lhs_type_id),
+                BinaryOpKind::Subtract => Ok(lhs_type_id),
+                BinaryOpKind::Multiply => Ok(lhs_type_id),
+                BinaryOpKind::Divide => Ok(lhs_type_id),
+                BinaryOpKind::Rem => Ok(lhs_type_id),
+                BinaryOpKind::Less => Ok(BOOL_TYPE_ID),
+                BinaryOpKind::LessEqual => Ok(BOOL_TYPE_ID),
+                BinaryOpKind::Greater => Ok(BOOL_TYPE_ID),
+                BinaryOpKind::GreaterEqual => Ok(BOOL_TYPE_ID),
+                BinaryOpKind::And => ferr!(binary_op.span, "Invalid left-hand side for and"),
+                BinaryOpKind::Or => ferr!(binary_op.span, "Invalid left-hand side for or"),
+                BinaryOpKind::Equals => Ok(BOOL_TYPE_ID),
+                BinaryOpKind::NotEquals => Ok(BOOL_TYPE_ID),
+                _ => unreachable!(),
+            },
+            Type::Bool => match kind {
+                BinaryOpKind::Add
+                | BinaryOpKind::Subtract
+                | BinaryOpKind::Multiply
+                | BinaryOpKind::Divide
+                | BinaryOpKind::Rem
+                | BinaryOpKind::Less
+                | BinaryOpKind::LessEqual
+                | BinaryOpKind::Greater
+                | BinaryOpKind::GreaterEqual => {
+                    ferr!(binary_op.span, "Invalid operation on bool: {}", kind)
+                }
+                BinaryOpKind::And => Ok(BOOL_TYPE_ID),
+                BinaryOpKind::Or => Ok(BOOL_TYPE_ID),
+                BinaryOpKind::Equals => Ok(BOOL_TYPE_ID),
+                BinaryOpKind::NotEquals => Ok(BOOL_TYPE_ID),
+                BinaryOpKind::OptionalElse => unreachable!(),
+            },
+            Type::Char => match kind {
+                BinaryOpKind::Add
+                | BinaryOpKind::Subtract
+                | BinaryOpKind::Multiply
+                | BinaryOpKind::Divide
+                | BinaryOpKind::Rem
+                | BinaryOpKind::Less
+                | BinaryOpKind::LessEqual
+                | BinaryOpKind::Greater
+                | BinaryOpKind::GreaterEqual
+                | BinaryOpKind::And
+                | BinaryOpKind::Or => ferr!(binary_op.span, "Invalid operation on char: {}", kind),
+                BinaryOpKind::Equals => Ok(BOOL_TYPE_ID),
+                BinaryOpKind::NotEquals => Ok(BOOL_TYPE_ID),
+                BinaryOpKind::OptionalElse => unreachable!(),
+            },
+            Type::Unit => match kind {
+                BinaryOpKind::Equals => Ok(BOOL_TYPE_ID),
+                BinaryOpKind::NotEquals => Ok(BOOL_TYPE_ID),
+                _ => ferr!(binary_op.span, "Invalid operation on unit: {}", kind),
+            },
+            _other => {
+                ferr!(binary_op.span, "Invalid left-hand side of binary operation {}", kind)
+            }
+        }?;
+
+        // At this point I think all operations are symmetric but we'll leave this here
+        // to signal that invariant and in case things change
+        let expected_rhs_type = if kind.is_symmetric_binop() { Some(lhs.get_type()) } else { None };
+        let rhs = self.eval_expr(binary_op.rhs, scope_id, expected_rhs_type)?;
+
+        if kind.is_symmetric_binop() {
+            // We already confirmed that the LHS is valid for this operation, and
+            // if the op is symmetric, we just have to check the RHS matches
+            if self.typecheck_types(lhs.get_type(), rhs.get_type(), scope_id).is_err() {
+                return make_fail_span("operand types did not match", binary_op.span);
+            }
+        } else {
+            panic!("Unexpected asymmetric binop down here {}", kind)
+        }
+
+        let expr = TypedExpr::BinaryOp(BinaryOp {
+            kind,
+            ty: result_type,
+            lhs: Box::new(lhs),
+            rhs: Box::new(rhs),
+            span: binary_op.span,
+        });
+        Ok(expr)
+    }
+
     fn eval_equality_expr(
         &mut self,
+        lhs: TypedExpr,
         binary_op: &parse::BinaryOp,
         scope_id: ScopeId,
         _expected_type: Option<TypeId>,
@@ -3644,24 +4422,9 @@ impl TypedModule {
             binary_op.op_kind == BinaryOpKind::Equals
                 || binary_op.op_kind == BinaryOpKind::NotEquals
         );
-        let lhs = self.eval_expr(binary_op.lhs, scope_id, None)?;
+        // let lhs = self.eval_expr(binary_op.lhs, scope_id, None)?;
         let lhs_type_id = lhs.get_type();
         let equals_expr = match self.types.get(lhs_type_id) {
-            Type::Unit | Type::Char | Type::Int | Type::Bool => {
-                // All these scalar types treated as IntValue s in codegen
-                let rhs = self.eval_expr(binary_op.rhs, scope_id, Some(lhs.get_type()))?;
-                if rhs.get_type() == lhs.get_type() {
-                    Ok(TypedExpr::BinaryOp(BinaryOp {
-                        kind: BinaryOpKind::Equals,
-                        ty: BOOL_TYPE_ID,
-                        lhs: Box::new(lhs),
-                        rhs: Box::new(rhs),
-                        span: binary_op.span,
-                    }))
-                } else {
-                    make_fail_span("Bad rhs type", binary_op.span)
-                }
-            }
             Type::TypeVariable(_type_var) => {
                 let rhs = self.eval_expr(binary_op.rhs, scope_id, Some(lhs.get_type()))?;
                 if let Err(msg) = self.typecheck_types(lhs.get_type(), rhs.get_type(), scope_id) {
@@ -3697,6 +4460,9 @@ impl TypedModule {
                     rhs: Box::new(rhs),
                     span: binary_op.span,
                 }))
+            }
+            Type::Unit | Type::Char | Type::Integer(_) | Type::Bool => {
+                panic!("Scalar ints shouldnt be passed to eval_equality_expr")
             }
             _other_lhs_type => {
                 let rhs = self.eval_expr(binary_op.rhs, scope_id, Some(lhs.get_type()))?;
@@ -3741,6 +4507,7 @@ impl TypedModule {
         let call_expr = TypedExpr::FunctionCall(Call {
             callee_function_id: equals_implementation_function_id,
             args: vec![lhs, rhs],
+            type_args: Vec::new(),
             ret_type: BOOL_TYPE_ID, // TODO: We should assert that equals does return a bool so we don't emit invalid bytecode
             span,
         });
@@ -3913,7 +4680,10 @@ impl TypedModule {
                 }
                 let span = self.ast.spans.get(fn_call.span);
                 let line = self.ast.sources.get_line_for_span(span).unwrap();
-                let int_expr = TypedExpr::Int(line.line_number() as i64, fn_call.span);
+                let int_expr = TypedExpr::Integer(TypedIntegerExpr {
+                    value: TypedIntegerValue::U64(line.line_number() as u64),
+                    span: fn_call.span,
+                });
                 return Ok(Either::Left(int_expr));
             }
             _ => {}
@@ -3997,65 +4767,24 @@ impl TypedModule {
                         struct_scope.find_function(fn_call.name)
                     }
                     Type::Enum(e) => {
-                        if fn_call.name == self.ast.identifiers.get("as").unwrap() {
-                            // Enum cast
-                            if fn_call.args.len() != 0 {
-                                return make_fail_span(".as takes no arguments", fn_call.span);
-                            }
-                            let Some(type_args) = fn_call.type_args.as_ref() else {
-                                return make_fail_span(
-                                    ".as requires a type parameter with desired variant tag",
-                                    fn_call.span,
-                                );
-                            };
-                            let Some(tag_name_arg) = type_args.get(0) else {
-                                return make_fail_span(
-                                    ".as requires a type parameter with desired variant tag",
-                                    fn_call.span,
-                                );
-                            };
-
-                            // TODO(clone): We have to eval a type expr
-                            let e = e.clone();
-                            let type_id =
-                                self.eval_type_expr(tag_name_arg.type_expr, calling_scope, None)?;
-                            let Some(tag_type) = self.types.get(type_id).as_tag() else {
-                                return make_fail_span(
-                                    ".as requires a type parameter with desired variant tag",
-                                    fn_call.span,
-                                );
-                            };
-                            let tag_name = tag_type.ident;
-                            let Some(matching_variant) = e.variant_by_name(tag_name) else {
-                                return make_fail_span("No variant for tag", fn_call.span);
-                            };
-                            return Ok(Either::Left(TypedExpr::EnumCast(TypedEnumCast {
-                                base: Box::new(base_expr.clone()),
-                                variant_type_id: matching_variant.my_type_id,
-                                variant_name: matching_variant.tag_name,
-                                variant_index: matching_variant.index,
-                                span: fn_call.span,
-                            })));
-                        } else {
-                            let Some(enum_defn_info) = e.type_defn_info.as_ref() else {
-                                return make_fail_span(
-                                    "Anonymous enums currently have no methods",
-                                    fn_call.span,
-                                );
-                            };
-                            let Some(enum_companion_ns) = enum_defn_info.companion_namespace else {
-                                return make_fail_ast_id(
-                                    &self.ast,
-                                    &format!(
-                                        "Enum {} has no companion namespace",
-                                        self.get_ident_str(enum_defn_info.name).blue()
-                                    ),
-                                    e.ast_node,
-                                );
-                            };
-                            let enum_scope = self.get_namespace_scope(enum_companion_ns);
-                            enum_scope.find_function(fn_call.name)
-                        }
+                        let Some(enum_defn_info) = e.type_defn_info.as_ref() else {
+                            return make_fail_span(
+                                "Anonymous enums currently have no methods",
+                                fn_call.span,
+                            );
+                        };
+                        let Some(enum_companion_ns) = enum_defn_info.companion_namespace else {
+                            return make_fail_ast_id(
+                                &self.ast,
+                                &format!(
+                                    "Enum {} has no companion namespace",
+                                    self.get_ident_str(enum_defn_info.name).blue()
+                                ),
+                                e.ast_node,
+                            );
+                        };
+                        let enum_scope = self.get_namespace_scope(enum_companion_ns);
+                        enum_scope.find_function(fn_call.name)
                     }
                     Type::EnumVariant(ev) => {
                         let parent_enum_info =
@@ -4255,84 +4984,90 @@ impl TypedModule {
         let original_function = self.get_function(function_id);
         let original_params = original_function.params.clone();
 
-        let (function_to_call, typechecked_arguments) = match &original_function.type_params {
-            None => (
-                function_id,
-                self.typecheck_call_arguments(
-                    fn_call,
-                    this_expr,
-                    &original_params,
-                    known_value_args,
-                    scope_id,
-                    false,
-                )?,
-            ),
-            Some(type_params) => {
-                let intrinsic_type = original_function.intrinsic_type;
-
-                // We infer the type arguments, or just use them if the user has supplied them
-                let type_args = match known_type_args {
-                    Some(ta) => {
-                        // Need the ident
-                        ta.into_iter()
-                            .enumerate()
-                            .map(|(idx, type_id)| TypeParam {
-                                ident: type_params[idx].ident,
-                                type_id,
-                            })
-                            .collect()
-                    }
-                    None => self.infer_call_type_args(
+        let (function_to_call, typechecked_arguments, type_args) =
+            match original_function.type_params.is_empty() {
+                true => (
+                    function_id,
+                    self.typecheck_call_arguments(
                         fn_call,
-                        function_id,
-                        this_expr.as_ref(),
-                        // We shouldn't have to clone this because we should always
-                        // pass the type args if we pass the known value args
-                        known_value_args.clone(),
-                        scope_id,
-                    )?,
-                };
-
-                // We skip specialization if any of the type arguments are type variables: `any_type_vars`
-                // because we could just be evaluating a generic function that calls another generic function,
-                // in which case we don't want to generate a 'specialized' function where we haven't
-                // actually specialized everything
-                let mut fully_concrete = true;
-                for TypeParam { type_id, .. } in type_args.iter() {
-                    if self.types.is_type_generic(*type_id) {
-                        fully_concrete = false
-                    }
-                }
-                if !fully_concrete {
-                    (
-                        function_id,
-                        self.typecheck_call_arguments(
-                            fn_call,
-                            this_expr,
-                            &original_params,
-                            known_value_args,
-                            scope_id,
-                            false,
-                        )?,
-                    )
-                } else {
-                    self.get_specialized_function_for_call(
-                        fn_call,
-                        type_args,
-                        function_id,
-                        intrinsic_type,
                         this_expr,
-                        scope_id,
+                        &original_params,
                         known_value_args,
-                    )?
+                        scope_id,
+                        false,
+                    )?,
+                    Vec::new(),
+                ),
+                false => {
+                    let type_params = &original_function.type_params;
+                    let intrinsic_type = original_function.intrinsic_type;
+
+                    // We infer the type arguments, or just use them if the user has supplied them
+                    let type_args = match known_type_args {
+                        Some(ta) => {
+                            // Need the ident
+                            ta.into_iter()
+                                .enumerate()
+                                .map(|(idx, type_id)| TypeParam {
+                                    ident: type_params[idx].ident,
+                                    type_id,
+                                })
+                                .collect()
+                        }
+                        None => self.infer_call_type_args(
+                            fn_call,
+                            function_id,
+                            this_expr.as_ref(),
+                            // We shouldn't have to clone this because we should always
+                            // pass the type args if we pass the known value args
+                            known_value_args.clone(),
+                            scope_id,
+                        )?,
+                    };
+
+                    // We skip specialization if any of the type arguments are type variables: `any_type_vars`
+                    // because we could just be evaluating a generic function that calls another generic function,
+                    // in which case we don't want to generate a 'specialized' function where we haven't
+                    // actually specialized everything
+                    let mut fully_concrete = true;
+                    for TypeParam { type_id, .. } in type_args.iter() {
+                        if self.types.does_type_reference_type_variables(*type_id) {
+                            fully_concrete = false
+                        }
+                    }
+                    if !fully_concrete {
+                        (
+                            function_id,
+                            self.typecheck_call_arguments(
+                                fn_call,
+                                this_expr,
+                                &original_params,
+                                known_value_args,
+                                scope_id,
+                                false,
+                            )?,
+                            type_args,
+                        )
+                    } else {
+                        let (function_id, args) = self.get_specialized_function_for_call(
+                            fn_call,
+                            &type_args,
+                            function_id,
+                            intrinsic_type,
+                            this_expr,
+                            scope_id,
+                            known_value_args,
+                        )?;
+                        (function_id, args, type_args)
+                    }
                 }
-            }
-        };
+            };
 
         let function_ret_type = self.get_function(function_to_call).ret_type;
         let call = Call {
             callee_function_id: function_to_call,
             args: typechecked_arguments,
+            type_args,
             ret_type: function_ret_type,
             span: fn_call.span,
         };
@@ -4348,11 +5083,8 @@ impl TypedModule {
         calling_scope: ScopeId,
     ) -> TyperResult<Vec<TypeParam>> {
         let generic_function = self.get_function(generic_function_id);
-        let generic_type_params = generic_function
-            .type_params
-            .as_ref()
-            .cloned()
-            .expect("expected function to be generic");
+        let generic_type_params = generic_function.type_params.clone();
+        debug_assert!(!generic_type_params.is_empty());
         let generic_name = generic_function.name;
         let generic_params = generic_function.params.clone();
         let type_params = match &fn_call.type_args {
@@ -4465,7 +5197,7 @@ impl TypedModule {
     fn get_specialized_function_for_call(
         &mut self,
         fn_call: &FnCall,
-        inferred_or_passed_type_args: Vec<TypeParam>,
+        inferred_or_passed_type_args: &Vec<TypeParam>,
         generic_function_id: FunctionId,
         intrinsic_type: Option<IntrinsicFunction>,
         this_expr: Option<TypedExpr>,
@@ -4700,6 +5432,12 @@ impl TypedModule {
         scope_id: ScopeId,
     ) -> Result<IntrinsicFunction, String> {
         trace!("resolve_intrinsic_function_type for {}", &*self.get_ident_str(fn_name));
+        // FIXME: This is a broken way of resolving these builtin namespaces
+        // since it doesn't require that we're in the root scope. We really should just
+        // do a top-down thing like "are we in _root -> ?" "are we in _root -> Array", "root -> string", etc
+
+        // This current one is also really slow because in the common case, we iterate all namespaces needlessly
+        // since we rely on this namespaces.find()
         let result = if let Some(current_namespace) =
             self.namespaces.iter().find(|ns| ns.scope_id == scope_id)
         {
@@ -4728,16 +5466,33 @@ impl TypedModule {
                     None
                 }
             } else if Some(current_namespace.name) == { self.ast.identifiers.get("char") } {
-                // Future Char intrinsics
+                // Future Char builtins
                 None
             } else if Some(current_namespace.name) == { self.ast.identifiers.get("_root") } {
                 let function_name = self.get_ident_str(fn_name);
-                IntrinsicFunction::from_root_function_name(function_name)
+                match function_name {
+                    "printInt" => Some(IntrinsicFunction::PrintInt),
+                    "print" => Some(IntrinsicFunction::PrintString),
+                    "exit" => Some(IntrinsicFunction::Exit),
+                    "sizeOf" => Some(IntrinsicFunction::SizeOf),
+                    "alignOf" => Some(IntrinsicFunction::AlignOf),
+                    _ => None,
+                }
             } else if Some(current_namespace.name) == self.ast.identifiers.get("RawPointer") {
                 if Some(fn_name) == self.ast.identifiers.get("asUnsafe") {
                     Some(IntrinsicFunction::RawPointerToReference)
                 } else {
                     None
+                }
+            } else if Some(current_namespace.name) == self.ast.identifiers.get("Bits") {
+                match self.get_ident_str(fn_name) {
+                    "not" => Some(IntrinsicFunction::BitNot),
+                    "and" => Some(IntrinsicFunction::BitAnd),
+                    "or" => Some(IntrinsicFunction::BitOr),
+                    "xor" => Some(IntrinsicFunction::BitXor),
+                    "shiftLeft" => Some(IntrinsicFunction::BitShiftLeft),
+                    "shiftRight" => Some(IntrinsicFunction::BitShiftRight),
+                    _ => None,
                 }
             } else {
                 None
@@ -4799,18 +5554,9 @@ impl TypedModule {
             self.scopes.get_scope(fn_scope_id).parent.unwrap_or(self.scopes.get_root_scope_id());
 
         // Instantiate type arguments
-        let is_generic = !specialize
-            && parsed_function.type_args.as_ref().map(|args| !args.is_empty()).unwrap_or(false);
-        trace!(
-            "eval_function {} is_generic: {} in scope: {}",
-            &*self.get_ident_str(parsed_function.name),
-            is_generic,
-            parent_scope_id
-        );
-        let mut type_params: Option<Vec<TypeParam>> = None;
-        if is_generic {
-            let mut the_type_params = Vec::new();
-            for type_parameter in parsed_function.type_args.as_ref().unwrap().iter() {
+        let mut type_params: Vec<TypeParam> = Vec::with_capacity(parsed_function.type_args.len());
+        if !specialize {
+            for type_parameter in parsed_function.type_args.iter() {
                 let type_variable = TypeVariable {
                     identifier_id: type_parameter.ident,
                     scope_id: fn_scope_id,
@@ -4820,18 +5566,17 @@ impl TypedModule {
                 let fn_scope = self.scopes.get_scope_mut(fn_scope_id);
                 let type_param =
                     TypeParam { ident: type_parameter.ident, type_id: type_variable_id };
-                the_type_params.push(type_param);
+                type_params.push(type_param);
                 if !fn_scope.add_type(type_parameter.ident, type_variable_id) {
                     return make_fail_span("Generic type {} already exists", type_parameter.span);
                 }
             }
-            type_params = Some(the_type_params);
-            trace!(
-                "Added type arguments to function {} scope {:?}",
-                &*self.get_ident_str(parsed_function.name),
-                self.scopes.get_scope(fn_scope_id)
-            );
         }
+        trace!(
+            "Added type arguments to function {} scope {:?}",
+            &*self.get_ident_str(parsed_function.name),
+            self.scopes.get_scope(fn_scope_id)
+        );
 
         // Typecheck arguments
         let mut params = Vec::new();
@@ -4850,6 +5595,7 @@ impl TypedModule {
                 is_mutable: false,
                 owner_scope: fn_scope_id,
             };
+
             let variable_id = self.variables.add_variable(variable);
             params.push(FnArgDefn {
                 name: fn_arg.name,
@@ -5330,8 +6076,8 @@ impl TypedModule {
                 self.eval_function_body(*function_declaration_id)?;
                 Ok(())
             }
-            ParsedId::TypeDefn(type_defn_id) => {
-                let _type_id = self.eval_type_defn(type_defn_id, scope_id)?;
+            ParsedId::TypeDefn(_type_defn_id) => {
+                // Done in prior phase
                 Ok(())
             }
             ParsedId::Ability(_ability) => {
@@ -5489,16 +6235,16 @@ mod test {
 
     #[test]
     fn const_definition_1() -> anyhow::Result<()> {
-        let src = r"val x: int = 420;";
+        let src = r"val x: i64 = 420;";
         let parsed_module = setup(src, "const_definition_1.nx")?;
         let mut module = TypedModule::new(parsed_module);
         module.run()?;
         let i1 = &module.constants[0];
-        if let TypedExpr::Int(i, span_id) = i1.expr {
-            let span = module.ast.spans.get(span_id);
-            assert_eq!(i, 420);
+        if let TypedExpr::Integer(int_expr) = &i1.expr {
+            let span = module.ast.spans.get(int_expr.span);
+            assert_eq!(int_expr.value, TypedIntegerValue::I64(420));
             assert_eq!(span.end(), 16);
-            assert_eq!(span.start, 0);
+            assert_eq!(span.start, 13);
             Ok(())
         } else {
             panic!("{i1:?} was not an int")
@@ -5508,13 +6254,14 @@ mod test {
     #[test]
     fn fn_definition_1() -> anyhow::Result<()> {
         let src = r#"
-        fn foo(): int {
+        fn foo(): u64 {
           1
         }
-        fn basic(x: int, y: int): int {
-          val x: int = 0; mut y: int = 1;
+        fn basic(x: u64, y: u64): u64 {
+          val x: u64 = 0;
+          mut y: u64 = 1;
           y = { 1; 2; 3 };
-          y = 42 + 42;
+          y = (42: u64) + 42;
           foo()
         }"#;
         let module = setup(src, "basic_fn.nx")?;
