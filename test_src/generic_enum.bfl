@@ -1,0 +1,21 @@
+type Result<T, E> = enum Ok(T) | Err(E)
+namespace Result {
+  fn show(self: Result<int, string>): unit {
+    when self {
+      | .Ok(v) -> { print("Ok "); printInt(v); println("") }
+      | .Err(e) -> { print("Error "); println(e); }
+    }
+  }
+}
+
+fn main(): int {
+    val x1: Result<int, string> = .Ok(-3);
+    val x2: Result<int, string> = .Err("Some error message");
+
+    x1.show();
+    x2.show();
+    assert(sizeOf<Result<int, string>>() == 24);
+    assert(alignOf<Result<int, string>>() == 8);
+
+    0
+}

@@ -16,8 +16,8 @@ use inkwell::debug_info::{
 };
 use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::module::{Linkage as LlvmLinkage, Module as LlvmModule};
-use inkwell::passes::{PassManager, PassManagerBuilder};
-use inkwell::targets::{InitializationConfig, Target, TargetMachine, TargetTriple};
+use inkwell::passes::PassManager;
+use inkwell::targets::{InitializationConfig, Target, TargetData, TargetMachine};
 use inkwell::types::{
     AnyType, AnyTypeEnum, BasicMetadataTypeEnum, BasicType, BasicTypeEnum, IntType, PointerType,
     StructType, VoidType,
@@ -49,6 +49,18 @@ pub struct CodegenError {
     pub span: SpanId,
 }
 
+macro_rules! err {
+    ($span:expr, $($format_args:expr),*) => {
+        {
+            let s: String = format!($($format_args),*);
+            Err(CodegenError {
+                message: s,
+                span: $span,
+            })
+        }
+    };
+}
+
 type CodegenResult<T> = Result<T, CodegenError>;
 
 impl Display for CodegenError {
@@ -59,10 +71,22 @@ impl Display for CodegenError {
 
 impl Error for CodegenError {}
 
+fn size_info(td: &TargetData, typ: &dyn AnyType) -> SizeInfo {
+    SizeInfo {
+        size_bits: td.get_bit_size(typ) as u32,
+        align_bits: td.get_preferred_alignment(typ) * 8,
+    }
+}
+
 #[derive(Debug, Copy, Clone)]
 struct BranchSetup<'ctx> {
     then_block: BasicBlock<'ctx>,
     else_block: BasicBlock<'ctx>,
+}
+
+struct StructDebugMember<'ctx, 'name> {
+    name: &'name str,
+    di_type: DIType<'ctx>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -95,10 +119,17 @@ impl SizeInfo {
         SizeInfo { size_bits: WORD_SIZE_BITS as u32, align_bits: WORD_SIZE_BITS as u32 };
     pub const ZERO: SizeInfo = SizeInfo { size_bits: 0, align_bits: 0 };
 
-    // https://learn.microsoft.com/en-us/cpp/c-language/alignment-c?view=msvc-170
-    // struct and union types have an alignment equal to the largest alignment of any member.
-    // Padding bytes are added within a struct to ensure individual member alignment requirements are met.
-    pub fn size_of_aggregate(sizes: &[SizeInfo]) -> SizeInfo {
+    /// https://learn.microsoft.com/en-us/cpp/c-language/alignment-c?view=msvc-170
+    /// struct and union types have an alignment equal to the largest alignment of any member.
+    /// Padding bytes are added within a struct to ensure individual member alignment requirements are met.
+    ///
+    /// THIS FUNCTION DOESNT INSERT PADDING SO THE SIZE OF STRUCTS WILL NOT
+    /// MATCH LLVMS.
+    #[deprecated(
+        since = "0.1.0",
+        note = "This function does not insert padding, so the size of structs will not match LLVM's. Resurrect this if we do our own backend"
+    )]
+    pub fn compute_size_of_aggregate(sizes: &[SizeInfo]) -> SizeInfo {
         let mut max_align = 0;
         let mut total_size = 0;
         for size in sizes {
@@ -377,7 +408,7 @@ pub struct Codegen<'ctx, 'module> {
     ctx: &'ctx Context,
     pub module: &'module TypedModule,
     llvm_module: LlvmModule<'ctx>,
-    llvm_machine: Option<TargetMachine>,
+    llvm_machine: TargetMachine,
     builder: Builder<'ctx>,
     llvm_functions: HashMap<FunctionId, FunctionValue<'ctx>>,
     llvm_types: RefCell<HashMap<TypeId, LlvmType<'ctx>>>,
@@ -548,7 +579,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     ) -> Codegen<'ctx, 'module> {
         let builder = ctx.create_builder();
         let char_type = ctx.i8_type();
-        let llvm_module = ctx.create_module(&module.ast.name);
+        let mut llvm_module = ctx.create_module(&module.ast.name);
         llvm_module.set_source_file_name(&module.ast.sources.get_main().filename);
         // Example of linking an LLVM module
         // let stdlib_module = ctx
@@ -557,6 +588,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         // llvm_module.link_in_module(stdlib_module).unwrap();
 
         let debug_context = Codegen::init_debug(ctx, &llvm_module, &module, optimize, debug);
+
+        let machine = Codegen::set_up_machine(&mut llvm_module);
+        let target_data = machine.get_target_data();
 
         let pointers = HashMap::new();
         let format_int_str = {
@@ -578,7 +612,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         builtin_globals.insert("formatInt".to_string(), format_int_str);
         builtin_globals.insert("formatString".to_string(), format_str_str);
         let int = ctx.i64_type();
-        let int_size = SizeInfo::scalar_value(int.get_bit_width());
         let string_struct = Codegen::make_named_struct(
             ctx,
             "string",
@@ -587,7 +620,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 char_type.ptr_type(AddressSpace::default()).as_basic_type_enum(),
             ],
         );
-        let string_size = SizeInfo::size_of_aggregate(&[int_size, SizeInfo::POINTER]);
+        let string_size = size_info(&target_data, &string_struct);
 
         let builtin_types = BuiltinTypes {
             ctx,
@@ -642,7 +675,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             ctx,
             module,
             llvm_module,
-            llvm_machine: None,
+            llvm_machine: machine,
             builder,
             variables: pointers,
             globals,
@@ -654,6 +687,16 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             debug: debug_context,
             tag_type_mappings,
         }
+    }
+
+    fn size_info(&self, typ: &dyn AnyType) -> SizeInfo {
+        let td = self.llvm_machine.get_target_data();
+        size_info(&td, typ)
+    }
+
+    fn offset_of_struct_member(&self, typ: &StructType, field_index: u32) -> u64 {
+        let td = self.llvm_machine.get_target_data();
+        td.offset_of_element(typ, field_index).unwrap()
     }
 
     fn set_debug_location(&self, span: SpanId) -> DILocation<'ctx> {
@@ -721,16 +764,25 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         // discriminant indicating whether the value is None, and the value itself
         let boolean_type = self.codegen_type(BOOL_TYPE_ID)?;
         let inner_type = self.codegen_type(optional_type.inner_type)?;
+
+        // The bug is because padding gets added to { i8, i64 } struct,
+        // so the offset of the second field is 8, not 1
+        // Which messes with enums since we pad the root struct ourselves and assume
+        // our size calcs are correct
+        // i bet I can add an assert on the LLVM size and see the problem now
+        // We could also repro with any enum payload that isn't naturally aligned
         let struct_type = self
             .ctx
             .struct_type(&[boolean_type.value_basic_type(), inner_type.value_basic_type()], false);
-        let size = SizeInfo::size_of_aggregate(&[boolean_type.size_info(), inner_type.size_info()]);
-        // FIXME(padding): Do our own padding, so we have correct offset to pass in
+        let size = self.size_info(&struct_type);
         let di_type = self.make_debug_struct_type(
             &format!("optional_{}", type_id.to_string()),
+            &struct_type,
             SpanId::NONE,
-            &[("tag", boolean_type.debug_type(), 0), ("payload", inner_type.debug_type(), 8)],
-            size,
+            &[
+                StructDebugMember { name: "tag", di_type: boolean_type.debug_type() },
+                StructDebugMember { name: "payload", di_type: inner_type.debug_type() },
+            ],
         );
         Ok(LlvmStructType {
             type_id,
@@ -741,7 +793,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         })
     }
 
-    fn create_array_type(&self, elem_type: BasicTypeEnum<'ctx>) -> StructType<'ctx> {
+    fn create_array_struct(&self, elem_type: BasicTypeEnum<'ctx>) -> StructType<'ctx> {
         // NOTE: All the 'length' types could probably be i32 but our language int type is only i64
         //       so we couldn't express that at the lang level right now
         let length_type = self.builtin_types.int.as_basic_type_enum();
@@ -756,27 +808,30 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         line.line_index + 1
     }
 
-    fn make_debug_struct_type(
+    fn make_debug_struct_type<'names>(
         &self,
         name: &str,
+        struct_type: &StructType,
         span: SpanId,
-        field_types: &[(impl AsRef<str>, DIType<'ctx>, u32)],
-        size: SizeInfo,
+        field_types: &[StructDebugMember<'ctx, 'names>],
     ) -> DIType<'ctx> {
         let line_number = self.get_line_number(span);
+        let size = self.size_info(struct_type);
         let fields = &field_types
             .iter()
-            .map(|(field_name, member_type, offset)| {
+            .enumerate()
+            .map(|(member_index, debug_member)| {
+                let offset = self.offset_of_struct_member(struct_type, member_index as u32);
                 let t = self.debug.debug_builder.create_member_type(
                     self.debug.current_scope(),
-                    field_name.as_ref(),
+                    debug_member.name,
                     self.debug.current_file(),
                     line_number,
-                    member_type.get_size_in_bits(),
-                    member_type.get_align_in_bits(),
-                    *offset as u64,
+                    debug_member.di_type.get_size_in_bits(),
+                    debug_member.di_type.get_align_in_bits(),
+                    offset,
                     0,
-                    *member_type,
+                    debug_member.di_type,
                 );
                 t.as_type()
             })
@@ -818,62 +873,74 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         if let Some(result) = result {
             return Ok(result);
         };
+        let make_value_integer_type =
+            |name: &str,
+             type_id: TypeId,
+             int_type: IntType<'ctx>,
+             encoding: llvm_sys::debuginfo::LLVMDWARFTypeEncoding| {
+                let size = self.size_info(&int_type);
+                LlvmType::Value(LlvmValueType {
+                    type_id,
+                    basic_type: int_type.as_basic_type_enum(),
+                    size,
+                    di_type: self
+                        .debug
+                        .debug_builder
+                        .create_basic_type(name, size.size_bits as u64, encoding, 0)
+                        .unwrap()
+                        .as_type(),
+                })
+            };
         let codegened_type = match type_id {
-            UNIT_TYPE_ID => Ok(LlvmValueType {
-                type_id: UNIT_TYPE_ID,
-                basic_type: self.builtin_types.unit.as_basic_type_enum(),
-                size: SizeInfo::scalar_value(self.builtin_types.unit.get_bit_width()),
-                di_type: self
-                    .debug
-                    .debug_builder
-                    .create_basic_type(
-                        "unit",
-                        self.builtin_types.unit.get_bit_width() as u64,
-                        dw_ate_boolean,
-                        0,
-                    )
-                    .unwrap()
-                    .as_type(),
+            UNIT_TYPE_ID => Ok(make_value_integer_type(
+                "unit",
+                UNIT_TYPE_ID,
+                self.builtin_types.unit,
+                dw_ate_boolean,
+            )),
+            CHAR_TYPE_ID => Ok(make_value_integer_type(
+                "char",
+                CHAR_TYPE_ID,
+                self.builtin_types.char,
+                dw_ate_char,
+            )),
+            U8_TYPE_ID => {
+                Ok(make_value_integer_type("u8", U8_TYPE_ID, self.ctx.i8_type(), dw_ate_unsigned))
             }
-            .into()),
-            CHAR_TYPE_ID => Ok(LlvmValueType {
-                type_id: CHAR_TYPE_ID,
-                basic_type: self.builtin_types.char.as_basic_type_enum(),
-                size: SizeInfo::scalar_value(self.builtin_types.char.get_bit_width()),
-                di_type: self
-                    .debug
-                    .debug_builder
-                    .create_basic_type(
-                        "char",
-                        self.builtin_types.char.get_bit_width() as u64,
-                        dw_ate_char,
-                        0,
-                    )
-                    .unwrap()
-                    .as_type(),
+            U16_TYPE_ID => Ok(make_value_integer_type(
+                "u16",
+                U16_TYPE_ID,
+                self.ctx.i16_type(),
+                dw_ate_unsigned,
+            )),
+            U32_TYPE_ID => Ok(make_value_integer_type(
+                "u32",
+                U32_TYPE_ID,
+                self.ctx.i32_type(),
+                dw_ate_unsigned,
+            )),
+            U64_TYPE_ID => Ok(make_value_integer_type(
+                "u64",
+                U64_TYPE_ID,
+                self.ctx.i64_type(),
+                dw_ate_unsigned,
+            )),
+            I8_TYPE_ID => {
+                Ok(make_value_integer_type("i8", I8_TYPE_ID, self.ctx.i8_type(), dw_ate_signed))
             }
-            .into()),
-            INT_TYPE_ID => Ok(LlvmValueType {
-                type_id: INT_TYPE_ID,
-                basic_type: self.builtin_types.int.as_basic_type_enum(),
-                size: SizeInfo::scalar_value(self.builtin_types.int.get_bit_width()),
-                di_type: self
-                    .debug
-                    .debug_builder
-                    .create_basic_type(
-                        "int",
-                        self.builtin_types.int.get_bit_width() as u64,
-                        dw_ate_signed,
-                        0,
-                    )
-                    .unwrap()
-                    .as_type(),
+            I16_TYPE_ID => {
+                Ok(make_value_integer_type("i16", I16_TYPE_ID, self.ctx.i16_type(), dw_ate_signed))
             }
-            .into()),
+            I32_TYPE_ID => {
+                Ok(make_value_integer_type("i32", I32_TYPE_ID, self.ctx.i32_type(), dw_ate_signed))
+            }
+            I64_TYPE_ID => {
+                Ok(make_value_integer_type("i64", I64_TYPE_ID, self.ctx.i64_type(), dw_ate_signed))
+            }
             BOOL_TYPE_ID => Ok(LlvmValueType {
                 type_id: BOOL_TYPE_ID,
                 basic_type: self.builtin_types.boolean.as_basic_type_enum(),
-                size: SizeInfo::scalar_value(self.builtin_types.boolean.get_bit_width()),
+                size: self.size_info(&self.builtin_types.boolean),
                 di_type: self
                     .debug
                     .debug_builder
@@ -891,20 +958,23 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let data_ptr_type = self
                     .debug
                     .create_pointer_type("string_data", self.get_debug_type(CHAR_TYPE_ID)?);
-                let string_struct_size = self.builtin_types.string_size;
+                let string_size = self.builtin_types.string_size;
                 let di_type = self.make_debug_struct_type(
                     "string",
+                    &self.builtin_types.string_struct,
                     SpanId::NONE,
                     &[
-                        ("length", self.get_debug_type(INT_TYPE_ID)?, 0),
-                        ("data", data_ptr_type, 64),
+                        StructDebugMember {
+                            name: "length",
+                            di_type: self.get_debug_type(U64_TYPE_ID)?,
+                        },
+                        StructDebugMember { name: "data", di_type: data_ptr_type },
                     ],
-                    string_struct_size,
                 );
                 Ok(LlvmValueType {
                     type_id: STRING_TYPE_ID,
                     basic_type: self.builtin_types.string_struct.as_basic_type_enum(),
-                    size: string_struct_size,
+                    size: string_size,
                     di_type,
                 }
                 .into())
@@ -920,82 +990,77 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         trace!("generating llvm type for struct type {type_id}");
                         let field_count = struc.fields.len();
                         let mut field_types = Vec::with_capacity(field_count);
-                        let mut field_di_types = Vec::with_capacity(field_count);
-                        let mut field_sizes = Vec::with_capacity(field_count);
+                        let mut field_basic_types = Vec::with_capacity(field_count);
                         let name = struc
                             .type_defn_info
                             .as_ref()
                             .map(|info| self.get_ident_name(info.name).to_string())
                             .unwrap_or("<anon_struct>".to_string());
-                        let mut offset = 0;
                         for field in &struc.fields {
-                            let field_type = self.codegen_type(field.type_id)?;
-                            // FIXME: Insert padding here
-                            field_types.push(field_type.value_basic_type());
-                            field_di_types.push((
-                                self.module.ast.identifiers.get_name(field.name),
-                                field_type.debug_type(),
-                                offset,
-                            ));
-                            field_sizes.push(field_type.size_info());
-                            offset += field_type.size_info().size_bits;
+                            let field_llvm_type = self.codegen_type(field.type_id)?;
+                            field_basic_types.push(field_llvm_type.value_basic_type());
+                            field_types.push(field_llvm_type);
                         }
-                        let struct_type = self.ctx.struct_type(&field_types, false);
-                        let size = SizeInfo::size_of_aggregate(&field_sizes);
+
+                        let llvm_struct_type = self.ctx.struct_type(&field_basic_types, false);
+
+                        let mut field_di_types: Vec<StructDebugMember> =
+                            Vec::with_capacity(field_count);
+                        for (index, field_llvm_type) in field_types.iter().enumerate() {
+                            let ident = struc.fields[index].name;
+                            field_di_types.push(StructDebugMember {
+                                name: self.module.ast.identifiers.get_name(ident),
+                                di_type: field_llvm_type.debug_type(),
+                            });
+                        }
+                        let size = self.size_info(&llvm_struct_type);
                         let di_type = self.make_debug_struct_type(
                             &name,
+                            &llvm_struct_type,
                             self.module.ast.get_span_for_id(struc.ast_node),
                             &field_di_types,
-                            size,
                         );
                         Ok(LlvmValueType {
                             type_id,
-                            basic_type: struct_type.as_basic_type_enum(),
+                            basic_type: llvm_struct_type.as_basic_type_enum(),
                             size,
                             di_type,
                         }
                         .into())
                     }
                     t @ Type::TypeVariable(v) => {
-                        println!("{}", self.module);
                         let span = self.module.ast.get_span_for_maybe_id(t.ast_node());
-                        Err(CodegenError {
-                            message: format!(
-                                "codegen was asked to codegen a type variable {:?}",
-                                v
-                            ),
-                            span,
-                        })
+                        err!(span, "codegen was asked to codegen a type variable {:?}", v)
                     }
                     Type::Array(array) => {
                         let element_type = self.codegen_type(array.element_type)?;
-                        let struct_type = self.create_array_type(element_type.value_basic_type());
+                        let struct_type = self.create_array_struct(element_type.value_basic_type());
                         let name = format!("array_{}", array.element_type);
                         // This badly duplicates the shape of 'array'
                         // This is why it would be amazing to have the tools in the source
                         // language to define types like this; basically we just need Pointer<T>
-                        let int_type = self.codegen_type(INT_TYPE_ID)?;
-                        let array_struct_size = SizeInfo::size_of_aggregate(&[
-                            int_type.size_info(),
-                            int_type.size_info(),
-                            SizeInfo::POINTER,
-                        ]);
+                        let int_type = self.codegen_type(U64_TYPE_ID)?;
                         let struct_di_type = self.make_debug_struct_type(
                             &name,
+                            &struct_type,
                             SpanId::NONE,
                             &[
-                                ("length", int_type.debug_type(), 0),
-                                ("capacity", int_type.debug_type(), 64),
-                                (
-                                    "data",
-                                    self.debug.create_pointer_type(
+                                StructDebugMember {
+                                    name: "length",
+                                    di_type: int_type.debug_type(),
+                                },
+                                StructDebugMember {
+                                    name: "capacity",
+                                    di_type: int_type.debug_type(),
+                                },
+                                StructDebugMember {
+                                    name: "data",
+                                    di_type: self.debug.create_pointer_type(
                                         "array_data",
                                         element_type.debug_type(),
                                     ),
-                                    128,
-                                ),
+                                },
                             ],
-                            array_struct_size,
                         );
                         Ok(LlvmPointerType {
                             type_id,
@@ -1042,7 +1107,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             )
                             .unwrap()
                             .as_type(),
-                        size: SizeInfo::scalar_value(self.builtin_types.tag_type.get_bit_width()),
+                        size: self.size_info(&self.builtin_types.tag_type),
                     })),
                     Type::Enum(enum_type) => {
                         let mut payload_section_size: u32 = 0;
@@ -1067,28 +1132,24 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                                         ],
                                         false,
                                     );
-                                    let debug_struct = {
-                                        self.make_debug_struct_type(
-                                            &format!(
-                                                "variant_{}",
-                                                self.module
-                                                    .ast
-                                                    .identifiers
-                                                    .get_name(variant.tag_name)
-                                            ),
-                                            SpanId::NONE,
-                                            &[
-                                                ("tag", discriminant_field_debug, 0),
-                                                ("payload", variant_payload_type.debug_type(), 64),
-                                            ],
-                                            SizeInfo::size_of_aggregate(&[
-                                                SizeInfo::scalar_value(
-                                                    discriminant_field.get_bit_width(),
-                                                ),
-                                                variant_payload_type.size_info(),
-                                            ]),
-                                        )
-                                    };
+                                    let debug_struct = self.make_debug_struct_type(
+                                        &format!(
+                                            "variant_{}",
+                                            self.module.ast.identifiers.get_name(variant.tag_name)
+                                        ),
+                                        &struc,
+                                        SpanId::NONE,
+                                        &[
+                                            StructDebugMember {
+                                                name: "tag",
+                                                di_type: discriminant_field_debug,
+                                            },
+                                            StructDebugMember {
+                                                name: "payload",
+                                                di_type: variant_payload_type.debug_type(),
+                                            },
+                                        ],
+                                    );
                                     payload_size = variant_payload_type.size_info();
                                     if payload_size.size_bits > payload_section_size {
                                         payload_section_size = payload_size.size_bits;
@@ -1109,11 +1170,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                                                     .identifiers
                                                     .get_name(variant.tag_name)
                                             ),
+                                            &s,
                                             SpanId::NONE,
-                                            &[("tag", discriminant_field_debug, 0)],
-                                            SizeInfo::scalar_value(
-                                                discriminant_field.get_bit_width(),
-                                            ),
+                                            &[StructDebugMember {
+                                                name: "tag",
+                                                di_type: discriminant_field_debug,
+                                            }],
                                         )
                                     };
                                     (s, debug_struct)
@@ -1121,7 +1183,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             variant_structs.push(EnumVariantStructType {
                                 struct_type: variant_struct,
                                 di_type: variant_struct_debug,
-                                size: SizeInfo::ZERO,
+                                size: self.size_info(&variant_struct),
                                 payload_size_unpadded: payload_size,
                             });
                         }
@@ -1150,19 +1212,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                                 );
                                 let variant_struct_type =
                                     Codegen::make_named_struct(&self.ctx, struct_name, &fields);
-                                let mut variant_struct_size = SizeInfo::size_of_aggregate(&[
-                                    SizeInfo::scalar_value(
-                                        self.builtin_types.tag_type.get_bit_width(),
-                                    ),
-                                    variant_struct.payload_size_unpadded,
-                                ]);
-                                // We need to include the padding in the size but
-                                // don't want to consider it for alignment so we don't pass
-                                // it to size_of_aggregate!
-                                variant_struct_size.size_bits += size_diff_bits;
+
+                                // We call size_info on a non-opaque copy to get the size
+                                let variant_struct_size = self.size_info(&variant_struct_type);
                                 variant_struct.struct_type = variant_struct_type;
                                 variant_struct.size = variant_struct_size;
-                                variant_struct.payload_size_unpadded = variant_struct_size;
                             } else {
                                 debug!("Not padding variant {}", variant_struct.struct_type);
                             }
@@ -1178,14 +1232,17 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             false,
                         );
 
+                        let mut enum_size = self.size_info(&base_type);
+
                         // Alignment is the largest alignment of any variant
-                        // Size is obvious
-                        let enum_size =
-                            self.builtin_types.tag_type.get_bit_width() + payload_section_size;
-                        let enum_align =
+                        enum_size.align_bits =
                             variant_structs.iter().map(|v| v.size.align_bits).max().unwrap();
-                        let final_size_info =
-                            SizeInfo { size_bits: enum_size, align_bits: enum_align };
+
+                        assert!(variant_structs
+                            .iter()
+                            .map(|s| s.size.size_bits)
+                            .all(|size| size == enum_size.size_bits));
+
                         let member_types: Vec<_> = variant_structs
                             .iter()
                             .map(|variant| {
@@ -1220,8 +1277,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                                 &name,
                                 self.debug.current_file(),
                                 0,
-                                final_size_info.size_bits as u64,
-                                final_size_info.align_bits,
+                                enum_size.size_bits as u64,
+                                enum_size.align_bits,
                                 0,
                                 &member_types,
                                 0,
@@ -1234,7 +1291,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             base_struct_type: base_type,
                             variant_structs,
                             di_type: debug_union_type,
-                            size: final_size_info,
+                            size: enum_size,
                         }
                         .into())
                     }
@@ -1603,14 +1660,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 true => Ok(self.builtin_types.true_value.as_basic_value_enum().into()),
                 false => Ok(self.builtin_types.false_value.as_basic_value_enum().into()),
             },
-            TypedExpr::Int(int_value, _) => {
-                // LLVM only has unsigned values, the instructions are what provide the semantics
-                // of signed vs unsigned
-                let value = self.builtin_types.int.const_int(*int_value as u64, false);
-                Ok(value.as_basic_value_enum().into())
+            TypedExpr::Integer(integer) => {
+                let value = self.codegen_integer_value(integer)?;
+                Ok(value.into())
             }
             TypedExpr::Str(string_value, _) => {
-                // We will make them structs (structs) with an array pointer and a length for now
                 let global_str_data = self.llvm_module.add_global(
                     self.builtin_types.char.array_type(string_value.len() as u32),
                     None,
@@ -1824,38 +1878,77 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let value_payload = self.get_enum_payload(variant_type.struct_type, enum_value);
                 Ok(value_payload.into())
             }
-            TypedExpr::EnumCast(enum_cast) => {
-                let enum_value =
-                    self.codegen_expr_basic_value(&enum_cast.base)?.into_struct_value();
-                let is_variant_bool =
-                    self.codegen_enum_is_variant(enum_value, enum_cast.variant_name);
+            TypedExpr::Cast(cast) => {
+                match cast.cast_type {
+                    CastType::EnumVariant => {
+                        let enum_value =
+                            self.codegen_expr_basic_value(&cast.base_expr)?.into_struct_value();
+                        let variant =
+                            self.module.types.get(cast.target_type_id).expect_enum_variant();
+                        let is_variant_bool =
+                            self.codegen_enum_is_variant(enum_value, variant.tag_name);
 
-                let cond = self.bool_to_i1(is_variant_bool, "enum_cast_check");
-                let branch = self.build_conditional_branch(cond, "cast_post", "cast_fail");
+                        let cond = self.bool_to_i1(is_variant_bool, "enum_cast_check");
+                        let branch = self.build_conditional_branch(cond, "cast_post", "cast_fail");
 
-                // cast_fail
-                self.builder.position_at_end(branch.else_block);
-                // TODO: We can call @llvm.expect.i1 in order
-                // to help branch prediction and indicate that failure is 'cold'
-                self.build_bfl_crash("bad enum cast", enum_cast.span);
+                        // cast_fail
+                        self.builder.position_at_end(branch.else_block);
+                        // TODO: We can call @llvm.expect.i1 in order
+                        // to help branch prediction and indicate that failure is 'cold'
+                        self.build_bfl_crash("bad enum cast", cast.span);
 
-                // cast_post
-                self.builder.position_at_end(branch.then_block);
-                // Ultimately, this cast is currently a no-op
-                // So we don't need to emit any instructions in cast_post
+                        // cast_post
+                        self.builder.position_at_end(branch.then_block);
+                        // Ultimately, this cast is currently a no-op
+                        // So we don't need to emit any instructions in cast_post
 
-                Ok(enum_value.as_basic_value_enum().into())
-            }
-            TypedExpr::NoOpCast(cast) => {
-                let value = self.codegen_expr_basic_value(&cast.base)?;
-                Ok(value.into())
+                        Ok(enum_value.as_basic_value_enum().into())
+                    }
+                    CastType::KnownNoOp | CastType::Integer8ToChar => {
+                        let value = self.codegen_expr_basic_value(&cast.base_expr)?;
+                        Ok(value.into())
+                    }
+                    CastType::IntegerExtend | CastType::IntegerExtendFromChar => {
+                        let value = self.codegen_expr_basic_value(&cast.base_expr)?;
+                        let int_value = value.into_int_value();
+                        let llvm_type = self.codegen_type(cast.target_type_id)?;
+                        let integer_type =
+                            self.module.types.get(cast.target_type_id).expect_integer();
+                        let value: IntValue<'ctx> = if integer_type.is_signed() {
+                            self.builder.build_int_s_extend(
+                                int_value,
+                                llvm_type.value_basic_type().into_int_type(),
+                                "extend_cast",
+                            )
+                        } else {
+                            self.builder.build_int_z_extend(
+                                int_value,
+                                llvm_type.value_basic_type().into_int_type(),
+                                "extend_cast",
+                            )
+                        };
+                        Ok(value.as_basic_value_enum().into())
+                    }
+                    CastType::IntegerTruncate => {
+                        let value = self.codegen_expr_basic_value(&cast.base_expr)?;
+                        let int_value = value.into_int_value();
+                        let int_type = self.codegen_type(cast.target_type_id)?;
+                        let truncated_value = self.builder.build_int_truncate(
+                            int_value,
+                            int_type.value_basic_type().into_int_type(),
+                            "trunc_cast",
+                        );
+                        Ok(truncated_value.as_basic_value_enum().into())
+                    }
+                }
             }
         }
     }
 
     fn codegen_binop(&mut self, bin_op: &BinaryOp) -> CodegenResult<LlvmValue<'ctx>> {
-        match bin_op.ty {
-            INT_TYPE_ID => {
+        match self.module.types.get(bin_op.ty) {
+            Type::Integer(integer_type) => {
+                let signed = integer_type.is_signed();
                 let lhs_value = self.codegen_expr_basic_value(&bin_op.lhs)?.into_int_value();
                 let rhs_value = self.codegen_expr_basic_value(&bin_op.rhs)?.into_int_value();
                 let op_res = match bin_op.kind {
@@ -1867,12 +1960,20 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         self.builder.build_int_mul(lhs_value, rhs_value, "mul")
                     }
                     BinaryOpKind::Divide => {
-                        self.builder.build_int_signed_div(lhs_value, rhs_value, "sdiv")
+                        if signed {
+                            self.builder.build_int_signed_div(lhs_value, rhs_value, "sdiv")
+                        } else {
+                            self.builder.build_int_unsigned_div(lhs_value, rhs_value, "udiv")
+                        }
                     }
                     BinaryOpKind::And => self.builder.build_and(lhs_value, rhs_value, "and"),
                     BinaryOpKind::Or => self.builder.build_or(lhs_value, rhs_value, "or"),
                     BinaryOpKind::Rem => {
-                        self.builder.build_int_signed_rem(lhs_value, rhs_value, "rem")
+                        if signed {
+                            self.builder.build_int_signed_rem(lhs_value, rhs_value, "srem")
+                        } else {
+                            self.builder.build_int_unsigned_rem(lhs_value, rhs_value, "urem")
+                        }
                     }
                     BinaryOpKind::Equals => {
                         self.builder.build_int_compare(IntPredicate::EQ, lhs_value, rhs_value, "eq")
@@ -1883,7 +1984,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 };
                 Ok(op_res.as_basic_value_enum().into())
             }
-            BOOL_TYPE_ID => match bin_op.kind {
+            Type::Bool => match bin_op.kind {
                 BinaryOpKind::And | BinaryOpKind::Or => {
                     let lhs = self.codegen_expr_basic_value(&bin_op.lhs)?.into_int_value();
                     let op = match bin_op.kind {
@@ -1981,10 +2082,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 }
                 other => panic!("Unsupported binary operation {other:?} returning Bool"),
             },
-            STRING_TYPE_ID => panic!("No string-returning binary ops yet"),
-            UNIT_TYPE_ID => panic!("No unit-returning binary ops"),
-            CHAR_TYPE_ID => panic!("No char-returning binary ops"),
-            other => todo!("codegen for binary ops on user-defined types: {other}"),
+            Type::String => panic!("No string-returning binary ops yet"),
+            Type::Unit => panic!("No unit-returning binary ops"),
+            Type::Char => panic!("No char-returning binary ops"),
+            _other => todo!("codegen for binary ops on other types"),
         }
     }
 
@@ -2059,6 +2160,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         variant_type: StructType<'ctx>,
         enum_value: StructValue<'ctx>,
     ) -> BasicValueEnum<'ctx> {
+        // We have to use a pointer to the enum value to extract the payload
+        // in the type of the variant; its like a reinterpret cast
+
         let ptr = self.builder.build_alloca(variant_type, "enum_ptr_for_payload");
         self.builder.build_store(ptr, enum_value);
         // let casted_ptr = self
@@ -2077,6 +2181,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     fn codegen_function_call(&mut self, call: &Call) -> CodegenResult<LlvmValue<'ctx>> {
         let callee = self.module.get_function(call.callee_function_id);
+
+        if !callee.should_codegen_function() && callee.intrinsic_type.is_some() {
+            return self.codegen_intrinsic_inline(callee.intrinsic_type.unwrap(), call);
+        }
 
         let function_value = self.codegen_function(call.callee_function_id, callee)?;
 
@@ -2139,7 +2247,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     ) -> CodegenResult<PointerValue<'ctx>> {
         let pointee_ty = self.codegen_type(operation.result_type)?;
         // TOOD: Once codegen_expr returns type info, we can ditch this extra work to get and generate types separately
-        let array_type = self.create_array_type(pointee_ty.value_basic_type());
+        let array_type = self.create_array_struct(pointee_ty.value_basic_type());
         let array_value = self.codegen_expr_basic_value(&operation.base_expr)?.into_pointer_value();
         let index_value = self.codegen_expr_basic_value(&operation.index_expr)?;
 
@@ -2231,7 +2339,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 .build_memset(data_ptr, 1, self.builtin_types.char.const_zero(), size_bytes)
                 .unwrap();
         }
-        let array_type = self.create_array_type(element_type);
+        let array_type = self.create_array_struct(element_type);
         // insert_value returns a value and takes a value, doesn't modify memory at pointers
         // We can start building a struct by giving it an undefined struct first
         let array_struct = self
@@ -2249,7 +2357,64 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         self.variables.get(&variable_id).unwrap().loaded_value(&self.builder)
     }
 
-    fn codegen_intrinsic(
+    fn codegen_intrinsic_inline(
+        &mut self,
+        intrinsic_type: IntrinsicFunction,
+        call: &Call,
+    ) -> CodegenResult<LlvmValue<'ctx>> {
+        match intrinsic_type {
+            IntrinsicFunction::SizeOf => {
+                let type_param = &call.type_args[0];
+                let llvm_type = self.codegen_type(type_param.type_id)?;
+                let size = self.size_info(&llvm_type.value_any_type());
+                let size_bytes = size.size_bits / 8;
+                let size_value = self.builtin_types.int.const_int(size_bytes as u64, false);
+                Ok(size_value.as_basic_value_enum().into())
+            }
+            IntrinsicFunction::AlignOf => {
+                let type_param = &call.type_args[0];
+                let llvm_type = self.codegen_type(type_param.type_id)?;
+                let size = self.size_info(&llvm_type.value_any_type());
+                let align_bytes = size.align_bits / 8;
+                let align_value = self.builtin_types.int.const_int(align_bytes as u64, false);
+                Ok(align_value.as_basic_value_enum().into())
+            }
+            IntrinsicFunction::BitNot => {
+                let input_value = self.codegen_expr_basic_value(&call.args[0])?.into_int_value();
+                let not_value = self.builder.build_not(input_value, "not");
+                Ok(not_value.as_basic_value_enum().into())
+            }
+            IntrinsicFunction::BitAnd
+            | IntrinsicFunction::BitXor
+            | IntrinsicFunction::BitOr
+            | IntrinsicFunction::BitShiftLeft
+            | IntrinsicFunction::BitShiftRight => {
+                // We only support signed 64 bit integers for now
+                let is_operand_signed = true;
+                let sign_extend = is_operand_signed;
+                let lhs = self.codegen_expr_basic_value(&call.args[0])?.into_int_value();
+                let rhs = self.codegen_expr_basic_value(&call.args[1])?.into_int_value();
+                let result = match intrinsic_type {
+                    IntrinsicFunction::BitAnd => self.builder.build_and(lhs, rhs, "and"),
+                    IntrinsicFunction::BitXor => self.builder.build_xor(lhs, rhs, "xor"),
+                    IntrinsicFunction::BitOr => self.builder.build_or(lhs, rhs, "or"),
+                    IntrinsicFunction::BitShiftLeft => {
+                        self.builder.build_left_shift(lhs, rhs, "shl")
+                    }
+                    IntrinsicFunction::BitShiftRight => {
+                        self.builder.build_right_shift(lhs, rhs, sign_extend, "shr")
+                    }
+                    _ => unreachable!(),
+                };
+                Ok(result.as_basic_value_enum().into())
+            }
+            _ => {
+                panic!("Unexpected intrinsic type for inline gen")
+            }
+        }
+    }
+
+    fn codegen_intrinsic_function_body(
         &mut self,
         intrinsic_type: IntrinsicFunction,
         function: &TypedFunction,
@@ -2281,7 +2446,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let array =
                     self.get_loaded_variable(function.params[0].variable_id).into_pointer_value();
                 let array_type =
-                    self.create_array_type(self.builtin_types.char.as_basic_type_enum());
+                    self.create_array_struct(self.builtin_types.char.as_basic_type_enum());
                 let array_struct =
                     self.builder.build_load(array_type, array, "array_struct").into_struct_value();
                 let array_len = self.builtin_types.array_length(&self.builder, array_struct);
@@ -2513,6 +2678,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 );
                 Ok(actual_ptr.as_basic_value_enum())
             }
+            _ => {
+                panic!("Unexpected intrinsic type for actual llvm function {:?}", intrinsic_type)
+            }
         }
     }
     // This needs to return either a basic value or an instruction value (in the case of early return)
@@ -2640,6 +2808,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         if let Some(function) = self.llvm_functions.get(&function_id) {
             return Ok(*function);
         }
+
         let function_line_number = self
             .module
             .ast
@@ -2728,7 +2897,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         match function.intrinsic_type {
             Some(intrinsic_type) => {
                 trace!("codegen intrinsic {:?} fn {:?}", intrinsic_type, function);
-                let value = self.codegen_intrinsic(intrinsic_type, function)?.as_basic_value_enum();
+                let value = self
+                    .codegen_intrinsic_function_body(intrinsic_type, function)?
+                    .as_basic_value_enum();
                 self.builder.build_return(Some(&value));
             }
             None => {
@@ -2749,7 +2920,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                                 self.builder.build_return(Some(&basic_value))
                             }
                             LlvmValue::Never(_instr) => self.builder.build_unreachable(),
-                            // LlvmValue::Void(_instr) => self.builder.build_return(None),
                         };
                     }
                 }
@@ -2775,23 +2945,42 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         Ok(fn_val)
     }
 
+    fn codegen_integer_value(
+        &self,
+        integer: &TypedIntegerExpr,
+    ) -> CodegenResult<BasicValueEnum<'ctx>> {
+        let llvm_ty = self.codegen_type(integer.type_id())?;
+        let llvm_int_ty = llvm_ty.value_basic_type().into_int_type();
+        let Type::Integer(int_type) = self.module.types.get(llvm_ty.type_id()) else { panic!() };
+        let llvm_value = if int_type.is_signed() {
+            llvm_int_ty.const_int(integer.value.as_u64(), true)
+        } else {
+            llvm_int_ty.const_int(integer.value.as_u64(), false)
+        };
+        Ok(llvm_value.as_basic_value_enum())
+    }
+
     pub fn codegen_module(&mut self) -> CodegenResult<()> {
         let start = std::time::Instant::now();
         for constant in &self.module.constants {
-            match constant.expr {
-                TypedExpr::Int(i64, _) => {
-                    let llvm_ty = self.builtin_types.int;
-                    let llvm_val =
-                        self.llvm_module.add_global(llvm_ty, Some(AddressSpace::default()), "");
-                    llvm_val.set_constant(true);
-                    llvm_val.set_initializer(&llvm_ty.const_int(i64 as u64, false));
-                    self.globals.insert(constant.variable_id, llvm_val);
+            match &constant.expr {
+                TypedExpr::Integer(integer) => {
+                    let llvm_value = self.codegen_integer_value(integer)?;
+                    let variable = self.module.variables.get_variable(constant.variable_id);
+                    let llvm_global = self.llvm_module.add_global(
+                        llvm_value.get_type(),
+                        Some(AddressSpace::default()),
+                        self.module.get_ident_str(variable.name),
+                    );
+                    llvm_global.set_constant(true);
+                    llvm_global.set_initializer(&llvm_value);
+                    self.globals.insert(constant.variable_id, llvm_global);
                 }
                 _ => todo!("constant must be int"),
             }
         }
         for (id, function) in self.module.function_iter() {
-            if function.should_codegen() {
+            if function.should_codegen_function() {
                 self.codegen_function(id, function)?;
             }
         }
@@ -2803,21 +2992,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         self.module.name()
     }
 
-    pub fn optimize(&mut self, optimize: bool) -> anyhow::Result<()> {
-        let start = std::time::Instant::now();
-        Target::initialize_aarch64(&InitializationConfig::default());
-        // let triple = TargetMachine::get_default_triple();
-        let triple = TargetTriple::create("arm64-apple-macosx14.4.0");
+    fn set_up_machine(module: &mut LlvmModule) -> TargetMachine {
+        // Target::initialize_aarch64(&InitializationConfig::default());
+        Target::initialize_native(&InitializationConfig::default()).unwrap();
+        let triple = TargetMachine::get_default_triple();
+        // let triple = TargetTriple::create("arm64-apple-macosx14.4.0");
         let target = Target::from_triple(&triple).unwrap();
-        if !self.debug.strip_debug {
-            self.debug.debug_builder.finalize();
-        } else {
-            self.llvm_module.strip_debug_info();
-        }
-        self.llvm_module.verify().map_err(|err| {
-            eprintln!("{}", self.llvm_module.to_string());
-            anyhow::anyhow!("Module '{}' failed validation: {}", self.name(), err.to_string_lossy())
-        })?;
         let machine = target
             .create_target_machine(
                 &triple,
@@ -2829,24 +3009,32 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             )
             .unwrap();
 
-        self.llvm_module.set_data_layout(&machine.get_target_data().get_data_layout());
-        self.llvm_module.set_triple(&triple);
-        let pass_manager_b = PassManagerBuilder::create();
-        pass_manager_b.set_optimization_level(OptimizationLevel::Aggressive);
-        // pass_manager_b.populate_function_pass_manager(&function_pass_manager);
-        // pass_manager_b.populate_module_pass_manager(&module_pass_manager);
-        // The PassManager::create function works for Module and Function. If module,
-        // the expected input is (). If function, the expected input is a Module
-        // add_verifier_pass
-        // let function_pass_manager: PassManager<FunctionValue<'ctx>> =
-        //     PassManager::create(&self.llvm_module);
-        // function_pass_manager.add_verifier_pass();
+        module.set_data_layout(&machine.get_target_data().get_data_layout());
+        module.set_triple(&triple);
+
+        machine
+    }
+
+    pub fn optimize(&mut self, optimize: bool) -> anyhow::Result<()> {
+        let start = std::time::Instant::now();
+
+        if !self.debug.strip_debug {
+            self.debug.debug_builder.finalize();
+        } else {
+            self.llvm_module.strip_debug_info();
+        }
+        self.llvm_module.verify().map_err(|err| {
+            eprintln!("{}", self.llvm_module.to_string());
+            anyhow::anyhow!("Module '{}' failed validation: {}", self.name(), err.to_string_lossy())
+        })?;
 
         let module_pass_manager: PassManager<LlvmModule<'ctx>> = PassManager::create(());
         if optimize {
             module_pass_manager.add_cfg_simplification_pass();
             module_pass_manager.add_promote_memory_to_register_pass();
             module_pass_manager.add_instruction_combining_pass();
+            module_pass_manager.add_sccp_pass();
+            module_pass_manager.add_aggressive_dce_pass();
         }
 
         // Workaround: We have to inline always because ArrayNew returns a pointer to an alloca
@@ -2855,11 +3043,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         module_pass_manager.add_function_attrs_pass();
         module_pass_manager.add_verifier_pass();
 
+        self.llvm_machine.add_analysis_passes(&module_pass_manager);
+
         module_pass_manager.run_on(&self.llvm_module);
-
-        machine.add_analysis_passes(&module_pass_manager);
-
-        self.llvm_machine = Some(machine);
 
         info!("codegen phase 'optimize' took {}ms", start.elapsed().as_millis());
 
@@ -2869,8 +3055,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     #[allow(unused)]
     pub fn emit_object_file(&self, rel_destination_dir: &str) -> anyhow::Result<()> {
         let filename = format!("{}.o", self.name());
-        let machine =
-            self.llvm_machine.as_ref().expect("Cannot emit object file before optimizing");
+        let machine = &self.llvm_machine;
         let path = Path::new(rel_destination_dir).join(Path::new(&filename));
         log::info!("Outputting object file to {}", path.to_str().unwrap());
         machine

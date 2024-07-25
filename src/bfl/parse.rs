@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fmt::{Display, Formatter, Write};
 
 use log::trace;
+use string_interner::backend::StringBackend;
 use string_interner::Symbol;
 
 use crate::lex::*;
@@ -24,6 +25,11 @@ pub struct ParsedNamespaceId(u32);
 pub struct ParsedExpressionId(u32);
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
 pub struct ParsedTypeExpressionId(u32);
+impl ParsedTypeExpressionId {
+    pub const fn zero() -> ParsedTypeExpressionId {
+        ParsedTypeExpressionId(0)
+    }
+}
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
 pub struct ParsedPatternId(u32);
 
@@ -86,11 +92,17 @@ pub struct ArrayExpr {
 }
 
 #[derive(Debug, Clone)]
+pub struct ParsedIntegerLiteral {
+    pub text: String,
+    pub span: SpanId,
+}
+
+#[derive(Debug, Clone)]
 pub enum Literal {
     None(SpanId),
     Unit(SpanId),
     Char(u8, SpanId),
-    Numeric(String, SpanId),
+    Integer(ParsedIntegerLiteral),
     Bool(bool, SpanId),
     /// TODO: Need second span, "content_span_id"
     String(String, SpanId),
@@ -106,7 +118,7 @@ impl Display for Literal {
                 f.write_char(*byte as char)?;
                 f.write_char('\'')
             }
-            Literal::Numeric(n, _) => f.write_str(n),
+            Literal::Integer(i) => f.write_str(&i.text),
             Literal::Bool(true, _) => f.write_str("true"),
             Literal::Bool(false, _) => f.write_str("false"),
             Literal::String(s, _) => {
@@ -124,7 +136,7 @@ impl Literal {
             Literal::None(span) => *span,
             Literal::Unit(span) => *span,
             Literal::Char(_, span) => *span,
-            Literal::Numeric(_, span) => *span,
+            Literal::Integer(i) => i.span,
             Literal::Bool(_, span) => *span,
             Literal::String(_, span) => *span,
         }
@@ -150,7 +162,7 @@ impl Display for IdentifierId {
 // and u32 symbols
 #[derive(Debug, Clone)]
 pub struct Identifiers {
-    intern_pool: string_interner::StringInterner,
+    intern_pool: string_interner::StringInterner<StringBackend>,
 }
 impl Identifiers {
     pub const BUILTIN_IDENTS: [&'static str; 8] =
@@ -346,6 +358,13 @@ pub struct ParsedMatchExpression {
 }
 
 #[derive(Debug, Clone)]
+pub struct ParsedAsCast {
+    pub base_expr: ParsedExpressionId,
+    pub dest_type: ParsedTypeExpressionId,
+    pub span: SpanId,
+}
+
+#[derive(Debug, Clone)]
 pub enum ParsedExpression {
     BinaryOp(BinaryOp),                     // a == b
     UnaryOp(UnaryOp),                       // !b, *b
@@ -365,9 +384,10 @@ pub enum ParsedExpression {
     EnumConstructor(ParsedEnumConstructor), // .A(<expr>)
     Is(ParsedIsExpression),                 // x is T
     Match(ParsedMatchExpression),           // when x is {
-                                            // | a => ...
-                                            // | b => ...
-                                            // }
+    // | a => ...
+    // | b => ...
+    // }
+    AsCast(ParsedAsCast),
 }
 
 impl ParsedExpression {
@@ -401,6 +421,7 @@ impl ParsedExpression {
             Self::EnumConstructor(e) => e.span,
             Self::Is(is_expr) => is_expr.span,
             Self::Match(match_expr) => match_expr.span,
+            Self::AsCast(as_cast) => as_cast.span,
         }
     }
 
@@ -424,6 +445,7 @@ impl ParsedExpression {
             Self::EnumConstructor(_) => false,
             Self::Is(_) => false,
             Self::Match(_) => false,
+            Self::AsCast(_) => false,
         }
     }
 
@@ -613,11 +635,27 @@ pub enum TypeModifier {
     Opaque,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u8)]
+pub enum NumericWidth {
+    B8,
+    B16,
+    B32,
+    B64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ParsedNumericType {
+    pub width: NumericWidth,
+    pub signed: bool,
+    pub span: SpanId,
+}
+
 #[derive(Debug, Clone)]
 pub enum ParsedTypeExpression {
     Unit(SpanId),
     Char(SpanId),
-    Int(SpanId),
+    Integer(ParsedNumericType),
     Bool(SpanId),
     String(SpanId),
     Struct(StructType),
@@ -632,8 +670,8 @@ pub enum ParsedTypeExpression {
 
 impl ParsedTypeExpression {
     #[inline]
-    pub fn is_int(&self) -> bool {
-        matches!(self, ParsedTypeExpression::Int(_))
+    pub fn is_integer(&self) -> bool {
+        matches!(self, ParsedTypeExpression::Integer(_))
     }
 
     #[inline]
@@ -645,7 +683,7 @@ impl ParsedTypeExpression {
         match self {
             ParsedTypeExpression::Unit(span) => *span,
             ParsedTypeExpression::Char(span) => *span,
-            ParsedTypeExpression::Int(span) => *span,
+            ParsedTypeExpression::Integer(int) => int.span,
             ParsedTypeExpression::Bool(span) => *span,
             ParsedTypeExpression::String(span) => *span,
             ParsedTypeExpression::Struct(struc) => struc.span,
@@ -661,7 +699,7 @@ impl ParsedTypeExpression {
 }
 
 #[derive(Debug, Clone)]
-pub struct TypeParamDef {
+pub struct ParsedTypeParamDefn {
     pub ident: IdentifierId,
     pub span: SpanId,
 }
@@ -669,7 +707,7 @@ pub struct TypeParamDef {
 #[derive(Debug, Clone)]
 pub struct ParsedFunction {
     pub name: IdentifierId,
-    pub type_args: Option<Vec<TypeParamDef>>,
+    pub type_args: Vec<ParsedTypeParamDefn>,
     pub args: Vec<FnArgDef>,
     pub ret_type: Option<ParsedTypeExpressionId>,
     pub block: Option<Block>,
@@ -729,6 +767,7 @@ impl ParsedTypeDefnFlags {
 pub struct ParsedTypeDefn {
     pub name: IdentifierId,
     pub value_expr: ParsedTypeExpressionId,
+    pub type_params: Vec<ParsedTypeParamDefn>,
     pub span: SpanId,
     pub id: ParsedTypeDefnId,
     pub flags: ParsedTypeDefnFlags,
@@ -1434,7 +1473,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     self.tokens.advance();
                     self.tokens.advance();
                     let span = self.extend_token_span(first, second);
-                    let numeric = Literal::Numeric(s, span);
+                    let numeric = Literal::Integer(ParsedIntegerLiteral { text: s, span });
                     Ok(Some(self.add_expression(ParsedExpression::Literal(numeric))))
                 } else {
                     Err(Parser::error("number following '-'", second))
@@ -1459,11 +1498,14 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     ))
                 } else {
                     match text.chars().next() {
-                        Some(c) if c.is_numeric() || c == '-' => {
+                        Some(c) if c.is_numeric() => {
                             let s = text.to_string();
                             self.tokens.advance();
                             Ok(Some(self.add_expression(ParsedExpression::Literal(
-                                Literal::Numeric(s, first.span),
+                                Literal::Integer(ParsedIntegerLiteral {
+                                    text: s,
+                                    span: first.span,
+                                }),
                             ))))
                         }
                         _ => Ok(None),
@@ -1547,21 +1589,56 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             Ok(Some(type_expr_id))
         } else if first.kind == K::Ident {
             let ident_chars = Parser::tok_chars(&self.module.spans, self.source(), first);
-            if ident_chars == "unit" {
+            let maybe_constant_expr = match ident_chars {
+                "unit" => Some(ParsedTypeExpression::Unit(first.span)),
+                "string" => Some(ParsedTypeExpression::String(first.span)),
+                "bool" => Some(ParsedTypeExpression::Bool(first.span)),
+                "char" => Some(ParsedTypeExpression::Char(first.span)),
+                "u8" => Some(ParsedTypeExpression::Integer(ParsedNumericType {
+                    width: NumericWidth::B8,
+                    signed: false,
+                    span: first.span,
+                })),
+                "u16" => Some(ParsedTypeExpression::Integer(ParsedNumericType {
+                    width: NumericWidth::B16,
+                    signed: false,
+                    span: first.span,
+                })),
+                "u32" => Some(ParsedTypeExpression::Integer(ParsedNumericType {
+                    width: NumericWidth::B32,
+                    signed: false,
+                    span: first.span,
+                })),
+                "u64" => Some(ParsedTypeExpression::Integer(ParsedNumericType {
+                    width: NumericWidth::B64,
+                    signed: false,
+                    span: first.span,
+                })),
+                "i8" => Some(ParsedTypeExpression::Integer(ParsedNumericType {
+                    width: NumericWidth::B8,
+                    signed: true,
+                    span: first.span,
+                })),
+                "i16" => Some(ParsedTypeExpression::Integer(ParsedNumericType {
+                    width: NumericWidth::B16,
+                    signed: true,
+                    span: first.span,
+                })),
+                "i32" => Some(ParsedTypeExpression::Integer(ParsedNumericType {
+                    width: NumericWidth::B32,
+                    signed: true,
+                    span: first.span,
+                })),
+                "i64" => Some(ParsedTypeExpression::Integer(ParsedNumericType {
+                    width: NumericWidth::B64,
+                    signed: true,
+                    span: first.span,
+                })),
+                _ => None,
+            };
+            if let Some(constant_expr) = maybe_constant_expr {
                 self.tokens.advance();
-                Ok(Some(self.module.type_expressions.add(ParsedTypeExpression::Unit(first.span))))
-            } else if ident_chars == "string" {
-                self.tokens.advance();
-                Ok(Some(self.module.type_expressions.add(ParsedTypeExpression::String(first.span))))
-            } else if ident_chars == "int" {
-                self.tokens.advance();
-                Ok(Some(self.module.type_expressions.add(ParsedTypeExpression::Int(first.span))))
-            } else if ident_chars == "bool" {
-                self.tokens.advance();
-                Ok(Some(self.module.type_expressions.add(ParsedTypeExpression::Bool(first.span))))
-            } else if ident_chars == "char" {
-                self.tokens.advance();
-                Ok(Some(self.module.type_expressions.add(ParsedTypeExpression::Char(first.span))))
+                Ok(Some(self.module.type_expressions.add(constant_expr)))
             } else {
                 self.tokens.advance();
                 let next = self.tokens.peek();
@@ -1716,6 +1793,18 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     let span = self.extend_span(self.get_expression_span(result), next.span);
                     result = self.add_expression(ParsedExpression::OptionalGet(OptionalGet {
                         base: result,
+                        span,
+                    }));
+                } else if next.kind == K::KeywordAs {
+                    self.tokens.advance();
+                    let type_expr_id = self.expect_type_expression()?;
+                    let span = self.extend_span(
+                        self.get_expression_span(result),
+                        self.module.get_type_expression_span(type_expr_id),
+                    );
+                    result = self.add_expression(ParsedExpression::AsCast(ParsedAsCast {
+                        base_expr: result,
+                        dest_type: type_expr_id,
                         span,
                     }));
                 } else if next.kind == K::Dot {
@@ -2338,10 +2427,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(Some(Block { stmts: block_statements, span }))
     }
 
-    fn expect_type_param(&mut self) -> ParseResult<TypeParamDef> {
+    fn expect_type_param(&mut self) -> ParseResult<ParsedTypeParamDefn> {
         let s = self.expect_eat_token(K::Ident)?;
         let ident_id = self.intern_ident_token(s);
-        Ok(TypeParamDef { ident: ident_id, span: s.span })
+        Ok(ParsedTypeParamDefn { ident: ident_id, span: s.span })
     }
 
     fn parse_function(&mut self) -> ParseResult<Option<ParsedFunctionId>> {
@@ -2370,7 +2459,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         };
         let func_name = self.expect_eat_token(K::Ident)?;
         let func_name_id = self.intern_ident_token(func_name);
-        let type_arguments: Option<Vec<TypeParamDef>> =
+        let type_arguments: Vec<ParsedTypeParamDefn> =
             if let TokenKind::OpenAngle = self.peek().kind {
                 self.tokens.advance();
                 let (type_args, _type_arg_span) = self.eat_delimited(
@@ -2379,9 +2468,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     TokenKind::CloseAngle,
                     Parser::expect_type_param,
                 )?;
-                Some(type_args)
+                type_args
             } else {
-                None
+                Vec::new()
             };
         self.expect_eat_token(K::OpenParen)?;
         let (args, args_span) = self.eat_fndef_args()?;
@@ -2465,7 +2554,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(Some(ability_impl_id))
     }
 
-    fn parse_typedef(&mut self) -> ParseResult<Option<ParsedTypeDefnId>> {
+    fn parse_type_defn(&mut self) -> ParseResult<Option<ParsedTypeDefnId>> {
         let keyword_type = self.eat_token(K::KeywordType);
         let Some(keyword_type) = keyword_type else {
             return Ok(None);
@@ -2491,6 +2580,20 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         }
 
         let name = self.expect_eat_token(K::Ident)?;
+
+        let type_params: Vec<ParsedTypeParamDefn> = if let TokenKind::OpenAngle = self.peek().kind {
+            self.tokens.advance();
+            let (type_args, _type_arg_span) = self.eat_delimited(
+                "Type arguments",
+                TokenKind::Comma,
+                TokenKind::CloseAngle,
+                Parser::expect_type_param,
+            )?;
+            type_args
+        } else {
+            Vec::new()
+        };
+
         let equals = self.expect_eat_token(K::Equals)?;
         let type_expr = Parser::expect("Type expression", equals, self.parse_type_expression())?;
         let span =
@@ -2500,6 +2603,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             name,
             value_expr: type_expr,
             span,
+            type_params,
             id: ParsedTypeDefnId(0), // The id is set by add_typedefn
             flags,
         });
@@ -2538,7 +2642,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             Ok(Some(ParsedId::Constant(constant_id)))
         } else if let Some(function_id) = self.parse_function()? {
             Ok(Some(ParsedId::Function(function_id)))
-        } else if let Some(type_defn_id) = self.parse_typedef()? {
+        } else if let Some(type_defn_id) = self.parse_type_defn()? {
             Ok(Some(ParsedId::TypeDefn(type_defn_id)))
         } else if let Some(ability_id) = self.parse_ability_defn()? {
             Ok(Some(ParsedId::Ability(ability_id)))
@@ -2656,6 +2760,11 @@ impl ParsedModule {
                 }
                 f.write_str(" }")
             }
+            ParsedExpression::AsCast(cast) => {
+                self.display_expression_id(cast.base_expr, f)?;
+                f.write_str(" as ")?;
+                self.display_type_expression_id(cast.dest_type, f)
+            }
         }
     }
 
@@ -2681,7 +2790,19 @@ impl ParsedModule {
         match self.type_expressions.get(ty_expr_id) {
             ParsedTypeExpression::Unit(_) => f.write_str("unit"),
             ParsedTypeExpression::Char(_) => f.write_str("char"),
-            ParsedTypeExpression::Int(_) => f.write_str("int"),
+            ParsedTypeExpression::Integer(n) => {
+                let s = match (n.signed, n.width) {
+                    (true, NumericWidth::B8) => "i8",
+                    (true, NumericWidth::B16) => "i16",
+                    (true, NumericWidth::B32) => "i32",
+                    (true, NumericWidth::B64) => "i64",
+                    (false, NumericWidth::B8) => "u8",
+                    (false, NumericWidth::B16) => "u16",
+                    (false, NumericWidth::B32) => "u32",
+                    (false, NumericWidth::B64) => "u64",
+                };
+                f.write_str(s)
+            }
             ParsedTypeExpression::Bool(_) => f.write_str("bool"),
             ParsedTypeExpression::String(_) => f.write_str("string"),
             ParsedTypeExpression::Struct(struct_type) => {
