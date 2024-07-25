@@ -3388,6 +3388,29 @@ impl TypedModule {
                             self.type_id_to_string(target_type).blue()
                         ),
                     },
+                    Type::Enum(_e) => {
+                        match self.types.get(target_type) {
+                            Type::EnumVariant(variant) => {
+                                // Enum cast to variant
+                                if variant.enum_type_id == base_expr_type {
+                                    Ok(CastType::EnumVariant)
+                                } else {
+                                    ferr!(
+                                        cast.span,
+                                        "Cannot cast enum '{}' to '{}'",
+                                        self.type_id_to_string(base_expr_type).blue(),
+                                        self.type_id_to_string(variant.enum_type_id).blue()
+                                    )
+                                }
+                            }
+                            _ => ferr!(
+                                cast.span,
+                                "Cannot cast enum '{}' to '{}'",
+                                self.type_id_to_string(base_expr_type).blue(),
+                                self.type_id_to_string(target_type).blue()
+                            ),
+                        }
+                    }
                     _ => ferr!(
                         cast.span,
                         "Cannot cast '{}' to '{}'",
@@ -4744,64 +4767,24 @@ impl TypedModule {
                         struct_scope.find_function(fn_call.name)
                     }
                     Type::Enum(e) => {
-                        if fn_call.name == self.ast.identifiers.get("as").unwrap() {
-                            // Enum cast
-                            if fn_call.args.len() != 0 {
-                                return make_fail_span(".as takes no arguments", fn_call.span);
-                            }
-                            let Some(type_args) = fn_call.type_args.as_ref() else {
-                                return make_fail_span(
-                                    ".as requires a type parameter with desired variant tag",
-                                    fn_call.span,
-                                );
-                            };
-                            let Some(tag_name_arg) = type_args.get(0) else {
-                                return make_fail_span(
-                                    ".as requires a type parameter with desired variant tag",
-                                    fn_call.span,
-                                );
-                            };
-
-                            // TODO(clone): We have to eval a type expr
-                            let e = e.clone();
-                            let type_id =
-                                self.eval_type_expr(tag_name_arg.type_expr, calling_scope, None)?;
-                            let Some(tag_type) = self.types.get(type_id).as_tag() else {
-                                return make_fail_span(
-                                    ".as requires a type parameter with desired variant tag",
-                                    fn_call.span,
-                                );
-                            };
-                            let tag_name = tag_type.ident;
-                            let Some(matching_variant) = e.variant_by_name(tag_name) else {
-                                return make_fail_span("No variant for tag", fn_call.span);
-                            };
-                            return Ok(Either::Left(TypedExpr::Cast(TypedCast {
-                                base_expr: Box::new(base_expr.clone()),
-                                cast_type: CastType::EnumVariant,
-                                target_type_id: matching_variant.my_type_id,
-                                span: fn_call.span,
-                            })));
-                        } else {
-                            let Some(enum_defn_info) = e.type_defn_info.as_ref() else {
-                                return make_fail_span(
-                                    "Anonymous enums currently have no methods",
-                                    fn_call.span,
-                                );
-                            };
-                            let Some(enum_companion_ns) = enum_defn_info.companion_namespace else {
-                                return make_fail_ast_id(
-                                    &self.ast,
-                                    &format!(
-                                        "Enum {} has no companion namespace",
-                                        self.get_ident_str(enum_defn_info.name).blue()
-                                    ),
-                                    e.ast_node,
-                                );
-                            };
-                            let enum_scope = self.get_namespace_scope(enum_companion_ns);
-                            enum_scope.find_function(fn_call.name)
-                        }
+                        let Some(enum_defn_info) = e.type_defn_info.as_ref() else {
+                            return make_fail_span(
+                                "Anonymous enums currently have no methods",
+                                fn_call.span,
+                            );
+                        };
+                        let Some(enum_companion_ns) = enum_defn_info.companion_namespace else {
+                            return make_fail_ast_id(
+                                &self.ast,
+                                &format!(
+                                    "Enum {} has no companion namespace",
+                                    self.get_ident_str(enum_defn_info.name).blue()
+                                ),
+                                e.ast_node,
+                            );
+                        };
+                        let enum_scope = self.get_namespace_scope(enum_companion_ns);
+                        enum_scope.find_function(fn_call.name)
                     }
                     Type::EnumVariant(ev) => {
                         let parent_enum_info =

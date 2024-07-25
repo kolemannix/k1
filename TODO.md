@@ -57,9 +57,9 @@
   - [x] 16
   - [x] 32
   - [x] 64
-  - [ ] reject invalid values
+  - [x] reject invalid values
   - [ ] implement infallible coercions
-  - [ ] implement cast
+  - [x] implement cast
   - [ ] hex literals?
   - [ ] binary literals?
   - [ ] type suffixes on literals 123u32, 4u8, etc
