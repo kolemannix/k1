@@ -1,4 +1,10 @@
+fn test(a: u8, b: u8): u8 {
+  a + b
+}
+
 fn main(): int {
+  // This test is unfinished
+  printInt(test(255, 255) as int);
   val b: u8 = 255;
   val x = 0xcafebabe;
   val y = 0xdeadbeef;

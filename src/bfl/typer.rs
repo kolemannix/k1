@@ -4866,6 +4866,19 @@ impl TypedModule {
         calling_scope: ScopeId,
         skip_typecheck: bool,
     ) -> TyperResult<Vec<TypedExpr>> {
+        let total_passed = if this_expr.is_some() { 1 } else { 0 }
+            + pre_evaled_params.as_ref().map(|v| v.len()).unwrap_or(fn_call.args.len());
+        if total_passed != params.len() {
+            return make_fail_span(
+                format!(
+                    "Incorrect number of arguments: expected {}, got {}",
+                    params.len(),
+                    total_passed
+                ),
+                fn_call.span,
+            );
+        }
+
         let mut final_args: Vec<TypedExpr> = Vec::new();
         // We have to deal with `self` arguments outside of the loop because
         // we can't 'move' out of this_expr more than once
@@ -4873,7 +4886,7 @@ impl TypedModule {
         if let Some(first) = params.get(0) {
             let is_self = first.name == {
                 let this = &mut self.ast;
-                this.identifiers.intern("self")
+                this.identifiers.get("self").unwrap()
             };
             if is_self {
                 if let Some(this) = this_expr {
