@@ -58,14 +58,21 @@
   - [x] 32
   - [x] 64
   - [x] reject invalid values
-  - [ ] implement infallible coercions
+  - [x] implement infallible coercions
   - [x] implement cast
-  - [ ] hex literals?
-  - [ ] binary literals?
+  - [x] hex literals?
+  - [x] binary literals?
   - [ ] type suffixes on literals 123u32, 4u8, etc
-- [ ] Reject too many function args
+- [x] Reject too many function args
 - [ ] Mark types as trivially copyable or not
-- [ ] Remove custom size/align code and use LLVM's
+- [ ] return statement (control flow of blocks / statements: CanReturn, AlwaysReturns, NeverReturns (which is 'never'))
+- [ ] Precedence of dereference (and i guess unary ops in general) should be higher
+- [ ] Codegen 'variables' is broken (never cleared); use enter scope / exit scope w/ a stack of vecs or something
+      instead (matters when a variable id is reused because the same function is called twice; I think we just overwrite it
+      with the correct one but maybe nesting is a problem?)
+- [ ] Tuples?
+- [ ] Ranges?
+- [x] Remove custom size/align code and use LLVM's
 - [ ] More type expressions! (this was a big part of my original point)
   - [ ] Intersect structs
   - [ ] Union structs
@@ -73,13 +80,14 @@
   - [ ] inner type of optional
 - [ ] floating point f32 and f64
 - [ ] Optional coalescing accessor (x?.y)
-- [ ] Prevent function overloading in same namespace
+- [x] Prevent function overloading in same namespace
 - [x] Typecheck the binary ops
 - [x] Bitwise ops
 - [ ] Exhaustive pattern matching
+- [ ] function pointers
 - [ ] Pure lambdas with -> (not closures)
 - [ ] slices (windows? segments?)
-- [ ] Make demo readme
+- [ ] Make demo readme / site
 
 ## Error story
 - [ ] A simple stdlib enum?
@@ -149,23 +157,17 @@
 - [x] Use aggregates in codegen, not pointers, for optionals
 - [x] Basic generic type inference in function calls
 - [x] Pretty print scopes
-- [ ] Precedence of dereference (and i guess unary ops in general) should be higher
-- [ ] Change our builtin int type to be 32 bits?
-- [ ] Codegen 'variables' is broken (never cleared); use enter scope / exit scope w/ a stack of vecs or something
-      instead (matters when a variable id is reused because the same function is called twice; I think we just overwrite it
-      with the correct one but maybe nesting is a problem?)
 - [x] Support multiple files
 - [x] Fix namespaces to require full paths (currently busted must be unique names globally)
 - [x] Allow namespaces inside namespaces
 - [x] Some debug info in LLVM IR (source snippets or line numbers?)
-- [ ] uint type
+- [x] uint type
 - [x] Generic type inference
 - [ ] Type literals would be fun
 - [ ] Syntax Shed
   - [ ] Function syntax change? (foo = fn (a, b, c): int { }
   - [ ] from qualifier-focused to name -focused
   - [ ] Parse trailing commas
-- [ ] Tuples
 
 - [-] For iteration (we will just hardcode the iterable types)
 

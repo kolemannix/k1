@@ -1,14 +1,14 @@
-type Elem = { key: int, value: int }
-type HashMap = {
-  size: int,
-  slots: Array<Elem?>,
+type Elem<V> = { key: string, value: V }
+type HashMap<V> = {
+  size: u64,
+  slots: Array<Elem<V>?>,
 }
 
 namespace HashMap {
-  fn new(): HashMap {
+  fn new<V>(): HashMap {
     // Fixme: why doesn't this infer?
     // val slots: Array<Elem> = Array::new(16);
-    val slots = Array::new<Elem?>(16);
+    val slots = Array::new<Elem<V>?>(16);
     { size: 0, slots: slots }
   }
 
@@ -21,17 +21,20 @@ namespace HashMap {
   // hash_value *= FNV_PRIME;
   // hash_value ~ data[1];
   // }
-  fn fnv1a_hash(key: int): int {
+  fn fnv1a_hash(key: string): u64 {
     val FNV_PRIME = 1099511628211;
     val FNV_OFFSET = 14695981039346656037;
     val hash_value = FNV_OFFSET;
-    hash_value = hash_value * FNV_PRIME;
-    hash_value = hash_value ^ key;
+    for c in key do {
+      hash_value = hash_value * FNV_PRIME;
+      hash_value = Bits::xor(hash_value, c as u64);
+    };
     hash_value
   }
 
-  fn insert(self: HashMap*, key: int, value: int): unit {
-    val index = key % self.slots.length();
+  fn insert<V>(self: HashMap<V>*, key: string, value: V): unit {
+    val hash = fnv1a_hash(key);
+    val index = hash % self.slots.length();
     val elem = { key: key, value: value };
     val slot = self.slots[index];
     when slot {
@@ -71,9 +74,8 @@ namespace HashMap {
       when it {
         | None -> println("empty")
         | Some({ key, value }) -> {
-          printInt(key);
-          print(" -> ");
-          printInt(value);
+          print(key);
+          print(" -> <value>");
           println("");
         }
       }
