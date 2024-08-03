@@ -654,11 +654,7 @@ pub struct ParsedNumericType {
 #[derive(Debug, Clone)]
 pub enum ParsedTypeExpression {
     Builtin(SpanId),
-    Unit(SpanId),
-    Char(SpanId),
     Integer(ParsedNumericType),
-    Bool(SpanId),
-    String(SpanId),
     Struct(StructType),
     Name(IdentifierId, SpanId),
     TagName(IdentifierId, SpanId),
@@ -676,18 +672,10 @@ impl ParsedTypeExpression {
     }
 
     #[inline]
-    pub fn is_string(&self) -> bool {
-        matches!(self, ParsedTypeExpression::String(_))
-    }
-    #[inline]
     pub fn get_span(&self) -> SpanId {
         match self {
             ParsedTypeExpression::Builtin(span) => *span,
-            ParsedTypeExpression::Unit(span) => *span,
-            ParsedTypeExpression::Char(span) => *span,
             ParsedTypeExpression::Integer(int) => int.span,
-            ParsedTypeExpression::Bool(span) => *span,
-            ParsedTypeExpression::String(span) => *span,
             ParsedTypeExpression::Struct(struc) => struc.span,
             ParsedTypeExpression::Name(_, span) => *span,
             ParsedTypeExpression::TagName(_, span) => *span,
@@ -1607,10 +1595,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         } else if first.kind == K::Ident {
             let ident_chars = Parser::tok_chars(&self.module.spans, self.source(), first);
             let maybe_constant_expr = match ident_chars {
-                // "unit" => Some(ParsedTypeExpression::Unit(first.span)),
-                // "string" => Some(ParsedTypeExpression::String(first.span)),
-                // "bool" => Some(ParsedTypeExpression::Bool(first.span)),
-                // "char" => Some(ParsedTypeExpression::Char(first.span)),
                 "u8" => Some(ParsedTypeExpression::Integer(ParsedNumericType {
                     width: NumericWidth::B8,
                     signed: false,
@@ -2811,8 +2795,6 @@ impl ParsedModule {
         f: &mut impl Write,
     ) -> std::fmt::Result {
         match self.type_expressions.get(ty_expr_id) {
-            ParsedTypeExpression::Unit(_) => f.write_str("unit"),
-            ParsedTypeExpression::Char(_) => f.write_str("char"),
             ParsedTypeExpression::Integer(n) => {
                 let s = match (n.signed, n.width) {
                     (true, NumericWidth::B8) => "i8",
@@ -2826,8 +2808,6 @@ impl ParsedModule {
                 };
                 f.write_str(s)
             }
-            ParsedTypeExpression::Bool(_) => f.write_str("bool"),
-            ParsedTypeExpression::String(_) => f.write_str("string"),
             ParsedTypeExpression::Struct(struct_type) => {
                 f.write_str("{ ")?;
                 for field in struct_type.fields.iter() {

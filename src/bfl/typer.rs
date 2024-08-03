@@ -1308,8 +1308,6 @@ impl TypedModule {
                     _ => ferr!(*span, "Unknown builtin type '{}'", name),
                 }
             }
-            ParsedTypeExpression::Unit(_) => Ok(UNIT_TYPE_ID),
-            ParsedTypeExpression::Char(_) => Ok(CHAR_TYPE_ID),
             ParsedTypeExpression::Integer(num_type) => match (num_type.width, num_type.signed) {
                 (NumericWidth::B8, false) => Ok(U8_TYPE_ID),
                 (NumericWidth::B16, false) => Ok(U16_TYPE_ID),
@@ -1320,8 +1318,6 @@ impl TypedModule {
                 (NumericWidth::B32, true) => Ok(I32_TYPE_ID),
                 (NumericWidth::B64, true) => Ok(I64_TYPE_ID),
             },
-            ParsedTypeExpression::Bool(_) => Ok(BOOL_TYPE_ID),
-            ParsedTypeExpression::String(_) => Ok(STRING_TYPE_ID),
             ParsedTypeExpression::Struct(struct_defn) => {
                 let struct_defn = struct_defn.clone();
                 let mut fields: Vec<StructTypeField> = Vec::new();
