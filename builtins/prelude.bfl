@@ -1,3 +1,10 @@
+type unit = builtin
+type char = builtin
+type bool = builtin
+type string = builtin
+type never = builtin
+
+
 extern fn _bfl_charToString(c: char): string
 extern fn _bfl_charToInt(c: char): int
 extern fn _bfl_intToChar(i: int): char
@@ -34,6 +41,7 @@ namespace Bits {
   intern fn shiftRight(a: int, b: int): int
 }
 
+// Must have ability id 0
 ability Equals {
   fn equals(self: Self, other: Self): bool
 }

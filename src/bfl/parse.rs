@@ -653,6 +653,7 @@ pub struct ParsedNumericType {
 
 #[derive(Debug, Clone)]
 pub enum ParsedTypeExpression {
+    Builtin(SpanId),
     Unit(SpanId),
     Char(SpanId),
     Integer(ParsedNumericType),
@@ -681,6 +682,7 @@ impl ParsedTypeExpression {
     #[inline]
     pub fn get_span(&self) -> SpanId {
         match self {
+            ParsedTypeExpression::Builtin(span) => *span,
             ParsedTypeExpression::Unit(span) => *span,
             ParsedTypeExpression::Char(span) => *span,
             ParsedTypeExpression::Integer(int) => int.span,
@@ -735,13 +737,16 @@ pub struct ParsedConstant {
 #[derive(Debug, Clone)]
 pub struct ParsedTypeDefnFlags(u32);
 impl ParsedTypeDefnFlags {
-    pub fn new(alias: bool, opaque: bool) -> Self {
+    pub fn new(alias: bool, opaque: bool, builtin: bool) -> Self {
         let mut s = Self(0);
         if alias {
             s.set_alias();
         }
         if opaque {
             s.set_opaque();
+        }
+        if builtin {
+            s.set_builtin();
         }
         s
     }
@@ -754,12 +759,20 @@ impl ParsedTypeDefnFlags {
         self.0 |= 2;
     }
 
+    pub fn set_builtin(&mut self) {
+        self.0 |= 4;
+    }
+
     pub fn is_alias(&self) -> bool {
         self.0 & 1 != 0
     }
 
     pub fn is_opaque(&self) -> bool {
         self.0 & 2 != 0
+    }
+
+    pub fn is_builtin(&self) -> bool {
+        self.0 & 4 != 0
     }
 }
 
@@ -1204,11 +1217,10 @@ pub struct Parser<'toks, 'module> {
 impl<'toks, 'module> Parser<'toks, 'module> {
     pub fn make(
         tokens: &'toks [Token],
-        source: Source,
+        file_id: FileId,
         module: &'module mut ParsedModule,
     ) -> Parser<'toks, 'module> {
-        let parser = Parser { tokens: TokenIter::make(tokens), file_id: source.file_id, module };
-        parser.module.sources.insert(source);
+        let parser = Parser { tokens: TokenIter::make(&tokens), file_id, module };
         parser
     }
 
@@ -1587,13 +1599,18 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             let enumm = self.expect_enum_type_expression()?;
             let type_expr_id = self.module.type_expressions.add(ParsedTypeExpression::Enum(enumm));
             Ok(Some(type_expr_id))
+        } else if first.kind == K::KeywordBuiltin {
+            self.tokens.advance();
+            let builtin_id =
+                self.module.type_expressions.add(ParsedTypeExpression::Builtin(first.span));
+            Ok(Some(builtin_id))
         } else if first.kind == K::Ident {
             let ident_chars = Parser::tok_chars(&self.module.spans, self.source(), first);
             let maybe_constant_expr = match ident_chars {
-                "unit" => Some(ParsedTypeExpression::Unit(first.span)),
-                "string" => Some(ParsedTypeExpression::String(first.span)),
-                "bool" => Some(ParsedTypeExpression::Bool(first.span)),
-                "char" => Some(ParsedTypeExpression::Char(first.span)),
+                // "unit" => Some(ParsedTypeExpression::Unit(first.span)),
+                // "string" => Some(ParsedTypeExpression::String(first.span)),
+                // "bool" => Some(ParsedTypeExpression::Bool(first.span)),
+                // "char" => Some(ParsedTypeExpression::Char(first.span)),
                 "u8" => Some(ParsedTypeExpression::Integer(ParsedNumericType {
                     width: NumericWidth::B8,
                     signed: false,
@@ -2561,14 +2578,15 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         };
 
         // Parse modifiers
-        let mut flags = ParsedTypeDefnFlags::new(false, false);
+        let mut flags = ParsedTypeDefnFlags::new(false, false, false);
         loop {
             let name_or_modifier = self.peek();
-            if name_or_modifier.kind != K::Ident {
-                break;
-            }
+
             let text = self.get_token_chars(name_or_modifier);
-            if text == "alias" {
+            if name_or_modifier.kind == K::KeywordBuiltin {
+                flags.set_builtin();
+                self.tokens.advance();
+            } else if text == "alias" {
                 flags.set_alias();
                 self.tokens.advance()
             } else if text == "opaque" {
@@ -2682,9 +2700,14 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             new_definitions.push(def)
         }
         if self.tokens.peek().kind != K::Eof {
-            let err = Parser::error("End of file or start of new definition", self.tokens.peek());
-            self.module.errors.push(err.clone());
-            return Err(err);
+            if self.module.errors.is_empty() {
+                let err =
+                    Parser::error("End of file or start of new definition", self.tokens.peek());
+                self.module.errors.push(err.clone());
+                return Err(err);
+            } else {
+                return Err(self.module.errors.last().unwrap().clone());
+            }
         }
 
         self.module.get_namespace_mut(root_namespace_id).definitions.extend(new_definitions);
@@ -2854,12 +2877,16 @@ impl ParsedModule {
                 f.write_char('.')?;
                 f.write_str(self.identifiers.get_name(acc.member_name))
             }
+            ParsedTypeExpression::Builtin(_builtin) => f.write_str("__builtin"),
         }
     }
 }
 
-pub fn lex_text(spans: &mut Spans, text: &str, file_id: FileId) -> ParseResult<Vec<Token>> {
-    let mut lexer = Lexer::make(text, spans, file_id);
+pub fn lex_text(module: &mut ParsedModule, source: Source) -> ParseResult<Vec<Token>> {
+    let file_id = source.file_id;
+    module.sources.insert(source);
+    let text = &module.sources.get_source(file_id).content;
+    let mut lexer = Lexer::make(text, &mut module.spans, file_id);
     let tokens = lexer.run().map_err(|lex_error| ParseError {
         expected: lex_error.msg,
         token: EOF_TOKEN,
@@ -2876,8 +2903,9 @@ pub fn test_parse_module(source: Source) -> ParseResult<ParsedModule> {
     let module_name = source.filename.split('.').next().unwrap().to_string();
     let mut module = ParsedModule::make(module_name);
 
-    let token_vec = lex_text(&mut module.spans, &source.content, source.file_id)?;
-    let mut parser = Parser::make(&token_vec, source, &mut module);
+    let file_id = source.file_id;
+    let token_vec = lex_text(&mut module, source)?;
+    let mut parser = Parser::make(&token_vec, file_id, &mut module);
 
     let result = parser.parse_module();
     if let Err(e) = result {

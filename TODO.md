@@ -64,6 +64,7 @@
   - [x] binary literals?
   - [ ] type suffixes on literals 123u32, 4u8, etc
 - [x] Reject too many function args
+- [ ] Move to UFCS instead of having the concept of a 'method' or companion namespace
 - [ ] Mark types as trivially copyable or not
 - [ ] return statement (control flow of blocks / statements: CanReturn, AlwaysReturns, NeverReturns (which is 'never'))
 - [ ] Precedence of dereference (and i guess unary ops in general) should be higher

@@ -1,0 +1,37 @@
+ability Num {
+  fn num(num: Self): i32
+}
+
+// abilities result in namespaces being created pointing to the same scope
+// so that we don't have to do special things to resolve them; they _are_ namespaces
+
+// ability To<T> {
+//   fn to(self: Self): T
+// }
+//
+// ability Weird {
+//   fn weird(x: u32, y: u32, t: Self): Self
+// }
+
+type Point = { x: i32, y: i32 }
+
+impl Num for Point {
+  fn num(self: Self): i32 {
+    1
+  }
+}
+
+impl Num for i32 {
+  fn num(self: Self): i32 {
+    2
+  }
+}
+
+// Lol I never actually did function resolution for namespaces
+fn main(): int {
+  assert((3: i32).num() == 2);
+  assert(Num::num(3: i32) == 2);
+  val p = { x: 1, y: 2 }: Point;
+  assert(p.num() == 1);
+  0
+}

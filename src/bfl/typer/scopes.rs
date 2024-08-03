@@ -21,6 +21,7 @@ pub enum ScopeType {
     ForExpr,
     MatchArm,
     TypeDefn,
+    AbilityDefn,
 }
 
 impl ScopeType {
@@ -35,6 +36,7 @@ impl ScopeType {
             ScopeType::ForExpr => "for",
             ScopeType::MatchArm => "match_arm",
             ScopeType::TypeDefn => "type_defn",
+            ScopeType::AbilityDefn => "ability_defn",
         }
     }
 }
@@ -214,6 +216,17 @@ impl Scopes {
             }
             None => false,
         }
+    }
+
+    pub fn all_pending_type_defns_below(&self, scope_id: ScopeId) -> Vec<ParsedTypeDefnId> {
+        let scope = self.get_scope(scope_id);
+        let mut pendings: Vec<ParsedTypeDefnId> =
+            scope.pending_type_defns.values().copied().collect();
+        for child in &scope.children {
+            let child_pendings = self.all_pending_type_defns_below(*child);
+            pendings.extend(child_pendings);
+        }
+        pendings
     }
 }
 

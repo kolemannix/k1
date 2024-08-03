@@ -32,6 +32,7 @@ use log::{debug, info, trace};
 use crate::lex::SpanId;
 use crate::parse::{FileId, IdentifierId};
 use crate::typer::scopes::ScopeId;
+use crate::typer::types::*;
 use crate::typer::{Linkage as TyperLinkage, *};
 
 const STRING_LENGTH_FIELD_INDEX: u32 = 0;
