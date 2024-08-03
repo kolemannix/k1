@@ -1,5 +1,7 @@
 fn main(): int {
 
+  printInt(12345);
+
   // NOT
   assert(Bits::not(100) == -101);
   assert(Bits::not(0) == -1);

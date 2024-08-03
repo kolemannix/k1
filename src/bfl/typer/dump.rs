@@ -14,7 +14,7 @@ impl Display for TypedModule {
             f.write_str("\n")?;
         }
         f.write_str("--- Namespaces ---\n")?;
-        for (id, namespace) in self.namespaces.iter().enumerate() {
+        for (id, namespace) in self.namespaces.iter() {
             write!(f, "{} ", id)?;
             f.write_str(&self.get_ident_str(namespace.name))?;
             f.write_str("\n")?;
@@ -88,7 +88,7 @@ impl TypedModule {
         }
         for (id, namespace_id) in scope.namespaces.iter() {
             write!(writ, "{} ", id)?;
-            let namespace = self.get_namespace(*namespace_id);
+            let namespace = self.namespaces.get(*namespace_id);
             writ.write_str(&self.get_ident_str(namespace.name))?;
             writ.write_str("\n")?;
         }
@@ -166,7 +166,7 @@ impl TypedModule {
             }
             Type::TypeVariable(tv) => {
                 writ.write_str("$")?;
-                writ.write_str(self.ast.identifiers.get_name(tv.identifier_id))
+                writ.write_str(self.ast.identifiers.get_name(tv.name))
             }
             Type::Optional(opt) => {
                 self.display_type_id(opt.inner_type, writ)?;
@@ -226,9 +226,8 @@ impl TypedModule {
                     writ.write_str(self.get_ident_str(param.name))?;
                     let last = idx == gen.params.len() - 1;
                     if !last {
-                        writ.write_str(" | ")?;
+                        writ.write_str(", ")?;
                     }
-                    writ.write_str(", ")?;
                 }
                 writ.write_str(">")?;
                 writ.write_str("(")?;

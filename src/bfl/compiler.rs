@@ -115,16 +115,16 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
             name.to_str().unwrap().to_string(),
             content,
         );
-
-        let token_vec = match lex_text(&mut parsed_module.spans, &source.content, source.file_id) {
+        let token_vec = match lex_text(&mut parsed_module, source) {
             Ok(token_vec) => token_vec,
             Err(e) => {
+                // If lexing fails, we panic here because the source isn't in sources
                 print_error_location(&parsed_module.spans, &parsed_module.sources, e.span());
                 parse_errors.push(e);
                 return ();
             }
         };
-        let mut parser = parse::Parser::make(&token_vec, source, &mut parsed_module);
+        let mut parser = parse::Parser::make(&token_vec, file_id, &mut parsed_module);
 
         let result = parser.parse_module();
         if let Err(e) = result {
