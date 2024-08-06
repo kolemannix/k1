@@ -52,7 +52,7 @@ impl Scopes {
 
     pub fn add_root_scope(&mut self, name: Option<IdentifierId>) -> ScopeId {
         debug_assert!(self.scopes.is_empty());
-        self.scopes.push(Scope::make(ScopeType::Namespace, name));
+        self.scopes.push(Scope::make(ScopeType::Namespace, None, name));
         0 as ScopeId
     }
 
@@ -64,21 +64,17 @@ impl Scopes {
         0 as ScopeId
     }
 
-    pub fn add_scope_to_root(
-        &mut self,
-        scope_type: ScopeType,
-        name: Option<IdentifierId>,
-    ) -> ScopeId {
-        self.add_child_scope(0, scope_type, name)
-    }
-
     pub fn add_child_scope(
         &mut self,
         parent_scope_id: ScopeId,
         scope_type: ScopeType,
+        scope_owner_id: Option<ScopeOwnerId>,
         name: Option<IdentifierId>,
     ) -> ScopeId {
-        let scope = Scope { parent: Some(parent_scope_id), ..Scope::make(scope_type, name) };
+        let scope = Scope {
+            parent: Some(parent_scope_id),
+            ..Scope::make(scope_type, scope_owner_id, name)
+        };
         let id = self.scopes.len() as ScopeId;
         self.scopes.push(scope);
         let parent_scope = self.get_scope_mut(parent_scope_id);
@@ -96,6 +92,10 @@ impl Scopes {
 
     pub fn get_scope_mut(&mut self, id: ScopeId) -> &mut Scope {
         &mut self.scopes[id as usize]
+    }
+
+    pub fn set_scope_owner_id(&mut self, id: ScopeId, owner_id: ScopeOwnerId) {
+        self.get_scope_mut(id).owner_id = Some(owner_id);
     }
 
     pub fn find_namespace(&self, scope: ScopeId, ident: IdentifierId) -> Option<NamespaceId> {
@@ -230,6 +230,22 @@ impl Scopes {
     }
 }
 
+/// Useful for going from scope to 'thing that owns the scope', like to a scope's ability or namespace or function
+#[derive(Debug, Clone, Copy)]
+pub enum ScopeOwnerId {
+    Ability(AbilityId),
+    Function(FunctionId),
+    Namespace(NamespaceId),
+}
+impl ScopeOwnerId {
+    pub fn expect_ability(&self) -> AbilityId {
+        match self {
+            ScopeOwnerId::Ability(a) => *a,
+            _ => panic!("Expected ability scope owner"),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Scope {
     pub variables: HashMap<IdentifierId, VariableId>,
@@ -242,12 +258,17 @@ pub struct Scope {
     pub parent: Option<ScopeId>,
     pub children: Vec<ScopeId>,
     pub scope_type: ScopeType,
+    pub owner_id: Option<ScopeOwnerId>,
     /// Name is just used for pretty-printing and debugging scopes don't really have names
     pub name: Option<IdentifierId>,
 }
 
 impl Scope {
-    pub fn make(typ: ScopeType, name: Option<IdentifierId>) -> Scope {
+    pub fn make(
+        scope_type: ScopeType,
+        owner_id: Option<ScopeOwnerId>,
+        name: Option<IdentifierId>,
+    ) -> Scope {
         Scope {
             variables: HashMap::new(),
             functions: HashMap::new(),
@@ -257,7 +278,8 @@ impl Scope {
             pending_type_defns: HashMap::new(),
             parent: None,
             children: Vec::new(),
-            scope_type: typ,
+            scope_type,
+            owner_id,
             name,
         }
     }

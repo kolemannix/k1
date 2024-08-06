@@ -15,19 +15,19 @@ impl Display for TypedModule {
         }
         f.write_str("--- Namespaces ---\n")?;
         for (id, namespace) in self.namespaces.iter() {
-            write!(f, "{} ", id)?;
+            write!(f, "{} ", id.0)?;
             f.write_str(&self.get_ident_str(namespace.name))?;
             f.write_str("\n")?;
         }
         f.write_str("--- Variables ---\n")?;
         for (id, variable) in self.variables.iter() {
-            write!(f, "{id:02} ")?;
+            write!(f, "{:02} ", id.0)?;
             self.display_variable(variable, f)?;
             f.write_str("\n")?;
         }
         f.write_str("--- Functions ---\n")?;
-        for (id, func) in self.functions.iter().enumerate() {
-            write!(f, "{id:02} ")?;
+        for (id, func) in self.function_iter() {
+            write!(f, "{:02} ", id.0)?;
             self.display_function(func, f, false)?;
             f.write_str("\n")?;
         }

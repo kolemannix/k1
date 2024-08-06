@@ -5,7 +5,7 @@ impl TypedModule {
         &mut self,
         _ability_id: AbilityId,
         _target_type_id: TypeId,
-    ) -> TyperResult<TypedAbilityImplementation> {
+    ) -> TyperResult<TypedAbilityImpl> {
         todo!("derive_ability_impl")
     }
 }
