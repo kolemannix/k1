@@ -228,6 +228,17 @@ impl Scopes {
         }
         pendings
     }
+
+    pub fn nearest_parent_namespace(&self, scope_id: ScopeId) -> NamespaceId {
+        let scope = self.get_scope(scope_id);
+        match scope.owner_id {
+            Some(ScopeOwnerId::Namespace(ns)) => ns,
+            _ => match scope.parent {
+                Some(parent) => self.nearest_parent_namespace(parent),
+                None => panic!("No parent namespace found"),
+            },
+        }
+    }
 }
 
 /// Useful for going from scope to 'thing that owns the scope', like to a scope's ability or namespace or function

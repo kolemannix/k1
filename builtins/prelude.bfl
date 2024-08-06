@@ -32,26 +32,9 @@ namespace RawPointer {
 intern fn sizeOf<T>(): int
 intern fn alignOf<T>(): int
 
-namespace Bits {
-  intern fn not(a: int): int
-  intern fn and(a: int, b: int): int
-  intern fn or(a: int, b: int): int
-  intern fn xor(a: int, b: int): int
-  intern fn shiftLeft(a: int, b: int): int
-  intern fn shiftRight(a: int, b: int): int
-}
-
 // Must have ability id 0
 ability Equals {
   fn equals(self: Self, other: Self): bool
-}
-
-ability Show {
-  fn show(self: Self): string
-}
-
-ability Hash {
-  fn hash(self: Self): u64
 }
 
 intern fn printInt(value: i64): unit

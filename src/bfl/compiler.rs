@@ -137,10 +137,15 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
     if use_prelude {
         let prelude_path: &Path = Path::new("builtins/prelude.bfl");
         parse_file(prelude_path, 0);
+
+        let bitwise_path: &Path = Path::new("builtins/bitwise.bfl");
+        parse_file(bitwise_path, 1);
     }
+    // TODO: Generate file_ids from parsed_module.sources.next_id() or whatever
+    let file_offset = if use_prelude { 2 } else { 0 };
 
     for (idx, f) in dir_entries.iter().enumerate() {
-        let file_id = idx as u32 + 1;
+        let file_id = idx as u32 + file_offset;
         parse_file(&f.path(), file_id);
     }
 
