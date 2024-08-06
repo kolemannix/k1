@@ -1,0 +1,40 @@
+ability Num {
+  fn num(self: Self): i32
+}
+
+// One day, generic abilities
+// ability To<T> {
+//   fn to(self: Self): T
+// }
+
+type Point = { x: i32, y: i32 }
+
+impl Num for Point {
+  fn num(self: Self): i32 {
+    self.x + self.y
+  }
+}
+
+fn main(): int {
+
+  // Method-style call
+  val three = 3: i32;
+  assert(three.num() == 3);
+
+  // Qualified call
+  assert(Num::num(3: i32) == 3);
+
+  // Method-style call on user-defined type
+  val p = { x: 1, y: 2 }: Point;
+  assert(p.num() == 3);
+
+  0
+}
+
+// This is below 'main' so that
+// it tests for order-independence of the impls
+impl Num for i32 {
+  fn num(self: Self): i32 {
+    self
+  }
+}

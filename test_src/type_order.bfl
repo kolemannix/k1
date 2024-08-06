@@ -2,7 +2,7 @@ type alias PointList = Array<Point>
 type alias Point = { x: int, y: int }
 
 ability ToPoint {
-  fn to_point(self: Self): Point
+  fn toPoint(self: Self): Point
 }
 
 fn main(): int {

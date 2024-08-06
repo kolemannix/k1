@@ -14,20 +14,20 @@ impl Display for TypedModule {
             f.write_str("\n")?;
         }
         f.write_str("--- Namespaces ---\n")?;
-        for (id, namespace) in self.namespaces.iter().enumerate() {
-            write!(f, "{} ", id)?;
+        for (id, namespace) in self.namespaces.iter() {
+            write!(f, "{} ", id.0)?;
             f.write_str(&self.get_ident_str(namespace.name))?;
             f.write_str("\n")?;
         }
         f.write_str("--- Variables ---\n")?;
         for (id, variable) in self.variables.iter() {
-            write!(f, "{id:02} ")?;
+            write!(f, "{:02} ", id.0)?;
             self.display_variable(variable, f)?;
             f.write_str("\n")?;
         }
         f.write_str("--- Functions ---\n")?;
-        for (id, func) in self.functions.iter().enumerate() {
-            write!(f, "{id:02} ")?;
+        for (id, func) in self.function_iter() {
+            write!(f, "{:02} ", id.0)?;
             self.display_function(func, f, false)?;
             f.write_str("\n")?;
         }
@@ -88,7 +88,7 @@ impl TypedModule {
         }
         for (id, namespace_id) in scope.namespaces.iter() {
             write!(writ, "{} ", id)?;
-            let namespace = self.get_namespace(*namespace_id);
+            let namespace = self.namespaces.get(*namespace_id);
             writ.write_str(&self.get_ident_str(namespace.name))?;
             writ.write_str("\n")?;
         }
@@ -166,7 +166,7 @@ impl TypedModule {
             }
             Type::TypeVariable(tv) => {
                 writ.write_str("$")?;
-                writ.write_str(self.ast.identifiers.get_name(tv.identifier_id))
+                writ.write_str(self.ast.identifiers.get_name(tv.name))
             }
             Type::Optional(opt) => {
                 self.display_type_id(opt.inner_type, writ)?;
@@ -226,9 +226,8 @@ impl TypedModule {
                     writ.write_str(self.get_ident_str(param.name))?;
                     let last = idx == gen.params.len() - 1;
                     if !last {
-                        writ.write_str(" | ")?;
+                        writ.write_str(", ")?;
                     }
-                    writ.write_str(", ")?;
                 }
                 writ.write_str(">")?;
                 writ.write_str("(")?;

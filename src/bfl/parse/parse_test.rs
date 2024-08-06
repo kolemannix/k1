@@ -1,3 +1,5 @@
+use raylib::ffi::false_;
+
 use crate::parse::*;
 use std::fs;
 
@@ -8,10 +10,10 @@ fn make_test_module() -> ParsedModule {
 fn set_up<'module>(input: &str, module: &'module mut ParsedModule) -> Parser<'static, 'module> {
     let source =
         Source::make(0, "unit_test".to_string(), "unit_test.bfl".to_string(), input.to_string());
-    let mut lexer = Lexer::make(&source.content, &mut module.spans, 0);
-    let token_vec: &'static mut [Token] = lexer.run().unwrap().leak();
+    let file_id = source.file_id;
+    let token_vec: &'static mut [Token] = lex_text(module, source).unwrap().leak();
     println!("{:#?}", token_vec);
-    let parser = Parser::make(token_vec, source, module);
+    let parser = Parser::make(token_vec, file_id, module);
     parser
 }
 
@@ -166,7 +168,7 @@ fn type_parameter_single() -> ParseResult<()> {
 
 #[test]
 fn type_parameter_multi() -> ParseResult<()> {
-    let (module, type_expr) = test_single_type_expr("Map<unit, Array<unit>>")?;
+    let (module, type_expr) = test_single_type_expr("Map<u8, Array<u8>>")?;
     let ParsedTypeExpression::TypeApplication(app) = type_expr else {
         panic!("Expected type application")
     };
@@ -178,7 +180,11 @@ fn type_parameter_multi() -> ParseResult<()> {
     };
     assert!(matches!(
         module.type_expressions.get(inner_app.params[0]),
-        ParsedTypeExpression::Unit(_)
+        ParsedTypeExpression::Integer(ParsedNumericType {
+            width: NumericWidth::B8,
+            signed: false,
+            ..
+        })
     ));
     Ok(())
 }
@@ -275,8 +281,8 @@ fn generic_method_call_lhs_expr() -> Result<(), ParseError> {
 
 #[test]
 fn char_type() -> ParseResult<()> {
-    let (_module, result) = test_single_type_expr("char")?;
-    assert!(matches!(result, ParsedTypeExpression::Char(_)));
+    let (_module, result) = test_single_type_expr("u8")?;
+    assert!(matches!(result, ParsedTypeExpression::Integer(_)));
     Ok(())
 }
 
