@@ -1,3 +1,15 @@
+val z: int = 1337;
+
+fn add_stuff(x: int, y: int): int {
+  val b: int = x + 1;
+  val foo: int = b + z;
+  foo + y
+}
+
+fn mult(x: int, y: int): int {
+  x * y
+}
+
 fn main(): int {
   val x = (1 * 100 * 2) / 3;
   assert(x == 66);
@@ -18,6 +30,13 @@ fn main(): int {
   assert(2 % 3 == 2);
   assert(-1 % 2 == -1);
   assert(-10 % 2 == 0);
+
+  assert(add_stuff(y = 2, x = 1) == 1341);
+  val multResult: int = mult(
+    55,
+    2 + 3 + 3,
+  );
+  assert(multResult == 440);
 
   0
 }
