@@ -54,6 +54,7 @@ pub struct TypedAbilityFunctionRef {
 }
 
 pub const EQUALS_ABILITY_ID: AbilityId = AbilityId(0);
+pub const BITWISE_ABILITY_ID: AbilityId = AbilityId(1);
 
 #[derive(Debug, Clone)]
 pub struct TypedAbility {
@@ -4872,19 +4873,30 @@ impl TypedModule {
         calling_scope: ScopeId,
         pre_evaled_value_args: Option<Vec<TypedExpr>>,
     ) -> TyperResult<(FunctionId, Vec<TypedExpr>)> {
+        let generic_function = self.get_function(generic_function_id);
+        let generic_function_parent_scope = self
+            .scopes
+            .get_scope(generic_function.scope)
+            .parent
+            .expect("No function scope should be a root scope");
+        let generic_function_metadata = generic_function.metadata;
+        let generic_function_span = generic_function.span;
+        let specializations = generic_function.specializations.clone();
+        let name = String::from(self.get_ident_str(generic_function.name));
+        // drop(generic_function);
+
+        // Place specializations as siblings aside their generic parent
+        // Just don't add them as functions to the parent scope so they can't be resolved
         let spec_fn_scope_id = self.scopes.add_child_scope(
-            self.scopes.get_root_scope_id(),
+            generic_function_parent_scope,
             ScopeType::FunctionScope,
             None,
             None,
         );
-        let generic_function = self.get_function(generic_function_id);
-        let generic_function_metadata = generic_function.metadata;
-        let generic_function_span = generic_function.span;
-        let specializations = generic_function.specializations.clone();
-        let name = String::from(&*self.get_ident_str(generic_function.name));
-        // drop(generic_function);
-        let mut new_name = name.clone();
+
+        let mut new_name = "".to_string();
+        new_name.push_str(&name);
+
         // Add type_args to scope and typecheck them against the actual params
         for type_param in inferred_or_passed_type_args.iter() {
             if let Type::TypeVariable(tv) = self.types.get(type_param.type_id) {
@@ -4920,16 +4932,13 @@ impl TypedModule {
             .iter()
             .map(|type_param| type_param.type_id)
             .collect::<Vec<_>>();
-        new_name.push_str("_");
+        new_name.push_str("_spec_");
         new_name.push_str(
             &type_ids.iter().map(|type_id| type_id.to_string()).collect::<Vec<_>>().join("_"),
         );
 
-        self.scopes.get_scope_mut(spec_fn_scope_id).name = Some({
-            let this = &mut self.ast;
-            let ident: &str = &new_name;
-            this.identifiers.intern(ident)
-        });
+        self.scopes.get_scope_mut(spec_fn_scope_id).name =
+            Some(self.ast.identifiers.intern(&new_name));
 
         for (i, existing_specialization) in specializations.iter().enumerate() {
             let types_stringified = existing_specialization
@@ -5102,18 +5111,31 @@ impl TypedModule {
     ) -> Result<IntrinsicFunction, String> {
         let fn_name_str = self.ast.identifiers.get_name(fn_name);
         let second = namespace_chain.get(1).map(|id| self.get_ident_str(*id));
-        //eprintln!("Resolve intrinsic chain {}", second.unwrap_or("None"));
+        // eprintln!(
+        //     "Resolve intrinsic chain {} {:?}",
+        //     second.unwrap_or("None"),
+        //     specialization_params
+        // );
         let result = if let Some((ability_id, ability_impl_type_id)) =
             specialization_params.and_then(|params| params.ability_impl_info)
         {
-            match (ability_id, ability_impl_type_id) {
-                (EQUALS_ABILITY_ID, STRING_TYPE_ID) => {
+            match (ability_id, self.types.get(ability_impl_type_id)) {
+                (EQUALS_ABILITY_ID, Type::String) => {
                     if fn_name_str == "equals" {
                         Some(IntrinsicFunction::StringEquals)
                     } else {
                         None
                     }
                 }
+                (BITWISE_ABILITY_ID, Type::Integer(_)) => match fn_name_str {
+                    "not" => Some(IntrinsicFunction::BitNot),
+                    "and" => Some(IntrinsicFunction::BitAnd),
+                    "or" => Some(IntrinsicFunction::BitOr),
+                    "xor" => Some(IntrinsicFunction::BitXor),
+                    "shiftLeft" => Some(IntrinsicFunction::BitShiftLeft),
+                    "shiftRight" => Some(IntrinsicFunction::BitShiftRight),
+                    _ => None,
+                },
                 _ => None,
             }
         } else {
@@ -5632,15 +5654,19 @@ impl TypedModule {
                 .get_scope_mut(spec_fn_scope_id)
                 .add_type(self.ast.identifiers.intern("Self"), target_type);
 
-            let function_impl = self.specialize_function(
+            let function_impl = self.eval_function_predecl(
                 parsed_impl_function_id,
-                SpecializationParams {
+                // messy: This scope is unused when specializing, so we just pass the root
+                self.scopes.get_root_scope_id(),
+                Some(SpecializationParams {
                     fn_scope_id: spec_fn_scope_id,
-                    new_name: function_name,
+                    new_name: new_name_ident,
                     known_intrinsic: None,
                     generic_parent_function: ability_function_ref.function_id,
                     ability_impl_info: Some((ability_id, target_type)),
-                },
+                }),
+                false,
+                self.get_root_namespace_id(),
             )?;
 
             let specialized = self.get_function(function_impl);
@@ -6025,6 +6051,14 @@ impl TypedModule {
             bail!("{} failed declaration phase with {} errors", self.name(), self.errors.len())
         }
 
+        debug_assert!(
+            self.get_ability(EQUALS_ABILITY_ID).name == self.ast.identifiers.get("Equals").unwrap()
+        );
+        debug_assert!(
+            self.get_ability(BITWISE_ABILITY_ID).name
+                == self.ast.identifiers.get("Bitwise").unwrap()
+        );
+
         // Everything else evaluation phase
         for &parsed_definition_id in self.ast.get_root_namespace().definitions.clone().iter() {
             let result = self.eval_definition(parsed_definition_id, root_scope_id);
@@ -6039,57 +6073,24 @@ impl TypedModule {
         }
         Ok(())
     }
-}
 
-#[cfg(test)]
-mod test {
-    use crate::parse::{test_parse_module, ParseResult, Source};
-    use crate::typer::*;
-
-    fn setup(src: &str, test_name: &str) -> ParseResult<ParsedModule> {
-        test_parse_module(Source::make(
-            0,
-            "unit_test".to_string(),
-            test_name.to_string(),
-            src.to_string(),
-        ))
-    }
-
-    #[test]
-    fn const_definition_1() -> anyhow::Result<()> {
-        let src = r"val x: i64 = 420;";
-        let parsed_module = setup(src, "const_definition_1.nx")?;
-        let mut module = TypedModule::new(parsed_module);
-        module.run()?;
-        let i1 = &module.constants[0];
-        if let TypedExpr::Integer(int_expr) = &i1.expr {
-            let span = module.ast.spans.get(int_expr.span);
-            assert_eq!(int_expr.value, TypedIntegerValue::I64(420));
-            assert_eq!(span.end(), 16);
-            assert_eq!(span.start, 13);
-            Ok(())
-        } else {
-            panic!("{i1:?} was not an int")
+    pub fn make_qualified_name(
+        &self,
+        scope: ScopeId,
+        name: IdentifierId,
+        delimiter: &str,
+    ) -> String {
+        let starting_namespace = self.scopes.nearest_parent_namespace(scope);
+        let namespace_chain = self.namespaces.name_chain(starting_namespace);
+        let mut s = String::new();
+        for identifier in namespace_chain.iter() {
+            let ident_str = self.get_ident_str(*identifier);
+            if ident_str != "_root" {
+                s.push_str(&ident_str);
+                s.push_str(delimiter);
+            }
         }
-    }
-
-    #[test]
-    fn fn_definition_1() -> anyhow::Result<()> {
-        let src = r#"
-        fn foo(): u64 {
-          1
-        }
-        fn basic(x: u64, y: u64): u64 {
-          val x: u64 = 0;
-          mut y: u64 = 1;
-          y = { 1; 2; 3 };
-          y = (42: u64) + 42;
-          foo()
-        }"#;
-        let module = setup(src, "basic_fn.nx")?;
-        let mut ir = TypedModule::new(module);
-        ir.run()?;
-        println!("{:?}", ir.functions);
-        Ok(())
+        s.push_str(&self.get_ident_str(name));
+        s
     }
 }

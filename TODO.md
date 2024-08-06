@@ -64,6 +64,7 @@
   - [x] binary literals?
   - [ ] type suffixes on literals 123u32, 4u8, etc
 - [x] Reject too many function args
+- [x] Use abilities to implement Bits namespace
 - [ ] return statement (control flow of blocks / statements: CanReturn, AlwaysReturns, NeverReturns (which is 'never'))
 - [ ] Move to UFCS instead of having the concept of a 'method' or companion namespace?
 - [ ] 'Context' system; implicit stack arguments
@@ -90,6 +91,7 @@
 - [ ] function pointers
 - [ ] Pure lambdas with -> (not closures)
 - [ ] slices (windows? segments?)
+- [ ] Generic abilities
 - [ ] Make demo readme / site
 
 ## Error story
