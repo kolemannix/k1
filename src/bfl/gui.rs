@@ -3,7 +3,7 @@ use std::{
     sync::{mpsc, Arc, RwLock},
 };
 
-use crate::typer::TypedModule;
+use crate::typer::{FunctionId, TypedModule};
 use raylib::prelude::*;
 
 pub struct Gui {
@@ -127,7 +127,7 @@ impl Gui {
             );
             self.state.selected_function = active;
             if self.state.selected_function >= 0 {
-                let fun = module.get_function(self.state.selected_function as u32);
+                let fun = module.get_function(FunctionId(self.state.selected_function as u32));
                 //let mut buf = [u8; 1024];
                 // todo: text box
                 d.gui_label(

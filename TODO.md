@@ -64,9 +64,10 @@
   - [x] binary literals?
   - [ ] type suffixes on literals 123u32, 4u8, etc
 - [x] Reject too many function args
-- [ ] Move to UFCS instead of having the concept of a 'method' or companion namespace
-- [ ] Mark types as trivially copyable or not
 - [ ] return statement (control flow of blocks / statements: CanReturn, AlwaysReturns, NeverReturns (which is 'never'))
+- [ ] Move to UFCS instead of having the concept of a 'method' or companion namespace?
+- [ ] 'Context' system; implicit stack arguments
+- [ ] Mark types as trivially copyable or not
 - [ ] Precedence of dereference (and i guess unary ops in general) should be higher
 - [ ] Codegen 'variables' is broken (never cleared); use enter scope / exit scope w/ a stack of vecs or something
       instead (matters when a variable id is reused because the same function is called twice; I think we just overwrite it
@@ -81,6 +82,7 @@
   - [ ] inner type of optional
 - [ ] floating point f32 and f64
 - [ ] Optional coalescing accessor (x?.y)
+- [ ] Finish/fix simple generic inference
 - [x] Prevent function overloading in same namespace
 - [x] Typecheck the binary ops
 - [x] Bitwise ops
@@ -104,6 +106,7 @@
   This will let us intern strings, etc. Kinda like the JVM, except its not
   a VM, just a native runtime.
   - If we introduce simple implicits for context passing, we can use this to pass heaps around
+  - Generational References combined w/ arena-style memory mgmt
 
 # GUI checklist
 
