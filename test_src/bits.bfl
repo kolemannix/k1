@@ -1,38 +1,40 @@
 fn main(): int {
 
   // NOT
-  assert(Bits::not(100) == -101);
-  assert(Bits::not(0) == -1);
+  assert(100.not() == -101);
+  assert(Bitwise::not(0) == -1);
   // 2^63-1 == 9223372036854775807
   // 2^63 == 9223372036854775808
-  assert(Bits::not(9223372036854775807) == -9223372036854775808);
+  assert(9223372036854775807.not() == -9223372036854775808);
+
+  assert(Bitwise::not(-24555: i32) == 24554);
 
   // AND
-  assert(Bits::and(100, 100) == 100);
-  assert(Bits::and(100, 0) == 0);
-  assert(Bits::and(0, 100) == 0);
-  assert(Bits::and(0, 0) == 0);
-  assert(Bits::and(-1, 2) == 2);
+  assert(100.and(100) == 100);
+  assert(Bitwise::and(100, 0) == 0);
+  assert(Bitwise::and(0, 100) == 0);
+  assert(Bitwise::and(0, 0) == 0);
+  assert(Bitwise::and(-1, 2) == 2);
 
   // OR
-  assert(Bits::or(100, 100) == 100);
-  assert(Bits::or(100, 0) == 100);
-  assert(Bits::or(0, 100) == 100);
-  assert(Bits::or(0, 0) == 0);
-  assert(Bits::or(-1, 2) == -1);
+  assert(Bitwise::or(100, 100) == 100);
+  assert(Bitwise::or(100, 0) == 100);
+  assert(Bitwise::or(0, 100) == 100);
+  assert(Bitwise::or(0, 0) == 0);
+  assert(Bitwise::or(-1, 2) == -1);
 
   // Shift Left
-  assert(Bits::shiftLeft(1, 1) == 2);
-  assert(Bits::shiftLeft(1, 2) == 4);
-  assert(Bits::shiftLeft(1, 3) == 8);
-  assert(Bits::shiftLeft(3, 7) == 384);
+  assert(Bitwise::shiftLeft(1, 1) == 2);
+  assert(Bitwise::shiftLeft(1, 2) == 4);
+  assert(Bitwise::shiftLeft(1, 3) == 8);
+  assert(Bitwise::shiftLeft(3, 7) == 384);
 
   // Shift Right
-  assert(Bits::shiftRight(42, 1) == 21);
-  assert(Bits::shiftRight(-16, 2) == -4);
-  assert(Bits::shiftRight(0, 5) == 0);
-  assert(Bits::shiftRight(1000000000, 10) == 976562);
-  assert(Bits::shiftRight(-7, 1) == -4);
+  assert(Bitwise::shiftRight(42, 1) == 21);
+  assert(Bitwise::shiftRight(-16, 2) == -4);
+  assert(Bitwise::shiftRight(0, 5) == 0);
+  assert(Bitwise::shiftRight(1000000000, 10) == 976562);
+  assert(Bitwise::shiftRight(-7, 1) == -4);
 
   0
 }

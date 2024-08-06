@@ -32,6 +32,7 @@ use log::{debug, info, trace};
 use crate::lex::SpanId;
 use crate::parse::{FileId, IdentifierId};
 use crate::typer::scopes::ScopeId;
+use crate::typer::types::*;
 use crate::typer::{Linkage as TyperLinkage, *};
 
 const STRING_LENGTH_FIELD_INDEX: u32 = 0;
@@ -2838,10 +2839,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             TyperLinkage::External => Some(LlvmLinkage::External),
             TyperLinkage::Intrinsic => None,
         };
-        let fn_val = {
-            let name = self.module.ast.identifiers.get_name(function.name);
-            self.llvm_module.add_function(&name, fn_ty, llvm_linkage)
-        };
+        let qualified_name = self.module.make_qualified_name(function.scope, function.name, "__");
+        eprintln!(
+            "Made qualified name {qualified_name} for function {}",
+            self.module.get_ident_str(function.name)
+        );
+        let fn_val = self.llvm_module.add_function(&qualified_name, fn_ty, llvm_linkage);
 
         self.llvm_functions.insert(function_id, fn_val);
 
