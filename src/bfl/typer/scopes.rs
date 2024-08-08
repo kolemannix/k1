@@ -239,6 +239,17 @@ impl Scopes {
             },
         }
     }
+
+    pub fn nearest_parent_function(&self, calling_scope: ScopeId) -> FunctionId {
+        let scope = self.get_scope(calling_scope);
+        match scope.owner_id {
+            Some(ScopeOwnerId::Function(fn_id)) => fn_id,
+            _ => match scope.parent {
+                Some(parent) => self.nearest_parent_function(parent),
+                None => panic!("No parent function found"),
+            },
+        }
+    }
 }
 
 /// Useful for going from scope to 'thing that owns the scope', like to a scope's ability or namespace or function
