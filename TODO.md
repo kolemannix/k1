@@ -52,7 +52,7 @@
   - [x] from reference
   - [x] to reference
 - [x] sizeOf
-- [ ] Rest of the int sizes
+- [x] Rest of the int sizes
   - [x] 8
   - [x] 16
   - [x] 32
@@ -62,7 +62,7 @@
   - [x] implement cast
   - [x] hex literals?
   - [x] binary literals?
-  - [ ] type suffixes on literals 123u32, 4u8, etc
+- [ ] type suffixes on int literals 123u32, 4u8, etc
 - [x] Reject too many function args
 - [x] Use abilities to implement Bits namespace
 - [ ] return statement (control flow of blocks / statements: CanReturn, AlwaysReturns, NeverReturns (which is 'never'))

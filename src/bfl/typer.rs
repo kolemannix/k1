@@ -152,6 +152,12 @@ impl TypedBlock {
     pub fn is_single_unit_block(&self) -> bool {
         self.statements.len() == 1 && self.statements[0].is_unit_expr()
     }
+
+    pub fn control_flow_type(&self) -> ControlFlowType {
+        self.statements
+            .last()
+            .map_or(ControlFlowType::Value(UNIT_TYPE_ID), |s| s.control_flow_type())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -608,6 +614,20 @@ pub struct TypedCast {
 }
 
 #[derive(Debug, Clone)]
+pub struct TypedReturn {
+    pub value: Box<TypedExpr>,
+    pub span: SpanId,
+}
+
+#[derive(Debug, Clone)]
+pub enum ControlFlowType {
+    Returns(TypeId),
+    Value(TypeId),
+    //Breaks,
+    //Continues,
+}
+
+#[derive(Debug, Clone)]
 pub enum TypedExpr {
     Unit(SpanId),
     Char(u8, SpanId),
@@ -635,6 +655,7 @@ pub enum TypedExpr {
     EnumIsVariant(TypedEnumIsVariantExpr),
     EnumGetPayload(GetEnumPayload),
     Cast(TypedCast),
+    Return(TypedReturn),
 }
 
 impl From<VariableExpr> for TypedExpr {
@@ -672,6 +693,7 @@ impl TypedExpr {
             TypedExpr::EnumIsVariant(_is_variant) => BOOL_TYPE_ID,
             TypedExpr::EnumGetPayload(as_variant) => as_variant.payload_type_id,
             TypedExpr::Cast(c) => c.target_type_id,
+            TypedExpr::Return(_ret) => NEVER_TYPE_ID,
         }
     }
     #[inline]
@@ -702,6 +724,15 @@ impl TypedExpr {
             TypedExpr::EnumIsVariant(is_variant) => is_variant.span,
             TypedExpr::EnumGetPayload(as_variant) => as_variant.span,
             TypedExpr::Cast(c) => c.span,
+            TypedExpr::Return(ret) => ret.span,
+        }
+    }
+
+    pub fn control_flow_type(&self) -> ControlFlowType {
+        match self {
+            TypedExpr::Return(ret) => ControlFlowType::Returns(ret.value.get_type()),
+            TypedExpr::Block(block) => block.control_flow_type(),
+            _ => ControlFlowType::Value(self.get_type()),
         }
     }
 
@@ -771,6 +802,15 @@ impl TypedStmt {
             }
         }
         return false;
+    }
+
+    pub fn control_flow_type(&self) -> ControlFlowType {
+        match self {
+            TypedStmt::Expr(expr) => expr.control_flow_type(),
+            TypedStmt::ValDef(_) => ControlFlowType::Value(UNIT_TYPE_ID),
+            TypedStmt::Assignment(_) => ControlFlowType::Value(UNIT_TYPE_ID),
+            TypedStmt::WhileLoop(_) => ControlFlowType::Value(UNIT_TYPE_ID),
+        }
     }
 }
 
@@ -1900,7 +1940,7 @@ impl TypedModule {
             else {
                 return Err(format!("expected struc to have field {}", expected_field.name));
             };
-            self.typecheck_types(expected_field.type_id, matching_field.type_id, scope_id)?;
+            self.check_types(expected_field.type_id, matching_field.type_id, scope_id)?;
         }
         Ok(())
     }
@@ -1928,12 +1968,12 @@ impl TypedModule {
             else {
                 return Err(format!("expected field {}", expected_field.name));
             };
-            self.typecheck_types(matching_field.type_id, expected_field.type_id, scope_id)?;
+            self.check_types(matching_field.type_id, expected_field.type_id, scope_id)?;
         }
         Ok(())
     }
 
-    fn typecheck_types(
+    fn check_types(
         &self,
         expected: TypeId,
         actual: TypeId,
@@ -1949,11 +1989,11 @@ impl TypedModule {
         }
         match (self.types.get(expected), self.types.get(actual)) {
             (Type::Optional(o1), Type::Optional(o2)) => {
-                self.typecheck_types(o1.inner_type, o2.inner_type, scope_id)
+                self.check_types(o1.inner_type, o2.inner_type, scope_id)
             }
             (Type::Struct(r1), Type::Struct(r2)) => self.typecheck_struct(r1, r2, scope_id),
             (Type::Array(a1), Type::Array(a2)) => {
-                self.typecheck_types(a1.element_type, a2.element_type, scope_id)
+                self.check_types(a1.element_type, a2.element_type, scope_id)
             }
             (Type::TypeVariable(t1), Type::TypeVariable(t2)) => {
                 if t1.name == t2.name {
@@ -1967,7 +2007,7 @@ impl TypedModule {
                 }
             }
             (Type::Reference(o1), Type::Reference(o2)) => {
-                self.typecheck_types(o1.inner_type, o2.inner_type, scope_id)
+                self.check_types(o1.inner_type, o2.inner_type, scope_id)
             }
             (Type::Enum(_expected_enum), Type::EnumVariant(actual_variant)) => {
                 if actual_variant.enum_type_id == expected {
@@ -1980,6 +2020,7 @@ impl TypedModule {
                     ))
                 }
             }
+            (_expected, Type::Never) => Ok(()),
             // (Type::OpaqueAlias(opaque), other) => {
             //     eprintln!("Expecting opaque, got other");
             //     Err("opaque".to_string())
@@ -1993,7 +2034,7 @@ impl TypedModule {
                         // We will recursively just resolve to the same type variable without this check
                         // this check requires us to make progress. Doesn't prevent cycles though I guess
                         if expected_resolved != expected {
-                            return self.typecheck_types(expected_resolved, actual, scope_id);
+                            return self.check_types(expected_resolved, actual, scope_id);
                         }
                     }
                 }
@@ -2004,10 +2045,10 @@ impl TypedModule {
                         // We will recursively just resolve to the same type variable without this check
                         // this check requires us to make progress. Doesn't prevent cycles though I guess
                         if actual_resolved != actual {
-                            return self.typecheck_types(expected, actual_resolved, scope_id);
+                            return self.check_types(expected, actual_resolved, scope_id);
                         }
                         // ?? I remember the above check mattering but it looks like not?
-                        return self.typecheck_types(expected, actual_resolved, scope_id);
+                        return self.check_types(expected, actual_resolved, scope_id);
                     }
                 }
                 Err(format!(
@@ -2456,11 +2497,7 @@ impl TypedModule {
                 _ => expression,
             },
             Type::Optional(optional_type) => {
-                match self.typecheck_types(
-                    optional_type.inner_type,
-                    expression.get_type(),
-                    scope_id,
-                ) {
+                match self.check_types(optional_type.inner_type, expression.get_type(), scope_id) {
                     Ok(_) => TypedExpr::OptionalSome(OptionalSome {
                         inner_expr: Box::new(expression),
                         type_id: expected_type_id,
@@ -2469,11 +2506,7 @@ impl TypedModule {
                 }
             }
             Type::Reference(reference_type) => {
-                match self.typecheck_types(
-                    reference_type.inner_type,
-                    expression.get_type(),
-                    scope_id,
-                ) {
+                match self.check_types(reference_type.inner_type, expression.get_type(), scope_id) {
                     Ok(_) => {
                         let base_span = expression.get_span();
                         TypedExpr::UnaryOp(UnaryOp {
@@ -2492,7 +2525,7 @@ impl TypedModule {
                 {
                     return expression;
                 }
-                let Ok(_) = self.typecheck_types(opaque.aliasee, expression.get_type(), scope_id)
+                let Ok(_) = self.check_types(opaque.aliasee, expression.get_type(), scope_id)
                 else {
                     return expression;
                 };
@@ -2517,7 +2550,7 @@ impl TypedModule {
                         return expression;
                     }
                     let Ok(_) =
-                        self.typecheck_types(expected_type_id, expression_opaque.aliasee, scope_id)
+                        self.check_types(expected_type_id, expression_opaque.aliasee, scope_id)
                     else {
                         return expression;
                     };
@@ -2765,7 +2798,7 @@ impl TypedModule {
                         }))
                     }
                     ParsedUnaryOpKind::BooleanNegation => {
-                        self.typecheck_types(BOOL_TYPE_ID, base_expr.get_type(), scope_id)
+                        self.check_types(BOOL_TYPE_ID, base_expr.get_type(), scope_id)
                             .map_err(|s| make_error(s, op.span))?;
                         Ok(TypedExpr::UnaryOp(UnaryOp {
                             kind: UnaryOpKind::BooleanNegation,
@@ -2908,7 +2941,7 @@ impl TypedModule {
                 // drop(typed_variant);
                 let payload_expr = self.eval_expr(e.payload, scope_id, Some(variant_payload))?;
                 if let Err(msg) =
-                    self.typecheck_types(variant_payload, payload_expr.get_type(), scope_id)
+                    self.check_types(variant_payload, payload_expr.get_type(), scope_id)
                 {
                     return make_fail_span(&format!("Payload type mismatch: {}", msg), span);
                 };
@@ -3175,11 +3208,9 @@ impl TypedModule {
             if let Some(expected_arm_type_id) = expected_arm_type_id.as_ref() {
                 // Never is divergent so need not contribute to the overall type of the pattern
                 if arm_expr.get_type() != NEVER_TYPE_ID {
-                    if let Err(msg) = self.typecheck_types(
-                        *expected_arm_type_id,
-                        arm_expr.get_type(),
-                        match_scope_id,
-                    ) {
+                    if let Err(msg) =
+                        self.check_types(*expected_arm_type_id, arm_expr.get_type(), match_scope_id)
+                    {
                         return make_fail_span(
                             &format!("Mismatching type for match case: {}", msg),
                             arm_expr_span,
@@ -3893,7 +3924,7 @@ impl TypedModule {
 
                 let rhs = self.eval_expr(binary_op.rhs, scope_id, Some(lhs_inner))?;
                 let rhs_type = rhs.get_type();
-                if let Err(msg) = self.typecheck_types(lhs_inner, rhs_type, scope_id) {
+                if let Err(msg) = self.check_types(lhs_inner, rhs_type, scope_id) {
                     return make_fail_span(
                         &format!("'else' value incompatible with optional: {}", msg),
                         binary_op.span,
@@ -4005,7 +4036,7 @@ impl TypedModule {
         if kind.is_symmetric_binop() {
             // We already confirmed that the LHS is valid for this operation, and
             // if the op is symmetric, we just have to check the RHS matches
-            if self.typecheck_types(lhs.get_type(), rhs.get_type(), scope_id).is_err() {
+            if self.check_types(lhs.get_type(), rhs.get_type(), scope_id).is_err() {
                 return make_fail_span("operand types did not match", binary_op.span);
             }
         } else {
@@ -4038,7 +4069,7 @@ impl TypedModule {
         let equals_expr = match self.types.get(lhs_type_id) {
             Type::TypeVariable(_type_var) => {
                 let rhs = self.eval_expr(binary_op.rhs, scope_id, Some(lhs.get_type()))?;
-                if let Err(msg) = self.typecheck_types(lhs.get_type(), rhs.get_type(), scope_id) {
+                if let Err(msg) = self.check_types(lhs.get_type(), rhs.get_type(), scope_id) {
                     return make_fail_span(
                         format!("Type mismatch on equality of 2 generic variables: {}", msg),
                         binary_op.span,
@@ -4163,8 +4194,7 @@ impl TypedModule {
         let condition = self.eval_expr(if_expr.cond, scope_id, None)?;
 
         let mut consequent = {
-            // If there is no binding, the condition must be a boolean
-            if let Err(msg) = self.typecheck_types(BOOL_TYPE_ID, condition.get_type(), scope_id) {
+            if let Err(msg) = self.check_types(BOOL_TYPE_ID, condition.get_type(), scope_id) {
                 return make_fail_span(
                     format!("Invalid if condition type: {}.", msg),
                     condition.get_span(),
@@ -4177,11 +4207,16 @@ impl TypedModule {
         // De-sugar if without else:
         // If there is no alternate, we coerce the consequent to return Unit, so both
         // branches have a matching type, making codegen simpler
-        if if_expr.alt.is_none() {
+        // However, if the consequent is a never type, we don't need to do this, in
+        // fact we can't because then we'd have an expression following a never expression
+        let cons_never = consequent_type == NEVER_TYPE_ID;
+
+        if if_expr.alt.is_none() && !cons_never {
             self.coerce_block_to_unit_block(&mut consequent);
         };
         let alternate = if let Some(alt) = if_expr.alt {
-            let expr = self.eval_expr(alt, scope_id, Some(consequent_type))?;
+            let type_hint = if cons_never { None } else { Some(consequent_type) };
+            let expr = self.eval_expr(alt, scope_id, type_hint)?;
             self.coerce_expr_to_block(expr, scope_id)
         } else {
             self.make_unit_block(scope_id, if_expr.span)
@@ -4205,7 +4240,7 @@ impl TypedModule {
         let no_never = !cons_never && !alt_never;
 
         let overall_type = if no_never {
-            if let Err(msg) = self.typecheck_types(consequent_type, alternate.expr_type, scope_id) {
+            if let Err(msg) = self.check_types(consequent_type, alternate.expr_type, scope_id) {
                 return make_fail_span(
                     format!("else branch type did not match then branch type: {}", msg),
                     alternate.span,
@@ -4257,9 +4292,36 @@ impl TypedModule {
         calling_scope: ScopeId,
     ) -> TyperResult<Either<TypedExpr, FunctionId>> {
         match self.ast.identifiers.get_name(fn_call.name) {
+            "return" => {
+                if fn_call.args.len() != 1 {
+                    return make_fail_span(
+                        "return(...) must have exactly one argument",
+                        fn_call.span,
+                    );
+                }
+                let return_value =
+                    self.eval_expr_inner(fn_call.args[0].value, calling_scope, None)?;
+                let enclosing_function = self.scopes.nearest_parent_function(calling_scope);
+                let expected_return_type = self.get_function(enclosing_function).ret_type;
+                if let Err(msg) =
+                    self.check_types(expected_return_type, return_value.get_type(), calling_scope)
+                {
+                    return make_fail_span(
+                        format!("return type did not match function return type: {}", msg),
+                        fn_call.span,
+                    );
+                }
+                return Ok(Either::Left(TypedExpr::Return(TypedReturn {
+                    value: Box::new(return_value),
+                    span: fn_call.span,
+                })));
+            }
             "Some" => {
                 if fn_call.args.len() != 1 {
-                    return make_fail_span("Some() must have exactly one argument", fn_call.span);
+                    return make_fail_span(
+                        "Some(...) must have exactly one argument",
+                        fn_call.span,
+                    );
                 }
                 let arg = self.eval_expr_inner(fn_call.args[0].value, calling_scope, None)?;
                 let type_id = arg.get_type();
@@ -4551,7 +4613,7 @@ impl TypedModule {
                 if let Some(this) = this_expr {
                     if !skip_typecheck {
                         if let Err(e) =
-                            self.typecheck_types(first.type_id, this.get_type(), calling_scope)
+                            self.check_types(first.type_id, this.get_type(), calling_scope)
                         {
                             return make_fail_span(
                                 format!(
@@ -4575,11 +4637,9 @@ impl TypedModule {
         };
         for fn_param in &params[start as usize..] {
             if let Some(pre_evaled_expr) = pre_evaled_params.next() {
-                if let Err(msg) = self.typecheck_types(
-                    fn_param.type_id,
-                    pre_evaled_expr.get_type(),
-                    calling_scope,
-                ) {
+                if let Err(msg) =
+                    self.check_types(fn_param.type_id, pre_evaled_expr.get_type(), calling_scope)
+                {
                     return make_fail_span(
                         format!(
                             "Invalid parameter type passed to function {}: {}",
@@ -4606,7 +4666,7 @@ impl TypedModule {
                         self.eval_expr(param.value, calling_scope, expected_type_for_param)?;
                     if !skip_typecheck {
                         if let Err(e) =
-                            self.typecheck_types(fn_param.type_id, expr.get_type(), calling_scope)
+                            self.check_types(fn_param.type_id, expr.get_type(), calling_scope)
                         {
                             return make_fail_span(
                                 format!(
@@ -4823,7 +4883,7 @@ impl TypedModule {
                         let existing_solution =
                             solved_params.iter().find(|p| p.ident == solved_param.ident);
                         if let Some(existing_solution) = existing_solution {
-                            if let Err(msg) = self.typecheck_types(
+                            if let Err(msg) = self.check_types(
                                 existing_solution.type_id,
                                 solved_param.type_id,
                                 calling_scope,
@@ -5011,7 +5071,7 @@ impl TypedModule {
                 let value_expr = self.eval_expr(val_def.value, scope_id, provided_type)?;
                 let actual_type = value_expr.get_type();
                 let variable_type = if let Some(expected_type) = provided_type {
-                    if let Err(msg) = self.typecheck_types(expected_type, actual_type, scope_id) {
+                    if let Err(msg) = self.check_types(expected_type, actual_type, scope_id) {
                         return make_fail_span(
                             format!("Local variable type mismatch: {}", msg),
                             val_def.span,
@@ -5041,7 +5101,7 @@ impl TypedModule {
                 // let lhs = self.eval_expr(&assignment.lhs, scope_id, None)?;
                 let lhs = self.eval_assignment_lhs_expr(assignment.lhs, scope_id, None)?;
                 let rhs = self.eval_expr(assignment.rhs, scope_id, Some(lhs.get_type()))?;
-                if let Err(msg) = self.typecheck_types(lhs.get_type(), rhs.get_type(), scope_id) {
+                if let Err(msg) = self.check_types(lhs.get_type(), rhs.get_type(), scope_id) {
                     return make_fail_span(
                         format!("Invalid types for assignment: {}", msg),
                         assignment.span,
@@ -5060,7 +5120,7 @@ impl TypedModule {
             }
             ParsedStmt::While(while_stmt) => {
                 let cond = self.eval_expr(while_stmt.cond, scope_id, Some(BOOL_TYPE_ID))?;
-                if let Err(e) = self.typecheck_types(BOOL_TYPE_ID, cond.get_type(), scope_id) {
+                if let Err(e) = self.check_types(BOOL_TYPE_ID, cond.get_type(), scope_id) {
                     return make_fail_span(
                         format!("Invalid while condition type: {}", e),
                         cond.get_span(),
@@ -5086,7 +5146,7 @@ impl TypedModule {
         for (index, stmt) in block.stmts.iter().enumerate() {
             if last_expr_type == NEVER_TYPE_ID {
                 return make_fail_span(
-                    "Dead code following divergent statement of type 'never'",
+                    "Dead code following divergent statement",
                     self.ast.get_stmt_span(stmt),
                 );
             }
@@ -5454,8 +5514,7 @@ impl TypedModule {
                 // TODO(clone): Intern blocks
                 let block_ast = block_ast.clone();
                 let block = self.eval_block(&block_ast, fn_scope_id, Some(given_ret_type))?;
-                if let Err(msg) = self.typecheck_types(given_ret_type, block.expr_type, fn_scope_id)
-                {
+                if let Err(msg) = self.check_types(given_ret_type, block.expr_type, fn_scope_id) {
                     return make_fail_span(
                         format!(
                             "Function {} return type mismatch: {}",
@@ -5683,7 +5742,7 @@ impl TypedModule {
             }
             for (index, specialized_param) in specialized.params.iter().enumerate() {
                 let generic_param = &generic.params[index];
-                if let Err(msg) = self.typecheck_types(
+                if let Err(msg) = self.check_types(
                     generic_param.type_id,
                     specialized_param.type_id,
                     spec_fn_scope_id,
@@ -5701,7 +5760,7 @@ impl TypedModule {
                 }
             }
             if let Err(msg) =
-                self.typecheck_types(generic.ret_type, specialized.ret_type, spec_fn_scope_id)
+                self.check_types(generic.ret_type, specialized.ret_type, spec_fn_scope_id)
             {
                 return make_fail_span(
                     format!(

@@ -480,6 +480,11 @@ impl TypedModule {
                 self.display_expr(&as_variant_expr.target_expr, writ, indentation)?;
                 writ.write_str(".payload")
             }
+            TypedExpr::Return(ret) => {
+                writ.write_str("return(")?;
+                self.display_expr(&ret.value, writ, indentation);
+                writ.write_char(')')
+            }
         }
     }
 

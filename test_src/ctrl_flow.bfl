@@ -1,0 +1,20 @@
+fn rand(): bool {
+  // Expression is of type never, but return type is bool.
+  // never <: bool
+  return(true)
+}
+
+fn doit(): int {
+  val x: unit = if rand() {
+    return(1)
+  };
+
+  0
+}
+
+fn main(): int {
+  print("doit: ");
+  printInt(doit());
+
+  0
+}

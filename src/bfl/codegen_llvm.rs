@@ -1414,7 +1414,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
         // Consequent Block
         self.builder.position_at_end(consequent_block);
-        let consequent_incoming = match self.codegen_block_statements(&ir_if.consequent)? {
+        let consequent_block_value = self.codegen_block_statements(&ir_if.consequent)?;
+        let consequent_incoming = match consequent_block_value {
             LlvmValue::Never(_) => None,
             LlvmValue::BasicValue(value) => {
                 let consequent_final_block = self.builder.get_insert_block().unwrap();
@@ -1942,6 +1943,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         Ok(truncated_value.as_basic_value_enum().into())
                     }
                 }
+            }
+            TypedExpr::Return(ret) => {
+                let return_value = self.codegen_expr_basic_value(&ret.value)?;
+                let ret_inst = self.builder.build_return(Some(&return_value));
+                Ok(LlvmValue::Never(ret_inst))
             }
         }
     }
