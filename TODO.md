@@ -66,7 +66,7 @@
 - [x] Reject too many function args
 - [x] Use abilities to implement Bits namespace
 - [x] return statement (control flow of blocks / statements: CanReturn, AlwaysReturns, NeverReturns (which is 'never'))
-- [ ] Move to UFCS instead of having the concept of a 'method' or companion namespace?
+- [ ] Use `as` casting syntax for rawpointer.asUnsafe
 - [ ] 'Context' system; implicit stack arguments
 - [ ] Mark types as trivially copyable or not
 - [ ] Precedence of dereference (and i guess unary ops in general) should be higher
@@ -87,12 +87,16 @@
 - [x] Prevent function overloading in same namespace
 - [x] Typecheck the binary ops
 - [x] Bitwise ops
+- [x] Bitwise ops using abilities
 - [ ] Exhaustive pattern matching
 - [ ] function pointers
 - [ ] Pure lambdas with -> (not closures)
 - [ ] slices (windows? segments?)
 - [ ] Generic abilities
 - [ ] Make demo readme / site
+
+## Maybe
+- [ ] Move to UFCS instead of having the concept of a 'method' or companion namespace?
 
 ## Error story
 - [ ] A simple stdlib enum?
