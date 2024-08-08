@@ -109,14 +109,13 @@ impl Equals for Array<int> {
       false
     } else {
       mut i: u64 = 0;
-      mut ret = true;
-      while (ret and i < self.length()) {
+      while i < self.length() {
         if self[i] != other[i] {
-          ret = false;
+          return(false);
         };
         i = i + 1;
       };
-      ret
+      true
     }
   }
 }
@@ -131,14 +130,13 @@ impl Equals for Array<string> {
       false
     } else {
       mut i: u64 = 0;
-      mut ret = true;
-      while (ret and i < self.length()) {
+      while i < self.length() {
         if self[i] != other[i] {
-          ret = false;
+          return(false);
         };
         i = i + 1;
       };
-      ret
+      true
     }
   }
 }
@@ -148,19 +146,13 @@ namespace string {
   intern fn length(self: string): u64
   fn index_of(self: string, c: char): i64 {
     mut i: u64 = 0;
-    mut found = false;
-    while ((not found) and i < self.length()) {
+    while i < self.length() {
       if (self[i] == c) {
-        found = true;
-      } else {
-        i = i + 1;
+        return(i as i64);
       };
+      i = i + 1;
     };
-    if found {
-      i as i64
-    } else {
-      -1
-    }
+    -1
   }
   fn concat(self: string, other: string): string {
     val new_length = self.length() + other.length();
