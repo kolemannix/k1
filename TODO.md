@@ -65,7 +65,7 @@
 - [ ] type suffixes on int literals 123u32, 4u8, etc
 - [x] Reject too many function args
 - [x] Use abilities to implement Bits namespace
-- [ ] return statement (control flow of blocks / statements: CanReturn, AlwaysReturns, NeverReturns (which is 'never'))
+- [x] return statement (control flow of blocks / statements: CanReturn, AlwaysReturns, NeverReturns (which is 'never'))
 - [ ] Move to UFCS instead of having the concept of a 'method' or companion namespace?
 - [ ] 'Context' system; implicit stack arguments
 - [ ] Mark types as trivially copyable or not
