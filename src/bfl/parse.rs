@@ -213,6 +213,7 @@ pub struct FnCall {
     pub args: Vec<FnCallArg>,
     pub namespaces: Vec<IdentifierId>,
     pub span: SpanId,
+    pub is_method: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -372,7 +373,6 @@ pub enum ParsedExpression {
     FnCall(FnCall),                         // square(1, 2)
     Variable(Variable),                     // x
     FieldAccess(FieldAccess),               // x.b
-    MethodCall(MethodCall),                 // x.load()
     Block(Block),                           // { <expr>; <expr>; <expr> }
     If(IfExpr),                             // if a else b
     Struct(Struct),                         // { x: 1, y: 3 }
@@ -409,7 +409,6 @@ impl ParsedExpression {
             Self::FnCall(call) => call.span,
             Self::Variable(var) => var.span,
             Self::FieldAccess(acc) => acc.span,
-            Self::MethodCall(call) => call.span,
             Self::Block(block) => block.span,
             Self::If(if_expr) => if_expr.span,
             Self::Struct(struc) => struc.span,
@@ -430,7 +429,6 @@ impl ParsedExpression {
             Self::Variable(_var) => true,
             Self::IndexOperation(_op) => true,
             Self::FieldAccess(_acc) => true,
-            Self::MethodCall(_call) => false,
             Self::BinaryOp(_op) => false,
             Self::UnaryOp(_op) => false,
             Self::Literal(_lit) => false,
@@ -1827,16 +1825,15 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                         )?;
                         let span = self.extend_span(self.get_expression_span(result), args_span);
                         let name = self.intern_ident_token(target);
-                        result = self.add_expression(ParsedExpression::MethodCall(MethodCall {
-                            base: result,
-                            call: Box::new(FnCall {
-                                name,
-                                type_args,
-                                args,
-                                namespaces: Vec::new(),
-                                span,
-                            }),
+                        let mut all_args = vec![FnCallArg { name: None, value: result }];
+                        all_args.extend(args);
+                        result = self.add_expression(ParsedExpression::FnCall(FnCall {
+                            name,
+                            type_args,
+                            args: all_args,
+                            namespaces: Vec::new(),
                             span,
+                            is_method: true,
                         }));
                     } else {
                         let span = self.extend_span(self.get_expression_span(result), next.span);
@@ -2180,6 +2177,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     args,
                     namespaces,
                     span,
+                    is_method: false,
                 }))))
             } else {
                 // The last thing it can be is a simple variable reference expression
@@ -2729,7 +2727,6 @@ impl ParsedModule {
             ParsedExpression::FnCall(call) => f.write_fmt(format_args!("{:?}", call)),
             ParsedExpression::Variable(var) => f.write_fmt(format_args!("{}", var)),
             ParsedExpression::FieldAccess(acc) => f.write_fmt(format_args!("{:?}", acc)),
-            ParsedExpression::MethodCall(call) => f.write_fmt(format_args!("{:?}", call)),
             ParsedExpression::Block(block) => f.write_fmt(format_args!("{:?}", block)),
             ParsedExpression::If(if_expr) => f.write_fmt(format_args!("{:?}", if_expr)),
             ParsedExpression::Struct(struc) => f.write_fmt(format_args!("{:?}", struc)),

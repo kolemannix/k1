@@ -4,6 +4,8 @@ type bool = builtin
 type string = builtin
 type never = builtin
 
+intern fn sizeOf<T>(): int
+intern fn alignOf<T>(): int
 
 extern fn _bfl_charToString(c: char): string
 extern fn _bfl_charToInt(c: char): int
@@ -28,9 +30,6 @@ namespace RawPointer {
 
   fn fromIntUnsafe(value: u64): RawPointer { value }
 }
-
-intern fn sizeOf<T>(): int
-intern fn alignOf<T>(): int
 
 // Must have ability id 0
 ability Equals {
