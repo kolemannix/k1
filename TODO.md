@@ -73,8 +73,10 @@
 - [ ] Codegen 'variables' is broken (never cleared); use enter scope / exit scope w/ a stack of vecs or something
       instead (matters when a variable id is reused because the same function is called twice; I think we just overwrite it
       with the correct one but maybe nesting is a problem?)
-- [ ] Tuples?
-- [ ] Ranges?
+- [ ] Imports
+- [ ] Tuples? No, I don't think you need them if you have anonymous structs. The lack of names always makes them
+      easy to start using and very hard to maintain / read consumer code
+- [ ] Ranges? I rarely use ranges; I think as a builtin that's an overreach. Maybe a stdlib type like Scala does
 - [x] Remove custom size/align code and use LLVM's
 - [ ] More type expressions! (this was a big part of my original point)
   - [ ] Intersect structs

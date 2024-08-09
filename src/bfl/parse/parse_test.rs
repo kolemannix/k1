@@ -264,18 +264,16 @@ fn generic_fn_call() -> Result<(), ParseError> {
 fn generic_method_call_lhs_expr() -> Result<(), ParseError> {
     let input = "getFn().baz<u64>(42)";
     let (mut parser, result) = test_single_expr(input)?;
-    let ParsedExpression::MethodCall(call) = result else { panic!() };
-    let ParsedExpression::FnCall(fn_call) = parser.expressions.get(call.base).clone() else {
+    let ParsedExpression::FnCall(call) = result else { panic!() };
+    let ParsedExpression::FnCall(fn_call) = parser.expressions.get(call.args[0].value).clone()
+    else {
         panic!()
     };
     assert_eq!(fn_call.name, parser.identifiers.intern("getFn"));
-    assert_eq!(call.call.name, parser.identifiers.intern("baz"));
-    let type_arg = parser.type_expressions.get(call.call.type_args.unwrap()[0].type_expr);
+    assert_eq!(call.name, parser.identifiers.intern("baz"));
+    let type_arg = parser.type_expressions.get(call.type_args.unwrap()[0].type_expr);
     assert!(type_arg.is_integer());
-    assert!(matches!(
-        &*parser.expressions.get(call.call.args[0].value),
-        ParsedExpression::Literal(_)
-    ));
+    assert!(matches!(&*parser.expressions.get(call.args[1].value), ParsedExpression::Literal(_)));
     Ok(())
 }
 

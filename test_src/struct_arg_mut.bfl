@@ -13,11 +13,11 @@ namespace Foo {
 }
 
 fn main(): int {
-  val x: Foo* = Foo::new(42);
+  val x: Foo* = &Foo::new(42);
   assert(x.x == 42);
-  assert((*x).getValue() == 42);
+  assert(x.getValue() == 42);
   x.setValue(41);
-  assert((*x).getValue() == 41);
+  assert(x.getValue() == 41);
   assert(not x.y);
   0
 }

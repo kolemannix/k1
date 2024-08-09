@@ -19,7 +19,7 @@ use types::*;
 
 use crate::lex::{SpanId, Spans, TokenKind};
 use crate::parse::{
-    self, ForExpr, ForExprType, IfExpr, IndexOperation, NumericWidth, ParsedAbilityId,
+    self, FnCallArg, ForExpr, ForExprType, IfExpr, IndexOperation, NumericWidth, ParsedAbilityId,
     ParsedAbilityImplId, ParsedConstantId, ParsedExpressionId, ParsedFunctionId, ParsedId,
     ParsedNamespaceId, ParsedPattern, ParsedPatternId, ParsedTypeDefnId, ParsedTypeExpression,
     ParsedTypeExpressionId, ParsedUnaryOpKind, Sources,
@@ -2505,20 +2505,6 @@ impl TypedModule {
                     Err(_) => expression,
                 }
             }
-            Type::Reference(reference_type) => {
-                match self.check_types(reference_type.inner_type, expression.get_type(), scope_id) {
-                    Ok(_) => {
-                        let base_span = expression.get_span();
-                        TypedExpr::UnaryOp(UnaryOp {
-                            kind: UnaryOpKind::Reference,
-                            type_id: expected_type_id,
-                            expr: Box::new(expression),
-                            span: base_span,
-                        })
-                    }
-                    Err(_) => expression,
-                }
-            }
             Type::OpaqueAlias(opaque) => {
                 if !self
                     .is_inside_companion_scope(opaque.type_defn_info.companion_namespace, scope_id)
@@ -2542,6 +2528,18 @@ impl TypedModule {
                 })
             }
             _other => match self.types.get(expression.get_type()) {
+                Type::Reference(reference) => {
+                    if self.check_types(expected_type_id, reference.inner_type, scope_id).is_ok() {
+                        TypedExpr::UnaryOp(UnaryOp {
+                            kind: UnaryOpKind::Dereference,
+                            type_id: reference.inner_type,
+                            span: expression.get_span(),
+                            expr: Box::new(expression),
+                        })
+                    } else {
+                        expression
+                    }
+                }
                 Type::OpaqueAlias(expression_opaque) => {
                     if !self.is_inside_companion_scope(
                         expression_opaque.type_defn_info.companion_namespace,
@@ -2860,19 +2858,6 @@ impl TypedModule {
                 let block = block.clone();
                 let block = self.eval_block(&block, scope_id, expected_type)?;
                 Ok(TypedExpr::Block(block))
-            }
-            ParsedExpression::MethodCall(method_call) => {
-                // This clone is actually sad because MethodCall is still big. We need to intern blocks
-                let method_call = method_call.clone();
-                let base_expr = self.eval_expr(method_call.base, scope_id, None)?;
-                let call = self.eval_function_call(
-                    &method_call.call,
-                    Some(base_expr),
-                    None,
-                    None,
-                    scope_id,
-                )?;
-                Ok(call)
             }
             ParsedExpression::FnCall(fn_call) => {
                 let call = self.eval_function_call(&fn_call.clone(), None, None, None, scope_id)?;
@@ -3584,7 +3569,14 @@ impl TypedModule {
         scope_id: ScopeId,
     ) -> TyperResult<TypedExpr> {
         self.eval_function_call(
-            &FnCall { name, type_args: None, args: Vec::with_capacity(0), namespaces, span },
+            &FnCall {
+                name,
+                type_args: None,
+                args: Vec::with_capacity(0),
+                namespaces,
+                span,
+                is_method: false,
+            },
             None,
             known_type_args,
             Some(value_arg_exprs),
@@ -4036,8 +4028,8 @@ impl TypedModule {
         if kind.is_symmetric_binop() {
             // We already confirmed that the LHS is valid for this operation, and
             // if the op is symmetric, we just have to check the RHS matches
-            if self.check_types(lhs.get_type(), rhs.get_type(), scope_id).is_err() {
-                return make_fail_span("operand types did not match", binary_op.span);
+            if let Err(msg) = self.check_types(lhs.get_type(), rhs.get_type(), scope_id) {
+                return ffail!(binary_op.span, "operand types did not match: {msg}");
             }
         } else {
             panic!("Unexpected asymmetric binop down here {}", kind)
@@ -4288,7 +4280,6 @@ impl TypedModule {
     fn resolve_parsed_function_call(
         &mut self,
         fn_call: &FnCall,
-        this_expr: Option<&TypedExpr>,
         calling_scope: ScopeId,
     ) -> TyperResult<Either<TypedExpr, FunctionId>> {
         match self.ast.identifiers.get_name(fn_call.name) {
@@ -4361,13 +4352,19 @@ impl TypedModule {
         // 2. "function" call, no abilities or methods to check, pure scoping-based resolution
 
         let root_scope = self.scopes.get_root_scope_id();
-        let function_id = match this_expr {
+        let method_call_self = match fn_call.args.get(0) {
+            Some(arg) if fn_call.is_method => {
+                Some(self.eval_expr(arg.value, calling_scope, None)?)
+            }
+            _ => None,
+        };
+        let function_id = match method_call_self {
             Some(base_expr) => {
                 // Resolve a method call
                 let type_id = base_expr.get_type();
                 if let Type::Reference(_r) = self.types.get(type_id) {
                     if fn_call.name == self.ast.identifiers.get("asRawPointer").unwrap()
-                        && fn_call.args.is_empty()
+                        && fn_call.args.len() == 1
                         && fn_call.type_args.is_none()
                     {
                         return Ok(Either::Left(TypedExpr::UnaryOp(UnaryOp {
@@ -4383,7 +4380,7 @@ impl TypedModule {
                     // Also use companion namespace method not just name of namespace
                     Type::Optional(_optional_type) => {
                         if fn_call.name == self.ast.identifiers.get("hasValue").unwrap()
-                            && fn_call.args.is_empty()
+                            && fn_call.args.len() == 1
                             && fn_call.type_args.is_none()
                         {
                             return Ok(Either::Left(TypedExpr::OptionalHasValue(Box::new(
@@ -4578,17 +4575,17 @@ impl TypedModule {
 
     // skip_typecheck: I actually just want this to handle the 'self' order and zipping thing because I sometimes
     // don't want these checked just yet because I'm using them for inference
+    // ^ That use case may not be valid anymore now that 'self' is handled sanely as just the first argument
     fn typecheck_call_arguments(
         &mut self,
         fn_call: &FnCall,
-        this_expr: Option<TypedExpr>,
         params: &Vec<FnArgDefn>,
         pre_evaled_params: Option<Vec<TypedExpr>>,
         calling_scope: ScopeId,
         skip_typecheck: bool,
     ) -> TyperResult<Vec<TypedExpr>> {
-        let total_passed = if this_expr.is_some() { 1 } else { 0 }
-            + pre_evaled_params.as_ref().map(|v| v.len()).unwrap_or(fn_call.args.len());
+        let total_passed =
+            pre_evaled_params.as_ref().map(|v| v.len()).unwrap_or(fn_call.args.len());
         if total_passed != params.len() {
             return make_fail_span(
                 format!(
@@ -4601,41 +4598,11 @@ impl TypedModule {
         }
 
         let mut final_args: Vec<TypedExpr> = Vec::new();
-        // We have to deal with `self` arguments outside of the loop because
-        // we can't 'move' out of this_expr more than once
-        let mut skip_first = false;
-        if let Some(first) = params.get(0) {
-            let is_self = first.name == {
-                let this = &mut self.ast;
-                this.identifiers.get("self").unwrap()
-            };
-            if is_self {
-                if let Some(this) = this_expr {
-                    if !skip_typecheck {
-                        if let Err(e) =
-                            self.check_types(first.type_id, this.get_type(), calling_scope)
-                        {
-                            return make_fail_span(
-                                format!(
-                                    "Invalid parameter type for 'self' to function {}: {}",
-                                    &*self.ast.identifiers.get_name(fn_call.name),
-                                    e
-                                ),
-                                fn_call.span,
-                            );
-                        }
-                    }
-                    final_args.push(this);
-                    skip_first = true;
-                }
-            }
-        }
-        let start: u32 = if skip_first { 1 } else { 0 };
         let mut pre_evaled_params = match pre_evaled_params {
             Some(v) => v.into_iter(),
             None => Vec::new().into_iter(),
         };
-        for fn_param in &params[start as usize..] {
+        for fn_param in params {
             if let Some(pre_evaled_expr) = pre_evaled_params.next() {
                 if let Err(msg) =
                     self.check_types(fn_param.type_id, pre_evaled_expr.get_type(), calling_scope)
@@ -4654,8 +4621,7 @@ impl TypedModule {
             } else {
                 let matching_param_by_name =
                     fn_call.args.iter().find(|arg| arg.name == Some(fn_param.name));
-                // If we skipped 'self', we need to subtract 1 from the offset we index into fn_call.args with
-                let matching_idx = fn_param.position - start;
+                let matching_idx = fn_param.position;
                 let matching_param =
                     matching_param_by_name.or(fn_call.args.get(matching_idx as usize));
 
@@ -4706,11 +4672,14 @@ impl TypedModule {
             fn_call.args.is_empty() || known_value_args.is_none(),
             "cannot pass both typed value args and parsed value args to eval_function_call"
         );
-        let function_id =
-            match self.resolve_parsed_function_call(fn_call, this_expr.as_ref(), scope_id)? {
-                Either::Left(expr) => return Ok(expr),
-                Either::Right(function_id) => function_id,
-            };
+        let function_id = match self.resolve_parsed_function_call(fn_call, scope_id)? {
+            Either::Left(expr) => return Ok(expr),
+            Either::Right(function_id) => function_id,
+        };
+
+        // Re-evaluate known-expr with a type hint now that we know the function
+        // let this_expr =
+        //     fn_call.args.get(0).map(|arg| self.eval_expr(arg.value, scope_id, expected_type));
 
         // Now that we have resolved to a function id, we need to specialize it if generic
         let original_function = self.get_function(function_id);
@@ -4722,7 +4691,6 @@ impl TypedModule {
                     function_id,
                     self.typecheck_call_arguments(
                         fn_call,
-                        this_expr,
                         &original_params,
                         known_value_args,
                         scope_id,
@@ -4749,7 +4717,6 @@ impl TypedModule {
                         None => self.infer_call_type_args(
                             fn_call,
                             function_id,
-                            this_expr.as_ref(),
                             // We shouldn't have to clone this because we should always
                             // pass the type args if we pass the known value args
                             known_value_args.clone(),
@@ -4772,7 +4739,6 @@ impl TypedModule {
                             function_id,
                             self.typecheck_call_arguments(
                                 fn_call,
-                                this_expr,
                                 &original_params,
                                 known_value_args,
                                 scope_id,
@@ -4810,7 +4776,6 @@ impl TypedModule {
         &mut self,
         fn_call: &FnCall,
         generic_function_id: FunctionId,
-        this_expr: Option<&TypedExpr>,
         pre_evaled_params: Option<Vec<TypedExpr>>,
         calling_scope: ScopeId,
     ) -> TyperResult<Vec<TypeParam>> {
@@ -4843,7 +4808,6 @@ impl TypedModule {
             None => {
                 let exprs = self.typecheck_call_arguments(
                     fn_call,
-                    this_expr.cloned(),
                     &generic_params,
                     pre_evaled_params,
                     calling_scope,
@@ -5015,7 +4979,6 @@ impl TypedModule {
                 );
                 let exprs = self.typecheck_call_arguments(
                     fn_call,
-                    this_expr,
                     &existing_specialization.specialized_params,
                     pre_evaled_value_args,
                     calling_scope,
@@ -5047,7 +5010,6 @@ impl TypedModule {
 
         let typechecked_exprs = self.typecheck_call_arguments(
             fn_call,
-            this_expr,
             &specialized_params,
             pre_evaled_value_args,
             calling_scope,

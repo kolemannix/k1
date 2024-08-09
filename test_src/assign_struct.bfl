@@ -1,7 +1,7 @@
 type Range = { min: int, max: int }
 
 fn main(): int {
-  val x: Range* = { min: 4, max: 11 };
+  val x: Range* = &{ min: 4, max: 11 };
   x.min = 2;
   assert(x.min == 2);
 
