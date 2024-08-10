@@ -1,5 +1,8 @@
 type Result<T, E> = enum Ok(T) | Err(E)
 namespace Result {
+  fn unwrap<T, E>(self: Result<T, E>): T {
+    (self as Result<T,E>.Ok).payload
+  }
   fn show(self: Result<int, string>): unit {
     when self {
       | .Ok(v) -> { print("Ok "); printInt(v); println("") }
@@ -11,6 +14,14 @@ namespace Result {
 fn main(): int {
     val x1: Result<int, string> = .Ok(-3);
     val x2: Result<int, string> = .Err("Some error message");
+
+    val x1Ok = x1 as Result<int, string>.Ok;
+
+    assert(Result::unwrap(x1) == -3);
+
+    // This tests type inference for enums
+    assert(x1.unwrap() == -3);
+    assert(x1Ok.unwrap() == -3);
 
     x1.show();
     x2.show();

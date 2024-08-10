@@ -54,10 +54,6 @@ BflString _bfl_readFileToString(BflString filename) {
 
 // To be removed once we have basic casts
 
-int64_t _bfl_charToInt(char c) {
-    return (int64_t)c;
-}
-
 char _bfl_intToChar(int64_t i) {
     return (char)i;
 }

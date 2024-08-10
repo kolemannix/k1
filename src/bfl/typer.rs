@@ -1534,10 +1534,13 @@ impl TypedModule {
                     Type::Optional(_o) => todo!("optional dot access for inner type"),
                     // You can do dot access on References to get out their 'inner' types
                     Type::Reference(_r) => todo!("reference dot access for referenced type"),
-                    _other => {
+                    other => {
                         return make_fail_ast_id(
                             &self.ast,
-                            "Invalid type for '.' access",
+                            &format!(
+                                "Invalid type for '.' access: {}",
+                                &self.type_to_string(other)
+                            ),
                             type_expr_id.into(),
                         )
                     } // You can do dot access on function names (which are not type expressions yet)
@@ -2047,8 +2050,6 @@ impl TypedModule {
                         if actual_resolved != actual {
                             return self.check_types(expected, actual_resolved, scope_id);
                         }
-                        // ?? I remember the above check mattering but it looks like not?
-                        return self.check_types(expected, actual_resolved, scope_id);
                     }
                 }
                 Err(format!(
@@ -2738,7 +2739,7 @@ impl TypedModule {
                         ) {
                             Ok(_) => Ok(expected_type_id),
                             Err(s) => make_fail_span(
-                                format!("Invalid struc type: {}", s),
+                                format!("Invalid struct type: {}", s),
                                 ast_struct.span,
                             ),
                         }
@@ -4821,62 +4822,19 @@ impl TypedModule {
 
                     // This 'match' is where we would ideally implement some actual
                     // recursive type unification algorithm rather than hardcode 2 cases
-                    let maybe_solved_param = match self.types.get(param.type_id) {
-                        Type::TypeVariable(tv) => {
-                            // If the type param is used in the type of the argument, we can infer
-                            // the type param from the type of the argument
-                            Some(TypeParam { ident: tv.name, type_id: expr.get_type() })
-                        }
-                        Type::Array(array_type) => {
-                            // If the type param is used in the element type of an array, we can infer
-                            // the type param from the type of the array
-                            if let Type::TypeVariable(tv) = self.types.get(array_type.element_type)
-                            {
-                                if let Type::Array(at) = self.types.get(expr.get_type()) {
-                                    Some(TypeParam { ident: tv.name, type_id: at.element_type })
-                                } else {
-                                    None
-                                }
-                            } else {
-                                None
-                            }
-                        }
-                        _ => None,
-                    };
-                    if let Some(solved_param) = maybe_solved_param {
-                        let existing_solution =
-                            solved_params.iter().find(|p| p.ident == solved_param.ident);
-                        if let Some(existing_solution) = existing_solution {
-                            if let Err(msg) = self.check_types(
-                                existing_solution.type_id,
-                                solved_param.type_id,
-                                calling_scope,
-                            ) {
-                                return make_fail_span(
-                                    format!(
-                                        "Conflicting type parameters for type param {} in call to {}: {}",
-                                        self.get_ident_str(solved_param.ident),
-                                        self.get_ident_str(generic_name),
-                                        msg
-                                    ),
-                                    fn_call.span,
-                                );
-                            } else {
-                                debug!("We double-solved type param {} but that's ok because it matched", self.get_ident_str(existing_solution.ident))
-                            }
-                        } else {
-                            // Only push if we haven't solved this one yet
-                            solved_params.push(solved_param);
-                        }
-                    }
+                    self.solve_generic_params(
+                        &mut solved_params,
+                        expr.get_type(),
+                        param.type_id,
+                        calling_scope,
+                        fn_call.span,
+                    )?;
                 }
                 if solved_params.len() < generic_type_params.len() {
-                    return make_fail_span(
-                        format!(
-                            "Could not infer all type parameters for function call to {}",
-                            &*self.get_ident_str(generic_name)
-                        ),
+                    return ffail!(
                         fn_call.span,
+                        "Could not infer all type parameters for function call to {}",
+                        self.get_ident_str(generic_name)
                     );
                 } else {
                     debug!("Solved params: {:?}", solved_params);
@@ -4885,6 +4843,150 @@ impl TypedModule {
             }
         };
         Ok(type_params)
+    }
+
+    fn solve_generic_params(
+        &self,
+        solved_params: &mut Vec<TypeParam>,
+        passed_expr: TypeId,
+        argument_type: TypeId,
+        scope_id: ScopeId,
+        span: SpanId,
+    ) -> TyperResult<()> {
+        // Example: expr: Array<T>, arg:
+        // val arr: Array<int> = [1, 2, 3];
+        // arr.length()
+        // Array::length<?>(arr)
+        // expr: Array<int>, arg: Array<T>
+
+        match (self.types.get(passed_expr), self.types.get(argument_type)) {
+            (_, Type::TypeVariable(tv)) => {
+                // If the type param is used in the type of the argument, we can infer
+                // the type param from the type of the argument
+                let solved_param = TypeParam { ident: tv.name, type_id: passed_expr };
+                let existing_solution =
+                    solved_params.iter().find(|p| p.ident == solved_param.ident);
+                if let Some(existing_solution) = existing_solution {
+                    if let Err(msg) =
+                        self.check_types(existing_solution.type_id, solved_param.type_id, scope_id)
+                    {
+                        return make_fail_span(
+                            format!(
+                                "Conflicting type parameters for type param {} in call: {}",
+                                self.get_ident_str(solved_param.ident),
+                                msg
+                            ),
+                            span,
+                        );
+                    } else {
+                        debug!(
+                            "We double-solved type param {} but that's ok because it matched",
+                            self.get_ident_str(existing_solution.ident)
+                        )
+                    }
+                } else {
+                    // Only push if we haven't solved this one yet
+                    solved_params.push(solved_param);
+                }
+                Ok(())
+            }
+            (Type::Reference(passed_refer), Type::Reference(refer)) => self.solve_generic_params(
+                solved_params,
+                passed_refer.inner_type,
+                refer.inner_type,
+                scope_id,
+                span,
+            ),
+            (Type::Optional(passed_opt), Type::Optional(opt)) => self.solve_generic_params(
+                solved_params,
+                passed_opt.inner_type,
+                opt.inner_type,
+                scope_id,
+                span,
+            ),
+            (Type::Struct(passed_struct), Type::Struct(struc)) => {
+                // Struct example:
+                // type Pair<T, U> = { a: T, b: U }
+                // fn get_first<T, U>(p: Pair<T, U>): T { p.a }
+                // get_first({ a: 1, b: 2})
+                // passed_expr: Pair<int, int>, argument_type: Pair<T, U>
+                // passed expr: { a: int, b: int }, argument_type: { a: T, b: U }
+                // Structs must have all same field names
+                let passed_fields = &passed_struct.fields;
+                let fields = &struc.fields;
+                if passed_fields.len() != fields.len() {
+                    return Ok(());
+                }
+                for (idx, field) in fields.iter().enumerate() {
+                    let passed_field = &passed_fields[idx];
+                    if field.name != passed_field.name {
+                        return Ok(());
+                    }
+                    self.solve_generic_params(
+                        solved_params,
+                        passed_field.type_id,
+                        field.type_id,
+                        scope_id,
+                        span,
+                    )?;
+                }
+                Ok(())
+            }
+            (Type::Array(passed_array_type), Type::Array(param_array_type)) => self
+                .solve_generic_params(
+                    solved_params,
+                    passed_array_type.element_type,
+                    param_array_type.element_type,
+                    scope_id,
+                    span,
+                ),
+            (Type::Enum(passed_enum), Type::Enum(param_enum_type)) => {
+                // Enum example
+                // type Result<T, E> = enum Ok(T) | Err(E)
+                // fn unwrap<T, E>(self: Result<T, E>): T {
+                //  (self as Result<T,E>.Ok).payload
+                // }
+                // unwrap(Result<int, string>.Ok(1))
+                // passed_expr: Result<int, string>, argument_type: Result<T, E>
+                // passed_expr: enum Ok(int), Err(string), argument_type: enum Ok(T), Err(E)
+                // Enum must have same variants with same tags, walk each variant and recurse on its payload
+                let passed_variants = &passed_enum.variants;
+                let variants = &param_enum_type.variants;
+                if passed_variants.len() != variants.len() {
+                    return Ok(());
+                }
+                for (idx, variant) in variants.iter().enumerate() {
+                    let passed_variant = &passed_variants[idx];
+                    if variant.tag_name != passed_variant.tag_name {
+                        return Ok(());
+                    }
+                    if let Some(passed_payload) = passed_variant.payload {
+                        if let Some(param_payload) = variant.payload {
+                            self.solve_generic_params(
+                                solved_params,
+                                passed_payload,
+                                param_payload,
+                                scope_id,
+                                span,
+                            )?;
+                        } else {
+                            return Ok(());
+                        }
+                    }
+                }
+
+                Ok(())
+            }
+            (Type::EnumVariant(passed_enum_variant), Type::Enum(_param_enum_type_variant)) => self
+                .solve_generic_params(
+                    solved_params,
+                    passed_enum_variant.enum_type_id,
+                    argument_type,
+                    scope_id,
+                    span,
+                ),
+            _ => Ok(()),
+        }
     }
 
     fn get_specialized_function_for_call(

@@ -1,6 +1,6 @@
 fn main(): int {
   val charCodes = for c in "asdf" yield {
-    c.toInt()
+    c as int
   };
   assert(charCodes[0] == 97);
   assert(charCodes[1] == 115);

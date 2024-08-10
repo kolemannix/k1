@@ -85,7 +85,7 @@
   - [ ] inner type of optional
 - [ ] floating point f32 and f64
 - [ ] Optional coalescing accessor (x?.y)
-- [ ] Finish/fix simple generic inference
+- [x] Finish/fix simple generic inference
 - [x] Prevent function overloading in same namespace
 - [x] Typecheck the binary ops
 - [x] Bitwise ops
