@@ -8,7 +8,6 @@ intern fn sizeOf<T>(): int
 intern fn alignOf<T>(): int
 
 extern fn _bfl_charToString(c: char): string
-extern fn _bfl_charToInt(c: char): int
 extern fn _bfl_intToChar(i: int): char
 extern fn _bfl_readFileToString(path: string): string
 extern fn _bfl_crash(reason: string*, file: string*, line: u64): never
@@ -63,9 +62,6 @@ fn assert(value: bool): unit {
 namespace char {
   fn fromInt(value: int): char {
     _bfl_intToChar(value)
-  }
-  fn toInt(self: char): int {
-    _bfl_charToInt(self)
   }
   fn toString(self: char): string {
     _bfl_charToString(self)

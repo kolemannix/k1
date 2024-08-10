@@ -1,9 +1,13 @@
 type Box<T> = { value: T }
-type MBox<T, U> = { t: T?, u: U }
-namespace MBox {
-  fn t<T, U>(self: MBox<T, U>): T? {
+type Pair<T, U> = { t: T?, u: U? }
+namespace Pair {
+  fn t<T, U>(self: Pair<T, U>): T? {
     self.t
   }
+}
+
+fn unboxIt<T>(b: Box<Box<Box<T>>>): T {
+  b.value.value.value
 }
 
 fn main(): int {
@@ -19,10 +23,14 @@ fn main(): int {
   assert(c3.value! == false);
   assert((*c4.value) == false);
 
-  val m: MBox<int, bool> = { t: 0, u: true };
-  assert(m.t! == 0);
-  assert(m.u == true);
-  assert(m.t<int, bool>()! == 0);
+  val p: Pair<int, bool> = { t: 0, u: true };
+  assert(p.t! == 0);
+  assert(p.u! == true);
+  assert(p.t<int, bool>()! == 0);
+  assert(p.t()! == 0);
+
+  val nested: Box<Box<Box<int>>> = { value: { value: { value: 42 } } };
+  assert(unboxIt(nested) == 42);
 
   b.value
 }
