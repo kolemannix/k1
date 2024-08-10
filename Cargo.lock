@@ -107,27 +107,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d468802bab17cbc0cc575e9b053f41e72aa36bfa6b7f55e3529ffa43161b97fa"
 
 [[package]]
-name = "bfl"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "colored",
- "component",
- "either",
- "env_logger",
- "inkwell",
- "llvm-sys",
- "log",
- "parse-display",
- "raylib",
- "rust-analyzer",
- "smallvec",
- "string-interner",
- "zstd-sys",
-]
-
-[[package]]
 name = "bindgen"
 version = "0.69.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -464,6 +443,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "936cfd212a0155903bcbc060e316fb6cc7cbf2e1907329391ebadc1fe0ce77c2"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "k1"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "colored",
+ "component",
+ "either",
+ "env_logger",
+ "inkwell",
+ "llvm-sys",
+ "log",
+ "parse-display",
+ "raylib",
+ "rust-analyzer",
+ "smallvec",
+ "string-interner",
+ "zstd-sys",
 ]
 
 [[package]]

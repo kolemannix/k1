@@ -7,10 +7,10 @@ use std::{
 };
 
 use anyhow::{bail, Result};
-use bfl::compiler;
 use clap::Parser;
 use colored::Colorize;
 use inkwell::context::Context;
+use k1::compiler;
 use std::os::unix::prelude::ExitStatusExt;
 
 #[derive(Parser, Debug, Clone)]
@@ -83,9 +83,9 @@ fn get_test_expectation(test_file: &Path) -> TestExpectation {
 }
 
 fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<()> {
-    let out_dir = "bfl-out/test_suite";
+    let out_dir = ".k1-out/test_suite";
     let filename = path.as_ref().file_name().unwrap().to_str().unwrap();
-    let args = bfl::compiler::Args {
+    let args = k1::compiler::Args {
         no_llvm_opt: true,
         debug: true,
         no_prelude: false,
@@ -223,7 +223,7 @@ pub fn main() -> Result<()> {
         let path = dir_entry.path();
         if metadata.is_file() {
             let extension = path.extension().unwrap();
-            if extension == "bfl" {
+            if extension == "k1" {
                 match test_suite_args.filter.as_ref() {
                     None => all_tests.push(path.to_path_buf()),
                     Some(f) => {

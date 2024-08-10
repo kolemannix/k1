@@ -4,5 +4,5 @@ set -x
 # Exit on errors
 set -e
 export RUST_BACKTRACE=1
-filename=$(basename $1 .bfl)
-cargo run -- --debug --no-llvm-opt $1; lldb bfl-out/$filename.out
+filename=$(basename $1 .k1)
+cargo run -- --debug --no-llvm-opt $1; lldb .k1-out/$filename.out

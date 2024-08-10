@@ -16,11 +16,11 @@
     "args": ["$ZED_FILE"]
   },
   {
-    "label": "Build BFLLib",
-    "command": "./build_bfllib.sh"
+    "label": "Build k1lib",
+    "command": "./build_k1lib.sh"
   },
   {
-    "label": "BFL Test",
+    "label": "K1 Test",
     "command": "./test.sh",
     "args": [],
     // "cwd": "null",

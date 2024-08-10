@@ -9,7 +9,7 @@ fn as_digit(c: char): int? {
 }
 
 fn main(): int {
-  val input = Files::readToString("/Users/knix/dev/bfl/dogfood/aoc/1.txt");
+  val input = Files::readToString("/Users/knix/dev/k1/dogfood/aoc/1.txt");
   print("The file was ");
   printInt(input.length());
   println(" characters long");

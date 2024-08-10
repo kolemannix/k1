@@ -135,10 +135,10 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
     };
 
     if use_prelude {
-        let prelude_path: &Path = Path::new("builtins/prelude.bfl");
+        let prelude_path: &Path = Path::new("builtins/prelude.k1");
         parse_file(prelude_path, 0);
 
-        let bitwise_path: &Path = Path::new("builtins/bitwise.bfl");
+        let bitwise_path: &Path = Path::new("builtins/bitwise.k1");
         parse_file(bitwise_path, 1);
     }
     // TODO: Generate file_ids from parsed_module.sources.next_id() or whatever
@@ -192,11 +192,11 @@ pub fn write_executable<'ctx, 'module>(
         "-o",
         &format!("{}/{}.out", out_dir, module_name),
         // "-L",
-        // "bfllib/zig-out/lib",
+        // "k1lib/zig-out/lib",
         "-L",
-        "bfllib",
+        "k1lib",
         "-l",
-        "bfllib",
+        "k1lib",
     ]);
     log::info!("Build Command: {:?}", build_cmd);
     let build_status = build_cmd.status()?;

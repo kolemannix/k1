@@ -6,4 +6,4 @@ fn main(): int {
   assert(x_as_b.payload == 1);
   0
 }
-//abortmsg: bad enum cast at enum_bad_cast.bfl:5
+//abortmsg: bad enum cast at enum_bad_cast.k1:5

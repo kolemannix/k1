@@ -9,7 +9,7 @@ fn make_test_module() -> ParsedModule {
 
 fn set_up<'module>(input: &str, module: &'module mut ParsedModule) -> Parser<'static, 'module> {
     let source =
-        Source::make(0, "unit_test".to_string(), "unit_test.bfl".to_string(), input.to_string());
+        Source::make(0, "unit_test".to_string(), "unit_test.k1".to_string(), input.to_string());
     let file_id = source.file_id;
     let token_vec: &'static mut [Token] = lex_text(module, source).unwrap().leak();
     println!("{:#?}", token_vec);
@@ -51,7 +51,7 @@ fn basic_fn() -> Result<(), ParseError> {
       add(x, y)
     }"#;
     let source =
-        Source::make(0, "test_src".to_string(), "test_case.bfl".to_string(), src.to_string());
+        Source::make(0, "test_src".to_string(), "test_case.k1".to_string(), src.to_string());
     let mut module = test_parse_module(source)?;
     let fndef = module.functions.first().unwrap();
     assert_eq!(fndef.name, module.identifiers.intern("basic"));
@@ -195,12 +195,12 @@ fn prelude_only() -> Result<(), ParseError> {
     let prelude_source = Source::make(
         0,
         "builtins".to_string(),
-        "prelude.bfl".to_string(),
-        fs::read_to_string("builtins/prelude.bfl").unwrap(),
+        "prelude.k1".to_string(),
+        fs::read_to_string("builtins/prelude.k1").unwrap(),
     );
     let module = test_parse_module(prelude_source)?;
     assert_eq!(&module.name, "prelude");
-    assert_eq!(&module.sources.get_main().filename, "prelude.bfl");
+    assert_eq!(&module.sources.get_main().filename, "prelude.k1");
     assert_eq!(&module.sources.get_main().directory, "builtins");
     assert!(!module.get_root_namespace().definitions.is_empty());
     Ok(())
