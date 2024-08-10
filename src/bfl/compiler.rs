@@ -181,7 +181,7 @@ pub fn write_executable<'ctx, 'module>(
     let clang_time = std::time::Instant::now();
     let mut build_cmd = std::process::Command::new("clang");
 
-    // TODO: We could do this a lot more efficiently by just feeding the in-memory LLVM IR to libclang or whatever the library version is called.
+    // TODO: Could we do this a lot more efficiently by just feeding the in-memory LLVM IR to libclang or whatever the library version is called.
     build_cmd.args([
         // "-v",
         if debug { "-g" } else { "" },
