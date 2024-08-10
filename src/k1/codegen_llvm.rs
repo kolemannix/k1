@@ -503,7 +503,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             DWARFSourceLanguage::C,
             &source.filename,
             &source.directory,
-            "bfl_compiler",
+            "k1_compiler",
             optimize,
             "",
             0,
@@ -1638,7 +1638,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
                     // label: unwrap_crash
                     self.builder.position_at_end(branch.else_block);
-                    self.build_bfl_crash("get on empty optional", opt_get.span);
+                    self.build_k1_crash("get on empty optional", opt_get.span);
 
                     // label: unwrap_ok
                     self.builder.position_at_end(branch.then_block);
@@ -1897,7 +1897,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         self.builder.position_at_end(branch.else_block);
                         // TODO: We can call @llvm.expect.i1 in order
                         // to help branch prediction and indicate that failure is 'cold'
-                        self.build_bfl_crash("bad enum cast", cast.span);
+                        self.build_k1_crash("bad enum cast", cast.span);
 
                         // cast_post
                         self.builder.position_at_end(branch.then_block);
@@ -2096,14 +2096,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         }
     }
 
-    fn build_bfl_crash(&self, msg: &str, span_id: SpanId) -> InstructionValue {
+    fn build_k1_crash(&self, msg: &str, span_id: SpanId) -> InstructionValue {
         let msg_string = self.const_string_ptr(&msg, "crash_msg");
         let span = self.module.ast.spans.get(span_id);
         let line = self.module.ast.sources.get_line_for_span(span).unwrap();
         let filename = self
             .const_string_ptr(&self.module.ast.sources.source_by_span(span).filename, "filename");
         self.builder.build_call(
-            self.llvm_module.get_function("_bfl_crash").unwrap(),
+            self.llvm_module.get_function("_k1_crash").unwrap(),
             &[
                 msg_string.into(),
                 filename.into(),
@@ -3079,13 +3079,13 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     pub fn interpret_module(&self) -> anyhow::Result<u64> {
         let engine = self.llvm_module.create_jit_execution_engine(OptimizationLevel::None).unwrap();
-        let bfllib_module = self
+        let base_lib_module = self
             .ctx
             .create_module_from_ir(
-                MemoryBuffer::create_from_file(Path::new("bfllib/bfllib.ll")).unwrap(),
+                MemoryBuffer::create_from_file(Path::new("k1lib/k1lib.ll")).unwrap(),
             )
             .unwrap();
-        self.llvm_module.link_in_module(bfllib_module).unwrap();
+        self.llvm_module.link_in_module(base_lib_module).unwrap();
         let Some(main_fn_id) = self.module.get_main_function_id() else {
             bail!("No main function")
         };

@@ -7,17 +7,17 @@ type never = builtin
 intern fn sizeOf<T>(): int
 intern fn alignOf<T>(): int
 
-extern fn _bfl_charToString(c: char): string
-extern fn _bfl_intToChar(i: int): char
-extern fn _bfl_readFileToString(path: string): string
-extern fn _bfl_crash(reason: string*, file: string*, line: u64): never
+extern fn _k1_charToString(c: char): string
+extern fn _k1_intToChar(i: int): char
+extern fn _k1_readFileToString(path: string): string
+extern fn _k1_crash(reason: string*, file: string*, line: u64): never
 
 type alias int = i64
 type alias uint = u64
 type alias byte = u8
 
-// extern fn _bfl_malloc(size: int): RawPointer
-// extern fn _bfl_free(ptr: RawPointer): unit
+// extern fn _k1_malloc(size: int): RawPointer
+// extern fn _k1_free(ptr: RawPointer): unit
 
 //type alias opaque string = { len: int, data: RawPointer }
 
@@ -40,12 +40,12 @@ intern fn print(value: string): unit
 intern fn exit(code: i64): unit
 
 fn crash(msg: string): never {
-  _bfl_crash(&msg, &compilerFile(), compilerLine());
+  _k1_crash(&msg, &compilerFile(), compilerLine());
 }
 
 namespace Files {
   fn readToString(path: string): string {
-    _bfl_readFileToString(path)
+    _k1_readFileToString(path)
   }
 }
 
@@ -61,10 +61,10 @@ fn assert(value: bool): unit {
 }
 namespace char {
   fn fromInt(value: int): char {
-    _bfl_intToChar(value)
+    _k1_intToChar(value)
   }
   fn toString(self: char): string {
-    _bfl_charToString(self)
+    _k1_charToString(self)
   }
 }
 

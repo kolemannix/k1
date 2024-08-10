@@ -1,6 +1,5 @@
 /target
 .idea
-bfl-out
+.k1-out
 zig-cache
 zig-out
-

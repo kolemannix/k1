@@ -8,20 +8,20 @@
 typedef struct {
   uint64_t len;
   char *data;
-} BflString;
+} K1String;
 // #pragma pack()
 
-_Static_assert (sizeof(BflString) == 16, "BflString size");
+_Static_assert (sizeof(K1String) == 16, "K1String size");
 
-void _bfl_crash(BflString* reason, BflString* filename, uint64_t line) {
+void _k1_crash(K1String* reason, K1String* filename, uint64_t line) {
     fprintf(stderr, "%.*s at %.*s:%llu\n", (int)reason->len, reason->data, (int)filename->len, filename->data, line);
     abort();
 }
 
-BflString _bfl_charToString(char c) {
+K1String _k1_charToString(char c) {
   char *data = malloc(1);
   data[0] = c;
-  BflString string = {
+  K1String string = {
       .len = 1,
       .data = data,
   };
@@ -30,7 +30,7 @@ BflString _bfl_charToString(char c) {
 
 // Passing struct; not guaranteed ABI
 // One day pass by reference OR pass each field
-BflString _bfl_readFileToString(BflString filename) {
+K1String _k1_readFileToString(K1String filename) {
     char* as_cstring = malloc(filename.len + 1);
     // snprintf(as_cstring, filename.len, "%s", filename.data);
     memcpy(as_cstring, filename.data, filename.len);
@@ -43,7 +43,7 @@ BflString _bfl_readFileToString(BflString filename) {
 
     fseek(file, 0, SEEK_SET);
     fread(buf, fsize, 1, file);
-    BflString string = {
+    K1String string = {
         .len = fsize,
         .data = buf
     };
@@ -54,6 +54,6 @@ BflString _bfl_readFileToString(BflString filename) {
 
 // To be removed once we have basic casts
 
-char _bfl_intToChar(int64_t i) {
+char _k1_intToChar(int64_t i) {
     return (char)i;
 }

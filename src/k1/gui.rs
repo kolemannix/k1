@@ -28,7 +28,7 @@ impl Gui {
         compile_sender: mpsc::SyncSender<()>,
         run_sender: mpsc::SyncSender<()>,
     ) -> Self {
-        let (mut rl, rl_thread) = raylib::init().size(800, 600).resizable().title("BFL").build();
+        let (mut rl, rl_thread) = raylib::init().size(800, 600).resizable().title("K1").build();
         rl.set_target_fps(60);
         rl.gui_enable();
 

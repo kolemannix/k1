@@ -1,12 +1,12 @@
 [package]
-name = "bfl"
+name = "k1"
 version = "0.1.0"
 edition = "2021"
 default-run = "compiler"
 
 [lib]
-name = "bfl"
-path = "src/bfl/lib.rs"
+name = "k1"
+path = "src/k1/lib.rs"
 
 [dependencies]
 anyhow = "1.0.69"

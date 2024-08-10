@@ -1,10 +1,10 @@
 use std::sync::{Arc, RwLock};
 use std::thread::{self, JoinHandle};
 
-use bfl::compiler::Args;
-use bfl::typer::TypedModule;
-use bfl::{compiler, gui};
 use clap::Parser;
+use k1::compiler::Args;
+use k1::typer::TypedModule;
+use k1::{compiler, gui};
 use log::info;
 
 fn main() {
@@ -12,9 +12,9 @@ fn main() {
     let args = Args::parse();
     info!("{:#?}", args);
 
-    info!("bfl Compiler v0.1.0");
+    info!("k1 Compiler v0.1.0");
 
-    let out_dir = "bfl-out";
+    let out_dir = ".k1-out";
 
     // If gui mode:
     // - Create a new thread to compile the module

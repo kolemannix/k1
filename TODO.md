@@ -118,7 +118,7 @@
 
 ## Memory Management story
 - [ ] Figure out the pointer/reference story
-  - I want to do a minimal runtime with a user-visible heap, semi-auto memory management. Write the heap and main fn in C, call bfl main from the 'runtime' main, which sets up a basic heap based on settings or something user-visible.
+  - I want to do a minimal runtime with a user-visible heap, semi-auto memory management. Write the heap and main fn in C, call main from the 'runtime' main, which sets up a basic heap based on settings or something user-visible.
   This will let us intern strings, etc. Kinda like the JVM, except its not
   a VM, just a native runtime.
   - If we introduce simple implicits for context passing, we can use this to pass heaps around

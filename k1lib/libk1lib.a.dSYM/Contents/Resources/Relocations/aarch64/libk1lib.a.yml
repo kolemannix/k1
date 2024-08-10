@@ -1,0 +1,10 @@
+---
+triple:          'arm64-apple-darwin'
+binary-path:     'k1lib/libk1lib.a'
+relocations:
+  - { offsetInCU: 0x26, offset: 0x26, size: 0x8, addend: 0x0, symName: __k1_crash, symObjAddr: 0x0, symBinAddr: 0x3D50, symSize: 0x70 }
+  - { offsetInCU: 0x48, offset: 0x48, size: 0x8, addend: 0x0, symName: __k1_crash, symObjAddr: 0x0, symBinAddr: 0x3D50, symSize: 0x70 }
+  - { offsetInCU: 0x88, offset: 0x88, size: 0x8, addend: 0x0, symName: __k1_charToString, symObjAddr: 0x70, symBinAddr: 0x3DC0, symSize: 0x50 }
+  - { offsetInCU: 0xCC, offset: 0xCC, size: 0x8, addend: 0x0, symName: __k1_readFileToString, symObjAddr: 0xC0, symBinAddr: 0x3E10, symSize: 0xE8 }
+  - { offsetInCU: 0x13A, offset: 0x13A, size: 0x8, addend: 0x0, symName: __k1_intToChar, symObjAddr: 0x1A8, symBinAddr: 0x3EF8, symSize: 0x18 }
+...
