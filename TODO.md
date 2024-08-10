@@ -67,6 +67,7 @@
 - [x] Use abilities to implement Bits namespace
 - [x] return statement (control flow of blocks / statements: CanReturn, AlwaysReturns, NeverReturns (which is 'never'))
 - [ ] Use `as` casting syntax for rawpointer.asUnsafe
+- [ ] Allow `as` casting syntax for enums to supply only the tag (`result as .Ok` instead of result as `Result<T,E>.Ok`)
 - [ ] 'Context' system; implicit stack arguments
 - [ ] Mark types as trivially copyable or not
 - [ ] Precedence of dereference (and i guess unary ops in general) should be higher
@@ -76,7 +77,6 @@
 - [ ] Imports
 - [ ] Tuples? No, I don't think you need them if you have anonymous structs. The lack of names always makes them
       easy to start using and very hard to maintain / read consumer code
-- [ ] Ranges? I rarely use ranges; I think as a builtin that's an overreach. Maybe a stdlib type like Scala does
 - [x] Remove custom size/align code and use LLVM's
 - [ ] More type expressions! (this was a big part of my original point)
   - [ ] Intersect structs
@@ -84,7 +84,8 @@
   - [ ] return type of function
   - [ ] inner type of optional
 - [ ] floating point f32 and f64
-- [ ] Optional coalescing accessor (x?.y)
+- [ ] Optional coalescing field accessor (x?.y)
+- [ ] Ranges? I rarely use ranges; I think as a builtin that's an overreach. Maybe a stdlib type like Scala does
 - [x] Finish/fix simple generic inference
 - [x] Prevent function overloading in same namespace
 - [x] Typecheck the binary ops
@@ -95,7 +96,14 @@
 - [ ] Pure lambdas with -> (not closures)
 - [ ] slices (windows? segments?)
 - [ ] Generic abilities
+- [ ] Ability constraints
+- [ ] array bounds checking
+- [ ] Rework builtin array
+- [ ] German/Umbra strings
 - [ ] Make demo readme / site
+
+## Non-goals at least for now
+- [ ] Memory safety / solving the 'aliasing' problem, not because its unimportant but because I have other interests
 
 ## Maybe
 - [ ] Move to UFCS instead of having the concept of a 'method' or companion namespace?
@@ -227,7 +235,6 @@
 - [x] Implicit return of unit if no return statement
 - [x] string.indexOf
   - charToString implemented in zig and linked
-- [ ] array bounds checking
 - [ ] Array.distinct in zig
 - [x] Not equal != operator
 - [x] Unary negation operator

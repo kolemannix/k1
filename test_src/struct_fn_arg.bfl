@@ -1,9 +1,0 @@
-fn addPoint(p: { x: int, y: int}): int {
-  p.x + p.y
-}
-
-fn main(): int {
-  val result: int = addPoint({ x: 1, y: 2 });
-  assert(result == 3);
-  0
-}
