@@ -28,9 +28,7 @@ type alias byte = u8
 // Must have type id 6; do not reorder!
 type alias opaque RawPointer = u64
 namespace RawPointer {
-  intern fn asUnsafe<T>(self: RawPointer): T*
   fn toIntUnsafe(self: RawPointer): u64 { self }
-
   fn fromIntUnsafe(value: u64): RawPointer { value }
 }
 
