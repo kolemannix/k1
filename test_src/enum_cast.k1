@@ -3,7 +3,9 @@ type E = enum A(int) | B | C
 fn main(): int {
   val x: E = .A(42);
   val y = .A(42): E.A;
-  val x_as_a = x as E.A;
-  assert(x_as_a.payload == y.payload);
+  val xAsA = x as E.A;
+  val xAsA2 = x as .A;
+  assert(xAsA.payload == y.payload);
+  assert(xAsA2.payload == y.payload);
   0
 }

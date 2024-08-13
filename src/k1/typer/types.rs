@@ -13,6 +13,10 @@ pub struct TypeId(u32);
 
 impl TypeId {
     pub const PENDING: TypeId = TypeId(u32::MAX);
+
+    pub fn to_u64(&self) -> u64 {
+        self.0 as u64
+    }
 }
 
 impl Display for TypeId {
@@ -208,6 +212,23 @@ impl IntegerType {
     }
 }
 
+pub struct Spanned<T> {
+    pub v: T,
+    pub span: SpanId,
+}
+
+#[derive(Debug, Clone)]
+pub struct FnArgType {
+    pub type_id: TypeId,
+    pub name: IdentifierId,
+}
+
+#[derive(Debug, Clone)]
+pub struct FunctionType {
+    pub params: Vec<FnArgType>,
+    pub return_type: TypeId,
+}
+
 #[derive(Debug, Clone)]
 pub enum Type {
     Unit,
@@ -229,6 +250,7 @@ pub enum Type {
     Never,
     OpaqueAlias(OpaqueTypeAlias),
     Generic(GenericType),
+    Function(FunctionType),
 }
 
 impl Type {
@@ -246,6 +268,7 @@ impl Type {
             Type::Never => None,
             Type::OpaqueAlias(opaque) => Some(opaque.ast_id.into()),
             Type::Generic(gen) => Some(gen.ast_id.into()),
+            Type::Function(_fun) => None,
         }
     }
 
@@ -370,6 +393,7 @@ impl Type {
             Type::Never => None,
             Type::OpaqueAlias(opaque) => Some(&opaque.type_defn_info),
             Type::Generic(gen) => Some(&gen.type_defn_info),
+            Type::Function(_) => None,
         }
     }
 
@@ -403,6 +427,7 @@ impl Types {
                 }
             }
         }
+
         match typ {
             Type::Enum(mut e) => {
                 // Enums and variants are self-referential
@@ -494,6 +519,17 @@ impl Types {
             Type::Never => false,
             Type::OpaqueAlias(opaque) => self.does_type_reference_type_variables(opaque.aliasee),
             Type::Generic(_gen) => true,
+            Type::Function(fun) => {
+                for param in fun.params.iter() {
+                    if self.does_type_reference_type_variables(param.type_id) {
+                        return true;
+                    }
+                }
+                if self.does_type_reference_type_variables(fun.return_type) {
+                    return true;
+                }
+                return false;
+            }
         }
     }
 
@@ -515,6 +551,7 @@ impl Types {
             Type::Never => None,
             Type::OpaqueAlias(_opaque) => None,
             Type::Generic(_gen) => None,
+            Type::Function(_fun) => None,
         }
     }
 

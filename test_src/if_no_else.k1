@@ -1,8 +1,12 @@
 fn main(): int {
-  if true {
+  // Gets unit type
+  val expr: unit = if true {
     printInt(42)
+  };
+
+  // Even if one branch is 'never'
+  val expr: unit = if false {
+    crash("never happens");
   };
   0
 }
-// 42
-// 0

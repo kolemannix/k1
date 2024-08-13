@@ -19,7 +19,7 @@ use types::*;
 
 use crate::lex::{SpanId, Spans, TokenKind};
 use crate::parse::{
-    self, FnCallArg, ForExpr, ForExprType, IfExpr, IndexOperation, NumericWidth, ParsedAbilityId,
+    self, ForExpr, ForExprType, IfExpr, IndexOperation, NumericWidth, ParsedAbilityId,
     ParsedAbilityImplId, ParsedConstantId, ParsedExpressionId, ParsedFunctionId, ParsedId,
     ParsedNamespaceId, ParsedPattern, ParsedPatternId, ParsedTypeDefnId, ParsedTypeExpression,
     ParsedTypeExpressionId, ParsedUnaryOpKind, Sources,
@@ -937,6 +937,7 @@ pub enum IntrinsicFunction {
     RawPointerToReference,
     SizeOf,
     AlignOf,
+    TypeId,
     BitNot,
     BitAnd,
     BitOr,
@@ -959,9 +960,11 @@ impl IntrinsicFunction {
             IntrinsicFunction::ArrayCapacity => false,
             IntrinsicFunction::StringFromCharArray => false,
             IntrinsicFunction::StringEquals => false,
+            // TODO: RawPointerToReference should be inlined
             IntrinsicFunction::RawPointerToReference => false,
             IntrinsicFunction::SizeOf => true,
             IntrinsicFunction::AlignOf => true,
+            IntrinsicFunction::TypeId => true,
             IntrinsicFunction::BitNot => true,
             IntrinsicFunction::BitAnd => true,
             IntrinsicFunction::BitOr => true,
@@ -1363,7 +1366,7 @@ impl TypedModule {
 
         let removed = self.scopes.remove_pending_type_defn(scope_id, parsed_type_defn.name);
         if !removed {
-            panic!("Failed to remove pending type defn");
+            panic_at_disco!("Failed to remove pending type defn");
         } else {
             eprintln!("Removed pending type defn {}", self.get_ident_str(parsed_type_defn.name))
         }
@@ -1451,7 +1454,7 @@ impl TypedModule {
                 Ok(tag_type_id)
             }
             ParsedTypeExpression::TypeApplication(ty_app) => {
-                if self.ast.identifiers.get_name(ty_app.base) == "Array" {
+                if self.ast.identifiers.get_name(ty_app.base_name) == "Array" {
                     if ty_app.params.len() == 1 {
                         let element_ty = self.eval_type_expr(ty_app.params[0], scope_id, None)?;
                         let array_ty = ArrayType { element_type: element_ty };
@@ -1461,7 +1464,7 @@ impl TypedModule {
                         make_fail_span("Expected 1 type parameter for Array", ty_app.span)
                     }
                 } else {
-                    self.eval_type_application(type_expr_id, scope_id)
+                    self.eval_type_application(type_expr_id, scope_id, type_defn_info)
                 }
             }
             ParsedTypeExpression::Optional(opt) => {
@@ -1527,13 +1530,52 @@ impl TypedModule {
                         Ok(variant_type)
                     }
                     // You can do dot access on structs to get their members!
-                    Type::Struct(_s) => todo!("struct member access"),
+                    t @ Type::Struct(s) => {
+                        let Some(field) = s.find_field(dot_acc.member_name) else {
+                            return ffail!(
+                                dot_acc.span,
+                                "Field {} does not exist on struct {}",
+                                self.get_ident_str(dot_acc.member_name),
+                                self.type_to_string(t)
+                            );
+                        };
+                        Ok(field.1.type_id)
+                    }
                     // You can do dot access on Array to get its element type
                     Type::Array(_a) => todo!("array member access"),
                     // You can do dot access on Optionals to get out their 'inner' types
-                    Type::Optional(_o) => todo!("optional dot access for inner type"),
+                    Type::Optional(opt) => {
+                        if self.ast.identifiers.get_name(dot_acc.member_name) != "value" {
+                            return make_fail_ast_id(
+                                &self.ast,
+                                "Invalid member access on Optional type; try '.value'",
+                                type_expr_id.into(),
+                            );
+                        }
+                        Ok(opt.inner_type)
+                    }
                     // You can do dot access on References to get out their 'inner' types
                     Type::Reference(_r) => todo!("reference dot access for referenced type"),
+                    Type::Function(fun) => {
+                        let member_name = self.ast.identifiers.get_name(dot_acc.member_name);
+                        // Consider #return to avoid collisions
+                        match member_name {
+                            "return" => Ok(fun.return_type),
+                            _other => {
+                                if let Some(param) =
+                                    fun.params.iter().find(|p| p.name == dot_acc.member_name)
+                                {
+                                    Ok(param.type_id)
+                                } else {
+                                    return make_fail_ast_id(
+                                        &self.ast,
+                                        &format!("Function has no parameter named {}", member_name),
+                                        type_expr_id.into(),
+                                    );
+                                }
+                            }
+                        }
+                    }
                     other => {
                         return make_fail_ast_id(
                             &self.ast,
@@ -1543,8 +1585,7 @@ impl TypedModule {
                             ),
                             type_expr_id.into(),
                         )
-                    } // You can do dot access on function names (which are not type expressions yet)
-                      // to talk about their return types (and argument types?)
+                    }
                 }
             }
         }?;
@@ -1555,19 +1596,100 @@ impl TypedModule {
         &mut self,
         ty_app_id: ParsedTypeExpressionId,
         scope_id: ScopeId,
+        type_defn_info: Option<TypeDefnInfo>,
     ) -> TyperResult<TypeId> {
         let ParsedTypeExpression::TypeApplication(ty_app) =
             self.ast.type_expressions.get(ty_app_id)
         else {
-            panic!("Expected TypeApplication")
+            panic_at_disco!("Expected TypeApplication")
         };
         let ty_app = ty_app.clone();
-        match self.scopes.find_type(scope_id, ty_app.base) {
+        match self.get_ident_str(ty_app.base_name) {
+            "_struct_combine" => {
+                if ty_app.params.len() != 2 {
+                    return ffail!(ty_app.span, "Expected 2 type parameters for _struct_combine");
+                }
+                let arg1 = self.eval_type_expr(ty_app.params[0], scope_id, None)?;
+                let arg2 = self.eval_type_expr(ty_app.params[1], scope_id, None)?;
+
+                let struct1 = self
+                    .types
+                    .get(arg1)
+                    .as_struct()
+                    .ok_or(ferr!(ty_app.span, "Expected struct"))?;
+                let struct2 = self
+                    .types
+                    .get(arg2)
+                    .as_struct()
+                    .ok_or(ferr!(ty_app.span, "Expected struct"))?;
+
+                let mut combined_fields =
+                    Vec::with_capacity(struct1.fields.len() + struct2.fields.len());
+                combined_fields.extend(struct1.fields.clone());
+                for field in struct2.fields.iter() {
+                    let collision = combined_fields.iter().find(|f| f.name == field.name);
+                    if let Some(collision) = collision {
+                        if collision.type_id != field.type_id {
+                            return ffail!(
+                                ty_app.span,
+                                "Field '{}' has conflicting types in the two structs",
+                                self.get_ident_str(field.name).blue()
+                            );
+                        }
+                    }
+                    let mut field = field.clone();
+                    field.index = combined_fields.len() as u32;
+                    combined_fields.push(field);
+                }
+
+                let new_struct = Type::Struct(StructType {
+                    fields: combined_fields,
+                    type_defn_info,
+                    ast_node: ParsedId::TypeExpression(ty_app_id),
+                });
+                let type_id = self.types.add_type(new_struct);
+                eprintln!("Combined struct: {}", self.type_id_to_string(type_id));
+
+                return Ok(type_id);
+            }
+            "_struct_remove" => {
+                if ty_app.params.len() != 2 {
+                    return ffail!(ty_app.span, "Expected 2 type parameters for _struct_remove");
+                }
+                let arg1 = self.eval_type_expr(ty_app.params[0], scope_id, None)?;
+                let arg2 = self.eval_type_expr(ty_app.params[1], scope_id, None)?;
+
+                let struct1 = self
+                    .types
+                    .get(arg1)
+                    .as_struct()
+                    .ok_or(ferr!(ty_app.span, "Expected struct"))?;
+                let struct2 = self
+                    .types
+                    .get(arg2)
+                    .as_struct()
+                    .ok_or(ferr!(ty_app.span, "Expected struct"))?;
+                let mut new_fields = struct1.fields.clone();
+                new_fields.retain(|f| !struct2.fields.iter().any(|sf| sf.name == f.name));
+                let mut new_struct = StructType {
+                    fields: new_fields,
+                    type_defn_info,
+                    ast_node: ParsedId::TypeExpression(ty_app_id),
+                };
+                for (i, field) in new_struct.fields.iter_mut().enumerate() {
+                    field.index = i as u32;
+                }
+                let type_id = self.types.add_type(Type::Struct(new_struct));
+                return Ok(type_id);
+            }
+            _ => {}
+        };
+        match self.scopes.find_type(scope_id, ty_app.base_name) {
             None => {
                 return ffail!(
                     ty_app.span,
                     "No type named '{}' is in scope",
-                    self.get_ident_str(ty_app.base).blue()
+                    self.get_ident_str(ty_app.base_name).blue()
                 )
             }
             Some(type_id) => {
@@ -1576,7 +1698,7 @@ impl TypedModule {
                     return ffail!(
                         ty_app.span,
                         "Type '{}' does not take type parameters",
-                        self.get_ident_str(ty_app.base)
+                        self.get_ident_str(ty_app.base_name)
                     );
                 };
                 for parsed_param in ty_app.params.clone().iter() {
@@ -1885,6 +2007,12 @@ impl TypedModule {
             }
             ParsedPattern::Struct(struct_pattern) => {
                 let target_type = self.types.get(target_type_id);
+                if struct_pattern.fields.is_empty() {
+                    return make_fail_span(
+                        "Useless pattern: Struct pattern has no fields; use wildcard pattern '_' instead",
+                        struct_pattern.span,
+                    );
+                }
                 let expected_struct = target_type.as_struct().ok_or_else(|| {
                     make_error(
                         &format!(
@@ -1896,14 +2024,14 @@ impl TypedModule {
                 })?;
                 let mut fields = Vec::with_capacity(struct_pattern.fields.len());
                 for (field_name, field_parsed_pattern_id) in &struct_pattern.fields {
-                    let expected_field = expected_struct
-                        .fields
-                        .iter()
-                        .find(|f| f.name == *field_name)
-                        .ok_or(make_error(
-                            format!("Impossible pattern: Struct has no field named {}", field_name),
-                            self.ast.get_pattern_span(*field_parsed_pattern_id),
-                        ))?;
+                    let expected_field =
+                        expected_struct.fields.iter().find(|f| f.name == *field_name).ok_or(
+                            ferr!(
+                                self.ast.get_pattern_span(*field_parsed_pattern_id),
+                                "Impossible pattern: Struct has no field named '{}'",
+                                self.get_ident_str(*field_name).blue()
+                            ),
+                        )?;
                     let field_type_id = expected_field.type_id;
                     let field_pattern =
                         self.eval_pattern(*field_parsed_pattern_id, field_type_id, scope_id)?;
@@ -1932,16 +2060,16 @@ impl TypedModule {
     ) -> Result<(), String> {
         if expected.fields.len() != actual.fields.len() {
             return Err(format!(
-                "expected struc with {} fields, got {}",
+                "expected struct with {} fields, got {}",
                 expected.fields.len(),
                 actual.fields.len()
             ));
         }
         for expected_field in &expected.fields {
-            trace!("typechecking struc field {:?}", expected_field);
+            trace!("typechecking struct field {:?}", expected_field);
             let Some(matching_field) = actual.fields.iter().find(|f| f.name == expected_field.name)
             else {
-                return Err(format!("expected struc to have field {}", expected_field.name));
+                return Err(format!("expected struct to have field {}", expected_field.name));
             };
             self.check_types(expected_field.type_id, matching_field.type_id, scope_id)?;
         }
@@ -2861,7 +2989,7 @@ impl TypedModule {
                 Ok(TypedExpr::Block(block))
             }
             ParsedExpression::FnCall(fn_call) => {
-                let call = self.eval_function_call(&fn_call.clone(), None, None, None, scope_id)?;
+                let call = self.eval_function_call(&fn_call.clone(), None, None, scope_id)?;
                 Ok(call)
             }
             ParsedExpression::OptionalGet(optional_get) => {
@@ -2974,87 +3102,7 @@ impl TypedModule {
             ParsedExpression::Match(_match_expr) => {
                 self.eval_match_expr(expr_id, scope_id, expected_type)
             }
-            ParsedExpression::AsCast(cast) => {
-                let cast = cast.clone();
-                let base_expr = self.eval_expr(cast.base_expr, scope_id, None)?;
-                let base_expr_type = base_expr.get_type();
-                let target_type = self.eval_type_expr(cast.dest_type, scope_id, None)?;
-                let cast_type = match self.types.get(base_expr_type) {
-                    Type::Integer(from_integer_type) => match self.types.get(target_type) {
-                        Type::Integer(to_integer_type) => {
-                            let cast_type = match from_integer_type
-                                .bit_width()
-                                .cmp(&to_integer_type.bit_width())
-                            {
-                                Ordering::Less => CastType::IntegerExtend,
-                                Ordering::Greater => CastType::IntegerTruncate,
-                                Ordering::Equal => CastType::KnownNoOp,
-                            };
-                            Ok(cast_type)
-                        }
-                        Type::Char => {
-                            if from_integer_type.bit_width() == 8 {
-                                Ok(CastType::Integer8ToChar)
-                            } else {
-                                ffail!(
-                                    cast.span,
-                                    "Cannot cast integer '{}' to char, must be 8 bits",
-                                    from_integer_type
-                                )
-                            }
-                        }
-                        _ => ffail!(
-                            cast.span,
-                            "Cannot cast integer '{}' to '{}'",
-                            from_integer_type,
-                            self.type_id_to_string(target_type).blue()
-                        ),
-                    },
-                    Type::Char => match self.types.get(target_type) {
-                        Type::Integer(_to_integer_type) => Ok(CastType::IntegerExtendFromChar),
-                        _ => ffail!(
-                            cast.span,
-                            "Cannot cast char to '{}'",
-                            self.type_id_to_string(target_type).blue()
-                        ),
-                    },
-                    Type::Enum(_e) => {
-                        match self.types.get(target_type) {
-                            Type::EnumVariant(variant) => {
-                                // Enum cast to variant
-                                if variant.enum_type_id == base_expr_type {
-                                    Ok(CastType::EnumVariant)
-                                } else {
-                                    ffail!(
-                                        cast.span,
-                                        "Cannot cast enum '{}' to '{}'",
-                                        self.type_id_to_string(base_expr_type).blue(),
-                                        self.type_id_to_string(variant.enum_type_id).blue()
-                                    )
-                                }
-                            }
-                            _ => ffail!(
-                                cast.span,
-                                "Cannot cast enum '{}' to '{}'",
-                                self.type_id_to_string(base_expr_type).blue(),
-                                self.type_id_to_string(target_type).blue()
-                            ),
-                        }
-                    }
-                    _ => ffail!(
-                        cast.span,
-                        "Cannot cast '{}' to '{}'",
-                        self.type_id_to_string(base_expr_type).blue(),
-                        self.type_id_to_string(target_type).blue()
-                    ),
-                }?;
-                Ok(TypedExpr::Cast(TypedCast {
-                    base_expr: Box::new(base_expr),
-                    target_type_id: target_type,
-                    cast_type,
-                    span: cast.span,
-                }))
-            }
+            ParsedExpression::AsCast(_cast) => self.eval_cast(expr_id, scope_id),
         };
         result
     }
@@ -3112,7 +3160,7 @@ impl TypedModule {
         )?;
         resulting_block.statements.extend(pre_stmts);
         resulting_block.push_stmt(TypedStmt::Expr(Box::new(if_chain)));
-        debug!("match result\n{}", self.block_to_string(&resulting_block));
+        eprintln!("match result\n{}", self.block_to_string(&resulting_block));
         let result = TypedExpr::Block(resulting_block);
         Ok(result)
     }
@@ -3501,6 +3549,106 @@ impl TypedModule {
         }
     }
 
+    fn eval_cast(
+        &mut self,
+        expr_id: ParsedExpressionId,
+        scope_id: ScopeId,
+    ) -> TyperResult<TypedExpr> {
+        let cast = self.ast.expressions.get(expr_id).expect_cast();
+        let cast = cast.clone();
+        let base_expr = self.eval_expr(cast.base_expr, scope_id, None)?;
+        let base_expr_type = base_expr.get_type();
+        let target_type = self.eval_type_expr(cast.dest_type, scope_id, None)?;
+        let (cast_type, output_type) = match self.types.get(base_expr_type) {
+            Type::Integer(from_integer_type) => match self.types.get(target_type) {
+                Type::Integer(to_integer_type) => {
+                    let cast_type =
+                        match from_integer_type.bit_width().cmp(&to_integer_type.bit_width()) {
+                            Ordering::Less => CastType::IntegerExtend,
+                            Ordering::Greater => CastType::IntegerTruncate,
+                            Ordering::Equal => CastType::KnownNoOp,
+                        };
+                    Ok((cast_type, target_type))
+                }
+                Type::Char => {
+                    if from_integer_type.bit_width() == 8 {
+                        Ok((CastType::Integer8ToChar, target_type))
+                    } else {
+                        ffail!(
+                            cast.span,
+                            "Cannot cast integer '{}' to char, must be 8 bits",
+                            from_integer_type
+                        )
+                    }
+                }
+                _ => ffail!(
+                    cast.span,
+                    "Cannot cast integer '{}' to '{}'",
+                    from_integer_type,
+                    self.type_id_to_string(target_type).blue()
+                ),
+            },
+            Type::Char => match self.types.get(target_type) {
+                Type::Integer(_to_integer_type) => {
+                    Ok((CastType::IntegerExtendFromChar, target_type))
+                }
+                _ => ffail!(
+                    cast.span,
+                    "Cannot cast char to '{}'",
+                    self.type_id_to_string(target_type).blue()
+                ),
+            },
+            Type::Enum(e) => {
+                match self.types.get(target_type) {
+                    Type::TagInstance(tag_type) => {
+                        // If this tag is a variant of the enum, we can cast to it
+                        if let Some(variant) = e.variant_by_name(tag_type.ident) {
+                            Ok((CastType::EnumVariant, variant.my_type_id))
+                        } else {
+                            ffail!(
+                                cast.span,
+                                "Cannot cast enum '{}' to '{}'",
+                                self.type_id_to_string(base_expr_type).blue(),
+                                self.type_id_to_string(target_type).blue()
+                            )
+                        }
+                    }
+                    Type::EnumVariant(variant) => {
+                        // Enum cast to variant
+                        if variant.enum_type_id == base_expr_type {
+                            Ok((CastType::EnumVariant, target_type))
+                        } else {
+                            ffail!(
+                                cast.span,
+                                "Cannot cast enum '{}' to '{}'",
+                                self.type_id_to_string(base_expr_type).blue(),
+                                self.type_id_to_string(variant.enum_type_id).blue()
+                            )
+                        }
+                    }
+                    _ => ffail!(
+                        cast.span,
+                        "Cannot cast enum '{}' to '{}'",
+                        self.type_id_to_string(base_expr_type).blue(),
+                        self.type_id_to_string(target_type).blue()
+                    ),
+                }
+            }
+            _ => ffail!(
+                cast.span,
+                "Cannot cast '{}' to '{}'",
+                self.type_id_to_string(base_expr_type).blue(),
+                self.type_id_to_string(target_type).blue()
+            ),
+        }?;
+        Ok(TypedExpr::Cast(TypedCast {
+            base_expr: Box::new(base_expr),
+            target_type_id: output_type,
+            cast_type,
+            span: cast.span,
+        }))
+    }
+
     fn synth_equals_binop(&self, lhs: TypedExpr, rhs: TypedExpr, span: SpanId) -> TypedExpr {
         TypedExpr::BinaryOp(BinaryOp {
             kind: BinaryOpKind::Equals,
@@ -3578,7 +3726,6 @@ impl TypedModule {
                 span,
                 is_method: false,
             },
-            None,
             known_type_args,
             Some(value_arg_exprs),
             scope_id,
@@ -4664,7 +4811,6 @@ impl TypedModule {
     fn eval_function_call(
         &mut self,
         fn_call: &FnCall,
-        this_expr: Option<TypedExpr>,
         known_type_args: Option<Vec<TypeId>>,
         known_value_args: Option<Vec<TypedExpr>>,
         scope_id: ScopeId,
@@ -4753,7 +4899,6 @@ impl TypedModule {
                             &type_args,
                             function_id,
                             intrinsic_type,
-                            this_expr,
                             scope_id,
                             known_value_args,
                         )?;
@@ -4995,7 +5140,6 @@ impl TypedModule {
         inferred_or_passed_type_args: &Vec<TypeParam>,
         generic_function_id: FunctionId,
         intrinsic_type: Option<IntrinsicFunction>,
-        this_expr: Option<TypedExpr>,
         calling_scope: ScopeId,
         pre_evaled_value_args: Option<Vec<TypedExpr>>,
     ) -> TyperResult<(FunctionId, Vec<TypedExpr>)> {
@@ -5271,12 +5415,13 @@ impl TypedModule {
                     "exit" => Some(IntrinsicFunction::Exit),
                     "sizeOf" => Some(IntrinsicFunction::SizeOf),
                     "alignOf" => Some(IntrinsicFunction::AlignOf),
+                    "typeId" => Some(IntrinsicFunction::TypeId),
                     _ => None,
                 },
                 Some("string") => match fn_name_str {
                     "length" => Some(IntrinsicFunction::StringLength),
                     "fromChars" => Some(IntrinsicFunction::StringFromCharArray),
-                    // Ability impl, won't work just yet
+                    // Ability impl
                     "equals" => Some(IntrinsicFunction::StringEquals),
                     _ => None,
                 },
@@ -5502,7 +5647,7 @@ impl TypedModule {
         } else {
             None
         };
-        let given_ret_type = match parsed_function_ret_type {
+        let return_type = match parsed_function_ret_type {
             None => UNIT_TYPE_ID,
             Some(type_expr) => self.eval_type_expr(type_expr, fn_scope_id, None)?,
         };
@@ -5523,10 +5668,13 @@ impl TypedModule {
         } else {
             TypedFunctionMetadata::Standard { parsed_function_id, is_method_of }
         };
+
+        let param_types =
+            params.iter().map(|p| FnArgType { type_id: p.type_id, name: p.name }).collect();
         let function = TypedFunction {
             name,
             scope: fn_scope_id,
-            ret_type: given_ret_type,
+            ret_type: return_type,
             params,
             type_params,
             block: None,
@@ -5543,6 +5691,19 @@ impl TypedModule {
         if !specialize {
             if !self.scopes.add_function(parent_scope_id, parsed_function_name, function_id) {
                 return make_fail_span(&format!("Function name is taken"), parsed_function_span);
+            }
+
+            let function_type_id = self
+                .types
+                .add_type(Type::Function(FunctionType { params: param_types, return_type }));
+            let type_added =
+                self.scopes.add_type(parent_scope_id, parsed_function_name, function_type_id);
+            if !type_added {
+                return ffail!(
+                    parsed_function_span,
+                    "Function name '{}' is taken (in typespace)",
+                    self.get_ident_str(parsed_function_name)
+                );
             }
         }
 

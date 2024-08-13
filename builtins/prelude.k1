@@ -6,6 +6,10 @@ type never = builtin
 
 intern fn sizeOf<T>(): int
 intern fn alignOf<T>(): int
+intern fn typeId<T>(): bool
+fn typeEq<T, U>(): bool {
+  typeId<T>() == typeId<U>()
+}
 
 extern fn _k1_charToString(c: char): string
 extern fn _k1_intToChar(i: int): char
@@ -55,8 +59,12 @@ fn printBool(value: bool): unit {
 
 fn assert(value: bool): unit {
   if not value {
-    println("ASSERT FAILED");
-    exit(1)
+    crash("ASSERT FAILED")
+  };
+}
+fn assertMsg(msg: string, value: bool): unit {
+  if not value {
+    crash("ASSERT FAILED: ".concat(msg))
   };
 }
 namespace char {

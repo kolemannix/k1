@@ -1,0 +1,26 @@
+type Positioned = {
+  x: int, y: int, width: int, height: int
+}
+type Text = _struct_combine<{ text: string }, Positioned>
+
+type User = {
+  name: string,
+  password: string,
+}
+
+type UserView = _struct_remove<User, { password: string }>
+
+fn main(): int {
+  val t: Text = { text: "Hello, Builder!", x: 0, y: 0, width: 0, height: 0 };
+  assert(t is { text: "Hello, Builder!" });
+  assert(t.x == 0);
+  assert(t.y == 0);
+  // assert(t is { x: 0, y: 0 });
+  assert(t is { width: 0, height: 0 });
+
+  assert(sizeOf<Text>() == 16 + 32);
+
+  assert(sizeOf<UserView>() == sizeOf<{ name: string }>());
+
+  0
+}
