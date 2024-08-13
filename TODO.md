@@ -66,15 +66,11 @@
 - [x] Use abilities to implement Bits namespace
 - [x] return statement (control flow of blocks / statements: CanReturn, AlwaysReturns, NeverReturns (which is 'never'))
       ^ mixed feelings here as it breaks the fact that 'expr as T' always returns a T...
-- [ ] Use `as` casting syntax for rawpointer.asUnsafe
+- [x] Use `as` casting syntax for rawpointer.asUnsafe
 - [x] Allow `as` casting syntax for enums to supply only the tag (`result as .Ok` instead of result as `Result<T,E>.Ok`)
 - [ ] 'Context' system; implicit stack arguments
 - [ ] Mark types as trivially copyable or not
   ^ The builtin array would be NOT copyable so that you don't accidentally alias the data ptr
-- [ ] Precedence of dereference (and i guess unary ops in general) should be higher
-- [ ] Codegen 'variables' is broken (never cleared); use enter scope / exit scope w/ a stack of vecs or something
-      instead (matters when a variable id is reused because the same function is called twice; I think we just overwrite it
-      with the correct one but maybe nesting is a problem?)
 - [ ] Imports
 - [x] Remove custom size/align code and use LLVM's
 - [x] More type expressions! (this was a big part of my original point)
@@ -94,11 +90,11 @@
 - [x] Bitwise ops using abilities
 - [ ] Exhaustive pattern matching
 - [ ] function pointers (we could take address of a function as RawPointer already)
-- [ ] Pure lambdas with -> (not closures)
 - [ ] slices (windows? segments?)
 - [ ] Generic abilities
 - [ ] Ability constraints
 - [ ] array bounds checking
+- [ ] Pure lambdas with -> (not closures)
 - [ ] Rework builtin array to be userspace and use multipointers?
 - [ ] German/Umbra strings
 - [ ] Make demo readme / site
@@ -112,6 +108,7 @@
 
 ## Maybe
 - [ ] Move to UFCS instead of having the concept of a 'method' or companion namespace?
+- [ ] Automatic unsafe marker
 
 ## Error story
 - [ ] As values, of course.
@@ -129,9 +126,12 @@
   - If we introduce simple implicits for context passing, we can use this to pass heaps around
   - Generational References combined w/ arena-style memory mgmt
 
-# Minor
-
+# Minor Fix
 - [ ] type suffixes on int literals 123u32, 4u8, etc
+- [ ] Precedence of dereference (and i guess unary ops in general) should be higher
+- [ ] Codegen 'variables' is broken (never cleared); use enter scope / exit scope w/ a stack of vecs or something
+      instead (matters when a variable id is reused because the same function is called twice; I think we just overwrite it
+      with the correct one but maybe nesting is a problem?)
 
 # GUI checklist
 

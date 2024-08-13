@@ -29,7 +29,7 @@ use inkwell::values::{
 use inkwell::{AddressSpace, IntPredicate, OptimizationLevel};
 use log::{debug, info, trace};
 
-use crate::lex::{Span, SpanId};
+use crate::lex::SpanId;
 use crate::parse::{FileId, IdentifierId};
 use crate::typer::scopes::ScopeId;
 use crate::typer::types::*;
@@ -1942,6 +1942,16 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         );
                         Ok(truncated_value.as_basic_value_enum().into())
                     }
+                    CastType::RawPointerToReference => {
+                        let raw_pointer =
+                            self.codegen_expr_basic_value(&cast.base_expr)?.into_int_value();
+                        let actual_ptr = self.builder.build_int_to_ptr(
+                            raw_pointer,
+                            self.builtin_types.int.ptr_type(AddressSpace::default()),
+                            "ptr",
+                        );
+                        Ok(actual_ptr.as_basic_value_enum().into())
+                    }
                 }
             }
             TypedExpr::Return(ret) => {
@@ -2682,16 +2692,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     .unwrap();
                 self.builder.build_store(array_arg, updated_array);
                 Ok(self.builtin_types.unit_value.as_basic_value_enum())
-            }
-            IntrinsicFunction::RawPointerToReference => {
-                let raw_pointer_input =
-                    self.get_loaded_variable(function.params[0].variable_id).into_int_value();
-                let actual_ptr = self.builder.build_int_to_ptr(
-                    raw_pointer_input,
-                    self.builtin_types.int.ptr_type(AddressSpace::default()),
-                    "ptr",
-                );
-                Ok(actual_ptr.as_basic_value_enum())
             }
             _ => {
                 panic!("Unexpected intrinsic type for actual llvm function {:?}", intrinsic_type)

@@ -590,6 +590,7 @@ pub enum CastType {
     IntegerExtendFromChar,
     EnumVariant,
     KnownNoOp,
+    RawPointerToReference,
 }
 
 impl Display for CastType {
@@ -601,6 +602,7 @@ impl Display for CastType {
             CastType::IntegerExtendFromChar => write!(f, "iextfromchar"),
             CastType::EnumVariant => write!(f, "enum"),
             CastType::KnownNoOp => write!(f, "noop"),
+            CastType::RawPointerToReference => write!(f, "ptrtoref"),
         }
     }
 }
@@ -934,7 +936,6 @@ pub enum IntrinsicFunction {
     ArrayCapacity,
     StringFromCharArray,
     StringEquals,
-    RawPointerToReference,
     SizeOf,
     AlignOf,
     TypeId,
@@ -960,8 +961,6 @@ impl IntrinsicFunction {
             IntrinsicFunction::ArrayCapacity => false,
             IntrinsicFunction::StringFromCharArray => false,
             IntrinsicFunction::StringEquals => false,
-            // TODO: RawPointerToReference should be inlined
-            IntrinsicFunction::RawPointerToReference => false,
             IntrinsicFunction::SizeOf => true,
             IntrinsicFunction::AlignOf => true,
             IntrinsicFunction::TypeId => true,
@@ -3634,6 +3633,16 @@ impl TypedModule {
                     ),
                 }
             }
+            Type::OpaqueAlias(_opaque) if base_expr_type == RAW_POINTER_TYPE_ID => {
+                match self.types.get(target_type) {
+                    Type::Reference(_refer) => Ok((CastType::RawPointerToReference, target_type)),
+                    _ => ffail!(
+                        cast.span,
+                        "Cannot cast raw pointer to '{}'",
+                        self.type_id_to_string(target_type).blue()
+                    ),
+                }
+            }
             _ => ffail!(
                 cast.span,
                 "Cannot cast '{}' to '{}'",
@@ -5435,7 +5444,6 @@ impl TypedModule {
                 },
                 Some("char") => None,
                 Some("RawPointer") => match fn_name_str {
-                    "asUnsafe" => Some(IntrinsicFunction::RawPointerToReference),
                     _ => None,
                 },
                 Some("Bits") => match fn_name_str {
