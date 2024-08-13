@@ -1,5 +1,0 @@
-fn main(): int {
-  printBool(1 != 2);
-  printBool(2 != 2);
-  0
-}

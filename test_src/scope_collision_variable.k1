@@ -5,4 +5,3 @@ fn main(x: int): int {
   assert(x == 42);
   0
 }
-// 42

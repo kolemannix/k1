@@ -29,7 +29,7 @@ use inkwell::values::{
 use inkwell::{AddressSpace, IntPredicate, OptimizationLevel};
 use log::{debug, info, trace};
 
-use crate::lex::SpanId;
+use crate::lex::{Span, SpanId};
 use crate::parse::{FileId, IdentifierId};
 use crate::typer::scopes::ScopeId;
 use crate::typer::types::*;
@@ -2414,6 +2414,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     _ => unreachable!(),
                 };
                 Ok(result.as_basic_value_enum().into())
+            }
+            IntrinsicFunction::TypeId => {
+                let type_param = &call.type_args[0];
+                let type_id_value = self.codegen_integer_value(&TypedIntegerExpr {
+                    value: TypedIntegerValue::U64(type_param.type_id.to_u64()),
+                    span: call.span,
+                })?;
+                Ok(type_id_value.into())
             }
             _ => {
                 panic!("Unexpected intrinsic type for inline gen")

@@ -462,6 +462,13 @@ impl ParsedExpression {
             None
         }
     }
+
+    pub fn expect_cast(&self) -> &ParsedAsCast {
+        match self {
+            ParsedExpression::AsCast(as_cast) => as_cast,
+            _ => panic!("expected cast expression"),
+        }
+    }
 }
 
 enum ExprStackMember {
@@ -590,7 +597,7 @@ pub struct StructType {
 
 #[derive(Debug, Clone)]
 pub struct TypeApplication {
-    pub base: IdentifierId,
+    pub base_name: IdentifierId,
     pub params: Vec<ParsedTypeExpressionId>,
     pub span: SpanId,
 }
@@ -1652,7 +1659,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     let span = self.extend_span(first.span, params_span);
                     Ok(Some(self.module.type_expressions.add(
                         ParsedTypeExpression::TypeApplication(TypeApplication {
-                            base: ident,
+                            base_name: ident,
                             params: type_parameters,
                             span,
                         }),
@@ -2821,7 +2828,7 @@ impl ParsedModule {
                 f.write_str(self.identifiers.get_name(*ident))
             }
             ParsedTypeExpression::TypeApplication(tapp) => {
-                f.write_str(self.identifiers.get_name(tapp.base))?;
+                f.write_str(self.identifiers.get_name(tapp.base_name))?;
                 f.write_str("<")?;
                 for tparam in tapp.params.iter() {
                     self.display_type_expression_id(*tparam, f)?;

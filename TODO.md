@@ -62,27 +62,28 @@
   - [x] implement cast
   - [x] hex literals?
   - [x] binary literals?
-- [ ] type suffixes on int literals 123u32, 4u8, etc
 - [x] Reject too many function args
 - [x] Use abilities to implement Bits namespace
 - [x] return statement (control flow of blocks / statements: CanReturn, AlwaysReturns, NeverReturns (which is 'never'))
+      ^ mixed feelings here as it breaks the fact that 'expr as T' always returns a T...
 - [ ] Use `as` casting syntax for rawpointer.asUnsafe
-- [ ] Allow `as` casting syntax for enums to supply only the tag (`result as .Ok` instead of result as `Result<T,E>.Ok`)
+- [x] Allow `as` casting syntax for enums to supply only the tag (`result as .Ok` instead of result as `Result<T,E>.Ok`)
 - [ ] 'Context' system; implicit stack arguments
 - [ ] Mark types as trivially copyable or not
+  ^ The builtin array would be NOT copyable so that you don't accidentally alias the data ptr
 - [ ] Precedence of dereference (and i guess unary ops in general) should be higher
 - [ ] Codegen 'variables' is broken (never cleared); use enter scope / exit scope w/ a stack of vecs or something
       instead (matters when a variable id is reused because the same function is called twice; I think we just overwrite it
       with the correct one but maybe nesting is a problem?)
 - [ ] Imports
-- [ ] Tuples? No, I don't think you need them if you have anonymous structs. The lack of names always makes them
-      easy to start using and very hard to maintain / read consumer code
 - [x] Remove custom size/align code and use LLVM's
-- [ ] More type expressions! (this was a big part of my original point)
-  - [ ] Intersect structs
-  - [ ] Union structs
-  - [ ] return type of function
-  - [ ] inner type of optional
+- [x] More type expressions! (this was a big part of my original point)
+  - [x] Intersect structs
+  - [x] Union structs
+  - [x] inner type of optional
+  - [x] return type of function (fn.return)
+  - [x] param types of function (fn.arg, fn.arg2)
+- [x] Function types
 - [ ] floating point f32 and f64
 - [ ] Optional coalescing field accessor (x?.y)
 - [ ] Ranges? I rarely use ranges; I think as a builtin that's an overreach. Maybe a stdlib type like Scala does
@@ -92,28 +93,32 @@
 - [x] Bitwise ops
 - [x] Bitwise ops using abilities
 - [ ] Exhaustive pattern matching
-- [ ] function pointers
+- [ ] function pointers (we could take address of a function as RawPointer already)
 - [ ] Pure lambdas with -> (not closures)
 - [ ] slices (windows? segments?)
 - [ ] Generic abilities
 - [ ] Ability constraints
 - [ ] array bounds checking
-- [ ] Rework builtin array
+- [ ] Rework builtin array to be userspace and use multipointers?
 - [ ] German/Umbra strings
 - [ ] Make demo readme / site
 
 ## Non-goals at least for now
 - [ ] Memory safety / solving the 'aliasing' problem, not because its unimportant but because I have other interests
+- [ ] Tuples. I don't think you need them if you have anonymous structs. The lack of names always makes them
+      easy to start using and very hard to maintain / read consumer code.
+      "In the beginning all you want is an anonymous tuple and in the end all you want are named fields"
+- [ ] Ability derivation (prefer a metaprogram solution)
 
 ## Maybe
 - [ ] Move to UFCS instead of having the concept of a 'method' or companion namespace?
 
 ## Error story
+- [ ] As values, of course.
 - [ ] A simple stdlib enum?
-- [ ]
+- [ ] A '?' operator for early return? We could do an ability for it!
 
 ## Ability Derivation
-- [ ] Ability derivation
 - [ ] I think you have to cache and commit the generated code, or you get the slow proc macros or slow implicit derivation problems that Scala has. This is first-class codegen, not 'macros'?
 
 ## Memory Management story
@@ -124,12 +129,17 @@
   - If we introduce simple implicits for context passing, we can use this to pass heaps around
   - Generational References combined w/ arena-style memory mgmt
 
+# Minor
+
+- [ ] type suffixes on int literals 123u32, 4u8, etc
+
 # GUI checklist
 
 - [x] Get render loop working with access to module, ability to trigger compile, run
 - [ ] Render namespaces, use recursion over namespace for all functionality?
 - [ ] Search for a type?
 - [ ] One day allow updating or adding a single definition
+
 
 # Old todo list
 

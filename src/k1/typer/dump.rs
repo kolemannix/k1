@@ -234,6 +234,18 @@ impl TypedModule {
                 self.display_type_id(gen.inner, writ)?;
                 writ.write_str(")")
             }
+            Type::Function(fun) => {
+                writ.write_str("fn(")?;
+                for (idx, param) in fun.params.iter().enumerate() {
+                    self.display_type_id(param.type_id, writ)?;
+                    let last = idx == fun.params.len() - 1;
+                    if !last {
+                        writ.write_str(", ")?;
+                    }
+                }
+                writ.write_str(") -> ")?;
+                self.display_type_id(fun.return_type, writ)
+            }
         }
     }
 

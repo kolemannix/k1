@@ -6,7 +6,7 @@ fn main(): int {
   assert(squares[2] == 81);
   assert(squares[3] == 144);
 
-  // Desugared
+  // Desugared(ish)
   // val squares = {
   //   val mut counter_uniq: int = 0;
   //   val iteree: Array<int> = [1, 5, 9, 12];
