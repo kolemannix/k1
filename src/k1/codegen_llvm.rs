@@ -861,7 +861,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     }
 
     fn codegen_type(&self, type_id: TypeId) -> CodegenResult<LlvmType<'ctx>> {
-        trace!("codegen for type {}", self.module.type_id_to_string(type_id));
+        let result = self.llvm_types.borrow().get(&type_id).cloned();
+        if let Some(result) = result {
+            return Ok(result);
+        };
+        self.codegen_type_inner(type_id, 0)
+    }
+
+    fn codegen_type_inner(&self, type_id: TypeId, depth: usize) -> CodegenResult<LlvmType<'ctx>> {
         let _dw_ate_address = 0x01;
         let dw_ate_boolean = 0x02;
         let _dw_ate_complex_float = 0x03;
@@ -870,10 +877,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let dw_ate_char = 0x06;
         let dw_ate_unsigned = 0x07;
         let _dw_ate_unsigned_char = 0x08;
-        let result = self.llvm_types.borrow().get(&type_id).cloned();
-        if let Some(result) = result {
-            return Ok(result);
-        };
         let make_value_integer_type =
             |name: &str,
              type_id: TypeId,
@@ -892,6 +895,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         .as_type(),
                 })
             };
+        debug!("codegen for type {}", self.module.type_id_to_string(type_id));
+        let mut no_cache = false;
         let codegened_type = match type_id {
             UNIT_TYPE_ID => Ok(make_value_integer_type(
                 "unit",
@@ -982,7 +987,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             type_id => {
                 // Generate and store the type in here
-                let ty = self.module.types.get(type_id);
+                let ty = self.module.types.get_no_follow(type_id);
                 match ty {
                     Type::Optional(optional) => {
                         Ok(self.build_optional_type(type_id, &optional)?.into())
@@ -998,7 +1003,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             .map(|info| self.get_ident_name(info.name).to_string())
                             .unwrap_or("<anon_struct>".to_string());
                         for field in &struc.fields {
-                            let field_llvm_type = self.codegen_type(field.type_id)?;
+                            let field_llvm_type =
+                                self.codegen_type_inner(field.type_id, depth + 1)?;
                             field_basic_types.push(field_llvm_type.value_basic_type());
                             field_types.push(field_llvm_type);
                         }
@@ -1034,7 +1040,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         err!(span, "codegen was asked to codegen a type variable {:?}", v)
                     }
                     Type::Array(array) => {
-                        let element_type = self.codegen_type(array.element_type)?;
+                        let element_type =
+                            self.codegen_type_inner(array.element_type, depth + 1)?;
                         let struct_type = self.create_array_struct(element_type.value_basic_type());
                         let name = format!("array_{}", array.element_type);
                         // This badly duplicates the shape of 'array'
@@ -1075,7 +1082,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     }
                     Type::Reference(reference) => {
                         // Could also use any_ptr here
-                        let inner_type = self.codegen_type(reference.inner_type)?;
+                        let inner_type =
+                            self.codegen_type_inner(reference.inner_type, depth + 1)?;
                         let inner_debug_type = inner_type.debug_type();
                         Ok(LlvmPointerType {
                             type_id,
@@ -1125,7 +1133,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             let (variant_struct, variant_struct_debug) =
                                 if let Some(payload_type_id) = variant.payload {
                                     let variant_payload_type =
-                                        self.codegen_type(payload_type_id)?;
+                                        self.codegen_type_inner(payload_type_id, depth + 1)?;
                                     let struc = self.ctx.struct_type(
                                         &[
                                             discriminant_field.as_basic_type_enum(),
@@ -1298,9 +1306,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     }
                     Type::EnumVariant(ev) => {
                         let parent_enum = self.codegen_type(ev.enum_type_id)?.expect_enum();
-                        // Let's try this for now; we may have to represent this differently
-                        // as a LlvmStructType
-                        // let variant = parent_enum.variant_structs[ev.index];
                         Ok(parent_enum.into())
                     }
                     Type::Never => {
@@ -1315,7 +1320,40 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             .as_type();
                         Ok(LlvmVoidType { void_type: self.ctx.void_type(), di_type }.into())
                     }
-                    Type::OpaqueAlias(opaque) => self.codegen_type(opaque.aliasee),
+                    Type::OpaqueAlias(opaque) => self.codegen_type_inner(opaque.aliasee, depth + 1),
+                    Type::RecursiveReference(rr) => {
+                        if depth == 0 {
+                            // If this is not a recursive call, we already built this type
+                            // and should 'follow the redirect' so that calling code
+                            // gets the actual type
+                            self.codegen_type(rr.root_type_id)
+                        } else {
+                            // If this is a recursive call (depth > 0), we are in the process of
+                            // building the type, and should return a placeholder for the 'recursive
+                            // reference' type
+                            // For recursive references, we use an empty struct as the representation,
+                            // and use LLVMs opaque struct type to represent it
+                            let defn_info = self
+                                .module
+                                .types
+                                .get(rr.root_type_id)
+                                .defn_info()
+                                .expect("recursive type must have defn info");
+
+                            // FIXME: This needs to codegen the name in a standardized way so it matches
+                            let name = self.get_ident_name(defn_info.name);
+                            let s = self.ctx.opaque_struct_type(name);
+
+                            no_cache = true;
+                            Ok(LlvmType::StructType(LlvmStructType {
+                                type_id,
+                                struct_type: s,
+                                fields: Vec::new(),
+                                di_type: self.make_debug_struct_type(name, &s, SpanId::NONE, &[]),
+                                size: SizeInfo::ZERO,
+                            }))
+                        }
+                    }
                     other => Err(CodegenError {
                         message: format!(
                             "codegen_type for type dropped through unexpectedly: {:?}",
@@ -1326,7 +1364,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 }
             }
         }?;
-        self.llvm_types.borrow_mut().insert(type_id, codegened_type.clone());
+        if !no_cache {
+            self.llvm_types.borrow_mut().insert(type_id, codegened_type.clone());
+        }
         // eprintln!(
         //     "Size of '{}': {:?}",
         //     self.module.type_id_to_string(type_id),
@@ -2343,7 +2383,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         element_type: BasicTypeEnum<'ctx>,
         zero_initialize: bool,
     ) -> StructValue<'ctx> {
-        // First, we allocate memory somewhere not on the stack
+        // "Cannot build array malloc call for an unsized type" By now we should have grabbed the 'root' type
+        // not the recursive 'placeholder' zero-sized type
         let data_ptr =
             self.builder.build_array_malloc(element_type, capacity, "array_data").unwrap();
         if zero_initialize {
@@ -2698,14 +2739,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
         }
     }
-    // This needs to return either a basic value or an instruction value (in the case of early return)
-    // Actually, early return is a big rabbit hole. We need to typecheck it earlier, and probably
-    // store it on the block
-    //
-    // For now, I'm going to return an Option. If the block has an early return, we just return
-    // None. We'll fix it when implementing early returns
-    // Maybe we rename ReturnStmt to Early Return to separate it from tail returns, which have
-    // pretty different semantics and implications for codegen, I am realizing
+
     fn codegen_block_statements(&mut self, block: &TypedBlock) -> CodegenResult<LlvmValue<'ctx>> {
         let unit_value = self.builtin_types.unit_value.as_basic_value_enum().into();
         let mut last: LlvmValue<'ctx> = unit_value;
@@ -2714,7 +2748,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             match stmt {
                 TypedStmt::Expr(expr) => last = self.codegen_expr(expr)?,
                 TypedStmt::ValDef(val_def) => {
-                    let _value = self.codegen_val(val_def);
+                    let _value = self.codegen_val(val_def)?;
                     last = unit_value;
                 }
                 TypedStmt::Assignment(assignment) => {

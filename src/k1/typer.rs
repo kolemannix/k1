@@ -1060,10 +1060,38 @@ impl Variables {
     }
 }
 
+#[derive(Debug, Clone)]
+struct EvalTypeExprContext {
+    should_attach_defn_info: bool,
+    /// If this is a type definition, this is the type definition info
+    /// that should be attached to the type, if `should_attach_defn_info` is true
+    pub inner_type_defn_info: Option<TypeDefnInfo>,
+}
+
+impl EvalTypeExprContext {
+    pub fn attached_type_defn_info(&self) -> Option<TypeDefnInfo> {
+        if self.should_attach_defn_info {
+            self.inner_type_defn_info.clone()
+        } else {
+            None
+        }
+    }
+
+    pub fn no_attach_defn_info(&self) -> Self {
+        let mut copy = self.clone();
+        copy.should_attach_defn_info = false;
+        copy
+    }
+
+    pub const EMPTY: Self =
+        EvalTypeExprContext { should_attach_defn_info: false, inner_type_defn_info: None };
+}
+
 // Not using this yet but probably need to be
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Symbol {
-    pub namespace: NamespaceId,
+    // TODO: decide between scope or namespace id here
+    pub scope: ScopeId,
     pub identifier: IdentifierId,
 }
 
@@ -1102,6 +1130,7 @@ impl TypedModule {
                 Type::Integer(IntegerType::I64),
             ],
             type_defn_mapping: HashMap::new(),
+            placeholder_mapping: HashMap::new(),
         };
         debug_assert!(matches!(*types.get(UNIT_TYPE_ID), Type::Unit));
         debug_assert!(matches!(*types.get(CHAR_TYPE_ID), Type::Char));
@@ -1162,56 +1191,6 @@ impl TypedModule {
         self.scopes.get_root_scope().find_function(main)
     }
 
-    fn type_eq(type1: &Type, type2: &Type) -> bool {
-        match (type1, type2) {
-            (Type::Unit, Type::Unit) => true,
-            (Type::Char, Type::Char) => true,
-            (Type::Integer(int1), Type::Integer(int2)) => int1 == int2,
-            (Type::Bool, Type::Bool) => true,
-            (Type::String, Type::String) => true,
-            (Type::Struct(r1), Type::Struct(r2)) => {
-                if r1.is_named() || r2.is_named() {
-                    return false;
-                }
-                if r1.fields.len() != r2.fields.len() {
-                    return false;
-                }
-                for (index, f1) in r1.fields.iter().enumerate() {
-                    let f2 = &r2.fields[index];
-                    let mismatch = f1.name != f2.name || f1.type_id != f2.type_id;
-                    if mismatch {
-                        return false;
-                    }
-                }
-                return true;
-            }
-            (Type::Array(a1), Type::Array(a2)) => a1.element_type == a2.element_type,
-            (Type::Optional(o1), Type::Optional(o2)) => o1.inner_type == o2.inner_type,
-            (Type::Reference(r1), Type::Reference(r2)) => r1.inner_type == r2.inner_type,
-            (Type::TypeVariable(t1), Type::TypeVariable(t2)) => {
-                t1.name == t2.name && t1.scope_id == t2.scope_id
-            }
-            (Type::TagInstance(t1), Type::TagInstance(t2)) => t1.ident == t2.ident,
-            (Type::Enum(e1), Type::Enum(e2)) => {
-                if e1.type_defn_info.is_some() || e2.type_defn_info.is_some() {
-                    return false;
-                }
-                if e1.variants.len() != e2.variants.len() {
-                    return false;
-                }
-                for (index, v1) in e1.variants.iter().enumerate() {
-                    let v2 = &e2.variants[index];
-                    let mismatch = v1.tag_name != v2.tag_name || v1.payload != v2.payload;
-                    if mismatch {
-                        return false;
-                    }
-                }
-                true
-            }
-            _ => false,
-        }
-    }
-
     fn add_ability(&mut self, ability: TypedAbility) -> AbilityId {
         let ability_id = self.abilities.len();
         self.abilities.push(ability);
@@ -1222,6 +1201,12 @@ impl TypedModule {
         &self.abilities[ability_id.0 as usize]
     }
 
+    // New design:
+    // - recursive references stay, because its actually better for codegen
+    // - Use ParsedTypeDefnId as payload for uniqueness of the RecursiveReference type
+    // - codegen_type will stop as recursive references and do an opaque struct, I think that's the only way
+    // - Require that we're inside a struct or enum root in order to do a recursive definition
+    // - Update the RecursiveReference to point to the real type_id once eval comes back
     fn eval_type_defn(
         &mut self,
         parsed_type_defn_id: ParsedTypeDefnId,
@@ -1245,16 +1230,17 @@ impl TypedModule {
             scope: scope_id,
             companion_namespace: companion_namespace_id,
             generic_parent: None,
+            ast_id: parsed_type_defn_id,
         };
 
         let has_type_params = !parsed_type_defn.type_params.is_empty();
 
-        let passed_type_defn_info = if has_type_params
+        let should_attach_defn_info = if has_type_params
             || (parsed_type_defn.flags.is_alias() && !parsed_type_defn.flags.is_opaque())
         {
-            None
+            false
         } else {
-            Some(type_defn_info.clone())
+            true
         };
 
         let defn_scope_id = self.scopes.add_child_scope(
@@ -1286,18 +1272,35 @@ impl TypedModule {
             }
         }
 
-        let rhs_type_id =
-            self.eval_type_expr(parsed_type_defn.value_expr, defn_scope_id, passed_type_defn_info)?;
+        let type_eval_context = EvalTypeExprContext {
+            should_attach_defn_info,
+            inner_type_defn_info: Some(type_defn_info.clone()),
+        };
+
+        // The big evaluation!
+        let resulting_type_id = self.eval_type_expr_defn(
+            parsed_type_defn.value_expr,
+            defn_scope_id,
+            type_eval_context,
+        )?;
+
+        // If this was a recursive definition, do a replacement
+        if let Some(placeholder_id) = self.types.placeholder_mapping.get(&parsed_type_defn_id) {
+            self.types.get_mut(*placeholder_id).as_recursive_reference().root_type_id =
+                resulting_type_id;
+            // self.types.replace_type(*placeholder_id, resulting_type_id, resulting_type_id)
+        }
+
         let type_id = if has_type_params {
             eprintln!(
                 "Generating a generic wrapper for a {} with companion namespace {:?}",
-                self.type_id_to_string(rhs_type_id),
+                self.type_id_to_string(resulting_type_id),
                 type_defn_info.companion_namespace
             );
             let gen = GenericType {
                 params: type_params,
                 ast_id: parsed_type_defn_id.into(),
-                inner: rhs_type_id,
+                inner: resulting_type_id,
                 type_defn_info,
                 specializations: HashMap::new(),
             };
@@ -1307,38 +1310,38 @@ impl TypedModule {
                 // Opaque alias
                 eprintln!(
                     "Generating an opaque alias for a {} with companion namespace {:?}",
-                    self.type_id_to_string(rhs_type_id),
+                    self.type_id_to_string(resulting_type_id),
                     type_defn_info.companion_namespace,
                 );
                 let alias = OpaqueTypeAlias {
                     ast_id: parsed_type_defn_id.into(),
-                    aliasee: rhs_type_id,
+                    aliasee: resulting_type_id,
                     type_defn_info,
                 };
                 Ok(self.types.add_type(Type::OpaqueAlias(alias)))
             } else {
                 // Transparent alias
-                match self.types.get(rhs_type_id) {
+                match self.types.get(resulting_type_id) {
                     Type::Never => {
                         make_fail_span("Why would you alias 'never'", parsed_type_defn.span)
                     }
                     _ => {
                         eprintln!(
                             "Creating transparent alias type defn for type: {}",
-                            self.type_id_to_string(rhs_type_id)
+                            self.type_id_to_string(resulting_type_id)
                         );
-                        Ok(rhs_type_id)
+                        Ok(resulting_type_id)
                     }
                 }
             }
         } else {
             // 'New type' territory; must be a named struct/enum OR a builtin
-            match self.types.get(rhs_type_id) {
+            match self.types.get(resulting_type_id) {
                 Type::Unit | Type::Char | Type::Bool | Type::String | Type::Never => {
-                    Ok(rhs_type_id)
+                    Ok(resulting_type_id)
                 }
-                Type::Struct(_s) => Ok(rhs_type_id),
-                Type::Enum(_e) => Ok(rhs_type_id),
+                Type::Struct(_s) => Ok(resulting_type_id),
+                Type::Enum(_e) => Ok(resulting_type_id),
                 _other => {
                     ffail!(parsed_type_defn.span, "Non-alias type definition must be a struct or enum; perhaps you meant to create an alias `type alias [opaque] <name> = <type>`")
                 }
@@ -1377,14 +1380,28 @@ impl TypedModule {
         &mut self,
         type_expr_id: ParsedTypeExpressionId,
         scope_id: ScopeId,
-        // If this is a type definition, this is the type definition info
-        // that should be attached to the type
-        type_defn_info: Option<TypeDefnInfo>,
+    ) -> TyperResult<TypeId> {
+        self.eval_type_expr_defn(type_expr_id, scope_id, EvalTypeExprContext::EMPTY.clone())
+    }
+
+    fn eval_type_expr_defn(
+        &mut self,
+        type_expr_id: ParsedTypeExpressionId,
+        scope_id: ScopeId,
+        // The context is mostly for when we are evaluating a type expression that is part of a type
+        // definition. It talks about self_name for recursive definitions, and the definition info
+        // like companion namespace, etc for a type definition.
+        context: EvalTypeExprContext,
     ) -> TyperResult<TypeId> {
         let base = match self.ast.type_expressions.get(type_expr_id) {
             ParsedTypeExpression::Builtin(span) => {
-                let name = self
-                    .get_ident_str(type_defn_info.expect("required defn info for builtin").name);
+                let name = self.get_ident_str(
+                    context
+                        .inner_type_defn_info
+                        .as_ref()
+                        .expect("required defn info for builtin")
+                        .name,
+                );
                 match name {
                     "unit" => Ok(UNIT_TYPE_ID),
                     "char" => Ok(CHAR_TYPE_ID),
@@ -1408,15 +1425,33 @@ impl TypedModule {
                 let struct_defn = struct_defn.clone();
                 let mut fields: Vec<StructTypeField> = Vec::new();
                 for (index, ast_field) in struct_defn.fields.iter().enumerate() {
-                    let ty = self.eval_type_expr(ast_field.ty, scope_id, None)?;
+                    let ty = self.eval_type_expr_defn(
+                        ast_field.ty,
+                        scope_id,
+                        context.no_attach_defn_info(),
+                    )?;
+                    // TODO: This is kinda how we'd prevent this
+                    // if let Type::RecursiveReference(rr) = self.types.get_no_follow(ty) {
+                    //     if Some(rr.parsed_id)
+                    //         == context.inner_type_defn_info.as_ref().map(|i| i.ast_id)
+                    //     {
+                    //         return make_fail_span(
+                    //             "Recursive references require some indirection",
+                    //             self.ast.get_type_expression_span(ast_field.ty),
+                    //         );
+                    //     }
+                    // }
                     fields.push(StructTypeField {
                         name: ast_field.name,
                         type_id: ty,
                         index: index as u32,
                     })
                 }
-                let struct_defn =
-                    StructType { fields, type_defn_info, ast_node: type_expr_id.into() };
+                let struct_defn = StructType {
+                    fields,
+                    type_defn_info: context.attached_type_defn_info(),
+                    ast_node: type_expr_id.into(),
+                };
                 let type_id = self.types.add_type(Type::Struct(struct_defn));
                 Ok(type_id)
             }
@@ -1427,23 +1462,61 @@ impl TypedModule {
                     let name = *name;
                     match self.scopes.find_type(scope_id, name) {
                         Some(named_type) => Ok(named_type),
-                        None => match self.scopes.find_pending_type_defn(scope_id, name) {
-                            None => make_fail_span(
-                                format!("No type named {} is in scope", self.get_ident_str(name)),
-                                *span,
-                            ),
-                            Some((pending_defn_id, pending_defn_scope_id)) => {
-                                eprintln!(
-                                    "Recursing into pending type defn {}",
-                                    self.get_ident_str(
-                                        self.ast.get_type_defn(pending_defn_id).name
-                                    )
-                                );
-                                let type_id =
-                                    self.eval_type_defn(pending_defn_id, pending_defn_scope_id)?;
-                                Ok(type_id)
+                        None => {
+                            // Checks for recursion by name
+                            if context.inner_type_defn_info.as_ref().map(|info| info.name)
+                                == Some(name)
+                            {
+                                let type_defn_info = context.inner_type_defn_info.as_ref().unwrap();
+                                let placeholder_type_id = match self
+                                    .types
+                                    .placeholder_mapping
+                                    .get(&type_defn_info.ast_id)
+                                {
+                                    None => {
+                                        eprintln!(
+                                            "Inserting recursive reference for {}",
+                                            self.get_ident_str(name)
+                                        );
+                                        let type_id = self.types.add_type(
+                                            Type::RecursiveReference(RecursiveReference {
+                                                parsed_id: type_defn_info.ast_id,
+                                                root_type_id: TypeId::PENDING,
+                                            }),
+                                        );
+                                        self.types
+                                            .placeholder_mapping
+                                            .insert(type_defn_info.ast_id, type_id);
+                                        type_id
+                                    }
+                                    Some(type_id) => *type_id,
+                                };
+                                Ok(placeholder_type_id)
+                            } else {
+                                match self.scopes.find_pending_type_defn(scope_id, name) {
+                                    None => make_fail_span(
+                                        format!(
+                                            "No type named {} is in scope",
+                                            self.get_ident_str(name)
+                                        ),
+                                        *span,
+                                    ),
+                                    Some((pending_defn_id, pending_defn_scope_id)) => {
+                                        eprintln!(
+                                            "Recursing into pending type defn {}",
+                                            self.get_ident_str(
+                                                self.ast.get_type_defn(pending_defn_id).name
+                                            )
+                                        );
+                                        let type_id = self.eval_type_defn(
+                                            pending_defn_id,
+                                            pending_defn_scope_id,
+                                        )?;
+                                        Ok(type_id)
+                                    }
+                                }
                             }
-                        },
+                        }
                     }
                 }
             }
@@ -1455,7 +1528,11 @@ impl TypedModule {
             ParsedTypeExpression::TypeApplication(ty_app) => {
                 if self.ast.identifiers.get_name(ty_app.base_name) == "Array" {
                     if ty_app.params.len() == 1 {
-                        let element_ty = self.eval_type_expr(ty_app.params[0], scope_id, None)?;
+                        let element_ty = self.eval_type_expr_defn(
+                            ty_app.params[0],
+                            scope_id,
+                            context.no_attach_defn_info(),
+                        )?;
                         let array_ty = ArrayType { element_type: element_ty };
                         let type_id = self.types.add_type(Type::Array(array_ty));
                         Ok(type_id)
@@ -1463,17 +1540,27 @@ impl TypedModule {
                         make_fail_span("Expected 1 type parameter for Array", ty_app.span)
                     }
                 } else {
-                    self.eval_type_application(type_expr_id, scope_id, type_defn_info)
+                    let type_op_result = self.detect_and_eval_type_operator(
+                        type_expr_id,
+                        scope_id,
+                        context.clone(),
+                    )?;
+                    match type_op_result {
+                        None => self.eval_type_application(type_expr_id, scope_id, context),
+                        Some(type_op_result) => Ok(type_op_result),
+                    }
                 }
             }
             ParsedTypeExpression::Optional(opt) => {
-                let inner_ty = self.eval_type_expr(opt.base, scope_id, None)?;
+                let inner_ty =
+                    self.eval_type_expr_defn(opt.base, scope_id, context.no_attach_defn_info())?;
                 let optional_type = Type::Optional(OptionalType { inner_type: inner_ty });
                 let type_id = self.types.add_type(optional_type);
                 Ok(type_id)
             }
             ParsedTypeExpression::Reference(r) => {
-                let inner_ty = self.eval_type_expr(r.base, scope_id, None)?;
+                let inner_ty =
+                    self.eval_type_expr_defn(r.base, scope_id, context.no_attach_defn_info())?;
                 let reference_type = Type::Reference(ReferenceType { inner_type: inner_ty });
                 let type_id = self.types.add_type(reference_type);
                 Ok(type_id)
@@ -1482,14 +1569,29 @@ impl TypedModule {
                 let e = e.clone();
                 let mut variants = Vec::with_capacity(e.variants.len());
                 for (index, v) in e.variants.iter().enumerate() {
-                    // Hack: Ensure there's a type for this tag
+                    // Hack: CAlling get_type_for_tag ensures there's a type for this tag
                     self.types.get_type_for_tag(v.tag_name);
 
                     let payload_type_id = match &v.payload_expression {
                         None => None,
                         Some(payload_type_expr) => {
-                            let type_id =
-                                self.eval_type_expr(*payload_type_expr, scope_id, None)?;
+                            let type_id = self.eval_type_expr_defn(
+                                *payload_type_expr,
+                                scope_id,
+                                context.no_attach_defn_info(),
+                            )?;
+                            // TODO: This is kinda how we'd prevent infinite recursion
+                            // if let Type::RecursiveReference(rr) = self.types.get_no_follow(type_id)
+                            // {
+                            //     if Some(rr.parsed_id)
+                            //         == context.inner_type_defn_info.as_ref().map(|i| i.ast_id)
+                            //     {
+                            //         return make_fail_span(
+                            //             "Recursive references requires some indirection",
+                            //             self.ast.get_type_expression_span(*payload_type_expr),
+                            //         );
+                            //     }
+                            // }
                             Some(type_id)
                         }
                     };
@@ -1504,7 +1606,7 @@ impl TypedModule {
                 }
                 let enum_type = Type::Enum(TypedEnum {
                     variants,
-                    type_defn_info,
+                    type_defn_info: context.attached_type_defn_info(),
                     ast_node: type_expr_id.into(),
                 });
                 let enum_type_id = self.types.add_type(enum_type);
@@ -1512,7 +1614,11 @@ impl TypedModule {
             }
             ParsedTypeExpression::DotMemberAccess(dot_acc) => {
                 let dot_acc = dot_acc.clone();
-                let base_type = self.eval_type_expr(dot_acc.base, scope_id, None)?;
+                let base_type = self.eval_type_expr_defn(
+                    dot_acc.base,
+                    scope_id,
+                    context.no_attach_defn_info(),
+                )?;
                 match self.types.get(base_type) {
                     // You can do dot access on enums to get their variants
                     Type::Enum(e) => {
@@ -1541,7 +1647,16 @@ impl TypedModule {
                         Ok(field.1.type_id)
                     }
                     // You can do dot access on Array to get its element type
-                    Type::Array(_a) => todo!("array member access"),
+                    Type::Array(arr) => {
+                        if self.ast.identifiers.get_name(dot_acc.member_name) != "element" {
+                            return make_fail_ast_id(
+                                &self.ast,
+                                "Invalid member access on Array type; try '.element'",
+                                type_expr_id.into(),
+                            );
+                        }
+                        Ok(arr.element_type)
+                    }
                     // You can do dot access on Optionals to get out their 'inner' types
                     Type::Optional(opt) => {
                         if self.ast.identifiers.get_name(dot_acc.member_name) != "value" {
@@ -1554,10 +1669,18 @@ impl TypedModule {
                         Ok(opt.inner_type)
                     }
                     // You can do dot access on References to get out their 'inner' types
-                    Type::Reference(_r) => todo!("reference dot access for referenced type"),
+                    Type::Reference(r) => {
+                        if self.ast.identifiers.get_name(dot_acc.member_name) != "value" {
+                            return make_fail_ast_id(
+                                &self.ast,
+                                "Invalid member access on Optional type; try '.value'",
+                                type_expr_id.into(),
+                            );
+                        }
+                        Ok(r.inner_type)
+                    }
                     Type::Function(fun) => {
                         let member_name = self.ast.identifiers.get_name(dot_acc.member_name);
-                        // Consider #return to avoid collisions
                         match member_name {
                             "return" => Ok(fun.return_type),
                             _other => {
@@ -1591,12 +1714,13 @@ impl TypedModule {
         Ok(base)
     }
 
-    fn eval_type_application(
+    /// Temporary home for our type operators until I decide on syntax
+    fn detect_and_eval_type_operator(
         &mut self,
         ty_app_id: ParsedTypeExpressionId,
         scope_id: ScopeId,
-        type_defn_info: Option<TypeDefnInfo>,
-    ) -> TyperResult<TypeId> {
+        context: EvalTypeExprContext,
+    ) -> TyperResult<Option<TypeId>> {
         let ParsedTypeExpression::TypeApplication(ty_app) =
             self.ast.type_expressions.get(ty_app_id)
         else {
@@ -1608,8 +1732,16 @@ impl TypedModule {
                 if ty_app.params.len() != 2 {
                     return ffail!(ty_app.span, "Expected 2 type parameters for _struct_combine");
                 }
-                let arg1 = self.eval_type_expr(ty_app.params[0], scope_id, None)?;
-                let arg2 = self.eval_type_expr(ty_app.params[1], scope_id, None)?;
+                let arg1 = self.eval_type_expr_defn(
+                    ty_app.params[0],
+                    scope_id,
+                    context.no_attach_defn_info(),
+                )?;
+                let arg2 = self.eval_type_expr_defn(
+                    ty_app.params[1],
+                    scope_id,
+                    context.no_attach_defn_info(),
+                )?;
 
                 let struct1 = self
                     .types
@@ -1643,20 +1775,28 @@ impl TypedModule {
 
                 let new_struct = Type::Struct(StructType {
                     fields: combined_fields,
-                    type_defn_info,
+                    type_defn_info: context.attached_type_defn_info(),
                     ast_node: ParsedId::TypeExpression(ty_app_id),
                 });
                 let type_id = self.types.add_type(new_struct);
                 eprintln!("Combined struct: {}", self.type_id_to_string(type_id));
 
-                return Ok(type_id);
+                return Ok(Some(type_id));
             }
             "_struct_remove" => {
                 if ty_app.params.len() != 2 {
                     return ffail!(ty_app.span, "Expected 2 type parameters for _struct_remove");
                 }
-                let arg1 = self.eval_type_expr(ty_app.params[0], scope_id, None)?;
-                let arg2 = self.eval_type_expr(ty_app.params[1], scope_id, None)?;
+                let arg1 = self.eval_type_expr_defn(
+                    ty_app.params[0],
+                    scope_id,
+                    context.no_attach_defn_info(),
+                )?;
+                let arg2 = self.eval_type_expr_defn(
+                    ty_app.params[1],
+                    scope_id,
+                    context.no_attach_defn_info(),
+                )?;
 
                 let struct1 = self
                     .types
@@ -1672,17 +1812,31 @@ impl TypedModule {
                 new_fields.retain(|f| !struct2.fields.iter().any(|sf| sf.name == f.name));
                 let mut new_struct = StructType {
                     fields: new_fields,
-                    type_defn_info,
+                    type_defn_info: context.attached_type_defn_info(),
                     ast_node: ParsedId::TypeExpression(ty_app_id),
                 };
                 for (i, field) in new_struct.fields.iter_mut().enumerate() {
                     field.index = i as u32;
                 }
                 let type_id = self.types.add_type(Type::Struct(new_struct));
-                return Ok(type_id);
+                return Ok(Some(type_id));
             }
-            _ => {}
+            _ => return Ok(None),
         };
+    }
+
+    fn eval_type_application(
+        &mut self,
+        ty_app_id: ParsedTypeExpressionId,
+        scope_id: ScopeId,
+        context: EvalTypeExprContext,
+    ) -> TyperResult<TypeId> {
+        let ParsedTypeExpression::TypeApplication(ty_app) =
+            self.ast.type_expressions.get(ty_app_id)
+        else {
+            panic_at_disco!("Expected TypeApplication")
+        };
+        let ty_app = ty_app.clone();
         match self.scopes.find_type(scope_id, ty_app.base_name) {
             None => {
                 return ffail!(
@@ -1701,7 +1855,11 @@ impl TypedModule {
                     );
                 };
                 for parsed_param in ty_app.params.clone().iter() {
-                    let param_type_id = self.eval_type_expr(*parsed_param, scope_id, None)?;
+                    let param_type_id = self.eval_type_expr_defn(
+                        *parsed_param,
+                        scope_id,
+                        context.no_attach_defn_info(),
+                    )?;
                     evaled_type_params.push(param_type_id);
                 }
                 let gen = self.types.get(type_id).expect_generic().clone();
@@ -1857,7 +2015,7 @@ impl TypedModule {
         &mut self,
         parsed_type_expr: ParsedTypeExpressionId,
     ) -> TyperResult<TypeId> {
-        let ty = self.eval_type_expr(parsed_type_expr, self.scopes.get_root_scope_id(), None)?;
+        let ty = self.eval_type_expr(parsed_type_expr, self.scopes.get_root_scope_id())?;
         match ty {
             UNIT_TYPE_ID => Ok(ty),
             CHAR_TYPE_ID => Ok(ty),
@@ -2722,7 +2880,7 @@ impl TypedModule {
     ) -> TyperResult<TypedExpr> {
         let expected_type = match self.ast.expressions.get_type_hint(expr) {
             Some(t) => {
-                let type_id = self.eval_type_expr(t, scope_id, None)?;
+                let type_id = self.eval_type_expr(t, scope_id)?;
                 Some(type_id)
             }
             None => expected_type,
@@ -3031,7 +3189,11 @@ impl TypedModule {
                     match expected_type {
                         Type::Enum(e) => Ok(e),
                         Type::EnumVariant(ev) => Ok(self.types.get(ev.enum_type_id).expect_enum()),
-                        _ => Err(make_error("Expected an enum type", e.span)),
+                        _ => ffail!(
+                            e.span,
+                            "Expected type {} but got enum constructor",
+                            self.type_to_string(expected_type)
+                        ),
                     }
                 }?;
                 let typed_variant = enum_type.variant_by_name(e.tag).ok_or(make_error(
@@ -3557,7 +3719,7 @@ impl TypedModule {
         let cast = cast.clone();
         let base_expr = self.eval_expr(cast.base_expr, scope_id, None)?;
         let base_expr_type = base_expr.get_type();
-        let target_type = self.eval_type_expr(cast.dest_type, scope_id, None)?;
+        let target_type = self.eval_type_expr(cast.dest_type, scope_id)?;
         let (cast_type, output_type) = match self.types.get(base_expr_type) {
             Type::Integer(from_integer_type) => match self.types.get(target_type) {
                 Type::Integer(to_integer_type) => {
@@ -4955,7 +5117,7 @@ impl TypedModule {
                 for (idx, type_arg) in type_args.iter().enumerate() {
                     let param = &generic_type_params[idx];
                     // TODO: This is where we'd apply constraints
-                    let type_id = self.eval_type_expr(type_arg.type_expr, calling_scope, None)?;
+                    let type_id = self.eval_type_expr(type_arg.type_expr, calling_scope)?;
                     checked_params.push(TypeParam { ident: param.ident, type_id });
                 }
                 checked_params
@@ -5283,7 +5445,7 @@ impl TypedModule {
             ParsedStmt::ValDef(val_def) => {
                 let provided_type = match val_def.type_expr.as_ref() {
                     None => None,
-                    Some(&type_expr) => Some(self.eval_type_expr(type_expr, scope_id, None)?),
+                    Some(&type_expr) => Some(self.eval_type_expr(type_expr, scope_id)?),
                 };
                 let value_expr = self.eval_expr(val_def.value, scope_id, provided_type)?;
                 let actual_type = value_expr.get_type();
@@ -5533,7 +5695,7 @@ impl TypedModule {
         let mut params = Vec::new();
         let mut is_method_of = None;
         for (idx, fn_arg) in parsed_function_args.iter().enumerate() {
-            let type_id = self.eval_type_expr(fn_arg.ty, fn_scope_id, None)?;
+            let type_id = self.eval_type_expr(fn_arg.ty, fn_scope_id)?;
 
             // First arg Self shenanigans
             if idx == 0 && !specialize {
@@ -5657,7 +5819,7 @@ impl TypedModule {
         };
         let return_type = match parsed_function_ret_type {
             None => UNIT_TYPE_ID,
-            Some(type_expr) => self.eval_type_expr(type_expr, fn_scope_id, None)?,
+            Some(type_expr) => self.eval_type_expr(type_expr, fn_scope_id)?,
         };
         let metadata = if is_ability_decl {
             TypedFunctionMetadata::AbilityDefn(parsed_function_id)
@@ -5887,7 +6049,7 @@ impl TypedModule {
                 span,
             );
         };
-        let target_type = self.eval_type_expr(parsed_ability_impl.target_type, scope_id, None)?;
+        let target_type = self.eval_type_expr(parsed_ability_impl.target_type, scope_id)?;
 
         // Scoping / orphan / coherence: For now, let's globally allow only one implementation per (Ability, Target Type) pair
         // Check for existing implementation
