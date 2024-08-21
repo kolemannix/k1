@@ -121,6 +121,9 @@ impl TypedModule {
     }
 
     fn display_type(&self, ty: &Type, writ: &mut impl Write) -> std::fmt::Result {
+        if let Some(defn_info) = ty.defn_info() {
+            return writ.write_str(self.get_ident_str(defn_info.name));
+        }
         match ty {
             Type::Unit => writ.write_str("()"),
             Type::Char => writ.write_str("char"),
@@ -140,6 +143,8 @@ impl TypedModule {
             Type::Bool => writ.write_str("bool"),
             Type::String => writ.write_str("string"),
             Type::Struct(struc) => {
+                // Leftover, redundant to print name and expand. We need 2 prints, one that expands for
+                // debug and one that doesn't for codegen and other real use
                 if let Some(defn_info) = struc.type_defn_info.as_ref() {
                     writ.write_str(self.get_ident_str(defn_info.name))?;
                     writ.write_str("(")?;
@@ -245,6 +250,13 @@ impl TypedModule {
                 }
                 writ.write_str(") -> ")?;
                 self.display_type_id(fun.return_type, writ)
+            }
+            Type::RecursiveReference(rr) => {
+                if rr.is_pending() {
+                    writ.write_str("pending")
+                } else {
+                    self.display_type_id(rr.root_type_id, writ)
+                }
             }
         }
     }
@@ -494,7 +506,7 @@ impl TypedModule {
             }
             TypedExpr::Return(ret) => {
                 writ.write_str("return(")?;
-                self.display_expr(&ret.value, writ, indentation);
+                self.display_expr(&ret.value, writ, indentation)?;
                 writ.write_char(')')
             }
         }

@@ -79,10 +79,10 @@
   - [x] inner type of optional
   - [x] return type of function (fn.return)
   - [x] param types of function (fn.arg, fn.arg2)
-- [x] Function types
-- [ ] floating point f32 and f64
+- [x] Function types (functions have types but there's no syntax for describing a function type yet)
+- [x] Recursive types
+- [ ] floating point (f32 and f64)
 - [ ] Optional coalescing field accessor (x?.y)
-- [ ] Ranges? I rarely use ranges; I think as a builtin that's an overreach. Maybe a stdlib type like Scala does
 - [x] Finish/fix simple generic inference
 - [x] Prevent function overloading in same namespace
 - [x] Typecheck the binary ops
@@ -115,9 +115,6 @@
 - [ ] A simple stdlib enum?
 - [ ] A '?' operator for early return? We could do an ability for it!
 
-## Ability Derivation
-- [ ] I think you have to cache and commit the generated code, or you get the slow proc macros or slow implicit derivation problems that Scala has. This is first-class codegen, not 'macros'?
-
 ## Memory Management story
 - [ ] Figure out the pointer/reference story
   - I want to do a minimal runtime with a user-visible heap, semi-auto memory management. Write the heap and main fn in C, call main from the 'runtime' main, which sets up a basic heap based on settings or something user-visible.
@@ -126,8 +123,12 @@
   - If we introduce simple implicits for context passing, we can use this to pass heaps around
   - Generational References combined w/ arena-style memory mgmt
 
+# Major fix
+- [ ] Replace IdentifierId with global 'Symbol' where its a bug not to
+
 # Minor Fix
 - [ ] type suffixes on int literals 123u32, 4u8, etc
+- [ ] Require indirection for recursive types
 - [ ] Precedence of dereference (and i guess unary ops in general) should be higher
 - [ ] Codegen 'variables' is broken (never cleared); use enter scope / exit scope w/ a stack of vecs or something
       instead (matters when a variable id is reused because the same function is called twice; I think we just overwrite it

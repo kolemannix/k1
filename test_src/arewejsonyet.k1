@@ -1,0 +1,24 @@
+type Json = enum
+  JsStr(string)
+  | JsNumber(string)
+  | JsBool(bool)
+  | JsNull
+  | JsArray(Array<Json>)
+  | JsObject(Array<{ key: string, value: Json}>)
+
+fn main(): int {
+  val obj: Json = .JsStr("hello");
+  val null: Json = .JsNull;
+  assert(obj is .JsStr("hello"));
+  assert(null is .JsNull);
+
+  // Causes stack overflow due to no indirection
+  // type Node = { value: string, child: Node? }
+  // val n: Node = { value: "hello", child: None };
+
+  val obj2: Json = .JsArray([.JsStr("hello"), .JsNumber("123")]);
+  assert((obj2 as .JsArray).payload[0] is .JsStr("hello"));
+  assert((obj2 as .JsArray).payload[1] is .JsNumber("123"));
+
+  0
+}

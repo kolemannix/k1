@@ -39,6 +39,7 @@ pub struct TypeDefnInfo {
     // If there's a corresponding namespace for this type defn, this is it
     pub companion_namespace: Option<NamespaceId>,
     pub generic_parent: Option<TypeId>,
+    pub ast_id: ParsedTypeDefnId,
 }
 
 #[derive(Debug, Clone)]
@@ -230,6 +231,18 @@ pub struct FunctionType {
 }
 
 #[derive(Debug, Clone)]
+pub struct RecursiveReference {
+    pub parsed_id: ParsedTypeDefnId,
+    pub root_type_id: TypeId,
+}
+
+impl RecursiveReference {
+    pub fn is_pending(&self) -> bool {
+        self.root_type_id == TypeId::PENDING
+    }
+}
+
+#[derive(Debug, Clone)]
 pub enum Type {
     Unit,
     Char,
@@ -251,6 +264,7 @@ pub enum Type {
     OpaqueAlias(OpaqueTypeAlias),
     Generic(GenericType),
     Function(FunctionType),
+    RecursiveReference(RecursiveReference),
 }
 
 impl Type {
@@ -269,6 +283,7 @@ impl Type {
             Type::OpaqueAlias(opaque) => Some(opaque.ast_id.into()),
             Type::Generic(gen) => Some(gen.ast_id.into()),
             Type::Function(_fun) => None,
+            Type::RecursiveReference(r) => Some(ParsedId::TypeDefn(r.parsed_id)),
         }
     }
 
@@ -394,6 +409,7 @@ impl Type {
             Type::OpaqueAlias(opaque) => Some(&opaque.type_defn_info),
             Type::Generic(gen) => Some(&gen.type_defn_info),
             Type::Function(_) => None,
+            Type::RecursiveReference(_) => None,
         }
     }
 
@@ -410,19 +426,27 @@ impl Type {
             _ => None,
         }
     }
+
+    pub fn as_recursive_reference(&mut self) -> &mut RecursiveReference {
+        match self {
+            Type::RecursiveReference(r) => r,
+            _ => panic!("expected recursive reference"),
+        }
+    }
 }
 
 #[derive(Default, Debug)]
 pub struct Types {
     pub types: Vec<Type>,
     pub type_defn_mapping: HashMap<ParsedTypeDefnId, TypeId>,
+    pub placeholder_mapping: HashMap<ParsedTypeDefnId, TypeId>,
 }
 
 impl Types {
     pub fn add_type_ext(&mut self, typ: Type, dedupe: bool) -> TypeId {
         if dedupe {
             for (existing_type_id, existing_type) in self.iter() {
-                if TypedModule::type_eq(existing_type, &typ) {
+                if self.type_eq(existing_type, &typ) {
                     return existing_type_id;
                 }
             }
@@ -464,8 +488,15 @@ impl Types {
         self.add_type_ext(typ, true)
     }
 
-    pub fn get(&self, type_id: TypeId) -> &Type {
+    pub fn get_no_follow(&self, type_id: TypeId) -> &Type {
         &self.types[type_id.0 as usize]
+    }
+
+    pub fn get(&self, type_id: TypeId) -> &Type {
+        match self.get_no_follow(type_id) {
+            Type::RecursiveReference(rr) => self.get(rr.root_type_id),
+            t => t,
+        }
     }
 
     pub fn get_mut(&mut self, type_id: TypeId) -> &mut Type {
@@ -530,6 +561,7 @@ impl Types {
                 }
                 return false;
             }
+            Type::RecursiveReference(_rr) => false,
         }
     }
 
@@ -552,6 +584,7 @@ impl Types {
             Type::OpaqueAlias(_opaque) => None,
             Type::Generic(_gen) => None,
             Type::Function(_fun) => None,
+            Type::RecursiveReference(_) => None,
         }
     }
 
@@ -579,5 +612,149 @@ impl Types {
         let tag_type = Type::TagInstance(TagInstanceType { ident: tag_ident });
         let tag_type_id = self.add_type(tag_type);
         tag_type_id
+    }
+
+    // Ended up storing redirects as RecursiveReference, but keeping this around
+    pub fn replace_type(
+        &mut self,
+        placeholder_id: TypeId,
+        replace_in: TypeId,
+        replace_with: TypeId,
+    ) {
+        match self.get_mut(replace_in) {
+            Type::Unit => (),
+            Type::Char => (),
+            Type::Integer(_) => (),
+            Type::Bool => (),
+            Type::String => (),
+            Type::Struct(s) => {
+                for f in s.fields.clone().iter_mut() {
+                    if f.type_id == placeholder_id {
+                        f.type_id = replace_with;
+                    } else {
+                        self.replace_type(placeholder_id, f.type_id, replace_with);
+                    }
+                }
+            }
+            Type::Array(a) => {
+                let elem_type = a.element_type;
+                if elem_type == placeholder_id {
+                    a.element_type = replace_with;
+                } else {
+                    self.replace_type(placeholder_id, elem_type, replace_with)
+                }
+            }
+            Type::Optional(o) => {
+                let inner_type = o.inner_type;
+                if inner_type == placeholder_id {
+                    o.inner_type = replace_with
+                } else {
+                    self.replace_type(placeholder_id, inner_type, replace_with)
+                }
+            }
+            Type::Reference(refer) => {
+                let inner_type = refer.inner_type;
+                self.replace_type(placeholder_id, inner_type, replace_with)
+            }
+            Type::TypeVariable(_) => (),
+            Type::TagInstance(_) => (),
+            Type::Enum(e) => {
+                for v in e.variants.clone().iter_mut() {
+                    if v.my_type_id == placeholder_id {
+                        v.my_type_id = replace_with;
+                    } else {
+                        self.replace_type(placeholder_id, v.my_type_id, replace_with)
+                    }
+                }
+            }
+            Type::EnumVariant(ev) => {
+                if let Some(payload) = ev.payload {
+                    if payload == placeholder_id {
+                        ev.payload = Some(replace_with);
+                    } else {
+                        self.replace_type(placeholder_id, payload, replace_with)
+                    }
+                }
+            }
+            Type::Never => (),
+            Type::OpaqueAlias(_) => todo!(),
+            Type::Generic(_) => unreachable!(),
+            Type::Function(_f) => unreachable!(),
+            Type::RecursiveReference(_rr) => (),
+        }
+    }
+
+    fn type_id_eq(&self, type1: TypeId, type2: TypeId) -> bool {
+        self.type_eq(&self.get(type1), &self.get(type2))
+    }
+
+    fn type_eq(&self, type1: &Type, type2: &Type) -> bool {
+        match (type1, type2) {
+            (Type::Unit, Type::Unit) => true,
+            (Type::Char, Type::Char) => true,
+            (Type::Integer(int1), Type::Integer(int2)) => int1 == int2,
+            (Type::Bool, Type::Bool) => true,
+            (Type::String, Type::String) => true,
+            (Type::Struct(r1), Type::Struct(r2)) => {
+                if r1.is_named() || r2.is_named() {
+                    return false;
+                }
+                if r1.fields.len() != r2.fields.len() {
+                    return false;
+                }
+                for (index, f1) in r1.fields.iter().enumerate() {
+                    let f2 = &r2.fields[index];
+                    let mismatch = f1.name != f2.name || f1.type_id != f2.type_id;
+                    if mismatch {
+                        return false;
+                    }
+                }
+                return true;
+            }
+            (Type::Array(a1), Type::Array(a2)) => a1.element_type == a2.element_type,
+            (Type::Optional(o1), Type::Optional(o2)) => o1.inner_type == o2.inner_type,
+            (Type::Reference(r1), Type::Reference(r2)) => r1.inner_type == r2.inner_type,
+            (Type::TypeVariable(t1), Type::TypeVariable(t2)) => {
+                t1.name == t2.name && t1.scope_id == t2.scope_id
+            }
+            (Type::TagInstance(t1), Type::TagInstance(t2)) => t1.ident == t2.ident,
+            (Type::Enum(e1), Type::Enum(e2)) => {
+                if e1.type_defn_info.is_some() || e2.type_defn_info.is_some() {
+                    return false;
+                }
+                if e1.variants.len() != e2.variants.len() {
+                    return false;
+                }
+                for (index, v1) in e1.variants.iter().enumerate() {
+                    let v2 = &e2.variants[index];
+                    let mismatch = v1.tag_name != v2.tag_name || v1.payload != v2.payload;
+                    if mismatch {
+                        return false;
+                    }
+                }
+                true
+            }
+            // We never really want to de-dupe this type as its inherently unique
+            (Type::EnumVariant(_ev1), Type::EnumVariant(_ev2)) => false,
+            // We never really want to de-dupe this type as its inherently unique
+            (Type::OpaqueAlias(_opa1), Type::OpaqueAlias(_opa2)) => false,
+            // We never really want to de-dupe this type as its inherently unique
+            (Type::Generic(_g1), Type::Generic(_g2)) => false,
+            (Type::Function(f1), Type::Function(f2)) => {
+                // I guess functions can totally share a FunctionType if they share
+                // the exact shape
+                if self.type_id_eq(f1.return_type, f2.return_type) {
+                    if f1.params.len() == f2.params.len() {
+                        return f1
+                            .params
+                            .iter()
+                            .zip(f2.params.iter())
+                            .all(|(p1, p2)| self.type_id_eq(p1.type_id, p2.type_id));
+                    }
+                };
+                return false;
+            }
+            _ => false,
+        }
     }
 }
