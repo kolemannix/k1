@@ -109,6 +109,7 @@
 ## Maybe
 - [ ] Move to UFCS instead of having the concept of a 'method' or companion namespace?
 - [ ] Automatic unsafe marker
+- [ ] Might be very cool to have builtin syntax for anything implementing a 'Monad' ability
 
 ## Error story
 - [ ] As values, of course.
