@@ -1,0 +1,29 @@
+type alias opaque Symbols = Array<{ name: string, value: Ast }>
+
+fn parse_expr(tokens: Array<Token>, index: int, context symbols: Symbols): (Ast, Array<Token>) {
+    let (ast, rest) = parse_term(tokens, index, symbols);
+    if rest.len() == 0 {
+        return (ast, rest);
+    }
+    let token = rest[0];
+    if token.kind == TokenKind::Plus {
+        let (rhs, rest2) = parse_expr(rest, 1, symbols);
+        return (Add(ast, rhs), rest2);
+    }
+    return (ast, rest);
+}
+
+type ParseContext = { symbols: Symbols, index: int }
+
+fn parse(input: string, context ctx: ParseContext): enum Ok(Ast) | Err(string) {
+    val tokens = tokenize(input);
+    let (ast, rest) = parse_expr(tokens, 0);
+    if rest.len() > 0 {
+        return(Err("Unexpected tokens at end of input"));
+    }
+    return Ok(ast);
+}
+
+fn main(): int {
+
+}

@@ -12,13 +12,13 @@ fn main(): int {
   assert(obj is .JsStr("hello"));
   assert(null is .JsNull);
 
-  // Causes stack overflow due to no indirection
-  // type Node = { value: string, child: Node? }
-  // val n: Node = { value: "hello", child: None };
-
   val obj2: Json = .JsArray([.JsStr("hello"), .JsNumber("123")]);
   assert((obj2 as .JsArray).payload[0] is .JsStr("hello"));
   assert((obj2 as .JsArray).payload[1] is .JsNumber("123"));
+
+  // TODO: Causes stack overflow due to no indirection
+  // type Node = { value: string, child: Node? }
+  // val n: Node = { value: "hello", child: None };
 
   0
 }
