@@ -11,8 +11,6 @@ fn typeEq<T, U>(): bool {
   typeId<T>() == typeId<U>()
 }
 
-extern fn _k1_charToString(c: char): string
-extern fn _k1_intToChar(i: int): char
 extern fn _k1_readFileToString(path: string): string
 extern fn _k1_crash(reason: string*, file: string*, line: u64): never
 
@@ -66,11 +64,8 @@ fn assertMsg(msg: string, value: bool): unit {
   };
 }
 namespace char {
-  fn fromInt(value: int): char {
-    _k1_intToChar(value)
-  }
   fn toString(self: char): string {
-    _k1_charToString(self)
+    string::fromChars([self]);
   }
 }
 

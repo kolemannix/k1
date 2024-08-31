@@ -4,8 +4,13 @@ use parse_display::Display;
 use std::collections::HashMap;
 
 use crate::{
-    parse::ParsedTypeDefnId,
-    typer::{AbilityId, FunctionId, IdentifierId, NamespaceId, TypeId, VariableId},
+    ferr,
+    lex::SpanId,
+    parse::{Identifiers, NamespacedIdentifier, ParsedTypeDefnId},
+    typer::{
+        make_error, AbilityId, FunctionId, Identifier, NamespaceId, Namespaces, TypeId,
+        TyperResult, VariableId,
+    },
 };
 
 pub type ScopeId = u32;
@@ -50,7 +55,7 @@ impl Scopes {
         Scopes { scopes: Vec::new() }
     }
 
-    pub fn add_root_scope(&mut self, name: Option<IdentifierId>) -> ScopeId {
+    pub fn add_root_scope(&mut self, name: Option<Identifier>) -> ScopeId {
         debug_assert!(self.scopes.is_empty());
         self.scopes.push(Scope::make(ScopeType::Namespace, None, name));
         0 as ScopeId
@@ -69,7 +74,7 @@ impl Scopes {
         parent_scope_id: ScopeId,
         scope_type: ScopeType,
         scope_owner_id: Option<ScopeOwnerId>,
-        name: Option<IdentifierId>,
+        name: Option<Identifier>,
     ) -> ScopeId {
         let scope = Scope {
             parent: Some(parent_scope_id),
@@ -98,7 +103,7 @@ impl Scopes {
         self.get_scope_mut(id).owner_id = Some(owner_id);
     }
 
-    pub fn find_namespace(&self, scope: ScopeId, ident: IdentifierId) -> Option<NamespaceId> {
+    pub fn find_namespace(&self, scope: ScopeId, ident: Identifier) -> Option<NamespaceId> {
         let scope = self.get_scope(scope);
         if let ns @ Some(_r) = scope.find_namespace(ident) {
             return ns;
@@ -109,7 +114,28 @@ impl Scopes {
         }
     }
 
-    pub fn find_variable(&self, scope: ScopeId, ident: IdentifierId) -> Option<VariableId> {
+    pub fn find_variable_namespaced(
+        &self,
+        scope: ScopeId,
+        name: &NamespacedIdentifier,
+        namespaces: &Namespaces,
+        identifiers: &Identifiers,
+    ) -> TyperResult<Option<VariableId>> {
+        if name.namespaces.is_empty() {
+            Ok(self.find_variable(scope, name.name))
+        } else {
+            let scope_to_search = self.traverse_namespace_chain(
+                scope,
+                &name.namespaces,
+                namespaces,
+                identifiers,
+                name.span,
+            )?;
+            Ok(self.get_scope(scope_to_search).find_variable(name.name))
+        }
+    }
+
+    pub fn find_variable(&self, scope: ScopeId, ident: Identifier) -> Option<VariableId> {
         let scope = self.get_scope(scope);
         if let v @ Some(_r) = scope.find_variable(ident) {
             return v;
@@ -120,33 +146,40 @@ impl Scopes {
         }
     }
 
-    pub fn add_variable(
-        &mut self,
-        scope_id: ScopeId,
-        ident: IdentifierId,
-        variable_id: VariableId,
-    ) {
+    pub fn add_variable(&mut self, scope_id: ScopeId, ident: Identifier, variable_id: VariableId) {
         let scope = self.get_scope_mut(scope_id);
         scope.add_variable(ident, variable_id);
     }
 
-    pub fn find_function(
+    pub fn find_function_namespaced(
         &self,
         scope: ScopeId,
-        ident: IdentifierId,
-        recurse: bool,
-    ) -> Option<FunctionId> {
+        name: &NamespacedIdentifier,
+        namespaces: &Namespaces,
+        identifiers: &Identifiers,
+    ) -> TyperResult<Option<FunctionId>> {
+        if name.namespaces.is_empty() {
+            Ok(self.find_function(scope, name.name))
+        } else {
+            let scope_to_search = self.traverse_namespace_chain(
+                scope,
+                &name.namespaces,
+                namespaces,
+                identifiers,
+                name.span,
+            )?;
+            Ok(self.get_scope(scope_to_search).find_function(name.name))
+        }
+    }
+
+    pub fn find_function(&self, scope: ScopeId, ident: Identifier) -> Option<FunctionId> {
         let scope = self.get_scope(scope);
         if let f @ Some(_r) = scope.find_function(ident) {
             return f;
         }
-        if recurse {
-            match scope.parent {
-                Some(parent) => self.find_function(parent, ident, true),
-                None => None,
-            }
-        } else {
-            return None;
+        match scope.parent {
+            Some(parent) => self.find_function(parent, ident),
+            None => None,
         }
     }
 
@@ -154,18 +187,18 @@ impl Scopes {
     pub fn add_function(
         &mut self,
         scope_id: ScopeId,
-        identifier: IdentifierId,
+        identifier: Identifier,
         function_id: FunctionId,
     ) -> bool {
         self.get_scope_mut(scope_id).add_function(identifier, function_id)
     }
 
     #[must_use]
-    pub fn add_type(&mut self, scope_id: ScopeId, ident: IdentifierId, ty: TypeId) -> bool {
+    pub fn add_type(&mut self, scope_id: ScopeId, ident: Identifier, ty: TypeId) -> bool {
         self.get_scope_mut(scope_id).add_type(ident, ty)
     }
 
-    pub fn find_type(&self, scope_id: ScopeId, ident: IdentifierId) -> Option<TypeId> {
+    pub fn find_type(&self, scope_id: ScopeId, ident: Identifier) -> Option<TypeId> {
         let scope = self.get_scope(scope_id);
         trace!("Find type {} in {:?}", ident, scope.types);
         if let v @ Some(_r) = scope.find_type(ident) {
@@ -180,7 +213,7 @@ impl Scopes {
     pub fn find_pending_type_defn(
         &self,
         scope_id: ScopeId,
-        ident: IdentifierId,
+        ident: Identifier,
     ) -> Option<(ParsedTypeDefnId, ScopeId)> {
         let scope = self.get_scope(scope_id);
         if let Some(defn) = scope.find_pending_type_defn(ident) {
@@ -192,7 +225,7 @@ impl Scopes {
         }
     }
 
-    pub fn remove_pending_type_defn(&mut self, scope_id: ScopeId, ident: IdentifierId) -> bool {
+    pub fn remove_pending_type_defn(&mut self, scope_id: ScopeId, ident: Identifier) -> bool {
         let scope = self.get_scope_mut(scope_id);
         if scope.remove_pending_type_defn(ident) {
             true
@@ -250,6 +283,76 @@ impl Scopes {
             },
         }
     }
+
+    pub fn traverse_namespace_chain(
+        &self,
+        scope_id: ScopeId,
+        namespace_chain: &[Identifier],
+        namespaces: &Namespaces,
+        identifiers: &Identifiers,
+        span: SpanId,
+    ) -> TyperResult<ScopeId> {
+        let mut ns_iter = namespace_chain.iter();
+        let mut cur_scope_id = scope_id;
+        let Some(first) = ns_iter.next() else {
+            return Ok(cur_scope_id);
+        };
+        // First lookup is special and recursive because it's in the current scope
+        let Some(first_ns) = self.find_namespace(cur_scope_id, *first) else {
+            return Err(ferr!(
+                span,
+                "Namespace not found: {} in scope: {:?}",
+                identifiers.get_name(*first),
+                self.get_scope(scope_id).name.map(|n| identifiers.get_name(n))
+            ));
+        };
+        cur_scope_id = namespaces.get(first_ns).scope_id;
+
+        for ns in ns_iter {
+            let cur_scope = self.get_scope(cur_scope_id);
+            let namespace_id = cur_scope.find_namespace(*ns).ok_or(ferr!(
+                span,
+                "Namespace not found: {} in scope: {:?}",
+                identifiers.get_name(*ns),
+                self.get_scope(cur_scope_id).name.map(|n| identifiers.get_name(n))
+            ))?;
+            let namespace = namespaces.get(namespace_id);
+            cur_scope_id = namespace.scope_id;
+        }
+        Ok(cur_scope_id)
+    }
+
+    fn find_ability(&self, scope_id: ScopeId, name: Identifier) -> Option<AbilityId> {
+        let scope = self.get_scope(scope_id);
+        if let Some(ability_id) = scope.find_ability(name) {
+            return Some(ability_id);
+        }
+        match scope.parent {
+            Some(parent_scope_id) => self.find_ability(parent_scope_id, name),
+            None => None,
+        }
+    }
+
+    pub fn find_ability_namespaced(
+        &self,
+        scope_id: ScopeId,
+        ability_name: &NamespacedIdentifier,
+        namespaces: &Namespaces,
+        identifiers: &Identifiers,
+    ) -> TyperResult<Option<AbilityId>> {
+        if ability_name.namespaces.is_empty() {
+            Ok(self.find_ability(scope_id, ability_name.name))
+        } else {
+            let scope_to_search = self.traverse_namespace_chain(
+                scope_id,
+                &ability_name.namespaces,
+                namespaces,
+                identifiers,
+                ability_name.span,
+            )?;
+            Ok(self.get_scope(scope_to_search).find_ability(ability_name.name))
+        }
+    }
 }
 
 /// Useful for going from scope to 'thing that owns the scope', like to a scope's ability or namespace or function
@@ -270,26 +373,26 @@ impl ScopeOwnerId {
 
 #[derive(Debug)]
 pub struct Scope {
-    pub variables: HashMap<IdentifierId, VariableId>,
-    pub functions: HashMap<IdentifierId, FunctionId>,
-    pub namespaces: HashMap<IdentifierId, NamespaceId>,
-    pub types: HashMap<IdentifierId, TypeId>,
-    pub abilities: HashMap<IdentifierId, AbilityId>,
+    pub variables: HashMap<Identifier, VariableId>,
+    pub functions: HashMap<Identifier, FunctionId>,
+    pub namespaces: HashMap<Identifier, NamespaceId>,
+    pub types: HashMap<Identifier, TypeId>,
+    pub abilities: HashMap<Identifier, AbilityId>,
     // FIXME: Add abilities here so they participate in the type defn phase
-    pub pending_type_defns: HashMap<IdentifierId, ParsedTypeDefnId>,
+    pub pending_type_defns: HashMap<Identifier, ParsedTypeDefnId>,
     pub parent: Option<ScopeId>,
     pub children: Vec<ScopeId>,
     pub scope_type: ScopeType,
     pub owner_id: Option<ScopeOwnerId>,
     /// Name is just used for pretty-printing and debugging scopes don't really have names
-    pub name: Option<IdentifierId>,
+    pub name: Option<Identifier>,
 }
 
 impl Scope {
     pub fn make(
         scope_type: ScopeType,
         owner_id: Option<ScopeOwnerId>,
-        name: Option<IdentifierId>,
+        name: Option<Identifier>,
     ) -> Scope {
         Scope {
             variables: HashMap::new(),
@@ -306,7 +409,7 @@ impl Scope {
         }
     }
 
-    pub fn add_variable(&mut self, ident: IdentifierId, value: VariableId) {
+    pub fn add_variable(&mut self, ident: Identifier, value: VariableId) {
         // This accomplishes shadowing by overwriting the name in the scope.
         // I think this is ok because ther variable itself by variable id
         // is not lost, in case we wanted to do some analysis.
@@ -314,12 +417,12 @@ impl Scope {
         self.variables.insert(ident, value);
     }
 
-    pub fn find_variable(&self, ident: IdentifierId) -> Option<VariableId> {
+    pub fn find_variable(&self, ident: Identifier) -> Option<VariableId> {
         self.variables.get(&ident).copied()
     }
 
     #[must_use]
-    pub fn add_type(&mut self, ident: IdentifierId, ty: TypeId) -> bool {
+    pub fn add_type(&mut self, ident: Identifier, ty: TypeId) -> bool {
         if self.types.contains_key(&ident) {
             false
         } else {
@@ -328,12 +431,12 @@ impl Scope {
         }
     }
 
-    pub fn find_type(&self, ident: IdentifierId) -> Option<TypeId> {
+    pub fn find_type(&self, ident: Identifier) -> Option<TypeId> {
         self.types.get(&ident).copied()
     }
 
     #[must_use]
-    pub fn add_function(&mut self, ident: IdentifierId, function_id: FunctionId) -> bool {
+    pub fn add_function(&mut self, ident: Identifier, function_id: FunctionId) -> bool {
         if self.functions.contains_key(&ident) {
             false
         } else {
@@ -342,12 +445,12 @@ impl Scope {
         }
     }
 
-    pub fn find_function(&self, ident: IdentifierId) -> Option<FunctionId> {
+    pub fn find_function(&self, ident: Identifier) -> Option<FunctionId> {
         self.functions.get(&ident).copied()
     }
 
     #[must_use]
-    pub fn add_namespace(&mut self, ident: IdentifierId, namespace_id: NamespaceId) -> bool {
+    pub fn add_namespace(&mut self, ident: Identifier, namespace_id: NamespaceId) -> bool {
         if self.namespaces.contains_key(&ident) {
             false
         } else {
@@ -356,12 +459,12 @@ impl Scope {
         }
     }
 
-    pub fn find_namespace(&self, ident: IdentifierId) -> Option<NamespaceId> {
+    pub fn find_namespace(&self, ident: Identifier) -> Option<NamespaceId> {
         self.namespaces.get(&ident).copied()
     }
 
     #[must_use]
-    pub fn add_ability(&mut self, ident: IdentifierId, ability_id: AbilityId) -> bool {
+    pub fn add_ability(&mut self, ident: Identifier, ability_id: AbilityId) -> bool {
         if self.abilities.contains_key(&ident) {
             false
         } else {
@@ -370,14 +473,14 @@ impl Scope {
         }
     }
 
-    pub fn find_ability(&self, ident: IdentifierId) -> Option<AbilityId> {
+    pub fn find_ability(&self, ident: Identifier) -> Option<AbilityId> {
         self.abilities.get(&ident).copied()
     }
 
     #[must_use]
     pub fn add_pending_type_defn(
         &mut self,
-        ident: IdentifierId,
+        ident: Identifier,
         parsed_defn_id: ParsedTypeDefnId,
     ) -> bool {
         if self.pending_type_defns.contains_key(&ident) {
@@ -388,11 +491,11 @@ impl Scope {
         }
     }
 
-    pub fn find_pending_type_defn(&self, ident: IdentifierId) -> Option<ParsedTypeDefnId> {
+    pub fn find_pending_type_defn(&self, ident: Identifier) -> Option<ParsedTypeDefnId> {
         self.pending_type_defns.get(&ident).copied()
     }
 
-    pub fn remove_pending_type_defn(&mut self, ident: IdentifierId) -> bool {
+    pub fn remove_pending_type_defn(&mut self, ident: Identifier) -> bool {
         self.pending_type_defns.remove(&ident).is_some()
     }
 }

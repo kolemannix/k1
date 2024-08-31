@@ -37,7 +37,7 @@
   - [x] Newtypes (opaque)
   - [x] Aliases
 - [x] Generic structs and enums
-- [ ] Recursive types
+- [x] Recursive types
 - [ ] Require named fncall args; and allow anonymous w/ declaration like Jakt
 - [x] TypedIf allow exprs instead of requiring blocks (did not do; instead improved handling of unit blocks)
 - [x] Remove binding 'if' since we have pattern matching
@@ -68,6 +68,7 @@
       ^ mixed feelings here as it breaks the fact that 'expr as T' always returns a T...
 - [x] Use `as` casting syntax for rawpointer.asUnsafe
 - [x] Allow `as` casting syntax for enums to supply only the tag (`result as .Ok` instead of result as `Result<T,E>.Ok`)
+- [ ] Ability constraints
 - [ ] 'Context' system; implicit stack arguments
 - [ ] Mark types as trivially copyable or not
   ^ The builtin array would be NOT copyable so that you don't accidentally alias the data ptr
@@ -79,8 +80,8 @@
   - [x] inner type of optional
   - [x] return type of function (fn.return)
   - [x] param types of function (fn.arg, fn.arg2)
+- [ ] Define 'platform layer' (crash, alloc/free, other?)
 - [x] Function types (functions have types but there's no syntax for describing a function type yet)
-- [x] Recursive types
 - [ ] floating point (f32 and f64)
 - [ ] Optional coalescing field accessor (x?.y)
 - [x] Finish/fix simple generic inference
@@ -92,7 +93,6 @@
 - [ ] function pointers (we could take address of a function as RawPointer already)
 - [ ] slices (windows? segments?)
 - [ ] Generic abilities
-- [ ] Ability constraints
 - [ ] array bounds checking
 - [ ] Pure lambdas with -> (not closures)
 - [ ] Rework builtin array to be userspace and use multipointers?
