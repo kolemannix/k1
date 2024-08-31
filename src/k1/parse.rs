@@ -104,7 +104,7 @@ pub enum Literal {
     Char(u8, SpanId),
     Integer(ParsedIntegerLiteral),
     Bool(bool, SpanId),
-    /// TODO: Need second span, "content_span_id"
+    /// TODO(string literal escaping): Need second span, "content_span_id"
     String(String, SpanId),
 }
 
@@ -1156,7 +1156,6 @@ impl Line {
         self.line_index + 1
     }
     pub fn end_char(&self) -> u32 {
-        // TODO(unicode): Assuming ascii for now
         self.start_char + self.content.len() as u32
     }
 }
@@ -2012,7 +2011,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 K::CloseAngle,
                 Parser::expect_type_expression,
             )?;
-            // TODO named type arguments
             let type_args: Vec<_> = type_expressions
                 .into_iter()
                 .map(|type_expr| FnCallTypeArg { name: None, type_expr })
@@ -2096,7 +2094,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         } else if first.kind == K::OpenParen {
             self.tokens.advance();
             let expr = self.expect_expression()?;
-            // TODO: If comma, parse a tuple
+            // Note: Here would be where we would support tuples
             self.expect_eat_token(K::CloseParen)?;
             Ok(Some(expr))
         } else if first.kind == K::KeywordFor {
@@ -2337,7 +2335,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         F: Fn(&mut Parser<'toks, 'module>) -> ParseResult<T>,
     {
         trace!("eat_delimited delim='{}' terminator='{}'", delim, terminator);
-        // TODO @Allocation Use smallvec
         let mut v = Vec::with_capacity(8);
 
         // FIXME(spans) this should probably be passed in since it doesn't cover the opening delimiter

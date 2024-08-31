@@ -720,7 +720,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     }
 
     fn build_print_int_call(&mut self, int_value: BasicValueEnum<'ctx>) -> BasicValueEnum<'ctx> {
-        // TODO: Builtin globals could be a struct not a hashmap because its all static currently
+        // Note: These 'builtin globals' should be a struct not a hashmap because its all static currently
         let format_str_global = self.builtin_globals.get("formatInt").unwrap();
         let call = self
             .builder
@@ -1445,11 +1445,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let condition_value = self.bool_to_i1(condition.into_int_value(), "cond_i1");
         self.builder.build_conditional_branch(condition_value, consequent_block, alternate_block);
 
-        // TODO: Support when either or both arms are of type 'never'
-        // or, equivalently for typing the 'if', if they
-        // return from the whole function, rather than yield an expression value
-        //Figure out what phi does if one of its incomings is unreachable
-
         // Consequent Block
         self.builder.position_at_end(consequent_block);
         let consequent_block_value = self.codegen_block_statements(&ir_if.consequent)?;
@@ -2140,7 +2135,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             Type::String => panic!("No string-returning binary ops yet"),
             Type::Unit => panic!("No unit-returning binary ops"),
             Type::Char => panic!("No char-returning binary ops"),
-            _other => todo!("codegen for binary ops on other types"),
+            _other => unreachable!("codegen for binary ops on other types"),
         }
     }
 
@@ -2616,7 +2611,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let element_type = self.codegen_type(array_type.expect_array().element_type)?;
                 let len = self.get_loaded_variable(function.params[0].variable_id).into_int_value();
 
-                // TODO: Use ctlz intrinsic to count leading zeroes and get next highest
+                // Note: We could use ctlz intrinsic to count leading zeroes and get next highest
                 //       power of 2 for capacity
                 // let ctlz_intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.ctlz").unwrap();
                 // let ctlz_function = ctlz_intrinsic.get_declaration(&self.llvm_module, &[self.ctx.i64_type().as_basic_type_enum()]).unwrap();
@@ -3024,7 +3019,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     llvm_global.set_initializer(&llvm_value);
                     self.globals.insert(constant.variable_id, llvm_global);
                 }
-                _ => todo!("constant must be int"),
+                _ => unimplemented!("constants must be integers"),
             }
         }
         for (id, function) in self.module.function_iter() {

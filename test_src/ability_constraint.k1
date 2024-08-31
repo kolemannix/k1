@@ -19,15 +19,13 @@ impl Num for int {
   }
 }
 
-impl Show for int {
-  fn show(self: int): string {
-    "todo"
-  }
+fn main(): int {
+  add(1, 2);
+  0
 }
 
-fn main(): int {
-
-  add(1, 2);
-
-  0
+impl Show for int {
+  fn show(self: int): string {
+    "some int"
+  }
 }

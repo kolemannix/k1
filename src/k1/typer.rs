@@ -215,7 +215,6 @@ pub struct TypedFunction {
     pub linkage: Linkage,
     pub specializations: Vec<SpecializationStruct>,
     pub parsed_function_id: ParsedFunctionId,
-    // pub is_specialization_of: Option<FunctionId>,
     is_method_of: Option<TypeId>,
     pub kind: TypedFunctionKind,
     pub span: SpanId,
@@ -634,6 +633,7 @@ pub enum TypedExpr {
     ArrayIndex(IndexOp),
     StringIndex(IndexOp),
     // TODO: Can some of these just be unary ops
+    // TODO: We could also make Optional defined in userland now!
     OptionalSome(OptionalSome),
     OptionalHasValue(Box<TypedExpr>),
     OptionalGet(OptionalGet),
@@ -1078,8 +1078,7 @@ impl EvalTypeExprContext {
 // Not using this yet but probably need to be
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Symbol {
-    // TODO: decide between scope or namespace id here
-    pub scope: ScopeId,
+    pub namespace: NamespaceId,
     pub identifier: Identifier,
 }
 
@@ -1420,7 +1419,7 @@ impl TypedModule {
                         scope_id,
                         context.no_attach_defn_info(),
                     )?;
-                    // TODO: This is kinda how we'd prevent this
+                    // TODO(infinite recursive types): This is kinda how we'd prevent this
                     // if let Type::RecursiveReference(rr) = self.types.get_no_follow(ty) {
                     //     if Some(rr.parsed_id)
                     //         == context.inner_type_defn_info.as_ref().map(|i| i.ast_id)
@@ -1570,7 +1569,7 @@ impl TypedModule {
                                 scope_id,
                                 context.no_attach_defn_info(),
                             )?;
-                            // TODO: This is kinda how we'd prevent infinite recursion
+                            // TODO(infinite recursive types): This is kinda how we'd prevent infinite recursion
                             // if let Type::RecursiveReference(rr) = self.types.get_no_follow(type_id)
                             // {
                             //     if Some(rr.parsed_id)
@@ -3414,11 +3413,11 @@ impl TypedModule {
         //     Type::Optional(_) => {
         //         vec!["Some", "None"]
         //     }
-        //     Type::Reference(_) => todo!(),
-        //     Type::TypeVariable(_) => todo!(),
-        //     Type::TagInstance(_) => todo!(),
-        //     Type::Enum(_) => todo!(),
-        //     Type::EnumVariant(_) => todo!(),
+        //     Type::Reference(_) => unimplemented!(),
+        //     Type::TypeVariable(_) => unimplemented!(),
+        //     Type::TagInstance(_) => unimplemented!(),
+        //     Type::Enum(_) => unimplemented!(),
+        //     Type::EnumVariant(_) => unimplemented!(),
         // };
         // for c in typed_cases.iter() {
         //     match &c.pattern {
@@ -3451,7 +3450,7 @@ impl TypedModule {
 
     /// For each match case we output
     /// 1) a series of statements to bind variables that are used by the condition
-    /// TODO: These conditions should be in their own block; currently they pollute the match block
+    /// FIXME!: These conditions should be in their own block; currently they pollute the match block
     /// 2) an expr that is expected to a boolean, representing the condition of the branch,
     fn eval_match_arm(
         &mut self,
@@ -4015,7 +4014,7 @@ impl TypedModule {
                     self.types.add_type(new_array)
                 }
                 other => {
-                    todo!("Unsupported iteree type: {}", self.type_to_string(other))
+                    panic!("Unsupported iteree type: {}", self.type_to_string(other))
                 }
             }
         };
@@ -4425,7 +4424,7 @@ impl TypedModule {
             callee_function_id: equals_implementation_function_id,
             args: vec![lhs, rhs],
             type_args: Vec::new(),
-            ret_type: BOOL_TYPE_ID, // TODO: We should assert that equals does return a bool so we don't emit invalid bytecode
+            ret_type: BOOL_TYPE_ID,
             span,
         });
         Ok(call_expr)
@@ -4669,7 +4668,7 @@ impl TypedModule {
                     };
                 };
                 let method_id = match self.types.get_type_dereferenced(type_id) {
-                    // TODO: DRY up. First resolve to a namespace, then same path
+                    // TODO: DRY up. First resolve to a namespace, then call same code
                     // Also use companion namespace method not just name of namespace
                     Type::Optional(_optional_type) => {
                         if fn_name == self.ast.identifiers.get("hasValue").unwrap()
@@ -5379,7 +5378,11 @@ impl TypedModule {
             }
         }
 
-        // TODO: new_name should maybe be calculated by specialize_function
+        // TODO: Specialization logic is weirdly divided between this function and
+        // eval_function_predecl, resulting in a lot of edge cases or ignoring some arguments
+        // inside eval_function_predecl. I think that function should just fully handle specialization
+        // It's almost like get_specialized_function_for_call belongs _INSIDE_ eval_function_predecl instead of
+        // outside. I think things will be much nicer and less buggy if we clean this up
         let new_name_ident = self.ast.identifiers.intern(&new_name);
         let specialized_function_id = self.specialize_function(
             generic_function_ast_id,
@@ -5644,7 +5647,7 @@ impl TypedModule {
         let parsed_function_type_args = parsed_function.type_args.clone();
 
         let is_ability_decl = ability_id.is_some() && ability_impl_type.is_none();
-        let is_ability_impl = ability_id.is_some() && ability_impl_type.is_some();
+        let _is_ability_impl = ability_id.is_some() && ability_impl_type.is_some();
 
         let name = match (ability_impl_type, specialization_params) {
             (Some(target_type), None) => self.ast.identifiers.intern(format!(
@@ -5936,7 +5939,7 @@ impl TypedModule {
 
         let body_block = match ast_fn_def.block.as_ref() {
             Some(block_ast) => {
-                // TODO(clone): Intern blocks
+                // Note(clone): Intern blocks
                 let block_ast = block_ast.clone();
                 let block = self.eval_block(&block_ast, fn_scope_id, Some(given_ret_type))?;
                 if let Err(msg) = self.check_types(given_ret_type, block.expr_type, fn_scope_id) {
@@ -6478,9 +6481,6 @@ impl TypedModule {
         eprintln!("**** ns phase begin ****");
         let ns_phase_res = self.eval_namespace_ns_phase(root_namespace_id, None);
         if let Err(e) = ns_phase_res {
-            // TODO: I'm not sure if we can just keep going if this fails; the namespaces
-            // won't even have scopes so a lot of things just won't work, and
-            // may result in internal compiler errors instead of helpful ones
             print_error(&self.ast.spans, &self.ast.sources, &e.message, e.span);
             self.errors.push(e);
         }
@@ -6501,6 +6501,9 @@ impl TypedModule {
             print_error(&self.ast.spans, &self.ast.sources, &e.message, e.span);
             self.errors.push(e);
         }
+        if !self.errors.is_empty() {
+            bail!("{} failed type definition phase with {} errors", self.name(), self.errors.len())
+        }
         eprintln!("**** type defn phase end ****");
 
         // Type evaluation phase
@@ -6517,6 +6520,9 @@ impl TypedModule {
                 dbg!(self.get_ident_str(defn.name));
             }
             panic!("Unevaluated type defns!!!")
+        }
+        if !self.errors.is_empty() {
+            bail!("{} failed type evaluation phase with {} errors", self.name(), self.errors.len())
         }
         eprintln!("**** type eval phase end ****");
 
