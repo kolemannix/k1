@@ -27,6 +27,7 @@ pub enum ScopeType {
     MatchArm,
     TypeDefn,
     AbilityDefn,
+    AbilityImpl,
 }
 
 impl ScopeType {
@@ -42,6 +43,7 @@ impl ScopeType {
             ScopeType::MatchArm => "match_arm",
             ScopeType::TypeDefn => "type_defn",
             ScopeType::AbilityDefn => "ability_defn",
+            ScopeType::AbilityImpl => "ability_impl",
         }
     }
 }
