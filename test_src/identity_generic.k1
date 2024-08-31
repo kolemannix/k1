@@ -1,15 +1,12 @@
-fn identity2<T>(t: T): T { t }
+fn identity2<TT>(t: TT): TT { t }
 fn identity<T>(t: T): T {
-  printInt(identity2<int>(4));
   identity2<T>(t)
 }
 // fn identity<T>(t: T): T { t }
 
 fn main(): int {
-  printInt(identity<int>(4));
-  val b: bool = identity<bool>(true);
-  printInt(if b 1 else 0);
-  printInt(identity<{ value: int }>({ value: 42 }).value);
+  assert(identity<int>(4) == 4);
+  assert(identity<bool>(true));
+  assert(identity<{ value: int }>({ value: 42 }).value == 42);
   0
 }
-// 4, 1, 42

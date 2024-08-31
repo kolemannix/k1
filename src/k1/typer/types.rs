@@ -3,7 +3,7 @@ use std::fmt::{Display, Formatter};
 
 use crate::typer::scopes::*;
 
-use crate::parse::IdentifierId;
+use crate::parse::Identifier;
 use crate::parse::{ParsedId, ParsedTypeDefnId};
 
 use crate::typer::*;
@@ -27,14 +27,14 @@ impl Display for TypeId {
 
 #[derive(Debug, Clone)]
 pub struct StructTypeField {
-    pub name: IdentifierId,
+    pub name: Identifier,
     pub type_id: TypeId,
     pub index: u32,
 }
 
 #[derive(Debug, Clone)]
 pub struct TypeDefnInfo {
-    pub name: IdentifierId,
+    pub name: Identifier,
     pub scope: ScopeId,
     // If there's a corresponding namespace for this type defn, this is it
     pub companion_namespace: Option<NamespaceId>,
@@ -59,7 +59,7 @@ impl StructType {
         self.type_defn_info.is_none()
     }
 
-    pub fn find_field(&self, field_name: IdentifierId) -> Option<(usize, &StructTypeField)> {
+    pub fn find_field(&self, field_name: Identifier) -> Option<(usize, &StructTypeField)> {
         self.fields.iter().enumerate().find(|(_, field)| field.name == field_name)
     }
 }
@@ -86,10 +86,10 @@ pub struct ArrayType {
 
 #[derive(Debug, Clone)]
 pub struct TypeVariable {
-    pub name: IdentifierId,
+    pub name: Identifier,
     pub scope_id: ScopeId,
-    /// This is where trait bounds would go
-    pub _constraints: Option<Vec<()>>,
+    pub ability_impls: Vec<AbilityId>,
+    pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
@@ -104,14 +104,14 @@ pub struct ReferenceType {
 
 #[derive(Debug, Clone)]
 pub struct TagInstanceType {
-    pub ident: IdentifierId,
+    pub ident: Identifier,
 }
 
 #[derive(Debug, Clone)]
 pub struct TypedEnumVariant {
     pub enum_type_id: TypeId,
     pub my_type_id: TypeId,
-    pub tag_name: IdentifierId,
+    pub tag_name: Identifier,
     pub index: u32,
     pub payload: Option<TypeId>,
 }
@@ -125,7 +125,7 @@ pub struct TypedEnum {
 }
 
 impl TypedEnum {
-    pub fn variant_by_name(&self, name: IdentifierId) -> Option<&TypedEnumVariant> {
+    pub fn variant_by_name(&self, name: Identifier) -> Option<&TypedEnumVariant> {
         self.variants.iter().find(|v| v.tag_name == name)
     }
     pub fn variant_by_index(&self, index: u32) -> Option<&TypedEnumVariant> {
@@ -142,7 +142,7 @@ pub struct OpaqueTypeAlias {
 
 #[derive(Debug, Clone)]
 pub struct GenericTypeParam {
-    pub name: IdentifierId,
+    pub name: Identifier,
     pub type_id: TypeId,
 }
 
@@ -221,7 +221,7 @@ pub struct Spanned<T> {
 #[derive(Debug, Clone)]
 pub struct FnArgType {
     pub type_id: TypeId,
-    pub name: IdentifierId,
+    pub name: Identifier,
 }
 
 #[derive(Debug, Clone)]
@@ -275,7 +275,7 @@ impl Type {
             Type::Array(_a) => None,
             Type::Optional(_t) => None,
             Type::Reference(_t) => None,
-            Type::TypeVariable(_t) => None,
+            Type::TypeVariable(t) => None,
             Type::TagInstance(_t) => None,
             Type::Enum(e) => Some(e.ast_node),
             Type::EnumVariant(_ev) => None,
@@ -433,6 +433,30 @@ impl Type {
             _ => panic!("expected recursive reference"),
         }
     }
+
+    pub fn span(&self) -> Option<SpanId> {
+        match self {
+            // TODO: these are in prelude now so we can populate the spans
+            Type::Unit => None,
+            Type::Char => None,
+            Type::Integer(_) => None,
+            Type::Bool => None,
+            Type::String => None,
+            Type::Struct(s) => None,
+            Type::Array(_) => None,
+            Type::Optional(_) => None,
+            Type::Reference(_) => None,
+            Type::TypeVariable(t) => Some(t.span),
+            Type::TagInstance(_) => None,
+            Type::Enum(e) => None,
+            Type::EnumVariant(_) => None,
+            Type::Never => None,
+            Type::OpaqueAlias(opaque) => None,
+            Type::Generic(gen) => None,
+            Type::Function(_) => None,
+            Type::RecursiveReference(r) => None,
+        }
+    }
 }
 
 #[derive(Default, Debug)]
@@ -544,9 +568,24 @@ impl Types {
             Type::Reference(refer) => self.does_type_reference_type_variables(refer.inner_type),
             Type::TypeVariable(_) => true,
             Type::TagInstance(_) => false,
-            // We don't _yet_ support generics in enums
-            Type::Enum(_) => false,
-            Type::EnumVariant(_) => false,
+            Type::Enum(e) => {
+                for v in e.variants.iter() {
+                    if let Some(payload) = v.payload {
+                        if self.does_type_reference_type_variables(payload) {
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            }
+            Type::EnumVariant(ev) => {
+                if let Some(payload) = ev.payload {
+                    if self.does_type_reference_type_variables(payload) {
+                        return true;
+                    }
+                }
+                return false;
+            }
             Type::Never => false,
             Type::OpaqueAlias(opaque) => self.does_type_reference_type_variables(opaque.aliasee),
             Type::Generic(_gen) => true,
@@ -601,7 +640,7 @@ impl Types {
     }
 
     // FIXME: Slow
-    pub fn get_type_for_tag(&mut self, tag_ident: IdentifierId) -> TypeId {
+    pub fn get_type_for_tag(&mut self, tag_ident: Identifier) -> TypeId {
         for (type_id, typ) in self.iter() {
             if let Type::TagInstance(tag) = typ {
                 if tag.ident == tag_ident {

@@ -122,7 +122,7 @@ fn fn_args_literal() -> Result<(), ParseError> {
     if let ParsedExpression::FnCall(fn_call) = result {
         let args = &fn_call.args;
         let idents = &module.identifiers;
-        assert_eq!(idents.get_name(fn_call.name), "f");
+        assert_eq!(idents.get_name(fn_call.name.name), "f");
         assert_eq!(idents.get_name(args[0].name.unwrap()), "myarg");
         assert!(ParsedExpression::is_literal(&module.expressions.get(args[0].value)));
         assert!(ParsedExpression::is_literal(&module.expressions.get(args[1].value)));
@@ -155,7 +155,7 @@ fn dot_accessor() -> ParseResult<()> {
     };
     assert_eq!(module.identifiers.get_name(acc2.target), "b");
     let ParsedExpression::Variable(v) = module.expressions.get(acc2.base) else { panic!() };
-    assert_eq!(module.identifiers.get_name(v.name), "a");
+    assert_eq!(module.identifiers.get_name(v.name.name), "a");
     Ok(())
 }
 
@@ -269,8 +269,8 @@ fn generic_method_call_lhs_expr() -> Result<(), ParseError> {
     else {
         panic!()
     };
-    assert_eq!(fn_call.name, parser.identifiers.intern("getFn"));
-    assert_eq!(call.name, parser.identifiers.intern("baz"));
+    assert_eq!(fn_call.name.name, parser.identifiers.intern("getFn"));
+    assert_eq!(call.name.name, parser.identifiers.intern("baz"));
     let type_arg = parser.type_expressions.get(call.type_args.unwrap()[0].type_expr);
     assert!(type_arg.is_integer());
     assert!(matches!(&*parser.expressions.get(call.args[1].value), ParsedExpression::Literal(_)));
@@ -300,9 +300,9 @@ fn namespaced_fncall() -> ParseResult<()> {
         dbg!(result);
         panic!("not fncall")
     };
-    assert_eq!(fn_call.namespaces[0], parser.identifiers.intern("foo"));
-    assert_eq!(fn_call.namespaces[1], parser.identifiers.intern("bar"));
-    assert_eq!(fn_call.name, parser.identifiers.intern("baz"));
+    assert_eq!(fn_call.name.namespaces[0], parser.identifiers.intern("foo"));
+    assert_eq!(fn_call.name.namespaces[1], parser.identifiers.intern("bar"));
+    assert_eq!(fn_call.name.name, parser.identifiers.intern("baz"));
     assert!(fn_call.args.is_empty());
     Ok(())
 }
@@ -314,9 +314,9 @@ fn namespaced_val() -> ParseResult<()> {
         dbg!(result);
         panic!("not variable")
     };
-    assert_eq!(variable.namespaces[0], parser.identifiers.intern("foo"));
-    assert_eq!(variable.namespaces[1], parser.identifiers.intern("bar"));
-    assert_eq!(variable.name, parser.identifiers.intern("baz"));
+    assert_eq!(variable.name.namespaces[0], parser.identifiers.intern("foo"));
+    assert_eq!(variable.name.namespaces[1], parser.identifiers.intern("bar"));
+    assert_eq!(variable.name.name, parser.identifiers.intern("baz"));
     Ok(())
 }
 

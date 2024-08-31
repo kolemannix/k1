@@ -63,43 +63,51 @@ impl Display for LexError {
 impl std::error::Error for LexError {}
 
 pub struct TokenIter<'toks> {
-    iter: std::slice::Iter<'toks, Token>,
+    cursor: usize,
+    tokens: &'toks [Token],
 }
 
 impl<'toks> TokenIter<'toks> {
     pub fn make(data: &'toks [Token]) -> TokenIter<'toks> {
-        TokenIter { iter: data.iter() }
+        TokenIter { cursor: 0, tokens: data }
     }
 
     #[inline]
     pub fn next(&mut self) -> Token {
-        *self.iter.next().unwrap_or(&EOF_TOKEN)
+        let tok = self.tokens[self.cursor];
+        self.cursor += 1;
+        tok
     }
+
     #[inline]
     pub fn advance(&mut self) {
-        self.next();
+        self.cursor += 1;
     }
+
+    #[inline]
+    pub fn retreat(&mut self) {
+        self.cursor -= 1;
+    }
+
+    #[inline]
+    fn peek_n(&self, n: i64) -> Token {
+        let pos = self.cursor as i64 + n;
+        self.tokens.get(pos as usize).copied().unwrap_or(EOF_TOKEN)
+    }
+
     #[inline]
     pub fn peek(&self) -> Token {
-        let peeked = self.iter.clone().next();
-        *peeked.unwrap_or(&EOF_TOKEN)
+        self.peek_n(0)
     }
 
     #[inline]
     pub fn peek_two(&self) -> (Token, Token) {
-        let mut peek_iter = self.iter.clone();
-        let p1 = *peek_iter.next().unwrap_or(&EOF_TOKEN);
-        let p2 = *peek_iter.next().unwrap_or(&EOF_TOKEN);
-        (p1, p2)
+        (self.peek_n(0), self.peek_n(1))
     }
 
     #[inline]
     pub fn peek_three(&self) -> (Token, Token, Token) {
-        let mut peek_iter = self.iter.clone();
-        let p1 = *peek_iter.next().unwrap_or(&EOF_TOKEN);
-        let p2 = *peek_iter.next().unwrap_or(&EOF_TOKEN);
-        let p3 = *peek_iter.next().unwrap_or(&EOF_TOKEN);
-        (p1, p2, p3)
+        (self.peek_n(0), self.peek_n(1), self.peek_n(2))
     }
 }
 
@@ -137,6 +145,7 @@ pub enum TokenKind {
     KeywordAs,
     KeywordNot,
     KeywordBuiltin,
+    KeywordWhere,
 
     Slash,
     LineComment,
@@ -217,6 +226,7 @@ impl TokenKind {
             K::KeywordAs => Some("as"),
             K::KeywordNot => Some("not"),
             K::KeywordBuiltin => Some("builtin"),
+            K::KeywordWhere => Some("where"),
 
             K::Slash => Some("/"),
             K::LineComment => Some("//"),
@@ -315,6 +325,7 @@ impl TokenKind {
             "as" => Some(K::KeywordAs),
             "is" => Some(K::KeywordIs),
             "builtin" => Some(K::KeywordBuiltin),
+            "where" => Some(K::KeywordWhere),
             "==" => Some(K::EqualsEquals),
             "!=" => Some(K::BangEquals),
             "<=" => Some(K::LessThanEqual),
@@ -348,6 +359,7 @@ impl TokenKind {
             K::KeywordAs => true,
             K::KeywordNot => true,
             K::KeywordBuiltin => true,
+            K::KeywordWhere => true,
             _ => false,
         }
     }

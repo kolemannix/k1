@@ -18,16 +18,6 @@ void _k1_crash(K1String* reason, K1String* filename, uint64_t line) {
     abort();
 }
 
-K1String _k1_charToString(char c) {
-  char *data = malloc(1);
-  data[0] = c;
-  K1String string = {
-      .len = 1,
-      .data = data,
-  };
-  return string;
-}
-
 // Passing struct; not guaranteed ABI
 // One day pass by reference OR pass each field
 K1String _k1_readFileToString(K1String filename) {
@@ -50,10 +40,4 @@ K1String _k1_readFileToString(K1String filename) {
     fclose(file);
     free(as_cstring);
     return string;
-}
-
-// To be removed once we have basic casts
-
-char _k1_intToChar(int64_t i) {
-    return (char)i;
 }

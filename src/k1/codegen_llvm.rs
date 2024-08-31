@@ -30,7 +30,7 @@ use inkwell::{AddressSpace, IntPredicate, OptimizationLevel};
 use log::{debug, info, trace};
 
 use crate::lex::SpanId;
-use crate::parse::{FileId, IdentifierId};
+use crate::parse::{FileId, Identifier};
 use crate::typer::scopes::ScopeId;
 use crate::typer::types::*;
 use crate::typer::{Linkage as TyperLinkage, *};
@@ -422,7 +422,7 @@ pub struct Codegen<'ctx, 'module> {
     builtin_globals: HashMap<String, GlobalValue<'ctx>>,
     builtin_types: BuiltinTypes<'ctx>,
     debug: DebugContext<'ctx>,
-    tag_type_mappings: HashMap<IdentifierId, GlobalValue<'ctx>>,
+    tag_type_mappings: HashMap<Identifier, GlobalValue<'ctx>>,
 }
 
 struct DebugContext<'ctx> {
@@ -656,7 +656,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             Some(LlvmLinkage::External),
         );
         let mut tag_type_value: u64 = 0;
-        let mut tag_type_mappings: HashMap<IdentifierId, GlobalValue<'ctx>> = HashMap::new();
+        let mut tag_type_mappings: HashMap<Identifier, GlobalValue<'ctx>> = HashMap::new();
         for (_type_id, typ) in module.types.iter() {
             if let Type::TagInstance(tag) = typ {
                 let value = builtin_types.tag_type.const_int(tag_type_value, false);
@@ -715,7 +715,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         locn
     }
 
-    fn get_ident_name(&self, id: IdentifierId) -> &str {
+    fn get_ident_name(&self, id: Identifier) -> &str {
         self.module.ast.identifiers.get_name(id)
     }
 
@@ -897,6 +897,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             };
         debug!("codegen for type {}", self.module.type_id_to_string(type_id));
         let mut no_cache = false;
+        let span = self.module.get_span_for_type_id(type_id).unwrap_or(SpanId::NONE);
         let codegened_type = match type_id {
             UNIT_TYPE_ID => Ok(make_value_integer_type(
                 "unit",
@@ -1024,7 +1025,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         let di_type = self.make_debug_struct_type(
                             &name,
                             &llvm_struct_type,
-                            self.module.ast.get_span_for_id(struc.ast_node),
+                            span,
                             &field_di_types,
                         );
                         Ok(LlvmValueType {
@@ -1035,8 +1036,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         }
                         .into())
                     }
-                    t @ Type::TypeVariable(v) => {
-                        let span = self.module.ast.get_span_for_maybe_id(t.ast_node());
+                    Type::TypeVariable(v) => {
                         err!(span, "codegen was asked to codegen a type variable {:?}", v)
                     }
                     Type::Array(array) => {
@@ -1354,13 +1354,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             }))
                         }
                     }
-                    other => Err(CodegenError {
-                        message: format!(
-                            "codegen_type for type dropped through unexpectedly: {:?}",
-                            other
-                        ),
-                        span: self.module.ast.get_span_for_maybe_id(other.ast_node()),
-                    }),
+                    other => err!(
+                        span,
+                        "codegen_type for type dropped through unexpectedly: {:?}",
+                        other
+                    ),
                 }
             }
         }?;
@@ -2186,7 +2184,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     fn codegen_enum_is_variant(
         &mut self,
         enum_value: StructValue<'ctx>,
-        variant_name: IdentifierId,
+        variant_name: Identifier,
     ) -> IntValue<'ctx> {
         let tag_value = self.get_value_for_tag_type(variant_name);
         let enum_tag_value = self.get_enum_tag(enum_value);
@@ -2239,8 +2237,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     fn codegen_function_call(&mut self, call: &Call) -> CodegenResult<LlvmValue<'ctx>> {
         let callee = self.module.get_function(call.callee_function_id);
 
-        if !callee.should_codegen_function() && callee.intrinsic_type.is_some() {
-            return self.codegen_intrinsic_inline(callee.intrinsic_type.unwrap(), call);
+        if let Some(intrinsic_type) = callee.intrinsic_type {
+            if intrinsic_type.is_inlined() {
+                return self.codegen_intrinsic_inline(callee.intrinsic_type.unwrap(), call);
+            }
         }
 
         let function_value = self.codegen_function(call.callee_function_id, callee)?;
@@ -2866,9 +2866,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             .expect("line for span")
             .line_index
             + 1;
-        if function.is_generic() {
-            panic!("Cannot codegen generic function: {}", &*self.get_ident_name(function.name));
-        }
 
         let maybe_starting_block = self.builder.get_insert_block();
         let param_types: CodegenResult<Vec<LlvmType<'ctx>>> =
@@ -3031,7 +3028,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
         }
         for (id, function) in self.module.function_iter() {
-            if function.should_codegen_function() {
+            if self.module.should_codegen_function(function) {
                 self.codegen_function(id, function)?;
             }
         }
@@ -3138,7 +3135,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         Ok(res)
     }
 
-    fn get_value_for_tag_type(&self, identifier_id: IdentifierId) -> IntValue<'ctx> {
+    fn get_value_for_tag_type(&self, identifier_id: Identifier) -> IntValue<'ctx> {
         let global = self.tag_type_mappings.get(&identifier_id).expect("tag type mapping value");
         let ptr = global.as_pointer_value();
         self.builder.build_load(self.builtin_types.tag_type, ptr, "tag_value").into_int_value()
