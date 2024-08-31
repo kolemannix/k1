@@ -38,11 +38,10 @@
   - [x] Aliases
 - [x] Generic structs and enums
 - [x] Recursive types
-- [ ] Require named fncall args; and allow anonymous w/ declaration like Jakt
 - [x] TypedIf allow exprs instead of requiring blocks (did not do; instead improved handling of unit blocks)
 - [x] Remove binding 'if' since we have pattern matching
 - [x] Abilities
-  - [ ] Ability impl decl bugfix (ability impls need to be seen in the decl phase)
+- [x] Ability impl decl order bugfix (ability impls need to be seen in the decl phase)
 - [x] Type Ascriptions
 - [x] Enforce unique function name in namespace!
 - [x] Optional coalescing binary operator '?'
@@ -68,7 +67,8 @@
       ^ mixed feelings here as it breaks the fact that 'expr as T' always returns a T...
 - [x] Use `as` casting syntax for rawpointer.asUnsafe
 - [x] Allow `as` casting syntax for enums to supply only the tag (`result as .Ok` instead of result as `Result<T,E>.Ok`)
-- [ ] Ability constraints
+- [x] Ability constraints on functions
+- [ ] Ability constraints on generics
 - [ ] 'Context' system; implicit stack arguments
 - [ ] Mark types as trivially copyable or not
   ^ The builtin array would be NOT copyable so that you don't accidentally alias the data ptr
@@ -80,7 +80,7 @@
   - [x] inner type of optional
   - [x] return type of function (fn.return)
   - [x] param types of function (fn.arg, fn.arg2)
-- [ ] Define 'platform layer' (crash, alloc/free, other?)
+- [ ] Define clear 'platform layer' (crash, alloc/free, other?). Then we could do an LLVM jit platform and a rust interpreter platform
 - [x] Function types (functions have types but there's no syntax for describing a function type yet)
 - [ ] floating point (f32 and f64)
 - [ ] Optional coalescing field accessor (x?.y)
@@ -108,8 +108,17 @@
 
 ## Maybe
 - [ ] Move to UFCS instead of having the concept of a 'method' or companion namespace?
-- [ ] Automatic unsafe marker
+- [ ] Automatic unsafe marker/tracing when 'raw' stuff is used
 - [ ] Might be very cool to have builtin syntax for anything implementing a 'Monad' ability
+- [ ] Require named fncall args by default; and allow anonymous w/ declaration like Jakt
+
+## Compiler
+- Use smallvec
+- Invoke LLVM from in-memory repr?
+- UTF8
+- Intern ParsedBlock and ParsedStatement
+- Move Optional to userland
+- Move Array to userland (once we have slice / multipointer)
 
 ## Error story
 - [ ] As values, of course.

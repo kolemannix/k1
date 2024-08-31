@@ -546,7 +546,8 @@ impl Types {
     }
 
     /// Recursively checks if given type contains any type variables
-    /// TODO: Cache whether or not a type is generic on insertion into the type pool
+    /// Note: We could cache whether or not a type is generic on insertion into the type pool
+    ///       But types are not immutable so this could be a dangerous idea!
     pub fn does_type_reference_type_variables(&self, type_id: TypeId) -> bool {
         match self.get(type_id) {
             Type::Unit => false,
