@@ -105,10 +105,11 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
     };
     let mut parse_errors = Vec::new();
 
-    let mut parse_file = |path: &Path, file_id: u32| {
+    let mut parse_file = |path: &Path| {
         let content = fs::read_to_string(path).unwrap();
         let name = path.file_name().unwrap();
         info!("Parsing {}", name.to_string_lossy());
+        let file_id = parsed_module.sources.next_file_id();
         let source = Source::make(
             file_id,
             path.canonicalize().unwrap().parent().unwrap().to_str().unwrap().to_string(),
@@ -136,17 +137,14 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
 
     if use_prelude {
         let prelude_path: &Path = Path::new("builtins/prelude.k1");
-        parse_file(prelude_path, 0);
+        parse_file(prelude_path);
 
         let bitwise_path: &Path = Path::new("builtins/bitwise.k1");
-        parse_file(bitwise_path, 1);
+        parse_file(bitwise_path);
     }
-    // FIXME: Generate file_ids from parsed_module.sources.next_id() or whatever
-    let file_offset = if use_prelude { 2 } else { 0 };
 
-    for (idx, f) in dir_entries.iter().enumerate() {
-        let file_id = idx as u32 + file_offset;
-        parse_file(&f.path(), file_id);
+    for f in dir_entries.iter() {
+        parse_file(&f.path());
     }
 
     if !parse_errors.is_empty() {

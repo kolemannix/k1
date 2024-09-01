@@ -883,28 +883,30 @@ impl ParsedPatternPool {
 
 #[derive(Debug, Default, Clone)]
 pub struct Sources {
-    sources: HashMap<FileId, Source>,
+    sources: Vec<Source>,
 }
 
 impl Sources {
-    pub fn insert(&mut self, source: Source) {
-        self.sources.insert(source.file_id, source);
+    pub fn insert(&mut self, mut source: Source) {
+        let id = self.next_file_id();
+        source.file_id = id;
+        self.sources.push(source);
     }
 
     pub fn get_main(&self) -> &Source {
-        self.sources.get(&0).unwrap()
+        &self.sources[0]
     }
 
     pub fn get_source(&self, file_id: FileId) -> &Source {
-        self.sources.get(&file_id).unwrap()
+        &self.sources[file_id as usize]
     }
 
     pub fn get_line_for_span(&self, span: Span) -> Option<&Line> {
-        self.sources.get(&span.file_id).unwrap().get_line_for_span(span)
+        self.sources[span.file_id as usize].get_line_for_span(span)
     }
 
     pub fn get_span_content(&self, span: Span) -> &str {
-        self.sources.get(&span.file_id).unwrap().get_span_content(span)
+        self.sources[span.file_id as usize].get_span_content(span)
     }
 
     pub fn source_by_span(&self, span: Span) -> &Source {
@@ -912,7 +914,11 @@ impl Sources {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (FileId, &Source)> {
-        self.sources.iter().map(|(file_id, source)| (*file_id, source))
+        self.sources.iter().map(|source| (source.file_id, source))
+    }
+
+    pub fn next_file_id(&self) -> FileId {
+        self.sources.len() as u32
     }
 }
 
@@ -1120,11 +1126,24 @@ impl Display for ParseError {
 }
 impl std::error::Error for ParseError {}
 
+pub fn get_span_source_line<'sources>(
+    spans: &Spans,
+    sources: &'sources Sources,
+    span_id: SpanId,
+) -> &'sources Line {
+    let span = spans.get(span_id);
+    let source = sources.source_by_span(span);
+    let Some(line) = source.get_line_for_span(span) else {
+        panic!("Error: could not find line for span {:?}", span)
+    };
+    line
+}
+
 pub fn print_error_location(spans: &Spans, sources: &Sources, span_id: SpanId) {
     let span = spans.get(span_id);
     let source = sources.source_by_span(span);
     let Some(line) = source.get_line_for_span(span) else {
-        println!("Error: could not find line for span {:?}", span);
+        eprintln!("Error: could not find line for span {:?}", span);
         return;
     };
     use colored::*;
@@ -2779,7 +2798,11 @@ impl ParsedModule {
                 self.display_expression_id(op.expr, f)
             }
             ParsedExpression::Literal(lit) => f.write_fmt(format_args!("{}", lit)),
-            ParsedExpression::FnCall(call) => f.write_fmt(format_args!("{:?}", call)),
+            ParsedExpression::FnCall(call) => {
+                f.write_str(self.identifiers.get_name(call.name.name))?;
+                f.write_str("(...)")?;
+                Ok(())
+            }
             ParsedExpression::Variable(var) => f.write_fmt(format_args!("{}", var)),
             ParsedExpression::FieldAccess(acc) => f.write_fmt(format_args!("{:?}", acc)),
             ParsedExpression::Block(block) => f.write_fmt(format_args!("{:?}", block)),

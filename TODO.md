@@ -68,11 +68,6 @@
 - [x] Use `as` casting syntax for rawpointer.asUnsafe
 - [x] Allow `as` casting syntax for enums to supply only the tag (`result as .Ok` instead of result as `Result<T,E>.Ok`)
 - [x] Ability constraints on functions
-- [ ] Ability constraints on generics
-- [ ] 'Context' system; implicit stack arguments
-- [ ] Mark types as trivially copyable or not
-  ^ The builtin array would be NOT copyable so that you don't accidentally alias the data ptr
-- [ ] Imports
 - [x] Remove custom size/align code and use LLVM's
 - [x] More type expressions! (this was a big part of my original point)
   - [x] Intersect structs
@@ -80,6 +75,17 @@
   - [x] inner type of optional
   - [x] return type of function (fn.return)
   - [x] param types of function (fn.arg, fn.arg2)
+- [ ] Exhaustive pattern matching
+- [ ] function pointers (we could take address of a function as RawPointer already)
+- [ ] slices (windows? segments?)
+- [ ] Imports
+- [ ] Generic abilities
+- [ ] array bounds checking
+- [ ] Pure lambdas with -> (not closures)
+- [ ] Rework builtin array to be userspace and use multipointers?
+- [ ] German/Umbra strings
+- [ ] Make demo readme / site
+- [ ] Ability constraints on generics
 - [ ] Define clear 'platform layer' (crash, alloc/free, other?). Then we could do an LLVM jit platform and a rust interpreter platform
 - [x] Function types (functions have types but there's no syntax for describing a function type yet)
 - [ ] floating point (f32 and f64)
@@ -89,15 +95,9 @@
 - [x] Typecheck the binary ops
 - [x] Bitwise ops
 - [x] Bitwise ops using abilities
-- [ ] Exhaustive pattern matching
-- [ ] function pointers (we could take address of a function as RawPointer already)
-- [ ] slices (windows? segments?)
-- [ ] Generic abilities
-- [ ] array bounds checking
-- [ ] Pure lambdas with -> (not closures)
-- [ ] Rework builtin array to be userspace and use multipointers?
-- [ ] German/Umbra strings
-- [ ] Make demo readme / site
+- [ ] 'Context' system; implicit stack arguments
+- [ ] Mark types as trivially copyable or not
+  ^ The builtin array would be NOT copyable so that you don't accidentally alias the data ptr
 
 ## Non-goals at least for now
 - [ ] Memory safety / solving the 'aliasing' problem, not because its unimportant but because I have other interests
@@ -110,7 +110,9 @@
 - [ ] Move to UFCS instead of having the concept of a 'method' or companion namespace?
 - [ ] Automatic unsafe marker/tracing when 'raw' stuff is used
 - [ ] Might be very cool to have builtin syntax for anything implementing a 'Monad' ability
+  - (Monad ability would require closures and generic abilities)
 - [ ] Require named fncall args by default; and allow anonymous w/ declaration like Jakt
+- [ ] as? for fallible casting
 
 ## Compiler
 - Use smallvec
