@@ -170,8 +170,12 @@ impl TypedModule {
                 writ.write_str(">")
             }
             Type::TypeVariable(tv) => {
+                let scope_name = self.make_scope_name(self.scopes.get_scope(tv.scope_id));
+                writ.write_str(&scope_name)?;
+                writ.write_str(".")?;
                 writ.write_str("$")?;
-                writ.write_str(self.ast.identifiers.get_name(tv.name))
+                writ.write_str(self.ast.identifiers.get_name(tv.name))?;
+                Ok(())
             }
             Type::Optional(opt) => {
                 self.display_type_id(opt.inner_type, writ)?;

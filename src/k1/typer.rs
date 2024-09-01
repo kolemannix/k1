@@ -1878,6 +1878,7 @@ impl TypedModule {
         }
     }
 
+    // TODO: Make this more re-usable by just framing it as "replacement pairs", decoupling it from generic substitution
     fn substitute_in_type(
         &mut self,
         type_id: TypeId,
@@ -1987,16 +1988,33 @@ impl TypedModule {
                     None => type_id,
                     Some((param_index, _generic_param)) => {
                         let corresponding_type = passed_params[param_index];
-                        eprintln!(
-                            "SUBSTITUTING {} for {}",
+                        debug!(
+                            "substituting {} -> {}",
+                            self.type_id_to_string(type_id),
                             self.type_id_to_string(corresponding_type),
-                            self.type_id_to_string(type_id)
                         );
                         corresponding_type
                     }
                 }
             }
-            _ => todo!("Weird generic type"),
+            Type::Array(array_type) => {
+                let array_type = array_type.clone();
+                let new_inner = self.substitute_in_type(
+                    array_type.element_type,
+                    None,
+                    passed_params,
+                    generic_params,
+                    parsed_expression_id,
+                );
+                if new_inner != array_type.element_type {
+                    let specialized_array = ArrayType { element_type: new_inner };
+                    self.types.add_type(Type::Array(specialized_array))
+                } else {
+                    type_id
+                }
+            }
+            Type::Unit | Type::Char | Type::Integer(_) | Type::Bool | Type::String => type_id,
+            _ => todo!("Unhandled type for 'substitute_in_type': {}", self.type_to_string(typ)),
         }
     }
 
@@ -2872,8 +2890,8 @@ impl TypedModule {
         scope_id: ScopeId,
         expected_type: Option<TypeId>,
     ) -> TyperResult<TypedExpr> {
-        trace!(
-            "eval_expr: {}: {:?}",
+        debug!(
+            "eval_expr_inner: {}: {:?}",
             &self.ast.expression_to_string(expr_id),
             expected_type.map(|t| self.type_id_to_string(t))
         );
@@ -3015,9 +3033,21 @@ impl TypedModule {
             }
             ParsedExpression::UnaryOp(op) => {
                 let op = op.clone();
-                let base_expr = self.eval_expr(op.expr, scope_id, None)?;
                 match op.op_kind {
                     ParsedUnaryOpKind::Dereference => {
+                        // Example:
+                        // let x: int = *intptr
+                        // The expected_type when we eval `*intptr` is int, so
+                        // the expected_type when we eval `intptr` should be *int
+                        let expected_type = match expected_type {
+                            Some(expected) => {
+                                Some(self.types.add_type(Type::Reference(ReferenceType {
+                                    inner_type: expected,
+                                })))
+                            }
+                            None => None,
+                        };
+                        let base_expr = self.eval_expr(op.expr, scope_id, expected_type)?;
                         let reference_type =
                             self.types.get(base_expr.get_type()).as_reference().ok_or(
                                 make_error(
@@ -3041,6 +3071,12 @@ impl TypedModule {
                         }))
                     }
                     ParsedUnaryOpKind::Reference => {
+                        let expected_type = match expected_type.map(|t| self.types.get(t)) {
+                            Some(Type::Reference(r)) => Some(r.inner_type),
+                            Some(_unrelated) => None,
+                            None => None,
+                        };
+                        let base_expr = self.eval_expr(op.expr, scope_id, expected_type)?;
                         let type_id = self.types.add_type(Type::Reference(ReferenceType {
                             inner_type: base_expr.get_type(),
                         }));
@@ -3052,6 +3088,7 @@ impl TypedModule {
                         }))
                     }
                     ParsedUnaryOpKind::BooleanNegation => {
+                        let base_expr = self.eval_expr(op.expr, scope_id, expected_type)?;
                         self.check_types(BOOL_TYPE_ID, base_expr.get_type(), scope_id)
                             .map_err(|s| make_error(s, op.span))?;
                         Ok(TypedExpr::UnaryOp(UnaryOp {
@@ -3116,7 +3153,8 @@ impl TypedModule {
                 Ok(TypedExpr::Block(block))
             }
             ParsedExpression::FnCall(fn_call) => {
-                let call = self.eval_function_call(&fn_call.clone(), None, None, scope_id)?;
+                let call =
+                    self.eval_function_call(&fn_call.clone(), None, None, scope_id, expected_type)?;
                 Ok(call)
             }
             ParsedExpression::OptionalGet(optional_get) => {
@@ -3291,7 +3329,7 @@ impl TypedModule {
         )?;
         resulting_block.statements.extend(pre_stmts);
         resulting_block.push_stmt(TypedStmt::Expr(Box::new(if_chain)));
-        eprintln!("match result\n{}", self.block_to_string(&resulting_block));
+        debug!("match result\n{}", self.block_to_string(&resulting_block));
         let result = TypedExpr::Block(resulting_block);
         Ok(result)
     }
@@ -3869,6 +3907,7 @@ impl TypedModule {
             known_type_args,
             Some(value_arg_exprs),
             scope_id,
+            None,
         )
     }
 
@@ -4975,6 +5014,7 @@ impl TypedModule {
         known_type_args: Option<Vec<TypeId>>,
         known_value_args: Option<Vec<TypedExpr>>,
         scope_id: ScopeId,
+        expected_type_id: Option<TypeId>,
     ) -> TyperResult<TypedExpr> {
         assert!(
             fn_call.args.is_empty() || known_value_args.is_none(),
@@ -5025,6 +5065,7 @@ impl TypedModule {
                             // pass the type args if we pass the known value args
                             known_value_args.clone(),
                             scope_id,
+                            expected_type_id,
                         )?,
                     };
 
@@ -5057,8 +5098,10 @@ impl TypedModule {
         generic_function_id: FunctionId,
         pre_evaled_params: Option<Vec<TypedExpr>>,
         calling_scope: ScopeId,
+        expected_type_id: Option<TypeId>,
     ) -> TyperResult<Vec<TypeParam>> {
         let generic_function = self.get_function(generic_function_id);
+        let function_return_type = generic_function.ret_type;
         let generic_type_params = generic_function.type_params.clone();
         debug_assert!(!generic_type_params.is_empty());
         let generic_name = generic_function.name;
@@ -5094,11 +5137,24 @@ impl TypedModule {
 
                 let mut solved_params: Vec<TypeParam> = Vec::new();
 
+                if let Some(call_expected_type) = expected_type_id {
+                    eprintln!(
+                        "using expected type {} to try to infer call to {}",
+                        self.type_id_to_string(call_expected_type),
+                        self.get_ident_str(fn_call.name.name)
+                    );
+                    self.solve_generic_params(
+                        &mut solved_params,
+                        call_expected_type,
+                        function_return_type,
+                        calling_scope,
+                        fn_call.span,
+                    )?;
+                }
+
                 for (idx, expr) in exprs.iter().enumerate() {
                     let param = &generic_params[idx];
 
-                    // This 'match' is where we would ideally implement some actual
-                    // recursive type unification algorithm rather than hardcode 2 cases
                     self.solve_generic_params(
                         &mut solved_params,
                         expr.get_type(),
@@ -5749,15 +5805,18 @@ impl TypedModule {
                         if self.types.get_type_id_dereferenced(type_id) == companion_type_id {
                             is_method_of = Some(companion_type_id);
                         } else {
-                            match (self.types.get(companion_type_id), self.types.get(type_id)) {
+                            match (
+                                self.types.get(companion_type_id),
+                                self.types.get_type_dereferenced(type_id),
+                            ) {
                                 (Type::Generic(_g), instance) => {
                                     let ok = instance.defn_info().is_some_and(|info| {
                                         info.generic_parent == Some(companion_type_id)
                                     });
                                     if !ok {
-                                        return make_fail_span(
-                                            "First argument named 'self' must be of the companion type",
+                                        return ffail!(
                                             fn_arg.span,
+                                            "First argument named 'self' did not have a companion type",
                                         );
                                     }
                                 }

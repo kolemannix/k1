@@ -5,10 +5,8 @@ type HashMap<V> = {
 }
 
 namespace HashMap {
-  fn new<V>(): HashMap {
-    // Fixme: why doesn't this infer?
-    // val slots: Array<Elem> = Array::new(16);
-    val slots = Array::new<Elem<V>?>(16);
+  fn new<V>(): HashMap<V> {
+    val slots: Array<Elem<V>?> = Array::new(16);
     { size: 0, slots: slots }
   }
 
@@ -22,12 +20,12 @@ namespace HashMap {
   // hash_value ~ data[1];
   // }
   fn fnv1a_hash(key: string): u64 {
-    val FNV_PRIME = 1099511628211;
-    val FNV_OFFSET = 14695981039346656037;
-    val hash_value = FNV_OFFSET;
+    val FNV_PRIME: u64 = 1099511628211;
+    val FNV_OFFSET: u64 = 14695981039346656037;
+    mut hash_value = FNV_OFFSET;
     for c in key do {
       hash_value = hash_value * FNV_PRIME;
-      hash_value = Bits::xor(hash_value, c as u64);
+      hash_value = Bitwise::xor(hash_value, c as u64);
     };
     hash_value
   }
@@ -46,6 +44,7 @@ namespace HashMap {
         if existingKey == key {
           self.slots[index] = Some(elem);
         } else {
+          // Super naive fully linear probing
           mut probe_index = index;
           mut done = false;
           while not done {
@@ -64,12 +63,12 @@ namespace HashMap {
     }
   }
 
-  fn dump(self: HashMap): unit {
+  fn dump<V>(self: HashMap<V>): unit {
     print("Capacity: ");
-    printInt(self.slots.capacity());
+    printInt(self.slots.capacity() as i64);
     println("");
     for self.slots do {
-      printInt(it_index);
+      printInt(it_index as i64);
       print(" ");
       when it {
         | None -> println("empty")
@@ -86,12 +85,13 @@ namespace HashMap {
 
 
 fn test(): unit {
-  val myMap: HashMap* = &HashMap::new();
-  myMap.insert(1, 2);
-  myMap.insert(1, 3);
-  myMap.insert(2, 4);
-  myMap.insert(18, 4);
+  val myMap: HashMap<int>* = &HashMap::new();
+  myMap.insert("1", 2);
+  myMap.insert("1", 3);
+  myMap.insert("2", 4);
+  myMap.insert("18", 4);
   (*myMap).dump();
+
 }
 
 fn main(): int {
