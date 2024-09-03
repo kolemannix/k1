@@ -385,7 +385,6 @@ pub enum ParsedExpression {
     Block(Block),                           // { <expr>; <expr>; <expr> }
     If(IfExpr),                             // if a else b
     Struct(Struct),                         // { x: 1, y: 3 }
-    IndexOperation(IndexOperation),         // xs[3]
     Array(ArrayExpr),                       // [1, 3, 5, 7]
     OptionalGet(OptionalGet),               // foo!
     For(ForExpr),                           // for i in [1,2,3] do println(i)
@@ -421,7 +420,6 @@ impl ParsedExpression {
             Self::Block(block) => block.span,
             Self::If(if_expr) => if_expr.span,
             Self::Struct(struc) => struc.span,
-            Self::IndexOperation(op) => op.span,
             Self::Array(array_expr) => array_expr.span,
             Self::OptionalGet(optional_get) => optional_get.span,
             Self::For(for_expr) => for_expr.span,
@@ -436,7 +434,6 @@ impl ParsedExpression {
     pub fn is_assignable(&self) -> bool {
         match self {
             Self::Variable(_var) => true,
-            Self::IndexOperation(_op) => true,
             Self::FieldAccess(_acc) => true,
             Self::BinaryOp(_op) => false,
             Self::UnaryOp(_op) => false,
@@ -458,14 +455,6 @@ impl ParsedExpression {
 
     pub fn as_match(&self) -> Option<&ParsedMatchExpression> {
         if let Self::Match(v) = self {
-            Some(v)
-        } else {
-            None
-        }
-    }
-
-    pub fn as_index_operation(&self) -> Option<&IndexOperation> {
-        if let Self::IndexOperation(v) = self {
             Some(v)
         } else {
             None
@@ -1683,11 +1672,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             } else {
                 self.tokens.advance();
                 let next = self.tokens.peek();
-                if next.kind == K::OpenAngle {
-                    // parameterized type: Dict<int, int>
+                if next.kind == K::OpenBracket {
+                    // parameterized type: Dict[int, int]
                     self.tokens.advance();
                     let (type_parameters, params_span) =
-                        self.eat_delimited("Type parameters", K::Comma, K::CloseAngle, |p| {
+                        self.eat_delimited("Type parameters", K::Comma, K::CloseBracket, |p| {
                             Parser::expect_type_expression(p)
                         })?;
                     let ident = self.intern_ident_token(first);
@@ -1853,9 +1842,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     self.tokens.advance();
                     let target = self.expect_eat_token(K::Ident)?;
                     let next = self.peek();
-                    // method call access syntax; a.b() a.b<int>(c)
+                    // method call access syntax; a.b() a.b[int](c)
                     if next.kind == K::OpenParen
-                        || (next.kind == K::OpenAngle && !next.is_whitespace_preceeded())
+                        || (next.kind == K::OpenBracket && !next.is_whitespace_preceeded())
                     {
                         let type_args = self.parse_optional_type_args()?;
                         self.expect_eat_token(K::OpenParen)?;
@@ -1885,21 +1874,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                             span,
                         }));
                     }
-                } else if next.kind == K::OpenBracket {
-                    self.tokens.advance();
-                    let index_expr = Parser::expect(
-                        "expression inside []",
-                        self.peek(),
-                        self.parse_expression(),
-                    )?;
-                    let close = self.expect_eat_token(K::CloseBracket)?;
-                    let span = self.extend_span(self.get_expression_span(result), close.span);
-                    result =
-                        self.add_expression(ParsedExpression::IndexOperation(IndexOperation {
-                            target: result,
-                            index_expr,
-                            span,
-                        }));
                 }
             } else {
                 break result;
@@ -2021,13 +1995,13 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn parse_optional_type_args(&mut self) -> ParseResult<Option<Vec<FnCallTypeArg>>> {
         let next = self.peek();
-        if next.kind == K::OpenAngle {
-            // Eat the OpenAngle
+        if next.kind == K::OpenBracket {
+            // Eat the OpenBracket
             self.tokens.advance();
             let (type_expressions, _type_args_span) = self.eat_delimited(
                 "Type arguments",
                 K::Comma,
-                K::CloseAngle,
+                K::CloseBracket,
                 Parser::expect_type_expression,
             )?;
             let type_args: Vec<_> = type_expressions
@@ -2201,7 +2175,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             // square<int>(42) -> FnCall
             // square < int > (42) -> square LESS THAN int GREATER THAN (42)
             let second = self.tokens.peek();
-            if (second.kind == K::OpenAngle && !second.is_whitespace_preceeded())
+            if (second.kind == K::OpenBracket && !second.is_whitespace_preceeded())
                 || second.kind == K::OpenParen
             {
                 trace!("parse_expression FnCall");
@@ -2320,7 +2294,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let _valid_lhs = match &*self.get_expression(lhs) {
             ParsedExpression::FieldAccess(_) => true,
             ParsedExpression::Variable(_) => true,
-            ParsedExpression::IndexOperation(_) => true,
             _ => false,
         };
         self.expect_eat_token(K::Equals)?;
@@ -2496,12 +2469,12 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let func_name = self.expect_eat_token(K::Ident)?;
         let func_name_id = self.intern_ident_token(func_name);
         let mut type_arguments: Vec<ParsedTypeParamDefn> =
-            if let TokenKind::OpenAngle = self.peek().kind {
+            if let TokenKind::OpenBracket = self.peek().kind {
                 self.tokens.advance();
                 let (type_args, _type_arg_span) = self.eat_delimited(
                     "Type arguments",
                     TokenKind::Comma,
-                    TokenKind::CloseAngle,
+                    TokenKind::CloseBracket,
                     Parser::expect_type_param,
                 )?;
                 type_args
@@ -2655,12 +2628,13 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
         let name = self.expect_eat_token(K::Ident)?;
 
-        let type_params: Vec<ParsedTypeParamDefn> = if let TokenKind::OpenAngle = self.peek().kind {
+        let type_params: Vec<ParsedTypeParamDefn> = if let TokenKind::OpenBracket = self.peek().kind
+        {
             self.tokens.advance();
             let (type_args, _type_arg_span) = self.eat_delimited(
                 "Type arguments",
                 TokenKind::Comma,
-                TokenKind::CloseAngle,
+                TokenKind::CloseBracket,
                 Parser::expect_type_param,
             )?;
             type_args
@@ -2808,7 +2782,6 @@ impl ParsedModule {
             ParsedExpression::Block(block) => f.write_fmt(format_args!("{:?}", block)),
             ParsedExpression::If(if_expr) => f.write_fmt(format_args!("{:?}", if_expr)),
             ParsedExpression::Struct(struc) => f.write_fmt(format_args!("{:?}", struc)),
-            ParsedExpression::IndexOperation(op) => f.write_fmt(format_args!("{:?}", op)),
             ParsedExpression::Array(array_expr) => f.write_fmt(format_args!("{:?}", array_expr)),
             ParsedExpression::OptionalGet(optional_get) => {
                 f.write_fmt(format_args!("{:?}", optional_get))

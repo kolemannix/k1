@@ -1557,7 +1557,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         trace!("codegen expr lvalue\n{}", self.module.expr_to_string(expr));
         // We need only match on expression types that are allowed to appear as lvalues. That means:
         // - Variables
-        // - Array indices
         // - Struct members
         match expr {
             TypedExpr::Variable(ir_var) => {
@@ -1606,14 +1605,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     )
                     .unwrap();
                 Ok(field_ptr)
-            }
-            TypedExpr::ArrayIndex(index_op) => {
-                let elem_ptr = self.codegen_array_index_operation(index_op)?;
-                Ok(elem_ptr)
-            }
-            TypedExpr::StringIndex(index_op) => {
-                let elem_ptr = self.codegen_string_index_operation(index_op)?;
-                Ok(elem_ptr)
             }
             _ => Err(CodegenError {
                 message: format!("Unexpected lvalue: {}", self.module.expr_to_string(expr)),
@@ -1829,26 +1820,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(block_value)
             }
             TypedExpr::FunctionCall(call) => self.codegen_function_call(call),
-            TypedExpr::ArrayIndex(index_op) => {
-                let elem_ptr = self.codegen_array_index_operation(index_op)?;
-                let elem_type = self.codegen_type(index_op.result_type)?;
-                let elem_value = self.builder.build_load(
-                    elem_type.value_basic_type(),
-                    elem_ptr,
-                    "array_index_rvalue",
-                );
-                Ok(elem_value.into())
-            }
-            TypedExpr::StringIndex(index_op) => {
-                let elem_ptr = self.codegen_string_index_operation(index_op)?;
-                let elem_type = self.codegen_type(index_op.result_type)?;
-                let elem_value = self.builder.build_load(
-                    elem_type.value_basic_type(),
-                    elem_ptr,
-                    "string_index_rvalue",
-                );
-                Ok(elem_value.into())
-            }
             TypedExpr::Tag(tag_expr) => {
                 let int_value = self.get_value_for_tag_type(tag_expr.name);
                 Ok(int_value.as_basic_value_enum().into())
@@ -2273,10 +2244,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     fn codegen_string_index_operation(
         &mut self,
-        operation: &IndexOp,
+        string_base: &TypedExpr,
+        string_index: &TypedExpr,
     ) -> CodegenResult<PointerValue<'ctx>> {
-        let string_value = self.codegen_expr_basic_value(&operation.base_expr)?;
-        let index_value = self.codegen_expr_basic_value(&operation.index_expr)?;
+        let string_value = self.codegen_expr_basic_value(string_base)?;
+        let index_value = self.codegen_expr_basic_value(string_index)?;
 
         let string_value = string_value.as_basic_value_enum().into_struct_value();
         let data_ptr = self.builtin_types.string_data(&self.builder, string_value);
@@ -2295,18 +2267,18 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     fn codegen_array_index_operation(
         &mut self,
-        operation: &IndexOp,
+        array_base: &TypedExpr,
+        array_index: &TypedExpr,
     ) -> CodegenResult<PointerValue<'ctx>> {
-        let pointee_ty = self.codegen_type(operation.result_type)?;
-        // TOOD: Once codegen_expr returns type info, we can ditch this extra work to get and generate types separately
+        let pointee_ty = self.codegen_type(array_base.get_type())?;
+        // TODO: Once codegen_expr returns type info, we can ditch this extra work to get and generate types separately
+        let array_value = self.codegen_expr_basic_value(array_base)?.into_pointer_value();
+        let index_value = self.codegen_expr_basic_value(array_index)?;
         let array_type = self.create_array_struct(pointee_ty.value_basic_type());
-        let array_value = self.codegen_expr_basic_value(&operation.base_expr)?.into_pointer_value();
-        let index_value = self.codegen_expr_basic_value(&operation.index_expr)?;
 
         let array_struct =
             self.builder.build_load(array_type, array_value, "array_value").into_struct_value();
         let index_int_value = index_value.into_int_value();
-        // Likely we need one more level of dereferencing
         let array_data = self.builtin_types.array_data(&self.builder, array_struct);
         let gep_ptr = unsafe {
             self.builder.build_gep(
@@ -2468,6 +2440,31 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     span: call.span,
                 })?;
                 Ok(type_id_value.into())
+            }
+            IntrinsicFunction::ArrayGet => {
+                let array_elem_llvm_type = self.codegen_type(call.ret_type)?.value_basic_type();
+                let array_elem_ptr =
+                    self.codegen_array_index_operation(&call.args[0], &call.args[1])?;
+                let array_elem_value =
+                    self.builder.build_load(array_elem_llvm_type, array_elem_ptr, "array_get");
+                Ok(array_elem_value.into())
+            }
+            IntrinsicFunction::ArraySet => {
+                let array_elem_ptr =
+                    self.codegen_array_index_operation(&call.args[0], &call.args[1])?;
+                let rhs = self.codegen_expr_basic_value(&call.args[2])?;
+                self.builder.build_store(array_elem_ptr, rhs);
+                Ok(self.builtin_types.unit_value.as_basic_value_enum().into())
+            }
+            IntrinsicFunction::StringGet => {
+                let string_elem_ptr =
+                    self.codegen_string_index_operation(&call.args[0], &call.args[1])?;
+                let string_elem_value =
+                    self.builder.build_load(self.builtin_types.char, string_elem_ptr, "string_get");
+                Ok(string_elem_value.into())
+            }
+            IntrinsicFunction::StringSet => {
+                todo!()
             }
             _ => {
                 panic!("Unexpected intrinsic type for inline gen")
@@ -2763,13 +2760,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             let field_ptr = self.codegen_expr_lvalue(&assignment.destination)?;
                             let rhs = self.codegen_expr_basic_value(&assignment.value)?;
                             self.builder.build_store(field_ptr, rhs);
-                            last = unit_value
-                        }
-                        TypedExpr::ArrayIndex(_array_index) => {
-                            // We use codegen_expr_lvalue to get the pointer to the accessed element
-                            let elem_ptr = self.codegen_expr_lvalue(&assignment.destination)?;
-                            let rhs = self.codegen_expr_basic_value(&assignment.value)?;
-                            self.builder.build_store(elem_ptr, rhs);
                             last = unit_value
                         }
                         _ => {

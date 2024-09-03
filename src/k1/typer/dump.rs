@@ -165,9 +165,9 @@ impl TypedModule {
                 Ok(())
             }
             Type::Array(array) => {
-                writ.write_str("Array<")?;
+                writ.write_str("Array[")?;
                 self.display_type_id(array.element_type, writ)?;
-                writ.write_str(">")
+                writ.write_str("]")
             }
             Type::TypeVariable(tv) => {
                 let scope_name = self.make_scope_name(self.scopes.get_scope(tv.scope_id));
@@ -230,7 +230,7 @@ impl TypedModule {
             }
             Type::Generic(gen) => {
                 writ.write_str(self.get_ident_str(gen.type_defn_info.name))?;
-                writ.write_str("<")?;
+                writ.write_str("[")?;
                 for (idx, param) in gen.params.iter().enumerate() {
                     writ.write_str(self.get_ident_str(param.name))?;
                     let last = idx == gen.params.len() - 1;
@@ -238,7 +238,7 @@ impl TypedModule {
                         writ.write_str(", ")?;
                     }
                 }
-                writ.write_str(">")?;
+                writ.write_str("]")?;
                 writ.write_str("(")?;
                 self.display_type_id(gen.inner, writ)?;
                 writ.write_str(")")
@@ -384,9 +384,9 @@ impl TypedModule {
             TypedExpr::Bool(b, _) => write!(writ, "{}", b),
             TypedExpr::Str(s, _) => write!(writ, "\"{}\"", s),
             TypedExpr::None(typ, _) => {
-                writ.write_str("None<")?;
+                writ.write_str("None[")?;
                 self.display_type_id(*typ, writ)?;
-                writ.write_str(">")
+                writ.write_str("]")
             }
             TypedExpr::Array(array) => {
                 writ.write_str("[")?;
@@ -420,18 +420,6 @@ impl TypedModule {
                 self.display_expr(&field_access.base, writ, indentation)?;
                 writ.write_str(".")?;
                 writ.write_str(&self.get_ident_str(field_access.target_field))
-            }
-            TypedExpr::ArrayIndex(array_index) => {
-                self.display_expr(&array_index.base_expr, writ, indentation)?;
-                writ.write_str("[")?;
-                self.display_expr(&array_index.index_expr, writ, indentation)?;
-                writ.write_str("]")
-            }
-            TypedExpr::StringIndex(string_index) => {
-                self.display_expr(&string_index.base_expr, writ, indentation)?;
-                writ.write_str("[")?;
-                self.display_expr(&string_index.index_expr, writ, indentation)?;
-                writ.write_str("]")
             }
             TypedExpr::FunctionCall(fn_call) => {
                 let function = self.get_function(fn_call.callee_function_id);
@@ -495,9 +483,9 @@ impl TypedModule {
             }
             TypedExpr::EnumIsVariant(is_variant_expr) => {
                 self.display_expr(&is_variant_expr.target_expr, writ, indentation)?;
-                writ.write_str(".is<.")?;
+                writ.write_str(".is[.")?;
                 writ.write_str(self.ast.identifiers.get_name(is_variant_expr.variant_name))?;
-                writ.write_str(">()")
+                writ.write_str("]()")
             }
             TypedExpr::Cast(cast) => {
                 self.display_expr(&cast.base_expr, writ, indentation)?;
