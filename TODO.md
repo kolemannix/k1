@@ -76,7 +76,7 @@
   - [x] return type of function (fn.return)
   - [x] param types of function (fn.arg, fn.arg2)
 - [ ] Exhaustive pattern matching
-- [ ] function pointers (we could take address of a function as RawPointer already)
+- [ ] function pointers (we could almost take address of a function as RawPointer already)
 - [ ] slices (windows? segments?)
 - [ ] Imports
 - [ ] Generic abilities

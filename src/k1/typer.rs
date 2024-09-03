@@ -630,8 +630,6 @@ pub enum TypedExpr {
     Block(TypedBlock),
     FunctionCall(Call),
     If(Box<TypedIf>),
-    ArrayIndex(IndexOp),
-    StringIndex(IndexOp),
     // TODO: Can some of these just be unary ops
     // TODO: We could also make Optional defined in userland now!
     OptionalSome(OptionalSome),
@@ -670,8 +668,6 @@ impl TypedExpr {
             TypedExpr::Block(b) => b.expr_type,
             TypedExpr::FunctionCall(call) => call.ret_type,
             TypedExpr::If(ir_if) => ir_if.ty,
-            TypedExpr::ArrayIndex(op) => op.result_type,
-            TypedExpr::StringIndex(op) => op.result_type,
             TypedExpr::OptionalSome(opt) => opt.type_id,
             TypedExpr::OptionalHasValue(_opt) => BOOL_TYPE_ID,
             TypedExpr::OptionalGet(opt_get) => opt_get.result_type_id,
@@ -701,8 +697,6 @@ impl TypedExpr {
             TypedExpr::Block(b) => b.span,
             TypedExpr::FunctionCall(call) => call.span,
             TypedExpr::If(ir_if) => ir_if.span,
-            TypedExpr::ArrayIndex(op) => op.span,
-            TypedExpr::StringIndex(op) => op.span,
             TypedExpr::OptionalSome(opt) => opt.inner_expr.get_span(),
             TypedExpr::OptionalHasValue(opt) => opt.get_span(),
             TypedExpr::OptionalGet(get) => get.span,
@@ -919,8 +913,12 @@ pub enum IntrinsicFunction {
     ArrayGrow,
     ArraySetLength,
     ArrayCapacity,
+    ArrayGet,
+    ArraySet,
     StringFromCharArray,
     StringEquals,
+    StringGet,
+    StringSet,
     SizeOf,
     AlignOf,
     TypeId,
@@ -943,9 +941,13 @@ impl IntrinsicFunction {
             IntrinsicFunction::ArrayNew => false,
             IntrinsicFunction::ArrayGrow => false,
             IntrinsicFunction::ArraySetLength => false,
-            IntrinsicFunction::ArrayCapacity => false,
+            IntrinsicFunction::ArrayCapacity => true,
+            IntrinsicFunction::ArrayGet => true,
+            IntrinsicFunction::ArraySet => true,
             IntrinsicFunction::StringFromCharArray => false,
             IntrinsicFunction::StringEquals => false,
+            IntrinsicFunction::StringGet => true,
+            IntrinsicFunction::StringSet => true,
             IntrinsicFunction::SizeOf => true,
             IntrinsicFunction::AlignOf => true,
             IntrinsicFunction::TypeId => true,
@@ -2443,40 +2445,6 @@ impl TypedModule {
         }
     }
 
-    fn eval_index_operation(
-        &mut self,
-        index_op: &IndexOperation,
-        scope_id: ScopeId,
-    ) -> TyperResult<TypedExpr> {
-        let index_expr = self.eval_expr(index_op.index_expr, scope_id, Some(U64_TYPE_ID))?;
-        if index_expr.get_type() != U64_TYPE_ID {
-            return make_fail_span("index type must be u64", index_op.span);
-        }
-
-        let base_expr = self.eval_expr(index_op.target, scope_id, None)?;
-        let target_type = base_expr.get_type();
-        match target_type {
-            STRING_TYPE_ID => Ok(TypedExpr::StringIndex(IndexOp {
-                base_expr: Box::new(base_expr),
-                index_expr: Box::new(index_expr),
-                result_type: CHAR_TYPE_ID,
-                span: index_op.span,
-            })),
-            target_type_id => {
-                let target_type = self.types.get(target_type_id);
-                match target_type {
-                    Type::Array(array_type) => Ok(TypedExpr::ArrayIndex(IndexOp {
-                        base_expr: Box::new(base_expr),
-                        index_expr: Box::new(index_expr),
-                        result_type: array_type.element_type,
-                        span: index_op.span,
-                    })),
-                    _ => make_fail_span("index base must be an array", index_op.span),
-                }
-            }
-        }
-    }
-
     fn eval_integer_value(
         &self,
         parsed_text: &str,
@@ -2684,9 +2652,6 @@ impl TypedModule {
         _expected_type: Option<TypeId>,
     ) -> TyperResult<TypedExpr> {
         match self.ast.expressions.get(expr) {
-            ParsedExpression::IndexOperation(index_op) => {
-                self.eval_index_operation(&index_op.clone(), scope_id)
-            }
             ParsedExpression::Variable(variable) => self.eval_variable(variable, scope_id, true),
             ParsedExpression::FieldAccess(field_access) => {
                 self.eval_field_access(&field_access.clone(), scope_id, true)
@@ -2927,9 +2892,6 @@ impl TypedModule {
                     }
                 };
                 Ok(TypedExpr::Array(ArrayLiteral { elements, type_id, span: array_expr_span }))
-            }
-            ParsedExpression::IndexOperation(index_op) => {
-                self.eval_index_operation(&index_op.clone(), scope_id)
             }
             ParsedExpression::Struct(ast_struct) => {
                 let mut field_values = Vec::new();
@@ -4004,27 +3966,23 @@ impl TypedModule {
             variable_id: binding_variable_id,
             ty: item_type,
             initializer: if is_string_iteree {
-                TypedExpr::StringIndex(IndexOp {
-                    base_expr: Box::new(iteree_variable_expr.clone()),
-                    index_expr: Box::new(TypedExpr::Variable(VariableExpr {
-                        type_id: U64_TYPE_ID,
-                        variable_id: index_variable,
-                        span: body_span,
-                    })),
-                    result_type: item_type,
-                    span: body_span,
-                })
+                self.synth_function_call(
+                    vec![self.ast.identifiers.get("string").unwrap()],
+                    self.ast.identifiers.get("get").unwrap(),
+                    Some(vec![CHAR_TYPE_ID]),
+                    vec![iteree_variable_expr.clone(), index_variable_expr.clone()],
+                    body_span,
+                    while_scope_id,
+                )?
             } else {
-                TypedExpr::ArrayIndex(IndexOp {
-                    base_expr: Box::new(iteree_variable_expr.clone()),
-                    index_expr: Box::new(TypedExpr::Variable(VariableExpr {
-                        type_id: U64_TYPE_ID,
-                        variable_id: index_variable,
-                        span: body_span,
-                    })),
-                    result_type: item_type,
-                    span: body_span,
-                })
+                self.synth_function_call(
+                    vec![self.ast.identifiers.get("Array").unwrap()],
+                    self.ast.identifiers.get("get").unwrap(),
+                    Some(vec![item_type]),
+                    vec![iteree_variable_expr.clone(), index_variable_expr.clone()],
+                    body_span,
+                    while_scope_id,
+                )?
             },
             span: body_span,
         }));
@@ -4109,16 +4067,29 @@ impl TypedModule {
             match self.types.get(resulting_type) {
                 Type::Array(_) => {
                     // yielded_coll[index] = block_expr_val;
-                    let element_assign = TypedStmt::Assignment(Box::new(Assignment {
-                        destination: Box::new(TypedExpr::ArrayIndex(IndexOp {
-                            base_expr: Box::new(yielded_coll_expr.clone()),
-                            index_expr: Box::new(index_variable_expr.clone()),
-                            result_type: body_block_result_type,
-                            span: body_span,
-                        })),
-                        value: Box::new(user_block_val_expr),
-                        span: body_span,
-                    }));
+                    // yielded_coll.set(index, block_expr_val)
+                    // let element_assign = TypedStmt::Assignment(Box::new(Assignment {
+                    //     destination: Box::new(TypedExpr::ArrayIndex(IndexOp {
+                    //         base_expr: Box::new(yielded_coll_expr.clone()),
+                    //         index_expr: Box::new(index_variable_expr.clone()),
+                    //         result_type: body_block_result_type,
+                    //         span: body_span,
+                    //     })),
+                    //     value: Box::new(user_block_val_expr),
+                    //     span: body_span,
+                    // }));
+                    let element_assign = TypedStmt::Expr(Box::new(self.synth_function_call(
+                        vec![self.ast.identifiers.get("Array").unwrap()],
+                        self.ast.identifiers.get("set").unwrap(),
+                        Some(vec![item_type]),
+                        vec![
+                            yielded_coll_expr.clone(),
+                            index_variable_expr.clone(),
+                            user_block_val_expr,
+                        ],
+                        body_span,
+                        for_expr_scope,
+                    )?));
                     while_block.statements.push(element_assign);
                 }
                 _ => {}
@@ -5636,6 +5607,8 @@ impl TypedModule {
                     _ => None,
                 },
                 Some("string") => match fn_name_str {
+                    "get" => Some(IntrinsicFunction::StringGet),
+                    "set" => Some(IntrinsicFunction::StringSet),
                     "length" => Some(IntrinsicFunction::StringLength),
                     "fromChars" => Some(IntrinsicFunction::StringFromCharArray),
                     // Ability impl
@@ -5643,6 +5616,8 @@ impl TypedModule {
                     _ => None,
                 },
                 Some("Array") => match fn_name_str {
+                    "get" => Some(IntrinsicFunction::ArrayGet),
+                    "set" => Some(IntrinsicFunction::ArraySet),
                     "length" => Some(IntrinsicFunction::ArrayLength),
                     "capacity" => Some(IntrinsicFunction::ArrayCapacity),
                     "grow" => Some(IntrinsicFunction::ArrayGrow),

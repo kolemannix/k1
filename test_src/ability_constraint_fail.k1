@@ -6,7 +6,7 @@ ability Show {
   fn show(self: Self): string
 }
 
-fn add<T>(a: T, b: T): i32 where T: Num, T: Show {
+fn add[T](a: T, b: T): i32 where T: Num, T: Show {
   println(a.show());
   println("+");
   println(b.show());

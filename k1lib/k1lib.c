@@ -1,4 +1,5 @@
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,11 +13,24 @@ typedef struct {
 // #pragma pack()
 
 _Static_assert (sizeof(K1String) == 16, "K1String size");
+_Static_assert (sizeof(size_t) == 8, "64-bit ptr is required");
 
 void _k1_crash(K1String* reason, K1String* filename, uint64_t line) {
     fprintf(stderr, "%.*s at %.*s:%llu\n", (int)reason->len, reason->data, (int)filename->len, filename->data, line);
     abort();
 }
+
+void* _k1_malloc(uint64_t size_bytes) {
+    void* ptr = malloc(size_bytes);
+    printf("k1_malloc(%llu)", size_bytes);
+    return ptr;
+}
+
+void _k1_free(void* ptr) {
+    printf("k1_free(%zu)", (size_t)ptr);
+    free(ptr);
+}
+
 
 // Passing struct; not guaranteed ABI
 // One day pass by reference OR pass each field
