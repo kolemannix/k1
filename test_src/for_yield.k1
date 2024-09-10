@@ -1,10 +1,10 @@
 fn main(): int {
-  val squares: Array<int> = for it in [1, 5, 9, 12] yield { it * it };
+  val squares: Array[int] = for it in [1, 5, 9, 12] yield { it * it };
   assert(squares.length() == 4);
-  assert(squares[0] == 1);
-  assert(squares[1] == 25);
-  assert(squares[2] == 81);
-  assert(squares[3] == 144);
+  assert(squares.get(0) == 1);
+  assert(squares.get(1) == 25);
+  assert(squares.get(2) == 81);
+  assert(squares.get(3) == 144);
 
   // Desugared(ish)
   // val squares = {

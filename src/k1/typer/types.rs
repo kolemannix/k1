@@ -275,7 +275,7 @@ impl Type {
             Type::Array(_a) => None,
             Type::Optional(_t) => None,
             Type::Reference(_t) => None,
-            Type::TypeVariable(t) => None,
+            Type::TypeVariable(_t) => None,
             Type::TagInstance(_t) => None,
             Type::Enum(e) => Some(e.ast_node),
             Type::EnumVariant(_ev) => None,
@@ -376,6 +376,7 @@ impl Type {
         }
     }
 
+    #[allow(unused)]
     fn as_tag(&self) -> Option<&TagInstanceType> {
         match self {
             Type::TagInstance(tag) => Some(tag),
@@ -442,19 +443,19 @@ impl Type {
             Type::Integer(_) => None,
             Type::Bool => None,
             Type::String => None,
-            Type::Struct(s) => None,
+            Type::Struct(_s) => None,
             Type::Array(_) => None,
             Type::Optional(_) => None,
             Type::Reference(_) => None,
             Type::TypeVariable(t) => Some(t.span),
             Type::TagInstance(_) => None,
-            Type::Enum(e) => None,
+            Type::Enum(_e) => None,
             Type::EnumVariant(_) => None,
             Type::Never => None,
-            Type::OpaqueAlias(opaque) => None,
-            Type::Generic(gen) => None,
+            Type::OpaqueAlias(_opaque) => None,
+            Type::Generic(_gen) => None,
             Type::Function(_) => None,
-            Type::RecursiveReference(r) => None,
+            Type::RecursiveReference(_r) => None,
         }
     }
 }

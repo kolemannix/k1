@@ -1,35 +1,35 @@
-type Box<T> = { value: T }
-type Pair<T, U> = { t: T?, u: U? }
+type Box[T] = { value: T }
+type Pair[T, U] = { t: T?, u: U? }
 namespace Pair {
-  fn t<T, U>(self: Pair<T, U>): T? {
+  fn t[T, U](self: Pair[T, U]): T? {
     self.t
   }
 }
 
-fn unboxIt<T>(b: Box<Box<Box<T>>>): T {
+fn unboxIt[T](b: Box[Box[Box[T]]]): T {
   b.value.value.value
 }
 
 fn main(): int {
   // Consider f(a, b) call syntax
-  val b: Box<int> = { value: 0 };
-  val c: Box<bool> = { value: true };
-  val c2: Box<bool> = { value: false };
-  val c3: Box<bool?> = { value: false };
-  val c4: Box<bool*> = { value: &false };
+  val b: Box[int] = { value: 0 };
+  val c: Box[bool] = { value: true };
+  val c2: Box[bool] = { value: false };
+  val c3: Box[bool?] = { value: false };
+  val c4: Box[bool*] = { value: &false };
   assert(b.value == 0);
   assert(c.value == true);
   assert(c2.value == false);
   assert(c3.value! == false);
   assert((*c4.value) == false);
 
-  val p: Pair<int, bool> = { t: 0, u: true };
+  val p: Pair[int, bool] = { t: 0, u: true };
   assert(p.t! == 0);
   assert(p.u! == true);
-  assert(p.t<int, bool>()! == 0);
+  assert(p.t[int, bool]()! == 0);
   assert(p.t()! == 0);
 
-  val nested: Box<Box<Box<int>>> = { value: { value: { value: 42 } } };
+  val nested: Box[Box[Box[int]]] = { value: { value: { value: 42 } } };
   assert(unboxIt(nested) == 42);
 
   b.value

@@ -8,8 +8,8 @@ fn main(): int {
     assert(false);
   };
 
-  mut my_arr: Array<Point?> = [{ x: 42, y: 3}, None];
-  if my_arr[0] is Some(a) {
+  mut my_arr: Array[Point?] = [{ x: 42, y: 3}, None];
+  if my_arr.get(0) is Some(a) {
     assert(a.y == 3);
   };
 

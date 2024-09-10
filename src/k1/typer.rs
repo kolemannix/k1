@@ -19,10 +19,10 @@ use types::*;
 
 use crate::lex::{SpanId, Spans, TokenKind};
 use crate::parse::{
-    self, ForExpr, ForExprType, IfExpr, IndexOperation, NamespacedIdentifier, NumericWidth,
-    ParsedAbilityId, ParsedAbilityImplId, ParsedConstantId, ParsedExpressionId, ParsedFunctionId,
-    ParsedId, ParsedNamespaceId, ParsedPattern, ParsedPatternId, ParsedTypeDefnId,
-    ParsedTypeExpression, ParsedTypeExpressionId, ParsedUnaryOpKind, Sources,
+    self, ForExpr, ForExprType, IfExpr, NamespacedIdentifier, NumericWidth, ParsedAbilityId,
+    ParsedAbilityImplId, ParsedConstantId, ParsedExpressionId, ParsedFunctionId, ParsedId,
+    ParsedNamespaceId, ParsedPattern, ParsedPatternId, ParsedTypeDefnId, ParsedTypeExpression,
+    ParsedTypeExpressionId, ParsedUnaryOpKind, Sources,
 };
 use crate::parse::{
     Block, FnCall, Identifier, Literal, ParsedExpression, ParsedModule, ParsedStmt,
@@ -56,6 +56,35 @@ pub struct TypedAbilityFunctionRef {
 pub const EQUALS_ABILITY_ID: AbilityId = AbilityId(0);
 pub const BITWISE_ABILITY_ID: AbilityId = AbilityId(1);
 
+/// Used for analyzing pattern matching
+#[derive(Debug, Clone)]
+pub enum PatternConstructor {
+    Unit,
+    BoolFalse,
+    BoolTrue,
+    None,
+    /// Note: These 3 (Char, String, Int) will become more interesting if we implement exhaustive range-based matching like Rust's
+    /// For now they exist as placeholders to indicate to the algorithm that something needs to be matched. We treat
+    /// exact literals as NOT matching because they do not completely eliminate the pattern, and ignore those exact
+    /// literal patterns when we report on 'Useless' patterns
+    Char,
+    String,
+    Int,
+    ///
+    Some(Box<PatternConstructor>),
+    Struct {
+        fields: Vec<(Identifier, PatternConstructor)>,
+    },
+    // Binding(Identifier),
+    Enum {
+        variant_name: Identifier,
+        inner: Option<Box<PatternConstructor>>,
+    },
+    // TODO: Integer(range),
+    // TODO: Char(range),
+    // TODO: Array patterns Array(ArrayLiteral),
+}
+
 #[derive(Debug, Clone)]
 pub struct TypedAbility {
     pub name: Identifier,
@@ -84,8 +113,8 @@ pub struct TypedEnumPattern {
 
 #[derive(Debug, Clone)]
 pub struct TypedStructPatternField {
-    pub field_name: Identifier,
-    pub field_pattern: TypedPattern,
+    pub name: Identifier,
+    pub pattern: TypedPattern,
     pub field_index: u32,
     pub field_type_id: TypeId,
 }
@@ -106,7 +135,7 @@ pub struct TypedSomePattern {
 
 #[derive(Debug, Clone)]
 pub struct VariablePattern {
-    pub ident: Identifier,
+    pub name: Identifier,
     pub span: SpanId,
 }
 
@@ -129,6 +158,32 @@ pub enum TypedPattern {
     Enum(TypedEnumPattern),
     Struct(TypedStructPattern),
     Wildcard(SpanId),
+}
+
+impl TypedPattern {
+    pub fn is_innumerable_literal(&self) -> bool {
+        match self {
+            TypedPattern::LiteralChar(_, _span) => true,
+            TypedPattern::LiteralInteger(_, _span) => true,
+            TypedPattern::LiteralString(_, _span) => true,
+            _ => false,
+        }
+    }
+    pub fn span_id(&self) -> SpanId {
+        match self {
+            TypedPattern::LiteralUnit(span) => *span,
+            TypedPattern::LiteralChar(_, span) => *span,
+            TypedPattern::LiteralInteger(_, span) => *span,
+            TypedPattern::LiteralBool(_, span) => *span,
+            TypedPattern::LiteralString(_, span) => *span,
+            TypedPattern::LiteralNone(span) => *span,
+            TypedPattern::Some(some_pattern) => some_pattern.span,
+            TypedPattern::Variable(variable_pattern) => variable_pattern.span,
+            TypedPattern::Enum(enum_pattern) => enum_pattern.span,
+            TypedPattern::Struct(struct_pattern) => struct_pattern.span,
+            TypedPattern::Wildcard(span) => *span,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -215,6 +270,7 @@ pub struct TypedFunction {
     pub linkage: Linkage,
     pub specializations: Vec<SpecializationStruct>,
     pub parsed_function_id: ParsedFunctionId,
+    #[allow(unused)]
     is_method_of: Option<TypeId>,
     pub kind: TypedFunctionKind,
     pub span: SpanId,
@@ -495,8 +551,6 @@ pub struct NoOpCast {
 
 #[derive(Debug, Clone)]
 struct TypedMatchCase {
-    // Will be used when we do exhaustive matching
-    #[allow(unused)]
     pattern: TypedPattern,
     pre_stmts: Vec<TypedStmt>,
     condition: TypedExpr,
@@ -620,7 +674,7 @@ pub enum TypedExpr {
     Bool(bool, SpanId),
     Integer(TypedIntegerExpr),
     Str(String, SpanId),
-    None(TypeId, SpanId),
+    OptionalNone(TypeId, SpanId),
     Struct(Struct),
     Array(ArrayLiteral),
     Variable(VariableExpr),
@@ -653,7 +707,7 @@ impl TypedExpr {
     #[inline]
     pub fn get_type(&self) -> TypeId {
         match self {
-            TypedExpr::None(type_id, _) => *type_id,
+            TypedExpr::OptionalNone(type_id, _) => *type_id,
             TypedExpr::Unit(_) => UNIT_TYPE_ID,
             TypedExpr::Char(_, _) => CHAR_TYPE_ID,
             TypedExpr::Str(_, _) => STRING_TYPE_ID,
@@ -687,7 +741,7 @@ impl TypedExpr {
             TypedExpr::Bool(_, span) => *span,
             TypedExpr::Integer(int) => int.span,
             TypedExpr::Str(_, span) => *span,
-            TypedExpr::None(_, span) => *span,
+            TypedExpr::OptionalNone(_, span) => *span,
             TypedExpr::Struct(struc) => struc.span,
             TypedExpr::Array(array) => array.span,
             TypedExpr::Variable(var) => var.span,
@@ -937,7 +991,7 @@ impl IntrinsicFunction {
             IntrinsicFunction::PrintInt => false,
             IntrinsicFunction::PrintString => false,
             IntrinsicFunction::StringLength => false,
-            IntrinsicFunction::ArrayLength => false,
+            IntrinsicFunction::ArrayLength => true,
             IntrinsicFunction::ArrayNew => false,
             IntrinsicFunction::ArrayGrow => false,
             IntrinsicFunction::ArraySetLength => false,
@@ -2051,23 +2105,26 @@ impl TypedModule {
                 match self.ast.expressions.get(*literal_expr_id).expect_literal() {
                     Literal::None(span) => match self.types.get(target_type_id) {
                         Type::Optional(_) => Ok(TypedPattern::LiteralNone(*span)),
-                        _ => make_fail_span(
-                            "unrelated type will never match none",
+                        _ => ffail!(
                             self.ast.get_pattern_span(pat_expr),
+                            "unrelated pattern type None will never match {}",
+                            self.type_id_to_string(target_type_id)
                         ),
                     },
                     Literal::Unit(span) => match self.types.get(target_type_id) {
                         Type::Unit => Ok(TypedPattern::LiteralUnit(*span)),
-                        _ => make_fail_span(
-                            "unrelated type will never match unit",
+                        _ => ffail!(
                             self.ast.get_pattern_span(pat_expr),
+                            "unrelated pattern type unit will never match {}",
+                            self.type_id_to_string(target_type_id)
                         ),
                     },
                     Literal::Char(c, span) => match self.types.get(target_type_id) {
                         Type::Char => Ok(TypedPattern::LiteralChar(*c, *span)),
-                        _ => make_fail_span(
-                            "unrelated type will never match char",
+                        _ => ffail!(
                             self.ast.get_pattern_span(pat_expr),
+                            "unrelated pattern type char will never match {}",
+                            self.type_id_to_string(target_type_id)
                         ),
                     },
                     Literal::Integer(int) => {
@@ -2081,17 +2138,19 @@ impl TypedModule {
                             Type::Integer(_integer_type) => {
                                 Ok(TypedPattern::LiteralInteger(value, int.span))
                             }
-                            _ => make_fail_span(
-                                "unrelated type will never match int",
+                            _ => ffail!(
                                 self.ast.get_pattern_span(pat_expr),
+                                "unrelated pattern type int will never match {}",
+                                self.type_id_to_string(target_type_id)
                             ),
                         }
                     }
                     Literal::Bool(b, span) => match self.types.get(target_type_id) {
                         Type::Bool => Ok(TypedPattern::LiteralBool(*b, *span)),
-                        _ => make_fail_span(
-                            "unrelated type will never match bool",
+                        _ => ffail!(
                             self.ast.get_pattern_span(pat_expr),
+                            "unrelated pattern type bool will never match {}",
+                            self.type_id_to_string(target_type_id)
                         ),
                     },
                     // Clone would go away if we intern string literals
@@ -2099,15 +2158,16 @@ impl TypedModule {
                     // to be an allocation here. Should be same handling as non-pattern string literals
                     Literal::String(s, span) => match self.types.get(target_type_id) {
                         Type::String => Ok(TypedPattern::LiteralString(s.clone(), *span)),
-                        _ => make_fail_span(
-                            "unrelated type will never match string",
+                        _ => ffail!(
                             self.ast.get_pattern_span(pat_expr),
+                            "unrelated pattern type string will never match {}",
+                            self.type_id_to_string(target_type_id)
                         ),
                     },
                 }
             }
             ParsedPattern::Variable(ident_id, span) => {
-                Ok(TypedPattern::Variable(VariablePattern { ident: *ident_id, span: *span }))
+                Ok(TypedPattern::Variable(VariablePattern { name: *ident_id, span: *span }))
             }
             ParsedPattern::Some(some_pattern) => {
                 let Some(optional_type_id) = self.types.get(target_type_id).as_optional() else {
@@ -2202,8 +2262,8 @@ impl TypedModule {
                     let field_pattern =
                         self.eval_pattern(*field_parsed_pattern_id, field_type_id, scope_id)?;
                     fields.push(TypedStructPatternField {
-                        field_name: *field_name,
-                        field_pattern,
+                        name: *field_name,
+                        pattern: field_pattern,
                         field_index: expected_field.index,
                         field_type_id: expected_field.type_id,
                     });
@@ -3080,7 +3140,7 @@ impl TypedModule {
                 let inner_type = expected_type.inner_type;
                 let none_type = Type::Optional(OptionalType { inner_type });
                 let type_id = self.types.add_type(none_type);
-                Ok(TypedExpr::None(type_id, *span))
+                Ok(TypedExpr::OptionalNone(type_id, *span))
             }
             ParsedExpression::Literal(Literal::Char(byte, span)) => {
                 Ok(TypedExpr::Char(*byte, *span))
@@ -3228,10 +3288,12 @@ impl TypedModule {
                     .ast
                     .expressions
                     .add_expression(parse::ParsedExpression::Match(as_match_expr));
-                self.eval_expr(match_expr_id, scope_id, expected_type)
+                let partial_match = true;
+                self.eval_match_expr(match_expr_id, scope_id, expected_type, partial_match)
             }
             ParsedExpression::Match(_match_expr) => {
-                self.eval_match_expr(expr_id, scope_id, expected_type)
+                let partial_match = false;
+                self.eval_match_expr(expr_id, scope_id, expected_type, partial_match)
             }
             ParsedExpression::AsCast(_cast) => self.eval_cast(expr_id, scope_id),
         };
@@ -3243,6 +3305,7 @@ impl TypedModule {
         match_expr_id: ParsedExpressionId,
         scope_id: ScopeId,
         expected_type_id: Option<TypeId>,
+        partial: bool,
     ) -> TyperResult<TypedExpr> {
         let target_expr = {
             let match_expr = self.ast.expressions.get(match_expr_id).as_match().unwrap();
@@ -3268,6 +3331,7 @@ impl TypedModule {
             &match_expr.cases.clone(),
             match_block_scope_id,
             expected_type_id,
+            partial,
         )?;
 
         let match_result_type = arms[0].arm_block.expr_type;
@@ -3352,6 +3416,7 @@ impl TypedModule {
         cases: &[parse::ParsedMatchCase],
         match_scope_id: ScopeId,
         expected_type_id: Option<TypeId>,
+        partial: bool,
     ) -> TyperResult<Vec<TypedMatchCase>> {
         let mut typed_cases: Vec<TypedMatchCase> = Vec::new();
 
@@ -3390,60 +3455,43 @@ impl TypedModule {
             typed_cases.push(TypedMatchCase { pattern, pre_stmts, condition, arm_block });
         }
 
-        // Exhaustiveness checking
+        // Exhaustiveness Checking
+        if !partial {
+            let trial_constructors: Vec<PatternConstructor> =
+                self.generate_constructors_for_type(target_expr.type_id, target_expr.span);
+            let mut trial_alives: Vec<bool> = vec![true; trial_constructors.len()];
+            let mut pattern_scores: Vec<usize> = vec![0; typed_cases.len()];
+            'trial: for (trial_index, trial_expr) in trial_constructors.iter().enumerate() {
+                '_pattern: for (index, pattern) in typed_cases.iter().enumerate() {
+                    let pattern = &pattern.pattern;
+                    if self.pattern_matches(&pattern, trial_expr) {
+                        pattern_scores[index] += 1;
+                        trial_alives[trial_index] = false;
+                        continue 'trial;
+                    }
+                }
+            }
 
-        //  Warnings for pattern matching
-        //  LUC MARANGET
-        //  We'll try to construct a pattern input that does not get matched. We'll remember which patterns handle which inputs, such that we can
-        // also report useless patterns. If any input gets through, that is our witness of in-exhaustiveness
-        // let mut unhandled_cases = match self.types.get(target_expr.type_id) {
-        //     Type::Unit => vec!["()"],
-        //     Type::Char => {
-        //         vec![]
-        //     }
-        //     Type::Int => {
-        //         vec![]
-        //     }
-        //     Type::Bool => {
-        //         vec!["true", "false"]
-        //     }
-        //     Type::String => vec![],
-        //     Type::Struct(_) => vec![],
-        //     Type::Array(_) => vec![],
-        //     Type::Optional(_) => {
-        //         vec!["Some", "None"]
-        //     }
-        //     Type::Reference(_) => unimplemented!(),
-        //     Type::TypeVariable(_) => unimplemented!(),
-        //     Type::TagInstance(_) => unimplemented!(),
-        //     Type::Enum(_) => unimplemented!(),
-        //     Type::EnumVariant(_) => unimplemented!(),
-        // };
-        // for c in typed_cases.iter() {
-        //     match &c.pattern {
-        //         TypedPattern::LiteralBool(b, _) => {
-        //             unhandled_cases.retain(|c2| -> bool {
-        //                 if *b && *c2 == "true" {
-        //                     false
-        //                 } else if !*b && *c2 == "false" {
-        //                     false
-        //                 } else {
-        //                     true
-        //                 }
-        //             });
-        //         }
-        //         TypedPattern::Variable(_) => unhandled_cases.clear(),
-        //         TypedPattern::Wildcard(_) => unhandled_cases.clear(),
-        //         _ => todo!("exhaustiveness checking for all matchable types"),
-        //     }
-        // }
-        // if !unhandled_cases.is_empty() {
-        //     return make_fail_span(
-        //         &format!("Unhandled cases: {:?}", unhandled_cases),
-        //         target_expr.span,
-        //     );
-        // }
-        // End Exhaustiveness checking
+            if let Some(alive_index) = trial_alives.iter().position(|p| *p) {
+                let pattern = &trial_constructors[alive_index];
+                return ffail!(
+                    target_expr.span,
+                    "Unhandled pattern: {}",
+                    self.pattern_ctor_to_string(pattern)
+                );
+            }
+
+            if let Some(useless_index) = pattern_scores.iter().position(|p| *p == 0) {
+                let pattern = &typed_cases[useless_index].pattern;
+                if !pattern.is_innumerable_literal() {
+                    return ffail!(
+                        pattern.span_id(),
+                        "Useless pattern: {}",
+                        self.pattern_to_string(pattern)
+                    );
+                }
+            }
+        }
 
         Ok(typed_cases)
     }
@@ -3468,7 +3516,7 @@ impl TypedModule {
                 for pattern_field in struct_pattern.fields.iter() {
                     let target_value = TypedExpr::StructFieldAccess(FieldAccess {
                         base: Box::new(TypedExpr::Variable(target_expr_variable_expr.clone())),
-                        target_field: pattern_field.field_name,
+                        target_field: pattern_field.name,
                         target_field_index: pattern_field.field_index,
                         ty: pattern_field.field_type_id,
                         span: struct_pattern.span,
@@ -3481,7 +3529,7 @@ impl TypedModule {
                         target_value_decl_stmt,
                         struct_member_value_expr,
                     ) = self.synth_variable_decl(
-                        pattern_field.field_name, // Will be mangled
+                        pattern_field.name, // Will be mangled
                         target_value,
                         false,
                         false,
@@ -3490,7 +3538,7 @@ impl TypedModule {
                     condition_statements.push(target_value_decl_stmt);
 
                     let (inner_condition_stmts, condition) = self.eval_match_arm(
-                        &pattern_field.field_pattern,
+                        &pattern_field.pattern,
                         struct_member_value_expr.expect_variable(),
                         arm_block,
                         arm_block.scope_id,
@@ -3615,7 +3663,7 @@ impl TypedModule {
                 Ok((condition_statements, final_condition))
             }
             TypedPattern::Variable(variable_pattern) => {
-                let variable_ident = variable_pattern.ident;
+                let variable_ident = variable_pattern.name;
                 let (_variable_id, binding_stmt, _typed_expr) = self.synth_variable_decl(
                     variable_ident,
                     target_expr_variable_expr.into(),
@@ -3969,7 +4017,7 @@ impl TypedModule {
                 self.synth_function_call(
                     vec![self.ast.identifiers.get("string").unwrap()],
                     self.ast.identifiers.get("get").unwrap(),
-                    Some(vec![CHAR_TYPE_ID]),
+                    None,
                     vec![iteree_variable_expr.clone(), index_variable_expr.clone()],
                     body_span,
                     while_scope_id,
@@ -3999,15 +4047,15 @@ impl TypedModule {
             match self.types.get(iteree_type) {
                 Type::Optional(_opt) => {
                     let new_optional =
-                        Type::Optional(OptionalType { inner_type: body_block.expr_type });
+                        Type::Optional(OptionalType { inner_type: body_block_result_type });
                     self.types.add_type(new_optional)
                 }
                 Type::Array(_arr) => {
-                    let new_array = Type::Array(ArrayType { element_type: body_block.expr_type });
+                    let new_array = Type::Array(ArrayType { element_type: body_block_result_type });
                     self.types.add_type(new_array)
                 }
                 Type::String => {
-                    let new_array = Type::Array(ArrayType { element_type: body_block.expr_type });
+                    let new_array = Type::Array(ArrayType { element_type: body_block_result_type });
                     self.types.add_type(new_array)
                 }
                 other => {
@@ -4067,7 +4115,6 @@ impl TypedModule {
             match self.types.get(resulting_type) {
                 Type::Array(_) => {
                     // yielded_coll[index] = block_expr_val;
-                    // yielded_coll.set(index, block_expr_val)
                     // let element_assign = TypedStmt::Assignment(Box::new(Assignment {
                     //     destination: Box::new(TypedExpr::ArrayIndex(IndexOp {
                     //         base_expr: Box::new(yielded_coll_expr.clone()),
@@ -4078,10 +4125,11 @@ impl TypedModule {
                     //     value: Box::new(user_block_val_expr),
                     //     span: body_span,
                     // }));
+                    // yielded_coll.set(index, block_expr_val)
                     let element_assign = TypedStmt::Expr(Box::new(self.synth_function_call(
                         vec![self.ast.identifiers.get("Array").unwrap()],
                         self.ast.identifiers.get("set").unwrap(),
-                        Some(vec![item_type]),
+                        Some(vec![body_block_result_type]),
                         vec![
                             yielded_coll_expr.clone(),
                             index_variable_expr.clone(),
@@ -4476,7 +4524,7 @@ impl TypedModule {
             let match_expr_id =
                 self.ast.expressions.add_expression(ParsedExpression::Match(match_expr));
             // eprintln!("desugared if to match {}", self.ast.expression_to_string(match_expr_id));
-            return self.eval_match_expr(match_expr_id, scope_id, expected_type);
+            return self.eval_match_expr(match_expr_id, scope_id, expected_type, true);
         }
         //
         // End of match desugar case
@@ -4579,6 +4627,7 @@ impl TypedModule {
         &mut self,
         fn_call: &FnCall,
         calling_scope: ScopeId,
+        expected_type: Option<TypeId>,
     ) -> TyperResult<Either<TypedExpr, FunctionId>> {
         let fn_name = fn_call.name.name;
         match self.ast.identifiers.get_name(fn_name) {
@@ -4613,7 +4662,13 @@ impl TypedModule {
                         fn_call.span,
                     );
                 }
-                let arg = self.eval_expr_inner(fn_call.args[0].value, calling_scope, None)?;
+                let expected_inner_type = match expected_type.map(|t| self.types.get(t)) {
+                    Some(Type::Optional(opt)) => Some(opt.inner_type),
+                    Some(_unrelated) => None,
+                    None => None,
+                };
+                let arg =
+                    self.eval_expr(fn_call.args[0].value, calling_scope, expected_inner_type)?;
                 let type_id = arg.get_type();
                 let optional_type = Type::Optional(OptionalType { inner_type: type_id });
                 let type_id = self.types.add_type(optional_type);
@@ -4991,10 +5046,11 @@ impl TypedModule {
             fn_call.args.is_empty() || known_value_args.is_none(),
             "cannot pass both typed value args and parsed value args to eval_function_call"
         );
-        let function_id = match self.resolve_parsed_function_call(fn_call, scope_id)? {
-            Either::Left(expr) => return Ok(expr),
-            Either::Right(function_id) => function_id,
-        };
+        let function_id =
+            match self.resolve_parsed_function_call(fn_call, scope_id, expected_type_id)? {
+                Either::Left(expr) => return Ok(expr),
+                Either::Right(function_id) => function_id,
+            };
 
         // Now that we have resolved to a function id, we need to specialize it if generic
         let original_function = self.get_function(function_id);
@@ -5108,21 +5164,6 @@ impl TypedModule {
 
                 let mut solved_params: Vec<TypeParam> = Vec::new();
 
-                if let Some(call_expected_type) = expected_type_id {
-                    eprintln!(
-                        "using expected type {} to try to infer call to {}",
-                        self.type_id_to_string(call_expected_type),
-                        self.get_ident_str(fn_call.name.name)
-                    );
-                    self.solve_generic_params(
-                        &mut solved_params,
-                        call_expected_type,
-                        function_return_type,
-                        calling_scope,
-                        fn_call.span,
-                    )?;
-                }
-
                 for (idx, expr) in exprs.iter().enumerate() {
                     let param = &generic_params[idx];
 
@@ -5134,6 +5175,23 @@ impl TypedModule {
                         fn_call.span,
                     )?;
                 }
+                if solved_params.len() < generic_type_params.len() {
+                    if let Some(call_expected_type) = expected_type_id {
+                        eprintln!(
+                            "using expected type {} to try to infer call to {}",
+                            self.type_id_to_string(call_expected_type),
+                            self.get_ident_str(fn_call.name.name)
+                        );
+                        self.solve_generic_params(
+                            &mut solved_params,
+                            call_expected_type,
+                            function_return_type,
+                            calling_scope,
+                            fn_call.span,
+                        )?;
+                    }
+                }
+
                 if solved_params.len() < generic_type_params.len() {
                     return ffail!(
                         fn_call.span,
@@ -6620,5 +6678,128 @@ impl TypedModule {
         }
         s.push_str(&self.get_ident_str(name));
         s
+    }
+
+    fn generate_constructors_for_type(
+        &self,
+        type_id: TypeId,
+        span_id: SpanId,
+    ) -> Vec<PatternConstructor> {
+        match self.types.get(type_id) {
+            Type::Unit => vec![PatternConstructor::Unit],
+            Type::Char => vec![PatternConstructor::Char],
+            Type::String => vec![PatternConstructor::String],
+            Type::Integer(_) => vec![PatternConstructor::Int],
+            Type::Bool => {
+                vec![PatternConstructor::BoolFalse, PatternConstructor::BoolTrue]
+            }
+            Type::Optional(optional_type) => {
+                let inner_patterns =
+                    self.generate_constructors_for_type(optional_type.inner_type, span_id);
+                let mut some_patterns: Vec<PatternConstructor> = inner_patterns
+                    .into_iter()
+                    .map(|inner_pattern| PatternConstructor::Some(Box::new(inner_pattern)))
+                    .collect();
+
+                some_patterns.push(PatternConstructor::None);
+                some_patterns
+            }
+            Type::Enum(enum_type) => enum_type
+                .variants
+                .iter()
+                .flat_map(|v| match v.payload.as_ref() {
+                    None => {
+                        vec![PatternConstructor::Enum { variant_name: v.tag_name, inner: None }]
+                    }
+                    Some(payload) => self
+                        .generate_constructors_for_type(*payload, span_id)
+                        .into_iter()
+                        .map(|inner| PatternConstructor::Enum {
+                            variant_name: v.tag_name,
+                            inner: Some(Box::new(inner)),
+                        })
+                        .collect(),
+                })
+                .collect(),
+            Type::Struct(struc) => {
+                let mut all_field_ctors: Vec<Vec<(Identifier, PatternConstructor)>> = vec![];
+                for field in struc.fields.iter() {
+                    let field_ctors_iter = self
+                        .generate_constructors_for_type(field.type_id, span_id)
+                        .into_iter()
+                        .map(|pat| (field.name, pat))
+                        .collect::<Vec<_>>();
+                    all_field_ctors.push(field_ctors_iter)
+                }
+                // Generate cross product of all field combinations
+                let mut result = vec![PatternConstructor::Struct { fields: Vec::new() }];
+                // For each individual field's constructors, we iterate over all previously accumulated results
+                // Pushing this field's constructors onto each previous results' field vec
+                for field_ctors in all_field_ctors.into_iter() {
+                    let mut new_result = Vec::new();
+                    for ctor in result {
+                        for (field_name, field_ctor) in &field_ctors {
+                            if let PatternConstructor::Struct { mut fields } = ctor.clone() {
+                                fields.push((*field_name, field_ctor.clone()));
+                                new_result.push(PatternConstructor::Struct { fields });
+                            }
+                        }
+                    }
+                    result = new_result;
+                }
+                result
+            }
+            _ => {
+                eprintln!("unhandled match type {}", self.type_id_to_string(type_id));
+                vec![]
+            }
+        }
+    }
+
+    fn pattern_matches(&self, pattern: &TypedPattern, ctor: &PatternConstructor) -> bool {
+        match (pattern, ctor) {
+            (TypedPattern::Wildcard(_), _) => true,
+            (TypedPattern::Variable(_), _) => true,
+            (TypedPattern::LiteralUnit(_), PatternConstructor::Unit) => true,
+            (TypedPattern::LiteralBool(true, _), PatternConstructor::BoolTrue) => true,
+            (TypedPattern::LiteralBool(false, _), PatternConstructor::BoolFalse) => true,
+            (TypedPattern::LiteralNone(_), PatternConstructor::None) => true,
+            (TypedPattern::Some(pat), PatternConstructor::Some(trial_pat)) => {
+                self.pattern_matches(&pat.inner_pattern, trial_pat)
+            }
+            (TypedPattern::Enum(enum_pat), PatternConstructor::Enum { variant_name, inner }) => {
+                if *variant_name == enum_pat.variant_tag_name {
+                    match (enum_pat.payload.as_ref(), inner) {
+                        (Some(payload), Some(inner)) => self.pattern_matches(&payload, inner),
+                        (None, None) => true,
+                        _ => false,
+                    }
+                } else {
+                    false
+                }
+            }
+            (TypedPattern::Struct(struc), PatternConstructor::Struct { fields }) => {
+                // Because we treat all struct patterns as caring only about the fields they mention,
+                // an empty pattern already matches. So we iterate of the fields this pattern does
+                // care about, and if any do not match, we'll consider the whole pattern not to match
+                let mut matches = true;
+                for field_pattern in struc.fields.iter() {
+                    let matching_field_pattern = fields
+                        .iter()
+                        .find(|(name, _ctor_pattern)| *name == field_pattern.name)
+                        .map(|(_, ctor_pattern)| ctor_pattern)
+                        .expect("Field not in struct; pattern should have failed typecheck by now");
+                    if !self.pattern_matches(&field_pattern.pattern, matching_field_pattern) {
+                        matches = false;
+                        break;
+                    }
+                }
+                matches
+            }
+            _ => {
+                // eprintln!("Unhandled pattern_matches case: {:?} {:?}", pattern, ctor);
+                false
+            }
+        }
     }
 }

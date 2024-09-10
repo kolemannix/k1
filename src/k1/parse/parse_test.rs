@@ -1,5 +1,3 @@
-use raylib::ffi::false_;
-
 use crate::parse::*;
 use std::fs;
 
@@ -101,7 +99,7 @@ fn infix() -> Result<(), ParseError> {
 
 #[test]
 fn struct_1() -> Result<(), ParseError> {
-    let (_parser, result) = test_single_expr("{ a: 4, b: x[42], c: true }")?;
+    let (_parser, result) = test_single_expr("{ a: 4, b: x.a, c: true }")?;
     assert!(matches!(result, ParsedExpression::Struct(_)));
     Ok(())
 }
@@ -161,14 +159,14 @@ fn dot_accessor() -> ParseResult<()> {
 
 #[test]
 fn type_parameter_single() -> ParseResult<()> {
-    let (mut _module, type_expr) = test_single_type_expr("Array<unit>")?;
+    let (mut _module, type_expr) = test_single_type_expr("Array[unit]")?;
     assert!(matches!(type_expr, ParsedTypeExpression::TypeApplication(_)));
     Ok(())
 }
 
 #[test]
 fn type_parameter_multi() -> ParseResult<()> {
-    let (module, type_expr) = test_single_type_expr("Map<u8, Array<u8>>")?;
+    let (module, type_expr) = test_single_type_expr("Map[u8, Array[u8]]")?;
     let ParsedTypeExpression::TypeApplication(app) = type_expr else {
         panic!("Expected type application")
     };
@@ -221,7 +219,7 @@ fn precedence() -> Result<(), ParseError> {
 
 #[test]
 fn paren_expression() -> Result<(), ParseError> {
-    let input = "(1 + 2[i][i + 4]) * 3";
+    let input = "(1 + a(i, i + 4)) * 3";
     let (_parser, result) = test_single_expr(input)?;
     if let ParsedExpression::BinaryOp(bin_op) = &result {
         assert_eq!(bin_op.op_kind, BinaryOpKind::Multiply);
@@ -254,7 +252,7 @@ fn cmp_operators() -> Result<(), ParseError> {
 
 #[test]
 fn generic_fn_call() -> Result<(), ParseError> {
-    let input = "square<int>(42)";
+    let input = "square[int](42)";
     let (_parser, result) = test_single_expr(input)?;
     assert!(matches!(result, ParsedExpression::FnCall(_)));
     Ok(())
@@ -262,7 +260,7 @@ fn generic_fn_call() -> Result<(), ParseError> {
 
 #[test]
 fn generic_method_call_lhs_expr() -> Result<(), ParseError> {
-    let input = "getFn().baz<u64>(42)";
+    let input = "getFn().baz[u64](42)";
     let (mut parser, result) = test_single_expr(input)?;
     let ParsedExpression::FnCall(call) = result else { panic!() };
     let ParsedExpression::FnCall(fn_call) = parser.expressions.get(call.args[0].value).clone()
@@ -331,7 +329,7 @@ fn type_hint() -> ParseResult<()> {
 
 #[test]
 fn type_hint_binop() -> ParseResult<()> {
-    let input = "(3!: int + 4: Array<bool>): int";
+    let input = "(3!: int + 4: Array[bool]): int";
     let (module, _expr, expr_id) = test_single_expr_with_id(input)?;
     let type_hint = module.get_expression_type_hint(expr_id).unwrap();
     assert_eq!(module.type_expression_to_string(type_hint), "int");

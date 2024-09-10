@@ -1636,7 +1636,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     })
                 }
             }
-            TypedExpr::None(type_id, _) => {
+            TypedExpr::OptionalNone(type_id, _) => {
                 let optional_value = self.codegen_optional_value(*type_id, None)?;
                 Ok(optional_value.into())
             }
@@ -2270,11 +2270,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         array_base: &TypedExpr,
         array_index: &TypedExpr,
     ) -> CodegenResult<PointerValue<'ctx>> {
-        let pointee_ty = self.codegen_type(array_base.get_type())?;
-        // TODO: Once codegen_expr returns type info, we can ditch this extra work to get and generate types separately
         let array_value = self.codegen_expr_basic_value(array_base)?.into_pointer_value();
         let index_value = self.codegen_expr_basic_value(array_index)?;
-        let array_type = self.create_array_struct(pointee_ty.value_basic_type());
+        let elem_type = self.module.types.get(array_base.get_type()).expect_array().element_type;
+        let elem_llvm_type = self.codegen_type(elem_type)?.value_basic_type();
+
+        let array_type = self.create_array_struct(elem_llvm_type);
 
         let array_struct =
             self.builder.build_load(array_type, array_value, "array_value").into_struct_value();
@@ -2282,7 +2283,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let array_data = self.builtin_types.array_data(&self.builder, array_struct);
         let gep_ptr = unsafe {
             self.builder.build_gep(
-                pointee_ty.value_basic_type(),
+                elem_llvm_type,
                 array_data,
                 &[index_int_value],
                 "array_index_ptr",
@@ -2350,8 +2351,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         element_type: BasicTypeEnum<'ctx>,
         zero_initialize: bool,
     ) -> StructValue<'ctx> {
-        // "Cannot build array malloc call for an unsized type" By now we should have grabbed the 'root' type
-        // not the recursive 'placeholder' zero-sized type
         let data_ptr =
             self.builder.build_array_malloc(element_type, capacity, "array_data").unwrap();
         if zero_initialize {
@@ -2466,8 +2465,42 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             IntrinsicFunction::StringSet => {
                 todo!()
             }
+            IntrinsicFunction::ArrayCapacity => {
+                let array_arg = self.codegen_expr_basic_value(&call.args[0])?.into_pointer_value();
+                let array_struct_type = self
+                    .codegen_type(call.args[0].get_type())?
+                    .expect_pointer()
+                    .pointee_type
+                    .into_struct_type();
+                let array_value = self
+                    .builder
+                    .build_load(array_struct_type, array_arg, "array_value_for_cap")
+                    .into_struct_value();
+                let capacity_value = self
+                    .builtin_types
+                    .build_array_capacity(&self.builder, array_value)
+                    .as_basic_value_enum();
+                Ok(capacity_value.into())
+            }
+            IntrinsicFunction::ArrayLength => {
+                let array_arg = self.codegen_expr_basic_value(&call.args[0])?.into_pointer_value();
+                let array_struct_type = self
+                    .codegen_type(call.args[0].get_type())?
+                    .expect_pointer()
+                    .pointee_type
+                    .into_struct_type();
+                let array_value = self
+                    .builder
+                    .build_load(array_struct_type, array_arg, "array_value_for_len")
+                    .into_struct_value();
+                let capacity_value = self
+                    .builtin_types
+                    .array_length(&self.builder, array_value)
+                    .as_basic_value_enum();
+                Ok(capacity_value.into())
+            }
             _ => {
-                panic!("Unexpected intrinsic type for inline gen")
+                panic!("Unexpected intrinsic type for inline gen {:?}", intrinsic_type)
             }
         }
     }
@@ -2586,22 +2619,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     .build_load(self.builtin_types.boolean, result, "string_eq_result_value")
                     .as_basic_value_enum())
             }
-            IntrinsicFunction::ArrayLength => {
-                let array_arg =
-                    self.get_loaded_variable(function.params[0].variable_id).into_pointer_value();
-                let array_type: LlvmPointerType =
-                    self.codegen_type(function.params[0].type_id)?.expect_pointer();
-                let array_struct = self
-                    .builder
-                    .build_load(
-                        array_type.pointee_type.into_struct_type(),
-                        array_arg,
-                        "array_struct",
-                    )
-                    .into_struct_value();
-                let length = self.builtin_types.array_length(&self.builder, array_struct);
-                Ok(length.as_basic_value_enum())
-            }
             IntrinsicFunction::ArrayNew => {
                 let array_type_id = function.ret_type;
                 let array_type = self.module.types.get(array_type_id);
@@ -2681,24 +2698,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.builder.build_store(array_ptr, array);
                 self.builder.build_free(old_data);
                 Ok(self.builtin_types.unit_value.as_basic_value_enum())
-            }
-            IntrinsicFunction::ArrayCapacity => {
-                let array_arg =
-                    self.get_loaded_variable(function.params[0].variable_id).into_pointer_value();
-                let array_struct_type = self
-                    .codegen_type(function.params[0].type_id)?
-                    .expect_pointer()
-                    .pointee_type
-                    .into_struct_type();
-                let array_value = self
-                    .builder
-                    .build_load(array_struct_type, array_arg, "array_value")
-                    .into_struct_value();
-                let capacity_value = self
-                    .builtin_types
-                    .build_array_capacity(&self.builder, array_value)
-                    .as_basic_value_enum();
-                Ok(capacity_value)
             }
             IntrinsicFunction::ArraySetLength => {
                 let array_arg =

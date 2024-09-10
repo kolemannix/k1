@@ -76,6 +76,7 @@
   - [x] return type of function (fn.return)
   - [x] param types of function (fn.arg, fn.arg2)
 - [ ] Exhaustive pattern matching
+- [ ] Pipe operator (copy Elixir)
 - [ ] function pointers (we could almost take address of a function as RawPointer already)
 - [ ] slices (windows? segments?)
 - [ ] Imports

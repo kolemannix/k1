@@ -1,4 +1,4 @@
-type alias PointList = Array<Point>
+type alias PointList = Array[Point]
 type alias Point = { x: int, y: int }
 
 ability ToPoint {

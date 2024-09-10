@@ -1,8 +1,5 @@
 fn main(): int {
   val xs = [10, 20, 30+5, if true 4 else 2];
-  printInt(xs.length() as i64);
   assert(xs.get(0) + xs.get(1) + xs.get(2) + xs.get(3) == 69);
   0
 }
-// <expected output>
-// 69
