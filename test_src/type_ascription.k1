@@ -1,7 +1,7 @@
 type Config = { foo: int, bar: int }
 
 fn main(): int {
-  val xs = []: Array<int>;
+  val xs = []: Array[int];
   mut maybe_config = { foo: 1, bar: 2 }: Config?;
   0
 }

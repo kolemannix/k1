@@ -13,7 +13,7 @@ fn main(): int {
   val c: int? = None;
   assert(not c.hasValue());
 
-  assert(typeId<Point.y.value>() == typeId<int>());
+  assert(typeId[Point.y.value]() == typeId[int]());
 
   0
 }

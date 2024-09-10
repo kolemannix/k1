@@ -186,7 +186,7 @@ impl TypedModule {
                 writ.write_char('*')
             }
             Type::TagInstance(tag) => {
-                writ.write_str(".")?;
+                writ.write_str("Tag.")?;
                 writ.write_str(self.ast.identifiers.get_name(tag.ident))
             }
             Type::Enum(e) => {
@@ -213,6 +213,11 @@ impl TypedModule {
                 Ok(())
             }
             Type::EnumVariant(ev) => {
+                let enum_type = self.types.get(ev.enum_type_id).expect_enum();
+                if let Some(defn_info) = enum_type.type_defn_info.as_ref() {
+                    writ.write_str(self.get_ident_str(defn_info.name))?;
+                    writ.write_str(".")?;
+                }
                 writ.write_str(self.ast.identifiers.get_name(ev.tag_name))?;
                 if let Some(payload) = &ev.payload {
                     writ.write_str("(")?;
@@ -383,7 +388,7 @@ impl TypedModule {
             TypedExpr::Integer(int) => write!(writ, "{}", int.value),
             TypedExpr::Bool(b, _) => write!(writ, "{}", b),
             TypedExpr::Str(s, _) => write!(writ, "\"{}\"", s),
-            TypedExpr::None(typ, _) => {
+            TypedExpr::OptionalNone(typ, _) => {
                 writ.write_str("None[")?;
                 self.display_type_id(*typ, writ)?;
                 writ.write_str("]")
@@ -508,6 +513,113 @@ impl TypedModule {
         let func = self.get_function(function_id);
         let mut s = String::new();
         self.display_function(func, &mut s, display_block).unwrap();
+        s
+    }
+
+    pub fn display_pattern_ctor(
+        &self,
+        pattern_ctor: &PatternConstructor,
+        writ: &mut impl Write,
+    ) -> std::fmt::Result {
+        match pattern_ctor {
+            PatternConstructor::Unit => writ.write_str("()"),
+            PatternConstructor::BoolTrue => writ.write_str("true"),
+            PatternConstructor::BoolFalse => writ.write_str("false"),
+            PatternConstructor::None => writ.write_str("None"),
+            PatternConstructor::Char => writ.write_str("'<char>'"),
+            PatternConstructor::String => writ.write_str("\"<string>\""),
+            PatternConstructor::Int => writ.write_str("<int>"),
+            PatternConstructor::Some(inner) => {
+                writ.write_str("Some(")?;
+                self.display_pattern_ctor(inner, writ)?;
+                writ.write_str(")")?;
+                Ok(())
+            }
+            PatternConstructor::Struct { fields } => {
+                writ.write_str("{ ")?;
+                for (index, (field_name, field_pattern)) in fields.iter().enumerate() {
+                    writ.write_str(self.get_ident_str(*field_name))?;
+                    writ.write_str(": ")?;
+                    self.display_pattern_ctor(field_pattern, writ)?;
+                    let last = index == fields.len() - 1;
+                    if !last {
+                        writ.write_str(", ")?;
+                    } else {
+                        writ.write_str(" ")?;
+                    }
+                }
+                writ.write_str("}")?;
+                Ok(())
+            }
+            PatternConstructor::Enum { variant_name, inner } => {
+                writ.write_str(self.get_ident_str(*variant_name))?;
+                if let Some(payload) = inner.as_ref() {
+                    writ.write_str("(")?;
+                    self.display_pattern_ctor(payload, writ)?;
+                    writ.write_str(")")?;
+                };
+                Ok(())
+            }
+        }
+    }
+
+    pub fn pattern_ctor_to_string(&self, pattern_ctor: &PatternConstructor) -> String {
+        let mut s = String::new();
+        self.display_pattern_ctor(pattern_ctor, &mut s).unwrap();
+        s
+    }
+
+    pub fn display_pattern(
+        &self,
+        pattern: &TypedPattern,
+        writ: &mut impl Write,
+    ) -> std::fmt::Result {
+        match pattern {
+            TypedPattern::LiteralUnit(_) => writ.write_str("()"),
+            TypedPattern::LiteralChar(value, _) => write!(writ, "{value}"),
+            TypedPattern::LiteralInteger(value, _) => write!(writ, "{value}"),
+            TypedPattern::LiteralBool(value, _) => write!(writ, "{value}"),
+            TypedPattern::LiteralString(s, _) => write!(writ, "\"{s}\""),
+            TypedPattern::LiteralNone(_) => writ.write_str("None"),
+            TypedPattern::Variable(var) => writ.write_str(self.get_ident_str(var.name)),
+            TypedPattern::Wildcard(_) => writ.write_str("_"),
+            TypedPattern::Some(some) => {
+                writ.write_str("Some(")?;
+                self.display_pattern(&some.inner_pattern, writ)?;
+                writ.write_str(")")?;
+                Ok(())
+            }
+            TypedPattern::Enum(enum_pat) => {
+                writ.write_str(self.get_ident_str(enum_pat.variant_tag_name))?;
+                if let Some(payload) = enum_pat.payload.as_ref() {
+                    writ.write_str("(")?;
+                    self.display_pattern(&payload, writ)?;
+                    writ.write_str(")")?;
+                };
+                Ok(())
+            }
+            TypedPattern::Struct(struct_pat) => {
+                writ.write_str("{ ")?;
+                for (index, field_pat) in struct_pat.fields.iter().enumerate() {
+                    writ.write_str(self.get_ident_str(field_pat.name))?;
+                    writ.write_str(": ")?;
+                    self.display_pattern(&field_pat.pattern, writ)?;
+                    let last = index == struct_pat.fields.len() - 1;
+                    if !last {
+                        writ.write_str(", ")?;
+                    } else {
+                        writ.write_str(" ")?;
+                    }
+                }
+                writ.write_str("}")?;
+                Ok(())
+            }
+        }
+    }
+
+    pub fn pattern_to_string(&self, pattern: &TypedPattern) -> String {
+        let mut s = String::new();
+        self.display_pattern(pattern, &mut s).unwrap();
         s
     }
 }

@@ -1,6 +1,9 @@
 fn main(): int {
   val x: string = "abc";
   val conc = x.concat(x);
+  // printInt(conc.length());
+  // println(conc);
+  // println("abcabc");
   assert(conc == "abcabc");
   assert(conc.length() == 6);
   0

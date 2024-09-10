@@ -1,12 +1,12 @@
-fn identity2<TT>(t: TT): TT { t }
-fn identity<T>(t: T): T {
-  identity2<T>(t)
+fn identity2[TT](t: TT): TT { t }
+fn identity[T](t: T): T {
+  identity2[T](t)
 }
-// fn identity<T>(t: T): T { t }
+// fn identity[T>(t: T): T { t }
 
 fn main(): int {
-  assert(identity<int>(4) == 4);
-  assert(identity<bool>(true));
-  assert(identity<{ value: int }>({ value: 42 }).value == 42);
+  assert(identity(4) == 4);
+  assert(identity(true));
+  assert(identity({ value: 42 }).value == 42);
   0
 }
