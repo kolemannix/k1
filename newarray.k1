@@ -1,0 +1,10 @@
+fn main(): int {
+  val x: NewArray[char] = NewArray::new(4);
+  x.set(0, 'a');
+  x.set(1, 'b');
+  x.set(2, 'c');
+  x.set(3, 'z');
+  // _k1_free(x.data);
+  println(x.get(3).toString());
+  0
+}

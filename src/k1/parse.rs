@@ -177,8 +177,8 @@ pub struct Identifiers {
     intern_pool: string_interner::StringInterner<StringBackend>,
 }
 impl Identifiers {
-    pub const BUILTIN_IDENTS: [&'static str; 9] =
-        ["self", "unit", "char", "string", "length", "iteree", "it_index", "as", "asRawPointer"];
+    pub const BUILTIN_IDENTS: [&'static str; 8] =
+        ["self", "unit", "char", "string", "length", "iteree", "it_index", "as"];
 
     pub fn intern(&mut self, s: impl AsRef<str>) -> Identifier {
         let s = self.intern_pool.get_or_intern(&s);

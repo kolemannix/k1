@@ -1,0 +1,18 @@
+
+fn main(): int {
+  // Zero-initialize a struct with 4 u16 fields.
+  val x: { a: u16, b: u16, c: u16, d: u16 } = { a: 12, b: 13, c: 14, d: 255 };
+  val xAddr = &x;
+  val rawPtr: Pointer = xAddr as Pointer;
+
+  // Slice should probably be opaque which would mean you have to use a function to create one
+  val w: Slice[u16] = { len: 4, data: rawPtr, sadPhantomT: None };
+  printInt(w.get(0) as i64);
+  printInt(w.get(1) as i64);
+  printInt(w.get(2) as i64);
+  printInt(w.get(3) as i64);
+  printInt(w.get(4) as i64);
+  w.set(0, 0 as u16);
+  printInt(w.get(0) as i64);
+  0
+}

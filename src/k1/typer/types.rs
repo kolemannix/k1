@@ -69,15 +69,15 @@ pub const CHAR_TYPE_ID: TypeId = TypeId(1);
 pub const BOOL_TYPE_ID: TypeId = TypeId(2);
 pub const STRING_TYPE_ID: TypeId = TypeId(3);
 pub const NEVER_TYPE_ID: TypeId = TypeId(4);
-pub const U8_TYPE_ID: TypeId = TypeId(5);
-pub const U16_TYPE_ID: TypeId = TypeId(6);
-pub const U32_TYPE_ID: TypeId = TypeId(7);
-pub const U64_TYPE_ID: TypeId = TypeId(8);
-pub const I8_TYPE_ID: TypeId = TypeId(9);
-pub const I16_TYPE_ID: TypeId = TypeId(10);
-pub const I32_TYPE_ID: TypeId = TypeId(11);
-pub const I64_TYPE_ID: TypeId = TypeId(12);
-pub const RAW_POINTER_TYPE_ID: TypeId = TypeId(13);
+pub const POINTER_TYPE_ID: TypeId = TypeId(5);
+pub const U8_TYPE_ID: TypeId = TypeId(6);
+pub const U16_TYPE_ID: TypeId = TypeId(7);
+pub const U32_TYPE_ID: TypeId = TypeId(8);
+pub const U64_TYPE_ID: TypeId = TypeId(9);
+pub const I8_TYPE_ID: TypeId = TypeId(10);
+pub const I16_TYPE_ID: TypeId = TypeId(11);
+pub const I32_TYPE_ID: TypeId = TypeId(12);
+pub const I64_TYPE_ID: TypeId = TypeId(13);
 
 #[derive(Debug, Clone)]
 pub struct ArrayType {
@@ -249,6 +249,9 @@ pub enum Type {
     Integer(IntegerType),
     Bool,
     String,
+    /// Our Pointer is a raw untyped pointer; we mostly have this type for expressing intent
+    /// and because it allows us to treat it as a ptr in LLVM which
+    Pointer,
     Struct(StructType),
     Array(ArrayType),
     Optional(OptionalType),
@@ -257,8 +260,8 @@ pub enum Type {
     TypeVariable(TypeVariable),
     TagInstance(TagInstanceType),
     Enum(TypedEnum),
-    // Enum variants are proper types of their own, for lots
-    // of reasons that make programming nice. Unlike in Rust :()
+    /// Enum variants are proper types of their own, for lots
+    /// of reasons that make programming nice. Unlike in Rust :()
     EnumVariant(TypedEnumVariant),
     Never,
     OpaqueAlias(OpaqueTypeAlias),
@@ -271,6 +274,7 @@ impl Type {
     pub fn ast_node(&self) -> Option<ParsedId> {
         match self {
             Type::Unit | Type::Char | Type::Integer(_) | Type::Bool | Type::String => None,
+            Type::Pointer => None,
             Type::Struct(t) => Some(t.ast_node),
             Type::Array(_a) => None,
             Type::Optional(_t) => None,
@@ -398,6 +402,7 @@ impl Type {
             Type::Integer(_) => None,
             Type::Bool => None,
             Type::String => None,
+            Type::Pointer => None,
             Type::Struct(s) => s.type_defn_info.as_ref(),
             Type::Array(_) => None,
             Type::Optional(_) => None,
@@ -443,6 +448,7 @@ impl Type {
             Type::Integer(_) => None,
             Type::Bool => None,
             Type::String => None,
+            Type::Pointer => None,
             Type::Struct(_s) => None,
             Type::Array(_) => None,
             Type::Optional(_) => None,
@@ -556,6 +562,7 @@ impl Types {
             Type::Integer(_) => false,
             Type::Bool => false,
             Type::String => false,
+            Type::Pointer => false,
             Type::Array(arr) => self.does_type_reference_type_variables(arr.element_type),
             // We don't _yet_ support generics in structs
             Type::Struct(struc) => {
@@ -613,6 +620,7 @@ impl Types {
             Type::Integer(_) => None,
             Type::Bool => None,
             Type::String => Some(CHAR_TYPE_ID),
+            Type::Pointer => None,
             Type::Array(arr) => Some(arr.element_type),
             Type::Struct(_struct) => None,
             Type::Optional(_opt) => None,
@@ -656,6 +664,8 @@ impl Types {
     }
 
     // Ended up storing redirects as RecursiveReference, but keeping this around
+    // Ah I also got this confused with substitute_in_type which is actually used for generic instantiation
+    // This one looks like it mutates the type tree instead of making a new type
     pub fn replace_type(
         &mut self,
         placeholder_id: TypeId,
@@ -668,6 +678,7 @@ impl Types {
             Type::Integer(_) => (),
             Type::Bool => (),
             Type::String => (),
+            Type::Pointer => (),
             Type::Struct(s) => {
                 for f in s.fields.clone().iter_mut() {
                     if f.type_id == placeholder_id {
