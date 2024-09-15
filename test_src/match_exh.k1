@@ -44,7 +44,7 @@ fn main(): int {
   println("Hello, exhaustiveness!");
 
   when 'x' {
-    | a..'x' -> println("x")
+    | 'x' -> println("x")
     | a -> ()
   };
 

@@ -2,14 +2,17 @@ type Point = { x: int, y: int, z: int }
 
 fn main(): int {
   val point: Point* = &{ x: 10, y: 20, z: 30 };
-  val pointPtr: RawPointer = point.asRawPointer();
+  val pointPtr = point as Pointer;
 
   val point2 = pointPtr as Point*;
   assert(point2.x == 10);
   assert(point2.y == 20);
 
   // Move 8 bytes
-  val pointShifted = RawPointer::fromIntUnsafe(pointPtr.toIntUnsafe() + 8);
+  //FIXME: the specialized sizeOf doesnt take a type param but we still pass
+  //      one in the 'call' so it 'just works'...
+  assert(sizeOf[int]() == 8);
+  val pointShifted = ((pointPtr as u64) + sizeOf[int]()) as Pointer;
   val point3 = pointShifted as Point*;
 
   // x is now y, y is now z, z is now random bits

@@ -75,15 +75,18 @@
   - [x] inner type of optional
   - [x] return type of function (fn.return)
   - [x] param types of function (fn.arg, fn.arg2)
-- [ ] Exhaustive pattern matching
+- [x] Exhaustive pattern matching
+- [x] Rework RawPointer to be a builtin and support 'multipointer' operations
+- [ ] Implement Slice using new `Pointer`
+- [ ] Rework builtin array to use new Pointer
+- [ ] Rework builtin string to use new Pointer
 - [ ] Pipe operator (copy Elixir)
 - [ ] function pointers (we could almost take address of a function as RawPointer already)
 - [ ] slices (windows? segments?)
 - [ ] Imports
 - [ ] Generic abilities
-- [ ] array bounds checking
+- [ ] array bounds checking (do with windows)
 - [ ] Pure lambdas with -> (not closures)
-- [ ] Rework builtin array to be userspace and use multipointers?
 - [ ] German/Umbra strings
 - [ ] Make demo readme / site
 - [ ] Ability constraints on generics
@@ -139,8 +142,9 @@
 # Major fix
 - [ ] Replace IdentifierId with global 'Symbol' where its a bug not to
 
-# Minor Fix
+# Minor Fix (possible good bite-sized videos)
 - [ ] type suffixes on int literals 123u32, 4u8, etc
+- [ ] assert(sizeOf[Text]() == 16 + 32); rhs should infer to u64
 - [ ] Require indirection for recursive types
 - [ ] Precedence of dereference (and i guess unary ops in general) should be higher
 - [ ] Codegen 'variables' is broken (never cleared); use enter scope / exit scope w/ a stack of vecs or something

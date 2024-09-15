@@ -3,9 +3,14 @@ type char = builtin
 type bool = builtin
 type string = builtin
 type never = builtin
+type Pointer = builtin
 
-intern fn sizeOf[T](): int
-intern fn alignOf[T](): int
+type alias int = i64
+type alias uint = u64
+type alias byte = u8
+
+intern fn sizeOf[T](): u64
+intern fn alignOf[T](): u64
 intern fn typeId[T](): bool
 fn typeEq[T, U](): bool {
   typeId[T]() == typeId[U]()
@@ -14,21 +19,43 @@ fn typeEq[T, U](): bool {
 extern fn _k1_readFileToString(path: string): string
 extern fn _k1_crash(reason: string*, file: string*, line: u64): never
 
-type alias int = i64
-type alias uint = u64
-type alias byte = u8
+extern fn _k1_malloc(size: u64): Pointer
+extern fn _k1_free(ptr: Pointer): unit
 
-extern fn _k1_malloc(size: u64): RawPointer
-extern fn _k1_free(ptr: RawPointer): unit
+intern fn referenceSet[T](t: T*, value: T): unit
 
-//type alias opaque string = { len: int, data: RawPointer }
+namespace Pointer {
+  // This is an intrinsic so that we can codegen a getelementptr
+  // instruction in LLVM rather than a pointer cast.
+  // But we _could_ do it in userland using sizeOf and arithmetic which is neat!
+  intern fn refAtIndex[T](self: Pointer, index: u64): T*
 
-// Must have type id 6; do not reorder!
-type alias opaque RawPointer = u64
-namespace RawPointer {
-  fn toIntUnsafe(self: RawPointer): u64 { self }
-  fn fromIntUnsafe(value: u64): RawPointer { value }
+  // TODO: memset intrinsic
+  // intern fn memset(self: Pointer, num: u64, value: u8): unit
 }
+
+type Slice[T] = { len: u64, data: Pointer, sadPhantomT: T? }
+namespace Slice {
+    fn get[T](self: Slice[T], index: u64): T {
+        // TODO: Annotate as cold for llvm
+        if index >= self.len {
+          crash("Slice index out of bounds")
+        };
+        val resultT: T* = self.data.refAtIndex(index);
+        *resultT
+    }
+
+    fn set[T](self: Slice[T], index: u64, value: T): unit {
+        // TODO: Annotate as cold for llvm
+        if index >= self.len {
+          crash("Slice index out of bounds")
+        };
+        val resultT: T* = self.data.refAtIndex(index);
+        referenceSet(resultT, value)
+    }
+}
+
+//type alias opaque string = { len: u64, data: Pointer }
 
 // Must have ability id 0
 ability Equals {
@@ -66,6 +93,29 @@ fn assertMsg(msg: string, value: bool): unit {
 namespace char {
   fn toString(self: char): string {
     string::fromChars([self]);
+  }
+}
+
+type NewArray[T] = { len: u64, cap: u64, data: Pointer, phantom: T? }
+namespace NewArray {
+  fn new[T](len: u64): NewArray[T] {
+    val sizeBytes = sizeOf[T]();
+    val ptr = _k1_malloc(sizeBytes * len);
+    // No need to zero out since we'll be using our own allocator eventually which will zero on mmap()
+    { len: len, cap: len, data: ptr, phantom: None }
+  }
+  fn getRef[T](self: NewArray[T], index: u64): T* {
+    // This line actually exercises type inference pretty well!
+    val tRef: T* = self.data.refAtIndex(index);
+    tRef
+  }
+  fn get[T](self: NewArray[T], index: u64): T {
+    val tRef = self.getRef(index);
+    *tRef
+  }
+  fn set[T](self: NewArray[T], index: u64, value: T): unit {
+    val tRef = self.getRef(index);
+    referenceSet(tRef, value)
   }
 }
 

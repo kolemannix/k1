@@ -9,30 +9,31 @@ impl Display for TypedModule {
         f.write_str("\n")?;
         f.write_str("--- TYPES ---\n")?;
         for (id, ty) in self.types.iter() {
-            write!(f, "{} ", id)?;
+            write!(f, "type {:02} ", id)?;
             self.display_type(ty, f)?;
             f.write_str("\n")?;
         }
         f.write_str("--- Namespaces ---\n")?;
         for (id, namespace) in self.namespaces.iter() {
-            write!(f, "{} ", id.0)?;
+            write!(f, "ns {:02} ", id.0)?;
             f.write_str(&self.get_ident_str(namespace.name))?;
             f.write_str("\n")?;
         }
         f.write_str("--- Variables ---\n")?;
         for (id, variable) in self.variables.iter() {
-            write!(f, "{:02} ", id.0)?;
+            write!(f, "var {:02} ", id.0)?;
             self.display_variable(variable, f)?;
             f.write_str("\n")?;
         }
         f.write_str("--- Functions ---\n")?;
         for (id, func) in self.function_iter() {
-            write!(f, "{:02} ", id.0)?;
+            write!(f, "fn {:02} ", id.0)?;
             self.display_function(func, f, false)?;
             f.write_str("\n")?;
         }
         f.write_str("--- Scopes ---\n")?;
-        for (_id, scope) in self.scopes.iter() {
+        for (id, scope) in self.scopes.iter() {
+            write!(f, "scope {:02} ", id)?;
             self.display_scope(scope, f)?;
             f.write_str("\n")?;
         }
@@ -142,6 +143,7 @@ impl TypedModule {
             }
             Type::Bool => writ.write_str("bool"),
             Type::String => writ.write_str("string"),
+            Type::Pointer => writ.write_str("Pointer"),
             Type::Struct(struc) => {
                 // Leftover, redundant to print name and expand. We need 2 prints, one that expands for
                 // debug and one that doesn't for codegen and other real use

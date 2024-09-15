@@ -628,7 +628,27 @@ pub enum CastType {
     IntegerExtendFromChar,
     EnumVariant,
     KnownNoOp,
-    RawPointerToReference,
+    PointerToReference,
+    ReferenceToPointer,
+    PointerToInt,
+    IntToPointer,
+}
+
+impl CastType {
+    pub fn is_unsafe(&self) -> bool {
+        match self {
+            CastType::IntegerExtend => false,
+            CastType::IntegerTruncate => false,
+            CastType::Integer8ToChar => false,
+            CastType::IntegerExtendFromChar => false,
+            CastType::EnumVariant => false,
+            CastType::KnownNoOp => false,
+            CastType::PointerToReference => true,
+            CastType::ReferenceToPointer => true,
+            CastType::PointerToInt => true,
+            CastType::IntToPointer => true,
+        }
+    }
 }
 
 impl Display for CastType {
@@ -640,7 +660,10 @@ impl Display for CastType {
             CastType::IntegerExtendFromChar => write!(f, "iextfromchar"),
             CastType::EnumVariant => write!(f, "enum"),
             CastType::KnownNoOp => write!(f, "noop"),
-            CastType::RawPointerToReference => write!(f, "ptrtoref"),
+            CastType::PointerToReference => write!(f, "ptrtoref"),
+            CastType::ReferenceToPointer => write!(f, "reftoptr"),
+            CastType::PointerToInt => write!(f, "ptrtoint"),
+            CastType::IntToPointer => write!(f, "inttoptr"),
         }
     }
 }
@@ -982,6 +1005,8 @@ pub enum IntrinsicFunction {
     BitXor,
     BitShiftLeft,
     BitShiftRight,
+    PointerIndex,
+    ReferenceSet,
 }
 
 impl IntrinsicFunction {
@@ -1011,6 +1036,8 @@ impl IntrinsicFunction {
             IntrinsicFunction::BitXor => true,
             IntrinsicFunction::BitShiftLeft => true,
             IntrinsicFunction::BitShiftRight => true,
+            IntrinsicFunction::PointerIndex => true,
+            IntrinsicFunction::ReferenceSet => true,
         }
     }
 }
@@ -1163,6 +1190,7 @@ impl TypedModule {
                 Type::Bool,
                 Type::String,
                 Type::Never,
+                Type::Pointer,
                 Type::Integer(IntegerType::U8),
                 Type::Integer(IntegerType::U16),
                 Type::Integer(IntegerType::U32),
@@ -1382,13 +1410,16 @@ impl TypedModule {
         } else {
             // 'New type' territory; must be a named struct/enum OR a builtin
             match self.types.get(resulting_type_id) {
-                Type::Unit | Type::Char | Type::Bool | Type::String | Type::Never => {
-                    Ok(resulting_type_id)
-                }
+                Type::Unit
+                | Type::Char
+                | Type::Bool
+                | Type::String
+                | Type::Never
+                | Type::Pointer => Ok(resulting_type_id),
                 Type::Struct(_s) => Ok(resulting_type_id),
                 Type::Enum(_e) => Ok(resulting_type_id),
                 _other => {
-                    ffail!(parsed_type_defn.span, "Non-alias type definition must be a struct or enum; perhaps you meant to create an alias `type alias [opaque] <name> = <type>`")
+                    ffail!(parsed_type_defn.span, "Non-alias type definition must be a struct or enum or builtin; perhaps you meant to create an alias `type alias [opaque] <name> = <type>`")
                 }
             }
         }?;
@@ -1453,6 +1484,7 @@ impl TypedModule {
                     "bool" => Ok(BOOL_TYPE_ID),
                     "string" => Ok(STRING_TYPE_ID),
                     "never" => Ok(NEVER_TYPE_ID),
+                    "Pointer" => Ok(POINTER_TYPE_ID),
                     _ => ffail!(*span, "Unknown builtin type '{}'", name),
                 }
             }
@@ -1913,7 +1945,7 @@ impl TypedModule {
                 let specialized_type = match gen.specializations.get(&evaled_type_params) {
                     Some(existing) => *existing,
                     None => {
-                        let specialized_type = self.substitute_in_type(
+                        let specialized_type = self.instantiate_generic_type(
                             gen.inner,
                             Some(type_defn_info.clone()),
                             &evaled_type_params,
@@ -1934,8 +1966,8 @@ impl TypedModule {
         }
     }
 
-    // TODO: Make this more re-usable by just framing it as "replacement pairs", decoupling it from generic substitution
-    fn substitute_in_type(
+    // Note: We could make this more re-usable by just framing it as "replacement pairs", decoupling it from generic substitution
+    fn instantiate_generic_type(
         &mut self,
         type_id: TypeId,
         defn_info: Option<TypeDefnInfo>,
@@ -1944,97 +1976,8 @@ impl TypedModule {
         parsed_expression_id: ParsedTypeExpressionId,
     ) -> TypeId {
         let typ = self.types.get(type_id);
+        let force_new = defn_info.is_some();
         match typ {
-            Type::Struct(struc) => {
-                let mut new_fields = struc.fields.clone();
-                let mut any_change = false;
-                for field in new_fields.iter_mut() {
-                    let new_field_type_id = self.substitute_in_type(
-                        field.type_id,
-                        None,
-                        passed_params,
-                        generic_params,
-                        parsed_expression_id,
-                    );
-                    if new_field_type_id != field.type_id {
-                        any_change = true;
-                    }
-                    field.type_id = new_field_type_id;
-                }
-                if any_change {
-                    let specialized_struct = StructType {
-                        fields: new_fields,
-                        type_defn_info: defn_info,
-                        ast_node: parsed_expression_id.into(),
-                    };
-                    self.types.add_type(Type::Struct(specialized_struct))
-                } else {
-                    type_id
-                }
-            }
-            Type::Optional(opt) => {
-                let opt_inner = opt.inner_type;
-                let new_inner = self.substitute_in_type(
-                    opt_inner,
-                    None,
-                    passed_params,
-                    generic_params,
-                    parsed_expression_id,
-                );
-                if new_inner != opt_inner {
-                    let specialized_optional = OptionalType { inner_type: new_inner };
-                    self.types.add_type(Type::Optional(specialized_optional))
-                } else {
-                    type_id
-                }
-            }
-            Type::Reference(reference) => {
-                let ref_inner = reference.inner_type;
-                let new_inner = self.substitute_in_type(
-                    ref_inner,
-                    None,
-                    passed_params,
-                    generic_params,
-                    parsed_expression_id,
-                );
-                if new_inner != ref_inner {
-                    let specialized_reference = ReferenceType { inner_type: new_inner };
-                    self.types.add_type(Type::Reference(specialized_reference))
-                } else {
-                    type_id
-                }
-            }
-            Type::Enum(e) => {
-                let mut new_variants = e.variants.clone();
-                let mut any_changed = false;
-                for variant in new_variants.iter_mut() {
-                    let new_payload_id = match variant.payload {
-                        None => None,
-                        Some(payload_type_id) => Some(self.substitute_in_type(
-                            payload_type_id,
-                            None,
-                            passed_params,
-                            generic_params,
-                            parsed_expression_id,
-                        )),
-                    };
-                    if new_payload_id != variant.payload {
-                        any_changed = true;
-                        variant.payload = new_payload_id;
-                    }
-                }
-                if any_changed {
-                    let new_enum = TypedEnum {
-                        variants: new_variants,
-                        ast_node: parsed_expression_id.into(),
-                        type_defn_info: defn_info,
-                    };
-                    let new_enum_id = self.types.add_type(Type::Enum(new_enum));
-                    new_enum_id
-                } else {
-                    type_id
-                }
-            }
             Type::TypeVariable(_t) => {
                 let generic_param = generic_params
                     .iter()
@@ -2053,24 +1996,137 @@ impl TypedModule {
                     }
                 }
             }
+            Type::Struct(struc) => {
+                let mut new_fields = struc.fields.clone();
+                let mut any_change = false;
+                for field in new_fields.iter_mut() {
+                    let new_field_type_id = self.instantiate_generic_type(
+                        field.type_id,
+                        None,
+                        passed_params,
+                        generic_params,
+                        parsed_expression_id,
+                    );
+                    if new_field_type_id != field.type_id {
+                        any_change = true;
+                    }
+                    field.type_id = new_field_type_id;
+                }
+                if force_new || any_change {
+                    let specialized_struct = StructType {
+                        fields: new_fields,
+                        type_defn_info: defn_info,
+                        ast_node: parsed_expression_id.into(),
+                    };
+                    self.types.add_type(Type::Struct(specialized_struct))
+                } else {
+                    type_id
+                }
+            }
+            Type::Optional(opt) => {
+                let opt_inner = opt.inner_type;
+                let new_inner = self.instantiate_generic_type(
+                    opt_inner,
+                    None,
+                    passed_params,
+                    generic_params,
+                    parsed_expression_id,
+                );
+                if force_new || new_inner != opt_inner {
+                    let specialized_optional = OptionalType { inner_type: new_inner };
+                    self.types.add_type(Type::Optional(specialized_optional))
+                } else {
+                    type_id
+                }
+            }
+            Type::Reference(reference) => {
+                let ref_inner = reference.inner_type;
+                let new_inner = self.instantiate_generic_type(
+                    ref_inner,
+                    None,
+                    passed_params,
+                    generic_params,
+                    parsed_expression_id,
+                );
+                if force_new || new_inner != ref_inner {
+                    let specialized_reference = ReferenceType { inner_type: new_inner };
+                    self.types.add_type(Type::Reference(specialized_reference))
+                } else {
+                    type_id
+                }
+            }
             Type::Array(array_type) => {
                 let array_type = array_type.clone();
-                let new_inner = self.substitute_in_type(
+                let new_inner = self.instantiate_generic_type(
                     array_type.element_type,
                     None,
                     passed_params,
                     generic_params,
                     parsed_expression_id,
                 );
-                if new_inner != array_type.element_type {
+                if force_new || new_inner != array_type.element_type {
                     let specialized_array = ArrayType { element_type: new_inner };
                     self.types.add_type(Type::Array(specialized_array))
                 } else {
                     type_id
                 }
             }
-            Type::Unit | Type::Char | Type::Integer(_) | Type::Bool | Type::String => type_id,
-            _ => todo!("Unhandled type for 'substitute_in_type': {}", self.type_to_string(typ)),
+            Type::Enum(e) => {
+                let mut new_variants = e.variants.clone();
+                let mut any_changed = false;
+                for variant in new_variants.iter_mut() {
+                    let new_payload_id = match variant.payload {
+                        None => None,
+                        Some(payload_type_id) => Some(self.instantiate_generic_type(
+                            payload_type_id,
+                            None,
+                            passed_params,
+                            generic_params,
+                            parsed_expression_id,
+                        )),
+                    };
+                    if new_payload_id != variant.payload {
+                        any_changed = true;
+                        variant.payload = new_payload_id;
+                    }
+                }
+                if force_new || any_changed {
+                    let new_enum = TypedEnum {
+                        variants: new_variants,
+                        ast_node: parsed_expression_id.into(),
+                        type_defn_info: defn_info,
+                    };
+                    let new_enum_id = self.types.add_type(Type::Enum(new_enum));
+                    new_enum_id
+                } else {
+                    type_id
+                }
+            }
+            Type::Unit
+            | Type::Char
+            | Type::Integer(_)
+            | Type::Bool
+            | Type::String
+            | Type::Pointer
+            | Type::TagInstance(_) => type_id,
+            Type::EnumVariant(_) => {
+                unreachable!(
+                    "instantiate_generic_type is not expected to be called on an EnumVariant"
+                )
+            }
+            Type::Generic(_) => {
+                unreachable!("instantiate_generic_type is not expected to be called on a Generic")
+            }
+            Type::Function(_) => {
+                unreachable!("instantiate_generic_type is not expected to be called on a Function")
+            }
+            Type::Never => {
+                unreachable!("instantiate_generic_type is not expected to be called on never")
+            }
+            Type::RecursiveReference(_) => unreachable!(
+                "instantiate_generic_type is not expected to be called on RecursiveReference"
+            ),
+            Type::OpaqueAlias(_opaque) => type_id,
         }
     }
 
@@ -2291,13 +2347,12 @@ impl TypedModule {
                 actual.fields.len()
             ));
         }
-        for expected_field in &expected.fields {
+        for (expected_field, actual_field) in expected.fields.iter().zip(actual.fields.iter()) {
             trace!("typechecking struct field {:?}", expected_field);
-            let Some(matching_field) = actual.fields.iter().find(|f| f.name == expected_field.name)
-            else {
-                return Err(format!("expected struct to have field {}", expected_field.name));
-            };
-            self.check_types(expected_field.type_id, matching_field.type_id, scope_id)?;
+            if actual_field.name != expected_field.name {
+                return Err(format!("expected field name {} but got {}", self.get_ident_str(expected_field.name), self.get_ident_str(actual_field.name)));
+            }
+            self.check_types(expected_field.type_id, actual_field.type_id, scope_id).map_err(|msg| format!("Struct type mismatch on field '{}': {}", self.get_ident_str(actual_field.name), msg))?;
         }
         Ok(())
     }
@@ -3034,7 +3089,7 @@ impl TypedModule {
                         ) {
                             Ok(_) => Ok(expected_type_id),
                             Err(s) => make_fail_span(
-                                format!("Invalid struct type: {}", s),
+                                format!("Actual struct type did not match hinted or expected struct type: {}", s),
                                 ast_struct.span,
                             ),
                         }
@@ -3760,6 +3815,17 @@ impl TypedModule {
                         )
                     }
                 }
+                Type::Pointer => {
+                    if *from_integer_type == IntegerType::U64 {
+                        Ok((CastType::IntToPointer, target_type))
+                    } else {
+                        ffail!(
+                            cast.span,
+                            "Cannot cast integer '{}' to Pointer (must be u64; one day usize)",
+                            from_integer_type
+                        )
+                    }
+                }
                 _ => ffail!(
                     cast.span,
                     "Cannot cast integer '{}' to '{}'",
@@ -3813,16 +3879,23 @@ impl TypedModule {
                     ),
                 }
             }
-            Type::OpaqueAlias(_opaque) if base_expr_type == RAW_POINTER_TYPE_ID => {
-                match self.types.get(target_type) {
-                    Type::Reference(_refer) => Ok((CastType::RawPointerToReference, target_type)),
-                    _ => ffail!(
-                        cast.span,
-                        "Cannot cast raw pointer to '{}'",
-                        self.type_id_to_string(target_type).blue()
-                    ),
-                }
-            }
+            Type::Reference(_refer) => match self.types.get(target_type) {
+                Type::Pointer => Ok((CastType::ReferenceToPointer, POINTER_TYPE_ID)),
+                _ => ffail!(
+                    cast.span,
+                    "Cannot cast reference to '{}'",
+                    self.type_id_to_string(target_type).blue()
+                ),
+            },
+            Type::Pointer => match self.types.get(target_type) {
+                Type::Reference(_refer) => Ok((CastType::PointerToReference, target_type)),
+                Type::Integer(IntegerType::U64) => Ok((CastType::PointerToInt, target_type)),
+                _ => ffail!(
+                    cast.span,
+                    "Cannot cast Pointer to '{}'",
+                    self.type_id_to_string(target_type).blue()
+                ),
+            },
             _ => ffail!(
                 cast.span,
                 "Cannot cast '{}' to '{}'",
@@ -4302,6 +4375,9 @@ impl TypedModule {
 
         // Rest of the binary ops
 
+        // FIXME: We could figure out better hinting here so that the following would compile to u64 on the rhs:
+        // assert(sizeOf[Text]() == 16 + 32);
+        //                          ^^^^^^^
         let lhs = self.eval_expr(binary_op.lhs, scope_id, None)?;
         let kind = binary_op.op_kind;
         let lhs_type_id = lhs.get_type();
@@ -4719,22 +4795,20 @@ impl TypedModule {
             Some(base_expr) => {
                 // Resolve a method call
                 let type_id = base_expr.get_type();
-                if let Type::Reference(_r) = self.types.get(type_id) {
-                    if fn_name == self.ast.identifiers.get("asRawPointer").unwrap()
-                        && fn_call.args.len() == 1
-                        && fn_call.type_args.is_none()
-                    {
-                        return Ok(Either::Left(TypedExpr::UnaryOp(UnaryOp {
-                            kind: UnaryOpKind::ReferenceToInt,
-                            type_id: RAW_POINTER_TYPE_ID,
-                            expr: Box::new(base_expr.clone()),
-                            span: fn_call.span,
-                        })));
-                    };
-                };
                 let method_id = match self.types.get_type_dereferenced(type_id) {
                     // TODO: DRY up. First resolve to a namespace, then call same code
                     // Also use companion namespace method not just name of namespace
+                    // FIXME: This just bit me again when I made Pointer a builtin.
+                    //        Builtins are now in the prelude so we just need to attach
+                    //        the companion namespace and we'll be good to go!
+                    Type::Pointer => {
+                        let pointer_ident_id = self.ast.identifiers.get("Pointer").unwrap();
+                        let pointer_scope = self
+                            .get_namespace_scope_in_immediate_scope(root_scope, pointer_ident_id);
+                        pointer_scope
+                            .map(|pointer_scope| pointer_scope.find_function(fn_name))
+                            .flatten()
+                    }
                     Type::Optional(_optional_type) => {
                         if fn_name == self.ast.identifiers.get("hasValue").unwrap()
                             && fn_call.args.len() == 1
@@ -5390,6 +5464,35 @@ impl TypedModule {
         let name = String::from(self.get_ident_str(generic_function.name));
         // drop(generic_function);
 
+        let type_ids = inferred_or_passed_type_args
+            .iter()
+            .map(|type_param| type_param.type_id)
+            .collect::<Vec<_>>();
+
+        for (i, existing_specialization) in specializations.iter().enumerate() {
+            let types_stringified = existing_specialization
+                .specialized_type_params
+                .iter()
+                .map(|type_id| self.type_id_to_string(*type_id))
+                .collect::<Vec<_>>()
+                .join("_");
+            debug!("existing specialization for {} {}: {}", name, i, types_stringified);
+            if existing_specialization.specialized_type_params == type_ids {
+                debug!(
+                    "Found existing specialization for function {} with types: {}",
+                    name, types_stringified
+                );
+                let exprs = self.typecheck_call_arguments(
+                    fn_call,
+                    &existing_specialization.specialized_params,
+                    pre_evaled_value_args,
+                    calling_scope,
+                    false,
+                )?;
+                return Ok((existing_specialization.specialized_function_id, exprs));
+            }
+        }
+
         // Place specializations as siblings aside their generic parent
         // Just don't add them as functions to the parent scope so they can't be resolved
         let spec_fn_scope_id = self.scopes.add_child_scope(
@@ -5427,10 +5530,6 @@ impl TypedModule {
                 );
             }
         }
-        let type_ids = inferred_or_passed_type_args
-            .iter()
-            .map(|type_param| type_param.type_id)
-            .collect::<Vec<_>>();
         new_name.push_str("_spec_");
         new_name.push_str(
             &type_ids.iter().map(|type_id| type_id.to_string()).collect::<Vec<_>>().join("_"),
@@ -5438,30 +5537,6 @@ impl TypedModule {
 
         self.scopes.get_scope_mut(spec_fn_scope_id).name =
             Some(self.ast.identifiers.intern(&new_name));
-
-        for (i, existing_specialization) in specializations.iter().enumerate() {
-            let types_stringified = existing_specialization
-                .specialized_type_params
-                .iter()
-                .map(|type_id| self.type_id_to_string(*type_id))
-                .collect::<Vec<_>>()
-                .join("_");
-            debug!("existing specialization for {} {}: {}", name, i, types_stringified);
-            if existing_specialization.specialized_type_params == type_ids {
-                debug!(
-                    "Found existing specialization for function {} with types: {}",
-                    name, types_stringified
-                );
-                let exprs = self.typecheck_call_arguments(
-                    fn_call,
-                    &existing_specialization.specialized_params,
-                    pre_evaled_value_args,
-                    calling_scope,
-                    false,
-                )?;
-                return Ok((existing_specialization.specialized_function_id, exprs));
-            }
-        }
 
         // TODO: Specialization logic is weirdly divided between this function and
         // eval_function_predecl, resulting in a lot of edge cases or ignoring some arguments
@@ -5662,6 +5737,7 @@ impl TypedModule {
                     "sizeOf" => Some(IntrinsicFunction::SizeOf),
                     "alignOf" => Some(IntrinsicFunction::AlignOf),
                     "typeId" => Some(IntrinsicFunction::TypeId),
+                    "referenceSet" => Some(IntrinsicFunction::ReferenceSet),
                     _ => None,
                 },
                 Some("string") => match fn_name_str {
@@ -5684,7 +5760,8 @@ impl TypedModule {
                     _ => None,
                 },
                 Some("char") => None,
-                Some("RawPointer") => match fn_name_str {
+                Some("Pointer") => match fn_name_str {
+                    "refAtIndex" => Some(IntrinsicFunction::PointerIndex),
                     _ => None,
                 },
                 Some("Bits") => match fn_name_str {

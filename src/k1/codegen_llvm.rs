@@ -329,6 +329,8 @@ struct BuiltinTypes<'ctx> {
     string_struct: StructType<'ctx>,
     string_size: SizeInfo,
     tag_type: IntType<'ctx>,
+    ptr: PointerType<'ctx>,
+    ptr_sized_int: IntType<'ctx>,
 }
 
 impl<'ctx> BuiltinTypes<'ctx> {
@@ -639,6 +641,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             string_struct,
             string_size,
             tag_type: ctx.i64_type(),
+            // It doesn't matter what type the pointer points to; its irrelevant in LLVM
+            // since pointers do not actually have types
+            ptr: ctx.i64_type().ptr_type(AddressSpace::default()),
+            ptr_sized_int: ctx.ptr_sized_int_type(&machine.get_target_data(), None),
         };
 
         let printf_type = ctx.i32_type().fn_type(&[builtin_types.c_str.into()], true);
@@ -983,6 +989,28 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     basic_type: self.builtin_types.string_struct.as_basic_type_enum(),
                     size: string_size,
                     di_type,
+                }
+                .into())
+            }
+            POINTER_TYPE_ID => {
+                // We represent this as a LlvmValueType, not a LlvmPointerType, since its
+                // our 'raw' pointer that is really a 'number' wrapper and has no target type
+                // attached
+                Ok(LlvmValueType {
+                    type_id: POINTER_TYPE_ID,
+                    basic_type: self.builtin_types.ptr.as_basic_type_enum(),
+                    size: self.size_info(&self.builtin_types.ptr),
+                    di_type: self
+                        .debug
+                        .debug_builder
+                        .create_basic_type(
+                            "Pointer",
+                            self.builtin_types.ptr_sized_int.get_bit_width() as u64,
+                            dw_ate_unsigned,
+                            0,
+                        )
+                        .unwrap()
+                        .as_type(),
                 }
                 .into())
             }
@@ -1768,7 +1796,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     let index_value = self.ctx.i64_type().const_int(index as u64, true);
                     trace!("storing element {} of array literal: {:?}", index, element_expr);
                     let ptr_at_index = unsafe {
-                        self.builder.build_gep(element_type, array_data, &[index_value], "elem")
+                        self.builder.build_in_bounds_gep(
+                            element_type,
+                            array_data,
+                            &[index_value],
+                            "elem",
+                        )
                     };
                     self.builder.build_store(ptr_at_index, value);
                 }
@@ -1946,15 +1979,36 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         );
                         Ok(truncated_value.as_basic_value_enum().into())
                     }
-                    CastType::RawPointerToReference => {
-                        let raw_pointer =
-                            self.codegen_expr_basic_value(&cast.base_expr)?.into_int_value();
-                        let actual_ptr = self.builder.build_int_to_ptr(
-                            raw_pointer,
-                            self.builtin_types.int.ptr_type(AddressSpace::default()),
-                            "ptr",
+                    CastType::PointerToReference => {
+                        // I think this is a complete no-op in the LLVM ir
+                        let pointer =
+                            self.codegen_expr_basic_value(&cast.base_expr)?.into_pointer_value();
+                        Ok(pointer.as_basic_value_enum().into())
+                    }
+                    CastType::ReferenceToPointer => {
+                        // I think this is a complete no-op in the LLVM ir
+                        let reference =
+                            self.codegen_expr_basic_value(&cast.base_expr)?.into_pointer_value();
+                        Ok(reference.as_basic_value_enum().into())
+                    }
+                    CastType::PointerToInt => {
+                        let ptr =
+                            self.codegen_expr_basic_value(&cast.base_expr)?.into_pointer_value();
+                        let as_int = self.builder.build_ptr_to_int(
+                            ptr,
+                            self.builtin_types.ptr_sized_int,
+                            "ptrtoint_cast",
                         );
-                        Ok(actual_ptr.as_basic_value_enum().into())
+                        Ok(as_int.as_basic_value_enum().into())
+                    }
+                    CastType::IntToPointer => {
+                        let int = self.codegen_expr_basic_value(&cast.base_expr)?.into_int_value();
+                        let as_ptr = self.builder.build_int_to_ptr(
+                            int,
+                            self.builtin_types.ptr,
+                            "inttoptr_cast",
+                        );
+                        Ok(as_ptr.as_basic_value_enum().into())
                     }
                 }
             }
@@ -2282,6 +2336,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let index_int_value = index_value.into_int_value();
         let array_data = self.builtin_types.array_data(&self.builder, array_struct);
         let gep_ptr = unsafe {
+            // TODO: Make inbounds, or just delete once we use slice to implement Array
             self.builder.build_gep(
                 elem_llvm_type,
                 array_data,
@@ -2498,6 +2553,30 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     .array_length(&self.builder, array_value)
                     .as_basic_value_enum();
                 Ok(capacity_value.into())
+            }
+            IntrinsicFunction::PointerIndex => {
+                //  Reference:
+                //  intern fn refAtIndex[T](self: Pointer, index: u64): T*
+                let pointee_ty_arg = call.type_args[0];
+                let elem_type = self.codegen_type(pointee_ty_arg.type_id)?;
+                let ptr = self.codegen_expr_basic_value(&call.args[0])?.into_pointer_value();
+                let index = self.codegen_expr_basic_value(&call.args[1])?.into_int_value();
+                let result_pointer = unsafe {
+                    self.builder.build_in_bounds_gep(
+                        elem_type.value_basic_type(),
+                        ptr,
+                        &[index],
+                        "refAtIndex",
+                    )
+                };
+                Ok(result_pointer.as_basic_value_enum().into())
+            }
+            IntrinsicFunction::ReferenceSet => {
+                //  intern fn referenceSet[T](t: T*, value: T): unit
+                let reference_value = self.codegen_expr_basic_value(&call.args[0])?.into_pointer_value();
+                let actual_value = self.codegen_expr_basic_value(&call.args[1])?;
+                self.builder.build_store(reference_value, actual_value);
+                Ok(self.builtin_types.unit_value.as_basic_value_enum().into())
             }
             _ => {
                 panic!("Unexpected intrinsic type for inline gen {:?}", intrinsic_type)
@@ -3063,7 +3142,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let module_pass_manager: PassManager<LlvmModule<'ctx>> = PassManager::create(());
         if optimize {
             module_pass_manager.add_cfg_simplification_pass();
+            module_pass_manager.add_scalar_repl_aggregates_pass_ssa();
             module_pass_manager.add_promote_memory_to_register_pass();
+            module_pass_manager.add_new_gvn_pass();
             module_pass_manager.add_instruction_combining_pass();
             module_pass_manager.add_sccp_pass();
             module_pass_manager.add_aggressive_dce_pass();
