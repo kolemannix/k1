@@ -2133,14 +2133,16 @@ impl TypedModule {
     fn eval_const_type_expr(
         &mut self,
         parsed_type_expr: ParsedTypeExpressionId,
+        scope_id: ScopeId,
     ) -> TyperResult<TypeId> {
-        let ty = self.eval_type_expr(parsed_type_expr, self.scopes.get_root_scope_id())?;
+        let ty = self.eval_type_expr(parsed_type_expr, scope_id)?;
         match ty {
             UNIT_TYPE_ID => Ok(ty),
             CHAR_TYPE_ID => Ok(ty),
             I64_TYPE_ID => Ok(ty),
             BOOL_TYPE_ID => Ok(ty),
             STRING_TYPE_ID => Ok(ty),
+            POINTER_TYPE_ID => Ok(ty),
             _ => make_fail_span(
                 "Only scalar types allowed in constants",
                 self.ast.get_type_expression_span(parsed_type_expr),
@@ -2350,9 +2352,21 @@ impl TypedModule {
         for (expected_field, actual_field) in expected.fields.iter().zip(actual.fields.iter()) {
             trace!("typechecking struct field {:?}", expected_field);
             if actual_field.name != expected_field.name {
-                return Err(format!("expected field name {} but got {}", self.get_ident_str(expected_field.name), self.get_ident_str(actual_field.name)));
+                return Err(format!(
+                    "expected field name {} but got {}",
+                    self.get_ident_str(expected_field.name),
+                    self.get_ident_str(actual_field.name)
+                ));
             }
-            self.check_types(expected_field.type_id, actual_field.type_id, scope_id).map_err(|msg| format!("Struct type mismatch on field '{}': {}", self.get_ident_str(actual_field.name), msg))?;
+            self.check_types(expected_field.type_id, actual_field.type_id, scope_id).map_err(
+                |msg| {
+                    format!(
+                        "Struct type mismatch on field '{}': {}",
+                        self.get_ident_str(actual_field.name),
+                        msg
+                    )
+                },
+            )?;
         }
         Ok(())
     }
@@ -2391,7 +2405,7 @@ impl TypedModule {
         actual: TypeId,
         scope_id: ScopeId,
     ) -> Result<(), String> {
-        trace!(
+        debug!(
             "typecheck expect {} actual {}",
             self.type_id_to_string(expected),
             self.type_id_to_string(actual)
@@ -2448,6 +2462,16 @@ impl TypedModule {
                         if expected_resolved != expected {
                             return self.check_types(expected_resolved, actual, scope_id);
                         }
+                    } else {
+                        eprintln!(
+                            "failed to resolve {}; allowing typecheck to pass",
+                            self.type_to_string(exp)
+                        );
+                        // Note(typecheck type variable): I recently made this return Ok for an unbound type variable
+                        // This makes inferece, and other things, "just work" in generic code. I don't think it causes
+                        // any harm, but should be the first place we look if we get weird type checking 'misses' in generic
+                        // code!
+                        return Ok(());
                     }
                 }
                 if let Type::TypeVariable(actual_type_var) = act {
@@ -2470,9 +2494,13 @@ impl TypedModule {
         }
     }
 
-    fn eval_const(&mut self, parsed_constant_id: ParsedConstantId) -> TyperResult<VariableId> {
+    fn eval_const(
+        &mut self,
+        parsed_constant_id: ParsedConstantId,
+        scope_id: ScopeId,
+    ) -> TyperResult<VariableId> {
         let parsed_constant = self.ast.get_constant(parsed_constant_id);
-        let type_id = self.eval_const_type_expr(parsed_constant.ty)?;
+        let type_id = self.eval_const_type_expr(parsed_constant.ty, scope_id)?;
         let parsed_constant = self.ast.get_constant(parsed_constant_id);
         let constant_name = parsed_constant.name;
         let constant_span = parsed_constant.span;
@@ -2792,12 +2820,19 @@ impl TypedModule {
         expression: TypedExpr,
         scope_id: ScopeId,
     ) -> TypedExpr {
-        // For some reason, we used to skip coercion for 'None'. Tests pass
-        // with it commented out, but leaving here for future super-sleuthing
-        // if let TypedExpr::None(_type_id, _span) = expression {
-        //     return expression;
-        // }
-        match self.types.get(expected_type_id) {
+        if expected_type_id == expression.get_type() {
+            return expression;
+        }
+        debug!(
+            "coerce {}: {} to {}",
+            self.expr_to_string(&expression),
+            self.type_id_to_string(expression.get_type()),
+            self.type_id_to_string(expected_type_id)
+        );
+
+        // FIXME: Fix the control flow in here to not return expression but
+        // probably just Ok(None) or something
+        let res = match self.types.get(expected_type_id) {
             // TODO: DRY up identical enum and enum_variant cases
             Type::EnumVariant(ev) => match &expression {
                 TypedExpr::Tag(tag_expr) => {
@@ -2920,7 +2955,13 @@ impl TypedModule {
                 }
                 _ => expression,
             },
-        }
+        };
+        debug!(
+            "\tcoerce result: {}: {}",
+            self.expr_to_string(&res),
+            self.type_id_to_string(res.get_type())
+        );
+        res
     }
 
     fn is_inside_companion_scope(
@@ -3017,37 +3058,13 @@ impl TypedModule {
                         Type::Struct(struc) => Some((expected_type, struc.clone())),
                         Type::Optional(opt) => match self.types.get(opt.inner_type) {
                             Type::Struct(struc) => Some((opt.inner_type, struc.clone())),
-                            other_ty => {
-                                return make_fail_span(
-                                    format!(
-                                        "Got struct literal but expected {}",
-                                        self.type_to_string(other_ty)
-                                    ),
-                                    ast_struct.span,
-                                );
-                            }
+                            _other_optional => None,
                         },
                         Type::Reference(refer) => match self.types.get(refer.inner_type) {
                             Type::Struct(struc) => Some((refer.inner_type, struc.clone())),
-                            other_ty => {
-                                return make_fail_span(
-                                    format!(
-                                        "Got struct literal but expected {}",
-                                        self.type_to_string(other_ty)
-                                    ),
-                                    ast_struct.span,
-                                );
-                            }
+                            _other_reference => None,
                         },
-                        other_ty => {
-                            return make_fail_span(
-                                format!(
-                                    "Got struct literal but expected {}",
-                                    self.type_to_string(other_ty)
-                                ),
-                                ast_struct.span,
-                            );
-                        }
+                        _other_ty => None,
                     }
                 } else {
                     None
@@ -4714,10 +4731,13 @@ impl TypedModule {
                         fn_call.span,
                     );
                 }
-                let return_value =
-                    self.eval_expr_inner(fn_call.args[0].value, calling_scope, None)?;
                 let enclosing_function = self.scopes.nearest_parent_function(calling_scope);
                 let expected_return_type = self.get_function(enclosing_function).ret_type;
+                let return_value = self.eval_expr(
+                    fn_call.args[0].value,
+                    calling_scope,
+                    Some(expected_return_type),
+                )?;
                 if let Err(msg) =
                     self.check_types(expected_return_type, return_value.get_type(), calling_scope)
                 {
@@ -5074,8 +5094,7 @@ impl TypedModule {
                     matching_param_by_name.or(fn_call.args.get(matching_idx as usize));
 
                 if let Some(param) = matching_param {
-                    let expected_type_for_param =
-                        if skip_typecheck { None } else { Some(fn_param.type_id) };
+                    let expected_type_for_param = Some(fn_param.type_id);
                     let expr =
                         self.eval_expr(param.value, calling_scope, expected_type_for_param)?;
                     if !skip_typecheck {
@@ -5273,7 +5292,6 @@ impl TypedModule {
                         self.get_ident_str(generic_name)
                     );
                 } else {
-                    debug!("Solved params: {:?}", solved_params);
                     solved_params
                 }
             }
@@ -5309,9 +5327,13 @@ impl TypedModule {
     ) -> TyperResult<()> {
         // Example: expr: Array<T>, arg:
         // val arr: Array<int> = [1, 2, 3];
-        // arr.length()
         // Array::length<?>(arr)
         // expr: Array<int>, arg: Array<T>
+        debug!(
+            "solve_generic_params passed {} in slot {}",
+            self.type_id_to_string(passed_expr),
+            self.type_id_to_string(argument_type)
+        );
 
         match (self.types.get(passed_expr), self.types.get(argument_type)) {
             (_, Type::TypeVariable(tv)) => {
@@ -5320,6 +5342,8 @@ impl TypedModule {
                 let solved_param = TypeParam { ident: tv.name, type_id: passed_expr };
                 let existing_solution =
                     solved_params.iter().find(|p| p.ident == solved_param.ident);
+
+                // Only push if we haven't solved this type parameter yet
                 if let Some(existing_solution) = existing_solution {
                     if let Err(msg) =
                         self.check_types(existing_solution.type_id, solved_param.type_id, scope_id)
@@ -5339,7 +5363,11 @@ impl TypedModule {
                         )
                     }
                 } else {
-                    // Only push if we haven't solved this one yet
+                    debug!(
+                        "\tsolve_generic_params solved {} := {}",
+                        self.get_ident_str(solved_param.ident),
+                        self.type_id_to_string(solved_param.type_id)
+                    );
                     solved_params.push(solved_param);
                 }
                 Ok(())
@@ -6526,7 +6554,7 @@ impl TypedModule {
                 Ok(())
             }
             ParsedId::Constant(constant_id) => {
-                let _variable_id: VariableId = self.eval_const(constant_id)?;
+                let _variable_id: VariableId = self.eval_const(constant_id, scope_id)?;
                 Ok(())
             }
             ParsedId::Function(parsed_function_id) => {

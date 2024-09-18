@@ -2273,11 +2273,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let expected_type = callee.params[idx].type_id;
                 let basic_value = self.codegen_expr_basic_value(arg_expr);
                 trace!(
-                    "codegen function call arg: {}: {} (expected: {}) \n {:?}",
+                    "codegen function call arg: {}: {} (expected: {})",
                     self.module.expr_to_string(arg_expr),
                     self.module.type_id_to_string(arg_expr.get_type()),
-                    self.module.type_id_to_string(expected_type),
-                    basic_value
+                    self.module.type_id_to_string(expected_type)
                 );
                 basic_value.map(|bv| bv.into())
             })
