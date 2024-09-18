@@ -2763,12 +2763,12 @@ impl ParsedModule {
             ParsedExpression::BinaryOp(op) => {
                 f.write_str("(")?;
                 self.display_expression_id(op.lhs, f)?;
-                f.write_fmt(format_args!(" {} ", op.op_kind))?;
+                write!(f, " {} ", op.op_kind)?;
                 self.display_expression_id(op.rhs, f)?;
                 f.write_str(")")
             }
             ParsedExpression::UnaryOp(op) => {
-                f.write_fmt(format_args!("{}", op.op_kind))?;
+                write!(f, "{}", op.op_kind)?;
                 self.display_expression_id(op.expr, f)
             }
             ParsedExpression::Literal(lit) => f.write_fmt(format_args!("{}", lit)),
@@ -2777,7 +2777,11 @@ impl ParsedModule {
                 f.write_str("(...)")?;
                 Ok(())
             }
-            ParsedExpression::Variable(var) => f.write_fmt(format_args!("{}", var)),
+            ParsedExpression::Variable(var) => {
+                f.write_str("var#")?;
+                f.write_str(self.identifiers.get_name(var.name.name))?;
+                Ok(())
+            },
             ParsedExpression::FieldAccess(acc) => f.write_fmt(format_args!("{:?}", acc)),
             ParsedExpression::Block(block) => f.write_fmt(format_args!("{:?}", block)),
             ParsedExpression::If(if_expr) => f.write_fmt(format_args!("{:?}", if_expr)),

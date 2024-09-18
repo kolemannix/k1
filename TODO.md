@@ -77,15 +77,15 @@
   - [x] param types of function (fn.arg, fn.arg2)
 - [x] Exhaustive pattern matching
 - [x] Rework RawPointer to be a builtin and support 'multipointer' operations
-- [ ] Implement Slice using new `Pointer`
-- [ ] Rework builtin array to use new Pointer
+- [ ] Rework builtin array to use new Pointer, Remove all array intrinsics and builtin type
+  - [ ] Add array bounds checking
 - [ ] Rework builtin string to use new Pointer
+- [ ] Implement Slice using new `Pointer`
 - [ ] Pipe operator (copy Elixir)
-- [ ] function pointers (we could almost take address of a function as RawPointer already)
+- [ ] function pointers (For now just take static address of a function as Pointer)
 - [ ] slices (windows? segments?)
 - [ ] Imports
 - [ ] Generic abilities
-- [ ] array bounds checking (do with windows)
 - [ ] Pure lambdas with -> (not closures)
 - [ ] German/Umbra strings
 - [ ] Make demo readme / site
