@@ -22,12 +22,12 @@ void _k1_crash(K1String* reason, K1String* filename, uint64_t line) {
 
 void* _k1_malloc(uint64_t size_bytes) {
     void* ptr = malloc(size_bytes);
-    printf("k1_malloc(%llu)", size_bytes);
+    printf("k1_malloc(%llu)\n", size_bytes);
     return ptr;
 }
 
 void _k1_free(void* ptr) {
-    printf("k1_free(%zu)", (size_t)ptr);
+    printf("k1_free(%zu)\n", (size_t)ptr);
     free(ptr);
 }
 
