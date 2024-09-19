@@ -1,10 +1,48 @@
+// NewArray todo:
+// - Add phantom type
+// - X Type hints do not follow function calls (val x: NewArray[char]* = new(NewArray::new(0)))
+// - X Type inference doesn't follow references? (x.get[char](0))
+// - X Need a constant for null pointer
+//   - X Then we need impl Equals for pointer
+// - X Need a 'new' function?
+// - STRING BUILDING, at least (string interpolation, ideally!)
+
+fn printCap[T](arr: NewArray[T]): unit { print("cap: "); printInt(arr.cap as i64); println("") }
+
 fn main(): int {
-  val x: NewArray[char] = NewArray::new(4);
+  // val x: NewArray[char]* = &NewArray::new(0);
+  val x: NewArray[char]* = new(NewArray::new[char](0));
+  assert(x.data: Pointer == x.data: Pointer);
+
+  assert(x.cap == 0);
+
+  x.push('1');
+  assert(x.cap == 1);
+
+  x.push('2');
+  assert(x.cap == 2);
+
+  x.push('3');
+  assert(x.cap == 4);
+
+  x.push('4');
+  assert(x.cap == 4);
+
+  assert(x.len == 4);
+
+  assert(x.get(0) == '1');
+  assert(x.get(1) == '2');
+  assert(x.get(2) == '3');
+  assert(x.get(3) == '4');
+
   x.set(0, 'a');
   x.set(1, 'b');
   x.set(2, 'c');
   x.set(3, 'z');
   // _k1_free(x.data);
+  println(x.get(0).toString());
+  println(x.get(1).toString());
+  println(x.get(2).toString());
   println(x.get(3).toString());
   0
 }

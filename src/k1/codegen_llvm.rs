@@ -597,10 +597,17 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
         let pointers = HashMap::new();
         let format_int_str = {
-            let global = llvm_module.add_global(ctx.i8_type().array_type(3), None, "formatInt");
+            let global = llvm_module.add_global(ctx.i8_type().array_type(4), None, "formatInt");
             global.set_constant(true);
             global.set_unnamed_addr(true);
-            global.set_initializer(&i8_array_from_str(ctx, "%i\0"));
+            global.set_initializer(&i8_array_from_str(ctx, "%li\0"));
+            global
+        };
+        let format_uint_str = {
+            let global = llvm_module.add_global(ctx.i8_type().array_type(5), None, "formatUInt");
+            global.set_constant(true);
+            global.set_unnamed_addr(true);
+            global.set_initializer(&i8_array_from_str(ctx, "%llu\0"));
             global
         };
         let format_str_str = {
@@ -613,6 +620,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let globals = HashMap::new();
         let mut builtin_globals: HashMap<String, GlobalValue<'ctx>> = HashMap::new();
         builtin_globals.insert("formatInt".to_string(), format_int_str);
+        builtin_globals.insert("formatUInt".to_string(), format_uint_str);
         builtin_globals.insert("formatString".to_string(), format_str_str);
         let int = ctx.i64_type();
         let string_struct = Codegen::make_named_struct(
@@ -725,9 +733,17 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         self.module.ast.identifiers.get_name(id)
     }
 
-    fn build_print_int_call(&mut self, int_value: BasicValueEnum<'ctx>) -> BasicValueEnum<'ctx> {
+    fn build_print_int_call(
+        &mut self,
+        int_value: BasicValueEnum<'ctx>,
+        signed: bool,
+    ) -> BasicValueEnum<'ctx> {
         // Note: These 'builtin globals' should be a struct not a hashmap because its all static currently
-        let format_str_global = self.builtin_globals.get("formatInt").unwrap();
+        let format_str_global = if signed {
+            self.builtin_globals.get("formatInt").unwrap()
+        } else {
+            self.builtin_globals.get("formatUInt").unwrap()
+        };
         let call = self
             .builder
             .build_call(
@@ -2572,7 +2588,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             IntrinsicFunction::ReferenceSet => {
                 //  intern fn referenceSet[T](t: T*, value: T): unit
-                let reference_value = self.codegen_expr_basic_value(&call.args[0])?.into_pointer_value();
+                let reference_value =
+                    self.codegen_expr_basic_value(&call.args[0])?.into_pointer_value();
                 let actual_value = self.codegen_expr_basic_value(&call.args[1])?;
                 self.builder.build_store(reference_value, actual_value);
                 Ok(self.builtin_types.unit_value.as_basic_value_enum().into())
@@ -2596,7 +2613,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             IntrinsicFunction::PrintInt => {
                 let first_arg = self.get_loaded_variable(function.params[0].variable_id);
-                self.build_print_int_call(first_arg);
+                self.build_print_int_call(first_arg, true);
+                Ok(self.builtin_types.unit_value.as_basic_value_enum())
+            }
+            IntrinsicFunction::PrintUInt => {
+                let first_arg = self.get_loaded_variable(function.params[0].variable_id);
+                self.build_print_int_call(first_arg, false);
                 Ok(self.builtin_types.unit_value.as_basic_value_enum())
             }
             IntrinsicFunction::PrintString => {

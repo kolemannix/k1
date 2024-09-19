@@ -1,11 +1,11 @@
 type Square = enum
   Blank
-  | Pawn
-  | Knight
-  | Bishop
-  | Rook
-  | Queen
-  | King
+  , Pawn
+  , Knight
+  , Bishop
+  , Rook
+  , Queen
+  , King
 
 fn as_digit(c: char): int? {
   val i_code = c.toInt();
@@ -22,14 +22,14 @@ fn from_xy(x: int, y: int): int {
 }
 fn from_name(s: string): int {
   val file = when s[0] {
-    | 'a' -> 0
-    | 'b' -> 1
-    | 'c' -> 2
-    | 'd' -> 3
-    | 'e' -> 4
-    | 'f' -> 5
-    | 'g' -> 6
-    | 'h' -> 7
+    , 'a' -> 0
+    , 'b' -> 1
+    , 'c' -> 2
+    , 'd' -> 3
+    , 'e' -> 4
+    , 'f' -> 5
+    , 'g' -> 6
+    , 'h' -> 7
   };
   val rank = as_digit(s[1])! - 1;
   file + rank * 8
@@ -38,13 +38,13 @@ fn from_name(s: string): int {
 fn dump(board: Array<Square>): unit {
   for square in board do {
     when square {
-      | .Blank -> print("-")
-      | .Pawn -> print("P")
-      | .Knight -> print("N")
-      | .Bishop -> print("B")
-      | .Rook -> print("R")
-      | .Queen -> print("Q")
-      | .King -> print("K")
+      , .Blank -> print("-")
+      , .Pawn -> print("P")
+      , .Knight -> print("N")
+      , .Bishop -> print("B")
+      , .Rook -> print("R")
+      , .Queen -> print("Q")
+      , .King -> print("K")
     };
     if it_index % 8 == 7 {
       println("");

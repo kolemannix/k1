@@ -1730,7 +1730,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         loop {
             // Expect comma
             if !first {
-                if self.peek().kind == K::Pipe {
+                if self.peek().kind == K::Comma {
                     self.tokens.advance();
                 } else {
                     break;
@@ -2044,7 +2044,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(NamespacedIdentifier { namespaces, name: name_ident, span })
     }
 
-    /// Base expression meaning no postfix or binary ops
+    /// Base expression means no postfix or binary ops
     fn parse_base_expression(&mut self) -> ParseResult<Option<ParsedExpressionId>> {
         let (first, second, third) = self.tokens.peek_three();
         trace!("parse_base_expression {} {} {}", first.kind, second.kind, third.kind);
@@ -2056,8 +2056,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
             self.expect_eat_token(K::OpenBrace)?;
 
-            // Allow an opening pipe for symmetry
-            if self.peek().kind == K::Pipe {
+            // Allow an opening comma for symmetry
+            if self.peek().kind == K::Comma {
                 self.tokens.advance();
             }
             let mut cases = Vec::new();
@@ -2070,11 +2070,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let arm_expr_id = self.expect_expression()?;
                 cases.push(ParsedMatchCase { pattern: arm_pattern_id, expression: arm_expr_id });
                 let next = self.peek();
-                if next.kind == K::Pipe {
+                if next.kind == K::Comma {
                     self.tokens.advance();
                 } else if next.kind != K::CloseBrace {
                     return Err(ParseError {
-                        expected: "pipe or close brace".to_string(),
+                        expected: "comma or close brace".to_string(),
                         token: next,
                         cause: None,
                     });
@@ -2748,13 +2748,13 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
 // Display
 impl ParsedModule {
-    pub fn expression_to_string(&self, expr: ParsedExpressionId) -> String {
+    pub fn expr_id_to_string(&self, expr: ParsedExpressionId) -> String {
         let mut buffer = String::new();
-        self.display_expression_id(expr, &mut buffer).unwrap();
+        self.display_expr_id(expr, &mut buffer).unwrap();
         buffer
     }
 
-    pub fn display_expression_id(
+    pub fn display_expr_id(
         &self,
         expr: ParsedExpressionId,
         f: &mut impl Write,
@@ -2762,14 +2762,14 @@ impl ParsedModule {
         match self.expressions.get(expr) {
             ParsedExpression::BinaryOp(op) => {
                 f.write_str("(")?;
-                self.display_expression_id(op.lhs, f)?;
+                self.display_expr_id(op.lhs, f)?;
                 write!(f, " {} ", op.op_kind)?;
-                self.display_expression_id(op.rhs, f)?;
+                self.display_expr_id(op.rhs, f)?;
                 f.write_str(")")
             }
             ParsedExpression::UnaryOp(op) => {
                 write!(f, "{}", op.op_kind)?;
-                self.display_expression_id(op.expr, f)
+                self.display_expr_id(op.expr, f)
             }
             ParsedExpression::Literal(lit) => f.write_fmt(format_args!("{}", lit)),
             ParsedExpression::FnCall(call) => {
@@ -2781,7 +2781,7 @@ impl ParsedModule {
                 f.write_str("var#")?;
                 f.write_str(self.identifiers.get_name(var.name.name))?;
                 Ok(())
-            },
+            }
             ParsedExpression::FieldAccess(acc) => f.write_fmt(format_args!("{:?}", acc)),
             ParsedExpression::Block(block) => f.write_fmt(format_args!("{:?}", block)),
             ParsedExpression::If(if_expr) => f.write_fmt(format_args!("{:?}", if_expr)),
@@ -2799,28 +2799,28 @@ impl ParsedModule {
                 f.write_char('.')?;
                 f.write_str(self.identifiers.get_name(e.tag))?;
                 f.write_str("(")?;
-                self.display_expression_id(e.payload, f)?;
+                self.display_expr_id(e.payload, f)?;
                 f.write_str(")")
             }
             ParsedExpression::Is(is_expr) => {
-                self.display_expression_id(is_expr.target_expression, f)?;
+                self.display_expr_id(is_expr.target_expression, f)?;
                 f.write_str(" is ")?;
                 self.display_pattern_expression_id(is_expr.pattern, f)
             }
             ParsedExpression::Match(match_expr) => {
                 f.write_str("when ")?;
-                self.display_expression_id(match_expr.target_expression, f)?;
+                self.display_expr_id(match_expr.target_expression, f)?;
                 f.write_str(" is {")?;
                 for ParsedMatchCase { pattern, expression } in match_expr.cases.iter() {
                     f.write_str(" | ")?;
                     self.display_pattern_expression_id(*pattern, f)?;
                     f.write_str(" => ")?;
-                    self.display_expression_id(*expression, f)?;
+                    self.display_expr_id(*expression, f)?;
                 }
                 f.write_str(" }")
             }
             ParsedExpression::AsCast(cast) => {
-                self.display_expression_id(cast.base_expr, f)?;
+                self.display_expr_id(cast.base_expr, f)?;
                 f.write_str(" as ")?;
                 self.display_type_expression_id(cast.dest_type, f)
             }

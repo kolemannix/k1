@@ -9,11 +9,23 @@ type alias int = i64
 type alias uint = u64
 type alias byte = u8
 
+// Must have ability id 0
+ability Equals {
+  fn equals(self: Self, other: Self): bool
+}
+
 intern fn sizeOf[T](): u64
 intern fn alignOf[T](): u64
 intern fn typeId[T](): bool
 fn typeEq[T, U](): bool {
   typeId[T]() == typeId[U]()
+}
+
+fn new[T](value: T): T* {
+  val ptr = _k1_malloc(sizeOf[T]());
+  val t = ptr as T*;
+  referenceSet(t, value);
+  t
 }
 
 extern fn _k1_readFileToString(path: string): string
@@ -22,9 +34,21 @@ extern fn _k1_crash(reason: string*, file: string*, line: u64): never
 extern fn _k1_malloc(size: u64): Pointer
 extern fn _k1_free(ptr: Pointer): unit
 
+// Straight to libc, for now
+extern fn realloc(ptr: Pointer, size: u64): i32
+extern fn memcpy(src: Pointer, dst: Pointer, count: u64): Pointer
+extern fn memset(src: Pointer, count: u64, value: u8): Pointer
+extern fn arc4random_uniform(upperBound: u32): u32
+
 intern fn referenceSet[T](t: T*, value: T): unit
 
 namespace Pointer {
+  fn null(): Pointer { 0 as u64 as Pointer }
+
+  fn isNull(self: Pointer): bool {
+    self as u64 == 0
+  }
+
   // This is an intrinsic so that we can codegen a getelementptr
   // instruction in LLVM rather than a pointer cast.
   // But we _could_ do it in userland using sizeOf and arithmetic which is neat!
@@ -34,35 +58,16 @@ namespace Pointer {
   // intern fn memset(self: Pointer, num: u64, value: u8): unit
 }
 
-type Slice[T] = { len: u64, data: Pointer, sadPhantomT: T? }
-namespace Slice {
-    fn get[T](self: Slice[T], index: u64): T {
-        // TODO: Annotate as cold for llvm
-        if index >= self.len {
-          crash("Slice index out of bounds")
-        };
-        val resultT: T* = self.data.refAtIndex(index);
-        *resultT
-    }
-
-    fn set[T](self: Slice[T], index: u64, value: T): unit {
-        // TODO: Annotate as cold for llvm
-        if index >= self.len {
-          crash("Slice index out of bounds")
-        };
-        val resultT: T* = self.data.refAtIndex(index);
-        referenceSet(resultT, value)
-    }
+impl Equals for Pointer {
+  fn equals(self: Pointer, other: Pointer): bool {
+    self as u64 == other as u64
+  }
 }
 
 //type alias opaque string = { len: u64, data: Pointer }
 
-// Must have ability id 0
-ability Equals {
-  fn equals(self: Self, other: Self): bool
-}
-
 intern fn printInt(value: i64): unit
+intern fn printUInt(value: u64): unit
 intern fn print(value: string): unit
 intern fn exit(code: i64): unit
 
@@ -100,12 +105,15 @@ type NewArray[T] = { len: u64, cap: u64, data: Pointer, phantom: T? }
 namespace NewArray {
   fn new[T](len: u64): NewArray[T] {
     val sizeBytes = sizeOf[T]();
-    val ptr = _k1_malloc(sizeBytes * len);
+    val ptr = if len == 0 (0 as u64 as Pointer) else _k1_malloc(sizeBytes * len);
     // No need to zero out since we'll be using our own allocator eventually which will zero on mmap()
     { len: len, cap: len, data: ptr, phantom: None }
   }
   fn getRef[T](self: NewArray[T], index: u64): T* {
     // This line actually exercises type inference pretty well!
+    if index >= self.len {
+      crash("Array index out of bounds");
+    };
     val tRef: T* = self.data.refAtIndex(index);
     tRef
   }
@@ -116,6 +124,46 @@ namespace NewArray {
   fn set[T](self: NewArray[T], index: u64, value: T): unit {
     val tRef = self.getRef(index);
     referenceSet(tRef, value)
+  }
+
+  // Internal
+  fn _grow[T](self: NewArray[T]*): unit {
+    val newCap: u64 = if self.cap == 0 1 else self.cap * 2;
+    val newSize = newCap * sizeOf[T]();
+
+    if self.data as u64 == 0 {
+      val ptr = _k1_malloc(newSize);
+      self.data = ptr;
+    } else {
+      realloc(self.data, newSize);
+      ()
+    };
+    if (self.data as u64) == 0 {
+      crash("Realloc failed in array grow");
+    };
+
+    self.cap = newCap;
+  }
+
+  fn push[T](self: NewArray[T]*, elem: T): unit {
+    val start_length = self.len;
+    if start_length == self.cap {
+      self._grow();
+    };
+    self.len = start_length + 1;
+    self.set(start_length, elem);
+  }
+
+  fn first[T](self: NewArray[T]): T? {
+    if self.len > 0 {
+      self.get(0)
+    } else None
+  }
+
+  fn last[T](self: NewArray[T]): T? {
+    if self.len > 0 {
+      self.get(self.len - 1)
+    } else None
   }
 }
 

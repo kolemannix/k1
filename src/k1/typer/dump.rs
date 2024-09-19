@@ -531,6 +531,7 @@ impl TypedModule {
             PatternConstructor::Char => writ.write_str("'<char>'"),
             PatternConstructor::String => writ.write_str("\"<string>\""),
             PatternConstructor::Int => writ.write_str("<int>"),
+            PatternConstructor::TypeVariable => writ.write_str("<tvar>"),
             PatternConstructor::Some(inner) => {
                 writ.write_str("Some(")?;
                 self.display_pattern_ctor(inner, writ)?;
