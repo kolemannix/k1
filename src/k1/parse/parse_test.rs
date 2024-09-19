@@ -341,7 +341,7 @@ fn tag_literals() -> ParseResult<()> {
     let input = ".Foo: .Foo";
     let (module, _expr, expr_id) = test_single_expr_with_id(input)?;
     let type_hint = module.get_expression_type_hint(expr_id).unwrap();
-    assert_eq!(&module.expression_to_string(expr_id), ".Foo");
+    assert_eq!(&module.expr_id_to_string(expr_id), ".Foo");
     assert_eq!(module.type_expression_to_string(type_hint), ".Foo");
     Ok(())
 }
@@ -350,12 +350,12 @@ fn tag_literals() -> ParseResult<()> {
 fn when_pattern() -> ParseResult<()> {
     let input = r#"
         when x {
-           | { x: 1, y: 2 } -> 1
-           | { x: 2, y: 2 } -> { 2 }
-           | _ -> { 3 }
+           { x: 1, y: 2 } -> 1,
+           { x: 2, y: 2 } -> { 2 },
+           _ -> { 3 }
         };
 "#;
     let (module, _expr, expr_id) = test_single_expr_with_id(input)?;
-    println!("{}", &module.expression_to_string(expr_id));
+    println!("{}", &module.expr_id_to_string(expr_id));
     Ok(())
 }

@@ -1,10 +1,10 @@
 type Json = enum
   JsStr(string)
-  | JsNumber(string)
-  | JsBool(bool)
-  | JsNull
-  | JsArray(Array[Json])
-  | JsObject(Array[{ key: string, value: Json}])
+  , JsNumber(string)
+  , JsBool(bool)
+  , JsNull
+  , JsArray(Array[Json])
+  , JsObject(Array[{ key: string, value: Json}])
 
 fn main(): int {
   val obj: Json = .JsStr("hello");

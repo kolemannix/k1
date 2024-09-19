@@ -1,9 +1,9 @@
-type E = enum A(int) | B
+type E = enum A(int) , B
 namespace E {
   fn value_if_a(self: E): int {
     when self {
-      | .A(i) -> i
-      | .B -> crash("This is a B!")
+      , .A(i) -> i
+      , .B -> crash("This is a B!")
     }
   }
 }

@@ -70,6 +70,10 @@ pub enum PatternConstructor {
     Char,
     String,
     Int,
+    /// This one is also kinda a nothing burger, and can only be matched by Wildcards and Bindings; it's here for
+    /// the sake of being explicit; we could collapse all these into a 'Anything' constructor but the fact I can't
+    /// think of a good name means we shouldn't, probably
+    TypeVariable,
     ///
     Some(Box<PatternConstructor>),
     Struct {
@@ -80,9 +84,6 @@ pub enum PatternConstructor {
         variant_name: Identifier,
         inner: Option<Box<PatternConstructor>>,
     },
-    // TODO: Integer(range),
-    // TODO: Char(range),
-    // TODO: Array patterns Array(ArrayLiteral),
 }
 
 #[derive(Debug, Clone)]
@@ -318,6 +319,7 @@ pub enum BinaryOpKind {
 
     // Other
     OptionalElse,
+    Pipe,
 }
 
 impl Display for BinaryOpKind {
@@ -337,6 +339,7 @@ impl Display for BinaryOpKind {
             BinaryOpKind::Equals => f.write_str("=="),
             BinaryOpKind::NotEquals => f.write_str("!="),
             BinaryOpKind::OptionalElse => f.write_str("?"),
+            BinaryOpKind::Pipe => f.write_str("|"),
         }
     }
 }
@@ -345,6 +348,7 @@ impl BinaryOpKind {
     pub fn precedence(&self) -> usize {
         use BinaryOpKind as B;
         match self {
+            B::Pipe => 102,
             B::Rem => 101,
             B::Multiply | B::Divide => 100,
             B::Add | B::Subtract => 90,
@@ -371,6 +375,7 @@ impl BinaryOpKind {
             TokenKind::BangEquals => Some(BinaryOpKind::NotEquals),
             TokenKind::QuestionMark => Some(BinaryOpKind::OptionalElse),
             TokenKind::Percent => Some(BinaryOpKind::Rem),
+            TokenKind::Pipe => Some(BinaryOpKind::Pipe),
             _ => None,
         }
     }
@@ -391,6 +396,7 @@ impl BinaryOpKind {
             BinaryOpKind::Equals => true,
             BinaryOpKind::NotEquals => true,
             BinaryOpKind::OptionalElse => false,
+            BinaryOpKind::Pipe => false,
         }
     }
 }
@@ -983,6 +989,7 @@ impl Namespaces {
 pub enum IntrinsicFunction {
     Exit,
     PrintInt,
+    PrintUInt,
     PrintString,
     StringLength,
     ArrayLength,
@@ -1014,6 +1021,7 @@ impl IntrinsicFunction {
         match self {
             IntrinsicFunction::Exit => false,
             IntrinsicFunction::PrintInt => false,
+            IntrinsicFunction::PrintUInt => false,
             IntrinsicFunction::PrintString => false,
             IntrinsicFunction::StringLength => false,
             IntrinsicFunction::ArrayLength => true,
@@ -3013,7 +3021,7 @@ impl TypedModule {
     ) -> TyperResult<TypedExpr> {
         debug!(
             "eval_expr_inner: {}: {:?}",
-            &self.ast.expression_to_string(expr_id),
+            &self.ast.expr_id_to_string(expr_id),
             expected_type.map(|t| self.type_id_to_string(t))
         );
         let expr = self.ast.expressions.get(expr_id);
@@ -4328,8 +4336,17 @@ impl TypedModule {
                 _other => false,
             }
         }
-        // Special cases: Equality, and OptionalElse
+        // Special cases: Equality, OptionalElse, and Pipe
         match binary_op.op_kind {
+            BinaryOpKind::Pipe => {
+                return self.eval_pipe_expr(
+                    binary_op.lhs,
+                    binary_op.rhs,
+                    scope_id,
+                    expected_type,
+                    binary_op.span,
+                );
+            }
             BinaryOpKind::Equals | BinaryOpKind::NotEquals => {
                 let lhs = self.eval_expr(binary_op.lhs, scope_id, None)?;
                 if !is_scalar_for_equals(lhs.get_type()) {
@@ -4413,7 +4430,7 @@ impl TypedModule {
                 BinaryOpKind::Or => ffail!(binary_op.span, "Invalid left-hand side for or"),
                 BinaryOpKind::Equals => Ok(BOOL_TYPE_ID),
                 BinaryOpKind::NotEquals => Ok(BOOL_TYPE_ID),
-                _ => unreachable!(),
+                BinaryOpKind::OptionalElse | BinaryOpKind::Pipe => unreachable!(),
             },
             Type::Bool => match kind {
                 BinaryOpKind::Add
@@ -4431,7 +4448,7 @@ impl TypedModule {
                 BinaryOpKind::Or => Ok(BOOL_TYPE_ID),
                 BinaryOpKind::Equals => Ok(BOOL_TYPE_ID),
                 BinaryOpKind::NotEquals => Ok(BOOL_TYPE_ID),
-                BinaryOpKind::OptionalElse => unreachable!(),
+                BinaryOpKind::OptionalElse | BinaryOpKind::Pipe => unreachable!(),
             },
             Type::Char => match kind {
                 BinaryOpKind::Add
@@ -4447,7 +4464,7 @@ impl TypedModule {
                 | BinaryOpKind::Or => ffail!(binary_op.span, "Invalid operation on char: {}", kind),
                 BinaryOpKind::Equals => Ok(BOOL_TYPE_ID),
                 BinaryOpKind::NotEquals => Ok(BOOL_TYPE_ID),
-                BinaryOpKind::OptionalElse => unreachable!(),
+                BinaryOpKind::OptionalElse | BinaryOpKind::Pipe => unreachable!(),
             },
             Type::Unit => match kind {
                 BinaryOpKind::Equals => Ok(BOOL_TYPE_ID),
@@ -4557,6 +4574,46 @@ impl TypedModule {
                 span: binary_op.span,
             }))
         }
+    }
+
+    fn eval_pipe_expr(
+        &mut self,
+        lhs: ParsedExpressionId,
+        rhs: ParsedExpressionId,
+        scope_id: ScopeId,
+        expected_type: Option<TypeId>,
+        span: SpanId,
+    ) -> TyperResult<TypedExpr> {
+        eprintln!(
+            "heres the pipe {} | {}",
+            self.ast.expr_id_to_string(lhs),
+            self.ast.expr_id_to_string(rhs)
+        );
+        let new_fn_call = match self.ast.expressions.get(rhs) {
+            ParsedExpression::Variable(var) => {
+                let args = vec![parse::FnCallArg { name: None, value: lhs }];
+                FnCall { name: var.name.clone(), type_args: None, args, span, is_method: false }
+            }
+            ParsedExpression::FnCall(fn_call) => {
+                let mut args = Vec::with_capacity(fn_call.args.len() + 1);
+                args.push(parse::FnCallArg { name: None, value: lhs });
+                args.extend(fn_call.args.clone());
+                FnCall {
+                    name: fn_call.name.clone(),
+                    type_args: fn_call.type_args.as_ref().cloned(),
+                    args,
+                    span,
+                    is_method: false,
+                }
+            }
+            _ => {
+                return ffail!(
+                    self.ast.expressions.get_span(rhs),
+                    "rhs of pipe must be function call or function name",
+                )
+            }
+        };
+        self.eval_function_call(&new_fn_call, None, None, scope_id, expected_type)
     }
 
     fn synth_equals_call(
@@ -5760,6 +5817,7 @@ impl TypedModule {
                 // _root
                 None => match fn_name_str {
                     "printInt" => Some(IntrinsicFunction::PrintInt),
+                    "printUInt" => Some(IntrinsicFunction::PrintUInt),
                     "print" => Some(IntrinsicFunction::PrintString),
                     "exit" => Some(IntrinsicFunction::Exit),
                     "sizeOf" => Some(IntrinsicFunction::SizeOf),
@@ -6794,6 +6852,7 @@ impl TypedModule {
             Type::Unit => vec![PatternConstructor::Unit],
             Type::Char => vec![PatternConstructor::Char],
             Type::String => vec![PatternConstructor::String],
+            Type::TypeVariable(_) => vec![PatternConstructor::TypeVariable],
             Type::Integer(_) => vec![PatternConstructor::Int],
             Type::Bool => {
                 vec![PatternConstructor::BoolFalse, PatternConstructor::BoolTrue]
