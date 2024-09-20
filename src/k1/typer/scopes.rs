@@ -1,7 +1,6 @@
 use log::trace;
-use parse_display::Display;
 
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt::Display};
 
 use crate::{
     ferr,
@@ -15,7 +14,7 @@ use crate::{
 
 pub type ScopeId = u32;
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Display)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum ScopeType {
     FunctionScope,
     LexicalBlock,
@@ -45,6 +44,12 @@ impl ScopeType {
             ScopeType::AbilityDefn => "ability_defn",
             ScopeType::AbilityImpl => "ability_impl",
         }
+    }
+}
+
+impl Display for ScopeType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.short_name())
     }
 }
 

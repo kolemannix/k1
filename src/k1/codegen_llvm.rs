@@ -2969,10 +2969,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             TyperLinkage::Intrinsic => None,
         };
         let qualified_name = self.module.make_qualified_name(function.scope, function.name, "__");
-        eprintln!(
-            "Made qualified name {qualified_name} for function {}",
-            self.module.get_ident_str(function.name)
-        );
         let fn_val = self.llvm_module.add_function(&qualified_name, fn_ty, llvm_linkage);
 
         self.llvm_functions.insert(function_id, fn_val);

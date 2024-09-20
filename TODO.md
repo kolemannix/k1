@@ -81,6 +81,7 @@
   - [ ] Support re-ordering of args
 - [ ] Rework builtin array to use new Pointer, Remove all array intrinsics and builtin type
   - [ ] Add array bounds checking
+- [ ] Rework builtin optionals to be a simple enum
 - [ ] Rework builtin string to use new Pointer
 - [ ] Implement Slice using new `Pointer`
 - [ ] function pointers (For now just take static address of a function as Pointer)

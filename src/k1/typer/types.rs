@@ -33,12 +33,18 @@ pub struct StructTypeField {
 }
 
 #[derive(Debug, Clone)]
+pub struct GenericInstanceInfo {
+    pub generic_parent: TypeId,
+    pub param_values: Vec<TypeId>,
+}
+
+#[derive(Debug, Clone)]
 pub struct TypeDefnInfo {
     pub name: Identifier,
     pub scope: ScopeId,
     // If there's a corresponding namespace for this type defn, this is it
     pub companion_namespace: Option<NamespaceId>,
-    pub generic_parent: Option<TypeId>,
+    pub generic_instance_info: Option<GenericInstanceInfo>,
     pub ast_id: ParsedTypeDefnId,
 }
 
@@ -419,6 +425,10 @@ impl Type {
         }
     }
 
+    pub fn generic_instance_info(&self) -> Option<&GenericInstanceInfo> {
+        self.defn_info().as_ref().and_then(|d| d.generic_instance_info.as_ref())
+    }
+
     pub fn expect_integer(&self) -> &IntegerType {
         match self {
             Type::Integer(int) => int,
@@ -556,6 +566,12 @@ impl Types {
     /// Note: We could cache whether or not a type is generic on insertion into the type pool
     ///       But types are not immutable so this could be a dangerous idea!
     pub fn does_type_reference_type_variables(&self, type_id: TypeId) -> bool {
+        if let Some(generic_info) = self.get(type_id).generic_instance_info() {
+            return generic_info
+                .param_values
+                .iter()
+                .any(|t| self.does_type_reference_type_variables(*t));
+        }
         match self.get(type_id) {
             Type::Unit => false,
             Type::Char => false,
