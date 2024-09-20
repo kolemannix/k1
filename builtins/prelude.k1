@@ -101,19 +101,19 @@ namespace char {
   }
 }
 
-type NewArray[T] = { len: u64, cap: u64, data: Pointer, phantom: T? }
+type NewArray[T] = { len: u64, cap: u64, data: Pointer }
 namespace NewArray {
   fn new[T](len: u64): NewArray[T] {
     val sizeBytes = sizeOf[T]();
     val ptr = if len == 0 (0 as u64 as Pointer) else _k1_malloc(sizeBytes * len);
     // No need to zero out since we'll be using our own allocator eventually which will zero on mmap()
-    { len: len, cap: len, data: ptr, phantom: None }
+    { len: len, cap: len, data: ptr }
   }
   fn getRef[T](self: NewArray[T], index: u64): T* {
-    // This line actually exercises type inference pretty well!
     if index >= self.len {
       crash("Array index out of bounds");
     };
+    // This line actually exercises type inference pretty well!
     val tRef: T* = self.data.refAtIndex(index);
     tRef
   }

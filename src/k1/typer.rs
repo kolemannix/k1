@@ -1308,7 +1308,7 @@ impl TypedModule {
             name: parsed_type_defn.name,
             scope: scope_id,
             companion_namespace: companion_namespace_id,
-            generic_parent: None,
+            generic_instance_info: None,
             ast_id: parsed_type_defn_id,
         };
 
@@ -1949,7 +1949,11 @@ impl TypedModule {
                 }
                 let gen = self.types.get(type_id).expect_generic().clone();
                 let mut type_defn_info = gen.type_defn_info.clone();
-                type_defn_info.generic_parent = Some(type_id);
+                let generic_info = GenericInstanceInfo {
+                    generic_parent: type_id,
+                    param_values: evaled_type_params.clone(),
+                };
+                type_defn_info.generic_instance_info = Some(generic_info);
                 let specialized_type = match gen.specializations.get(&evaled_type_params) {
                     Some(existing) => *existing,
                     None => {
@@ -5382,7 +5386,6 @@ impl TypedModule {
         scope_id: ScopeId,
         span: SpanId,
     ) -> TyperResult<()> {
-        // Example: expr: Array<T>, arg:
         // val arr: Array<int> = [1, 2, 3];
         // Array::length<?>(arr)
         // expr: Array<int>, arg: Array<T>
@@ -5391,6 +5394,38 @@ impl TypedModule {
             self.type_id_to_string(passed_expr),
             self.type_id_to_string(argument_type)
         );
+        match (self.types.get(passed_expr), self.types.get(argument_type)) {
+            (passed_type, arg_type)
+                if passed_type.generic_instance_info().is_some()
+                    && arg_type.generic_instance_info().is_some() =>
+            {
+                // expr: NewArray<int> arg: NewArray<T>
+                let passed_info = passed_type.generic_instance_info().unwrap();
+                let arg_info = arg_type.generic_instance_info().unwrap();
+                if passed_info.generic_parent == arg_info.generic_parent {
+                    debug!(
+                        "comparing generic instances of {}",
+                        self.type_id_to_string(arg_info.generic_parent)
+                    );
+                    // We can directly 'solve' every appearance of a type param here
+                    for (passed_type, arg_slot) in
+                        passed_info.param_values.iter().zip(arg_info.param_values.iter())
+                    {
+                        self.solve_generic_params(
+                            solved_params,
+                            *passed_type,
+                            *arg_slot,
+                            scope_id,
+                            span,
+                        )?;
+                    }
+                } else {
+                    debug!("compared generic instances but they didn't match parent types");
+                }
+                return Ok(());
+            }
+            _ => {}
+        }
 
         match (self.types.get(passed_expr), self.types.get(argument_type)) {
             (_, Type::TypeVariable(tv)) => {
@@ -5666,6 +5701,7 @@ impl TypedModule {
                             || function.params.iter().any(|param| {
                                 self.types.does_type_reference_type_variables(param.type_id)
                             });
+                    debug!("{} is_generic? {is_generic}", self.get_ident_str(function.name));
                     !is_generic
                 }
             },
@@ -6006,8 +6042,8 @@ impl TypedModule {
                                 self.types.get_type_dereferenced(type_id),
                             ) {
                                 (Type::Generic(_g), instance) => {
-                                    let ok = instance.defn_info().is_some_and(|info| {
-                                        info.generic_parent == Some(companion_type_id)
+                                    let ok = instance.generic_instance_info().is_some_and(|info| {
+                                        info.generic_parent == companion_type_id
                                     });
                                     if !ok {
                                         return ffail!(
