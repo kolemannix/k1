@@ -1,42 +1,36 @@
-
-fn printCap[T](arr: NewArray[T]): unit { print("cap: "); printInt(arr.cap as i64); println("") }
-
 fn main(): int {
-  val x = new(NewArray::new[char](0));
-  assert(x.data == Pointer::null());
-  assert(x.data.isNull());
-  assert(x.data as u64 == 0);
-  assert(x.len == 0);
-  assert(x.cap == 0);
-  assert(x.isEmpty());
+  val xs = new(Array::new[int](0));
+  printUInt(sizeOf[Array[int]]());
+  assert(xs.data == Pointer::null());
+  assert(xs.data.isNull());
+  assert(xs.data as u64 == 0);
+  assert(xs.len == 0);
+  assert(xs.cap == 0);
+  assert(xs.isEmpty());
 
-  x.push('a');
-  assert(x.len == 1);
-  assert(x.cap == 1);
-  x.push('b');
-  assert(x.len == 2);
-  assert(x.cap == 2);
-  x.push('c');
-  assert(x.len == 3);
-  assert(x.cap == 4);
+  xs.push(1);
+  assert(xs.len == 1);
+  assert(xs.cap == 1);
+  xs.push(2);
+  assert(xs.len == 2);
+  assert(xs.cap == 2);
+  xs.push(3);
+  assert(xs.len == 3);
+  assert(xs.cap == 4);
 
-  println(x.get(0).toString());
-  println(x.get(1).toString());
-  println(x.get(2).toString());
+  printInt(xs.get(0));
+  printInt(xs.get(1));
+  printInt(xs.get(2));
 
-  assert(x.first()! == 'a');
-  assert(x.last()! == 'c');
+  assert(xs.first()! == 1);
+  assert(xs.last()! == 3);
 
-  x.set(2, 'z');
-  println(x.get(2).toString());
+  xs.set(2, 99);
+  assert(xs.get(2) == 99);
+
+  // for c in xs do {
+  //   ()
+  // };
 
   0
 }
-
-// NewArray todo:
-// - X Add phantom type
-// - X Type hints do not follow function calls (val x: NewArray[char]* = new(NewArray::new(0)))
-// - X Type inference doesn't follow references? (x.get[char](0))
-// - X Need a constant for null pointer
-//   - X Then we need impl Equals for pointer
-// - X Need a 'new' function?

@@ -84,6 +84,7 @@ pub const I8_TYPE_ID: TypeId = TypeId(10);
 pub const I16_TYPE_ID: TypeId = TypeId(11);
 pub const I32_TYPE_ID: TypeId = TypeId(12);
 pub const I64_TYPE_ID: TypeId = TypeId(13);
+pub const ARRAY_TYPE_ID: TypeId = TypeId(14);
 
 #[derive(Debug, Clone)]
 pub struct ArrayType {
@@ -259,7 +260,6 @@ pub enum Type {
     /// and because it allows us to treat it as a ptr in LLVM which
     Pointer,
     Struct(StructType),
-    Array(ArrayType),
     Optional(OptionalType),
     Reference(ReferenceType),
     #[allow(clippy::enum_variant_names)]
@@ -282,7 +282,6 @@ impl Type {
             Type::Unit | Type::Char | Type::Integer(_) | Type::Bool | Type::String => None,
             Type::Pointer => None,
             Type::Struct(t) => Some(t.ast_node),
-            Type::Array(_a) => None,
             Type::Optional(_t) => None,
             Type::Reference(_t) => None,
             Type::TypeVariable(_t) => None,
@@ -294,6 +293,20 @@ impl Type {
             Type::Generic(gen) => Some(gen.ast_id.into()),
             Type::Function(_fun) => None,
             Type::RecursiveReference(r) => Some(ParsedId::TypeDefn(r.parsed_id)),
+        }
+    }
+
+    pub fn as_array_instance(&self) -> Option<ArrayType> {
+        if let Type::Struct(_s) = self {
+            self.generic_instance_info().and_then(|g| {
+                if g.generic_parent == ARRAY_TYPE_ID {
+                    Some(ArrayType { element_type: g.param_values[0] })
+                } else {
+                    None
+                }
+            })
+        } else {
+            None
         }
     }
 
@@ -358,20 +371,6 @@ impl Type {
         }
     }
 
-    pub fn expect_array(&self) -> &ArrayType {
-        match self {
-            Type::Array(array) => array,
-            _ => panic!("expect_array called on: {:?}", self),
-        }
-    }
-
-    pub fn as_array(&self) -> Option<&ArrayType> {
-        match self {
-            Type::Array(array) => Some(array),
-            _ => None,
-        }
-    }
-
     pub fn as_struct(&self) -> Option<&StructType> {
         match self {
             Type::Struct(struc) => Some(struc),
@@ -410,7 +409,6 @@ impl Type {
             Type::String => None,
             Type::Pointer => None,
             Type::Struct(s) => s.type_defn_info.as_ref(),
-            Type::Array(_) => None,
             Type::Optional(_) => None,
             Type::Reference(_) => None,
             Type::TypeVariable(_) => None,
@@ -460,7 +458,6 @@ impl Type {
             Type::String => None,
             Type::Pointer => None,
             Type::Struct(_s) => None,
-            Type::Array(_) => None,
             Type::Optional(_) => None,
             Type::Reference(_) => None,
             Type::TypeVariable(t) => Some(t.span),
@@ -579,8 +576,6 @@ impl Types {
             Type::Bool => false,
             Type::String => false,
             Type::Pointer => false,
-            Type::Array(arr) => self.does_type_reference_type_variables(arr.element_type),
-            // We don't _yet_ support generics in structs
             Type::Struct(struc) => {
                 for field in struc.fields.iter() {
                     if self.does_type_reference_type_variables(field.type_id) {
@@ -637,7 +632,6 @@ impl Types {
             Type::Bool => None,
             Type::String => Some(CHAR_TYPE_ID),
             Type::Pointer => None,
-            Type::Array(arr) => Some(arr.element_type),
             Type::Struct(_struct) => None,
             Type::Optional(_opt) => None,
             Type::Reference(_refer) => None,
@@ -702,14 +696,6 @@ impl Types {
                     } else {
                         self.replace_type(placeholder_id, f.type_id, replace_with);
                     }
-                }
-            }
-            Type::Array(a) => {
-                let elem_type = a.element_type;
-                if elem_type == placeholder_id {
-                    a.element_type = replace_with;
-                } else {
-                    self.replace_type(placeholder_id, elem_type, replace_with)
                 }
             }
             Type::Optional(o) => {
@@ -779,7 +765,6 @@ impl Types {
                 }
                 return true;
             }
-            (Type::Array(a1), Type::Array(a2)) => a1.element_type == a2.element_type,
             (Type::Optional(o1), Type::Optional(o2)) => o1.inner_type == o2.inner_type,
             (Type::Reference(r1), Type::Reference(r2)) => r1.inner_type == r2.inner_type,
             (Type::TypeVariable(t1), Type::TypeVariable(t2)) => {

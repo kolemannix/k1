@@ -705,7 +705,6 @@ pub enum TypedExpr {
     Str(String, SpanId),
     OptionalNone(TypeId, SpanId),
     Struct(Struct),
-    Array(ArrayLiteral),
     Variable(VariableExpr),
     StructFieldAccess(FieldAccess),
     BinaryOp(BinaryOp),
@@ -743,7 +742,6 @@ impl TypedExpr {
             TypedExpr::Integer(integer) => integer.type_id(),
             TypedExpr::Bool(_, _) => BOOL_TYPE_ID,
             TypedExpr::Struct(struc) => struc.type_id,
-            TypedExpr::Array(arr) => arr.type_id,
             TypedExpr::Variable(var) => var.type_id,
             TypedExpr::StructFieldAccess(field_access) => field_access.ty,
             TypedExpr::BinaryOp(binary_op) => binary_op.ty,
@@ -772,7 +770,6 @@ impl TypedExpr {
             TypedExpr::Str(_, span) => *span,
             TypedExpr::OptionalNone(_, span) => *span,
             TypedExpr::Struct(struc) => struc.span,
-            TypedExpr::Array(array) => array.span,
             TypedExpr::Variable(var) => var.span,
             TypedExpr::StructFieldAccess(field_access) => field_access.span,
             TypedExpr::BinaryOp(binary_op) => binary_op.span,
@@ -992,14 +989,6 @@ pub enum IntrinsicFunction {
     PrintUInt,
     PrintString,
     StringLength,
-    ArrayLength,
-    ArrayNew,
-    ArrayGrow,
-    ArraySetLength,
-    ArrayCapacity,
-    ArrayGet,
-    ArraySet,
-    StringFromCharArray,
     StringEquals,
     StringGet,
     StringSet,
@@ -1024,14 +1013,6 @@ impl IntrinsicFunction {
             IntrinsicFunction::PrintUInt => false,
             IntrinsicFunction::PrintString => false,
             IntrinsicFunction::StringLength => false,
-            IntrinsicFunction::ArrayLength => true,
-            IntrinsicFunction::ArrayNew => false,
-            IntrinsicFunction::ArrayGrow => false,
-            IntrinsicFunction::ArraySetLength => false,
-            IntrinsicFunction::ArrayCapacity => true,
-            IntrinsicFunction::ArrayGet => true,
-            IntrinsicFunction::ArraySet => true,
-            IntrinsicFunction::StringFromCharArray => false,
             IntrinsicFunction::StringEquals => false,
             IntrinsicFunction::StringGet => true,
             IntrinsicFunction::StringSet => true,
@@ -1216,6 +1197,7 @@ impl TypedModule {
         debug_assert!(matches!(*types.get(BOOL_TYPE_ID), Type::Bool));
         debug_assert!(matches!(*types.get(STRING_TYPE_ID), Type::String));
         debug_assert!(matches!(*types.get(NEVER_TYPE_ID), Type::Never));
+        debug_assert!(matches!(*types.get(POINTER_TYPE_ID), Type::Pointer));
         debug_assert!(matches!(*types.get(U8_TYPE_ID), Type::Integer(IntegerType::U8)));
         debug_assert!(matches!(*types.get(U16_TYPE_ID), Type::Integer(IntegerType::U16)));
         debug_assert!(matches!(*types.get(U32_TYPE_ID), Type::Integer(IntegerType::U32)));
@@ -1433,6 +1415,16 @@ impl TypedModule {
         }?;
         self.types.add_type_defn_mapping(parsed_type_defn_id, type_id);
 
+        if type_id == ARRAY_TYPE_ID {
+            let t = self.types.get(type_id).expect_struct();
+            debug_assert!(scope_id == self.scopes.get_root_scope_id());
+            debug_assert!(
+                t.type_defn_info.as_ref().unwrap().name
+                    == self.ast.identifiers.get("Array").unwrap()
+            );
+            debug_assert!(t.fields.len() == 3);
+        }
+
         let type_added = self.scopes.add_type(scope_id, parsed_type_defn.name, type_id);
         if !type_added {
             return ffail!(
@@ -1610,30 +1602,12 @@ impl TypedModule {
                 let tag_type_id = self.types.get_type_for_tag(*ident);
                 Ok(tag_type_id)
             }
-            ParsedTypeExpression::TypeApplication(ty_app) => {
-                if self.ast.identifiers.get_name(ty_app.base_name) == "Array" {
-                    if ty_app.params.len() == 1 {
-                        let element_ty = self.eval_type_expr_defn(
-                            ty_app.params[0],
-                            scope_id,
-                            context.no_attach_defn_info(),
-                        )?;
-                        let array_ty = ArrayType { element_type: element_ty };
-                        let type_id = self.types.add_type(Type::Array(array_ty));
-                        Ok(type_id)
-                    } else {
-                        make_fail_span("Expected 1 type parameter for Array", ty_app.span)
-                    }
-                } else {
-                    let type_op_result = self.detect_and_eval_type_operator(
-                        type_expr_id,
-                        scope_id,
-                        context.clone(),
-                    )?;
-                    match type_op_result {
-                        None => self.eval_type_application(type_expr_id, scope_id, context),
-                        Some(type_op_result) => Ok(type_op_result),
-                    }
+            ParsedTypeExpression::TypeApplication(_ty_app) => {
+                let type_op_result =
+                    self.detect_and_eval_type_operator(type_expr_id, scope_id, context.clone())?;
+                match type_op_result {
+                    None => self.eval_type_application(type_expr_id, scope_id, context),
+                    Some(type_op_result) => Ok(type_op_result),
                 }
             }
             ParsedTypeExpression::Optional(opt) => {
@@ -1730,17 +1704,6 @@ impl TypedModule {
                             );
                         };
                         Ok(field.1.type_id)
-                    }
-                    // You can do dot access on Array to get its element type
-                    Type::Array(arr) => {
-                        if self.ast.identifiers.get_name(dot_acc.member_name) != "element" {
-                            return make_fail_ast_id(
-                                &self.ast,
-                                "Invalid member access on Array type; try '.element'",
-                                type_expr_id.into(),
-                            );
-                        }
-                        Ok(arr.element_type)
                     }
                     // You can do dot access on Optionals to get out their 'inner' types
                     Type::Optional(opt) => {
@@ -1947,45 +1910,58 @@ impl TypedModule {
                     )?;
                     evaled_type_params.push(param_type_id);
                 }
-                let gen = self.types.get(type_id).expect_generic().clone();
-                let mut type_defn_info = gen.type_defn_info.clone();
-                let generic_info = GenericInstanceInfo {
-                    generic_parent: type_id,
-                    param_values: evaled_type_params.clone(),
-                };
-                type_defn_info.generic_instance_info = Some(generic_info);
-                let specialized_type = match gen.specializations.get(&evaled_type_params) {
-                    Some(existing) => *existing,
-                    None => {
-                        let specialized_type = self.instantiate_generic_type(
-                            gen.inner,
-                            Some(type_defn_info.clone()),
-                            &evaled_type_params,
-                            &gen.params,
-                            ty_app_id,
-                        );
-                        match self.types.get_mut(type_id) {
-                            Type::Generic(gen) => {
-                                gen.specializations.insert(evaled_type_params, specialized_type);
-                            }
-                            _ => {}
-                        };
-                        specialized_type
-                    }
-                };
-                Ok(specialized_type)
+                Ok(self.instantiate_generic_type(type_id, evaled_type_params, ty_app_id.into()))
             }
         }
     }
 
-    // Note: We could make this more re-usable by just framing it as "replacement pairs", decoupling it from generic substitution
     fn instantiate_generic_type(
+        &mut self,
+        generic_type: TypeId,
+        passed_params: Vec<TypeId>,
+        parsed_id: ParsedId,
+    ) -> TypeId {
+        let gen = self.types.get(generic_type).expect_generic().clone();
+        let mut type_defn_info = gen.type_defn_info.clone();
+        let generic_info = GenericInstanceInfo {
+            generic_parent: generic_type,
+            param_values: passed_params.clone(),
+        };
+        type_defn_info.generic_instance_info = Some(generic_info);
+        match gen.specializations.get(&passed_params) {
+            Some(existing) => {
+                debug!(
+                    "Using cached generic instance for {}",
+                    self.get_ident_str(gen.type_defn_info.name)
+                );
+                *existing
+            }
+            None => {
+                let specialized_type = self.instantiate_generic_type_subst(
+                    gen.inner,
+                    Some(type_defn_info.clone()),
+                    &passed_params,
+                    &gen.params,
+                    parsed_id,
+                );
+                match self.types.get_mut(generic_type) {
+                    Type::Generic(gen) => {
+                        gen.specializations.insert(passed_params, specialized_type);
+                    }
+                    _ => {}
+                };
+                specialized_type
+            }
+        }
+    }
+
+    fn instantiate_generic_type_subst(
         &mut self,
         type_id: TypeId,
         defn_info: Option<TypeDefnInfo>,
         passed_params: &[TypeId],
         generic_params: &[GenericTypeParam],
-        parsed_expression_id: ParsedTypeExpressionId,
+        parsed_id: ParsedId,
     ) -> TypeId {
         let typ = self.types.get(type_id);
         let force_new = defn_info.is_some();
@@ -2012,12 +1988,12 @@ impl TypedModule {
                 let mut new_fields = struc.fields.clone();
                 let mut any_change = false;
                 for field in new_fields.iter_mut() {
-                    let new_field_type_id = self.instantiate_generic_type(
+                    let new_field_type_id = self.instantiate_generic_type_subst(
                         field.type_id,
                         None,
                         passed_params,
                         generic_params,
-                        parsed_expression_id,
+                        parsed_id,
                     );
                     if new_field_type_id != field.type_id {
                         any_change = true;
@@ -2028,7 +2004,7 @@ impl TypedModule {
                     let specialized_struct = StructType {
                         fields: new_fields,
                         type_defn_info: defn_info,
-                        ast_node: parsed_expression_id.into(),
+                        ast_node: parsed_id,
                     };
                     self.types.add_type(Type::Struct(specialized_struct))
                 } else {
@@ -2037,12 +2013,12 @@ impl TypedModule {
             }
             Type::Optional(opt) => {
                 let opt_inner = opt.inner_type;
-                let new_inner = self.instantiate_generic_type(
+                let new_inner = self.instantiate_generic_type_subst(
                     opt_inner,
                     None,
                     passed_params,
                     generic_params,
-                    parsed_expression_id,
+                    parsed_id,
                 );
                 if force_new || new_inner != opt_inner {
                     let specialized_optional = OptionalType { inner_type: new_inner };
@@ -2053,32 +2029,16 @@ impl TypedModule {
             }
             Type::Reference(reference) => {
                 let ref_inner = reference.inner_type;
-                let new_inner = self.instantiate_generic_type(
+                let new_inner = self.instantiate_generic_type_subst(
                     ref_inner,
                     None,
                     passed_params,
                     generic_params,
-                    parsed_expression_id,
+                    parsed_id,
                 );
                 if force_new || new_inner != ref_inner {
                     let specialized_reference = ReferenceType { inner_type: new_inner };
                     self.types.add_type(Type::Reference(specialized_reference))
-                } else {
-                    type_id
-                }
-            }
-            Type::Array(array_type) => {
-                let array_type = array_type.clone();
-                let new_inner = self.instantiate_generic_type(
-                    array_type.element_type,
-                    None,
-                    passed_params,
-                    generic_params,
-                    parsed_expression_id,
-                );
-                if force_new || new_inner != array_type.element_type {
-                    let specialized_array = ArrayType { element_type: new_inner };
-                    self.types.add_type(Type::Array(specialized_array))
                 } else {
                     type_id
                 }
@@ -2089,12 +2049,12 @@ impl TypedModule {
                 for variant in new_variants.iter_mut() {
                     let new_payload_id = match variant.payload {
                         None => None,
-                        Some(payload_type_id) => Some(self.instantiate_generic_type(
+                        Some(payload_type_id) => Some(self.instantiate_generic_type_subst(
                             payload_type_id,
                             None,
                             passed_params,
                             generic_params,
-                            parsed_expression_id,
+                            parsed_id,
                         )),
                     };
                     if new_payload_id != variant.payload {
@@ -2105,7 +2065,7 @@ impl TypedModule {
                 if force_new || any_changed {
                     let new_enum = TypedEnum {
                         variants: new_variants,
-                        ast_node: parsed_expression_id.into(),
+                        ast_node: parsed_id,
                         type_defn_info: defn_info,
                     };
                     let new_enum_id = self.types.add_type(Type::Enum(new_enum));
@@ -2426,13 +2386,11 @@ impl TypedModule {
             return Ok(());
         }
         match (self.types.get(expected), self.types.get(actual)) {
+            // TODO: check for generic instances here as well
             (Type::Optional(o1), Type::Optional(o2)) => {
                 self.check_types(o1.inner_type, o2.inner_type, scope_id)
             }
             (Type::Struct(r1), Type::Struct(r2)) => self.typecheck_struct(r1, r2, scope_id),
-            (Type::Array(a1), Type::Array(a2)) => {
-                self.check_types(a1.element_type, a2.element_type, scope_id)
-            }
             (Type::TypeVariable(t1), Type::TypeVariable(t2)) => {
                 if t1.name == t2.name && t1.scope_id == t2.scope_id {
                     Ok(())
@@ -3032,9 +2990,9 @@ impl TypedModule {
         let result = match expr {
             ParsedExpression::Array(array_expr) => {
                 let mut element_type: Option<TypeId> = match expected_type {
-                    Some(type_id) => match self.types.get(type_id) {
-                        Type::Array(arr) => Ok(Some(arr.element_type)),
-                        _ => Ok(None),
+                    Some(type_id) => match self.types.get(type_id).as_array_instance() {
+                        Some(arr) => Ok(Some(arr.element_type)),
+                        None => Ok(None),
                     },
                     None => Ok(None),
                 }?;
@@ -3054,12 +3012,13 @@ impl TypedModule {
                 let element_type = element_type.expect("By now this should be populated");
                 let type_id = match expected_type {
                     Some(t) => t,
-                    None => {
-                        let array_type = ArrayType { element_type };
-                        self.types.add_type(Type::Array(array_type))
-                    }
+                    None => self.instantiate_generic_type(
+                        ARRAY_TYPE_ID,
+                        vec![element_type],
+                        expr_id.into(),
+                    ),
                 };
-                Ok(TypedExpr::Array(ArrayLiteral { elements, type_id, span: array_expr_span }))
+                todo!("Generate a block that sets every element instead of an ArrayLiteral TypedExpr!")
             }
             ParsedExpression::Struct(ast_struct) => {
                 let mut field_values = Vec::new();
@@ -4027,12 +3986,9 @@ impl TypedModule {
         &mut self,
         for_expr: &ForExpr,
         scope_id: ScopeId,
-        _expected_type: Option<TypeId>,
+        expected_type: Option<TypeId>,
     ) -> TyperResult<TypedExpr> {
-        let binding_ident = for_expr.binding.unwrap_or({
-            let this = &mut self.ast;
-            this.identifiers.intern("it")
-        });
+        let binding_ident = for_expr.binding.unwrap_or(self.ast.identifiers.get("it").unwrap());
         let iterable_expr = self.eval_expr(for_expr.iterable_expr, scope_id, None)?;
         let iteree_type = iterable_expr.get_type();
         let is_string_iteree = iteree_type == STRING_TYPE_ID;
@@ -4137,51 +4093,35 @@ impl TypedModule {
             span: body_span,
         }));
 
-        // TODO: we can hint to the block based on the expected type of the entire for expr
         let body_scope_id =
             self.scopes.add_child_scope(while_scope_id, ScopeType::LexicalBlock, None, None);
-        let body_block = self.eval_block(&for_expr.body_block, body_scope_id, None)?;
+        let expected_block_type =
+            match expected_type.and_then(|t| self.types.get(t).as_array_instance()) {
+                None => None,
+                Some(array_type) => Some(array_type.element_type),
+            };
+        let body_block =
+            self.eval_block(&for_expr.body_block, body_scope_id, expected_block_type)?;
         let body_block_result_type = body_block.expr_type;
 
         let resulting_type = if is_do_block {
             UNIT_TYPE_ID
         } else {
-            match self.types.get(iteree_type) {
-                Type::Optional(_opt) => {
-                    let new_optional =
-                        Type::Optional(OptionalType { inner_type: body_block_result_type });
-                    self.types.add_type(new_optional)
-                }
-                Type::Array(_arr) => {
-                    let new_array = Type::Array(ArrayType { element_type: body_block_result_type });
-                    self.types.add_type(new_array)
-                }
-                Type::String => {
-                    let new_array = Type::Array(ArrayType { element_type: body_block_result_type });
-                    self.types.add_type(new_array)
-                }
-                other => {
-                    panic!("Unsupported iteree type: {}", self.type_to_string(other))
-                }
-            }
+            self.instantiate_generic_type(
+                ARRAY_TYPE_ID,
+                vec![body_block_result_type],
+                for_expr.iterable_expr.into(),
+            )
         };
         let yield_decls = if !is_do_block {
-            let yield_initializer = match self.types.get(resulting_type) {
-                Type::Array(_array_type) => self.synth_function_call(
-                    vec![self.ast.identifiers.get("Array").unwrap()],
-                    self.ast.identifiers.get("new").unwrap(),
-                    Some(vec![body_block_result_type]),
-                    vec![iteree_length_variable_expr.clone()],
-                    body_span,
-                    for_expr_scope,
-                )?,
-                _ => {
-                    return make_fail_span(
-                        "unsupported resulting_type in for_expr yield",
-                        for_expr.span,
-                    )
-                }
-            };
+            let yield_initializer = self.synth_function_call(
+                vec![self.ast.identifiers.get("Array").unwrap()],
+                self.ast.identifiers.get("new").unwrap(),
+                Some(vec![body_block_result_type]),
+                vec![iteree_length_variable_expr.clone()],
+                body_span,
+                for_expr_scope,
+            )?;
             let yield_ident = self.ast.identifiers.intern("yielded_coll");
             Some(self.synth_variable_decl(
                 yield_ident,
@@ -4214,36 +4154,15 @@ impl TypedModule {
 
         // Assign element to yielded array
         if let Some((_yield_coll_variable_id, _yield_def, yielded_coll_expr)) = &yield_decls {
-            match self.types.get(resulting_type) {
-                Type::Array(_) => {
-                    // yielded_coll[index] = block_expr_val;
-                    // let element_assign = TypedStmt::Assignment(Box::new(Assignment {
-                    //     destination: Box::new(TypedExpr::ArrayIndex(IndexOp {
-                    //         base_expr: Box::new(yielded_coll_expr.clone()),
-                    //         index_expr: Box::new(index_variable_expr.clone()),
-                    //         result_type: body_block_result_type,
-                    //         span: body_span,
-                    //     })),
-                    //     value: Box::new(user_block_val_expr),
-                    //     span: body_span,
-                    // }));
-                    // yielded_coll.set(index, block_expr_val)
-                    let element_assign = TypedStmt::Expr(Box::new(self.synth_function_call(
-                        vec![self.ast.identifiers.get("Array").unwrap()],
-                        self.ast.identifiers.get("set").unwrap(),
-                        Some(vec![body_block_result_type]),
-                        vec![
-                            yielded_coll_expr.clone(),
-                            index_variable_expr.clone(),
-                            user_block_val_expr,
-                        ],
-                        body_span,
-                        for_expr_scope,
-                    )?));
-                    while_block.statements.push(element_assign);
-                }
-                _ => {}
-            }
+            let element_assign = TypedStmt::Expr(Box::new(self.synth_function_call(
+                vec![self.ast.identifiers.get("Array").unwrap()],
+                self.ast.identifiers.get("set").unwrap(),
+                Some(vec![body_block_result_type]),
+                vec![yielded_coll_expr.clone(), index_variable_expr.clone(), user_block_val_expr],
+                body_span,
+                for_expr_scope,
+            )?));
+            while_block.statements.push(element_assign);
         }
 
         // Append the index increment to the body block
@@ -4916,12 +4835,6 @@ impl TypedModule {
                             self.get_namespace_scope_in_immediate_scope(root_scope, char_ident_id);
                         char_scope.map(|char_scope| char_scope.find_function(fn_name)).flatten()
                     }
-                    Type::Array(_array_type) => {
-                        let array_ident_id = self.ast.identifiers.get("Array").unwrap();
-                        let array_scope =
-                            self.get_namespace_scope_in_immediate_scope(root_scope, array_ident_id);
-                        array_scope.map(|array_scope| array_scope.find_function(fn_name)).flatten()
-                    }
                     Type::Struct(struc) => {
                         // Need to distinguish between instances of 'named'
                         // structs and anonymous ones
@@ -5506,14 +5419,6 @@ impl TypedModule {
                 }
                 Ok(())
             }
-            (Type::Array(passed_array_type), Type::Array(param_array_type)) => self
-                .solve_generic_params(
-                    solved_params,
-                    passed_array_type.element_type,
-                    param_array_type.element_type,
-                    scope_id,
-                    span,
-                ),
             (Type::Enum(passed_enum), Type::Enum(param_enum_type)) => {
                 // Enum example
                 // type Result<T, E> = enum Ok(T) | Err(E)
@@ -5866,19 +5771,11 @@ impl TypedModule {
                     "get" => Some(IntrinsicFunction::StringGet),
                     "set" => Some(IntrinsicFunction::StringSet),
                     "length" => Some(IntrinsicFunction::StringLength),
-                    "fromChars" => Some(IntrinsicFunction::StringFromCharArray),
                     // Ability impl
                     "equals" => Some(IntrinsicFunction::StringEquals),
                     _ => None,
                 },
                 Some("Array") => match fn_name_str {
-                    "get" => Some(IntrinsicFunction::ArrayGet),
-                    "set" => Some(IntrinsicFunction::ArraySet),
-                    "length" => Some(IntrinsicFunction::ArrayLength),
-                    "capacity" => Some(IntrinsicFunction::ArrayCapacity),
-                    "grow" => Some(IntrinsicFunction::ArrayGrow),
-                    "new" => Some(IntrinsicFunction::ArrayNew),
-                    "set_length" => Some(IntrinsicFunction::ArraySetLength),
                     _ => None,
                 },
                 Some("char") => None,
@@ -6065,15 +5962,10 @@ impl TypedModule {
                             }
                         }
                     } else {
-                        if self.types.get(type_id).as_array().is_some() {
-                            // Special-case to allow Array methods since its a builtin generic so there's
-                            // no companion type id
-                        } else {
-                            return make_fail_span(
-                                "Cannot use name 'self' unless defining a method",
-                                fn_arg.span,
-                            );
-                        }
+                        return make_fail_span(
+                            "Cannot use name 'self' unless defining a method",
+                            fn_arg.span,
+                        );
                     }
                 };
 

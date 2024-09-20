@@ -75,6 +75,7 @@
   - [x] inner type of optional
   - [x] return type of function (fn.return)
   - [x] param types of function (fn.arg, fn.arg2)
+- [ ] Dot access on any generic instance by type variable name (Array.T)
 - [x] Exhaustive pattern matching
 - [x] Rework RawPointer to be a builtin and support 'multipointer' operations
 - [x] Pipe operator (copy Elixir)
