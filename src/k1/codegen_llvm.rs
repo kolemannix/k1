@@ -6,7 +6,6 @@ use std::ops::Deref;
 use std::path::Path;
 
 use anyhow::bail;
-use inkwell::attributes::AttributeLoc;
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -37,10 +36,6 @@ use crate::typer::{Linkage as TyperLinkage, *};
 
 const STRING_LENGTH_FIELD_INDEX: u32 = 0;
 const STRING_DATA_FIELD_INDEX: u32 = 1;
-
-const ARRAY_LENGTH_FIELD_INDEX: u32 = 0;
-const ARRAY_CAPACITY_FIELD_INDEX: u32 = 1;
-const ARRAY_DATA_FIELD_INDEX: u32 = 2;
 
 const WORD_SIZE_BITS: u64 = 64;
 
@@ -334,28 +329,6 @@ struct BuiltinTypes<'ctx> {
 }
 
 impl<'ctx> BuiltinTypes<'ctx> {
-    fn array_length(&self, builder: &Builder<'ctx>, array: StructValue<'ctx>) -> IntValue<'ctx> {
-        let length =
-            builder.build_extract_value(array, ARRAY_LENGTH_FIELD_INDEX, "array_length").unwrap();
-        length.into_int_value()
-    }
-
-    fn build_array_capacity(
-        &self,
-        builder: &Builder<'ctx>,
-        array: StructValue<'ctx>,
-    ) -> IntValue<'ctx> {
-        let cap =
-            builder.build_extract_value(array, ARRAY_CAPACITY_FIELD_INDEX, "array_cap").unwrap();
-        cap.into_int_value()
-    }
-    fn array_data(&self, builder: &Builder<'ctx>, array: StructValue<'ctx>) -> PointerValue<'ctx> {
-        builder
-            .build_extract_value(array, ARRAY_DATA_FIELD_INDEX, "array_data")
-            .unwrap()
-            .into_pointer_value()
-    }
-
     fn string_length(
         &self,
         builder: &Builder<'ctx>,
@@ -1083,47 +1056,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     Type::TypeVariable(v) => {
                         err!(span, "codegen was asked to codegen a type variable {:?}", v)
                     }
-                    Type::Array(array) => {
-                        let element_type =
-                            self.codegen_type_inner(array.element_type, depth + 1)?;
-                        let struct_type = self.create_array_struct(element_type.value_basic_type());
-                        let name = format!("array_{}", array.element_type);
-                        // This badly duplicates the shape of 'array'
-                        // This is why it would be amazing to have the tools in the source
-                        // language to define types like this; basically we just need Pointer<T>
-                        let int_type = self.codegen_type(U64_TYPE_ID)?;
-                        let struct_di_type = self.make_debug_struct_type(
-                            &name,
-                            &struct_type,
-                            SpanId::NONE,
-                            &[
-                                StructDebugMember {
-                                    name: "length",
-                                    di_type: int_type.debug_type(),
-                                },
-                                StructDebugMember {
-                                    name: "capacity",
-                                    di_type: int_type.debug_type(),
-                                },
-                                StructDebugMember {
-                                    name: "data",
-                                    di_type: self.debug.create_pointer_type(
-                                        "array_data",
-                                        element_type.debug_type(),
-                                    ),
-                                },
-                            ],
-                        );
-                        Ok(LlvmPointerType {
-                            type_id,
-                            pointer_type: struct_type
-                                .ptr_type(AddressSpace::default())
-                                .as_basic_type_enum(),
-                            pointee_type: struct_type.as_basic_type_enum(),
-                            di_type: self.debug.create_pointer_type(&name, struct_di_type),
-                        }
-                        .into())
-                    }
                     Type::Reference(reference) => {
                         // Could also use any_ptr here
                         let inner_type =
@@ -1796,35 +1728,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     .unwrap();
                 Ok(field_value.into())
             }
-            TypedExpr::Array(array) => {
-                let Type::Array(array_type) = self.module.types.get(array.type_id) else {
-                    panic!("expected array type for array");
-                };
-                let element_type = self.codegen_type(array_type.element_type)?.value_basic_type();
-                let array_len = self.builtin_types.int.const_int(array.elements.len() as u64, true);
-
-                let array_capacity = array_len;
-                let array_value = self.make_array(array_len, array_capacity, element_type, false);
-                let array_data = self.builtin_types.array_data(&self.builder, array_value);
-                // Store each element
-                for (index, element_expr) in array.elements.iter().enumerate() {
-                    let value = self.codegen_expr_basic_value(element_expr)?;
-                    let index_value = self.ctx.i64_type().const_int(index as u64, true);
-                    trace!("storing element {} of array literal: {:?}", index, element_expr);
-                    let ptr_at_index = unsafe {
-                        self.builder.build_in_bounds_gep(
-                            element_type,
-                            array_data,
-                            &[index_value],
-                            "elem",
-                        )
-                    };
-                    self.builder.build_store(ptr_at_index, value);
-                }
-                let array_ptr = self.builder.build_alloca(array_value.get_type(), "array_ptr");
-                self.builder.build_store(array_ptr, array_value);
-                Ok(array_ptr.as_basic_value_enum().into())
-            }
             TypedExpr::If(if_expr) => self.codegen_if_else(if_expr),
             TypedExpr::BinaryOp(bin_op) => self.codegen_binop(bin_op),
             TypedExpr::UnaryOp(unary_op) => {
@@ -2334,36 +2237,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         Ok(character_pointer)
     }
 
-    fn codegen_array_index_operation(
-        &mut self,
-        array_base: &TypedExpr,
-        array_index: &TypedExpr,
-    ) -> CodegenResult<PointerValue<'ctx>> {
-        let array_value = self.codegen_expr_basic_value(array_base)?.into_pointer_value();
-        let index_value = self.codegen_expr_basic_value(array_index)?;
-        let elem_type = self.module.types.get(array_base.get_type()).expect_array().element_type;
-        let elem_llvm_type = self.codegen_type(elem_type)?.value_basic_type();
-
-        let array_type = self.create_array_struct(elem_llvm_type);
-
-        let array_struct =
-            self.builder.build_load(array_type, array_value, "array_value").into_struct_value();
-        let index_int_value = index_value.into_int_value();
-        let array_data = self.builtin_types.array_data(&self.builder, array_struct);
-        let gep_ptr = unsafe {
-            // TODO: Make inbounds, or just delete once we use slice to implement Array
-            self.builder.build_gep(
-                elem_llvm_type,
-                array_data,
-                &[index_int_value],
-                "array_index_ptr",
-            )
-        };
-        // We want to return a pointer to the element, not the element itself
-        // This is usually so that we can assign to the element
-        Ok(gep_ptr)
-    }
-
     fn make_string(&self, array_len: IntValue<'ctx>) -> StructValue<'ctx> {
         let data_ptr = self
             .builder
@@ -2510,21 +2383,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 })?;
                 Ok(type_id_value.into())
             }
-            IntrinsicFunction::ArrayGet => {
-                let array_elem_llvm_type = self.codegen_type(call.ret_type)?.value_basic_type();
-                let array_elem_ptr =
-                    self.codegen_array_index_operation(&call.args[0], &call.args[1])?;
-                let array_elem_value =
-                    self.builder.build_load(array_elem_llvm_type, array_elem_ptr, "array_get");
-                Ok(array_elem_value.into())
-            }
-            IntrinsicFunction::ArraySet => {
-                let array_elem_ptr =
-                    self.codegen_array_index_operation(&call.args[0], &call.args[1])?;
-                let rhs = self.codegen_expr_basic_value(&call.args[2])?;
-                self.builder.build_store(array_elem_ptr, rhs);
-                Ok(self.builtin_types.unit_value.as_basic_value_enum().into())
-            }
             IntrinsicFunction::StringGet => {
                 let string_elem_ptr =
                     self.codegen_string_index_operation(&call.args[0], &call.args[1])?;
@@ -2534,40 +2392,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             IntrinsicFunction::StringSet => {
                 todo!()
-            }
-            IntrinsicFunction::ArrayCapacity => {
-                let array_arg = self.codegen_expr_basic_value(&call.args[0])?.into_pointer_value();
-                let array_struct_type = self
-                    .codegen_type(call.args[0].get_type())?
-                    .expect_pointer()
-                    .pointee_type
-                    .into_struct_type();
-                let array_value = self
-                    .builder
-                    .build_load(array_struct_type, array_arg, "array_value_for_cap")
-                    .into_struct_value();
-                let capacity_value = self
-                    .builtin_types
-                    .build_array_capacity(&self.builder, array_value)
-                    .as_basic_value_enum();
-                Ok(capacity_value.into())
-            }
-            IntrinsicFunction::ArrayLength => {
-                let array_arg = self.codegen_expr_basic_value(&call.args[0])?.into_pointer_value();
-                let array_struct_type = self
-                    .codegen_type(call.args[0].get_type())?
-                    .expect_pointer()
-                    .pointee_type
-                    .into_struct_type();
-                let array_value = self
-                    .builder
-                    .build_load(array_struct_type, array_arg, "array_value_for_len")
-                    .into_struct_value();
-                let capacity_value = self
-                    .builtin_types
-                    .array_length(&self.builder, array_value)
-                    .as_basic_value_enum();
-                Ok(capacity_value.into())
             }
             IntrinsicFunction::PointerIndex => {
                 //  Reference:
@@ -2632,21 +2456,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     self.get_loaded_variable(function.params[0].variable_id).into_struct_value();
                 let length = self.builtin_types.string_length(&self.builder, string_arg);
                 Ok(length.as_basic_value_enum())
-            }
-            IntrinsicFunction::StringFromCharArray => {
-                let array =
-                    self.get_loaded_variable(function.params[0].variable_id).into_pointer_value();
-                let array_type =
-                    self.create_array_struct(self.builtin_types.char.as_basic_type_enum());
-                let array_struct =
-                    self.builder.build_load(array_type, array, "array_struct").into_struct_value();
-                let array_len = self.builtin_types.array_length(&self.builder, array_struct);
-                let string = self.make_string(array_len);
-                let string_data = self.builtin_types.string_data(&self.builder, string);
-                let array_data = self.builtin_types.array_data(&self.builder, array_struct);
-                let _copied =
-                    self.builder.build_memcpy(string_data, 1, array_data, 1, array_len).unwrap();
-                Ok(string.as_basic_value_enum())
             }
             IntrinsicFunction::StringEquals => {
                 let string1 =
@@ -2718,112 +2527,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     .builder
                     .build_load(self.builtin_types.boolean, result, "string_eq_result_value")
                     .as_basic_value_enum())
-            }
-            IntrinsicFunction::ArrayNew => {
-                let array_type_id = function.ret_type;
-                let array_type = self.module.types.get(array_type_id);
-                let element_type = self.codegen_type(array_type.expect_array().element_type)?;
-                let len = self.get_loaded_variable(function.params[0].variable_id).into_int_value();
-
-                // Note: We could use ctlz intrinsic to count leading zeroes and get next highest
-                //       power of 2 for capacity
-                // let ctlz_intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.ctlz").unwrap();
-                // let ctlz_function = ctlz_intrinsic.get_declaration(&self.llvm_module, &[self.ctx.i64_type().as_basic_type_enum()]).unwrap();
-                // let capacity = self.builder.build_call(ctlz_function, &[], "capacity");
-                let capacity = len;
-                let array_struct =
-                    self.make_array(len, capacity, element_type.value_basic_type(), true);
-                let array_ptr =
-                    self.builder.build_malloc(array_struct.get_type(), "array_ptr").unwrap();
-                self.builder.build_store(array_ptr, array_struct);
-                Ok(array_ptr.as_basic_value_enum())
-            }
-            IntrinsicFunction::ArrayGrow => {
-                // We need to resize the array and copy the elements into the new memory
-                let self_param = &function.params[0];
-                let array_ptr =
-                    self.get_loaded_variable(self_param.variable_id).into_pointer_value();
-                let array_type = self
-                    .codegen_type(self_param.type_id)?
-                    .expect_pointer()
-                    .pointee_type
-                    .into_struct_type();
-                let array =
-                    self.builder.build_load(array_type, array_ptr, "array").into_struct_value();
-                let cap = self.builtin_types.build_array_capacity(&self.builder, array);
-                let cap_is_zero = self.builder.build_int_compare(
-                    IntPredicate::EQ,
-                    cap,
-                    self.builtin_types.int.const_zero(),
-                    "cap_is_zero",
-                );
-                let cap_times_two = self.builder.build_int_mul(
-                    cap,
-                    self.builtin_types.int.const_int(2, true),
-                    "new_cap",
-                );
-                let new_cap = self
-                    .builder
-                    .build_select(
-                        cap_is_zero,
-                        self.builtin_types.int.const_int(1, true),
-                        cap_times_two,
-                        "new_cap",
-                    )
-                    .into_int_value();
-                // self.build_print_string_call(self.const_string("growing array\n"));
-                let old_data = self.builtin_types.array_data(&self.builder, array);
-                let element_type_id =
-                    self.module.types.get(self_param.type_id).expect_array().element_type;
-                let new_data_type = self.codegen_type(element_type_id)?;
-                let new_data = self
-                    .builder
-                    .build_array_malloc(new_data_type.value_basic_type(), new_cap, "new_data")
-                    .unwrap();
-                let memcpy_bytes = self.builder.build_int_mul(
-                    cap,
-                    new_data_type.value_basic_type().size_of().unwrap(),
-                    "memcpy_bytes",
-                );
-                let _copied =
-                    self.builder.build_memcpy(new_data, 1, old_data, 1, memcpy_bytes).unwrap();
-                let array = self
-                    .builder
-                    .build_insert_value(array, new_data, ARRAY_DATA_FIELD_INDEX, "new_array_data")
-                    .unwrap();
-                let array = self
-                    .builder
-                    .build_insert_value(array, new_cap, ARRAY_CAPACITY_FIELD_INDEX, "new_array_cap")
-                    .unwrap();
-                self.builder.build_store(array_ptr, array);
-                self.builder.build_free(old_data);
-                Ok(self.builtin_types.unit_value.as_basic_value_enum())
-            }
-            IntrinsicFunction::ArraySetLength => {
-                let array_arg =
-                    self.get_loaded_variable(function.params[0].variable_id).into_pointer_value();
-                let array_struct_type = self
-                    .codegen_type(function.params[0].type_id)?
-                    .expect_pointer()
-                    .pointee_type
-                    .into_struct_type();
-                let array_value = self
-                    .builder
-                    .build_load(array_struct_type, array_arg, "array_value")
-                    .into_struct_value();
-                let new_len =
-                    self.get_loaded_variable(function.params[1].variable_id).into_int_value();
-                let updated_array = self
-                    .builder
-                    .build_insert_value(
-                        array_value,
-                        new_len,
-                        ARRAY_LENGTH_FIELD_INDEX,
-                        "set_length",
-                    )
-                    .unwrap();
-                self.builder.build_store(array_arg, updated_array);
-                Ok(self.builtin_types.unit_value.as_basic_value_enum())
             }
             _ => {
                 panic!("Unexpected intrinsic type for actual llvm function {:?}", intrinsic_type)
@@ -3055,18 +2758,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         };
         if let Some(start_block) = maybe_starting_block {
             self.builder.position_at_end(start_block);
-        }
-        #[allow(clippy::single_match)]
-        match function.intrinsic_type {
-            // Workaround: ArrayNew returns a pointer to an alloca, so it needs to be inlined
-            Some(IntrinsicFunction::ArrayNew) => {
-                // Always inline
-                fn_val.add_attribute(
-                    AttributeLoc::Function,
-                    self.ctx.create_string_attribute("alwaysinline", "true"),
-                );
-            }
-            _ => {}
         }
         self.debug.pop_scope();
         fn_val.set_subprogram(di_subprogram);

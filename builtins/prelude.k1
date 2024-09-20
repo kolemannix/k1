@@ -4,6 +4,7 @@ type bool = builtin
 type string = builtin
 type never = builtin
 type Pointer = builtin
+type Array[T] = { len: u64, cap: u64, data: Pointer }
 
 type alias int = i64
 type alias uint = u64
@@ -35,7 +36,7 @@ extern fn _k1_malloc(size: u64): Pointer
 extern fn _k1_free(ptr: Pointer): unit
 
 // Straight to libc, for now
-extern fn realloc(ptr: Pointer, size: u64): i32
+extern fn realloc(ptr: Pointer, size: u64): Pointer
 extern fn memcpy(src: Pointer, dst: Pointer, count: u64): Pointer
 extern fn memset(src: Pointer, count: u64, value: u8): Pointer
 extern fn arc4random_uniform(upperBound: u32): u32
@@ -97,14 +98,15 @@ fn assertMsg(msg: string, value: bool): unit {
 }
 namespace char {
   fn toString(self: char): string {
-    string::fromChars([self]);
+    val arr = &Array::new[char](0);
+    arr.push(self);
+    string::fromChars(*arr);
   }
 }
 
-type NewArray[T] = { len: u64, cap: u64, data: Pointer }
-namespace NewArray {
+namespace Array {
 
-  fn new[T](len: u64): NewArray[T] {
+  fn new[T](len: u64): Array[T] {
     val data = if len == 0 {
       ();
       Pointer::null()
@@ -115,44 +117,42 @@ namespace NewArray {
     { len: len, cap: len, data: data }
   }
 
-  fn getRef[T](self: NewArray[T], index: u64): T* {
+  fn getRef[T](self: Array[T], index: u64): T* {
     if index >= self.len {
       crash("Array index out of bounds")
     };
-    val tRef: T* = self.data.refAtIndex(index);
+    val tRef: T* = self.data.refAtIndex[T](index);
     tRef
   }
 
-  fn set[T](self: NewArray[T], index: u64, elem: T): unit {
+  fn set[T](self: Array[T], index: u64, elem: T): unit {
     val tRef = self.getRef(index);
     referenceSet(tRef, elem);
   }
 
-  fn get[T](self: NewArray[T], index: u64): T {
+  fn get[T](self: Array[T], index: u64): T {
     val tRef = self.getRef(index);
     *tRef
   }
 
-  fn _grow[T](self: NewArray[T]*): unit {
+  fn _grow[T](self: Array[T]*): unit {
     val newCap: u64 = if self.cap == 0 1 else self.cap * 2;
     val newSize = newCap * sizeOf[T]();
 
-    if self.data.isNull() {
-      val ptr = _k1_malloc(newSize);
-      self.data = ptr;
+    val ptr = if self.data.isNull() {
+      _k1_malloc(newSize)
     } else {
-      println("realloc");
-      realloc(self.data, newSize);
-      ()
+      realloc(self.data, newSize)
     };
-    if self.data.isNull() {
+    if ptr.isNull() {
       crash("allocation failed in array grow");
     };
 
+    self.data = ptr;
     self.cap = newCap;
   }
 
-  fn push[T](self: NewArray[T]*, elem: T): unit {
+  fn push[T](self: Array[T]*, elem: T): unit {
     val startLength = self.len;
     if startLength == self.cap {
       self._grow();
@@ -162,11 +162,11 @@ namespace NewArray {
     ()
   }
 
-  fn isEmpty[T](self: NewArray[T]): bool {
+  fn isEmpty[T](self: Array[T]): bool {
     self.len == 0
   }
 
-  fn first[T](self: NewArray[T]): T? {
+  fn first[T](self: Array[T]): T? {
     if not self.isEmpty() {
       self.get(0)
     } else {
@@ -174,7 +174,7 @@ namespace NewArray {
     }
   }
 
-  fn last[T](self: NewArray[T]): T? {
+  fn last[T](self: Array[T]): T? {
     if not self.isEmpty() {
       self.get(self.len - 1)
     } else {
@@ -183,48 +183,14 @@ namespace NewArray {
   }
 }
 
-namespace Array {
-
-  intern fn get[T](self: Array[T], index: u64): T
-  intern fn set[T](self: Array[T], index: u64, value: T): unit
-
-  intern fn new[T](len: u64): Array[T]
-  intern fn length[T](self: Array[T]): u64
-  intern fn capacity[T](self: Array[T]): u64
-  intern fn grow[T](self: Array[T]): unit
-  intern fn set_length[T](self: Array[T], new_length: u64): unit
-
-
-  fn push[T](self: Array[T], elem: T): unit {
-    val start_length = self.length();
-    if start_length == self.capacity() {
-      self.grow();
-    };
-    self.set(start_length, elem);
-    self.set_length(start_length + 1);
-  }
-
-  fn first[T](self: Array[T]): T? {
-    if self.length() > 0 {
-      self.get(0)
-    } else None
-  }
-
-  fn last[T](self: Array[T]): T? {
-    if self.length() > 0 {
-      self.get(self.length() - 1)
-    } else None
-  }
-}
-
 impl Equals for Array[int] {
   // todo: Obviously this should be a memcmp
   fn equals(self: Array[int], other: Array[int]): bool {
-    if self.length() != other.length() {
+    if self.len != other.len {
       false
     } else {
       mut i: u64 = 0;
-      while i < self.length() {
+      while i < self.len {
         if self.get(i) != other.get(i) {
           return(false);
         };
@@ -241,11 +207,11 @@ impl Equals for string {
 
 impl Equals for Array[string] {
   fn equals(self: Array[string], other: Array[string]): bool {
-    if self.length() != other.length() {
+    if self.len != other.len {
       false
     } else {
       mut i: u64 = 0;
-      while i < self.length() {
+      while i < self.len {
         if self.get(i) != other.get(i) {
           return(false);
         };
@@ -261,7 +227,9 @@ namespace string {
   intern fn get(self: string, index: u64): char
   intern fn set(self: string, index: u64, value: char): unit
 
-  intern fn fromChars(bytes: Array[char]): string
+  fn fromChars(bytes: Array[char]): string {
+    crash("string::fromChars todo")
+  }
   intern fn length(self: string): u64
   fn index_of(self: string, c: char): i64 {
     mut i: u64 = 0;

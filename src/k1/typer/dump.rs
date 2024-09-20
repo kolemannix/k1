@@ -166,11 +166,6 @@ impl TypedModule {
                 };
                 Ok(())
             }
-            Type::Array(array) => {
-                writ.write_str("Array[")?;
-                self.display_type_id(array.element_type, writ)?;
-                writ.write_str("]")
-            }
             Type::TypeVariable(tv) => {
                 let scope_name = self.make_scope_name(self.scopes.get_scope(tv.scope_id));
                 writ.write_str(&scope_name)?;
@@ -393,16 +388,6 @@ impl TypedModule {
             TypedExpr::OptionalNone(typ, _) => {
                 writ.write_str("None[")?;
                 self.display_type_id(*typ, writ)?;
-                writ.write_str("]")
-            }
-            TypedExpr::Array(array) => {
-                writ.write_str("[")?;
-                for (idx, expr) in array.elements.iter().enumerate() {
-                    if idx > 0 {
-                        writ.write_str(", ")?;
-                    }
-                    self.display_expr(expr, writ, indentation)?;
-                }
                 writ.write_str("]")
             }
             TypedExpr::Struct(struc) => {
