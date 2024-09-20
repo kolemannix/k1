@@ -103,67 +103,83 @@ namespace char {
 
 type NewArray[T] = { len: u64, cap: u64, data: Pointer }
 namespace NewArray {
+
   fn new[T](len: u64): NewArray[T] {
-    val sizeBytes = sizeOf[T]();
-    val ptr = if len == 0 (0 as u64 as Pointer) else _k1_malloc(sizeBytes * len);
-    // No need to zero out since we'll be using our own allocator eventually which will zero on mmap()
-    { len: len, cap: len, data: ptr }
+    val data = if len == 0 {
+      ();
+      Pointer::null()
+    } else {
+      val sizeBytes = sizeOf[T]() * len;
+      _k1_malloc(sizeBytes)
+    };
+    { len: len, cap: len, data: data }
   }
+
   fn getRef[T](self: NewArray[T], index: u64): T* {
     if index >= self.len {
-      crash("Array index out of bounds");
+      crash("Array index out of bounds")
     };
-    // This line actually exercises type inference pretty well!
     val tRef: T* = self.data.refAtIndex(index);
     tRef
   }
+
+  fn set[T](self: NewArray[T], index: u64, elem: T): unit {
+    val tRef = self.getRef(index);
+    referenceSet(tRef, elem);
+  }
+
   fn get[T](self: NewArray[T], index: u64): T {
     val tRef = self.getRef(index);
     *tRef
   }
-  fn set[T](self: NewArray[T], index: u64, value: T): unit {
-    val tRef = self.getRef(index);
-    referenceSet(tRef, value)
-  }
 
-  // Internal
   fn _grow[T](self: NewArray[T]*): unit {
     val newCap: u64 = if self.cap == 0 1 else self.cap * 2;
     val newSize = newCap * sizeOf[T]();
 
-    if self.data as u64 == 0 {
+    if self.data.isNull() {
       val ptr = _k1_malloc(newSize);
       self.data = ptr;
     } else {
+      println("realloc");
       realloc(self.data, newSize);
       ()
     };
-    if (self.data as u64) == 0 {
-      crash("Realloc failed in array grow");
+    if self.data.isNull() {
+      crash("allocation failed in array grow");
     };
 
     self.cap = newCap;
   }
 
   fn push[T](self: NewArray[T]*, elem: T): unit {
-    val start_length = self.len;
-    if start_length == self.cap {
+    val startLength = self.len;
+    if startLength == self.cap {
       self._grow();
     };
-    self.len = start_length + 1;
-    self.set(start_length, elem);
+    self.len = startLength + 1;
+    self.set(startLength, elem);
+    ()
+  }
+
+  fn isEmpty[T](self: NewArray[T]): bool {
+    self.len == 0
   }
 
   fn first[T](self: NewArray[T]): T? {
-    if self.len > 0 {
+    if not self.isEmpty() {
       self.get(0)
-    } else None
+    } else {
+      None
+    }
   }
 
   fn last[T](self: NewArray[T]): T? {
-    if self.len > 0 {
+    if not self.isEmpty() {
       self.get(self.len - 1)
-    } else None
+    } else {
+      None
+    }
   }
 }
 

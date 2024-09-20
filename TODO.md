@@ -143,6 +143,8 @@
 
 # Major fix
 - [ ] Replace IdentifierId with global 'Symbol' where its a bug not to
+- [ ] Parsing bug where first expr of block is namespaced with ::
+- [ ] ICE when assigning to struct member when struct is not a reference (self.module.types.get(field_access.base.get_type()).as_reference().is_some())
 
 # Minor Fix (possible good bite-sized videos)
 - [ ] type suffixes on int literals 123u32, 4u8, etc
