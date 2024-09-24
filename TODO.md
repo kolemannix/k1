@@ -75,15 +75,16 @@
   - [x] inner type of optional
   - [x] return type of function (fn.return)
   - [x] param types of function (fn.arg, fn.arg2)
-- [ ] Dot access on any generic instance by type variable name (Array.T)
 - [x] Exhaustive pattern matching
 - [x] Rework RawPointer to be a builtin and support 'multipointer' operations
 - [x] Pipe operator (copy Elixir)
-  - [ ] Support re-ordering of args
-- [ ] Rework builtin array to use new Pointer, Remove all array intrinsics and builtin type
-  - [ ] Add array bounds checking
+  - [ ] Support pipe-last
+- [x] Rework builtin array to use new Pointer, Remove all array intrinsics and builtin type
+  - [x] Add array bounds checking
+  - [x] Fix array literal syntax
+- [x] Rework builtin string to use new Pointer
+- [ ] Ability constraints on generics
 - [ ] Rework builtin optionals to be a simple enum
-- [ ] Rework builtin string to use new Pointer
 - [ ] Implement Slice using new `Pointer`
 - [ ] function pointers (For now just take static address of a function as Pointer)
 - [ ] slices (windows? segments?)
@@ -92,7 +93,6 @@
 - [ ] Pure lambdas with -> (not closures)
 - [ ] German/Umbra strings
 - [ ] Make demo readme / site
-- [ ] Ability constraints on generics
 - [ ] Define clear 'platform layer' (crash, alloc/free, other?). Then we could do an LLVM jit platform and a rust interpreter platform
 - [x] Function types (functions have types but there's no syntax for describing a function type yet)
 - [ ] floating point (f32 and f64)
@@ -176,7 +176,7 @@
   - [x] Accessor codegen
 - [x] Identifier cleanup and interning
 - [x] Actual scoping
-- [x] Real prelude so we can more easily add runtime/stl functions (for array)
+- [x] Real core so we can more easily add runtime/stl functions (for array)
 - [x] Heap memory (just using malloc)
 - [x] Arrays (Fixed size but heap allocated)
 - [x] Generic functions (no inference)
@@ -254,7 +254,7 @@
 
 - [x] move some-wrapping into a function
 - [x] has value from userland (currently only happens by desugaring))
-- [x] unwrap from userland (I think this can just be a prelude function not intrinsic)
+- [x] unwrap from userland (I think this can just be a core function not intrinsic)
 - [x] test with optional array elements
 - [x] test with optional struct fields
 - [x] test with optional function args
@@ -288,7 +288,7 @@
 - [x] Maybe eventually actually free some memory? lol
 - [x] Rename IR to typed-ast, since it's a tree not instruction set. TAST?
 - [x] Make intrinsics like arrayIndex a real function in the LLVM IR?
-- [x] Fix line numbers to account for prelude
+- [x] Fix line numbers to account for core
 - [x] Fix unnecessary load of function args
 - [x] Proper println implementation. Fine to use printf internally for now but we should define our own func around it
 - [x] Implement Display instead of relying on Debug

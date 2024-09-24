@@ -55,3 +55,11 @@ K1String _k1_readFileToString(K1String filename) {
     free(as_cstring);
     return string;
 }
+
+// int main(int argc, char** argv) {
+//     puts("Hello from the runtime");
+//     void *heap = _k1_malloc(1024 * 1024);
+//     int res = _k1_main()
+//
+//     return int
+// }

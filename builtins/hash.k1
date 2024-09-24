@@ -1,4 +1,4 @@
-type Elem[V] = { key: string, value: V }
+type Elem[V] where V: Show = { key: string, value: V }
 type HashMap[V] = {
   size: u64,
   slots: Array[Elem[V]?],

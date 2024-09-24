@@ -684,7 +684,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     fn offset_of_struct_member(&self, typ: &StructType, field_index: u32) -> u64 {
         let td = self.llvm_machine.get_target_data();
-        td.offset_of_element(typ, field_index).unwrap()
+        let offset_bytes = td.offset_of_element(typ, field_index).unwrap();
+        offset_bytes * 8
     }
 
     fn set_debug_location(&self, span: SpanId) -> DILocation<'ctx> {
@@ -787,15 +788,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             di_type,
             size,
         })
-    }
-
-    fn create_array_struct(&self, elem_type: BasicTypeEnum<'ctx>) -> StructType<'ctx> {
-        // NOTE: All the 'length' types could probably be i32 but our language int type is only i64
-        //       so we couldn't express that at the lang level right now
-        let length_type = self.builtin_types.int.as_basic_type_enum();
-        let capacity_type = self.builtin_types.int.as_basic_type_enum();
-        let data_type = elem_type.ptr_type(AddressSpace::default()).as_basic_type_enum();
-        self.ctx.struct_type(&[length_type, capacity_type, data_type], false)
     }
 
     fn get_line_number(&self, span: SpanId) -> u32 {
@@ -985,6 +977,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 // We represent this as a LlvmValueType, not a LlvmPointerType, since its
                 // our 'raw' pointer that is really a 'number' wrapper and has no target type
                 // attached
+                let placeholder_pointee = self.codegen_type(U64_TYPE_ID)?.debug_type();
                 Ok(LlvmValueType {
                     type_id: POINTER_TYPE_ID,
                     basic_type: self.builtin_types.ptr.as_basic_type_enum(),
@@ -992,13 +985,13 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     di_type: self
                         .debug
                         .debug_builder
-                        .create_basic_type(
+                        .create_pointer_type(
                             "Pointer",
+                            placeholder_pointee,
                             self.builtin_types.ptr_sized_int.get_bit_width() as u64,
-                            dw_ate_unsigned,
-                            0,
+                            WORD_SIZE_BITS as u32,
+                            AddressSpace::default(),
                         )
-                        .unwrap()
                         .as_type(),
                 }
                 .into())
@@ -2076,7 +2069,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 }
                 other => panic!("Unsupported binary operation {other:?} returning Bool"),
             },
-            Type::String => panic!("No string-returning binary ops yet"),
             Type::Unit => panic!("No unit-returning binary ops"),
             Type::Char => panic!("No char-returning binary ops"),
             _other => unreachable!("codegen for binary ops on other types"),
@@ -2285,39 +2277,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         self.builder
             .build_load(self.builtin_types.string_struct, ptr, &format!("{name}_loaded"))
             .into_struct_value()
-    }
-
-    fn make_array(
-        &mut self,
-        array_len: IntValue<'ctx>,
-        capacity: IntValue<'ctx>,
-        element_type: BasicTypeEnum<'ctx>,
-        zero_initialize: bool,
-    ) -> StructValue<'ctx> {
-        let data_ptr =
-            self.builder.build_array_malloc(element_type, capacity, "array_data").unwrap();
-        if zero_initialize {
-            let size_bytes = self.builder.build_int_mul(
-                capacity,
-                element_type.size_of().unwrap(),
-                "memset_bytes",
-            );
-            self.builder
-                .build_memset(data_ptr, 1, self.builtin_types.char.const_zero(), size_bytes)
-                .unwrap();
-        }
-        let array_type = self.create_array_struct(element_type);
-        // insert_value returns a value and takes a value, doesn't modify memory at pointers
-        // We can start building a struct by giving it an undefined struct first
-        let array_struct = self
-            .builder
-            .build_insert_value(array_type.get_undef(), array_len, 0, "array_len")
-            .unwrap();
-        let array_struct =
-            self.builder.build_insert_value(array_struct, capacity, 1, "array_cap").unwrap();
-        let array_struct =
-            self.builder.build_insert_value(array_struct, data_ptr, 2, "array_data").unwrap();
-        array_struct.into_struct_value()
     }
 
     fn get_loaded_variable(&mut self, variable_id: VariableId) -> BasicValueEnum<'ctx> {

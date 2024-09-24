@@ -73,18 +73,18 @@ impl StructType {
 pub const UNIT_TYPE_ID: TypeId = TypeId(0);
 pub const CHAR_TYPE_ID: TypeId = TypeId(1);
 pub const BOOL_TYPE_ID: TypeId = TypeId(2);
-pub const STRING_TYPE_ID: TypeId = TypeId(3);
-pub const NEVER_TYPE_ID: TypeId = TypeId(4);
-pub const POINTER_TYPE_ID: TypeId = TypeId(5);
-pub const U8_TYPE_ID: TypeId = TypeId(6);
-pub const U16_TYPE_ID: TypeId = TypeId(7);
-pub const U32_TYPE_ID: TypeId = TypeId(8);
-pub const U64_TYPE_ID: TypeId = TypeId(9);
-pub const I8_TYPE_ID: TypeId = TypeId(10);
-pub const I16_TYPE_ID: TypeId = TypeId(11);
-pub const I32_TYPE_ID: TypeId = TypeId(12);
-pub const I64_TYPE_ID: TypeId = TypeId(13);
-pub const ARRAY_TYPE_ID: TypeId = TypeId(14);
+pub const NEVER_TYPE_ID: TypeId = TypeId(3);
+pub const POINTER_TYPE_ID: TypeId = TypeId(4);
+pub const U8_TYPE_ID: TypeId = TypeId(5);
+pub const U16_TYPE_ID: TypeId = TypeId(6);
+pub const U32_TYPE_ID: TypeId = TypeId(7);
+pub const U64_TYPE_ID: TypeId = TypeId(8);
+pub const I8_TYPE_ID: TypeId = TypeId(9);
+pub const I16_TYPE_ID: TypeId = TypeId(10);
+pub const I32_TYPE_ID: TypeId = TypeId(11);
+pub const I64_TYPE_ID: TypeId = TypeId(12);
+pub const ARRAY_TYPE_ID: TypeId = TypeId(15);
+pub const STRING_TYPE_ID: TypeId = TypeId(16);
 
 #[derive(Debug, Clone)]
 pub struct ArrayType {
@@ -255,7 +255,6 @@ pub enum Type {
     Char,
     Integer(IntegerType),
     Bool,
-    String,
     /// Our Pointer is a raw untyped pointer; we mostly have this type for expressing intent
     /// and because it allows us to treat it as a ptr in LLVM which
     Pointer,
@@ -279,7 +278,7 @@ pub enum Type {
 impl Type {
     pub fn ast_node(&self) -> Option<ParsedId> {
         match self {
-            Type::Unit | Type::Char | Type::Integer(_) | Type::Bool | Type::String => None,
+            Type::Unit | Type::Char | Type::Integer(_) | Type::Bool => None,
             Type::Pointer => None,
             Type::Struct(t) => Some(t.ast_node),
             Type::Optional(_t) => None,
@@ -406,7 +405,6 @@ impl Type {
             Type::Char => None,
             Type::Integer(_) => None,
             Type::Bool => None,
-            Type::String => None,
             Type::Pointer => None,
             Type::Struct(s) => s.type_defn_info.as_ref(),
             Type::Optional(_) => None,
@@ -450,12 +448,11 @@ impl Type {
 
     pub fn span(&self) -> Option<SpanId> {
         match self {
-            // TODO: these are in prelude now so we can populate the spans
+            // TODO: these are in core now so we can populate the spans
             Type::Unit => None,
             Type::Char => None,
             Type::Integer(_) => None,
             Type::Bool => None,
-            Type::String => None,
             Type::Pointer => None,
             Type::Struct(_s) => None,
             Type::Optional(_) => None,
@@ -569,12 +566,11 @@ impl Types {
                 .iter()
                 .any(|t| self.does_type_reference_type_variables(*t));
         }
-        match self.get(type_id) {
+        match self.get_no_follow(type_id) {
             Type::Unit => false,
             Type::Char => false,
             Type::Integer(_) => false,
             Type::Bool => false,
-            Type::String => false,
             Type::Pointer => false,
             Type::Struct(struc) => {
                 for field in struc.fields.iter() {
@@ -624,15 +620,34 @@ impl Types {
         }
     }
 
-    pub fn item_type_of_iterable(&self, type_id: TypeId) -> Option<TypeId> {
+    pub fn item_type_of_iterable(
+        &self,
+        identifiers: &Identifiers,
+        scopes: &Scopes,
+        type_id: TypeId,
+    ) -> Option<TypeId> {
         match self.get(type_id) {
             Type::Unit => None,
             Type::Char => None,
             Type::Integer(_) => None,
             Type::Bool => None,
-            Type::String => Some(CHAR_TYPE_ID),
             Type::Pointer => None,
-            Type::Struct(_struct) => None,
+            // Check for Array and string since they are currently structs
+            t @ Type::Struct(_struct) => {
+                if let Some(array_type) = t.as_array_instance() {
+                    Some(array_type.element_type)
+                } else if let Some(defn_info) = t.defn_info() {
+                    if defn_info.name == identifiers.get("string").unwrap()
+                        && defn_info.scope == scopes.get_root_scope_id()
+                    {
+                        Some(CHAR_TYPE_ID)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
             Type::Optional(_opt) => None,
             Type::Reference(_refer) => None,
             Type::TypeVariable(_) => None,
@@ -687,7 +702,6 @@ impl Types {
             Type::Char => (),
             Type::Integer(_) => (),
             Type::Bool => (),
-            Type::String => (),
             Type::Pointer => (),
             Type::Struct(s) => {
                 for f in s.fields.clone().iter_mut() {
@@ -748,7 +762,6 @@ impl Types {
             (Type::Char, Type::Char) => true,
             (Type::Integer(int1), Type::Integer(int2)) => int1 == int2,
             (Type::Bool, Type::Bool) => true,
-            (Type::String, Type::String) => true,
             (Type::Struct(r1), Type::Struct(r2)) => {
                 if r1.is_named() || r2.is_named() {
                     return false;

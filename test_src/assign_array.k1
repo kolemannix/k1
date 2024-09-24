@@ -4,4 +4,3 @@ fn main(): int {
   assert(x.get(1) == 3);
   0
 }
-// 3

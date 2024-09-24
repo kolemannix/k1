@@ -1,6 +1,6 @@
 fn main(): int {
   val squares: Array[int] = for it in [1, 5, 9, 12] yield { it * it };
-  assert(squares.length() == 4);
+  assert(squares.len == 4);
   assert(squares.get(0) == 1);
   assert(squares.get(1) == 25);
   assert(squares.get(2) == 81);

@@ -188,17 +188,17 @@ fn type_parameter_multi() -> ParseResult<()> {
 }
 
 #[test]
-fn prelude_only() -> Result<(), ParseError> {
+fn core_only() -> Result<(), ParseError> {
     env_logger::init();
-    let prelude_source = Source::make(
+    let core_source = Source::make(
         0,
         "builtins".to_string(),
-        "prelude.k1".to_string(),
-        fs::read_to_string("builtins/prelude.k1").unwrap(),
+        "core.k1".to_string(),
+        fs::read_to_string("builtins/core.k1").unwrap(),
     );
-    let module = test_parse_module(prelude_source)?;
-    assert_eq!(&module.name, "prelude");
-    assert_eq!(&module.sources.get_main().filename, "prelude.k1");
+    let module = test_parse_module(core_source)?;
+    assert_eq!(&module.name, "core");
+    assert_eq!(&module.sources.get_main().filename, "core.k1");
     assert_eq!(&module.sources.get_main().directory, "builtins");
     assert!(!module.get_root_namespace().definitions.is_empty());
     Ok(())

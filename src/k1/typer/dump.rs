@@ -142,7 +142,6 @@ impl TypedModule {
                 Ok(())
             }
             Type::Bool => writ.write_str("bool"),
-            Type::String => writ.write_str("string"),
             Type::Pointer => writ.write_str("Pointer"),
             Type::Struct(struc) => {
                 // Leftover, redundant to print name and expand. We need 2 prints, one that expands for

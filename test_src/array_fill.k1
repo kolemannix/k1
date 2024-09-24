@@ -1,8 +1,9 @@
 fn main(): int {
-  val xs = Array::new[int](5);
+  // FIXME: This test is stupid
+  val xs = &Array::new[int](5);
   mut i = 0: u64;
-  while i < xs.length() {
-    xs.set(i, 4);
+  while i < xs.cap {
+    xs.push(4);
     i = i + 1;
   };
   assert(xs.get(0) == 4);
@@ -10,6 +11,5 @@ fn main(): int {
   assert(xs.get(2) == 4);
   assert(xs.get(3) == 4);
   assert(xs.get(4) == 4);
-  // in lldb: parray `xs->length` xs->data_ptr
   0
 }

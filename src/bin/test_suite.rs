@@ -88,7 +88,7 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
     let args = k1::compiler::Args {
         no_llvm_opt: true,
         debug: true,
-        no_prelude: false,
+        no_core: false,
         write_llvm: true,
         dump_module: false,
         run: false,

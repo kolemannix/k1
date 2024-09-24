@@ -23,6 +23,9 @@ fn main(): int {
     assert(x1.unwrap() == -3);
     assert(x1Ok.unwrap() == -3);
 
+    // Shows that we can talk about the payload type
+    val b: Result[int, string].Ok.payload = 42;
+
     x1.show();
     x2.show();
     assert(sizeOf[Result[int, string]]() == 24);
