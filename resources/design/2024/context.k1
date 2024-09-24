@@ -1,29 +1,32 @@
+type Loc = { file: string, line: u32 }
+
+module Parser;
+
 type alias opaque Symbols = Array<{ name: string, value: Ast }>
+type Context = __struct_combine({ symbols: Symbols }, DefaultContext)
 
-fn parse_expr(tokens: Array<Token>, index: int, context symbols: Symbols): (Ast, Array<Token>) {
-    let (ast, rest) = parse_term(tokens, index, symbols);
-    if rest.len() == 0 {
-        return (ast, rest);
+
+// Idea for vale-style safe pointers
+// type TrackedAllocation =  {
+//   ptr: Pointer, fingerprint: u64
+// }
+
+Scopes can have temporary allocators that free on close if they want?
+Functions can have temporary allocators that free on close if they want?
+  (like a dynamic call stack)
+
+
+How do we call a function from another namespace if our context doesn't have
+what its context needs?
+a) pass only missing members explicitly
+
+fn parse_expr(context: Context, caller_loc: Loc)(tokens: Array<Token>, index: int): Ast? {
+  when tokens.first() {
+    None -> None,
+    Some(t) -> {
+      if t == T.True new(Ast.True) else None
     }
-    let token = rest[0];
-    if token.kind == TokenKind::Plus {
-        let (rhs, rest2) = parse_expr(rest, 1, symbols);
-        return (Add(ast, rhs), rest2);
-    }
-    return (ast, rest);
+  }
 }
 
-type ParseContext = { symbols: Symbols, index: int }
-
-fn parse(input: string, context ctx: ParseContext): enum Ok(Ast) | Err(string) {
-    val tokens = tokenize(input);
-    let (ast, rest) = parse_expr(tokens, 0);
-    if rest.len() > 0 {
-        return(Err("Unexpected tokens at end of input"));
-    }
-    return Ok(ast);
-}
-
-fn main(): int {
-
-}
+namespace end;

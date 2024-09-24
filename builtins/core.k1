@@ -1,10 +1,10 @@
 type unit = builtin
 type char = builtin
 type bool = builtin
-type string = builtin
 type never = builtin
 type Pointer = builtin
 type Array[T] = { len: u64, cap: u64, data: Pointer }
+type string = { len: u64, data: Pointer }
 
 type alias int = i64
 type alias uint = u64
@@ -13,6 +13,11 @@ type alias byte = u8
 // Must have ability id 0
 ability Equals {
   fn equals(self: Self, other: Self): bool
+}
+
+ability Show {
+  // TODO: make this use an allocator. How does it get passed conveniently?
+  fn show(self: Self): string
 }
 
 intern fn sizeOf[T](): u64
@@ -106,15 +111,15 @@ namespace char {
 
 namespace Array {
 
-  fn new[T](len: u64): Array[T] {
-    val data = if len == 0 {
+  fn new[T](cap: u64): Array[T] {
+    val data = if cap == 0 {
       ();
       Pointer::null()
     } else {
-      val sizeBytes = sizeOf[T]() * len;
+      val sizeBytes = sizeOf[T]() * cap;
       _k1_malloc(sizeBytes)
     };
-    { len: len, cap: len, data: data }
+    { len: 0, cap: cap, data: data }
   }
 
   fn getRef[T](self: Array[T], index: u64): T* {
@@ -224,17 +229,31 @@ impl Equals for Array[string] {
 
 namespace string {
 
-  intern fn get(self: string, index: u64): char
-  intern fn set(self: string, index: u64, value: char): unit
+  fn getRef(self: string, index: u64): char* {
+    if index >= self.len {
+      crash("string index out of bounds")
+    };
+    val charRef: char* = self.data.refAtIndex(index);
+    charRef
+  }
+
+  fn get(self: string, index: u64): char {
+    val charRef: char* = self.getRef(index);
+    *charRef
+  }
+  fn set(self: string, index: u64, value: char): unit {
+    val charRef: char* = self.getRef(index);
+    referenceSet(charRef, value)
+  }
 
   fn fromChars(bytes: Array[char]): string {
-    crash("string::fromChars todo")
+    { len: bytes.len, data: bytes.data }
   }
-  intern fn length(self: string): u64
-  fn index_of(self: string, c: char): i64 {
+
+  fn indexOf(self: string, c: char): i64 {
     mut i: u64 = 0;
-    while i < self.length() {
-      if (self.get(i) == c) {
+    while i < self.len {
+      if self.get(i) == c {
         return(i as i64);
       };
       i = i + 1;
@@ -242,18 +261,20 @@ namespace string {
     -1
   }
   fn concat(self: string, other: string): string {
-    val new_length = self.length() + other.length();
-    val copied = Array::new[char](new_length);
+    // todo, nocommit: make memcpy now
+    val new_length = self.len + other.len;
+    val copied = &Array::new[char](new_length);
     mut i: u64 = 0;
-    while (i < self.length()) {
-      copied.set(i, self.get(i));
+    while i < self.len {
+      copied.push(self.get(i));
       i = i + 1;
     };
     i = 0;
-    while (i < other.length()) {
-      copied.set(i + self.length(), other.get(i));
+    while i < other.len {
+      copied.push(other.get(i));
       i = i + 1;
     };
+    copied.len = new_length;
     fromChars(copied)
   }
 }

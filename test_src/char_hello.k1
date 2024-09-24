@@ -3,6 +3,6 @@ fn main(): int {
   assert(c == '!');
   val s = c.toString();
   print(s);
-  assert(s.length() == 1);
+  assert(s.len == 1);
   0
 }

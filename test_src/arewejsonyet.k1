@@ -4,7 +4,7 @@ type Json = enum
   , JsBool(bool)
   , JsNull
   , JsArray(Array[Json])
-  , JsObject(Array[{ key: string, value: Json}])
+  , JsObject(Array[{ key: string, value: Json }])
 
 fn main(): int {
   val obj: Json = .JsStr("hello");
