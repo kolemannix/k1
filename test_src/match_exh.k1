@@ -4,8 +4,8 @@ fn matchBool(b: bool): unit {
     true -> println("true")
   }
 }
-type TriState = enum Yes , No , Failure({ reason: string })
 
+type TriState = enum Yes , No , Failure({ reason: string })
 fn matchTristateOpt(t: TriState?): unit {
   when t {
     Some(.Yes) -> println("yes"),

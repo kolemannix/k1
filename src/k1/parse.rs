@@ -1483,6 +1483,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     let esc_char = bytes[2];
                     let literal = match esc_char {
                         b'n' => Ok(Literal::Char(b'\n', first.span)),
+                        b'0' => Ok(Literal::Char(b'\0', first.span)),
                         b'\'' => Ok(Literal::Char(b'\'', first.span)),
                         b't' => Ok(Literal::Char(b'\t', first.span)),
                         _ => Err(Parser::error(
