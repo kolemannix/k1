@@ -83,7 +83,12 @@
   - [x] Add array bounds checking
   - [x] Fix array literal syntax
 - [x] Rework builtin string to use new Pointer
+- [ ] Friendliness pass
+  - [ ] Get rid of 'enum' keyword
+  - [ ] Try to make structs look like constructors? Might be hard
+  - [ ] 'when' keyword is bad; `switch` maybe or `case`
 - [ ] Ability constraints on generics
+- [ ] Remove tag literals, make enum tags per-enum
 - [ ] Rework builtin optionals to be a simple enum
 - [ ] Implement Slice using new `Pointer`
 - [ ] function pointers (For now just take static address of a function as Pointer)
@@ -102,6 +107,8 @@
 - [x] Typecheck the binary ops
 - [x] Bitwise ops
 - [x] Bitwise ops using abilities
+- [ ] RTTI story and 'any' type
+- [ ] Ability-based iteration
 - [ ] 'Context' system; implicit stack arguments
 - [ ] Mark types as trivially copyable or not
   ^ The builtin array would be NOT copyable so that you don't accidentally alias the data ptr
@@ -114,12 +121,11 @@
 - [ ] Ability derivation (prefer a metaprogram solution)
 
 ## Maybe
-- [ ] Move to UFCS instead of having the concept of a 'method' or companion namespace?
-- [ ] Automatic unsafe marker/tracing when 'raw' stuff is used
+- [ ] Require unsafe marker when unsafe stuff is used
 - [ ] Might be very cool to have builtin syntax for anything implementing a 'Monad' ability
   - (Monad ability would require closures and generic abilities)
-- [ ] Require named fncall args by default; and allow anonymous w/ declaration like Jakt
-- [ ] as? for fallible casting
+- [ ] Require named fncall args by default; and allow anonymous w/ declaration like Jakt?
+- [ ] as! for fallible casting and as? for optional casting
 
 ## Compiler
 - Use smallvec
@@ -145,7 +151,7 @@
 # Major fix
 - [ ] Replace IdentifierId with global 'Symbol' where its a bug not to
 - [ ] Parsing bug where first expr of block is namespaced with ::
-- [ ] ICE when assigning to struct member when struct is not a reference (self.module.types.get(field_access.base.get_type()).as_reference().is_some())
+- [x] ICE when assigning to struct member when struct is not a reference (self.module.types.get(field_access.base.get_type()).as_reference().is_some())
 
 # Minor Fix (possible good bite-sized videos)
 - [ ] type suffixes on int literals 123u32, 4u8, etc

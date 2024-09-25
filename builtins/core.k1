@@ -34,6 +34,9 @@ fn new[T](value: T): T* {
   t
 }
 
+
+// What will become platform stuff
+
 extern fn _k1_readFileToString(path: string): string
 extern fn _k1_crash(reason: string*, file: string*, line: u64): never
 
@@ -45,6 +48,8 @@ extern fn realloc(ptr: Pointer, size: u64): Pointer
 extern fn memcpy(src: Pointer, dst: Pointer, count: u64): Pointer
 extern fn memset(src: Pointer, count: u64, value: u8): Pointer
 extern fn arc4random_uniform(upperBound: u32): u32
+
+// End What will become platform stuff
 
 intern fn referenceSet[T](t: T*, value: T): unit
 
@@ -101,6 +106,7 @@ fn assertMsg(msg: string, value: bool): unit {
     crash("ASSERT FAILED: ".concat(msg))
   };
 }
+
 namespace char {
   fn toString(self: char): string {
     val arr = &Array::new[char](0);
@@ -282,3 +288,16 @@ namespace string {
 fn println(value: string): unit {
   print(value.concat('\n'.toString()));
 }
+
+// Note: eventually, should be Slice[string]
+//fn printAll(values: Array[string]): unit {
+//  mut final = "";
+//  for s in values do {
+//
+//  };
+//  final
+//}
+//
+//impl Show for i64 {
+//
+//}
