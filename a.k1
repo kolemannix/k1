@@ -1,0 +1,5 @@
+fn main(): int {
+  val b: bool? = .None;
+  printBool(b.hasValue());
+  0
+}

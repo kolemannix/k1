@@ -5,13 +5,13 @@ fn matchBool(b: bool): unit {
   }
 }
 
-type TriState = enum Yes , No , Failure({ reason: string })
+type TriState = enum Yes, No, Failure({ reason: string })
 fn matchTristateOpt(t: TriState?): unit {
   when t {
-    Some(.Yes) -> println("yes"),
-    Some(.No) -> println("no"),
-    Some(.Failure(s)) -> println("failure: ".concat(s.reason)),
-    None -> println("none")
+    .Some(.Yes) -> println("yes"),
+    .Some(.No) -> println("no"),
+    .Some(.Failure(s)) -> println("failure: ".concat(s.reason)),
+    .None -> println("none")
   }
 }
 
@@ -25,9 +25,9 @@ fn failedWithBaz(t: TriState): bool {
 
 fn matchOptBool(b: bool?): unit {
   when b {
-    None -> println("None"),
-    Some(false) -> println("false"),
-    Some(true) -> println("true")
+    .None -> println("None"),
+    .Some(false) -> println("false"),
+    .Some(true) -> println("true")
   }
 }
 
@@ -49,12 +49,12 @@ fn main(): int {
   };
 
   matchBool(false);
-  matchOptBool(Some(false));
+  matchOptBool(.Some(false));
 
   val yes: TriState = .Yes;
-  matchTristateOpt(Some(yes));
-  matchTristateOpt(Some(.Yes));
-  matchTristateOpt(Some(.Failure({ reason: "because" })));
+  matchTristateOpt(.Some(yes));
+  matchTristateOpt(.Some(.Yes));
+  matchTristateOpt(.Some(.Failure({ reason: "because" })));
 
   assert(not bothTrue({ a: true, b: false }));
   assert(bothTrue({ a: true, b: true }));

@@ -44,7 +44,6 @@ pub struct TypeDefnInfo {
     pub scope: ScopeId,
     // If there's a corresponding namespace for this type defn, this is it
     pub companion_namespace: Option<NamespaceId>,
-    pub generic_instance_info: Option<GenericInstanceInfo>,
     pub ast_id: ParsedTypeDefnId,
 }
 
@@ -53,6 +52,7 @@ pub struct StructType {
     pub fields: Vec<StructTypeField>,
     /// Populated for non-anonymous (named) structs
     pub type_defn_info: Option<TypeDefnInfo>,
+    pub generic_instance_info: Option<GenericInstanceInfo>,
     pub ast_node: ParsedId,
 }
 
@@ -85,6 +85,7 @@ pub const I32_TYPE_ID: TypeId = TypeId(11);
 pub const I64_TYPE_ID: TypeId = TypeId(12);
 pub const ARRAY_TYPE_ID: TypeId = TypeId(15);
 pub const STRING_TYPE_ID: TypeId = TypeId(16);
+pub const OPTIONAL_TYPE_ID: TypeId = TypeId(23);
 
 #[derive(Debug, Clone)]
 pub struct ArrayType {
@@ -128,6 +129,7 @@ pub struct TypedEnum {
     pub variants: Vec<TypedEnumVariant>,
     /// Populated for non-anonymous (named) enums
     pub type_defn_info: Option<TypeDefnInfo>,
+    pub generic_instance_info: Option<GenericInstanceInfo>,
     pub ast_node: ParsedId,
 }
 
@@ -257,9 +259,10 @@ pub enum Type {
     Bool,
     /// Our Pointer is a raw untyped pointer; we mostly have this type for expressing intent
     /// and because it allows us to treat it as a ptr in LLVM which
+    /// allows for pointer-reasoning based optimizations
     Pointer,
     Struct(StructType),
-    Optional(OptionalType),
+    // Optional(OptionalType),
     Reference(ReferenceType),
     #[allow(clippy::enum_variant_names)]
     TypeVariable(TypeVariable),
@@ -281,7 +284,6 @@ impl Type {
             Type::Unit | Type::Char | Type::Integer(_) | Type::Bool => None,
             Type::Pointer => None,
             Type::Struct(t) => Some(t.ast_node),
-            Type::Optional(_t) => None,
             Type::Reference(_t) => None,
             Type::TypeVariable(_t) => None,
             Type::TagInstance(_t) => None,
@@ -309,6 +311,20 @@ impl Type {
         }
     }
 
+    pub fn as_optional(&self) -> Option<OptionalType> {
+        if let Type::Enum(_e) = self {
+            self.generic_instance_info().and_then(|g| {
+                if g.generic_parent == OPTIONAL_TYPE_ID {
+                    Some(OptionalType { inner_type: g.param_values[0] })
+                } else {
+                    None
+                }
+            })
+        } else {
+            None
+        }
+    }
+
     pub fn as_reference(&self) -> Option<&ReferenceType> {
         match self {
             Type::Reference(r) => Some(r),
@@ -319,12 +335,6 @@ impl Type {
         match self {
             Type::Reference(r) => r,
             _ => panic!("expect_reference called on: {:?}", self),
-        }
-    }
-    pub fn as_optional(&self) -> Option<&OptionalType> {
-        match self {
-            Type::Optional(opt) => Some(opt),
-            _ => None,
         }
     }
 
@@ -363,11 +373,8 @@ impl Type {
         }
     }
 
-    pub fn expect_optional(&self) -> &OptionalType {
-        match self {
-            Type::Optional(opt) => opt,
-            _ => panic!("expect_optional called on: {:?}", self),
-        }
+    pub fn expect_optional(&self) -> OptionalType {
+        self.as_optional().unwrap()
     }
 
     pub fn as_struct(&self) -> Option<&StructType> {
@@ -407,7 +414,6 @@ impl Type {
             Type::Bool => None,
             Type::Pointer => None,
             Type::Struct(s) => s.type_defn_info.as_ref(),
-            Type::Optional(_) => None,
             Type::Reference(_) => None,
             Type::TypeVariable(_) => None,
             Type::TagInstance(_) => None,
@@ -422,7 +428,24 @@ impl Type {
     }
 
     pub fn generic_instance_info(&self) -> Option<&GenericInstanceInfo> {
-        self.defn_info().as_ref().and_then(|d| d.generic_instance_info.as_ref())
+        match self {
+            Type::Unit => None,
+            Type::Char => None,
+            Type::Integer(_) => None,
+            Type::Bool => None,
+            Type::Pointer => None,
+            Type::Struct(s) => s.generic_instance_info.as_ref(),
+            Type::Reference(_) => None,
+            Type::TypeVariable(_) => None,
+            Type::TagInstance(_) => None,
+            Type::Enum(e) => e.generic_instance_info.as_ref(),
+            Type::EnumVariant(_) => None,
+            Type::Never => None,
+            Type::OpaqueAlias(_opaque) => None,
+            Type::Generic(_gen) => None,
+            Type::Function(_) => None,
+            Type::RecursiveReference(_) => None,
+        }
     }
 
     pub fn expect_integer(&self) -> &IntegerType {
@@ -455,7 +478,6 @@ impl Type {
             Type::Bool => None,
             Type::Pointer => None,
             Type::Struct(_s) => None,
-            Type::Optional(_) => None,
             Type::Reference(_) => None,
             Type::TypeVariable(t) => Some(t.span),
             Type::TagInstance(_) => None,
@@ -580,7 +602,6 @@ impl Types {
                 }
                 return false;
             }
-            Type::Optional(opt) => self.does_type_reference_type_variables(opt.inner_type),
             Type::Reference(refer) => self.does_type_reference_type_variables(refer.inner_type),
             Type::TypeVariable(_) => true,
             Type::TagInstance(_) => false,
@@ -648,7 +669,6 @@ impl Types {
                     None
                 }
             }
-            Type::Optional(_opt) => None,
             Type::Reference(_refer) => None,
             Type::TypeVariable(_) => None,
             Type::TagInstance(_) => None,
@@ -712,14 +732,6 @@ impl Types {
                     }
                 }
             }
-            Type::Optional(o) => {
-                let inner_type = o.inner_type;
-                if inner_type == placeholder_id {
-                    o.inner_type = replace_with
-                } else {
-                    self.replace_type(placeholder_id, inner_type, replace_with)
-                }
-            }
             Type::Reference(refer) => {
                 let inner_type = refer.inner_type;
                 self.replace_type(placeholder_id, inner_type, replace_with)
@@ -778,7 +790,6 @@ impl Types {
                 }
                 return true;
             }
-            (Type::Optional(o1), Type::Optional(o2)) => o1.inner_type == o2.inner_type,
             (Type::Reference(r1), Type::Reference(r2)) => r1.inner_type == r2.inner_type,
             (Type::TypeVariable(t1), Type::TypeVariable(t2)) => {
                 t1.name == t2.name && t1.scope_id == t2.scope_id

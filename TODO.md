@@ -1,5 +1,11 @@
 # Project Completion Checklist
 
+- Fixing enums big time
+  - [ ] Rename Optional -> Opt
+  - [ ] Remove tag literals, make enum tags per-enum
+  - [ ] Add namespace-level type variables
+  - [ ] Parse Optional[i32]::Some(5) and infer Optional::Some(5) and Optional::None (payloadless)
+
 - [x] QoL before rest of pattern matching
   - [x] Codegen fail instead of panic
   - [x] Rename record to struct
@@ -87,6 +93,7 @@
   - [ ] Get rid of 'enum' keyword
   - [ ] Try to make structs look like constructors? Might be hard
   - [ ] 'when' keyword is bad; `switch` maybe or `case`
+- [ ] Think about introducing type 'kind' and check_kind as a replacement for the 'allow_unbound_type_var' hack
 - [ ] Ability constraints on generics
 - [ ] Remove tag literals, make enum tags per-enum
 - [ ] Rework builtin optionals to be a simple enum
