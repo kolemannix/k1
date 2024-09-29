@@ -2400,18 +2400,8 @@ impl TypedModule {
         actual: TypeId,
         scope_id: ScopeId,
     ) -> Result<(), String> {
-        self.check_types_ext(expected, actual, scope_id, false)
-    }
-
-    fn check_types_ext(
-        &self,
-        expected: TypeId,
-        actual: TypeId,
-        scope_id: ScopeId,
-        allow_unbound_expected_typevar: bool,
-    ) -> Result<(), String> {
         debug!(
-            "typecheck: {} <: {} (allow_unbound={allow_unbound_expected_typevar})",
+            "typecheck: {} <: {}",
             self.type_id_to_string(actual).blue(),
             self.type_id_to_string(expected).blue(),
         );
@@ -2440,12 +2430,7 @@ impl TypedModule {
                                     .name
                             )
                         );
-                        if let Err(msg) = self.check_types_ext(
-                            *exp_param,
-                            *act_param,
-                            scope_id,
-                            allow_unbound_expected_typevar,
-                        ) {
+                        if let Err(msg) = self.check_types(*exp_param, *act_param, scope_id) {
                             return Err(format!("Invalid generic type param: {}", msg));
                         }
                     }
@@ -2473,12 +2458,9 @@ impl TypedModule {
                     ))
                 }
             }
-            (Type::Reference(o1), Type::Reference(o2)) => self.check_types_ext(
-                o1.inner_type,
-                o2.inner_type,
-                scope_id,
-                allow_unbound_expected_typevar,
-            ),
+            (Type::Reference(o1), Type::Reference(o2)) => {
+                self.check_types(o1.inner_type, o2.inner_type, scope_id)
+            }
             (Type::Enum(_exp_enum), Type::Enum(_act_enum)) => {
                 todo!()
             }
@@ -2507,31 +2489,22 @@ impl TypedModule {
                         // We will recursively just resolve to the same type variable without this check
                         // this check requires us to make progress. Doesn't prevent cycles though I guess
                         if expected_resolved != expected {
-                            return self.check_types_ext(
-                                expected_resolved,
-                                actual,
-                                scope_id,
-                                allow_unbound_expected_typevar,
-                            );
+                            return self.check_types(expected_resolved, actual, scope_id);
                         }
                     } else {
-                        // Note(typecheck type variable): I recently made this return Ok for an unbound type variable
-                        // This makes inference, and other things, "just work" in generic code. I don't think it causes
-                        // any harm, but should be the first place we look if we get weird type checking 'misses' in generic
-                        // code!
-                        return if false {
-                            debug!(
-                                "failed to resolve type var {}; allowing typecheck to pass for actual value {}",
-                                self.type_id_to_string(expected),
-                                self.type_id_to_string(actual)
-                            );
-                            Ok(())
-                        } else {
-                            Err(format!(
-                                "failed to resolve expected type {}",
-                                self.type_id_to_string(expected),
-                            ))
-                        };
+                        // return if allow_unbound_typevar {
+                        //     debug!(
+                        //         "failed to resolve type var {}; allowing typecheck to pass for actual value {}",
+                        //         self.type_id_to_string(expected),
+                        //         self.type_id_to_string(actual)
+                        //     );
+                        //     Ok(())
+                        // } else {
+                        return Err(format!(
+                            "failed to resolve expected type {}",
+                            self.type_id_to_string(expected),
+                        ));
+                        // };
                     }
                 }
                 if let Type::TypeVariable(actual_type_var) = act {
@@ -2541,12 +2514,7 @@ impl TypedModule {
                         // We will recursively just resolve to the same type variable without this check
                         // this check requires us to make progress. Doesn't prevent cycles though I guess
                         if actual_resolved != actual {
-                            return self.check_types_ext(
-                                expected,
-                                actual_resolved,
-                                scope_id,
-                                allow_unbound_expected_typevar,
-                            );
+                            return self.check_types(expected, actual_resolved, scope_id);
                         }
                     }
                 }
