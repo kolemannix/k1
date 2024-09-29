@@ -1,7 +1,7 @@
 # Project Completion Checklist
 
 - Fixing enums big time
-  - [ ] Rename Optional -> Opt
+  - [x] Rename Optional -> Opt
   - [ ] Remove tag literals, make enum tags per-enum
   - [ ] Add namespace-level type variables
   - [ ] Parse Optional[i32]::Some(5) and infer Optional::Some(5) and Optional::None (payloadless)
