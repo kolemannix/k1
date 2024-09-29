@@ -1,4 +1,4 @@
-fn noNum(): int? { None }
+fn noNum(): int? { .None }
 fn someNum(): int? { 100 }
 fn main(): int {
   val result = noNum() ? 42;

@@ -5,10 +5,34 @@ type never = builtin
 type Pointer = builtin
 type Array[T] = { len: u64, cap: u64, data: Pointer }
 type string = { len: u64, data: Pointer }
+type Opt[T] = enum None, Some(T)
+namespace Opt {
+  fn hasValue[T](self: T?): bool {
+    self is .Some(_)
+  }
+
+  fn get[T](self: T?): T {
+    (self as .Some).payload
+  }
+}
+
+// One day
+// ability OrElse[T] {
+//   fn hasValue(): bool
+//   fn unwrap(): T
+// }
 
 type alias int = i64
 type alias uint = u64
 type alias byte = u8
+
+
+// type TypeInfo = enum Unit, Boolean(enum False, True), Int,
+//
+// type Any = {
+//   typeInfo: TypeInfo,
+//   value: Pointer
+// }
 
 // Must have ability id 0
 ability Equals {
@@ -45,7 +69,7 @@ extern fn _k1_free(ptr: Pointer): unit
 
 // Straight to libc, for now
 extern fn realloc(ptr: Pointer, size: u64): Pointer
-extern fn memcpy(src: Pointer, dst: Pointer, count: u64): Pointer
+extern fn memcpy(dst: Pointer, src: Pointer, count: u64): Pointer
 extern fn memset(src: Pointer, count: u64, value: u8): Pointer
 extern fn arc4random_uniform(upperBound: u32): u32
 
@@ -147,10 +171,17 @@ namespace Array {
   }
 
   fn _grow[T](self: Array[T]*): unit {
-    val newCap: u64 = if self.cap == 0 1 else self.cap * 2;
+    val tSize = sizeOf[T]();
+    val newCap: u64 = if self.cap == 0 {
+      // For large elements, just allocate what's needed
+      if tSize >= 1024 1 else 8
+    } else {
+      self.cap * 2
+    };
     val newSize = newCap * sizeOf[T]();
 
     val ptr = if self.data.isNull() {
+
       _k1_malloc(newSize)
     } else {
       realloc(self.data, newSize)
@@ -178,10 +209,11 @@ namespace Array {
   }
 
   fn first[T](self: Array[T]): T? {
+    // This exercises both Some-wrapping, .None-promotion, and type hinting through ifs!
     if not self.isEmpty() {
       self.get(0)
     } else {
-      None
+      .None
     }
   }
 
@@ -189,8 +221,19 @@ namespace Array {
     if not self.isEmpty() {
       self.get(self.len - 1)
     } else {
-      None
+      .None
     }
+  }
+
+  // I know I know I know I know
+  fn reversed[T](self: Array[T]): Array[T] {
+    val reversed = &Array::new[T](self.len);
+    mut i = self.len - 1;
+    while (i >= 0) {
+      reversed.push(self.get(i));
+      i = i - 1;
+    };
+    reversed
   }
 }
 
@@ -266,38 +309,78 @@ namespace string {
     };
     -1
   }
+
   fn concat(self: string, other: string): string {
-    // todo, nocommit: make memcpy now
     val new_length = self.len + other.len;
     val copied = &Array::new[char](new_length);
-    mut i: u64 = 0;
-    while i < self.len {
-      copied.push(self.get(i));
-      i = i + 1;
-    };
-    i = 0;
-    while i < other.len {
-      copied.push(other.get(i));
-      i = i + 1;
-    };
+
+    memcpy(copied.data, self.data, self.len);
+
+    val offset = copied.data as u64 + self.len;
+    memcpy(offset as Pointer, other.data, other.len);
+
     copied.len = new_length;
+    fromChars(copied)
+  }
+
+  fn appendChar(self: string, c: char): string {
+    val new_length = self.len + 1;
+
+    val copied = &Array::new[char](new_length);
+    copied.len = new_length;
+
+    memcpy(copied.data, self.data, self.len);
+    copied.set(self.len, c);
+
     fromChars(copied)
   }
 }
 
 fn println(value: string): unit {
-  print(value.concat('\n'.toString()));
+  value | string::appendChar('\n') | print;
 }
 
-// Note: eventually, should be Slice[string]
-//fn printAll(values: Array[string]): unit {
-//  mut final = "";
-//  for s in values do {
-//
-//  };
-//  final
-//}
-//
-//impl Show for i64 {
-//
-//}
+impl Show for i64 {
+  // We know this is super slow, relax, it'll be ok
+  fn show(self: i64): string {
+    val neg = self < 0;
+    mut remaining: i64 = if neg self * -1 else self;
+    val buf = &Array::new[char](8);
+    while remaining > 0 {
+      val d = remaining % 10;
+      val c = (d + 48) as u8 as char;
+      buf.push(c);
+      remaining = remaining / 10;
+    };
+
+    if neg {
+      buf.push('-');
+    };
+
+    // I know I know I know I know
+    // Since we know its bytes we could do simd stuff or even just 64 bits at a time
+    // Which I guess is technically 'simd' too
+    // Why did inference break here??
+    val rev = (*buf).reversed();
+    string::fromChars(rev)
+  }
+}
+
+
+impl Show for i32 {
+  fn show(self: i32): string {
+    (self as i64).show()
+  }
+}
+
+impl Show for i16 {
+  fn show(self: i16): string {
+    (self as i64).show()
+  }
+}
+
+impl Show for i8 {
+  fn show(self: i8): string {
+    (self as i64).show()
+  }
+}

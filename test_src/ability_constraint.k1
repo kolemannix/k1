@@ -2,10 +2,6 @@ ability Num {
   fn num(self: Self): i32
 }
 
-ability Show {
-  fn show(self: Self): string
-}
-
 fn add[T](a: T, b: T): i32 where T: Num, T: Show {
   println(a.show());
   println("+");
@@ -22,10 +18,4 @@ impl Num for int {
 fn main(): int {
   add(1, 2);
   0
-}
-
-impl Show for int {
-  fn show(self: int): string {
-    "some int"
-  }
 }

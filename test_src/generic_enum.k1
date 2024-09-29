@@ -17,9 +17,9 @@ fn main(): int {
 
     val x1Ok = x1 as Result[int, string].Ok;
 
-    assert(Result::unwrap(x1) == -3);
 
     // This tests type inference for enums
+    assert(Result::unwrap(x1) == -3);
     assert(x1.unwrap() == -3);
     assert(x1Ok.unwrap() == -3);
 

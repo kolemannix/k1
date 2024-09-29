@@ -1000,9 +1000,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 // Generate and store the type in here
                 let ty = self.module.types.get_no_follow(type_id);
                 match ty {
-                    Type::Optional(optional) => {
-                        Ok(self.build_optional_type(type_id, &optional)?.into())
-                    }
                     Type::Struct(struc) => {
                         trace!("generating llvm type for struct type {type_id}");
                         let field_count = struc.fields.len();
@@ -1603,45 +1600,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         ),
                         span: expr.get_span(),
                     })
-                }
-            }
-            TypedExpr::OptionalNone(type_id, _) => {
-                let optional_value = self.codegen_optional_value(*type_id, None)?;
-                Ok(optional_value.into())
-            }
-            TypedExpr::OptionalSome(opt_some) => {
-                let optional_value =
-                    self.codegen_optional_value(opt_some.type_id, Some(opt_some))?;
-                Ok(optional_value.into())
-            }
-            TypedExpr::OptionalHasValue(optional_expr) => {
-                let optional_value = self.codegen_expr_basic_value(optional_expr)?;
-                let optional_has_value =
-                    self.codegen_optional_has_value(optional_value.into_struct_value());
-                Ok(optional_has_value.as_basic_value_enum().into())
-            }
-            TypedExpr::OptionalGet(opt_get) => {
-                if opt_get.checked {
-                    let optional_value = self.codegen_expr_basic_value(&opt_get.inner_expr)?;
-                    let has_value =
-                        self.codegen_optional_has_value(optional_value.into_struct_value());
-                    let has_value_i1 = self.bool_to_i1(has_value, "unwrap_check");
-                    let branch =
-                        self.build_conditional_branch(has_value_i1, "unwrap_ok", "unwrap_crash");
-
-                    // label: unwrap_crash
-                    self.builder.position_at_end(branch.else_block);
-                    self.build_k1_crash("get on empty optional", opt_get.span);
-
-                    // label: unwrap_ok
-                    self.builder.position_at_end(branch.then_block);
-                    let payload = self.codegen_optional_get(optional_value.into_struct_value());
-
-                    Ok(payload.into())
-                } else {
-                    let optional_value = self.codegen_expr_basic_value(&opt_get.inner_expr)?;
-                    let payload = self.codegen_optional_get(optional_value.into_struct_value());
-                    Ok(payload.into())
                 }
             }
             TypedExpr::Unit(_) => Ok(self.builtin_types.unit_value.as_basic_value_enum().into()),
@@ -2598,7 +2556,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         function_id: FunctionId,
         function: &TypedFunction,
     ) -> CodegenResult<FunctionValue<'ctx>> {
-        trace!("codegen function\n{}", self.module.function_id_to_string(function_id, true));
+        debug!("codegen function\n{}", self.module.function_id_to_string(function_id, true));
 
         if let Some(function) = self.llvm_functions.get(&function_id) {
             return Ok(*function);

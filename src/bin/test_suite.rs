@@ -268,10 +268,10 @@ pub fn main() -> Result<()> {
                             success.fetch_add(1, Ordering::Relaxed);
                         } else {
                             let mut failures = failures.lock().unwrap();
-                            failures.push(
+                            failures.push((
                                 test.as_path().file_name().unwrap().to_str().unwrap().to_string(),
-                            );
-                            eprintln!("{filename:040} {}: {}", "FAIL".red(), result.unwrap_err());
+                                result.unwrap_err(),
+                            ));
                         }
                     })
                     .unwrap();
@@ -288,15 +288,20 @@ pub fn main() -> Result<()> {
                 success.fetch_add(1, Ordering::Relaxed);
             } else {
                 let mut failures = failures.lock().unwrap();
-                failures.push(test.as_path().file_name().unwrap().to_str().unwrap().to_string());
-                eprintln!("Test failed: {}", result.unwrap_err());
+                failures.push((
+                    test.as_path().file_name().unwrap().to_str().unwrap().to_string(),
+                    result.unwrap_err(),
+                ));
             }
         }
     }
     let success = success.into_inner();
     if success != total {
         let failures = failures.lock().unwrap();
-        eprintln!("\n-----------------------------------\nFailed tests:\n{}", failures.join("\n"));
+        eprintln!("\n-----------------------------------\nFailed tests:\n");
+        for (filename, result) in failures.iter() {
+            eprintln!("{filename:040} {}: {}", "FAIL".red(), result);
+        }
         bail!("{} tests failed", total - success);
     } else {
         eprintln!("Ran {} tests, {} succeeded", total, success);

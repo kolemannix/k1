@@ -99,7 +99,6 @@ pub struct ParsedIntegerLiteral {
 
 #[derive(Debug, Clone)]
 pub enum Literal {
-    None(SpanId),
     Unit(SpanId),
     Char(u8, SpanId),
     Integer(ParsedIntegerLiteral),
@@ -111,7 +110,6 @@ pub enum Literal {
 impl Display for Literal {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Literal::None(_) => f.write_str("None"),
             Literal::Unit(_) => f.write_str("()"),
             Literal::Char(byte, _) => {
                 f.write_char('\'')?;
@@ -133,7 +131,6 @@ impl Display for Literal {
 impl Literal {
     pub fn get_span(&self) -> SpanId {
         match self {
-            Literal::None(span) => *span,
             Literal::Unit(span) => *span,
             Literal::Char(_, span) => *span,
             Literal::Integer(i) => i.span,
@@ -537,9 +534,6 @@ pub enum ParsedPattern {
     Struct(ParsedStructPattern),
     Enum(ParsedEnumPattern),
     Wildcard(SpanId),
-    Some(ParsedSomePattern),
-    // Tag(TagExpr),
-    // Array(ArrayExpr),
 }
 
 impl ParsedPattern {}
@@ -1011,7 +1005,6 @@ impl ParsedModule {
             ParsedPattern::Variable(_var_pattern, span) => *span,
             ParsedPattern::Struct(struct_pattern) => struct_pattern.span,
             ParsedPattern::Wildcard(span) => *span,
-            ParsedPattern::Some(some_pattern) => some_pattern.span,
         }
     }
 
@@ -1342,16 +1335,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let pattern_id =
                     self.module.patterns.add_pattern(ParsedPattern::Wildcard(ident_token.span));
                 Ok(pattern_id)
-            } else if self.module.identifiers.get_name(ident) == "Some" {
-                self.expect_eat_token(K::OpenParen)?;
-                let inner_pattern = self.expect_pattern()?;
-                let close = self.expect_eat_token(K::CloseParen)?;
-                let span = self.extend_token_span(first, close);
-                let pattern_id = self
-                    .module
-                    .patterns
-                    .add_pattern(ParsedPattern::Some(ParsedSomePattern { inner_pattern, span }));
-                Ok(pattern_id)
             } else {
                 let pattern_id = self
                     .module
@@ -1536,11 +1519,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     Ok(Some(self.add_expression(ParsedExpression::Literal(Literal::Bool(
                         false, first.span,
                     )))))
-                } else if text == "None" {
-                    self.tokens.advance();
-                    Ok(Some(
-                        self.add_expression(ParsedExpression::Literal(Literal::None(first.span))),
-                    ))
                 } else {
                     match text.chars().next() {
                         Some(c) if c.is_numeric() => {

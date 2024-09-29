@@ -19,9 +19,9 @@ fn main(): int {
   assert(not (b is false));
   assert(b is true);
 
-  val opt = Some(42);
-  assert(opt is Some(_));
-  assert(not (opt is None));
+  val opt: int? = .Some(42);
+  assert(opt is .Some(_));
+  assert(not (opt is .None));
 
   val foo = { x: 1, y: "asdf" };
   // Wildcard pattern
@@ -48,14 +48,14 @@ fn main(): int {
   };
 
   // Record pattern where inner has condition statements
-  val bar = { x: Some(1) };
-  if bar is { x: Some(x) } {
+  val bar = { x: .Some(1): int? };
+  if bar is { x: .Some(x) } {
     assert(x == 1);
   };
 
   // Optionals
-  val opt = Some({ x: 1 });
-  if opt is Some({ x: 2 }) {
+  val opt: { x: i64 }? = .Some({ x: 1 });
+  if opt is .Some({ x: 2 }) {
     ()
   } else assert(true);
 

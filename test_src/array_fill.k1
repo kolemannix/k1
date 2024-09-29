@@ -1,5 +1,4 @@
 fn main(): int {
-  // FIXME: This test is stupid
   val xs = &Array::new[int](0);
   assert(xs.cap == 0);
   assert(xs.len == 0);
