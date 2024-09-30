@@ -2,9 +2,11 @@
 
 - Fixing enums big time
   - [x] Rename Optional -> Opt
-  - [ ] Remove tag literals, make enum tags per-enum
+  - [x] Remove tag literals, make enum tags per-enum
   - [ ] Add namespace-level type variables
-  - [ ] Parse Optional[i32]::Some(5) and infer Optional::Some(5) and Optional::None (payloadless)
+  - [ ] Parse texpr Opt[T].Some Optional[i32]::Some(5) and infer Optional::Some(5) and Optional::None (payloadless)
+  - [ ] CastType EnumVariant check should not happen in codegen
+  - [ ] kill ParsedTypeExpression::AnonEnumVariant?
 
 - [x] QoL before rest of pattern matching
   - [x] Codegen fail instead of panic

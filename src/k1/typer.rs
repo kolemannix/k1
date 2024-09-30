@@ -591,7 +591,7 @@ pub struct TypedIntegerExpr {
 }
 
 impl TypedIntegerExpr {
-    pub fn type_id(&self) -> TypeId {
+    pub fn get_type(&self) -> TypeId {
         match self.value {
             TypedIntegerValue::U8(_) => U8_TYPE_ID,
             TypedIntegerValue::U16(_) => U16_TYPE_ID,
@@ -690,7 +690,6 @@ pub enum TypedExpr {
     Block(TypedBlock),
     FunctionCall(Call),
     If(Box<TypedIf>),
-    Tag(TypedTagExpr),
     EnumConstructor(TypedEnumConstructor),
     EnumIsVariant(TypedEnumIsVariantExpr),
     EnumGetPayload(GetEnumPayload),
@@ -711,7 +710,7 @@ impl TypedExpr {
             TypedExpr::Unit(_) => UNIT_TYPE_ID,
             TypedExpr::Char(_, _) => CHAR_TYPE_ID,
             TypedExpr::Str(_, _) => STRING_TYPE_ID,
-            TypedExpr::Integer(integer) => integer.type_id(),
+            TypedExpr::Integer(integer) => integer.get_type(),
             TypedExpr::Bool(_, _) => BOOL_TYPE_ID,
             TypedExpr::Struct(struc) => struc.type_id,
             TypedExpr::Variable(var) => var.type_id,
@@ -721,7 +720,6 @@ impl TypedExpr {
             TypedExpr::Block(b) => b.expr_type,
             TypedExpr::FunctionCall(call) => call.ret_type,
             TypedExpr::If(ir_if) => ir_if.ty,
-            TypedExpr::Tag(tag_expr) => tag_expr.type_id,
             TypedExpr::EnumConstructor(enum_cons) => enum_cons.type_id,
             TypedExpr::EnumIsVariant(_is_variant) => BOOL_TYPE_ID,
             TypedExpr::EnumGetPayload(as_variant) => as_variant.payload_type_id,
@@ -745,7 +743,6 @@ impl TypedExpr {
             TypedExpr::Block(b) => b.span,
             TypedExpr::FunctionCall(call) => call.span,
             TypedExpr::If(ir_if) => ir_if.span,
-            TypedExpr::Tag(tag_expr) => tag_expr.span,
             TypedExpr::EnumConstructor(e) => e.span,
             TypedExpr::EnumIsVariant(is_variant) => is_variant.span,
             TypedExpr::EnumGetPayload(as_variant) => as_variant.span,
@@ -1602,11 +1599,6 @@ impl TypedModule {
                     }
                 }
             }
-            ParsedTypeExpression::TagName(ident, _span) => {
-                // Make a type for this tag, if there isn't one
-                let tag_type_id = self.types.get_type_for_tag(*ident);
-                Ok(tag_type_id)
-            }
             ParsedTypeExpression::TypeApplication(_ty_app) => {
                 let type_op_result =
                     self.detect_and_eval_type_operator(type_expr_id, scope_id, context.clone())?;
@@ -1636,9 +1628,6 @@ impl TypedModule {
                 let e = e.clone();
                 let mut variants = Vec::with_capacity(e.variants.len());
                 for (index, v) in e.variants.iter().enumerate() {
-                    // Hack: CAlling get_type_for_tag ensures there's a type for this tag
-                    self.types.get_type_for_tag(v.tag_name);
-
                     let payload_type_id = match &v.payload_expression {
                         None => None,
                         Some(payload_type_expr) => {
@@ -1665,7 +1654,7 @@ impl TypedModule {
                     let variant = TypedEnumVariant {
                         enum_type_id: TypeId::PENDING,
                         my_type_id: TypeId::PENDING,
-                        tag_name: v.tag_name,
+                        name: v.tag_name,
                         index: index as u32,
                         payload: payload_type_id,
                     };
@@ -1691,7 +1680,7 @@ impl TypedModule {
                     // You can do dot access on enums to get their variants
                     Type::Enum(e) => {
                         let Some(matching_variant) =
-                            e.variants.iter().find(|v| v.tag_name == dot_acc.member_name)
+                            e.variants.iter().find(|v| v.name == dot_acc.member_name)
                         else {
                             return ffail!(
                                 dot_acc.span,
@@ -2124,12 +2113,7 @@ impl TypedModule {
                     type_id
                 }
             }
-            Type::Unit
-            | Type::Char
-            | Type::Integer(_)
-            | Type::Bool
-            | Type::Pointer
-            | Type::TagInstance(_) => type_id,
+            Type::Unit | Type::Char | Type::Integer(_) | Type::Bool | Type::Pointer => type_id,
             Type::EnumVariant(_) => {
                 unreachable!(
                     "instantiate_generic_type is not expected to be called on an EnumVariant"
@@ -2251,7 +2235,7 @@ impl TypedModule {
                     );
                 };
                 let Some(matching_variant) =
-                    enum_type.variants.iter().find(|v| v.tag_name == enum_pattern.variant_tag)
+                    enum_type.variants.iter().find(|v| v.name == enum_pattern.variant_tag)
                 else {
                     return make_fail_span(
                         &format!(
@@ -2278,7 +2262,7 @@ impl TypedModule {
                 let enum_pattern = TypedEnumPattern {
                     enum_type_id: target_type_id,
                     variant_index: matching_variant.index,
-                    variant_tag_name: matching_variant.tag_name,
+                    variant_tag_name: matching_variant.name,
                     payload: payload_pattern,
                     span: enum_pattern.span,
                 };
@@ -2471,7 +2455,7 @@ impl TypedModule {
                     Err(format!(
                         "expected enum {} but got variant {} of a different enum",
                         self.type_id_to_string(expected),
-                        self.get_ident_str(actual_variant.tag_name)
+                        self.get_ident_str(actual_variant.name)
                     ))
                 }
             }
@@ -2815,7 +2799,7 @@ impl TypedModule {
                     return make_fail_span(
                         &format!(
                             "Variant {} has no payload",
-                            self.ast.identifiers.get_name(ev.tag_name)
+                            self.ast.identifiers.get_name(ev.name)
                         ),
                         field_access.span,
                     );
@@ -2823,7 +2807,7 @@ impl TypedModule {
                 Ok(TypedExpr::EnumGetPayload(GetEnumPayload {
                     target_expr: Box::new(base_expr),
                     payload_type_id,
-                    variant_name: ev.tag_name,
+                    variant_name: ev.name,
                     variant_index: ev.index,
                     span: field_access.span,
                 }))
@@ -2878,70 +2862,14 @@ impl TypedModule {
             self.type_id_to_string(expression.get_type()).blue(),
             self.type_id_to_string(expected_type_id).blue()
         );
-
-        // FIXME: Fix the control flow in here to not return expression but
-        // probably just Ok(None) or something
-
-        if let Type::EnumVariant(ev) = self.types.get(expected_type_id) {
-            // TODO: DRY up identical enum and enum_variant cases
-            if let TypedExpr::Tag(tag_expr) = &expression {
-                if ev.tag_name == tag_expr.name {
-                    if let Some(_p) = ev.payload {
-                    } else {
-                        debug!("coercion rule: tag to enum variant. We have a matching variant for coercion: {:?}", ev);
-                        let span = tag_expr.span;
-                        return CoerceResult::Coerced(
-                            "tag to enum variant",
-                            TypedExpr::EnumConstructor(TypedEnumConstructor {
-                                type_id: expected_type_id,
-                                variant_name: ev.tag_name,
-                                variant_index: ev.index,
-                                payload: None,
-                                span,
-                            }),
-                        );
-                    }
-                } else {
-                    // We 'fail' by just giving up the coercion and let typechecking fail
-                    // better
-                }
-            }
-        };
-        if let expected_type @ Type::Enum(e) = self.types.get(expected_type_id) {
-            match &expression {
-                TypedExpr::Tag(tag_expr) => {
-                    if let Some(matching_variant) = e.variant_by_name(tag_expr.name) {
-                        if let None = matching_variant.payload {
-                            debug!("coercion rule: tag to payloadless enum. We have a matching variant for coercion: {:?}", matching_variant);
-                            debug!(
-                                "We have a matching variant for coercion: {:?}",
-                                matching_variant
-                            );
-                            let span = tag_expr.span;
-                            return CoerceResult::Coerced(
-                                "tag to enum",
-                                TypedExpr::EnumConstructor(TypedEnumConstructor {
-                                    type_id: expected_type_id,
-                                    variant_name: matching_variant.tag_name,
-                                    variant_index: matching_variant.index,
-                                    payload: None,
-                                    span,
-                                }),
-                            );
-                        };
-                    }
-                }
-                _ => {
-                    // Lift values to Some(...) if the expr isn't even an option
-                    if let Some(_optional_type) = expected_type.as_optional() {
-                        if self.types.get(expression.get_type()).as_optional().is_none() {
-                            debug!("coercion rule applied: Some-lift");
-                            return CoerceResult::Coerced(
-                                "some-lift",
-                                self.synth_optional_some(parsed_id, expression),
-                            );
-                        }
-                    }
+        if let expected_type @ Type::Enum(_e) = self.types.get(expected_type_id) {
+            // Lift values to Some(...) if the expr isn't even an option
+            if let Some(_optional_type) = expected_type.as_optional() {
+                if self.types.get(expression.get_type()).as_optional().is_none() {
+                    return CoerceResult::Coerced(
+                        "some-lift",
+                        self.synth_optional_some(parsed_id, expression),
+                    );
                 }
             }
         };
@@ -3391,14 +3319,46 @@ impl TypedModule {
             ParsedExpression::For(for_expr) => {
                 self.eval_for_expr(&for_expr.clone(), scope_id, expected_type)
             }
-            ParsedExpression::Tag(tag_expr) => {
-                let type_id = self.types.get_type_for_tag(tag_expr.tag);
-                let typed_expr = TypedExpr::Tag(TypedTagExpr {
-                    name: tag_expr.tag,
-                    type_id,
-                    span: tag_expr.span,
-                });
-                Ok(typed_expr)
+            ParsedExpression::AnonEnumVariant(anon_enum) => {
+                let Some(expected_type) = expected_type else {
+                    return ffail!(anon_enum.span, "Could not infer enum type from context");
+                };
+                let (expected_enum, expected_variant_name) = match self.types.get(expected_type) {
+                    Type::EnumVariant(ev) => {
+                        (self.types.get(ev.enum_type_id).expect_enum(), Some(ev.name))
+                    }
+                    Type::Enum(e) => (e, None),
+                    _ => return ffail!(anon_enum.span, "Expected type is not enum"),
+                };
+
+                if let Some(matching_variant) = expected_enum.variant_by_name(anon_enum.name) {
+                    let None = matching_variant.payload else {
+                        return ffail!(anon_enum.span, "Enum variant requires payload");
+                    };
+                    if let Some(expected_variant_name) = expected_variant_name {
+                        if matching_variant.name != expected_variant_name {
+                            return ffail!(
+                                anon_enum.span,
+                                "Expected variant {}",
+                                self.get_ident_str(expected_variant_name)
+                            );
+                        }
+                    }
+                    let span = anon_enum.span;
+                    Ok(TypedExpr::EnumConstructor(TypedEnumConstructor {
+                        type_id: expected_type,
+                        variant_name: matching_variant.name,
+                        variant_index: matching_variant.index,
+                        payload: None,
+                        span,
+                    }))
+                } else {
+                    ffail!(
+                        anon_enum.span,
+                        "No variant named {}",
+                        self.get_ident_str(anon_enum.name)
+                    )
+                }
             }
             ParsedExpression::EnumConstructor(e) => {
                 let span = e.span;
@@ -3432,7 +3392,7 @@ impl TypedModule {
                     e.span,
                 ))?;
                 let variant_index = typed_variant.index;
-                let variant_name = typed_variant.tag_name;
+                let variant_name = typed_variant.name;
                 // drop(typed_variant);
                 let payload_expr = self.eval_expr(e.payload, scope_id, Some(variant_payload))?;
                 if let Err(msg) =
@@ -3770,7 +3730,7 @@ impl TypedModule {
                     let payload_value = TypedExpr::EnumGetPayload(GetEnumPayload {
                         target_expr: Box::new(target_expr_variable_expr.into()),
                         payload_type_id,
-                        variant_name: variant.tag_name,
+                        variant_name: variant.name,
                         variant_index: variant.index,
                         span: enum_pattern.span,
                     });
@@ -3922,21 +3882,8 @@ impl TypedModule {
                     self.type_id_to_string(target_type).blue()
                 ),
             },
-            Type::Enum(e) => {
+            Type::Enum(_e) => {
                 match self.types.get(target_type) {
-                    Type::TagInstance(tag_type) => {
-                        // If this tag is a variant of the enum, we can cast to it
-                        if let Some(variant) = e.variant_by_name(tag_type.ident) {
-                            Ok((CastType::EnumVariant, variant.my_type_id))
-                        } else {
-                            ffail!(
-                                cast.span,
-                                "Cannot cast enum '{}' to '{}'",
-                                self.type_id_to_string(base_expr_type).blue(),
-                                self.type_id_to_string(target_type).blue()
-                            )
-                        }
-                    }
                     Type::EnumVariant(variant) => {
                         // Enum cast to variant
                         if variant.enum_type_id == base_expr_type {
@@ -4456,26 +4403,6 @@ impl TypedModule {
                 if let Err(msg) = self.check_types(lhs.get_type(), rhs.get_type(), scope_id) {
                     return make_fail_span(
                         format!("Type mismatch on equality of 2 generic variables: {}", msg),
-                        binary_op.span,
-                    );
-                }
-                Ok(TypedExpr::BinaryOp(BinaryOp {
-                    kind: BinaryOpKind::Equals,
-                    ty: BOOL_TYPE_ID,
-                    lhs: Box::new(lhs),
-                    rhs: Box::new(rhs),
-                    span: binary_op.span,
-                }))
-            }
-            Type::TagInstance(tag) => {
-                let tag_ident = tag.ident;
-                let rhs = self.eval_expr(binary_op.rhs, scope_id, None)?;
-                let Type::TagInstance(rhs_tag) = self.types.get(rhs.get_type()) else {
-                    return make_fail_span("Expected string on rhs", binary_op.span);
-                };
-                if rhs_tag.ident != tag_ident {
-                    return make_fail_span(
-                        "Cannot compare different tags for equality",
                         binary_op.span,
                     );
                 }
@@ -5413,7 +5340,7 @@ impl TypedModule {
                 }
                 for (idx, variant) in variants.iter().enumerate() {
                     let passed_variant = &passed_variants[idx];
-                    if variant.tag_name != passed_variant.tag_name {
+                    if variant.name != passed_variant.name {
                         return Ok(());
                     }
                     if let Some(passed_payload) = passed_variant.payload {
@@ -6768,13 +6695,13 @@ impl TypedModule {
                 .iter()
                 .flat_map(|v| match v.payload.as_ref() {
                     None => {
-                        vec![PatternConstructor::Enum { variant_name: v.tag_name, inner: None }]
+                        vec![PatternConstructor::Enum { variant_name: v.name, inner: None }]
                     }
                     Some(payload) => self
                         .generate_constructors_for_type(*payload, span_id)
                         .into_iter()
                         .map(|inner| PatternConstructor::Enum {
-                            variant_name: v.tag_name,
+                            variant_name: v.name,
                             inner: Some(Box::new(inner)),
                         })
                         .collect(),
@@ -6877,7 +6804,7 @@ impl TypedModule {
             cast_type: CastType::KnownNoOp,
             base_expr: Box::new(TypedExpr::EnumConstructor(TypedEnumConstructor {
                 type_id: some_variant.my_type_id,
-                variant_name: some_variant.tag_name,
+                variant_name: some_variant.name,
                 variant_index: some_variant.index,
                 span,
                 payload: Some(Box::new(expression)),

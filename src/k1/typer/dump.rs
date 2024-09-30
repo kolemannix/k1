@@ -202,10 +202,6 @@ impl TypedModule {
                 self.display_type_id(r.inner_type, expand, writ)?;
                 writ.write_char('*')
             }
-            Type::TagInstance(tag) => {
-                writ.write_str("Tag.")?;
-                writ.write_str(self.ast.identifiers.get_name(tag.ident))
-            }
             Type::Enum(e) => {
                 if let Some(defn_info) = e.type_defn_info.as_ref() {
                     writ.write_str(self.get_ident_str(defn_info.name))?;
@@ -216,7 +212,7 @@ impl TypedModule {
                 }
                 writ.write_str("enum ")?;
                 for (idx, v) in e.variants.iter().enumerate() {
-                    writ.write_str(self.ast.identifiers.get_name(v.tag_name))?;
+                    writ.write_str(self.ast.identifiers.get_name(v.name))?;
                     if let Some(payload) = &v.payload {
                         writ.write_str("(")?;
                         self.display_type_id(*payload, expand, writ)?;
@@ -238,7 +234,7 @@ impl TypedModule {
                     writ.write_str(self.get_ident_str(defn_info.name))?;
                     writ.write_str(".")?;
                 }
-                writ.write_str(self.ast.identifiers.get_name(ev.tag_name))?;
+                writ.write_str(self.ast.identifiers.get_name(ev.name))?;
                 if let Some(payload) = &ev.payload {
                     writ.write_str("(")?;
                     self.display_type_id(*payload, expand, writ)?;
@@ -465,10 +461,6 @@ impl TypedModule {
                 self.display_expr(&binary_op.lhs, writ, indentation)?;
                 write!(writ, " {} ", binary_op.kind)?;
                 self.display_expr(&binary_op.rhs, writ, indentation)
-            }
-            TypedExpr::Tag(tag_expr) => {
-                writ.write_str(".")?;
-                writ.write_str(&self.get_ident_str(tag_expr.name))
             }
             TypedExpr::EnumConstructor(enum_constr) => {
                 writ.write_str(".")?;

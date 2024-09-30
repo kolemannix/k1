@@ -168,7 +168,9 @@ struct LlvmValueType<'ctx> {
 
 #[derive(Debug, Clone, Copy)]
 struct EnumVariantStructType<'ctx> {
+    name: Identifier,
     struct_type: StructType<'ctx>,
+    tag_value: IntValue<'ctx>,
     di_type: DIType<'ctx>,
     size: SizeInfo,
     payload_size_unpadded: SizeInfo,
@@ -177,6 +179,7 @@ struct EnumVariantStructType<'ctx> {
 #[derive(Debug, Clone)]
 struct LlvmEnumType<'ctx> {
     type_id: TypeId,
+    tag_type: IntType<'ctx>,
     base_struct_type: StructType<'ctx>,
     variant_structs: Vec<EnumVariantStructType<'ctx>>,
     di_type: DIType<'ctx>,
@@ -323,7 +326,6 @@ struct BuiltinTypes<'ctx> {
     c_str: PointerType<'ctx>,
     string_struct: StructType<'ctx>,
     string_size: SizeInfo,
-    tag_type: IntType<'ctx>,
     ptr: PointerType<'ctx>,
     ptr_sized_int: IntType<'ctx>,
 }
@@ -366,7 +368,7 @@ impl<'ctx> BuiltinTypes<'ctx> {
             padding_members.push(self.ctx.i8_type().into());
             remaining_bits -= 8;
         }
-        self.ctx.struct_type(&padding_members, true).as_basic_type_enum()
+        self.ctx.struct_type(&padding_members, false).as_basic_type_enum()
         // debug_assert!(size_bits % 8 == 0);
         // let byte_count = size_bits / 8;
         // self.ctx.custom_width_int_type(8).array_type(byte_count).as_basic_type_enum()
@@ -397,7 +399,6 @@ pub struct Codegen<'ctx, 'module> {
     builtin_globals: HashMap<String, GlobalValue<'ctx>>,
     builtin_types: BuiltinTypes<'ctx>,
     debug: DebugContext<'ctx>,
-    tag_type_mappings: HashMap<Identifier, GlobalValue<'ctx>>,
 }
 
 struct DebugContext<'ctx> {
@@ -621,7 +622,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             c_str: char_type.ptr_type(AddressSpace::default()),
             string_struct,
             string_size,
-            tag_type: ctx.i64_type(),
             // It doesn't matter what type the pointer points to; its irrelevant in LLVM
             // since pointers do not actually have types
             ptr: ctx.i64_type().ptr_type(AddressSpace::default()),
@@ -642,23 +642,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 .fn_type(&[byte_ptr.into(), byte_ptr.into(), ctx.i64_type().into()], false),
             Some(LlvmLinkage::External),
         );
-        let mut tag_type_value: u64 = 0;
-        let mut tag_type_mappings: HashMap<Identifier, GlobalValue<'ctx>> = HashMap::new();
-        for (_type_id, typ) in module.types.iter() {
-            if let Type::TagInstance(tag) = typ {
-                let value = builtin_types.tag_type.const_int(tag_type_value, false);
-                let name = module.ast.identifiers.get_name(tag.ident);
-                let global = llvm_module.add_global(
-                    builtin_types.tag_type,
-                    None,
-                    &format!("Tag.{}", &*name),
-                );
-                global.set_constant(true);
-                global.set_initializer(&value);
-                tag_type_mappings.insert(tag.ident, global);
-                tag_type_value += 1;
-            }
-        }
         Codegen {
             ctx,
             module,
@@ -673,7 +656,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             builtin_globals,
             builtin_types,
             debug: debug_context,
-            tag_type_mappings,
         }
     }
 
@@ -1065,33 +1047,23 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         }
                         .into())
                     }
-                    Type::TagInstance(tag_instance) => Ok(LlvmType::Value(LlvmValueType {
-                        type_id,
-                        basic_type: self.builtin_types.tag_type.as_basic_type_enum(),
-                        di_type: self
-                            .debug
-                            .debug_builder
-                            .create_basic_type(
-                                &format!(
-                                    "tag_{}",
-                                    self.module.ast.identifiers.get_name(tag_instance.ident)
-                                ),
-                                self.builtin_types.tag_type.get_bit_width() as u64,
-                                dw_ate_unsigned,
-                                0,
-                            )
-                            .unwrap()
-                            .as_type(),
-                        size: self.size_info(&self.builtin_types.tag_type),
-                    })),
                     Type::Enum(enum_type) => {
                         let mut payload_section_size: u32 = 0;
                         let mut variant_structs = Vec::with_capacity(enum_type.variants.len());
-                        let discriminant_field = self.builtin_types.tag_type;
+                        if enum_type.variants.len() >= u8::MAX as usize {
+                            panic!("too many enum variants for now");
+                        }
+                        let tag_int_type =
+                            self.codegen_type(I8_TYPE_ID)?.value_basic_type().into_int_type();
                         let discriminant_field_debug = self
                             .debug
                             .debug_builder
-                            .create_basic_type("tag", WORD_SIZE_BITS, dw_ate_unsigned, 0)
+                            .create_basic_type(
+                                "tag",
+                                tag_int_type.get_bit_width() as u64,
+                                dw_ate_unsigned,
+                                0,
+                            )
                             .unwrap()
                             .as_type();
                         for variant in enum_type.variants.iter() {
@@ -1102,7 +1074,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                                         self.codegen_type_inner(payload_type_id, depth + 1)?;
                                     let struc = self.ctx.struct_type(
                                         &[
-                                            discriminant_field.as_basic_type_enum(),
+                                            tag_int_type.as_basic_type_enum(),
                                             variant_payload_type.value_basic_type(),
                                         ],
                                         false,
@@ -1110,7 +1082,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                                     let debug_struct = self.make_debug_struct_type(
                                         &format!(
                                             "variant_{}",
-                                            self.module.ast.identifiers.get_name(variant.tag_name)
+                                            self.module.ast.identifiers.get_name(variant.name)
                                         ),
                                         &struc,
                                         SpanId::NONE,
@@ -1132,18 +1104,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                                     (struc, debug_struct)
                                 } else {
                                     payload_size = SizeInfo::ZERO;
-                                    let s = self.ctx.struct_type(
-                                        &[discriminant_field.as_basic_type_enum()],
-                                        false,
-                                    );
+                                    let s = self
+                                        .ctx
+                                        .struct_type(&[tag_int_type.as_basic_type_enum()], false);
                                     let debug_struct = {
                                         self.make_debug_struct_type(
                                             &format!(
                                                 "variant_{}",
-                                                self.module
-                                                    .ast
-                                                    .identifiers
-                                                    .get_name(variant.tag_name)
+                                                self.module.ast.identifiers.get_name(variant.name)
                                             ),
                                             &s,
                                             SpanId::NONE,
@@ -1156,7 +1124,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                                     (s, debug_struct)
                                 };
                             variant_structs.push(EnumVariantStructType {
+                                name: variant.name,
                                 struct_type: variant_struct,
+                                tag_value: tag_int_type.const_int(variant.index as u64, false),
                                 di_type: variant_struct_debug,
                                 size: self.size_info(&variant_struct),
                                 payload_size_unpadded: payload_size,
@@ -1179,7 +1149,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                                 let variant = &enum_type.variants[index];
                                 let struct_name = &format!(
                                     "{}_{}",
-                                    &*self.get_ident_name(variant.tag_name),
+                                    &*self.get_ident_name(variant.name),
                                     variant
                                         .payload
                                         .map(|p| p.to_string())
@@ -1201,7 +1171,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
                         let base_type = self.ctx.struct_type(
                             &[
-                                self.builtin_types.tag_type.as_basic_type_enum(),
+                                tag_int_type.as_basic_type_enum(),
                                 union_padding.as_basic_type_enum(),
                             ],
                             false,
@@ -1263,6 +1233,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
                         Ok(LlvmEnumType {
                             type_id,
+                            tag_type: tag_int_type,
                             base_struct_type: base_type,
                             variant_structs,
                             di_type: debug_union_type,
@@ -1723,39 +1694,33 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(block_value)
             }
             TypedExpr::FunctionCall(call) => self.codegen_function_call(call),
-            TypedExpr::Tag(tag_expr) => {
-                let int_value = self.get_value_for_tag_type(tag_expr.name);
-                Ok(int_value.as_basic_value_enum().into())
-            }
             TypedExpr::EnumConstructor(enum_constr) => {
                 let llvm_type = self.codegen_type(enum_constr.type_id)?;
                 let enum_type = llvm_type.expect_enum();
                 let variant_tag_name = enum_constr.variant_name;
 
-                let llvm_variant =
-                    enum_type.variant_structs[enum_constr.variant_index as usize].struct_type;
+                let enum_variant = enum_type.variant_structs[enum_constr.variant_index as usize];
 
-                let enum_ptr = self.builder.build_alloca(llvm_variant, "enum_constr");
+                let enum_ptr = self.builder.build_alloca(enum_variant.struct_type, "enum_constr");
 
                 // Store the tag_value in the first slot
-                let tag_value = self.get_value_for_tag_type(variant_tag_name);
                 let tag_pointer = self
                     .builder
                     .build_struct_gep(
-                        llvm_variant,
+                        enum_variant.struct_type,
                         enum_ptr,
                         0,
                         &format!("enum_tag_{}", &*self.get_ident_name(variant_tag_name)),
                     )
                     .unwrap();
-                self.builder.build_store(tag_pointer, tag_value);
+                self.builder.build_store(tag_pointer, enum_variant.tag_value);
 
                 if let Some(payload) = &enum_constr.payload {
                     let value = self.codegen_expr_basic_value(payload)?;
                     let payload_pointer = self
                         .builder
                         .build_struct_gep(
-                            llvm_variant,
+                            enum_variant.struct_type,
                             enum_ptr,
                             1,
                             &format!("enum_payload_{}", &*self.get_ident_name(variant_tag_name)),
@@ -1772,8 +1737,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let enum_value = self
                     .codegen_expr_basic_value(&enum_is_variant.target_expr)?
                     .into_struct_value();
-                let is_variant_bool =
-                    self.codegen_enum_is_variant(enum_value, enum_is_variant.variant_name);
+                let enum_llvm =
+                    self.codegen_type(enum_is_variant.target_expr.get_type())?.expect_enum();
+                let variant = enum_llvm
+                    .variant_structs
+                    .iter()
+                    .find(|v| v.name == enum_is_variant.variant_name)
+                    .unwrap();
+                let is_variant_bool = self.codegen_enum_is_variant(enum_value, variant.tag_value);
                 Ok(is_variant_bool.as_basic_value_enum().into())
             }
             TypedExpr::EnumGetPayload(enum_get_payload) => {
@@ -1790,12 +1761,18 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             TypedExpr::Cast(cast) => {
                 match cast.cast_type {
                     CastType::EnumVariant => {
+                        // FIXME: Move this to synthed code and simplify codegen
                         let enum_value =
                             self.codegen_expr_basic_value(&cast.base_expr)?.into_struct_value();
-                        let variant =
-                            self.module.types.get(cast.target_type_id).expect_enum_variant();
+                        let expected_variant_index =
+                            self.module.types.get(cast.target_type_id).expect_enum_variant().index;
+                        let expected_variant = self
+                            .codegen_type(cast.base_expr.get_type())?
+                            .expect_enum()
+                            .variant_structs[expected_variant_index as usize];
+
                         let is_variant_bool =
-                            self.codegen_enum_is_variant(enum_value, variant.tag_name);
+                            self.codegen_enum_is_variant(enum_value, expected_variant.tag_value);
 
                         let cond = self.bool_to_i1(is_variant_bool, "enum_cast_check");
                         let branch = self.build_conditional_branch(cond, "cast_post", "cast_fail");
@@ -2073,14 +2050,13 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     fn codegen_enum_is_variant(
         &mut self,
         enum_value: StructValue<'ctx>,
-        variant_name: Identifier,
+        variant_tag_value: IntValue<'ctx>,
     ) -> IntValue<'ctx> {
-        let tag_value = self.get_value_for_tag_type(variant_name);
         let enum_tag_value = self.get_enum_tag(enum_value);
         let is_equal = self.builder.build_int_compare(
             IntPredicate::EQ,
             enum_tag_value,
-            tag_value,
+            variant_tag_value,
             "is_variant_cmp",
         );
         let is_equal_bool = self.i1_to_bool(is_equal, "is_variant");
@@ -2685,7 +2661,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         &self,
         integer: &TypedIntegerExpr,
     ) -> CodegenResult<BasicValueEnum<'ctx>> {
-        let llvm_ty = self.codegen_type(integer.type_id())?;
+        let llvm_ty = self.codegen_type(integer.get_type())?;
         let llvm_int_ty = llvm_ty.value_basic_type().into_int_type();
         let Type::Integer(int_type) = self.module.types.get(llvm_ty.type_id()) else { panic!() };
         let llvm_value = if int_type.is_signed() {
@@ -2823,11 +2799,5 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let return_value = unsafe { engine.run_function(*llvm_function, &[]) };
         let res: u64 = return_value.as_int(true);
         Ok(res)
-    }
-
-    fn get_value_for_tag_type(&self, identifier_id: Identifier) -> IntValue<'ctx> {
-        let global = self.tag_type_mappings.get(&identifier_id).expect("tag type mapping value");
-        let ptr = global.as_pointer_value();
-        self.builder.build_load(self.builtin_types.tag_type, ptr, "tag_value").into_int_value()
     }
 }

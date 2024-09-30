@@ -85,7 +85,7 @@ pub const I32_TYPE_ID: TypeId = TypeId(11);
 pub const I64_TYPE_ID: TypeId = TypeId(12);
 pub const ARRAY_TYPE_ID: TypeId = TypeId(15);
 pub const STRING_TYPE_ID: TypeId = TypeId(16);
-pub const OPTIONAL_TYPE_ID: TypeId = TypeId(23);
+pub const OPTIONAL_TYPE_ID: TypeId = TypeId(21);
 
 #[derive(Debug, Clone)]
 pub struct ArrayType {
@@ -111,15 +111,10 @@ pub struct ReferenceType {
 }
 
 #[derive(Debug, Clone)]
-pub struct TagInstanceType {
-    pub ident: Identifier,
-}
-
-#[derive(Debug, Clone)]
 pub struct TypedEnumVariant {
     pub enum_type_id: TypeId,
     pub my_type_id: TypeId,
-    pub tag_name: Identifier,
+    pub name: Identifier,
     pub index: u32,
     pub payload: Option<TypeId>,
 }
@@ -135,7 +130,7 @@ pub struct TypedEnum {
 
 impl TypedEnum {
     pub fn variant_by_name(&self, name: Identifier) -> Option<&TypedEnumVariant> {
-        self.variants.iter().find(|v| v.tag_name == name)
+        self.variants.iter().find(|v| v.name == name)
     }
     pub fn variant_by_index(&self, index: u32) -> Option<&TypedEnumVariant> {
         self.variants.iter().find(|v| v.index == index)
@@ -266,7 +261,6 @@ pub enum Type {
     Reference(ReferenceType),
     #[allow(clippy::enum_variant_names)]
     TypeVariable(TypeVariable),
-    TagInstance(TagInstanceType),
     Enum(TypedEnum),
     /// Enum variants are proper types of their own, for lots
     /// of reasons that make programming nice. Unlike in Rust :()
@@ -286,7 +280,6 @@ impl Type {
             Type::Struct(t) => Some(t.ast_node),
             Type::Reference(_t) => None,
             Type::TypeVariable(_t) => None,
-            Type::TagInstance(_t) => None,
             Type::Enum(e) => Some(e.ast_node),
             Type::EnumVariant(_ev) => None,
             Type::Never => None,
@@ -391,14 +384,6 @@ impl Type {
         }
     }
 
-    #[allow(unused)]
-    fn as_tag(&self) -> Option<&TagInstanceType> {
-        match self {
-            Type::TagInstance(tag) => Some(tag),
-            _ => None,
-        }
-    }
-
     pub fn expect_generic(&self) -> &GenericType {
         match self {
             Type::Generic(g) => g,
@@ -416,7 +401,6 @@ impl Type {
             Type::Struct(s) => s.type_defn_info.as_ref(),
             Type::Reference(_) => None,
             Type::TypeVariable(_) => None,
-            Type::TagInstance(_) => None,
             Type::Enum(e) => e.type_defn_info.as_ref(),
             Type::EnumVariant(_) => None,
             Type::Never => None,
@@ -437,7 +421,6 @@ impl Type {
             Type::Struct(s) => s.generic_instance_info.as_ref(),
             Type::Reference(_) => None,
             Type::TypeVariable(_) => None,
-            Type::TagInstance(_) => None,
             Type::Enum(e) => e.generic_instance_info.as_ref(),
             Type::EnumVariant(_) => None,
             Type::Never => None,
@@ -480,7 +463,6 @@ impl Type {
             Type::Struct(_s) => None,
             Type::Reference(_) => None,
             Type::TypeVariable(t) => Some(t.span),
-            Type::TagInstance(_) => None,
             Type::Enum(_e) => None,
             Type::EnumVariant(_) => None,
             Type::Never => None,
@@ -604,7 +586,6 @@ impl Types {
             }
             Type::Reference(refer) => self.does_type_reference_type_variables(refer.inner_type),
             Type::TypeVariable(_) => true,
-            Type::TagInstance(_) => false,
             Type::Enum(e) => {
                 for v in e.variants.iter() {
                     if let Some(payload) = v.payload {
@@ -671,7 +652,6 @@ impl Types {
             }
             Type::Reference(_refer) => None,
             Type::TypeVariable(_) => None,
-            Type::TagInstance(_) => None,
             Type::Enum(_) => None,
             Type::EnumVariant(_) => None,
             Type::Never => None,
@@ -692,20 +672,6 @@ impl Types {
 
     pub fn find_type_defn_mapping(&mut self, type_defn_id: ParsedTypeDefnId) -> Option<TypeId> {
         self.type_defn_mapping.get(&type_defn_id).copied()
-    }
-
-    // FIXME: Slow
-    pub fn get_type_for_tag(&mut self, tag_ident: Identifier) -> TypeId {
-        for (type_id, typ) in self.iter() {
-            if let Type::TagInstance(tag) = typ {
-                if tag.ident == tag_ident {
-                    return type_id;
-                }
-            }
-        }
-        let tag_type = Type::TagInstance(TagInstanceType { ident: tag_ident });
-        let tag_type_id = self.add_type(tag_type);
-        tag_type_id
     }
 
     // Ended up storing redirects as RecursiveReference, but keeping this around
@@ -737,7 +703,6 @@ impl Types {
                 self.replace_type(placeholder_id, inner_type, replace_with)
             }
             Type::TypeVariable(_) => (),
-            Type::TagInstance(_) => (),
             Type::Enum(e) => {
                 for v in e.variants.clone().iter_mut() {
                     if v.my_type_id == placeholder_id {
@@ -794,7 +759,6 @@ impl Types {
             (Type::TypeVariable(t1), Type::TypeVariable(t2)) => {
                 t1.name == t2.name && t1.scope_id == t2.scope_id
             }
-            (Type::TagInstance(t1), Type::TagInstance(t2)) => t1.ident == t2.ident,
             (Type::Enum(e1), Type::Enum(e2)) => {
                 if e1.type_defn_info.is_some() || e2.type_defn_info.is_some() {
                     return false;
@@ -804,7 +768,7 @@ impl Types {
                 }
                 for (index, v1) in e1.variants.iter().enumerate() {
                     let v2 = &e2.variants[index];
-                    let mismatch = v1.tag_name != v2.tag_name || v1.payload != v2.payload;
+                    let mismatch = v1.name != v2.name || v1.payload != v2.payload;
                     if mismatch {
                         return false;
                     }
