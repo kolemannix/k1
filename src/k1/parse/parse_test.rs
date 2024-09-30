@@ -338,11 +338,11 @@ fn type_hint_binop() -> ParseResult<()> {
 
 #[test]
 fn tag_literals() -> ParseResult<()> {
-    let input = ".Foo: .Foo";
+    let input = ".Foo: A.Foo";
     let (module, _expr, expr_id) = test_single_expr_with_id(input)?;
     let type_hint = module.get_expression_type_hint(expr_id).unwrap();
     assert_eq!(&module.expr_id_to_string(expr_id), ".Foo");
-    assert_eq!(module.type_expression_to_string(type_hint), ".Foo");
+    assert_eq!(module.type_expression_to_string(type_hint), "A.Foo");
     Ok(())
 }
 

@@ -347,8 +347,8 @@ pub struct OptionalGet {
 }
 
 #[derive(Debug, Clone)]
-pub struct TagExpr {
-    pub tag: Identifier,
+pub struct AnonEnumVariant {
+    pub name: Identifier,
     pub span: SpanId,
 }
 
@@ -400,7 +400,7 @@ pub enum ParsedExpression {
     Array(ArrayExpr),                       // [1, 3, 5, 7]
     OptionalGet(OptionalGet),               // foo!
     For(ForExpr),                           // for i in [1,2,3] do println(i)
-    Tag(TagExpr),                           // .A
+    AnonEnumVariant(AnonEnumVariant),       // .A
     EnumConstructor(ParsedEnumConstructor), // .A(<expr>)
     Is(ParsedIsExpression),                 // x is T
     Match(ParsedMatchExpression),           // when x is {
@@ -435,7 +435,7 @@ impl ParsedExpression {
             Self::Array(array_expr) => array_expr.span,
             Self::OptionalGet(optional_get) => optional_get.span,
             Self::For(for_expr) => for_expr.span,
-            Self::Tag(tag_expr) => tag_expr.span,
+            Self::AnonEnumVariant(tag_expr) => tag_expr.span,
             Self::EnumConstructor(e) => e.span,
             Self::Is(is_expr) => is_expr.span,
             Self::Match(match_expr) => match_expr.span,
@@ -457,7 +457,7 @@ impl ParsedExpression {
             Self::Array(_array_expr) => false,
             Self::OptionalGet(_optional_get) => false,
             Self::For(_) => false,
-            Self::Tag(_) => false,
+            Self::AnonEnumVariant(_) => false,
             Self::EnumConstructor(_) => false,
             Self::Is(_) => false,
             Self::Match(_) => false,
@@ -669,7 +669,6 @@ pub enum ParsedTypeExpression {
     Integer(ParsedNumericType),
     Struct(StructType),
     Name(Identifier, SpanId),
-    TagName(Identifier, SpanId),
     TypeApplication(TypeApplication),
     Optional(ParsedOptional),
     Reference(ParsedReference),
@@ -690,7 +689,6 @@ impl ParsedTypeExpression {
             ParsedTypeExpression::Integer(int) => int.span,
             ParsedTypeExpression::Struct(struc) => struc.span,
             ParsedTypeExpression::Name(_, span) => *span,
-            ParsedTypeExpression::TagName(_, span) => *span,
             ParsedTypeExpression::TypeApplication(app) => app.span,
             ParsedTypeExpression::Optional(opt) => opt.span,
             ParsedTypeExpression::Reference(r) => r.span,
@@ -1605,7 +1603,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn parse_base_type_expression(&mut self) -> ParseResult<Option<ParsedTypeExpressionId>> {
-        let (first, second) = self.peek_two();
+        let first = self.peek();
         if first.kind == K::KeywordEnum {
             let enumm = self.expect_enum_type_expression()?;
             let type_expr_id = self.module.type_expressions.add(ParsedTypeExpression::Enum(enumm));
@@ -1691,17 +1689,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     ))
                 }
             }
-        } else if first.kind == K::Dot && second.kind == K::Ident {
-            // Tag Literal Type
-            self.tokens.advance();
-            let tag_name = self.expect_eat_token(K::Ident)?;
-            let tag_name_ident = self.intern_ident_token(tag_name);
-            let span = self.extend_token_span(first, tag_name);
-            Ok(Some(
-                self.module
-                    .type_expressions
-                    .add(ParsedTypeExpression::TagName(tag_name_ident, span)),
-            ))
         } else if first.kind == K::OpenBrace {
             let open_brace = self.expect_eat_token(K::OpenBrace)?;
             let (fields, fields_span) =
@@ -2158,9 +2145,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             } else {
                 // Tag Literal
                 let span = self.extend_token_span(first, second);
-                Ok(Some(
-                    self.add_expression(ParsedExpression::Tag(TagExpr { tag: tag_name, span })),
-                ))
+                Ok(Some(self.add_expression(ParsedExpression::AnonEnumVariant(AnonEnumVariant {
+                    name: tag_name,
+                    span,
+                }))))
             }
         } else if first.kind == K::Ident {
             // FnCall
@@ -2785,9 +2773,9 @@ impl ParsedModule {
                 f.write_fmt(format_args!("{:?}", optional_get))
             }
             ParsedExpression::For(for_expr) => f.write_fmt(format_args!("{:?}", for_expr)),
-            ParsedExpression::Tag(tag_expr) => {
+            ParsedExpression::AnonEnumVariant(tag_expr) => {
                 f.write_char('.')?;
-                f.write_str(self.identifiers.get_name(tag_expr.tag))
+                f.write_str(self.identifiers.get_name(tag_expr.name))
             }
             ParsedExpression::EnumConstructor(e) => {
                 f.write_char('.')?;
@@ -2865,10 +2853,6 @@ impl ParsedModule {
                 f.write_str(" }")
             }
             ParsedTypeExpression::Name(ident, _) => f.write_str(self.identifiers.get_name(*ident)),
-            ParsedTypeExpression::TagName(ident, _) => {
-                f.write_str(".")?;
-                f.write_str(self.identifiers.get_name(*ident))
-            }
             ParsedTypeExpression::TypeApplication(tapp) => {
                 f.write_str(self.identifiers.get_name(tapp.base_name))?;
                 f.write_str("<")?;
