@@ -38,3 +38,6 @@ strip = "debuginfo"
 
 [profile.release]
 panic = "abort"
+
+[lints.clippy]
+let_and_return = "allow"
