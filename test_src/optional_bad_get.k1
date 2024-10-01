@@ -5,4 +5,4 @@ fn main(): int {
   assert(n!.x == 1);
   0
 }
-//abortmsg: bad enum cast
+//abortmsg: Opt.get on None

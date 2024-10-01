@@ -5,6 +5,5 @@ fn main(): int {
   val y = .A(42): E.A;
   val xAsA = x as E.A;
   assert(xAsA.payload == y.payload);
-  assert(xAsA2.payload == y.payload);
   0
 }

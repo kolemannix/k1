@@ -173,12 +173,12 @@ struct EnumVariantStructType<'ctx> {
     tag_value: IntValue<'ctx>,
     di_type: DIType<'ctx>,
     size: SizeInfo,
-    payload_size_unpadded: SizeInfo,
 }
 
 #[derive(Debug, Clone)]
 struct LlvmEnumType<'ctx> {
     type_id: TypeId,
+    #[allow(unused)]
     tag_type: IntType<'ctx>,
     base_struct_type: StructType<'ctx>,
     variant_structs: Vec<EnumVariantStructType<'ctx>>,
@@ -354,6 +354,7 @@ impl<'ctx> BuiltinTypes<'ctx> {
     }
 
     fn padding_type(&self, size_bits: u32) -> inkwell::types::BasicTypeEnum<'ctx> {
+        debug_assert!(size_bits % 8 == 0);
         let mut padding_members: Vec<BasicTypeEnum<'ctx>> = vec![];
         let mut remaining_bits = size_bits;
         while remaining_bits >= 64 {
@@ -368,9 +369,7 @@ impl<'ctx> BuiltinTypes<'ctx> {
             padding_members.push(self.ctx.i8_type().into());
             remaining_bits -= 8;
         }
-        self.ctx.struct_type(&padding_members, false).as_basic_type_enum()
-        // debug_assert!(size_bits % 8 == 0);
-        // let byte_count = size_bits / 8;
+        self.ctx.struct_type(&padding_members, true).as_basic_type_enum()
         // self.ctx.custom_width_int_type(8).array_type(byte_count).as_basic_type_enum()
         //self.ctx.custom_width_int_type(size_bits).as_basic_type_enum()
     }
@@ -734,44 +733,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         call
     }
 
-    fn build_optional_type(
-        &self,
-        type_id: TypeId,
-        optional_type: &OptionalType,
-    ) -> CodegenResult<LlvmStructType<'ctx>> {
-        // Optional types are represented as a struct with a boolean
-        // discriminant indicating whether the value is None, and the value itself
-        let boolean_type = self.codegen_type(BOOL_TYPE_ID)?;
-        let inner_type = self.codegen_type(optional_type.inner_type)?;
-
-        // The bug is because padding gets added to { i8, i64 } struct,
-        // so the offset of the second field is 8, not 1
-        // Which messes with enums since we pad the root struct ourselves and assume
-        // our size calcs are correct
-        // i bet I can add an assert on the LLVM size and see the problem now
-        // We could also repro with any enum payload that isn't naturally aligned
-        let struct_type = self
-            .ctx
-            .struct_type(&[boolean_type.value_basic_type(), inner_type.value_basic_type()], false);
-        let size = self.size_info(&struct_type);
-        let di_type = self.make_debug_struct_type(
-            &format!("optional_{}", type_id.to_string()),
-            &struct_type,
-            SpanId::NONE,
-            &[
-                StructDebugMember { name: "tag", di_type: boolean_type.debug_type() },
-                StructDebugMember { name: "payload", di_type: inner_type.debug_type() },
-            ],
-        );
-        Ok(LlvmStructType {
-            type_id,
-            struct_type,
-            fields: vec![boolean_type, inner_type],
-            di_type,
-            size,
-        })
-    }
-
     fn get_line_number(&self, span: SpanId) -> u32 {
         let span = self.module.ast.spans.get(span);
         let line = self.module.ast.sources.get_line_for_span(span).expect("No line for span");
@@ -1048,13 +1009,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         .into())
                     }
                     Type::Enum(enum_type) => {
-                        let mut payload_section_size: u32 = 0;
                         let mut variant_structs = Vec::with_capacity(enum_type.variants.len());
                         if enum_type.variants.len() >= u8::MAX as usize {
                             panic!("too many enum variants for now");
                         }
                         let tag_int_type =
-                            self.codegen_type(I8_TYPE_ID)?.value_basic_type().into_int_type();
+                            self.codegen_type(U8_TYPE_ID)?.value_basic_type().into_int_type();
                         let discriminant_field_debug = self
                             .debug
                             .debug_builder
@@ -1067,7 +1027,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             .unwrap()
                             .as_type();
                         for variant in enum_type.variants.iter() {
-                            let payload_size: SizeInfo;
                             let (variant_struct, variant_struct_debug) =
                                 if let Some(payload_type_id) = variant.payload {
                                     let variant_payload_type =
@@ -1097,13 +1056,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                                             },
                                         ],
                                     );
-                                    payload_size = variant_payload_type.size_info();
-                                    if payload_size.size_bits > payload_section_size {
-                                        payload_section_size = payload_size.size_bits;
-                                    }
                                     (struc, debug_struct)
                                 } else {
-                                    payload_size = SizeInfo::ZERO;
                                     let s = self
                                         .ctx
                                         .struct_type(&[tag_int_type.as_basic_type_enum()], false);
@@ -1129,14 +1083,16 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                                 tag_value: tag_int_type.const_int(variant.index as u64, false),
                                 di_type: variant_struct_debug,
                                 size: self.size_info(&variant_struct),
-                                payload_size_unpadded: payload_size,
                             });
                         }
 
+                        let largest_variant_size =
+                            variant_structs.iter().map(|v| v.size.size_bits).max().unwrap();
+
                         // Now that we know the full size, go back and pad each variant struct
                         for (index, variant_struct) in variant_structs.iter_mut().enumerate() {
-                            let size_diff_bits = payload_section_size
-                                - variant_struct.payload_size_unpadded.size_bits;
+                            let size_diff_bits =
+                                largest_variant_size - variant_struct.size.size_bits;
                             let mut fields = variant_struct.struct_type.get_field_types();
                             if size_diff_bits != 0 {
                                 let padding =
@@ -1156,7 +1112,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                                         .unwrap_or("".to_string()),
                                 );
                                 let variant_struct_type =
-                                    Codegen::make_named_struct(&self.ctx, struct_name, &fields);
+                                    Codegen::make_named_struct(self.ctx, struct_name, &fields);
 
                                 // We call size_info on a non-opaque copy to get the size
                                 let variant_struct_size = self.size_info(&variant_struct_type);
@@ -1167,7 +1123,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             }
                         }
 
-                        let union_padding = self.builtin_types.padding_type(payload_section_size);
+                        let union_padding = self
+                            .builtin_types
+                            .padding_type(largest_variant_size - tag_int_type.get_bit_width());
 
                         let base_type = self.ctx.struct_type(
                             &[
@@ -1183,10 +1141,17 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         enum_size.align_bits =
                             variant_structs.iter().map(|v| v.size.align_bits).max().unwrap();
 
-                        assert!(variant_structs
+                        let same_size_check = variant_structs
                             .iter()
                             .map(|s| s.size.size_bits)
-                            .all(|size| size == enum_size.size_bits));
+                            .all(|size| size == enum_size.size_bits);
+                        if !same_size_check {
+                            panic!(
+                                "Enum codegen sizes were wrong. Base: {:?}, Variants: {:?}",
+                                &base_type,
+                                variant_structs.iter().map(|v| v.struct_type).collect::<Vec<_>>()
+                            );
+                        }
 
                         let member_types: Vec<_> = variant_structs
                             .iter()
@@ -1435,59 +1400,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         expr: &TypedExpr,
     ) -> CodegenResult<BasicValueEnum<'ctx>> {
         Ok(self.codegen_expr(expr)?.expect_value())
-    }
-
-    fn codegen_optional_value(
-        &mut self,
-        type_id: TypeId,
-        optional_some: Option<&OptionalSome>,
-    ) -> CodegenResult<BasicValueEnum<'ctx>> {
-        let is_none = optional_some.is_none();
-        let optional_llvm_type = self.codegen_type(type_id)?;
-        let struct_type = optional_llvm_type.value_basic_type().into_struct_type();
-        let discriminator_value =
-            if is_none { self.builtin_types.false_value } else { self.builtin_types.true_value };
-        let value_value: BasicValueEnum<'ctx> = if let Some(opt_some) = optional_some {
-            self.codegen_expr_basic_value(&opt_some.inner_expr)?
-        } else {
-            struct_type.get_field_type_at_index(1).unwrap().const_zero()
-        };
-        let none_struct = self
-            .builder
-            .build_insert_value(
-                struct_type.get_undef(),
-                discriminator_value,
-                0,
-                &format!("opt_discrim_{}", type_id),
-            )
-            .unwrap();
-        let struct_value = self
-            .builder
-            .build_insert_value(none_struct, value_value, 1, &format!("opt_value_{}", type_id))
-            .unwrap();
-        Ok(struct_value.as_basic_value_enum())
-    }
-    fn codegen_optional_has_value(&mut self, optional_value: StructValue<'ctx>) -> IntValue<'ctx> {
-        let discriminator_value = self
-            .builder
-            .build_extract_value(optional_value, 0, "discrim_value")
-            .unwrap()
-            .into_int_value();
-        let is_some = self.builder.build_int_compare(
-            IntPredicate::NE,
-            discriminator_value,
-            self.builtin_types.false_value,
-            "is_some_cmp",
-        );
-        let is_some_bool = self.i1_to_bool(is_some, "is_some");
-        is_some_bool
-    }
-    fn codegen_optional_get(&mut self, optional_value: StructValue<'ctx>) -> BasicValueEnum<'ctx> {
-        // This is UNSAFE we don't check the discriminator. The actual unwrap method
-        // or user-facing unwrap should check it and exit if it is None later
-        self.builder
-            .build_extract_value(optional_value, 1, "opt_value")
-            .expect("optional should always have a 2nd field")
     }
 
     fn codegen_expr_lvalue(&mut self, expr: &TypedExpr) -> CodegenResult<PointerValue<'ctx>> {
@@ -2161,32 +2073,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             )
         };
         Ok(character_pointer)
-    }
-
-    fn make_string(&self, array_len: IntValue<'ctx>) -> StructValue<'ctx> {
-        let data_ptr = self
-            .builder
-            .build_array_malloc(self.builtin_types.char, array_len, "string_data")
-            .unwrap();
-        let string_type = self.builtin_types.string_struct;
-        let string_struct = self
-            .builder
-            .build_insert_value(
-                string_type.get_undef(),
-                array_len,
-                STRING_LENGTH_FIELD_INDEX,
-                "string_len",
-            )
-            .unwrap();
-        let string_struct = self
-            .builder
-            .build_insert_value(string_struct, data_ptr, STRING_DATA_FIELD_INDEX, "string_data")
-            .unwrap();
-        // 63 = ascii '?' character to detect uninitialized memory
-        self.builder
-            .build_memset(data_ptr, 1, self.builtin_types.char.const_int(63, false), array_len)
-            .unwrap();
-        string_struct.as_basic_value_enum().into_struct_value()
     }
 
     #[allow(unused)]
