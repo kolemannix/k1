@@ -80,7 +80,6 @@ pub enum PatternConstructor {
     /// the sake of being explicit; we could collapse all these into a 'Anything' constructor but the fact I can't
     /// think of a good name means we shouldn't, probably
     TypeVariable,
-    ///
     Some(Box<PatternConstructor>),
     Struct {
         fields: Vec<(Identifier, PatternConstructor)>,
@@ -824,7 +823,7 @@ impl TypedStmt {
                 return true;
             }
         }
-        return false;
+        false
     }
 
     pub fn control_flow_type(&self) -> ControlFlowType {
@@ -976,7 +975,7 @@ pub enum IntrinsicFunction {
 }
 
 impl IntrinsicFunction {
-    pub fn is_inlined(self: Self) -> bool {
+    pub fn is_inlined(self) -> bool {
         match self {
             IntrinsicFunction::Exit => false,
             IntrinsicFunction::PrintInt => false,
@@ -1283,13 +1282,9 @@ impl TypedModule {
 
         let has_type_params = !parsed_type_defn.type_params.is_empty();
 
-        let should_attach_defn_info = if has_type_params
-            || (parsed_type_defn.flags.is_alias() && !parsed_type_defn.flags.is_opaque())
-        {
-            false
-        } else {
-            true
-        };
+        let should_not_attach_defn_info = has_type_params
+            || (parsed_type_defn.flags.is_alias() && !parsed_type_defn.flags.is_opaque());
+        let should_attach_defn_info = !should_not_attach_defn_info;
 
         let defn_scope_id = self.scopes.add_child_scope(
             scope_id,
@@ -1349,7 +1344,7 @@ impl TypedModule {
             );
             let gen = GenericType {
                 params: type_params,
-                ast_id: parsed_type_defn_id.into(),
+                ast_id: parsed_type_defn_id,
                 inner: resulting_type_id,
                 type_defn_info,
                 specializations: HashMap::new(),
@@ -1364,7 +1359,7 @@ impl TypedModule {
                     type_defn_info.companion_namespace,
                 );
                 let alias = OpaqueTypeAlias {
-                    ast_id: parsed_type_defn_id.into(),
+                    ast_id: parsed_type_defn_id,
                     aliasee: resulting_type_id,
                     type_defn_info,
                 };
@@ -1739,7 +1734,7 @@ impl TypedModule {
                                 } else {
                                     return make_fail_ast_id(
                                         &self.ast,
-                                        &format!("Function has no parameter named {}", member_name),
+                                        format!("Function has no parameter named {}", member_name),
                                         type_expr_id.into(),
                                     );
                                 }
@@ -1749,7 +1744,7 @@ impl TypedModule {
                     _ => {
                         return make_fail_ast_id(
                             &self.ast,
-                            &format!(
+                            format!(
                                 "Invalid type for '.' access: {}",
                                 self.type_id_to_string(base_type)
                             ),
@@ -1830,7 +1825,7 @@ impl TypedModule {
                 let type_id = self.types.add_type(new_struct);
                 eprintln!("Combined struct: {}", self.type_id_to_string(type_id));
 
-                return Ok(Some(type_id));
+                Ok(Some(type_id))
             }
             "_struct_remove" => {
                 if ty_app.params.len() != 2 {
@@ -1869,10 +1864,10 @@ impl TypedModule {
                     field.index = i as u32;
                 }
                 let type_id = self.types.add_type(Type::Struct(new_struct));
-                return Ok(Some(type_id));
+                Ok(Some(type_id))
             }
-            _ => return Ok(None),
-        };
+            _ => Ok(None),
+        }
     }
 
     fn eval_type_application(
@@ -1889,7 +1884,7 @@ impl TypedModule {
         let ty_app = ty_app.clone();
         match self.scopes.find_type(scope_id, ty_app.base_name) {
             None => {
-                return ffail!(
+                ffail!(
                     ty_app.span,
                     "No type named '{}' is in scope",
                     self.get_ident_str(ty_app.base_name).blue()
@@ -1957,11 +1952,8 @@ impl TypedModule {
                         .collect::<Vec<_>>(),
                     self.type_id_to_string(specialized_type)
                 );
-                match self.types.get_mut(generic_type) {
-                    Type::Generic(gen) => {
-                        gen.specializations.insert(passed_params, specialized_type);
-                    }
-                    _ => {}
+                if let Type::Generic(gen) = self.types.get_mut(generic_type) {
+                    gen.specializations.insert(passed_params, specialized_type);
                 };
                 specialized_type
             }
@@ -1982,32 +1974,29 @@ impl TypedModule {
         // If this type is already a generic instance of something, just
         // re-specialize it on the right inputs. So find out what the new value
         // of each type param should be and call instantiate_generic_type
-        match typ.generic_instance_info() {
-            Some(spec_info) => {
-                let new_parameter_values: Vec<TypeId> = spec_info
-                    .param_values
-                    .iter()
-                    .map(|prev_type_id| {
-                        match generic_params
-                            .iter()
-                            .enumerate()
-                            .find(|(_, p)| p.type_id == *prev_type_id)
-                        {
-                            None => *prev_type_id,
-                            Some((index, _gen_param)) => {
-                                let corresponding = passed_params[index];
-                                corresponding
-                            }
+        if let Some(spec_info) = typ.generic_instance_info() {
+            let new_parameter_values: Vec<TypeId> = spec_info
+                .param_values
+                .iter()
+                .map(|prev_type_id| {
+                    match generic_params
+                        .iter()
+                        .enumerate()
+                        .find(|(_, p)| p.type_id == *prev_type_id)
+                    {
+                        None => *prev_type_id,
+                        Some((index, _gen_param)) => {
+                            let corresponding = passed_params[index];
+                            corresponding
                         }
-                    })
-                    .collect();
-                return self.instantiate_generic_type(
-                    spec_info.generic_parent,
-                    new_parameter_values,
-                    typ.ast_node().unwrap(),
-                );
-            }
-            None => {}
+                    }
+                })
+                .collect();
+            return self.instantiate_generic_type(
+                spec_info.generic_parent,
+                new_parameter_values,
+                typ.ast_node().unwrap(),
+            );
         };
         match typ {
             Type::TypeVariable(_t) => {
@@ -2277,12 +2266,10 @@ impl TypedModule {
                     );
                 }
                 let expected_struct = target_type.as_struct().ok_or_else(|| {
-                    make_error(
-                        &format!(
-                            "Impossible pattern: Match target '{}' is not a struct",
-                            self.type_id_to_string(target_type_id)
-                        ),
+                    ferr!(
                         struct_pattern.span,
+                        "Impossible pattern: Match target '{}' is not a struct",
+                        self.type_id_to_string(target_type_id)
                     )
                 })?;
                 let mut fields = Vec::with_capacity(struct_pattern.fields.len());

@@ -3,10 +3,11 @@
 - Fixing enums big time
   - [x] Rename Optional -> Opt
   - [x] Remove tag literals, make enum tags per-enum
+  - [ ] Parse type expr `Opt[T].Some`, expr `Opt[i32].Some(5)` and infer `Opt.Some(5)` and `Opt.None`, Either.Left(42) (payloadless)
+    - deal with fncall syntax collision by checking for the enum first
+  - [ ] CastType `EnumVariant`: checks should not happen in codegen
+  - [x] kill ParsedTypeExpression::AnonEnumVariant?
   - [ ] Add namespace-level type variables
-  - [ ] Parse texpr Opt[T].Some Optional[i32]::Some(5) and infer Optional::Some(5) and Optional::None (payloadless)
-  - [ ] CastType EnumVariant check should not happen in codegen
-  - [ ] kill ParsedTypeExpression::AnonEnumVariant?
 
 - [x] QoL before rest of pattern matching
   - [x] Codegen fail instead of panic
@@ -91,17 +92,15 @@
   - [x] Add array bounds checking
   - [x] Fix array literal syntax
 - [x] Rework builtin string to use new Pointer
+- [x] Rework builtin optionals to be a generic enum
+- [ ] Think about introducing type 'kind' and check_kind next time we need to typecheck on shape but not _really_ typecheck such as when inferring
 - [ ] Friendliness pass
-  - [ ] Get rid of 'enum' keyword
-  - [ ] Try to make structs look like constructors? Might be hard
+  - [ ] Get rid of 'enum' keyword, data?
   - [ ] 'when' keyword is bad; `switch` maybe or `case`
-- [ ] Think about introducing type 'kind' and check_kind as a replacement for the 'allow_unbound_type_var' hack
 - [ ] Ability constraints on generics
-- [ ] Remove tag literals, make enum tags per-enum
-- [ ] Rework builtin optionals to be a simple enum
-- [ ] Implement Slice using new `Pointer`
+- [x] Remove tag literals, make enum tags per-enum
 - [ ] function pointers (For now just take static address of a function as Pointer)
-- [ ] slices (windows? segments?)
+- [ ] Implement Slice using new `Pointer`
 - [ ] Imports
 - [ ] Generic abilities
 - [ ] Pure lambdas with -> (not closures)

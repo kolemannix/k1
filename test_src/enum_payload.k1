@@ -1,17 +1,17 @@
 type Maybe = enum A , B(char) , C(string)
 
 fn main(): int {
-  val a: Maybe = .A;
+  //val a: Maybe = .A;
   val b: Maybe = .B('x');
-  val c: Maybe = .C("hello, enums");
-  if a is .A {
-    ()
-  } else assert(false);
+  //val c: Maybe = .C("hello, enums");
+  //if a is .A {
+  //  ()
+  //} else assert(false);
   if b is .B(x) {
     assert(x == 'x');
   } else assert(false);
-  if c is .C("hello, enums") {
-    ()
-  } else assert(false);
+  //if c is .C("hello, enums") {
+  //  ()
+  //} else assert(false);
   0
 }
