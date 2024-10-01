@@ -2073,17 +2073,16 @@ impl TypedModule {
                 let mut any_changed = false;
                 let original_defn_info = e.type_defn_info.clone();
                 for variant in new_variants.iter_mut() {
-                    let new_payload_id = match variant.payload {
-                        None => None,
-                        Some(payload_type_id) => Some(self.instantiate_generic_type_subst(
+                    let new_payload_id = variant.payload.map(|payload_type_id| {
+                        self.instantiate_generic_type_subst(
                             payload_type_id,
                             None,
                             None,
                             passed_params,
                             generic_params,
                             parsed_id,
-                        )),
-                    };
+                        )
+                    });
                     if new_payload_id != variant.payload {
                         any_changed = true;
                         variant.payload = new_payload_id;
@@ -2151,7 +2150,7 @@ impl TypedModule {
         scope_id: ScopeId,
     ) -> TyperResult<TypedPattern> {
         let parsed_pattern_expr = self.ast.patterns.get_pattern(pat_expr);
-        match &*parsed_pattern_expr {
+        match parsed_pattern_expr {
             ParsedPattern::Wildcard(span) => Ok(TypedPattern::Wildcard(*span)),
             ParsedPattern::Literal(literal_expr_id) => {
                 match self.ast.expressions.get(*literal_expr_id).expect_literal() {
@@ -2215,23 +2214,19 @@ impl TypedModule {
             }
             ParsedPattern::Enum(enum_pattern) => {
                 let Some(enum_type) = self.types.get(target_type_id).as_enum() else {
-                    return make_fail_span(
-                        &format!(
-                            "Impossible pattern: Expected an enum type; but got {}",
-                            self.type_id_to_string(target_type_id)
-                        ),
+                    return ffail!(
                         enum_pattern.span,
+                        "Impossible pattern: Expected an enum type; but got {}",
+                        self.type_id_to_string(target_type_id)
                     );
                 };
                 let Some(matching_variant) =
                     enum_type.variants.iter().find(|v| v.name == enum_pattern.variant_tag)
                 else {
-                    return make_fail_span(
-                        &format!(
-                            "Impossible pattern: No variant named '{}'",
-                            self.get_ident_str(enum_pattern.variant_tag).blue()
-                        ),
+                    return ffail!(
                         enum_pattern.span,
+                        "Impossible pattern: No variant named '{}'",
+                        self.get_ident_str(enum_pattern.variant_tag).blue()
                     );
                 };
 
@@ -2380,41 +2375,37 @@ impl TypedModule {
             return Ok(());
         }
 
-        match (
+        if let (Some(gen1), Some(gen2)) = (
             self.types.get(expected).generic_instance_info(),
             self.types.get(actual).generic_instance_info(),
         ) {
-            (Some(gen1), Some(gen2)) => {
-                return if gen1.generic_parent == gen2.generic_parent {
-                    for (exp_param, act_param) in
-                        gen1.param_values.iter().zip(gen2.param_values.iter())
-                    {
-                        debug!(
-                            "Comparing params {} and {} inside {}",
-                            self.type_id_to_string(*exp_param),
-                            self.type_id_to_string(*act_param),
-                            self.get_ident_str(
-                                self.types
-                                    .get(gen1.generic_parent)
-                                    .expect_generic()
-                                    .type_defn_info
-                                    .name
-                            )
-                        );
-                        if let Err(msg) = self.check_types(*exp_param, *act_param, scope_id) {
-                            return Err(format!("Invalid generic type param: {}", msg));
-                        }
+            return if gen1.generic_parent == gen2.generic_parent {
+                for (exp_param, act_param) in gen1.param_values.iter().zip(gen2.param_values.iter())
+                {
+                    debug!(
+                        "Comparing params {} and {} inside {}",
+                        self.type_id_to_string(*exp_param),
+                        self.type_id_to_string(*act_param),
+                        self.get_ident_str(
+                            self.types
+                                .get(gen1.generic_parent)
+                                .expect_generic()
+                                .type_defn_info
+                                .name
+                        )
+                    );
+                    if let Err(msg) = self.check_types(*exp_param, *act_param, scope_id) {
+                        return Err(format!("Invalid generic type param: {}", msg));
                     }
-                    Ok(())
-                } else {
-                    Err(format!(
-                        "Expected {}, but got {}",
-                        self.type_id_to_string(expected),
-                        self.type_id_to_string(actual),
-                    ))
                 }
-            }
-            _ => {}
+                Ok(())
+            } else {
+                Err(format!(
+                    "Expected {}, but got {}",
+                    self.type_id_to_string(expected),
+                    self.type_id_to_string(actual),
+                ))
+            };
         }
         match (self.types.get(expected), self.types.get(actual)) {
             (Type::Struct(r1), Type::Struct(r2)) => self.typecheck_struct(r1, r2, scope_id),
@@ -2634,7 +2625,7 @@ impl TypedModule {
                 IntegerType::I64 => parse_int!(I64, i64, hex_base, offset),
             };
             let value = value
-                .map_err(|e| make_error(&format!("Invalid hex {expected_int_type}: {e}"), span))?;
+                .map_err(|e| make_error(format!("Invalid hex {expected_int_type}: {e}"), span))?;
             Ok(value)
         } else if parsed_text.starts_with("0b") {
             let bin_base = 2;
@@ -2651,7 +2642,7 @@ impl TypedModule {
                 IntegerType::I64 => parse_int!(I64, i64, bin_base, offset),
             };
             let value = value.map_err(|e| {
-                make_error(&format!("Invalid binary {expected_int_type}: {e}"), span)
+                make_error(format!("Invalid binary {expected_int_type}: {e}"), span)
             })?;
             Ok(value)
         } else {
@@ -2669,7 +2660,7 @@ impl TypedModule {
                 IntegerType::I64 => parse_int!(I64, i64, dec_base, offset),
             };
             let value = value.map_err(|e| {
-                make_error(&format!("Invalid integer {expected_int_type}: {e}"), span)
+                make_error(format!("Invalid integer {expected_int_type}: {e}"), span)
             })?;
             Ok(value)
         }
@@ -2690,7 +2681,7 @@ impl TypedModule {
                 &self.ast.identifiers,
             )?
             .ok_or(make_error(
-                format!("{} is not defined", &*self.ast.identifiers.get_name(variable.name.name)),
+                format!("{} is not defined", self.ast.identifiers.get_name(variable.name.name)),
                 variable.name.span,
             ))?;
         let v = self.variables.get_variable(variable_id);
@@ -2698,7 +2689,7 @@ impl TypedModule {
             return make_fail_span(
                 format!(
                     "Cannot assign to immutable variable {}",
-                    &*self.ast.identifiers.get_name(v.name)
+                    self.ast.identifiers.get_name(v.name)
                 ),
                 variable.name.span,
             );
@@ -2752,7 +2743,7 @@ impl TypedModule {
                     struct_type.find_field(field_access.target).ok_or(make_error(
                         format!(
                             "Field {} not found on struct type",
-                            &*self.ast.identifiers.get_name(field_access.target)
+                            self.ast.identifiers.get_name(field_access.target)
                         ),
                         field_access.span,
                     ))?;
@@ -2774,21 +2765,17 @@ impl TypedModule {
             }
             Type::EnumVariant(ev) => {
                 if self.ast.identifiers.get_name(field_access.target) != "payload" {
-                    return make_fail_span(
-                        &format!(
-                            "Field {} does not exist; try .payload",
-                            self.ast.identifiers.get_name(field_access.target)
-                        ),
+                    return ffail!(
                         field_access.span,
+                        "Field {} does not exist; try .payload",
+                        self.ast.identifiers.get_name(field_access.target)
                     );
                 }
                 let Some(payload_type_id) = ev.payload else {
-                    return make_fail_span(
-                        &format!(
-                            "Variant {} has no payload",
-                            self.ast.identifiers.get_name(ev.name)
-                        ),
+                    return ffail!(
                         field_access.span,
+                        "Variant {} has no payload",
+                        self.ast.identifiers.get_name(ev.name)
                     );
                 };
                 Ok(TypedExpr::EnumGetPayload(GetEnumPayload {
@@ -2799,13 +2786,11 @@ impl TypedModule {
                     span: field_access.span,
                 }))
             }
-            _ => make_fail_span(
-                format!(
-                    "Cannot access field {} on type: {}",
-                    self.ast.identifiers.get_name(field_access.target),
-                    self.type_id_to_string(base_expr.get_type())
-                ),
+            _ => ffail!(
                 field_access.span,
+                "Cannot access field {} on type: {}",
+                self.ast.identifiers.get_name(field_access.target),
+                self.type_id_to_string(base_expr.get_type())
             ),
         }
     }
@@ -2834,8 +2819,8 @@ impl TypedModule {
     /// - enum construction
     /// - enum variant construction
     /// - Opaque type instance construction if in definition namespace
-    /// This is a good place to do this because we just typechecked an expression, and
-    /// we know the expected type.
+    ///   This is a good place to do this because we just typechecked an expression, and
+    ///   we know the expected type.
     fn coerce_expression_to_expected_type(
         &mut self,
         expected_type_id: TypeId,
@@ -2860,36 +2845,31 @@ impl TypedModule {
                 }
             }
         };
-        match self.types.get(expected_type_id) {
-            Type::OpaqueAlias(opaque) => {
-                // Note: The opaque conversion should probably be something more clear like a cast
-                //       that only works in here, or a function thats only available inside?
-                // We'll revisit opaques when we make generics work for them fully!
-                if !self
-                    .is_inside_companion_scope(opaque.type_defn_info.companion_namespace, scope_id)
-                {
-                    return CoerceResult::Fail(expression);
-                }
-                let Ok(_) = self.check_types(opaque.aliasee, expression.get_type(), scope_id)
-                else {
-                    return CoerceResult::Fail(expression);
-                };
-                debug!(
-                    "coerce into opaque from {} to {}",
-                    self.type_id_to_string(expression.get_type()),
-                    self.type_id_to_string(expected_type_id)
-                );
-                return CoerceResult::Coerced(
-                    "opaque into",
-                    TypedExpr::Cast(TypedCast {
-                        span: expression.get_span(),
-                        base_expr: Box::new(expression),
-                        target_type_id: expected_type_id,
-                        cast_type: CastType::KnownNoOp,
-                    }),
-                );
+        if let Type::OpaqueAlias(opaque) = self.types.get(expected_type_id) {
+            // Note: The opaque conversion should probably be something more clear like a cast
+            //       that only works in here, or a function thats only available inside?
+            // We'll revisit opaques when we make generics work for them fully!
+            if !self.is_inside_companion_scope(opaque.type_defn_info.companion_namespace, scope_id)
+            {
+                return CoerceResult::Fail(expression);
             }
-            _ => {}
+            let Ok(_) = self.check_types(opaque.aliasee, expression.get_type(), scope_id) else {
+                return CoerceResult::Fail(expression);
+            };
+            debug!(
+                "coerce into opaque from {} to {}",
+                self.type_id_to_string(expression.get_type()),
+                self.type_id_to_string(expected_type_id)
+            );
+            return CoerceResult::Coerced(
+                "opaque into",
+                TypedExpr::Cast(TypedCast {
+                    span: expression.get_span(),
+                    base_expr: Box::new(expression),
+                    target_type_id: expected_type_id,
+                    cast_type: CastType::KnownNoOp,
+                }),
+            );
         };
         if self.types.get(expected_type_id).as_reference().is_none() {
             // We only do this if the expected type is not a reference at all. Meaning,
@@ -2911,34 +2891,31 @@ impl TypedModule {
         };
 
         // Match on actual type
-        match self.types.get(expression.get_type()) {
-            Type::OpaqueAlias(expression_opaque) => {
-                if !self.is_inside_companion_scope(
-                    expression_opaque.type_defn_info.companion_namespace,
-                    scope_id,
-                ) {
-                    return CoerceResult::Fail(expression);
-                }
-                let Ok(_) = self.check_types(expected_type_id, expression_opaque.aliasee, scope_id)
-                else {
-                    return CoerceResult::Fail(expression);
-                };
-                debug!(
-                    "coerce out of opaque from {} to {}",
-                    self.type_id_to_string(expression.get_type()),
-                    self.type_id_to_string(expression_opaque.aliasee)
-                );
-                return CoerceResult::Coerced(
-                    "opaque out",
-                    TypedExpr::Cast(TypedCast {
-                        target_type_id: expression_opaque.aliasee,
-                        cast_type: CastType::KnownNoOp,
-                        span: expression.get_span(),
-                        base_expr: Box::new(expression),
-                    }),
-                );
+        if let Type::OpaqueAlias(expression_opaque) = self.types.get(expression.get_type()) {
+            if !self.is_inside_companion_scope(
+                expression_opaque.type_defn_info.companion_namespace,
+                scope_id,
+            ) {
+                return CoerceResult::Fail(expression);
             }
-            _ => {}
+            let Ok(_) = self.check_types(expected_type_id, expression_opaque.aliasee, scope_id)
+            else {
+                return CoerceResult::Fail(expression);
+            };
+            debug!(
+                "coerce out of opaque from {} to {}",
+                self.type_id_to_string(expression.get_type()),
+                self.type_id_to_string(expression_opaque.aliasee)
+            );
+            return CoerceResult::Coerced(
+                "opaque out",
+                TypedExpr::Cast(TypedCast {
+                    target_type_id: expression_opaque.aliasee,
+                    cast_type: CastType::KnownNoOp,
+                    span: expression.get_span(),
+                    base_expr: Box::new(expression),
+                }),
+            );
         };
         CoerceResult::Fail(expression)
     }
@@ -3043,14 +3020,12 @@ impl TypedModule {
                         let element_expr = self.eval_expr(*elem, scope_id, element_type)?;
                         if element_type.is_none() {
                             element_type = Some(element_expr.get_type())
-                        } else {
-                            if let Err(msg) = self.check_types(
-                                element_type.unwrap(),
-                                element_expr.get_type(),
-                                array_lit_scope,
-                            ) {
-                                return ffail!(span, "Array element had incorrect type: {msg}");
-                            }
+                        } else if let Err(msg) = self.check_types(
+                            element_type.unwrap(),
+                            element_expr.get_type(),
+                            array_lit_scope,
+                        ) {
+                            return ffail!(span, "Array element had incorrect type: {msg}");
                         };
                         elements.push(element_expr);
                     }
@@ -3363,20 +3338,16 @@ impl TypedModule {
                         ),
                     }
                 }?;
-                let typed_variant = enum_type.variant_by_name(e.tag).ok_or(make_error(
-                    format!(
-                        "No variant {} exists in enum {}",
-                        &*self.ast.identifiers.get_name(e.tag),
-                        self.type_id_to_string(expected_type)
-                    ),
+                let typed_variant = enum_type.variant_by_name(e.tag).ok_or(ferr!(
                     e.span,
+                    "No variant {} exists in enum {}",
+                    self.ast.identifiers.get_name(e.tag),
+                    self.type_id_to_string(expected_type)
                 ))?;
-                let variant_payload = typed_variant.payload.ok_or(make_error(
-                    format!(
-                        "Variant {} does not have a payload",
-                        &*self.ast.identifiers.get_name(e.tag)
-                    ),
+                let variant_payload = typed_variant.payload.ok_or(ferr!(
                     e.span,
+                    "Variant {} does not have a payload",
+                    self.ast.identifiers.get_name(e.tag)
                 ))?;
                 let variant_index = typed_variant.index;
                 let variant_name = typed_variant.name;
@@ -3385,7 +3356,7 @@ impl TypedModule {
                 if let Err(msg) =
                     self.check_types(variant_payload, payload_expr.get_type(), scope_id)
                 {
-                    return make_fail_span(&format!("Payload type mismatch: {}", msg), span);
+                    return ffail!(span, "Payload type mismatch: {}", msg);
                 };
                 Ok(TypedExpr::EnumConstructor(TypedEnumConstructor {
                     type_id: expected_type,
