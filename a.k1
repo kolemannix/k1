@@ -1,5 +1,30 @@
+namespace Foo {
+type State = enum On(unit), Off(unit)
+// type StateHard = enum On(int?), Off(int?)
+}
+
 fn main(): int {
-  val b: bool? = .None;
+
+  val State: unit = ();
+
+  // nocommit: Namespace not found: _root from scope: "main"
+  val s1 = _root::Foo::State.On(());
+  val s2 = Foo::State.Off(());
+
+  // val s3: Foo::State = Foo::State.Off(());
+  // val s4: Foo::State.On = Foo::State.Off(());
+
+  // val s5: Foo::StateHard = StateHard.On(Some(42));
+  // val s6: Foo::StateHard = StateHard.On(42);
+  // val s7: Foo::StateHard = StateHard.On(None);
+
+
+  // A collision to make sure it works
+  val Opt: unit = ();
+
+  val b: Opt[bool].None = .None;
+  // val c: Opt[bool].None = Opt.None;
+  // val d: Opt[bool] = Opt.Some(5);
   printBool(b.hasValue());
   0
 }
