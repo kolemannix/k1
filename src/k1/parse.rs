@@ -388,22 +388,23 @@ pub struct ParsedAsCast {
 
 #[derive(Debug, Clone)]
 pub enum ParsedExpression {
-    BinaryOp(BinaryOp),                     // a == b
-    UnaryOp(UnaryOp),                       // !b, *b
-    Literal(Literal),                       // 42, "asdf"
-    FnCall(FnCall),                         // square(1, 2)
-    Variable(Variable),                     // x
-    FieldAccess(FieldAccess),               // x.b
-    Block(Block),                           // { <expr>; <expr>; <expr> }
-    If(IfExpr),                             // if a else b
-    Struct(Struct),                         // { x: 1, y: 3 }
-    Array(ArrayExpr),                       // [1, 3, 5, 7]
-    OptionalGet(OptionalGet),               // foo!
-    For(ForExpr),                           // for i in [1,2,3] do println(i)
-    AnonEnumVariant(AnonEnumVariant),       // .A
+    BinaryOp(BinaryOp),               // a == b
+    UnaryOp(UnaryOp),                 // !b, *b
+    Literal(Literal),                 // 42, "asdf"
+    FnCall(FnCall),                   // square(1, 2)
+    Variable(Variable),               // x
+    FieldAccess(FieldAccess),         // x.b
+    Block(Block),                     // { <expr>; <expr>; <expr> }
+    If(IfExpr),                       // if a else b
+    Struct(Struct),                   // { x: 1, y: 3 }
+    Array(ArrayExpr),                 // [1, 3, 5, 7]
+    OptionalGet(OptionalGet),         // foo!
+    For(ForExpr),                     // for i in [1,2,3] do println(i)
+    AnonEnumVariant(AnonEnumVariant), // .A
+    /// nocommit this will just become function call, I think
     EnumConstructor(ParsedEnumConstructor), // .A(<expr>)
-    Is(ParsedIsExpression),                 // x is T
-    Match(ParsedMatchExpression),           // when x is {
+    Is(ParsedIsExpression),           // x is T
+    Match(ParsedMatchExpression),     // when x is {
     // | a => ...
     // | b => ...
     // }

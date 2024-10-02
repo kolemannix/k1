@@ -1021,7 +1021,7 @@ macro_rules! panic_at_disco {
 
 #[macro_export]
 macro_rules! ferr {
-    ($span:expr, $($format_args:expr),*) => {
+    ($span:expr, $($format_args:expr),* $(,)?) => {
         {
             let s: String = format!($($format_args),*);
             make_error(&s, $span)
@@ -2680,9 +2680,10 @@ impl TypedModule {
                 &self.namespaces,
                 &self.ast.identifiers,
             )?
-            .ok_or(make_error(
-                format!("{} is not defined", self.ast.identifiers.get_name(variable.name.name)),
+            .ok_or(ferr!(
                 variable.name.span,
+                "Variable '{}' is not defined",
+                self.ast.identifiers.get_name(variable.name.name),
             ))?;
         let v = self.variables.get_variable(variable_id);
         if is_assignment_lhs && !v.is_mutable {
@@ -2709,9 +2710,49 @@ impl TypedModule {
         is_assignment_lhs: bool,
         _expected_type_id: Option<TypeId>,
     ) -> TyperResult<TypedExpr> {
+        // Bailout case: Enum Constructor
+        let parsed_expr = self.ast.expressions.get(field_access.base);
+        if let parse::ParsedExpression::Variable(v) = parsed_expr {
+            if let Some(enum_type_id) = self.scopes.find_type_namespaced(
+                scope_id,
+                &v.name,
+                &self.namespaces,
+                &self.ast.identifiers,
+            )? {
+                match self.types.get(enum_type_id) {
+                    Type::Enum(enum_type) => {
+                        if let Some(variant) = enum_type.variant_by_name(field_access.target) {
+                            // This syntactic field access (a.b) is actually a tagless enum
+                            // constructor.
+                            return Ok(TypedExpr::EnumConstructor(TypedEnumConstructor {
+                                type_id: variant.enum_type_id,
+                                variant_name: variant.name,
+                                variant_index: variant.index,
+                                payload: None,
+                                span: field_access.span,
+                            }));
+                        }
+                    }
+                    Type::Generic(g) => {
+                        if let Some(_enum_inner) = self.types.get(g.inner).as_enum() {
+                            return ffail!(
+                                field_access.span,
+                                "Unimplemented on generics yet; pass the type"
+                            );
+                            // TODO: Gotta infer the type params
+                            // val x = Opt.None
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        };
+
         let mut base_expr = self.eval_expr(field_access.base, scope_id, None)?;
-        let type_id = base_expr.get_type();
-        let base_type = match self.types.get(type_id) {
+
+        // Perform auto-dereference
+        let base_expr_type = base_expr.get_type();
+        let base_type = match self.types.get(base_expr_type) {
             Type::Reference(reference_type) => {
                 // Auto de-reference everything for field access
                 let inner_type = self.types.get(reference_type.inner_type);
@@ -4680,6 +4721,57 @@ impl TypedModule {
             _ => {}
         };
 
+        if fn_call.is_method {
+            debug_assert!(fn_call.name.namespaces.is_empty())
+        }
+
+        // Special case for enum constructors which are syntactically also function calls
+        // Factor out into function
+        if fn_call.is_method {
+            if let Some(lhs_expr) = fn_call.args.first() {
+                if let ParsedExpression::Variable(v) = self.ast.expressions.get(lhs_expr.value) {
+                    if let Some(t) = self.scopes.find_type_namespaced(
+                        calling_scope,
+                        &v.name,
+                        &self.namespaces,
+                        &self.ast.identifiers,
+                    )? {
+                        match self.types.get(t) {
+                            Type::Enum(e) => {
+                                if let Some(variant) = e.variant_by_name(fn_call.name.name).cloned()
+                                {
+                                    let Some(payload_type) = variant.payload else {
+                                        return ffail!(fn_call.span, "Payload expected");
+                                    };
+                                    let Some(payload_arg) = fn_call.args.get(1) else {
+                                        return ffail!(fn_call.span, "Payload not passed");
+                                    };
+                                    let payload_expr = self.eval_expr(
+                                        payload_arg.value,
+                                        calling_scope,
+                                        Some(payload_type),
+                                    )?;
+                                    return Ok(Either::Left(TypedExpr::EnumConstructor(
+                                        TypedEnumConstructor {
+                                            type_id: variant.enum_type_id,
+                                            variant_name: variant.name,
+                                            variant_index: variant.index,
+                                            payload: Some(Box::new(payload_expr)),
+                                            span: fn_call.span,
+                                        },
+                                    )));
+                                }
+                            }
+                            Type::Generic(g) => {
+                                todo!("generic enum constr")
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+
         // Two resolution paths:
         // 1. "method" call (aka known first arg type so we can check for ability impls and methods)
         // 2. "function" call, no abilities or methods to check, pure scoping-based resolution
@@ -4691,9 +4783,6 @@ impl TypedModule {
             }
             _ => None,
         };
-        if fn_call.is_method {
-            debug_assert!(fn_call.name.namespaces.is_empty())
-        }
         let function_id = match method_call_self {
             Some(base_expr) => {
                 // Resolve a method call
@@ -6461,6 +6550,12 @@ impl TypedModule {
                 let root_namespace_id = self.namespaces.add(namespace);
                 self.scopes
                     .set_scope_owner_id(root_scope_id, ScopeOwnerId::Namespace(root_namespace_id));
+
+                // Add _root ns to the root scope as well so users can use it
+                let root_scope = self.scopes.get_scope_mut(root_scope_id);
+                if !root_scope.add_namespace(name, root_namespace_id) {
+                    return ffail!(span, "Root namespace was taken, hmmmm",);
+                }
 
                 self.namespace_ast_mappings.insert(parsed_namespace_id, root_namespace_id);
                 Ok(root_namespace_id)

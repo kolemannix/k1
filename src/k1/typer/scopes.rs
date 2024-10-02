@@ -217,6 +217,27 @@ impl Scopes {
         }
     }
 
+    pub fn find_type_namespaced(
+        &self,
+        scope_id: ScopeId,
+        type_name: &NamespacedIdentifier,
+        namespaces: &Namespaces,
+        identifiers: &Identifiers,
+    ) -> TyperResult<Option<TypeId>> {
+        if type_name.namespaces.is_empty() {
+            Ok(self.find_type(scope_id, type_name.name))
+        } else {
+            let scope_to_search = self.traverse_namespace_chain(
+                scope_id,
+                &type_name.namespaces,
+                namespaces,
+                identifiers,
+                type_name.span,
+            )?;
+            Ok(self.get_scope(scope_to_search).find_type(type_name.name))
+        }
+    }
+
     pub fn find_pending_type_defn(
         &self,
         scope_id: ScopeId,
@@ -308,7 +329,7 @@ impl Scopes {
         let Some(first_ns) = self.find_namespace(cur_scope_id, *first) else {
             return Err(ferr!(
                 span,
-                "Namespace not found: {} in scope: {:?}",
+                "Namespace not found: {} from scope: {:?}",
                 identifiers.get_name(*first),
                 self.get_scope(scope_id).name.map(|n| identifiers.get_name(n))
             ));
