@@ -172,12 +172,12 @@ fn type_parameter_multi() -> ParseResult<()> {
     };
     assert_eq!(app.params.len(), 2);
     let ParsedTypeExpression::TypeApplication(inner_app) =
-        module.type_expressions.get(app.params[1])
+        module.type_expressions.get(app.params[1].type_expr)
     else {
         panic!("Expected second param to be a type application");
     };
     assert!(matches!(
-        module.type_expressions.get(inner_app.params[0]),
+        module.type_expressions.get(inner_app.params[0].type_expr),
         ParsedTypeExpression::Integer(ParsedNumericType {
             width: NumericWidth::B8,
             signed: false,
@@ -269,7 +269,7 @@ fn generic_method_call_lhs_expr() -> Result<(), ParseError> {
     };
     assert_eq!(fn_call.name.name, parser.identifiers.intern("getFn"));
     assert_eq!(call.name.name, parser.identifiers.intern("baz"));
-    let type_arg = parser.type_expressions.get(call.type_args.unwrap()[0].type_expr);
+    let type_arg = parser.type_expressions.get(call.type_args[0].type_expr);
     assert!(type_arg.is_integer());
     assert!(matches!(&*parser.expressions.get(call.args[1].value), ParsedExpression::Literal(_)));
     Ok(())
