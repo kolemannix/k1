@@ -7,12 +7,11 @@ fn main(): int {
 
   val State: unit = ();
 
-  // nocommit: Namespace not found: _root from scope: "main"
   val s1 = _root::Foo::State.On(());
   val s2 = Foo::State.Off(());
 
-  // val s3: Foo::State = Foo::State.Off(());
-  // val s4: Foo::State.On = Foo::State.Off(());
+  val s3: Foo::State = Foo::State.Off(());
+  val s4: Foo::State.On = Foo::State.On(());
 
   // val s5: Foo::StateHard = StateHard.On(Some(42));
   // val s6: Foo::StateHard = StateHard.On(42);

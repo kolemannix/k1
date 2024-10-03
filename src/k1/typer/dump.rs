@@ -144,7 +144,7 @@ impl TypedModule {
 
     fn display_type(&self, ty: &Type, expand: bool, writ: &mut impl Write) -> std::fmt::Result {
         match ty {
-            Type::Unit => writ.write_str("()"),
+            Type::Unit => writ.write_str("unit"),
             Type::Char => writ.write_str("char"),
             Type::Integer(int_type) => {
                 match int_type {

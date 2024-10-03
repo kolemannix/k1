@@ -1529,72 +1529,8 @@ impl TypedModule {
                 let type_id = self.types.add_type(Type::Struct(struct_defn));
                 Ok(type_id)
             }
-            ParsedTypeExpression::Name(name, span) => {
-                if *name == get_ident!(self, "never") {
-                    Ok(NEVER_TYPE_ID)
-                } else {
-                    let name = *name;
-                    match self.scopes.find_type(scope_id, name) {
-                        Some(named_type) => Ok(named_type),
-                        None => {
-                            // Checks for recursion by name
-                            if context.inner_type_defn_info.as_ref().map(|info| info.name)
-                                == Some(name)
-                            {
-                                let type_defn_info = context.inner_type_defn_info.as_ref().unwrap();
-                                let placeholder_type_id = match self
-                                    .types
-                                    .placeholder_mapping
-                                    .get(&type_defn_info.ast_id)
-                                {
-                                    None => {
-                                        eprintln!(
-                                            "Inserting recursive reference for {}",
-                                            self.get_ident_str(name)
-                                        );
-                                        let type_id = self.types.add_type(
-                                            Type::RecursiveReference(RecursiveReference {
-                                                parsed_id: type_defn_info.ast_id,
-                                                root_type_id: TypeId::PENDING,
-                                            }),
-                                        );
-                                        self.types
-                                            .placeholder_mapping
-                                            .insert(type_defn_info.ast_id, type_id);
-                                        type_id
-                                    }
-                                    Some(type_id) => *type_id,
-                                };
-                                Ok(placeholder_type_id)
-                            } else {
-                                match self.scopes.find_pending_type_defn(scope_id, name) {
-                                    None => make_fail_span(
-                                        format!(
-                                            "No type named {} is in scope",
-                                            self.get_ident_str(name)
-                                        ),
-                                        *span,
-                                    ),
-                                    Some((pending_defn_id, pending_defn_scope_id)) => {
-                                        eprintln!(
-                                            "Recursing into pending type defn {}",
-                                            self.get_ident_str(
-                                                self.ast.get_type_defn(pending_defn_id).name
-                                            )
-                                        );
-                                        let type_id = self.eval_type_defn(
-                                            pending_defn_id,
-                                            pending_defn_scope_id,
-                                        )?;
-                                        Ok(type_id)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            ParsedTypeExpression::TypeApplication(_ty_app) => {
+            ParsedTypeExpression::TypeApplication(ty_app) => {
+                if ty_app.base_name.namespaces.is_empty() {}
                 let type_op_result =
                     self.detect_and_eval_type_operator(type_expr_id, scope_id, context.clone())?;
                 match type_op_result {
@@ -1770,18 +1706,18 @@ impl TypedModule {
             panic_at_disco!("Expected TypeApplication")
         };
         let ty_app = ty_app.clone();
-        match self.get_ident_str(ty_app.base_name) {
+        match self.get_ident_str(ty_app.base_name.name) {
             "_struct_combine" => {
                 if ty_app.params.len() != 2 {
                     return ffail!(ty_app.span, "Expected 2 type parameters for _struct_combine");
                 }
                 let arg1 = self.eval_type_expr_defn(
-                    ty_app.params[0],
+                    ty_app.params[0].type_expr,
                     scope_id,
                     context.no_attach_defn_info(),
                 )?;
                 let arg2 = self.eval_type_expr_defn(
-                    ty_app.params[1],
+                    ty_app.params[1].type_expr,
                     scope_id,
                     context.no_attach_defn_info(),
                 )?;
@@ -1832,12 +1768,12 @@ impl TypedModule {
                     return ffail!(ty_app.span, "Expected 2 type parameters for _struct_remove");
                 }
                 let arg1 = self.eval_type_expr_defn(
-                    ty_app.params[0],
+                    ty_app.params[0].type_expr,
                     scope_id,
                     context.no_attach_defn_info(),
                 )?;
                 let arg2 = self.eval_type_expr_defn(
-                    ty_app.params[1],
+                    ty_app.params[1].type_expr,
                     scope_id,
                     context.no_attach_defn_info(),
                 )?;
@@ -1881,33 +1817,87 @@ impl TypedModule {
         else {
             panic_at_disco!("Expected TypeApplication")
         };
-        let ty_app = ty_app.clone();
-        match self.scopes.find_type(scope_id, ty_app.base_name) {
-            None => {
-                ffail!(
-                    ty_app.span,
-                    "No type named '{}' is in scope",
-                    self.get_ident_str(ty_app.base_name).blue()
-                )
-            }
+
+        let base_name = &ty_app.base_name;
+        let name = base_name.name;
+        if ty_app.base_name.namespaces.is_empty() && name == get_ident!(self, "never") {
+            return Ok(NEVER_TYPE_ID);
+        }
+        let has_type_params = !ty_app.params.is_empty();
+        match self.scopes.find_type_namespaced(
+            scope_id,
+            base_name,
+            &self.namespaces,
+            &self.ast.identifiers,
+        )? {
             Some(type_id) => {
-                let mut evaled_type_params: Vec<TypeId> = Vec::with_capacity(ty_app.params.len());
-                let Type::Generic(_) = self.types.get(type_id) else {
-                    return ffail!(
-                        ty_app.span,
-                        "Type '{}' does not take type parameters",
-                        self.get_ident_str(ty_app.base_name)
-                    );
-                };
-                for parsed_param in ty_app.params.clone().iter() {
-                    let param_type_id = self.eval_type_expr_defn(
-                        *parsed_param,
-                        scope_id,
-                        context.no_attach_defn_info(),
-                    )?;
-                    evaled_type_params.push(param_type_id);
+                if has_type_params {
+                    let mut evaled_type_params: Vec<TypeId> =
+                        Vec::with_capacity(ty_app.params.len());
+                    let Type::Generic(_) = self.types.get(type_id) else {
+                        return ffail!(
+                            ty_app.span,
+                            "Type '{}' does not take type parameters",
+                            self.get_ident_str(ty_app.base_name.name)
+                        );
+                    };
+                    for parsed_param in ty_app.params.clone().iter() {
+                        let param_type_id = self.eval_type_expr_defn(
+                            parsed_param.type_expr,
+                            scope_id,
+                            context.no_attach_defn_info(),
+                        )?;
+                        evaled_type_params.push(param_type_id);
+                    }
+                    Ok(self.instantiate_generic_type(type_id, evaled_type_params, ty_app_id.into()))
+                } else {
+                    Ok(type_id)
                 }
-                Ok(self.instantiate_generic_type(type_id, evaled_type_params, ty_app_id.into()))
+            }
+            None => {
+                // Checks for recursion by name; does not work with namespaced names (?)
+                // , JsArray(Array[Json]) -> , JsArray(_root::Array[Json])
+                if context.inner_type_defn_info.as_ref().map(|info| info.name) == Some(name) {
+                    let type_defn_info = context.inner_type_defn_info.as_ref().unwrap();
+                    let placeholder_type_id = match self
+                        .types
+                        .placeholder_mapping
+                        .get(&type_defn_info.ast_id)
+                    {
+                        None => {
+                            eprintln!(
+                                "Inserting recursive reference for {}",
+                                self.get_ident_str(name)
+                            );
+                            let type_id =
+                                self.types.add_type(Type::RecursiveReference(RecursiveReference {
+                                    parsed_id: type_defn_info.ast_id,
+                                    root_type_id: TypeId::PENDING,
+                                }));
+                            self.types.placeholder_mapping.insert(type_defn_info.ast_id, type_id);
+                            type_id
+                        }
+                        Some(type_id) => *type_id,
+                    };
+                    Ok(placeholder_type_id)
+                } else {
+                    match self.scopes.find_pending_type_defn(scope_id, name) {
+                        None => ffail!(
+                            ty_app.span,
+                            "No type named {} is in scope",
+                            self.get_ident_str(name),
+                        ),
+                        Some((pending_defn_id, pending_defn_scope_id)) => {
+                            eprintln!(
+                                "Recursing into pending type defn {}",
+                                self.get_ident_str(self.ast.get_type_defn(pending_defn_id).name)
+                            );
+                            let type_id =
+                                self.eval_type_defn(pending_defn_id, pending_defn_scope_id)?;
+                            Ok(type_id)
+                        }
+                    }
+                }
             }
         }
     }
@@ -4459,7 +4449,7 @@ impl TypedModule {
         let new_fn_call = match self.ast.expressions.get(rhs) {
             ParsedExpression::Variable(var) => {
                 let args = vec![parse::FnCallArg { name: None, value: lhs }];
-                FnCall { name: var.name.clone(), type_args: None, args, span, is_method: false }
+                FnCall { name: var.name.clone(), type_args: vec![], args, span, is_method: false }
             }
             ParsedExpression::FnCall(fn_call) => {
                 let mut args = Vec::with_capacity(fn_call.args.len() + 1);
@@ -4467,7 +4457,7 @@ impl TypedModule {
                 args.extend(fn_call.args.clone());
                 FnCall {
                     name: fn_call.name.clone(),
-                    type_args: fn_call.type_args.as_ref().cloned(),
+                    type_args: fn_call.type_args.clone(),
                     args,
                     span,
                     is_method: false,
@@ -4646,7 +4636,8 @@ impl TypedModule {
         _expected_type: Option<TypeId>,
     ) -> TyperResult<Either<TypedExpr, FunctionId>> {
         let fn_name = fn_call.name.name;
-        match self.ast.identifiers.get_name(fn_name) {
+        let fn_name_str = self.ast.identifiers.get_name(fn_name);
+        match fn_name_str {
             "return" => {
                 if fn_call.args.len() != 1 {
                     return make_fail_span(
@@ -4762,7 +4753,7 @@ impl TypedModule {
                                     )));
                                 }
                             }
-                            Type::Generic(g) => {
+                            Type::Generic(_g) => {
                                 todo!("generic enum constr")
                             }
                             _ => {}
@@ -5158,8 +5149,9 @@ impl TypedModule {
         debug_assert!(!generic_type_params.is_empty());
         let generic_name = generic_function.name;
         let generic_params = generic_function.params.clone();
-        let type_params = match &fn_call.type_args {
-            Some(type_args) => {
+        let type_args = &fn_call.type_args;
+        let type_params = match type_args.is_empty() {
+            false => {
                 if type_args.len() != generic_type_params.len() {
                     return make_fail_span(
                         format!(
@@ -5178,7 +5170,7 @@ impl TypedModule {
                 }
                 evaled_params
             }
-            None => {
+            true => {
                 let exprs = self.check_call_arguments(
                     fn_call,
                     &generic_params,
@@ -6712,13 +6704,19 @@ impl TypedModule {
         t.span().or(t.ast_node().map(|parsed_id| self.ast.get_span_for_id(parsed_id)))
     }
 
-    pub fn make_qualified_name(&self, scope: ScopeId, name: Identifier, delimiter: &str) -> String {
+    pub fn make_qualified_name(
+        &self,
+        scope: ScopeId,
+        name: Identifier,
+        delimiter: &str,
+        skip_root: bool,
+    ) -> String {
         let starting_namespace = self.scopes.nearest_parent_namespace(scope);
         let namespace_chain = self.namespaces.name_chain(starting_namespace);
         let mut s = String::new();
         for identifier in namespace_chain.iter() {
             let ident_str = self.get_ident_str(*identifier);
-            if ident_str != "_root" {
+            if !skip_root || ident_str != "_root" {
                 s.push_str(&ident_str);
                 s.push_str(delimiter);
             }
@@ -6955,7 +6953,13 @@ impl TypedModule {
         scope_id: ScopeId,
     ) -> TyperResult<TypedExpr> {
         self.eval_function_call(
-            &FnCall { name, type_args: None, args: Vec::with_capacity(0), span, is_method: false },
+            &FnCall {
+                name,
+                type_args: vec![],
+                args: Vec::with_capacity(0),
+                span,
+                is_method: false,
+            },
             known_type_args,
             Some(value_arg_exprs),
             scope_id,

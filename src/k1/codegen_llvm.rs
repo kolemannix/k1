@@ -2450,7 +2450,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             TyperLinkage::External => Some(LlvmLinkage::External),
             TyperLinkage::Intrinsic => None,
         };
-        let qualified_name = self.module.make_qualified_name(function.scope, function.name, "__");
+        let qualified_name =
+            self.module.make_qualified_name(function.scope, function.name, "__", true);
         let fn_val = self.llvm_module.add_function(&qualified_name, fn_ty, llvm_linkage);
 
         self.llvm_functions.insert(function_id, fn_val);
