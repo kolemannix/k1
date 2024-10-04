@@ -355,7 +355,7 @@ pub struct AnonEnumVariant {
 
 #[derive(Debug, Clone)]
 pub struct ParsedEnumConstructor {
-    pub tag: Identifier,
+    pub variant_name: Identifier,
     pub payload: ParsedExpressionId,
     pub span: SpanId,
 }
@@ -479,6 +479,13 @@ impl ParsedExpression {
         match self {
             ParsedExpression::AsCast(as_cast) => as_cast,
             _ => panic!("expected cast expression"),
+        }
+    }
+
+    pub fn expect_fn_call(&self) -> &FnCall {
+        match self {
+            ParsedExpression::FnCall(call) => call,
+            _ => panic!("expected fn call"),
         }
     }
 }
@@ -1267,6 +1274,13 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         self.module.spans.extend(span1, span2)
     }
 
+    fn extend_span_maybe(&mut self, span1: SpanId, span2: Option<SpanId>) -> SpanId {
+        match span2 {
+            None => span1,
+            Some(span2) => self.extend_span(span1, span2),
+        }
+    }
+
     fn expect_pattern(&mut self) -> ParseResult<ParsedPatternId> {
         let first = self.peek();
         if let Some(literal_id) = self.parse_literal()? {
@@ -1668,7 +1682,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 // Box[Point],
                 // std::Map[int, int]
                 let (type_params, type_params_span) = self.parse_optional_type_args()?;
-                let span = self.extend_span(first.span, type_params_span);
+                let span = self.extend_span_maybe(first.span, type_params_span);
                 Ok(Some(self.module.type_expressions.add(ParsedTypeExpression::TypeApplication(
                     TypeApplication { base_name, params: type_params, span },
                 ))))
@@ -1761,18 +1775,21 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn parse_struct(&mut self) -> ParseResult<Option<Struct>> {
-        let Some(open_brace) = self.eat_token(K::OpenBrace) else {
-            return Ok(None);
-        };
-        let (fields, fields_span) =
-            self.eat_delimited("Struct values", K::Comma, K::CloseBrace, |parser| {
+        let Some((fields, span)) = self.eat_delimited_if_opener(
+            "Struct",
+            K::OpenBrace,
+            K::Comma,
+            K::CloseBrace,
+            |parser| {
                 let name = parser.expect_eat_token(K::Ident)?;
                 parser.expect_eat_token(K::Colon)?;
                 let expr = Parser::expect("expression", parser.peek(), parser.parse_expression())?;
                 Ok(StructField { name: parser.intern_ident_token(name), expr })
-            })?;
-        // TODO: This pattern creates extra spans because we don't include the opening brace in eat_delimited
-        let span = self.extend_span(open_brace.span, fields_span);
+            },
+        )?
+        else {
+            return Ok(None);
+        };
         Ok(Some(Struct { fields, span }))
     }
 
@@ -1830,8 +1847,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                         }));
                     } else {
                         let (type_args, type_args_span) = self.parse_optional_type_args()?;
-                        let span =
-                            self.extend_span(self.get_expression_span(result), type_args_span);
+                        let span = self
+                            .extend_span_maybe(self.get_expression_span(result), type_args_span);
                         let target = self.intern_ident_token(target);
                         result = self.add_expression(ParsedExpression::FieldAccess(FieldAccess {
                             base: result,
@@ -1959,7 +1976,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         self.extend_span(self.get_expression_span(expr1), self.get_expression_span(expr2))
     }
 
-    fn parse_optional_type_args(&mut self) -> ParseResult<(Vec<NamedTypeArg>, SpanId)> {
+    fn parse_optional_type_args(&mut self) -> ParseResult<(Vec<NamedTypeArg>, Option<SpanId>)> {
         let next = self.peek();
         if next.kind == K::OpenBracket {
             // Eat the OpenBracket
@@ -1974,9 +1991,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 .into_iter()
                 .map(|type_expr| NamedTypeArg { name: None, type_expr })
                 .collect();
-            Ok((type_args, type_args_span))
+            Ok((type_args, Some(type_args_span)))
         } else {
-            Ok((vec![], next.span))
+            Ok((vec![], None))
         }
     }
 
@@ -2125,7 +2142,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let close_paren = self.expect_eat_token(K::CloseParen)?;
                 let span = self.extend_token_span(first, close_paren);
                 Ok(Some(self.add_expression(ParsedExpression::EnumConstructor(
-                    ParsedEnumConstructor { tag: tag_name, payload, span },
+                    ParsedEnumConstructor { variant_name: tag_name, payload, span },
                 ))))
             } else {
                 // Tag Literal
@@ -2291,6 +2308,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     {
         let next = self.peek();
         if next.kind == opener {
+            self.tokens.advance();
             let (result, result_span) = self.eat_delimited(name, delim, terminator, parse)?;
             let span = self.extend_span(next.span, result_span);
             Ok(Some((result, span)))
@@ -2797,7 +2815,7 @@ impl ParsedModule {
             }
             ParsedExpression::EnumConstructor(e) => {
                 f.write_char('.')?;
-                f.write_str(self.identifiers.get_name(e.tag))?;
+                f.write_str(self.identifiers.get_name(e.variant_name))?;
                 f.write_str("(")?;
                 self.display_expr_id(e.payload, f)?;
                 f.write_str(")")
@@ -2872,12 +2890,15 @@ impl ParsedModule {
             }
             ParsedTypeExpression::TypeApplication(tapp) => {
                 display_namespaced_identifier(f, &self.identifiers, &tapp.base_name, "::")?;
-                f.write_str("[")?;
-                for tparam in tapp.params.iter() {
-                    self.display_type_expression_id(tparam.type_expr, f)?;
-                    f.write_str(", ")?;
+                if !tapp.params.is_empty() {
+                    f.write_str("[")?;
+                    for tparam in tapp.params.iter() {
+                        self.display_type_expression_id(tparam.type_expr, f)?;
+                        f.write_str(", ")?;
+                    }
+                    f.write_str("]")?;
                 }
-                f.write_str("]")
+                Ok(())
             }
             ParsedTypeExpression::Optional(opt) => {
                 self.display_type_expression_id(opt.base, f)?;
@@ -2916,8 +2937,8 @@ pub fn display_namespaced_identifier(
     delim: &'static str,
 ) -> std::fmt::Result {
     for ident in ns_ident.namespaces.iter() {
-        writ.write_str(idents.get_name(*ident));
-        writ.write_str(delim);
+        writ.write_str(idents.get_name(*ident))?;
+        writ.write_str(delim)?;
     }
     writ.write_str(idents.get_name(ns_ident.name))?;
     Ok(())

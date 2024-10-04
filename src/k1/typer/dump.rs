@@ -208,30 +208,37 @@ impl TypedModule {
                     if let Some(spec_info) = e.generic_instance_info.as_ref() {
                         self.display_instance_info(spec_info, writ)?;
                     }
-                    writ.write_str("(")?;
-                }
-                writ.write_str("enum ")?;
-                for (idx, v) in e.variants.iter().enumerate() {
-                    writ.write_str(self.ast.identifiers.get_name(v.name))?;
-                    if let Some(payload) = &v.payload {
+                    if expand {
                         writ.write_str("(")?;
-                        self.display_type_id(*payload, expand, writ)?;
+                    }
+                }
+                if expand {
+                    writ.write_str("enum ")?;
+                    for (idx, v) in e.variants.iter().enumerate() {
+                        writ.write_str(self.ast.identifiers.get_name(v.name))?;
+                        if let Some(payload) = &v.payload {
+                            writ.write_str("(")?;
+                            self.display_type_id(*payload, expand, writ)?;
+                            writ.write_str(")")?;
+                        }
+                        let last = idx == e.variants.len() - 1;
+                        if !last {
+                            writ.write_str(" | ")?;
+                        }
+                    }
+                    if let Some(_defn_info) = e.type_defn_info.as_ref() {
                         writ.write_str(")")?;
                     }
-                    let last = idx == e.variants.len() - 1;
-                    if !last {
-                        writ.write_str(" | ")?;
-                    }
-                }
-                if let Some(_defn_info) = e.type_defn_info.as_ref() {
-                    writ.write_str(")")?;
                 }
                 Ok(())
             }
             Type::EnumVariant(ev) => {
-                let enum_type = self.types.get(ev.enum_type_id).expect_enum();
-                if let Some(defn_info) = enum_type.type_defn_info.as_ref() {
+                let e = self.types.get(ev.enum_type_id).expect_enum();
+                if let Some(defn_info) = e.type_defn_info.as_ref() {
                     writ.write_str(self.get_ident_str(defn_info.name))?;
+                    if let Some(spec_info) = e.generic_instance_info.as_ref() {
+                        self.display_instance_info(spec_info, writ)?;
+                    }
                     writ.write_str(".")?;
                 }
                 writ.write_str(self.ast.identifiers.get_name(ev.name))?;

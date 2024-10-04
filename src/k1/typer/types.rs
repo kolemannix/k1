@@ -159,6 +159,12 @@ pub struct GenericType {
     pub specializations: HashMap<Vec<TypeId>, TypeId>,
 }
 
+impl GenericType {
+    pub fn name(&self) -> Identifier {
+        self.type_defn_info.name
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntegerType {
     U8,
@@ -291,10 +297,10 @@ impl Type {
     }
 
     pub fn as_array_instance(&self) -> Option<ArrayType> {
-        if let Type::Struct(_s) = self {
-            self.generic_instance_info().and_then(|g| {
-                if g.generic_parent == ARRAY_TYPE_ID {
-                    Some(ArrayType { element_type: g.param_values[0] })
+        if let Type::Struct(s) = self {
+            s.generic_instance_info.as_ref().and_then(|spec_info| {
+                if spec_info.generic_parent == ARRAY_TYPE_ID {
+                    Some(ArrayType { element_type: spec_info.param_values[0] })
                 } else {
                     None
                 }
@@ -305,10 +311,10 @@ impl Type {
     }
 
     pub fn as_optional(&self) -> Option<OptionalType> {
-        if let Type::Enum(_e) = self {
-            self.generic_instance_info().and_then(|g| {
-                if g.generic_parent == OPTIONAL_TYPE_ID {
-                    Some(OptionalType { inner_type: g.param_values[0] })
+        if let Type::Enum(e) = self {
+            e.generic_instance_info.as_ref().and_then(|spec_info| {
+                if spec_info.generic_parent == OPTIONAL_TYPE_ID {
+                    Some(OptionalType { inner_type: spec_info.param_values[0] })
                 } else {
                     None
                 }
@@ -411,26 +417,6 @@ impl Type {
         }
     }
 
-    pub fn generic_instance_info(&self) -> Option<&GenericInstanceInfo> {
-        match self {
-            Type::Unit => None,
-            Type::Char => None,
-            Type::Integer(_) => None,
-            Type::Bool => None,
-            Type::Pointer => None,
-            Type::Struct(s) => s.generic_instance_info.as_ref(),
-            Type::Reference(_) => None,
-            Type::TypeVariable(_) => None,
-            Type::Enum(e) => e.generic_instance_info.as_ref(),
-            Type::EnumVariant(_) => None,
-            Type::Never => None,
-            Type::OpaqueAlias(_opaque) => None,
-            Type::Generic(_gen) => None,
-            Type::Function(_) => None,
-            Type::RecursiveReference(_) => None,
-        }
-    }
-
     pub fn expect_integer(&self) -> &IntegerType {
         match self {
             Type::Integer(int) => int,
@@ -527,14 +513,44 @@ impl Types {
         self.add_type_ext(typ, true)
     }
 
+    #[inline]
     pub fn get_no_follow(&self, type_id: TypeId) -> &Type {
         &self.types[type_id.0 as usize]
     }
 
+    #[inline]
     pub fn get(&self, type_id: TypeId) -> &Type {
         match self.get_no_follow(type_id) {
             Type::RecursiveReference(rr) => self.get(rr.root_type_id),
             t => t,
+        }
+    }
+
+    pub fn get_as_enum(&self, type_id: TypeId) -> Option<(&TypedEnum, Option<&TypedEnumVariant>)> {
+        match self.get(type_id) {
+            Type::Enum(e) => Some((e, None)),
+            Type::EnumVariant(ev) => Some((self.get(ev.enum_type_id).expect_enum(), Some(ev))),
+            _ => None,
+        }
+    }
+
+    pub fn get_generic_instance_info(&self, type_id: TypeId) -> Option<&GenericInstanceInfo> {
+        match self.get(type_id) {
+            Type::Enum(e) => e.generic_instance_info.as_ref(),
+            Type::EnumVariant(ev) => self.get_generic_instance_info(ev.enum_type_id),
+            Type::Struct(s) => s.generic_instance_info.as_ref(),
+            Type::Unit => None,
+            Type::Char => None,
+            Type::Integer(_) => None,
+            Type::Bool => None,
+            Type::Pointer => None,
+            Type::Reference(_) => None,
+            Type::TypeVariable(_) => None,
+            Type::Never => None,
+            Type::OpaqueAlias(_opaque) => None,
+            Type::Generic(_gen) => None,
+            Type::Function(_) => None,
+            Type::RecursiveReference(_) => None,
         }
     }
 
@@ -564,8 +580,8 @@ impl Types {
     /// Note: We could cache whether or not a type is generic on insertion into the type pool
     ///       But types are not immutable so this could be a dangerous idea!
     pub fn does_type_reference_type_variables(&self, type_id: TypeId) -> bool {
-        if let Some(generic_info) = self.get(type_id).generic_instance_info() {
-            return generic_info
+        if let Some(spec_info) = self.get_generic_instance_info(type_id) {
+            return spec_info
                 .param_values
                 .iter()
                 .any(|t| self.does_type_reference_type_variables(*t));

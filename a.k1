@@ -1,29 +1,44 @@
-namespace Foo {
-type State = enum On(unit), Off(unit)
-// type StateHard = enum On(int?), Off(int?)
-}
+type State = enum On(unit), Off(unit), Zilch
+type StateHard = enum On(int?), Off(int?)
+type Contrived[A, B] = enum Stuff({ a: A, b: B}), Empty
 
 fn main(): int {
 
   val State: unit = ();
 
-  val s1 = _root::Foo::State.On(());
-  val s2 = Foo::State.Off(());
+  val z0: State.Zilch = State.Zilch;
+  val z1: State = State.Zilch;
+  val z2: State.Zilch = State.Zilch: State.Zilch;
 
-  val s3: Foo::State = Foo::State.Off(());
-  val s4: Foo::State.On = Foo::State.On(());
+  val s1 = _root::State.On(());
+  val s2 = _root::State.Off(());
 
-  // val s5: Foo::StateHard = StateHard.On(Some(42));
-  // val s6: Foo::StateHard = StateHard.On(42);
-  // val s7: Foo::StateHard = StateHard.On(None);
+  val s3: _root::State = _root::State.Off(());
+  val s4: _root::State.On = _root::State.On(());
 
+  val s5 = StateHard.On(.Some(42));
+  val s6: StateHard = StateHard.On(42);
+  val s7: StateHard = StateHard.On(.None);
 
   // A collision to make sure it works
   val Opt: unit = ();
 
+  val bb: Opt[bool]      = .Some(true);
+  val bc: Opt[bool].Some = .Some(true);
+  val bc = _root::Opt.Some[bool](true);
+  assert(bc is .Some(true));
+  val bc2 = _root::Opt.Some(42);
+  assert(bc2 is .Some(42));
+
+  val b: Opt[bool].None = Opt.None;
   val b: Opt[bool].None = .None;
-  // val c: Opt[bool].None = Opt.None;
-  // val d: Opt[bool] = Opt.Some(5);
-  printBool(b.hasValue());
+  val c: Opt[bool].None = Opt.None;
+
+  val i: Opt[i32] = Opt.None[i32];
+  val i: Opt[i32].None = Opt.None[i32];
+  val i: Opt[i32].None = Opt.None;
+
+  val x = Contrived.Stuff({ a: 42, b: "hello"});
+
   0
 }
