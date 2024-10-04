@@ -389,23 +389,22 @@ pub struct ParsedAsCast {
 
 #[derive(Debug, Clone)]
 pub enum ParsedExpression {
-    BinaryOp(BinaryOp),               // a == b
-    UnaryOp(UnaryOp),                 // !b, *b
-    Literal(Literal),                 // 42, "asdf"
-    FnCall(FnCall),                   // square(1, 2)
-    Variable(Variable),               // x
-    FieldAccess(FieldAccess),         // x.b, Opt.None[i32] (overloaded to handle enum constrs)
-    Block(Block),                     // { <expr>; <expr>; <expr> }
-    If(IfExpr),                       // if a else b
-    Struct(Struct),                   // { x: 1, y: 3 }
-    Array(ArrayExpr),                 // [1, 3, 5, 7]
-    OptionalGet(OptionalGet),         // foo!
-    For(ForExpr),                     // for i in [1,2,3] do println(i)
+    BinaryOp(BinaryOp),                     // a == b
+    UnaryOp(UnaryOp),                       // !b, *b
+    Literal(Literal),                       // 42, "asdf"
+    FnCall(FnCall),                         // square(1, 2)
+    Variable(Variable),                     // x
+    FieldAccess(FieldAccess), // x.b, Opt.None[i32] (overloaded to handle enum constrs)
+    Block(Block),             // { <expr>; <expr>; <expr> }
+    If(IfExpr),               // if a else b
+    Struct(Struct),           // { x: 1, y: 3 }
+    Array(ArrayExpr),         // [1, 3, 5, 7]
+    OptionalGet(OptionalGet), // foo!
+    For(ForExpr),             // for i in [1,2,3] do println(i)
     AnonEnumVariant(AnonEnumVariant), // .A
-    /// nocommit this will just become function call, I think
     EnumConstructor(ParsedEnumConstructor), // .A(<expr>)
-    Is(ParsedIsExpression),           // x is T
-    Match(ParsedMatchExpression),     // when x is {
+    Is(ParsedIsExpression),   // x is T
+    Match(ParsedMatchExpression), // when x is {
     // | a => ...
     // | b => ...
     // }
@@ -1820,14 +1819,14 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                         span,
                     }));
                 } else if next.kind == K::Dot {
-                    // Field access syntax; a.b
+                    // Field access syntax; a.b with optional bracketed type args []
                     self.tokens.advance();
                     let target = self.expect_eat_token(K::Ident)?;
+                    let (type_args, type_args_span) = self.parse_optional_type_args()?;
                     let next = self.peek();
-                    // method call access syntax; a.b() a.b[int](c)
-                    if next.kind == K::OpenParen || (next.kind == K::OpenBracket) {
-                        let (type_args, _type_args_span) = self.parse_optional_type_args()?;
-                        self.expect_eat_token(K::OpenParen)?;
+                    // a.b[int](...)
+                    if next.kind == K::OpenParen {
+                        self.tokens.advance();
                         let (args, args_span) = self.eat_delimited(
                             "Function arguments",
                             K::Comma,
@@ -1846,7 +1845,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                             is_method: true,
                         }));
                     } else {
-                        let (type_args, type_args_span) = self.parse_optional_type_args()?;
+                        // a.b[int] <complete expression>
                         let span = self
                             .extend_span_maybe(self.get_expression_span(result), type_args_span);
                         let target = self.intern_ident_token(target);
@@ -1856,7 +1855,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                             type_args,
                             span,
                         }));
-                    }
+                    };
                 }
             } else {
                 break result;
@@ -1977,24 +1976,21 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn parse_optional_type_args(&mut self) -> ParseResult<(Vec<NamedTypeArg>, Option<SpanId>)> {
-        let next = self.peek();
-        if next.kind == K::OpenBracket {
-            // Eat the OpenBracket
-            self.tokens.advance();
-            let (type_expressions, type_args_span) = self.eat_delimited(
-                "Type arguments",
-                K::Comma,
-                K::CloseBracket,
-                Parser::expect_type_expression,
-            )?;
-            let type_args: Vec<_> = type_expressions
-                .into_iter()
-                .map(|type_expr| NamedTypeArg { name: None, type_expr })
-                .collect();
-            Ok((type_args, Some(type_args_span)))
-        } else {
-            Ok((vec![], None))
-        }
+        let Some((type_expressions, type_args_span)) = self.eat_delimited_if_opener(
+            "Type arguments",
+            K::OpenBracket,
+            K::Comma,
+            K::CloseBracket,
+            Parser::expect_type_expression,
+        )?
+        else {
+            return Ok((vec![], None));
+        };
+        let type_args: Vec<_> = type_expressions
+            .into_iter()
+            .map(|type_expr| NamedTypeArg { name: None, type_expr })
+            .collect();
+        Ok((type_args, Some(type_args_span)))
     }
 
     fn expect_namespaced_ident(&mut self) -> ParseResult<NamespacedIdentifier> {

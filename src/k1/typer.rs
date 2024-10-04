@@ -3123,16 +3123,13 @@ impl TypedModule {
                         Ok(anon_struct_type_id)
                     }
                     Some((expected_type_id, expected_struct)) => {
-                        match self.typecheck_struct(
-                            &expected_struct,
-                            &struct_type,
-                            scope_id,
-                        ) {
+                        match self.typecheck_struct(&expected_struct, &struct_type, scope_id) {
                             Ok(_) => Ok(expected_type_id),
-                            Err(s) => {
-                                let anon_struct_type_id = self.types.add_type(Type::Struct(struct_type));
+                            Err(_s) => {
+                                let anon_struct_type_id =
+                                    self.types.add_type(Type::Struct(struct_type));
                                 Ok(anon_struct_type_id)
-                            },
+                            }
                         }
                     }
                 }?;
@@ -3323,8 +3320,10 @@ impl TypedModule {
             }
             ParsedExpression::EnumConstructor(e) => {
                 let span = e.span;
-                let expected_type = expected_type
-                    .ok_or(make_error("Could not infer enum type from context", e.span))?;
+                let expected_type = expected_type.ok_or(make_error(
+                    "Could not infer enum type from context; try supplying the name",
+                    e.span,
+                ))?;
                 let enum_type_id = {
                     match self.types.get(expected_type) {
                         Type::Enum(_e) => Ok(expected_type),

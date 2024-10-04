@@ -6,13 +6,13 @@
   - [x] Parse type expr `Opt[T].Some`
   - [x] expr `Opt.None`
   - [x] expr `_root::Opt.None`
-  - [ ] expr `_root::Opt.None[i32]`
+  - [x] expr `_root::Opt.None[i32]`
   - [x] expr `Opt.Some(5)`
   - [x] expr `Opt.Some[i32](5)`
   - [x] expr `_root::Opt.Some[i32](5)`
   - [x] deal with fncall syntax collision by checking for the enum first
-  - [ ] CastType `EnumVariant`: checks should not happen in codegen
   - [x] kill ParsedTypeExpression::AnonEnumVariant?
+  - [ ] CastType `EnumVariant`: checks should not happen in codegen
   - [ ] Add namespace-level type variables
 
 - [x] QoL before rest of pattern matching
