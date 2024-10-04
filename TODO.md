@@ -4,13 +4,12 @@
   - [x] Rename Optional -> Opt
   - [x] Remove tag literals, make enum tags per-enum
   - [x] Parse type expr `Opt[T].Some`
-  - [ ] expr `Opt.None`
-  - [ ] expr `_root::Opt.None`
+  - [x] expr `Opt.None`
+  - [x] expr `_root::Opt.None`
   - [ ] expr `_root::Opt.None[i32]`
-  - [ ] expr `Opt.Some(5)` 
-  - [ ] expr `Opt.Some[i32](5)` 
-  - [ ] expr `_root::Opt.Some[i32](5)` 
-  - [ ] and infer `Opt.Some(5)` and `Opt.None`, Either.Left(42) (payloadless)
+  - [x] expr `Opt.Some(5)`
+  - [x] expr `Opt.Some[i32](5)`
+  - [x] expr `_root::Opt.Some[i32](5)`
   - [x] deal with fncall syntax collision by checking for the enum first
   - [ ] CastType `EnumVariant`: checks should not happen in codegen
   - [x] kill ParsedTypeExpression::AnonEnumVariant?

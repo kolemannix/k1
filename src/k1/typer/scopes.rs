@@ -3,7 +3,7 @@ use log::trace;
 use std::{collections::HashMap, fmt::Display};
 
 use crate::{
-    ferr,
+    errf,
     lex::SpanId,
     parse::{Identifiers, NamespacedIdentifier, ParsedTypeDefnId},
     typer::{
@@ -327,7 +327,7 @@ impl Scopes {
         };
         // First lookup is special and recursive because it's in the current scope
         let Some(first_ns) = self.find_namespace(cur_scope_id, *first) else {
-            return Err(ferr!(
+            return Err(errf!(
                 span,
                 "Namespace not found: {} from scope: {:?}",
                 identifiers.get_name(*first),
@@ -338,7 +338,7 @@ impl Scopes {
 
         for ns in ns_iter {
             let cur_scope = self.get_scope(cur_scope_id);
-            let namespace_id = cur_scope.find_namespace(*ns).ok_or(ferr!(
+            let namespace_id = cur_scope.find_namespace(*ns).ok_or(errf!(
                 span,
                 "Namespace not found: {} in scope: {:?}",
                 identifiers.get_name(*ns),
