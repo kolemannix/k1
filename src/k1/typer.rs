@@ -27,6 +27,7 @@ use crate::parse::{
 use crate::parse::{
     Block, FnCall, Identifier, Literal, ParsedExpression, ParsedModule, ParsedStmt,
 };
+use crate::strings;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FunctionId(pub u32);
@@ -610,7 +611,6 @@ pub enum CastType {
     IntegerTruncate,
     Integer8ToChar,
     IntegerExtendFromChar,
-    EnumVariant,
     KnownNoOp,
     PointerToReference,
     ReferenceToPointer,
@@ -625,7 +625,6 @@ impl CastType {
             CastType::IntegerTruncate => false,
             CastType::Integer8ToChar => false,
             CastType::IntegerExtendFromChar => false,
-            CastType::EnumVariant => false,
             CastType::KnownNoOp => false,
             CastType::PointerToReference => true,
             CastType::ReferenceToPointer => true,
@@ -642,7 +641,6 @@ impl Display for CastType {
             CastType::IntegerTruncate => write!(f, "itrunc"),
             CastType::Integer8ToChar => write!(f, "i8tochar"),
             CastType::IntegerExtendFromChar => write!(f, "iextfromchar"),
-            CastType::EnumVariant => write!(f, "enum"),
             CastType::KnownNoOp => write!(f, "noop"),
             CastType::PointerToReference => write!(f, "ptrtoref"),
             CastType::ReferenceToPointer => write!(f, "reftoptr"),
@@ -795,6 +793,12 @@ pub enum TypedStmt {
     ValDef(Box<ValDef>),
     Assignment(Box<Assignment>),
     WhileLoop(Box<TypedWhileLoop>),
+}
+
+impl From<TypedExpr> for TypedStmt {
+    fn from(expr: TypedExpr) -> Self {
+        TypedStmt::Expr(Box::new(expr))
+    }
 }
 
 impl TypedStmt {
@@ -1624,15 +1628,15 @@ impl TypedModule {
                         Ok(variant_type)
                     }
                     Type::EnumVariant(ev) => {
-                        if self.ast.identifiers.get_name(dot_acc.member_name) != "payload" {
+                        if self.ast.identifiers.get_name(dot_acc.member_name) != "value" {
                             failf!(
                                 dot_acc.span,
-                                "Invalid member access on EnumVariant type; try '.payload'",
+                                "Invalid member access on EnumVariant type; try '.value'",
                             )
                         } else if let Some(payload) = ev.payload {
                             Ok(payload)
                         } else {
-                            failf!(dot_acc.span, "Variant has no payload")
+                            failf!(dot_acc.span, "Variant has no payload value")
                         }
                     }
                     // You can do dot access on structs to get their members!
@@ -2771,17 +2775,17 @@ impl TypedModule {
                 }))
             }
             Type::EnumVariant(ev) => {
-                if self.ast.identifiers.get_name(field_access.target) != "payload" {
+                if self.ast.identifiers.get_name(field_access.target) != "value" {
                     return failf!(
                         field_access.span,
-                        "Field {} does not exist; try .payload",
+                        "Field {} does not exist; try .value",
                         self.ast.identifiers.get_name(field_access.target)
                     );
                 }
                 let Some(payload_type_id) = ev.payload else {
                     return failf!(
                         field_access.span,
-                        "Variant {} has no payload",
+                        "Variant {} has no payload value",
                         self.ast.identifiers.get_name(ev.name)
                     );
                 };
@@ -3818,29 +3822,6 @@ impl TypedModule {
                     self.type_id_to_string(target_type).blue()
                 ),
             },
-            Type::Enum(_e) => {
-                match self.types.get(target_type) {
-                    Type::EnumVariant(variant) => {
-                        // Enum cast to variant
-                        if variant.enum_type_id == base_expr_type {
-                            Ok((CastType::EnumVariant, target_type))
-                        } else {
-                            failf!(
-                                cast.span,
-                                "Cannot cast enum '{}' to '{}'",
-                                self.type_id_to_string(base_expr_type).blue(),
-                                self.type_id_to_string(variant.enum_type_id).blue()
-                            )
-                        }
-                    }
-                    _ => failf!(
-                        cast.span,
-                        "Cannot cast enum '{}' to '{}'",
-                        self.type_id_to_string(base_expr_type).blue(),
-                        self.type_id_to_string(target_type).blue()
-                    ),
-                }
-            }
             Type::Reference(_refer) => match self.types.get(target_type) {
                 Type::Pointer => Ok((CastType::ReferenceToPointer, POINTER_TYPE_ID)),
                 _ => failf!(
@@ -4733,6 +4714,64 @@ impl TypedModule {
                         }
                     }
                     Type::Enum(e) => {
+                        if self.get_ident_str(fn_name).starts_with("as")
+                            && fn_call.type_args.len() == 0
+                            && fn_call.args.len() == 1
+                        {
+                            let span = fn_call.span;
+                            let Some(variant) = e.variants.iter().find_map(|v| {
+                                let mut s = String::with_capacity(16);
+                                s.push_str("as");
+                                let name = self.get_ident_str(v.name);
+                                let name_capitalized = strings::capitalize_first(name);
+                                s.push_str(&name_capitalized);
+
+                                if self.get_ident_str(fn_name) == &s {
+                                    Some(v)
+                                } else {
+                                    None
+                                }
+                            }) else {
+                                return failf!(
+                                    span,
+                                    "Method '{}' does not exist on type {}",
+                                    self.get_ident_str(fn_name),
+                                    self.type_id_to_string(base_expr.get_type())
+                                );
+                            };
+                            let variant_type_id = variant.my_type_id;
+                            let condition = TypedExpr::EnumIsVariant(TypedEnumIsVariantExpr {
+                                target_expr: Box::new(base_expr.clone()),
+                                variant_name: variant.name,
+                                variant_index: variant.index,
+                                span,
+                            });
+                            let parsed_id = fn_call.args[0].value.into();
+                            let consequent = self.synth_optional_some(
+                                parsed_id,
+                                TypedExpr::Cast(TypedCast {
+                                    cast_type: CastType::KnownNoOp,
+                                    base_expr: Box::new(base_expr),
+                                    target_type_id: variant.my_type_id,
+                                    span,
+                                }),
+                            );
+                            let alternate =
+                                self.synth_optional_none(variant_type_id, parsed_id, span);
+
+                            // Blocks are required; we'll fix this soon
+                            let consequent =
+                                self.synth_block(vec![consequent.into()], calling_scope, span);
+                            let alternate =
+                                self.synth_block(vec![alternate.into()], calling_scope, span);
+                            return Ok(Either::Left(TypedExpr::If(Box::new(TypedIf {
+                                ty: consequent.expr_type,
+                                condition,
+                                consequent,
+                                alternate,
+                                span,
+                            }))));
+                        }
                         let Some(enum_defn_info) = e.type_defn_info.as_ref() else {
                             return make_fail_span(
                                 "Anonymous enums currently have no methods",
@@ -6993,17 +7032,36 @@ impl TypedModule {
             .expect_enum()
             .variant_by_name(get_ident!(self, "Some"))
             .unwrap();
-        TypedExpr::Cast(TypedCast {
-            cast_type: CastType::KnownNoOp,
-            base_expr: Box::new(TypedExpr::EnumConstructor(TypedEnumConstructor {
-                type_id: some_variant.my_type_id,
-                variant_name: some_variant.name,
-                variant_index: some_variant.index,
-                span,
-                payload: Some(Box::new(expression)),
-            })),
-            target_type_id: some_variant.enum_type_id,
+
+        TypedExpr::EnumConstructor(TypedEnumConstructor {
+            type_id: some_variant.enum_type_id,
+            variant_name: some_variant.name,
+            variant_index: some_variant.index,
             span,
+            payload: Some(Box::new(expression)),
+        })
+    }
+
+    fn synth_optional_none(
+        &mut self,
+        type_id: TypeId,
+        parsed_id: ParsedId,
+        span: SpanId,
+    ) -> TypedExpr {
+        let optional_type =
+            self.instantiate_generic_type(OPTIONAL_TYPE_ID, vec![type_id], parsed_id);
+        let none_variant = self
+            .types
+            .get(optional_type)
+            .expect_enum()
+            .variant_by_name(get_ident!(self, "None"))
+            .unwrap();
+        TypedExpr::EnumConstructor(TypedEnumConstructor {
+            type_id: none_variant.enum_type_id,
+            variant_name: none_variant.name,
+            variant_index: none_variant.index,
+            span,
+            payload: None,
         })
     }
 

@@ -1672,36 +1672,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             TypedExpr::Cast(cast) => {
                 match cast.cast_type {
-                    CastType::EnumVariant => {
-                        // FIXME: Move this to synthed code and simplify codegen
-                        let enum_value =
-                            self.codegen_expr_basic_value(&cast.base_expr)?.into_struct_value();
-                        let expected_variant_index =
-                            self.module.types.get(cast.target_type_id).expect_enum_variant().index;
-                        let expected_variant = self
-                            .codegen_type(cast.base_expr.get_type())?
-                            .expect_enum()
-                            .variant_structs[expected_variant_index as usize];
-
-                        let is_variant_bool =
-                            self.codegen_enum_is_variant(enum_value, expected_variant.tag_value);
-
-                        let cond = self.bool_to_i1(is_variant_bool, "enum_cast_check");
-                        let branch = self.build_conditional_branch(cond, "cast_post", "cast_fail");
-
-                        // cast_fail
-                        self.builder.position_at_end(branch.else_block);
-                        // TODO: We can call @llvm.expect.i1 in order
-                        // to help branch prediction and indicate that failure is 'cold'
-                        self.build_k1_crash("bad enum cast", cast.span);
-
-                        // cast_post
-                        self.builder.position_at_end(branch.then_block);
-                        // Ultimately, this cast is currently a no-op
-                        // So we don't need to emit any instructions in cast_post
-
-                        Ok(enum_value.as_basic_value_enum().into())
-                    }
                     CastType::KnownNoOp | CastType::Integer8ToChar => {
                         let value = self.codegen_expr_basic_value(&cast.base_expr)?;
                         Ok(value.into())

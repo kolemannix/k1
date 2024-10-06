@@ -749,16 +749,13 @@ pub struct ParsedConstant {
 #[derive(Debug, Clone)]
 pub struct ParsedTypeDefnFlags(u32);
 impl ParsedTypeDefnFlags {
-    pub fn new(alias: bool, opaque: bool, builtin: bool) -> Self {
+    pub fn new(alias: bool, opaque: bool) -> Self {
         let mut s = Self(0);
         if alias {
             s.set_alias();
         }
         if opaque {
             s.set_opaque();
-        }
-        if builtin {
-            s.set_builtin();
         }
         s
     }
@@ -771,20 +768,12 @@ impl ParsedTypeDefnFlags {
         self.0 |= 2;
     }
 
-    pub fn set_builtin(&mut self) {
-        self.0 |= 4;
-    }
-
     pub fn is_alias(&self) -> bool {
         self.0 & 1 != 0
     }
 
     pub fn is_opaque(&self) -> bool {
         self.0 & 2 != 0
-    }
-
-    pub fn is_builtin(&self) -> bool {
-        self.0 & 4 != 0
     }
 }
 
@@ -2621,15 +2610,12 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         };
 
         // Parse modifiers
-        let mut flags = ParsedTypeDefnFlags::new(false, false, false);
+        let mut flags = ParsedTypeDefnFlags::new(false, false);
         loop {
             let name_or_modifier = self.peek();
 
             let text = self.get_token_chars(name_or_modifier);
-            if name_or_modifier.kind == K::KeywordBuiltin {
-                flags.set_builtin();
-                self.tokens.advance();
-            } else if text == "alias" {
+            if text == "alias" {
                 flags.set_alias();
                 self.tokens.advance()
             } else if text == "opaque" {

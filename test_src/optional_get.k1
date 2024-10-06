@@ -17,7 +17,7 @@ fn main(): int {
   val c: int? = .None;
   assertMsg("b", not c.hasValue());
 
-  assertMsg("c", typeId[Point.y.Some.payload]() == typeId[int]());
+  assertMsg("c", typeId[Point.y.Some.value]() == typeId[int]());
 
   0
 }

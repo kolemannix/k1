@@ -458,6 +458,13 @@ impl Type {
             Type::RecursiveReference(_r) => None,
         }
     }
+
+    pub fn as_enum_variant(&self) -> Option<&TypedEnumVariant> {
+        match self {
+            Type::EnumVariant(ev) => Some(ev),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Default, Debug)]

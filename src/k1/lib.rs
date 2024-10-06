@@ -3,6 +3,7 @@ pub mod compiler;
 pub mod gui;
 pub mod lex;
 pub mod parse;
+mod strings;
 pub mod typer;
 
 static_assert_size!(parse::ParsedStmt, 40); // Get down below 100 // We did it!
