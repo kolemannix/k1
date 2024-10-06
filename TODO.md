@@ -12,7 +12,8 @@
   - [x] expr `_root::Opt.Some[i32](5)`
   - [x] deal with fncall syntax collision by checking for the enum first
   - [x] kill ParsedTypeExpression::AnonEnumVariant?
-  - [ ] CastType `EnumVariant`: checks should not happen in codegen
+  - [x] CastType `EnumVariant`: checks should not happen in codegen
+  - [ ] Convert TypedIf.consequent and TypedIf.alternative to TypedExpr from TypedBlock
   - [ ] Add namespace-level type variables
 
 - [x] QoL before rest of pattern matching
