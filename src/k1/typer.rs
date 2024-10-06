@@ -464,8 +464,8 @@ pub struct ArrayLiteral {
 #[derive(Debug, Clone)]
 pub struct TypedIf {
     pub condition: TypedExpr,
-    pub consequent: TypedBlock,
-    pub alternate: TypedBlock,
+    pub consequent: TypedExpr,
+    pub alternate: TypedExpr,
     pub ty: TypeId,
     pub span: SpanId,
 }
@@ -763,6 +763,10 @@ impl TypedExpr {
             panic!("Expected variable expression")
         }
     }
+
+    pub fn is_unit(&self) -> bool {
+        matches!(self, TypedExpr::Unit(_))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -823,9 +827,7 @@ impl TypedStmt {
 
     pub fn is_unit_expr(&self) -> bool {
         if let TypedStmt::Expr(expr) = self {
-            if let TypedExpr::Unit(_) = **expr {
-                return true;
-            }
+            return expr.is_unit();
         }
         false
     }
@@ -3467,17 +3469,17 @@ impl TypedModule {
                 scope_id,
             )
         } else {
-            let (condition_expr, block) = cases.pop_front().unwrap();
+            let (case_condition, case_body) = cases.pop_front().unwrap();
             // Optimize out 'if true' and 'if false'
-            if let TypedExpr::Bool(b, _) = condition_expr {
+            if let TypedExpr::Bool(b, _) = case_condition {
                 if b {
-                    Ok(TypedExpr::Block(block))
+                    Ok(TypedExpr::Block(case_body))
                 } else {
                     self.chain_match_cases(
                         match_result_type,
                         cases,
                         scope_id,
-                        condition_expr.get_span(),
+                        case_condition.get_span(),
                     )
                 }
             } else {
@@ -3485,14 +3487,13 @@ impl TypedModule {
                     match_result_type,
                     cases,
                     scope_id,
-                    condition_expr.get_span(),
+                    case_condition.get_span(),
                 )?;
-                let alternate = self.coerce_expr_to_block(res, scope_id);
                 Ok(TypedExpr::If(Box::new(TypedIf {
-                    span: condition_expr.get_span(),
-                    condition: condition_expr,
-                    consequent: block,
-                    alternate,
+                    span: case_condition.get_span(),
+                    condition: case_condition,
+                    consequent: TypedExpr::Block(case_body),
+                    alternate: res,
                     ty: match_result_type,
                 })))
             }
@@ -4195,8 +4196,8 @@ impl TypedModule {
                 )?;
                 let if_else = TypedExpr::If(Box::new(TypedIf {
                     condition: lhs_has_value,
-                    consequent: self.coerce_expr_to_block(lhs_get_expr, coalesce_block.scope_id),
-                    alternate: self.coerce_expr_to_block(rhs, coalesce_block.scope_id),
+                    consequent: lhs_get_expr,
+                    alternate: rhs,
                     ty: rhs_type,
                     span: binary_op.span,
                 }));
@@ -4472,26 +4473,26 @@ impl TypedModule {
                     condition.get_span(),
                 );
             }
-            let consequent_expr = self.eval_expr(if_expr.cons, scope_id, expected_type)?;
-            self.coerce_expr_to_block(consequent_expr, scope_id)
+            self.eval_expr(if_expr.cons, scope_id, expected_type)?
         };
-        let consequent_type = consequent.expr_type;
         // De-sugar if without else:
         // If there is no alternate, we coerce the consequent to return Unit, so both
         // branches have a matching type, making codegen simpler
         // However, if the consequent is a never type, we don't need to do this, in
         // fact we can't because then we'd have an expression following a never expression
-        let cons_never = consequent_type == NEVER_TYPE_ID;
+        let cons_never = consequent.get_type() == NEVER_TYPE_ID;
 
         if if_expr.alt.is_none() && !cons_never {
-            self.coerce_block_to_unit_block(&mut consequent);
+            let mut consequent_as_block = self.coerce_expr_to_block(consequent, scope_id);
+            self.coerce_block_to_unit_block(&mut consequent_as_block);
+            consequent = TypedExpr::Block(consequent_as_block)
         };
         let alternate = if let Some(alt) = if_expr.alt {
-            let type_hint = if cons_never { None } else { Some(consequent_type) };
-            let expr = self.eval_expr(alt, scope_id, type_hint)?;
-            self.coerce_expr_to_block(expr, scope_id)
+            let type_hint = if cons_never { None } else { Some(consequent.get_type()) };
+            self.eval_expr(alt, scope_id, type_hint)?
         } else {
-            self.make_unit_block(scope_id, if_expr.span)
+            let unit_expr = TypedExpr::Unit(if_expr.span);
+            unit_expr
         };
 
         // Special typechecking that accounts for 'never'.
@@ -4502,28 +4503,30 @@ impl TypedModule {
 
         // Then essentially discards the 'never' types and runs resolution as if they weren't there. imagine
         // when x {
-        //   | A -> crash()
-        //   | B -> crash()
-        //   | C -> 42
-        //   | D -> crash()
+        //   , A -> crash()
+        //   , B -> crash()
+        //   , C -> 42
+        //   , D -> crash()
         // }: int
-        let cons_never = consequent_type == NEVER_TYPE_ID;
-        let alt_never = alternate.expr_type == NEVER_TYPE_ID;
+        let cons_never = consequent.get_type() == NEVER_TYPE_ID;
+        let alt_never = alternate.get_type() == NEVER_TYPE_ID;
         let no_never = !cons_never && !alt_never;
 
         let overall_type = if no_never {
-            if let Err(msg) = self.check_types(consequent_type, alternate.expr_type, scope_id) {
+            if let Err(msg) =
+                self.check_types(consequent.get_type(), alternate.get_type(), scope_id)
+            {
                 return make_fail_span(
                     format!("else branch type did not match then branch type: {}", msg),
-                    alternate.span,
+                    alternate.get_span(),
                 );
             };
-            consequent.expr_type
+            consequent.get_type()
         } else {
             if cons_never {
-                alternate.expr_type
+                alternate.get_type()
             } else {
-                consequent_type
+                consequent.get_type()
             }
         };
         Ok(TypedExpr::If(Box::new(TypedIf {
@@ -4759,13 +4762,8 @@ impl TypedModule {
                             let alternate =
                                 self.synth_optional_none(variant_type_id, parsed_id, span);
 
-                            // Blocks are required; we'll fix this soon
-                            let consequent =
-                                self.synth_block(vec![consequent.into()], calling_scope, span);
-                            let alternate =
-                                self.synth_block(vec![alternate.into()], calling_scope, span);
                             return Ok(Either::Left(TypedExpr::If(Box::new(TypedIf {
-                                ty: consequent.expr_type,
+                                ty: consequent.get_type(),
                                 condition,
                                 consequent,
                                 alternate,

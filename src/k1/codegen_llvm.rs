@@ -1349,7 +1349,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
         // Consequent Block
         self.builder.position_at_end(consequent_block);
-        let consequent_block_value = self.codegen_block_statements(&ir_if.consequent)?;
+        let consequent_block_value = self.codegen_expr(&ir_if.consequent)?;
         let consequent_incoming = match consequent_block_value {
             LlvmValue::Never(_) => None,
             LlvmValue::BasicValue(value) => {
@@ -1361,7 +1361,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
         // Alternate Block
         self.builder.position_at_end(alternate_block);
-        let alternate_incoming = match self.codegen_block_statements(&ir_if.alternate)? {
+        let alternate_incoming = match self.codegen_expr(&ir_if.alternate)? {
             LlvmValue::Never(_) => None,
             LlvmValue::BasicValue(value) => {
                 let alternate_final_block = self.builder.get_insert_block().unwrap();

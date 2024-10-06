@@ -453,10 +453,10 @@ impl TypedModule {
                 writ.write_str("if ")?;
                 self.display_expr(&if_expr.condition, writ, indentation)?;
                 writ.write_str(" ")?;
-                self.display_block(&if_expr.consequent, writ, indentation)?;
-                if !if_expr.alternate.is_single_unit_block() {
+                self.display_expr(&if_expr.consequent, writ, indentation)?;
+                if !if_expr.alternate.is_unit() {
                     writ.write_str(" else ")?;
-                    self.display_block(&if_expr.alternate, writ, indentation)?;
+                    self.display_expr(&if_expr.alternate, writ, indentation)?;
                 }
                 Ok(())
             }
