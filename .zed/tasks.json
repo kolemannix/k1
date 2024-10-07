@@ -16,6 +16,11 @@
     "args": ["$ZED_FILE"]
   },
   {
+    "label": "Debug file",
+    "command": "./debug",
+    "args": ["$ZED_FILE"]
+  },
+  {
     "label": "Build k1lib",
     "command": "./build_k1lib.sh"
   },

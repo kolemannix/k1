@@ -1,10 +1,36 @@
 fn main(): int {
-  val x: NewArray[char] = NewArray::new(4);
-  x.set(0, 'a');
-  x.set(1, 'b');
-  x.set(2, 'c');
-  x.set(3, 'z');
-  // _k1_free(x.data);
-  println(x.get(3).toString());
+  val xs = new(Array::new[int](0));
+  printUInt(sizeOf[Array[int]]());
+  assert(xs.data == Pointer::null());
+  assert(xs.data.isNull());
+  assert(xs.data as u64 == 0);
+  assert(xs.len == 0);
+  assert(xs.cap == 0);
+  assert(xs.isEmpty());
+
+  xs.push(1);
+  assert(xs.len == 1);
+  assert(xs.cap == 1);
+  xs.push(2);
+  assert(xs.len == 2);
+  assert(xs.cap == 2);
+  xs.push(3);
+  assert(xs.len == 3);
+  assert(xs.cap == 4);
+
+  printInt(xs.get(0));
+  printInt(xs.get(1));
+  printInt(xs.get(2));
+
+  assert(xs.first()! == 1);
+  assert(xs.last()! == 3);
+
+  xs.set(2, 99);
+  assert(xs.get(2) == 99);
+
+  // for c in xs do {
+  //   ()
+  // };
+
   0
 }

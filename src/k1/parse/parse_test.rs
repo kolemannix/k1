@@ -172,12 +172,12 @@ fn type_parameter_multi() -> ParseResult<()> {
     };
     assert_eq!(app.params.len(), 2);
     let ParsedTypeExpression::TypeApplication(inner_app) =
-        module.type_expressions.get(app.params[1])
+        module.type_expressions.get(app.params[1].type_expr)
     else {
         panic!("Expected second param to be a type application");
     };
     assert!(matches!(
-        module.type_expressions.get(inner_app.params[0]),
+        module.type_expressions.get(inner_app.params[0].type_expr),
         ParsedTypeExpression::Integer(ParsedNumericType {
             width: NumericWidth::B8,
             signed: false,
@@ -188,17 +188,17 @@ fn type_parameter_multi() -> ParseResult<()> {
 }
 
 #[test]
-fn prelude_only() -> Result<(), ParseError> {
+fn core_only() -> Result<(), ParseError> {
     env_logger::init();
-    let prelude_source = Source::make(
+    let core_source = Source::make(
         0,
         "builtins".to_string(),
-        "prelude.k1".to_string(),
-        fs::read_to_string("builtins/prelude.k1").unwrap(),
+        "core.k1".to_string(),
+        fs::read_to_string("builtins/core.k1").unwrap(),
     );
-    let module = test_parse_module(prelude_source)?;
-    assert_eq!(&module.name, "prelude");
-    assert_eq!(&module.sources.get_main().filename, "prelude.k1");
+    let module = test_parse_module(core_source)?;
+    assert_eq!(&module.name, "core");
+    assert_eq!(&module.sources.get_main().filename, "core.k1");
     assert_eq!(&module.sources.get_main().directory, "builtins");
     assert!(!module.get_root_namespace().definitions.is_empty());
     Ok(())
@@ -269,7 +269,7 @@ fn generic_method_call_lhs_expr() -> Result<(), ParseError> {
     };
     assert_eq!(fn_call.name.name, parser.identifiers.intern("getFn"));
     assert_eq!(call.name.name, parser.identifiers.intern("baz"));
-    let type_arg = parser.type_expressions.get(call.type_args.unwrap()[0].type_expr);
+    let type_arg = parser.type_expressions.get(call.type_args[0].type_expr);
     assert!(type_arg.is_integer());
     assert!(matches!(&*parser.expressions.get(call.args[1].value), ParsedExpression::Literal(_)));
     Ok(())
@@ -338,11 +338,11 @@ fn type_hint_binop() -> ParseResult<()> {
 
 #[test]
 fn tag_literals() -> ParseResult<()> {
-    let input = ".Foo: .Foo";
+    let input = ".Foo: A.Foo";
     let (module, _expr, expr_id) = test_single_expr_with_id(input)?;
     let type_hint = module.get_expression_type_hint(expr_id).unwrap();
-    assert_eq!(&module.expression_to_string(expr_id), ".Foo");
-    assert_eq!(module.type_expression_to_string(type_hint), ".Foo");
+    assert_eq!(&module.expr_id_to_string(expr_id), ".Foo");
+    assert_eq!(module.type_expression_to_string(type_hint), "A.Foo");
     Ok(())
 }
 
@@ -350,12 +350,12 @@ fn tag_literals() -> ParseResult<()> {
 fn when_pattern() -> ParseResult<()> {
     let input = r#"
         when x {
-           | { x: 1, y: 2 } -> 1
-           | { x: 2, y: 2 } -> { 2 }
-           | _ -> { 3 }
+           { x: 1, y: 2 } -> 1,
+           { x: 2, y: 2 } -> { 2 },
+           _ -> { 3 }
         };
 "#;
     let (module, _expr, expr_id) = test_single_expr_with_id(input)?;
-    println!("{}", &module.expression_to_string(expr_id));
+    println!("{}", &module.expr_id_to_string(expr_id));
     Ok(())
 }

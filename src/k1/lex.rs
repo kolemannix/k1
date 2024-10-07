@@ -413,6 +413,7 @@ impl Span {
     }
 
     pub fn extended(&self, other: Span) -> Span {
+        debug_assert!(other.end() >= self.end());
         let mut copied = *self;
         let new_end = other.end();
         let new_len = new_end - copied.start;

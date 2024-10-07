@@ -5,4 +5,4 @@ set -x
 set -e
 export RUST_BACKTRACE=1
 filename=$(basename $1 .k1)
-cargo run -- --debug --no-llvm-opt $1; lldb .k1-out/$filename.out
+RUST_LOG=debug cargo run -- --debug --no-llvm-opt $1; lldb .k1-out/$filename.out

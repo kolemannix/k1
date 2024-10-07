@@ -1,6 +1,6 @@
 fn main(): int {
   val hi = "hello, world";
-  assert(hi.index_of('e') == 1);
-  assert(hi.index_of('x') == -1);
+  assert(hi.indexOf('e') == 1);
+  assert(hi.indexOf('x') == -1);
   0
 }

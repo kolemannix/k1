@@ -1,6 +1,6 @@
 fn main(): int {
   val c = '\n';
   assert(c as u8 == 10);
-  assert(c.toString().length() == 1);
+  assert(c.toString().len == 1);
   0
 }

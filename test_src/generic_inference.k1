@@ -1,5 +1,5 @@
 fn combinedLength[T](x: Array[T], y: Array[T]): u64 {
-  x.length() + y.length()
+  x.len + y.len
 }
 
 fn identity[T](x: T): T {
@@ -10,9 +10,7 @@ fn main(): int {
   val xs = [1,2,3];
   val ys = [4,5,6];
 
-  xs.length();
-
-  identity(xs).length();
+  identity(xs).len;
 
   combinedLength(xs, ys);
   0

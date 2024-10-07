@@ -1,10 +1,10 @@
 type Json = enum
   JsStr(string)
-  | JsNumber(string)
-  | JsBool(bool)
-  | JsNull
-  | JsArray(Array[Json])
-  | JsObject(Array[{ key: string, value: Json}])
+  , JsNumber(string)
+  , JsBool(bool)
+  , JsNull
+  , JsArray(Array[Json])
+  , JsObject(Array[{ key: string, value: Json }])
 
 fn main(): int {
   val obj: Json = .JsStr("hello");
@@ -13,8 +13,8 @@ fn main(): int {
   assert(null is .JsNull);
 
   val obj2: Json = .JsArray([.JsStr("hello"), .JsNumber("123")]);
-  assert((obj2 as .JsArray).payload.get(0) is .JsStr("hello"));
-  assert((obj2 as .JsArray).payload.get(1) is .JsNumber("123"));
+  assert(obj2.asJsArray()!.value.get(0) is .JsStr("hello"));
+  assert(obj2.asJsArray()!.value.get(1) is .JsNumber("123"));
 
   // TODO: Causes stack overflow due to no indirection
   // type Node = { value: string, child: Node? }

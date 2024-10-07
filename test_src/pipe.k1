@@ -1,0 +1,8 @@
+fn add(a: int, b: int): int { a + b }
+fn add1(a: int): int { a + 1 }
+
+fn main(): int {
+  "Hello, " | string::concat("Builder!") | println;
+  assert((42 | add(3) | add1 | add(4) | add1) == 51);
+  0
+}

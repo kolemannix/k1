@@ -1,10 +1,9 @@
 use log::trace;
-use parse_display::Display;
 
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt::Display};
 
 use crate::{
-    ferr,
+    errf,
     lex::SpanId,
     parse::{Identifiers, NamespacedIdentifier, ParsedTypeDefnId},
     typer::{
@@ -15,7 +14,7 @@ use crate::{
 
 pub type ScopeId = u32;
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Display)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum ScopeType {
     FunctionScope,
     LexicalBlock,
@@ -45,6 +44,12 @@ impl ScopeType {
             ScopeType::AbilityDefn => "ability_defn",
             ScopeType::AbilityImpl => "ability_impl",
         }
+    }
+}
+
+impl Display for ScopeType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.short_name())
     }
 }
 
@@ -212,6 +217,27 @@ impl Scopes {
         }
     }
 
+    pub fn find_type_namespaced(
+        &self,
+        scope_id: ScopeId,
+        type_name: &NamespacedIdentifier,
+        namespaces: &Namespaces,
+        identifiers: &Identifiers,
+    ) -> TyperResult<Option<TypeId>> {
+        if type_name.namespaces.is_empty() {
+            Ok(self.find_type(scope_id, type_name.name))
+        } else {
+            let scope_to_search = self.traverse_namespace_chain(
+                scope_id,
+                &type_name.namespaces,
+                namespaces,
+                identifiers,
+                type_name.span,
+            )?;
+            Ok(self.get_scope(scope_to_search).find_type(type_name.name))
+        }
+    }
+
     pub fn find_pending_type_defn(
         &self,
         scope_id: ScopeId,
@@ -301,9 +327,9 @@ impl Scopes {
         };
         // First lookup is special and recursive because it's in the current scope
         let Some(first_ns) = self.find_namespace(cur_scope_id, *first) else {
-            return Err(ferr!(
+            return Err(errf!(
                 span,
-                "Namespace not found: {} in scope: {:?}",
+                "Namespace not found: {} from scope: {:?}",
                 identifiers.get_name(*first),
                 self.get_scope(scope_id).name.map(|n| identifiers.get_name(n))
             ));
@@ -312,7 +338,7 @@ impl Scopes {
 
         for ns in ns_iter {
             let cur_scope = self.get_scope(cur_scope_id);
-            let namespace_id = cur_scope.find_namespace(*ns).ok_or(ferr!(
+            let namespace_id = cur_scope.find_namespace(*ns).ok_or(errf!(
                 span,
                 "Namespace not found: {} in scope: {:?}",
                 identifiers.get_name(*ns),

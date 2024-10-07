@@ -1,7 +1,0 @@
-fn main(): int {
-  val x: Array[int] = [5,10,0];
-  x.set(1, 3);
-  assert(x.get(1) == 3);
-  0
-}
-// 3
