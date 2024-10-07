@@ -100,7 +100,6 @@
   - [x] Fix array literal syntax
 - [x] Rework builtin string to use new Pointer
 - [x] Rework builtin optionals to be a generic enum
-- [ ] Ability constraints on generics
 - [ ] Generic abilities
 - [ ] Friendliness pass
   - [ ] Get rid of 'enum' keyword, data?
@@ -124,7 +123,8 @@
 - [ ] Ability-based iteration
 - [ ] 'Context' system; implicit stack arguments
 - [ ] Mark types as trivially copyable or not
-  ^ The builtin array would be NOT copyable so that you don't accidentally alias the data ptr
+^ The builtin array would be NOT copyable so that you don't accidentally alias the data ptr
+- [ ] Ability constraints on generics (not strictly needed since we have them on functions)
 
 ## Non-goals at least for now
 - [ ] Memory safety / solving the 'aliasing' problem, not because its unimportant but because I have other interests
