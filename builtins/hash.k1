@@ -1,4 +1,4 @@
-type Elem[V] where V: Show = { key: string, value: V }
+type Elem[E] = { key: string, value: E }
 type HashMap[V] = {
   size: u64,
   slots: Array[Elem[V]?],
@@ -7,18 +7,10 @@ type HashMap[V] = {
 namespace HashMap {
   fn new[V](): HashMap[V] {
     val slots: Array[Elem[V]?] = Array::new(16);
+    // The problem is the expected_type passed in for `slots`; its HashMap.V instead of new.V
     { size: 0, slots: slots }
   }
 
-  // C FNV-1a hash
-  // #define FNV_PRIME 0x100000001b3
-  // #define FNV_OFFSET 0xcbf29ce48422325UL
-  // uint64_t hash_fnvl(const char *data, size_t length)
-  // uint64_t hash_value = FNV_OFFSET;
-  // for (int i=0; i < length; i+) {
-  // hash_value *= FNV_PRIME;
-  // hash_value ~ data[1];
-  // }
   fn fnv1a_hash(key: string): u64 {
     val FNV_PRIME: u64 = 1099511628211;
     val FNV_OFFSET: u64 = 14695981039346656037;
@@ -32,17 +24,17 @@ namespace HashMap {
 
   fn insert[V](self: HashMap[V]*, key: string, value: V): unit {
     val hash = fnv1a_hash(key);
-    val index = hash % self.slots.length();
+    val index = hash % self.slots.len;
     val elem = { key: key, value: value };
     val slot = self.slots.get(index);
     when slot {
-      , None -> {
-        self.slots.set(index, Some(elem));
+      , .None -> {
+        self.slots.set(index, Opt.Some(elem));
         self.size = self.size + 1;
       }
-      | Some({ key: existingKey, value: _ }) -> {
+      , .Some({ key: existingKey, value: _ }) -> {
         if existingKey == key {
-          self.slots.set(index, Some(elem));
+          self.slots.set(index, .Some(elem));
         } else {
           // Super naive fully linear probing
           mut probe_index = index;
@@ -54,7 +46,7 @@ namespace HashMap {
               probe_index = 0;
             };
             if self.slots.get(probe_index) is None {
-              self.slots.set(probe_index, Some(elem));
+              self.slots.set(probe_index, .Some(elem));
               self.size = self.size + 1;
               done = true;
             };
@@ -64,7 +56,7 @@ namespace HashMap {
     }
   }
 
-  fn dump[V](self: HashMap[V]): unit {
+  fn dump[V](self: HashMap[V]): unit where V: Show {
     print("Capacity: ");
     printInt(self.slots.capacity() as i64);
     println("");
@@ -72,8 +64,8 @@ namespace HashMap {
       printInt(it_index as i64);
       print(" ");
       when it {
-        , None -> println("empty")
-        , Some({ key, value }) -> {
+        , .None -> println("empty")
+        , .Some({ key, value }) -> {
           print(key);
           print(" -> <value>");
           println("");

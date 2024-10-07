@@ -127,12 +127,13 @@ impl TypedModule {
 
     fn display_instance_info(
         &self,
-        spec_info: &GenericInstanceInfo,
         writ: &mut impl Write,
+        spec_info: &GenericInstanceInfo,
+        expand: bool,
     ) -> std::fmt::Result {
         writ.write_str("[")?;
         for (index, t) in spec_info.param_values.iter().enumerate() {
-            self.display_type_id(*t, false, writ)?;
+            self.display_type_id(*t, expand, writ)?;
             let last = index == spec_info.param_values.len() - 1;
             if !last {
                 writ.write_str(", ")?;
@@ -144,8 +145,8 @@ impl TypedModule {
 
     fn display_type(&self, ty: &Type, expand: bool, writ: &mut impl Write) -> std::fmt::Result {
         match ty {
-            Type::Unit => writ.write_str("unit"),
-            Type::Char => writ.write_str("char"),
+            Type::Unit(_) => writ.write_str("unit"),
+            Type::Char(_) => writ.write_str("char"),
             Type::Integer(int_type) => {
                 match int_type {
                     IntegerType::U8 => writ.write_str("u8")?,
@@ -159,34 +160,21 @@ impl TypedModule {
                 }
                 Ok(())
             }
-            Type::Bool => writ.write_str("bool"),
-            Type::Pointer => writ.write_str("Pointer"),
+            Type::Bool(_) => writ.write_str("bool"),
+            Type::Pointer(_) => writ.write_str("Pointer"),
             Type::Struct(struc) => {
-                // Leftover, redundant to print name and expand. We need 2 prints, one that expands for
-                // debug and one that doesn't for codegen and other real use
                 if let Some(defn_info) = struc.type_defn_info.as_ref() {
                     writ.write_str(self.get_ident_str(defn_info.name))?;
                     if let Some(spec_info) = struc.generic_instance_info.as_ref() {
-                        self.display_instance_info(spec_info, writ)?;
+                        self.display_instance_info(writ, spec_info, expand)?;
                     }
                     if expand {
-                        writ.write_str("(")?
-                    };
-                }
-                if expand {
-                    writ.write_str("{")?;
-                    for (index, field) in struc.fields.iter().enumerate() {
-                        if index > 0 {
-                            writ.write_str(", ")?;
-                        }
-                        writ.write_str(self.ast.identifiers.get_name(field.name))?;
-                        writ.write_str(": ")?;
-                        self.display_type_id(field.type_id, expand, writ)?;
-                    }
-                    writ.write_str("}")?;
-                    if let Some(_defn_info) = struc.type_defn_info.as_ref() {
+                        writ.write_str("(")?;
+                        self.display_struct_fields(writ, struc, expand)?;
                         writ.write_str(")")?;
-                    };
+                    }
+                } else {
+                    self.display_struct_fields(writ, struc, expand)?;
                 }
                 Ok(())
             }
@@ -206,7 +194,7 @@ impl TypedModule {
                 if let Some(defn_info) = e.type_defn_info.as_ref() {
                     writ.write_str(self.get_ident_str(defn_info.name))?;
                     if let Some(spec_info) = e.generic_instance_info.as_ref() {
-                        self.display_instance_info(spec_info, writ)?;
+                        self.display_instance_info(writ, spec_info, expand)?;
                     }
                     if expand {
                         writ.write_str("(")?;
@@ -237,7 +225,7 @@ impl TypedModule {
                 if let Some(defn_info) = e.type_defn_info.as_ref() {
                     writ.write_str(self.get_ident_str(defn_info.name))?;
                     if let Some(spec_info) = e.generic_instance_info.as_ref() {
-                        self.display_instance_info(spec_info, writ)?;
+                        self.display_instance_info(writ, spec_info, expand)?;
                     }
                     writ.write_str(".")?;
                 }
@@ -249,7 +237,7 @@ impl TypedModule {
                 }
                 Ok(())
             }
-            Type::Never => writ.write_str("never"),
+            Type::Never(_) => writ.write_str("never"),
             Type::OpaqueAlias(opaque) => {
                 writ.write_str(self.get_ident_str(opaque.type_defn_info.name))?;
                 writ.write_str("(")?;
@@ -267,9 +255,12 @@ impl TypedModule {
                     }
                 }
                 writ.write_str("]")?;
-                writ.write_str("(")?;
-                self.display_type_id(gen.inner, expand, writ)?;
-                writ.write_str(")")
+                if expand {
+                    writ.write_str("(")?;
+                    self.display_type_id(gen.inner, expand, writ)?;
+                    writ.write_str(")")?;
+                }
+                Ok(())
             }
             Type::Function(fun) => {
                 writ.write_str("fn(")?;
@@ -287,12 +278,30 @@ impl TypedModule {
                 if rr.is_pending() {
                     writ.write_str("pending")
                 } else {
-                    let info = self.types.get(rr.root_type_id).defn_info().unwrap();
+                    let info = self.types.get_defn_info(rr.root_type_id).unwrap();
                     writ.write_str(self.get_ident_str(info.name))?;
                     Ok(())
                 }
             }
         }
+    }
+
+    fn display_struct_fields(
+        &self,
+        writ: &mut impl Write,
+        struc: &StructType,
+        expand: bool,
+    ) -> std::fmt::Result {
+        writ.write_str("{")?;
+        for (index, field) in struc.fields.iter().enumerate() {
+            if index > 0 {
+                writ.write_str(", ")?;
+            }
+            writ.write_str(self.ast.identifiers.get_name(field.name))?;
+            writ.write_str(": ")?;
+            self.display_type_id(field.type_id, expand, writ)?;
+        }
+        writ.write_str("}")
     }
 
     pub fn function_to_string(&self, function: &TypedFunction, display_block: bool) -> String {

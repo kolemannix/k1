@@ -44,7 +44,7 @@ pub struct TypeDefnInfo {
     pub scope: ScopeId,
     // If there's a corresponding namespace for this type defn, this is it
     pub companion_namespace: Option<NamespaceId>,
-    pub ast_id: ParsedTypeDefnId,
+    pub ast_id: ParsedId,
 }
 
 #[derive(Debug, Clone)]
@@ -70,19 +70,21 @@ impl StructType {
     }
 }
 
-pub const UNIT_TYPE_ID: TypeId = TypeId(0);
-pub const CHAR_TYPE_ID: TypeId = TypeId(1);
-pub const BOOL_TYPE_ID: TypeId = TypeId(2);
-pub const NEVER_TYPE_ID: TypeId = TypeId(3);
-pub const POINTER_TYPE_ID: TypeId = TypeId(4);
-pub const U8_TYPE_ID: TypeId = TypeId(5);
-pub const U16_TYPE_ID: TypeId = TypeId(6);
-pub const U32_TYPE_ID: TypeId = TypeId(7);
-pub const U64_TYPE_ID: TypeId = TypeId(8);
-pub const I8_TYPE_ID: TypeId = TypeId(9);
-pub const I16_TYPE_ID: TypeId = TypeId(10);
-pub const I32_TYPE_ID: TypeId = TypeId(11);
-pub const I64_TYPE_ID: TypeId = TypeId(12);
+pub const U8_TYPE_ID: TypeId = TypeId(0);
+pub const U16_TYPE_ID: TypeId = TypeId(1);
+pub const U32_TYPE_ID: TypeId = TypeId(2);
+pub const U64_TYPE_ID: TypeId = TypeId(3);
+pub const I8_TYPE_ID: TypeId = TypeId(4);
+pub const I16_TYPE_ID: TypeId = TypeId(5);
+pub const I32_TYPE_ID: TypeId = TypeId(6);
+pub const I64_TYPE_ID: TypeId = TypeId(7);
+
+pub const UNIT_TYPE_ID: TypeId = TypeId(8);
+pub const CHAR_TYPE_ID: TypeId = TypeId(9);
+pub const BOOL_TYPE_ID: TypeId = TypeId(10);
+pub const NEVER_TYPE_ID: TypeId = TypeId(11);
+pub const POINTER_TYPE_ID: TypeId = TypeId(12);
+
 pub const ARRAY_TYPE_ID: TypeId = TypeId(15);
 pub const STRING_TYPE_ID: TypeId = TypeId(16);
 pub const OPTIONAL_TYPE_ID: TypeId = TypeId(21);
@@ -124,6 +126,7 @@ pub struct TypedEnum {
     pub variants: Vec<TypedEnumVariant>,
     /// Populated for non-anonymous (named) enums
     pub type_defn_info: Option<TypeDefnInfo>,
+    /// Populated for specialized copies of generic enums, contains provenance info
     pub generic_instance_info: Option<GenericInstanceInfo>,
     pub ast_node: ParsedId,
 }
@@ -238,6 +241,7 @@ pub struct FnArgType {
 pub struct FunctionType {
     pub params: Vec<FnArgType>,
     pub return_type: TypeId,
+    pub defn_info: Option<TypeDefnInfo>,
 }
 
 #[derive(Debug, Clone)]
@@ -254,16 +258,15 @@ impl RecursiveReference {
 
 #[derive(Debug, Clone)]
 pub enum Type {
-    Unit,
-    Char,
+    Unit(TypeDefnInfo),
+    Char(TypeDefnInfo),
     Integer(IntegerType),
-    Bool,
+    Bool(TypeDefnInfo),
     /// Our Pointer is a raw untyped pointer; we mostly have this type for expressing intent
     /// and because it allows us to treat it as a ptr in LLVM which
     /// allows for pointer-reasoning based optimizations
-    Pointer,
+    Pointer(TypeDefnInfo),
     Struct(StructType),
-    // Optional(OptionalType),
     Reference(ReferenceType),
     #[allow(clippy::enum_variant_names)]
     TypeVariable(TypeVariable),
@@ -271,7 +274,7 @@ pub enum Type {
     /// Enum variants are proper types of their own, for lots
     /// of reasons that make programming nice. Unlike in Rust :()
     EnumVariant(TypedEnumVariant),
-    Never,
+    Never(TypeDefnInfo),
     OpaqueAlias(OpaqueTypeAlias),
     Generic(GenericType),
     Function(FunctionType),
@@ -281,14 +284,17 @@ pub enum Type {
 impl Type {
     pub fn ast_node(&self) -> Option<ParsedId> {
         match self {
-            Type::Unit | Type::Char | Type::Integer(_) | Type::Bool => None,
-            Type::Pointer => None,
+            Type::Unit(defn_info)
+            | Type::Char(defn_info)
+            | Type::Bool(defn_info)
+            | Type::Pointer(defn_info)
+            | Type::Never(defn_info) => Some(defn_info.ast_id.into()),
+            Type::Integer(_) => None,
             Type::Struct(t) => Some(t.ast_node),
             Type::Reference(_t) => None,
             Type::TypeVariable(_t) => None,
             Type::Enum(e) => Some(e.ast_node),
             Type::EnumVariant(_ev) => None,
-            Type::Never => None,
             Type::OpaqueAlias(opaque) => Some(opaque.ast_id.into()),
             Type::Generic(gen) => Some(gen.ast_id.into()),
             Type::Function(_fun) => None,
@@ -397,26 +403,6 @@ impl Type {
         }
     }
 
-    pub fn defn_info(&self) -> Option<&TypeDefnInfo> {
-        match self {
-            Type::Unit => None,
-            Type::Char => None,
-            Type::Integer(_) => None,
-            Type::Bool => None,
-            Type::Pointer => None,
-            Type::Struct(s) => s.type_defn_info.as_ref(),
-            Type::Reference(_) => None,
-            Type::TypeVariable(_) => None,
-            Type::Enum(e) => e.type_defn_info.as_ref(),
-            Type::EnumVariant(_) => None,
-            Type::Never => None,
-            Type::OpaqueAlias(opaque) => Some(&opaque.type_defn_info),
-            Type::Generic(gen) => Some(&gen.type_defn_info),
-            Type::Function(_) => None,
-            Type::RecursiveReference(_) => None,
-        }
-    }
-
     pub fn expect_integer(&self) -> &IntegerType {
         match self {
             Type::Integer(int) => int,
@@ -435,27 +421,6 @@ impl Type {
         match self {
             Type::RecursiveReference(r) => r,
             _ => panic!("expected recursive reference"),
-        }
-    }
-
-    pub fn span(&self) -> Option<SpanId> {
-        match self {
-            // TODO: these are in core now so we can populate the spans
-            Type::Unit => None,
-            Type::Char => None,
-            Type::Integer(_) => None,
-            Type::Bool => None,
-            Type::Pointer => None,
-            Type::Struct(_s) => None,
-            Type::Reference(_) => None,
-            Type::TypeVariable(t) => Some(t.span),
-            Type::Enum(_e) => None,
-            Type::EnumVariant(_) => None,
-            Type::Never => None,
-            Type::OpaqueAlias(_opaque) => None,
-            Type::Generic(_gen) => None,
-            Type::Function(_) => None,
-            Type::RecursiveReference(_r) => None,
         }
     }
 
@@ -546,17 +511,37 @@ impl Types {
             Type::Enum(e) => e.generic_instance_info.as_ref(),
             Type::EnumVariant(ev) => self.get_generic_instance_info(ev.enum_type_id),
             Type::Struct(s) => s.generic_instance_info.as_ref(),
-            Type::Unit => None,
-            Type::Char => None,
+            Type::Unit(_) => None,
+            Type::Char(_) => None,
             Type::Integer(_) => None,
-            Type::Bool => None,
-            Type::Pointer => None,
+            Type::Bool(_) => None,
+            Type::Pointer(_) => None,
             Type::Reference(_) => None,
             Type::TypeVariable(_) => None,
-            Type::Never => None,
+            Type::Never(_) => None,
             Type::OpaqueAlias(_opaque) => None,
             Type::Generic(_gen) => None,
             Type::Function(_) => None,
+            Type::RecursiveReference(_) => None,
+        }
+    }
+
+    pub fn get_defn_info(&self, type_id: TypeId) -> Option<&TypeDefnInfo> {
+        match self.get(type_id) {
+            Type::Enum(e) => e.type_defn_info.as_ref(),
+            Type::EnumVariant(ev) => self.get_defn_info(ev.enum_type_id),
+            Type::Struct(s) => s.type_defn_info.as_ref(),
+            Type::Unit(_) => None,
+            Type::Char(_) => None,
+            Type::Integer(_) => None,
+            Type::Bool(_) => None,
+            Type::Pointer(_) => None,
+            Type::Reference(_) => None,
+            Type::TypeVariable(_) => None,
+            Type::Never(_) => None,
+            Type::OpaqueAlias(opaque) => Some(&opaque.type_defn_info),
+            Type::Generic(gen) => Some(&gen.type_defn_info),
+            Type::Function(f) => f.defn_info.as_ref(),
             Type::RecursiveReference(_) => None,
         }
     }
@@ -594,11 +579,12 @@ impl Types {
                 .any(|t| self.does_type_reference_type_variables(*t));
         }
         match self.get_no_follow(type_id) {
-            Type::Unit => false,
-            Type::Char => false,
+            Type::TypeVariable(_) => true,
+            Type::Unit(_) => false,
+            Type::Char(_) => false,
             Type::Integer(_) => false,
-            Type::Bool => false,
-            Type::Pointer => false,
+            Type::Bool(_) => false,
+            Type::Pointer(_) => false,
             Type::Struct(struc) => {
                 for field in struc.fields.iter() {
                     if self.does_type_reference_type_variables(field.type_id) {
@@ -608,7 +594,6 @@ impl Types {
                 return false;
             }
             Type::Reference(refer) => self.does_type_reference_type_variables(refer.inner_type),
-            Type::TypeVariable(_) => true,
             Type::Enum(e) => {
                 for v in e.variants.iter() {
                     if let Some(payload) = v.payload {
@@ -627,7 +612,7 @@ impl Types {
                 }
                 return false;
             }
-            Type::Never => false,
+            Type::Never(_) => false,
             Type::OpaqueAlias(opaque) => self.does_type_reference_type_variables(opaque.aliasee),
             Type::Generic(_gen) => true,
             Type::Function(fun) => {
@@ -652,16 +637,16 @@ impl Types {
         type_id: TypeId,
     ) -> Option<TypeId> {
         match self.get(type_id) {
-            Type::Unit => None,
-            Type::Char => None,
+            Type::Unit(_) => None,
+            Type::Char(_) => None,
             Type::Integer(_) => None,
-            Type::Bool => None,
-            Type::Pointer => None,
+            Type::Bool(_) => None,
+            Type::Pointer(_) => None,
             // Check for Array and string since they are currently structs
-            t @ Type::Struct(_struct) => {
+            t @ Type::Struct(struc) => {
                 if let Some(array_type) = t.as_array_instance() {
                     Some(array_type.element_type)
-                } else if let Some(defn_info) = t.defn_info() {
+                } else if let Some(defn_info) = struc.type_defn_info.as_ref() {
                     if defn_info.name == identifiers.get("string").unwrap()
                         && defn_info.scope == scopes.get_root_scope_id()
                     {
@@ -677,7 +662,7 @@ impl Types {
             Type::TypeVariable(_) => None,
             Type::Enum(_) => None,
             Type::EnumVariant(_) => None,
-            Type::Never => None,
+            Type::Never(_) => None,
             Type::OpaqueAlias(_opaque) => None,
             Type::Generic(_gen) => None,
             Type::Function(_fun) => None,
@@ -707,11 +692,11 @@ impl Types {
         replace_with: TypeId,
     ) {
         match self.get_mut(replace_in) {
-            Type::Unit => (),
-            Type::Char => (),
+            Type::Unit(_) => (),
+            Type::Char(_) => (),
             Type::Integer(_) => (),
-            Type::Bool => (),
-            Type::Pointer => (),
+            Type::Bool(_) => (),
+            Type::Pointer(_) => (),
             Type::Struct(s) => {
                 for f in s.fields.clone().iter_mut() {
                     if f.type_id == placeholder_id {
@@ -744,7 +729,7 @@ impl Types {
                     }
                 }
             }
-            Type::Never => (),
+            Type::Never(_) => (),
             Type::OpaqueAlias(_) => todo!(),
             Type::Generic(_) => unreachable!(),
             Type::Function(_f) => unreachable!(),
@@ -758,10 +743,10 @@ impl Types {
 
     fn type_eq(&self, type1: &Type, type2: &Type) -> bool {
         match (type1, type2) {
-            (Type::Unit, Type::Unit) => true,
-            (Type::Char, Type::Char) => true,
+            (Type::Unit(_), Type::Unit(_)) => true,
+            (Type::Char(_), Type::Char(_)) => true,
             (Type::Integer(int1), Type::Integer(int2)) => int1 == int2,
-            (Type::Bool, Type::Bool) => true,
+            (Type::Bool(_), Type::Bool(_)) => true,
             (Type::Struct(r1), Type::Struct(r2)) => {
                 if r1.is_named() || r2.is_named() {
                     return false;
