@@ -1296,7 +1296,6 @@ impl TypedModule {
             let type_variable = Type::TypeVariable(TypeVariable {
                 name: type_param.ident,
                 scope_id: defn_scope_id,
-                // nocommit: Support type constraints in type definitions
                 ability_impls: vec![],
                 span: type_param.span,
             });
@@ -1897,7 +1896,9 @@ impl TypedModule {
             generic_parent: generic_type,
             param_values: passed_params.clone(),
         };
-        // nocommit CHECK CONSTRAINTS HERE!!!
+
+        // Note: This is where we'd check constraints
+
         match gen.specializations.get(&passed_params) {
             Some(existing) => {
                 let use_cache = true;
@@ -5261,7 +5262,6 @@ impl TypedModule {
             }
         };
 
-        // nocommit Move check out of infer function
         for (param_defn, param_given) in generic_type_params.iter().zip(type_params.iter()) {
             for constrained_ability_id in param_defn.ability_constraints.iter() {
                 let implementation = self.ability_impls.iter().find(|imp| {
