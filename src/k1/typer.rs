@@ -1265,11 +1265,6 @@ impl TypedModule {
         // Find companion namespace if exists and update type_defn_info
         let companion_namespace_id =
             self.scopes.get_scope(scope_id).find_namespace(parsed_type_defn.name);
-        eprintln!(
-            "companion_ns hit={} for {}",
-            companion_namespace_id.is_some(),
-            self.get_ident_str(parsed_type_defn.name)
-        );
 
         // The type defn info is about a lot more than just definition site.
         // It differentiates between simple names for shapes of structs and
@@ -1334,7 +1329,6 @@ impl TypedModule {
         if let Some(placeholder_id) = self.types.placeholder_mapping.get(&parsed_type_defn_id) {
             self.types.get_mut(*placeholder_id).as_recursive_reference().root_type_id =
                 resulting_type_id;
-            // self.types.replace_type(*placeholder_id, resulting_type_id, resulting_type_id)
         }
 
         let type_id = if has_type_params {
@@ -1354,7 +1348,7 @@ impl TypedModule {
         } else if parsed_type_defn.flags.is_alias() {
             if parsed_type_defn.flags.is_opaque() {
                 // Opaque alias
-                eprintln!(
+                debug!(
                     "Generating an opaque alias for a {} with companion namespace {:?}",
                     self.type_id_to_string(resulting_type_id),
                     type_defn_info.companion_namespace,
@@ -1407,7 +1401,7 @@ impl TypedModule {
         };
         if let Some(companion_namespace_id) = companion_namespace_id {
             self.namespaces.get_mut(companion_namespace_id).companion_type_id = Some(type_id);
-            eprintln!(
+            debug!(
                 "Found and set companion namespace for type {} {} to ns {}",
                 self.get_ident_str(parsed_type_defn.name),
                 type_id,
@@ -4649,9 +4643,10 @@ impl TypedModule {
         let function_id = match method_call_self {
             Some(base_expr) => {
                 // Resolve a method call
-                let base_type_id = self.types.get_type_id_dereferenced(base_expr.get_type());
-                eprintln!("base type derefed is {}", self.type_id_to_string(base_type_id));
-                let method_id = match self.types.get(base_type_id) {
+                let type_id = base_expr.get_type();
+                let base_for_method_derefed =
+                    self.types.get_type_id_dereferenced(base_expr.get_type());
+                let method_id = match self.types.get(base_for_method_derefed) {
                     Type::Enum(e) => {
                         if self.get_ident_str(fn_name).starts_with("as")
                             && fn_call.type_args.len() == 0
@@ -4719,21 +4714,13 @@ impl TypedModule {
                             None
                         }
                     }
-                    other_type => {
-                        eprintln!(
-                            "looking up companion for {}",
-                            self.type_to_string(other_type, true)
-                        );
+                    _other_type => {
                         if let Some(companion_ns) = self
                             .types
-                            .get_defn_info(base_type_id)
+                            .get_defn_info(base_for_method_derefed)
                             .and_then(|d| d.companion_namespace)
                         {
                             let companion_scope = self.get_namespace_scope(companion_ns);
-                            eprintln!(
-                                "Looking up scope for companion ns for {}",
-                                self.get_ident_str(fn_name)
-                            );
                             companion_scope.find_function(fn_name)
                         } else {
                             None
@@ -4741,7 +4728,7 @@ impl TypedModule {
                     }
                 };
                 let ability_fn_id = if method_id.is_none() {
-                    match self.types.get(base_type_id) {
+                    match self.types.get(base_expr.get_type()) {
                         // For a type variable, we must check for impls in a different place
                         Type::TypeVariable(tv) => {
                             if !tv.ability_impls.is_empty() {
@@ -4764,12 +4751,7 @@ impl TypedModule {
                                 Ok(None)
                             }
                         }
-                        _ => self.find_ability_implementation(
-                            fn_name,
-                            base_type_id,
-                            None,
-                            fn_call.span,
-                        ),
+                        _ => self.find_ability_implementation(fn_name, type_id, None, fn_call.span),
                     }?
                 } else {
                     None
@@ -4781,7 +4763,7 @@ impl TypedModule {
                             format!(
                                 "Method '{}' does not exist on type {}",
                                 &*self.get_ident_str(fn_name).blue(),
-                                self.type_id_to_string(base_type_id),
+                                self.type_id_to_string(type_id),
                             ),
                             fn_call.span,
                         );
@@ -5241,7 +5223,7 @@ impl TypedModule {
                         )?;
                     }
                     if solved_params.len() == generic_type_params.len() {
-                        eprintln!(
+                        debug!(
                             "Solved after {}/{} params",
                             gen_param.position,
                             generic_params.len()
