@@ -32,9 +32,9 @@ path = "src/bin/test_suite.rs"
 name = "compiler"
 path = "src/bin/compiler_main.rs"
 
-[profile.dev]
-debug = 0
-strip = "debuginfo"
+# [profile.dev]
+# debug = 0
+# strip = "debuginfo"
 
 [profile.release]
 panic = "abort"

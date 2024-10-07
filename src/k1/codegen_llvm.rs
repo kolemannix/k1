@@ -1210,7 +1210,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         let parent_enum = self.codegen_type(ev.enum_type_id)?.expect_enum();
                         Ok(parent_enum.into())
                     }
-                    Type::Never => {
+                    Type::Never(_) => {
                         // From DWARF standard:
                         // "Debugging information entries for C void functions
                         // should not have an attribute for the return"
@@ -1238,8 +1238,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             let defn_info = self
                                 .module
                                 .types
-                                .get(rr.root_type_id)
-                                .defn_info()
+                                .get_defn_info(rr.root_type_id)
                                 .expect("recursive type must have defn info");
 
                             // FIXME: This needs to codegen the name in a standardized way so it matches
@@ -1788,7 +1787,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 };
                 Ok(op_res.as_basic_value_enum().into())
             }
-            Type::Bool => match bin_op.kind {
+            Type::Bool(_) => match bin_op.kind {
                 BinaryOpKind::And | BinaryOpKind::Or => {
                     let lhs = self.codegen_expr_basic_value(&bin_op.lhs)?.into_int_value();
                     let op = match bin_op.kind {
@@ -1886,8 +1885,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 }
                 other => panic!("Unsupported binary operation {other:?} returning Bool"),
             },
-            Type::Unit => panic!("No unit-returning binary ops"),
-            Type::Char => panic!("No char-returning binary ops"),
+            Type::Unit(_) => panic!("No unit-returning binary ops"),
+            Type::Char(_) => panic!("No char-returning binary ops"),
             _other => unreachable!("codegen for binary ops on other types"),
         }
     }

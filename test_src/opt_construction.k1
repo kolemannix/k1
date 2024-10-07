@@ -40,5 +40,7 @@ fn main(): int {
 
   val x = Contrived.Stuff({ a: 42, b: "hello"});
 
+  val bbb = Opt.None[int];
+
   0
 }

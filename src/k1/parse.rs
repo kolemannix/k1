@@ -51,6 +51,15 @@ pub enum ParsedId {
     Pattern(ParsedPatternId),
 }
 
+impl ParsedId {
+    pub fn expect_type_defn(self) -> ParsedTypeDefnId {
+        match self {
+            ParsedId::TypeDefn(id) => id,
+            _ => panic!("Expected type definition"),
+        }
+    }
+}
+
 impl From<ParsedTypeExpressionId> for ParsedId {
     fn from(id: ParsedTypeExpressionId) -> Self {
         ParsedId::TypeExpression(id)
@@ -66,6 +75,12 @@ impl From<ParsedExpressionId> for ParsedId {
 impl From<ParsedTypeDefnId> for ParsedId {
     fn from(id: ParsedTypeDefnId) -> Self {
         ParsedId::TypeDefn(id)
+    }
+}
+
+impl From<ParsedFunctionId> for ParsedId {
+    fn from(id: ParsedFunctionId) -> Self {
+        ParsedId::Function(id)
     }
 }
 
@@ -237,6 +252,12 @@ pub struct FnCall {
     pub args: Vec<FnCallArg>,
     pub span: SpanId,
     pub is_method: bool,
+}
+
+impl FnCall {
+    pub fn arg_by_name(&self, name: Identifier) -> Option<(usize, &FnCallArg)> {
+        self.args.iter().enumerate().find(|(_, arg)| arg.name.is_some_and(|n| n == name))
+    }
 }
 
 #[derive(Debug, Clone)]

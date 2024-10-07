@@ -100,20 +100,18 @@
   - [x] Fix array literal syntax
 - [x] Rework builtin string to use new Pointer
 - [x] Rework builtin optionals to be a generic enum
-- [ ] Think about introducing type 'kind' and check_kind next time we need to typecheck on shape but not _really_ typecheck such as when inferring
+- [ ] Ability constraints on generics
+- [ ] Generic abilities
 - [ ] Friendliness pass
   - [ ] Get rid of 'enum' keyword, data?
   - [ ] 'when' keyword is bad; `switch` maybe or `case`
-- [ ] Ability constraints on generics
 - [x] Remove tag literals, make enum tags per-enum
 - [ ] function pointers (For now just take static address of a function as Pointer)
-- [ ] Implement Slice using new `Pointer`
 - [ ] Imports
-- [ ] Generic abilities
 - [ ] Pure lambdas with -> (not closures)
 - [ ] German/Umbra strings
 - [ ] Make demo readme / site
-- [ ] Define clear 'platform layer' (crash, alloc/free, other?). Then we could do an LLVM jit platform and a rust interpreter platform
+- [ ] Define clear 'platform layer' (crash, alloc/free, other?). Then we could do an LLVM interp platform and a rust interpreter platform
 - [x] Function types (functions have types but there's no syntax for describing a function type yet)
 - [ ] floating point (f32 and f64)
 - [ ] Optional coalescing field accessor (x?.y)
@@ -147,8 +145,7 @@
 - Invoke LLVM from in-memory repr?
 - UTF8
 - Intern ParsedBlock and ParsedStatement
-- Move Optional to userland
-- Move Array to userland (once we have slice / multipointer)
+- Think about introducing type 'kind' and check_kind next time we need to typecheck on shape but not _really_ typecheck such as when inferring
 
 ## Error story
 - [ ] As values, of course.
