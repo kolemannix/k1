@@ -10,7 +10,7 @@ impl Display for TypedModule {
         f.write_str("--- TYPES ---\n")?;
         for (id, ty) in self.types.iter() {
             write!(f, "type {:02} ", id)?;
-            self.display_type(ty, f)?;
+            self.display_type(ty, true, f)?;
             f.write_str("\n")?;
         }
         f.write_str("--- Namespaces ---\n")?;
@@ -84,7 +84,7 @@ impl TypedModule {
             writ.write_str("\t")?;
             writ.write_str(&self.get_ident_str(*ident))?;
             writ.write_str(" := ")?;
-            self.display_type_id(*type_id, writ)?;
+            self.display_type_id(*type_id, true, writ)?;
             writ.write_str("\n")?;
         }
         for (id, namespace_id) in scope.namespaces.iter() {
@@ -102,32 +102,51 @@ impl TypedModule {
         }
         writ.write_str(&self.get_ident_str(var.name))?;
         writ.write_str(": ")?;
-        self.display_type_id(var.type_id, writ)
+        self.display_type_id(var.type_id, false, writ)
     }
 
-    fn display_type_id(&self, ty: TypeId, writ: &mut impl Write) -> std::fmt::Result {
-        let ty = self.types.get(ty);
-        self.display_type(ty, writ)
+    fn display_type_id(&self, ty: TypeId, expand: bool, writ: &mut impl Write) -> std::fmt::Result {
+        let ty = self.types.get_no_follow(ty);
+        self.display_type(ty, expand, writ)
     }
 
     pub fn type_id_to_string(&self, type_id: TypeId) -> String {
-        let ty = self.types.get(type_id);
-        self.type_to_string(ty)
+        self.type_id_to_string_ext(type_id, false)
     }
 
-    pub fn type_to_string(&self, ty: &Type) -> String {
+    pub fn type_id_to_string_ext(&self, type_id: TypeId, expand: bool) -> String {
+        let ty = self.types.get_no_follow(type_id);
+        self.type_to_string(ty, expand)
+    }
+
+    pub fn type_to_string(&self, ty: &Type, expand: bool) -> String {
         let mut s = String::new();
-        self.display_type(ty, &mut s).unwrap();
+        self.display_type(ty, expand, &mut s).unwrap();
         s
     }
 
-    fn display_type(&self, ty: &Type, writ: &mut impl Write) -> std::fmt::Result {
-        if let Some(defn_info) = ty.defn_info() {
-            return writ.write_str(self.get_ident_str(defn_info.name));
+    fn display_instance_info(
+        &self,
+        writ: &mut impl Write,
+        spec_info: &GenericInstanceInfo,
+        expand: bool,
+    ) -> std::fmt::Result {
+        writ.write_str("[")?;
+        for (index, t) in spec_info.param_values.iter().enumerate() {
+            self.display_type_id(*t, expand, writ)?;
+            let last = index == spec_info.param_values.len() - 1;
+            if !last {
+                writ.write_str(", ")?;
+            }
         }
+        writ.write_str("]")?;
+        return Ok(());
+    }
+
+    fn display_type(&self, ty: &Type, expand: bool, writ: &mut impl Write) -> std::fmt::Result {
         match ty {
-            Type::Unit => writ.write_str("()"),
-            Type::Char => writ.write_str("char"),
+            Type::Unit(_) => writ.write_str("unit"),
+            Type::Char(_) => writ.write_str("char"),
             Type::Integer(int_type) => {
                 match int_type {
                     IntegerType::U8 => writ.write_str("u8")?,
@@ -141,35 +160,23 @@ impl TypedModule {
                 }
                 Ok(())
             }
-            Type::Bool => writ.write_str("bool"),
-            Type::String => writ.write_str("string"),
-            Type::Pointer => writ.write_str("Pointer"),
+            Type::Bool(_) => writ.write_str("bool"),
+            Type::Pointer(_) => writ.write_str("Pointer"),
             Type::Struct(struc) => {
-                // Leftover, redundant to print name and expand. We need 2 prints, one that expands for
-                // debug and one that doesn't for codegen and other real use
                 if let Some(defn_info) = struc.type_defn_info.as_ref() {
                     writ.write_str(self.get_ident_str(defn_info.name))?;
-                    writ.write_str("(")?;
-                }
-                writ.write_str("{")?;
-                for (index, field) in struc.fields.iter().enumerate() {
-                    if index > 0 {
-                        writ.write_str(", ")?;
+                    if let Some(spec_info) = struc.generic_instance_info.as_ref() {
+                        self.display_instance_info(writ, spec_info, expand)?;
                     }
-                    writ.write_str(self.ast.identifiers.get_name(field.name))?;
-                    writ.write_str(": ")?;
-                    self.display_type_id(field.type_id, writ)?;
+                    if expand {
+                        writ.write_str("(")?;
+                        self.display_struct_fields(writ, struc, expand)?;
+                        writ.write_str(")")?;
+                    }
+                } else {
+                    self.display_struct_fields(writ, struc, expand)?;
                 }
-                writ.write_str("}")?;
-                if let Some(_defn_info) = struc.type_defn_info.as_ref() {
-                    writ.write_str(")")?;
-                };
                 Ok(())
-            }
-            Type::Array(array) => {
-                writ.write_str("Array[")?;
-                self.display_type_id(array.element_type, writ)?;
-                writ.write_str("]")
             }
             Type::TypeVariable(tv) => {
                 let scope_name = self.make_scope_name(self.scopes.get_scope(tv.scope_id));
@@ -179,60 +186,62 @@ impl TypedModule {
                 writ.write_str(self.ast.identifiers.get_name(tv.name))?;
                 Ok(())
             }
-            Type::Optional(opt) => {
-                self.display_type_id(opt.inner_type, writ)?;
-                writ.write_char('?')
-            }
             Type::Reference(r) => {
-                self.display_type_id(r.inner_type, writ)?;
+                self.display_type_id(r.inner_type, expand, writ)?;
                 writ.write_char('*')
-            }
-            Type::TagInstance(tag) => {
-                writ.write_str("Tag.")?;
-                writ.write_str(self.ast.identifiers.get_name(tag.ident))
             }
             Type::Enum(e) => {
                 if let Some(defn_info) = e.type_defn_info.as_ref() {
                     writ.write_str(self.get_ident_str(defn_info.name))?;
-                    writ.write_str("(")?;
-                }
-                writ.write_str("enum ")?;
-                for (idx, v) in e.variants.iter().enumerate() {
-                    writ.write_str(self.ast.identifiers.get_name(v.tag_name))?;
-                    if let Some(payload) = &v.payload {
+                    if let Some(spec_info) = e.generic_instance_info.as_ref() {
+                        self.display_instance_info(writ, spec_info, expand)?;
+                    }
+                    if expand {
                         writ.write_str("(")?;
-                        self.display_type_id(*payload, writ)?;
+                    }
+                }
+                if expand {
+                    writ.write_str("enum ")?;
+                    for (idx, v) in e.variants.iter().enumerate() {
+                        writ.write_str(self.ast.identifiers.get_name(v.name))?;
+                        if let Some(payload) = &v.payload {
+                            writ.write_str("(")?;
+                            self.display_type_id(*payload, expand, writ)?;
+                            writ.write_str(")")?;
+                        }
+                        let last = idx == e.variants.len() - 1;
+                        if !last {
+                            writ.write_str(" | ")?;
+                        }
+                    }
+                    if let Some(_defn_info) = e.type_defn_info.as_ref() {
                         writ.write_str(")")?;
                     }
-                    let last = idx == e.variants.len() - 1;
-                    if !last {
-                        writ.write_str(" | ")?;
-                    }
-                }
-                if let Some(_defn_info) = e.type_defn_info.as_ref() {
-                    writ.write_str(")")?;
                 }
                 Ok(())
             }
             Type::EnumVariant(ev) => {
-                let enum_type = self.types.get(ev.enum_type_id).expect_enum();
-                if let Some(defn_info) = enum_type.type_defn_info.as_ref() {
+                let e = self.types.get(ev.enum_type_id).expect_enum();
+                if let Some(defn_info) = e.type_defn_info.as_ref() {
                     writ.write_str(self.get_ident_str(defn_info.name))?;
+                    if let Some(spec_info) = e.generic_instance_info.as_ref() {
+                        self.display_instance_info(writ, spec_info, expand)?;
+                    }
                     writ.write_str(".")?;
                 }
-                writ.write_str(self.ast.identifiers.get_name(ev.tag_name))?;
+                writ.write_str(self.ast.identifiers.get_name(ev.name))?;
                 if let Some(payload) = &ev.payload {
                     writ.write_str("(")?;
-                    self.display_type_id(*payload, writ)?;
+                    self.display_type_id(*payload, expand, writ)?;
                     writ.write_str(")")?;
                 }
                 Ok(())
             }
-            Type::Never => writ.write_str("never"),
+            Type::Never(_) => writ.write_str("never"),
             Type::OpaqueAlias(opaque) => {
                 writ.write_str(self.get_ident_str(opaque.type_defn_info.name))?;
                 writ.write_str("(")?;
-                self.display_type_id(opaque.aliasee, writ)?;
+                self.display_type_id(opaque.aliasee, expand, writ)?;
                 writ.write_str(")")
             }
             Type::Generic(gen) => {
@@ -246,30 +255,53 @@ impl TypedModule {
                     }
                 }
                 writ.write_str("]")?;
-                writ.write_str("(")?;
-                self.display_type_id(gen.inner, writ)?;
-                writ.write_str(")")
+                if expand {
+                    writ.write_str("(")?;
+                    self.display_type_id(gen.inner, expand, writ)?;
+                    writ.write_str(")")?;
+                }
+                Ok(())
             }
             Type::Function(fun) => {
                 writ.write_str("fn(")?;
                 for (idx, param) in fun.params.iter().enumerate() {
-                    self.display_type_id(param.type_id, writ)?;
+                    self.display_type_id(param.type_id, expand, writ)?;
                     let last = idx == fun.params.len() - 1;
                     if !last {
                         writ.write_str(", ")?;
                     }
                 }
                 writ.write_str(") -> ")?;
-                self.display_type_id(fun.return_type, writ)
+                self.display_type_id(fun.return_type, expand, writ)
             }
             Type::RecursiveReference(rr) => {
                 if rr.is_pending() {
                     writ.write_str("pending")
                 } else {
-                    self.display_type_id(rr.root_type_id, writ)
+                    let info = self.types.get_defn_info(rr.root_type_id).unwrap();
+                    writ.write_str(self.get_ident_str(info.name))?;
+                    Ok(())
                 }
             }
         }
+    }
+
+    fn display_struct_fields(
+        &self,
+        writ: &mut impl Write,
+        struc: &StructType,
+        expand: bool,
+    ) -> std::fmt::Result {
+        writ.write_str("{")?;
+        for (index, field) in struc.fields.iter().enumerate() {
+            if index > 0 {
+                writ.write_str(", ")?;
+            }
+            writ.write_str(self.ast.identifiers.get_name(field.name))?;
+            writ.write_str(": ")?;
+            self.display_type_id(field.type_id, expand, writ)?;
+        }
+        writ.write_str("}")
     }
 
     pub fn function_to_string(&self, function: &TypedFunction, display_block: bool) -> String {
@@ -300,11 +332,11 @@ impl TypedModule {
             }
             writ.write_str(&self.get_ident_str(param.name))?;
             writ.write_str(": ")?;
-            self.display_type_id(param.type_id, writ)?;
+            self.display_type_id(param.type_id, false, writ)?;
         }
         writ.write_str(")")?;
         writ.write_str(": ")?;
-        self.display_type_id(function.ret_type, writ)?;
+        self.display_type_id(function.ret_type, false, writ)?;
         if display_block {
             if let Some(block) = &function.block {
                 self.display_block(block, writ, 0)?;
@@ -340,7 +372,7 @@ impl TypedModule {
         }
         writ.write_str(&" ".repeat(indentation))?;
         writ.write_str("}: ")?;
-        self.display_type_id(block.expr_type, writ)
+        self.display_type_id(block.expr_type, false, writ)
     }
 
     fn display_stmt(
@@ -390,21 +422,6 @@ impl TypedModule {
             TypedExpr::Integer(int) => write!(writ, "{}", int.value),
             TypedExpr::Bool(b, _) => write!(writ, "{}", b),
             TypedExpr::Str(s, _) => write!(writ, "\"{}\"", s),
-            TypedExpr::OptionalNone(typ, _) => {
-                writ.write_str("None[")?;
-                self.display_type_id(*typ, writ)?;
-                writ.write_str("]")
-            }
-            TypedExpr::Array(array) => {
-                writ.write_str("[")?;
-                for (idx, expr) in array.elements.iter().enumerate() {
-                    if idx > 0 {
-                        writ.write_str(", ")?;
-                    }
-                    self.display_expr(expr, writ, indentation)?;
-                }
-                writ.write_str("]")
-            }
             TypedExpr::Struct(struc) => {
                 writ.write_str("{")?;
                 for (idx, field) in struc.fields.iter().enumerate() {
@@ -445,10 +462,10 @@ impl TypedModule {
                 writ.write_str("if ")?;
                 self.display_expr(&if_expr.condition, writ, indentation)?;
                 writ.write_str(" ")?;
-                self.display_block(&if_expr.consequent, writ, indentation)?;
-                if !if_expr.alternate.is_single_unit_block() {
+                self.display_expr(&if_expr.consequent, writ, indentation)?;
+                if !if_expr.alternate.is_unit() {
                     writ.write_str(" else ")?;
-                    self.display_block(&if_expr.alternate, writ, indentation)?;
+                    self.display_expr(&if_expr.alternate, writ, indentation)?;
                 }
                 Ok(())
             }
@@ -460,23 +477,6 @@ impl TypedModule {
                 self.display_expr(&binary_op.lhs, writ, indentation)?;
                 write!(writ, " {} ", binary_op.kind)?;
                 self.display_expr(&binary_op.rhs, writ, indentation)
-            }
-            TypedExpr::OptionalSome(opt) => {
-                writ.write_str("Some(")?;
-                self.display_expr(&opt.inner_expr, writ, indentation)?;
-                writ.write_str(")")
-            }
-            TypedExpr::OptionalHasValue(opt) => {
-                self.display_expr(opt, writ, indentation)?;
-                writ.write_str(".hasValue()")
-            }
-            TypedExpr::OptionalGet(opt) => {
-                self.display_expr(&opt.inner_expr, writ, indentation)?;
-                writ.write_str("!")
-            }
-            TypedExpr::Tag(tag_expr) => {
-                writ.write_str(".")?;
-                writ.write_str(&self.get_ident_str(tag_expr.name))
             }
             TypedExpr::EnumConstructor(enum_constr) => {
                 writ.write_str(".")?;
@@ -497,7 +497,7 @@ impl TypedModule {
             TypedExpr::Cast(cast) => {
                 self.display_expr(&cast.base_expr, writ, indentation)?;
                 write!(writ, " as({}) ", cast.cast_type)?;
-                self.display_type_id(cast.target_type_id, writ)
+                self.display_type_id(cast.target_type_id, false, writ)
             }
             TypedExpr::EnumGetPayload(as_variant_expr) => {
                 self.display_expr(&as_variant_expr.target_expr, writ, indentation)?;
@@ -531,6 +531,7 @@ impl TypedModule {
             PatternConstructor::Char => writ.write_str("'<char>'"),
             PatternConstructor::String => writ.write_str("\"<string>\""),
             PatternConstructor::Int => writ.write_str("<int>"),
+            PatternConstructor::TypeVariable => writ.write_str("<tvar>"),
             PatternConstructor::Some(inner) => {
                 writ.write_str("Some(")?;
                 self.display_pattern_ctor(inner, writ)?;
@@ -582,15 +583,8 @@ impl TypedModule {
             TypedPattern::LiteralInteger(value, _) => write!(writ, "{value}"),
             TypedPattern::LiteralBool(value, _) => write!(writ, "{value}"),
             TypedPattern::LiteralString(s, _) => write!(writ, "\"{s}\""),
-            TypedPattern::LiteralNone(_) => writ.write_str("None"),
             TypedPattern::Variable(var) => writ.write_str(self.get_ident_str(var.name)),
             TypedPattern::Wildcard(_) => writ.write_str("_"),
-            TypedPattern::Some(some) => {
-                writ.write_str("Some(")?;
-                self.display_pattern(&some.inner_pattern, writ)?;
-                writ.write_str(")")?;
-                Ok(())
-            }
             TypedPattern::Enum(enum_pat) => {
                 writ.write_str(self.get_ident_str(enum_pat.variant_tag_name))?;
                 if let Some(payload) = enum_pat.payload.as_ref() {

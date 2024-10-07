@@ -1,9 +1,9 @@
-type E = enum A(int) | B(int) | C
+type E = enum A(int) , B(int) , C
 
 fn main(): int {
   val x: E = .A(42);
-  val x_as_b = x as E.B;
-  assert(x_as_b.payload == 1);
+  val x_as_b = x.asB();
+  assert(x_as_b!.value == 1);
   0
 }
-//abortmsg: bad enum cast at enum_bad_cast.k1:5
+//abortmsg: Opt.get on None

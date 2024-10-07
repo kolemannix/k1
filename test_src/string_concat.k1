@@ -5,6 +5,6 @@ fn main(): int {
   // println(conc);
   // println("abcabc");
   assert(conc == "abcabc");
-  assert(conc.length() == 6);
+  assert(conc.len == 6);
   0
 }

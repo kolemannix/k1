@@ -22,9 +22,9 @@ use clap::Parser;
 #[derive(Parser, Debug, Clone)]
 #[command(author, version, about, long_about = None)]
 pub struct Args {
-    /// No Prelude
+    /// No core
     #[arg(short, long, default_value_t = false)]
-    pub no_prelude: bool,
+    pub no_core: bool,
 
     /// Output an LLVM IR file at out_dir/{module_name}.ll
     #[arg(long, default_value_t = true)]
@@ -90,7 +90,7 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
 
     let src_filter = if !is_dir { Some(|p: &Path| *p == *src_path) } else { None };
 
-    let use_prelude = !args.no_prelude;
+    let use_core = !args.no_core;
 
     let mut parsed_module = ParsedModule::make(module_name.to_string());
 
@@ -135,9 +135,9 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
         ()
     };
 
-    if use_prelude {
-        let prelude_path: &Path = Path::new("builtins/prelude.k1");
-        parse_file(prelude_path);
+    if use_core {
+        let core_path: &Path = Path::new("builtins/core.k1");
+        parse_file(core_path);
 
         let bitwise_path: &Path = Path::new("builtins/bitwise.k1");
         parse_file(bitwise_path);

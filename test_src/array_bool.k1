@@ -1,6 +1,0 @@
-fn main(): int {
-  val boolArray: Array[bool] = [false,true];
-  assert(boolArray.get(0) == false);
-  assert(boolArray.get(1) == true);
-  0
-}

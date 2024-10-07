@@ -22,12 +22,12 @@ void _k1_crash(K1String* reason, K1String* filename, uint64_t line) {
 
 void* _k1_malloc(uint64_t size_bytes) {
     void* ptr = malloc(size_bytes);
-    printf("k1_malloc(%llu)", size_bytes);
+    printf("k1_malloc(%llu)\n", size_bytes);
     return ptr;
 }
 
 void _k1_free(void* ptr) {
-    printf("k1_free(%zu)", (size_t)ptr);
+    printf("k1_free(%zu)\n", (size_t)ptr);
     free(ptr);
 }
 
@@ -55,3 +55,11 @@ K1String _k1_readFileToString(K1String filename) {
     free(as_cstring);
     return string;
 }
+
+// int main(int argc, char** argv) {
+//     puts("Hello from the runtime");
+//     void *heap = _k1_malloc(1024 * 1024);
+//     int res = _k1_main()
+//
+//     return int
+// }

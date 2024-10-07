@@ -33,13 +33,18 @@ pub struct StructTypeField {
 }
 
 #[derive(Debug, Clone)]
+pub struct GenericInstanceInfo {
+    pub generic_parent: TypeId,
+    pub param_values: Vec<TypeId>,
+}
+
+#[derive(Debug, Clone)]
 pub struct TypeDefnInfo {
     pub name: Identifier,
     pub scope: ScopeId,
     // If there's a corresponding namespace for this type defn, this is it
     pub companion_namespace: Option<NamespaceId>,
-    pub generic_parent: Option<TypeId>,
-    pub ast_id: ParsedTypeDefnId,
+    pub ast_id: ParsedId,
 }
 
 #[derive(Debug, Clone)]
@@ -47,6 +52,7 @@ pub struct StructType {
     pub fields: Vec<StructTypeField>,
     /// Populated for non-anonymous (named) structs
     pub type_defn_info: Option<TypeDefnInfo>,
+    pub generic_instance_info: Option<GenericInstanceInfo>,
     pub ast_node: ParsedId,
 }
 
@@ -64,20 +70,24 @@ impl StructType {
     }
 }
 
-pub const UNIT_TYPE_ID: TypeId = TypeId(0);
-pub const CHAR_TYPE_ID: TypeId = TypeId(1);
-pub const BOOL_TYPE_ID: TypeId = TypeId(2);
-pub const STRING_TYPE_ID: TypeId = TypeId(3);
-pub const NEVER_TYPE_ID: TypeId = TypeId(4);
-pub const POINTER_TYPE_ID: TypeId = TypeId(5);
-pub const U8_TYPE_ID: TypeId = TypeId(6);
-pub const U16_TYPE_ID: TypeId = TypeId(7);
-pub const U32_TYPE_ID: TypeId = TypeId(8);
-pub const U64_TYPE_ID: TypeId = TypeId(9);
-pub const I8_TYPE_ID: TypeId = TypeId(10);
-pub const I16_TYPE_ID: TypeId = TypeId(11);
-pub const I32_TYPE_ID: TypeId = TypeId(12);
-pub const I64_TYPE_ID: TypeId = TypeId(13);
+pub const U8_TYPE_ID: TypeId = TypeId(0);
+pub const U16_TYPE_ID: TypeId = TypeId(1);
+pub const U32_TYPE_ID: TypeId = TypeId(2);
+pub const U64_TYPE_ID: TypeId = TypeId(3);
+pub const I8_TYPE_ID: TypeId = TypeId(4);
+pub const I16_TYPE_ID: TypeId = TypeId(5);
+pub const I32_TYPE_ID: TypeId = TypeId(6);
+pub const I64_TYPE_ID: TypeId = TypeId(7);
+
+pub const UNIT_TYPE_ID: TypeId = TypeId(8);
+pub const CHAR_TYPE_ID: TypeId = TypeId(9);
+pub const BOOL_TYPE_ID: TypeId = TypeId(10);
+pub const NEVER_TYPE_ID: TypeId = TypeId(11);
+pub const POINTER_TYPE_ID: TypeId = TypeId(12);
+
+pub const ARRAY_TYPE_ID: TypeId = TypeId(15);
+pub const STRING_TYPE_ID: TypeId = TypeId(16);
+pub const OPTIONAL_TYPE_ID: TypeId = TypeId(21);
 
 #[derive(Debug, Clone)]
 pub struct ArrayType {
@@ -103,15 +113,10 @@ pub struct ReferenceType {
 }
 
 #[derive(Debug, Clone)]
-pub struct TagInstanceType {
-    pub ident: Identifier,
-}
-
-#[derive(Debug, Clone)]
 pub struct TypedEnumVariant {
     pub enum_type_id: TypeId,
     pub my_type_id: TypeId,
-    pub tag_name: Identifier,
+    pub name: Identifier,
     pub index: u32,
     pub payload: Option<TypeId>,
 }
@@ -121,12 +126,14 @@ pub struct TypedEnum {
     pub variants: Vec<TypedEnumVariant>,
     /// Populated for non-anonymous (named) enums
     pub type_defn_info: Option<TypeDefnInfo>,
+    /// Populated for specialized copies of generic enums, contains provenance info
+    pub generic_instance_info: Option<GenericInstanceInfo>,
     pub ast_node: ParsedId,
 }
 
 impl TypedEnum {
     pub fn variant_by_name(&self, name: Identifier) -> Option<&TypedEnumVariant> {
-        self.variants.iter().find(|v| v.tag_name == name)
+        self.variants.iter().find(|v| v.name == name)
     }
     pub fn variant_by_index(&self, index: u32) -> Option<&TypedEnumVariant> {
         self.variants.iter().find(|v| v.index == index)
@@ -153,6 +160,12 @@ pub struct GenericType {
     pub ast_id: ParsedTypeDefnId,
     pub type_defn_info: TypeDefnInfo,
     pub specializations: HashMap<Vec<TypeId>, TypeId>,
+}
+
+impl GenericType {
+    pub fn name(&self) -> Identifier {
+        self.type_defn_info.name
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -228,6 +241,7 @@ pub struct FnArgType {
 pub struct FunctionType {
     pub params: Vec<FnArgType>,
     pub return_type: TypeId,
+    pub defn_info: Option<TypeDefnInfo>,
 }
 
 #[derive(Debug, Clone)]
@@ -244,26 +258,23 @@ impl RecursiveReference {
 
 #[derive(Debug, Clone)]
 pub enum Type {
-    Unit,
-    Char,
+    Unit(TypeDefnInfo),
+    Char(TypeDefnInfo),
     Integer(IntegerType),
-    Bool,
-    String,
+    Bool(TypeDefnInfo),
     /// Our Pointer is a raw untyped pointer; we mostly have this type for expressing intent
     /// and because it allows us to treat it as a ptr in LLVM which
-    Pointer,
+    /// allows for pointer-reasoning based optimizations
+    Pointer(TypeDefnInfo),
     Struct(StructType),
-    Array(ArrayType),
-    Optional(OptionalType),
     Reference(ReferenceType),
     #[allow(clippy::enum_variant_names)]
     TypeVariable(TypeVariable),
-    TagInstance(TagInstanceType),
     Enum(TypedEnum),
     /// Enum variants are proper types of their own, for lots
     /// of reasons that make programming nice. Unlike in Rust :()
     EnumVariant(TypedEnumVariant),
-    Never,
+    Never(TypeDefnInfo),
     OpaqueAlias(OpaqueTypeAlias),
     Generic(GenericType),
     Function(FunctionType),
@@ -273,21 +284,49 @@ pub enum Type {
 impl Type {
     pub fn ast_node(&self) -> Option<ParsedId> {
         match self {
-            Type::Unit | Type::Char | Type::Integer(_) | Type::Bool | Type::String => None,
-            Type::Pointer => None,
+            Type::Unit(defn_info)
+            | Type::Char(defn_info)
+            | Type::Bool(defn_info)
+            | Type::Pointer(defn_info)
+            | Type::Never(defn_info) => Some(defn_info.ast_id.into()),
+            Type::Integer(_) => None,
             Type::Struct(t) => Some(t.ast_node),
-            Type::Array(_a) => None,
-            Type::Optional(_t) => None,
             Type::Reference(_t) => None,
             Type::TypeVariable(_t) => None,
-            Type::TagInstance(_t) => None,
             Type::Enum(e) => Some(e.ast_node),
             Type::EnumVariant(_ev) => None,
-            Type::Never => None,
             Type::OpaqueAlias(opaque) => Some(opaque.ast_id.into()),
             Type::Generic(gen) => Some(gen.ast_id.into()),
             Type::Function(_fun) => None,
             Type::RecursiveReference(r) => Some(ParsedId::TypeDefn(r.parsed_id)),
+        }
+    }
+
+    pub fn as_array_instance(&self) -> Option<ArrayType> {
+        if let Type::Struct(s) = self {
+            s.generic_instance_info.as_ref().and_then(|spec_info| {
+                if spec_info.generic_parent == ARRAY_TYPE_ID {
+                    Some(ArrayType { element_type: spec_info.param_values[0] })
+                } else {
+                    None
+                }
+            })
+        } else {
+            None
+        }
+    }
+
+    pub fn as_optional(&self) -> Option<OptionalType> {
+        if let Type::Enum(e) = self {
+            e.generic_instance_info.as_ref().and_then(|spec_info| {
+                if spec_info.generic_parent == OPTIONAL_TYPE_ID {
+                    Some(OptionalType { inner_type: spec_info.param_values[0] })
+                } else {
+                    None
+                }
+            })
+        } else {
+            None
         }
     }
 
@@ -301,12 +340,6 @@ impl Type {
         match self {
             Type::Reference(r) => r,
             _ => panic!("expect_reference called on: {:?}", self),
-        }
-    }
-    pub fn as_optional(&self) -> Option<&OptionalType> {
-        match self {
-            Type::Optional(opt) => Some(opt),
-            _ => None,
         }
     }
 
@@ -345,25 +378,8 @@ impl Type {
         }
     }
 
-    pub fn expect_optional(&self) -> &OptionalType {
-        match self {
-            Type::Optional(opt) => opt,
-            _ => panic!("expect_optional called on: {:?}", self),
-        }
-    }
-
-    pub fn expect_array(&self) -> &ArrayType {
-        match self {
-            Type::Array(array) => array,
-            _ => panic!("expect_array called on: {:?}", self),
-        }
-    }
-
-    pub fn as_array(&self) -> Option<&ArrayType> {
-        match self {
-            Type::Array(array) => Some(array),
-            _ => None,
-        }
+    pub fn expect_optional(&self) -> OptionalType {
+        self.as_optional().unwrap()
     }
 
     pub fn as_struct(&self) -> Option<&StructType> {
@@ -380,42 +396,10 @@ impl Type {
         }
     }
 
-    #[allow(unused)]
-    fn as_tag(&self) -> Option<&TagInstanceType> {
-        match self {
-            Type::TagInstance(tag) => Some(tag),
-            _ => None,
-        }
-    }
-
     pub fn expect_generic(&self) -> &GenericType {
         match self {
             Type::Generic(g) => g,
             _ => panic!("expect_generic called on: {:?}", self),
-        }
-    }
-
-    pub fn defn_info(&self) -> Option<&TypeDefnInfo> {
-        match self {
-            Type::Unit => None,
-            Type::Char => None,
-            Type::Integer(_) => None,
-            Type::Bool => None,
-            Type::String => None,
-            Type::Pointer => None,
-            Type::Struct(s) => s.type_defn_info.as_ref(),
-            Type::Array(_) => None,
-            Type::Optional(_) => None,
-            Type::Reference(_) => None,
-            Type::TypeVariable(_) => None,
-            Type::TagInstance(_) => None,
-            Type::Enum(e) => e.type_defn_info.as_ref(),
-            Type::EnumVariant(_) => None,
-            Type::Never => None,
-            Type::OpaqueAlias(opaque) => Some(&opaque.type_defn_info),
-            Type::Generic(gen) => Some(&gen.type_defn_info),
-            Type::Function(_) => None,
-            Type::RecursiveReference(_) => None,
         }
     }
 
@@ -440,28 +424,10 @@ impl Type {
         }
     }
 
-    pub fn span(&self) -> Option<SpanId> {
+    pub fn as_enum_variant(&self) -> Option<&TypedEnumVariant> {
         match self {
-            // TODO: these are in prelude now so we can populate the spans
-            Type::Unit => None,
-            Type::Char => None,
-            Type::Integer(_) => None,
-            Type::Bool => None,
-            Type::String => None,
-            Type::Pointer => None,
-            Type::Struct(_s) => None,
-            Type::Array(_) => None,
-            Type::Optional(_) => None,
-            Type::Reference(_) => None,
-            Type::TypeVariable(t) => Some(t.span),
-            Type::TagInstance(_) => None,
-            Type::Enum(_e) => None,
-            Type::EnumVariant(_) => None,
-            Type::Never => None,
-            Type::OpaqueAlias(_opaque) => None,
-            Type::Generic(_gen) => None,
-            Type::Function(_) => None,
-            Type::RecursiveReference(_r) => None,
+            Type::EnumVariant(ev) => Some(ev),
+            _ => None,
         }
     }
 }
@@ -519,14 +485,64 @@ impl Types {
         self.add_type_ext(typ, true)
     }
 
+    #[inline]
     pub fn get_no_follow(&self, type_id: TypeId) -> &Type {
         &self.types[type_id.0 as usize]
     }
 
+    #[inline]
     pub fn get(&self, type_id: TypeId) -> &Type {
         match self.get_no_follow(type_id) {
             Type::RecursiveReference(rr) => self.get(rr.root_type_id),
             t => t,
+        }
+    }
+
+    pub fn get_as_enum(&self, type_id: TypeId) -> Option<(&TypedEnum, Option<&TypedEnumVariant>)> {
+        match self.get(type_id) {
+            Type::Enum(e) => Some((e, None)),
+            Type::EnumVariant(ev) => Some((self.get(ev.enum_type_id).expect_enum(), Some(ev))),
+            _ => None,
+        }
+    }
+
+    pub fn get_generic_instance_info(&self, type_id: TypeId) -> Option<&GenericInstanceInfo> {
+        match self.get(type_id) {
+            Type::Enum(e) => e.generic_instance_info.as_ref(),
+            Type::EnumVariant(ev) => self.get_generic_instance_info(ev.enum_type_id),
+            Type::Struct(s) => s.generic_instance_info.as_ref(),
+            Type::Unit(_) => None,
+            Type::Char(_) => None,
+            Type::Integer(_) => None,
+            Type::Bool(_) => None,
+            Type::Pointer(_) => None,
+            Type::Reference(_) => None,
+            Type::TypeVariable(_) => None,
+            Type::Never(_) => None,
+            Type::OpaqueAlias(_opaque) => None,
+            Type::Generic(_gen) => None,
+            Type::Function(_) => None,
+            Type::RecursiveReference(_) => None,
+        }
+    }
+
+    pub fn get_defn_info(&self, type_id: TypeId) -> Option<&TypeDefnInfo> {
+        match self.get(type_id) {
+            Type::Enum(e) => e.type_defn_info.as_ref(),
+            Type::EnumVariant(ev) => self.get_defn_info(ev.enum_type_id),
+            Type::Struct(s) => s.type_defn_info.as_ref(),
+            Type::Unit(info) => Some(info),
+            Type::Char(info) => Some(info),
+            Type::Integer(_) => None,
+            Type::Bool(info) => Some(info),
+            Type::Pointer(info) => Some(info),
+            Type::Reference(_) => None,
+            Type::TypeVariable(_) => None,
+            Type::Never(info) => Some(info),
+            Type::OpaqueAlias(opaque) => Some(&opaque.type_defn_info),
+            Type::Generic(gen) => Some(&gen.type_defn_info),
+            Type::Function(f) => f.defn_info.as_ref(),
+            Type::RecursiveReference(_) => None,
         }
     }
 
@@ -556,15 +572,19 @@ impl Types {
     /// Note: We could cache whether or not a type is generic on insertion into the type pool
     ///       But types are not immutable so this could be a dangerous idea!
     pub fn does_type_reference_type_variables(&self, type_id: TypeId) -> bool {
-        match self.get(type_id) {
-            Type::Unit => false,
-            Type::Char => false,
+        if let Some(spec_info) = self.get_generic_instance_info(type_id) {
+            return spec_info
+                .param_values
+                .iter()
+                .any(|t| self.does_type_reference_type_variables(*t));
+        }
+        match self.get_no_follow(type_id) {
+            Type::TypeVariable(_) => true,
+            Type::Unit(_) => false,
+            Type::Char(_) => false,
             Type::Integer(_) => false,
-            Type::Bool => false,
-            Type::String => false,
-            Type::Pointer => false,
-            Type::Array(arr) => self.does_type_reference_type_variables(arr.element_type),
-            // We don't _yet_ support generics in structs
+            Type::Bool(_) => false,
+            Type::Pointer(_) => false,
             Type::Struct(struc) => {
                 for field in struc.fields.iter() {
                     if self.does_type_reference_type_variables(field.type_id) {
@@ -573,10 +593,7 @@ impl Types {
                 }
                 return false;
             }
-            Type::Optional(opt) => self.does_type_reference_type_variables(opt.inner_type),
             Type::Reference(refer) => self.does_type_reference_type_variables(refer.inner_type),
-            Type::TypeVariable(_) => true,
-            Type::TagInstance(_) => false,
             Type::Enum(e) => {
                 for v in e.variants.iter() {
                     if let Some(payload) = v.payload {
@@ -595,7 +612,7 @@ impl Types {
                 }
                 return false;
             }
-            Type::Never => false,
+            Type::Never(_) => false,
             Type::OpaqueAlias(opaque) => self.does_type_reference_type_variables(opaque.aliasee),
             Type::Generic(_gen) => true,
             Type::Function(fun) => {
@@ -613,23 +630,39 @@ impl Types {
         }
     }
 
-    pub fn item_type_of_iterable(&self, type_id: TypeId) -> Option<TypeId> {
+    pub fn item_type_of_iterable(
+        &self,
+        identifiers: &Identifiers,
+        scopes: &Scopes,
+        type_id: TypeId,
+    ) -> Option<TypeId> {
         match self.get(type_id) {
-            Type::Unit => None,
-            Type::Char => None,
+            Type::Unit(_) => None,
+            Type::Char(_) => None,
             Type::Integer(_) => None,
-            Type::Bool => None,
-            Type::String => Some(CHAR_TYPE_ID),
-            Type::Pointer => None,
-            Type::Array(arr) => Some(arr.element_type),
-            Type::Struct(_struct) => None,
-            Type::Optional(_opt) => None,
+            Type::Bool(_) => None,
+            Type::Pointer(_) => None,
+            // Check for Array and string since they are currently structs
+            t @ Type::Struct(struc) => {
+                if let Some(array_type) = t.as_array_instance() {
+                    Some(array_type.element_type)
+                } else if let Some(defn_info) = struc.type_defn_info.as_ref() {
+                    if defn_info.name == identifiers.get("string").unwrap()
+                        && defn_info.scope == scopes.get_root_scope_id()
+                    {
+                        Some(CHAR_TYPE_ID)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
             Type::Reference(_refer) => None,
             Type::TypeVariable(_) => None,
-            Type::TagInstance(_) => None,
             Type::Enum(_) => None,
             Type::EnumVariant(_) => None,
-            Type::Never => None,
+            Type::Never(_) => None,
             Type::OpaqueAlias(_opaque) => None,
             Type::Generic(_gen) => None,
             Type::Function(_fun) => None,
@@ -649,20 +682,6 @@ impl Types {
         self.type_defn_mapping.get(&type_defn_id).copied()
     }
 
-    // FIXME: Slow
-    pub fn get_type_for_tag(&mut self, tag_ident: Identifier) -> TypeId {
-        for (type_id, typ) in self.iter() {
-            if let Type::TagInstance(tag) = typ {
-                if tag.ident == tag_ident {
-                    return type_id;
-                }
-            }
-        }
-        let tag_type = Type::TagInstance(TagInstanceType { ident: tag_ident });
-        let tag_type_id = self.add_type(tag_type);
-        tag_type_id
-    }
-
     // Ended up storing redirects as RecursiveReference, but keeping this around
     // Ah I also got this confused with substitute_in_type which is actually used for generic instantiation
     // This one looks like it mutates the type tree instead of making a new type
@@ -673,12 +692,11 @@ impl Types {
         replace_with: TypeId,
     ) {
         match self.get_mut(replace_in) {
-            Type::Unit => (),
-            Type::Char => (),
+            Type::Unit(_) => (),
+            Type::Char(_) => (),
             Type::Integer(_) => (),
-            Type::Bool => (),
-            Type::String => (),
-            Type::Pointer => (),
+            Type::Bool(_) => (),
+            Type::Pointer(_) => (),
             Type::Struct(s) => {
                 for f in s.fields.clone().iter_mut() {
                     if f.type_id == placeholder_id {
@@ -688,28 +706,11 @@ impl Types {
                     }
                 }
             }
-            Type::Array(a) => {
-                let elem_type = a.element_type;
-                if elem_type == placeholder_id {
-                    a.element_type = replace_with;
-                } else {
-                    self.replace_type(placeholder_id, elem_type, replace_with)
-                }
-            }
-            Type::Optional(o) => {
-                let inner_type = o.inner_type;
-                if inner_type == placeholder_id {
-                    o.inner_type = replace_with
-                } else {
-                    self.replace_type(placeholder_id, inner_type, replace_with)
-                }
-            }
             Type::Reference(refer) => {
                 let inner_type = refer.inner_type;
                 self.replace_type(placeholder_id, inner_type, replace_with)
             }
             Type::TypeVariable(_) => (),
-            Type::TagInstance(_) => (),
             Type::Enum(e) => {
                 for v in e.variants.clone().iter_mut() {
                     if v.my_type_id == placeholder_id {
@@ -728,7 +729,7 @@ impl Types {
                     }
                 }
             }
-            Type::Never => (),
+            Type::Never(_) => (),
             Type::OpaqueAlias(_) => todo!(),
             Type::Generic(_) => unreachable!(),
             Type::Function(_f) => unreachable!(),
@@ -742,11 +743,10 @@ impl Types {
 
     fn type_eq(&self, type1: &Type, type2: &Type) -> bool {
         match (type1, type2) {
-            (Type::Unit, Type::Unit) => true,
-            (Type::Char, Type::Char) => true,
+            (Type::Unit(_), Type::Unit(_)) => true,
+            (Type::Char(_), Type::Char(_)) => true,
             (Type::Integer(int1), Type::Integer(int2)) => int1 == int2,
-            (Type::Bool, Type::Bool) => true,
-            (Type::String, Type::String) => true,
+            (Type::Bool(_), Type::Bool(_)) => true,
             (Type::Struct(r1), Type::Struct(r2)) => {
                 if r1.is_named() || r2.is_named() {
                     return false;
@@ -763,13 +763,10 @@ impl Types {
                 }
                 return true;
             }
-            (Type::Array(a1), Type::Array(a2)) => a1.element_type == a2.element_type,
-            (Type::Optional(o1), Type::Optional(o2)) => o1.inner_type == o2.inner_type,
             (Type::Reference(r1), Type::Reference(r2)) => r1.inner_type == r2.inner_type,
             (Type::TypeVariable(t1), Type::TypeVariable(t2)) => {
                 t1.name == t2.name && t1.scope_id == t2.scope_id
             }
-            (Type::TagInstance(t1), Type::TagInstance(t2)) => t1.ident == t2.ident,
             (Type::Enum(e1), Type::Enum(e2)) => {
                 if e1.type_defn_info.is_some() || e2.type_defn_info.is_some() {
                     return false;
@@ -779,7 +776,7 @@ impl Types {
                 }
                 for (index, v1) in e1.variants.iter().enumerate() {
                     let v2 = &e2.variants[index];
-                    let mismatch = v1.tag_name != v2.tag_name || v1.payload != v2.payload;
+                    let mismatch = v1.name != v2.name || v1.payload != v2.payload;
                     if mismatch {
                         return false;
                     }

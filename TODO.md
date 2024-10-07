@@ -1,5 +1,21 @@
 # Project Completion Checklist
 
+- Fixing enums big time
+  - [x] Rename Optional -> Opt
+  - [x] Remove tag literals, make enum tags per-enum
+  - [x] Parse type expr `Opt[T].Some`
+  - [x] expr `Opt.None`
+  - [x] expr `_root::Opt.None`
+  - [x] expr `_root::Opt.None[i32]`
+  - [x] expr `Opt.Some(5)`
+  - [x] expr `Opt.Some[i32](5)`
+  - [x] expr `_root::Opt.Some[i32](5)`
+  - [x] deal with fncall syntax collision by checking for the enum first
+  - [x] kill ParsedTypeExpression::AnonEnumVariant?
+  - [x] CastType `EnumVariant`: checks should not happen in codegen
+  - [ ] Convert TypedIf.consequent and TypedIf.alternative to TypedExpr from TypedBlock
+  - [ ] Add namespace-level type variables
+
 - [x] QoL before rest of pattern matching
   - [x] Codegen fail instead of panic
   - [x] Rename record to struct
@@ -77,20 +93,24 @@
   - [x] param types of function (fn.arg, fn.arg2)
 - [x] Exhaustive pattern matching
 - [x] Rework RawPointer to be a builtin and support 'multipointer' operations
-- [ ] Implement Slice using new `Pointer`
-- [ ] Rework builtin array to use new Pointer
-- [ ] Rework builtin string to use new Pointer
-- [ ] Pipe operator (copy Elixir)
-- [ ] function pointers (we could almost take address of a function as RawPointer already)
-- [ ] slices (windows? segments?)
-- [ ] Imports
+- [x] Pipe operator (copy Elixir)
+  - [ ] Support pipe-last
+- [x] Rework builtin array to use new Pointer, Remove all array intrinsics and builtin type
+  - [x] Add array bounds checking
+  - [x] Fix array literal syntax
+- [x] Rework builtin string to use new Pointer
+- [x] Rework builtin optionals to be a generic enum
 - [ ] Generic abilities
-- [ ] array bounds checking (do with windows)
+- [ ] Friendliness pass
+  - [ ] Get rid of 'enum' keyword, data?
+  - [ ] 'when' keyword is bad; `switch` maybe or `case`
+- [x] Remove tag literals, make enum tags per-enum
+- [ ] function pointers (For now just take static address of a function as Pointer)
+- [ ] Imports
 - [ ] Pure lambdas with -> (not closures)
 - [ ] German/Umbra strings
 - [ ] Make demo readme / site
-- [ ] Ability constraints on generics
-- [ ] Define clear 'platform layer' (crash, alloc/free, other?). Then we could do an LLVM jit platform and a rust interpreter platform
+- [ ] Define clear 'platform layer' (crash, alloc/free, other?). Then we could do an LLVM interp platform and a rust interpreter platform
 - [x] Function types (functions have types but there's no syntax for describing a function type yet)
 - [ ] floating point (f32 and f64)
 - [ ] Optional coalescing field accessor (x?.y)
@@ -99,9 +119,12 @@
 - [x] Typecheck the binary ops
 - [x] Bitwise ops
 - [x] Bitwise ops using abilities
+- [ ] RTTI story and 'any' type
+- [ ] Ability-based iteration
 - [ ] 'Context' system; implicit stack arguments
 - [ ] Mark types as trivially copyable or not
-  ^ The builtin array would be NOT copyable so that you don't accidentally alias the data ptr
+^ The builtin array would be NOT copyable so that you don't accidentally alias the data ptr
+- [ ] Ability constraints on generics (not strictly needed since we have them on functions)
 
 ## Non-goals at least for now
 - [ ] Memory safety / solving the 'aliasing' problem, not because its unimportant but because I have other interests
@@ -111,20 +134,18 @@
 - [ ] Ability derivation (prefer a metaprogram solution)
 
 ## Maybe
-- [ ] Move to UFCS instead of having the concept of a 'method' or companion namespace?
-- [ ] Automatic unsafe marker/tracing when 'raw' stuff is used
+- [ ] Require unsafe marker when unsafe stuff is used
 - [ ] Might be very cool to have builtin syntax for anything implementing a 'Monad' ability
   - (Monad ability would require closures and generic abilities)
-- [ ] Require named fncall args by default; and allow anonymous w/ declaration like Jakt
-- [ ] as? for fallible casting
+- [ ] Require named fncall args by default; and allow anonymous w/ declaration like Jakt?
+- [ ] as! for fallible casting and as? for optional casting
 
 ## Compiler
 - Use smallvec
 - Invoke LLVM from in-memory repr?
 - UTF8
 - Intern ParsedBlock and ParsedStatement
-- Move Optional to userland
-- Move Array to userland (once we have slice / multipointer)
+- Think about introducing type 'kind' and check_kind next time we need to typecheck on shape but not _really_ typecheck such as when inferring
 
 ## Error story
 - [ ] As values, of course.
@@ -141,6 +162,8 @@
 
 # Major fix
 - [ ] Replace IdentifierId with global 'Symbol' where its a bug not to
+- [ ] Parsing bug where first expr of block is namespaced with ::
+- [x] ICE when assigning to struct member when struct is not a reference (self.module.types.get(field_access.base.get_type()).as_reference().is_some())
 
 # Minor Fix (possible good bite-sized videos)
 - [ ] type suffixes on int literals 123u32, 4u8, etc
@@ -171,7 +194,7 @@
   - [x] Accessor codegen
 - [x] Identifier cleanup and interning
 - [x] Actual scoping
-- [x] Real prelude so we can more easily add runtime/stl functions (for array)
+- [x] Real core so we can more easily add runtime/stl functions (for array)
 - [x] Heap memory (just using malloc)
 - [x] Arrays (Fixed size but heap allocated)
 - [x] Generic functions (no inference)
@@ -249,7 +272,7 @@
 
 - [x] move some-wrapping into a function
 - [x] has value from userland (currently only happens by desugaring))
-- [x] unwrap from userland (I think this can just be a prelude function not intrinsic)
+- [x] unwrap from userland (I think this can just be a core function not intrinsic)
 - [x] test with optional array elements
 - [x] test with optional struct fields
 - [x] test with optional function args
@@ -283,7 +306,7 @@
 - [x] Maybe eventually actually free some memory? lol
 - [x] Rename IR to typed-ast, since it's a tree not instruction set. TAST?
 - [x] Make intrinsics like arrayIndex a real function in the LLVM IR?
-- [x] Fix line numbers to account for prelude
+- [x] Fix line numbers to account for core
 - [x] Fix unnecessary load of function args
 - [x] Proper println implementation. Fine to use printf internally for now but we should define our own func around it
 - [x] Implement Display instead of relying on Debug

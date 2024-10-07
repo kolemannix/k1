@@ -1,12 +1,12 @@
-type Result[T, E] = enum Ok(T) | Err(E)
+type Result[T, E] = enum Ok(T) , Err(E)
 namespace Result {
   fn unwrap[T, E](self: Result[T, E]): T {
-    (self as Result[T,E].Ok).payload
+    self.asOk()!.value
   }
   fn show(self: Result[int, string]): unit {
     when self {
-      | .Ok(v) -> { print("Ok "); printInt(v); println("") }
-      | .Err(e) -> { print("Error "); println(e); }
+      .Ok(v) -> { print("Ok "); printInt(v); println("") },
+      .Err(e) -> { print("Error "); println(e); }
     }
   }
 }
@@ -15,13 +15,15 @@ fn main(): int {
     val x1: Result[int, string] = .Ok(-3);
     val x2: Result[int, string] = .Err("Some error message");
 
-    val x1Ok = x1 as Result[int, string].Ok;
-
-    assert(Result::unwrap(x1) == -3);
+    val x1Ok = x1.asOk()!;
 
     // This tests type inference for enums
+    assert(Result::unwrap(x1) == -3);
     assert(x1.unwrap() == -3);
     assert(x1Ok.unwrap() == -3);
+
+    // Shows that we can talk about the payload type
+    val b: Result[int, string].Ok.value = 42;
 
     x1.show();
     x2.show();

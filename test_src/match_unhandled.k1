@@ -1,9 +1,9 @@
 type Foo = { x: int, y: bool? }
 fn main(): int {
-  val foo: Foo = { x: 1, y: None };
+  val foo: Foo = { x: 1, y: .None };
   val y = when foo {
-    | { x, y: Some(true) } -> x
-    | { x, y: None } -> x + 2
+    { x, y: .Some(true) } -> x,
+    { x, y: .None } -> x + 2
   };
   assert(y == 3);
   0

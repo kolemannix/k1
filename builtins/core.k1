@@ -1,0 +1,391 @@
+type unit = builtin
+type char = builtin
+type bool = builtin
+type never = builtin
+type Pointer = builtin
+type Array[T] = { len: u64, cap: u64, data: Pointer }
+type string = { len: u64, data: Pointer }
+type Opt[T] = enum None, Some(T)
+namespace Opt {
+
+  fn hasValue[T](self: T?): bool {
+    self is .Some(_)
+  }
+
+  fn get[T](self: T?): T {
+    if self is .Some(t) {
+      t
+    } else {
+      crash("Opt.get on None")
+    }
+  }
+}
+
+// One day
+// ability OrElse[T] {
+//   fn hasValue(): bool
+//   fn unwrap(): T
+// }
+
+type alias int = i64
+type alias uint = u64
+type alias byte = u8
+
+
+// type TypeInfo = enum Unit, Boolean(enum False, True), Int,
+//
+// type Any = {
+//   typeInfo: TypeInfo,
+//   value: Pointer
+// }
+
+// Must have ability id 0
+ability Equals {
+  fn equals(self: Self, other: Self): bool
+}
+
+ability Show {
+  // TODO: make this use an allocator. How does it get passed conveniently?
+  fn show(self: Self): string
+}
+
+intern fn sizeOf[T](): u64
+intern fn alignOf[T](): u64
+intern fn typeId[T](): bool
+fn typeEq[T, U](): bool {
+  typeId[T]() == typeId[U]()
+}
+
+fn new[T](value: T): T* {
+  val ptr = _k1_malloc(sizeOf[T]());
+  val t = ptr as T*;
+  referenceSet(t, value);
+  t
+}
+
+
+// What will become platform stuff
+
+extern fn _k1_readFileToString(path: string): string
+extern fn _k1_crash(reason: string*, file: string*, line: u64): never
+
+extern fn _k1_malloc(size: u64): Pointer
+extern fn _k1_free(ptr: Pointer): unit
+
+// Straight to libc, for now
+extern fn realloc(ptr: Pointer, size: u64): Pointer
+extern fn memcpy(dst: Pointer, src: Pointer, count: u64): Pointer
+extern fn memset(src: Pointer, count: u64, value: u8): Pointer
+extern fn arc4random_uniform(upperBound: u32): u32
+
+// End What will become platform stuff
+
+intern fn referenceSet[T](t: T*, value: T): unit
+
+namespace Pointer {
+  fn null(): Pointer { 0 as u64 as Pointer }
+
+  fn isNull(self: Pointer): bool {
+    self as u64 == 0
+  }
+
+  // This is an intrinsic so that we can codegen a getelementptr
+  // instruction in LLVM rather than a pointer cast.
+  // But we _could_ do it in userland using sizeOf and arithmetic which is neat!
+  intern fn refAtIndex[T](self: Pointer, index: u64): T*
+
+  // TODO: memset intrinsic
+  // intern fn memset(self: Pointer, num: u64, value: u8): unit
+}
+
+impl Equals for Pointer {
+  fn equals(self: Pointer, other: Pointer): bool {
+    self as u64 == other as u64
+  }
+}
+
+//type alias opaque string = { len: u64, data: Pointer }
+
+intern fn printInt(value: i64): unit
+intern fn printUInt(value: u64): unit
+intern fn print(value: string): unit
+intern fn exit(code: i64): unit
+
+fn crash(msg: string): never {
+  _k1_crash(&msg, &compilerFile(), compilerLine());
+}
+
+namespace Files {
+  fn readToString(path: string): string {
+    _k1_readFileToString(path)
+  }
+}
+
+fn printBool(value: bool): unit {
+  if value { print("true") } else { print("false") }
+}
+
+fn assert(value: bool): unit {
+  if not value {
+    crash("ASSERT FAILED")
+  };
+}
+fn assertMsg(msg: string, value: bool): unit {
+  if not value {
+    crash("ASSERT FAILED: ".concat(msg))
+  };
+}
+
+namespace char {
+  fn toString(self: char): string {
+    val arr = &Array::new[char](0);
+    arr.push(self);
+    string::fromChars(*arr);
+  }
+}
+
+namespace Array {
+
+  fn new[T](cap: u64): Array[T] {
+    val data = if cap == 0 {
+      ();
+      Pointer::null()
+    } else {
+      val sizeBytes = sizeOf[T]() * cap;
+      _k1_malloc(sizeBytes)
+    };
+    { len: 0, cap: cap, data: data }
+  }
+
+  fn getRef[T](self: Array[T], index: u64): T* {
+    if index >= self.len {
+      crash("Array index out of bounds")
+    };
+    val tRef: T* = self.data.refAtIndex[T](index);
+    tRef
+  }
+
+  fn set[T](self: Array[T], index: u64, elem: T): unit {
+    val tRef = self.getRef(index);
+    referenceSet(tRef, elem);
+  }
+
+  fn get[T](self: Array[T], index: u64): T {
+    val tRef = self.getRef(index);
+    *tRef
+  }
+
+  fn _grow[T](self: Array[T]*): unit {
+    val tSize = sizeOf[T]();
+    val newCap: u64 = if self.cap == 0 {
+      // For large elements, just allocate what's needed
+      if tSize >= 1024 1 else 8
+    } else {
+      self.cap * 2
+    };
+    val newSize = newCap * sizeOf[T]();
+
+    val ptr = if self.data.isNull() {
+
+      _k1_malloc(newSize)
+    } else {
+      realloc(self.data, newSize)
+    };
+    if ptr.isNull() {
+      crash("allocation failed in array grow");
+    };
+
+    self.data = ptr;
+    self.cap = newCap;
+  }
+
+  fn push[T](self: Array[T]*, elem: T): unit {
+    val startLength = self.len;
+    if startLength == self.cap {
+      self._grow();
+    };
+    self.len = startLength + 1;
+    self.set(startLength, elem);
+    ()
+  }
+
+  fn isEmpty[T](self: Array[T]): bool {
+    self.len == 0
+  }
+
+  fn first[T](self: Array[T]): T? {
+    // This exercises both Some-wrapping, .None-promotion, and type hinting through ifs!
+    if not self.isEmpty() {
+      self.get(0)
+    } else {
+      .None
+    }
+  }
+
+  fn last[T](self: Array[T]): T? {
+    if not self.isEmpty() {
+      self.get(self.len - 1)
+    } else {
+      .None
+    }
+  }
+
+  // I know I know I know I know
+  fn reversed[T](self: Array[T]): Array[T] {
+    val reversed = &Array::new[T](self.len);
+    mut i = self.len - 1;
+    while (i >= 0) {
+      reversed.push(self.get(i));
+      i = i - 1;
+    };
+    reversed
+  }
+}
+
+impl Equals for Array[int] {
+  // todo: Obviously this should be a memcmp
+  fn equals(self: Array[int], other: Array[int]): bool {
+    if self.len != other.len {
+      false
+    } else {
+      mut i: u64 = 0;
+      while i < self.len {
+        if self.get(i) != other.get(i) {
+          return(false);
+        };
+        i = i + 1;
+      };
+      true
+    }
+  }
+}
+
+impl Equals for string {
+  intern fn equals(self: string, that: string): bool
+}
+
+impl Equals for Array[string] {
+  fn equals(self: Array[string], other: Array[string]): bool {
+    if self.len != other.len {
+      false
+    } else {
+      mut i: u64 = 0;
+      while i < self.len {
+        if self.get(i) != other.get(i) {
+          return(false);
+        };
+        i = i + 1;
+      };
+      true
+    }
+  }
+}
+
+namespace string {
+
+  fn getRef(self: string, index: u64): char* {
+    if index >= self.len {
+      crash("string index out of bounds")
+    };
+    val charRef: char* = self.data.refAtIndex(index);
+    charRef
+  }
+
+  fn get(self: string, index: u64): char {
+    val charRef: char* = self.getRef(index);
+    *charRef
+  }
+  fn set(self: string, index: u64, value: char): unit {
+    val charRef: char* = self.getRef(index);
+    referenceSet(charRef, value)
+  }
+
+  fn fromChars(bytes: Array[char]): string {
+    { len: bytes.len, data: bytes.data }
+  }
+
+  fn indexOf(self: string, c: char): i64 {
+    mut i: u64 = 0;
+    while i < self.len {
+      if self.get(i) == c {
+        return(i as i64);
+      };
+      i = i + 1;
+    };
+    -1
+  }
+
+  fn concat(self: string, other: string): string {
+    val new_length = self.len + other.len;
+    val copied = &Array::new[char](new_length);
+
+    memcpy(copied.data, self.data, self.len);
+
+    val offset = copied.data as u64 + self.len;
+    memcpy(offset as Pointer, other.data, other.len);
+
+    copied.len = new_length;
+    fromChars(copied)
+  }
+
+  fn appendChar(self: string, c: char): string {
+    val new_length = self.len + 1;
+
+    val copied = &Array::new[char](new_length);
+    copied.len = new_length;
+
+    memcpy(copied.data, self.data, self.len);
+    copied.set(self.len, c);
+
+    fromChars(copied)
+  }
+}
+
+fn println(value: string): unit {
+  value | string::appendChar('\n') | print;
+}
+
+impl Show for i64 {
+  // We know this is super slow, relax, it'll be ok
+  fn show(self: i64): string {
+    val neg = self < 0;
+    mut remaining: i64 = if neg self * -1 else self;
+    val buf = &Array::new[char](8);
+    while remaining > 0 {
+      val d = remaining % 10;
+      val c = (d + 48) as u8 as char;
+      buf.push(c);
+      remaining = remaining / 10;
+    };
+
+    if neg {
+      buf.push('-');
+    };
+
+    // I know I know I know I know
+    // Since we know its bytes we could do simd stuff or even just 64 bits at a time
+    // Which I guess is technically 'simd' too
+    // Why did inference break here??
+    val rev = (*buf).reversed();
+    string::fromChars(rev)
+  }
+}
+
+
+impl Show for i32 {
+  fn show(self: i32): string {
+    (self as i64).show()
+  }
+}
+
+impl Show for i16 {
+  fn show(self: i16): string {
+    (self as i64).show()
+  }
+}
+
+impl Show for i8 {
+  fn show(self: i8): string {
+    (self as i64).show()
+  }
+}
