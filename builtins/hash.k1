@@ -31,6 +31,7 @@ namespace HashMap {
     val index = hash % self.slots.len;
     val elem = { key: key, value: value };
     val slot = self.slots.get(index);
+    // val fillFactor = fdiv(self.size, self.slots.len);
     when slot {
       .None -> {
         self.slots.set(index, Opt.Some(elem));
@@ -44,7 +45,6 @@ namespace HashMap {
           mut probe_index = index;
           mut done = false;
           while not done {
-            println("probing");
             probe_index = probe_index + 1;
             if probe_index == self.slots.len {
               probe_index = 0;
