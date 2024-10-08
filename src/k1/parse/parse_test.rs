@@ -213,7 +213,7 @@ fn precedence() -> Result<(), ParseError> {
     let ParsedExpression::Literal(rhs) = module.expressions.get(bin_op.rhs) else { panic!() };
     assert_eq!(bin_op.op_kind, BinaryOpKind::Add);
     assert_eq!(lhs.op_kind, BinaryOpKind::Multiply);
-    assert!(matches!(rhs, Literal::Integer(_)));
+    assert!(matches!(rhs, Literal::Numeric(_)));
     Ok(())
 }
 

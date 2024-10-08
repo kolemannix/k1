@@ -107,7 +107,7 @@ pub struct ArrayExpr {
 }
 
 #[derive(Debug, Clone)]
-pub struct ParsedIntegerLiteral {
+pub struct ParsedNumericLiteral {
     pub text: String,
     pub span: SpanId,
 }
@@ -116,7 +116,7 @@ pub struct ParsedIntegerLiteral {
 pub enum Literal {
     Unit(SpanId),
     Char(u8, SpanId),
-    Integer(ParsedIntegerLiteral),
+    Numeric(ParsedNumericLiteral),
     Bool(bool, SpanId),
     /// TODO(string literal escaping): Need second span, "content_span_id"
     String(String, SpanId),
@@ -131,7 +131,7 @@ impl Display for Literal {
                 f.write_char(*byte as char)?;
                 f.write_char('\'')
             }
-            Literal::Integer(i) => f.write_str(&i.text),
+            Literal::Numeric(i) => f.write_str(&i.text),
             Literal::Bool(true, _) => f.write_str("true"),
             Literal::Bool(false, _) => f.write_str("false"),
             Literal::String(s, _) => {
@@ -148,7 +148,7 @@ impl Literal {
         match self {
             Literal::Unit(span) => *span,
             Literal::Char(_, span) => *span,
-            Literal::Integer(i) => i.span,
+            Literal::Numeric(i) => i.span,
             Literal::Bool(_, span) => *span,
             Literal::String(_, span) => *span,
         }
@@ -683,6 +683,17 @@ pub enum NumericWidth {
     B16,
     B32,
     B64,
+}
+
+impl NumericWidth {
+    pub fn bit_width(&self) -> u32 {
+        match self {
+            NumericWidth::B8 => 8,
+            NumericWidth::B16 => 16,
+            NumericWidth::B32 => 32,
+            NumericWidth::B64 => 64,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1377,7 +1388,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             self.print_error(cause);
         }
         let got_str = if parse_error.token.kind == K::Ident {
-            Parser::tok_chars(&self.module.spans, self.source(), parse_error.token).to_string()
+            self.token_chars(parse_error.token).to_string()
         } else {
             parse_error.token.kind.to_string()
         };
@@ -1411,6 +1422,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let s = Parser::chars_at_span(spans, source, tok.span);
         trace!("{}.chars='{}'", tok.kind, s);
         s
+    }
+
+    fn token_chars(&self, tok: Token) -> &str {
+        Parser::tok_chars(&self.module.spans, self.source(), tok)
     }
 
     fn eat_token(&mut self, target_token: TokenKind) -> Option<Token> {
@@ -1478,7 +1493,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             (K::Char, _) => {
                 trace!("parse_literal char");
                 self.tokens.advance();
-                let text = Parser::tok_chars(&self.module.spans, self.source(), first);
+                let text = self.token_chars(first);
                 assert!(text.starts_with('\''));
                 assert!(text.ends_with('\''));
                 let bytes = text.as_bytes();
@@ -1510,26 +1525,26 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             (K::String, _) => {
                 trace!("parse_literal string");
                 self.tokens.advance();
-                let text = Parser::tok_chars(&self.module.spans, self.source(), first);
+                let text = self.token_chars(first);
                 let literal = Literal::String(text.to_string(), first.span);
                 Ok(Some(self.add_expression(ParsedExpression::Literal(literal))))
             }
             (K::Minus, K::Ident) if !second.is_whitespace_preceeded() => {
-                let text = Parser::tok_chars(&self.module.spans, self.source(), second);
+                let text = self.token_chars(second);
                 if text.chars().next().unwrap().is_numeric() {
                     let mut s = "-".to_string();
                     s.push_str(text);
                     self.tokens.advance();
                     self.tokens.advance();
                     let span = self.extend_token_span(first, second);
-                    let numeric = Literal::Integer(ParsedIntegerLiteral { text: s, span });
+                    let numeric = Literal::Numeric(ParsedNumericLiteral { text: s, span });
                     Ok(Some(self.add_expression(ParsedExpression::Literal(numeric))))
                 } else {
                     Err(Parser::error("number following '-'", second))
                 }
             }
             (K::Ident, _) => {
-                let text = Parser::tok_chars(&self.module.spans, self.source(), first);
+                let text = self.token_chars(first);
                 if text == "true" {
                     self.tokens.advance();
                     Ok(Some(self.add_expression(ParsedExpression::Literal(Literal::Bool(
@@ -1546,7 +1561,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                             let s = text.to_string();
                             self.tokens.advance();
                             Ok(Some(self.add_expression(ParsedExpression::Literal(
-                                Literal::Integer(ParsedIntegerLiteral {
+                                Literal::Numeric(ParsedNumericLiteral {
                                     text: s,
                                     span: first.span,
                                 }),
@@ -1637,7 +1652,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 self.module.type_expressions.add(ParsedTypeExpression::Builtin(first.span));
             Ok(Some(builtin_id))
         } else if first.kind == K::Ident {
-            let ident_chars = Parser::tok_chars(&self.module.spans, self.source(), first);
+            let ident_chars = self.get_token_chars(first);
             let maybe_constant_expr = match ident_chars {
                 "u8" => Some(ParsedTypeExpression::Integer(ParsedNumericType {
                     width: NumericWidth::B8,
@@ -2131,12 +2146,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             self.tokens.advance();
             self.tokens.advance();
 
-            if Parser::tok_chars(&self.module.spans, self.source(), second)
-                .chars()
-                .next()
-                .unwrap()
-                .is_lowercase()
-            {
+            if self.token_chars(second).chars().next().unwrap().is_lowercase() {
                 return Err(Parser::error("Uppercase tag name", second));
             }
             let tag_name = self.intern_ident_token(second);
