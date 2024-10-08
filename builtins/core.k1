@@ -3,8 +3,13 @@ type char = builtin
 type bool = builtin
 type never = builtin
 type Pointer = builtin
+
+type f32 = builtin
+type f64 = builtin
+
 type Array[T] = { len: u64, cap: u64, data: Pointer }
 type string = { len: u64, data: Pointer }
+
 type Opt[T] = enum None, Some(T)
 namespace Opt {
 

@@ -605,6 +605,49 @@ impl TypedIntegerExpr {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TypedFloatValue {
+    F32(f32),
+    F64(f64),
+}
+
+impl TypedFloatValue {
+    pub fn get_type(&self) -> TypeId {
+        match self {
+            TypedFloatValue::F32(_) => F32_TYPE_ID,
+            TypedFloatValue::F64(_) => F64_TYPE_ID,
+        }
+    }
+
+    pub fn as_f64(&self) -> f64 {
+        match self {
+            TypedFloatValue::F32(v) => *v as f64,
+            TypedFloatValue::F64(v) => *v,
+        }
+    }
+}
+
+impl Display for TypedFloatValue {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TypedFloatValue::F32(v) => write!(f, "{}f32", v),
+            TypedFloatValue::F64(v) => write!(f, "{}f64", v),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TypedFloatExpr {
+    pub value: TypedFloatValue,
+    pub span: SpanId,
+}
+
+impl TypedFloatExpr {
+    pub fn get_type(&self) -> TypeId {
+        self.value.get_type()
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum CastType {
     IntegerExtend,
@@ -678,6 +721,7 @@ pub enum TypedExpr {
     Char(u8, SpanId),
     Bool(bool, SpanId),
     Integer(TypedIntegerExpr),
+    Float(TypedFloatExpr),
     Str(String, SpanId),
     Struct(Struct),
     Variable(VariableExpr),
@@ -708,6 +752,7 @@ impl TypedExpr {
             TypedExpr::Char(_, _) => CHAR_TYPE_ID,
             TypedExpr::Str(_, _) => STRING_TYPE_ID,
             TypedExpr::Integer(integer) => integer.get_type(),
+            TypedExpr::Float(float) => float.get_type(),
             TypedExpr::Bool(_, _) => BOOL_TYPE_ID,
             TypedExpr::Struct(struc) => struc.type_id,
             TypedExpr::Variable(var) => var.type_id,
@@ -731,6 +776,7 @@ impl TypedExpr {
             TypedExpr::Char(_, span) => *span,
             TypedExpr::Bool(_, span) => *span,
             TypedExpr::Integer(int) => int.span,
+            TypedExpr::Float(float) => float.span,
             TypedExpr::Str(_, span) => *span,
             TypedExpr::Struct(struc) => struc.span,
             TypedExpr::Variable(var) => var.span,
@@ -1380,7 +1426,8 @@ impl TypedModule {
                 | Type::Char(_)
                 | Type::Bool(_)
                 | Type::Never(_)
-                | Type::Pointer(_) => Ok(resulting_type_id),
+                | Type::Pointer(_)
+                | Type::Float(_) => Ok(resulting_type_id),
                 Type::Struct(_s) => Ok(resulting_type_id),
                 Type::Enum(_e) => Ok(resulting_type_id),
                 _other => {
@@ -1462,6 +1509,22 @@ impl TypedModule {
                     "Pointer" => {
                         let id = self.types.add_type(Type::Pointer(defn_info));
                         assert!(id == POINTER_TYPE_ID);
+                        Ok(id)
+                    }
+                    "f32" => {
+                        let id = self.types.add_type(Type::Float(FloatType {
+                            size: NumericWidth::B32,
+                            defn_info,
+                        }));
+                        assert!(id == F32_TYPE_ID);
+                        Ok(id)
+                    }
+                    "f64" => {
+                        let id = self.types.add_type(Type::Float(FloatType {
+                            size: NumericWidth::B64,
+                            defn_info,
+                        }));
+                        assert!(id == F64_TYPE_ID);
                         Ok(id)
                     }
                     _ => failf!(*span, "Unknown builtin type '{}'", name),
@@ -2091,9 +2154,12 @@ impl TypedModule {
                     type_id
                 }
             }
-            Type::Unit(_) | Type::Char(_) | Type::Integer(_) | Type::Bool(_) | Type::Pointer(_) => {
-                type_id
-            }
+            Type::Unit(_)
+            | Type::Char(_)
+            | Type::Integer(_)
+            | Type::Float(_)
+            | Type::Bool(_)
+            | Type::Pointer(_) => type_id,
             Type::EnumVariant(_) => {
                 unreachable!(
                     "instantiate_generic_type is not expected to be called on an EnumVariant"
@@ -2162,16 +2228,22 @@ impl TypedModule {
                             self.type_id_to_string(target_type_id)
                         ),
                     },
-                    Literal::Integer(int) => {
-                        let value = self.eval_integer_value(
-                            &int.text,
-                            int.span,
+                    Literal::Numeric(num_lit) => {
+                        let TypedExpr::Integer(value) = self.eval_numeric_value(
+                            &num_lit.text,
+                            num_lit.span,
                             scope_id,
                             Some(target_type_id),
-                        )?;
+                        )?
+                        else {
+                            return failf!(
+                                num_lit.span,
+                                "Only integer patterns are supported [nocommit]"
+                            );
+                        };
                         match self.types.get(target_type_id) {
                             Type::Integer(_integer_type) => {
-                                Ok(TypedPattern::LiteralInteger(value, int.span))
+                                Ok(TypedPattern::LiteralInteger(value.value, num_lit.span))
                             }
                             _ => failf!(
                                 self.ast.get_pattern_span(pat_expr),
@@ -2493,14 +2565,8 @@ impl TypedModule {
         let constant_span = parsed_constant.span;
         let root_scope_id = self.scopes.get_root_scope_id();
         let expr = match self.ast.expressions.get(parsed_constant.value_expr) {
-            ParsedExpression::Literal(Literal::Integer(integer)) => {
-                let value = self.eval_integer_value(
-                    &integer.text,
-                    integer.span,
-                    root_scope_id,
-                    Some(type_id),
-                )?;
-                TypedExpr::Integer(TypedIntegerExpr { value, span: integer.span })
+            ParsedExpression::Literal(Literal::Numeric(integer)) => {
+                self.eval_numeric_value(&integer.text, integer.span, root_scope_id, Some(type_id))?
             }
             ParsedExpression::Literal(Literal::Bool(b, span)) => TypedExpr::Bool(*b, *span),
             ParsedExpression::Literal(Literal::Char(c, span)) => TypedExpr::Char(*c, *span),
@@ -2575,14 +2641,54 @@ impl TypedModule {
         }
     }
 
-    fn eval_integer_value(
+    fn eval_numeric_value(
         &self,
         parsed_text: &str,
         span: SpanId,
         _scope_id: ScopeId,
         expected_type_id: Option<TypeId>,
+    ) -> TyperResult<TypedExpr> {
+        if parsed_text.contains('.') {
+            Ok(TypedExpr::Float(TypedFloatExpr {
+                value: self.eval_float_value(parsed_text, span, expected_type_id)?,
+                span,
+            }))
+        } else {
+            Ok(TypedExpr::Integer(TypedIntegerExpr {
+                value: self.eval_integer_value(parsed_text, span, expected_type_id)?,
+                span,
+            }))
+        }
+    }
+
+    fn eval_float_value(
+        &self,
+        parsed_text: &str,
+        span: SpanId,
+        expected_type_id: Option<TypeId>,
+    ) -> TyperResult<TypedFloatValue> {
+        let expected_width = match expected_type_id {
+            None => NumericWidth::B32,
+            Some(F64_TYPE_ID) => NumericWidth::B64,
+            // Parse as f32 and let typechecking fail
+            Some(_) => NumericWidth::B32,
+        };
+        let value: Result<TypedFloatValue, std::num::ParseFloatError> = match expected_width {
+            NumericWidth::B32 => parsed_text.parse::<f32>().map(|v| TypedFloatValue::F32(v)),
+            NumericWidth::B64 => parsed_text.parse::<f64>().map(|v| TypedFloatValue::F64(v)),
+            _ => unreachable!("unreachable float width"),
+        };
+        let value =
+            value.map_err(|e| errf!(span, "Invalid f{}: {e}", expected_width.bit_width()))?;
+        Ok(value)
+    }
+
+    fn eval_integer_value(
+        &self,
+        parsed_text: &str,
+        span: SpanId,
+        expected_type_id: Option<TypeId>,
     ) -> TyperResult<TypedIntegerValue> {
-        // let minus_start = parsed_text.starts_with('-');
         let expected_int_type = match expected_type_id {
             None => IntegerType::I64,
             Some(U8_TYPE_ID) => IntegerType::U8,
@@ -3223,10 +3329,8 @@ impl TypedModule {
             ParsedExpression::Literal(Literal::Char(byte, span)) => {
                 Ok(TypedExpr::Char(*byte, *span))
             }
-            ParsedExpression::Literal(Literal::Integer(int)) => {
-                let value =
-                    self.eval_integer_value(&int.text, int.span, scope_id, expected_type)?;
-                Ok(TypedExpr::Integer(TypedIntegerExpr { value, span: int.span }))
+            ParsedExpression::Literal(Literal::Numeric(int)) => {
+                self.eval_numeric_value(&int.text, int.span, scope_id, expected_type)
             }
             ParsedExpression::Literal(Literal::Bool(b, span)) => {
                 let expr = TypedExpr::Bool(*b, *span);
@@ -3773,16 +3877,15 @@ impl TypedModule {
         let (cast_type, output_type) = match self.types.get(base_expr_type) {
             Type::Integer(from_integer_type) => match self.types.get(target_type) {
                 Type::Integer(to_integer_type) => {
-                    let cast_type =
-                        match from_integer_type.bit_width().cmp(&to_integer_type.bit_width()) {
-                            Ordering::Less => CastType::IntegerExtend,
-                            Ordering::Greater => CastType::IntegerTruncate,
-                            Ordering::Equal => CastType::KnownNoOp,
-                        };
+                    let cast_type = match from_integer_type.width().cmp(&to_integer_type.width()) {
+                        Ordering::Less => CastType::IntegerExtend,
+                        Ordering::Greater => CastType::IntegerTruncate,
+                        Ordering::Equal => CastType::KnownNoOp,
+                    };
                     Ok((cast_type, target_type))
                 }
                 Type::Char(_) => {
-                    if from_integer_type.bit_width() == 8 {
+                    if from_integer_type.width() == NumericWidth::B8 {
                         Ok((CastType::Integer8ToChar, target_type))
                     } else {
                         failf!(
@@ -6757,6 +6860,9 @@ impl TypedModule {
             print_error(&self.ast.spans, &self.ast.sources, &e.message, e.span);
             self.errors.push(e);
         }
+        if !self.errors.is_empty() {
+            bail!("{} failed type evaluation phase with {} errors", self.name(), self.errors.len())
+        }
         let pendings = self.scopes.all_pending_type_defns_below(self.scopes.get_root_scope_id());
         if !pendings.is_empty() {
             for pending in pendings.iter() {
@@ -6764,9 +6870,6 @@ impl TypedModule {
                 dbg!(self.get_ident_str(defn.name));
             }
             panic!("Unevaluated type defns!!!")
-        }
-        if !self.errors.is_empty() {
-            bail!("{} failed type evaluation phase with {} errors", self.name(), self.errors.len())
         }
 
         // This just ensures our ARRAY_TYPE_ID constant is correct

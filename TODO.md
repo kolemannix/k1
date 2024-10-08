@@ -94,12 +94,12 @@
 - [x] Exhaustive pattern matching
 - [x] Rework RawPointer to be a builtin and support 'multipointer' operations
 - [x] Pipe operator (copy Elixir)
-  - [ ] Support pipe-last
 - [x] Rework builtin array to use new Pointer, Remove all array intrinsics and builtin type
   - [x] Add array bounds checking
   - [x] Fix array literal syntax
 - [x] Rework builtin string to use new Pointer
 - [x] Rework builtin optionals to be a generic enum
+- [ ] floating point (f16, f32 and f64)
 - [ ] Generic abilities
 - [ ] Friendliness pass
   - [ ] Get rid of 'enum' keyword, data?
@@ -112,7 +112,6 @@
 - [ ] Make demo readme / site
 - [ ] Define clear 'platform layer' (crash, alloc/free, other?). Then we could do an LLVM interp platform and a rust interpreter platform
 - [x] Function types (functions have types but there's no syntax for describing a function type yet)
-- [ ] floating point (f32 and f64)
 - [ ] Optional coalescing field accessor (x?.y)
 - [x] Finish/fix simple generic inference
 - [x] Prevent function overloading in same namespace

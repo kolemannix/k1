@@ -1,0 +1,5 @@
+fn main(): int {
+  // Now its down to just a lexer problem
+  val f: f64 = 12.0;
+  0
+}

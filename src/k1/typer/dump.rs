@@ -160,6 +160,12 @@ impl TypedModule {
                 }
                 Ok(())
             }
+            Type::Float(float_type) => match float_type.size {
+                NumericWidth::B8 => write!(writ, "f8"),
+                NumericWidth::B16 => write!(writ, "f16"),
+                NumericWidth::B32 => write!(writ, "f32"),
+                NumericWidth::B64 => write!(writ, "f64"),
+            },
             Type::Bool(_) => writ.write_str("bool"),
             Type::Pointer(_) => writ.write_str("Pointer"),
             Type::Struct(struc) => {
@@ -420,6 +426,7 @@ impl TypedModule {
             TypedExpr::Unit(_) => writ.write_str("()"),
             TypedExpr::Char(c, _) => write!(writ, "'{}'", c),
             TypedExpr::Integer(int) => write!(writ, "{}", int.value),
+            TypedExpr::Float(float) => write!(writ, "{}", float.value),
             TypedExpr::Bool(b, _) => write!(writ, "{}", b),
             TypedExpr::Str(s, _) => write!(writ, "\"{}\"", s),
             TypedExpr::Struct(struc) => {

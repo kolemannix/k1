@@ -84,10 +84,12 @@ pub const CHAR_TYPE_ID: TypeId = TypeId(9);
 pub const BOOL_TYPE_ID: TypeId = TypeId(10);
 pub const NEVER_TYPE_ID: TypeId = TypeId(11);
 pub const POINTER_TYPE_ID: TypeId = TypeId(12);
+pub const F32_TYPE_ID: TypeId = TypeId(13);
+pub const F64_TYPE_ID: TypeId = TypeId(14);
 
-pub const ARRAY_TYPE_ID: TypeId = TypeId(15);
-pub const STRING_TYPE_ID: TypeId = TypeId(16);
-pub const OPTIONAL_TYPE_ID: TypeId = TypeId(21);
+pub const ARRAY_TYPE_ID: TypeId = TypeId(17);
+pub const STRING_TYPE_ID: TypeId = TypeId(18);
+pub const OPTIONAL_TYPE_ID: TypeId = TypeId(23);
 
 #[derive(Debug, Clone)]
 pub struct ArrayType {
@@ -180,6 +182,12 @@ pub enum IntegerType {
     I64,
 }
 
+#[derive(Debug, Clone)]
+pub struct FloatType {
+    pub size: NumericWidth,
+    pub defn_info: TypeDefnInfo,
+}
+
 impl Display for IntegerType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -209,12 +217,12 @@ impl IntegerType {
         }
     }
 
-    pub fn bit_width(&self) -> u32 {
+    pub fn width(&self) -> NumericWidth {
         match self {
-            IntegerType::U8 | IntegerType::I8 => 8,
-            IntegerType::U16 | IntegerType::I16 => 16,
-            IntegerType::U32 | IntegerType::I32 => 32,
-            IntegerType::U64 | IntegerType::I64 => 64,
+            IntegerType::U8 | IntegerType::I8 => NumericWidth::B8,
+            IntegerType::U16 | IntegerType::I16 => NumericWidth::B16,
+            IntegerType::U32 | IntegerType::I32 => NumericWidth::B32,
+            IntegerType::U64 | IntegerType::I64 => NumericWidth::B64,
         }
     }
 
@@ -261,6 +269,7 @@ pub enum Type {
     Unit(TypeDefnInfo),
     Char(TypeDefnInfo),
     Integer(IntegerType),
+    Float(FloatType),
     Bool(TypeDefnInfo),
     /// Our Pointer is a raw untyped pointer; we mostly have this type for expressing intent
     /// and because it allows us to treat it as a ptr in LLVM which
@@ -289,6 +298,7 @@ impl Type {
             | Type::Bool(defn_info)
             | Type::Pointer(defn_info)
             | Type::Never(defn_info) => Some(defn_info.ast_id.into()),
+            Type::Float(ft) => Some(ft.defn_info.ast_id.into()),
             Type::Integer(_) => None,
             Type::Struct(t) => Some(t.ast_node),
             Type::Reference(_t) => None,
@@ -514,6 +524,7 @@ impl Types {
             Type::Unit(_) => None,
             Type::Char(_) => None,
             Type::Integer(_) => None,
+            Type::Float(_) => None,
             Type::Bool(_) => None,
             Type::Pointer(_) => None,
             Type::Reference(_) => None,
@@ -534,6 +545,7 @@ impl Types {
             Type::Unit(info) => Some(info),
             Type::Char(info) => Some(info),
             Type::Integer(_) => None,
+            Type::Float(f) => Some(&f.defn_info),
             Type::Bool(info) => Some(info),
             Type::Pointer(info) => Some(info),
             Type::Reference(_) => None,
@@ -583,6 +595,7 @@ impl Types {
             Type::Unit(_) => false,
             Type::Char(_) => false,
             Type::Integer(_) => false,
+            Type::Float(_) => false,
             Type::Bool(_) => false,
             Type::Pointer(_) => false,
             Type::Struct(struc) => {
@@ -640,6 +653,7 @@ impl Types {
             Type::Unit(_) => None,
             Type::Char(_) => None,
             Type::Integer(_) => None,
+            Type::Float(_) => None,
             Type::Bool(_) => None,
             Type::Pointer(_) => None,
             // Check for Array and string since they are currently structs
@@ -695,6 +709,7 @@ impl Types {
             Type::Unit(_) => (),
             Type::Char(_) => (),
             Type::Integer(_) => (),
+            Type::Float(_) => (),
             Type::Bool(_) => (),
             Type::Pointer(_) => (),
             Type::Struct(s) => {
