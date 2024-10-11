@@ -17,6 +17,6 @@ fn main(): int {
   assert(xs.get(4) == 4);
   assert(xs.first()! == 0);
   assert(xs.last()! == 4);
-  assert((*xs) == [0 as int,1,2,3,4]);
+  assert((*xs) == [0,1,2,3,4]);
   0
 }

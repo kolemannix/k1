@@ -479,10 +479,12 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
 
     fn eat_token(&mut self) -> LexResult<Option<Token>> {
         let mut tok_buf = String::new();
+        // FIXME: Am I crazy or is this just always tok_buf.len()?!?!?!
         let mut tok_len = 0;
         let mut is_line_comment = false;
         let mut line_comment_start = 0;
         let mut is_string = false;
+        let mut is_number = false;
         let peeked_whitespace = self.peek().is_whitespace();
         let make_token = |lex: &mut Lexer, kind: TokenKind, start: u32, len: u32| {
             let span = lex.add_span(start, len);
@@ -533,9 +535,23 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                     // Break without advancing; we'll have a clear buffer next time
                     // and will advance
 
-                    // Watch out for peeked_whitespace regressions in this case; we were passing 'false'
-                    // but I think it should be just using the current value
-                    break Some(make_token(self, K::Ident, n - tok_len, tok_len));
+                    // Dot is a token, but not inside a 'number', where:
+                    // If followed by a digit, its just part of the Ident stream
+                    // Otherwise, its a 'Dot' token.
+                    // Example:
+                    // 100.42 -> Ident(100.42)
+                    // 100.toInt() -> Ident(100), Dot, Ident(toInt)
+                    // knows to accept dot for numbers
+                    if is_number && single_char_tok == K::Dot {
+                        if next.is_numeric() {
+                            // Fall through, continue the floating point number including a dot
+                        } else {
+                            // End the ident; we'll eat the dot next token w/ an empty buffer
+                            break Some(make_token(self, K::Ident, n - tok_len, tok_len));
+                        }
+                    } else {
+                        break Some(make_token(self, K::Ident, n - tok_len, tok_len));
+                    }
                 } else if single_char_tok == K::SingleQuote {
                     self.advance(); // eat opening '
                     let mut len = 1;
@@ -581,14 +597,28 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                     break Some(make_token(self, TokenKind::Ident, n - tok_len, tok_len));
                 }
             }
-            if (tok_buf.is_empty() && is_ident_or_num_start(c)) || is_ident_char(c) {
+            if tok_buf.is_empty() && is_ident_or_num_start(c) {
+                // case: Start an ident
+
+                // Signal that its a number
+                if c == '-' || c.is_numeric() {
+                    is_number = true;
+                }
+                tok_len += 1;
+                tok_buf.push(c);
+            } else if !tok_buf.is_empty() && is_ident_char(c) || c == '.' {
+                if c == '.' && !is_number {
+                    panic!("lexer got dot outside of is_number state")
+                }
+
+                // case: Continue an ident
                 if tok_buf.len() == 1 && tok_buf.starts_with('_') && c == '_' {
                     return Err(self.err("Identifiers cannot begin with __"));
                 }
                 tok_len += 1;
                 tok_buf.push(c);
             } else if let Some(tok) = TokenKind::token_from_str(&tok_buf) {
-                // No longer eat this so the next eat_token call can see it.
+                // Do not eat this so the next eat_token call can see it.
                 // self.advance();
                 break Some(make_token(self, tok, n - tok_len, tok_len));
             }
@@ -625,11 +655,11 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
 }
 
 fn is_ident_char(c: char) -> bool {
-    c.is_alphanumeric() || c == '_' || c == '.'
+    c.is_alphanumeric() || c == '_'
 }
 
 fn is_ident_or_num_start(c: char) -> bool {
-    c.is_alphabetic() || c == '_' || c == '-'
+    c.is_alphanumeric() || c == '_' || c == '-'
 }
 
 #[cfg(test)]

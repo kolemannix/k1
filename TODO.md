@@ -13,8 +13,7 @@
   - [x] deal with fncall syntax collision by checking for the enum first
   - [x] kill ParsedTypeExpression::AnonEnumVariant?
   - [x] CastType `EnumVariant`: checks should not happen in codegen
-  - [ ] Convert TypedIf.consequent and TypedIf.alternative to TypedExpr from TypedBlock
-  - [ ] Add namespace-level type variables
+  - [x] Convert TypedIf.consequent and TypedIf.alternative to TypedExpr from TypedBlock
 
 - [x] QoL before rest of pattern matching
   - [x] Codegen fail instead of panic
@@ -99,7 +98,8 @@
   - [x] Fix array literal syntax
 - [x] Rework builtin string to use new Pointer
 - [x] Rework builtin optionals to be a generic enum
-- [ ] floating point (f16, f32 and f64)
+- [x] floating point (f32 and f64)
+  - [ ] Test handling of NaN and Infinity, other float edge cases
 - [ ] Generic abilities
 - [ ] Friendliness pass
   - [ ] Get rid of 'enum' keyword, data?
@@ -165,6 +165,7 @@
 - [x] ICE when assigning to struct member when struct is not a reference (self.module.types.get(field_access.base.get_type()).as_reference().is_some())
 
 # Minor Fix (possible good bite-sized videos)
+- [ ] // FIXME: Am I crazy or is this just always tok_buf.len()?!?!?!
 - [ ] type suffixes on int literals 123u32, 4u8, etc
 - [ ] assert(sizeOf[Text]() == 16 + 32); rhs should infer to u64
 - [ ] Require indirection for recursive types
