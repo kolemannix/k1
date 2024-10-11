@@ -2271,10 +2271,7 @@ impl TypedModule {
                                 ),
                             },
                             _ => {
-                                return failf!(
-                                    num_lit.span,
-                                    "Only integer patterns are supported [nocommit]"
-                                )
+                                unreachable!("eval_numeric_value should produce only Integer and Float exprs")
                             }
                         }
                     }
