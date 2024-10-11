@@ -538,6 +538,7 @@ impl TypedModule {
             PatternConstructor::Char => writ.write_str("'<char>'"),
             PatternConstructor::String => writ.write_str("\"<string>\""),
             PatternConstructor::Int => writ.write_str("<int>"),
+            PatternConstructor::Float => writ.write_str("<float>"),
             PatternConstructor::TypeVariable => writ.write_str("<tvar>"),
             PatternConstructor::Some(inner) => {
                 writ.write_str("Some(")?;
@@ -588,6 +589,7 @@ impl TypedModule {
             TypedPattern::LiteralUnit(_) => writ.write_str("()"),
             TypedPattern::LiteralChar(value, _) => write!(writ, "{value}"),
             TypedPattern::LiteralInteger(value, _) => write!(writ, "{value}"),
+            TypedPattern::LiteralFloat(value, _) => write!(writ, "{value}"),
             TypedPattern::LiteralBool(value, _) => write!(writ, "{value}"),
             TypedPattern::LiteralString(s, _) => write!(writ, "\"{s}\""),
             TypedPattern::Variable(var) => writ.write_str(self.get_ident_str(var.name)),
@@ -596,7 +598,7 @@ impl TypedModule {
                 writ.write_str(self.get_ident_str(enum_pat.variant_tag_name))?;
                 if let Some(payload) = enum_pat.payload.as_ref() {
                     writ.write_str("(")?;
-                    self.display_pattern(&payload, writ)?;
+                    self.display_pattern(payload, writ)?;
                     writ.write_str(")")?;
                 };
                 Ok(())

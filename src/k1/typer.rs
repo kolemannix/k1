@@ -70,13 +70,14 @@ pub enum PatternConstructor {
     BoolFalse,
     BoolTrue,
     None,
-    /// Note: These 3 (Char, String, Int) will become more interesting if we implement exhaustive range-based matching like Rust's
+    /// Note: These 4 (Char, String, Int, Float) will become more interesting if we implement exhaustive range-based matching like Rust's
     /// For now they exist as placeholders to indicate to the algorithm that something needs to be matched. We treat
     /// exact literals as NOT matching because they do not completely eliminate the pattern, and ignore those exact
     /// literal patterns when we report on 'Useless' patterns
     Char,
     String,
     Int,
+    Float,
     /// This one is also kinda a nothing burger, and can only be matched by Wildcards and Bindings; it's here for
     /// the sake of being explicit; we could collapse all these into a 'Anything' constructor but the fact I can't
     /// think of a good name means we shouldn't, probably
@@ -150,6 +151,7 @@ pub enum TypedPattern {
     LiteralUnit(SpanId),
     LiteralChar(u8, SpanId),
     LiteralInteger(TypedIntegerValue, SpanId),
+    LiteralFloat(TypedFloatValue, SpanId),
     LiteralBool(bool, SpanId),
     LiteralString(String, SpanId),
     Variable(VariablePattern),
@@ -163,6 +165,7 @@ impl TypedPattern {
         match self {
             TypedPattern::LiteralChar(_, _span) => true,
             TypedPattern::LiteralInteger(_, _span) => true,
+            TypedPattern::LiteralFloat(_, _span) => true,
             TypedPattern::LiteralString(_, _span) => true,
             _ => false,
         }
@@ -172,6 +175,7 @@ impl TypedPattern {
             TypedPattern::LiteralUnit(span) => *span,
             TypedPattern::LiteralChar(_, span) => *span,
             TypedPattern::LiteralInteger(_, span) => *span,
+            TypedPattern::LiteralFloat(_, span) => *span,
             TypedPattern::LiteralBool(_, span) => *span,
             TypedPattern::LiteralString(_, span) => *span,
             TypedPattern::Variable(variable_pattern) => variable_pattern.span,
@@ -657,8 +661,12 @@ pub enum CastType {
     KnownNoOp,
     PointerToReference,
     ReferenceToPointer,
-    PointerToInt,
-    IntToPointer,
+    PointerToInteger,
+    IntegerToPointer,
+    FloatExtend,
+    FloatTruncate,
+    FloatToInteger,
+    IntegerToFloat,
 }
 
 impl CastType {
@@ -671,8 +679,12 @@ impl CastType {
             CastType::KnownNoOp => false,
             CastType::PointerToReference => true,
             CastType::ReferenceToPointer => true,
-            CastType::PointerToInt => true,
-            CastType::IntToPointer => true,
+            CastType::PointerToInteger => true,
+            CastType::IntegerToPointer => true,
+            CastType::FloatExtend => false,
+            CastType::FloatTruncate => false,
+            CastType::FloatToInteger => false,
+            CastType::IntegerToFloat => false,
         }
     }
 }
@@ -687,8 +699,12 @@ impl Display for CastType {
             CastType::KnownNoOp => write!(f, "noop"),
             CastType::PointerToReference => write!(f, "ptrtoref"),
             CastType::ReferenceToPointer => write!(f, "reftoptr"),
-            CastType::PointerToInt => write!(f, "ptrtoint"),
-            CastType::IntToPointer => write!(f, "inttoptr"),
+            CastType::PointerToInteger => write!(f, "ptrtoint"),
+            CastType::IntegerToPointer => write!(f, "inttoptr"),
+            CastType::FloatExtend => write!(f, "fext"),
+            CastType::FloatTruncate => write!(f, "ftrunc"),
+            CastType::FloatToInteger => write!(f, "ftoint"),
+            CastType::IntegerToFloat => write!(f, "inttof"),
         }
     }
 }
@@ -1575,8 +1591,7 @@ impl TypedModule {
                 let type_id = self.types.add_type(Type::Struct(struct_defn));
                 Ok(type_id)
             }
-            ParsedTypeExpression::TypeApplication(ty_app) => {
-                if ty_app.base_name.namespaces.is_empty() {}
+            ParsedTypeExpression::TypeApplication(_ty_app) => {
                 let type_op_result =
                     self.detect_and_eval_type_operator(type_expr_id, scope_id, context.clone())?;
                 match type_op_result {
@@ -2229,27 +2244,38 @@ impl TypedModule {
                         ),
                     },
                     Literal::Numeric(num_lit) => {
-                        let TypedExpr::Integer(value) = self.eval_numeric_value(
+                        match self.eval_numeric_value(
                             &num_lit.text,
                             num_lit.span,
                             scope_id,
                             Some(target_type_id),
-                        )?
-                        else {
-                            return failf!(
-                                num_lit.span,
-                                "Only integer patterns are supported [nocommit]"
-                            );
-                        };
-                        match self.types.get(target_type_id) {
-                            Type::Integer(_integer_type) => {
-                                Ok(TypedPattern::LiteralInteger(value.value, num_lit.span))
+                        )? {
+                            TypedExpr::Integer(value) => match self.types.get(target_type_id) {
+                                Type::Integer(_integer_type) => {
+                                    Ok(TypedPattern::LiteralInteger(value.value, num_lit.span))
+                                }
+                                _ => failf!(
+                                    self.ast.get_pattern_span(pat_expr),
+                                    "unrelated pattern type int will never match {}",
+                                    self.type_id_to_string(target_type_id)
+                                ),
+                            },
+                            TypedExpr::Float(value) => match self.types.get(target_type_id) {
+                                Type::Float(_integer_type) => {
+                                    Ok(TypedPattern::LiteralFloat(value.value, num_lit.span))
+                                }
+                                _ => failf!(
+                                    self.ast.get_pattern_span(pat_expr),
+                                    "unrelated pattern type float will never match {}",
+                                    self.type_id_to_string(target_type_id)
+                                ),
+                            },
+                            _ => {
+                                return failf!(
+                                    num_lit.span,
+                                    "Only integer patterns are supported [nocommit]"
+                                )
                             }
-                            _ => failf!(
-                                self.ast.get_pattern_span(pat_expr),
-                                "unrelated pattern type int will never match {}",
-                                self.type_id_to_string(target_type_id)
-                            ),
                         }
                     }
                     Literal::Bool(b, span) => match self.types.get(target_type_id) {
@@ -2674,8 +2700,8 @@ impl TypedModule {
             Some(_) => NumericWidth::B32,
         };
         let value: Result<TypedFloatValue, std::num::ParseFloatError> = match expected_width {
-            NumericWidth::B32 => parsed_text.parse::<f32>().map(|v| TypedFloatValue::F32(v)),
-            NumericWidth::B64 => parsed_text.parse::<f64>().map(|v| TypedFloatValue::F64(v)),
+            NumericWidth::B32 => parsed_text.parse::<f32>().map(TypedFloatValue::F32),
+            NumericWidth::B64 => parsed_text.parse::<f64>().map(TypedFloatValue::F64),
             _ => unreachable!("unreachable float width"),
         };
         let value =
@@ -3074,7 +3100,8 @@ impl TypedModule {
                 self.expr_to_string(&base_result),
                 self.type_id_to_string(base_result.get_type())
             );
-            if let Err(_) = self.check_types(expected_type_id, base_result.get_type(), scope_id) {
+            if let Err(_msg) = self.check_types(expected_type_id, base_result.get_type(), scope_id)
+            {
                 let new_expr = match self.coerce_expression_to_expected_type(
                     expected_type_id,
                     base_result,
@@ -3528,7 +3555,16 @@ impl TypedModule {
             partial,
         )?;
 
-        let match_result_type = arms[0].arm_block.expr_type;
+        let match_result_type = arms
+            .iter()
+            .find_map(|arm| {
+                if arm.arm_block.expr_type != NEVER_TYPE_ID {
+                    Some(arm.arm_block.expr_type)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(NEVER_TYPE_ID);
         let mut resulting_block = TypedBlock {
             expr_type: match_result_type,
             scope_id: match_block_scope_id,
@@ -3632,17 +3668,16 @@ impl TypedModule {
                     if let Err(msg) =
                         self.check_types(*expected_arm_type_id, arm_expr.get_type(), match_scope_id)
                     {
-                        return make_fail_span(
-                            &format!("Mismatching type for match case: {}", msg),
-                            arm_expr_span,
-                        );
+                        return failf!(arm_expr_span, "Mismatching type for match case: {}", msg,);
                     }
                 }
             }
 
             arm_block.push_expr(arm_expr);
 
-            expected_arm_type_id = Some(arm_block.expr_type);
+            if arm_block.expr_type != NEVER_TYPE_ID {
+                expected_arm_type_id = Some(arm_block.expr_type);
+            }
             typed_cases.push(TypedMatchCase { pattern, pre_stmts, condition, arm_block });
         }
 
@@ -3655,7 +3690,7 @@ impl TypedModule {
             'trial: for (trial_index, trial_expr) in trial_constructors.iter().enumerate() {
                 '_pattern: for (index, pattern) in typed_cases.iter().enumerate() {
                     let pattern = &pattern.pattern;
-                    if self.pattern_matches(&pattern, trial_expr) {
+                    if self.pattern_matches(pattern, trial_expr) {
                         pattern_scores[index] += 1;
                         trial_alives[trial_index] = false;
                         continue 'trial;
@@ -3689,7 +3724,7 @@ impl TypedModule {
 
     /// For each match case we output
     /// 1) a series of statements to bind variables that are used by the condition
-    /// FIXME!: These conditions should be in their own block; currently they pollute the match block
+    ///    FIXME!: These conditions should be in their own block; currently they pollute the match block
     /// 2) an expr that is expected to a boolean, representing the condition of the branch,
     fn eval_match_arm(
         &mut self,
@@ -3786,7 +3821,7 @@ impl TypedModule {
                     );
                     let mut stmts = vec![payload_variable.defn_stmt];
                     let (inner_pattern_stmts, cond) = self.eval_match_arm(
-                        &payload_pattern,
+                        payload_pattern,
                         payload_variable.variable_expr.expect_variable(),
                         arm_block,
                         arm_block.scope_id,
@@ -3837,7 +3872,20 @@ impl TypedModule {
                     ty: BOOL_TYPE_ID,
                     lhs: Box::new(target_expr_variable_expr.into()),
                     rhs: Box::new(TypedExpr::Integer(TypedIntegerExpr {
-                        value: int_value.clone(),
+                        value: *int_value,
+                        span: *span,
+                    })),
+                    span: *span,
+                };
+                Ok((vec![], TypedExpr::BinaryOp(bin_op)))
+            }
+            TypedPattern::LiteralFloat(float_value, span) => {
+                let bin_op = BinaryOp {
+                    kind: BinaryOpKind::Equals,
+                    ty: BOOL_TYPE_ID,
+                    lhs: Box::new(target_expr_variable_expr.into()),
+                    rhs: Box::new(TypedExpr::Float(TypedFloatExpr {
+                        value: *float_value,
                         span: *span,
                     })),
                     span: *span,
@@ -3874,6 +3922,9 @@ impl TypedModule {
         let base_expr = self.eval_expr(cast.base_expr, scope_id, None)?;
         let base_expr_type = base_expr.get_type();
         let target_type = self.eval_type_expr(cast.dest_type, scope_id)?;
+        if base_expr_type == target_type {
+            return failf!(cast.span, "Useless cast");
+        }
         let (cast_type, output_type) = match self.types.get(base_expr_type) {
             Type::Integer(from_integer_type) => match self.types.get(target_type) {
                 Type::Integer(to_integer_type) => {
@@ -3897,7 +3948,7 @@ impl TypedModule {
                 }
                 Type::Pointer(_) => {
                     if *from_integer_type == IntegerType::U64 {
-                        Ok((CastType::IntToPointer, target_type))
+                        Ok((CastType::IntegerToPointer, target_type))
                     } else {
                         failf!(
                             cast.span,
@@ -3906,10 +3957,33 @@ impl TypedModule {
                         )
                     }
                 }
+                Type::Float(_to_float_type) => {
+                    // We're just going to allow these casts and make it UB if it doesn't fit, the LLVM
+                    // default. If I find a saturating version in LLVM I'll use that instead
+                    Ok((CastType::IntegerToFloat, target_type))
+                }
                 _ => failf!(
                     cast.span,
                     "Cannot cast integer '{}' to '{}'",
                     from_integer_type,
+                    self.type_id_to_string(target_type).blue()
+                ),
+            },
+            Type::Float(from_float_type) => match self.types.get(target_type) {
+                Type::Float(to_float_type) => {
+                    let cast_type = match from_float_type.size.cmp(&to_float_type.size) {
+                        Ordering::Less => CastType::FloatTruncate,
+                        Ordering::Greater => CastType::FloatExtend,
+                        Ordering::Equal => CastType::KnownNoOp,
+                    };
+                    Ok((cast_type, target_type))
+                }
+                // We're just going to allow these casts and make it UB if it doesn't fit, the LLVM
+                // default. If I find a saturating version in LLVM I'll use that instead
+                Type::Integer(_to_int_type) => Ok((CastType::FloatToInteger, target_type)),
+                _ => failf!(
+                    cast.span,
+                    "Cannot cast float to '{}'",
                     self.type_id_to_string(target_type).blue()
                 ),
             },
@@ -3933,7 +4007,7 @@ impl TypedModule {
             },
             Type::Pointer(_) => match self.types.get(target_type) {
                 Type::Reference(_refer) => Ok((CastType::PointerToReference, target_type)),
-                Type::Integer(IntegerType::U64) => Ok((CastType::PointerToInt, target_type)),
+                Type::Integer(IntegerType::U64) => Ok((CastType::PointerToInteger, target_type)),
                 _ => failf!(
                     cast.span,
                     "Cannot cast Pointer to '{}'",
@@ -4238,6 +4312,7 @@ impl TypedModule {
                 UNIT_TYPE_ID | CHAR_TYPE_ID | U8_TYPE_ID | U16_TYPE_ID | U32_TYPE_ID
                 | U64_TYPE_ID | I8_TYPE_ID | I16_TYPE_ID | I32_TYPE_ID | I64_TYPE_ID
                 | BOOL_TYPE_ID => true,
+                F32_TYPE_ID | F64_TYPE_ID => true,
                 _other => false,
             }
         }
@@ -4255,19 +4330,17 @@ impl TypedModule {
             BinaryOpKind::Equals | BinaryOpKind::NotEquals => {
                 let lhs = self.eval_expr(binary_op.lhs, scope_id, None)?;
                 if !is_scalar_for_equals(lhs.get_type()) {
-                    return self.eval_equality_expr(lhs, &binary_op, scope_id, expected_type);
+                    return self.eval_equality_expr(lhs, binary_op, scope_id, expected_type);
                 }
             }
             BinaryOpKind::OptionalElse => {
                 // LHS must be an optional and RHS must be its contained type
                 let lhs = self.eval_expr(binary_op.lhs, scope_id, None)?;
                 let Some(lhs_optional) = self.types.get(lhs.get_type()).as_optional() else {
-                    return make_fail_span(
-                        &format!(
-                            "'else' operator can only be used on an optional; type was '{}'",
-                            self.type_id_to_string(lhs.get_type())
-                        ),
+                    return failf!(
                         binary_op.span,
+                        "'else' operator can only be used on an optional; type was '{}'",
+                        self.type_id_to_string(lhs.get_type())
                     );
                 };
                 let lhs_inner = lhs_optional.inner_type;
@@ -4275,9 +4348,10 @@ impl TypedModule {
                 let rhs = self.eval_expr(binary_op.rhs, scope_id, Some(lhs_inner))?;
                 let rhs_type = rhs.get_type();
                 if let Err(msg) = self.check_types(lhs_inner, rhs_type, scope_id) {
-                    return make_fail_span(
-                        &format!("'else' value incompatible with optional: {}", msg),
+                    return failf!(
                         binary_op.span,
+                        "'else' value incompatible with optional: {}",
+                        msg,
                     );
                 }
                 let mut coalesce_block = self.synth_block(vec![], scope_id, binary_op.span);
@@ -4319,11 +4393,14 @@ impl TypedModule {
         // FIXME: We could figure out better hinting here so that the following would compile to u64 on the rhs:
         // assert(sizeOf[Text]() == 16 + 32);
         //                          ^^^^^^^
+        //
+        // If everything was just a function in disguise, we could leverage all of our inference
+        // and keep everything in one place
         let lhs = self.eval_expr(binary_op.lhs, scope_id, None)?;
         let kind = binary_op.op_kind;
         let lhs_type_id = lhs.get_type();
         let result_type = match self.types.get(lhs_type_id) {
-            Type::Integer(_integer_type) => match kind {
+            Type::Float(_) | Type::Integer(_) => match kind {
                 BinaryOpKind::Add => Ok(lhs_type_id),
                 BinaryOpKind::Subtract => Ok(lhs_type_id),
                 BinaryOpKind::Multiply => Ok(lhs_type_id),
@@ -4438,10 +4515,10 @@ impl TypedModule {
                     span: binary_op.span,
                 }))
             }
-            Type::Unit(_) | Type::Char(_) | Type::Integer(_) | Type::Bool(_) => {
-                panic!("Scalar ints shouldnt be passed to eval_equality_expr")
-            }
-            _other_lhs_type => {
+            other_lhs_type => {
+                if other_lhs_type.is_scalar_int_value() {
+                    panic!("Scalar ints shouldnt be passed to eval_equality_expr")
+                }
                 let rhs = self.eval_expr(binary_op.rhs, scope_id, Some(lhs.get_type()))?;
                 if rhs.get_type() != lhs_type_id {
                     failf!(
@@ -6963,11 +7040,11 @@ impl TypedModule {
         for identifier in namespace_chain.iter() {
             let ident_str = self.get_ident_str(*identifier);
             if !skip_root || ident_str != "_root" {
-                s.push_str(&ident_str);
+                s.push_str(ident_str);
                 s.push_str(delimiter);
             }
         }
-        s.push_str(&self.get_ident_str(name));
+        s.push_str(self.get_ident_str(name));
         s
     }
 
@@ -6984,6 +7061,7 @@ impl TypedModule {
             Type::Char(_) => vec![PatternConstructor::Char],
             Type::TypeVariable(_) => vec![PatternConstructor::TypeVariable],
             Type::Integer(_) => vec![PatternConstructor::Int],
+            Type::Float(_) => vec![PatternConstructor::Float],
             Type::Bool(_) => {
                 vec![PatternConstructor::BoolFalse, PatternConstructor::BoolTrue]
             }

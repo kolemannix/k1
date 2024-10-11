@@ -291,6 +291,13 @@ pub enum Type {
 }
 
 impl Type {
+    // Note: This is kind of a codegen concern that doesn't belong in this layer,
+    //       but it has some implications for typechecking, and I'm not super worried
+    //       about platform independence in the middle-end right now
+    pub fn is_scalar_int_value(&self) -> bool {
+        matches!(self, Type::Unit(_) | Type::Char(_) | Type::Integer(_) | Type::Bool(_))
+    }
+
     pub fn ast_node(&self) -> Option<ParsedId> {
         match self {
             Type::Unit(defn_info)
