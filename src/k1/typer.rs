@@ -3169,7 +3169,9 @@ impl TypedModule {
                     }
                     elements
                 };
-                let element_type = element_type.expect("By now this should be populated");
+                let Some(element_type) = element_type else {
+                    return failf!(span, "Could not infer element type for Array literal");
+                };
                 let array_new_fn_call = self.synth_function_call(
                     qident!(self, span, ["Array"], "new"),
                     span,
@@ -5238,7 +5240,7 @@ impl TypedModule {
                 return make_fail_span(
                     format!(
                         "Invalid parameter type passed to function {}: {}",
-                        &*self.ast.identifiers.get_name(fn_call.name.name),
+                        self.ast.identifiers.get_name(fn_call.name.name),
                         e
                     ),
                     expr.get_span(),
@@ -6511,7 +6513,7 @@ impl TypedModule {
                 return make_fail_span(
                     format!(
                         "Ability '{}' already implemented for type: {}",
-                        &*self.get_ident_str(ability_name).blue(),
+                        self.get_ident_str(ability_name).blue(),
                         self.type_id_to_string(target_type).blue()
                     ),
                     span,
@@ -6812,6 +6814,7 @@ impl TypedModule {
     ) -> TyperResult<NamespaceId> {
         let ast_namespace = self.ast.get_namespace(parsed_namespace_id);
         let name = ast_namespace.name;
+        eprintln!("create_namespace {} inside {:?}", self.get_ident_str(name), parent_scope);
         let span = ast_namespace.span;
 
         match parent_scope {
@@ -6906,6 +6909,7 @@ impl TypedModule {
             self.errors.push(e);
         }
         eprintln!("**** ns phase end ****");
+        eprintln!("module after ns phase {}", self);
 
         if !self.errors.is_empty() {
             bail!(

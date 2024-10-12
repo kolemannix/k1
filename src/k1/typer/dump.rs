@@ -43,18 +43,6 @@ impl Display for TypedModule {
 
 /// Dumping impl
 impl TypedModule {
-    pub fn make_scope_name(&self, scope: &Scope) -> String {
-        let mut name = match scope.name {
-            Some(name) => (*self.get_ident_str(name)).to_string(),
-            None => scope.scope_type.short_name().to_string(),
-        };
-        if let Some(p) = scope.parent {
-            let parent_scope = self.scopes.get_scope(p);
-            name = format!("{}.{}", self.make_scope_name(parent_scope), name);
-        }
-        name
-    }
-
     pub fn scope_to_string(&self, scope: &Scope) -> String {
         let mut s = String::new();
         self.display_scope(scope, &mut s).unwrap();
@@ -62,8 +50,8 @@ impl TypedModule {
     }
 
     pub fn display_scope(&self, scope: &Scope, writ: &mut impl Write) -> std::fmt::Result {
-        let scope_name = self.make_scope_name(scope);
-        write!(writ, "{}\n", scope_name)?;
+        let scope_name = self.scopes.make_scope_name(scope, &self.ast.identifiers);
+        writeln!(writ, "{}", scope_name)?;
 
         for (id, variable_id) in scope.variables.iter() {
             let variable = self.variables.get_variable(*variable_id);
@@ -185,7 +173,9 @@ impl TypedModule {
                 Ok(())
             }
             Type::TypeVariable(tv) => {
-                let scope_name = self.make_scope_name(self.scopes.get_scope(tv.scope_id));
+                let scope_name = self
+                    .scopes
+                    .make_scope_name(self.scopes.get_scope(tv.scope_id), &self.ast.identifiers);
                 writ.write_str(&scope_name)?;
                 writ.write_str(".")?;
                 writ.write_str("$")?;

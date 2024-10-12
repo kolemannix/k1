@@ -108,7 +108,7 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
     let mut parse_file = |path: &Path| {
         let content = fs::read_to_string(path).unwrap();
         let name = path.file_name().unwrap();
-        info!("Parsing {}", name.to_string_lossy());
+        eprintln!("Parsing {}", name.to_string_lossy());
         let file_id = parsed_module.sources.next_file_id();
         let source = Source::make(
             file_id,
@@ -122,7 +122,7 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
                 // If lexing fails, we panic here because the source isn't in sources
                 print_error_location(&parsed_module.spans, &parsed_module.sources, e.span());
                 parse_errors.push(e);
-                return ();
+                return;
             }
         };
         let mut parser = parse::Parser::make(&token_vec, file_id, &mut parsed_module);
@@ -132,7 +132,6 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
             parser.print_error(&e);
             parse_errors.push(e);
         }
-        ()
     };
 
     if use_core {
@@ -141,6 +140,9 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
 
         let bitwise_path: &Path = Path::new("builtins/bitwise.k1");
         parse_file(bitwise_path);
+
+        let string_path: &Path = Path::new("builtins/string.k1");
+        parse_file(string_path);
     }
 
     for f in dir_entries.iter() {
@@ -156,7 +158,7 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
     info!("parsing took {}ms", parsing_elapsed.as_millis());
 
     let mut typed_module = TypedModule::new(parsed_module);
-    if let Err(_) = typed_module.run() {
+    if let Err(_e) = typed_module.run() {
         if args.dump_module {
             println!("{}", typed_module);
         }

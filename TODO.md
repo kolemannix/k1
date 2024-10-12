@@ -160,6 +160,7 @@
   - Generational References combined w/ arena-style memory mgmt
 
 # Major fix
+- [ ] Unmatched closing delim in namespace causes silent failure to parse rest of sources
 - [ ] Replace IdentifierId with global 'Symbol' where its a bug not to
 - [ ] Parsing bug where first expr of block is namespaced with ::
 - [x] ICE when assigning to struct member when struct is not a reference (self.module.types.get(field_access.base.get_type()).as_reference().is_some())
