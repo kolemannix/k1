@@ -212,10 +212,7 @@ impl Identifiers {
         Identifier(s)
     }
     pub fn get(&self, s: impl AsRef<str>) -> Option<Identifier> {
-        match self.intern_pool.get(&s) {
-            Some(s) => Some(Identifier(s)),
-            None => None,
-        }
+        self.intern_pool.get(&s).map(Identifier)
     }
     pub fn get_name(&self, id: Identifier) -> &str {
         self.intern_pool.resolve(id.0).expect("failed to resolve identifier")
@@ -1252,7 +1249,7 @@ impl Source {
 
     pub fn get_line_for_span(&self, span: Span) -> Option<&Line> {
         self.lines.iter().find(|line| {
-            let line_end = line.end_char() as u32;
+            let line_end = line.end_char();
             line.start_char <= span.start && line_end >= span.start
         })
     }
@@ -1270,12 +1267,12 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         file_id: FileId,
         module: &'module mut ParsedModule,
     ) -> Parser<'toks, 'module> {
-        let parser = Parser { tokens: TokenIter::make(&tokens), file_id, module };
+        let parser = Parser { tokens: TokenIter::make(tokens), file_id, module };
         parser
     }
 
     fn source(&self) -> &Source {
-        &self.module.sources.get_source(self.file_id)
+        self.module.sources.get_source(self.file_id)
     }
 
     fn expect<A>(what: &str, current: Token, value: ParseResult<Option<A>>) -> ParseResult<A> {
@@ -1402,11 +1399,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     #[inline]
     fn peek(&self) -> Token {
         self.tokens.peek()
-    }
-
-    #[inline]
-    fn peek_two(&self) -> (Token, Token) {
-        self.tokens.peek_two()
     }
 
     fn chars_at_span<'source>(
@@ -2286,7 +2278,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn parse_assignment(&mut self, lhs: ParsedExpressionId) -> ParseResult<Assignment> {
-        let _valid_lhs = match &*self.get_expression(lhs) {
+        let _valid_lhs = match self.get_expression(lhs) {
             ParsedExpression::FieldAccess(_) => true,
             ParsedExpression::Variable(_) => true,
             _ => false,
@@ -2333,6 +2325,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         }
     }
 
+    #[allow(unused)]
     fn eat_delimited_expect_opener<T, F>(
         &mut self,
         name: &str,
@@ -2486,19 +2479,27 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         };
         let linkage = if is_intrinsic {
             Linkage::Intrinsic
-        } else if !is_intrinsic && self.peek().kind == K::KeywordExtern {
+        } else if self.peek().kind == K::KeywordExtern {
             self.tokens.advance();
-            Linkage::External
+            let external_name = if self.peek().kind == K::OpenParen {
+                self.tokens.advance();
+                // Parse the external name
+                let external_name = self.expect_eat_token(K::Ident)?;
+                self.expect_eat_token(K::CloseParen)?;
+                Some(self.intern_ident_token(external_name))
+            } else {
+                None
+            };
+            Linkage::External(external_name)
         } else {
             Linkage::Standard
         };
 
-        let Some(fn_keyword) = self.eat_token(K::KeywordFn) else {
-            return if is_intrinsic {
-                Err(ParseError { expected: "fn".to_string(), token: self.peek(), cause: None })
-            } else {
-                Ok(None)
-            };
+        let fn_keyword = match self.expect_eat_token(K::KeywordFn) {
+            Ok(f) => f,
+            Err(e) => {
+                return if linkage != Linkage::Standard { Err(e) } else { Ok(None) };
+            }
         };
         let func_name = self.expect_eat_token(K::Ident)?;
         let func_name_id = self.intern_ident_token(func_name);

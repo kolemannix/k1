@@ -1,88 +1,88 @@
 namespace Bits {
-  intern fn not(a: int): int
-  intern fn and(a: int, b: int): int
-  intern fn or(a: int, b: int): int
+  intern fn bitNot(a: int): int
+  intern fn bitAnd(a: int, b: int): int
+  intern fn bitOr(a: int, b: int): int
   intern fn xor(a: int, b: int): int
   intern fn shiftLeft(a: int, b: int): int
   intern fn shiftRight(a: int, b: int): int
 }
 
 ability Bitwise {
-  fn not(self: Self): Self
-  fn and(self: Self, other: Self): Self
-  fn or(self: Self, other: Self): Self
+  fn bitNot(self: Self): Self
+  fn bitAnd(self: Self, other: Self): Self
+  fn bitOr(self: Self, other: Self): Self
   fn xor(self: Self, other: Self): Self
   fn shiftLeft(self: Self, other: Self): Self
   fn shiftRight(self: Self, other: Self): Self
 }
 
 impl Bitwise for u8 {
-  intern fn not(self: u8): u8
-  intern fn and(self: u8, other: u8): u8
-  intern fn or(self: u8, other: u8): u8
+  intern fn bitNot(self: u8): u8
+  intern fn bitAnd(self: u8, other: u8): u8
+  intern fn bitOr(self: u8, other: u8): u8
   intern fn xor(self: u8, other: u8): u8
   intern fn shiftLeft(self: u8, other: u8): u8
   intern fn shiftRight(self: u8, other: u8): u8
 }
 
 impl Bitwise for u16 {
-  intern fn not(self: u16): u16
-  intern fn and(self: u16, other: u16): u16
-  intern fn or(self: u16, other: u16): u16
+  intern fn bitNot(self: u16): u16
+  intern fn bitAnd(self: u16, other: u16): u16
+  intern fn bitOr(self: u16, other: u16): u16
   intern fn xor(self: u16, other: u16): u16
   intern fn shiftLeft(self: u16, other: u16): u16
   intern fn shiftRight(self: u16, other: u16): u16
 }
 
 impl Bitwise for u32 {
-  intern fn not(self: u32): u32
-  intern fn and(self: u32, other: u32): u32
-  intern fn or(self: u32, other: u32): u32
+  intern fn bitNot(self: u32): u32
+  intern fn bitAnd(self: u32, other: u32): u32
+  intern fn bitOr(self: u32, other: u32): u32
   intern fn xor(self: u32, other: u32): u32
   intern fn shiftLeft(self: u32, other: u32): u32
   intern fn shiftRight(self: u32, other: u32): u32
 }
 
 impl Bitwise for u64 {
-  intern fn not(self: u64): u64
-  intern fn and(self: u64, other: u64): u64
-  intern fn or(self: u64, other: u64): u64
+  intern fn bitNot(self: u64): u64
+  intern fn bitAnd(self: u64, other: u64): u64
+  intern fn bitOr(self: u64, other: u64): u64
   intern fn xor(self: u64, other: u64): u64
   intern fn shiftLeft(self: u64, other: u64): u64
   intern fn shiftRight(self: u64, other: u64): u64
 }
 
 impl Bitwise for i8 {
-  intern fn not(self: i8): i8
-  intern fn and(self: i8, other: i8): i8
-  intern fn or(self: i8, other: i8): i8
+  intern fn bitNot(self: i8): i8
+  intern fn bitAnd(self: i8, other: i8): i8
+  intern fn bitOr(self: i8, other: i8): i8
   intern fn xor(self: i8, other: i8): i8
   intern fn shiftLeft(self: i8, other: i8): i8
   intern fn shiftRight(self: i8, other: i8): i8
 }
 
 impl Bitwise for i16 {
-  intern fn not(self: i16): i16
-  intern fn and(self: i16, other: i16): i16
-  intern fn or(self: i16, other: i16): i16
+  intern fn bitNot(self: i16): i16
+  intern fn bitAnd(self: i16, other: i16): i16
+  intern fn bitOr(self: i16, other: i16): i16
   intern fn xor(self: i16, other: i16): i16
   intern fn shiftLeft(self: i16, other: i16): i16
   intern fn shiftRight(self: i16, other: i16): i16
 }
 
 impl Bitwise for i32 {
-  intern fn not(self: i32): i32
-  intern fn and(self: i32, other: i32): i32
-  intern fn or(self: i32, other: i32): i32
+  intern fn bitNot(self: i32): i32
+  intern fn bitAnd(self: i32, other: i32): i32
+  intern fn bitOr(self: i32, other: i32): i32
   intern fn xor(self: i32, other: i32): i32
   intern fn shiftLeft(self: i32, other: i32): i32
   intern fn shiftRight(self: i32, other: i32): i32
 }
 
 impl Bitwise for i64 {
-  intern fn not(self: i64): i64
-  intern fn and(self: i64, other: i64): i64
-  intern fn or(self: i64, other: i64): i64
+  intern fn bitNot(self: i64): i64
+  intern fn bitAnd(self: i64, other: i64): i64
+  intern fn bitOr(self: i64, other: i64): i64
   intern fn xor(self: i64, other: i64): i64
   intern fn shiftLeft(self: i64, other: i64): i64
   intern fn shiftRight(self: i64, other: i64): i64

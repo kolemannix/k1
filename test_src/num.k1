@@ -9,7 +9,7 @@ fn main(): int {
   val x = 0xcafebabe;
   val y = 0xdeadbeef;
   val a: u8 = 0b11111111;
-  Bits::and(x, y);
+  Bits::bitAnd(x, y);
 
   0
 }

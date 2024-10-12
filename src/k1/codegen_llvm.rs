@@ -2533,16 +2533,18 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         };
         let llvm_linkage = match function.linkage {
             TyperLinkage::Standard => None,
-            TyperLinkage::External => Some(LlvmLinkage::External),
+            TyperLinkage::External(_name) => Some(LlvmLinkage::External),
             TyperLinkage::Intrinsic => None,
         };
-        let qualified_name =
-            self.module.make_qualified_name(function.scope, function.name, "__", true);
-        let fn_val = self.llvm_module.add_function(&qualified_name, fn_ty, llvm_linkage);
+        let llvm_name = match function.linkage {
+            TyperLinkage::External(Some(name)) => self.module.get_ident_str(name),
+            _ => &self.module.make_qualified_name(function.scope, function.name, "__", true),
+        };
+        let fn_val = self.llvm_module.add_function(llvm_name, fn_ty, llvm_linkage);
 
         self.llvm_functions.insert(function_id, fn_val);
 
-        if function.linkage == Linkage::External {
+        if matches!(function.linkage, Linkage::External(_)) {
             return Ok(fn_val);
         }
 

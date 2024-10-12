@@ -16,7 +16,7 @@ impl Display for TypedModule {
         f.write_str("--- Namespaces ---\n")?;
         for (id, namespace) in self.namespaces.iter() {
             write!(f, "ns {:02} ", id.0)?;
-            f.write_str(&self.get_ident_str(namespace.name))?;
+            f.write_str(self.get_ident_str(namespace.name))?;
             f.write_str("\n")?;
         }
         f.write_str("--- Variables ---\n")?;
@@ -70,7 +70,7 @@ impl TypedModule {
         }
         for (ident, type_id) in scope.types.iter() {
             writ.write_str("\t")?;
-            writ.write_str(&self.get_ident_str(*ident))?;
+            writ.write_str(self.get_ident_str(*ident))?;
             writ.write_str(" := ")?;
             self.display_type_id(*type_id, true, writ)?;
             writ.write_str("\n")?;
@@ -78,7 +78,7 @@ impl TypedModule {
         for (id, namespace_id) in scope.namespaces.iter() {
             write!(writ, "{} ", id)?;
             let namespace = self.namespaces.get(*namespace_id);
-            writ.write_str(&self.get_ident_str(namespace.name))?;
+            writ.write_str(self.get_ident_str(namespace.name))?;
             writ.write_str("\n")?;
         }
         Ok(())
@@ -88,7 +88,7 @@ impl TypedModule {
         if var.is_mutable {
             writ.write_str("mut ")?;
         }
-        writ.write_str(&self.get_ident_str(var.name))?;
+        writ.write_str(self.get_ident_str(var.name))?;
         writ.write_str(": ")?;
         self.display_type_id(var.type_id, false, writ)
     }
@@ -128,7 +128,7 @@ impl TypedModule {
             }
         }
         writ.write_str("]")?;
-        return Ok(());
+        Ok(())
     }
 
     fn display_type(&self, ty: &Type, expand: bool, writ: &mut impl Write) -> std::fmt::Result {
@@ -312,7 +312,7 @@ impl TypedModule {
         writ: &mut impl Write,
         display_block: bool,
     ) -> std::fmt::Result {
-        if function.linkage == Linkage::External {
+        if matches!(function.linkage, Linkage::External(_)) {
             writ.write_str("extern ")?;
         }
         if function.linkage == Linkage::Intrinsic {
@@ -320,13 +320,13 @@ impl TypedModule {
         }
 
         writ.write_str("fn ")?;
-        writ.write_str(&self.get_ident_str(function.name))?;
+        writ.write_str(self.get_ident_str(function.name))?;
         writ.write_str("(")?;
         for (idx, param) in function.params.iter().enumerate() {
             if idx > 0 {
                 writ.write_str(", ")?;
             }
-            writ.write_str(&self.get_ident_str(param.name))?;
+            writ.write_str(self.get_ident_str(param.name))?;
             writ.write_str(": ")?;
             self.display_type_id(param.type_id, false, writ)?;
         }
@@ -426,7 +426,7 @@ impl TypedModule {
                         writ.write_str(",\n")?;
                         writ.write_str(&" ".repeat(indentation + 1))?;
                     }
-                    writ.write_str(&self.get_ident_str(field.name))?;
+                    writ.write_str(self.get_ident_str(field.name))?;
                     writ.write_str(": ")?;
                     self.display_expr(&field.expr, writ, indentation)?;
                 }
@@ -435,16 +435,16 @@ impl TypedModule {
             }
             TypedExpr::Variable(v) => {
                 let variable = self.variables.get_variable(v.variable_id);
-                writ.write_str(&self.get_ident_str(variable.name))
+                writ.write_str(self.get_ident_str(variable.name))
             }
             TypedExpr::StructFieldAccess(field_access) => {
                 self.display_expr(&field_access.base, writ, indentation)?;
                 writ.write_str(".")?;
-                writ.write_str(&self.get_ident_str(field_access.target_field))
+                writ.write_str(self.get_ident_str(field_access.target_field))
             }
             TypedExpr::FunctionCall(fn_call) => {
                 let function = self.get_function(fn_call.callee_function_id);
-                writ.write_str(&self.get_ident_str(function.name))?;
+                writ.write_str(self.get_ident_str(function.name))?;
                 writ.write_str("(")?;
                 for (idx, arg) in fn_call.args.iter().enumerate() {
                     if idx > 0 {
@@ -477,7 +477,7 @@ impl TypedModule {
             }
             TypedExpr::EnumConstructor(enum_constr) => {
                 writ.write_str(".")?;
-                writ.write_str(&self.get_ident_str(enum_constr.variant_name))?;
+                writ.write_str(self.get_ident_str(enum_constr.variant_name))?;
                 if let Some(payload) = &enum_constr.payload {
                     writ.write_str("(")?;
                     self.display_expr(payload, writ, indentation)?;
