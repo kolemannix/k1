@@ -1,0 +1,45 @@
+fn as_digit(c: char): u8? {
+  val i_code = c as u8;
+  if i_code >= 48 and i_code <= 57 {
+    i_code - 48
+  } else {
+    .None
+  }
+}
+
+fn main(): int {
+  val input: string = Files::readToString("/Users/knix/dev/k1/dogfood/aoc/2023/1_1.txt");
+  print("The file was ");
+  printUInt(input.len);
+  println(" characters long");
+  val digits: Array[Array[int]]* = &[];
+  mut line: u64 = 0;
+  mut first = true;
+  for c in input do {
+    if c == '\n' {
+      line = line + 1;
+      first = true;
+    };
+    if as_digit(c) is .Some(i) {
+      if first {
+        digits.push([i as int]);
+        first = false;
+      } else {
+        digits.getRef(line).push(i as int);
+      };
+    };
+  };
+  mut sum = 0;
+  for *digits do {
+    if it.first() is .Some(fst) {
+      if it.last() is .Some(lst) {
+        val two_digit = fst * 10 + lst;
+        sum = sum + two_digit;
+      };
+    };
+  };
+  print("sum is ");
+  printInt(sum);
+  println("");
+  0
+}

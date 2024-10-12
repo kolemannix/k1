@@ -312,6 +312,18 @@ impl Scopes {
         }
     }
 
+    pub fn make_scope_name(&self, scope: &Scope, identifiers: &Identifiers) -> String {
+        let mut name = match scope.name {
+            Some(name) => (*identifiers.get_name(name)).to_string(),
+            None => scope.scope_type.short_name().to_string(),
+        };
+        if let Some(p) = scope.parent {
+            let parent_scope = self.get_scope(p);
+            name = format!("{}.{}", self.make_scope_name(parent_scope, identifiers), name);
+        }
+        name
+    }
+
     pub fn traverse_namespace_chain(
         &self,
         scope_id: ScopeId,
@@ -331,7 +343,7 @@ impl Scopes {
                 span,
                 "Namespace not found: {} from scope: {:?}",
                 identifiers.get_name(*first),
-                self.get_scope(scope_id).name.map(|n| identifiers.get_name(n))
+                self.make_scope_name(self.get_scope(cur_scope_id), identifiers)
             ));
         };
         cur_scope_id = namespaces.get(first_ns).scope_id;
