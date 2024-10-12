@@ -100,12 +100,12 @@
 - [x] Rework builtin optionals to be a generic enum
 - [x] floating point (f32 and f64)
   - [ ] Test handling of NaN and Infinity, other float edge cases
-- [ ] Generic abilities
+- [ ] Generic abilities (ability From<T> { ... })
 - [ ] Friendliness pass
   - [ ] Get rid of 'enum' keyword, data?
   - [ ] 'when' keyword is bad; `switch` maybe or `case`
 - [x] Remove tag literals, make enum tags per-enum
-- [ ] function pointers (For now just take static address of a function as Pointer)
+- [ ] function pointers (By taking the static address of a function as Pointer)
 - [ ] Imports
 - [ ] Pure lambdas with -> (not closures)
 - [ ] German/Umbra strings

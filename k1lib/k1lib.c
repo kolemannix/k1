@@ -22,28 +22,28 @@ void _k1_crash(K1String* reason, K1String* filename, uint64_t line) {
 
 void* _k1_malloc(uint64_t size_bytes) {
     void* ptr = malloc(size_bytes);
-    printf("k1_malloc(%llu)\n", size_bytes);
+    // printf("k1_malloc(%llu)\n", size_bytes);
     return ptr;
 }
 
 void _k1_free(void* ptr) {
-    printf("k1_free(%zu)\n", (size_t)ptr);
+    // printf("k1_free(%zu)\n", (size_t)ptr);
     free(ptr);
 }
 
 
 // Passing struct; not guaranteed ABI
 // One day pass by reference OR pass each field
-K1String _k1_readFileToString(K1String filename) {
-    char* as_cstring = malloc(filename.len + 1);
+K1String _k1_readFileToString(K1String *filename) {
+    char* as_cstring = _k1_malloc(filename->len + 1);
     // snprintf(as_cstring, filename.len, "%s", filename.data);
-    memcpy(as_cstring, filename.data, filename.len);
-    as_cstring[filename.len] = '\0';
+    memcpy(as_cstring, filename->data, filename->len);
+    as_cstring[filename->len] = '\0';
 
     FILE* file = fopen(as_cstring, "r");
     fseek(file, 0, SEEK_END);
     long fsize = ftell(file);
-    char* buf = malloc(fsize);
+    char* buf = _k1_malloc(fsize);
 
     fseek(file, 0, SEEK_SET);
     fread(buf, fsize, 1, file);
@@ -52,7 +52,7 @@ K1String _k1_readFileToString(K1String filename) {
         .data = buf
     };
     fclose(file);
-    free(as_cstring);
+    _k1_free(as_cstring);
     return string;
 }
 

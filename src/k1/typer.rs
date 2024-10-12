@@ -44,7 +44,7 @@ pub struct AbilityImplId(u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Linkage {
     Standard,
-    External,
+    External(Option<Identifier>),
     Intrinsic,
 }
 
@@ -5901,9 +5901,9 @@ impl TypedModule {
                     }
                 }
                 (BITWISE_ABILITY_ID, Type::Integer(_)) => match fn_name_str {
-                    "not" => Some(IntrinsicFunction::BitNot),
-                    "and" => Some(IntrinsicFunction::BitAnd),
-                    "or" => Some(IntrinsicFunction::BitOr),
+                    "bitNot" => Some(IntrinsicFunction::BitNot),
+                    "bitAnd" => Some(IntrinsicFunction::BitAnd),
+                    "bitOr" => Some(IntrinsicFunction::BitOr),
                     "xor" => Some(IntrinsicFunction::BitXor),
                     "shiftLeft" => Some(IntrinsicFunction::BitShiftLeft),
                     "shiftRight" => Some(IntrinsicFunction::BitShiftRight),
@@ -5939,9 +5939,9 @@ impl TypedModule {
                     _ => None,
                 },
                 Some("Bits") => match fn_name_str {
-                    "not" => Some(IntrinsicFunction::BitNot),
-                    "and" => Some(IntrinsicFunction::BitAnd),
-                    "or" => Some(IntrinsicFunction::BitOr),
+                    "bitNot" => Some(IntrinsicFunction::BitNot),
+                    "bitAnd" => Some(IntrinsicFunction::BitAnd),
+                    "bitOr" => Some(IntrinsicFunction::BitOr),
                     "xor" => Some(IntrinsicFunction::BitXor),
                     "shiftLeft" => Some(IntrinsicFunction::BitShiftLeft),
                     "shiftRight" => Some(IntrinsicFunction::BitShiftRight),
@@ -5952,12 +5952,10 @@ impl TypedModule {
         };
         match result {
             Some(result) => Ok(result),
-            None => {
-                return Err(format!(
-                    "Could not resolve intrinsic function type for function {}",
-                    &*self.get_ident_str(fn_name),
-                ))
-            }
+            None => Err(format!(
+                "Could not resolve intrinsic function type for function {}",
+                self.get_ident_str(fn_name),
+            )),
         }
     }
 
@@ -6341,7 +6339,7 @@ impl TypedModule {
         let function_name = function.name;
         let fn_scope_id = function.scope;
         let ret_type = function.ret_type;
-        let is_extern = function.linkage == Linkage::External;
+        let is_extern = matches!(function.linkage, Linkage::External(_));
         let ast_id = function.parsed_function_id;
         let is_intrinsic = function.intrinsic_type.is_some();
         let is_ability_defn = matches!(function.kind, TypedFunctionKind::AbilityDefn(_));
@@ -6814,7 +6812,6 @@ impl TypedModule {
     ) -> TyperResult<NamespaceId> {
         let ast_namespace = self.ast.get_namespace(parsed_namespace_id);
         let name = ast_namespace.name;
-        eprintln!("create_namespace {} inside {:?}", self.get_ident_str(name), parent_scope);
         let span = ast_namespace.span;
 
         match parent_scope {
@@ -6909,7 +6906,6 @@ impl TypedModule {
             self.errors.push(e);
         }
         eprintln!("**** ns phase end ****");
-        eprintln!("module after ns phase {}", self);
 
         if !self.errors.is_empty() {
             bail!(
@@ -6920,7 +6916,7 @@ impl TypedModule {
         }
 
         // Pending Type declaration phase
-        eprintln!("type **** defn phase begin ****");
+        eprintln!("**** type defn phase begin ****");
         let type_defn_result = self.eval_namespace_type_defn_phase(root_namespace_id);
         if let Err(e) = type_defn_result {
             print_error(&self.ast.spans, &self.ast.sources, &e.message, e.span);
@@ -6932,7 +6928,7 @@ impl TypedModule {
         eprintln!("**** type defn phase end ****");
 
         // Type evaluation phase
-        eprintln!("type **** eval phase begin ****");
+        eprintln!("**** type eval phase begin ****");
         let type_eval_result = self.eval_namespace_type_eval_phase(root_namespace_id);
         if let Err(e) = type_eval_result {
             print_error(&self.ast.spans, &self.ast.sources, &e.message, e.span);

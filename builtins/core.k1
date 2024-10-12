@@ -71,17 +71,20 @@ fn new[T](value: T): T* {
 
 // What will become platform stuff
 
-extern fn _k1_readFileToString(path: string): string
+extern fn _k1_readFileToString(path: string*): string
 extern fn _k1_crash(reason: string*, file: string*, line: u64): never
 
 extern fn _k1_malloc(size: u64): Pointer
 extern fn _k1_free(ptr: Pointer): unit
 
 // Straight to libc, for now
-extern fn realloc(ptr: Pointer, size: u64): Pointer
-extern fn memcpy(dst: Pointer, src: Pointer, count: u64): Pointer
-extern fn memset(src: Pointer, count: u64, value: u8): Pointer
-extern fn arc4random_uniform(upperBound: u32): u32
+namespace libc {
+  extern(printf) fn printfStr(formatStr: Pointer, cString: Pointer): i32
+  extern(memcpy) fn memcpy(dst: Pointer, src: Pointer, count: u64): Pointer
+  extern(memset) fn memset(src: Pointer, count: u64, value: u8): Pointer
+  extern(realloc) fn realloc(ptr: Pointer, size: u64): Pointer
+  extern(arc4random_uniform) fn arc4random_uniform(upperBound: u32): u32
+}
 
 // End What will become platform stuff
 
@@ -99,8 +102,6 @@ namespace Pointer {
   // But we _could_ do it in userland using sizeOf and arithmetic which is neat!
   intern fn refAtIndex[T](self: Pointer, index: u64): T*
 
-  // TODO: memset intrinsic
-  // intern fn memset(self: Pointer, num: u64, value: u8): unit
 }
 
 impl Equals for Pointer {
@@ -122,7 +123,7 @@ fn crash(msg: string): never {
 
 namespace Files {
   fn readToString(path: string): string {
-    _k1_readFileToString(path)
+    _k1_readFileToString(&path)
   }
 }
 
@@ -194,7 +195,7 @@ namespace Array {
 
       _k1_malloc(newSize)
     } else {
-      realloc(self.data, newSize)
+      (); libc::realloc(self.data, newSize)
     };
     if ptr.isNull() {
       crash("allocation failed in array grow");
@@ -263,10 +264,6 @@ impl Equals for Array[int] {
       true
     }
   }
-}
-
-impl Equals for string {
-  intern fn equals(self: string, that: string): bool
 }
 
 fn println(value: string): unit {

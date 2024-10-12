@@ -490,6 +490,13 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
             let span = lex.add_span(start, len);
             Token::new(kind, span, peeked_whitespace)
         };
+        let make_keyword_or_ident = |lex: &mut Lexer, tok_buf: &str, start: u32, len: u32| {
+            if let Some(kind) = TokenKind::token_from_str(tok_buf) {
+                make_token(lex, kind, start, len)
+            } else {
+                make_token(lex, TokenKind::Ident, start, len)
+            }
+        };
         trace!("lex starting new token with prev_skip=false");
         let token = loop {
             let (c, n) = self.peek_with_pos();
@@ -524,7 +531,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
             }
             if c == EOF_CHAR {
                 if !tok_buf.is_empty() {
-                    break Some(make_token(self, K::Ident, n - tok_len, tok_len));
+                    break Some(make_keyword_or_ident(self, &tok_buf, n - tok_len, tok_len));
                 } else {
                     break None;
                 }
@@ -547,10 +554,15 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                             // Fall through, continue the floating point number including a dot
                         } else {
                             // End the ident; we'll eat the dot next token w/ an empty buffer
-                            break Some(make_token(self, K::Ident, n - tok_len, tok_len));
+                            break Some(make_keyword_or_ident(
+                                self,
+                                &tok_buf,
+                                n - tok_len,
+                                tok_len,
+                            ));
                         }
                     } else {
-                        break Some(make_token(self, K::Ident, n - tok_len, tok_len));
+                        break Some(make_keyword_or_ident(self, &tok_buf, n - tok_len, tok_len));
                     }
                 } else if single_char_tok == K::SingleQuote {
                     self.advance(); // eat opening '
@@ -594,7 +606,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                 if let Some(tok) = TokenKind::token_from_str(&tok_buf) {
                     break Some(make_token(self, tok, n - tok_len, tok_len));
                 } else {
-                    break Some(make_token(self, TokenKind::Ident, n - tok_len, tok_len));
+                    break Some(make_keyword_or_ident(self, &tok_buf, n - tok_len, tok_len));
                 }
             }
             if tok_buf.is_empty() && is_ident_or_num_start(c) {
@@ -617,6 +629,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                 }
                 tok_len += 1;
                 tok_buf.push(c);
+            // We can possibly remove this check; it would be handled next loop
             } else if let Some(tok) = TokenKind::token_from_str(&tok_buf) {
                 // Do not eat this so the next eat_token call can see it.
                 // self.advance();
@@ -795,6 +808,15 @@ mod test {
             ],
             kinds
         );
+        Ok(())
+    }
+
+    #[test]
+    fn extern_fn_name() -> anyhow::Result<()> {
+        let input = r#"extern(printf)"#;
+        let (spans, tokens) = set_up(input)?;
+        let kinds: Vec<TokenKind> = tokens.iter().map(|t| t.kind).collect();
+        assert_eq!(vec![K::KeywordExtern, K::OpenParen, K::Ident, K::CloseParen,], kinds);
         Ok(())
     }
 }

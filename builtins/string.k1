@@ -1,3 +1,7 @@
+// TODO: CString type
+// type alias opaque CString = Pointer
+// namespace CString { }
+
 namespace string {
 
   fn getRef(self: string, index: u64): char* {
@@ -36,10 +40,10 @@ namespace string {
     val new_length = self.len + other.len;
     val copied = &Array::new[char](new_length);
 
-    memcpy(copied.data, self.data, self.len);
+    libc::memcpy(copied.data, self.data, self.len);
 
     val offset = copied.data as u64 + self.len;
-    memcpy(offset as Pointer, other.data, other.len);
+    libc::memcpy(offset as Pointer, other.data, other.len);
 
     copied.len = new_length;
     fromChars(copied)
@@ -51,7 +55,7 @@ namespace string {
     val copied = &Array::new[char](new_length);
     copied.len = new_length;
 
-    memcpy(copied.data, self.data, self.len);
+    libc::memcpy(copied.data, self.data, self.len);
     copied.set(self.len, c);
 
     fromChars(copied)
@@ -74,6 +78,14 @@ namespace string {
       string::fromChars(buf)
     }
   }
+
+  fn toCString(self: string): Pointer {
+    self.concat('\0'.toString()).data
+  }
+}
+
+impl Equals for string {
+  intern fn equals(self: string, that: string): bool
 }
 
 impl Equals for Array[string] {
