@@ -1604,20 +1604,16 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     result = new_id;
                 } else if next.kind == K::QuestionMark {
                     // Optional Type
-                    // For now, we say you can't nest options, at least syntactically, by not recursing / looping
                     self.tokens.advance();
                     result = self.module.type_expressions.add(ParsedTypeExpression::Optional(
                         ParsedOptional { base: result, span: next.span },
                     ));
-                    break;
                 } else if next.kind == K::Asterisk {
                     // Reference Type
-                    // For now, we say you can't nest references, at least syntactically, by not recursing / looping
                     self.tokens.advance();
                     result = self.module.type_expressions.add(ParsedTypeExpression::Reference(
                         ParsedReference { base: result, span: next.span },
                     ));
-                    break;
                 } else {
                     panic!("unhandled postfix type operator {:?}", next.kind);
                 }

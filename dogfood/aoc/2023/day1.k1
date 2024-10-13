@@ -1,10 +1,51 @@
-fn as_digit(c: char): u8? {
+fn asDigit(c: char): u8? {
   val i_code = c as u8;
   if i_code >= 48 and i_code <= 57 {
     i_code - 48
   } else {
     .None
   }
+}
+
+fn day2(): int {
+  val input: string = Files::readToString("/Users/knix/dev/k1/dogfood/aoc/2023/1_1.txt");
+  val lines = input.splitByChar('\n');
+  val lineDigits = for line in lines yield {
+    val digits: Array[i64]* = &[];
+    for c in line do {
+      val thisDigit: i64? = if asDigit(c) is .Some(d) {
+        .Some(d as i64)
+      } else {
+        val rest = line.substring(it_index, line.len);
+        if rest.startsWith("one") Opt.Some(1) else 
+        if rest.startsWith("two")   2         else 
+        if rest.startsWith("three") 3          else 
+        if rest.startsWith("four")  4          else 
+        if rest.startsWith("five")  5          else 
+        if rest.startsWith("six")   6          else 
+        if rest.startsWith("seven") 7          else 
+        if rest.startsWith("eight") 8          else 
+        if rest.startsWith("nine")  9          else 
+        if rest.startsWith("zero")  0          else 
+        .None
+      };
+      if thisDigit is .Some(d) {
+        digits.push(d);
+      }
+    };
+    *digits
+  };
+  mut sum = 0;
+  for lineDigits do {
+    if it.first() is .Some(fst) {
+      if it.last() is .Some(lst) {
+        val two_digit = fst * 10 + lst;
+        sum = sum + two_digit;
+      };
+    };
+  };
+  println("sum is ".concat(sum.show()));
+  sum
 }
 
 fn main(): int {
@@ -20,7 +61,7 @@ fn main(): int {
       line = line + 1;
       first = true;
     };
-    if as_digit(c) is .Some(i) {
+    if asDigit(c) is .Some(i) {
       if first {
         digits.push([i as int]);
         first = false;
@@ -41,5 +82,7 @@ fn main(): int {
   print("sum is ");
   printInt(sum);
   println("");
+
+  day2();
   0
 }

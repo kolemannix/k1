@@ -524,17 +524,14 @@ impl TypedModule {
             PatternConstructor::Unit => writ.write_str("()"),
             PatternConstructor::BoolTrue => writ.write_str("true"),
             PatternConstructor::BoolFalse => writ.write_str("false"),
-            PatternConstructor::None => writ.write_str("None"),
             PatternConstructor::Char => writ.write_str("'<char>'"),
             PatternConstructor::String => writ.write_str("\"<string>\""),
             PatternConstructor::Int => writ.write_str("<int>"),
             PatternConstructor::Float => writ.write_str("<float>"),
             PatternConstructor::TypeVariable => writ.write_str("<tvar>"),
-            PatternConstructor::Some(inner) => {
-                writ.write_str("Some(")?;
-                self.display_pattern_ctor(inner, writ)?;
-                writ.write_str(")")?;
-                Ok(())
+            PatternConstructor::Reference(inner) => {
+                writ.write_str("*")?;
+                self.display_pattern_ctor(inner, writ)
             }
             PatternConstructor::Struct { fields } => {
                 writ.write_str("{ ")?;

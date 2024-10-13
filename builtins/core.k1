@@ -152,6 +152,10 @@ namespace char {
 
 namespace Array {
 
+  fn empty[T](): Array[T] {
+    new[T](0)
+  }
+
   fn new[T](cap: u64): Array[T] {
     val data = if cap == 0 {
       ();
@@ -219,20 +223,38 @@ namespace Array {
     self.len == 0
   }
 
-  fn first[T](self: Array[T]): T? {
+  fn nonEmpty[T](self: Array[T]): bool {
+    self.len > 0
+  }
+
+  fn firstRef[T](self: Array[T]): T*? {
     // This exercises both Some-wrapping, .None-promotion, and type hinting through ifs!
     if not self.isEmpty() {
-      self.get(0)
+      self.getRef(0)
+    } else {
+      .None
+    }
+  }
+
+  fn first[T](self: Array[T]): T? {
+    when self.firstRef() {
+      .None -> .None,
+      .Some(firstRef) -> .Some(*firstRef)
+    }
+  }
+
+  fn lastRef[T](self: Array[T]): T*? {
+    if not self.isEmpty() {
+      self.getRef(self.len - 1)
     } else {
       .None
     }
   }
 
   fn last[T](self: Array[T]): T? {
-    if not self.isEmpty() {
-      self.get(self.len - 1)
-    } else {
-      .None
+    when self.lastRef() {
+      .None -> .None,
+      .Some(lastRef) -> .Some(*lastRef)
     }
   }
 
@@ -291,6 +313,22 @@ impl Show for i64 {
     // Since we know its bytes we could do simd stuff or even just 64 bits at a time
     // Which I guess is technically 'simd' too
     // Why did inference break here??
+    val rev = (*buf).reversed();
+    string::fromChars(rev)
+  }
+}
+
+impl Show for u64 {
+  fn show(self: u64): string {
+    mut remaining: u64 = self;
+    val buf = &Array::new[char](8);
+    while remaining > 0 {
+      val d = remaining % 10;
+      val c = (d + 48) as u8 as char;
+      buf.push(c);
+      remaining = remaining / 10;
+    };
+
     val rev = (*buf).reversed();
     string::fromChars(rev)
   }
