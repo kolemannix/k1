@@ -61,22 +61,57 @@ namespace string {
     fromChars(copied)
   }
 
-  fn splitAtChar(self: string, delim: char): Array[string] {
+  fn splitByChar(self: string, delim: char): Array[string] {
     val results = &Array::new[Array[char]](0);
+    mut accum = &Array::new[char](0);
     for c in self do {
       if c == delim {
-        results.push(Array::new[char](0));
+        if accum.nonEmpty() { 
+          results.push(accum);
+          accum = &Array::new[char](0);
+        }
       } else {
-        if results.last() is .Some(s) {
-          (&s).push(c)
-        } else {
-          results.push([c])
-        };
+        accum.push(c);
       };
     };
+    if accum.nonEmpty() {
+      results.push(accum);
+    };
+
     for buf in *results yield {
       string::fromChars(buf)
     }
+  }
+
+  fn indexOfString(self: string, target: string): u64? {
+    mut i: u64 = 0;
+    while i < self.len {
+      if i + target.len >= self.len {
+        return(.None)
+      };
+      val sub = self.substring(i, i + target.len);
+      if sub == target { return(i) };
+      i = i + 1;
+    };
+    .None
+  }
+
+  fn substring(self: string, start: u64, end: u64): string {
+    if start >= self.len or start < 0 {
+      crash("substring start index out of bounds: ".concat(start.show()))
+    };
+    val end = if end >= self.len self.len else end;
+    if end < start {
+      return("")
+    };
+    val newLen = end - start;
+    val newDataU64 = (self.data as u64) + (sizeOf[char]() * start);
+    val newData = newDataU64 as Pointer;
+    { len: newLen, data: newData }
+  }
+
+  fn startsWith(self: string, other: string): bool {
+    self.substring(0, other.len) == other
   }
 
   fn toCString(self: string): Pointer {
@@ -102,5 +137,21 @@ impl Equals for Array[string] {
       };
       true
     }
+  }
+}
+
+// One day? impl Show for Array[T] ???
+// Note(stdlib slow): Need efficient string building
+impl Show for Array[string] {
+  fn show(self: Array[string]): string {
+    mut builder: string = "[";
+    for s in self do {
+      builder = builder.concat(s);
+      val last = it_index == self.len - 1;
+      if not last {
+        builder = builder.concat(", ");
+      };
+    };
+    builder.concat("]")
   }
 }

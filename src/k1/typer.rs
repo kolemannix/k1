@@ -69,7 +69,6 @@ pub enum PatternConstructor {
     Unit,
     BoolFalse,
     BoolTrue,
-    None,
     /// Note: These 4 (Char, String, Int, Float) will become more interesting if we implement exhaustive range-based matching like Rust's
     /// For now they exist as placeholders to indicate to the algorithm that something needs to be matched. We treat
     /// exact literals as NOT matching because they do not completely eliminate the pattern, and ignore those exact
@@ -82,7 +81,7 @@ pub enum PatternConstructor {
     /// the sake of being explicit; we could collapse all these into a 'Anything' constructor but the fact I can't
     /// think of a good name means we shouldn't, probably
     TypeVariable,
-    Some(Box<PatternConstructor>),
+    Reference(Box<PatternConstructor>),
     Struct {
         fields: Vec<(Identifier, PatternConstructor)>,
     },
@@ -3210,7 +3209,7 @@ impl TypedModule {
                 let dereference_array_literal =
                     self.synth_dereference(array_variable.variable_expr);
                 array_lit_block.push_expr(dereference_array_literal);
-                eprintln!("array_literal_desugar {}", self.block_to_string(&array_lit_block));
+                debug!("array_literal_desugar {}", self.block_to_string(&array_lit_block));
                 Ok(TypedExpr::Block(array_lit_block))
             }
             ParsedExpression::Struct(ast_struct) => {
@@ -7048,7 +7047,7 @@ impl TypedModule {
     fn generate_constructors_for_type(
         &self,
         type_id: TypeId,
-        span_id: SpanId,
+        _span_id: SpanId,
     ) -> Vec<PatternConstructor> {
         if type_id == STRING_TYPE_ID {
             return vec![PatternConstructor::String];
@@ -7062,6 +7061,13 @@ impl TypedModule {
             Type::Bool(_) => {
                 vec![PatternConstructor::BoolFalse, PatternConstructor::BoolTrue]
             }
+            Type::Reference(refer) => {
+                let inner = self.generate_constructors_for_type(refer.inner_type, _span_id);
+                inner
+                    .into_iter()
+                    .map(|pointee_pattern| PatternConstructor::Reference(Box::new(pointee_pattern)))
+                    .collect()
+            }
             Type::Enum(enum_type) => enum_type
                 .variants
                 .iter()
@@ -7070,7 +7076,7 @@ impl TypedModule {
                         vec![PatternConstructor::Enum { variant_name: v.name, inner: None }]
                     }
                     Some(payload) => self
-                        .generate_constructors_for_type(*payload, span_id)
+                        .generate_constructors_for_type(*payload, _span_id)
                         .into_iter()
                         .map(|inner| PatternConstructor::Enum {
                             variant_name: v.name,
@@ -7084,7 +7090,7 @@ impl TypedModule {
                 let mut all_field_ctors: Vec<Vec<(Identifier, PatternConstructor)>> = vec![];
                 for field in struc.fields.iter() {
                     let field_ctors_iter = self
-                        .generate_constructors_for_type(field.type_id, span_id)
+                        .generate_constructors_for_type(field.type_id, _span_id)
                         .into_iter()
                         .map(|pat| (field.name, pat))
                         .collect::<Vec<_>>();

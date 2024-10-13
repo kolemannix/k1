@@ -100,19 +100,21 @@
 - [x] Rework builtin optionals to be a generic enum
 - [x] floating point (f32 and f64)
   - [ ] Test handling of NaN and Infinity, other float edge cases
+- [ ] 'Context' system; implicit stack arguments
+- [ ] Pass caller source location for assert
+- [ ] Handle escaped chars in string literals
 - [ ] Generic abilities (ability From<T> { ... })
 - [ ] Friendliness pass
   - [ ] Get rid of 'enum' keyword, data?
   - [ ] 'when' keyword is bad; `switch` maybe or `case`
 - [x] Remove tag literals, make enum tags per-enum
-- [ ] function pointers (By taking the static address of a function as Pointer)
 - [ ] Imports
 - [ ] Pure lambdas with -> (not closures)
-- [ ] German/Umbra strings
 - [ ] Make demo readme / site
 - [ ] Define clear 'platform layer' (crash, alloc/free, other?). Then we could do an LLVM interp platform and a rust interpreter platform
 - [x] Function types (functions have types but there's no syntax for describing a function type yet)
 - [ ] Optional coalescing field accessor (x?.y)
+- [ ] function pointers (By taking the static address of a function as Pointer)
 - [x] Finish/fix simple generic inference
 - [x] Prevent function overloading in same namespace
 - [x] Typecheck the binary ops
@@ -120,8 +122,8 @@
 - [x] Bitwise ops using abilities
 - [ ] RTTI story and 'any' type
 - [ ] Ability-based iteration
-- [ ] 'Context' system; implicit stack arguments
 - [ ] Mark types as trivially copyable or not
+- [ ] German/Umbra strings
 ^ The builtin array would be NOT copyable so that you don't accidentally alias the data ptr
 - [ ] Ability constraints on generics (not strictly needed since we have them on functions)
 
@@ -163,12 +165,18 @@
 - [ ] Unmatched closing delim in namespace causes silent failure to parse rest of sources
 - [ ] Replace IdentifierId with global 'Symbol' where its a bug not to
 - [ ] Parsing bug where first expr of block is namespaced with ::
+- [ ] Parsing bug where `if rest.startsWith("one") .Some(1: u64)` parses as `if rest.startsWith("one").Some(1: u64)`
 - [x] ICE when assigning to struct member when struct is not a reference (self.module.types.get(field_access.base.get_type()).as_reference().is_some())
 
 # Minor Fix (possible good bite-sized videos)
 - [ ] // FIXME: Am I crazy or is this just always tok_buf.len()?!?!?!
 - [ ] type suffixes on int literals 123u32, 4u8, etc
-- [ ] assert(sizeOf[Text]() == 16 + 32); rhs should infer to u64
+- [ ] Inference improvements
+  - assert(sizeOf[Text]() == 16 + 32); rhs should infer to u64
+  - expected type not passed to this else branch (involves generics + some lifting though)
+        if rest.startsWith("one") Opt.Some(1: u64) else 
+        if rest.startsWith("two")   2          else 
+        > else branch type did not match then branch type: Invalid generic type param: Expected u64 but got i64
 - [ ] Require indirection for recursive types
 - [ ] Precedence of dereference (and i guess unary ops in general) should be higher
 - [ ] Codegen 'variables' is broken (never cleared); use enter scope / exit scope w/ a stack of vecs or something
