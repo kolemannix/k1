@@ -1,6 +1,9 @@
 use log::trace;
 
-use std::{collections::HashMap, fmt::Display};
+use std::{
+    collections::{hash_map::Entry, HashMap},
+    fmt::Display,
+};
 
 use crate::{
     errf,
@@ -142,10 +145,25 @@ impl Scopes {
         }
     }
 
+    pub fn find_context_variable_by_type(
+        &self,
+        scope: ScopeId,
+        type_id: TypeId,
+    ) -> Option<VariableId> {
+        let scope = self.get_scope(scope);
+        if let Some(v) = scope.find_context_variable_by_type(type_id) {
+            return Some(v);
+        }
+        match scope.parent {
+            Some(parent) => self.find_context_variable_by_type(parent, type_id),
+            None => None,
+        }
+    }
+
     pub fn find_variable(&self, scope: ScopeId, ident: Identifier) -> Option<VariableId> {
         let scope = self.get_scope(scope);
-        if let v @ Some(_r) = scope.find_variable(ident) {
-            return v;
+        if let Some(v) = scope.find_variable(ident) {
+            return Some(v);
         }
         match scope.parent {
             Some(parent) => self.find_variable(parent, ident),
@@ -156,6 +174,17 @@ impl Scopes {
     pub fn add_variable(&mut self, scope_id: ScopeId, ident: Identifier, variable_id: VariableId) {
         let scope = self.get_scope_mut(scope_id);
         scope.add_variable(ident, variable_id);
+    }
+
+    pub fn add_context_variable(
+        &mut self,
+        scope: ScopeId,
+        ident: Identifier,
+        variable_id: VariableId,
+        type_id: TypeId,
+    ) -> bool {
+        let scope = self.get_scope_mut(scope);
+        scope.add_context_variable(ident, variable_id, type_id)
     }
 
     pub fn find_function_namespaced(
@@ -414,6 +443,7 @@ impl ScopeOwnerId {
 #[derive(Debug)]
 pub struct Scope {
     pub variables: HashMap<Identifier, VariableId>,
+    pub context_variables_by_type: HashMap<TypeId, VariableId>,
     pub functions: HashMap<Identifier, FunctionId>,
     pub namespaces: HashMap<Identifier, NamespaceId>,
     pub types: HashMap<Identifier, TypeId>,
@@ -436,6 +466,7 @@ impl Scope {
     ) -> Scope {
         Scope {
             variables: HashMap::new(),
+            context_variables_by_type: HashMap::new(),
             functions: HashMap::new(),
             namespaces: HashMap::new(),
             types: HashMap::new(),
@@ -451,23 +482,47 @@ impl Scope {
 
     pub fn add_variable(&mut self, ident: Identifier, value: VariableId) {
         // This accomplishes shadowing by overwriting the name in the scope.
-        // I think this is ok because ther variable itself by variable id
+        // I think this is ok because the variable itself (by variable id)
         // is not lost, in case we wanted to do some analysis.
-        // Still might need to mark it shadowed
+        // Still, might need to mark it shadowed explicitly?
         self.variables.insert(ident, value);
+    }
+
+    #[must_use]
+    pub fn add_context_variable(
+        &mut self,
+        ident: Identifier,
+        value: VariableId,
+        type_id: TypeId,
+    ) -> bool {
+        if let Entry::Vacant(e) = self.context_variables_by_type.entry(type_id) {
+            e.insert(value);
+            // This accomplishes shadowing by overwriting the name in the scope.
+            // I think this is ok because the variable itself (by variable id)
+            // is not lost, in case we wanted to do some analysis.
+            // Still, might need to mark it shadowed explicitly?
+            self.variables.insert(ident, value);
+            true
+        } else {
+            false
+        }
     }
 
     pub fn find_variable(&self, ident: Identifier) -> Option<VariableId> {
         self.variables.get(&ident).copied()
     }
 
+    pub fn find_context_variable_by_type(&self, type_id: TypeId) -> Option<VariableId> {
+        self.context_variables_by_type.get(&type_id).copied()
+    }
+
     #[must_use]
     pub fn add_type(&mut self, ident: Identifier, ty: TypeId) -> bool {
-        if self.types.contains_key(&ident) {
-            false
-        } else {
-            self.types.insert(ident, ty);
+        if let Entry::Vacant(e) = self.types.entry(ident) {
+            e.insert(ty);
             true
+        } else {
+            false
         }
     }
 
@@ -477,11 +532,11 @@ impl Scope {
 
     #[must_use]
     pub fn add_function(&mut self, ident: Identifier, function_id: FunctionId) -> bool {
-        if self.functions.contains_key(&ident) {
-            false
-        } else {
-            self.functions.insert(ident, function_id);
+        if let Entry::Vacant(e) = self.functions.entry(ident) {
+            e.insert(function_id);
             true
+        } else {
+            false
         }
     }
 

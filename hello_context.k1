@@ -1,0 +1,15 @@
+fn addTracked(context hist: Array[string]*, x: int, y: int): int {
+  hist.push(x.show());
+  hist.push(y.show());
+  x + y
+}
+fn main(): int {
+  context val history: Array[string]* = new([]);
+
+  assert(addTracked(1,2) == 3);
+  assert(addTracked(3,4) == 7);
+
+  assert(*history == [1,2,3,4]);
+
+  0
+}

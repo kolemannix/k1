@@ -102,6 +102,7 @@
   - [ ] Test handling of NaN and Infinity, other float edge cases
 - [ ] 'Context' system; implicit stack arguments
 - [ ] Pass caller source location for assert
+- [ ] Implement 'opaque' types as single-member structs internally? This removes a type 'kind' from the language
 - [ ] Handle escaped chars in string literals
 - [ ] Generic abilities (ability From<T> { ... })
 - [ ] Friendliness pass
