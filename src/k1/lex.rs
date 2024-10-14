@@ -146,6 +146,7 @@ pub enum TokenKind {
     KeywordNot,
     KeywordBuiltin,
     KeywordWhere,
+    KeywordContext,
 
     Slash,
     LineComment,
@@ -227,6 +228,7 @@ impl TokenKind {
             K::KeywordNot => Some("not"),
             K::KeywordBuiltin => Some("builtin"),
             K::KeywordWhere => Some("where"),
+            K::KeywordContext => Some("context"),
 
             K::Slash => Some("/"),
             K::LineComment => Some("//"),
@@ -326,6 +328,7 @@ impl TokenKind {
             "is" => Some(K::KeywordIs),
             "builtin" => Some(K::KeywordBuiltin),
             "where" => Some(K::KeywordWhere),
+            "context" => Some(K::KeywordContext),
             "==" => Some(K::EqualsEquals),
             "!=" => Some(K::BangEquals),
             "<=" => Some(K::LessThanEqual),
@@ -360,6 +363,7 @@ impl TokenKind {
             K::KeywordNot => true,
             K::KeywordBuiltin => true,
             K::KeywordWhere => true,
+            K::KeywordContext => true,
             _ => false,
         }
     }

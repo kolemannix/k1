@@ -262,7 +262,9 @@ pub struct ValDef {
     pub name: Identifier,
     pub type_expr: Option<ParsedTypeExpressionId>,
     pub value: ParsedExpressionId,
+    // TODO: Move to a flags struct for ValDef
     pub is_mutable: bool,
+    pub is_context: bool,
     pub span: SpanId,
 }
 
@@ -764,6 +766,27 @@ pub struct FnArgDef {
     pub name: Identifier,
     pub ty: ParsedTypeExpressionId,
     pub span: SpanId,
+    pub modifiers: FnArgDefModifiers,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct FnArgDefModifiers(u32);
+impl FnArgDefModifiers {
+    pub fn new(context: bool) -> Self {
+        let mut s = Self(0);
+        if context {
+            s.set_context();
+        }
+        s
+    }
+
+    pub fn set_context(&mut self) {
+        self.0 |= 1;
+    }
+
+    pub fn is_context(&self) -> bool {
+        self.0 & 1 != 0
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -2222,16 +2245,30 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         }
     }
 
-    fn parse_mut(&mut self) -> ParseResult<Option<ValDef>> {
-        self.parse_val(true)
-    }
-
-    fn parse_val(&mut self, mutable: bool) -> ParseResult<Option<ValDef>> {
-        trace!("parse_val");
-        let keyword = if mutable { K::KeywordMut } else { K::KeywordVal };
-        let Some(eaten_keyword) = self.eat_token(keyword) else {
-            return Ok(None);
+    fn parse_val_def(&mut self) -> ParseResult<Option<ValDef>> {
+        trace!("parse_val_def");
+        let is_context = if self.peek().kind == K::KeywordContext {
+            self.tokens.advance();
+            true
+        } else {
+            false
         };
+        let any_modifiers = is_context;
+
+        let eaten_keyword = match self.peek() {
+            t if t.kind == K::KeywordVal || t.kind == K::KeywordMut => {
+                self.tokens.advance();
+                t
+            }
+            t => {
+                if any_modifiers {
+                    return Err(Parser::error("val or mut", t));
+                } else {
+                    return Ok(None);
+                }
+            }
+        };
+        let is_mutable = eaten_keyword.kind == K::KeywordMut;
         let name_token = self.expect_eat_token(K::Ident)?;
         let typ = match self.eat_token(K::Colon) {
             None => Ok(None),
@@ -2246,7 +2283,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             name: self.intern_ident_token(name_token),
             type_expr: typ,
             value: initializer_expression,
-            is_mutable: mutable,
+            is_mutable,
+            is_context,
             span,
         }))
     }
@@ -2287,12 +2325,17 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn eat_fn_arg_def(&mut self) -> ParseResult<FnArgDef> {
         trace!("eat_fn_arg_def");
+        let mut modifiers = FnArgDefModifiers::new(false);
+        if self.peek().kind == K::KeywordContext {
+            self.tokens.advance();
+            modifiers.set_context();
+        };
         let name_token = self.expect_eat_token(K::Ident)?;
         self.expect_eat_token(K::Colon)?;
         let typ = Parser::expect("type_expression", self.peek(), self.parse_type_expression())?;
         let span =
             self.extend_span(name_token.span, self.module.type_expressions.get(typ).get_span());
-        Ok(FnArgDef { name: self.intern_ident_token(name_token), ty: typ, span })
+        Ok(FnArgDef { name: self.intern_ident_token(name_token), ty: typ, span, modifiers })
     }
 
     fn eat_fndef_args(&mut self) -> ParseResult<(Vec<FnArgDef>, SpanId)> {
@@ -2427,9 +2470,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         trace!("eat_statement {:?}", self.peek());
         if let Some(while_loop) = self.parse_while_loop()? {
             Ok(Some(ParsedStmt::While(while_loop)))
-        } else if let Some(mut_def) = self.parse_mut()? {
-            Ok(Some(ParsedStmt::ValDef(mut_def)))
-        } else if let Some(val_def) = self.parse_val(false)? {
+        } else if let Some(val_def) = self.parse_val_def()? {
             Ok(Some(ParsedStmt::ValDef(val_def)))
         } else if let Some(expr) = self.parse_expression()? {
             let peeked = self.peek();

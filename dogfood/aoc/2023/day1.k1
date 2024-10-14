@@ -17,16 +17,16 @@ fn day2(): int {
         .Some(d as i64)
       } else {
         val rest = line.substring(it_index, line.len);
-        if rest.startsWith("one") Opt.Some(1) else 
-        if rest.startsWith("two")   2         else 
-        if rest.startsWith("three") 3          else 
-        if rest.startsWith("four")  4          else 
-        if rest.startsWith("five")  5          else 
-        if rest.startsWith("six")   6          else 
-        if rest.startsWith("seven") 7          else 
-        if rest.startsWith("eight") 8          else 
-        if rest.startsWith("nine")  9          else 
-        if rest.startsWith("zero")  0          else 
+        if rest.startsWith("one")   1    else 
+        if rest.startsWith("two")   2    else 
+        if rest.startsWith("three") 3    else 
+        if rest.startsWith("four")  4    else 
+        if rest.startsWith("five")  5    else 
+        if rest.startsWith("six")   6    else 
+        if rest.startsWith("seven") 7    else 
+        if rest.startsWith("eight") 8    else 
+        if rest.startsWith("nine")  9    else 
+        if rest.startsWith("zero")  0    else 
         .None
       };
       if thisDigit is .Some(d) {

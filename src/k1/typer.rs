@@ -220,6 +220,7 @@ pub struct FnArgDefn {
     pub variable_id: VariableId,
     pub position: u32,
     pub type_id: TypeId,
+    pub is_context: bool,
     pub span: SpanId,
 }
 
@@ -939,6 +940,7 @@ pub struct Variable {
     pub type_id: TypeId,
     pub is_mutable: bool,
     pub owner_scope: ScopeId,
+    pub is_context: bool,
 }
 
 #[derive(Debug)]
@@ -2604,6 +2606,7 @@ impl TypedModule {
             type_id,
             is_mutable: false,
             owner_scope: root_scope_id,
+            is_context: false,
         });
         self.constants.push(Constant { variable_id, expr, ty: type_id, span: constant_span });
         self.scopes.add_variable(root_scope_id, constant_name, variable_id);
@@ -4109,6 +4112,7 @@ impl TypedModule {
             type_id: item_type,
             is_mutable: false,
             owner_scope: while_scope_id,
+            is_context: false,
         });
         self.scopes.add_variable(while_scope_id, binding_ident, binding_variable_id);
         let iteration_element_val_def = TypedStmt::ValDef(Box::new(ValDef {
@@ -5194,6 +5198,25 @@ impl TypedModule {
         debug!("typecheck_call_arguments {}", self.get_ident_str(fn_call.name.name));
         let total_passed =
             pre_evaled_params.as_ref().map(|v| v.len()).unwrap_or(fn_call.args.len());
+        for context_param in params.iter().filter(|p| p.is_context) {
+            eprintln!("context search");
+            let Some(found_id) =
+                self.scopes.find_context_variable_by_type(calling_scope, context_param.type_id)
+            else {
+                return failf!(fn_call.span, "Failed to find context parameter");
+            };
+            let found = self.variables.get_variable(found_id);
+            eprintln!(
+                "result for {}: {}",
+                self.get_ident_str(context_param.name),
+                self.get_ident_str(found.name)
+            );
+            TypedExpr::Variable(VariableExpr {
+                variable_id: found_id,
+                type_id: found.type_id,
+                span: fn_call.span,
+            });
+        }
         if total_passed != params.len() {
             return make_fail_span(
                 format!(
@@ -5210,7 +5233,8 @@ impl TypedModule {
             Some(v) => v.into_iter(),
             None => Vec::new().into_iter(),
         };
-        for fn_param in params {
+        let explicit_params: Vec<_> = params.iter().filter(|p| !p.is_context).collect();
+        for fn_param in explicit_params.iter() {
             let expr = match pre_evaled_params.next() {
                 Some(e) => e,
                 None => {
@@ -5223,8 +5247,8 @@ impl TypedModule {
                         return make_fail_span(
                             format!(
                                 "Missing argument to {}: {}",
-                                &*self.ast.identifiers.get_name(fn_call.name.name).blue(),
-                                &*self.get_ident_str(fn_param.name).blue()
+                                self.ast.identifiers.get_name(fn_call.name.name).blue(),
+                                self.get_ident_str(fn_param.name).blue()
                             ),
                             fn_call.span,
                         );
@@ -5791,7 +5815,8 @@ impl TypedModule {
                             val_def.span,
                         );
                     }
-                    expected_type
+                    // expected_type
+                    actual_type
                 } else {
                     actual_type
                 };
@@ -5801,6 +5826,7 @@ impl TypedModule {
                     name: val_def.name,
                     type_id: variable_type,
                     owner_scope: scope_id,
+                    is_context: val_def.is_context,
                 });
                 let val_def_stmt = TypedStmt::ValDef(Box::new(ValDef {
                     ty: variable_type,
@@ -5808,7 +5834,16 @@ impl TypedModule {
                     initializer: value_expr,
                     span: val_def.span,
                 }));
-                self.scopes.add_variable(scope_id, val_def.name, variable_id);
+                if val_def.is_context {
+                    self.scopes.add_context_variable(
+                        scope_id,
+                        val_def.name,
+                        variable_id,
+                        variable_type,
+                    );
+                } else {
+                    self.scopes.add_variable(scope_id, val_def.name, variable_id);
+                }
                 Ok(val_def_stmt)
             }
             ParsedStmt::Assignment(assignment) => {
@@ -6126,7 +6161,7 @@ impl TypedModule {
         }
         trace!(
             "Added type arguments to function {} scope {:?}",
-            &*self.get_ident_str(parsed_function.name),
+            self.get_ident_str(parsed_function.name),
             self.scopes.get_scope(fn_scope_id)
         );
 
@@ -6202,7 +6237,7 @@ impl TypedModule {
             if specialize {
                 trace!(
                     "Specializing argument: {} got {}",
-                    &*self.get_ident_str(fn_arg.name),
+                    self.get_ident_str(fn_arg.name),
                     self.type_id_to_string(type_id)
                 );
             }
@@ -6211,17 +6246,36 @@ impl TypedModule {
                 type_id,
                 is_mutable: false,
                 owner_scope: fn_scope_id,
+                is_context: fn_arg.modifiers.is_context(),
             };
 
+            let is_context = fn_arg.modifiers.is_context();
             let variable_id = self.variables.add_variable(variable);
             params.push(FnArgDefn {
                 name: fn_arg.name,
                 variable_id,
                 position: idx as u32,
                 type_id,
+                is_context,
                 span: fn_arg.span,
             });
-            self.scopes.add_variable(fn_scope_id, fn_arg.name, variable_id);
+            if is_context {
+                let inserted = self.scopes.add_context_variable(
+                    fn_scope_id,
+                    fn_arg.name,
+                    variable_id,
+                    type_id,
+                );
+                if !inserted {
+                    return failf!(
+                        fn_arg.span,
+                        "Duplicate context parameters for type {}",
+                        self.type_id_to_string(type_id)
+                    );
+                }
+            } else {
+                self.scopes.add_variable(fn_scope_id, fn_arg.name, variable_id)
+            }
         }
 
         let intrinsic_type = if let Some(known_intrinsic) =
@@ -6293,7 +6347,11 @@ impl TypedModule {
         // So don't add them to any scope.
         if !specialize {
             if !self.scopes.add_function(parent_scope_id, parsed_function_name, function_id) {
-                return make_fail_span(&format!("Function name is taken"), parsed_function_span);
+                return failf!(
+                    parsed_function_span,
+                    "Function name {} is taken",
+                    self.get_ident_str(parsed_function_name)
+                );
             }
 
             let defn_info = TypeDefnInfo {
@@ -7280,8 +7338,13 @@ impl TypedModule {
                 format!("__{}_{}", self.ast.identifiers.get_name(name), owner_scope);
             self.ast.identifiers.intern(new_ident_name)
         };
-        let variable =
-            Variable { name: new_ident, is_mutable, owner_scope, type_id: initializer.get_type() };
+        let variable = Variable {
+            name: new_ident,
+            is_mutable,
+            owner_scope,
+            type_id: initializer.get_type(),
+            is_context: false,
+        };
         let variable_id = self.variables.add_variable(variable);
         let variable_expr = TypedExpr::Variable(VariableExpr { type_id, variable_id, span });
         let defn_stmt =
