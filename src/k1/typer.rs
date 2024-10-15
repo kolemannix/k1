@@ -4563,7 +4563,14 @@ impl TypedModule {
         let new_fn_call = match self.ast.expressions.get(rhs) {
             ParsedExpression::Variable(var) => {
                 let args = vec![parse::FnCallArg { name: None, value: lhs }];
-                FnCall { name: var.name.clone(), type_args: vec![], args, span, is_method: false }
+                FnCall {
+                    name: var.name.clone(),
+                    type_args: vec![],
+                    args,
+                    explicit_context_args: vec![],
+                    span,
+                    is_method: false,
+                }
             }
             ParsedExpression::FnCall(fn_call) => {
                 let mut args = Vec::with_capacity(fn_call.args.len() + 1);
@@ -4573,6 +4580,7 @@ impl TypedModule {
                     name: fn_call.name.clone(),
                     type_args: fn_call.type_args.clone(),
                     args,
+                    explicit_context_args: vec![],
                     span,
                     is_method: false,
                 }
@@ -5191,64 +5199,120 @@ impl TypedModule {
     fn check_call_arguments(
         &mut self,
         fn_call: &FnCall,
-        params: &Vec<FnArgDefn>,
+        params: &[FnArgDefn],
         pre_evaled_params: Option<Vec<TypedExpr>>,
         calling_scope: ScopeId,
     ) -> TyperResult<Vec<TypedExpr>> {
         debug!("typecheck_call_arguments {}", self.get_ident_str(fn_call.name.name));
-        let total_passed =
-            pre_evaled_params.as_ref().map(|v| v.len()).unwrap_or(fn_call.args.len());
-        for context_param in params.iter().filter(|p| p.is_context) {
-            eprintln!("context search");
-            let Some(found_id) =
-                self.scopes.find_context_variable_by_type(calling_scope, context_param.type_id)
-            else {
-                return failf!(fn_call.span, "Failed to find context parameter");
-            };
-            let found = self.variables.get_variable(found_id);
-            eprintln!(
-                "result for {}: {}",
-                self.get_ident_str(context_param.name),
-                self.get_ident_str(found.name)
-            );
-            TypedExpr::Variable(VariableExpr {
-                variable_id: found_id,
-                type_id: found.type_id,
-                span: fn_call.span,
-            });
+        let explicit_context_args = !fn_call.explicit_context_args.is_empty();
+        let mut final_args: Vec<TypedExpr> = Vec::new();
+        if !explicit_context_args {
+            for context_param in params.iter().filter(|p| p.is_context) {
+                let is_source_loc =
+                    self.types.get_defn_info(context_param.type_id).is_some_and(|defn_info| {
+                        defn_info.name == get_ident!(self, "CompilerSourceLoc")
+                            && defn_info.scope == self.scopes.get_root_scope_id()
+                    });
+                if is_source_loc {
+                    let span = self.ast.spans.get(fn_call.span);
+                    let source = self.ast.sources.get_source(span.file_id);
+                    let line = source.get_line_for_span(span).unwrap();
+                    let source_loc_expr = TypedExpr::Struct(Struct {
+                        fields: vec![
+                            StructField {
+                                name: get_ident!(self, "filename"),
+                                expr: TypedExpr::Str(source.filename.clone(), fn_call.span),
+                            },
+                            StructField {
+                                name: get_ident!(self, "line"),
+                                expr: TypedExpr::Integer(TypedIntegerExpr {
+                                    value: TypedIntegerValue::U64(line.line_number() as u64),
+                                    span: fn_call.span,
+                                }),
+                            },
+                        ],
+                        type_id: context_param.type_id,
+                        span: fn_call.span,
+                    });
+                    final_args.push(source_loc_expr);
+                } else {
+                    let Some(found_id) = self
+                        .scopes
+                        .find_context_variable_by_type(calling_scope, context_param.type_id)
+                    else {
+                        return failf!(
+                            fn_call.span,
+                            "Failed to find context parameter '{}'. No context variables of type {} are in scope",
+                            self.get_ident_str(context_param.name),
+                            self.type_id_to_string(context_param.type_id)
+                        );
+                    };
+                    let found = self.variables.get_variable(found_id);
+                    eprintln!(
+                        "result for {}: {}",
+                        self.get_ident_str(context_param.name),
+                        self.get_ident_str(found.name)
+                    );
+                    final_args.push(TypedExpr::Variable(VariableExpr {
+                        variable_id: found_id,
+                        type_id: found.type_id,
+                        span: fn_call.span,
+                    }));
+                }
+            }
         }
-        if total_passed != params.len() {
+
+        let explicit_param_count = params.iter().filter(|p| !p.is_context).count();
+        let context_param_count = params.len() - explicit_param_count;
+        let total_expected =
+            if explicit_context_args { params.len() } else { explicit_param_count };
+        let actual_passed_args = fn_call.explicit_context_args.iter().chain(fn_call.args.iter());
+        let total_passed = pre_evaled_params
+            .as_ref()
+            .map(|v| v.len())
+            .unwrap_or(actual_passed_args.clone().count());
+        if total_passed != total_expected {
             return make_fail_span(
                 format!(
                     "Incorrect number of arguments: expected {}, got {}",
-                    params.len(),
-                    total_passed
+                    total_expected, total_passed
                 ),
                 fn_call.span,
             );
         }
 
-        let mut final_args: Vec<TypedExpr> = Vec::new();
         let mut pre_evaled_params = match pre_evaled_params {
             Some(v) => v.into_iter(),
             None => Vec::new().into_iter(),
         };
-        let explicit_params: Vec<_> = params.iter().filter(|p| !p.is_context).collect();
-        for fn_param in explicit_params.iter() {
+
+        // If the user opted to pass context params explicitly, then check all params
+        // If the user did not, then just check the non-context params
+        let expected_literal_params: &mut dyn Iterator<Item = &FnArgDefn> = if explicit_context_args
+        {
+            &mut params.iter()
+        } else {
+            &mut params.iter().filter(|p| !p.is_context)
+        };
+        for fn_param in expected_literal_params {
             let expr = match pre_evaled_params.next() {
                 Some(e) => e,
                 None => {
                     let matching_param_by_name =
-                        fn_call.args.iter().find(|arg| arg.name == Some(fn_param.name));
-                    let matching_idx = fn_param.position;
-                    let matching_param =
-                        matching_param_by_name.or(fn_call.args.get(matching_idx as usize));
+                        actual_passed_args.clone().find(|arg| arg.name == Some(fn_param.name));
+                    let param_position = if explicit_context_args {
+                        fn_param.position
+                    } else {
+                        fn_param.position - (context_param_count as u32)
+                    };
+                    let matching_param = matching_param_by_name
+                        .or(actual_passed_args.clone().nth(param_position as usize));
                     let Some(param) = matching_param else {
                         return make_fail_span(
                             format!(
                                 "Missing argument to {}: {}",
                                 self.ast.identifiers.get_name(fn_call.name.name).blue(),
-                                self.get_ident_str(fn_param.name).blue()
+                                self.get_ident_str(fn_param.name).red()
                             ),
                             fn_call.span,
                         );
@@ -6077,6 +6141,7 @@ impl TypedModule {
         let parsed_function_name = parsed_function.name;
         let parsed_function_span = parsed_function.span;
         let parsed_function_args = parsed_function.args.clone();
+        let parsed_function_context_args = parsed_function.context_args.clone();
         let parsed_function_type_args = parsed_function.type_args.clone();
 
         let is_ability_decl = ability_id.is_some() && ability_impl_type.is_none();
@@ -6165,10 +6230,12 @@ impl TypedModule {
             self.scopes.get_scope(fn_scope_id)
         );
 
-        // Declare arguments
+        // Process arguments
         let mut params = Vec::new();
         let mut is_method_of = None;
-        for (idx, fn_arg) in parsed_function_args.iter().enumerate() {
+        for (idx, fn_arg) in
+            parsed_function_context_args.iter().chain(parsed_function_args.iter()).enumerate()
+        {
             let type_id = self.eval_type_expr(fn_arg.ty, fn_scope_id)?;
 
             // First arg Self shenanigans
@@ -7361,7 +7428,14 @@ impl TypedModule {
         known_args: Option<(Vec<TypeId>, Vec<TypedExpr>)>,
     ) -> TyperResult<TypedExpr> {
         self.eval_function_call(
-            &FnCall { name, type_args: vec![], args: vec![], span, is_method: false },
+            &FnCall {
+                name,
+                type_args: vec![],
+                args: vec![],
+                explicit_context_args: vec![],
+                span,
+                is_method: false,
+            },
             scope_id,
             None,
             known_args,
