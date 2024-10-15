@@ -189,7 +189,7 @@ pub struct Identifiers {
     intern_pool: string_interner::StringInterner<StringBackend>,
 }
 impl Identifiers {
-    pub const BUILTIN_IDENTS: [&'static str; 15] = [
+    pub const BUILTIN_IDENTS: [&'static str; 16] = [
         "self",
         "it",
         "unit",
@@ -205,6 +205,7 @@ impl Identifiers {
         "block_expr_val",
         "optelse_lhs",
         "array_literal",
+        "CompilerSourceLoc",
     ];
 
     pub fn intern(&mut self, s: impl AsRef<str>) -> Identifier {
@@ -247,6 +248,7 @@ pub struct FnCall {
     pub name: NamespacedIdentifier,
     pub type_args: Vec<NamedTypeArg>,
     pub args: Vec<FnCallArg>,
+    pub explicit_context_args: Vec<FnCallArg>,
     pub span: SpanId,
     pub is_method: bool,
 }
@@ -754,6 +756,7 @@ pub struct ParsedFunction {
     pub name: Identifier,
     pub type_args: Vec<ParsedTypeParamDefn>,
     pub args: Vec<FnArgDef>,
+    pub context_args: Vec<FnArgDef>,
     pub ret_type: Option<ParsedTypeExpressionId>,
     pub block: Option<Block>,
     pub span: SpanId,
@@ -1806,7 +1809,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn expect_fn_arg(&mut self) -> ParseResult<FnCallArg> {
         let res = self.parse_fn_arg();
-        Parser::expect("fn_arg", self.peek(), res)
+        Parser::expect("Function argument", self.peek(), res)
     }
 
     fn parse_struct(&mut self) -> ParseResult<Option<Struct>> {
@@ -1862,21 +1865,17 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     let next = self.peek();
                     // a.b[int](...)
                     if next.kind == K::OpenParen {
-                        self.tokens.advance();
-                        let (args, args_span) = self.eat_delimited(
-                            "Function arguments",
-                            K::Comma,
-                            K::CloseParen,
-                            Parser::expect_fn_arg,
-                        )?;
-                        let span = self.extend_span(self.get_expression_span(result), args_span);
+                        let (context_args, args, args_span) = self.expect_fn_call_args()?;
+                        let self_arg = result;
+                        let span = self.extend_span(self.get_expression_span(self_arg), args_span);
                         let name = self.intern_ident_token(target);
-                        let mut all_args = vec![FnCallArg { name: None, value: result }];
+                        let mut all_args = vec![FnCallArg { name: None, value: self_arg }];
                         all_args.extend(args);
                         result = self.add_expression(ParsedExpression::FnCall(FnCall {
                             name: NamespacedIdentifier::naked(name, target.span),
                             type_args,
                             args: all_args,
+                            explicit_context_args: context_args,
                             span,
                             is_method: true,
                         }));
@@ -2186,18 +2185,13 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             if second.kind == K::OpenBracket || second.kind == K::OpenParen {
                 trace!("parse_expression FnCall");
                 let (type_args, _type_args_span) = self.parse_optional_type_args()?;
-                self.expect_eat_token(K::OpenParen)?;
-                let (args, args_span) = self.eat_delimited(
-                    "Function arguments",
-                    K::Comma,
-                    K::CloseParen,
-                    Parser::expect_fn_arg,
-                )?;
+                let (context_args, args, args_span) = self.expect_fn_call_args()?;
                 let span = self.extend_span(namespaced_ident.span, args_span);
                 Ok(Some(self.add_expression(ParsedExpression::FnCall(FnCall {
                     name: namespaced_ident,
                     type_args,
                     args,
+                    explicit_context_args: context_args,
                     span,
                     is_method: false,
                 }))))
@@ -2243,6 +2237,33 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             // More expression types
             Ok(None)
         }
+    }
+
+    fn expect_fn_call_args(&mut self) -> ParseResult<(Vec<FnCallArg>, Vec<FnCallArg>, SpanId)> {
+        let (first, second) = self.tokens.peek_two();
+        let is_context = second.kind == K::KeywordContext;
+
+        let (context_args, _) = if is_context {
+            self.expect_eat_token(K::OpenParen)?;
+            self.expect_eat_token(K::KeywordContext)?;
+            self.eat_delimited(
+                "Function context arguments",
+                K::Comma,
+                K::CloseParen,
+                Parser::expect_fn_arg,
+            )?
+        } else {
+            (vec![], self.peek().span)
+        };
+        let (args, args_span) = self.eat_delimited_expect_opener(
+            "Function arguments",
+            K::OpenParen,
+            K::Comma,
+            K::CloseParen,
+            Parser::expect_fn_arg,
+        )?;
+        let span = self.extend_span(first.span, args_span);
+        Ok((context_args, args, span))
     }
 
     fn parse_val_def(&mut self) -> ParseResult<Option<ValDef>> {
@@ -2323,23 +2344,39 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(Assignment { lhs, rhs, span })
     }
 
-    fn eat_fn_arg_def(&mut self) -> ParseResult<FnArgDef> {
+    fn eat_fn_arg_def(&mut self, is_context: bool) -> ParseResult<FnArgDef> {
         trace!("eat_fn_arg_def");
-        let mut modifiers = FnArgDefModifiers::new(false);
-        if self.peek().kind == K::KeywordContext {
-            self.tokens.advance();
-            modifiers.set_context();
-        };
         let name_token = self.expect_eat_token(K::Ident)?;
         self.expect_eat_token(K::Colon)?;
         let typ = Parser::expect("type_expression", self.peek(), self.parse_type_expression())?;
         let span =
             self.extend_span(name_token.span, self.module.type_expressions.get(typ).get_span());
+        let modifiers = FnArgDefModifiers::new(is_context);
         Ok(FnArgDef { name: self.intern_ident_token(name_token), ty: typ, span, modifiers })
     }
 
-    fn eat_fndef_args(&mut self) -> ParseResult<(Vec<FnArgDef>, SpanId)> {
-        self.eat_delimited("Function arguments", K::Comma, K::CloseParen, Parser::eat_fn_arg_def)
+    // Returns: context_args, args, span
+    fn eat_fndef_args(&mut self) -> ParseResult<(Vec<FnArgDef>, Vec<FnArgDef>, SpanId)> {
+        let (first, next) = self.tokens.peek_two();
+        let is_context = next.kind == K::KeywordContext;
+        let (context_args, _context_args_span) = if is_context {
+            self.expect_eat_token(K::OpenParen)?;
+            self.expect_eat_token(K::KeywordContext)?;
+            self.eat_delimited("Function context arguments", K::Comma, K::CloseParen, |p| {
+                Parser::eat_fn_arg_def(p, true)
+            })?
+        } else {
+            (vec![], self.peek().span)
+        };
+        let (args, fn_args_span) = self.eat_delimited_expect_opener(
+            "Function arguments",
+            K::OpenParen,
+            K::Comma,
+            K::CloseParen,
+            |p| Parser::eat_fn_arg_def(p, false),
+        )?;
+        let span = self.extend_span(first.span, fn_args_span);
+        Ok((context_args, args, span))
     }
 
     fn eat_delimited_if_opener<T, F>(
@@ -2553,8 +2590,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             } else {
                 Vec::new()
             };
-        self.expect_eat_token(K::OpenParen)?;
-        let (args, args_span) = self.eat_fndef_args()?;
+        let (context_args, args, args_span) = self.eat_fndef_args()?;
         self.expect_eat_token(K::Colon)?;
         let ret_type = self.parse_type_expression()?;
         let mut type_constraints = Vec::new();
@@ -2576,6 +2612,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             name: func_name_id,
             type_args: type_arguments,
             args,
+            context_args,
             ret_type,
             block,
             span,

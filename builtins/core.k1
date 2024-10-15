@@ -26,6 +26,8 @@ namespace Opt {
   }
 }
 
+type CompilerSourceLoc = { filename: string, line: u64 }
+
 // One day
 // ability OrElse[T] {
 //   fn hasValue(): bool
@@ -117,8 +119,8 @@ intern fn printUInt(value: u64): unit
 intern fn print(value: string): unit
 intern fn exit(code: i64): unit
 
-fn crash(msg: string): never {
-  _k1_crash(&msg, &compilerFile(), compilerLine());
+fn crash(context locn: CompilerSourceLoc)(msg: string): never {
+  _k1_crash(&msg, &locn.filename, locn.line);
 }
 
 namespace Files {
