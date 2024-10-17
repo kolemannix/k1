@@ -1,0 +1,7 @@
+fn main(): int {
+  println("Hello, lambdas!");
+
+  [1,2,3].map(\x -> x + 1);
+  
+  0
+}

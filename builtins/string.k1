@@ -6,7 +6,7 @@ namespace string {
 
   fn getRef(self: string, index: u64): char* {
     if index >= self.len {
-      crash("string index out of bounds")
+      crash("string index out of bounds: ".concat(index.show()))
     };
     val charRef: char* = self.data.refAtIndex(index);
     charRef
@@ -23,6 +23,10 @@ namespace string {
 
   fn fromChars(bytes: Array[char]): string {
     { len: bytes.len, data: bytes.data }
+  }
+
+  fn isEmpty(self: string): bool {
+    self.len == 0
   }
 
   fn indexOf(self: string, c: char): i64 {
@@ -64,6 +68,7 @@ namespace string {
   fn splitByChar(self: string, delim: char): Array[string] {
     val results = &Array::new[Array[char]](0);
     mut accum = &Array::new[char](0);
+    // Note(stdlib slow): TODO: use ranges instead to make this zero-copy!!
     for c in self do {
       if c == delim {
         if accum.nonEmpty() { 
@@ -117,6 +122,27 @@ namespace string {
   fn toCString(self: string): Pointer {
     self.concat('\0'.toString()).data
   }
+
+  fn toInt(self: string): int? {
+    if self.isEmpty() { return(.None) };
+
+    val neg = self.get(0) == '-';
+    mut i: u64 = if neg 1 else 0;
+    mut total: u64 = 0;
+    while i < self.len {
+      val c = self.get(i);
+      val digit = c.toAsciiDigit();
+      if digit is .Some(digit) {
+        total = (total * 10) + digit as u64;
+      } else {
+        return(.None);
+      };
+      i = i + 1;
+    };
+
+    if neg { (total as i64) * -1 } else { total as i64 }
+  }
+
 }
 
 impl Equals for string {

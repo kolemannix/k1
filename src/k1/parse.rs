@@ -2473,11 +2473,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let condition_expr =
             Parser::expect("conditional expression", if_keyword, self.parse_expression())?;
         let consequent_expr =
-            Parser::expect("block following condition", if_keyword, self.parse_expression())?;
+            Parser::expect("expression following condition", if_keyword, self.parse_expression())?;
         let else_peek = self.peek();
         let alt = if else_peek.kind == K::KeywordElse {
             self.tokens.advance();
-            let alt_result = Parser::expect("else block", else_peek, self.parse_expression())?;
+            let alt_result = Parser::expect("else expression", else_peek, self.parse_expression())?;
             Some(alt_result)
         } else {
             None
