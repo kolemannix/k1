@@ -4376,11 +4376,12 @@ impl TypedModule {
                     coalesce_block.scope_id,
                     Some((vec![lhs_inner], vec![lhs_variable.variable_expr])),
                 )?;
+
                 let if_else = TypedExpr::If(Box::new(TypedIf {
                     condition: lhs_has_value,
                     consequent: lhs_get_expr,
                     alternate: rhs,
-                    ty: rhs_type,
+                    ty: lhs_inner,
                     span: binary_op.span,
                 }));
                 coalesce_block.push_stmt(lhs_variable.defn_stmt);

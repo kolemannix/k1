@@ -150,6 +150,15 @@ namespace char {
     arr.push(self);
     string::fromChars(*arr);
   }
+
+  fn toAsciiDigit(self: char): u8? {
+    val i_code = self as u8;
+    if i_code >= 48 and i_code <= 57 {
+      i_code - 48
+    } else {
+      .None
+    }
+  }
 }
 
 namespace Array {

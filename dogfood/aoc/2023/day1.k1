@@ -1,19 +1,10 @@
-fn asDigit(c: char): u8? {
-  val i_code = c as u8;
-  if i_code >= 48 and i_code <= 57 {
-    i_code - 48
-  } else {
-    .None
-  }
-}
-
 fn day2(): int {
-  val input: string = Files::readToString("/Users/knix/dev/k1/dogfood/aoc/2023/1_1.txt");
+  val input: string = Files::readToString("/Users/knix/dev/k1/dogfood/aoc/2023/1.txt");
   val lines = input.splitByChar('\n');
   val lineDigits = for line in lines yield {
     val digits: Array[i64]* = &[];
     for c in line do {
-      val thisDigit: i64? = if asDigit(c) is .Some(d) {
+      val thisDigit: i64? = if c.toAsciiDigit() is .Some(d) {
         .Some(d as i64)
       } else {
         val rest = line.substring(it_index, line.len);
@@ -49,7 +40,7 @@ fn day2(): int {
 }
 
 fn main(): int {
-  val input: string = Files::readToString("/Users/knix/dev/k1/dogfood/aoc/2023/1_1.txt");
+  val input: string = Files::readToString("/Users/knix/dev/k1/dogfood/aoc/2023/1.txt");
   print("The file was ");
   printUInt(input.len);
   println(" characters long");
@@ -61,7 +52,7 @@ fn main(): int {
       line = line + 1;
       first = true;
     };
-    if asDigit(c) is .Some(i) {
+    if c.toAsciiDigit() is .Some(i) {
       if first {
         digits.push([i as int]);
         first = false;
