@@ -3,3 +3,6 @@
 .k1-out
 zig-cache
 zig-out
+.bsp
+.metals
+.scala-build
