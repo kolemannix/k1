@@ -58,6 +58,13 @@ impl ParsedId {
             _ => panic!("Expected type definition"),
         }
     }
+
+    pub fn as_function_id(&self) -> Option<ParsedFunctionId> {
+        match self {
+            ParsedId::Function(fn_id) => Some(*fn_id),
+            _ => None,
+        }
+    }
 }
 
 impl From<ParsedTypeExpressionId> for ParsedId {
@@ -410,6 +417,20 @@ pub struct ParsedAsCast {
 }
 
 #[derive(Debug, Clone)]
+pub struct ClosureArgDefn {
+    pub binding: Identifier,
+    pub ty: Option<ParsedTypeExpressionId>,
+    pub span: SpanId,
+}
+
+#[derive(Debug, Clone)]
+pub struct ParsedClosure {
+    pub arguments: Vec<ClosureArgDefn>,
+    pub body: ParsedExpressionId,
+    pub span: SpanId,
+}
+
+#[derive(Debug, Clone)]
 pub enum ParsedExpression {
     BinaryOp(BinaryOp),                     // a == b
     UnaryOp(UnaryOp),                       // !b, *b
@@ -430,7 +451,8 @@ pub enum ParsedExpression {
     // | a => ...
     // | b => ...
     // }
-    AsCast(ParsedAsCast),
+    AsCast(ParsedAsCast), // x as u64, y as .Color
+    Closure(ParsedClosure),
 }
 
 impl ParsedExpression {
@@ -463,6 +485,7 @@ impl ParsedExpression {
             Self::Is(is_expr) => is_expr.span,
             Self::Match(match_expr) => match_expr.span,
             Self::AsCast(as_cast) => as_cast.span,
+            Self::Closure(closure) => closure.span,
         }
     }
 
@@ -485,6 +508,7 @@ impl ParsedExpression {
             Self::Is(_) => false,
             Self::Match(_) => false,
             Self::AsCast(_) => false,
+            Self::Closure(_) => false,
         }
     }
 
@@ -507,6 +531,13 @@ impl ParsedExpression {
         match self {
             ParsedExpression::FnCall(call) => call,
             _ => panic!("expected fn call"),
+        }
+    }
+
+    pub fn expect_closure(&self) -> &ParsedClosure {
+        match self {
+            ParsedExpression::Closure(c) => c,
+            _ => panic!("expected closure"),
         }
     }
 }
@@ -705,6 +736,13 @@ pub struct ParsedNumericType {
 }
 
 #[derive(Debug, Clone)]
+pub struct ParsedFunctionType {
+    pub params: Vec<ParsedTypeExpressionId>,
+    pub return_type: ParsedTypeExpressionId,
+    pub span: SpanId,
+}
+
+#[derive(Debug, Clone)]
 pub enum ParsedTypeExpression {
     Builtin(SpanId),
     Integer(ParsedNumericType),
@@ -714,6 +752,7 @@ pub enum ParsedTypeExpression {
     Reference(ParsedReference),
     Enum(ParsedEnumType),
     DotMemberAccess(ParsedDotMemberAccess),
+    Function(ParsedFunctionType),
 }
 
 impl ParsedTypeExpression {
@@ -733,6 +772,7 @@ impl ParsedTypeExpression {
             ParsedTypeExpression::Reference(r) => r.span,
             ParsedTypeExpression::Enum(e) => e.span,
             ParsedTypeExpression::DotMemberAccess(a) => a.span,
+            ParsedTypeExpression::Function(f) => f.span,
         }
     }
 }
@@ -1497,6 +1537,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         self.module.expressions.get(id).get_span()
     }
 
+    pub fn get_type_expression_span(&self, id: ParsedTypeExpressionId) -> SpanId {
+        self.module.type_expressions.get(id).get_span()
+    }
+
     fn parse_literal(&mut self) -> ParseResult<Option<ParsedExpressionId>> {
         let (first, second) = self.tokens.peek_two();
         trace!("parse_literal {} {}", first.kind, second.kind);
@@ -1660,6 +1704,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             let enumm = self.expect_enum_type_expression()?;
             let type_expr_id = self.module.type_expressions.add(ParsedTypeExpression::Enum(enumm));
             Ok(Some(type_expr_id))
+        } else if first.kind == K::BackSlash {
+            let fun = self.expect_function_type()?;
+            Ok(Some(fun))
         } else if first.kind == K::KeywordBuiltin {
             self.tokens.advance();
             let builtin_id =
@@ -1738,6 +1785,21 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         } else {
             Ok(None)
         }
+    }
+
+    fn expect_function_type(&mut self) -> ParseResult<ParsedTypeExpressionId> {
+        let (params, params_span) = self.eat_delimited_expect_opener(
+            "Function parameters",
+            K::BackSlash,
+            K::Comma,
+            K::Minus,
+            Parser::expect_type_expression,
+        )?;
+        let _rest_of_arrow = self.expect_eat_token(K::RightAngle)?;
+        let return_type = self.expect_type_expression()?;
+        let span = self.extend_span(params_span, self.get_type_expression_span(return_type));
+        let function_type = ParsedFunctionType { params, return_type, span };
+        Ok(self.module.type_expressions.add(ParsedTypeExpression::Function(function_type)))
     }
 
     fn expect_enum_type_expression(&mut self) -> ParseResult<ParsedEnumType> {
@@ -2064,6 +2126,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         trace!("parse_base_expression {} {} {}", first.kind, second.kind, third.kind);
         if let Some(literal_id) = self.parse_literal()? {
             Ok(Some(literal_id))
+        } else if first.kind == K::BackSlash {
+            Ok(Some(self.expect_closure()?))
         } else if first.kind == K::KeywordWhen {
             let when_keyword = self.tokens.next();
             let target_expression = self.expect_expression()?;
@@ -2079,7 +2143,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let arm_pattern_id = self.expect_pattern()?;
 
                 self.expect_eat_token(K::Minus)?;
-                self.expect_eat_token(K::CloseAngle)?;
+                self.expect_eat_token(K::RightAngle)?;
 
                 let arm_expr_id = self.expect_expression()?;
                 cases.push(ParsedMatchCase { pattern: arm_pattern_id, expression: arm_expr_id });
@@ -2237,6 +2301,30 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             // More expression types
             Ok(None)
         }
+    }
+
+    fn expect_closure_arg_defn(&mut self) -> ParseResult<ClosureArgDefn> {
+        let name = self.expect_eat_token(K::Ident)?;
+        let binding = self.intern_ident_token(name);
+        let ty = if self.peek().kind == K::Colon {
+            self.tokens.advance();
+            Some(self.expect_type_expression()?)
+        } else {
+            None
+        };
+        Ok(ClosureArgDefn { ty, binding, span: name.span })
+    }
+
+    fn expect_closure(&mut self) -> ParseResult<ParsedExpressionId> {
+        let start = self.expect_eat_token(K::BackSlash)?;
+        let (arguments, _args_span) =
+            self.eat_delimited("Lambda args", K::Comma, K::Minus, Parser::expect_closure_arg_defn)?;
+        let _rest_of_arrow = self.expect_eat_token(K::RightAngle)?;
+
+        let body = self.expect_expression()?;
+        let span = self.extend_span(start.span, self.get_expression_span(body));
+        let closure = ParsedClosure { arguments, body, span };
+        Ok(self.add_expression(ParsedExpression::Closure(closure)))
     }
 
     fn expect_fn_call_args(&mut self) -> ParseResult<(Vec<FnCallArg>, Vec<FnCallArg>, SpanId)> {
@@ -2930,6 +3018,23 @@ impl ParsedModule {
                 f.write_str(" as ")?;
                 self.display_type_expression_id(cast.dest_type, f)
             }
+            ParsedExpression::Closure(closure) => {
+                f.write_char('\\')?;
+                for (index, arg) in closure.arguments.iter().enumerate() {
+                    f.write_str(self.identifiers.get_name(arg.binding))?;
+                    if let Some(ty) = arg.ty {
+                        f.write_str(": ")?;
+                        self.display_type_expression_id(ty, f)?;
+                    }
+                    let last = index == closure.arguments.len() - 1;
+                    if !last {
+                        f.write_str(", ")?;
+                    }
+                }
+                f.write_str(" -> ")?;
+                self.display_expr_id(closure.body, f)?;
+                Ok(())
+            }
         }
     }
 
@@ -3014,6 +3119,19 @@ impl ParsedModule {
                 f.write_str(self.identifiers.get_name(acc.member_name))
             }
             ParsedTypeExpression::Builtin(_builtin) => f.write_str("builtin"),
+            ParsedTypeExpression::Function(fun) => {
+                f.write_char('\\')?;
+                for (index, t) in fun.params.iter().enumerate() {
+                    self.display_type_expression_id(*t, f)?;
+                    let last = index == fun.params.len() - 1;
+                    if !last {
+                        f.write_str(", ")?;
+                    }
+                }
+                f.write_str(" -> ")?;
+                self.display_type_expression_id(fun.return_type, f)?;
+                Ok(())
+            }
         }
     }
 }

@@ -1066,13 +1066,13 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     let size_diff_bits = largest_variant_size - variant_struct.size.size_bits;
                     let mut fields = variant_struct.struct_type.get_field_types();
                     if size_diff_bits != 0 {
-                        let padding = self.builtin_types.padding_type(size_diff_bits as u32);
+                        let padding = self.builtin_types.padding_type(size_diff_bits);
                         fields.push(padding.as_basic_type_enum());
                         debug!("Padding variant {} with {}", variant_struct.struct_type, padding);
                         let variant = &enum_type.variants[index];
                         let struct_name = &format!(
                             "{}_{}",
-                            &*self.get_ident_name(variant.name),
+                            self.get_ident_name(variant.name),
                             variant.payload.map(|p| p.to_string()).unwrap_or("".to_string()),
                         );
                         let variant_struct_type =
@@ -1145,7 +1145,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     .debug_builder
                     .create_union_type(
                         self.debug.current_scope(),
-                        &name,
+                        name,
                         self.debug.current_file(),
                         0,
                         enum_size.size_bits as u64,
@@ -1153,7 +1153,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         0,
                         &member_types,
                         0,
-                        &name,
+                        name,
                     )
                     .as_type();
 
@@ -1258,11 +1258,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let variable = self.module.variables.get_variable(val.variable_id);
         let variable_ptr = self
             .builder
-            .build_alloca(variable_type.value_basic_type(), &self.get_ident_name(variable.name));
-        trace!(
-            "codegen_val {}: pointee_ty: {variable_type:?}",
-            &*self.get_ident_name(variable.name)
-        );
+            .build_alloca(variable_type.value_basic_type(), self.get_ident_name(variable.name));
+        trace!("codegen_val {}: pointee_ty: {variable_type:?}", self.get_ident_name(variable.name));
         // We're always storing a pointer
         // in self.variables that, when loaded, gives the actual type of the variable
         let store_instr = self.builder.build_store(variable_ptr, value);
@@ -1270,7 +1267,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             variable_ptr,
             Some(self.debug.debug_builder.create_auto_variable(
                 self.debug.current_scope(),
-                &self.get_ident_name(variable.name),
+                self.get_ident_name(variable.name),
                 self.debug.current_file(),
                 self.get_line_number(val.span),
                 variable_type.debug_type(),
@@ -1406,7 +1403,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         field_access.target_field_index,
                         &format!(
                             "struct.{}",
-                            &*self.module.ast.identifiers.get_name(field_access.target_field)
+                            self.module.ast.identifiers.get_name(field_access.target_field)
                         ),
                     )
                     .unwrap();
@@ -1517,7 +1514,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         field_access.target_field_index,
                         &format!(
                             "struc.{}",
-                            &*self.module.ast.identifiers.get_name(field_access.target_field)
+                            self.module.ast.identifiers.get_name(field_access.target_field)
                         ),
                     )
                     .unwrap();
@@ -1566,7 +1563,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let block_value = self.codegen_block_statements(block)?;
                 Ok(block_value)
             }
-            TypedExpr::FunctionCall(call) => self.codegen_function_call(call),
+            TypedExpr::Call(call) => self.codegen_function_call(call),
             TypedExpr::EnumConstructor(enum_constr) => {
                 let llvm_type = self.codegen_type(enum_constr.type_id)?;
                 let enum_type = llvm_type.expect_enum();
@@ -1583,7 +1580,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         enum_variant.struct_type,
                         enum_ptr,
                         0,
-                        &format!("enum_tag_{}", &*self.get_ident_name(variant_tag_name)),
+                        &format!("enum_tag_{}", self.get_ident_name(variant_tag_name)),
                     )
                     .unwrap();
                 self.builder.build_store(tag_pointer, enum_variant.tag_value);
@@ -1596,7 +1593,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             enum_variant.struct_type,
                             enum_ptr,
                             1,
-                            &format!("enum_payload_{}", &*self.get_ident_name(variant_tag_name)),
+                            &format!("enum_payload_{}", self.get_ident_name(variant_tag_name)),
                         )
                         .unwrap();
                     self.builder.build_store(payload_pointer, value);
@@ -1773,6 +1770,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let return_value = self.codegen_expr_basic_value(&ret.value)?;
                 let ret_inst = self.builder.build_return(Some(&return_value));
                 Ok(LlvmValue::Never(ret_inst))
+            }
+            TypedExpr::Closure(typed_closure) => {
+                todo!("mega todo closure codegen")
             }
         }
     }
@@ -2094,7 +2094,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     }
 
     fn codegen_function_call(&mut self, call: &Call) -> CodegenResult<LlvmValue<'ctx>> {
-        let callee = self.module.get_function(call.callee_function_id);
+        let callee = self.module.get_function(call.callee.as_static().expect("dynamic dispatch"));
 
         if let Some(intrinsic_type) = callee.intrinsic_type {
             if intrinsic_type.is_inlined() {
@@ -2102,7 +2102,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
         }
 
-        let function_value = self.codegen_function(call.callee_function_id, callee)?;
+        let function_value = self.codegen_function(call.callee.as_static().unwrap(), callee)?;
 
         let args: CodegenResult<Vec<BasicMetadataValueEnum<'ctx>>> = call
             .args
@@ -2483,7 +2483,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         );
         let di_subprogram = self.debug.debug_builder.create_function(
             self.debug.current_scope(),
-            &self.module.ast.identifiers.get_name(function.name),
+            self.module.ast.identifiers.get_name(function.name),
             None,
             *function_file,
             function_line_number,
@@ -2558,17 +2558,17 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             let param_name = self.module.ast.identifiers.get_name(typed_param.name);
             trace!(
                 "Got LLVM type for variable {}: {} (from {})",
-                &*param_name,
+                param_name,
                 ty.value_basic_type(),
                 self.module.type_id_to_string(typed_param.type_id)
             );
-            param.set_name(&param_name);
+            param.set_name(param_name);
             self.set_debug_location(typed_param.span);
-            let pointer = self.builder.build_alloca(ty.value_basic_type(), &param_name);
+            let pointer = self.builder.build_alloca(ty.value_basic_type(), param_name);
             let arg_debug_type = self.get_debug_type(typed_param.type_id)?;
             let di_local_variable = self.debug.debug_builder.create_parameter_variable(
                 self.debug.current_scope(),
-                &param_name,
+                param_name,
                 typed_param.position,
                 self.debug.current_file(),
                 function_line_number,
@@ -2606,7 +2606,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 // blocks" to make this all more reasonable
                 // Rust rejects "unreachable expression"
                 let function_block = function.block.as_ref().unwrap_or_else(|| {
-                    panic!("Function has no block {}", &*self.get_ident_name(function.name))
+                    panic!("Function has no block {}", self.get_ident_name(function.name))
                 });
                 let value = self.codegen_block_statements(function_block)?;
                 let current_block = self.builder.get_insert_block().unwrap();

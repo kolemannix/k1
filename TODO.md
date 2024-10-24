@@ -102,13 +102,15 @@
   - [ ] Test handling of NaN and Infinity, other float edge cases
 - [x] 'Context' system; implicit stack arguments
 - [x] Pass caller source location for assert
-- [ ] Builtin syntax for Map[K, V]
+- [ ] Change reference and dereference syntax to x.& and x.*
+- [ ] Builtin syntax for maps w/ Map[K, V]
 - [ ] Implement 'opaque' types as single-member structs internally? This removes a type 'kind' from the language
 - [ ] Handle escaped chars in string literals
 - [ ] Generic abilities (ability From<T> { ... })
 - [ ] Friendliness pass
   - [ ] Get rid of 'enum' keyword, data?
   - [ ] 'when' keyword is bad; `switch` maybe or `case`
+  - [ ] It would be really nice _not_ to take the keyword 'type'. Just a thought from using Rust/Scala
 - [x] Remove tag literals, make enum tags per-enum
 - [ ] Imports
 - [ ] Pure lambdas with -> (not closures)
