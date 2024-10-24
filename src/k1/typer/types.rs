@@ -47,6 +47,12 @@ pub struct TypeDefnInfo {
     pub ast_id: ParsedId,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct ClosureStructTypes {
+    pub fn_type_id: TypeId,
+    pub env_type_id: TypeId,
+}
+
 #[derive(Debug, Clone)]
 pub struct StructType {
     pub fields: Vec<StructTypeField>,
@@ -234,15 +240,18 @@ impl IntegerType {
     }
 }
 
-pub struct Spanned<T> {
-    pub v: T,
-    pub span: SpanId,
-}
+// pub struct Spanned<T> {
+//     pub v: T,
+//     pub span: SpanId,
+// }
 
 #[derive(Debug, Clone)]
 pub struct FnArgType {
-    pub type_id: TypeId,
     pub name: Identifier,
+    pub position: u32,
+    pub type_id: TypeId,
+    pub is_context: bool,
+    pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
@@ -250,6 +259,9 @@ pub struct FunctionType {
     pub params: Vec<FnArgType>,
     pub return_type: TypeId,
     pub defn_info: Option<TypeDefnInfo>,
+    // Some function types carry the specific closure they came from with them
+    // This allows us to know the environment type and thus size of a closure variable
+    pub closure_id: Option<ClosureId>,
 }
 
 #[derive(Debug, Clone)]
@@ -304,8 +316,8 @@ impl Type {
             | Type::Char(defn_info)
             | Type::Bool(defn_info)
             | Type::Pointer(defn_info)
-            | Type::Never(defn_info) => Some(defn_info.ast_id.into()),
-            Type::Float(ft) => Some(ft.defn_info.ast_id.into()),
+            | Type::Never(defn_info) => Some(defn_info.ast_id),
+            Type::Float(ft) => Some(ft.defn_info.ast_id),
             Type::Integer(_) => None,
             Type::Struct(t) => Some(t.ast_node),
             Type::Reference(_t) => None,
@@ -447,6 +459,13 @@ impl Type {
             _ => None,
         }
     }
+
+    pub fn as_function(&self) -> Option<&FunctionType> {
+        match self {
+            Type::Function(tf) => Some(tf),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Default, Debug)]
@@ -563,6 +582,26 @@ impl Types {
             Type::Function(f) => f.defn_info.as_ref(),
             Type::RecursiveReference(_) => None,
         }
+    }
+
+    pub fn as_closure_struct(&self, type_id: TypeId) -> Option<ClosureStructTypes> {
+        self.get(type_id).as_struct().and_then(|s| {
+            let f1 = self.get(s.fields[0].type_id);
+            let f2 = self.get(s.fields[1].type_id);
+            if let Type::Reference(f1) = f1 {
+                if let Type::Function(fn_type) = self.get(f1.inner_type) {
+                    if let Type::Reference(f2_ref) = f2 {
+                        if let Type::Struct(env_struc) = self.get(f2_ref.inner_type) {
+                            return Some(ClosureStructTypes {
+                                fn_type_id: f1.inner_type,
+                                env_type_id: f2_ref.inner_type,
+                            });
+                        }
+                    }
+                }
+            }
+            None
+        })
     }
 
     pub fn get_mut(&mut self, type_id: TypeId) -> &mut Type {
@@ -813,15 +852,18 @@ impl Types {
             (Type::Generic(_g1), Type::Generic(_g2)) => false,
             (Type::Function(f1), Type::Function(f2)) => {
                 // I guess functions can totally share a FunctionType if they share
-                // the exact shape
-                if self.type_id_eq(f1.return_type, f2.return_type) {
-                    if f1.params.len() == f2.params.len() {
-                        return f1
-                            .params
-                            .iter()
-                            .zip(f2.params.iter())
-                            .all(|(p1, p2)| self.type_id_eq(p1.type_id, p2.type_id));
-                    }
+                // the exact shape, and are not closures
+                if f1.closure_id.is_some() || f2.closure_id.is_some() {
+                    return false;
+                }
+                if self.type_id_eq(f1.return_type, f2.return_type)
+                    && f1.params.len() == f2.params.len()
+                {
+                    return f1
+                        .params
+                        .iter()
+                        .zip(f2.params.iter())
+                        .all(|(p1, p2)| self.type_id_eq(p1.type_id, p2.type_id));
                 };
                 return false;
             }

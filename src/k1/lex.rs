@@ -158,8 +158,8 @@ pub enum TokenKind {
     CloseBracket,
     OpenBrace,
     CloseBrace,
-    OpenAngle,
-    CloseAngle,
+    LeftAngle,
+    RightAngle,
     Colon,
     Semicolon,
     Equals,
@@ -172,6 +172,7 @@ pub enum TokenKind {
     Pipe,
     Ampersand,
     Percent,
+    BackSlash,
 
     DoubleQuote,
     SingleQuote,
@@ -239,8 +240,8 @@ impl TokenKind {
             K::CloseBracket => Some("]"),
             K::OpenBrace => Some("{"),
             K::CloseBrace => Some("}"),
-            K::OpenAngle => Some("<"),
-            K::CloseAngle => Some(">"),
+            K::LeftAngle => Some("<"),
+            K::RightAngle => Some(">"),
             K::Colon => Some(":"),
             K::Semicolon => Some(";"),
             K::Equals => Some("="),
@@ -253,6 +254,7 @@ impl TokenKind {
             K::Pipe => Some("|"),
             K::Ampersand => Some("&"),
             K::Percent => Some("%"),
+            K::BackSlash => Some("\\"),
 
             K::Plus => Some("+"),
             K::Minus => Some("-"),
@@ -278,8 +280,8 @@ impl TokenKind {
             ']' => Some(K::CloseBracket),
             '{' => Some(K::OpenBrace),
             '}' => Some(K::CloseBrace),
-            '<' => Some(K::OpenAngle),
-            '>' => Some(K::CloseAngle),
+            '<' => Some(K::LeftAngle),
+            '>' => Some(K::RightAngle),
             ':' => Some(K::Colon),
             ';' => Some(K::Semicolon),
             '=' => Some(K::Equals),
@@ -296,6 +298,7 @@ impl TokenKind {
             '|' => Some(K::Pipe),
             '&' => Some(K::Ampersand),
             '%' => Some(K::Percent),
+            '\\' => Some(K::BackSlash),
             _ => None,
         }
     }
@@ -588,11 +591,11 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                     self.advance();
                     self.advance();
                     break Some(make_token(self, K::BangEquals, n, 2));
-                } else if single_char_tok == TokenKind::OpenAngle && next == '=' {
+                } else if single_char_tok == TokenKind::LeftAngle && next == '=' {
                     self.advance();
                     self.advance();
                     break Some(make_token(self, K::LessThanEqual, n, 2));
-                } else if single_char_tok == TokenKind::CloseAngle && next == '=' {
+                } else if single_char_tok == TokenKind::RightAngle && next == '=' {
                     self.advance();
                     self.advance();
                     break Some(make_token(self, K::GreaterThanEqual, n, 2));

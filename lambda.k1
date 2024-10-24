@@ -1,7 +1,32 @@
+
+fn map(a: Array[int], f: \int -> int): Array[int] {
+  for i in a yield { f(i) }
+}
+
+fn simpleAddOne(x: int): int { x + 1 }
+
+fn __clos_addOne(x: int, env: { global: int }*): int { x + { (*env).global } }
+
 fn main(): int {
   println("Hello, lambdas!");
+  val global: int = 3;
 
-  [1,2,3].map(\x -> x + 1);
+  val addOne: \int -> int = \x -> x + global;
+  // = { ptr: Pointer, env: { global: int* } };
+  
+  // round 2: reassign a closure
+  // actually not, should fail typecheck
+  // val addOne2: \int -> int = addOne;
+
+  // round 3: Take the address of a function
+  // val addOne3 = &simpleAddOne;
+
+  addOne(1);
+
+  // addOne2(2);
+
+
+  map([1,2,3], \x -> x + 1);
   
   0
 }

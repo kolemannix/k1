@@ -1,16 +1,12 @@
-// make needs a heap
-// make will use the People heap if there is on in the context?
-fn<Heap = People> make(name: string): Pointer<Person, Heap> {
-  val person = { name: name, age: 0 };
-}
-
-// Arenas (heaps) have a 'strings' section because strings are hard/special/important
+// heaps have a 'strings' section because strings are hard/special/important?
 
 fn main(): int {
-  // Declare your lifetimes (heaps) like other aspects of your program
-  arena People;
+  rt.createPool("people");
+
+  context val pool = rt.getPool("people");
+
   for [1,2,3,4,5] {
-    val person = make("George");
+    val person = new({ name: "George", age: i });
     person
   }
 }
