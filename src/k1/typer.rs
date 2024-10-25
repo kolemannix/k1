@@ -39,6 +39,12 @@ pub struct AbilityId(u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ClosureId(u32);
 
+impl Display for ClosureId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("closure#{}", self.0))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AbilityImplId(u32);
 
@@ -193,6 +199,7 @@ pub struct TypedClosure {
     // This kinda crosses the streams; its a value in a 'type'-y thing, but
     // that's because a closure's environment is basically values baked into a function
     pub environment_struct: TypedExpr,
+    pub environment_struct_reference_type: TypeId,
     pub parsed_expression_id: ParsedExpressionId,
     pub span: SpanId,
 }
@@ -266,7 +273,7 @@ pub struct SpecializationStruct {
 #[derive(Debug, Clone, Copy)]
 pub struct TypedFunctionMetadata {}
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TypedFunctionKind {
     Standard,
     Closure,
@@ -3640,6 +3647,33 @@ impl TypedModule {
         let mut typed_params = Vec::with_capacity(closure_arguments.len());
         let expected_function_type =
             expected_type.and_then(|et| self.types.get(et).as_function()).cloned();
+
+        //
+        // We don't yet support or detect captures, but I'm going ahead
+        // with wiring in the environment type to ensure its considered
+        let environment_struct_type = self.types.add_type(Type::Struct(StructType {
+            fields: vec![],
+            type_defn_info: None,
+            generic_instance_info: None,
+            ast_node: expr_id.into(),
+        }));
+        let environment_struct = TypedExpr::Struct(Struct {
+            fields: vec![],
+            type_id: environment_struct_type,
+            span: body_span,
+        });
+        let environment_struct_reference_type = self
+            .types
+            .add_type(Type::Reference(ReferenceType { inner_type: environment_struct_type }));
+        let environment_param = FnArgType {
+            name: get_ident!(self, "__clos_env"),
+            position: 0,
+            type_id: environment_struct_reference_type,
+            is_context: false,
+            span: body_span,
+        };
+        typed_params.push(environment_param);
+
         for (index, arg) in closure_arguments.iter().enumerate() {
             let arg_type_id = match arg.ty {
                 Some(type_expr) => self.eval_type_expr(type_expr, scope_id)?,
@@ -3659,7 +3693,7 @@ impl TypedModule {
             };
             typed_params.push(FnArgType {
                 name: arg.binding,
-                position: index as u32,
+                position: (index + 1) as u32,
                 type_id: arg_type_id,
                 is_context: false,
                 span: arg.span,
@@ -3692,16 +3726,22 @@ impl TypedModule {
             expected_function_type.map(|f| f.return_type),
         )?;
         let return_type = body.get_type();
-        let closure_type_id = self.types.add_type(Type::Function(FunctionType {
-            params: typed_params,
-            return_type,
-            defn_info: None,
-            closure_id: None,
-        }));
-        let name_string = format!(
-            "{}",
-            self.make_qualified_name(scope_id, get_ident!(self, "{{closure}}"), "__", true)
+        let closure_type_id = self.types.add_type_ext(
+            Type::Function(FunctionType {
+                params: typed_params,
+                return_type,
+                defn_info: None,
+                closure_id: None,
+            }),
+            false,
         );
+        let encl_fn_name = self.get_function(self.scopes.nearest_parent_function(scope_id)).name;
+        let name = self.ast.identifiers.intern(format!(
+            "{}_{{closure}}_{}",
+            self.get_ident_str(encl_fn_name),
+            closure_type_id
+        ));
+        let name_string = self.make_qualified_name(scope_id, name, "__", true);
         let name = self.ast.identifiers.intern(name_string);
         let function = TypedFunction {
             name,
@@ -3720,24 +3760,11 @@ impl TypedModule {
             span,
         };
         let body_function_id = self.add_function(function);
-        //
-        // We don't yet support or detect captures, but I'm going ahead
-        // with wiring in the environment type to ensure its considered
-        let environment_struct_type = self.types.add_type(Type::Struct(StructType {
-            fields: vec![],
-            type_defn_info: None,
-            generic_instance_info: None,
-            ast_node: expr_id.into(),
-        }));
-        let environment_struct = TypedExpr::Struct(Struct {
-            fields: vec![],
-            type_id: environment_struct_type,
-            span: body_span,
-        });
         let closure_id = self.add_closure(TypedClosure {
             scope: closure_scope_id,
             body_function_id,
             environment_struct,
+            environment_struct_reference_type,
             parsed_expression_id: expr_id,
             span,
         });
@@ -5261,7 +5288,7 @@ impl TypedModule {
                                         closure_environment: Some(Box::new(env.clone())),
                                     }
                                 } else {
-                                    panic!("")
+                                    return failf!(fn_call.span, "Trying to call an unknown function; to perform dynamic dispatch, callee must be a reference");
                                 }
                             }
                             // If you try to 'call' a pointer to a struct w/ a function pointer and an env
@@ -5555,6 +5582,8 @@ impl TypedModule {
             }
         }
 
+        let is_closure = params.first().is_some_and(|p| p.name == get_ident!(self, "__clos_env"));
+        let params = if is_closure { &params[1..] } else { params };
         let explicit_param_count = params.iter().filter(|p| !p.is_context).count();
         let context_param_count = params.len() - explicit_param_count;
         let total_expected =
@@ -5587,19 +5616,15 @@ impl TypedModule {
         } else {
             &mut params.iter().filter(|p| !p.is_context)
         };
-        for fn_param in expected_literal_params {
+
+        for (param_index, fn_param) in expected_literal_params.enumerate() {
             let expr = match pre_evaled_params.next() {
                 Some(e) => e,
                 None => {
                     let matching_param_by_name =
                         actual_passed_args.clone().find(|arg| arg.name == Some(fn_param.name));
-                    let param_position = if explicit_context_args {
-                        fn_param.position
-                    } else {
-                        fn_param.position - (context_param_count as u32)
-                    };
                     let matching_param = matching_param_by_name
-                        .or(actual_passed_args.clone().nth(param_position as usize));
+                        .or(actual_passed_args.clone().nth(param_index as usize));
                     let Some(param) = matching_param else {
                         return make_fail_span(
                             format!(

@@ -1,32 +1,29 @@
-
-fn map(a: Array[int], f: \int -> int): Array[int] {
-  for i in a yield { f(i) }
-}
+// fn map(a: Array[int], f: \int -> int): Array[int] {
+//   for i in a yield { f(i) }
+// }
 
 fn simpleAddOne(x: int): int { x + 1 }
 
-fn __clos_addOne(x: int, env: { global: int }*): int { x + { (*env).global } }
+// fn __clos_addOne(x: int, env: { closedOver: int }*): int { x + { (*env).closedOver } }
 
 fn main(): int {
-  println("Hello, lambdas!");
-  val global: int = 3;
+  val closedOver: int = 3;
 
-  val addOne: \int -> int = \x -> x + global;
-  // = { ptr: Pointer, env: { global: int* } };
+  val addOne = \x: int -> x + 1;
   
   // round 2: reassign a closure
   // actually not, should fail typecheck
-  // val addOne2: \int -> int = addOne;
+  val addOne2 = addOne;
 
   // round 3: Take the address of a function
-  // val addOne3 = &simpleAddOne;
+  // val addOne3 = \i -> simpleAddOne(i);
 
-  addOne(1);
+  // printInt(addOne(1));
+  printInt(addOne2(2));
 
-  // addOne2(2);
 
-
-  map([1,2,3], \x -> x + 1);
+  // round 4
+  // map([1,2,3], \x -> x + 1);
   
   0
 }
