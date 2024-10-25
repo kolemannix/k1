@@ -259,7 +259,11 @@ impl TypedModule {
                 Ok(())
             }
             Type::Function(fun) => {
-                writ.write_str("fn(")?;
+                writ.write_str("fn")?;
+                if let Some(closure_id) = fun.closure_id.as_ref() {
+                    writ.write_fmt(format_args!("[{closure_id}]"))?;
+                }
+                writ.write_str("(")?;
                 for (idx, param) in fun.params.iter().enumerate() {
                     self.display_type_id(param.type_id, expand, writ)?;
                     let last = idx == fun.params.len() - 1;

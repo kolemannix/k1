@@ -196,7 +196,7 @@ pub struct Identifiers {
     intern_pool: string_interner::StringInterner<StringBackend>,
 }
 impl Identifiers {
-    pub const BUILTIN_IDENTS: [&'static str; 16] = [
+    pub const BUILTIN_IDENTS: [&'static str; 17] = [
         "self",
         "it",
         "unit",
@@ -213,6 +213,7 @@ impl Identifiers {
         "optelse_lhs",
         "array_literal",
         "CompilerSourceLoc",
+        "__clos_env",
     ];
 
     pub fn intern(&mut self, s: impl AsRef<str>) -> Identifier {
