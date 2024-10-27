@@ -120,7 +120,7 @@ namespace string {
   }
 
   fn toCString(self: string): Pointer {
-    self.concat('\0'.toString()).data
+    self.appendChar('\0').data
   }
 
   fn toInt(self: string): int? {
@@ -146,7 +146,11 @@ namespace string {
 }
 
 impl Equals for string {
-  intern fn equals(self: string, that: string): bool
+  fn equals(self: string, that: string): bool {
+    if self.len != that.len { return(false) };
+    val compareResult = libc::memcmp(self.data, that.data, self.len);
+    compareResult == 0
+  }
 }
 
 impl Equals for Array[string] {

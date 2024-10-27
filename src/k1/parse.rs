@@ -196,7 +196,7 @@ pub struct Identifiers {
     intern_pool: string_interner::StringInterner<StringBackend>,
 }
 impl Identifiers {
-    pub const BUILTIN_IDENTS: [&'static str; 17] = [
+    pub const BUILTIN_IDENTS: [&'static str; 19] = [
         "self",
         "it",
         "unit",
@@ -214,6 +214,8 @@ impl Identifiers {
         "array_literal",
         "CompilerSourceLoc",
         "__clos_env",
+        "fn_ptr",
+        "env_ptr",
     ];
 
     pub fn intern(&mut self, s: impl AsRef<str>) -> Identifier {
@@ -1701,7 +1703,13 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn parse_base_type_expression(&mut self) -> ParseResult<Option<ParsedTypeExpressionId>> {
         let first = self.peek();
-        if first.kind == K::KeywordEnum {
+        if first.kind == K::OpenParen {
+            self.tokens.advance();
+            let expr = self.expect_type_expression()?;
+            // Note: Here would be where we would support tuples (if we did paren tuples)
+            self.expect_eat_token(K::CloseParen)?;
+            Ok(Some(expr))
+        } else if first.kind == K::KeywordEnum {
             let enumm = self.expect_enum_type_expression()?;
             let type_expr_id = self.module.type_expressions.add(ParsedTypeExpression::Enum(enumm));
             Ok(Some(type_expr_id))
@@ -2125,8 +2133,18 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     fn parse_base_expression(&mut self) -> ParseResult<Option<ParsedExpressionId>> {
         let (first, second, third) = self.tokens.peek_three();
         trace!("parse_base_expression {} {} {}", first.kind, second.kind, third.kind);
-        if let Some(literal_id) = self.parse_literal()? {
-            Ok(Some(literal_id))
+        if first.kind == K::OpenParen {
+            self.tokens.advance();
+            if self.peek().kind == K::CloseParen {
+                let end = self.tokens.next();
+                let span = self.extend_token_span(first, end);
+                Ok(Some(self.add_expression(ParsedExpression::Literal(Literal::Unit(span)))))
+            } else {
+                // Note: Here would be where we would support tuples
+                let expr = self.expect_expression()?;
+                self.expect_eat_token(K::CloseParen)?;
+                Ok(Some(expr))
+            }
         } else if first.kind == K::BackSlash {
             Ok(Some(self.expect_closure()?))
         } else if first.kind == K::KeywordWhen {
@@ -2163,12 +2181,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             let span = self.extend_token_span(when_keyword, close);
             let match_expr = ParsedMatchExpression { target_expression, cases, span };
             Ok(Some(self.add_expression(ParsedExpression::Match(match_expr))))
-        } else if first.kind == K::OpenParen {
-            self.tokens.advance();
-            let expr = self.expect_expression()?;
-            // Note: Here would be where we would support tuples
-            self.expect_eat_token(K::CloseParen)?;
-            Ok(Some(expr))
         } else if first.kind == K::KeywordFor {
             self.tokens.advance();
             let binding = if third.kind == K::KeywordIn {
@@ -2243,6 +2255,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     span,
                 }))))
             }
+        } else if let Some(literal_id) = self.parse_literal()? {
+            Ok(Some(literal_id))
         } else if first.kind == K::Ident {
             // FnCall
             let namespaced_ident = self.expect_namespaced_ident()?;

@@ -41,3 +41,6 @@ panic = "abort"
 
 [lints.clippy]
 let_and_return = "allow"
+match_like_matches_macro = "allow"
+too_many_arguments = "allow"
+collapsible_else_if = "allow"

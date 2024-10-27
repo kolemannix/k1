@@ -517,6 +517,10 @@ impl Types {
         TypeId(self.types.len() as u32)
     }
 
+    pub fn add_reference_type(&mut self, inner_type: TypeId) -> TypeId {
+        self.add_type(Type::Reference(ReferenceType { inner_type }))
+    }
+
     pub fn add_type(&mut self, typ: Type) -> TypeId {
         self.add_type_ext(typ, true)
     }
@@ -586,12 +590,15 @@ impl Types {
 
     pub fn as_closure_struct(&self, type_id: TypeId) -> Option<ClosureStructTypes> {
         self.get(type_id).as_struct().and_then(|s| {
+            if s.fields.len() != 2 {
+                return None;
+            }
             let f1 = self.get(s.fields[0].type_id);
             let f2 = self.get(s.fields[1].type_id);
             if let Type::Reference(f1) = f1 {
-                if let Type::Function(fn_type) = self.get(f1.inner_type) {
+                if let Type::Function(_fn_type) = self.get(f1.inner_type) {
                     if let Type::Reference(f2_ref) = f2 {
-                        if let Type::Struct(env_struc) = self.get(f2_ref.inner_type) {
+                        if let Type::Struct(_env_struc) = self.get(f2_ref.inner_type) {
                             return Some(ClosureStructTypes {
                                 fn_type_id: f1.inner_type,
                                 env_type_id: f2_ref.inner_type,

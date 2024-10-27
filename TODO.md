@@ -99,10 +99,14 @@
 - [x] Rework builtin string to use new Pointer
 - [x] Rework builtin optionals to be a generic enum
 - [x] floating point (f32 and f64)
-  - [ ] Test handling of NaN and Infinity, other float edge cases
 - [x] 'Context' system; implicit stack arguments
 - [x] Pass caller source location for assert
+- [ ] Closures
+  - [ ] Direct calls, no captures
+  - [ ] Support captures, but explicit only 
+- [ ] 'join' types to form new enums/structs, statically, like Roc
 - [ ] Change reference and dereference syntax to x.& and x.*
+- [ ] b"" strings that are of type... Slice[u8]
 - [ ] Builtin syntax for maps w/ Map[K, V]
 - [ ] Implement 'opaque' types as single-member structs internally? This removes a type 'kind' from the language
 - [ ] Handle escaped chars in string literals
@@ -113,7 +117,6 @@
   - [ ] It would be really nice _not_ to take the keyword 'type'. Just a thought from using Rust/Scala
 - [x] Remove tag literals, make enum tags per-enum
 - [ ] Imports
-- [ ] Pure lambdas with -> (not closures)
 - [ ] Make demo readme / site
 - [ ] Define clear 'platform layer' (crash, alloc/free, other?). Then we could do an LLVM interp platform and a rust interpreter platform
 - [x] Function types (functions have types but there's no syntax for describing a function type yet)
@@ -130,6 +133,7 @@
 - [ ] German/Umbra strings
 ^ The builtin array would be NOT copyable so that you don't accidentally alias the data ptr
 - [ ] Ability constraints on generics (not strictly needed since we have them on functions)
+- [ ] Test handling of NaN and Infinity, other float edge cases
 
 ## Non-goals at least for now
 - [ ] Memory safety / solving the 'aliasing' problem, not because its unimportant but because I have other interests
