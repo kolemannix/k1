@@ -81,9 +81,13 @@ extern fn _k1_free(ptr: Pointer): unit
 
 // Straight to libc, for now
 namespace libc {
-  extern(printf) fn printfStr(formatStr: Pointer, cString: Pointer): i32
+  extern(exit) fn exit(code: i32): never
+
+  extern(printf) fn printfString(formatStr: Pointer, len: i32, cString: Pointer): i32
   extern(memcpy) fn memcpy(dst: Pointer, src: Pointer, count: u64): Pointer
   extern(memset) fn memset(src: Pointer, count: u64, value: u8): Pointer
+  extern(memcmp) fn memcmp(s1: Pointer, s2: Pointer, size: u64): i32
+
   extern(realloc) fn realloc(ptr: Pointer, size: u64): Pointer
   extern(arc4random_uniform) fn arc4random_uniform(upperBound: u32): u32
 }
@@ -114,10 +118,35 @@ impl Equals for Pointer {
 
 //type alias opaque string = { len: u64, data: Pointer }
 
-intern fn printInt(value: i64): unit
-intern fn printUInt(value: u64): unit
-intern fn print(value: string): unit
-intern fn exit(code: i64): unit
+fn printInt(value: i64): unit {
+  print(value.show())
+}
+fn printUInt(value: u64): unit {
+  print(value.show())
+}
+fn print(value: string): unit {
+  val fmt = "%.*s";
+  val fmt2 = fmt.toCString();
+  libc::printfString(fmt2, value.len as i32, value.data);
+  ()
+}
+
+fn printIt[T](value: T): unit where T: Show {
+  val s = value.show();
+  print(s)
+}
+
+fn println(value: string): unit {
+  val fmt = "%.*s".appendChar('\n').toCString();
+  libc::printfString(fmt, value.len as i32, value.data);
+  ()
+}
+
+namespace sys {
+  fn exit(code: i32): never {
+    libc::exit(code)
+  }
+}
 
 fn crash(context locn: CompilerSourceLoc)(msg: string): never {
   _k1_crash(&msg, &locn.filename, locn.line);
@@ -299,8 +328,10 @@ impl Equals for Array[int] {
   }
 }
 
-fn println(value: string): unit {
-  value | string::appendChar('\n') | print;
+impl Show for bool {
+  fn show(self: bool): string {
+    if self "true" else "false"
+  }
 }
 
 impl Show for i64 {

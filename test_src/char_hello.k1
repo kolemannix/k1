@@ -2,6 +2,11 @@ fn main(): int {
   val c: char = '!';
   assert(c == '!');
   val s = c.toString();
+  print(s);
+  //println(s);
   assert(s.len == 1);
+  assert(s.get(0) == '!');
+
+  assert(s.appendChar('!') == "!!");
   0
 }

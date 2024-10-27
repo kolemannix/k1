@@ -1,0 +1,31 @@
+fn map(a: Array[int], f: \int -> int): Array[int] {
+  val result = for i in a yield { f(i) };
+  for x in result do {
+    printIt(x)
+  }
+}
+
+fn staticAddOne(x: int): int { x + 1 }
+
+// fn __clos_addOne(x: int, env: { closedOver: int }*): int { x + { (*env).closedOver } }
+
+fn main(): int {
+  val closedOver: int = 3;
+
+  val addOne = \x: int -> x + 1;
+  val addOne2 = addOne;
+  val addOne3 = \i: int -> staticAddOne(i);
+
+  printInt(addOne(1));
+  printInt(addOne2(2));
+  printInt(addOne3(3));
+
+
+  // round 4
+  map([1,2,3], \x: int -> x + 1);
+
+  // Infer type of x?
+  // map([1,2,3], \x -> x + 1);
+  
+  0
+}

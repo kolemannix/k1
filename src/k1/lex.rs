@@ -340,7 +340,6 @@ impl TokenKind {
         }
     }
     pub fn is_keyword(&self) -> bool {
-        #[allow(clippy::match_like_matches_macro)]
         match self {
             K::KeywordFn => true,
             K::KeywordVal => true,
@@ -821,7 +820,7 @@ mod test {
     #[test]
     fn extern_fn_name() -> anyhow::Result<()> {
         let input = r#"extern(printf)"#;
-        let (spans, tokens) = set_up(input)?;
+        let (_spans, tokens) = set_up(input)?;
         let kinds: Vec<TokenKind> = tokens.iter().map(|t| t.kind).collect();
         assert_eq!(vec![K::KeywordExtern, K::OpenParen, K::Ident, K::CloseParen,], kinds);
         Ok(())

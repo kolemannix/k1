@@ -336,8 +336,9 @@ impl TypedModule {
         }
         writ.write_str(")")?;
         writ.write_str(": ")?;
-        self.display_type_id(function.ret_type, false, writ)?;
+        self.display_type_id(function.return_type, false, writ)?;
         if display_block {
+            writ.write_str(" ")?;
             if let Some(block) = &function.block {
                 self.display_block(block, writ, 0)?;
             }
@@ -370,7 +371,7 @@ impl TypedModule {
             }
             writ.write_str("\n")?;
         }
-        writ.write_str(&" ".repeat(indentation))?;
+        writ.write_str(&"  ".repeat(indentation))?;
         writ.write_str("}: ")?;
         self.display_type_id(block.expr_type, false, writ)
     }
@@ -381,7 +382,7 @@ impl TypedModule {
         writ: &mut impl Write,
         indentation: usize,
     ) -> std::fmt::Result {
-        writ.write_str(&" ".repeat(indentation))?;
+        writ.write_str(&"  ".repeat(indentation))?;
         match stmt {
             TypedStmt::Expr(expr) => self.display_expr(expr, writ, indentation),
             TypedStmt::ValDef(val_def) => {
@@ -424,17 +425,18 @@ impl TypedModule {
             TypedExpr::Bool(b, _) => write!(writ, "{}", b),
             TypedExpr::Str(s, _) => write!(writ, "\"{}\"", s),
             TypedExpr::Struct(struc) => {
-                writ.write_str("{")?;
+                writ.write_str("{\n")?;
                 for (idx, field) in struc.fields.iter().enumerate() {
                     if idx > 0 {
                         writ.write_str(",\n")?;
-                        writ.write_str(&" ".repeat(indentation + 1))?;
                     }
+                    writ.write_str(&"  ".repeat(indentation + 1))?;
                     writ.write_str(self.get_ident_str(field.name))?;
                     writ.write_str(": ")?;
                     self.display_expr(&field.expr, writ, indentation)?;
                 }
-                writ.write_str(&" ".repeat(indentation))?;
+                writ.write_str("\n")?;
+                writ.write_str(&"  ".repeat(indentation))?;
                 writ.write_str("}")
             }
             TypedExpr::Variable(v) => {
@@ -457,7 +459,10 @@ impl TypedModule {
                             writ.write_str("]")?;
                         }
                     }
-                    Callee::Dynamic(callee_expr) => {
+                    Callee::DynamicPtr(callee_expr) => {
+                        self.display_expr(callee_expr, writ, indentation)?;
+                    }
+                    Callee::DynamicClosure(callee_expr) => {
                         self.display_expr(callee_expr, writ, indentation)?;
                     }
                 };
@@ -535,6 +540,10 @@ impl TypedModule {
                     self.get_function(closure.body_function_id).block.as_ref().unwrap();
                 self.display_block(closure_body, writ, indentation)?;
                 Ok(())
+            }
+            TypedExpr::FunctionName(fn_name_expr) => {
+                let fun = self.get_function(fn_name_expr.function_id);
+                writ.write_str(self.get_ident_str(fun.name))
             }
         }
     }

@@ -295,7 +295,7 @@ impl TypedFunctionKind {
 pub struct TypedFunction {
     pub name: Identifier,
     pub scope: ScopeId,
-    pub ret_type: TypeId,
+    pub return_type: TypeId,
     pub params: Vec<FnArgDefn>,
     pub type_params: Vec<FunctionTypeParam>,
     pub block: Option<TypedBlock>,
@@ -472,22 +472,25 @@ pub struct UnaryOp {
 
 #[derive(Debug, Clone)]
 pub enum Callee {
+    // nocommit: break into static fn, static closure
     Static {
         function_id: FunctionId,
         closure_environment: Option<Box<TypedExpr>>,
     },
     /// Must be a Struct ptr w/ a function ptr and an environment ptr
-    Dynamic(Box<TypedExpr>),
+    DynamicClosure(Box<TypedExpr>),
+    DynamicPtr(Box<TypedExpr>),
 }
 
 impl Callee {
     pub fn make_static(function_id: FunctionId) -> Callee {
         Callee::Static { function_id, closure_environment: None }
     }
-    pub fn as_static(&self) -> Option<FunctionId> {
+    pub fn maybe_function_id(&self) -> Option<FunctionId> {
         match self {
             Callee::Static { function_id: fn_pointer, .. } => Some(*fn_pointer),
-            Callee::Dynamic { .. } => None,
+            Callee::DynamicClosure(_) => None,
+            Callee::DynamicPtr(_) => None,
         }
     }
 }
@@ -799,6 +802,13 @@ pub struct ClosureExpr {
 }
 
 #[derive(Debug, Clone)]
+pub struct FunctionReferenceExpr {
+    pub function_id: FunctionId,
+    pub span: SpanId,
+    pub type_id: TypeId,
+}
+
+#[derive(Debug, Clone)]
 pub enum TypedExpr {
     Unit(SpanId),
     Char(u8, SpanId),
@@ -818,8 +828,21 @@ pub enum TypedExpr {
     EnumIsVariant(TypedEnumIsVariantExpr),
     EnumGetPayload(GetEnumPayload),
     Cast(TypedCast),
+    /// Explicit returns are syntactically like function calls.
+    /// return(<expr>)
+    /// It has the expression type of 'never'
     Return(TypedReturn),
+    /// Creating a closure results in a Closure expr.
+    /// - A function is created
+    /// - An environment capture expr is created
+    /// - An expression is returned that is really just a pointer to the unique Closure it points
+    ///   to; this can either be called directly or turned into a dynamic function object if needed
     Closure(ClosureExpr),
+    /// Referring to a function by name, if there are no variables in scope with the same name
+    /// results in taking a function pointer
+    FunctionName(FunctionReferenceExpr),
+    // nocommit: Consider introducing this instead of using Struct exprs to represent closure objects
+    // ClosureStruct()
 }
 
 impl From<VariableExpr> for TypedExpr {
@@ -852,6 +875,7 @@ impl TypedExpr {
             TypedExpr::Cast(c) => c.target_type_id,
             TypedExpr::Return(_ret) => NEVER_TYPE_ID,
             TypedExpr::Closure(closure) => closure.closure_type,
+            TypedExpr::FunctionName(f) => f.type_id,
         }
     }
     #[inline]
@@ -877,6 +901,7 @@ impl TypedExpr {
             TypedExpr::Cast(c) => c.span,
             TypedExpr::Return(ret) => ret.span,
             TypedExpr::Closure(closure) => closure.span,
+            TypedExpr::FunctionName(f) => f.span,
         }
     }
 
@@ -1092,14 +1117,6 @@ impl Namespaces {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IntrinsicFunction {
-    Exit,
-    PrintInt,
-    PrintUInt,
-    PrintString,
-    StringLength,
-    StringEquals,
-    StringGet,
-    StringSet,
     SizeOf,
     AlignOf,
     TypeId,
@@ -1116,14 +1133,6 @@ pub enum IntrinsicFunction {
 impl IntrinsicFunction {
     pub fn is_inlined(self) -> bool {
         match self {
-            IntrinsicFunction::Exit => false,
-            IntrinsicFunction::PrintInt => false,
-            IntrinsicFunction::PrintUInt => false,
-            IntrinsicFunction::PrintString => false,
-            IntrinsicFunction::StringLength => false,
-            IntrinsicFunction::StringEquals => false,
-            IntrinsicFunction::StringGet => true,
-            IntrinsicFunction::StringSet => true,
             IntrinsicFunction::SizeOf => true,
             IntrinsicFunction::AlignOf => true,
             IntrinsicFunction::TypeId => true,
@@ -1833,9 +1842,26 @@ impl TypedModule {
                     }
                 }
             }
+            // When a function type is written explicitly, it is interpreted as
+            // a function object type, which is always a closure, which is a
+            // 2 member struct with a function pointer and an environment pointer
             ParsedTypeExpression::Function(fun_type) => {
                 let fun_type = fun_type.clone();
                 let mut params: Vec<FnArgType> = Vec::with_capacity(fun_type.params.len());
+                let empty_struct_id = self.types.add_type(Type::Struct(StructType {
+                    type_defn_info: None,
+                    fields: vec![],
+                    ast_node: type_expr_id.into(),
+                    generic_instance_info: None,
+                }));
+                let empty_struct_reference_id = self.types.add_reference_type(empty_struct_id);
+                params.push(FnArgType {
+                    type_id: empty_struct_reference_id,
+                    name: get_ident!(self, "__clos_env"),
+                    position: 0,
+                    is_context: false,
+                    span: fun_type.span,
+                });
                 for (index, param) in fun_type.params.iter().enumerate() {
                     let type_id = self.eval_type_expr(*param, scope_id)?;
                     let span = self.ast.get_type_expression_span(*param);
@@ -1843,7 +1869,7 @@ impl TypedModule {
                     params.push(FnArgType {
                         type_id,
                         name,
-                        position: index as u32,
+                        position: (index + 1) as u32,
                         is_context: false,
                         span,
                     });
@@ -1855,7 +1881,28 @@ impl TypedModule {
                     defn_info: None,
                     closure_id: None,
                 }));
-                Ok(function_type_id)
+                //
+                // This is kind of an abuse of Struct, would be better to introduce
+                // "FunctionObject" or Closure type but I don't like adding new type
+                // kinds either, so kinda stuck. Maybe its really a trait object, hah
+                let closure_struct = StructType {
+                    type_defn_info: None,
+                    fields: vec![
+                        StructTypeField {
+                            index: 0,
+                            name: get_ident!(self, "fn_ptr"),
+                            type_id: self.types.add_reference_type(function_type_id),
+                        },
+                        StructTypeField {
+                            index: 0,
+                            name: get_ident!(self, "env_ptr"),
+                            type_id: empty_struct_reference_id,
+                        },
+                    ],
+                    ast_node: type_expr_id.into(),
+                    generic_instance_info: None,
+                };
+                Ok(self.types.add_type(Type::Struct(closure_struct)))
             }
         }?;
         Ok(base)
@@ -2896,40 +2943,62 @@ impl TypedModule {
     }
 
     fn eval_variable(
-        &self,
-        variable: &parse::Variable,
+        &mut self,
+        variable_expr_id: ParsedExpressionId,
         scope_id: ScopeId,
         is_assignment_lhs: bool,
     ) -> TyperResult<TypedExpr> {
-        let variable_id = self
-            .scopes
-            .find_variable_namespaced(
-                scope_id,
-                &variable.name,
-                &self.namespaces,
-                &self.ast.identifiers,
-            )?
-            .ok_or(errf!(
-                variable.name.span,
-                "Variable '{}' is not defined",
-                self.ast.identifiers.get_name(variable.name.name),
-            ))?;
-        let v = self.variables.get_variable(variable_id);
-        if is_assignment_lhs && !v.is_mutable {
-            return make_fail_span(
-                format!(
-                    "Cannot assign to immutable variable {}",
-                    self.ast.identifiers.get_name(v.name)
-                ),
-                variable.name.span,
-            );
+        let ParsedExpression::Variable(variable) = self.ast.expressions.get(variable_expr_id)
+        else {
+            panic!()
+        };
+        let variable_id = self.scopes.find_variable_namespaced(
+            scope_id,
+            &variable.name,
+            &self.namespaces,
+            &self.ast.identifiers,
+        )?;
+        match variable_id {
+            None => {
+                // function lookup
+                let function_id = self.scopes.find_function_namespaced(
+                    scope_id,
+                    &variable.name,
+                    &self.namespaces,
+                    &self.ast.identifiers,
+                )?;
+                match function_id {
+                    Some(function_id) => Ok(TypedExpr::FunctionName(FunctionReferenceExpr {
+                        function_id,
+                        span: variable.name.span,
+                        type_id: self
+                            .types
+                            .add_reference_type(self.get_function(function_id).type_id),
+                    })),
+                    None => failf!(
+                        variable.name.span,
+                        "Variable '{}' is not defined",
+                        self.ast.identifiers.get_name(variable.name.name),
+                    ),
+                }
+            }
+            Some(variable_id) => {
+                let v = self.variables.get_variable(variable_id);
+                if is_assignment_lhs && !v.is_mutable {
+                    return failf!(
+                        variable.name.span,
+                        "Cannot assign to immutable variable {}",
+                        self.ast.identifiers.get_name(v.name)
+                    );
+                }
+                let expr = TypedExpr::Variable(VariableExpr {
+                    type_id: v.type_id,
+                    variable_id,
+                    span: variable.name.span,
+                });
+                Ok(expr)
+            }
         }
-        let expr = TypedExpr::Variable(VariableExpr {
-            type_id: v.type_id,
-            variable_id,
-            span: variable.name.span,
-        });
-        Ok(expr)
     }
 
     fn eval_field_access(
@@ -3047,7 +3116,7 @@ impl TypedModule {
         _expected_type: Option<TypeId>,
     ) -> TyperResult<TypedExpr> {
         match self.ast.expressions.get(expr) {
-            ParsedExpression::Variable(variable) => self.eval_variable(variable, scope_id, true),
+            ParsedExpression::Variable(_variable) => self.eval_variable(expr, scope_id, true),
             ParsedExpression::FieldAccess(field_access) => {
                 self.eval_field_access(&field_access.clone(), scope_id, true, None)
             }
@@ -3063,6 +3132,7 @@ impl TypedModule {
     /// - de-referencing,
     /// - enum construction
     /// - enum variant construction
+    /// - Statically-known Function to dynamic function object struct
     /// - Opaque type instance construction if in definition namespace
     ///   This is a good place to do this because we just typechecked an expression, and
     ///   we know the expected type.
@@ -3090,6 +3160,23 @@ impl TypedModule {
                 }
             }
         };
+        if let Some(closure_types) = self.types.as_closure_struct(expected_type_id) {
+            if let Type::Function(f) = self.types.get(expression.get_type()) {
+                if let Some(closure_id) = f.closure_id {
+                    let closure = self.get_closure(closure_id);
+                    let function_id = closure.body_function_id;
+                    let fn_reference_type = self.types.add_reference_type(expression.get_type());
+                    return CoerceResult::Coerced(
+                        "fn-address",
+                        TypedExpr::FunctionName(FunctionReferenceExpr {
+                            function_id,
+                            span: expression.get_span(),
+                            type_id: fn_reference_type,
+                        }),
+                    );
+                }
+            }
+        }
         if let Type::OpaqueAlias(opaque) = self.types.get(expected_type_id) {
             // Note: The opaque conversion should probably be something more clear like a cast
             //       that only works in here, or a function thats only available inside?
@@ -3471,15 +3558,10 @@ impl TypedModule {
                 Ok(expr)
             }
             ParsedExpression::Literal(Literal::String(s, span)) => {
-                // So sad, we could just point to the source. BUT if we ever do escaping and things
-                // then the source string is not the same as the string the user meant; perhaps here
-                // is the place, or maybe in the parser, that we would actually do some work, which
-                // would justify storing it separately. But then, post-transform, we should intern
-                // these
                 let expr = TypedExpr::Str(s.clone(), *span);
                 Ok(expr)
             }
-            ParsedExpression::Variable(variable) => self.eval_variable(variable, scope_id, false),
+            ParsedExpression::Variable(_variable) => self.eval_variable(expr_id, scope_id, false),
             ParsedExpression::FieldAccess(field_access) => {
                 let field_access = field_access.clone();
                 self.eval_field_access(&field_access, scope_id, false, expected_type)
@@ -3746,7 +3828,7 @@ impl TypedModule {
         let function = TypedFunction {
             name,
             scope: closure_scope_id,
-            ret_type: return_type,
+            return_type,
             params: closure_params,
             type_params: vec![],
             block: Some(self.coerce_expr_to_block(body, closure_scope_id)),
@@ -4415,11 +4497,9 @@ impl TypedModule {
 
         let body_scope_id =
             self.scopes.add_child_scope(while_scope_id, ScopeType::LexicalBlock, None, None);
-        let expected_block_type =
-            match expected_type.and_then(|t| self.types.get(t).as_array_instance()) {
-                None => None,
-                Some(array_type) => Some(array_type.element_type),
-            };
+        let expected_block_type = expected_type
+            .and_then(|t| self.types.get(t).as_array_instance())
+            .map(|array_type| array_type.element_type);
         let body_block =
             self.eval_block(&for_expr.body_block, body_scope_id, expected_block_type)?;
         let body_block_result_type = body_block.expr_type;
@@ -5014,7 +5094,7 @@ impl TypedModule {
                     );
                 }
                 let enclosing_function = self.scopes.nearest_parent_function(calling_scope);
-                let expected_return_type = self.get_function(enclosing_function).ret_type;
+                let expected_return_type = self.get_function(enclosing_function).return_type;
                 let return_value = self.eval_expr(
                     fn_call.args[0].value,
                     calling_scope,
@@ -5089,137 +5169,15 @@ impl TypedModule {
             }
             _ => None,
         };
-        let callee = match method_call_self {
-            Some(base_expr) => {
-                // Resolve a method call
-                let type_id = base_expr.get_type();
-                let base_for_method_derefed =
-                    self.types.get_type_id_dereferenced(base_expr.get_type());
-                let method_id = match self.types.get(base_for_method_derefed) {
-                    Type::Enum(e) => {
-                        if self.get_ident_str(fn_name).starts_with("as")
-                            && fn_call.type_args.is_empty()
-                            && fn_call.args.len() == 1
-                        {
-                            let span = fn_call.span;
-                            let Some(variant) = e.variants.iter().find_map(|v| {
-                                let mut s = String::with_capacity(16);
-                                s.push_str("as");
-                                let name = self.get_ident_str(v.name);
-                                let name_capitalized = strings::capitalize_first(name);
-                                s.push_str(&name_capitalized);
-
-                                if self.get_ident_str(fn_name) == &s {
-                                    Some(v)
-                                } else {
-                                    None
-                                }
-                            }) else {
-                                return failf!(
-                                    span,
-                                    "Method '{}' does not exist on type {}",
-                                    self.get_ident_str(fn_name),
-                                    self.type_id_to_string(base_expr.get_type())
-                                );
-                            };
-                            let variant_type_id = variant.my_type_id;
-                            let condition = TypedExpr::EnumIsVariant(TypedEnumIsVariantExpr {
-                                target_expr: Box::new(base_expr.clone()),
-                                variant_name: variant.name,
-                                variant_index: variant.index,
-                                span,
-                            });
-                            let parsed_id = fn_call.args[0].value.into();
-                            let consequent = self.synth_optional_some(
-                                parsed_id,
-                                TypedExpr::Cast(TypedCast {
-                                    cast_type: CastType::KnownNoOp,
-                                    base_expr: Box::new(base_expr),
-                                    target_type_id: variant.my_type_id,
-                                    span,
-                                }),
-                            );
-                            let alternate =
-                                self.synth_optional_none(variant_type_id, parsed_id, span);
-
-                            return Ok(Either::Left(TypedExpr::If(Box::new(TypedIf {
-                                ty: consequent.get_type(),
-                                condition,
-                                consequent,
-                                alternate,
-                                span,
-                            }))));
-                        }
-                        let Some(enum_defn_info) = e.type_defn_info.as_ref() else {
-                            return make_fail_span(
-                                "Anonymous enums currently have no methods",
-                                fn_call.span,
-                            );
-                        };
-                        if let Some(enum_companion_ns) = enum_defn_info.companion_namespace {
-                            let enum_scope = self.get_namespace_scope(enum_companion_ns);
-                            enum_scope.find_function(fn_name)
-                        } else {
-                            None
-                        }
-                    }
-                    _other_type => {
-                        if let Some(companion_ns) = self
-                            .types
-                            .get_defn_info(base_for_method_derefed)
-                            .and_then(|d| d.companion_namespace)
-                        {
-                            let companion_scope = self.get_namespace_scope(companion_ns);
-                            companion_scope.find_function(fn_name)
-                        } else {
-                            None
-                        }
-                    }
-                };
-                let ability_fn_id = if method_id.is_none() {
-                    match self.types.get(base_expr.get_type()) {
-                        // For a type variable, we must check for impls in a different place
-                        Type::TypeVariable(tv) => {
-                            if !tv.ability_impls.is_empty() {
-                                let mut matching_fns = Vec::new();
-                                for ability_id in tv.ability_impls.iter() {
-                                    let ability = self.get_ability(*ability_id);
-                                    let matching_fn = ability.find_function_by_name(fn_name);
-                                    if let Some((_matching_index, generic_fn)) = matching_fn {
-                                        matching_fns.push(generic_fn.function_id)
-                                    }
-                                }
-                                if matching_fns.is_empty() {
-                                    Ok(None)
-                                } else if matching_fns.len() > 1 {
-                                    failf!(fn_call.span, "Ambiguous Type Variable ability")
-                                } else {
-                                    Ok(Some(matching_fns[0]))
-                                }
-                            } else {
-                                Ok(None)
-                            }
-                        }
-                        _ => self.find_ability_implementation(fn_name, type_id, None, fn_call.span),
-                    }?
-                } else {
-                    None
-                };
-                match method_id.or(ability_fn_id) {
-                    Some(function_id) => Callee::make_static(function_id),
-                    None => {
-                        return make_fail_span(
-                            format!(
-                                "Method '{}' does not exist on type {}",
-                                &*self.get_ident_str(fn_name).blue(),
-                                self.type_id_to_string(type_id),
-                            ),
-                            fn_call.span,
-                        );
-                    }
-                }
-            }
+        match method_call_self {
+            Some(base_expr) => self.resolve_parsed_function_call_method(
+                base_expr,
+                fn_call,
+                calling_scope,
+                expected_type,
+            ),
             None => {
+                // Resolve non-method call
                 if let Some(function_id) = self.scopes.find_function_namespaced(
                     calling_scope,
                     &fn_call.name,
@@ -5248,9 +5206,9 @@ impl TypedModule {
                             self.type_id_to_string(base_expr.get_type()),
                             self.get_ident_str(fn_name)
                         ))?;
-                        Callee::make_static(function_id)
+                        Ok(Either::Right(Callee::make_static(function_id)))
                     } else {
-                        Callee::make_static(function_id)
+                        Ok(Either::Right(Callee::make_static(function_id)))
                     }
                 } else {
                     if !fn_call.name.namespaces.is_empty() {
@@ -5263,67 +5221,142 @@ impl TypedModule {
                     if let Some(variable_id) = self.scopes.find_variable(calling_scope, fn_name) {
                         let v = self.variables.get_variable(variable_id);
                         match self.types.get(v.type_id) {
-                            // This should work for calling function pointers too!
-                            //
-                            // nocommit: we could still make this static
-                            // by looking at fn_type.closure_id in order to know
-                            // if we have a 'static unique fn type' aka a specific closure's type
-                            // or if we have a generic fn type, in which case we have to do dynamic
-                            // dispatch
-
-                            // At this point the variable should always have its environment
-                            // baked in and be a struct w/ function reference and env
-                            //
-                            // For typechecking closure params we just lop off the first parameter
-                            // as its always the environment
-                            //
-                            // Need to put the environment argument on the closure's FunctionType
-                            //
                             Type::Function(fn_type) => {
                                 if let Some(closure_id) = fn_type.closure_id.as_ref() {
                                     let closure = self.get_closure(*closure_id);
                                     let env = &closure.environment_struct;
-                                    Callee::Static {
+                                    Ok(Either::Right(Callee::Static {
                                         function_id: closure.body_function_id,
                                         closure_environment: Some(Box::new(env.clone())),
-                                    }
+                                    }))
                                 } else {
-                                    return failf!(fn_call.span, "Trying to call an unknown function; to perform dynamic dispatch, callee must be a reference");
+                                    failf!(
+                                        fn_call.span,
+                                        "Unsupported dynamic callee: {}",
+                                        self.type_id_to_string(v.type_id)
+                                    )
                                 }
                             }
-                            // If you try to 'call' a pointer to a struct w/ a function pointer and an env
-                            // pointer, that's a dynamic call!
-                            Type::Reference(reference) => {
-                                let Some(ClosureStructTypes { .. }) =
-                                    self.types.as_closure_struct(reference.inner_type)
-                                else {
-                                    return failf!(fn_call.span, "todo");
-                                };
-                                Callee::Dynamic(Box::new(TypedExpr::Variable(VariableExpr {
-                                    variable_id,
-                                    type_id: v.type_id,
-                                    span: fn_call.name.span,
-                                })))
+                            Type::Struct(_s) => {
+                                if self.types.as_closure_struct(v.type_id).is_some() {
+                                    Ok(Either::Right(Callee::DynamicClosure(Box::new(
+                                        TypedExpr::Variable(VariableExpr {
+                                            variable_id,
+                                            type_id: v.type_id,
+                                            span: fn_call.name.span,
+                                        }),
+                                    ))))
+                                } else {
+                                    failf!(
+                                        fn_call.span,
+                                        "Unsupported dynamic callee: {}",
+                                        self.type_id_to_string(v.type_id)
+                                    )
+                                }
                             }
                             _ => {
-                                return failf!(
+                                failf!(
                                     fn_call.span,
                                     "Function not found: '{}'",
                                     self.get_ident_str(fn_name)
-                                );
+                                )
                             }
                         }
                     } else {
-                        return failf!(
+                        failf!(
                             fn_call.span,
                             "Function not found: '{}'",
                             self.get_ident_str(fn_name)
-                        );
+                        )
                     }
                 }
             }
+        }
+    }
+
+    fn resolve_parsed_function_call_method(
+        &mut self,
+        base_expr: TypedExpr,
+        fn_call: &FnCall,
+        _calling_scope: ScopeId,
+        _expected_type: Option<TypeId>,
+    ) -> TyperResult<Either<TypedExpr, Callee>> {
+        let fn_name = fn_call.name.name;
+        let type_id = base_expr.get_type();
+        let base_for_method_derefed = self.types.get_type_id_dereferenced(base_expr.get_type());
+
+        // Handle the special case of the synthesized enum 'as{Variant}' methods
+        if let Some(enum_as_result) =
+            self.handle_enum_as(base_for_method_derefed, &base_expr, fn_call)?
+        {
+            return Ok(Either::Left(enum_as_result));
+        }
+        let method_id = match self.types.get(base_for_method_derefed) {
+            Type::Enum(e) => {
+                let Some(enum_defn_info) = e.type_defn_info.as_ref() else {
+                    return make_fail_span(
+                        "Anonymous enums currently have no methods",
+                        fn_call.span,
+                    );
+                };
+                if let Some(enum_companion_ns) = enum_defn_info.companion_namespace {
+                    let enum_scope = self.get_namespace_scope(enum_companion_ns);
+                    enum_scope.find_function(fn_name)
+                } else {
+                    None
+                }
+            }
+            _other_type => {
+                if let Some(companion_ns) = self
+                    .types
+                    .get_defn_info(base_for_method_derefed)
+                    .and_then(|d| d.companion_namespace)
+                {
+                    let companion_scope = self.get_namespace_scope(companion_ns);
+                    companion_scope.find_function(fn_name)
+                } else {
+                    None
+                }
+            }
         };
-        Ok(Either::Right(callee))
+        let ability_fn_id = if method_id.is_none() {
+            match self.types.get(base_expr.get_type()) {
+                // For a type variable, we must check for impls in a different place
+                Type::TypeVariable(tv) => {
+                    if !tv.ability_impls.is_empty() {
+                        let mut matching_fns = Vec::new();
+                        for ability_id in tv.ability_impls.iter() {
+                            let ability = self.get_ability(*ability_id);
+                            let matching_fn = ability.find_function_by_name(fn_name);
+                            if let Some((_matching_index, generic_fn)) = matching_fn {
+                                matching_fns.push(generic_fn.function_id)
+                            }
+                        }
+                        if matching_fns.is_empty() {
+                            Ok(None)
+                        } else if matching_fns.len() > 1 {
+                            failf!(fn_call.span, "Ambiguous Type Variable ability")
+                        } else {
+                            Ok(Some(matching_fns[0]))
+                        }
+                    } else {
+                        Ok(None)
+                    }
+                }
+                _ => self.find_ability_implementation(fn_name, type_id, None, fn_call.span),
+            }?
+        } else {
+            None
+        };
+        match method_id.or(ability_fn_id) {
+            Some(function_id) => Ok(Either::Right(Callee::make_static(function_id))),
+            None => failf!(
+                fn_call.span,
+                "Method '{}' does not exist on type {}",
+                self.get_ident_str(fn_name),
+                self.type_id_to_string(type_id),
+            ),
+        }
     }
 
     fn find_ability_implementation(
@@ -5350,12 +5383,69 @@ impl TypedModule {
                 matching_fns.push(impl_fn_id);
             }
         }
-        if matching_fns.len() == 0 {
+        if matching_fns.is_empty() {
             Ok(None)
         } else if matching_fns.len() > 1 {
             failf!(span, "Ambiguous ability")
         } else {
             Ok(Some(matching_fns[0]))
+        }
+    }
+
+    fn handle_enum_as(
+        &mut self,
+        base_type_id: TypeId,
+        base_expr: &TypedExpr,
+        fn_call: &FnCall,
+    ) -> TyperResult<Option<TypedExpr>> {
+        let Type::Enum(e) = self.types.get(base_type_id) else { return Ok(None) };
+        let fn_name = self.get_ident_str(fn_call.name.name);
+        if fn_name.starts_with("as") && fn_call.type_args.is_empty() && fn_call.args.len() == 1 {
+            let span = fn_call.span;
+            let Some(variant) = e.variants.iter().find(|v| {
+                let mut s = String::with_capacity(16);
+                s.push_str("as");
+                let name = self.get_ident_str(v.name);
+                let name_capitalized = strings::capitalize_first(name);
+                s.push_str(&name_capitalized);
+
+                fn_name == s
+            }) else {
+                return failf!(
+                    span,
+                    "Method '{}' does not exist on type {}",
+                    fn_name,
+                    self.type_id_to_string(base_expr.get_type())
+                );
+            };
+            let variant_type_id = variant.my_type_id;
+            let condition = TypedExpr::EnumIsVariant(TypedEnumIsVariantExpr {
+                target_expr: Box::new(base_expr.clone()),
+                variant_name: variant.name,
+                variant_index: variant.index,
+                span,
+            });
+            let parsed_id = fn_call.args[0].value.into();
+            let consequent = self.synth_optional_some(
+                parsed_id,
+                TypedExpr::Cast(TypedCast {
+                    cast_type: CastType::KnownNoOp,
+                    base_expr: Box::new(base_expr.clone()),
+                    target_type_id: variant.my_type_id,
+                    span,
+                }),
+            );
+            let alternate = self.synth_optional_none(variant_type_id, parsed_id, span);
+
+            Ok(Some(TypedExpr::If(Box::new(TypedIf {
+                ty: consequent.get_type(),
+                condition,
+                consequent,
+                alternate,
+                span,
+            }))))
+        } else {
+            Ok(None)
         }
     }
 
@@ -5385,7 +5475,7 @@ impl TypedModule {
             Type::Enum(e) => {
                 // We only do this _if_ the name matches a variant of the enum
                 // Otherwise we are happy to fall through to a regular method call
-                if let Some(_) = e.variant_by_name(variant_name) {
+                if let Some(_variant) = e.variant_by_name(variant_name) {
                     Ok(Some(self.eval_enum_constructor(
                         base_type_in_scope,
                         variant_name,
@@ -5585,7 +5675,6 @@ impl TypedModule {
         let is_closure = params.first().is_some_and(|p| p.name == get_ident!(self, "__clos_env"));
         let params = if is_closure { &params[1..] } else { params };
         let explicit_param_count = params.iter().filter(|p| !p.is_context).count();
-        let context_param_count = params.len() - explicit_param_count;
         let total_expected =
             if explicit_context_args { params.len() } else { explicit_param_count };
         let actual_passed_args = fn_call.explicit_context_args.iter().chain(fn_call.args.iter());
@@ -5623,8 +5712,8 @@ impl TypedModule {
                 None => {
                     let matching_param_by_name =
                         actual_passed_args.clone().find(|arg| arg.name == Some(fn_param.name));
-                    let matching_param = matching_param_by_name
-                        .or(actual_passed_args.clone().nth(param_index as usize));
+                    let matching_param =
+                        matching_param_by_name.or(actual_passed_args.clone().nth(param_index));
                     let Some(param) = matching_param else {
                         return make_fail_span(
                             format!(
@@ -5656,15 +5745,28 @@ impl TypedModule {
         Ok(final_args)
     }
 
-    fn get_callee_function_type(&self, callee: &Callee) -> TypeId {
+    pub fn get_callee_function_type(&self, callee: &Callee) -> TypeId {
         match callee {
             Callee::Static { function_id, .. } => self.get_function(*function_id).type_id,
-            Callee::Dynamic(dynamic) => match self.types.as_closure_struct(dynamic.get_type()) {
-                Some(ClosureStructTypes { fn_type_id, .. }) => fn_type_id,
-                None => {
-                    panic!("Invalid dynamic function callee: {:?}", dynamic)
+            Callee::DynamicPtr(function_reference_expr) => {
+                let function_reference_type = self
+                    .types
+                    .get(function_reference_expr.get_type())
+                    .expect_reference()
+                    .inner_type;
+                function_reference_type
+            }
+            Callee::DynamicClosure(dynamic) => {
+                match self.types.as_closure_struct(dynamic.get_type()) {
+                    Some(ClosureStructTypes { fn_type_id, .. }) => fn_type_id,
+                    None => {
+                        panic!(
+                            "Invalid dynamic function callee: {}",
+                            self.type_id_to_string(dynamic.get_type())
+                        )
+                    }
                 }
-            },
+            }
         }
     }
 
@@ -5693,7 +5795,7 @@ impl TypedModule {
         // - x So we just need to make sure the dynamic callee has an expr for its environment as well!
 
         // Now that we have resolved to a function id, we need to specialize it if generic
-        let original_function = callee.as_static().map(|f| self.get_function(f));
+        let original_function = callee.maybe_function_id().map(|f| self.get_function(f));
         let is_generic = original_function.is_some_and(|f| !f.type_params.is_empty());
 
         let (callee, typechecked_arguments, type_args) = match is_generic {
@@ -5713,7 +5815,7 @@ impl TypedModule {
             }
             true => {
                 let original_function = original_function.unwrap();
-                let function_id = callee.as_static().unwrap();
+                let function_id = callee.maybe_function_id().unwrap();
                 let type_params = &original_function.type_params;
                 let intrinsic_type = original_function.intrinsic_type;
 
@@ -5774,7 +5876,7 @@ impl TypedModule {
         expected_type_id: Option<TypeId>,
     ) -> TyperResult<Vec<TypeParam>> {
         let generic_function = self.get_function(generic_function_id);
-        let function_return_type = generic_function.ret_type;
+        let function_return_type = generic_function.return_type;
         let generic_type_params = generic_function.type_params.clone();
         debug_assert!(!generic_type_params.is_empty());
         let generic_name = generic_function.name;
@@ -5879,7 +5981,7 @@ impl TypedModule {
                 let implementation = self.ability_impls.iter().find(|imp| {
                     imp.type_id == param_given.type_id && imp.ability_id == *constrained_ability_id
                 });
-                if !implementation.is_some() {
+                if implementation.is_none() {
                     return failf!(
                         fn_call.span,
                         "Cannot invoke function '{}' with type parameter {} = {}; does not satisfy ability constraint {}",
@@ -5912,35 +6014,32 @@ impl TypedModule {
             self.type_id_to_string(passed_expr).blue(),
             self.type_id_to_string(argument_type).blue()
         );
-        match (
+        if let (Some(passed_info), Some(arg_info)) = (
             self.types.get_generic_instance_info(passed_expr),
             self.types.get_generic_instance_info(argument_type),
         ) {
-            (Some(passed_info), Some(arg_info)) => {
-                // expr: NewArray<int> arg: NewArray<T>
-                if passed_info.generic_parent == arg_info.generic_parent {
-                    debug!(
-                        "comparing generic instances of {}",
-                        self.type_id_to_string(arg_info.generic_parent)
-                    );
-                    // We can directly 'solve' every appearance of a type param here
-                    for (passed_type, arg_slot) in
-                        passed_info.param_values.iter().zip(arg_info.param_values.iter())
-                    {
-                        self.solve_generic_params(
-                            solved_params,
-                            *passed_type,
-                            *arg_slot,
-                            scope_id,
-                            span,
-                        )?;
-                    }
-                } else {
-                    debug!("compared generic instances but they didn't match parent types");
+            // expr: NewArray<int> arg: NewArray<T>
+            if passed_info.generic_parent == arg_info.generic_parent {
+                debug!(
+                    "comparing generic instances of {}",
+                    self.type_id_to_string(arg_info.generic_parent)
+                );
+                // We can directly 'solve' every appearance of a type param here
+                for (passed_type, arg_slot) in
+                    passed_info.param_values.iter().zip(arg_info.param_values.iter())
+                {
+                    self.solve_generic_params(
+                        solved_params,
+                        *passed_type,
+                        *arg_slot,
+                        scope_id,
+                        span,
+                    )?;
                 }
-                return Ok(());
+            } else {
+                debug!("compared generic instances but they didn't match parent types");
             }
-            _ => {}
+            return Ok(());
         }
 
         match (self.types.get(passed_expr), self.types.get(argument_type)) {
@@ -6067,7 +6166,7 @@ impl TypedModule {
     fn get_specialized_function_for_call(
         &mut self,
         fn_call: &FnCall,
-        inferred_or_passed_type_args: &Vec<TypeParam>,
+        inferred_or_passed_type_args: &[TypeParam],
         generic_function_id: FunctionId,
         intrinsic_type: Option<IntrinsicFunction>,
         calling_scope: ScopeId,
@@ -6129,7 +6228,7 @@ impl TypedModule {
         for type_param in inferred_or_passed_type_args.iter() {
             debug!(
                 "Adding type param {}: {} to scope for specialized function {}",
-                &*self.get_ident_str(type_param.ident),
+                self.get_ident_str(type_param.ident),
                 self.type_id_to_string(type_param.type_id),
                 name
             );
@@ -6138,12 +6237,10 @@ impl TypedModule {
                 .get_scope_mut(spec_fn_scope_id)
                 .add_type(type_param.ident, type_param.type_id)
             {
-                return make_fail_span(
-                    &format!(
-                        "Type {} already existed in spec fn scope",
-                        self.get_ident_str(type_param.ident)
-                    ),
+                return failf!(
                     generic_function_span,
+                    "Type {} already existed in spec fn scope",
+                    self.get_ident_str(type_param.ident)
                 );
             }
         }
@@ -6201,7 +6298,7 @@ impl TypedModule {
                 TypedFunctionKind::Closure => true,
                 TypedFunctionKind::Standard | TypedFunctionKind::AbilityImpl { .. } => {
                     let is_generic =
-                        self.types.does_type_reference_type_variables(function.ret_type)
+                        self.types.does_type_reference_type_variables(function.return_type)
                             || function.params.iter().any(|param| {
                                 self.types.does_type_reference_type_variables(param.type_id)
                             });
@@ -6338,20 +6435,17 @@ impl TypedModule {
     ) -> Result<IntrinsicFunction, String> {
         let fn_name_str = self.ast.identifiers.get_name(fn_name);
         let second = namespace_chain.get(1).map(|id| self.get_ident_str(*id));
-        // eprintln!(
-        //     "Resolve intrinsic chain {} {:?}",
-        //     second.unwrap_or("None"),
-        //     specialization_params
-        // );
         let result = if let Some((ability_id, ability_impl_type_id)) = ability_impl_info {
             match (ability_id, self.types.get(ability_impl_type_id)) {
-                (EQUALS_ABILITY_ID, _t) if ability_impl_type_id == STRING_TYPE_ID => {
-                    if fn_name_str == "equals" {
-                        Some(IntrinsicFunction::StringEquals)
-                    } else {
-                        None
-                    }
-                }
+                // Leaving this example of how to do intrinsic ability fns
+                // Even though we have bitwise below
+                // (EQUALS_ABILITY_ID, _t) if ability_impl_type_id == STRING_TYPE_ID => {
+                //     if fn_name_str == "equals" {
+                //         Some(IntrinsicFunction::StringEquals)
+                //     } else {
+                //         None
+                //     }
+                // }
                 (BITWISE_ABILITY_ID, Type::Integer(_)) => match fn_name_str {
                     "bitNot" => Some(IntrinsicFunction::BitNot),
                     "bitAnd" => Some(IntrinsicFunction::BitAnd),
@@ -6367,10 +6461,6 @@ impl TypedModule {
             match second {
                 // _root
                 None => match fn_name_str {
-                    "printInt" => Some(IntrinsicFunction::PrintInt),
-                    "printUInt" => Some(IntrinsicFunction::PrintUInt),
-                    "print" => Some(IntrinsicFunction::PrintString),
-                    "exit" => Some(IntrinsicFunction::Exit),
                     "sizeOf" => Some(IntrinsicFunction::SizeOf),
                     "alignOf" => Some(IntrinsicFunction::AlignOf),
                     "typeId" => Some(IntrinsicFunction::TypeId),
@@ -6379,7 +6469,6 @@ impl TypedModule {
                 },
                 Some("string") => match fn_name_str {
                     // Ability impl
-                    "equals" => Some(IntrinsicFunction::StringEquals),
                     _ => None,
                 },
                 Some("Array") => match fn_name_str {
@@ -6463,13 +6552,13 @@ impl TypedModule {
             Some(Type::EnumVariant(ev)) if ev.my_type_id == variant_type_id => variant_type_id,
             _ => enum_type,
         };
-        return Ok(TypedExpr::EnumConstructor(TypedEnumConstructor {
+        Ok(TypedExpr::EnumConstructor(TypedEnumConstructor {
             type_id: output_type,
             variant_name,
             variant_index,
             payload,
             span,
-        }));
+        }))
     }
 
     fn eval_function_predecl(
@@ -6761,7 +6850,7 @@ impl TypedModule {
         let function = TypedFunction {
             name,
             scope: fn_scope_id,
-            ret_type: return_type,
+            return_type,
             params,
             type_params,
             block: None,
@@ -6817,7 +6906,7 @@ impl TypedModule {
         let function = self.get_function(declaration_id);
         let function_name = function.name;
         let fn_scope_id = function.scope;
-        let ret_type = function.ret_type;
+        let ret_type = function.return_type;
         let is_extern = matches!(function.linkage, Linkage::External(_));
         let ast_id = function.parsed_id.as_function_id().expect("expected function id");
         let is_intrinsic = function.intrinsic_type.is_some();
@@ -6837,13 +6926,11 @@ impl TypedModule {
                     self.type_id_to_string(block.expr_type)
                 );
                 if let Err(msg) = self.check_types(ret_type, block.expr_type, fn_scope_id) {
-                    return make_fail_span(
-                        format!(
-                            "Function {} return type mismatch: {}",
-                            &*self.get_ident_str(function_name),
-                            msg
-                        ),
+                    return failf!(
                         function_span,
+                        "Function {} return type mismatch: {}",
+                        self.get_ident_str(function_name),
+                        msg
                     );
                 } else {
                     Some(block)
@@ -7085,7 +7172,7 @@ impl TypedModule {
                 }
             }
             if let Err(msg) =
-                self.check_types(generic.ret_type, specialized.ret_type, impl_scope_id)
+                self.check_types(generic.return_type, specialized.return_type, impl_scope_id)
             {
                 return make_fail_span(
                     format!(
@@ -7611,7 +7698,7 @@ impl TypedModule {
             (TypedPattern::Enum(enum_pat), PatternConstructor::Enum { variant_name, inner }) => {
                 if *variant_name == enum_pat.variant_tag_name {
                     match (enum_pat.payload.as_ref(), inner) {
-                        (Some(payload), Some(inner)) => self.pattern_matches(&payload, inner),
+                        (Some(payload), Some(inner)) => self.pattern_matches(payload, inner),
                         (None, None) => true,
                         _ => false,
                     }
@@ -7704,9 +7791,7 @@ impl TypedModule {
     fn synth_reference(&mut self, base: TypedExpr) -> TypedExpr {
         TypedExpr::UnaryOp(UnaryOp {
             kind: UnaryOpKind::Reference,
-            type_id: self
-                .types
-                .add_type(Type::Reference(ReferenceType { inner_type: base.get_type() })),
+            type_id: self.types.add_reference_type(base.get_type()),
             span: base.get_span(),
             expr: Box::new(base),
         })
