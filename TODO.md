@@ -101,7 +101,6 @@
 - [x] floating point (f32 and f64)
 - [x] 'Context' system; implicit stack arguments
 - [x] Pass caller source location for assert
-- [ ] LLVM: avoid loading aggregate values directly
 - [ ] Closures
   - [x] Direct calls, no captures
   - [ ] Support captures, but explicit only 
@@ -117,12 +116,13 @@
   - [ ] 'when' keyword is bad; `switch` maybe or `case`
   - [ ] It would be really nice _not_ to take the keyword 'type'. Just a thought from using Rust/Scala
 - [x] Remove tag literals, make enum tags per-enum
+- [ ] LLVM: avoid loading aggregate values directly
 - [ ] Imports
 - [ ] Make demo readme / site
 - [ ] Define clear 'platform layer' (crash, alloc/free, other?). Then we could do an LLVM interp platform and a rust interpreter platform
 - [x] Function types (functions have types but there's no syntax for describing a function type yet)
 - [ ] Optional coalescing field accessor (x?.y)
-- [ ] function pointers (By taking the static address of a function as Pointer)
+- [x] function pointers (By taking the static address of a function as Pointer)
 - [x] Finish/fix simple generic inference
 - [x] Prevent function overloading in same namespace
 - [x] Typecheck the binary ops

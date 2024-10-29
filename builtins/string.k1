@@ -66,14 +66,14 @@ namespace string {
   }
 
   fn splitByChar(self: string, delim: char): Array[string] {
-    val results = &Array::new[Array[char]](0);
-    mut accum = &Array::new[char](0);
+    val results = &Array::empty[Array[char]]();
+    mut accum = &Array::empty[char]();
     // Note(stdlib slow): TODO: use ranges instead to make this zero-copy!!
     for c in self do {
       if c == delim {
         if accum.nonEmpty() { 
           results.push(accum);
-          accum = &Array::new[char](0);
+          accum = &Array::empty[char]();
         }
       } else {
         accum.push(c);

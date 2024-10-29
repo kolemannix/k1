@@ -9,8 +9,6 @@ fn main(): int {
   assert(point2.y == 20);
 
   // Move 8 bytes
-  //FIXME: the specialized sizeOf doesnt take a type param but we still pass
-  //      one in the 'call' so it 'just works'...
   assert(sizeOf[int]() == 8);
   val pointShifted = ((pointPtr as u64) + sizeOf[int]()) as Pointer;
   val point3 = pointShifted as Point*;

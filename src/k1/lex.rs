@@ -485,7 +485,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
 
     fn eat_token(&mut self) -> LexResult<Option<Token>> {
         let mut tok_buf = String::new();
-        // FIXME: Am I crazy or is this just always tok_buf.len()?!?!?!
+        // FIXME(lexer): Am I crazy or is this just always tok_buf.len()?!?!?!
         let mut tok_len = 0;
         let mut is_line_comment = false;
         let mut line_comment_start = 0;
