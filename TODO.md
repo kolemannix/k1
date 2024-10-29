@@ -101,8 +101,9 @@
 - [x] floating point (f32 and f64)
 - [x] 'Context' system; implicit stack arguments
 - [x] Pass caller source location for assert
+- [ ] LLVM: avoid loading aggregate values directly
 - [ ] Closures
-  - [ ] Direct calls, no captures
+  - [x] Direct calls, no captures
   - [ ] Support captures, but explicit only 
 - [ ] 'join' types to form new enums/structs, statically, like Roc
 - [ ] Change reference and dereference syntax to x.& and x.*

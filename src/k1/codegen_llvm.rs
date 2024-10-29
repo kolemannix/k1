@@ -1819,6 +1819,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let closure_struct_type =
                     self.codegen_type(closure_object_type.struct_representation)?.expect_struct();
 
+                // nocommit: Use insertvalue
                 let ptr = self.builder.build_alloca(closure_struct_type.struct_type, "closure");
                 let fn_ptr = self
                     .builder
@@ -1832,7 +1833,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.builder.build_store(fn_ptr, llvm_fn.as_global_value().as_pointer_value());
                 self.builder.build_store(env_ptr, environment_ptr);
 
-                Ok(LlvmValue::BasicValue(ptr.as_basic_value_enum()))
+                let closure_struct =
+                    self.builder.build_load(closure_struct_type.struct_type, ptr, "closure");
+
+                Ok(LlvmValue::BasicValue(closure_struct))
             }
             TypedExpr::FunctionName(fn_name_expr) => {
                 let function_value = self.codegen_function_or_get(fn_name_expr.function_id)?;
@@ -2184,24 +2188,24 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             Callee::StaticFunction(function_id) => {
                 let function_value = self.codegen_function_or_get(*function_id)?;
 
-                // self.set_debug_location(call.span);
+                self.set_debug_location(call.span);
                 self.builder.build_call(function_value, args.make_contiguous(), "")
             }
             Callee::StaticClosure { function_id, closure_type_id } => {
                 let closure_env_ptr =
-                    self.closure_environments.get(&closure_type_id).unwrap().as_basic_value_enum();
+                    self.closure_environments.get(closure_type_id).unwrap().as_basic_value_enum();
                 args.push_front(closure_env_ptr.into());
 
                 let function_value = self.codegen_function_or_get(*function_id)?;
 
-                // self.set_debug_location(call.span);
+                self.set_debug_location(call.span);
                 self.builder.build_call(function_value, args.make_contiguous(), "")
             }
             Callee::DynamicFunction(function_reference_expr) => {
                 let function_ptr =
                     self.codegen_expr_basic_value(function_reference_expr)?.into_pointer_value();
 
-                // self.set_debug_location(call.span);
+                self.set_debug_location(call.span);
                 self.builder.build_indirect_call(
                     llvm_function_type,
                     function_ptr,
@@ -2707,14 +2711,20 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
         let module_pass_manager: PassManager<LlvmModule<'ctx>> = PassManager::create(());
         if optimize {
-            module_pass_manager.add_cfg_simplification_pass();
             module_pass_manager.add_scalar_repl_aggregates_pass_ssa();
             module_pass_manager.add_promote_memory_to_register_pass();
             module_pass_manager.add_new_gvn_pass();
-            module_pass_manager.add_instruction_combining_pass();
+            module_pass_manager.add_aggressive_inst_combiner_pass();
+            module_pass_manager.add_memcpy_optimize_pass();
+            module_pass_manager.add_scoped_no_alias_aa_pass();
+            module_pass_manager.add_type_based_alias_analysis_pass();
             module_pass_manager.add_sccp_pass();
             module_pass_manager.add_aggressive_dce_pass();
+            module_pass_manager.add_ind_var_simplify_pass();
+            module_pass_manager.add_loop_idiom_pass();
+            module_pass_manager.add_loop_unroll_pass();
             module_pass_manager.add_function_inlining_pass();
+            module_pass_manager.add_cfg_simplification_pass();
         }
 
         module_pass_manager.add_function_attrs_pass();

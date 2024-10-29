@@ -1879,18 +1879,7 @@ impl TypedModule {
                     return_type,
                     defn_info: None,
                 }));
-                //
-                // nocommit: This is kind of an abuse of Struct, would be better to introduce
-                // "FunctionObject" or Closure type but I don't like adding new type
-                // kinds either, so kinda stuck. Maybe its really a trait object, hah
-                //
-                //
-                // Plan:
-                // - X Explicitly mark a closure env arg as such, ignore when typechecking functions
-                //   don't ignore in codegen, etc
-                // - X Introduce an AbstractClosure type, used wherever this struct is used,
-                // - A closure instance matches an abstract if their functions are shaped the same
-                // - An abstract closure matches another abstract closure if their functions are shaped the same
+
                 let env_type = self.types.add_type(Type::Struct(StructType {
                     fields: vec![],
                     type_defn_info: None,
@@ -2699,6 +2688,13 @@ impl TypedModule {
             (Type::ClosureObject(closure_object), Type::Closure(closure_type)) => {
                 self.check_types(closure_object.function_type, closure_type.function_type, scope_id)
             }
+            (Type::ClosureObject(exp_closure_object), Type::ClosureObject(act_closure_object)) => {
+                self.check_types(
+                    exp_closure_object.function_type,
+                    act_closure_object.function_type,
+                    scope_id,
+                )
+            }
             (Type::Function(f1), Type::Function(f2)) => {
                 // nocommit: Make this nice
                 if let Err(msg) = self.check_types(f1.return_type, f2.return_type, scope_id) {
@@ -3200,30 +3196,6 @@ impl TypedModule {
                 }
             }
         };
-        //nocommit don't need this coercion case; closures are simply subtypes of closureobjects
-        //if let Some(closure_types) = self.types.as_closure_struct(expected_type_id) {
-        //    if let Type::Closure(closure_type) = self.types.get(expression.get_type()) {
-        //        let body_function_id = closure_type.body_function_id;
-        //        let environment_struct = closure_type.environment_struct.clone();
-        //        let struct_repr_type = closure_type.struct_repr_type;
-        //        if self
-        //            .check_types(closure_types.fn_type_id, closure_type.function_type, scope_id)
-        //            .is_ok()
-        //        {
-        //            eprintln!("coerce closure to fn-object");
-        //            let environment_struct_ref = self.synth_reference(environment_struct);
-        //            let fn_reference_expr =
-        //                self.synth_function_reference_expr(body_function_id, expression.get_span());
-        //            let closure_expr = self.synth_struct_expr(
-        //                struct_repr_type,
-        //                vec![fn_reference_expr, environment_struct_ref],
-        //                scope_id,
-        //                expression.get_span(),
-        //            );
-        //            return CoerceResult::Coerced("closure-to-object", closure_expr);
-        //        }
-        //    }
-        //}
         if let Type::OpaqueAlias(opaque) = self.types.get(expected_type_id) {
             // Note: The opaque conversion should probably be something more clear like a cast
             //       that only works in here, or a function thats only available inside?
@@ -5379,7 +5351,7 @@ impl TypedModule {
             None => failf!(
                 fn_call.span,
                 "Method '{}' does not exist on type {}",
-                self.get_ident_str(fn_name).blue(),
+                self.get_ident_str(fn_name),
                 self.type_id_to_string(type_id),
             ),
         }
@@ -6223,6 +6195,22 @@ impl TypedModule {
                     Ok(())
                 }
             }
+            (Type::Closure(passed_closure), Type::ClosureObject(param_closure)) => self
+                .solve_generic_params(
+                    solved_params,
+                    passed_closure.function_type,
+                    param_closure.function_type,
+                    scope_id,
+                    span,
+                ),
+            (Type::ClosureObject(passed_closure), Type::ClosureObject(param_closure)) => self
+                .solve_generic_params(
+                    solved_params,
+                    passed_closure.function_type,
+                    param_closure.function_type,
+                    scope_id,
+                    span,
+                ),
             _ => Ok(()),
         }
     }
