@@ -195,10 +195,6 @@ impl TypedPattern {
 #[derive(Debug, Clone)]
 pub struct TypedClosure {
     pub scope: ScopeId,
-    pub body_function_id: FunctionId,
-    // This kinda crosses the streams; its a value in a 'type'-y thing, but
-    // that's because a closure's environment is basically values baked into a function
-    pub environment_struct: TypedExpr,
     pub environment_struct_reference_type: TypeId,
     pub parsed_expression_id: ParsedExpressionId,
     pub span: SpanId,
@@ -237,9 +233,11 @@ impl TypedBlock {
 pub struct FnArgDefn {
     pub name: Identifier,
     pub variable_id: VariableId,
+    // TODO: Consider dropping these explicit position fields
     pub position: u32,
     pub type_id: TypeId,
     pub is_context: bool,
+    pub is_closure_env: bool,
     pub span: SpanId,
 }
 
@@ -250,6 +248,7 @@ impl FnArgDefn {
             position: self.position,
             type_id: self.type_id,
             is_context: self.is_context,
+            is_closure_env: self.is_closure_env,
             span: self.span,
         }
     }
@@ -472,25 +471,27 @@ pub struct UnaryOp {
 
 #[derive(Debug, Clone)]
 pub enum Callee {
-    // nocommit: break into static fn, static closure
-    Static {
+    StaticFunction(FunctionId),
+    StaticClosure {
         function_id: FunctionId,
-        closure_environment: Option<Box<TypedExpr>>,
+        closure_type_id: TypeId,
     },
-    /// Must be a Struct ptr w/ a function ptr and an environment ptr
+    /// Must contain a ClosureObject
     DynamicClosure(Box<TypedExpr>),
-    DynamicPtr(Box<TypedExpr>),
+    /// Must contain a Function reference
+    DynamicFunction(Box<TypedExpr>),
 }
 
 impl Callee {
     pub fn make_static(function_id: FunctionId) -> Callee {
-        Callee::Static { function_id, closure_environment: None }
+        Callee::StaticFunction(function_id)
     }
     pub fn maybe_function_id(&self) -> Option<FunctionId> {
         match self {
-            Callee::Static { function_id: fn_pointer, .. } => Some(*fn_pointer),
+            Callee::StaticFunction(function_id) => Some(*function_id),
+            Callee::StaticClosure { function_id, .. } => Some(*function_id),
             Callee::DynamicClosure(_) => None,
-            Callee::DynamicPtr(_) => None,
+            Callee::DynamicFunction(_) => None,
         }
     }
 }
@@ -796,8 +797,6 @@ pub enum ControlFlowType {
 #[derive(Debug, Clone)]
 pub struct ClosureExpr {
     pub closure_type: TypeId,
-    pub return_type: TypeId,
-    pub closure_id: ClosureId,
     pub span: SpanId,
 }
 
@@ -841,8 +840,6 @@ pub enum TypedExpr {
     /// Referring to a function by name, if there are no variables in scope with the same name
     /// results in taking a function pointer
     FunctionName(FunctionReferenceExpr),
-    // nocommit: Consider introducing this instead of using Struct exprs to represent closure objects
-    // ClosureStruct()
 }
 
 impl From<VariableExpr> for TypedExpr {
@@ -1860,6 +1857,7 @@ impl TypedModule {
                     name: get_ident!(self, "__clos_env"),
                     position: 0,
                     is_context: false,
+                    is_closure_env: true,
                     span: fun_type.span,
                 });
                 for (index, param) in fun_type.params.iter().enumerate() {
@@ -1871,6 +1869,7 @@ impl TypedModule {
                         name,
                         position: (index + 1) as u32,
                         is_context: false,
+                        is_closure_env: false,
                         span,
                     });
                 }
@@ -1879,30 +1878,32 @@ impl TypedModule {
                     params,
                     return_type,
                     defn_info: None,
-                    closure_id: None,
                 }));
                 //
-                // This is kind of an abuse of Struct, would be better to introduce
+                // nocommit: This is kind of an abuse of Struct, would be better to introduce
                 // "FunctionObject" or Closure type but I don't like adding new type
                 // kinds either, so kinda stuck. Maybe its really a trait object, hah
-                let closure_struct = StructType {
+                //
+                //
+                // Plan:
+                // - X Explicitly mark a closure env arg as such, ignore when typechecking functions
+                //   don't ignore in codegen, etc
+                // - X Introduce an AbstractClosure type, used wherever this struct is used,
+                // - A closure instance matches an abstract if their functions are shaped the same
+                // - An abstract closure matches another abstract closure if their functions are shaped the same
+                let env_type = self.types.add_type(Type::Struct(StructType {
+                    fields: vec![],
                     type_defn_info: None,
-                    fields: vec![
-                        StructTypeField {
-                            index: 0,
-                            name: get_ident!(self, "fn_ptr"),
-                            type_id: self.types.add_reference_type(function_type_id),
-                        },
-                        StructTypeField {
-                            index: 0,
-                            name: get_ident!(self, "env_ptr"),
-                            type_id: empty_struct_reference_id,
-                        },
-                    ],
-                    ast_node: type_expr_id.into(),
                     generic_instance_info: None,
-                };
-                Ok(self.types.add_type(Type::Struct(closure_struct)))
+                    ast_node: type_expr_id.into(),
+                }));
+                let closure_object_type = self.types.add_closure_object(
+                    &self.ast.identifiers,
+                    function_type_id,
+                    env_type,
+                    type_expr_id.into(),
+                );
+                Ok(closure_object_type)
             }
         }?;
         Ok(base)
@@ -2340,6 +2341,14 @@ impl TypedModule {
             Type::Function(_) => {
                 unreachable!("instantiate_generic_type is not expected to be called on a Function")
             }
+            Type::Closure(_) => {
+                unreachable!("instantiate_generic_type is not expected to be called on a Closure")
+            }
+            Type::ClosureObject(_) => {
+                unreachable!(
+                    "instantiate_generic_type is not expected to be called on a ClosureObject"
+                )
+            }
             Type::Never(_) => {
                 unreachable!("instantiate_generic_type is not expected to be called on never")
             }
@@ -2616,6 +2625,7 @@ impl TypedModule {
             return Ok(());
         }
 
+        // nocommit: Should really make generic instance a type kind.
         if let (Some(gen1), Some(gen2)) = (
             self.types.get_generic_instance_info(expected),
             self.types.get_generic_instance_info(actual),
@@ -2665,7 +2675,15 @@ impl TypedModule {
                 self.check_types(o1.inner_type, o2.inner_type, scope_id)
             }
             (Type::Enum(_exp_enum), Type::Enum(_act_enum)) => {
-                todo!()
+                if expected == actual {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "expected enum {} but got enum {}",
+                        self.type_id_to_string(expected),
+                        self.type_id_to_string(actual)
+                    ))
+                }
             }
             (Type::Enum(_expected_enum), Type::EnumVariant(actual_variant)) => {
                 if actual_variant.enum_type_id == expected {
@@ -2676,6 +2694,28 @@ impl TypedModule {
                         self.type_id_to_string(expected),
                         self.get_ident_str(actual_variant.name)
                     ))
+                }
+            }
+            (Type::ClosureObject(closure_object), Type::Closure(closure_type)) => {
+                self.check_types(closure_object.function_type, closure_type.function_type, scope_id)
+            }
+            (Type::Function(f1), Type::Function(f2)) => {
+                // nocommit: Make this nice
+                if let Err(msg) = self.check_types(f1.return_type, f2.return_type, scope_id) {
+                    Err(format!("ret type: {}", msg))
+                } else {
+                    if f1.params.len() != f2.params.len() {
+                        return Err(format!("invalid param count"));
+                    }
+                    for (p1, p2) in f1.params.iter().zip(f2.params.iter()) {
+                        if p1.is_context && p2.is_context {
+                            continue;
+                        }
+                        if let Err(msg) = self.check_types(p1.type_id, p2.type_id, scope_id) {
+                            return Err(format!("invalid param: {}", msg));
+                        }
+                    }
+                    Ok(())
                 }
             }
             (_expected, Type::Never(_)) => Ok(()),
@@ -3160,23 +3200,30 @@ impl TypedModule {
                 }
             }
         };
-        if let Some(closure_types) = self.types.as_closure_struct(expected_type_id) {
-            if let Type::Function(f) = self.types.get(expression.get_type()) {
-                if let Some(closure_id) = f.closure_id {
-                    let closure = self.get_closure(closure_id);
-                    let function_id = closure.body_function_id;
-                    let fn_reference_type = self.types.add_reference_type(expression.get_type());
-                    return CoerceResult::Coerced(
-                        "fn-address",
-                        TypedExpr::FunctionName(FunctionReferenceExpr {
-                            function_id,
-                            span: expression.get_span(),
-                            type_id: fn_reference_type,
-                        }),
-                    );
-                }
-            }
-        }
+        //nocommit don't need this coercion case; closures are simply subtypes of closureobjects
+        //if let Some(closure_types) = self.types.as_closure_struct(expected_type_id) {
+        //    if let Type::Closure(closure_type) = self.types.get(expression.get_type()) {
+        //        let body_function_id = closure_type.body_function_id;
+        //        let environment_struct = closure_type.environment_struct.clone();
+        //        let struct_repr_type = closure_type.struct_repr_type;
+        //        if self
+        //            .check_types(closure_types.fn_type_id, closure_type.function_type, scope_id)
+        //            .is_ok()
+        //        {
+        //            eprintln!("coerce closure to fn-object");
+        //            let environment_struct_ref = self.synth_reference(environment_struct);
+        //            let fn_reference_expr =
+        //                self.synth_function_reference_expr(body_function_id, expression.get_span());
+        //            let closure_expr = self.synth_struct_expr(
+        //                struct_repr_type,
+        //                vec![fn_reference_expr, environment_struct_ref],
+        //                scope_id,
+        //                expression.get_span(),
+        //            );
+        //            return CoerceResult::Coerced("closure-to-object", closure_expr);
+        //        }
+        //    }
+        //}
         if let Type::OpaqueAlias(opaque) = self.types.get(expected_type_id) {
             // Note: The opaque conversion should probably be something more clear like a cast
             //       that only works in here, or a function thats only available inside?
@@ -3739,19 +3786,16 @@ impl TypedModule {
             generic_instance_info: None,
             ast_node: expr_id.into(),
         }));
-        let environment_struct = TypedExpr::Struct(Struct {
-            fields: vec![],
-            type_id: environment_struct_type,
-            span: body_span,
-        });
-        let environment_struct_reference_type = self
-            .types
-            .add_type(Type::Reference(ReferenceType { inner_type: environment_struct_type }));
+        let environment_struct =
+            self.synth_struct_expr(environment_struct_type, vec![], scope_id, body_span);
+        let environment_struct_reference_type =
+            self.types.add_reference_type(environment_struct_type);
         let environment_param = FnArgType {
             name: get_ident!(self, "__clos_env"),
             position: 0,
             type_id: environment_struct_reference_type,
             is_context: false,
+            is_closure_env: true,
             span: body_span,
         };
         typed_params.push(environment_param);
@@ -3778,6 +3822,7 @@ impl TypedModule {
                 position: (index + 1) as u32,
                 type_id: arg_type_id,
                 is_context: false,
+                is_closure_env: false,
                 span: arg.span,
             });
         }
@@ -3799,6 +3844,7 @@ impl TypedModule {
                 position: index as u32,
                 type_id: typed_arg.type_id,
                 is_context: false,
+                is_closure_env: typed_arg.is_closure_env,
                 span: typed_arg.span,
             })
         }
@@ -3808,20 +3854,16 @@ impl TypedModule {
             expected_function_type.map(|f| f.return_type),
         )?;
         let return_type = body.get_type();
-        let closure_type_id = self.types.add_type_ext(
-            Type::Function(FunctionType {
-                params: typed_params,
-                return_type,
-                defn_info: None,
-                closure_id: None,
-            }),
-            false,
-        );
+        let function_type = self.types.add_type(Type::Function(FunctionType {
+            params: typed_params,
+            return_type,
+            defn_info: None,
+        }));
         let encl_fn_name = self.get_function(self.scopes.nearest_parent_function(scope_id)).name;
         let name = self.ast.identifiers.intern(format!(
             "{}_{{closure}}_{}",
             self.get_ident_str(encl_fn_name),
-            closure_type_id
+            closure_scope_id,
         ));
         let name_string = self.make_qualified_name(scope_id, name, "__", true);
         let name = self.ast.identifiers.intern(name_string);
@@ -3836,29 +3878,20 @@ impl TypedModule {
             linkage: Linkage::Standard,
             specializations: vec![],
             parsed_id: expr_id.into(),
-            type_id: closure_type_id,
+            type_id: function_type,
             is_method_of: None,
             kind: TypedFunctionKind::Closure,
             span,
         };
         let body_function_id = self.add_function(function);
-        let closure_id = self.add_closure(TypedClosure {
-            scope: closure_scope_id,
-            body_function_id,
+        let closure_type_id = self.types.add_closure(
+            &self.ast.identifiers,
+            function_type,
             environment_struct,
-            environment_struct_reference_type,
-            parsed_expression_id: expr_id,
-            span,
-        });
-        if let Type::Function(closure_type) = self.types.get_mut(closure_type_id) {
-            closure_type.closure_id = Some(closure_id);
-        };
-        Ok(TypedExpr::Closure(ClosureExpr {
-            return_type,
-            closure_type: closure_type_id,
-            closure_id,
-            span,
-        }))
+            body_function_id,
+            expr_id.into(),
+        );
+        Ok(TypedExpr::Closure(ClosureExpr { closure_type: closure_type_id, span }))
     }
 
     fn eval_match_expr(
@@ -5211,63 +5244,56 @@ impl TypedModule {
                         Ok(Either::Right(Callee::make_static(function_id)))
                     }
                 } else {
-                    if !fn_call.name.namespaces.is_empty() {
-                        return failf!(
-                            fn_call.span,
-                            "Function not found: '{}'",
-                            self.get_ident_str(fn_name)
-                        );
-                    }
-                    if let Some(variable_id) = self.scopes.find_variable(calling_scope, fn_name) {
-                        let v = self.variables.get_variable(variable_id);
-                        match self.types.get(v.type_id) {
-                            Type::Function(fn_type) => {
-                                if let Some(closure_id) = fn_type.closure_id.as_ref() {
-                                    let closure = self.get_closure(*closure_id);
-                                    let env = &closure.environment_struct;
-                                    Ok(Either::Right(Callee::Static {
-                                        function_id: closure.body_function_id,
-                                        closure_environment: Some(Box::new(env.clone())),
-                                    }))
-                                } else {
-                                    failf!(
-                                        fn_call.span,
-                                        "Unsupported dynamic callee: {}",
-                                        self.type_id_to_string(v.type_id)
-                                    )
-                                }
-                            }
-                            Type::Struct(_s) => {
-                                if self.types.as_closure_struct(v.type_id).is_some() {
-                                    Ok(Either::Right(Callee::DynamicClosure(Box::new(
-                                        TypedExpr::Variable(VariableExpr {
-                                            variable_id,
-                                            type_id: v.type_id,
-                                            span: fn_call.name.span,
-                                        }),
-                                    ))))
-                                } else {
-                                    failf!(
-                                        fn_call.span,
-                                        "Unsupported dynamic callee: {}",
-                                        self.type_id_to_string(v.type_id)
-                                    )
-                                }
-                            }
-                            _ => {
-                                failf!(
-                                    fn_call.span,
-                                    "Function not found: '{}'",
-                                    self.get_ident_str(fn_name)
-                                )
-                            }
-                        }
-                    } else {
+                    let fn_not_found = || {
                         failf!(
                             fn_call.span,
                             "Function not found: '{}'",
                             self.get_ident_str(fn_name)
                         )
+                    };
+                    if !fn_call.name.namespaces.is_empty() {
+                        return fn_not_found();
+                    }
+                    if let Some(variable_id) = self.scopes.find_variable(calling_scope, fn_name) {
+                        let function_variable = self.variables.get_variable(variable_id);
+                        match self.types.get(function_variable.type_id) {
+                            Type::Closure(closure_type) => {
+                                Ok(Either::Right(Callee::StaticClosure {
+                                    function_id: closure_type.body_function_id,
+                                    closure_type_id: function_variable.type_id,
+                                }))
+                            }
+                            Type::ClosureObject(_closure_object) => {
+                                Ok(Either::Right(Callee::DynamicClosure(Box::new(
+                                    TypedExpr::Variable(VariableExpr {
+                                        variable_id,
+                                        type_id: function_variable.type_id,
+                                        span: fn_call.name.span,
+                                    }),
+                                ))))
+                            }
+                            Type::Reference(function_reference) => {
+                                if self
+                                    .types
+                                    .get(function_reference.inner_type)
+                                    .as_function()
+                                    .is_some()
+                                {
+                                    Ok(Either::Right(Callee::DynamicFunction(Box::new(
+                                        TypedExpr::Variable(VariableExpr {
+                                            variable_id,
+                                            type_id: function_variable.type_id,
+                                            span: fn_call.name.span,
+                                        }),
+                                    ))))
+                                } else {
+                                    fn_not_found()
+                                }
+                            }
+                            _ => fn_not_found(),
+                        }
+                    } else {
+                        fn_not_found()
                     }
                 }
             }
@@ -5353,7 +5379,7 @@ impl TypedModule {
             None => failf!(
                 fn_call.span,
                 "Method '{}' does not exist on type {}",
-                self.get_ident_str(fn_name),
+                self.get_ident_str(fn_name).blue(),
                 self.type_id_to_string(type_id),
             ),
         }
@@ -5747,8 +5773,10 @@ impl TypedModule {
 
     pub fn get_callee_function_type(&self, callee: &Callee) -> TypeId {
         match callee {
-            Callee::Static { function_id, .. } => self.get_function(*function_id).type_id,
-            Callee::DynamicPtr(function_reference_expr) => {
+            Callee::StaticFunction(function_id) | Callee::StaticClosure { function_id, .. } => {
+                self.get_function(*function_id).type_id
+            }
+            Callee::DynamicFunction(function_reference_expr) => {
                 let function_reference_type = self
                     .types
                     .get(function_reference_expr.get_type())
@@ -5756,17 +5784,15 @@ impl TypedModule {
                     .inner_type;
                 function_reference_type
             }
-            Callee::DynamicClosure(dynamic) => {
-                match self.types.as_closure_struct(dynamic.get_type()) {
-                    Some(ClosureStructTypes { fn_type_id, .. }) => fn_type_id,
-                    None => {
-                        panic!(
-                            "Invalid dynamic function callee: {}",
-                            self.type_id_to_string(dynamic.get_type())
-                        )
-                    }
+            Callee::DynamicClosure(dynamic) => match self.types.get(dynamic.get_type()) {
+                Type::ClosureObject(closure_object) => closure_object.function_type,
+                _ => {
+                    panic!(
+                        "Invalid dynamic function callee: {}",
+                        self.type_id_to_string(dynamic.get_type())
+                    )
                 }
-            }
+            },
         }
     }
 
@@ -5978,10 +6004,16 @@ impl TypedModule {
 
         for (param_defn, param_given) in generic_type_params.iter().zip(type_params.iter()) {
             for constrained_ability_id in param_defn.ability_constraints.iter() {
-                let implementation = self.ability_impls.iter().find(|imp| {
-                    imp.type_id == param_given.type_id && imp.ability_id == *constrained_ability_id
-                });
-                if implementation.is_none() {
+                let has_impl = match self.types.get(param_given.type_id) {
+                    Type::TypeVariable(tv) => {
+                        tv.ability_impls.iter().any(|ai| ai == constrained_ability_id)
+                    }
+                    _other => self.ability_impls.iter().any(|imp| {
+                        imp.type_id == param_given.type_id
+                            && imp.ability_id == *constrained_ability_id
+                    }),
+                };
+                if !has_impl {
                     return failf!(
                         fn_call.span,
                         "Cannot invoke function '{}' with type parameter {} = {}; does not satisfy ability constraint {}",
@@ -6004,9 +6036,14 @@ impl TypedModule {
         scope_id: ScopeId,
         span: SpanId,
     ) -> TyperResult<()> {
-        // val arr: Array<int> = [1, 2, 3];
-        // Array::length<?>(arr)
-        // expr: Array<int>, arg: Array<T>
+        // passed_expr              argument_type -> result
+        //
+        // int                    T                 -> T := int
+        // Array[int]             Array[T]          -> T := int
+        // Pair[int, string]      Pair[T, U]        -> T := int, U := string
+        // Pair[int, string]      Pair[T, U]        -> T := int, U := string
+        // fn(int) -> int         Fn(T) -> T        -> T := int
+        // fn() -> Array[string]  Fn() -> Array[T]  -> T := string
         // expr: int arg: T
         // T := int
         debug!(
@@ -6018,7 +6055,7 @@ impl TypedModule {
             self.types.get_generic_instance_info(passed_expr),
             self.types.get_generic_instance_info(argument_type),
         ) {
-            // expr: NewArray<int> arg: NewArray<T>
+            // expr: NewArray[int] arg: NewArray[T]
             if passed_info.generic_parent == arg_info.generic_parent {
                 debug!(
                     "comparing generic instances of {}",
@@ -6159,6 +6196,33 @@ impl TypedModule {
                     scope_id,
                     span,
                 ),
+            (Type::Function(passed_fn), Type::Function(param_fn)) => {
+                if passed_fn.params.len() == param_fn.params.len() {
+                    for (passed_param, param_param) in
+                        passed_fn.params.iter().zip(param_fn.params.iter())
+                    {
+                        if passed_param.is_closure_env && param_param.is_closure_env {
+                            continue;
+                        }
+                        self.solve_generic_params(
+                            solved_params,
+                            passed_param.type_id,
+                            param_param.type_id,
+                            scope_id,
+                            span,
+                        )?
+                    }
+                    self.solve_generic_params(
+                        solved_params,
+                        passed_fn.return_type,
+                        param_fn.return_type,
+                        scope_id,
+                        span,
+                    )
+                } else {
+                    Ok(())
+                }
+            }
             _ => Ok(()),
         }
     }
@@ -6767,6 +6831,7 @@ impl TypedModule {
                 position: idx as u32,
                 type_id,
                 is_context,
+                is_closure_env: false,
                 span: fn_arg.span,
             });
             if is_context {
@@ -6844,7 +6909,6 @@ impl TypedModule {
                 companion_namespace: None,
                 ast_id: parsed_function_id.into(),
             }),
-            closure_id: None,
         }));
 
         let function = TypedFunction {
@@ -7880,5 +7944,41 @@ impl TypedModule {
             None,
             known_args,
         )
+    }
+
+    fn synth_struct_expr(
+        &mut self,
+        struct_type_id: TypeId,
+        field_exprs: Vec<TypedExpr>,
+        scope_id: ScopeId,
+        span: SpanId,
+    ) -> TypedExpr {
+        let struct_type = self.types.get(struct_type_id).expect_struct();
+        if struct_type.fields.len() != field_exprs.len() {
+            panic!("Mismatching field count: {} / {}", struct_type.fields.len(), field_exprs.len());
+        }
+        let mut fields: Vec<StructField> = Vec::with_capacity(struct_type.fields.len());
+        for (index, field_expr) in field_exprs.into_iter().enumerate() {
+            let field = &struct_type.fields[index];
+            if let Err(msg) = self.check_types(field.type_id, field_expr.get_type(), scope_id) {
+                panic!("synthed struct fields failed typechecking: {}", msg)
+            }
+            fields.push(StructField { name: field.name, expr: field_expr });
+        }
+        TypedExpr::Struct(Struct { fields, type_id: struct_type_id, span })
+    }
+
+    fn synth_function_reference_expr(
+        &mut self,
+        function_id: FunctionId,
+        span: SpanId,
+    ) -> TypedExpr {
+        let fn_type = self.get_function(function_id).type_id;
+        let fn_reference_type = self.types.add_reference_type(fn_type);
+        TypedExpr::FunctionName(FunctionReferenceExpr {
+            function_id,
+            span,
+            type_id: fn_reference_type,
+        })
     }
 }

@@ -260,9 +260,6 @@ impl TypedModule {
             }
             Type::Function(fun) => {
                 writ.write_str("fn")?;
-                if let Some(closure_id) = fun.closure_id.as_ref() {
-                    writ.write_fmt(format_args!("[{closure_id}]"))?;
-                }
                 writ.write_str("(")?;
                 for (idx, param) in fun.params.iter().enumerate() {
                     self.display_type_id(param.type_id, expand, writ)?;
@@ -273,6 +270,18 @@ impl TypedModule {
                 }
                 writ.write_str(") -> ")?;
                 self.display_type_id(fun.return_type, expand, writ)
+            }
+            Type::Closure(clos) => {
+                write!(writ, "closure(")?;
+                self.display_type_id(clos.function_type, expand, writ)?;
+                writ.write_str(")")?;
+                Ok(())
+            }
+            Type::ClosureObject(closure_object) => {
+                writ.write_str("closure_object(")?;
+                self.display_type_id(closure_object.function_type, expand, writ)?;
+                writ.write_str(")")?;
+                Ok(())
             }
             Type::RecursiveReference(rr) => {
                 if rr.is_pending() {
@@ -450,16 +459,15 @@ impl TypedModule {
             }
             TypedExpr::Call(fn_call) => {
                 match &fn_call.callee {
-                    Callee::Static { function_id, closure_environment } => {
+                    Callee::StaticClosure { function_id, .. } => {
                         let name = self.get_function(*function_id).name;
                         writ.write_str(self.get_ident_str(name))?;
-                        if let Some(env) = closure_environment.as_ref() {
-                            writ.write_str("[env=")?;
-                            self.display_expr(env, writ, indentation)?;
-                            writ.write_str("]")?;
-                        }
                     }
-                    Callee::DynamicPtr(callee_expr) => {
+                    Callee::StaticFunction(function_id) => {
+                        let name = self.get_function(*function_id).name;
+                        writ.write_str(self.get_ident_str(name))?;
+                    }
+                    Callee::DynamicFunction(callee_expr) => {
                         self.display_expr(callee_expr, writ, indentation)?;
                     }
                     Callee::DynamicClosure(callee_expr) => {
@@ -528,8 +536,8 @@ impl TypedModule {
             }
             TypedExpr::Closure(closure_expr) => {
                 writ.write_char('\\')?;
-                let closure = self.get_closure(closure_expr.closure_id);
-                let fn_type = self.types.get(closure_expr.closure_type).as_function().unwrap();
+                let closure_type = self.types.get(closure_expr.closure_type).as_closure().unwrap();
+                let fn_type = self.types.get(closure_type.function_type).as_function().unwrap();
                 for arg in fn_type.params.iter() {
                     writ.write_str(self.get_ident_str(arg.name))?;
                     writ.write_str(": ")?;
@@ -537,7 +545,7 @@ impl TypedModule {
                 }
                 writ.write_str(" -> ")?;
                 let closure_body =
-                    self.get_function(closure.body_function_id).block.as_ref().unwrap();
+                    self.get_function(closure_type.body_function_id).block.as_ref().unwrap();
                 self.display_block(closure_body, writ, indentation)?;
                 Ok(())
             }

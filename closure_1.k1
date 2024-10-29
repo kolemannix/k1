@@ -1,8 +1,9 @@
-fn map(a: Array[int], f: \int -> int): Array[int] {
+fn map[T, U](a: Array[T], f: \T -> U): Array[U] where U: Show {
   val result = for i in a yield { f(i) };
   for x in result do {
     printIt(x)
-  }
+  };
+  result
 }
 
 fn staticAddOne(x: int): int { x + 1 }
@@ -21,8 +22,10 @@ fn main(): int {
   printInt(addOne3(3));
 
 
+
+
   // round 4
-  map([1,2,3], \x: int -> x + 1);
+  map([1,2,3], \x: int -> "hello");
 
   // Infer type of x?
   // map([1,2,3], \x -> x + 1);
