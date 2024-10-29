@@ -5786,12 +5786,6 @@ impl TypedModule {
 
         let span = fn_call.span;
 
-        // Dynamic dispatch todo:
-        // - x We need get the params and ret type using the common function_type, not the function_id
-        // - x We need to make sure we only do the static stuff in the static case
-        // - x In codegen is where we worry about the difference between a static and dynamic call
-        // - x So we just need to make sure the dynamic callee has an expr for its environment as well!
-
         // Now that we have resolved to a function id, we need to specialize it if generic
         let original_function = callee.maybe_function_id().map(|f| self.get_function(f));
         let is_generic = original_function.is_some_and(|f| !f.type_params.is_empty());
