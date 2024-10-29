@@ -1,0 +1,25 @@
+fn addTracked(context hist: Array[string]*)(x: int, y: int): int {
+  hist.push(x.show().concat(" + ").concat(y.show()));
+  x + y
+}
+
+fn addAll(context a: u8, b: u16)(x: int, y: int): int {
+  x + y
+}
+
+fn main(): int {
+  context val history: Array[string]* = new([]);
+
+  assert(addTracked(context history)(1,2) == 3);
+
+  assert(addTracked(3,4) == 7);
+
+  context val u: u8 = 1;
+  context val v: u16 = 1;
+  addAll(4, 5);
+
+  // FIXME: should not require deref
+  println((*history).show());
+  assert((*history) == ["1 + 2","3 + 4"]);
+  0
+}
