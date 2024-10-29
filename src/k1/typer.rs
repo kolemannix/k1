@@ -2696,19 +2696,26 @@ impl TypedModule {
                 )
             }
             (Type::Function(f1), Type::Function(f2)) => {
-                // nocommit: Make this nice
                 if let Err(msg) = self.check_types(f1.return_type, f2.return_type, scope_id) {
-                    Err(format!("ret type: {}", msg))
+                    Err(format!("Wrong return type: {}", msg))
                 } else {
                     if f1.params.len() != f2.params.len() {
-                        return Err(format!("invalid param count"));
+                        return Err(format!(
+                            "Wrong parameter count: expected {} but got {}",
+                            f1.params.len(),
+                            f2.params.len()
+                        ));
                     }
                     for (p1, p2) in f1.params.iter().zip(f2.params.iter()) {
                         if p1.is_context && p2.is_context {
                             continue;
                         }
                         if let Err(msg) = self.check_types(p1.type_id, p2.type_id, scope_id) {
-                            return Err(format!("invalid param: {}", msg));
+                            return Err(format!(
+                                "Incorrect type for parameter '{}': {}",
+                                self.get_ident_str(p1.name),
+                                msg
+                            ));
                         }
                     }
                     Ok(())
