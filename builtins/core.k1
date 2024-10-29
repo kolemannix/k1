@@ -38,7 +38,6 @@ type alias int = i64
 type alias uint = u64
 type alias byte = u8
 
-
 // type TypeInfo = enum Unit, Boolean(enum False, True), Int,
 //
 // type Any = {
@@ -59,9 +58,6 @@ ability Show {
 intern fn sizeOf[T](): u64
 intern fn alignOf[T](): u64
 intern fn typeId[T](): bool
-fn typeEq[T, U](): bool {
-  typeId[T]() == typeId[U]()
-}
 
 fn new[T](value: T): T* {
   val ptr = _k1_malloc(sizeOf[T]());
@@ -162,12 +158,12 @@ fn printBool(value: bool): unit {
   if value { print("true") } else { print("false") }
 }
 
-fn assert(value: bool): unit {
+fn assert(context locn: CompilerSourceLoc)(value: bool): unit {
   if not value {
     crash("ASSERT FAILED")
   };
 }
-fn assertMsg(msg: string, value: bool): unit {
+fn assertMsg(context locn: CompilerSourceLoc)(msg: string, value: bool): unit {
   if not value {
     crash("ASSERT FAILED: ".concat(msg))
   };
@@ -375,7 +371,6 @@ impl Show for u64 {
     string::fromChars(rev)
   }
 }
-
 
 impl Show for i32 {
   fn show(self: i32): string {

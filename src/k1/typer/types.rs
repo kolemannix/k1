@@ -251,6 +251,7 @@ pub struct FnArgType {
     pub position: u32,
     pub type_id: TypeId,
     pub is_context: bool,
+    pub is_closure_env: bool,
     pub span: SpanId,
 }
 
@@ -259,9 +260,6 @@ pub struct FunctionType {
     pub params: Vec<FnArgType>,
     pub return_type: TypeId,
     pub defn_info: Option<TypeDefnInfo>,
-    // Some function types carry the specific closure they came from with them
-    // This allows us to know the environment type and thus size of a closure variable
-    pub closure_id: Option<ClosureId>,
 }
 
 #[derive(Debug, Clone)]
@@ -274,6 +272,26 @@ impl RecursiveReference {
     pub fn is_pending(&self) -> bool {
         self.root_type_id == TypeId::PENDING
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct ClosureType {
+    pub function_type: TypeId,
+    pub env_type: TypeId,
+    pub parsed_id: ParsedId,
+    pub body_function_id: FunctionId,
+    // This kinda crosses the streams; its a value expression in a type, but
+    // that's because a closure's environment is basically values baked into a function
+    // Its almost like a comptime-known value, aka the type 5
+    pub environment_struct: TypedExpr,
+    pub closure_object_type: TypeId,
+}
+
+#[derive(Debug, Clone)]
+pub struct ClosureObjectType {
+    pub function_type: TypeId,
+    pub parsed_id: ParsedId,
+    pub struct_representation: TypeId,
 }
 
 #[derive(Debug, Clone)]
@@ -299,6 +317,8 @@ pub enum Type {
     OpaqueAlias(OpaqueTypeAlias),
     Generic(GenericType),
     Function(FunctionType),
+    Closure(ClosureType),
+    ClosureObject(ClosureObjectType),
     RecursiveReference(RecursiveReference),
 }
 
@@ -327,6 +347,8 @@ impl Type {
             Type::OpaqueAlias(opaque) => Some(opaque.ast_id.into()),
             Type::Generic(gen) => Some(gen.ast_id.into()),
             Type::Function(_fun) => None,
+            Type::Closure(clos) => Some(clos.parsed_id),
+            Type::ClosureObject(clos_obj) => Some(clos_obj.parsed_id),
             Type::RecursiveReference(r) => Some(ParsedId::TypeDefn(r.parsed_id)),
         }
     }
@@ -462,7 +484,20 @@ impl Type {
 
     pub fn as_function(&self) -> Option<&FunctionType> {
         match self {
-            Type::Function(tf) => Some(tf),
+            Type::Function(f) => Some(f),
+            _ => None,
+        }
+    }
+
+    pub fn as_closure(&self) -> Option<&ClosureType> {
+        match self {
+            Type::Closure(c) => Some(c),
+            _ => None,
+        }
+    }
+    pub fn as_closure_object(&self) -> Option<&ClosureObjectType> {
+        match self {
+            Type::ClosureObject(co) => Some(co),
             _ => None,
         }
     }
@@ -563,6 +598,8 @@ impl Types {
             Type::OpaqueAlias(_opaque) => None,
             Type::Generic(_gen) => None,
             Type::Function(_) => None,
+            Type::Closure(_) => None,
+            Type::ClosureObject(_) => None,
             Type::RecursiveReference(_) => None,
         }
     }
@@ -584,31 +621,69 @@ impl Types {
             Type::OpaqueAlias(opaque) => Some(&opaque.type_defn_info),
             Type::Generic(gen) => Some(&gen.type_defn_info),
             Type::Function(f) => f.defn_info.as_ref(),
+            Type::Closure(_c) => None,
+            Type::ClosureObject(_) => None,
             Type::RecursiveReference(_) => None,
         }
     }
 
-    pub fn as_closure_struct(&self, type_id: TypeId) -> Option<ClosureStructTypes> {
-        self.get(type_id).as_struct().and_then(|s| {
-            if s.fields.len() != 2 {
-                return None;
-            }
-            let f1 = self.get(s.fields[0].type_id);
-            let f2 = self.get(s.fields[1].type_id);
-            if let Type::Reference(f1) = f1 {
-                if let Type::Function(_fn_type) = self.get(f1.inner_type) {
-                    if let Type::Reference(f2_ref) = f2 {
-                        if let Type::Struct(_env_struc) = self.get(f2_ref.inner_type) {
-                            return Some(ClosureStructTypes {
-                                fn_type_id: f1.inner_type,
-                                env_type_id: f2_ref.inner_type,
-                            });
-                        }
-                    }
-                }
-            }
-            None
-        })
+    pub fn add_closure(
+        &mut self,
+        identifiers: &Identifiers,
+        function_type_id: TypeId,
+        environment_struct: TypedExpr,
+        body_function_id: FunctionId,
+        parsed_id: ParsedId,
+    ) -> TypeId {
+        let env_type = environment_struct.get_type();
+        let closure_type_id = self.add_type(Type::Closure(ClosureType {
+            function_type: function_type_id,
+            env_type: environment_struct.get_type(),
+            parsed_id,
+            body_function_id,
+            environment_struct,
+            closure_object_type: TypeId::PENDING,
+        }));
+        let closure_object_type =
+            self.add_closure_object(identifiers, function_type_id, env_type, parsed_id);
+        if let Type::Closure(c) = self.get_mut(closure_type_id) {
+            c.closure_object_type = closure_object_type;
+        }
+        closure_type_id
+    }
+
+    pub fn add_closure_object(
+        &mut self,
+        identifiers: &Identifiers,
+        function_type_id: TypeId,
+        env_type: TypeId,
+        parsed_id: ParsedId,
+    ) -> TypeId {
+        let fn_ptr_type = self.add_reference_type(function_type_id);
+        let env_ptr_type = self.add_reference_type(env_type);
+        let fields = vec![
+            StructTypeField {
+                name: identifiers.get("fn_ptr").unwrap(),
+                type_id: fn_ptr_type,
+                index: 0,
+            },
+            StructTypeField {
+                name: identifiers.get("env_ptr").unwrap(),
+                type_id: env_ptr_type,
+                index: 1,
+            },
+        ];
+        let struct_representation = self.add_type(Type::Struct(StructType {
+            fields,
+            type_defn_info: None,
+            generic_instance_info: None,
+            ast_node: parsed_id,
+        }));
+        self.add_type(Type::ClosureObject(ClosureObjectType {
+            function_type: function_type_id,
+            parsed_id,
+            struct_representation,
+        }))
     }
 
     pub fn get_mut(&mut self, type_id: TypeId) -> &mut Type {
@@ -692,6 +767,12 @@ impl Types {
                 }
                 return false;
             }
+            Type::Closure(closure) => {
+                self.does_type_reference_type_variables(closure.function_type)
+                    || self.does_type_reference_type_variables(closure.env_type)
+            }
+            // But a closure object is generic if its function is generic
+            Type::ClosureObject(co) => self.does_type_reference_type_variables(co.function_type),
             Type::RecursiveReference(_rr) => false,
         }
     }
@@ -733,6 +814,8 @@ impl Types {
             Type::OpaqueAlias(_opaque) => None,
             Type::Generic(_gen) => None,
             Type::Function(_fun) => None,
+            Type::Closure(_closure) => None,
+            Type::ClosureObject(_co) => None,
             Type::RecursiveReference(_) => None,
         }
     }
@@ -800,7 +883,9 @@ impl Types {
             Type::Never(_) => (),
             Type::OpaqueAlias(_) => todo!(),
             Type::Generic(_) => unreachable!(),
-            Type::Function(_f) => unreachable!(),
+            Type::Function(_f) => todo!(),
+            Type::Closure(_c) => todo!(),
+            Type::ClosureObject(_co) => todo!(),
             Type::RecursiveReference(_rr) => (),
         }
     }
@@ -858,11 +943,6 @@ impl Types {
             // We never really want to de-dupe this type as its inherently unique
             (Type::Generic(_g1), Type::Generic(_g2)) => false,
             (Type::Function(f1), Type::Function(f2)) => {
-                // I guess functions can totally share a FunctionType if they share
-                // the exact shape, and are not closures
-                if f1.closure_id.is_some() || f2.closure_id.is_some() {
-                    return false;
-                }
                 if self.type_id_eq(f1.return_type, f2.return_type)
                     && f1.params.len() == f2.params.len()
                 {
@@ -874,6 +954,7 @@ impl Types {
                 };
                 return false;
             }
+            (Type::Closure(_c1), Type::Closure(_c2)) => false,
             _ => false,
         }
     }

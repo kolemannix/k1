@@ -143,8 +143,8 @@ impl SizeInfo {
 struct LlvmPointerType<'ctx> {
     #[allow(unused)]
     type_id: TypeId,
-    pointer_type: BasicTypeEnum<'ctx>,
-    pointee_type: BasicTypeEnum<'ctx>,
+    pointer_type: PointerType<'ctx>,
+    pointee_type: AnyTypeEnum<'ctx>,
     di_type: DIType<'ctx>,
 }
 
@@ -197,10 +197,6 @@ struct LlvmStructType<'ctx> {
 struct LlvmClosureType<'ctx> {
     type_id: TypeId,
     struct_type: StructType<'ctx>,
-    #[allow(unused)]
-    function_type: LlvmFunctionType<'ctx>,
-    #[allow(unused)]
-    env_type: StructType<'ctx>,
     di_type: DIType<'ctx>,
     size: SizeInfo,
 }
@@ -213,19 +209,6 @@ enum LlvmType<'ctx> {
     Closure(LlvmClosureType<'ctx>),
     Pointer(LlvmPointerType<'ctx>),
     Void(LlvmVoidType<'ctx>),
-}
-
-impl<'ctx> LlvmType<'ctx> {
-    fn fn_type(
-        &self,
-        args: &[BasicMetadataTypeEnum<'ctx>],
-        varargs: bool,
-    ) -> LlvmFunctionType<'ctx> {
-        match self {
-            LlvmType::Void(v) => v.void_type.fn_type(args, varargs),
-            other => other.physical_value_type().fn_type(args, varargs),
-        }
-    }
 }
 
 impl<'ctx> From<LlvmVoidType<'ctx>> for LlvmType<'ctx> {
@@ -279,23 +262,33 @@ impl<'ctx> LlvmType<'ctx> {
 
     pub fn expect_pointer(&self) -> LlvmPointerType<'ctx> {
         match self {
-            LlvmType::Value(value) => panic!("expected pointer on value: {:?}", value),
             LlvmType::Pointer(pointer) => *pointer,
-            LlvmType::EnumType(_) => panic!("expected pointer on enum"),
-            LlvmType::StructType(_) => panic!("expected pointer on struct"),
-            LlvmType::Void(_) => panic!("expected pointer on void"),
-            LlvmType::Closure(_) => panic!("expected pointer on closure"),
+            _ => panic!("expected pointer on {self:?}"),
         }
     }
 
     pub fn expect_enum(self) -> LlvmEnumType<'ctx> {
         match self {
-            LlvmType::Value(value) => panic!("expected enum on value: {:?}", value),
-            LlvmType::Pointer(_pointer) => panic!("expected enum on pointer"),
             LlvmType::EnumType(e) => e,
-            LlvmType::StructType(_s) => panic!("expected enum on struct"),
-            LlvmType::Void(_) => panic!("expected enum on void"),
-            LlvmType::Closure(_) => panic!("expected enum on closure"),
+            _ => panic!("expected enum on {self:?}"),
+        }
+    }
+
+    fn expect_struct(self) -> LlvmStructType<'ctx> {
+        match self {
+            LlvmType::StructType(s) => s,
+            _ => panic!("expected struct on {self:?}"),
+        }
+    }
+
+    fn fn_type(
+        &self,
+        args: &[BasicMetadataTypeEnum<'ctx>],
+        varargs: bool,
+    ) -> LlvmFunctionType<'ctx> {
+        match self {
+            LlvmType::Void(v) => v.void_type.fn_type(args, varargs),
+            other => other.physical_value_type().fn_type(args, varargs),
         }
     }
 
@@ -314,7 +307,7 @@ impl<'ctx> LlvmType<'ctx> {
     fn physical_value_type(&self) -> BasicTypeEnum<'ctx> {
         match self {
             LlvmType::Value(value) => value.basic_type,
-            LlvmType::Pointer(pointer) => pointer.pointer_type,
+            LlvmType::Pointer(pointer) => pointer.pointer_type.as_basic_type_enum(),
             LlvmType::EnumType(e) => e.base_struct_type.as_basic_type_enum(),
             LlvmType::StructType(s) => s.struct_type.as_basic_type_enum(),
             LlvmType::Void(_) => panic!("No value type on Void / never"),
@@ -400,6 +393,7 @@ pub struct Codegen<'ctx, 'module> {
     /// checking, as a Pointer to the actual type
     variables: HashMap<VariableId, Pointer<'ctx>>,
     globals: HashMap<VariableId, GlobalValue<'ctx>>,
+    closure_environments: HashMap<TypeId, PointerValue<'ctx>>,
     builtin_types: BuiltinTypes<'ctx>,
     debug: DebugContext<'ctx>,
 }
@@ -602,6 +596,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         builtin_globals.insert("formatString".to_string(), format_str_str);
         let int = ctx.i64_type();
 
+        let closure_environments = HashMap::new();
+
         let builtin_types = BuiltinTypes {
             ctx,
             int,
@@ -629,6 +625,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             builder,
             variables: pointers,
             globals,
+            closure_environments,
             llvm_functions: HashMap::new(),
             llvm_types: RefCell::new(HashMap::new()),
             builtin_types,
@@ -862,7 +859,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             "Pointer",
                             placeholder_pointee,
                             self.builtin_types.ptr_sized_int.get_bit_width() as u64,
-                            WORD_SIZE_BITS as u32,
+                            self.builtin_types.ptr_sized_int.get_bit_width(),
                             AddressSpace::default(),
                         )
                         .as_type(),
@@ -898,9 +895,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let size = self.size_info(&llvm_struct_type);
                 let di_type =
                     self.make_debug_struct_type(&name, &llvm_struct_type, span, &field_di_types);
-                Ok(LlvmValueType {
+                Ok(LlvmStructType {
                     type_id,
-                    basic_type: llvm_struct_type.as_basic_type_enum(),
+                    struct_type: llvm_struct_type,
+                    fields: field_types,
                     size,
                     di_type,
                 }
@@ -910,16 +908,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 err!(span, "codegen was asked to codegen a type variable {:?}", v)
             }
             Type::Reference(reference) => {
-                // Could also use any_ptr here
                 let inner_type = self.codegen_type_inner(reference.inner_type, depth + 1)?;
                 let inner_debug_type = inner_type.debug_type();
                 Ok(LlvmPointerType {
                     type_id,
                     pointer_type: inner_type
                         .physical_value_type()
-                        .ptr_type(AddressSpace::default())
-                        .as_basic_type_enum(),
-                    pointee_type: inner_type.physical_value_type(),
+                        .ptr_type(AddressSpace::default()),
+                    pointee_type: inner_type.physical_value_type().as_any_type_enum(),
                     di_type: self
                         .debug
                         .create_pointer_type(&format!("reference_{}", type_id), inner_debug_type),
@@ -1161,47 +1157,52 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     }))
                 }
             }
-            Type::Function(_function_type) => {
-                let llvm_function_type = self.make_llvm_function_type(type_id)?;
-                let struct_type = self.ctx.struct_type(
-                    &[
-                        self.builtin_types.ptr.as_basic_type_enum(),
-                        self.builtin_types.ptr.as_basic_type_enum(),
-                    ],
-                    false,
-                );
-                // TODO: fix the debug type for function objects
-                let di_type = self.make_debug_struct_type(
-                    &format!("closure_{}", type_id),
-                    &struct_type,
-                    SpanId::NONE,
-                    &[
-                        StructDebugMember {
-                            name: "fn_ptr",
-                            di_type: self.debug.create_pointer_type(
-                                "fn_ptr",
-                                self.codegen_type(U8_TYPE_ID)?.debug_type(),
-                            ),
-                        },
-                        StructDebugMember {
-                            name: "env",
-                            di_type: self.debug.create_pointer_type(
-                                "env_ptr",
-                                self.codegen_type(U8_TYPE_ID)?.debug_type(),
-                            ),
-                        },
-                    ],
-                );
+            Type::Function(function_type) => {
+                let pointee = self.make_llvm_function_type(type_id)?;
+                let placeholder_pointee = self.codegen_type(I8_TYPE_ID)?.debug_type();
 
-                let size = self.size_info(&struct_type);
+                Ok(LlvmType::Pointer(LlvmPointerType {
+                    type_id,
+                    pointer_type: pointee.ptr_type(AddressSpace::default()),
+                    pointee_type: pointee.as_any_type_enum(),
+                    di_type: self
+                        .debug
+                        .debug_builder
+                        .create_pointer_type(
+                            "Pointer",
+                            placeholder_pointee,
+                            self.builtin_types.ptr_sized_int.get_bit_width() as u64,
+                            self.builtin_types.ptr_sized_int.get_bit_width(),
+                            AddressSpace::default(),
+                        )
+                        .as_type(),
+                }))
+            }
+            Type::Closure(closure_type) => {
+                let closure_object_type = self
+                    .module
+                    .types
+                    .get(closure_type.closure_object_type)
+                    .as_closure_object()
+                    .unwrap();
+                let struct_type =
+                    self.codegen_type(closure_object_type.struct_representation)?.expect_struct();
 
                 Ok(LlvmType::Closure(LlvmClosureType {
                     type_id,
-                    struct_type,
-                    function_type: llvm_function_type,
-                    env_type: struct_type,
-                    di_type,
-                    size,
+                    struct_type: struct_type.struct_type,
+                    di_type: struct_type.di_type,
+                    size: struct_type.size,
+                }))
+            }
+            Type::ClosureObject(closure_object_type) => {
+                let struct_type =
+                    self.codegen_type(closure_object_type.struct_representation)?.expect_struct();
+                Ok(LlvmType::Closure(LlvmClosureType {
+                    type_id,
+                    struct_type: struct_type.struct_type,
+                    di_type: struct_type.di_type,
+                    size: struct_type.size,
                 }))
             }
             Type::Generic(_) => {
@@ -1396,7 +1397,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     .is_some());
 
                 let struct_type =
-                    self.codegen_type(field_access.base.get_type())?.expect_pointer().pointee_type;
+                    self.module.types.get_type_id_dereferenced(field_access.base.get_type());
+                let struct_type = self.codegen_type(struct_type)?.physical_value_type();
 
                 let struct_pointer =
                     self.codegen_expr(&field_access.base)?.expect_value().into_pointer_value();
@@ -1789,10 +1791,13 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(LlvmValue::Never(ret_inst))
             }
             TypedExpr::Closure(closure_expr) => {
-                let closure = self.module.get_closure(closure_expr.closure_id);
-                let llvm_fn = self.codegen_function_or_get(closure.body_function_id)?;
-                let environment = self.codegen_expr_basic_value(&closure.environment_struct)?;
+                let closure_type =
+                    self.module.types.get(closure_expr.closure_type).as_closure().unwrap();
+                let llvm_fn = self.codegen_function_or_get(closure_type.body_function_id)?;
+                let environment =
+                    self.codegen_expr_basic_value(&closure_type.environment_struct)?;
                 let environment_ptr = self.builder.build_alloca(environment.get_type(), "env");
+                self.closure_environments.insert(closure_expr.closure_type, environment_ptr);
                 self.builder.build_store(environment_ptr, environment);
 
                 // The struct type for a closure's physical representation
@@ -1804,29 +1809,29 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 //
                 // As long as we don't actually make the call dynamically, it shouldn't matter
                 // too much though
-                let closure_struct_type = self.ctx.struct_type(
-                    &[
-                        llvm_fn.get_type().ptr_type(AddressSpace::default()).as_basic_type_enum(),
-                        environment_ptr.get_type().as_basic_type_enum(),
-                    ],
-                    false,
-                );
 
-                let ptr = self.builder.build_alloca(closure_struct_type, "closure");
+                let closure_object_type = self
+                    .module
+                    .types
+                    .get(closure_type.closure_object_type)
+                    .as_closure_object()
+                    .unwrap();
+                let closure_struct_type =
+                    self.codegen_type(closure_object_type.struct_representation)?.expect_struct();
+
+                let ptr = self.builder.build_alloca(closure_struct_type.struct_type, "closure");
                 let fn_ptr = self
                     .builder
-                    .build_struct_gep(closure_struct_type, ptr, 0, "closure_fn")
+                    .build_struct_gep(closure_struct_type.struct_type, ptr, 0, "closure_fn")
                     .unwrap();
                 let env_ptr = self
                     .builder
-                    .build_struct_gep(closure_struct_type, ptr, 1, "closure_env")
+                    .build_struct_gep(closure_struct_type.struct_type, ptr, 1, "closure_env")
                     .unwrap();
 
                 self.builder.build_store(fn_ptr, llvm_fn.as_global_value().as_pointer_value());
                 self.builder.build_store(env_ptr, environment_ptr);
 
-                // nocommit: Strongly consider introducing a new LlvmValue to represent this
-                // more strongly
                 Ok(LlvmValue::BasicValue(ptr.as_basic_value_enum()))
             }
             TypedExpr::FunctionName(fn_name_expr) => {
@@ -2176,22 +2181,27 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let function_type = self.module.get_callee_function_type(&call.callee);
         let llvm_function_type = self.make_llvm_function_type(function_type)?;
         let callsite_value = match &call.callee {
-            Callee::Static { function_id, closure_environment } => {
-                if let Some(closure_env) = closure_environment {
-                    let closure_env_ptr = self.builder.build_alloca(self.builtin_types.ptr, "");
-                    let value = self.codegen_expr_basic_value(closure_env)?;
-                    self.builder.build_store(closure_env_ptr, value);
-                    args.push_front(closure_env_ptr.into())
-                };
-
+            Callee::StaticFunction(function_id) => {
                 let function_value = self.codegen_function_or_get(*function_id)?;
-                self.set_debug_location(call.span);
+
+                // self.set_debug_location(call.span);
                 self.builder.build_call(function_value, args.make_contiguous(), "")
             }
-            Callee::DynamicPtr(function_reference_expr) => {
+            Callee::StaticClosure { function_id, closure_type_id } => {
+                let closure_env_ptr =
+                    self.closure_environments.get(&closure_type_id).unwrap().as_basic_value_enum();
+                args.push_front(closure_env_ptr.into());
+
+                let function_value = self.codegen_function_or_get(*function_id)?;
+
+                // self.set_debug_location(call.span);
+                self.builder.build_call(function_value, args.make_contiguous(), "")
+            }
+            Callee::DynamicFunction(function_reference_expr) => {
                 let function_ptr =
                     self.codegen_expr_basic_value(function_reference_expr)?.into_pointer_value();
-                self.set_debug_location(call.span);
+
+                // self.set_debug_location(call.span);
                 self.builder.build_indirect_call(
                     llvm_function_type,
                     function_ptr,
@@ -2210,7 +2220,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let closure_env_ptr =
                     self.builder.build_extract_value(callee_struct, 1, "env_ptr").unwrap();
                 args.push_front(closure_env_ptr.into());
-                self.set_debug_location(call.span);
+
+                // self.set_debug_location(call.span);
                 self.builder.build_indirect_call(
                     llvm_function_type,
                     fn_ptr,
