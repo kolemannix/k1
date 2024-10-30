@@ -19,7 +19,6 @@ fn main(): int {
   addAll(4, 5);
 
   // FIXME: should not require deref
-  println((*history).show());
-  assert((*history) == ["1 + 2","3 + 4"]);
+  assert(history.* == ["1 + 2","3 + 4"]);
   0
 }

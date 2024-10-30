@@ -162,6 +162,7 @@ pub enum TokenKind {
     LeftAngle,
     RightAngle,
     Colon,
+    ColonColon,
     Semicolon,
     Equals,
     EqualsEquals,
@@ -244,6 +245,7 @@ impl TokenKind {
             K::LeftAngle => Some("<"),
             K::RightAngle => Some(">"),
             K::Colon => Some(":"),
+            K::ColonColon => Some("::"),
             K::Semicolon => Some(";"),
             K::Equals => Some("="),
             K::EqualsEquals => Some("=="),
@@ -337,6 +339,7 @@ impl TokenKind {
             "!=" => Some(K::BangEquals),
             "<=" => Some(K::LessThanEqual),
             ">=" => Some(K::GreaterThanEqual),
+            "::" => Some(K::ColonColon),
             _ => None,
         }
     }
@@ -374,16 +377,12 @@ impl TokenKind {
         BinaryOpKind::from_tokenkind(*self).is_some()
     }
     pub fn is_prefix_operator(&self) -> bool {
-        #[allow(clippy::match_like_matches_macro)]
         match self {
-            K::Asterisk => true,
             K::KeywordNot => true,
-            K::Ampersand => true,
             _ => false,
         }
     }
     pub fn is_postfix_operator(&self) -> bool {
-        #[allow(clippy::match_like_matches_macro)]
         match self {
             K::Dot => true,
             K::OpenBracket => true,
@@ -394,7 +393,6 @@ impl TokenKind {
         }
     }
     pub fn is_postfix_type_operator(&self) -> bool {
-        #[allow(clippy::match_like_matches_macro)]
         match self {
             K::QuestionMark => true,
             K::Asterisk => true,
@@ -524,7 +522,24 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                 }
             }
             if is_string {
-                if c == '"' {
+                let (_, next) = self.peek_two();
+                // nocommit: Lets share the 'escaped' chars
+                // and go ahead and lex them all in pairs for correctness
+                // I bet this'll pay off when we add interpolation
+                if c == '\\' && next == '"' {
+                    // Skip over \"
+                    tok_buf.push(c);
+                    tok_buf.push(next);
+                    self.advance();
+                    self.advance();
+                    continue;
+                } else if c == '\\' && next == '\\' {
+                    tok_buf.push(c);
+                    tok_buf.push(next);
+                    self.advance();
+                    self.advance();
+                    continue;
+                } else if c == '"' {
                     self.advance();
                     break Some(make_buffered_token(self, K::String, &tok_buf, n));
                 } else if c == '\n' {
@@ -582,6 +597,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                     }
                     // `n` is the index of the opening quote
                     break Some(make_token(self, TokenKind::Char, n, len));
+                // Handle all of our 2-char but-also-1-char-prefixed tokens!
                 } else if single_char_tok == TokenKind::Equals && next == '=' {
                     self.advance();
                     self.advance();
@@ -598,6 +614,10 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                     self.advance();
                     self.advance();
                     break Some(make_token(self, K::GreaterThanEqual, n, 2));
+                } else if single_char_tok == TokenKind::Colon && next == ':' {
+                    self.advance();
+                    self.advance();
+                    break Some(make_token(self, K::ColonColon, n, 2));
                 } else if single_char_tok == TokenKind::Slash && next == '/' {
                     is_line_comment = true;
                     line_comment_start = n;
@@ -631,7 +651,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                 tok_buf.push(c);
             // We can possibly remove this check; it would be handled next loop
             } else if let Some(tok) = TokenKind::token_from_str(&tok_buf) {
-                // Do not eat this so the next eat_token call can see it.
+                // Do not eat c so the next eat_token call can see it.
                 break Some(make_buffered_token(self, tok, &tok_buf, n));
             }
             self.advance();

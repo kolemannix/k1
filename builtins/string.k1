@@ -14,7 +14,7 @@ namespace string {
 
   fn get(self: string, index: u64): char {
     val charRef: char* = self.getRef(index);
-    *charRef
+    charRef.*
   }
   fn set(self: string, index: u64, value: char): unit {
     val charRef: char* = self.getRef(index);
@@ -42,7 +42,7 @@ namespace string {
 
   fn concat(self: string, other: string): string {
     val new_length = self.len + other.len;
-    val copied = &Array::new[char](new_length);
+    val copied = Array::new[char](new_length).&;
 
     libc::memcpy(copied.data, self.data, self.len);
 
@@ -56,7 +56,7 @@ namespace string {
   fn appendChar(self: string, c: char): string {
     val new_length = self.len + 1;
 
-    val copied = &Array::new[char](new_length);
+    val copied = Array::new[char](new_length).&;
     copied.len = new_length;
 
     libc::memcpy(copied.data, self.data, self.len);
@@ -66,14 +66,14 @@ namespace string {
   }
 
   fn splitByChar(self: string, delim: char): Array[string] {
-    val results = &Array::empty[Array[char]]();
-    mut accum = &Array::empty[char]();
+    val results = Array::empty[Array[char]]().&;
+    mut accum = Array::empty[char]().&;
     // Note(stdlib slow): TODO: use ranges instead to make this zero-copy!!
     for c in self do {
       if c == delim {
         if accum.nonEmpty() { 
           results.push(accum);
-          accum = &Array::empty[char]();
+          accum = Array::empty[char]().&;
         }
       } else {
         accum.push(c);
@@ -83,7 +83,7 @@ namespace string {
       results.push(accum);
     };
 
-    for buf in *results yield {
+    for buf in results.* yield {
       string::fromChars(buf)
     }
   }
@@ -184,6 +184,10 @@ impl Show for Array[string] {
     };
     builder.concat("]")
   }
+}
+
+impl Show for string {
+  fn show(self: string): string { self }
 }
 
 impl Equals for Opt[string] {

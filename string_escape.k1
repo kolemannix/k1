@@ -1,4 +1,12 @@
 fn main(): int {
-  print("Hello, world\n");
+  val s = "\n\0\t\r\"\\";
+  val codes = for c in s yield { c as u8 };
+  assert(codes == [10, 0, 9, 13, 34, 92]);
+  assert(s.get(0) == '\n');
+  assert(s.get(1) == '\0');
+  assert(s.get(2) == '\t');
+  assert(s.get(3) == '\r');
+  assert(s.get(4) == '"');
+  assert(s.get(5) == '\\');
   0
 }

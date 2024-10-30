@@ -201,7 +201,7 @@ pub struct Identifiers {
     intern_pool: string_interner::StringInterner<StringBackend>,
 }
 impl Identifiers {
-    pub const BUILTIN_IDENTS: [&'static str; 21] = [
+    pub const BUILTIN_IDENTS: [&'static str; 23] = [
         "self",
         "it",
         "unit",
@@ -223,6 +223,8 @@ impl Identifiers {
         "__clos_env",
         "fn_ptr",
         "env_ptr",
+        "&",
+        "*",
     ];
 
     pub fn intern(&mut self, s: impl AsRef<str>) -> Identifier {
@@ -298,16 +300,12 @@ pub struct BinaryOp {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParsedUnaryOpKind {
     BooleanNegation,
-    Reference,
-    Dereference,
 }
 
 impl Display for ParsedUnaryOpKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             ParsedUnaryOpKind::BooleanNegation => f.write_str("not "),
-            ParsedUnaryOpKind::Reference => f.write_char('&'),
-            ParsedUnaryOpKind::Dereference => f.write_char('*'),
         }
     }
 }
@@ -316,8 +314,6 @@ impl ParsedUnaryOpKind {
     pub fn from_tokenkind(kind: TokenKind) -> Option<ParsedUnaryOpKind> {
         match kind {
             TokenKind::KeywordNot => Some(ParsedUnaryOpKind::BooleanNegation),
-            TokenKind::Ampersand => Some(ParsedUnaryOpKind::Reference),
-            TokenKind::Asterisk => Some(ParsedUnaryOpKind::Dereference),
             _ => None,
         }
     }
@@ -1242,11 +1238,12 @@ pub fn print_error(module: &ParsedModule, parse_error: &ParseError) {
         let line = source.get_line(lex_error.line_index as usize).unwrap();
 
         println!(
-            "Lexing error at {}/{}:{}\n{}",
+            "Lexing error at {}/{}:{}\n{}\n{}",
             source.directory,
             source.filename,
             lex_error.line_index + 1,
-            line.content
+            line.content,
+            lex_error.msg
         );
         return;
     }
@@ -1607,8 +1604,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     let literal = match esc_char {
                         b'n' => Ok(Literal::Char(b'\n', first.span)),
                         b'0' => Ok(Literal::Char(b'\0', first.span)),
-                        b'\'' => Ok(Literal::Char(b'\'', first.span)),
                         b't' => Ok(Literal::Char(b'\t', first.span)),
+                        b'r' => Ok(Literal::Char(b'\r', first.span)),
+                        b'\'' => Ok(Literal::Char(b'\'', first.span)),
+                        b'\\' => Ok(Literal::Char(b'\\', first.span)),
                         _ => Err(Parser::error(
                             format!(
                                 "Valid escaped char following escape sequence: {}",
@@ -1630,7 +1629,27 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 trace!("parse_literal string");
                 self.tokens.advance();
                 let text = self.token_chars(first);
-                let literal = Literal::String(text.to_string(), first.span);
+                let mut buf = String::with_capacity(text.len());
+                let mut chars = text.chars();
+                while let Some(c) = chars.next() {
+                    if c == '\\' {
+                        let Some(next) = chars.next() else {
+                            return Err(Parser::error("String ended with '\\'", first));
+                        };
+                        match next {
+                            'n' => buf.push('\n'),
+                            '0' => buf.push('\0'),
+                            't' => buf.push('\t'),
+                            'r' => buf.push('\r'),
+                            '"' => buf.push('"'),
+                            '\\' => buf.push('\\'),
+                            _ => {}
+                        };
+                    } else {
+                        buf.push(c)
+                    }
+                }
+                let literal = Literal::String(buf, first.span);
                 Ok(Some(self.add_expression(ParsedExpression::Literal(literal))))
             }
             (K::Minus, K::Ident) if !second.is_whitespace_preceeded() => {
@@ -1974,7 +1993,17 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 if is_coalescing {
                     self.tokens.advance();
                 }
-                let target = self.expect_eat_token(K::Ident)?;
+                let target = match self.peek().kind {
+                    K::Ident => self.tokens.next(),
+                    K::Ampersand => self.tokens.next(),
+                    K::Asterisk => self.tokens.next(),
+                    _k => {
+                        return Err(Parser::error(
+                            "Field name, identifiers or referencing operator",
+                            self.peek(),
+                        ))
+                    }
+                };
                 let (type_args, type_args_span) = self.parse_optional_type_args()?;
                 let next = self.peek();
                 // a.b[int](...)
@@ -2150,23 +2179,21 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn expect_namespaced_ident(&mut self) -> ParseResult<NamespacedIdentifier> {
-        let (first, second, third) = self.tokens.peek_three();
+        let (first, second) = self.tokens.peek_two();
         let mut namespaces = Vec::new();
-        if second.kind == K::Colon && third.kind == K::Colon && !second.is_whitespace_preceeded() {
+        if second.kind == K::ColonColon && !second.is_whitespace_preceeded() {
             // Namespaced expression; foo::
             // Loop until we don't see a ::
             namespaces.push(self.intern_ident_token(first));
             self.tokens.advance(); // ident
-            self.tokens.advance(); // colon
-            self.tokens.advance(); // colon
+            self.tokens.advance(); // coloncolon
             loop {
                 trace!("Parsing namespaces {:?}", namespaces);
-                let (a, b, c) = self.tokens.peek_three();
-                trace!("Parsing namespaces peeked 3 {} {} {}", a.kind, b.kind, c.kind);
-                if a.kind == K::Ident && b.kind == K::Colon && c.kind == K::Colon {
+                let (a, b) = self.tokens.peek_two();
+                trace!("Parsing namespaces peeked 3 {} {}", a.kind, b.kind);
+                if a.kind == K::Ident && b.kind == K::ColonColon {
                     self.tokens.advance(); // ident
-                    self.tokens.advance(); // colon
-                    self.tokens.advance(); // colon
+                    self.tokens.advance(); // coloncolon
                     namespaces.push(self.intern_ident_token(a));
                 } else {
                     break;
