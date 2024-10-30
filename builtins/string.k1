@@ -185,3 +185,9 @@ impl Show for Array[string] {
     builder.concat("]")
   }
 }
+
+impl Equals for Opt[string] {
+  fn equals(self: Opt[string], other: Opt[string]): bool {
+    opt_equals(self, other)
+  }
+}

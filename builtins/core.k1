@@ -11,20 +11,6 @@ type Array[T] = { len: u64, cap: u64, data: Pointer }
 type string = { len: u64, data: Pointer }
 
 type Opt[T] = enum None, Some(T)
-namespace Opt {
-
-  fn hasValue[T](self: T?): bool {
-    self is .Some(_)
-  }
-
-  fn get[T](self: T?): T {
-    if self is .Some(t) {
-      t
-    } else {
-      crash("Opt.get on None")
-    }
-  }
-}
 
 type CompilerSourceLoc = { filename: string, line: u64 }
 
@@ -387,5 +373,13 @@ impl Show for i16 {
 impl Show for i8 {
   fn show(self: i8): string {
     (self as i64).show()
+  }
+}
+
+impl Equals for i64 {
+  fn equals(self: i64, other: i64): bool {
+    // Because the types of self and other are i64, the compiler will not 
+    // use the ability but rather do the intrinsic thing
+    self == other
   }
 }
