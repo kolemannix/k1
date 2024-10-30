@@ -10,10 +10,11 @@ use TokenKind as K;
 pub const EOF_CHAR: char = '\0';
 pub const EOF_TOKEN: Token = Token { span: SpanId::NONE, kind: TokenKind::Eof, flags: 0 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LexError {
     pub msg: String,
     pub line_index: u32,
+    pub file_id: FileId,
 }
 
 pub type LexResult<A> = anyhow::Result<A, LexError>;
@@ -388,6 +389,7 @@ impl TokenKind {
             K::OpenBracket => true,
             K::Bang => true,
             K::KeywordAs => true,
+            K::QuestionMark => true,
             _ => false,
         }
     }
@@ -468,7 +470,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
     }
 
     fn err(&self, msg: impl Into<String>) -> LexError {
-        LexError { msg: msg.into(), line_index: self.line_index }
+        LexError { msg: msg.into(), line_index: self.line_index, file_id: self.file_id }
     }
 
     pub fn run(&mut self) -> LexResult<Vec<Token>> {

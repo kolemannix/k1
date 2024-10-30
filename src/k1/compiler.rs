@@ -5,8 +5,8 @@ use std::os::unix::prelude::ExitStatusExt;
 use std::path::Path;
 use std::time::Instant;
 
-use crate::parse;
 use crate::parse::print_error_location;
+use crate::parse::{self, print_error};
 use crate::typer::TypedModule;
 use anyhow::{bail, Result};
 use inkwell::context::Context;
@@ -119,8 +119,7 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
         let token_vec = match lex_text(&mut parsed_module, source) {
             Ok(token_vec) => token_vec,
             Err(e) => {
-                // If lexing fails, we panic here because the source isn't in sources
-                print_error_location(&parsed_module.spans, &parsed_module.sources, e.span());
+                print_error(&parsed_module, &e);
                 parse_errors.push(e);
                 return;
             }
@@ -129,7 +128,7 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
 
         let result = parser.parse_module();
         if let Err(e) = result {
-            parser.print_error(&e);
+            print_error(&parsed_module, &e);
             parse_errors.push(e);
         }
     };
@@ -138,11 +137,14 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
         let core_path: &Path = Path::new("builtins/core.k1");
         parse_file(core_path);
 
-        let bitwise_path: &Path = Path::new("builtins/bitwise.k1");
-        parse_file(bitwise_path);
+        let opt_path: &Path = Path::new("builtins/opt.k1");
+        parse_file(opt_path);
 
         let string_path: &Path = Path::new("builtins/string.k1");
         parse_file(string_path);
+
+        let bitwise_path: &Path = Path::new("builtins/bitwise.k1");
+        parse_file(bitwise_path);
     }
 
     for f in dir_entries.iter() {
@@ -173,11 +175,7 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
     Ok(typed_module)
 }
 
-pub fn write_executable<'ctx, 'module>(
-    debug: bool,
-    out_dir: &str,
-    module_name: &str,
-) -> Result<()> {
+pub fn write_executable(debug: bool, out_dir: &str, module_name: &str) -> Result<()> {
     let clang_time = std::time::Instant::now();
     let mut build_cmd = std::process::Command::new("clang");
 
@@ -221,7 +219,7 @@ pub fn codegen_module<'ctx, 'module>(
     let llvm_optimize = !args.no_llvm_opt;
     let out_dir = out_dir.as_ref();
 
-    let mut codegen = Codegen::create(ctx, &typed_module, args.debug, llvm_optimize);
+    let mut codegen = Codegen::create(ctx, typed_module, args.debug, llvm_optimize);
     let module_name = codegen.name().to_string();
     if let Err(e) = codegen.codegen_module() {
         print_error_location(&codegen.module.ast.spans, &codegen.module.ast.sources, e.span);
@@ -229,7 +227,7 @@ pub fn codegen_module<'ctx, 'module>(
         anyhow::bail!(e)
     }
     if let Err(e) = codegen.optimize(llvm_optimize) {
-        eprintln!("Codegen error: {}", e.to_string());
+        eprintln!("Codegen error: {}", e);
         anyhow::bail!(e)
     };
 

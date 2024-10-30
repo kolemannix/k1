@@ -23,6 +23,11 @@ pub struct ParsedAbilityImplId(u32);
 pub struct ParsedNamespaceId(u32);
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
 pub struct ParsedExpressionId(u32);
+impl Display for ParsedExpressionId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
 pub struct ParsedTypeExpressionId(u32);
 impl ParsedTypeExpressionId {
@@ -196,13 +201,15 @@ pub struct Identifiers {
     intern_pool: string_interner::StringInterner<StringBackend>,
 }
 impl Identifiers {
-    pub const BUILTIN_IDENTS: [&'static str; 19] = [
+    pub const BUILTIN_IDENTS: [&'static str; 21] = [
         "self",
         "it",
         "unit",
         "char",
         "string",
         "length",
+        "hasValue",
+        "get",
         "iteree",
         "it_index",
         "as",
@@ -339,6 +346,7 @@ pub struct FieldAccess {
     pub base: ParsedExpressionId,
     pub target: Identifier,
     pub type_args: Vec<NamedTypeArg>,
+    pub is_coalescing: bool, // ?.
     pub span: SpanId,
 }
 
@@ -1199,6 +1207,7 @@ pub struct ParseError {
     pub expected: String,
     pub token: Token,
     pub cause: Option<Box<ParseError>>,
+    pub lex_error: Option<LexError>,
 }
 
 impl ParseError {
@@ -1225,6 +1234,39 @@ pub fn get_span_source_line<'sources>(
         panic!("Error: could not find line for span {:?}", span)
     };
     line
+}
+
+pub fn print_error(module: &ParsedModule, parse_error: &ParseError) {
+    if let Some(lex_error) = parse_error.lex_error.as_ref() {
+        let source = module.sources.get_source(lex_error.file_id);
+        let line = source.get_line(lex_error.line_index as usize).unwrap();
+
+        println!(
+            "Lexing error at {}/{}:{}\n{}",
+            source.directory,
+            source.filename,
+            lex_error.line_index + 1,
+            line.content
+        );
+        return;
+    }
+    let span = parse_error.span();
+
+    if let Some(cause) = &parse_error.cause {
+        print_error(module, cause);
+    }
+    let got_str = if parse_error.token.kind == K::Ident {
+        let span = module.spans.get(parse_error.token.span);
+        let source = module.sources.source_by_span(span);
+        Parser::tok_chars(&module.spans, source, parse_error.token).to_string()
+    } else {
+        parse_error.token.kind.to_string()
+    };
+
+    use colored::*;
+
+    print_error_location(&module.spans, &module.sources, span);
+    println!("\tExpected '{}', but got '{}'\n", parse_error.expected.blue(), got_str,);
 }
 
 pub fn print_error_location(spans: &Spans, sources: &Sources, span_id: SpanId) {
@@ -1316,6 +1358,10 @@ impl Source {
         self.get_content(span.start, span.len)
     }
 
+    pub fn get_line(&self, line_index: usize) -> Option<&Line> {
+        self.lines.get(line_index)
+    }
+
     pub fn get_line_for_span(&self, span: Span) -> Option<&Line> {
         self.lines.iter().find(|line| {
             let line_end = line.end_char();
@@ -1346,7 +1392,12 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn expect<A>(what: &str, current: Token, value: ParseResult<Option<A>>) -> ParseResult<A> {
         match value {
-            Ok(None) => Err(ParseError { expected: what.to_string(), token: current, cause: None }),
+            Ok(None) => Err(ParseError {
+                expected: what.to_string(),
+                token: current,
+                cause: None,
+                lex_error: None,
+            }),
             Ok(Some(a)) => Ok(a),
             Err(e) => Err(e),
         }
@@ -1394,11 +1445,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 if next.kind == K::Comma {
                     self.tokens.advance();
                 } else if next.kind != K::CloseBrace {
-                    return Err(ParseError {
-                        expected: "comma or close brace".to_string(),
-                        token: next,
-                        cause: None,
-                    });
+                    return Err(Parser::error("comma or close brace", next));
                 }
             }
             let end = self.expect_eat_token(K::CloseBrace)?;
@@ -1447,27 +1494,14 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 }
 
 impl<'toks, 'module> Parser<'toks, 'module> {
-    pub fn print_error(&self, parse_error: &ParseError) {
-        let span = parse_error.span();
-
-        if let Some(cause) = &parse_error.cause {
-            self.print_error(cause);
-        }
-        let got_str = if parse_error.token.kind == K::Ident {
-            self.token_chars(parse_error.token).to_string()
-        } else {
-            parse_error.token.kind.to_string()
-        };
-
-        use colored::*;
-
-        print_error_location(&self.module.spans, &self.module.sources, span);
-        println!("\tExpected '{}', but got '{}'\n", parse_error.expected.blue(), got_str,);
-    }
-
     #[inline]
     fn peek(&self) -> Token {
         self.tokens.peek()
+    }
+
+    #[inline]
+    fn peek_two(&self) -> (Token, Token) {
+        self.tokens.peek_two()
     }
 
     fn chars_at_span<'source>(
@@ -1502,10 +1536,15 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn error(expected: impl AsRef<str>, token: Token) -> ParseError {
-        ParseError { expected: expected.as_ref().to_owned(), token, cause: None }
+        ParseError { expected: expected.as_ref().to_owned(), token, cause: None, lex_error: None }
     }
     fn error_cause(expected: impl AsRef<str>, token: Token, cause: ParseError) -> ParseError {
-        ParseError { expected: expected.as_ref().to_owned(), token, cause: Some(Box::new(cause)) }
+        ParseError {
+            expected: expected.as_ref().to_owned(),
+            token,
+            cause: Some(Box::new(cause)),
+            lex_error: None,
+        }
     }
 
     fn expect_eat_token(&mut self, target_token: TokenKind) -> ParseResult<Token> {
@@ -1906,63 +1945,74 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let Some(mut result) = self.parse_base_expression()? else { return Ok(None) };
         // Looping for postfix ops inspired by Jakt's parser
         let with_postfix: ParsedExpressionId = loop {
-            let next = self.peek();
-            if next.kind.is_postfix_operator() {
+            let (next, second) = self.peek_two();
+            let new_result = if next.kind == K::Bang {
                 // Optional uwrap `config!.url`
-                if next.kind == K::Bang {
+                self.tokens.advance();
+                let span = self.extend_span(self.get_expression_span(result), next.span);
+                Some(self.add_expression(ParsedExpression::OptionalGet(OptionalGet {
+                    base: result,
+                    span,
+                })))
+            } else if next.kind == K::KeywordAs {
+                self.tokens.advance();
+                let type_expr_id = self.expect_type_expression()?;
+                let span = self.extend_span(
+                    self.get_expression_span(result),
+                    self.module.get_type_expression_span(type_expr_id),
+                );
+                Some(self.add_expression(ParsedExpression::AsCast(ParsedAsCast {
+                    base_expr: result,
+                    dest_type: type_expr_id,
+                    span,
+                })))
+            } else if next.kind == K::Dot || (next.kind == K::QuestionMark && second.kind == K::Dot)
+            {
+                let is_coalescing = next.kind == K::QuestionMark && second.kind == K::Dot;
+                // Field access syntax; a.b with optional bracketed type args []
+                self.tokens.advance();
+                if is_coalescing {
                     self.tokens.advance();
-                    let span = self.extend_span(self.get_expression_span(result), next.span);
-                    result = self.add_expression(ParsedExpression::OptionalGet(OptionalGet {
-                        base: result,
+                }
+                let target = self.expect_eat_token(K::Ident)?;
+                let (type_args, type_args_span) = self.parse_optional_type_args()?;
+                let next = self.peek();
+                // a.b[int](...)
+                if next.kind == K::OpenParen {
+                    let (context_args, args, args_span) = self.expect_fn_call_args()?;
+                    let self_arg = result;
+                    let span = self.extend_span(self.get_expression_span(self_arg), args_span);
+                    let name = self.intern_ident_token(target);
+                    let mut all_args = vec![FnCallArg { name: None, value: self_arg }];
+                    all_args.extend(args);
+                    Some(self.add_expression(ParsedExpression::FnCall(FnCall {
+                        name: NamespacedIdentifier::naked(name, target.span),
+                        type_args,
+                        args: all_args,
+                        explicit_context_args: context_args,
                         span,
-                    }));
-                } else if next.kind == K::KeywordAs {
-                    self.tokens.advance();
-                    let type_expr_id = self.expect_type_expression()?;
+                        is_method: true,
+                    })))
+                } else {
+                    // a.b[int] <complete expression>
                     let span = self.extend_span(
                         self.get_expression_span(result),
-                        self.module.get_type_expression_span(type_expr_id),
+                        type_args_span.unwrap_or(target.span),
                     );
-                    result = self.add_expression(ParsedExpression::AsCast(ParsedAsCast {
-                        base_expr: result,
-                        dest_type: type_expr_id,
+                    let target = self.intern_ident_token(target);
+                    Some(self.add_expression(ParsedExpression::FieldAccess(FieldAccess {
+                        base: result,
+                        target,
+                        type_args,
+                        is_coalescing,
                         span,
-                    }));
-                } else if next.kind == K::Dot {
-                    // Field access syntax; a.b with optional bracketed type args []
-                    self.tokens.advance();
-                    let target = self.expect_eat_token(K::Ident)?;
-                    let (type_args, type_args_span) = self.parse_optional_type_args()?;
-                    let next = self.peek();
-                    // a.b[int](...)
-                    if next.kind == K::OpenParen {
-                        let (context_args, args, args_span) = self.expect_fn_call_args()?;
-                        let self_arg = result;
-                        let span = self.extend_span(self.get_expression_span(self_arg), args_span);
-                        let name = self.intern_ident_token(target);
-                        let mut all_args = vec![FnCallArg { name: None, value: self_arg }];
-                        all_args.extend(args);
-                        result = self.add_expression(ParsedExpression::FnCall(FnCall {
-                            name: NamespacedIdentifier::naked(name, target.span),
-                            type_args,
-                            args: all_args,
-                            explicit_context_args: context_args,
-                            span,
-                            is_method: true,
-                        }));
-                    } else {
-                        // a.b[int] <complete expression>
-                        let span = self
-                            .extend_span_maybe(self.get_expression_span(result), type_args_span);
-                        let target = self.intern_ident_token(target);
-                        result = self.add_expression(ParsedExpression::FieldAccess(FieldAccess {
-                            base: result,
-                            target,
-                            type_args,
-                            span,
-                        }));
-                    };
+                    })))
                 }
+            } else {
+                None
+            };
+            if let Some(new_result) = new_result {
+                result = new_result;
             } else {
                 break result;
             }
@@ -2170,11 +2220,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 if next.kind == K::Comma {
                     self.tokens.advance();
                 } else if next.kind != K::CloseBrace {
-                    return Err(ParseError {
-                        expected: "comma or close brace".to_string(),
-                        token: next,
-                        cause: None,
-                    });
+                    return Err(Parser::error("comma or close brace", next));
                 }
             }
             let close = self.expect_eat_token(K::CloseBrace)?;
@@ -3171,9 +3217,10 @@ pub fn lex_text(module: &mut ParsedModule, source: Source) -> ParseResult<Vec<To
     let text = &module.sources.get_source(file_id).content;
     let mut lexer = Lexer::make(text, &mut module.spans, file_id);
     let tokens = lexer.run().map_err(|lex_error| ParseError {
-        expected: lex_error.msg,
         token: EOF_TOKEN,
         cause: None,
+        lex_error: Some(lex_error),
+        expected: "lexing to succeed".to_string(),
     })?;
 
     let token_vec: Vec<Token> =
@@ -3192,7 +3239,7 @@ pub fn test_parse_module(source: Source) -> ParseResult<ParsedModule> {
 
     let result = parser.parse_module();
     if let Err(e) = result {
-        parser.print_error(&e);
+        print_error(&module, &e);
         Err(e)
     } else {
         Ok(module)

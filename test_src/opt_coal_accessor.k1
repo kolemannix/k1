@@ -1,0 +1,7 @@
+fn main(): int {
+  val maybeUser = Opt.Some({ name: "Koleman", age: 31 });
+  assert(maybeUser?.age == 31);
+  assert(maybeUser?.name == "Koleman");
+
+  0
+}

@@ -2614,7 +2614,6 @@ impl TypedModule {
             return Ok(());
         }
 
-        // nocommit: Should really make generic instance a type kind.
         if let (Some(gen1), Some(gen2)) = (
             self.types.get_generic_instance_info(expected),
             self.types.get_generic_instance_info(actual),
@@ -3046,12 +3045,14 @@ impl TypedModule {
 
     fn eval_field_access(
         &mut self,
+        field_access_id: ParsedExpressionId,
         field_access: &parse::FieldAccess,
         scope: ScopeId,
         is_assignment_lhs: bool,
         expected_type: Option<TypeId>,
     ) -> TyperResult<TypedExpr> {
         // Bailout case: Enum Constructor
+        let span = field_access.span;
         if let Some(enum_result) = self.handle_enum_constructor(
             field_access.base,
             field_access.target,
@@ -3059,7 +3060,7 @@ impl TypedModule {
             expected_type,
             &field_access.type_args,
             scope,
-            field_access.span,
+            span,
         )? {
             return Ok(enum_result);
         }
@@ -3085,16 +3086,84 @@ impl TypedModule {
             }
             other => {
                 if is_assignment_lhs {
-                    return failf!(
-                        field_access.span,
-                        "Cannot assign to member of non-reference struct"
-                    );
+                    return failf!(span, "Cannot assign to member of non-reference struct");
                 } else {
                     other
                 }
             }
         };
         match base_type {
+            Type::Enum(_opt_type) => {
+                if let Some(opt) = base_type.as_optional() {
+                    let parsed_id: ParsedId = field_access_id.into();
+                    let mut block = self.synth_block(vec![], scope, span);
+                    let block_scope = block.scope_id;
+                    let base_expr_var = self.synth_variable_defn(
+                        field_access.target,
+                        base_expr,
+                        false,
+                        false,
+                        block_scope,
+                    );
+                    let has_value = self.synth_function_call(
+                        qident!(self, span, ["Opt"], "hasValue"),
+                        span,
+                        block_scope,
+                        (vec![opt.inner_type], vec![base_expr_var.variable_expr.clone()]),
+                    )?;
+                    let Type::Struct(struct_type) = self.types.get(opt.inner_type) else {
+                        return failf!(
+                            span,
+                            "?. must be used on optional structs, got {}",
+                            self.type_id_to_string(base_expr_type)
+                        );
+                    };
+                    let (field_index, target_field) =
+                        struct_type.find_field(field_access.target).ok_or(make_error(
+                            format!(
+                                "Field {} not found on struct type",
+                                self.ast.identifiers.get_name(field_access.target)
+                            ),
+                            span,
+                        ))?;
+                    let field_type = target_field.type_id;
+                    let field_name = target_field.name;
+                    let opt_unwrap = self.synth_function_call(
+                        qident!(self, span, ["Opt"], "get"),
+                        span,
+                        block_scope,
+                        (vec![opt.inner_type], vec![base_expr_var.variable_expr]),
+                    )?;
+                    let result_type = self.synth_optional_type(field_type, parsed_id);
+                    let consequent = self.synth_optional_some(
+                        parsed_id,
+                        TypedExpr::StructFieldAccess(FieldAccess {
+                            base: Box::new(opt_unwrap),
+                            target_field: field_name,
+                            target_field_index: field_index as u32,
+                            span,
+                            ty: field_type,
+                        }),
+                    );
+                    let alternate = self.synth_optional_none(field_type, parsed_id, span);
+                    let if_expr = TypedExpr::If(Box::new(TypedIf {
+                        condition: has_value,
+                        consequent,
+                        alternate,
+                        ty: result_type,
+                        span,
+                    }));
+                    block.push_stmt(base_expr_var.defn_stmt);
+                    block.push_expr(if_expr);
+                    Ok(TypedExpr::Block(block))
+                } else {
+                    failf!(
+                        span,
+                        "Field {} does not exist",
+                        self.ast.identifiers.get_name(field_access.target)
+                    )
+                }
+            }
             Type::Struct(struct_type) => {
                 let (field_index, target_field) =
                     struct_type.find_field(field_access.target).ok_or(make_error(
@@ -3102,35 +3171,27 @@ impl TypedModule {
                             "Field {} not found on struct type",
                             self.ast.identifiers.get_name(field_access.target)
                         ),
-                        field_access.span,
+                        span,
                     ))?;
-                debug!(
-                    "field_access: struct type base: '{}'",
-                    self.type_id_to_string(base_expr.get_type())
-                );
-                debug!(
-                    "field_access: field type: '{}'",
-                    self.type_id_to_string(target_field.type_id)
-                );
                 Ok(TypedExpr::StructFieldAccess(FieldAccess {
                     base: Box::new(base_expr),
                     target_field: field_access.target,
                     target_field_index: field_index as u32,
                     ty: target_field.type_id,
-                    span: field_access.span,
+                    span,
                 }))
             }
             Type::EnumVariant(ev) => {
                 if self.ast.identifiers.get_name(field_access.target) != "value" {
                     return failf!(
-                        field_access.span,
+                        span,
                         "Field {} does not exist; try .value",
                         self.ast.identifiers.get_name(field_access.target)
                     );
                 }
                 let Some(payload_type_id) = ev.payload else {
                     return failf!(
-                        field_access.span,
+                        span,
                         "Variant {} has no payload value",
                         self.ast.identifiers.get_name(ev.name)
                     );
@@ -3140,12 +3201,12 @@ impl TypedModule {
                     payload_type_id,
                     variant_name: ev.name,
                     variant_index: ev.index,
-                    span: field_access.span,
+                    span,
                 }))
             }
             _ => failf!(
-                field_access.span,
-                "Cannot access field {} on type: {}",
+                span,
+                "Field {} does not exist on type {}",
                 self.ast.identifiers.get_name(field_access.target),
                 self.type_id_to_string(base_expr.get_type())
             ),
@@ -3161,7 +3222,7 @@ impl TypedModule {
         match self.ast.expressions.get(expr) {
             ParsedExpression::Variable(_variable) => self.eval_variable(expr, scope_id, true),
             ParsedExpression::FieldAccess(field_access) => {
-                self.eval_field_access(&field_access.clone(), scope_id, true, None)
+                self.eval_field_access(expr, &field_access.clone(), scope_id, true, None)
             }
             other => {
                 make_fail_span(format!("Invalid assignment lhs: {:?}", other), other.get_span())
@@ -3397,13 +3458,13 @@ impl TypedModule {
                     qident!(self, span, ["Array"], "new"),
                     span,
                     array_lit_scope,
-                    Some((
+                    (
                         vec![element_type],
                         vec![TypedExpr::Integer(TypedIntegerExpr {
                             value: TypedIntegerValue::U64(element_count as u64),
                             span,
                         })],
-                    )),
+                    ),
                 )?;
                 let array_new_expr = self.synth_reference(array_new_fn_call);
                 let array_variable = self.synth_variable_defn(
@@ -3419,10 +3480,10 @@ impl TypedModule {
                         qident!(self, span, ["Array"], "push"),
                         span,
                         array_lit_scope,
-                        Some((
+                        (
                             vec![element_type],
                             vec![array_variable.variable_expr.clone(), element_value_expr],
-                        )),
+                        ),
                     )?));
                     set_elements.push(element_set);
                 }
@@ -3590,7 +3651,7 @@ impl TypedModule {
             ParsedExpression::Variable(_variable) => self.eval_variable(expr_id, scope_id, false),
             ParsedExpression::FieldAccess(field_access) => {
                 let field_access = field_access.clone();
-                self.eval_field_access(&field_access, scope_id, false, expected_type)
+                self.eval_field_access(expr_id, &field_access, scope_id, false, expected_type)
             }
             ParsedExpression::Block(block) => {
                 // This clone is actually sad because Block is still big. We need to intern blocks
@@ -3620,7 +3681,7 @@ impl TypedModule {
                     qident!(self, span, ["Opt"], "get"),
                     span,
                     scope_id,
-                    Some((vec![optional_type.inner_type], vec![base])),
+                    (vec![optional_type.inner_type], vec![base]),
                 )?;
                 Ok(get_fn_call)
             }
@@ -3955,7 +4016,7 @@ impl TypedModule {
                 qident!(self, span_if_no_cases, "crash"),
                 span_if_no_cases,
                 scope_id,
-                Some((vec![], vec![message_expr])),
+                (vec![], vec![message_expr]),
             )
         } else {
             let (case_condition, case_body) = cases.pop_front().unwrap();
@@ -4478,13 +4539,13 @@ impl TypedModule {
                     },
                     body_span,
                     while_scope_id,
-                    Some((
+                    (
                         vec![],
                         vec![
                             iteree_variable.variable_expr.clone(),
                             index_variable.variable_expr.clone(),
                         ],
-                    )),
+                    ),
                 )?
             } else {
                 self.synth_function_call(
@@ -4495,13 +4556,13 @@ impl TypedModule {
                     },
                     body_span,
                     while_scope_id,
-                    Some((
+                    (
                         vec![item_type],
                         vec![
                             iteree_variable.variable_expr.clone(),
                             index_variable.variable_expr.clone(),
                         ],
-                    )),
+                    ),
                 )?
             },
             span: body_span,
@@ -4530,10 +4591,7 @@ impl TypedModule {
                 qident!(self, body_span, ["Array"], "new"),
                 body_span,
                 for_expr_scope,
-                Some((
-                    vec![body_block_result_type],
-                    vec![iteree_length_variable.variable_expr.clone()],
-                )),
+                (vec![body_block_result_type], vec![iteree_length_variable.variable_expr.clone()]),
             );
             let yield_initializer = self.synth_reference(synth_function_call?);
             Some(self.synth_variable_defn(
@@ -4569,13 +4627,13 @@ impl TypedModule {
                 qident!(self, body_span, ["Array"], "push"),
                 body_span,
                 for_expr_scope,
-                Some((
+                (
                     vec![body_block_result_type],
                     vec![
                         yielded_coll_variable.variable_expr.clone(),
                         user_block_variable.variable_expr,
                     ],
-                )),
+                ),
             )?));
             while_block.statements.push(element_assign);
         }
@@ -4685,57 +4743,12 @@ impl TypedModule {
                 }
             }
             BinaryOpKind::OptionalElse => {
-                // LHS must be an optional and RHS must be its contained type
-                let lhs = self.eval_expr(binary_op.lhs, scope_id, None)?;
-                let Some(lhs_optional) = self.types.get(lhs.get_type()).as_optional() else {
-                    return failf!(
-                        binary_op.span,
-                        "'else' operator can only be used on an optional; type was '{}'",
-                        self.type_id_to_string(lhs.get_type())
-                    );
-                };
-                let lhs_inner = lhs_optional.inner_type;
-
-                let rhs = self.eval_expr(binary_op.rhs, scope_id, Some(lhs_inner))?;
-                let rhs_type = rhs.get_type();
-                if let Err(msg) = self.check_types(lhs_inner, rhs_type, scope_id) {
-                    return failf!(
-                        binary_op.span,
-                        "'else' value incompatible with optional: {}",
-                        msg,
-                    );
-                }
-                let mut coalesce_block = self.synth_block(vec![], scope_id, binary_op.span);
-                let lhs_variable = self.synth_variable_defn(
-                    get_ident!(self, "optelse_lhs"),
-                    lhs,
-                    false,
-                    false,
-                    coalesce_block.scope_id,
-                );
-                let lhs_has_value = self.synth_function_call(
-                    qident!(self, binary_op.span, ["Opt"], "hasValue"),
+                return self.eval_optional_else(
+                    binary_op.lhs,
+                    binary_op.rhs,
+                    scope_id,
                     binary_op.span,
-                    coalesce_block.scope_id,
-                    Some((vec![lhs_inner], vec![lhs_variable.variable_expr.clone()])),
-                )?;
-                let lhs_get_expr = self.synth_function_call(
-                    qident!(self, binary_op.span, ["Opt"], "get"),
-                    binary_op.span,
-                    coalesce_block.scope_id,
-                    Some((vec![lhs_inner], vec![lhs_variable.variable_expr])),
-                )?;
-
-                let if_else = TypedExpr::If(Box::new(TypedIf {
-                    condition: lhs_has_value,
-                    consequent: lhs_get_expr,
-                    alternate: rhs,
-                    ty: lhs_inner,
-                    span: binary_op.span,
-                }));
-                coalesce_block.push_stmt(lhs_variable.defn_stmt);
-                coalesce_block.push_expr(if_else);
-                return Ok(TypedExpr::Block(coalesce_block));
+                )
             }
             _ => {}
         };
@@ -4835,6 +4848,62 @@ impl TypedModule {
             span: binary_op.span,
         });
         Ok(expr)
+    }
+
+    fn eval_optional_else(
+        &mut self,
+        lhs: ParsedExpressionId,
+        rhs: ParsedExpressionId,
+        scope_id: ScopeId,
+        span: SpanId,
+    ) -> TyperResult<TypedExpr> {
+        // LHS must be an optional and RHS must be its contained type
+        let lhs = self.eval_expr(lhs, scope_id, None)?;
+        let Some(lhs_optional) = self.types.get(lhs.get_type()).as_optional() else {
+            return failf!(
+                span,
+                "'else' operator can only be used on an optional; type was '{}'",
+                self.type_id_to_string(lhs.get_type())
+            );
+        };
+        let lhs_inner = lhs_optional.inner_type;
+
+        let rhs = self.eval_expr(rhs, scope_id, Some(lhs_inner))?;
+        let rhs_type = rhs.get_type();
+        if let Err(msg) = self.check_types(lhs_inner, rhs_type, scope_id) {
+            return failf!(span, "'else' value incompatible with optional: {}", msg,);
+        }
+        let mut coalesce_block = self.synth_block(vec![], scope_id, span);
+        let lhs_variable = self.synth_variable_defn(
+            get_ident!(self, "optelse_lhs"),
+            lhs,
+            false,
+            false,
+            coalesce_block.scope_id,
+        );
+        let lhs_has_value = self.synth_function_call(
+            qident!(self, span, ["Opt"], "hasValue"),
+            span,
+            coalesce_block.scope_id,
+            (vec![lhs_inner], vec![lhs_variable.variable_expr.clone()]),
+        )?;
+        let lhs_get_expr = self.synth_function_call(
+            qident!(self, span, ["Opt"], "get"),
+            span,
+            coalesce_block.scope_id,
+            (vec![lhs_inner], vec![lhs_variable.variable_expr]),
+        )?;
+
+        let if_else = TypedExpr::If(Box::new(TypedIf {
+            condition: lhs_has_value,
+            consequent: lhs_get_expr,
+            alternate: rhs,
+            ty: lhs_inner,
+            span,
+        }));
+        coalesce_block.push_stmt(lhs_variable.defn_stmt);
+        coalesce_block.push_expr(if_else);
+        Ok(TypedExpr::Block(coalesce_block))
     }
 
     fn eval_equality_expr(
@@ -7788,9 +7857,12 @@ impl TypedModule {
     /// Synthesis of Typed nodes
     ////////////////////////////
 
+    fn synth_optional_type(&mut self, inner_type: TypeId, parsed_id: ParsedId) -> TypeId {
+        self.instantiate_generic_type(OPTIONAL_TYPE_ID, vec![inner_type], parsed_id)
+    }
+
     fn synth_optional_some(&mut self, parsed_id: ParsedId, expression: TypedExpr) -> TypedExpr {
-        let optional_type =
-            self.instantiate_generic_type(OPTIONAL_TYPE_ID, vec![expression.get_type()], parsed_id);
+        let optional_type = self.synth_optional_type(expression.get_type(), parsed_id);
         let span = expression.get_span();
         let some_variant = self
             .types
@@ -7918,7 +7990,7 @@ impl TypedModule {
         name: NamespacedIdentifier,
         span: SpanId,
         scope_id: ScopeId,
-        known_args: Option<(Vec<TypeId>, Vec<TypedExpr>)>,
+        known_args: (Vec<TypeId>, Vec<TypedExpr>),
     ) -> TyperResult<TypedExpr> {
         self.eval_function_call(
             &FnCall {
@@ -7931,7 +8003,7 @@ impl TypedModule {
             },
             scope_id,
             None,
-            known_args,
+            Some(known_args),
         )
     }
 
