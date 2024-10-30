@@ -5,7 +5,7 @@ type Point = {
 }
 
 fn main(): int {
-  val xs = &[{ x: 1, y: 2, z: 3}: Point];
+  val xs = [{ x: 1, y: 2, z: 3}: Point].&;
   mut i = 0;
   while i < 100 {
     xs.push({ x: 1, y: 2, z: 3});

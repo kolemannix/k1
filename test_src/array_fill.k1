@@ -1,5 +1,5 @@
 fn main(): int {
-  val xs = &Array::new[int](0);
+  val xs = Array::new[int](0).&;
   assert(xs.cap == 0);
   assert(xs.len == 0);
 
@@ -17,6 +17,6 @@ fn main(): int {
   assert(xs.get(4) == 4);
   assert(xs.first()! == 0);
   assert(xs.last()! == 4);
-  assert((*xs) == [0,1,2,3,4]);
+  assert(xs.* == [0,1,2,3,4]);
   0
 }

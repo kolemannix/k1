@@ -1,7 +1,7 @@
 type Point = { x: int, y: int, z: int }
 
 fn main(): int {
-  val point: Point* = &{ x: 10, y: 20, z: 30 };
+  val point: Point* = { x: 10, y: 20, z: 30 }.&;
   val pointPtr = point as Pointer;
 
   val point2 = pointPtr as Point*;

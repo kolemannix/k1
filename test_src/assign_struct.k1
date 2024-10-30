@@ -1,5 +1,5 @@
 fn main(): int {
-  val x = &{ min: 4, max: 11 };
+  val x = { min: 4, max: 11 }.&;
   x.min = 2;
   assert(x.min == 2);
 

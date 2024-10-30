@@ -108,8 +108,7 @@
 - [ ] Change reference and dereference syntax to x.& and x.*
 - [ ] b"" strings that are of type... Slice[u8]
 - [ ] Builtin syntax for maps w/ Map[K, V]
-- [ ] Implement 'opaque' types as single-member structs internally? This removes a type 'kind' from the language
-- [ ] Handle escaped chars in string literals
+- [x] Handle escaped chars in string literals
 - [ ] Generic abilities (ability From<T> { ... })
 - [ ] Friendliness pass
   - [ ] Get rid of 'enum' keyword, data?
@@ -121,7 +120,7 @@
 - [ ] Make demo readme / site
 - [ ] Define clear 'platform layer' (crash, alloc/free, other?). Then we could do an LLVM interp platform and a rust interpreter platform
 - [x] Function types (functions have types but there's no syntax for describing a function type yet)
-- [ ] Optional coalescing field accessor (x?.y)
+- [x] Optional coalescing field accessor (x?.y)
 - [x] function pointers (By taking the static address of a function as Pointer)
 - [x] Finish/fix simple generic inference
 - [x] Prevent function overloading in same namespace
@@ -173,7 +172,7 @@
 # Major fix
 - [ ] Unmatched closing delim in namespace causes silent failure to parse rest of sources
 - [ ] Replace IdentifierId with global 'Symbol' where its a bug not to
-- [ ] Parsing bug where first expr of block is namespaced with ::
+- [x] Parsing bug where first expr of block is namespaced with ::
 - [ ] Parsing bug where `if rest.startsWith("one") .Some(1: u64)` parses as `if rest.startsWith("one").Some(1: u64)`
 - [x] ICE when assigning to struct member when struct is not a reference (self.module.types.get(field_access.base.get_type()).as_reference().is_some())
 

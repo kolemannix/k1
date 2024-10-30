@@ -3047,7 +3047,7 @@ impl TypedModule {
         &mut self,
         field_access_id: ParsedExpressionId,
         field_access: &parse::FieldAccess,
-        scope: ScopeId,
+        scope_id: ScopeId,
         is_assignment_lhs: bool,
         expected_type: Option<TypeId>,
     ) -> TyperResult<TypedExpr> {
@@ -3059,13 +3059,62 @@ impl TypedModule {
             None,
             expected_type,
             &field_access.type_args,
-            scope,
+            scope_id,
             span,
         )? {
             return Ok(enum_result);
         }
 
-        let mut base_expr = self.eval_expr(field_access.base, scope, None)?;
+        if field_access.target == get_ident!(self, "&") {
+            let expected_type = match expected_type.map(|t| self.types.get(t)) {
+                Some(Type::Reference(r)) => Some(r.inner_type),
+                Some(_unrelated) => None,
+                None => None,
+            };
+            let base_expr = self.eval_expr(field_access.base, scope_id, expected_type)?;
+            let type_id = self
+                .types
+                .add_type(Type::Reference(ReferenceType { inner_type: base_expr.get_type() }));
+            return Ok(TypedExpr::UnaryOp(UnaryOp {
+                kind: UnaryOpKind::Reference,
+                type_id,
+                expr: Box::new(base_expr),
+                span,
+            }));
+        } else if field_access.target == get_ident!(self, "*") {
+            // Example:
+            // let x: int = intptr.*
+            // The expected_type when we eval `*intptr` is int, so
+            // the expected_type when we eval `intptr` should be *int
+            let expected_type = match expected_type {
+                Some(expected) => Some(
+                    self.types.add_type(Type::Reference(ReferenceType { inner_type: expected })),
+                ),
+                None => None,
+            };
+            let base_expr = self.eval_expr(field_access.base, scope_id, expected_type)?;
+            let reference_type =
+                self.types.get(base_expr.get_type()).as_reference().ok_or(make_error(
+                    format!(
+                        "Cannot dereference non-reference type: {}",
+                        self.type_id_to_string(base_expr.get_type())
+                    ),
+                    span,
+                ))?;
+            debug!(
+                "AUTO DEREFERENCING: {}: {}",
+                self.expr_to_string(&base_expr),
+                self.type_id_to_string(base_expr.get_type())
+            );
+            return Ok(TypedExpr::UnaryOp(UnaryOp {
+                kind: UnaryOpKind::Dereference,
+                type_id: reference_type.inner_type,
+                expr: Box::new(base_expr),
+                span,
+            }));
+        }
+
+        let mut base_expr = self.eval_expr(field_access.base, scope_id, None)?;
 
         // Perform auto-dereference
         let base_expr_type = base_expr.get_type();
@@ -3095,8 +3144,11 @@ impl TypedModule {
         match base_type {
             Type::Enum(_opt_type) => {
                 if let Some(opt) = base_type.as_optional() {
+                    if !field_access.is_coalescing {
+                        return failf!(span, "Optionals have no direct fields; did you mean to use the '?.' operator?");
+                    }
                     let parsed_id: ParsedId = field_access_id.into();
-                    let mut block = self.synth_block(vec![], scope, span);
+                    let mut block = self.synth_block(vec![], scope_id, span);
                     let block_scope = block.scope_id;
                     let base_expr_var = self.synth_variable_defn(
                         field_access.target,
@@ -3567,59 +3619,6 @@ impl TypedModule {
             ParsedExpression::UnaryOp(op) => {
                 let op = op.clone();
                 match op.op_kind {
-                    ParsedUnaryOpKind::Dereference => {
-                        // Example:
-                        // let x: int = *intptr
-                        // The expected_type when we eval `*intptr` is int, so
-                        // the expected_type when we eval `intptr` should be *int
-                        let expected_type = match expected_type {
-                            Some(expected) => {
-                                Some(self.types.add_type(Type::Reference(ReferenceType {
-                                    inner_type: expected,
-                                })))
-                            }
-                            None => None,
-                        };
-                        let base_expr = self.eval_expr(op.expr, scope_id, expected_type)?;
-                        let reference_type =
-                            self.types.get(base_expr.get_type()).as_reference().ok_or(
-                                make_error(
-                                    format!(
-                                        "Cannot dereference non-reference type: {}",
-                                        self.type_id_to_string(base_expr.get_type())
-                                    ),
-                                    op.span,
-                                ),
-                            )?;
-                        debug!(
-                            "DEREFERENCING: {}: {}",
-                            self.expr_to_string(&base_expr),
-                            self.type_id_to_string(base_expr.get_type())
-                        );
-                        Ok(TypedExpr::UnaryOp(UnaryOp {
-                            kind: UnaryOpKind::Dereference,
-                            type_id: reference_type.inner_type,
-                            expr: Box::new(base_expr),
-                            span: op.span,
-                        }))
-                    }
-                    ParsedUnaryOpKind::Reference => {
-                        let expected_type = match expected_type.map(|t| self.types.get(t)) {
-                            Some(Type::Reference(r)) => Some(r.inner_type),
-                            Some(_unrelated) => None,
-                            None => None,
-                        };
-                        let base_expr = self.eval_expr(op.expr, scope_id, expected_type)?;
-                        let type_id = self.types.add_type(Type::Reference(ReferenceType {
-                            inner_type: base_expr.get_type(),
-                        }));
-                        Ok(TypedExpr::UnaryOp(UnaryOp {
-                            kind: UnaryOpKind::Reference,
-                            type_id,
-                            expr: Box::new(base_expr),
-                            span: op.span,
-                        }))
-                    }
                     ParsedUnaryOpKind::BooleanNegation => {
                         let base_expr = self.eval_expr(op.expr, scope_id, expected_type)?;
                         self.check_types(BOOL_TYPE_ID, base_expr.get_type(), scope_id)
@@ -5165,58 +5164,11 @@ impl TypedModule {
         expected_type: Option<TypeId>,
     ) -> TyperResult<Either<TypedExpr, Callee>> {
         let fn_name = fn_call.name.name;
-        let fn_name_str = self.ast.identifiers.get_name(fn_name);
-        match fn_name_str {
-            "return" => {
-                if fn_call.args.len() != 1 {
-                    return make_fail_span(
-                        "return(...) must have exactly one argument",
-                        fn_call.span,
-                    );
-                }
-                let enclosing_function = self.scopes.nearest_parent_function(calling_scope);
-                let expected_return_type = self.get_function(enclosing_function).return_type;
-                let return_value = self.eval_expr(
-                    fn_call.args[0].value,
-                    calling_scope,
-                    Some(expected_return_type),
-                )?;
-                if let Err(msg) =
-                    self.check_types(expected_return_type, return_value.get_type(), calling_scope)
-                {
-                    return make_fail_span(
-                        format!("return type did not match function return type: {}", msg),
-                        fn_call.span,
-                    );
-                }
-                return Ok(Either::Left(TypedExpr::Return(TypedReturn {
-                    value: Box::new(return_value),
-                    span: fn_call.span,
-                })));
-            }
-            "compilerFile" => {
-                if !fn_call.args.is_empty() {
-                    return make_fail_span("compilerFile() takes no arguments", fn_call.span);
-                }
-                let span = self.ast.spans.get(fn_call.span);
-                let filename = &self.ast.sources.source_by_span(span).filename;
-                let string_expr = TypedExpr::Str(filename.clone(), fn_call.span);
-                return Ok(Either::Left(string_expr));
-            }
-            "compilerLine" => {
-                if !fn_call.args.is_empty() {
-                    return make_fail_span("compilerLine() takes no arguments", fn_call.span);
-                }
-                let span = self.ast.spans.get(fn_call.span);
-                let line = self.ast.sources.get_line_for_span(span).unwrap();
-                let int_expr = TypedExpr::Integer(TypedIntegerExpr {
-                    value: TypedIntegerValue::U64(line.line_number() as u64),
-                    span: fn_call.span,
-                });
-                return Ok(Either::Left(int_expr));
-            }
-            _ => {}
-        };
+        if let Some(builtin_result) =
+            self.handle_builtin_function_call_lookalikes(fn_call, calling_scope)?
+        {
+            return Ok(Either::Left(builtin_result));
+        }
 
         if fn_call.is_method {
             // You can't do method call syntax _and_ namespace the name: foo.ns::send()
@@ -5346,6 +5298,64 @@ impl TypedModule {
                 }
             }
         }
+    }
+
+    fn handle_builtin_function_call_lookalikes(
+        &mut self,
+        fn_call: &FnCall,
+        calling_scope: ScopeId,
+    ) -> TyperResult<Option<TypedExpr>> {
+        match self.get_ident_str(fn_call.name.name) {
+            "return" => {
+                if fn_call.args.len() != 1 {
+                    return make_fail_span(
+                        "return(...) must have exactly one argument",
+                        fn_call.span,
+                    );
+                }
+                let enclosing_function = self.scopes.nearest_parent_function(calling_scope);
+                let expected_return_type = self.get_function(enclosing_function).return_type;
+                let return_value = self.eval_expr(
+                    fn_call.args[0].value,
+                    calling_scope,
+                    Some(expected_return_type),
+                )?;
+                if let Err(msg) =
+                    self.check_types(expected_return_type, return_value.get_type(), calling_scope)
+                {
+                    return make_fail_span(
+                        format!("return type did not match function return type: {}", msg),
+                        fn_call.span,
+                    );
+                }
+                return Ok(Some(TypedExpr::Return(TypedReturn {
+                    value: Box::new(return_value),
+                    span: fn_call.span,
+                })));
+            }
+            "compilerFile" => {
+                if !fn_call.args.is_empty() {
+                    return make_fail_span("compilerFile() takes no arguments", fn_call.span);
+                }
+                let span = self.ast.spans.get(fn_call.span);
+                let filename = &self.ast.sources.source_by_span(span).filename;
+                let string_expr = TypedExpr::Str(filename.clone(), fn_call.span);
+                return Ok(Some(string_expr));
+            }
+            "compilerLine" => {
+                if !fn_call.args.is_empty() {
+                    return make_fail_span("compilerLine() takes no arguments", fn_call.span);
+                }
+                let span = self.ast.spans.get(fn_call.span);
+                let line = self.ast.sources.get_line_for_span(span).unwrap();
+                let int_expr = TypedExpr::Integer(TypedIntegerExpr {
+                    value: TypedIntegerValue::U64(line.line_number() as u64),
+                    span: fn_call.span,
+                });
+                return Ok(Some(int_expr));
+            }
+            _ => return Ok(None),
+        };
     }
 
     fn resolve_parsed_function_call_method(
