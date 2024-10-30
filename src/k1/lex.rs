@@ -487,8 +487,6 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
 
     fn eat_token(&mut self) -> LexResult<Option<Token>> {
         let mut tok_buf = String::new();
-        // FIXME(lexer): Am I crazy or is this just always tok_buf.len()?!?!?!
-        let mut tok_len = 0;
         let mut is_line_comment = false;
         let mut line_comment_start = 0;
         let mut is_string = false;
@@ -498,7 +496,13 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
             let span = lex.add_span(start, len);
             Token::new(kind, span, peeked_whitespace)
         };
-        let make_keyword_or_ident = |lex: &mut Lexer, tok_buf: &str, start: u32, len: u32| {
+        let make_buffered_token = |lex: &mut Lexer, kind: TokenKind, tok_buf: &str, n: u32| {
+            let span = lex.add_span(n - tok_buf.len() as u32, tok_buf.len() as u32);
+            Token::new(kind, span, peeked_whitespace)
+        };
+        let make_keyword_or_ident = |lex: &mut Lexer, tok_buf: &str, n: u32| {
+            let start = n - tok_buf.len() as u32;
+            let len = tok_buf.len() as u32;
             if let Some(kind) = TokenKind::token_from_str(tok_buf) {
                 make_token(lex, kind, start, len)
             } else {
@@ -522,11 +526,10 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
             if is_string {
                 if c == '"' {
                     self.advance();
-                    break Some(make_token(self, K::String, n - tok_len, tok_len));
+                    break Some(make_buffered_token(self, K::String, &tok_buf, n));
                 } else if c == '\n' {
                     return Err(self.err("No newlines inside strings"));
                 } else {
-                    tok_len += 1;
                     tok_buf.push(c);
                     self.advance();
                     continue;
@@ -539,7 +542,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
             }
             if c == EOF_CHAR {
                 if !tok_buf.is_empty() {
-                    break Some(make_keyword_or_ident(self, &tok_buf, n - tok_len, tok_len));
+                    break Some(make_keyword_or_ident(self, &tok_buf, n));
                 } else {
                     break None;
                 }
@@ -562,15 +565,10 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                             // Fall through, continue the floating point number including a dot
                         } else {
                             // End the ident; we'll eat the dot next token w/ an empty buffer
-                            break Some(make_keyword_or_ident(
-                                self,
-                                &tok_buf,
-                                n - tok_len,
-                                tok_len,
-                            ));
+                            break Some(make_keyword_or_ident(self, &tok_buf, n));
                         }
                     } else {
-                        break Some(make_keyword_or_ident(self, &tok_buf, n - tok_len, tok_len));
+                        break Some(make_keyword_or_ident(self, &tok_buf, n));
                     }
                 } else if single_char_tok == K::SingleQuote {
                     self.advance(); // eat opening '
@@ -611,11 +609,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                 }
             }
             if c.is_whitespace() && !tok_buf.is_empty() {
-                if let Some(tok) = TokenKind::token_from_str(&tok_buf) {
-                    break Some(make_token(self, tok, n - tok_len, tok_len));
-                } else {
-                    break Some(make_keyword_or_ident(self, &tok_buf, n - tok_len, tok_len));
-                }
+                break Some(make_keyword_or_ident(self, &tok_buf, n));
             }
             if tok_buf.is_empty() && is_ident_or_num_start(c) {
                 // case: Start an ident
@@ -624,7 +618,6 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                 if c == '-' || c.is_numeric() {
                     is_number = true;
                 }
-                tok_len += 1;
                 tok_buf.push(c);
             } else if !tok_buf.is_empty() && is_ident_char(c) || c == '.' {
                 if c == '.' && !is_number {
@@ -635,13 +628,11 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                 if tok_buf.len() == 1 && tok_buf.starts_with('_') && c == '_' {
                     return Err(self.err("Identifiers cannot begin with __"));
                 }
-                tok_len += 1;
                 tok_buf.push(c);
             // We can possibly remove this check; it would be handled next loop
             } else if let Some(tok) = TokenKind::token_from_str(&tok_buf) {
                 // Do not eat this so the next eat_token call can see it.
-                // self.advance();
-                break Some(make_token(self, tok, n - tok_len, tok_len));
+                break Some(make_buffered_token(self, tok, &tok_buf, n));
             }
             self.advance();
         };
