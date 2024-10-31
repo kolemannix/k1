@@ -1,4 +1,4 @@
-type Square = enum
+deftype Square = enum
   Blank
   , Pawn
   , Knight
@@ -21,7 +21,7 @@ fn from_xy(x: int, y: int): int {
   x + y * 8
 }
 fn from_name(s: string): int {
-  val file = when s[0] {
+  val file = switch s[0] {
     , 'a' -> 0
     , 'b' -> 1
     , 'c' -> 2
@@ -37,7 +37,7 @@ fn from_name(s: string): int {
 
 fn dump(board: Array<Square>): unit {
   for square in board do {
-    when square {
+    switch square {
       , .Blank -> print("-")
       , .Pawn -> print("P")
       , .Knight -> print("N")

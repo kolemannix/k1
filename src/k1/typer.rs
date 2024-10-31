@@ -5113,7 +5113,7 @@ impl TypedModule {
         // I think its different in that it takes in a list of types (think pattern matching where we have more than 2 branches)
 
         // Then essentially discards the 'never' types and runs resolution as if they weren't there. imagine
-        // when x {
+        // switch x {
         //   , A -> crash()
         //   , B -> crash()
         //   , C -> 42

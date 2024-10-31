@@ -1,4 +1,4 @@
-type Block = {
+deftype Block = {
   position: { x: int, y: int, width: int, height: int },
   text: int
 }

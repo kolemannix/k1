@@ -1,7 +1,7 @@
-type Foo = { x: int, y: bool? }
+deftype Foo = { x: int, y: bool? }
 fn main(): int {
   val foo: Foo = { x: 1, y: .None };
-  val y = when foo {
+  val y = switch foo {
     { x, y: .Some(true) } -> x,
     { x, y: .Some(false) } -> x,
     { x, y: .Some(false) } -> x,

@@ -1,4 +1,4 @@
-type Point = { x: int, y: int? }
+deftype Point = { x: int, y: int? }
 
 fn main(): int {
   val n: Point? = .None;

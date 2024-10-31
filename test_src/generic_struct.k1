@@ -1,5 +1,5 @@
-type Box[T] = { value: T }
-type Pair[T, U] = { t: T?, u: U? }
+deftype Box[T] = { value: T }
+deftype Pair[T, U] = { t: T?, u: U? }
 namespace Pair {
   fn t[T, U](self: Pair[T, U]): T? {
     self.t

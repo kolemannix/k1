@@ -128,7 +128,7 @@ pub enum TokenKind {
     KeywordIf,
     KeywordElse,
     KeywordRecord,
-    KeywordType,
+    KeywordDefType,
     KeywordWhile,
     KeywordNamespace,
     KeywordIntern,
@@ -142,7 +142,7 @@ pub enum TokenKind {
     KeywordImpl,
     KeywordAuto,
     KeywordIs,
-    KeywordWhen,
+    KeywordSwitch,
     KeywordAs,
     KeywordNot,
     KeywordBuiltin,
@@ -212,7 +212,7 @@ impl TokenKind {
             K::KeywordIf => Some("if"),
             K::KeywordElse => Some("else"),
             K::KeywordRecord => Some("record"),
-            K::KeywordType => Some("type"),
+            K::KeywordDefType => Some("deftype"),
             K::KeywordWhile => Some("while"),
             K::KeywordNamespace => Some("namespace"),
             K::KeywordIntern => Some("intern"),
@@ -226,7 +226,7 @@ impl TokenKind {
             K::KeywordImpl => Some("impl"),
             K::KeywordAuto => Some("auto"),
             K::KeywordIs => Some("is"),
-            K::KeywordWhen => Some("when"),
+            K::KeywordSwitch => Some("switch"),
             K::KeywordAs => Some("as"),
             K::KeywordNot => Some("not"),
             K::KeywordBuiltin => Some("builtin"),
@@ -315,7 +315,7 @@ impl TokenKind {
             "if" => Some(K::KeywordIf),
             "else" => Some(K::KeywordElse),
             "record" => Some(K::KeywordRecord),
-            "type" => Some(K::KeywordType),
+            "deftype" => Some(K::KeywordDefType),
             "while" => Some(K::KeywordWhile),
             "namespace" => Some(K::KeywordNamespace),
             "intern" => Some(K::KeywordIntern),
@@ -328,7 +328,7 @@ impl TokenKind {
             "ability" => Some(K::KeywordAbility),
             "impl" => Some(K::KeywordImpl),
             "auto" => Some(K::KeywordAuto),
-            "when" => Some(K::KeywordWhen),
+            "switch" => Some(K::KeywordSwitch),
             "not" => Some(K::KeywordNot),
             "as" => Some(K::KeywordAs),
             "is" => Some(K::KeywordIs),
@@ -364,7 +364,7 @@ impl TokenKind {
             K::KeywordImpl => true,
             K::KeywordAuto => true,
             K::KeywordIs => true,
-            K::KeywordWhen => true,
+            K::KeywordSwitch => true,
             K::KeywordAs => true,
             K::KeywordNot => true,
             K::KeywordBuiltin => true,
@@ -427,6 +427,19 @@ impl Span {
         copied
     }
 }
+
+pub struct EscapedChar {
+    pub sentinel: char,
+    pub output: u8,
+}
+pub const STRING_ESCAPED_CHARS: [EscapedChar; 6] = [
+    EscapedChar { sentinel: 'n', output: b'\n' },
+    EscapedChar { sentinel: '0', output: b'\0' },
+    EscapedChar { sentinel: 't', output: b'\t' },
+    EscapedChar { sentinel: 'r', output: b'\r' },
+    EscapedChar { sentinel: '"', output: b'\"' },
+    EscapedChar { sentinel: '\\', output: b'\\' },
+];
 
 const TOKEN_FLAG_IS_WHITESPACE_PRECEEDED: u64 = 0x01;
 #[allow(unused)]
@@ -523,17 +536,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
             }
             if is_string {
                 let (_, next) = self.peek_two();
-                // nocommit: Lets share the 'escaped' chars
-                // and go ahead and lex them all in pairs for correctness
-                // I bet this'll pay off when we add interpolation
-                if c == '\\' && next == '"' {
-                    // Skip over \"
-                    tok_buf.push(c);
-                    tok_buf.push(next);
-                    self.advance();
-                    self.advance();
-                    continue;
-                } else if c == '\\' && next == '\\' {
+                if c == '\\' && STRING_ESCAPED_CHARS.iter().any(|c| c.sentinel == next) {
                     tok_buf.push(c);
                     tok_buf.push(next);
                     self.advance();

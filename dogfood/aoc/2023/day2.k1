@@ -2,7 +2,7 @@ type Color = enum Red, Green, Blue
 
 impl Show for Color {
   fn show(self: Color): string {
-    when self {
+    switch self {
       .Red -> "red",
       .Green -> "green",
       .Blue -> "blue"
@@ -37,7 +37,7 @@ fn main(): int {
       val values: Array[{ amount: int, color: Color }] = for value in values yield {
         val amountColor = value.splitByChar(' ');
         val amount = amountColor.get(0).toInt() ? crash("Bad amount: ".concat(value));
-        val color: Color = when amountColor.get(1) {
+        val color: Color = switch amountColor.get(1) {
           "red" -> .Red,
           "green" -> .Green,
           "blue" -> .Blue,
@@ -46,7 +46,7 @@ fn main(): int {
         { amount: amount, color: color }
       };
       for value in values do {
-        val colorSupply = when value.color {
+        val colorSupply = switch value.color {
           .Red -> supply.red,
           .Green -> supply.green,
           .Blue -> supply.blue

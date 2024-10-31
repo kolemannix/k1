@@ -1,4 +1,4 @@
-type Config = { foo: int, bar: int }
+deftype Config = { foo: int, bar: int }
 
 fn main(): int {
   val xs = []: Array[int];

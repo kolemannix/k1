@@ -1,13 +1,13 @@
 fn matchBool(b: bool): unit {
-  when b {
+  switch b {
     false -> println("false"),
     true -> println("true")
   }
 }
 
-type TriState = enum Yes, No, Failure({ reason: string })
+deftype TriState = enum Yes, No, Failure({ reason: string })
 fn matchTristateOpt(t: TriState?): unit {
-  when t {
+  switch t {
     .Some(.Yes) -> println("yes"),
     .Some(.No) -> println("no"),
     .Some(.Failure(s)) -> println("failure: ".concat(s.reason)),
@@ -16,7 +16,7 @@ fn matchTristateOpt(t: TriState?): unit {
 }
 
 fn failedWithBaz(t: TriState): bool {
-  when t {
+  switch t {
     .Yes -> false,
     .No -> false,
     .Failure(s) -> s.reason == "baz"
@@ -24,7 +24,7 @@ fn failedWithBaz(t: TriState): bool {
 }
 
 fn matchOptBool(b: bool?): unit {
-  when b {
+  switch b {
     .None -> println("None"),
     .Some(false) -> println("false"),
     .Some(true) -> println("true")
@@ -32,7 +32,7 @@ fn matchOptBool(b: bool?): unit {
 }
 
 fn bothTrue(bb: { a: bool, b: bool }): bool {
-  when bb {
+  switch bb {
     { a: false, b: false } -> false,
     { a: false, b: true } -> false,
     { a: true, b: false } -> false,
@@ -43,7 +43,7 @@ fn bothTrue(bb: { a: bool, b: bool }): bool {
 fn main(): int {
   println("Hello, exhaustiveness!");
 
-  when 'x' {
+  switch 'x' {
     'x' -> println("x"),
     a -> ()
   };

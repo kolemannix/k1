@@ -1,4 +1,4 @@
-type Point = { x: int, y: int, z: int }
+deftype Point = { x: int, y: int, z: int }
 
 fn main(): int {
   val point: Point* = { x: 10, y: 20, z: 30 }.&;

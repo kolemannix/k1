@@ -1,4 +1,4 @@
-type Point = { x: int?, y: int }
+deftype Point = { x: int?, y: int }
 
 fn main(): int {
   mut my_point: Point = { x: 42, y: 0 };
