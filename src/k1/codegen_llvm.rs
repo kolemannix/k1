@@ -1819,7 +1819,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let closure_struct_type =
                     self.codegen_type(closure_object_type.struct_representation)?.expect_struct();
 
-                // nocommit: Use insertvalue
                 let ptr = self.builder.build_alloca(closure_struct_type.struct_type, "closure");
                 let fn_ptr = self
                     .builder

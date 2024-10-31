@@ -104,18 +104,16 @@
 - [ ] Closures
   - [x] Direct calls, no captures
   - [ ] Support captures, but explicit only 
-- [ ] 'join' types to form new enums/structs, statically, like Roc
-- [ ] Change reference and dereference syntax to x.& and x.*
+- [x] Change reference and dereference syntax to x.& and x.*
 - [ ] b"" strings that are of type... Slice[u8]
 - [ ] Builtin syntax for maps w/ Map[K, V]
 - [x] Handle escaped chars in string literals
 - [ ] Generic abilities (ability From<T> { ... })
 - [ ] Friendliness pass
   - [ ] Get rid of 'enum' keyword, data?
-  - [ ] 'when' keyword is bad; `switch` maybe or `case`
+  - [x] 'when' keyword is bad; `switch` maybe or `case`
   - [ ] It would be really nice _not_ to take the keyword 'type'. Just a thought from using Rust/Scala
 - [x] Remove tag literals, make enum tags per-enum
-- [ ] LLVM: avoid loading aggregate values directly
 - [ ] Imports
 - [ ] Make demo readme / site
 - [ ] Define clear 'platform layer' (crash, alloc/free, other?). Then we could do an LLVM interp platform and a rust interpreter platform
@@ -133,6 +131,7 @@
 - [ ] German/Umbra strings
 ^ The builtin array would be NOT copyable so that you don't accidentally alias the data ptr
 - [ ] Ability constraints on generics (not strictly needed since we have them on functions)
+- [ ] Do away with k1lib.c?
 - [ ] Test handling of NaN and Infinity, other float edge cases
 
 ## Non-goals at least for now
@@ -143,6 +142,7 @@
 - [ ] Ability derivation (prefer a metaprogram solution)
 
 ## Maybe
+- [ ] 'join' types to form new enums/structs, statically, like Roc
 - [ ] Require unsafe marker when unsafe stuff is used
 - [ ] Might be very cool to have builtin syntax for anything implementing a 'Monad' ability
   - (Monad ability would require closures and generic abilities)
@@ -150,11 +150,12 @@
 - [ ] as! for fallible casting and as? for optional casting
 
 ## Compiler
-- Use smallvec
-- Invoke LLVM from in-memory repr?
-- UTF8
-- Intern ParsedBlock and ParsedStatement
-- Think about introducing type 'kind' and check_kind next time we need to typecheck on shape but not _really_ typecheck such as when inferring
+- [ ] LLVM: avoid loading aggregate values directly
+- [ ] Use smallvec
+- [ ] Invoke LLVM from in-memory repr?
+- [ ] UTF8
+- [ ] Intern ParsedBlock and ParsedStatement
+- [ ] Think about introducing type 'kind' and check_kind next time we need to typecheck on shape but not _really_ typecheck such as when inferring
 
 ## Error story
 - [ ] As values, of course.
@@ -177,7 +178,7 @@
 - [x] ICE when assigning to struct member when struct is not a reference (self.module.types.get(field_access.base.get_type()).as_reference().is_some())
 
 # Minor Fix (possible good bite-sized videos)
-- [ ] // FIXME: Am I crazy or is this just always tok_buf.len()?!?!?!
+- [x] // FIXME: Am I crazy or is this just always tok_buf.len()?!?!?!
 - [ ] type suffixes on int literals 123u32, 4u8, etc
 - [ ] Inference improvements
   - assert(sizeOf[Text]() == 16 + 32); rhs should infer to u64
@@ -186,10 +187,8 @@
         if rest.startsWith("two")   2          else 
         > else branch type did not match then branch type: Invalid generic type param: Expected u64 but got i64
 - [ ] Require indirection for recursive types
-- [ ] Precedence of dereference (and i guess unary ops in general) should be higher
-- [ ] Codegen 'variables' is broken (never cleared); use enter scope / exit scope w/ a stack of vecs or something
-      instead (matters when a variable id is reused because the same function is called twice; I think we just overwrite it
-      with the correct one but maybe nesting is a problem?)
+- [x] Precedence of dereference (and i guess unary ops in general) should be higher
+      Kinda fixed by removing all unary ops except 'not'
 
 # GUI checklist
 

@@ -1,8 +1,8 @@
-type Foo = { x: int }
-type Alias = Foo
+deftype Foo = { x: int }
+deftype Alias = Foo
 
 namespace Outer {
-  type Foo = { x: int }
+  deftype Foo = { x: int }
   namespace Foo {
     fn value(self: Foo): int { self.x + 3 }
   }

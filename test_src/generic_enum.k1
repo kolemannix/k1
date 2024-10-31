@@ -1,10 +1,10 @@
-type Result[T, E] = enum Ok(T) , Err(E)
+deftype Result[T, E] = enum Ok(T) , Err(E)
 namespace Result {
   fn unwrap[T, E](self: Result[T, E]): T {
     self.asOk()!.value
   }
   fn show(self: Result[int, string]): unit {
-    when self {
+    switch self {
       .Ok(v) -> { print("Ok "); printInt(v); println("") },
       .Err(e) -> { print("Error "); println(e); }
     }

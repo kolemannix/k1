@@ -18,7 +18,7 @@ other context, the one we use for allocations, is bound to a Thread, _not_ impli
 passed around on the stack.
 
 fn parse_expr(ctx: Context, caller_loc: Loc)(tokens: Array<Token>, index: int): Ast? {
-  when tokens.first() {
+  switch tokens.first() {
     None -> None,
     Some(t) -> {
       if t == T.True new(Ast.True) else None

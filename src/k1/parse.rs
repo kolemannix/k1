@@ -1601,16 +1601,14 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 if bytes[1] == b'\\' {
                     assert_eq!(bytes.len(), 4);
                     let esc_char = bytes[2];
-                    let literal = match esc_char {
-                        b'n' => Ok(Literal::Char(b'\n', first.span)),
-                        b'0' => Ok(Literal::Char(b'\0', first.span)),
-                        b't' => Ok(Literal::Char(b'\t', first.span)),
-                        b'r' => Ok(Literal::Char(b'\r', first.span)),
-                        b'\'' => Ok(Literal::Char(b'\'', first.span)),
-                        b'\\' => Ok(Literal::Char(b'\\', first.span)),
-                        _ => Err(Parser::error(
+                    let literal = match STRING_ESCAPED_CHARS
+                        .iter()
+                        .find(|c| c.sentinel == esc_char as char)
+                    {
+                        Some(c) => Ok(Literal::Char(c.output, first.span)),
+                        None => Err(Parser::error(
                             format!(
-                                "Valid escaped char following escape sequence: {}",
+                                "Invalid escaped char following escape sequence: {}",
                                 char::from(esc_char)
                             ),
                             first,
@@ -1636,14 +1634,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                         let Some(next) = chars.next() else {
                             return Err(Parser::error("String ended with '\\'", first));
                         };
-                        match next {
-                            'n' => buf.push('\n'),
-                            '0' => buf.push('\0'),
-                            't' => buf.push('\t'),
-                            'r' => buf.push('\r'),
-                            '"' => buf.push('"'),
-                            '\\' => buf.push('\\'),
-                            _ => {}
+                        if let Some(c) = STRING_ESCAPED_CHARS.iter().find(|c| c.sentinel == next) {
+                            buf.push(c.output as char)
                         };
                     } else {
                         buf.push(c)
@@ -2224,7 +2216,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             }
         } else if first.kind == K::BackSlash {
             Ok(Some(self.expect_closure()?))
-        } else if first.kind == K::KeywordWhen {
+        } else if first.kind == K::KeywordSwitch {
             let when_keyword = self.tokens.next();
             let target_expression = self.expect_expression()?;
 
@@ -2886,7 +2878,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn parse_type_defn(&mut self) -> ParseResult<Option<ParsedTypeDefnId>> {
-        let keyword_type = self.eat_token(K::KeywordType);
+        let keyword_type = self.eat_token(K::KeywordDefType);
         let Some(keyword_type) = keyword_type else {
             return Ok(None);
         };
@@ -3090,7 +3082,7 @@ impl ParsedModule {
                 self.display_pattern_expression_id(is_expr.pattern, f)
             }
             ParsedExpression::Match(match_expr) => {
-                f.write_str("when ")?;
+                f.write_str("switch ")?;
                 self.display_expr_id(match_expr.target_expression, f)?;
                 f.write_str(" {")?;
                 for ParsedMatchCase { pattern, expression } in match_expr.cases.iter() {

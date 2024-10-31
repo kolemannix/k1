@@ -1,4 +1,4 @@
-type Point = {
+deftype Point = {
   x: int,
   y: int,
   z: int,

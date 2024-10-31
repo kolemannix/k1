@@ -28,7 +28,7 @@ fn main(): int {
   assert(1337.1 is 1337.1);
   assert(not 1337.1 is 1337.2);
 
-  when 42.0 {
+  switch 42.0 {
     41.0 -> crash("should not equal"),
     42.0 -> (),
     f -> crash("should not fall through")

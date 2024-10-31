@@ -1,4 +1,4 @@
-type Json = enum
+deftype Json = enum
   JsStr(string)
   , JsNumber(string)
   , JsBool(bool)

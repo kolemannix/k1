@@ -1,18 +1,18 @@
-type unit = builtin
-type char = builtin
-type bool = builtin
-type never = builtin
-type Pointer = builtin
+deftype unit = builtin
+deftype char = builtin
+deftype bool = builtin
+deftype never = builtin
+deftype Pointer = builtin
 
-type f32 = builtin
-type f64 = builtin
+deftype f32 = builtin
+deftype f64 = builtin
 
-type Array[T] = { len: u64, cap: u64, data: Pointer }
-type string = { len: u64, data: Pointer }
+deftype Array[T] = { len: u64, cap: u64, data: Pointer }
+deftype string = { len: u64, data: Pointer }
 
-type Opt[T] = enum None, Some(T)
+deftype Opt[T] = enum None, Some(T)
 
-type CompilerSourceLoc = { filename: string, line: u64 }
+deftype CompilerSourceLoc = { filename: string, line: u64 }
 
 // One day
 // ability OrElse[T] {
@@ -20,13 +20,13 @@ type CompilerSourceLoc = { filename: string, line: u64 }
 //   fn unwrap(): T
 // }
 
-type alias int = i64
-type alias uint = u64
-type alias byte = u8
+deftype alias int = i64
+deftype alias uint = u64
+deftype alias byte = u8
 
-// type TypeInfo = enum Unit, Boolean(enum False, True), Int,
+// deftype TypeInfo = enum Unit, Boolean(enum False, True), Int,
 //
-// type Any = {
+// deftype Any = {
 //   typeInfo: TypeInfo,
 //   value: Pointer
 // }
@@ -98,7 +98,7 @@ impl Equals for Pointer {
   }
 }
 
-//type alias opaque string = { len: u64, data: Pointer }
+//deftype alias opaque string = { len: u64, data: Pointer }
 
 fn printInt(value: i64): unit {
   print(value.show())
@@ -248,7 +248,7 @@ namespace Array {
   }
 
   fn firstRef[T](self: Array[T]): T*? {
-    // This exercises both Some-wrapping, .None-promotion, and type hinting through ifs!
+    // This exercises both Some-wrapping, .None-promotion, and deftype hinting through ifs!
     if not self.isEmpty() {
       self.getRef(0)
     } else {
@@ -257,7 +257,7 @@ namespace Array {
   }
 
   fn first[T](self: Array[T]): T? {
-    when self.firstRef() {
+    switch self.firstRef() {
       .None -> .None,
       .Some(firstRef) -> .Some(firstRef.*)
     }
@@ -272,7 +272,7 @@ namespace Array {
   }
 
   fn last[T](self: Array[T]): T? {
-    when self.lastRef() {
+    switch self.lastRef() {
       .None -> .None,
       .Some(lastRef) -> .Some(lastRef.*)
     }

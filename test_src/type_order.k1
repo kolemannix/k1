@@ -1,5 +1,5 @@
-type alias PointList = Array[Point]
-type alias Point = { x: int, y: int }
+deftype alias PointList = Array[Point]
+deftype alias Point = { x: int, y: int }
 
 ability ToPoint {
   fn toPoint(self: Self): Point

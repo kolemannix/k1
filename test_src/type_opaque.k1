@@ -1,4 +1,4 @@
-type alias opaque UserId = int
+deftype alias opaque UserId = int
 namespace UserId {
   fn make(value: int): UserId {
     value

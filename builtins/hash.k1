@@ -1,5 +1,5 @@
-type Elem[E] = { key: string, value: E }
-type HashMap[V] = {
+deftype Elem[E] = { key: string, value: E }
+deftype HashMap[V] = {
   size: u64,
   slots: Array[Elem[V]?],
 }
@@ -32,7 +32,7 @@ namespace HashMap {
     val elem = { key: key, value: value };
     val slot = self.slots.get(index);
     // val fillFactor = fdiv(self.size, self.slots.len);
-    when slot {
+    switch slot {
       .None -> {
         self.slots.set(index, Opt.Some(elem));
         self.size = self.size + 1;
@@ -67,7 +67,7 @@ namespace HashMap {
     for self.slots do {
       printUInt(it_index);
       print(" ");
-      when it {
+      switch it {
         , .None -> println("empty")
         , .Some({ key, value }) -> {
             print(key | string::concat(" -> ") | string::concat(value.show()) | string::concat('\n'.toString()));

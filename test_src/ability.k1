@@ -7,7 +7,7 @@ ability Num {
 //   fn to(self: Self): T
 // }
 
-type Point = { x: i32, y: i32 }
+deftype Point = { x: i32, y: i32 }
 
 impl Num for Point {
   fn num(self: Self): i32 {
