@@ -1,18 +1,17 @@
-deftype Elem[E] = { key: string, value: E }
 deftype HashMap[V] = {
   size: u64,
-  slots: Array[Elem[V]?],
+  slots: Array[{ key: string, value: V }?],
 }
 
 namespace HashMap {
   fn new[V](): HashMap[V] {
-    val slots: Array[Elem[V]?]* = &Array::new(16);
+    val slots: Array[{ key: string, value: V }?]* = Array::new(16).&;
     mut i = 0;
     while i < 16 {
       slots.push(.None);
       i = i + 1;
     };
-    { size: 0, slots: *slots }
+    { size: 0, slots: slots.* }
   }
 
   fn fnv1a_hash(key: string): u64 {
@@ -31,7 +30,11 @@ namespace HashMap {
     val index = hash % self.slots.len;
     val elem = { key: key, value: value };
     val slot = self.slots.get(index);
-    // val fillFactor = fdiv(self.size, self.slots.len);
+    val fillFactor = self.size as f32 / self.slots.len as f32;
+    if fillFactor > 0.7 {
+      println("asdf");
+      self.grow();
+    };
     switch slot {
       .None -> {
         self.slots.set(index, Opt.Some(elem));
@@ -60,6 +63,21 @@ namespace HashMap {
     }
   }
 
+  fn grow[V](self: HashMap[V]*): unit {
+    println("growing");
+    val newSlots = Array::new[{ key: string, value: V}?](self.slots.len * 2);
+    val oldSlots = self.slots;
+
+    self.slots = newSlots;
+    self.size = 0;
+
+    for v in oldSlots do {
+      if v is .Some(v) {
+        self.insert(v.key, v.value)
+      }
+    }
+  }
+
   fn dump[V](self: HashMap[V]): unit where V: Show {
     print("Capacity: ");
     printUInt(self.slots.cap);
@@ -80,10 +98,9 @@ namespace HashMap {
 
 
 fn test(): unit {
-  val myMap: HashMap[int]* = &HashMap::new();
+  val myMap: HashMap[int]* = HashMap::new().&;
   mut i = 0;
   while i < 100 {
-    printInt(i);
     myMap.insert(randString(4), i);
     i = i + 1;
   };
@@ -91,16 +108,16 @@ fn test(): unit {
   myMap.insert("1", 3);
   myMap.insert("2", 4);
   myMap.insert("18", 4);
-  (*myMap).dump();
+  myMap.*.dump();
 
 }
 
 fn randByte(): u8 {
-  (arc4random_uniform(26) + 65) as u8
+  (libc::arc4random_uniform(26) + 65) as u8
 }
 
 fn randString(len: uint): string {
-  val arr = &Array::new[char](len);
+  val arr = Array::new[char](len).&;
   mut i: uint = 0;
   while i < len {
     arr.push(randByte() as char);

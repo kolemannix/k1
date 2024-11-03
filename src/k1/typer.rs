@@ -260,13 +260,14 @@ pub struct SpecializationParams {
     pub new_name: Identifier,
     pub known_intrinsic: Option<IntrinsicFunction>,
     pub generic_parent_function: FunctionId,
+    pub passed_type_ids: Vec<TypeId>,
 }
 
 #[derive(Debug, Clone)]
 pub struct SpecializationStruct {
     pub specialized_type_params: Vec<TypeId>,
     pub specialized_function_id: FunctionId,
-    pub specialized_params: Vec<FnArgType>,
+    pub specialized_function_type: TypeId,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2820,6 +2821,10 @@ impl TypedModule {
 
     pub fn get_function_mut(&mut self, function_id: FunctionId) -> &mut TypedFunction {
         &mut self.functions[function_id.0 as usize]
+    }
+
+    pub fn get_function_type(&self, function_id: FunctionId) -> &FunctionType {
+        self.types.get(self.functions[function_id.0 as usize].type_id).as_function().unwrap()
     }
 
     pub fn add_ability_impl(&mut self, ability_impl: TypedAbilityImpl) -> AbilityImplId {
@@ -5909,7 +5914,7 @@ impl TypedModule {
                             })
                             .collect()
                     }
-                    None => self.infer_and_check_call_type_args(
+                    None => self.infer_and_constrain_call_type_args(
                         fn_call,
                         function_id,
                         scope_id,
@@ -5917,15 +5922,21 @@ impl TypedModule {
                     )?,
                 };
 
-                let (function_id, args) = self.get_specialized_function_for_call(
-                    fn_call,
+                let function_id = self.get_specialized_function_for_call(
                     &type_args,
                     function_id,
                     intrinsic_type,
-                    scope_id,
-                    known_args.map(|ka| ka.1),
                 )?;
-                (Callee::make_static(function_id), args, type_args)
+
+                let specialized_params = &self.get_function_type(function_id).params.clone();
+                let typechecked_args = self.check_call_arguments(
+                    fn_call,
+                    specialized_params,
+                    known_args.map(|ka| ka.1),
+                    scope_id,
+                )?;
+
+                (Callee::make_static(function_id), typechecked_args, type_args)
             }
         };
 
@@ -5946,7 +5957,7 @@ impl TypedModule {
         Ok(TypedExpr::Call(call))
     }
 
-    fn infer_and_check_call_type_args(
+    fn infer_and_constrain_call_type_args(
         &mut self,
         fn_call: &FnCall,
         generic_function_id: FunctionId,
@@ -6297,13 +6308,10 @@ impl TypedModule {
 
     fn get_specialized_function_for_call(
         &mut self,
-        fn_call: &FnCall,
         inferred_or_passed_type_args: &[TypeParam],
         generic_function_id: FunctionId,
         intrinsic_type: Option<IntrinsicFunction>,
-        calling_scope: ScopeId,
-        pre_evaled_value_args: Option<Vec<TypedExpr>>,
-    ) -> TyperResult<(FunctionId, Vec<TypedExpr>)> {
+    ) -> TyperResult<FunctionId> {
         let generic_function = self.get_function(generic_function_id);
         let generic_function_parent_scope = self
             .scopes
@@ -6321,26 +6329,19 @@ impl TypedModule {
             .map(|type_param| type_param.type_id)
             .collect::<Vec<_>>();
 
-        for (i, existing_specialization) in specializations.iter().enumerate() {
-            let types_stringified = existing_specialization
-                .specialized_type_params
-                .iter()
-                .map(|type_id| self.type_id_to_string(*type_id))
-                .collect::<Vec<_>>()
-                .join("_");
-            debug!("existing specialization for {} {}: {}", name, i, types_stringified);
+        for existing_specialization in specializations.iter() {
             if existing_specialization.specialized_type_params == type_ids {
+                let types_stringified = existing_specialization
+                    .specialized_type_params
+                    .iter()
+                    .map(|type_id| self.type_id_to_string(*type_id))
+                    .collect::<Vec<_>>()
+                    .join("_");
                 debug!(
                     "Found existing specialization for function {} with types: {}",
                     name, types_stringified
                 );
-                let exprs = self.check_call_arguments(
-                    fn_call,
-                    &existing_specialization.specialized_params,
-                    pre_evaled_value_args,
-                    calling_scope,
-                )?;
-                return Ok((existing_specialization.specialized_function_id, exprs));
+                return Ok(existing_specialization.specialized_function_id);
             }
         }
 
@@ -6397,29 +6398,11 @@ impl TypedModule {
                 new_name: new_name_ident,
                 known_intrinsic: intrinsic_type,
                 generic_parent_function: generic_function_id,
+                passed_type_ids: type_ids.clone(),
             },
         )?;
-        let specialized_params: Vec<FnArgType> = self
-            .get_function(specialized_function_id)
-            .params
-            .iter()
-            .map(|p| p.to_fn_arg_type())
-            .collect();
 
-        let typechecked_exprs = self.check_call_arguments(
-            fn_call,
-            &specialized_params,
-            pre_evaled_value_args,
-            calling_scope,
-        )?;
-
-        self.get_function_mut(generic_function_id).specializations.push(SpecializationStruct {
-            specialized_function_id,
-            specialized_type_params: type_ids,
-            specialized_params,
-        });
-
-        Ok((specialized_function_id, typechecked_exprs))
+        Ok(specialized_function_id)
     }
 
     pub fn should_codegen_function(&self, function: &TypedFunction) -> bool {
@@ -6699,7 +6682,7 @@ impl TypedModule {
         // Note: messy: parent_scope_id is only used if not specializing
         // FIXME: use Either for arguments to this function
         parent_scope_id: ScopeId,
-        specialization_params: Option<SpecializationParams>,
+        specialization_params_owned: Option<SpecializationParams>,
         // ALSO IGNORED WHEN SPECIALIZING
         ability_id: Option<AbilityId>,
         // ALSO IGNORED WHEN SPECIALIZING
@@ -6707,7 +6690,7 @@ impl TypedModule {
         namespace_id: NamespaceId,
     ) -> TyperResult<FunctionId> {
         let namespace = self.namespaces.get(namespace_id);
-        let specialization_params = specialization_params.as_ref();
+        let specialization_params = specialization_params_owned.as_ref();
         let companion_type_id = namespace.companion_type_id;
         let specialize = specialization_params.is_some();
         let parsed_function = self.ast.get_function(parsed_function_id).clone();
@@ -6982,6 +6965,7 @@ impl TypedModule {
         let function = TypedFunction {
             name,
             scope: fn_scope_id,
+            // nocommit: Remove return type since it now lives on the function's type
             return_type,
             params,
             type_params,
@@ -6997,9 +6981,23 @@ impl TypedModule {
         };
         let function_id = self.add_function(function);
 
-        // We do not want to resolve specialized functions by name!
-        // So don't add them to any scope.
-        if !specialize {
+        // We can match w/ ownership here so that we don't have to clone the passed_type_ids
+        if let Some(specialization_params) = specialization_params_owned {
+            //
+            // Bookkeeping to do when specializing
+            //
+            self.get_function_mut(specialization_params.generic_parent_function)
+                .specializations
+                .push(SpecializationStruct {
+                    specialized_function_id: function_id,
+                    specialized_type_params: specialization_params.passed_type_ids,
+                    specialized_function_type: function_type_id,
+                });
+        } else {
+            //
+            // Bookkeeping to do when NOT specializing
+            //
+
             if !self.scopes.add_function(parent_scope_id, parsed_function_name, function_id) {
                 return failf!(
                     parsed_function_span,
@@ -7017,9 +7015,7 @@ impl TypedModule {
                     self.get_ident_str(parsed_function_name)
                 );
             }
-        }
 
-        if !specialize {
             let existed =
                 self.function_ast_mappings.insert(parsed_function_id, function_id).is_some();
             debug_assert!(!existed)
@@ -7092,6 +7088,8 @@ impl TypedModule {
             None,
             self.get_root_namespace_id(),
         )?;
+        // TODO: Do the body later, otherwise mutually recursive functions
+        //       cause a deep stack
         self.eval_function_body(specialized_function_id)?;
         Ok(specialized_function_id)
     }
