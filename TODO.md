@@ -115,6 +115,7 @@
   - [ ] It would be really nice _not_ to take the keyword 'type'. Just a thought from using Rust/Scala
 - [x] Remove tag literals, make enum tags per-enum
 - [ ] Imports
+- [ ] Ranges (ugh)
 - [ ] Make demo readme / site
 - [ ] Define clear 'platform layer' (crash, alloc/free, other?). Then we could do an LLVM interp platform and a rust interpreter platform
 - [x] Function types (functions have types but there's no syntax for describing a function type yet)
