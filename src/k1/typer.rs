@@ -245,7 +245,6 @@ impl FnArgDefn {
     pub fn to_fn_arg_type(&self) -> FnArgType {
         FnArgType {
             name: self.name,
-            position: self.position,
             type_id: self.type_id,
             is_context: self.is_context,
             is_closure_env: self.is_closure_env,
@@ -295,10 +294,9 @@ impl TypedFunctionKind {
 pub struct TypedFunction {
     pub name: Identifier,
     pub scope: ScopeId,
-    pub return_type: TypeId,
-    pub params: Vec<FnArgDefn>,
+    pub param_variables: Vec<VariableId>,
     pub type_params: Vec<FunctionTypeParam>,
-    pub block: Option<TypedBlock>,
+    pub body_block: Option<TypedBlock>,
     pub intrinsic_type: Option<IntrinsicFunction>,
     pub linkage: Linkage,
     pub specializations: Vec<SpecializationStruct>,
@@ -1856,7 +1854,6 @@ impl TypedModule {
                 params.push(FnArgType {
                     type_id: empty_struct_reference_id,
                     name: get_ident!(self, "__clos_env"),
-                    position: 0,
                     is_context: false,
                     is_closure_env: true,
                     span: fun_type.span,
@@ -1868,7 +1865,6 @@ impl TypedModule {
                     params.push(FnArgType {
                         type_id,
                         name,
-                        position: (index + 1) as u32,
                         is_context: false,
                         is_closure_env: false,
                         span,
@@ -3836,7 +3832,6 @@ impl TypedModule {
             self.types.add_reference_type(environment_struct_type);
         let environment_param = FnArgType {
             name: get_ident!(self, "__clos_env"),
-            position: 0,
             type_id: environment_struct_reference_type,
             is_context: false,
             is_closure_env: true,
@@ -3863,7 +3858,6 @@ impl TypedModule {
             };
             typed_params.push(FnArgType {
                 name: arg.binding,
-                position: (index + 1) as u32,
                 type_id: arg_type_id,
                 is_context: false,
                 is_closure_env: false,
@@ -3871,8 +3865,8 @@ impl TypedModule {
             });
         }
         let closure_scope = self.scopes.get_scope_mut(closure_scope_id);
-        let mut closure_params = Vec::with_capacity(typed_params.len());
-        for (index, typed_arg) in typed_params.iter().enumerate() {
+        let mut param_variables = Vec::with_capacity(typed_params.len());
+        for typed_arg in typed_params.iter() {
             let name = typed_arg.name;
             let variable_id = self.variables.add_variable(Variable {
                 name,
@@ -3882,15 +3876,7 @@ impl TypedModule {
                 is_context: false,
             });
             closure_scope.add_variable(name, variable_id);
-            closure_params.push(FnArgDefn {
-                name,
-                variable_id,
-                position: index as u32,
-                type_id: typed_arg.type_id,
-                is_context: false,
-                is_closure_env: typed_arg.is_closure_env,
-                span: typed_arg.span,
-            })
+            param_variables.push(variable_id)
         }
         let body = self.eval_expr(
             closure_body,
@@ -3914,10 +3900,9 @@ impl TypedModule {
         let function = TypedFunction {
             name,
             scope: closure_scope_id,
-            return_type,
-            params: closure_params,
+            param_variables,
             type_params: vec![],
-            block: Some(self.coerce_expr_to_block(body, closure_scope_id)),
+            body_block: Some(self.coerce_expr_to_block(body, closure_scope_id)),
             intrinsic_type: None,
             linkage: Linkage::Standard,
             specializations: vec![],
@@ -5319,7 +5304,7 @@ impl TypedModule {
                     );
                 }
                 let enclosing_function = self.scopes.nearest_parent_function(calling_scope);
-                let expected_return_type = self.get_function(enclosing_function).return_type;
+                let expected_return_type = self.get_function_type(enclosing_function).return_type;
                 let return_value = self.eval_expr(
                     fn_call.args[0].value,
                     calling_scope,
@@ -5965,11 +5950,12 @@ impl TypedModule {
         expected_type_id: Option<TypeId>,
     ) -> TyperResult<Vec<TypeParam>> {
         let generic_function = self.get_function(generic_function_id);
-        let function_return_type = generic_function.return_type;
+        let generic_function_type = self.get_function_type(generic_function_id);
+        let function_return_type = generic_function_type.return_type;
         let generic_type_params = generic_function.type_params.clone();
         debug_assert!(!generic_type_params.is_empty());
         let generic_name = generic_function.name;
-        let generic_params = generic_function.params.clone();
+        let generic_params = generic_function_type.params.clone();
         let type_args = &fn_call.type_args;
         let type_params = match type_args.is_empty() {
             false => {
@@ -5994,9 +5980,9 @@ impl TypedModule {
             true => {
                 let mut solved_params: Vec<TypeParam> = Vec::new();
 
-                for gen_param in generic_params.iter() {
+                for (param_index, gen_param) in generic_params.iter().enumerate() {
                     let Some(matching_argument) = (match fn_call.arg_by_name(gen_param.name) {
-                        None => fn_call.args.get(gen_param.position as usize),
+                        None => fn_call.args.get(param_index),
                         Some((_pos, p)) => Some(p),
                     }) else {
                         return failf!(
@@ -6027,11 +6013,7 @@ impl TypedModule {
                         )?;
                     }
                     if solved_params.len() == generic_type_params.len() {
-                        debug!(
-                            "Solved after {}/{} params",
-                            gen_param.position,
-                            generic_params.len()
-                        );
+                        debug!("Solved after {}/{} params", param_index, generic_params.len());
                         break;
                     }
                 }
@@ -6413,10 +6395,7 @@ impl TypedModule {
                 TypedFunctionKind::Closure => true,
                 TypedFunctionKind::Standard | TypedFunctionKind::AbilityImpl { .. } => {
                     let is_generic =
-                        self.types.does_type_reference_type_variables(function.return_type)
-                            || function.params.iter().any(|param| {
-                                self.types.does_type_reference_type_variables(param.type_id)
-                            });
+                        self.types.does_type_reference_type_variables(function.type_id);
                     debug!("{} is_generic? {is_generic}", self.function_to_string(function, false));
                     !is_generic
                 }
@@ -6789,7 +6768,8 @@ impl TypedModule {
         );
 
         // Process arguments
-        let mut params = Vec::new();
+        let mut param_types: Vec<FnArgType> = Vec::with_capacity(parsed_function_args.len());
+        let mut param_variables = Vec::with_capacity(parsed_function_args.len());
         let mut is_method_of = None;
         for (idx, fn_arg) in
             parsed_function_context_args.iter().chain(parsed_function_args.iter()).enumerate()
@@ -6876,15 +6856,14 @@ impl TypedModule {
 
             let is_context = fn_arg.modifiers.is_context();
             let variable_id = self.variables.add_variable(variable);
-            params.push(FnArgDefn {
+            param_types.push(FnArgType {
                 name: fn_arg.name,
-                variable_id,
-                position: idx as u32,
                 type_id,
                 is_context,
                 is_closure_env: false,
                 span: fn_arg.span,
             });
+            param_variables.push(variable_id);
             if is_context {
                 let inserted = self.scopes.add_context_variable(
                     fn_scope_id,
@@ -6950,7 +6929,6 @@ impl TypedModule {
             }
         };
 
-        let param_types: Vec<FnArgType> = params.iter().map(|p| p.to_fn_arg_type()).collect();
         let function_type_id = self.types.add_type(Type::Function(FunctionType {
             params: param_types,
             return_type,
@@ -6965,11 +6943,9 @@ impl TypedModule {
         let function = TypedFunction {
             name,
             scope: fn_scope_id,
-            // nocommit: Remove return type since it now lives on the function's type
-            return_type,
-            params,
+            param_variables,
             type_params,
-            block: None,
+            body_block: None,
             intrinsic_type,
             linkage: parsed_function_linkage,
             specializations: Vec::new(),
@@ -7034,7 +7010,7 @@ impl TypedModule {
         let function = self.get_function(declaration_id);
         let function_name = function.name;
         let fn_scope_id = function.scope;
-        let ret_type = function.return_type;
+        let return_type = self.get_function_type(declaration_id).return_type;
         let is_extern = matches!(function.linkage, Linkage::External(_));
         let ast_id = function.parsed_id.as_function_id().expect("expected function id");
         let is_intrinsic = function.intrinsic_type.is_some();
@@ -7047,13 +7023,13 @@ impl TypedModule {
             Some(block_ast) => {
                 // Note(clone): Intern blocks
                 let block_ast = block_ast.clone();
-                let block = self.eval_block(&block_ast, fn_scope_id, Some(ret_type))?;
+                let block = self.eval_block(&block_ast, fn_scope_id, Some(return_type))?;
                 debug!(
                     "evaled function block with expected type {} and got type {}",
-                    self.type_id_to_string(ret_type),
+                    self.type_id_to_string(return_type),
                     self.type_id_to_string(block.expr_type)
                 );
-                if let Err(msg) = self.check_types(ret_type, block.expr_type, fn_scope_id) {
+                if let Err(msg) = self.check_types(return_type, block.expr_type, fn_scope_id) {
                     return failf!(
                         function_span,
                         "Function {} return type mismatch: {}",
@@ -7069,7 +7045,7 @@ impl TypedModule {
         };
         // Add the body now
         if let Some(body_block) = body_block {
-            self.get_function_mut(declaration_id).block = Some(body_block);
+            self.get_function_mut(declaration_id).body_block = Some(body_block);
         }
         Ok(())
     }
@@ -7270,8 +7246,8 @@ impl TypedModule {
                 self.get_root_namespace_id(),
             )?;
 
-            let specialized = self.get_function(function_impl);
-            let generic = self.get_function(ability_function_ref.function_id);
+            let specialized = self.get_function_type(function_impl);
+            let generic = self.get_function_type(ability_function_ref.function_id);
             if specialized.params.len() != generic.params.len() {
                 return make_fail_span(
                     format!(

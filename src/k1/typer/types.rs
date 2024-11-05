@@ -248,7 +248,6 @@ impl IntegerType {
 #[derive(Debug, Clone)]
 pub struct FnArgType {
     pub name: Identifier,
-    pub position: u32,
     pub type_id: TypeId,
     pub is_context: bool,
     pub is_closure_env: bool,
