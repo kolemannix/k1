@@ -335,7 +335,8 @@ impl TypedModule {
         writ.write_str("fn ")?;
         writ.write_str(self.get_ident_str(function.name))?;
         writ.write_str("(")?;
-        for (idx, param) in function.params.iter().enumerate() {
+        let function_type = self.types.get(function.type_id).as_function().unwrap();
+        for (idx, param) in function_type.params.iter().enumerate() {
             if idx > 0 {
                 writ.write_str(", ")?;
             }
@@ -345,10 +346,10 @@ impl TypedModule {
         }
         writ.write_str(")")?;
         writ.write_str(": ")?;
-        self.display_type_id(function.return_type, false, writ)?;
+        self.display_type_id(function_type.return_type, false, writ)?;
         if display_block {
             writ.write_str(" ")?;
-            if let Some(block) = &function.block {
+            if let Some(block) = &function.body_block {
                 self.display_block(block, writ, 0)?;
             }
         }
@@ -545,7 +546,7 @@ impl TypedModule {
                 }
                 writ.write_str(" -> ")?;
                 let closure_body =
-                    self.get_function(closure_type.body_function_id).block.as_ref().unwrap();
+                    self.get_function(closure_type.body_function_id).body_block.as_ref().unwrap();
                 self.display_block(closure_body, writ, indentation)?;
                 Ok(())
             }

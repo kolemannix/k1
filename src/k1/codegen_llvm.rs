@@ -2482,6 +2482,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         debug!("\ncodegen function\n{}", self.module.function_id_to_string(function_id, true));
 
         let function = self.module.get_function(function_id);
+        let function_type = self.module.types.get(function.type_id).as_function().unwrap();
 
         let function_line_number = self
             .module
@@ -2494,16 +2495,16 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
         let maybe_starting_block = self.builder.get_insert_block();
 
-        let mut param_types: Vec<LlvmType<'ctx>> = Vec::with_capacity(function.params.len());
+        let mut param_types: Vec<LlvmType<'ctx>> = Vec::with_capacity(function_type.params.len());
         let mut param_metadata_types: Vec<BasicMetadataTypeEnum<'ctx>> =
-            Vec::with_capacity(function.params.len());
+            Vec::with_capacity(function_type.params.len());
 
-        for param in function.params.iter() {
+        for param in function_type.params.iter() {
             let res = self.codegen_type(param.type_id)?;
             param_metadata_types.push(BasicMetadataTypeEnum::from(res.physical_value_type()));
             param_types.push(res);
         }
-        let return_type = self.codegen_type(function.return_type)?;
+        let return_type = self.codegen_type(function_type.return_type)?;
 
         let llvm_name = match function.linkage {
             TyperLinkage::External(Some(name)) => self.module.get_ident_str(name),
@@ -2539,7 +2540,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let entry_block = self.ctx.append_basic_block(fn_val, "entry");
         self.builder.position_at_end(entry_block);
         for (i, param) in fn_val.get_param_iter().enumerate() {
-            let typed_param = &function.params[i];
+            let typed_param = &function_type.params[i];
             let ty = self.codegen_type(typed_param.type_id)?;
             let param_name = self.module.ast.identifiers.get_name(typed_param.name);
             trace!(
@@ -2570,8 +2571,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.set_debug_location(typed_param.span),
                 store,
             );
+            let variable_id = function.param_variables[i];
             self.variables.insert(
-                typed_param.variable_id,
+                variable_id,
                 Pointer {
                     pointer,
                     pointee_type_id: typed_param.type_id,
@@ -2591,7 +2593,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 // The plan is to separate the notion of "expression blocks" from "control flow
                 // blocks" to make this all more reasonable
                 // Rust rejects "unreachable expression"
-                let function_block = function.block.as_ref().unwrap_or_else(|| {
+                let function_block = function.body_block.as_ref().unwrap_or_else(|| {
                     panic!("Function has no block {}", self.get_ident_name(function.name))
                 });
                 let value = self.codegen_block_statements(function_block)?;
