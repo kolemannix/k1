@@ -235,7 +235,10 @@ fn while_loop_1() -> Result<(), ParseError> {
     let mut parser = set_up(input, &mut module);
     let result = parser.parse_statement()?.unwrap();
     if let ParsedStmt::While(while_stmt) = result {
-        assert_eq!(while_stmt.block.stmts.len(), 3);
+        let ParsedExpression::Block(block) = module.expressions.get(while_stmt.body) else {
+            panic!("expected block")
+        };
+        assert_eq!(block.stmts.len(), 3);
         return Ok(());
     }
     panic!()

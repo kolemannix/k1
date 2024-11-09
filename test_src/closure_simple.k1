@@ -14,8 +14,6 @@ fn filter[T](a: Array[T], f: \T -> bool): Array[T] {
 fn staticAddOne(x: int): int { x + 1 }
 
 fn main(): int {
-  val closedOver: int = 3;
-
   val addOne = \x: int -> x + 1;
   val addOne2 = addOne;
   val addOne3 = \i: int -> staticAddOne(i);

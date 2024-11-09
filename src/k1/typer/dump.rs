@@ -402,15 +402,15 @@ impl TypedModule {
                 self.display_expr(&val_def.initializer, writ, indentation)
             }
             TypedStmt::Assignment(assignment) => {
-                self.display_expr(&assignment.destination, writ, 0)?;
+                self.display_expr(&assignment.destination, writ, indentation)?;
                 writ.write_str(" = ")?;
-                self.display_expr(&assignment.value, writ, 0)
+                self.display_expr(&assignment.value, writ, indentation)
             }
             TypedStmt::WhileLoop(while_loop) => {
                 writ.write_str("while ")?;
-                self.display_expr(&while_loop.cond, writ, 0)?;
+                self.display_expr(&while_loop.cond, writ, indentation)?;
                 writ.write_str(" ")?;
-                self.display_block(&while_loop.block, writ, indentation + 1)
+                self.display_expr(&while_loop.body, writ, indentation)
             }
         }
     }
@@ -553,6 +553,13 @@ impl TypedModule {
             TypedExpr::FunctionName(fn_name_expr) => {
                 let fun = self.get_function(fn_name_expr.function_id);
                 writ.write_str(self.get_ident_str(fun.name))
+            }
+            TypedExpr::PendingCapture(pending_capture) => {
+                writ.write_str("capture(")?;
+                let variable = self.variables.get_variable(pending_capture.captured_variable_id);
+                writ.write_str(self.get_ident_str(variable.name));
+                writ.write_str(")")?;
+                Ok(())
             }
         }
     }

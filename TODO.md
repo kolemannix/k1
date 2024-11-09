@@ -101,23 +101,6 @@
 - [x] floating point (f32 and f64)
 - [x] 'Context' system; implicit stack arguments
 - [x] Pass caller source location for assert
-- [ ] Closures
-  - [x] Direct calls, no captures
-  - [ ] Support captures, but explicit only 
-- [x] Change reference and dereference syntax to x.& and x.*
-- [ ] b"" strings that are of type... Slice[u8]
-- [ ] Builtin syntax for maps w/ Map[K, V]
-- [x] Handle escaped chars in string literals
-- [ ] Generic abilities (ability From<T> { ... })
-- [ ] Friendliness pass
-  - [ ] Get rid of 'enum' keyword, data?
-  - [x] 'when' keyword is bad; `switch` maybe or `case`
-  - [ ] It would be really nice _not_ to take the keyword 'type'. Just a thought from using Rust/Scala
-- [x] Remove tag literals, make enum tags per-enum
-- [ ] Imports
-- [ ] Ranges (ugh)
-- [ ] Make demo readme / site
-- [ ] Define clear 'platform layer' (crash, alloc/free, other?). Then we could do an LLVM interp platform and a rust interpreter platform
 - [x] Function types (functions have types but there's no syntax for describing a function type yet)
 - [x] Optional coalescing field accessor (x?.y)
 - [x] function pointers (By taking the static address of a function as Pointer)
@@ -126,6 +109,26 @@
 - [x] Typecheck the binary ops
 - [x] Bitwise ops
 - [x] Bitwise ops using abilities
+- [x] Closures
+  - [x] Direct calls, no captures
+  - [x] Support captures, but explicit only 
+  - [x] Support implicit captures
+- [x] Change reference and dereference syntax to x.& and x.*
+- [ ] Remove lvalue-based assignment from the language, use references to assign instead, introduce a desugaring for `referenceSet`
+- [ ] b"" strings that are of type... Slice[u8]
+- [ ] Builtin syntax for maps w/ Map[K, V]
+- [x] Handle escaped chars in string literals
+- [ ] Friendliness pass
+  - [ ] Get rid of 'enum' keyword, data?
+  - [x] 'when' keyword is bad; `switch` maybe or `case`
+  - [ ] It would be really nice _not_ to take the keyword 'type'. Just a thought from using Rust/Scala
+- [x] Remove tag literals, make enum tags per-enum
+- [ ] Imports (need design around modules)
+- [ ] Add ranges, as stdlib thing
+      `sealed abstract class Range( val start: Int, val end: Int, val step: Int)`
+- [ ] Make demo readme / site
+- [ ] Generic abilities (ability From<T> { ... })
+- [ ] Define clear 'platform layer' (crash, alloc/free, other?). Then we could do an LLVM interp platform and a rust interpreter platform
 - [ ] RTTI story and 'any' type
 - [ ] Ability-based iteration
 - [ ] Mark types as trivially copyable or not
