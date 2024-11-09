@@ -1843,6 +1843,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     function_value.as_global_value().as_pointer_value().as_basic_value_enum();
                 Ok(function_ptr.into())
             }
+            e @ TypedExpr::PendingCapture(_) => {
+                panic!("Unsupported expression: {e:?}")
+            }
         }
     }
 
@@ -2424,7 +2427,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     self.builder.build_conditional_branch(cond_i1, loop_body_block, loop_end_block);
 
                     self.builder.position_at_end(loop_body_block);
-                    self.codegen_block_statements(&while_stmt.block)?;
+                    self.codegen_expr(&while_stmt.body)?;
                     self.builder.build_unconditional_branch(loop_entry_block);
 
                     self.builder.position_at_end(loop_end_block);

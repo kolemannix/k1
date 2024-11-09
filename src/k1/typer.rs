@@ -36,14 +36,6 @@ pub struct VariableId(u32);
 pub struct NamespaceId(u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AbilityId(u32);
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ClosureId(u32);
-
-impl Display for ClosureId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("closure#{}", self.0))
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AbilityImplId(u32);
@@ -64,6 +56,8 @@ pub struct TypedAbilityFunctionRef {
 pub const EQUALS_ABILITY_ID: AbilityId = AbilityId(0);
 pub const SHOW_ABILITY_ID: AbilityId = AbilityId(1);
 pub const BITWISE_ABILITY_ID: AbilityId = AbilityId(2);
+
+pub const CLOSURE_ENV_PARAM_NAME: &str = "__clos_env";
 
 enum CoerceResult {
     Fail(TypedExpr),
@@ -197,6 +191,7 @@ pub struct TypedClosure {
     pub scope: ScopeId,
     pub environment_struct_reference_type: TypeId,
     pub parsed_expression_id: ParsedExpressionId,
+    pub captures: Vec<VariableId>,
     pub span: SpanId,
 }
 
@@ -807,6 +802,13 @@ pub struct FunctionReferenceExpr {
 }
 
 #[derive(Debug, Clone)]
+pub struct PendingCaptureExpr {
+    pub captured_variable_id: VariableId,
+    pub type_id: TypeId,
+    pub span: SpanId,
+}
+
+#[derive(Debug, Clone)]
 pub enum TypedExpr {
     Unit(SpanId),
     Char(u8, SpanId),
@@ -839,6 +841,9 @@ pub enum TypedExpr {
     /// Referring to a function by name, if there are no variables in scope with the same name
     /// results in taking a function pointer
     FunctionName(FunctionReferenceExpr),
+    /// These get re-written into struct access expressions once we know all captures and have
+    /// generated the closure's capture struct
+    PendingCapture(PendingCaptureExpr),
 }
 
 impl From<VariableExpr> for TypedExpr {
@@ -872,6 +877,7 @@ impl TypedExpr {
             TypedExpr::Return(_ret) => NEVER_TYPE_ID,
             TypedExpr::Closure(closure) => closure.closure_type,
             TypedExpr::FunctionName(f) => f.type_id,
+            TypedExpr::PendingCapture(pc) => pc.type_id,
         }
     }
     #[inline]
@@ -898,6 +904,7 @@ impl TypedExpr {
             TypedExpr::Return(ret) => ret.span,
             TypedExpr::Closure(closure) => closure.span,
             TypedExpr::FunctionName(f) => f.span,
+            TypedExpr::PendingCapture(pc) => pc.span,
         }
     }
 
@@ -940,7 +947,7 @@ pub struct Assignment {
 #[derive(Debug, Clone)]
 pub struct TypedWhileLoop {
     pub cond: TypedExpr,
-    pub block: TypedBlock,
+    pub body: TypedExpr,
     pub span: SpanId,
 }
 
@@ -1032,6 +1039,7 @@ pub struct Variable {
     pub is_mutable: bool,
     pub owner_scope: ScopeId,
     pub is_context: bool,
+    pub is_global: bool,
 }
 
 #[derive(Debug)]
@@ -1291,7 +1299,6 @@ pub struct Symbol {
 pub struct TypedModule {
     pub ast: ParsedModule,
     functions: Vec<TypedFunction>,
-    pub closures: Vec<TypedClosure>,
     pub variables: Variables,
     pub types: Types,
     pub constants: Vec<Constant>,
@@ -1335,7 +1342,6 @@ impl TypedModule {
         TypedModule {
             ast: parsed_module,
             functions: Vec::new(),
-            closures: Vec::new(),
             variables: Variables::default(),
             types,
             constants: Vec::new(),
@@ -1352,16 +1358,6 @@ impl TypedModule {
 
     pub fn function_iter(&self) -> impl Iterator<Item = (FunctionId, &TypedFunction)> {
         self.functions.iter().enumerate().map(|(idx, f)| (FunctionId(idx as u32), f))
-    }
-
-    pub fn add_closure(&mut self, closure: TypedClosure) -> ClosureId {
-        let id = ClosureId(self.closures.len() as u32);
-        self.closures.push(closure);
-        id
-    }
-
-    pub fn get_closure(&self, closure_id: ClosureId) -> &TypedClosure {
-        &self.closures[closure_id.0 as usize]
     }
 
     pub fn name(&self) -> &str {
@@ -2799,6 +2795,7 @@ impl TypedModule {
             is_mutable: false,
             owner_scope: root_scope_id,
             is_context: false,
+            is_global: true,
         });
         self.constants.push(Constant { variable_id, expr, ty: type_id, span: constant_span });
         self.scopes.add_variable(root_scope_id, constant_name, variable_id);
@@ -2995,6 +2992,7 @@ impl TypedModule {
         else {
             panic!()
         };
+        let variable_name_span = variable.name.span;
         let variable_id = self.scopes.find_variable_namespaced(
             scope_id,
             &variable.name,
@@ -3025,21 +3023,54 @@ impl TypedModule {
                     ),
                 }
             }
-            Some(variable_id) => {
+            Some((variable_id, variable_scope_id)) => {
+                let is_capture = if let Some(nearest_parent_closure_scope) =
+                    self.scopes.nearest_parent_closure(scope_id)
+                {
+                    let variable_is_above_closure = self
+                        .scopes
+                        .scope_has_ancestor(nearest_parent_closure_scope, variable_scope_id);
+                    eprintln!(
+                        "variable_is_above_closure {} {variable_is_above_closure}",
+                        self.get_ident_str(variable.name.name)
+                    );
+                    let variable_is_global = self.variables.get_variable(variable_id).is_global;
+
+                    let is_capture = variable_is_above_closure && !variable_is_global;
+                    if is_capture {
+                        self.scopes.add_capture(nearest_parent_closure_scope, variable_id);
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+
                 let v = self.variables.get_variable(variable_id);
                 if is_assignment_lhs && !v.is_mutable {
                     return failf!(
-                        variable.name.span,
+                        variable_name_span,
                         "Cannot assign to immutable variable {}",
                         self.ast.identifiers.get_name(v.name)
                     );
                 }
-                let expr = TypedExpr::Variable(VariableExpr {
-                    type_id: v.type_id,
-                    variable_id,
-                    span: variable.name.span,
-                });
-                Ok(expr)
+                // nocommit: disallow (or think through) namespaced captures
+                if is_capture {
+                    let expr = TypedExpr::PendingCapture(PendingCaptureExpr {
+                        captured_variable_id: variable_id,
+                        type_id: v.type_id,
+                        span: variable_name_span,
+                    });
+                    Ok(expr)
+                } else {
+                    let expr = TypedExpr::Variable(VariableExpr {
+                        type_id: v.type_id,
+                        variable_id,
+                        span: variable_name_span,
+                    });
+                    Ok(expr)
+                }
             }
         }
     }
@@ -3800,44 +3831,128 @@ impl TypedModule {
         result
     }
 
+    fn visit_inner_exprs_mut(expr: &mut TypedExpr, mut action: impl FnMut(&mut TypedExpr)) {
+        // nocommit: Try implementing a mutable iterator instead
+        match expr {
+            TypedExpr::Unit(_) => (),
+            TypedExpr::Char(_, _) => (),
+            TypedExpr::Bool(_, _) => (),
+            TypedExpr::Integer(_) => (),
+            TypedExpr::Float(_) => (),
+            TypedExpr::Str(_, _) => (),
+            TypedExpr::Struct(s) => {
+                for f in s.fields.iter_mut() {
+                    action(&mut f.expr);
+                }
+            }
+            TypedExpr::Variable(_) => (),
+            TypedExpr::StructFieldAccess(field_access) => {
+                action(&mut field_access.base);
+            }
+            TypedExpr::BinaryOp(binary_op) => {
+                action(&mut binary_op.lhs);
+                action(&mut binary_op.rhs);
+            }
+            TypedExpr::UnaryOp(unary_op) => {
+                action(&mut unary_op.expr);
+            }
+            TypedExpr::Block(block) => {
+                for stmt in block.statements.iter_mut() {
+                    match stmt {
+                        TypedStmt::Expr(e) => action(e),
+                        TypedStmt::ValDef(val_def) => action(&mut val_def.initializer),
+                        TypedStmt::Assignment(assgn) => {
+                            // nocommit: Test with assignment lhs captures
+                            action(&mut assgn.destination);
+                            action(&mut assgn.value)
+                        }
+                        TypedStmt::WhileLoop(while_loop) => {
+                            action(&mut while_loop.cond);
+                            action(&mut while_loop.body)
+                        }
+                    }
+                }
+            }
+            TypedExpr::Call(call) => {
+                match &mut call.callee {
+                    Callee::DynamicClosure(expr) => action(expr),
+                    Callee::DynamicFunction(expr) => action(expr),
+                    _ => {}
+                };
+                for arg in call.args.iter_mut() {
+                    action(arg)
+                }
+            }
+            TypedExpr::If(typed_if) => {
+                action(&mut typed_if.condition);
+                action(&mut typed_if.consequent);
+                action(&mut typed_if.alternate);
+            }
+            TypedExpr::EnumConstructor(_) => (),
+            TypedExpr::EnumIsVariant(enum_is_variant) => action(&mut enum_is_variant.target_expr),
+            TypedExpr::EnumGetPayload(enum_get_payload) => {
+                action(&mut enum_get_payload.target_expr)
+            }
+            TypedExpr::Cast(cast) => action(&mut cast.base_expr),
+            TypedExpr::Return(ret) => action(&mut ret.value),
+            TypedExpr::Closure(_) => (),
+            TypedExpr::FunctionName(_) => (),
+            TypedExpr::PendingCapture(_) => (),
+        }
+    }
+
     fn eval_closure(
         &mut self,
         expr_id: ParsedExpressionId,
         scope_id: ScopeId,
         expected_type: Option<TypeId>,
     ) -> TyperResult<TypedExpr> {
+        fn fixup_capture_expr(
+            sself: &mut TypedModule,
+            body: &mut TypedExpr,
+            environment_param: VariableId,
+            env_struct_type: TypeId,
+        ) {
+            match body {
+                TypedExpr::PendingCapture(pc) => {
+                    let v = sself.variables.get_variable(pc.captured_variable_id);
+                    let env_struct_reference_type = sself.types.add_reference_type(env_struct_type);
+                    let (_field_index, env_struct_field) = sself
+                        .types
+                        .get(env_struct_type)
+                        .expect_struct()
+                        .find_field(v.name)
+                        .unwrap();
+                    let env_field_access = TypedExpr::StructFieldAccess(FieldAccess {
+                        base: Box::new(sself.synth_dereference(TypedExpr::Variable(
+                            VariableExpr {
+                                variable_id: environment_param,
+                                type_id: env_struct_reference_type,
+                                span: pc.span,
+                            },
+                        ))),
+                        target_field: env_struct_field.name,
+                        target_field_index: env_struct_field.index,
+                        ty: v.type_id,
+                        span: pc.span,
+                    });
+                    let _ = std::mem::replace(body, env_field_access);
+                }
+                other => TypedModule::visit_inner_exprs_mut(other, |expr| {
+                    fixup_capture_expr(sself, expr, environment_param, env_struct_type)
+                }),
+            }
+        }
         let closure = self.ast.expressions.get(expr_id).expect_closure();
         let closure_scope_id =
-            self.scopes.add_child_scope(scope_id, ScopeType::FunctionScope, None, None);
+            self.scopes.add_child_scope(scope_id, ScopeType::ClosureScope, None, None);
         let closure_arguments = closure.arguments.clone();
         let closure_body = closure.body;
         let span = closure.span;
         let body_span = self.ast.expressions.get_span(closure.body);
-        let mut typed_params = Vec::with_capacity(closure_arguments.len());
+        let mut typed_params = VecDeque::with_capacity(closure_arguments.len() + 1);
         let expected_function_type =
             expected_type.and_then(|et| self.types.get(et).as_function()).cloned();
-
-        //
-        // We don't yet support or detect captures, but I'm going ahead
-        // with wiring in the environment type to ensure its considered
-        let environment_struct_type = self.types.add_type(Type::Struct(StructType {
-            fields: vec![],
-            type_defn_info: None,
-            generic_instance_info: None,
-            ast_node: expr_id.into(),
-        }));
-        let environment_struct =
-            self.synth_struct_expr(environment_struct_type, vec![], scope_id, body_span);
-        let environment_struct_reference_type =
-            self.types.add_reference_type(environment_struct_type);
-        let environment_param = FnArgType {
-            name: get_ident!(self, "__clos_env"),
-            type_id: environment_struct_reference_type,
-            is_context: false,
-            is_closure_env: true,
-            span: body_span,
-        };
-        typed_params.push(environment_param);
 
         for (index, arg) in closure_arguments.iter().enumerate() {
             let arg_type_id = match arg.ty {
@@ -3856,7 +3971,7 @@ impl TypedModule {
                     expected_ty.type_id
                 }
             };
-            typed_params.push(FnArgType {
+            typed_params.push_back(FnArgType {
                 name: arg.binding,
                 type_id: arg_type_id,
                 is_context: false,
@@ -3864,8 +3979,9 @@ impl TypedModule {
                 span: arg.span,
             });
         }
+
+        let mut param_variables = VecDeque::with_capacity(typed_params.len());
         let closure_scope = self.scopes.get_scope_mut(closure_scope_id);
-        let mut param_variables = Vec::with_capacity(typed_params.len());
         for typed_arg in typed_params.iter() {
             let name = typed_arg.name;
             let variable_id = self.variables.add_variable(Variable {
@@ -3874,18 +3990,75 @@ impl TypedModule {
                 is_mutable: false,
                 owner_scope: closure_scope_id,
                 is_context: false,
+                is_global: false,
             });
             closure_scope.add_variable(name, variable_id);
-            param_variables.push(variable_id)
+            param_variables.push_back(variable_id)
         }
-        let body = self.eval_expr(
+
+        //
+        // Evaluating this is what populates our captures
+        // nocommit: early returns should return from closure not function
+        let mut body = self.eval_expr(
             closure_body,
             closure_scope_id,
             expected_function_type.map(|f| f.return_type),
         )?;
+
+        let closure_captures = self.scopes.get_captures(closure_scope_id);
+        let env_fields = closure_captures
+            .iter()
+            .enumerate()
+            .map(|(index, captured_variable_id)| {
+                let v = self.variables.get_variable(*captured_variable_id);
+                StructTypeField { type_id: v.type_id, name: v.name, index: index as u32 }
+            })
+            .collect();
+        let env_field_exprs = closure_captures
+            .iter()
+            .map(|captured_variable_id| {
+                let v = self.variables.get_variable(*captured_variable_id);
+                TypedExpr::Variable(VariableExpr {
+                    type_id: v.type_id,
+                    variable_id: *captured_variable_id,
+                    span,
+                })
+            })
+            .collect();
+        let environment_struct_type = self.types.add_type(Type::Struct(StructType {
+            fields: env_fields,
+            type_defn_info: None,
+            generic_instance_info: None,
+            ast_node: expr_id.into(),
+        }));
+        let environment_struct =
+            self.synth_struct_expr(environment_struct_type, env_field_exprs, scope_id, body_span);
+        let environment_struct_reference_type =
+            self.types.add_reference_type(environment_struct_type);
+        let environment_param = FnArgType {
+            name: get_ident!(self, CLOSURE_ENV_PARAM_NAME),
+            type_id: environment_struct_reference_type,
+            is_context: false,
+            is_closure_env: true,
+            span: body_span,
+        };
+        let environment_param_variable_id = self.variables.add_variable(Variable {
+            name: environment_param.name,
+            type_id: environment_struct_reference_type,
+            is_mutable: false,
+            owner_scope: closure_scope_id,
+            is_context: false,
+            is_global: false,
+        });
+        typed_params.push_front(environment_param);
+        param_variables.push_front(environment_param_variable_id);
+
+        let environment_param_variable_id = param_variables[0];
+        fixup_capture_expr(self, &mut body, environment_param_variable_id, environment_struct_type);
+
         let return_type = body.get_type();
         let function_type = self.types.add_type(Type::Function(FunctionType {
-            params: typed_params,
+            params: typed_params.into(),
             return_type,
             defn_info: None,
         }));
@@ -3897,10 +4070,11 @@ impl TypedModule {
         ));
         let name_string = self.make_qualified_name(scope_id, name, "__", true);
         let name = self.ast.identifiers.intern(name_string);
+
         let function = TypedFunction {
             name,
             scope: closure_scope_id,
-            param_variables,
+            param_variables: param_variables.into(),
             type_params: vec![],
             body_block: Some(self.coerce_expr_to_block(body, closure_scope_id)),
             intrinsic_type: None,
@@ -4092,7 +4266,7 @@ impl TypedModule {
             'trial: for (trial_index, trial_expr) in trial_constructors.iter().enumerate() {
                 '_pattern: for (index, pattern) in typed_cases.iter().enumerate() {
                     let pattern = &pattern.pattern;
-                    if self.pattern_matches(pattern, trial_expr) {
+                    if TypedModule::pattern_matches(pattern, trial_expr) {
                         pattern_scores[index] += 1;
                         trial_alives[trial_index] = false;
                         continue 'trial;
@@ -4514,6 +4688,7 @@ impl TypedModule {
             is_mutable: false,
             owner_scope: while_scope_id,
             is_context: false,
+            is_global: false,
         });
         self.scopes.add_variable(while_scope_id, binding_ident, binding_variable_id);
         let iteration_element_val_def = TypedStmt::ValDef(Box::new(ValDef {
@@ -4652,7 +4827,7 @@ impl TypedModule {
                 rhs: Box::new(iteree_length_variable.variable_expr),
                 span: iterable_span,
             }),
-            block: while_block,
+            body: TypedExpr::Block(while_block),
             span: for_expr.span,
         }));
 
@@ -5244,7 +5419,9 @@ impl TypedModule {
                     if !fn_call.name.namespaces.is_empty() {
                         return fn_not_found();
                     }
-                    if let Some(variable_id) = self.scopes.find_variable(calling_scope, fn_name) {
+                    if let Some((variable_id, _scope_id)) =
+                        self.scopes.find_variable(calling_scope, fn_name)
+                    {
                         let function_variable = self.variables.get_variable(variable_id);
                         match self.types.get(function_variable.type_id) {
                             Type::Closure(closure_type) => {
@@ -5318,10 +5495,10 @@ impl TypedModule {
                         fn_call.span,
                     );
                 }
-                return Ok(Some(TypedExpr::Return(TypedReturn {
+                Ok(Some(TypedExpr::Return(TypedReturn {
                     value: Box::new(return_value),
                     span: fn_call.span,
-                })));
+                })))
             }
             "compilerFile" => {
                 if !fn_call.args.is_empty() {
@@ -5330,7 +5507,7 @@ impl TypedModule {
                 let span = self.ast.spans.get(fn_call.span);
                 let filename = &self.ast.sources.source_by_span(span).filename;
                 let string_expr = TypedExpr::Str(filename.clone(), fn_call.span);
-                return Ok(Some(string_expr));
+                Ok(Some(string_expr))
             }
             "compilerLine" => {
                 if !fn_call.args.is_empty() {
@@ -5342,10 +5519,10 @@ impl TypedModule {
                     value: TypedIntegerValue::U64(line.line_number() as u64),
                     span: fn_call.span,
                 });
-                return Ok(Some(int_expr));
+                Ok(Some(int_expr))
             }
-            _ => return Ok(None),
-        };
+            _ => Ok(None),
+        }
     }
 
     fn resolve_parsed_function_call_method(
@@ -6436,6 +6613,7 @@ impl TypedModule {
                     type_id: variable_type,
                     owner_scope: scope_id,
                     is_context: val_def.is_context,
+                    is_global: false,
                 });
                 let val_def_stmt = TypedStmt::ValDef(Box::new(ValDef {
                     ty: variable_type,
@@ -6484,10 +6662,10 @@ impl TypedModule {
                         cond.get_span(),
                     );
                 }
-                let block = self.eval_block(&while_stmt.block, scope_id, None)?;
+                let block = self.eval_expr(while_stmt.body, scope_id, None)?;
                 Ok(TypedStmt::WhileLoop(Box::new(TypedWhileLoop {
                     cond,
-                    block,
+                    body: block,
                     span: while_stmt.span,
                 })))
             }
@@ -6852,6 +7030,7 @@ impl TypedModule {
                 is_mutable: false,
                 owner_scope: fn_scope_id,
                 is_context: fn_arg.modifiers.is_context(),
+                is_global: false,
             };
 
             let is_context = fn_arg.modifiers.is_context();
@@ -7794,7 +7973,7 @@ impl TypedModule {
         }
     }
 
-    fn pattern_matches(&self, pattern: &TypedPattern, ctor: &PatternConstructor) -> bool {
+    fn pattern_matches(pattern: &TypedPattern, ctor: &PatternConstructor) -> bool {
         match (pattern, ctor) {
             (TypedPattern::Wildcard(_), _) => true,
             (TypedPattern::Variable(_), _) => true,
@@ -7804,7 +7983,9 @@ impl TypedModule {
             (TypedPattern::Enum(enum_pat), PatternConstructor::Enum { variant_name, inner }) => {
                 if *variant_name == enum_pat.variant_tag_name {
                     match (enum_pat.payload.as_ref(), inner) {
-                        (Some(payload), Some(inner)) => self.pattern_matches(payload, inner),
+                        (Some(payload), Some(inner)) => {
+                            TypedModule::pattern_matches(payload, inner)
+                        }
                         (None, None) => true,
                         _ => false,
                     }
@@ -7823,7 +8004,8 @@ impl TypedModule {
                         .find(|(name, _ctor_pattern)| *name == field_pattern.name)
                         .map(|(_, ctor_pattern)| ctor_pattern)
                         .expect("Field not in struct; pattern should have failed typecheck by now");
-                    if !self.pattern_matches(&field_pattern.pattern, matching_field_pattern) {
+                    if !TypedModule::pattern_matches(&field_pattern.pattern, matching_field_pattern)
+                    {
                         matches = false;
                         break;
                     }
@@ -7960,6 +8142,7 @@ impl TypedModule {
             owner_scope,
             type_id: initializer.get_type(),
             is_context: false,
+            is_global: false,
         };
         let variable_id = self.variables.add_variable(variable);
         let variable_expr = TypedExpr::Variable(VariableExpr { type_id, variable_id, span });

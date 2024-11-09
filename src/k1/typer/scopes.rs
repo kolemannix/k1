@@ -20,6 +20,7 @@ pub type ScopeId = u32;
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum ScopeType {
     FunctionScope,
+    ClosureScope,
     LexicalBlock,
     Namespace,
     WhileBody,
@@ -36,6 +37,7 @@ impl ScopeType {
     pub fn short_name(&self) -> &'static str {
         match self {
             ScopeType::FunctionScope => "fn",
+            ScopeType::ClosureScope => "clos",
             ScopeType::LexicalBlock => "block",
             ScopeType::Namespace => "ns",
             ScopeType::WhileBody => "while",
@@ -58,16 +60,17 @@ impl Display for ScopeType {
 
 pub struct Scopes {
     scopes: Vec<Scope>,
+    captures: HashMap<ScopeId, Vec<VariableId>>,
 }
 
 impl Scopes {
     pub fn make() -> Self {
-        Scopes { scopes: Vec::new() }
+        Scopes { scopes: Vec::new(), captures: HashMap::new() }
     }
 
     pub fn add_root_scope(&mut self, name: Option<Identifier>) -> ScopeId {
         debug_assert!(self.scopes.is_empty());
-        self.scopes.push(Scope::make(ScopeType::Namespace, None, name));
+        self.scopes.push(Scope::make(ScopeType::Namespace, None, name, 0));
         0 as ScopeId
     }
 
@@ -86,14 +89,15 @@ impl Scopes {
         scope_owner_id: Option<ScopeOwnerId>,
         name: Option<Identifier>,
     ) -> ScopeId {
-        let scope = Scope {
-            parent: Some(parent_scope_id),
-            ..Scope::make(scope_type, scope_owner_id, name)
-        };
         let id = self.scopes.len() as ScopeId;
-        self.scopes.push(scope);
         let parent_scope = self.get_scope_mut(parent_scope_id);
         parent_scope.children.push(id);
+        let depth = parent_scope.depth + 1;
+        let scope = Scope {
+            parent: Some(parent_scope_id),
+            ..Scope::make(scope_type, scope_owner_id, name, depth)
+        };
+        self.scopes.push(scope);
         id
     }
 
@@ -102,7 +106,7 @@ impl Scopes {
     }
 
     pub fn get_root_scope(&self) -> &Scope {
-        &self.get_scope(self.get_root_scope_id())
+        self.get_scope(self.get_root_scope_id())
     }
 
     pub fn get_scope_mut(&mut self, id: ScopeId) -> &mut Scope {
@@ -130,7 +134,7 @@ impl Scopes {
         name: &NamespacedIdentifier,
         namespaces: &Namespaces,
         identifiers: &Identifiers,
-    ) -> TyperResult<Option<VariableId>> {
+    ) -> TyperResult<Option<(VariableId, ScopeId)>> {
         if name.namespaces.is_empty() {
             Ok(self.find_variable(scope, name.name))
         } else {
@@ -141,7 +145,10 @@ impl Scopes {
                 identifiers,
                 name.span,
             )?;
-            Ok(self.get_scope(scope_to_search).find_variable(name.name))
+            match self.get_scope(scope_to_search).find_variable(name.name) {
+                None => Ok(None),
+                Some(v) => Ok(Some((v, scope_to_search))),
+            }
         }
     }
 
@@ -160,10 +167,14 @@ impl Scopes {
         }
     }
 
-    pub fn find_variable(&self, scope: ScopeId, ident: Identifier) -> Option<VariableId> {
-        let scope = self.get_scope(scope);
+    pub fn find_variable(
+        &self,
+        scope_id: ScopeId,
+        ident: Identifier,
+    ) -> Option<(VariableId, ScopeId)> {
+        let scope = self.get_scope(scope_id);
         if let Some(v) = scope.find_variable(ident) {
-            return Some(v);
+            return Some((v, scope_id));
         }
         match scope.parent {
             Some(parent) => self.find_variable(parent, ident),
@@ -341,6 +352,17 @@ impl Scopes {
         }
     }
 
+    pub fn nearest_parent_closure(&self, scope_id: ScopeId) -> Option<ScopeId> {
+        let scope = self.get_scope(scope_id);
+        match scope.scope_type {
+            ScopeType::ClosureScope => Some(scope_id),
+            _ => match scope.parent {
+                Some(parent) => self.nearest_parent_closure(parent),
+                None => None,
+            },
+        }
+    }
+
     pub fn make_scope_name(&self, scope: &Scope, identifiers: &Identifiers) -> String {
         let mut name = match scope.name {
             Some(name) => (*identifiers.get_name(name)).to_string(),
@@ -422,6 +444,23 @@ impl Scopes {
             Ok(self.get_scope(scope_to_search).find_ability(ability_name.name))
         }
     }
+
+    pub fn add_capture(&mut self, scope_id: ScopeId, variable_id: VariableId) {
+        match self.captures.entry(scope_id) {
+            Entry::Occupied(mut captures) => {
+                if !captures.get().contains(&variable_id) {
+                    captures.get_mut().push(variable_id)
+                };
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(vec![variable_id]);
+            }
+        }
+    }
+
+    pub fn get_captures(&self, scope_id: ScopeId) -> &[VariableId] {
+        self.captures.get(&scope_id).map(|v| v.as_slice()).unwrap_or(&[])
+    }
 }
 
 /// Useful for going from scope to 'thing that owns the scope', like to a scope's ability or namespace or function
@@ -430,6 +469,7 @@ pub enum ScopeOwnerId {
     Ability(AbilityId),
     Function(FunctionId),
     Namespace(NamespaceId),
+    Closure(TypeId),
 }
 impl ScopeOwnerId {
     pub fn expect_ability(&self) -> AbilityId {
@@ -456,6 +496,7 @@ pub struct Scope {
     pub owner_id: Option<ScopeOwnerId>,
     /// Name is just used for pretty-printing and debugging scopes don't really have names
     pub name: Option<Identifier>,
+    pub depth: usize,
 }
 
 impl Scope {
@@ -463,6 +504,7 @@ impl Scope {
         scope_type: ScopeType,
         owner_id: Option<ScopeOwnerId>,
         name: Option<Identifier>,
+        depth: usize,
     ) -> Scope {
         Scope {
             variables: HashMap::new(),
@@ -477,6 +519,7 @@ impl Scope {
             scope_type,
             owner_id,
             name,
+            depth,
         }
     }
 
@@ -546,11 +589,11 @@ impl Scope {
 
     #[must_use]
     pub fn add_namespace(&mut self, ident: Identifier, namespace_id: NamespaceId) -> bool {
-        if self.namespaces.contains_key(&ident) {
-            false
-        } else {
-            self.namespaces.insert(ident, namespace_id);
+        if let std::collections::hash_map::Entry::Vacant(e) = self.namespaces.entry(ident) {
+            e.insert(namespace_id);
             true
+        } else {
+            false
         }
     }
 
@@ -560,11 +603,11 @@ impl Scope {
 
     #[must_use]
     pub fn add_ability(&mut self, ident: Identifier, ability_id: AbilityId) -> bool {
-        if self.abilities.contains_key(&ident) {
-            false
-        } else {
-            self.abilities.insert(ident, ability_id);
+        if let std::collections::hash_map::Entry::Vacant(e) = self.abilities.entry(ident) {
+            e.insert(ability_id);
             true
+        } else {
+            false
         }
     }
 
@@ -578,11 +621,11 @@ impl Scope {
         ident: Identifier,
         parsed_defn_id: ParsedTypeDefnId,
     ) -> bool {
-        if self.pending_type_defns.contains_key(&ident) {
-            false
-        } else {
-            self.pending_type_defns.insert(ident, parsed_defn_id);
+        if let std::collections::hash_map::Entry::Vacant(e) = self.pending_type_defns.entry(ident) {
+            e.insert(parsed_defn_id);
             true
+        } else {
+            false
         }
     }
 

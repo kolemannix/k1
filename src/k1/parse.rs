@@ -624,7 +624,7 @@ pub struct IfExpr {
 #[derive(Debug, Clone)]
 pub struct WhileStmt {
     pub cond: ParsedExpressionId,
-    pub block: Block,
+    pub body: ParsedExpressionId,
     /// Maybe its better not to store a span on nodes for which a span is trivially calculated
     pub span: SpanId,
 }
@@ -2666,9 +2666,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         }
         self.tokens.advance();
         let cond = self.expect_expression()?;
-        let block = Parser::expect("block for while loop", while_token, self.parse_block())?;
-        let span = self.extend_span(while_token.span, block.span);
-        Ok(Some(WhileStmt { cond, block, span }))
+        let body =
+            Parser::expect("body expr for while loop", while_token, self.parse_expression())?;
+        let span = self.extend_span(while_token.span, self.get_expression_span(body));
+        Ok(Some(WhileStmt { cond, body, span }))
     }
 
     fn parse_statement(&mut self) -> ParseResult<Option<ParsedStmt>> {
