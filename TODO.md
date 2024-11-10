@@ -113,7 +113,11 @@
   - [x] Direct calls, no captures
   - [x] Support captures, but explicit only 
   - [x] Support implicit captures
+  - [x] Allow 0 args
+  - [x] Allow specifying return type (without typing the closure itself)
+  - [x] Return works
 - [x] Change reference and dereference syntax to x.& and x.*
+- [ ] break from while
 - [ ] Remove lvalue-based assignment from the language, use references to assign instead, introduce a desugaring for `referenceSet`
 - [ ] b"" strings that are of type... Slice[u8]
 - [ ] Builtin syntax for maps w/ Map[K, V]
@@ -121,19 +125,19 @@
 - [ ] Friendliness pass
   - [ ] Get rid of 'enum' keyword, data?
   - [x] 'when' keyword is bad; `switch` maybe or `case`
-  - [ ] It would be really nice _not_ to take the keyword 'type'. Just a thought from using Rust/Scala
+  - [x] Replace `type` with `deftype` - It would be really nice _not_ to take the keyword 'type'. Just a thought from using Rust/Scala
 - [x] Remove tag literals, make enum tags per-enum
 - [ ] Imports (need design around modules)
 - [ ] Add ranges, as stdlib thing
-      `sealed abstract class Range( val start: Int, val end: Int, val step: Int)`
+      `sealed abstract class Range(val start: Int, val end: Int, val step: Int)`
 - [ ] Make demo readme / site
 - [ ] Generic abilities (ability From<T> { ... })
 - [ ] Define clear 'platform layer' (crash, alloc/free, other?). Then we could do an LLVM interp platform and a rust interpreter platform
 - [ ] RTTI story and 'any' type
 - [ ] Ability-based iteration
 - [ ] Mark types as trivially copyable or not
-- [ ] German/Umbra strings
 ^ The builtin array would be NOT copyable so that you don't accidentally alias the data ptr
+- [ ] German/Umbra strings
 - [ ] Ability constraints on generics (not strictly needed since we have them on functions)
 - [ ] Do away with k1lib.c?
 - [ ] Test handling of NaN and Infinity, other float edge cases

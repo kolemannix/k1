@@ -433,6 +433,7 @@ pub struct ClosureArgDefn {
 #[derive(Debug, Clone)]
 pub struct ParsedClosure {
     pub arguments: Vec<ClosureArgDefn>,
+    pub return_type: Option<ParsedTypeExpressionId>,
     pub body: ParsedExpressionId,
     pub span: SpanId,
 }
@@ -2397,13 +2398,25 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn expect_closure(&mut self) -> ParseResult<ParsedExpressionId> {
         let start = self.expect_eat_token(K::BackSlash)?;
-        let (arguments, _args_span) =
-            self.eat_delimited("Lambda args", K::Comma, K::Minus, Parser::expect_closure_arg_defn)?;
-        let _rest_of_arrow = self.expect_eat_token(K::RightAngle)?;
+        let _start = self.expect_eat_token(K::OpenParen)?;
+        let (arguments, _args_span, closing_delimeter) = self.eat_delimited_ext(
+            "Lambda args",
+            K::Comma,
+            |k| k == K::Minus || k == K::CloseParen,
+            Parser::expect_closure_arg_defn,
+        )?;
+        let return_type = if closing_delimeter.kind == K::Minus {
+            let _rest_of_arrow = self.expect_eat_token(K::RightAngle)?;
+            let return_type_expr = self.expect_type_expression()?;
+            self.expect_eat_token(K::CloseParen)?;
+            Some(return_type_expr)
+        } else {
+            None
+        };
 
         let body = self.expect_expression()?;
         let span = self.extend_span(start.span, self.get_expression_span(body));
-        let closure = ParsedClosure { arguments, body, span };
+        let closure = ParsedClosure { arguments, return_type, body, span };
         Ok(self.add_expression(ParsedExpression::Closure(closure)))
     }
 
@@ -2598,25 +2611,44 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     where
         F: Fn(&mut Parser<'toks, 'module>) -> ParseResult<T>,
     {
-        trace!("eat_delimited delim='{}' terminator='{}'", delim, terminator);
+        let (results, span, _terminator) =
+            self.eat_delimited_ext(name, delim, |k| k == terminator, parse)?;
+        Ok((results, span))
+    }
+
+    fn eat_delimited_ext<T, F>(
+        &mut self,
+        name: &str,
+        delim: TokenKind,
+        terminator_predicate: impl Fn(TokenKind) -> bool,
+        parse: F,
+    ) -> ParseResult<(Vec<T>, SpanId, Token)>
+    where
+        F: Fn(&mut Parser<'toks, 'module>) -> ParseResult<T>,
+    {
+        trace!("eat_delimited delim='{}'", delim);
         let mut v = Vec::with_capacity(8);
 
         let start_span = self.peek().span;
 
         loop {
-            if let Some(terminator) = self.eat_token(terminator) {
+            let terminator = self.peek();
+            if terminator_predicate(terminator.kind) {
+                self.tokens.advance();
                 trace!("eat_delimited found terminator after {} results.", v.len());
                 let span = self.module.spans.extend(start_span, terminator.span);
-                break Ok((v, span));
+                break Ok((v, span, terminator));
             }
             match parse(self) {
                 Ok(parsed) => {
                     v.push(parsed);
                     trace!("eat_delimited got result {}", v.len());
-                    if let Some(terminator) = self.eat_token(terminator) {
+                    let terminator = self.peek();
+                    if terminator_predicate(terminator.kind) {
+                        self.tokens.advance();
                         trace!("eat_delimited found terminator after {} results.", v.len());
                         let span = self.module.spans.extend(start_span, terminator.span);
-                        break Ok((v, span));
+                        break Ok((v, span, terminator));
                     }
                     let found_delim = self.eat_token(delim);
                     if found_delim.is_none() {
@@ -2627,7 +2659,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 Err(e) => {
                     // trace!("eat_delimited got err from 'parse': {}", e);
                     break Err(Parser::error_cause(
-                        format!("Failed to parse {} separated by '{delim}' and terminated by '{terminator}'", name),
+                        format!(
+                            "Failed to parse {} separated by '{delim}' and terminated by predicate",
+                            name
+                        ),
                         self.peek(),
                         e,
                     ));
