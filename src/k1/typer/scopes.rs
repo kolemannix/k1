@@ -58,14 +58,19 @@ impl Display for ScopeType {
     }
 }
 
+pub struct ScopeClosureInfo {
+    pub expected_return_type: Option<TypeId>,
+}
+
 pub struct Scopes {
     scopes: Vec<Scope>,
     captures: HashMap<ScopeId, Vec<VariableId>>,
+    closure_info: HashMap<ScopeId, ScopeClosureInfo>,
 }
 
 impl Scopes {
     pub fn make() -> Self {
-        Scopes { scopes: Vec::new(), captures: HashMap::new() }
+        Scopes { scopes: Vec::new(), captures: HashMap::new(), closure_info: HashMap::new() }
     }
 
     pub fn add_root_scope(&mut self, name: Option<Identifier>) -> ScopeId {
@@ -460,6 +465,14 @@ impl Scopes {
 
     pub fn get_captures(&self, scope_id: ScopeId) -> &[VariableId] {
         self.captures.get(&scope_id).map(|v| v.as_slice()).unwrap_or(&[])
+    }
+
+    pub fn add_closure_info(&mut self, closure_scope_id: ScopeId, info: ScopeClosureInfo) {
+        self.closure_info.insert(closure_scope_id, info);
+    }
+
+    pub fn get_closure_info(&self, closure_scope_id: ScopeId) -> Option<&ScopeClosureInfo> {
+        self.closure_info.get(&closure_scope_id)
     }
 }
 

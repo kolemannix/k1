@@ -3862,7 +3862,6 @@ impl TypedModule {
                         TypedStmt::Expr(e) => action(e),
                         TypedStmt::ValDef(val_def) => action(&mut val_def.initializer),
                         TypedStmt::Assignment(assgn) => {
-                            // nocommit: Test with assignment lhs captures
                             action(&mut assgn.destination);
                             action(&mut assgn.value)
                         }
@@ -3953,6 +3952,14 @@ impl TypedModule {
         let mut typed_params = VecDeque::with_capacity(closure_arguments.len() + 1);
         let expected_function_type =
             expected_type.and_then(|et| self.types.get(et).as_function()).cloned();
+        let declared_expected_return_type = match closure.return_type {
+            None => None,
+            Some(return_type_expr) => Some(self.eval_type_expr(return_type_expr, scope_id)?),
+        };
+        let expected_return_type = declared_expected_return_type
+            .or(expected_function_type.as_ref().map(|f| f.return_type));
+
+        self.scopes.add_closure_info(closure_scope_id, ScopeClosureInfo { expected_return_type });
 
         for (index, arg) in closure_arguments.iter().enumerate() {
             let arg_type_id = match arg.ty {
@@ -3999,11 +4006,19 @@ impl TypedModule {
         //
         // Evaluating this is what populates our captures
         // nocommit: early returns should return from closure not function
-        let mut body = self.eval_expr(
-            closure_body,
-            closure_scope_id,
-            expected_function_type.map(|f| f.return_type),
-        )?;
+        let mut body = self.eval_expr(closure_body, closure_scope_id, expected_return_type)?;
+        if let Some(expected_return_type) = expected_return_type {
+            if let Err(msg) = self.check_types(expected_return_type, body.get_type(), scope_id) {
+                return failf!(body.get_span(), "Closure returns incorrect type: {msg}");
+            }
+        }
+
+        // Note: NEVER hardcoded stuff that would probably prefer to be some
+        // sort of principled call to 'unify_types'
+        let return_type = match body.get_type() {
+            NEVER_TYPE_ID => expected_return_type.unwrap(),
+            _ => body.get_type(),
+        };
 
         let closure_captures = self.scopes.get_captures(closure_scope_id);
         let env_fields = closure_captures
@@ -4056,7 +4071,6 @@ impl TypedModule {
         let environment_param_variable_id = param_variables[0];
         fixup_capture_expr(self, &mut body, environment_param_variable_id, environment_struct_type);
 
-        let return_type = body.get_type();
         let function_type = self.types.add_type(Type::Function(FunctionType {
             params: typed_params.into(),
             return_type,
@@ -5480,8 +5494,24 @@ impl TypedModule {
                         fn_call.span,
                     );
                 }
-                let enclosing_function = self.scopes.nearest_parent_function(calling_scope);
-                let expected_return_type = self.get_function_type(enclosing_function).return_type;
+                let expected_return_type = if let Some(enclosing_closure) =
+                    self.scopes.nearest_parent_closure(calling_scope)
+                {
+                    let Some(expected_return_type) = self
+                        .scopes
+                        .get_closure_info(enclosing_closure)
+                        .unwrap()
+                        .expected_return_type
+                    else {
+                        return failf!(fn_call.span, "Closure must have explicit return type, or known return type from context, to use early returns.");
+                    };
+                    expected_return_type
+                } else {
+                    let enclosing_function = self.scopes.nearest_parent_function(calling_scope);
+                    let expected_return_type =
+                        self.get_function_type(enclosing_function).return_type;
+                    expected_return_type
+                };
                 let return_value = self.eval_expr(
                     fn_call.args[0].value,
                     calling_scope,
@@ -5490,10 +5520,7 @@ impl TypedModule {
                 if let Err(msg) =
                     self.check_types(expected_return_type, return_value.get_type(), calling_scope)
                 {
-                    return make_fail_span(
-                        format!("return type did not match function return type: {}", msg),
-                        fn_call.span,
-                    );
+                    return failf!(fn_call.span, "Returned wrong type: {msg}");
                 }
                 Ok(Some(TypedExpr::Return(TypedReturn {
                     value: Box::new(return_value),
