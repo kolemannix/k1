@@ -3055,8 +3055,13 @@ impl TypedModule {
                         self.ast.identifiers.get_name(v.name)
                     );
                 }
-                // nocommit: disallow (or think through) namespaced captures
                 if is_capture {
+                    if !variable.name.namespaces.is_empty() {
+                        return failf!(
+                            variable_name_span,
+                            "Should not capture namespaced things, I think?"
+                        );
+                    }
                     let expr = TypedExpr::PendingCapture(PendingCaptureExpr {
                         captured_variable_id: variable_id,
                         type_id: v.type_id,
@@ -3832,7 +3837,7 @@ impl TypedModule {
     }
 
     fn visit_inner_exprs_mut(expr: &mut TypedExpr, mut action: impl FnMut(&mut TypedExpr)) {
-        // nocommit: Try implementing a mutable iterator instead
+        // Try implementing a mutable iterator instead
         match expr {
             TypedExpr::Unit(_) => (),
             TypedExpr::Char(_, _) => (),
@@ -4003,9 +4008,6 @@ impl TypedModule {
             param_variables.push_back(variable_id)
         }
 
-        //
-        // Evaluating this is what populates our captures
-        // nocommit: early returns should return from closure not function
         let mut body = self.eval_expr(closure_body, closure_scope_id, expected_return_type)?;
         if let Some(expected_return_type) = expected_return_type {
             if let Err(msg) = self.check_types(expected_return_type, body.get_type(), scope_id) {
@@ -5901,6 +5903,7 @@ impl TypedModule {
                         defn_info.name == get_ident!(self, "CompilerSourceLoc")
                             && defn_info.scope == self.scopes.get_root_scope_id()
                     });
+                dbg!(is_source_loc);
                 if is_source_loc {
                     let span = self.ast.spans.get(fn_call.span);
                     let source = self.ast.sources.get_source(span.file_id);
@@ -5961,12 +5964,11 @@ impl TypedModule {
             .map(|v| v.len())
             .unwrap_or(actual_passed_args.clone().count());
         if total_passed != total_expected {
-            return make_fail_span(
-                format!(
-                    "Incorrect number of arguments: expected {}, got {}",
-                    total_expected, total_passed
-                ),
+            return failf!(
                 fn_call.span,
+                "Incorrect number of arguments: expected {}, got {}",
+                total_expected,
+                total_passed
             );
         }
 
@@ -5993,13 +5995,11 @@ impl TypedModule {
                     let matching_param =
                         matching_param_by_name.or(actual_passed_args.clone().nth(param_index));
                     let Some(param) = matching_param else {
-                        return make_fail_span(
-                            format!(
-                                "Missing argument to {}: {}",
-                                self.ast.identifiers.get_name(fn_call.name.name).blue(),
-                                self.get_ident_str(fn_param.name).red()
-                            ),
+                        return failf!(
                             fn_call.span,
+                            "Missing argument to {}: {}",
+                            self.ast.identifiers.get_name(fn_call.name.name).blue(),
+                            self.get_ident_str(fn_param.name).red()
                         );
                     };
                     let expected_type_for_param = Some(fn_param.type_id);
@@ -6184,6 +6184,8 @@ impl TypedModule {
             true => {
                 let mut solved_params: Vec<TypeParam> = Vec::new();
 
+                // FIXME: because this doesn't know about context params,
+                //        they don't work w/ generic functions
                 for (param_index, gen_param) in generic_params.iter().enumerate() {
                     let Some(matching_argument) = (match fn_call.arg_by_name(gen_param.name) {
                         None => fn_call.args.get(param_index),
@@ -6191,7 +6193,7 @@ impl TypedModule {
                     }) else {
                         return failf!(
                             fn_call.span,
-                            "Missing argument to {}: {}",
+                            "Missing argument to when solving generics {}: {}",
                             self.get_ident_str(fn_call.name.name).blue(),
                             self.get_ident_str(gen_param.name).blue()
                         );

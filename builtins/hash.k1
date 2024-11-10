@@ -3,41 +3,75 @@ deftype HashMap[V] = {
   slots: Array[{ key: string, value: V }?],
 }
 
+fn fnv1a_hash(key: string): u64 {
+  val FNV_PRIME: u64 = 1099511628211;
+  val FNV_OFFSET: u64 = 14695981039346656037;
+  mut hash_value = FNV_OFFSET;
+  for c in key do {
+    hash_value = Bitwise::xor(hash_value, c as u8 as u64);
+    hash_value = hash_value * FNV_PRIME;
+  };
+  hash_value
+}
+
 namespace HashMap {
-  fn new[V](): HashMap[V] {
-    val slots: Array[{ key: string, value: V }?]* = Array::new(16).&;
-    mut i = 0;
-    while i < 16 {
+
+  fn _make[V](cap: u64): HashMap[V] {
+    val slots: Array[{ key: string, value: V }?]* = Array::new(cap).&;
+    mut i = 0: u64;
+    while i < cap {
       slots.push(.None);
       i = i + 1;
     };
     { size: 0, slots: slots.* }
   }
 
-  fn fnv1a_hash(key: string): u64 {
-    val FNV_PRIME: u64 = 1099511628211;
-    val FNV_OFFSET: u64 = 14695981039346656037;
-    mut hash_value = FNV_OFFSET;
-    for c in key do {
-      hash_value = Bitwise::xor(hash_value, c as u8 as u64);
-      hash_value = hash_value * FNV_PRIME;
-    };
-    hash_value
+  fn new[V](): HashMap[V] {
+    _make(2)
   }
 
-  fn insert[V](self: HashMap[V]*, key: string, value: V): unit {
+  fn grow[V](self: HashMap[V]*): unit where V: Show {
+    val origSize = self.size;
+    val oldSlots = self.slots;
+    val newCap = oldSlots.cap * 2;
+    println("growing to ".concat(newCap.show()));
+    self.dump();
+
+    val newMap = _make[V](newCap);
+    referenceSet(self, newMap);
+
+    mut oldCount = 0: u64;
+    for v in oldSlots do {
+      if v is .Some(v) {
+        oldCount = oldCount + 1;
+        self.insert(v.key, v.value)
+      }
+    };
+    val newSize = self.size;
+    if oldCount != origSize {
+      println("Bad before grow; size lied; got actual ".concat(oldCount.show()))
+    };
+    if origSize != newSize {
+      println("*****************************bad grow");
+      println("origSize: ".concat(origSize.show()));
+      println("newSize: ".concat(newSize.show()));
+      self.dump();
+    }
+  }
+
+  fn insert[V](self: HashMap[V]*, key: string, value: V): unit where V: Show {
+    val fillFactor = self.size as f32 / self.slots.len as f32;
+    if fillFactor > 0.7 {
+      self.grow();
+    };
     val hash = fnv1a_hash(key);
     val index = hash % self.slots.len;
     val elem = { key: key, value: value };
     val slot = self.slots.get(index);
-    val fillFactor = self.size as f32 / self.slots.len as f32;
-    if fillFactor > 0.7 {
-      println("asdf");
-      self.grow();
-    };
+    val sizeBefore = self.size;
     switch slot {
       .None -> {
-        self.slots.set(index, Opt.Some(elem));
+        self.slots.set(index, .Some(elem));
         self.size = self.size + 1;
       },
       .Some({ key: existingKey, value: _ }) -> {
@@ -52,7 +86,10 @@ namespace HashMap {
             if probe_index == self.slots.len {
               probe_index = 0;
             };
-            if self.slots.get(probe_index) is None {
+            // nocommit: Disallow variable patterns in 'is'?
+            //           Disallow capital variables?
+            /// if self.slots.get(probe_index) is None {
+            if self.slots.get(probe_index) is .None {
               self.slots.set(probe_index, .Some(elem));
               self.size = self.size + 1;
               done = true;
@@ -60,22 +97,40 @@ namespace HashMap {
           };
         }
       }
-    }
+    };
   }
 
-  fn grow[V](self: HashMap[V]*): unit {
-    println("growing");
-    val newSlots = Array::new[{ key: string, value: V}?](self.slots.len * 2);
-    val oldSlots = self.slots;
+  fn get[V](self: HashMap[V]*, key: string): V? {
+    val hash = fnv1a_hash(key);
+    val index = hash % self.slots.len;
+    val slot = self.slots.get(index);
+    switch slot {
+      .None -> .None,
+      .Some({ key: existingKey, value: v }) -> {
+        if existingKey == key {
+          .Some(v)
+        } else {
+          mut probe_index = index;
+          mut retVal: V? = .None;
 
-    self.slots = newSlots;
-    self.size = 0;
-
-    for v in oldSlots do {
-      if v is .Some(v) {
-        self.insert(v.key, v.value)
+          // todo: Return from inside loop? or break w/ value
+          mut done = false;
+          while not done {
+            probe_index = probe_index + 1;
+            if probe_index == self.slots.len {
+              probe_index = 0;
+            };
+            if self.slots.get(probe_index) is .Some({ key: existingKey, value: v }) {
+              if existingKey == key {
+                retVal = .Some(v);
+                done = true;
+              }
+            };
+          };
+          retVal
+        }
       }
-    }
+    };
   }
 
   fn dump[V](self: HashMap[V]): unit where V: Show {
@@ -99,17 +154,19 @@ namespace HashMap {
 
 fn test(): unit {
   val myMap: HashMap[int]* = HashMap::new().&;
-  mut i = 0;
-  while i < 100 {
-    myMap.insert(randString(4), i);
+  mut i = 0: i64;
+  val size = 256: u64;
+  while i < size as i64 {
+    myMap.insert(i.show(), i);
     i = i + 1;
   };
-  myMap.insert("1", 2);
-  myMap.insert("1", 3);
-  myMap.insert("2", 4);
-  myMap.insert("18", 4);
+  assert(myMap.size == size);
+  i = 0;
+  while i < size as i64 {
+    assert(myMap.get(i.show())! == i);
+    i = i + 1;
+  };
   myMap.*.dump();
-
 }
 
 fn randByte(): u8 {
