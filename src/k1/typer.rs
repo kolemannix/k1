@@ -5886,16 +5886,17 @@ impl TypedModule {
         }
     }
 
-    fn check_call_arguments(
+    fn align_call_arguments_with_parameters<'params>(
         &mut self,
         fn_call: &FnCall,
-        params: &[FnArgType],
+        params: &'params [FnArgType],
         pre_evaled_params: Option<Vec<TypedExpr>>,
         calling_scope: ScopeId,
-    ) -> TyperResult<Vec<TypedExpr>> {
-        debug!("typecheck_call_arguments {}", self.get_ident_str(fn_call.name.name));
+        tolerate_missing_context_args: bool,
+    ) -> TyperResult<Vec<(TyperResult<TypedExpr>, &'params FnArgType)>> {
+        debug!("align_args {}", self.get_ident_str(fn_call.name.name));
         let explicit_context_args = !fn_call.explicit_context_args.is_empty();
-        let mut final_args: Vec<TypedExpr> = Vec::new();
+        let mut final_args: Vec<(TyperResult<TypedExpr>, &FnArgType)> = Vec::new();
         if !explicit_context_args {
             for context_param in params.iter().filter(|p| p.is_context) {
                 let is_source_loc =
@@ -5903,7 +5904,6 @@ impl TypedModule {
                         defn_info.name == get_ident!(self, "CompilerSourceLoc")
                             && defn_info.scope == self.scopes.get_root_scope_id()
                     });
-                dbg!(is_source_loc);
                 if is_source_loc {
                     let span = self.ast.spans.get(fn_call.span);
                     let source = self.ast.sources.get_source(span.file_id);
@@ -5925,30 +5925,32 @@ impl TypedModule {
                         type_id: context_param.type_id,
                         span: fn_call.span,
                     });
-                    final_args.push(source_loc_expr);
+                    final_args.push((Ok(source_loc_expr), context_param));
                 } else {
                     let Some(found_id) = self
                         .scopes
                         .find_context_variable_by_type(calling_scope, context_param.type_id)
                     else {
-                        return failf!(
+                        if !tolerate_missing_context_args {
+                            return failf!(
                             fn_call.span,
                             "Failed to find context parameter '{}'. No context variables of type {} are in scope",
                             self.get_ident_str(context_param.name),
                             self.type_id_to_string(context_param.type_id)
                         );
+                        } else {
+                            continue;
+                        }
                     };
                     let found = self.variables.get_variable(found_id);
-                    eprintln!(
-                        "result for {}: {}",
-                        self.get_ident_str(context_param.name),
-                        self.get_ident_str(found.name)
-                    );
-                    final_args.push(TypedExpr::Variable(VariableExpr {
-                        variable_id: found_id,
-                        type_id: found.type_id,
-                        span: fn_call.span,
-                    }));
+                    final_args.push((
+                        Ok(TypedExpr::Variable(VariableExpr {
+                            variable_id: found_id,
+                            type_id: found.type_id,
+                            span: fn_call.span,
+                        })),
+                        context_param,
+                    ));
                 }
             }
         }
@@ -5987,14 +5989,14 @@ impl TypedModule {
         };
 
         for (param_index, fn_param) in expected_literal_params.enumerate() {
-            let expr = match pre_evaled_params.next() {
-                Some(e) => e,
+            let expr_result = match pre_evaled_params.next() {
+                Some(e) => Ok(e),
                 None => {
-                    let matching_param_by_name =
+                    let matching_arg_by_name =
                         actual_passed_args.clone().find(|arg| arg.name == Some(fn_param.name));
-                    let matching_param =
-                        matching_param_by_name.or(actual_passed_args.clone().nth(param_index));
-                    let Some(param) = matching_param else {
+                    let matching_arg =
+                        matching_arg_by_name.or(actual_passed_args.clone().nth(param_index));
+                    let Some(param) = matching_arg else {
                         return failf!(
                             fn_call.span,
                             "Missing argument to {}: {}",
@@ -6003,24 +6005,37 @@ impl TypedModule {
                         );
                     };
                     let expected_type_for_param = Some(fn_param.type_id);
-                    let expr =
-                        self.eval_expr(param.value, calling_scope, expected_type_for_param)?;
-                    expr
+                    let expr_result =
+                        self.eval_expr(param.value, calling_scope, expected_type_for_param);
+                    expr_result
                 }
             };
-            if let Err(e) = self.check_types(fn_param.type_id, expr.get_type(), calling_scope) {
-                return make_fail_span(
-                    format!(
-                        "Invalid parameter type passed to function {}: {}",
-                        self.ast.identifiers.get_name(fn_call.name.name),
-                        e
-                    ),
-                    expr.get_span(),
-                );
-            }
-            final_args.push(expr);
+            final_args.push((expr_result, fn_param));
         }
         Ok(final_args)
+    }
+
+    fn check_call_arguments(
+        &mut self,
+        call_name: Identifier,
+        aligned_args: Vec<(TyperResult<TypedExpr>, &FnArgType)>,
+        calling_scope: ScopeId,
+    ) -> TyperResult<Vec<TypedExpr>> {
+        debug!("check_call_arguments {}", self.get_ident_str(call_name));
+        let mut successful_args = Vec::new();
+        for (expr, param) in aligned_args.into_iter() {
+            let expr = expr?;
+            if let Err(e) = self.check_types(param.type_id, expr.get_type(), calling_scope) {
+                return failf!(
+                    expr.get_span(),
+                    "Invalid parameter type passed to function {}: {}",
+                    self.get_ident_str(call_name),
+                    e
+                );
+            };
+            successful_args.push(expr);
+        }
+        Ok(successful_args)
     }
 
     pub fn get_callee_function_type(&self, callee: &Callee) -> TypeId {
@@ -6074,14 +6089,17 @@ impl TypedModule {
             false => {
                 let original_function_type =
                     self.types.get(self.get_callee_function_type(&callee)).as_function().unwrap();
+                let params = &original_function_type.params.clone();
+                let aligned_args = self.align_call_arguments_with_parameters(
+                    fn_call,
+                    params,
+                    known_args.map(|ka| ka.1),
+                    scope_id,
+                    false,
+                )?;
                 (
                     callee,
-                    self.check_call_arguments(
-                        fn_call,
-                        &original_function_type.params.clone(),
-                        known_args.map(|ka| ka.1),
-                        scope_id,
-                    )?,
+                    self.check_call_arguments(fn_call.name.name, aligned_args, scope_id)?,
                     Vec::new(),
                 )
             }
@@ -6118,12 +6136,15 @@ impl TypedModule {
                 )?;
 
                 let specialized_params = &self.get_function_type(function_id).params.clone();
-                let typechecked_args = self.check_call_arguments(
+                let aligned_args = self.align_call_arguments_with_parameters(
                     fn_call,
                     specialized_params,
                     known_args.map(|ka| ka.1),
                     scope_id,
+                    false,
                 )?;
+                let typechecked_args =
+                    self.check_call_arguments(fn_call.name.name, aligned_args, scope_id)?;
 
                 (Callee::make_static(function_id), typechecked_args, type_args)
             }
@@ -6160,21 +6181,21 @@ impl TypedModule {
         debug_assert!(!generic_type_params.is_empty());
         let generic_name = generic_function.name;
         let generic_params = generic_function_type.params.clone();
-        let type_args = &fn_call.type_args;
-        let type_params = match type_args.is_empty() {
+        let passed_type_args = &fn_call.type_args;
+        let type_params = match passed_type_args.is_empty() {
             false => {
-                if type_args.len() != generic_type_params.len() {
+                if passed_type_args.len() != generic_type_params.len() {
                     return make_fail_span(
                         format!(
                             "Expected {} type arguments but got {}",
                             generic_type_params.len(),
-                            type_args.len()
+                            passed_type_args.len()
                         ),
                         fn_call.span,
                     );
                 }
-                let mut evaled_params = Vec::with_capacity(type_args.len());
-                for (idx, type_arg) in type_args.iter().enumerate() {
+                let mut evaled_params = Vec::with_capacity(passed_type_args.len());
+                for (idx, type_arg) in passed_type_args.iter().enumerate() {
                     let param = &generic_type_params[idx];
                     let type_id = self.eval_type_expr(type_arg.type_expr, calling_scope)?;
                     evaled_params.push(TypeParam { ident: param.type_param.ident, type_id });
@@ -6184,32 +6205,21 @@ impl TypedModule {
             true => {
                 let mut solved_params: Vec<TypeParam> = Vec::new();
 
-                // FIXME: because this doesn't know about context params,
-                //        they don't work w/ generic functions
-                for (param_index, gen_param) in generic_params.iter().enumerate() {
-                    let Some(matching_argument) = (match fn_call.arg_by_name(gen_param.name) {
-                        None => fn_call.args.get(param_index),
-                        Some((_pos, p)) => Some(p),
-                    }) else {
-                        return failf!(
-                            fn_call.span,
-                            "Missing argument to when solving generics {}: {}",
-                            self.get_ident_str(fn_call.name.name).blue(),
-                            self.get_ident_str(gen_param.name).blue()
-                        );
-                    };
-
+                let args_and_params = self.align_call_arguments_with_parameters(
+                    fn_call,
+                    &generic_params,
+                    None,
+                    calling_scope,
+                    true,
+                )?;
+                for (param_index, (expr, gen_param)) in args_and_params.iter().enumerate() {
                     // We don't care if this fails; sometimes we can't
                     // evaluate an expression before inferring types
                     // That's ok because
                     // 1) We hope that other arguments will have more luck
                     // 2) We will evaluate these expressions again when we actually
                     //    do typechecking, if we manage to solve the generics
-                    if let Ok(expr) = self.eval_expr(
-                        matching_argument.value,
-                        calling_scope,
-                        Some(gen_param.type_id),
-                    ) {
+                    if let Ok(expr) = expr {
                         self.solve_generic_params(
                             &mut solved_params,
                             expr.get_type(),
@@ -6217,6 +6227,8 @@ impl TypedModule {
                             calling_scope,
                             fn_call.span,
                         )?;
+                    } else {
+                        eprintln!("Just fyi eval_expr failed during inference: {expr:?}")
                     }
                     if solved_params.len() == generic_type_params.len() {
                         debug!("Solved after {}/{} params", param_index, generic_params.len());

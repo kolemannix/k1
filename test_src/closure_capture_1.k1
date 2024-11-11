@@ -1,8 +1,8 @@
 fn main(): int {
   val closedOver: int = 3;
 
-  val add = \x: int -> {
-    val addOne = \y: int -> y + 1;
+  val add = \(x: int) {
+    val addOne = \(y: int) y + 1;
     addOne(x) + closedOver + addOne(closedOver) + (if closedOver == 3 1 else 0);
   };
 
