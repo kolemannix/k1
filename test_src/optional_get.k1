@@ -1,9 +1,6 @@
 deftype Point = { x: int, y: int? }
 
 fn main(): int {
-  // We can make optional special
-  // Or promote all optional-like enums, where optional-like means:
-  // - only one variant has a payload, and its type matches
   val p: Point? = { x: 1, y: 2 };
   assert(p!.x == 1);
   assert(p!.y! == 2);

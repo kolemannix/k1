@@ -1,0 +1,17 @@
+deftype Box[T] = { value: T }
+
+fn box[T](context foo: T)(value: T): Box[T] {
+  { value: value }
+}
+
+fn main(): int {
+  context val b = true;
+  context val c = { b: true };
+  box(context 10)(10);
+  box[bool](true);
+  box(false);
+  box({ b: false });
+
+
+  0
+}
