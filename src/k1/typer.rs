@@ -1752,6 +1752,16 @@ impl TypedModule {
                     scope_id,
                     context.no_attach_defn_info(),
                 )?;
+                if let Some(spec_info) = self.types.get_generic_instance_info(base_type) {
+                    let generic = self.types.get(spec_info.generic_parent).expect_generic();
+                    let type_params = &generic.params;
+                    if let Some(matching_type_var_pos) =
+                        type_params.iter().position(|tp| tp.name == dot_acc.member_name)
+                    {
+                        let actual_type = &spec_info.param_values[matching_type_var_pos];
+                        return Ok(*actual_type);
+                    }
+                }
                 match self.types.get(base_type) {
                     // You can do dot access on enums to get their variants
                     Type::Enum(e) => {
@@ -1792,7 +1802,7 @@ impl TypedModule {
                         };
                         Ok(field.1.type_id)
                     }
-                    // You can do dot access on References to get out their 'inner' types
+                    // You can do dot access on References to get out their 'value' types
                     Type::Reference(r) => {
                         if self.ast.identifiers.get_name(dot_acc.member_name) != "value" {
                             return make_fail_ast_id(
@@ -3508,7 +3518,7 @@ impl TypedModule {
             expected_type.map(|t| self.type_id_to_string(t))
         );
         let expr = self.ast.expressions.get(expr_id);
-        let result = match expr {
+        match expr {
             ParsedExpression::Array(array_expr) => {
                 let mut element_type: Option<TypeId> = match expected_type {
                     Some(type_id) => match self.types.get(type_id).as_array_instance() {
@@ -3832,8 +3842,78 @@ impl TypedModule {
             ParsedExpression::Closure(_closure) => {
                 self.eval_closure(expr_id, scope_id, expected_type)
             }
+            ParsedExpression::InterpolatedString(is) => {
+                let res = self.eval_interpolated_string(expr_id, scope_id, expected_type)?;
+                eprintln!("interp!\n{}", self.expr_to_string(&res));
+                Ok(res)
+            }
+        }
+    }
+
+    fn eval_interpolated_string(
+        &mut self,
+        expr_id: ParsedExpressionId,
+        scope_id: ScopeId,
+        _expected_type: Option<TypeId>,
+    ) -> TyperResult<TypedExpr> {
+        let span = self.ast.expressions.get_span(expr_id);
+        let ParsedExpression::InterpolatedString(is) = self.ast.expressions.get(expr_id) else {
+            panic!()
         };
-        result
+        let is = is.clone();
+
+        let mut block = self.synth_block(vec![], scope_id, span);
+        let block_scope = block.scope_id;
+        let part_count = is.parts.len();
+        let new_string_builder = self.synth_function_call(
+            qident!(self, span, ["StringBuilder"], "withCapacity"),
+            span,
+            block_scope,
+            (
+                vec![],
+                vec![TypedExpr::Integer(TypedIntegerExpr {
+                    value: TypedIntegerValue::U64(part_count as u64),
+                    span,
+                })],
+            ),
+        )?;
+        let string_builder_var = self.synth_variable_defn(
+            get_ident!(self, "sb"),
+            new_string_builder,
+            false,
+            false,
+            block.scope_id,
+        );
+        block.push_stmt(string_builder_var.defn_stmt);
+        for part in is.parts.into_iter() {
+            let string_expr = match part {
+                parse::InterpolatedStringPart::String(s) => TypedExpr::Str(s, span),
+                parse::InterpolatedStringPart::Identifier(ident) => {
+                    let variable_expr_id =
+                        self.ast.expressions.add_expression(ParsedExpression::Variable(
+                            parse::Variable { name: NamespacedIdentifier::naked(ident, span) },
+                        ));
+                    let expr = self.eval_variable(variable_expr_id, block_scope, false)?;
+                    self.synth_show_call(expr, block_scope)?
+                }
+            };
+            debug_assert!(string_expr.get_type() == STRING_TYPE_ID);
+            let push_call = self.synth_function_call(
+                qident!(self, span, ["StringBuilder"], "putString"),
+                span,
+                block_scope,
+                (vec![], vec![string_builder_var.variable_expr.clone(), string_expr]),
+            )?;
+            block.push_expr(push_call);
+        }
+        let build_call = self.synth_function_call(
+            qident!(self, span, ["StringBuilder"], "build"),
+            span,
+            block_scope,
+            (vec![], vec![string_builder_var.variable_expr]),
+        )?;
+        block.push_expr(build_call);
+        Ok(TypedExpr::Block(block))
     }
 
     fn visit_inner_exprs_mut(expr: &mut TypedExpr, mut action: impl FnMut(&mut TypedExpr)) {
@@ -5341,6 +5421,7 @@ impl TypedModule {
     fn resolve_parsed_function_call(
         &mut self,
         fn_call: &FnCall,
+        known_args: Option<&(Vec<TypeId>, Vec<TypedExpr>)>,
         calling_scope: ScopeId,
         expected_type: Option<TypeId>,
     ) -> TyperResult<Either<TypedExpr, Callee>> {
@@ -5358,6 +5439,11 @@ impl TypedModule {
 
         if fn_call.is_method {
             // Special case for enum constructors which are syntactically also function calls
+            // This can't use known_args, so keep in mind that we can't synth enum constructors via
+            // this codepath, have to do it directly :/
+            //
+            // Perhaps handle_enum_constructor could be updated to work with a TypedExpr base
+            // as well, provided it is a Variable expr
             if let Some(base_arg) = fn_call.args.first() {
                 if let Some(enum_constr) = self.handle_enum_constructor(
                     base_arg.value,
@@ -5373,24 +5459,26 @@ impl TypedModule {
             }
         }
 
+        let first_arg_expr = match known_args.as_ref() {
+            Some((_, args)) if !args.is_empty() => args.first().cloned(),
+            _ => match fn_call.args.first() {
+                None => None,
+                Some(first) => self.eval_expr(first.value, calling_scope, None).ok(),
+            },
+        };
+
         // Two resolution paths:
         // 1. "method" call (aka known first arg type so we can check for ability impls and methods)
         // 2. "function" call, no abilities or methods to check, pure scoping-based resolution
 
-        let method_call_self = match fn_call.args.first() {
-            Some(arg) if fn_call.is_method => {
-                Some(self.eval_expr(arg.value, calling_scope, None)?)
-            }
-            _ => None,
-        };
-        match method_call_self {
-            Some(base_expr) => self.resolve_parsed_function_call_method(
-                base_expr,
+        match fn_call.is_method {
+            true => self.resolve_parsed_function_call_method(
+                first_arg_expr.unwrap(),
                 fn_call,
                 calling_scope,
                 expected_type,
             ),
-            None => {
+            false => {
                 // Resolve non-method call
                 if let Some(function_id) = self.scopes.find_function_namespaced(
                     calling_scope,
@@ -5403,11 +5491,10 @@ impl TypedModule {
                     // and while we're at it we can return the function id of the actual specialized implementation
                     let function_ability_id = self.get_function(function_id).kind.ability_id();
                     if let Some(ability_id) = function_ability_id {
-                        let first_arg = fn_call.args.first().ok_or(make_error(
+                        let base_expr = first_arg_expr.ok_or(make_error(
                             "Ability functions must have at least one argument",
                             fn_call.span,
                         ))?;
-                        let base_expr = self.eval_expr(first_arg.value, calling_scope, None)?;
                         let function_id = self.find_ability_implementation(
                             fn_name,
                             base_expr.get_type(),
@@ -6074,7 +6161,12 @@ impl TypedModule {
             fn_call.args.is_empty() || known_args.is_none(),
             "cannot pass both typed value args and parsed value args to eval_function_call"
         );
-        let callee = match self.resolve_parsed_function_call(fn_call, scope_id, expected_type_id)? {
+        let callee = match self.resolve_parsed_function_call(
+            fn_call,
+            known_args.as_ref(),
+            scope_id,
+            expected_type_id,
+        )? {
             Either::Left(expr) => return Ok(expr),
             Either::Right(callee) => callee,
         };
@@ -6220,6 +6312,12 @@ impl TypedModule {
                     // 2) We will evaluate these expressions again when we actually
                     //    do typechecking, if we manage to solve the generics
                     if let Ok(expr) = expr {
+                        debug!(
+                            "solving {}: {} w/ param {}",
+                            self.get_ident_str(gen_param.name),
+                            self.type_id_to_string(gen_param.type_id),
+                            self.expr_to_string(expr)
+                        );
                         self.solve_generic_params(
                             &mut solved_params,
                             expr.get_type(),
@@ -8212,6 +8310,22 @@ impl TypedModule {
             scope_id,
             None,
             Some(known_args),
+        )
+    }
+
+    fn synth_show_call(&mut self, caller: TypedExpr, scope_id: ScopeId) -> TyperResult<TypedExpr> {
+        self.eval_function_call(
+            &FnCall {
+                name: qident!(self, caller.get_span(), ["Show"], "show"),
+                type_args: vec![],
+                args: vec![],
+                explicit_context_args: vec![],
+                span: caller.get_span(),
+                is_method: false,
+            },
+            scope_id,
+            None,
+            Some((vec![], vec![caller])),
         )
     }
 

@@ -288,6 +288,13 @@ namespace Array {
     };
     reversed
   }
+
+  // TODO(stdlib slow)
+  fn concat[T](self: Array[T]*, other: Array[T]): unit {
+    for e in other do {
+      self.push(e)
+    }
+  }
 }
 
 impl Equals for Array[u8] {

@@ -1,0 +1,46 @@
+deftype StringBuilder = { parts: Array[enum Char(char), String(string)]* }
+namespace StringBuilder {
+  deftype alias Part = StringBuilder.parts.value.T
+
+  fn withCapacity(cap: u64): StringBuilder {
+    val parts = _root::new(Array::new[Part](cap));
+    { parts: parts }
+  }
+
+  fn new(): StringBuilder {
+    withCapacity(0)
+  }
+
+  fn putChar(self: StringBuilder, c: char): unit { 
+    self.parts.push(.Char(c)) 
+  }
+  fn putString(self: StringBuilder, s: string): unit { 
+    self.parts.push(.String(s)) 
+  }
+  fn putByte(self: StringBuilder, b: byte): unit { 
+    self.parts.push(.Char(b as char)) 
+  }
+  fn len(self: StringBuilder): u64 {
+    val len: u64* = 0.&;
+    for part in self.parts.* do {
+      val partLen = switch part { .Char(_) -> 1: u64, .String(s) -> s.len };
+      referenceSet(len, partLen);
+    };
+    len.*
+  }
+  fn build(self: StringBuilder): string { 
+    val bytes = Array::new[char](self.len()).&;
+    for part in self.parts.* do {
+      switch part {
+        .Char(c) -> bytes.push(c),
+        .String(s) -> {
+          for c in s do {
+            bytes.push(c)
+          }
+        }
+      }
+    };
+    string::fromChars(bytes)
+  }
+}
+
