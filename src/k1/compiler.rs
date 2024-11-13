@@ -64,8 +64,8 @@ macro_rules! static_assert_size {
 }
 
 pub struct CompileModuleError {
-    pub parsed_module: Option<ParsedModule>,
-    pub module: Option<TypedModule>,
+    pub parsed_module: Option<Box<ParsedModule>>,
+    pub module: Option<Box<TypedModule>>,
 }
 
 /// If `args.file` points to a directory,
@@ -134,17 +134,11 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
     };
 
     if use_core {
-        let core_path: &Path = Path::new("builtins/core.k1");
-        parse_file(core_path);
-
-        let opt_path: &Path = Path::new("builtins/opt.k1");
-        parse_file(opt_path);
-
-        let string_path: &Path = Path::new("builtins/string.k1");
-        parse_file(string_path);
-
-        let bitwise_path: &Path = Path::new("builtins/bitwise.k1");
-        parse_file(bitwise_path);
+        parse_file(Path::new("builtins/core.k1"));
+        parse_file(Path::new("builtins/opt.k1"));
+        parse_file(Path::new("builtins/string.k1"));
+        parse_file(Path::new("builtins/string_builder.k1"));
+        parse_file(Path::new("builtins/bitwise.k1"));
     }
 
     for f in dir_entries.iter() {
@@ -152,7 +146,10 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
     }
 
     if !parse_errors.is_empty() {
-        return Err(CompileModuleError { parsed_module: Some(parsed_module), module: None });
+        return Err(CompileModuleError {
+            parsed_module: Some(Box::new(parsed_module)),
+            module: None,
+        });
     }
 
     let type_start = Instant::now();
@@ -164,7 +161,10 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
         if args.dump_module {
             println!("{}", typed_module);
         }
-        return Err(CompileModuleError { parsed_module: None, module: Some(typed_module) });
+        return Err(CompileModuleError {
+            parsed_module: None,
+            module: Some(Box::new(typed_module)),
+        });
     };
     let typing_elapsed = type_start.elapsed();
     if args.dump_module {

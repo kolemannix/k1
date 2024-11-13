@@ -542,6 +542,12 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                     self.advance();
                     self.advance();
                     continue;
+                } else if c == '\\' && next == '{' {
+                    tok_buf.push(c);
+                    tok_buf.push(next);
+                    self.advance();
+                    self.advance();
+                    continue;
                 } else if c == '"' {
                     self.advance();
                     break Some(make_buffered_token(self, K::String, &tok_buf, n));
@@ -689,7 +695,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
     }
 }
 
-fn is_ident_char(c: char) -> bool {
+pub fn is_ident_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 

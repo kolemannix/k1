@@ -130,7 +130,6 @@ pub enum Literal {
     Char(u8, SpanId),
     Numeric(ParsedNumericLiteral),
     Bool(bool, SpanId),
-    /// TODO(string literal escaping): Need second span, "content_span_id"
     String(String, SpanId),
 }
 
@@ -201,7 +200,7 @@ pub struct Identifiers {
     intern_pool: string_interner::StringInterner<StringBackend>,
 }
 impl Identifiers {
-    pub const BUILTIN_IDENTS: [&'static str; 23] = [
+    pub const BUILTIN_IDENTS: [&'static str; 24] = [
         "self",
         "it",
         "unit",
@@ -225,6 +224,7 @@ impl Identifiers {
         "env_ptr",
         "&",
         "*",
+        "sb",
     ];
 
     pub fn intern(&mut self, s: impl AsRef<str>) -> Identifier {
@@ -439,12 +439,26 @@ pub struct ParsedClosure {
 }
 
 #[derive(Debug, Clone)]
+pub enum InterpolatedStringPart {
+    // TODO: Put spans on each string part
+    String(String),
+    Identifier(Identifier),
+}
+
+#[derive(Debug, Clone)]
+pub struct ParsedInterpolatedString {
+    pub parts: Vec<InterpolatedStringPart>,
+    pub span: SpanId,
+}
+
+#[derive(Debug, Clone)]
 pub enum ParsedExpression {
-    BinaryOp(BinaryOp),                     // a == b
-    UnaryOp(UnaryOp),                       // !b, *b
-    Literal(Literal),                       // 42, "asdf"
-    FnCall(FnCall),                         // square(1, 2)
-    Variable(Variable),                     // x
+    BinaryOp(BinaryOp),                           // a == b
+    UnaryOp(UnaryOp),                             // !b, *b
+    Literal(Literal),                             // 42, "asdf"
+    InterpolatedString(ParsedInterpolatedString), // "hello, \{x}"
+    FnCall(FnCall),                               // square(1, 2)
+    Variable(Variable),                           // x
     FieldAccess(FieldAccess), // x.b, Opt.None[i32] (overloaded to handle enum constrs)
     Block(Block),             // { <expr>; <expr>; <expr> }
     If(IfExpr),               // if a else b
@@ -479,6 +493,7 @@ impl ParsedExpression {
             Self::BinaryOp(op) => op.span,
             Self::UnaryOp(op) => op.span,
             Self::Literal(lit) => lit.get_span(),
+            Self::InterpolatedString(is) => is.span,
             Self::FnCall(call) => call.span,
             Self::Variable(var) => var.name.span,
             Self::FieldAccess(acc) => acc.span,
@@ -504,6 +519,7 @@ impl ParsedExpression {
             Self::BinaryOp(_op) => false,
             Self::UnaryOp(_op) => false,
             Self::Literal(_lit) => false,
+            Self::InterpolatedString(_is) => false,
             Self::FnCall(_call) => false,
             Self::Block(_block) => false,
             Self::If(_if_expr) => false,
@@ -1627,23 +1643,84 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             (K::String, _) => {
                 trace!("parse_literal string");
                 self.tokens.advance();
-                let text = self.token_chars(first);
+                // Accessing the tok_chars this way achieves a partial borrow of self
+                let text = Parser::tok_chars(
+                    &self.module.spans,
+                    self.module.sources.get_source(self.file_id),
+                    first,
+                );
                 let mut buf = String::with_capacity(text.len());
                 let mut chars = text.chars();
+                enum Mode {
+                    Base,
+                    InterpIdent(String),
+                }
+                let mut mode = Mode::Base;
+                let mut parts: Vec<InterpolatedStringPart> = Vec::new();
                 while let Some(c) = chars.next() {
-                    if c == '\\' {
-                        let Some(next) = chars.next() else {
-                            return Err(Parser::error("String ended with '\\'", first));
-                        };
-                        if let Some(c) = STRING_ESCAPED_CHARS.iter().find(|c| c.sentinel == next) {
-                            buf.push(c.output as char)
-                        };
-                    } else {
-                        buf.push(c)
+                    match &mut mode {
+                        Mode::InterpIdent(ident_str) => {
+                            if crate::lex::is_ident_char(c) {
+                                ident_str.push(c)
+                            } else if c == '}' {
+                                let buf = std::mem::take(ident_str);
+                                let ident = self.module.identifiers.intern(buf);
+                                parts.push(InterpolatedStringPart::Identifier(ident));
+                                mode = Mode::Base;
+                            } else {
+                                return Err(Parser::error(
+                                    format!("Unexpected character inside interpolated identifier: {c}, expected more or '}}'"),
+                                    first,
+                                ));
+                            }
+                        }
+                        Mode::Base => {
+                            if c == '\\' {
+                                let Some(next) = chars.next() else {
+                                    return Err(Parser::error("String ended with '\\'", first));
+                                };
+                                if next == '{' {
+                                    let b = std::mem::take(&mut buf);
+                                    parts.push(InterpolatedStringPart::String(b));
+                                    mode = Mode::InterpIdent(String::with_capacity(16));
+                                } else if let Some(c) =
+                                    STRING_ESCAPED_CHARS.iter().find(|c| c.sentinel == next)
+                                {
+                                    buf.push(c.output as char)
+                                } else {
+                                    return Err(Parser::error(
+                                        format!("Invalid escape sequence: '\\{next}'"),
+                                        first,
+                                    ));
+                                };
+                            } else {
+                                buf.push(c)
+                            }
+                        }
                     }
                 }
-                let literal = Literal::String(buf, first.span);
-                Ok(Some(self.add_expression(ParsedExpression::Literal(literal))))
+                match mode {
+                    Mode::Base => parts.push(InterpolatedStringPart::String(buf)),
+                    Mode::InterpIdent(s) => {
+                        return Err(Parser::error(
+                            format!("Unterminated interpolated identifier: {s}"),
+                            first,
+                        ));
+                    }
+                }
+                if parts.len() == 1 {
+                    let InterpolatedStringPart::String(s) = parts.into_iter().next().unwrap()
+                    else {
+                        panic!()
+                    };
+                    let literal = Literal::String(s, first.span);
+                    Ok(Some(self.add_expression(ParsedExpression::Literal(literal))))
+                } else {
+                    let string_interp = ParsedInterpolatedString { parts, span: first.span };
+                    Ok(Some(
+                        self.add_expression(ParsedExpression::InterpolatedString(string_interp)),
+                    ))
+                }
             }
             (K::Minus, K::Ident) if !second.is_whitespace_preceeded() => {
                 let text = self.token_chars(second);
@@ -3082,6 +3159,21 @@ impl ParsedModule {
                 self.display_expr_id(op.expr, f)
             }
             ParsedExpression::Literal(lit) => f.write_fmt(format_args!("{}", lit)),
+            ParsedExpression::InterpolatedString(is) => {
+                f.write_char('"')?;
+                for part in &is.parts {
+                    match part {
+                        InterpolatedStringPart::String(s) => f.write_str(s)?,
+                        InterpolatedStringPart::Identifier(ident) => {
+                            f.write_char('{')?;
+                            f.write_str(self.identifiers.get_name(*ident))?;
+                            f.write_char('{')?;
+                        }
+                    }
+                }
+                f.write_char('"')?;
+                Ok(())
+            }
             ParsedExpression::FnCall(call) => {
                 f.write_str(self.identifiers.get_name(call.name.name))?;
                 f.write_str("(...)")?;
