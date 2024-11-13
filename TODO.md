@@ -118,12 +118,13 @@
   - [x] Return works
 - [x] Change reference and dereference syntax to x.& and x.*
 - [x] Fix context params when combined with generics
-- [ ] string interpolation
-- [ ] Fix named arguments
+- [x] string interpolation
 - [ ] Replace 'while' keyword with 'loop'; think about forms
+- [ ] Fix named arguments
 - [ ] return from while
 - [ ] break from while
-- [ ] Remove lvalue-based assignment from the language, use references to assign instead, introduce a desugaring for `referenceSet`
+- [ ] Remove lvalue-based assignment from the language, use references to assign instead, introduce a desugaring for `referenceSet` (`set a := b`)
+      - lvalue-based assignment stuff is just an abomination from an algebraic perspective, and probably inhibits learning
 - [ ] b"" strings that are of type... Slice[u8]
 - [ ] Builtin syntax for maps w/ Map[K, V]
 - [x] Handle escaped chars in string literals
