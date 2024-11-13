@@ -1,4 +1,0 @@
-fn main(): int {
-  context val history: Array[string]* = new([]);
-  0
-}
