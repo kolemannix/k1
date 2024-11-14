@@ -1,6 +1,6 @@
 # k1
 
-Design principles
+Design principles wip
 - Expressiveness of a dynamic language, native static performance
 - Introspectable types
 - Data-first
@@ -9,7 +9,7 @@ Design principles
 - Expose primitives (`Pointer`, `u8`, etc)
 - Aim for friendliness and teachability, avoid jargon (I'd like to kill `enum`)
 
-Notable features
+Notable features wip
 - Rich type-level expressions and operations (express a function's return type, or a struct member's type, etc)
 - Abilities enable abstractions and polymorphism
 - Anonymous structs and enums allow for lightweight, low-boilerplate, zero-cost data modeling

@@ -64,6 +64,12 @@ enum CoerceResult {
     Coerced(&'static str, TypedExpr),
 }
 
+#[derive(Debug, Clone)]
+enum MaybeTypedExpr {
+    Parsed(ParsedExpressionId),
+    Typed(TypedExpr),
+}
+
 /// Used for analyzing pattern matching
 #[derive(Debug, Clone)]
 pub enum PatternConstructor {
@@ -5459,11 +5465,13 @@ impl TypedModule {
             }
         }
 
-        let first_arg_expr = match known_args.as_ref() {
-            Some((_, args)) if !args.is_empty() => args.first().cloned(),
+        let first_arg_expr: Option<MaybeTypedExpr> = match known_args.as_ref() {
+            Some((_, args)) if !args.is_empty() => {
+                Some(MaybeTypedExpr::Typed(args.first().unwrap().clone()))
+            }
             _ => match fn_call.args.first() {
                 None => None,
-                Some(first) => self.eval_expr(first.value, calling_scope, None).ok(),
+                Some(first) => Some(MaybeTypedExpr::Parsed(first.value)),
             },
         };
 
@@ -5495,6 +5503,12 @@ impl TypedModule {
                             "Ability functions must have at least one argument",
                             fn_call.span,
                         ))?;
+                        let base_expr = match base_expr {
+                            MaybeTypedExpr::Parsed(parsed) => {
+                                self.eval_expr(parsed, calling_scope, None)?
+                            }
+                            MaybeTypedExpr::Typed(expr) => expr,
+                        };
                         let function_id = self.find_ability_implementation(
                             fn_name,
                             base_expr.get_type(),
@@ -5643,21 +5657,26 @@ impl TypedModule {
 
     fn resolve_parsed_function_call_method(
         &mut self,
-        base_expr: TypedExpr,
+        base_expr: MaybeTypedExpr,
         fn_call: &FnCall,
-        _calling_scope: ScopeId,
+        calling_scope: ScopeId,
         _expected_type: Option<TypeId>,
     ) -> TyperResult<Either<TypedExpr, Callee>> {
         let fn_name = fn_call.name.name;
-        let type_id = base_expr.get_type();
-        let base_for_method_derefed = self.types.get_type_id_dereferenced(base_expr.get_type());
 
         // Handle the special case of the synthesized enum 'as{Variant}' methods
-        if let Some(enum_as_result) =
-            self.handle_enum_as(base_for_method_derefed, &base_expr, fn_call)?
-        {
+        let base_expr = match base_expr {
+            MaybeTypedExpr::Typed(expr) => expr,
+            MaybeTypedExpr::Parsed(parsed_expr_id) => {
+                self.eval_expr(parsed_expr_id, calling_scope, None)?
+            }
+        };
+        if let Some(enum_as_result) = self.handle_enum_as(&base_expr, fn_call)? {
             return Ok(Either::Left(enum_as_result));
         }
+
+        let type_id = base_expr.get_type();
+        let base_for_method_derefed = self.types.get_type_id_dereferenced(type_id);
         let method_id = match self.types.get(base_for_method_derefed) {
             Type::Enum(e) => {
                 let Some(enum_defn_info) = e.type_defn_info.as_ref() else {
@@ -5761,10 +5780,10 @@ impl TypedModule {
 
     fn handle_enum_as(
         &mut self,
-        base_type_id: TypeId,
         base_expr: &TypedExpr,
         fn_call: &FnCall,
     ) -> TyperResult<Option<TypedExpr>> {
+        let base_type_id: TypeId = base_expr.get_type();
         let Type::Enum(e) = self.types.get(base_type_id) else { return Ok(None) };
         let fn_name = self.get_ident_str(fn_call.name.name);
         if fn_name.starts_with("as") && fn_call.type_args.is_empty() && fn_call.args.len() == 1 {
