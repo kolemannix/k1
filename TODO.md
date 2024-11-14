@@ -119,7 +119,6 @@
 - [x] Change reference and dereference syntax to x.& and x.*
 - [x] Fix context params when combined with generics
 - [x] string interpolation
-- [ ] Replace 'while' keyword with 'loop'; think about forms
 - [ ] Fix named arguments
 - [ ] return from while
 - [ ] break from while
@@ -129,8 +128,10 @@
 - [ ] Builtin syntax for maps w/ Map[K, V]
 - [x] Handle escaped chars in string literals
 - [ ] Friendliness pass
-  - [ ] Get rid of 'enum' keyword, data?
-  - [x] 'when' keyword is bad; `switch` maybe or `case`
+  - [ ] Move to single '=' for equality
+  - [ ] Move to single ':=' for assignment / definition? Or just space; `let x 42`, `set x 52`
+  - [ ] Replace 'enum' keyword with 'either', ensure the ambiguous cases have good errors (inside struct, inside param list)
+  - [x] 'when' keyword is bad; `switch` maybe or `case`, or resolve the ambiguity with `when <x> is {}`
   - [x] Replace `type` with `deftype` - It would be really nice _not_ to take the keyword 'type'. Just a thought from using Rust/Scala
 - [x] Remove tag literals, make enum tags per-enum
 - [ ] Imports (need design around modules)
