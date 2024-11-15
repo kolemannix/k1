@@ -1,3 +1,9 @@
+fn loop(): int {
+  while true {
+    return(1)
+  };
+}
 fn main(): int {
+  assert(loop() == 1);
   0
 }
