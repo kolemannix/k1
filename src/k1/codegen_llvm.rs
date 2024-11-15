@@ -2427,8 +2427,13 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     self.builder.build_conditional_branch(cond_i1, loop_body_block, loop_end_block);
 
                     self.builder.position_at_end(loop_body_block);
-                    self.codegen_expr(&while_stmt.body)?;
-                    self.builder.build_unconditional_branch(loop_entry_block);
+                    let body = self.codegen_expr(&while_stmt.body)?;
+                    match body {
+                        LlvmValue::Never(_instr) => {}
+                        LlvmValue::BasicValue(_) => {
+                            self.builder.build_unconditional_branch(loop_entry_block);
+                        }
+                    }
 
                     self.builder.position_at_end(loop_end_block);
                 }
