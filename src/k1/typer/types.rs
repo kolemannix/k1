@@ -38,6 +38,12 @@ pub struct GenericInstanceInfo {
     pub param_values: Vec<TypeId>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LoopType {
+    Loop,
+    While,
+}
+
 #[derive(Debug, Clone)]
 pub struct TypeDefnInfo {
     pub name: Identifier,

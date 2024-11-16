@@ -1,7 +1,8 @@
 fn main(): int {
-  val getThree = \(-> int) {
-    println("giving 3");
-    return(3)
-  };
+  val getThree = \(-> int) { return(3) };
+  val nullary = \() 4;
+  assert(getThree() == 3);
+  assert(nullary() == 4);
+
   0
 }

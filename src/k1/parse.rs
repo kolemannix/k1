@@ -453,27 +453,89 @@ pub struct ParsedInterpolatedString {
 
 #[derive(Debug, Clone)]
 pub enum ParsedExpression {
-    BinaryOp(BinaryOp),                           // a == b
-    UnaryOp(UnaryOp),                             // !b, *b
-    Literal(Literal),                             // 42, "asdf"
-    InterpolatedString(ParsedInterpolatedString), // "hello, \{x}"
-    FnCall(FnCall),                               // square(1, 2)
-    Variable(Variable),                           // x
-    FieldAccess(FieldAccess), // x.b, Opt.None[i32] (overloaded to handle enum constrs)
-    Block(Block),             // { <expr>; <expr>; <expr> }
-    If(IfExpr),               // if a else b
-    Struct(Struct),           // { x: 1, y: 3 }
-    Array(ArrayExpr),         // [1, 3, 5, 7]
-    OptionalGet(OptionalGet), // foo!
-    For(ForExpr),             // for i in [1,2,3] do println(i)
-    AnonEnumVariant(AnonEnumVariant), // .A
-    EnumConstructor(ParsedEnumConstructor), // .A(<expr>)
-    Is(ParsedIsExpression),   // x is T
-    Match(ParsedMatchExpression), // when x is {
-    // | a => ...
-    // | b => ...
-    // }
-    AsCast(ParsedAsCast), // x as u64, y as .Color
+    /// ```
+    /// <lhs: expr> == <rhs: expr>
+    /// ```
+    BinaryOp(BinaryOp),
+    /// ```
+    /// !b, *b
+    /// ```
+    UnaryOp(UnaryOp),
+    /// ```
+    /// 42, "asdf"
+    /// ```
+    Literal(Literal),
+    /// ```
+    /// "hello, \{x}"
+    /// ```
+    InterpolatedString(ParsedInterpolatedString),
+    /// ```
+    /// square(1, 2)
+    /// ```
+    FnCall(FnCall),
+    /// ```
+    /// x
+    /// ```
+    Variable(Variable),
+    /// ```
+    /// x.b, Opt.None[i32] (overloaded to handle enum constrs)
+    /// ```
+    FieldAccess(FieldAccess),
+    /// ```
+    /// { <a: stmt>; <b: stmt>; <c: stmt> }
+    /// ```
+    Block(Block),
+    /// ```
+    /// if <cond: expr> <cons: expr> else <alt: expr>
+    /// ```
+    If(IfExpr),
+    /// ```
+    /// while <cond: expr> <body: expr>
+    /// ```
+    While(ParsedWhileExpr),
+    /// ```
+    /// loop <body: block>
+    /// ```
+    Loop(ParsedLoopExpr),
+    /// ```
+    /// { x: <expr>, y: <expr> }
+    /// ```
+    Struct(Struct),
+    /// ```
+    /// [<expr>, <expr>, <expr>]
+    /// ```
+    Array(ArrayExpr),
+    /// ```
+    /// <opt: expr>!
+    /// ```
+    OptionalGet(OptionalGet),
+    /// ```
+    /// for <ident> in <coll: expr> do <body: expr>
+    /// ```
+    For(ForExpr),
+    /// ```
+    /// .<ident>
+    /// ```
+    AnonEnumVariant(AnonEnumVariant),
+    /// ```
+    /// .A(<expr>)
+    /// ```
+    EnumConstructor(ParsedEnumConstructor),
+    /// ```
+    /// <expr> is <pat>
+    /// ```
+    Is(ParsedIsExpression),
+    /// ```
+    /// when <expr> is {
+    /// <a: pat> -> <expr>,
+    /// <b: pat> -> <expr>
+    /// }
+    /// ```
+    Match(ParsedMatchExpression),
+    /// ```
+    /// x as u64, y as .Color
+    /// ```
+    AsCast(ParsedAsCast),
     Closure(ParsedClosure),
 }
 
@@ -499,6 +561,8 @@ impl ParsedExpression {
             Self::FieldAccess(acc) => acc.span,
             Self::Block(block) => block.span,
             Self::If(if_expr) => if_expr.span,
+            Self::While(while_expr) => while_expr.span,
+            Self::Loop(loop_expr) => loop_expr.span,
             Self::Struct(struc) => struc.span,
             Self::Array(array_expr) => array_expr.span,
             Self::OptionalGet(optional_get) => optional_get.span,
@@ -523,6 +587,8 @@ impl ParsedExpression {
             Self::FnCall(_call) => false,
             Self::Block(_block) => false,
             Self::If(_if_expr) => false,
+            Self::While(_while_expr) => false,
+            Self::Loop(_loop) => false,
             Self::Struct(_struct) => false,
             Self::Array(_array_expr) => false,
             Self::OptionalGet(_optional_get) => false,
@@ -639,10 +705,15 @@ pub struct IfExpr {
 }
 
 #[derive(Debug, Clone)]
-pub struct WhileStmt {
+pub struct ParsedWhileExpr {
     pub cond: ParsedExpressionId,
     pub body: ParsedExpressionId,
-    /// Maybe its better not to store a span on nodes for which a span is trivially calculated
+    pub span: SpanId,
+}
+
+#[derive(Debug, Clone)]
+pub struct ParsedLoopExpr {
+    pub body: Block,
     pub span: SpanId,
 }
 
@@ -666,7 +737,6 @@ pub enum ParsedStmt {
     ValDef(ValDef),                     // val x = 42
     Assignment(Assignment),             // x = 42
     LoneExpression(ParsedExpressionId), // println("asdfasdf")
-    While(WhileStmt),
 }
 
 #[derive(Debug, Clone)]
@@ -1125,7 +1195,6 @@ impl ParsedModule {
             ParsedStmt::ValDef(v) => v.span,
             ParsedStmt::Assignment(a) => a.span,
             ParsedStmt::LoneExpression(expr_id) => self.expressions.get_span(*expr_id),
-            ParsedStmt::While(w) => w.span,
         }
     }
 
@@ -2294,6 +2363,14 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             }
         } else if first.kind == K::BackSlash {
             Ok(Some(self.expect_closure()?))
+        } else if first.kind == K::KeywordWhile {
+            let while_result = Parser::expect("while loop", first, self.parse_while_loop())?;
+            Ok(Some(self.add_expression(ParsedExpression::While(while_result))))
+        } else if first.kind == K::KeywordLoop {
+            self.tokens.advance();
+            let body = self.expect_block()?;
+            let span = self.extend_span(first.span, body.span);
+            Ok(Some(self.add_expression(ParsedExpression::Loop(ParsedLoopExpr { body, span }))))
         } else if first.kind == K::KeywordSwitch {
             let when_keyword = self.tokens.next();
             let target_expression = self.expect_expression()?;
@@ -2771,7 +2848,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(Some(if_expr))
     }
 
-    fn parse_while_loop(&mut self) -> ParseResult<Option<WhileStmt>> {
+    fn parse_while_loop(&mut self) -> ParseResult<Option<ParsedWhileExpr>> {
         let while_token = self.peek();
         if while_token.kind != K::KeywordWhile {
             return Ok(None);
@@ -2781,14 +2858,12 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let body =
             Parser::expect("body expr for while loop", while_token, self.parse_expression())?;
         let span = self.extend_span(while_token.span, self.get_expression_span(body));
-        Ok(Some(WhileStmt { cond, body, span }))
+        Ok(Some(ParsedWhileExpr { cond, body, span }))
     }
 
     fn parse_statement(&mut self) -> ParseResult<Option<ParsedStmt>> {
         trace!("eat_statement {:?}", self.peek());
-        if let Some(while_loop) = self.parse_while_loop()? {
-            Ok(Some(ParsedStmt::While(while_loop)))
-        } else if let Some(val_def) = self.parse_val_def()? {
+        if let Some(val_def) = self.parse_val_def()? {
             Ok(Some(ParsedStmt::ValDef(val_def)))
         } else if let Some(expr) = self.parse_expression()? {
             let peeked = self.peek();
@@ -3187,6 +3262,17 @@ impl ParsedModule {
             ParsedExpression::FieldAccess(acc) => f.write_fmt(format_args!("{:?}", acc)),
             ParsedExpression::Block(block) => f.write_fmt(format_args!("{:?}", block)),
             ParsedExpression::If(if_expr) => f.write_fmt(format_args!("{:?}", if_expr)),
+            ParsedExpression::While(while_expr) => {
+                f.write_str("while ")?;
+                self.display_expr_id(while_expr.cond, f)?;
+                self.display_expr_id(while_expr.body, f)?;
+                Ok(())
+            }
+            ParsedExpression::Loop(loop_expr) => {
+                f.write_str("loop ")?;
+                write!(f, "{:?}", loop_expr.body)?;
+                Ok(())
+            }
             ParsedExpression::Struct(struc) => f.write_fmt(format_args!("{:?}", struc)),
             ParsedExpression::Array(array_expr) => f.write_fmt(format_args!("{:?}", array_expr)),
             ParsedExpression::OptionalGet(optional_get) => {

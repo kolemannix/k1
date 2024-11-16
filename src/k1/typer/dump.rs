@@ -406,12 +406,6 @@ impl TypedModule {
                 writ.write_str(" = ")?;
                 self.display_expr(&assignment.value, writ, indentation)
             }
-            TypedStmt::WhileLoop(while_loop) => {
-                writ.write_str("while ")?;
-                self.display_expr(&while_loop.cond, writ, indentation)?;
-                writ.write_str(" ")?;
-                self.display_expr(&while_loop.body, writ, indentation)
-            }
         }
     }
 
@@ -496,6 +490,16 @@ impl TypedModule {
                 }
                 Ok(())
             }
+            TypedExpr::WhileLoop(while_loop) => {
+                writ.write_str("while ")?;
+                self.display_expr(&while_loop.cond, writ, indentation)?;
+                writ.write_str(" ")?;
+                self.display_block(&while_loop.body, writ, indentation)
+            }
+            TypedExpr::LoopExpr(loop_expr) => {
+                writ.write_str("loop ")?;
+                self.display_block(&loop_expr.body, writ, indentation)
+            }
             TypedExpr::UnaryOp(unary_op) => {
                 writ.write_fmt(format_args!("{}", unary_op.kind))?;
                 self.display_expr(&unary_op.expr, writ, indentation)
@@ -535,6 +539,11 @@ impl TypedModule {
                 self.display_expr(&ret.value, writ, indentation)?;
                 writ.write_char(')')
             }
+            TypedExpr::Break(brk) => {
+                writ.write_str("break(")?;
+                self.display_expr(&brk.value, writ, indentation)?;
+                writ.write_char(')')
+            }
             TypedExpr::Closure(closure_expr) => {
                 writ.write_char('\\')?;
                 let closure_type = self.types.get(closure_expr.closure_type).as_closure().unwrap();
@@ -557,7 +566,7 @@ impl TypedModule {
             TypedExpr::PendingCapture(pending_capture) => {
                 writ.write_str("capture(")?;
                 let variable = self.variables.get_variable(pending_capture.captured_variable_id);
-                writ.write_str(self.get_ident_str(variable.name));
+                writ.write_str(self.get_ident_str(variable.name))?;
                 writ.write_str(")")?;
                 Ok(())
             }

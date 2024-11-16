@@ -1,0 +1,31 @@
+fn loopBreak(): unit {
+  val x: int = loop {
+    if true {
+      break(3)
+    } else {
+      break(4)
+    }
+  };
+  assert(x == 3)
+}
+
+fn loopNested(): unit {
+  val result = loop {
+    break(loop { break(10) })
+  };
+  assert(result == 10)
+}
+
+fn loopFalse(): unit {
+  val x = loop {
+    break(3);
+  };
+  assert(x == 3)
+}
+
+fn main(): int {
+  loopBreak();
+  loopNested();
+  loopFalse();
+  0
+}

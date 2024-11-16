@@ -380,6 +380,12 @@ impl<'ctx> BuiltinTypes<'ctx> {
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct LoopInfo<'ctx> {
+    pub break_value_ptr: PointerValue<'ctx>,
+    pub end_block: BasicBlock<'ctx>,
+}
+
 pub struct Codegen<'ctx, 'module> {
     ctx: &'ctx Context,
     pub module: &'module TypedModule,
@@ -394,6 +400,7 @@ pub struct Codegen<'ctx, 'module> {
     variables: HashMap<VariableId, Pointer<'ctx>>,
     globals: HashMap<VariableId, GlobalValue<'ctx>>,
     closure_environments: HashMap<TypeId, PointerValue<'ctx>>,
+    loops: HashMap<ScopeId, LoopInfo<'ctx>>,
     builtin_types: BuiltinTypes<'ctx>,
     debug: DebugContext<'ctx>,
 }
@@ -626,6 +633,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             variables: pointers,
             globals,
             closure_environments,
+            loops: HashMap::new(),
             llvm_functions: HashMap::new(),
             llvm_types: RefCell::new(HashMap::new()),
             builtin_types,
@@ -1157,7 +1165,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     }))
                 }
             }
-            Type::Function(function_type) => {
+            Type::Function(_function_type) => {
                 let pointee = self.make_llvm_function_type(type_id)?;
                 let placeholder_pointee = self.codegen_type(I8_TYPE_ID)?.debug_type();
 
@@ -1540,6 +1548,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(field_value.into())
             }
             TypedExpr::If(if_expr) => self.codegen_if_else(if_expr),
+            TypedExpr::WhileLoop(while_expr) => self.codegen_while_expr(while_expr),
+            TypedExpr::LoopExpr(loop_expr) => self.codegen_loop_expr(loop_expr),
             TypedExpr::BinaryOp(bin_op) => self.codegen_binop(bin_op),
             TypedExpr::UnaryOp(unary_op) => {
                 let value = self.codegen_expr_basic_value(&unary_op.expr)?;
@@ -1789,6 +1799,13 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let return_value = self.codegen_expr_basic_value(&ret.value)?;
                 let ret_inst = self.builder.build_return(Some(&return_value));
                 Ok(LlvmValue::Never(ret_inst))
+            }
+            TypedExpr::Break(brk) => {
+                let loop_info = *self.loops.get(&brk.loop_scope).unwrap();
+                let break_value = self.codegen_expr_basic_value(&brk.value)?;
+                self.builder.build_store(loop_info.break_value_ptr, break_value);
+                let branch_inst = self.builder.build_unconditional_branch(loop_info.end_block);
+                Ok(LlvmValue::Never(branch_inst))
             }
             TypedExpr::Closure(closure_expr) => {
                 let closure_type =
@@ -2361,9 +2378,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.builder.build_store(reference_value, actual_value);
                 Ok(self.builtin_types.unit_value.as_basic_value_enum().into())
             }
-            _ => {
-                panic!("Unexpected intrinsic type for inline gen {:?}", intrinsic_type)
-            }
         }
     }
 
@@ -2410,36 +2424,74 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         }
                     }
                 }
-                TypedStmt::WhileLoop(while_stmt) => {
-                    let start_block = self.builder.get_insert_block().unwrap();
-                    let current_fn = start_block.get_parent().unwrap();
-                    let loop_entry_block = self.ctx.append_basic_block(current_fn, "while_cond");
-                    let loop_body_block = self.ctx.append_basic_block(current_fn, "while_body");
-                    let loop_end_block = self.ctx.append_basic_block(current_fn, "while_end");
-
-                    // Go to the loop
-                    self.builder.build_unconditional_branch(loop_entry_block);
-
-                    self.builder.position_at_end(loop_entry_block);
-                    let cond = self.codegen_expr_basic_value(&while_stmt.cond)?.into_int_value();
-                    let cond_i1 = self.bool_to_i1(cond, "while_cond");
-
-                    self.builder.build_conditional_branch(cond_i1, loop_body_block, loop_end_block);
-
-                    self.builder.position_at_end(loop_body_block);
-                    let body = self.codegen_expr(&while_stmt.body)?;
-                    match body {
-                        LlvmValue::Never(_instr) => {}
-                        LlvmValue::BasicValue(_) => {
-                            self.builder.build_unconditional_branch(loop_entry_block);
-                        }
-                    }
-
-                    self.builder.position_at_end(loop_end_block);
-                }
             }
         }
         Ok(last)
+    }
+
+    fn codegen_while_expr(&mut self, while_loop: &WhileLoop) -> CodegenResult<LlvmValue<'ctx>> {
+        let start_block = self.builder.get_insert_block().unwrap();
+        let current_fn = start_block.get_parent().unwrap();
+        let loop_entry_block = self.ctx.append_basic_block(current_fn, "while_cond");
+        let loop_body_block = self.ctx.append_basic_block(current_fn, "while_body");
+        let loop_end_block = self.ctx.append_basic_block(current_fn, "while_end");
+
+        // Go to the loop
+        self.builder.build_unconditional_branch(loop_entry_block);
+
+        self.builder.position_at_end(loop_entry_block);
+        let cond = self.codegen_expr_basic_value(&while_loop.cond)?.into_int_value();
+        let cond_i1 = self.bool_to_i1(cond, "while_cond");
+
+        self.builder.build_conditional_branch(cond_i1, loop_body_block, loop_end_block);
+
+        self.builder.position_at_end(loop_body_block);
+        let body = self.codegen_block_statements(&while_loop.body)?;
+        match body {
+            LlvmValue::Never(_instr) => {}
+            LlvmValue::BasicValue(_) => {
+                self.builder.build_unconditional_branch(loop_entry_block);
+            }
+        }
+
+        self.builder.position_at_end(loop_end_block);
+        Ok(self.builtin_types.unit_value.as_basic_value_enum().into())
+    }
+
+    fn codegen_loop_expr(&mut self, loop_expr: &LoopExpr) -> CodegenResult<LlvmValue<'ctx>> {
+        let start_block = self.builder.get_insert_block().unwrap();
+        let current_fn = start_block.get_parent().unwrap();
+        // let loop_entry_block = self.ctx.append_basic_block(current_fn, "loop_entry");
+        let loop_body_block = self.ctx.append_basic_block(current_fn, "loop_body");
+        let loop_end_block = self.ctx.append_basic_block(current_fn, "loop_end");
+
+        let break_type = self.codegen_type(loop_expr.break_type)?;
+        // Optimization: skip if unit type
+        let break_value_ptr = self.builder.build_alloca(break_type.physical_value_type(), "break");
+        self.loops.insert(
+            loop_expr.body.scope_id,
+            LoopInfo { break_value_ptr, end_block: loop_end_block },
+        );
+
+        // Go to the body
+        self.builder.build_unconditional_branch(loop_body_block);
+
+        self.builder.position_at_end(loop_body_block);
+        let body = self.codegen_block_statements(&loop_expr.body)?;
+        match body {
+            LlvmValue::Never(_instr) => {}
+            LlvmValue::BasicValue(_) => {
+                self.builder.build_unconditional_branch(loop_body_block);
+            }
+        }
+
+        self.builder.position_at_end(loop_end_block);
+        let break_value = self.builder.build_load(
+            break_type.physical_value_type(),
+            break_value_ptr,
+            "loop_value",
+        );
+        Ok(break_value.into())
     }
 
     fn push_function_debug_info(

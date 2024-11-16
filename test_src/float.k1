@@ -1,5 +1,4 @@
 fn main(): int {
-  // Now its down to just a lexer problem
   val pi: f64 = 3.14159;
   assert(3.0 > 2.0);
   assert(3.0 >= 3.0);
@@ -24,6 +23,19 @@ fn main(): int {
   assert(-446.0 >= -447.0);
   assert(-448.0 < -447.0);
   assert(-448.0 <= -447.0);
+
+  assert(1.5 + 2.5 == 4.0);
+  assert(-1.5 == 0.0 - 1.5);
+  assert(5.0 % 2.0 == 1.0);
+
+  // TODO: Special values
+  // assert(1.0/0.0 is f64::INFINITY);
+  // assert(-1.0/0.0 is f64::NEG_INFINITY);
+  // assert(0.0/0.0 is f64::NaN);
+
+  // TODO: Scientific notation seems important
+  // TODO: Exponentiation operations
+
 
   assert(1337.1 is 1337.1);
   assert(not 1337.1 is 1337.2);

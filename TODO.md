@@ -111,7 +111,7 @@
 - [x] Bitwise ops using abilities
 - [x] Closures
   - [x] Direct calls, no captures
-  - [x] Support captures, but explicit only 
+  - [x] Support captures, but explicit only
   - [x] Support implicit captures
   - [x] Allow 0 args
   - [x] Allow specifying return type (without typing the closure itself)
@@ -120,12 +120,23 @@
 - [x] Fix context params when combined with generics
 - [x] string interpolation
 - [ ] Fix named arguments
-- [ ] return from while
+- [x] return from while
 - [ ] break from while
+- [ ] Move tests into single file, accumulate errors and allow inline assertions when a line should error.
+      Probably one tests for failing compilation and one passing one for each major language area
 - [ ] Remove lvalue-based assignment from the language, use references to assign instead, introduce a desugaring for `referenceSet` (`set a := b`)
       - lvalue-based assignment stuff is just an abomination from an algebraic perspective, and probably inhibits learning
+- [ ] Compiler directives
+    - [ ] Conditional compilation
+    - [ ] Dump tast
 - [ ] b"" strings that are of type... Slice[u8]
 - [ ] Builtin syntax for maps w/ Map[K, V]
+- [ ] Warnings/Errors
+  - [ ] Unused var
+  - [ ] Unused type bound
+  - [ ] Disallow naked variable patterns in 'is' OR Disallow capital variables, require capital enum variants...
+      - `if self.slots.get(probe_index) is None {`
+
 - [x] Handle escaped chars in string literals
 - [ ] Friendliness pass
   - [ ] Move to single '=' for equality
@@ -198,8 +209,8 @@
 - [ ] Inference improvements
   - assert(sizeOf[Text]() == 16 + 32); rhs should infer to u64
   - expected type not passed to this else branch (involves generics + some lifting though)
-        if rest.startsWith("one") Opt.Some(1: u64) else 
-        if rest.startsWith("two")   2          else 
+        if rest.startsWith("one") Opt.Some(1: u64) else
+        if rest.startsWith("two")   2          else
         > else branch type did not match then branch type: Invalid generic type param: Expected u64 but got i64
 - [ ] Require indirection for recursive types
 - [x] Precedence of dereference (and i guess unary ops in general) should be higher
