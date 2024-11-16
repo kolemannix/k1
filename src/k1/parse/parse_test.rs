@@ -231,11 +231,9 @@ fn paren_expression() -> Result<(), ParseError> {
 #[test]
 fn while_loop_1() -> Result<(), ParseError> {
     let input = "while true { (); (); 42 }";
-    let mut module = make_test_module();
-    let mut parser = set_up(input, &mut module);
-    let result = parser.parse_statement()?.unwrap();
-    if let ParsedStmt::While(while_stmt) = result {
-        let ParsedExpression::Block(block) = module.expressions.get(while_stmt.body) else {
+    let (module, result) = test_single_expr(input)?;
+    if let ParsedExpression::While(while_expr) = result {
+        let ParsedExpression::Block(block) = module.expressions.get(while_expr.body) else {
             panic!("expected block")
         };
         assert_eq!(block.stmts.len(), 3);

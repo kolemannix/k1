@@ -20,8 +20,9 @@ use crate::lex::{SpanId, Spans, TokenKind};
 use crate::parse::{
     self, ForExpr, ForExprType, Identifiers, IfExpr, NamedTypeArg, NamespacedIdentifier,
     NumericWidth, ParsedAbilityId, ParsedAbilityImplId, ParsedConstantId, ParsedExpressionId,
-    ParsedFunctionId, ParsedId, ParsedNamespaceId, ParsedPattern, ParsedPatternId,
-    ParsedTypeDefnId, ParsedTypeExpression, ParsedTypeExpressionId, ParsedUnaryOpKind, Sources,
+    ParsedFunctionId, ParsedId, ParsedLoopExpr, ParsedNamespaceId, ParsedPattern, ParsedPatternId,
+    ParsedTypeDefnId, ParsedTypeExpression, ParsedTypeExpressionId, ParsedUnaryOpKind,
+    ParsedWhileExpr, Sources,
 };
 use crate::parse::{
     Block, FnCall, Identifier, Literal, ParsedExpression, ParsedModule, ParsedStmt,
@@ -787,10 +788,17 @@ pub struct TypedReturn {
 }
 
 #[derive(Debug, Clone)]
+pub struct TypedBreak {
+    pub value: Box<TypedExpr>,
+    pub loop_scope: ScopeId,
+    pub span: SpanId,
+}
+
+#[derive(Debug, Clone)]
 pub enum ControlFlowType {
     Returns(TypeId),
     Value(TypeId),
-    //Breaks,
+    Breaks(TypeId),
     //Continues,
 }
 
@@ -815,6 +823,20 @@ pub struct PendingCaptureExpr {
 }
 
 #[derive(Debug, Clone)]
+pub struct WhileLoop {
+    pub cond: Box<TypedExpr>,
+    pub body: Box<TypedBlock>,
+    pub span: SpanId,
+}
+
+#[derive(Debug, Clone)]
+pub struct LoopExpr {
+    pub body: Box<TypedBlock>,
+    pub break_type: TypeId,
+    pub span: SpanId,
+}
+
+#[derive(Debug, Clone)]
 pub enum TypedExpr {
     Unit(SpanId),
     Char(u8, SpanId),
@@ -830,14 +852,21 @@ pub enum TypedExpr {
     Block(TypedBlock),
     Call(Call),
     If(Box<TypedIf>),
+    WhileLoop(WhileLoop),
+    LoopExpr(LoopExpr),
     EnumConstructor(TypedEnumConstructor),
     EnumIsVariant(TypedEnumIsVariantExpr),
     EnumGetPayload(GetEnumPayload),
     Cast(TypedCast),
-    /// Explicit returns are syntactically like function calls.
+    /// Explicit returns are syntactically like function calls, but are their own instruction type
     /// return(<expr>)
-    /// It has the expression type of 'never'
+    /// It has the expression type of 'never', but is bound by the return type of the nearest
+    /// enclosing function or closure
     Return(TypedReturn),
+    /// Breaks are syntactically like function calls, but are their own instruction type
+    /// break(<expr>)
+    /// It has the expression type of 'never', but influences the return type of the enclosing loop
+    Break(TypedBreak),
     /// Creating a closure results in a Closure expr.
     /// - A function is created
     /// - An environment capture expr is created
@@ -876,11 +905,14 @@ impl TypedExpr {
             TypedExpr::Block(b) => b.expr_type,
             TypedExpr::Call(call) => call.ret_type,
             TypedExpr::If(ir_if) => ir_if.ty,
+            TypedExpr::WhileLoop(_while_loop) => UNIT_TYPE_ID,
+            TypedExpr::LoopExpr(loop_expr) => loop_expr.break_type,
             TypedExpr::EnumConstructor(enum_cons) => enum_cons.type_id,
             TypedExpr::EnumIsVariant(_is_variant) => BOOL_TYPE_ID,
             TypedExpr::EnumGetPayload(as_variant) => as_variant.payload_type_id,
             TypedExpr::Cast(c) => c.target_type_id,
             TypedExpr::Return(_ret) => NEVER_TYPE_ID,
+            TypedExpr::Break(_break) => NEVER_TYPE_ID,
             TypedExpr::Closure(closure) => closure.closure_type,
             TypedExpr::FunctionName(f) => f.type_id,
             TypedExpr::PendingCapture(pc) => pc.type_id,
@@ -903,11 +935,14 @@ impl TypedExpr {
             TypedExpr::Block(b) => b.span,
             TypedExpr::Call(call) => call.span,
             TypedExpr::If(ir_if) => ir_if.span,
+            TypedExpr::WhileLoop(while_loop) => while_loop.span,
+            TypedExpr::LoopExpr(loop_expr) => loop_expr.span,
             TypedExpr::EnumConstructor(e) => e.span,
             TypedExpr::EnumIsVariant(is_variant) => is_variant.span,
             TypedExpr::EnumGetPayload(as_variant) => as_variant.span,
             TypedExpr::Cast(c) => c.span,
             TypedExpr::Return(ret) => ret.span,
+            TypedExpr::Break(brk) => brk.span,
             TypedExpr::Closure(closure) => closure.span,
             TypedExpr::FunctionName(f) => f.span,
             TypedExpr::PendingCapture(pc) => pc.span,
@@ -951,18 +986,10 @@ pub struct Assignment {
 }
 
 #[derive(Debug, Clone)]
-pub struct TypedWhileLoop {
-    pub cond: TypedExpr,
-    pub body: TypedExpr,
-    pub span: SpanId,
-}
-
-#[derive(Debug, Clone)]
 pub enum TypedStmt {
     Expr(Box<TypedExpr>),
     ValDef(Box<ValDef>),
     Assignment(Box<Assignment>),
-    WhileLoop(Box<TypedWhileLoop>),
 }
 
 impl From<TypedExpr> for TypedStmt {
@@ -978,7 +1005,6 @@ impl TypedStmt {
             TypedStmt::Expr(e) => e.get_span(),
             TypedStmt::ValDef(v) => v.span,
             TypedStmt::Assignment(ass) => ass.span,
-            TypedStmt::WhileLoop(w) => w.span,
         }
     }
 
@@ -987,7 +1013,6 @@ impl TypedStmt {
             TypedStmt::Expr(expr) => expr.get_type(),
             TypedStmt::ValDef(_) => UNIT_TYPE_ID,
             TypedStmt::Assignment(_) => UNIT_TYPE_ID,
-            TypedStmt::WhileLoop(_) => UNIT_TYPE_ID,
         }
     }
 
@@ -1003,7 +1028,6 @@ impl TypedStmt {
             TypedStmt::Expr(expr) => expr.control_flow_type(),
             TypedStmt::ValDef(_) => ControlFlowType::Value(UNIT_TYPE_ID),
             TypedStmt::Assignment(_) => ControlFlowType::Value(UNIT_TYPE_ID),
-            TypedStmt::WhileLoop(_) => ControlFlowType::Value(UNIT_TYPE_ID),
         }
     }
 }
@@ -3665,6 +3689,12 @@ impl TypedModule {
             ParsedExpression::If(if_expr) => {
                 self.eval_if_expr(&if_expr.clone(), scope_id, expected_type)
             }
+            ParsedExpression::While(while_expr) => {
+                self.eval_while_loop(&while_expr.clone(), scope_id, expected_type)
+            }
+            ParsedExpression::Loop(loop_expr) => {
+                self.eval_loop_expr(&loop_expr.clone(), scope_id, expected_type)
+            }
             ParsedExpression::BinaryOp(binary_op) => {
                 let binary_op = binary_op.clone();
                 self.eval_binary_op(&binary_op, scope_id, expected_type)
@@ -3706,7 +3736,7 @@ impl TypedModule {
                 self.eval_field_access(expr_id, &field_access, scope_id, false, expected_type)
             }
             ParsedExpression::Block(block) => {
-                // This clone is actually sad because Block is still big. We need to intern blocks
+                // TODO(clone big) This clone is actually sad because Block is still big. We need to intern blocks
                 let block = block.clone();
                 let block = self.eval_block(&block, scope_id, expected_type)?;
                 Ok(TypedExpr::Block(block))
@@ -3848,12 +3878,60 @@ impl TypedModule {
             ParsedExpression::Closure(_closure) => {
                 self.eval_closure(expr_id, scope_id, expected_type)
             }
-            ParsedExpression::InterpolatedString(is) => {
+            ParsedExpression::InterpolatedString(_is) => {
                 let res = self.eval_interpolated_string(expr_id, scope_id, expected_type)?;
                 eprintln!("interp!\n{}", self.expr_to_string(&res));
                 Ok(res)
             }
         }
+    }
+
+    fn eval_while_loop(
+        &mut self,
+        while_expr: &ParsedWhileExpr,
+        scope_id: ScopeId,
+        expected_type: Option<TypeId>,
+    ) -> TyperResult<TypedExpr> {
+        let cond = self.eval_expr(while_expr.cond, scope_id, Some(BOOL_TYPE_ID))?;
+        if let Err(msg) = self.check_types(BOOL_TYPE_ID, cond.get_type(), scope_id) {
+            return failf!(cond.get_span(), "Invalid while condition type: {msg}");
+        }
+
+        // nocommit: Enforce this in parsing?
+        let ParsedExpression::Block(parsed_block) = self.ast.expressions.get(while_expr.body)
+        else {
+            return failf!(while_expr.span, "'while' body must be a block");
+        };
+        let body_scope =
+            self.scopes.add_child_scope(scope_id, ScopeType::WhileLoopBody, None, None);
+        self.scopes.add_loop_info(body_scope, ScopeLoopInfo { break_type: Some(UNIT_TYPE_ID) });
+
+        let block = self.eval_block(&parsed_block.clone(), body_scope, expected_type)?;
+        Ok(TypedExpr::WhileLoop(WhileLoop {
+            cond: Box::new(cond),
+            body: Box::new(block),
+            span: while_expr.span,
+        }))
+    }
+
+    fn eval_loop_expr(
+        &mut self,
+        loop_expr: &ParsedLoopExpr,
+        scope_id: ScopeId,
+        expected_type: Option<TypeId>,
+    ) -> TyperResult<TypedExpr> {
+        let body_scope = self.scopes.add_child_scope(scope_id, ScopeType::LoopExprBody, None, None);
+        self.scopes.add_loop_info(body_scope, ScopeLoopInfo { break_type: expected_type });
+
+        let block = self.eval_block(&loop_expr.body.clone(), body_scope, expected_type)?;
+
+        let loop_info = self.scopes.get_loop_info(body_scope).unwrap();
+
+        Ok(TypedExpr::LoopExpr(LoopExpr {
+            body: Box::new(block),
+            break_type: loop_info.break_type.unwrap_or(UNIT_TYPE_ID),
+            span: loop_expr.span,
+        }))
     }
 
     fn eval_interpolated_string(
@@ -3922,6 +4000,17 @@ impl TypedModule {
         Ok(TypedExpr::Block(block))
     }
 
+    fn visit_inner_stmt_exprs_mut(stmt: &mut TypedStmt, action: &mut impl FnMut(&mut TypedExpr)) {
+        match stmt {
+            TypedStmt::Expr(e) => action(e),
+            TypedStmt::ValDef(val_def) => action(&mut val_def.initializer),
+            TypedStmt::Assignment(assgn) => {
+                action(&mut assgn.destination);
+                action(&mut assgn.value)
+            }
+        }
+    }
+
     fn visit_inner_exprs_mut(expr: &mut TypedExpr, mut action: impl FnMut(&mut TypedExpr)) {
         // Try implementing a mutable iterator instead
         match expr {
@@ -3949,18 +4038,7 @@ impl TypedModule {
             }
             TypedExpr::Block(block) => {
                 for stmt in block.statements.iter_mut() {
-                    match stmt {
-                        TypedStmt::Expr(e) => action(e),
-                        TypedStmt::ValDef(val_def) => action(&mut val_def.initializer),
-                        TypedStmt::Assignment(assgn) => {
-                            action(&mut assgn.destination);
-                            action(&mut assgn.value)
-                        }
-                        TypedStmt::WhileLoop(while_loop) => {
-                            action(&mut while_loop.cond);
-                            action(&mut while_loop.body)
-                        }
-                    }
+                    TypedModule::visit_inner_stmt_exprs_mut(stmt, &mut action);
                 }
             }
             TypedExpr::Call(call) => {
@@ -3978,6 +4056,17 @@ impl TypedModule {
                 action(&mut typed_if.consequent);
                 action(&mut typed_if.alternate);
             }
+            TypedExpr::WhileLoop(while_loop) => {
+                action(&mut while_loop.cond);
+                for stmt in while_loop.body.statements.iter_mut() {
+                    TypedModule::visit_inner_stmt_exprs_mut(stmt, &mut action);
+                }
+            }
+            TypedExpr::LoopExpr(loop_expr) => {
+                for stmt in loop_expr.body.statements.iter_mut() {
+                    TypedModule::visit_inner_stmt_exprs_mut(stmt, &mut action);
+                }
+            }
             TypedExpr::EnumConstructor(_) => (),
             TypedExpr::EnumIsVariant(enum_is_variant) => action(&mut enum_is_variant.target_expr),
             TypedExpr::EnumGetPayload(enum_get_payload) => {
@@ -3985,6 +4074,7 @@ impl TypedModule {
             }
             TypedExpr::Cast(cast) => action(&mut cast.base_expr),
             TypedExpr::Return(ret) => action(&mut ret.value),
+            TypedExpr::Break(brk) => action(&mut brk.value),
             TypedExpr::Closure(_) => (),
             TypedExpr::FunctionName(_) => (),
             TypedExpr::PendingCapture(_) => (),
@@ -4164,7 +4254,13 @@ impl TypedModule {
             return_type,
             defn_info: None,
         }));
-        let encl_fn_name = self.get_function(self.scopes.nearest_parent_function(scope_id)).name;
+        let encl_fn_name = self
+            .get_function(
+                self.scopes
+                    .nearest_parent_function(scope_id)
+                    .expect("Closure to be inside a function"),
+            )
+            .name;
         let name = self.ast.identifiers.intern(format!(
             "{}_{{closure}}_{}",
             self.get_ident_str(encl_fn_name),
@@ -4783,7 +4879,7 @@ impl TypedModule {
         );
 
         let while_scope_id =
-            self.scopes.add_child_scope(for_expr_scope, ScopeType::WhileBody, None, None);
+            self.scopes.add_child_scope(for_expr_scope, ScopeType::WhileLoopBody, None, None);
         let binding_variable_id = self.variables.add_variable(Variable {
             name: binding_ident,
             type_id: item_type,
@@ -4921,17 +5017,17 @@ impl TypedModule {
         }));
         while_block.statements.push(index_increment_statement);
 
-        let while_stmt = TypedStmt::WhileLoop(Box::new(TypedWhileLoop {
-            cond: TypedExpr::BinaryOp(BinaryOp {
+        let while_expr = TypedExpr::WhileLoop(WhileLoop {
+            cond: Box::new(TypedExpr::BinaryOp(BinaryOp {
                 kind: BinaryOpKind::Less,
                 ty: BOOL_TYPE_ID,
                 lhs: Box::new(index_variable.variable_expr.clone()),
                 rhs: Box::new(iteree_length_variable.variable_expr),
                 span: iterable_span,
-            }),
-            body: TypedExpr::Block(while_block),
+            })),
+            body: Box::new(while_block),
             span: for_expr.span,
-        }));
+        });
 
         let mut for_expr_initial_statements = Vec::with_capacity(4);
         for_expr_initial_statements.push(index_variable.defn_stmt);
@@ -4947,7 +5043,7 @@ impl TypedModule {
             span: for_expr.body_block.span,
         };
 
-        for_expr_block.statements.push(while_stmt);
+        for_expr_block.push_expr(while_expr);
         if let Some(yielded_coll_variable) = yielded_coll_variable {
             let yield_expr = self.synth_dereference(yielded_coll_variable.variable_expr);
             for_expr_block.push_expr(yield_expr);
@@ -5610,7 +5706,11 @@ impl TypedModule {
                     };
                     expected_return_type
                 } else {
-                    let enclosing_function = self.scopes.nearest_parent_function(calling_scope);
+                    let Some(enclosing_function) =
+                        self.scopes.nearest_parent_function(calling_scope)
+                    else {
+                        return failf!(fn_call.span, "No parent function; cannot return");
+                    };
                     let expected_return_type =
                         self.get_function_type(enclosing_function).return_type;
                     expected_return_type
@@ -5629,6 +5729,65 @@ impl TypedModule {
                     value: Box::new(return_value),
                     span: fn_call.span,
                 })))
+            }
+            "break" => {
+                if fn_call.args.len() > 1 {
+                    return make_fail_span("break(...) must have 0 or 1 argument", fn_call.span);
+                }
+                // Determine based on loop type if break with value is allowed
+                let Some((enclosing_loop_scope_id, loop_type)) =
+                    self.scopes.nearest_parent_loop(calling_scope)
+                else {
+                    return failf!(fn_call.span, "break(...) outside of while loop");
+                };
+                let expected_break_type: Option<TypeId> =
+                    self.scopes.get_loop_info(enclosing_loop_scope_id).unwrap().break_type;
+
+                let break_value = match fn_call.args.first() {
+                    None => TypedExpr::Unit(fn_call.span),
+                    Some(fn_call_arg) => {
+                        // ALTERNATIVE: Allow break with value from `while` loops but require the type to implement the `Default` trait
+                        match loop_type {
+                            LoopType::Loop => self.eval_expr(
+                                fn_call_arg.value,
+                                calling_scope,
+                                expected_break_type,
+                            )?,
+                            LoopType::While => {
+                                return failf!(
+                                    fn_call.span,
+                                    "break with value is only allowed in `loop` loops, because loop body may not ever be executed"
+                                )
+                            }
+                        }
+                    }
+                };
+                let actual_break_type = break_value.get_type();
+
+                // If we have an expected type already,
+                // - check it
+                // - else, set it
+                if let Some(expected_break_type) = expected_break_type {
+                    if let Err(msg) =
+                        self.check_types(expected_break_type, actual_break_type, calling_scope)
+                    {
+                        return failf!(fn_call.span, "Break with wrong type: {msg}");
+                    }
+                } else {
+                    self.scopes.add_loop_info(
+                        enclosing_loop_scope_id,
+                        ScopeLoopInfo { break_type: Some(actual_break_type) },
+                    )
+                }
+
+                Ok(Some(TypedExpr::Break(TypedBreak {
+                    value: Box::new(break_value),
+                    loop_scope: enclosing_loop_scope_id,
+                    span: fn_call.span,
+                })))
+            }
+            "continue" => {
+                todo!("implement continue")
             }
             "compilerFile" => {
                 if !fn_call.args.is_empty() {
@@ -6738,7 +6897,7 @@ impl TypedModule {
         }
     }
 
-    fn eval_block_stmt(
+    fn eval_stmt(
         &mut self,
         stmt: &ParsedStmt,
         scope_id: ScopeId,
@@ -6812,21 +6971,6 @@ impl TypedModule {
                 let expr = self.eval_expr(*expression, scope_id, expected_type)?;
                 Ok(TypedStmt::Expr(Box::new(expr)))
             }
-            ParsedStmt::While(while_stmt) => {
-                let cond = self.eval_expr(while_stmt.cond, scope_id, Some(BOOL_TYPE_ID))?;
-                if let Err(e) = self.check_types(BOOL_TYPE_ID, cond.get_type(), scope_id) {
-                    return make_fail_span(
-                        format!("Invalid while condition type: {}", e),
-                        cond.get_span(),
-                    );
-                }
-                let block = self.eval_expr(while_stmt.body, scope_id, None)?;
-                Ok(TypedStmt::WhileLoop(Box::new(TypedWhileLoop {
-                    cond,
-                    body: block,
-                    span: while_stmt.span,
-                })))
-            }
         }
     }
     fn eval_block(
@@ -6847,7 +6991,7 @@ impl TypedModule {
             let is_last = index == block.stmts.len() - 1;
             let expected_type = if is_last { expected_type } else { None };
 
-            let stmt = self.eval_block_stmt(stmt, scope_id, expected_type)?;
+            let stmt = self.eval_stmt(stmt, scope_id, expected_type)?;
             last_expr_type = stmt.get_type();
             statements.push(stmt);
         }

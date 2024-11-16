@@ -1,9 +1,47 @@
-fn loop(): int {
+fn whileSimple(): unit {
+  mut i: int = 10;
+  mut iters = 0;
+  while i > -10 {
+    i = i - 1;
+    iters = iters + 1;
+  };
+  assert(iters == 20);
+}
+
+fn whileReturn(): int {
   while true {
     return(1)
   };
+  0
 }
+
+fn whileNested(): int {
+  val result = while true {
+    while true {
+      return(10)
+    }
+  };
+  4
+}
+
+// nocommit
+fn blockLeak(): unit {
+  { val x = 42 };
+  assert(x == 42);
+}
+
+fn whileReturnClosure(): int {
+  while true {
+    val s = \(-> int) { return(5) };
+    return(s())
+  };
+  4
+}
+
 fn main(): int {
-  assert(loop() == 1);
+  whileSimple();
+  assert(whileReturn() == 1);
+  assert(whileNested() == 10);
+  assert(whileReturnClosure() == 5);
   0
 }

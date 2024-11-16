@@ -1,6 +1,15 @@
+// This table exercises:
+// - Generics
+// - References/pointers
+// - Structs and enums (Option type)
+// - Loops and control flow
+// - Basic numeric operations
+// - String handling
+// - Array operations
+
 deftype HashMap[V] = {
   size: u64,
-  slots: Array[{ key: string, value: V }?],
+  entries: Array[{ key: string, value: V }?],
 }
 
 fn fnv1a_hash(key: string): u64 {
@@ -16,85 +25,81 @@ fn fnv1a_hash(key: string): u64 {
 
 namespace HashMap {
 
+  deftype Entry[V] = { key: string, value: V }?
+
   fn _make[V](cap: u64): HashMap[V] {
-    val slots: Array[{ key: string, value: V }?]* = Array::new(cap).&;
+    val entries: Array[Entry[V]]* = Array::new(cap).&;
     mut i = 0: u64;
     while i < cap {
-      slots.push(.None);
+      entries.push(.None);
       i = i + 1;
     };
-    { size: 0, slots: slots.* }
+    { size: 0, entries: entries.* }
   }
 
   fn new[V](): HashMap[V] {
     _make(2)
   }
 
-  fn grow[V](self: HashMap[V]*): unit where V: Show {
+  fn grow[V](self: HashMap[V]*): unit {
     val origSize = self.size;
-    val oldSlots = self.slots;
-    val newCap = oldSlots.cap * 2;
-    println("growing to ".concat(newCap.show()));
-    self.dump();
+    val oldEntries = self.entries;
+    val newCap = oldEntries.cap * 2;
 
     val newMap = _make[V](newCap);
     referenceSet(self, newMap);
 
     mut oldCount = 0: u64;
-    for v in oldSlots do {
+    for v in oldEntries do {
       if v is .Some(v) {
         oldCount = oldCount + 1;
         self.insert(v.key, v.value)
       }
     };
-    val newSize = self.size;
-    if oldCount != origSize {
-      println("Bad before grow; size lied; got actual ".concat(oldCount.show()))
-    };
-    if origSize != newSize {
-      println("*****************************bad grow");
-      println("origSize: ".concat(origSize.show()));
-      println("newSize: ".concat(newSize.show()));
-      self.dump();
-    }
+  }
+
+  fn _locateNoProbe[V](self: HashMap[V]*, key: string): Entry[V]*? {
+    val hash = fnv1a_hash(key);
+    val index = hash % self.entries.len;
+    self.entries.getRef(index)
+  }
+
+  // Super naive fully linear probing
+  fn _probe[V](self: HashMap[V], startIndex: u64) -> Entry[V]* {
+    mut probeIndex = startIndex;
+    mut done = false;
+    while not done {
+      probeIndex = probeIndex + 1;
+      if probeIndex == self.entries.len {
+        probeIndex = 0
+      };
+      val entryRef = self.entries.getRef(probeIndex);
+      if entryRef.* is .None {
+        // done = true;
+        return(entryRef);
+      };
   }
 
   fn insert[V](self: HashMap[V]*, key: string, value: V): unit where V: Show {
-    val fillFactor = self.size as f32 / self.slots.len as f32;
+    val fillFactor = self.size as f32 / self.entries.len as f32;
     if fillFactor > 0.7 {
       self.grow();
     };
-    val hash = fnv1a_hash(key);
-    val index = hash % self.slots.len;
-    val elem = { key: key, value: value };
-    val slot = self.slots.get(index);
-    val sizeBefore = self.size;
-    switch slot {
+    val slotRef = self._locateNoProbe(key);
+    val entry = { key: key, value: value };
+    switch slotRef.* {
       .None -> {
-        self.slots.set(index, .Some(elem));
+        referenceSet(slotRef, .Some(entry));
         self.size = self.size + 1;
       },
       .Some({ key: existingKey, value: _ }) -> {
         if existingKey == key {
-          self.slots.set(index, .Some(elem));
+          val elem = { key: key, value: value };
+          slotRef.* = .Some(elem);
         } else {
-          // Super naive fully linear probing
-          mut probe_index = index;
-          mut done = false;
-          while not done {
-            probe_index = probe_index + 1;
-            if probe_index == self.slots.len {
-              probe_index = 0;
-            };
-            // nocommit: Disallow variable patterns in 'is'?
-            //           Disallow capital variables?
-            /// if self.slots.get(probe_index) is None {
-            if self.slots.get(probe_index) is .None {
-              self.slots.set(probe_index, .Some(elem));
-              self.size = self.size + 1;
-              done = true;
-            };
-          };
+          val nextAvailableEntry = self._probe(index);
+          referenceSet(nextAvailableEntry, .Some(elem));
+          self.size = self.size + 1;
         }
       }
     };
@@ -102,8 +107,8 @@ namespace HashMap {
 
   fn get[V](self: HashMap[V]*, key: string): V? {
     val hash = fnv1a_hash(key);
-    val index = hash % self.slots.len;
-    val slot = self.slots.get(index);
+    val index = hash % self.entries.len;
+    val slot = self.entries.get(index);
     switch slot {
       .None -> .None,
       .Some({ key: existingKey, value: v }) -> {
@@ -117,10 +122,10 @@ namespace HashMap {
           mut done = false;
           while not done {
             probe_index = probe_index + 1;
-            if probe_index == self.slots.len {
+            if probe_index == self.entries.len {
               probe_index = 0;
             };
-            if self.slots.get(probe_index) is .Some({ key: existingKey, value: v }) {
+            if self.entries.get(probe_index) is .Some({ key: existingKey, value: v }) {
               if existingKey == key {
                 retVal = .Some(v);
                 done = true;
@@ -133,11 +138,15 @@ namespace HashMap {
     };
   }
 
+  fn remove(self: HashMap[V]*, key: string): unit {
+
+  }
+
   fn dump[V](self: HashMap[V]): unit where V: Show {
     print("Capacity: ");
-    printUInt(self.slots.cap);
+    printUInt(self.entries.cap);
     println("");
-    for self.slots do {
+    for self.entries do {
       printUInt(it_index);
       print(" ");
       switch it {

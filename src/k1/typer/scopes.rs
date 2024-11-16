@@ -10,7 +10,7 @@ use crate::{
     lex::SpanId,
     parse::{Identifiers, NamespacedIdentifier, ParsedTypeDefnId},
     typer::{
-        make_error, AbilityId, FunctionId, Identifier, NamespaceId, Namespaces, TypeId,
+        make_error, AbilityId, FunctionId, Identifier, LoopType, NamespaceId, Namespaces, TypeId,
         TyperResult, VariableId,
     },
 };
@@ -23,7 +23,8 @@ pub enum ScopeType {
     ClosureScope,
     LexicalBlock,
     Namespace,
-    WhileBody,
+    WhileLoopBody,
+    LoopExprBody,
     IfBody,
     ElseBody,
     ForExpr,
@@ -40,7 +41,8 @@ impl ScopeType {
             ScopeType::ClosureScope => "clos",
             ScopeType::LexicalBlock => "block",
             ScopeType::Namespace => "ns",
-            ScopeType::WhileBody => "while",
+            ScopeType::WhileLoopBody => "while",
+            ScopeType::LoopExprBody => "loop",
             ScopeType::IfBody => "if",
             ScopeType::ElseBody => "else",
             ScopeType::ForExpr => "for",
@@ -48,6 +50,24 @@ impl ScopeType {
             ScopeType::TypeDefn => "type_defn",
             ScopeType::AbilityDefn => "ability_defn",
             ScopeType::AbilityImpl => "ability_impl",
+        }
+    }
+
+    pub fn loop_type(&self) -> Option<LoopType> {
+        match self {
+            ScopeType::FunctionScope => None,
+            ScopeType::ClosureScope => None,
+            ScopeType::LexicalBlock => None,
+            ScopeType::Namespace => None,
+            ScopeType::WhileLoopBody => Some(LoopType::While),
+            ScopeType::LoopExprBody => Some(LoopType::Loop),
+            ScopeType::IfBody => None,
+            ScopeType::ElseBody => None,
+            ScopeType::ForExpr => None,
+            ScopeType::MatchArm => None,
+            ScopeType::TypeDefn => None,
+            ScopeType::AbilityDefn => None,
+            ScopeType::AbilityImpl => None,
         }
     }
 }
@@ -62,15 +82,25 @@ pub struct ScopeClosureInfo {
     pub expected_return_type: Option<TypeId>,
 }
 
+pub struct ScopeLoopInfo {
+    pub break_type: Option<TypeId>,
+}
+
 pub struct Scopes {
     scopes: Vec<Scope>,
     captures: HashMap<ScopeId, Vec<VariableId>>,
     closure_info: HashMap<ScopeId, ScopeClosureInfo>,
+    loop_info: HashMap<ScopeId, ScopeLoopInfo>,
 }
 
 impl Scopes {
     pub fn make() -> Self {
-        Scopes { scopes: Vec::new(), captures: HashMap::new(), closure_info: HashMap::new() }
+        Scopes {
+            scopes: Vec::new(),
+            captures: HashMap::new(),
+            closure_info: HashMap::new(),
+            loop_info: HashMap::new(),
+        }
     }
 
     pub fn add_root_scope(&mut self, name: Option<Identifier>) -> ScopeId {
@@ -346,13 +376,13 @@ impl Scopes {
         }
     }
 
-    pub fn nearest_parent_function(&self, calling_scope: ScopeId) -> FunctionId {
+    pub fn nearest_parent_function(&self, calling_scope: ScopeId) -> Option<FunctionId> {
         let scope = self.get_scope(calling_scope);
         match scope.owner_id {
-            Some(ScopeOwnerId::Function(fn_id)) => fn_id,
+            Some(ScopeOwnerId::Function(fn_id)) => Some(fn_id),
             _ => match scope.parent {
                 Some(parent) => self.nearest_parent_function(parent),
-                None => panic!("No parent function found"),
+                None => None,
             },
         }
     }
@@ -363,6 +393,17 @@ impl Scopes {
             ScopeType::ClosureScope => Some(scope_id),
             _ => match scope.parent {
                 Some(parent) => self.nearest_parent_closure(parent),
+                None => None,
+            },
+        }
+    }
+
+    pub fn nearest_parent_loop(&self, scope_id: ScopeId) -> Option<(ScopeId, LoopType)> {
+        let scope = self.get_scope(scope_id);
+        match scope.scope_type.loop_type() {
+            Some(loop_type) => Some((scope_id, loop_type)),
+            None => match scope.parent {
+                Some(parent) => self.nearest_parent_loop(parent),
                 None => None,
             },
         }
@@ -473,6 +514,14 @@ impl Scopes {
 
     pub fn get_closure_info(&self, closure_scope_id: ScopeId) -> Option<&ScopeClosureInfo> {
         self.closure_info.get(&closure_scope_id)
+    }
+
+    pub fn add_loop_info(&mut self, loop_scope_id: ScopeId, info: ScopeLoopInfo) {
+        self.loop_info.insert(loop_scope_id, info);
+    }
+
+    pub fn get_loop_info(&self, loop_scope_id: ScopeId) -> Option<&ScopeLoopInfo> {
+        self.loop_info.get(&loop_scope_id)
     }
 }
 
