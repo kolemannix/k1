@@ -453,86 +453,86 @@ pub struct ParsedInterpolatedString {
 
 #[derive(Debug, Clone)]
 pub enum ParsedExpression {
-    /// ```
+    /// ```md
     /// <lhs: expr> == <rhs: expr>
     /// ```
     BinaryOp(BinaryOp),
-    /// ```
+    /// ```md
     /// !b, *b
     /// ```
     UnaryOp(UnaryOp),
-    /// ```
+    /// ```md
     /// 42, "asdf"
     /// ```
     Literal(Literal),
-    /// ```
+    /// ```md
     /// "hello, \{x}"
     /// ```
     InterpolatedString(ParsedInterpolatedString),
-    /// ```
+    /// ```md
     /// square(1, 2)
     /// ```
     FnCall(FnCall),
-    /// ```
+    /// ```md
     /// x
     /// ```
     Variable(Variable),
-    /// ```
+    /// ```md
     /// x.b, Opt.None[i32] (overloaded to handle enum constrs)
     /// ```
     FieldAccess(FieldAccess),
-    /// ```
+    /// ```md
     /// { <a: stmt>; <b: stmt>; <c: stmt> }
     /// ```
     Block(Block),
-    /// ```
+    /// ```md
     /// if <cond: expr> <cons: expr> else <alt: expr>
     /// ```
     If(IfExpr),
-    /// ```
+    /// ```md
     /// while <cond: expr> <body: expr>
     /// ```
     While(ParsedWhileExpr),
-    /// ```
+    /// ```md
     /// loop <body: block>
     /// ```
     Loop(ParsedLoopExpr),
-    /// ```
+    /// ```md
     /// { x: <expr>, y: <expr> }
     /// ```
     Struct(Struct),
-    /// ```
+    /// ```md
     /// [<expr>, <expr>, <expr>]
     /// ```
     Array(ArrayExpr),
-    /// ```
+    /// ```md
     /// <opt: expr>!
     /// ```
     OptionalGet(OptionalGet),
-    /// ```
+    /// ```md
     /// for <ident> in <coll: expr> do <body: expr>
     /// ```
     For(ForExpr),
-    /// ```
+    /// ```md
     /// .<ident>
     /// ```
     AnonEnumVariant(AnonEnumVariant),
-    /// ```
+    /// ```md
     /// .A(<expr>)
     /// ```
     EnumConstructor(ParsedEnumConstructor),
-    /// ```
+    /// ```md
     /// <expr> is <pat>
     /// ```
     Is(ParsedIsExpression),
-    /// ```
+    /// ```md
     /// when <expr> is {
     /// <a: pat> -> <expr>,
     /// <b: pat> -> <expr>
     /// }
     /// ```
     Match(ParsedMatchExpression),
-    /// ```
+    /// ```md
     /// x as u64, y as .Color
     /// ```
     AsCast(ParsedAsCast),

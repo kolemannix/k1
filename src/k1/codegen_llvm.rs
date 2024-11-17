@@ -6,6 +6,7 @@ use std::ops::Deref;
 use std::path::Path;
 
 use anyhow::bail;
+use either::Either;
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -85,14 +86,29 @@ struct StructDebugMember<'ctx, 'name> {
 #[derive(Debug, Clone, Copy)]
 enum LlvmValue<'ctx> {
     BasicValue(BasicValueEnum<'ctx>),
+    Pointer(PointerValue<'ctx>),
     Never(InstructionValue<'ctx>),
 }
 impl<'ctx> LlvmValue<'ctx> {
-    fn expect_value(self) -> BasicValueEnum<'ctx> {
+    fn as_basic_value(self) -> Either<InstructionValue<'ctx>, BasicValueEnum<'ctx>> {
         match self {
-            LlvmValue::BasicValue(bv) => bv,
-            LlvmValue::Never(_) => panic!("Expected BasicValue on never value"),
+            LlvmValue::BasicValue(bv) => Either::Right(bv),
+            LlvmValue::Pointer(p) => Either::Right(p.as_basic_value_enum()),
+            LlvmValue::Never(instr) => Either::Left(instr),
         }
+    }
+    fn expect_basic_value(self) -> BasicValueEnum<'ctx> {
+        self.as_basic_value().expect_right("Expected BasicValue on never value")
+    }
+
+    fn expect_never(&self) -> InstructionValue<'ctx> {
+        self.as_basic_value().expect_left("Expected Never on a real value")
+    }
+}
+
+impl<'ctx> From<PointerValue<'ctx>> for LlvmValue<'ctx> {
+    fn from(pointer: PointerValue<'ctx>) -> Self {
+        LlvmValue::Pointer(pointer)
     }
 }
 
@@ -382,7 +398,7 @@ impl<'ctx> BuiltinTypes<'ctx> {
 
 #[derive(Clone, Copy)]
 pub struct LoopInfo<'ctx> {
-    pub break_value_ptr: PointerValue<'ctx>,
+    pub break_value_ptr: Option<PointerValue<'ctx>>,
     pub end_block: BasicBlock<'ctx>,
 }
 
@@ -1267,9 +1283,15 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         struc
     }
 
-    fn codegen_val(&mut self, val: &ValDef) -> CodegenResult<PointerValue<'ctx>> {
-        let value = self.codegen_expr_basic_value(&val.initializer)?;
-        let variable_type = self.codegen_type(val.ty)?;
+    fn codegen_val(&mut self, val: &ValDef) -> CodegenResult<LlvmValue<'ctx>> {
+        let value = self.codegen_expr(&val.initializer)?;
+
+        if let LlvmValue::Never(instr) = value {
+            return Ok(LlvmValue::Never(instr));
+        }
+        let value = value.expect_basic_value();
+
+        let variable_type = self.codegen_type(val.variable_type)?;
         let variable = self.module.variables.get_variable(val.variable_id);
         let variable_ptr =
             self.builder.build_alloca(value.get_type(), self.get_ident_name(variable.name));
@@ -1295,11 +1317,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         );
         let pointer = Pointer {
             pointer: variable_ptr,
-            pointee_type_id: val.ty,
+            pointee_type_id: val.variable_type,
             pointee_llvm_type: variable_type.physical_value_type(),
         };
         self.variables.insert(val.variable_id, pointer);
-        Ok(variable_ptr)
+        Ok(variable_ptr.into())
     }
 
     fn codegen_if_else(&mut self, ir_if: &TypedIf) -> CodegenResult<LlvmValue<'ctx>> {
@@ -1318,9 +1340,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         // Consequent Block
         self.builder.position_at_end(consequent_block);
         let consequent_block_value = self.codegen_expr(&ir_if.consequent)?;
-        let consequent_incoming = match consequent_block_value {
-            LlvmValue::Never(_) => None,
-            LlvmValue::BasicValue(value) => {
+        let consequent_incoming = match consequent_block_value.as_basic_value() {
+            Either::Left(_) => None,
+            Either::Right(value) => {
                 let consequent_final_block = self.builder.get_insert_block().unwrap();
                 self.builder.build_unconditional_branch(merge_block);
                 Some((consequent_final_block, value))
@@ -1329,9 +1351,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
         // Alternate Block
         self.builder.position_at_end(alternate_block);
-        let alternate_incoming = match self.codegen_expr(&ir_if.alternate)? {
-            LlvmValue::Never(_) => None,
-            LlvmValue::BasicValue(value) => {
+        let alternate_block_value = self.codegen_expr(&ir_if.alternate)?;
+        let alternate_incoming = match alternate_block_value.as_basic_value() {
+            Either::Left(_) => None,
+            Either::Right(value) => {
                 let alternate_final_block = self.builder.get_insert_block().unwrap();
                 self.builder.build_unconditional_branch(merge_block);
                 Some((alternate_final_block, value))
@@ -1340,24 +1363,29 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
         // Merge block
         self.builder.position_at_end(merge_block);
-        let phi_value = self.builder.build_phi(typ.physical_value_type(), "if_phi");
-        if let Some((cons_inc_block, cons_value)) = consequent_incoming {
-            phi_value.add_incoming(&[(&cons_value, cons_inc_block)]);
-        };
-        if let Some((alt_inc_block, alt_value)) = alternate_incoming {
-            phi_value.add_incoming(&[(&alt_value, alt_inc_block)]);
-        };
-        debug!(
-            "{:?} PHI COUNT {}",
-            self.builder.get_insert_block().unwrap().get_parent().unwrap().get_name(),
-            phi_value.count_incoming()
-        );
-        if phi_value.count_incoming() == 0 {
+
+        if ir_if.ty == NEVER_TYPE_ID {
             // Both branches are divergent
             let unreachable = self.builder.build_unreachable();
             Ok(LlvmValue::Never(unreachable))
         } else {
-            Ok(LlvmValue::BasicValue(phi_value.as_basic_value()))
+            let phi_value = self.builder.build_phi(typ.physical_value_type(), "if_phi");
+            if let Some((cons_inc_block, cons_value)) = consequent_incoming {
+                phi_value.add_incoming(&[(&cons_value, cons_inc_block)]);
+            };
+            if let Some((alt_inc_block, alt_value)) = alternate_incoming {
+                phi_value.add_incoming(&[(&alt_value, alt_inc_block)]);
+            };
+            debug!(
+                "{:?} PHI COUNT {}",
+                self.builder.get_insert_block().unwrap().get_parent().unwrap().get_name(),
+                phi_value.count_incoming()
+            );
+            if phi_value.count_incoming() == 0 {
+                panic!("No incoming blocks even though type is not never")
+            } else {
+                Ok(LlvmValue::BasicValue(phi_value.as_basic_value()))
+            }
         }
     }
 
@@ -1367,7 +1395,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         &mut self,
         expr: &TypedExpr,
     ) -> CodegenResult<BasicValueEnum<'ctx>> {
-        Ok(self.codegen_expr(expr)?.expect_value())
+        Ok(self.codegen_expr(expr)?.expect_basic_value())
     }
 
     fn codegen_expr_lvalue(&mut self, expr: &TypedExpr) -> CodegenResult<PointerValue<'ctx>> {
@@ -1408,8 +1436,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     self.module.types.get_type_id_dereferenced(field_access.base.get_type());
                 let struct_type = self.codegen_type(struct_type)?.physical_value_type();
 
-                let struct_pointer =
-                    self.codegen_expr(&field_access.base)?.expect_value().into_pointer_value();
+                let struct_pointer = self
+                    .codegen_expr(&field_access.base)?
+                    .expect_basic_value()
+                    .into_pointer_value();
                 let field_ptr = self
                     .builder
                     .build_struct_gep(
@@ -1589,7 +1619,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 // This is just a lexical scoping block, not a control-flow block, so doesn't need
                 // to correspond to an LLVM basic block
                 // We just need to codegen each statement and yield the result value
-                let block_value = self.codegen_block_statements(block)?;
+                let block_value = self.codegen_block(block)?;
                 Ok(block_value)
             }
             TypedExpr::Call(call) => self.codegen_function_call(call),
@@ -1803,7 +1833,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             TypedExpr::Break(brk) => {
                 let loop_info = *self.loops.get(&brk.loop_scope).unwrap();
                 let break_value = self.codegen_expr_basic_value(&brk.value)?;
-                self.builder.build_store(loop_info.break_value_ptr, break_value);
+                if let Some(break_value_ptr) = loop_info.break_value_ptr {
+                    self.builder.build_store(break_value_ptr, break_value);
+                }
                 let branch_inst = self.builder.build_unconditional_branch(loop_info.end_block);
                 Ok(LlvmValue::Never(branch_inst))
             }
@@ -2389,16 +2421,20 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         panic!("Unexpected non-inline intrinsic {:?}", intrinsic_type)
     }
 
-    fn codegen_block_statements(&mut self, block: &TypedBlock) -> CodegenResult<LlvmValue<'ctx>> {
+    fn codegen_block(&mut self, block: &TypedBlock) -> CodegenResult<LlvmValue<'ctx>> {
         let unit_value = self.builtin_types.unit_value.as_basic_value_enum().into();
         let mut last: LlvmValue<'ctx> = unit_value;
         self.set_debug_location(block.span);
         for stmt in &block.statements {
+            if let LlvmValue::Never(_never_instr) = last {
+                eprintln!("Aborting block after generating {}", _never_instr);
+                return Ok(last);
+            }
             match stmt {
                 TypedStmt::Expr(expr) => last = self.codegen_expr(expr)?,
                 TypedStmt::ValDef(val_def) => {
-                    let _value = self.codegen_val(val_def)?;
-                    last = unit_value;
+                    let value = self.codegen_val(val_def)?;
+                    last = if val_def.variable_type == NEVER_TYPE_ID { value } else { unit_value };
                 }
                 TypedStmt::Assignment(assignment) => {
                     match assignment.destination.deref() {
@@ -2436,6 +2472,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let loop_body_block = self.ctx.append_basic_block(current_fn, "while_body");
         let loop_end_block = self.ctx.append_basic_block(current_fn, "while_end");
 
+        self.loops.insert(
+            while_loop.body.scope_id,
+            LoopInfo { break_value_ptr: None, end_block: loop_end_block },
+        );
+
         // Go to the loop
         self.builder.build_unconditional_branch(loop_entry_block);
 
@@ -2446,10 +2487,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         self.builder.build_conditional_branch(cond_i1, loop_body_block, loop_end_block);
 
         self.builder.position_at_end(loop_body_block);
-        let body = self.codegen_block_statements(&while_loop.body)?;
-        match body {
-            LlvmValue::Never(_instr) => {}
-            LlvmValue::BasicValue(_) => {
+        let body_value = self.codegen_block(&while_loop.body)?;
+        match body_value.as_basic_value() {
+            Either::Left(_instr) => {}
+            Either::Right(_bv) => {
                 self.builder.build_unconditional_branch(loop_entry_block);
             }
         }
@@ -2470,17 +2511,17 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let break_value_ptr = self.builder.build_alloca(break_type.physical_value_type(), "break");
         self.loops.insert(
             loop_expr.body.scope_id,
-            LoopInfo { break_value_ptr, end_block: loop_end_block },
+            LoopInfo { break_value_ptr: Some(break_value_ptr), end_block: loop_end_block },
         );
 
         // Go to the body
         self.builder.build_unconditional_branch(loop_body_block);
 
         self.builder.position_at_end(loop_body_block);
-        let body = self.codegen_block_statements(&loop_expr.body)?;
-        match body {
-            LlvmValue::Never(_instr) => {}
-            LlvmValue::BasicValue(_) => {
+        let body_value = self.codegen_block(&loop_expr.body)?;
+        match body_value.as_basic_value() {
+            Either::Left(_instr) => {}
+            Either::Right(_bv) => {
                 self.builder.build_unconditional_branch(loop_body_block);
             }
         }
@@ -2641,35 +2682,19 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 },
             );
         }
-        match function.intrinsic_type {
+        let _terminator_instr = match function.intrinsic_type {
             Some(intrinsic_type) => {
                 trace!("codegen intrinsic {:?} fn {:?}", intrinsic_type, function);
                 let value = self
                     .codegen_intrinsic_function_body(intrinsic_type, function)?
                     .as_basic_value_enum();
-                self.builder.build_return(Some(&value));
+                LlvmValue::Never(self.builder.build_return(Some(&value)))
             }
             None => {
-                // The plan is to separate the notion of "expression blocks" from "control flow
-                // blocks" to make this all more reasonable
-                // Rust rejects "unreachable expression"
                 let function_block = function.body_block.as_ref().unwrap_or_else(|| {
                     panic!("Function has no block {}", self.get_ident_name(function.name))
                 });
-                let value = self.codegen_block_statements(function_block)?;
-                let current_block = self.builder.get_insert_block().unwrap();
-                if current_block.get_terminator().is_none() {
-                    if return_type.is_void() {
-                        self.builder.build_return(None);
-                    } else {
-                        match value {
-                            LlvmValue::BasicValue(basic_value) => {
-                                self.builder.build_return(Some(&basic_value))
-                            }
-                            LlvmValue::Never(_instr) => self.builder.build_unreachable(),
-                        };
-                    }
-                }
+                self.codegen_block(function_block)?
             }
         };
         if let Some(start_block) = maybe_starting_block {

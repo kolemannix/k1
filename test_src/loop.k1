@@ -1,9 +1,9 @@
 fn loopBreak(): unit {
   val x: int = loop {
-    if true {
+    val inner: int = if true {
       break(3)
     } else {
-      break(4)
+      4
     }
   };
   assert(x == 3)

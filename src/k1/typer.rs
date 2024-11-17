@@ -791,6 +791,7 @@ pub struct TypedReturn {
 pub struct TypedBreak {
     pub value: Box<TypedExpr>,
     pub loop_scope: ScopeId,
+    pub loop_type: LoopType,
     pub span: SpanId,
 }
 
@@ -973,7 +974,7 @@ impl TypedExpr {
 #[derive(Debug, Clone)]
 pub struct ValDef {
     pub variable_id: VariableId,
-    pub ty: TypeId,
+    pub variable_type: TypeId,
     pub initializer: TypedExpr,
     pub span: SpanId,
 }
@@ -1011,8 +1012,20 @@ impl TypedStmt {
     pub fn get_type(&self) -> TypeId {
         match self {
             TypedStmt::Expr(expr) => expr.get_type(),
-            TypedStmt::ValDef(_) => UNIT_TYPE_ID,
-            TypedStmt::Assignment(_) => UNIT_TYPE_ID,
+            TypedStmt::ValDef(val_def) => {
+                if val_def.variable_type == NEVER_TYPE_ID {
+                    NEVER_TYPE_ID
+                } else {
+                    UNIT_TYPE_ID
+                }
+            }
+            TypedStmt::Assignment(assgn) => {
+                if assgn.destination.get_type() == NEVER_TYPE_ID {
+                    NEVER_TYPE_ID
+                } else {
+                    UNIT_TYPE_ID
+                }
+            }
         }
     }
 
@@ -1538,7 +1551,7 @@ impl TypedModule {
                 // Transparent alias
                 match self.types.get(resulting_type_id) {
                     Type::Never(_) => {
-                        make_fail_span("Why would you alias 'never'", parsed_type_defn.span)
+                        failf!(parsed_type_defn.span, "Why would you alias 'never'")
                     }
                     _ => {
                         debug!(
@@ -2394,9 +2407,9 @@ impl TypedModule {
             BOOL_TYPE_ID => Ok(ty),
             STRING_TYPE_ID => Ok(ty),
             POINTER_TYPE_ID => Ok(ty),
-            _ => make_fail_span(
-                "Only scalar types allowed in constants",
+            _ => failf!(
                 self.ast.get_type_expression_span(parsed_type_expr),
+                "Only scalar types allowed in constants",
             ),
         }
     }
@@ -3354,7 +3367,7 @@ impl TypedModule {
                 self.eval_field_access(expr, &field_access.clone(), scope_id, true, None)
             }
             other => {
-                make_fail_span(format!("Invalid assignment lhs: {:?}", other), other.get_span())
+                failf!(other.get_span(), "Invalid assignment lhs: {:?}", other)
             }
         }
     }
@@ -3738,7 +3751,9 @@ impl TypedModule {
             ParsedExpression::Block(block) => {
                 // TODO(clone big) This clone is actually sad because Block is still big. We need to intern blocks
                 let block = block.clone();
-                let block = self.eval_block(&block, scope_id, expected_type)?;
+                let block_scope =
+                    self.scopes.add_child_scope(scope_id, ScopeType::LexicalBlock, None, None);
+                let block = self.eval_block(&block, block_scope, expected_type, false)?;
                 Ok(TypedExpr::Block(block))
             }
             ParsedExpression::FnCall(fn_call) => {
@@ -3897,7 +3912,6 @@ impl TypedModule {
             return failf!(cond.get_span(), "Invalid while condition type: {msg}");
         }
 
-        // nocommit: Enforce this in parsing?
         let ParsedExpression::Block(parsed_block) = self.ast.expressions.get(while_expr.body)
         else {
             return failf!(while_expr.span, "'while' body must be a block");
@@ -3906,7 +3920,7 @@ impl TypedModule {
             self.scopes.add_child_scope(scope_id, ScopeType::WhileLoopBody, None, None);
         self.scopes.add_loop_info(body_scope, ScopeLoopInfo { break_type: Some(UNIT_TYPE_ID) });
 
-        let block = self.eval_block(&parsed_block.clone(), body_scope, expected_type)?;
+        let block = self.eval_block(&parsed_block.clone(), body_scope, expected_type, false)?;
         Ok(TypedExpr::WhileLoop(WhileLoop {
             cond: Box::new(cond),
             body: Box::new(block),
@@ -3923,7 +3937,7 @@ impl TypedModule {
         let body_scope = self.scopes.add_child_scope(scope_id, ScopeType::LoopExprBody, None, None);
         self.scopes.add_loop_info(body_scope, ScopeLoopInfo { break_type: expected_type });
 
-        let block = self.eval_block(&loop_expr.body.clone(), body_scope, expected_type)?;
+        let block = self.eval_block(&loop_expr.body.clone(), body_scope, expected_type, false)?;
 
         let loop_info = self.scopes.get_loop_info(body_scope).unwrap();
 
@@ -4184,18 +4198,30 @@ impl TypedModule {
             param_variables.push_back(variable_id)
         }
 
-        let mut body = self.eval_expr(closure_body, closure_scope_id, expected_return_type)?;
+        // Coerce parsed expr to block, call eval_block with needs_terminator = true
+        let ast_body_block = match self.ast.expressions.get(closure_body) {
+            ParsedExpression::Block(b) => b.clone(),
+            other_expr => {
+                let block = parse::Block {
+                    span: other_expr.get_span(),
+                    stmts: vec![parse::ParsedStmt::LoneExpression(closure_body)],
+                };
+                block
+            }
+        };
+        let body =
+            self.eval_block(&ast_body_block, closure_scope_id, expected_return_type, true)?;
         if let Some(expected_return_type) = expected_return_type {
-            if let Err(msg) = self.check_types(expected_return_type, body.get_type(), scope_id) {
-                return failf!(body.get_span(), "Closure returns incorrect type: {msg}");
+            if let Err(msg) = self.check_types(expected_return_type, body.expr_type, scope_id) {
+                return failf!(body.span, "Closure returns incorrect type: {msg}");
             }
         }
 
         // Note: NEVER hardcoded stuff that would probably prefer to be some
         // sort of principled call to 'unify_types'
-        let return_type = match body.get_type() {
-            NEVER_TYPE_ID => expected_return_type.unwrap(),
-            _ => body.get_type(),
+        let return_type = match body.expr_type {
+            NEVER_TYPE_ID => expected_return_type.unwrap_or(NEVER_TYPE_ID),
+            _ => body.expr_type,
         };
 
         let closure_captures = self.scopes.get_captures(closure_scope_id);
@@ -4247,7 +4273,17 @@ impl TypedModule {
         param_variables.push_front(environment_param_variable_id);
 
         let environment_param_variable_id = param_variables[0];
-        fixup_capture_expr(self, &mut body, environment_param_variable_id, environment_struct_type);
+        let body = {
+            let mut body_as_expr = TypedExpr::Block(body);
+            fixup_capture_expr(
+                self,
+                &mut body_as_expr,
+                environment_param_variable_id,
+                environment_struct_type,
+            );
+            let TypedExpr::Block(body) = body_as_expr else { panic!() };
+            body
+        };
 
         let function_type = self.types.add_type(Type::Function(FunctionType {
             params: typed_params.into(),
@@ -4274,7 +4310,7 @@ impl TypedModule {
             scope: closure_scope_id,
             param_variables: param_variables.into(),
             type_params: vec![],
-            body_block: Some(self.coerce_expr_to_block(body, closure_scope_id)),
+            body_block: Some(body),
             intrinsic_type: None,
             linkage: Linkage::Standard,
             specializations: vec![],
@@ -4381,7 +4417,8 @@ impl TypedModule {
             )
         } else {
             let (case_condition, case_body) = cases.pop_front().unwrap();
-            // Optimize out 'if true' and 'if false'
+            // This optimizes out 'if true' and 'if false' which happen quite a lot
+            // when evaluating pattern match conditions
             if let TypedExpr::Bool(b, _) = case_condition {
                 if b {
                     Ok(TypedExpr::Block(case_body))
@@ -4400,12 +4437,17 @@ impl TypedModule {
                     scope_id,
                     case_condition.get_span(),
                 )?;
+                // TODO(never unify): Unify types here
+                let if_result_type = match (case_body.expr_type, res.get_type()) {
+                    (NEVER_TYPE_ID, NEVER_TYPE_ID) => NEVER_TYPE_ID,
+                    _ => match_result_type,
+                };
                 Ok(TypedExpr::If(Box::new(TypedIf {
                     span: case_condition.get_span(),
                     condition: case_condition,
                     consequent: TypedExpr::Block(case_body),
                     alternate: res,
-                    ty: match_result_type,
+                    ty: if_result_type,
                 })))
             }
         }
@@ -4891,7 +4933,7 @@ impl TypedModule {
         self.scopes.add_variable(while_scope_id, binding_ident, binding_variable_id);
         let iteration_element_val_def = TypedStmt::ValDef(Box::new(ValDef {
             variable_id: binding_variable_id,
-            ty: item_type,
+            variable_type: item_type,
             initializer: if is_string_iteree {
                 self.synth_function_call(
                     NamespacedIdentifier {
@@ -4936,7 +4978,7 @@ impl TypedModule {
             .and_then(|t| self.types.get(t).as_array_instance())
             .map(|array_type| array_type.element_type);
         let body_block =
-            self.eval_block(&for_expr.body_block, body_scope_id, expected_block_type)?;
+            self.eval_block(&for_expr.body_block, body_scope_id, expected_block_type, false)?;
         let body_block_result_type = body_block.expr_type;
 
         let resulting_type = if is_do_block {
@@ -5783,6 +5825,7 @@ impl TypedModule {
                 Ok(Some(TypedExpr::Break(TypedBreak {
                     value: Box::new(break_value),
                     loop_scope: enclosing_loop_scope_id,
+                    loop_type,
                     span: fn_call.span,
                 })))
             }
@@ -6933,7 +6976,7 @@ impl TypedModule {
                     is_global: false,
                 });
                 let val_def_stmt = TypedStmt::ValDef(Box::new(ValDef {
-                    ty: variable_type,
+                    variable_type,
                     variable_id,
                     initializer: value_expr,
                     span: val_def.span,
@@ -6955,10 +6998,7 @@ impl TypedModule {
                 let lhs = self.eval_assignment_lhs_expr(assignment.lhs, scope_id, None)?;
                 let rhs = self.eval_expr(assignment.rhs, scope_id, Some(lhs.get_type()))?;
                 if let Err(msg) = self.check_types(lhs.get_type(), rhs.get_type(), scope_id) {
-                    return make_fail_span(
-                        format!("Invalid types for assignment: {}", msg),
-                        assignment.span,
-                    );
+                    return failf!(assignment.span, "Invalid types for assignment: {}", msg,);
                 }
                 let expr = TypedStmt::Assignment(Box::new(Assignment {
                     destination: Box::new(lhs),
@@ -6978,14 +7018,15 @@ impl TypedModule {
         block: &Block,
         scope_id: ScopeId,
         expected_type: Option<TypeId>,
+        needs_terminator: bool,
     ) -> TyperResult<TypedBlock> {
         let mut statements = Vec::with_capacity(block.stmts.len());
         let mut last_expr_type: TypeId = UNIT_TYPE_ID;
         for (index, stmt) in block.stmts.iter().enumerate() {
             if last_expr_type == NEVER_TYPE_ID {
-                return make_fail_span(
-                    "Dead code following divergent statement",
+                return failf!(
                     self.ast.get_stmt_span(stmt),
+                    "Dead code following divergent statement",
                 );
             }
             let is_last = index == block.stmts.len() - 1;
@@ -6993,7 +7034,36 @@ impl TypedModule {
 
             let stmt = self.eval_stmt(stmt, scope_id, expected_type)?;
             last_expr_type = stmt.get_type();
-            statements.push(stmt);
+
+            if is_last && needs_terminator {
+                if last_expr_type == NEVER_TYPE_ID {
+                    // No action needed; terminator exists
+                    statements.push(stmt);
+                } else {
+                    match stmt {
+                        TypedStmt::Expr(expr) => {
+                            // Return this expr
+                            let return_stmt =
+                                TypedStmt::Expr(Box::new(TypedExpr::Return(TypedReturn {
+                                    span: expr.get_span(),
+                                    value: expr,
+                                })));
+                            statements.push(return_stmt);
+                        }
+                        TypedStmt::Assignment(_) | TypedStmt::ValDef(_) => {
+                            let return_unit =
+                                TypedStmt::Expr(Box::new(TypedExpr::Return(TypedReturn {
+                                    span: stmt.get_span(),
+                                    value: Box::new(TypedExpr::Unit(stmt.get_span())),
+                                })));
+                            statements.push(stmt);
+                            statements.push(return_unit);
+                        }
+                    };
+                }
+            } else {
+                statements.push(stmt);
+            }
         }
 
         let typed_block =
@@ -7504,7 +7574,7 @@ impl TypedModule {
             Some(block_ast) => {
                 // Note(clone): Intern blocks
                 let block_ast = block_ast.clone();
-                let block = self.eval_block(&block_ast, fn_scope_id, Some(return_type))?;
+                let block = self.eval_block(&block_ast, fn_scope_id, Some(return_type), true)?;
                 debug!(
                     "evaled function block with expected type {} and got type {}",
                     self.type_id_to_string(return_type),
@@ -8052,14 +8122,12 @@ impl TypedModule {
         let root_namespace_id = self.ast.get_root_namespace().id;
 
         // Namespace phase
-        eprintln!("**** ns phase begin ****");
+        eprintln!(">> Phase 1 declare namespaces");
         let ns_phase_res = self.eval_namespace_ns_phase(root_namespace_id, None);
         if let Err(e) = ns_phase_res {
             print_error(&self.ast.spans, &self.ast.sources, &e.message, e.span);
             self.errors.push(e);
         }
-        eprintln!("**** ns phase end ****");
-
         if !self.errors.is_empty() {
             bail!(
                 "{} failed namespace declaration phase with {} errors",
@@ -8069,7 +8137,7 @@ impl TypedModule {
         }
 
         // Pending Type declaration phase
-        eprintln!("**** type defn phase begin ****");
+        eprintln!(">> Phase 2 declare types");
         let type_defn_result = self.eval_namespace_type_defn_phase(root_namespace_id);
         if let Err(e) = type_defn_result {
             print_error(&self.ast.spans, &self.ast.sources, &e.message, e.span);
@@ -8078,10 +8146,8 @@ impl TypedModule {
         if !self.errors.is_empty() {
             bail!("{} failed type definition phase with {} errors", self.name(), self.errors.len())
         }
-        eprintln!("**** type defn phase end ****");
-
         // Type evaluation phase
-        eprintln!("**** type eval phase begin ****");
+        eprintln!(">> Phase 3 evaluate types");
         let type_eval_result = self.eval_namespace_type_eval_phase(root_namespace_id);
         if let Err(e) = type_eval_result {
             print_error(&self.ast.spans, &self.ast.sources, &e.message, e.span);
@@ -8133,11 +8199,9 @@ impl TypedModule {
             debug_assert!(inner.as_enum().unwrap().variants.len() == 2);
         }
 
-        eprintln!("**** type eval phase end ****");
-
         // Everything else declaration phase
         let root_ns_id = NamespaceId(0);
-        eprintln!("**** declaration phase begin ****");
+        eprintln!(">> Phase 4 declare rest of definitions (functions, constants, abilities)");
         for &parsed_definition_id in self.ast.get_root_namespace().definitions.clone().iter() {
             let result = self.eval_definition_declaration_phase(
                 parsed_definition_id,
@@ -8149,7 +8213,6 @@ impl TypedModule {
                 self.errors.push(e);
             }
         }
-        eprintln!("**** declaration phase end ****");
         if !self.errors.is_empty() {
             bail!("{} failed declaration phase with {} errors", self.name(), self.errors.len())
         }
@@ -8158,6 +8221,7 @@ impl TypedModule {
         debug_assert!(self.get_ability(BITWISE_ABILITY_ID).name == get_ident!(self, "Bitwise"));
 
         // Everything else evaluation phase
+        eprintln!(">> Phase 5 evaluate rest of definitions (functions, constants, abilities)");
         for &parsed_definition_id in self.ast.get_root_namespace().definitions.clone().iter() {
             let result = self.eval_definition(parsed_definition_id, root_scope_id);
             if let Err(e) = result {
@@ -8448,8 +8512,12 @@ impl TypedModule {
         };
         let variable_id = self.variables.add_variable(variable);
         let variable_expr = TypedExpr::Variable(VariableExpr { type_id, variable_id, span });
-        let defn_stmt =
-            TypedStmt::ValDef(Box::new(ValDef { variable_id, ty: type_id, initializer, span }));
+        let defn_stmt = TypedStmt::ValDef(Box::new(ValDef {
+            variable_id,
+            variable_type: type_id,
+            initializer,
+            span,
+        }));
         self.scopes.add_variable(owner_scope, new_ident, variable_id);
         SynthedVariable { variable_id, defn_stmt, variable_expr }
     }
