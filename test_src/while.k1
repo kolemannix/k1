@@ -24,16 +24,17 @@ fn whileNested(): int {
   4
 }
 
-// nocommit
-fn blockLeak(): unit {
-  { val x = 42 };
-  assert(x == 42);
-}
-
 fn whileReturnClosure(): int {
   while true {
     val s = \(-> int) { return(5) };
     return(s())
+  };
+  4
+}
+
+fn whileBreak(): int {
+  while true {
+    break();
   };
   4
 }
@@ -43,5 +44,6 @@ fn main(): int {
   assert(whileReturn() == 1);
   assert(whileNested() == 10);
   assert(whileReturnClosure() == 5);
+  assert(whileBreak() == 4);
   0
 }

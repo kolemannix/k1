@@ -121,7 +121,8 @@
 - [x] string interpolation
 - [ ] Fix named arguments
 - [x] return from while
-- [ ] break from while
+- [x] break from while
+- [ ] 'never' needs to work in every expression position
 - [ ] Move tests into single file, accumulate errors and allow inline assertions when a line should error.
       Probably one tests for failing compilation and one passing one for each major language area
 - [ ] Remove lvalue-based assignment from the language, use references to assign instead, introduce a desugaring for `referenceSet` (`set a := b`)
@@ -136,7 +137,6 @@
   - [ ] Unused type bound
   - [ ] Disallow naked variable patterns in 'is' OR Disallow capital variables, require capital enum variants...
       - `if self.slots.get(probe_index) is None {`
-
 - [x] Handle escaped chars in string literals
 - [ ] Friendliness pass
   - [ ] Move to single '=' for equality

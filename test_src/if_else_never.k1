@@ -1,4 +1,4 @@
-fn doIt(b: bool): int {
+fn singleNever(b: bool): int {
   val x: int = if not b {
     crash("Uh oh!")
   } else {
@@ -12,7 +12,17 @@ fn doIt(b: bool): int {
   x + y
 }
 
+fn bothNever(b: bool): int {
+  val x: int = if not b {
+    crash("Uh oh!")
+  } else {
+    crash("Ahh!")
+  }
+}
+
 fn main(): int {
-  assert(doIt(true) == 0);
+  assert(singleNever(true) == 0);
+  bothNever(false);
   0
 }
+//abortmsg: Uh oh! at if_else_never.k1:17

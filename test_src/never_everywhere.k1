@@ -1,0 +1,18 @@
+fn main(): int {
+  // In call argument
+  println(crash("call arg"));
+  // In assignment rhs
+  mut x = 123;
+  x = crash("assgn lhs");
+
+  // In binop
+  crash("binop lhs") + 4;
+  4 + crash("binop rhs");
+
+  // Unary op
+  not crash("unary operand");
+
+  // And more...
+
+  0
+}
