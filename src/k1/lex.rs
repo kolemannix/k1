@@ -185,6 +185,8 @@ pub enum TokenKind {
     Asterisk,
     LessThanEqual,
     GreaterThanEqual,
+    LThinArrow,
+    RThinArrow,
 
     /// Not really a token but allows us to avoid Option<Token> everywhere
     Eof,
@@ -266,6 +268,8 @@ impl TokenKind {
             K::Asterisk => Some("*"),
             K::LessThanEqual => Some("<="),
             K::GreaterThanEqual => Some(">="),
+            K::LThinArrow => Some("<-"),
+            K::RThinArrow => Some("->"),
 
             K::DoubleQuote => Some("\""),
             K::SingleQuote => Some("'"),
@@ -304,6 +308,21 @@ impl TokenKind {
             '&' => Some(K::Ampersand),
             '%' => Some(K::Percent),
             '\\' => Some(K::BackSlash),
+            _ => None,
+        }
+    }
+    pub fn from_start_and_char(start: TokenKind, c: char) -> Option<TokenKind> {
+        match (start, c) {
+            (TokenKind::Equals, '=') => Some(K::EqualsEquals),
+            (TokenKind::Bang, '=') => Some(K::BangEquals),
+            (TokenKind::LeftAngle, '=') => Some(K::LessThanEqual),
+            (TokenKind::RightAngle, '=') => Some(K::GreaterThanEqual),
+            (TokenKind::Colon, ':') => Some(K::ColonColon),
+            (TokenKind::Slash, '/') => Some(TokenKind::LineComment),
+
+            // Thin Arrows
+            (TokenKind::LeftAngle, '-') => Some(K::LThinArrow),
+            (TokenKind::Minus, '>') => Some(K::RThinArrow),
             _ => None,
         }
     }
@@ -611,31 +630,22 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                     // `n` is the index of the opening quote
                     break Some(make_token(self, TokenKind::Char, n, len));
                 // Handle all of our 2-char but-also-1-char-prefixed tokens!
-                } else if single_char_tok == TokenKind::Equals && next == '=' {
-                    self.advance();
-                    self.advance();
-                    break Some(make_token(self, K::EqualsEquals, n, 2));
-                } else if single_char_tok == TokenKind::Bang && next == '=' {
-                    self.advance();
-                    self.advance();
-                    break Some(make_token(self, K::BangEquals, n, 2));
-                } else if single_char_tok == TokenKind::LeftAngle && next == '=' {
-                    self.advance();
-                    self.advance();
-                    break Some(make_token(self, K::LessThanEqual, n, 2));
-                } else if single_char_tok == TokenKind::RightAngle && next == '=' {
-                    self.advance();
-                    self.advance();
-                    break Some(make_token(self, K::GreaterThanEqual, n, 2));
-                } else if single_char_tok == TokenKind::Colon && next == ':' {
-                    self.advance();
-                    self.advance();
-                    break Some(make_token(self, K::ColonColon, n, 2));
-                } else if single_char_tok == TokenKind::Slash && next == '/' {
-                    is_line_comment = true;
-                    line_comment_start = n;
-                    self.advance();
-                    self.advance();
+                } else if let Some(double_tok) =
+                    TokenKind::from_start_and_char(single_char_tok, next)
+                {
+                    match double_tok {
+                        K::LineComment => {
+                            is_line_comment = true;
+                            line_comment_start = n;
+                            self.advance();
+                            self.advance();
+                        }
+                        other => {
+                            self.advance();
+                            self.advance();
+                            break Some(make_token(self, other, n, 2));
+                        }
+                    }
                 } else {
                     self.advance();
                     break Some(make_token(self, single_char_tok, n, 1));
