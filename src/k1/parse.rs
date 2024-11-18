@@ -1998,10 +1998,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             "Function parameters",
             K::BackSlash,
             K::Comma,
-            K::Minus,
+            K::RThinArrow,
             Parser::expect_type_expression,
         )?;
-        let _rest_of_arrow = self.expect_eat_token(K::RightAngle)?;
         let return_type = self.expect_type_expression()?;
         let span = self.extend_span(params_span, self.get_type_expression_span(return_type));
         let function_type = ParsedFunctionType { params, return_type, span };
@@ -2385,8 +2384,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             while self.peek().kind != K::CloseBrace {
                 let arm_pattern_id = self.expect_pattern()?;
 
-                self.expect_eat_token(K::Minus)?;
-                self.expect_eat_token(K::RightAngle)?;
+                self.expect_eat_token(K::RThinArrow)?;
 
                 let arm_expr_id = self.expect_expression()?;
                 cases.push(ParsedMatchCase { pattern: arm_pattern_id, expression: arm_expr_id });
@@ -2556,11 +2554,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let (arguments, _args_span, closing_delimeter) = self.eat_delimited_ext(
             "Lambda args",
             K::Comma,
-            |k| k == K::Minus || k == K::CloseParen,
+            |k| k == K::RThinArrow || k == K::CloseParen,
             Parser::expect_closure_arg_defn,
         )?;
-        let return_type = if closing_delimeter.kind == K::Minus {
-            let _rest_of_arrow = self.expect_eat_token(K::RightAngle)?;
+        let return_type = if closing_delimeter.kind == K::RThinArrow {
             let return_type_expr = self.expect_type_expression()?;
             self.expect_eat_token(K::CloseParen)?;
             Some(return_type_expr)
