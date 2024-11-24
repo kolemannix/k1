@@ -3518,6 +3518,13 @@ impl TypedModule {
         scope_id: ScopeId,
         expected_type: Option<TypeId>,
     ) -> TyperResult<TypedExpr> {
+        let directives = self.ast.expressions.get_directives(expr_id);
+        let debug_directive =
+            directives.iter().find(|p| matches!(p.kind, DirectiveKind::CompilerDebug));
+        let is_debug = debug_directive.is_some();
+        if is_debug {
+            self.push_debug_level();
+        }
         let expected_type = match self.ast.expressions.get_type_hint(expr_id) {
             Some(t) => {
                 let type_id = self.eval_type_expr(t, scope_id)?;
@@ -3528,7 +3535,7 @@ impl TypedModule {
         let base_result = self.eval_expr_inner(expr_id, scope_id, expected_type)?;
 
         // We gotta get rid of this coerce step its involved in every bug
-        if let Some(expected_type_id) = expected_type {
+        let result = if let Some(expected_type_id) = expected_type {
             // Try to coerce if types don't match
             debug!(
                 "is coerce needed for {}: {}?",
@@ -3560,7 +3567,17 @@ impl TypedModule {
             }
         } else {
             Ok(base_result)
-        }
+        }?;
+        if is_debug {
+            let expr_span = self.ast.expressions.get_span(expr_id);
+            eprintln!(
+                "DEBUG EXPR\n{}\nRESULT\n{}",
+                self.ast.get_span_content(expr_span),
+                self.expr_to_string_with_type(&result)
+            );
+            self.pop_debug_level();
+        };
+        Ok(result)
     }
 
     fn eval_expr_inner(

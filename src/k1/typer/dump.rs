@@ -415,6 +415,14 @@ impl TypedModule {
         s
     }
 
+    pub fn expr_to_string_with_type(&self, expr: &TypedExpr) -> String {
+        let mut s = String::new();
+        self.display_expr(expr, &mut s, 0).unwrap();
+        s.push_str(": ");
+        self.display_type_id(expr.get_type(), false, &mut s).unwrap();
+        s
+    }
+
     pub fn display_expr(
         &self,
         expr: &TypedExpr,

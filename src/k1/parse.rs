@@ -1179,6 +1179,11 @@ impl ParsedModule {
         }
     }
 
+    pub fn get_span_content(&self, span_id: SpanId) -> &str {
+        let span = self.spans.get(span_id);
+        self.sources.get_span_content(span)
+    }
+
     pub fn get_function(&self, id: ParsedFunctionId) -> &ParsedFunction {
         &self.functions[id.0 as usize]
     }
