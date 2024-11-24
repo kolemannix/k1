@@ -20,9 +20,9 @@ use crate::lex::{SpanId, Spans, TokenKind};
 use crate::parse::{
     self, DirectiveKind, ForExpr, ForExprType, Identifiers, IfExpr, NamedTypeArg,
     NamespacedIdentifier, NumericWidth, ParsedAbilityId, ParsedAbilityImplId, ParsedConstantId,
-    ParsedDirective, ParsedExpressionId, ParsedFunctionId, ParsedId, ParsedLoopExpr,
-    ParsedNamespaceId, ParsedPattern, ParsedPatternId, ParsedTypeDefnId, ParsedTypeExpression,
-    ParsedTypeExpressionId, ParsedUnaryOpKind, ParsedWhileExpr, Sources,
+    ParsedExpressionId, ParsedFunctionId, ParsedId, ParsedLoopExpr, ParsedNamespaceId,
+    ParsedPattern, ParsedPatternId, ParsedTypeDefnId, ParsedTypeExpression, ParsedTypeExpressionId,
+    ParsedUnaryOpKind, ParsedWhileExpr, Sources,
 };
 use crate::parse::{
     Block, FnCall, Identifier, Literal, ParsedExpression, ParsedModule, ParsedStmt,
