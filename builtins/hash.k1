@@ -45,11 +45,9 @@ namespace HashMap {
     val newMap = _make[V](newCap);
     referenceSet(self, newMap);
 
-    mut oldCount = 0: u64;
     for v in oldEntries do {
       if v is .Some(v) {
-        oldCount = oldCount + 1;
-        self.insert(v.key, v.value)
+        if not v.deleted self.insert(v.key, v.value)
       }
     };
   }
@@ -108,14 +106,13 @@ namespace HashMap {
 
   fn get[V](self: HashMap[V]*, key: string): V? {
     val index = self._computeIndex(key);
-    // println("index for \{key}: \{index}");
     val slot = self.entries.get(index);
     switch slot {
       .None -> .None,
       .Some({ key: existingKey, value: v, deleted }) -> {
-        if deleted .None
-        else if existingKey == key .Some(v)
-        else {
+        if existingKey == key {
+          if deleted .None else .Some(v)
+        } else {
           mut probe_index = index;
           loop {
             probe_index = probe_index + 1;
@@ -187,7 +184,7 @@ namespace HashMap {
         , .None -> println("empty")
         , .Some({ key, value, deleted }) -> {
             val v = Show::show(value);
-            print("\{key} -> \{value} (d=\{deleted})");
+            println("\{key} -> \{value} (d=\{deleted})");
         }
       }
     }
@@ -200,28 +197,27 @@ fn test(size: u64): unit {
   mut i = 0: i64;
   while i < size as i64 {
     myMap.insert(i.show(), i);
-    if i % 10 == 0 {
+    if i % 5 == 0 {
       myMap.remove(i.show());
     };
     i = i + 1;
   };
-  assert(myMap.size == size);
   i = 0;
-  myMap.*.dump();
+  // myMap.*.dump();
   while i < size as i64 {
     val result = myMap.get(i.show());
-    if i % 10 == 0 {
+    if i % 5 == 0 {
       assertMsg("\{i} should be empty", result is .None);
     } else {
       if result is .Some(v) { assert (v == i) } else { crash("Missing value \{i}") }
     };
     i = i + 1;
   };
-  myMap.*.dump();
+  // myMap.*.dump();
 }
 
 fn main(): int {
-  test(16);
+  test(100000);
   0
 }
 
