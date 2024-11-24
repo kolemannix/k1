@@ -119,9 +119,7 @@
 - [x] Change reference and dereference syntax to x.& and x.*
 - [x] Fix context params when combined with generics
 - [x] string interpolation
-- [ ] Compiler directives
-    - [ ] Dump tast
-    - [ ] Conditional compilation
+- [ ] Context location params are not being propagated
 - [ ] Fix named arguments
 - [x] return from while
 - [x] break from while
@@ -154,6 +152,7 @@
 - [ ] RTTI story and 'any' type
 - [ ] Ability-based iteration
 - [ ] Mark types as trivially copyable or not
+- [ ] Conditional compile directive
 ^ The builtin array would be NOT copyable so that you don't accidentally alias the data ptr
 - [ ] German/Umbra strings
 - [ ] Ability constraints on generics (not strictly needed since we have them on functions)

@@ -156,7 +156,7 @@ fn assertMsg(context locn: CompilerSourceLoc)(msg: string, value: bool): unit {
 
 namespace char {
   fn toString(self: char): string {
-    val arr = Array::new[char](0).&;
+    val arr = Array::withCapacity[char](1).&;
     arr.push(self);
     string::fromChars(arr.*);
   }
@@ -173,11 +173,22 @@ namespace char {
 
 namespace Array {
 
-  fn empty[T](): Array[T] {
-    new[T](0)
+  fn new[T](): Array[T] {
+    withCapacity[T](0)
   }
 
-  fn new[T](cap: u64): Array[T] {
+  fn filled[T](size: u64, value: T): Array[T] {
+    // TODO(stdlib perf): memcpy this where T is 'Copy'
+    val array: Array[T]* = Array::withCapacity(size).&;
+    mut i = 0: u64;
+    while i < size {
+      array.push(value);
+      i = i + 1;
+    };
+    array.*
+  }
+
+  fn withCapacity[T](cap: u64): Array[T] {
     val data = if cap == 0 {
       Pointer::null()
     } else {
@@ -216,7 +227,6 @@ namespace Array {
     val newSize = newCap * sizeOf[T]();
 
     val ptr = if self.data.isNull() {
-
       _k1_malloc(newSize)
     } else {
       libc::realloc(self.data, newSize)
@@ -227,6 +237,13 @@ namespace Array {
 
     self.data = ptr;
     self.cap = newCap;
+  }
+
+  fn cloned[T](self: Array[T]): Array[T] {
+    val numBytes = sizeOf[T]() * self.cap;
+    val newBuffer = _k1_malloc(numBytes);
+    libc::memcpy(newBuffer, self.data, numBytes);
+    { len: self.len, cap: self.cap, data: newBuffer }
   }
 
   fn push[T](self: Array[T]*, elem: T): unit {
@@ -280,7 +297,7 @@ namespace Array {
 
   // I know I know I know I know
   fn reversed[T](self: Array[T]): Array[T] {
-    val reversed = Array::new[T](self.len).&;
+    val reversed = Array::withCapacity[T](self.len).&;
     mut i = self.len - 1;
     while (i >= 0) {
       reversed.push(self.get(i));
@@ -336,7 +353,7 @@ impl Show for i64 {
   fn show(self: i64): string {
     val neg = self < 0;
     mut remaining: i64 = if neg self * -1 else self;
-    val buf = Array::new[char](8).&;
+    val buf = Array::withCapacity[char](8).&;
     while remaining > 0 {
       val d = remaining % 10;
       val c = (d + 48) as u8 as char;
@@ -362,7 +379,7 @@ impl Show for u64 {
     if self == 0 return("0");
 
     mut remaining: u64 = self;
-    val buf = Array::new[char](8).&;
+    val buf = Array::withCapacity[char](8).&;
     while remaining > 0 {
       val d = remaining % 10;
       val c = (d + 48) as u8 as char;

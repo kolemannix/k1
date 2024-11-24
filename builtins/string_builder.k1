@@ -3,7 +3,7 @@ namespace StringBuilder {
   deftype alias Part = StringBuilder.parts.value.T
 
   fn withCapacity(cap: u64): StringBuilder {
-    val parts = _root::new(Array::new[Part](cap));
+    val parts = _root::new(Array::withCapacity[Part](cap));
     { parts: parts }
   }
 
@@ -11,14 +11,14 @@ namespace StringBuilder {
     withCapacity(0)
   }
 
-  fn putChar(self: StringBuilder, c: char): unit { 
-    self.parts.push(.Char(c)) 
+  fn putChar(self: StringBuilder, c: char): unit {
+    self.parts.push(.Char(c))
   }
-  fn putString(self: StringBuilder, s: string): unit { 
-    self.parts.push(.String(s)) 
+  fn putString(self: StringBuilder, s: string): unit {
+    self.parts.push(.String(s))
   }
-  fn putByte(self: StringBuilder, b: byte): unit { 
-    self.parts.push(.Char(b as char)) 
+  fn putByte(self: StringBuilder, b: byte): unit {
+    self.parts.push(.Char(b as char))
   }
   fn len(self: StringBuilder): u64 {
     val len: u64* = 0.&;
@@ -28,8 +28,8 @@ namespace StringBuilder {
     };
     len.*
   }
-  fn build(self: StringBuilder): string { 
-    val bytes = Array::new[char](self.len()).&;
+  fn build(self: StringBuilder): string {
+    val bytes = Array::withCapacity[char](self.len()).&;
     for part in self.parts.* do {
       switch part {
         .Char(c) -> bytes.push(c),
@@ -43,4 +43,3 @@ namespace StringBuilder {
     string::fromChars(bytes)
   }
 }
-

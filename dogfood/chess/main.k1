@@ -53,7 +53,7 @@ fn dump(board: Array<Square>): unit {
 }
 
 fn startPos(): Array<Square> {
-  val board: Array<Square> = Array::new<Square>(64);
+  val board: Array<Square> = Array::withCapacity<Square>(64);
   for board do {
     board[it_index] = .Blank;
   };
