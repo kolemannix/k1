@@ -1023,6 +1023,7 @@ pub struct ParsedNamespace {
 pub struct ParsedExpressionPool {
     expressions: Vec<ParsedExpression>,
     type_hints: HashMap<ParsedExpressionId, ParsedTypeExpressionId>,
+    directives: HashMap<ParsedExpressionId, Vec<ParsedDirective>>,
 }
 impl ParsedExpressionPool {
     pub fn add_type_hint(&mut self, id: ParsedExpressionId, ty: ParsedTypeExpressionId) {
@@ -1031,6 +1032,14 @@ impl ParsedExpressionPool {
 
     pub fn get_type_hint(&self, id: ParsedExpressionId) -> Option<ParsedTypeExpressionId> {
         self.type_hints.get(&id).copied()
+    }
+
+    pub fn add_directives(&mut self, id: ParsedExpressionId, directives: Vec<ParsedDirective>) {
+        self.directives.insert(id, directives);
+    }
+
+    pub fn get_directives(&self, id: ParsedExpressionId) -> &[ParsedDirective] {
+        self.directives.get(&id).map(|v| &v[..]).unwrap_or(&[])
     }
 
     pub fn add_expression(&mut self, expression: ParsedExpression) -> ParsedExpressionId {
@@ -1674,6 +1683,16 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     pub fn add_expression(&mut self, expression: ParsedExpression) -> ParsedExpressionId {
         self.module.expressions.add_expression(expression)
+    }
+
+    pub fn add_expression_with_directives(
+        &mut self,
+        expression: ParsedExpression,
+        directives: Vec<ParsedDirective>,
+    ) -> ParsedExpressionId {
+        let id = self.module.expressions.add_expression(expression);
+        self.module.expressions.add_directives(id, directives);
+        id
     }
 
     pub fn get_expression(&self, id: ParsedExpressionId) -> &ParsedExpression {
@@ -2368,9 +2387,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     /// Base expression means no postfix or binary ops
     fn parse_base_expression(&mut self) -> ParseResult<Option<ParsedExpressionId>> {
+        let directives = self.parse_directives()?;
         let (first, second, third) = self.tokens.peek_three();
         trace!("parse_base_expression {} {} {}", first.kind, second.kind, third.kind);
-        if first.kind == K::OpenParen {
+        let resulting_expression = if first.kind == K::OpenParen {
             self.tokens.advance();
             if self.peek().kind == K::CloseParen {
                 let end = self.tokens.next();
@@ -2554,8 +2574,16 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             Ok(Some(self.add_expression(ParsedExpression::Array(ArrayExpr { elements, span }))))
         } else {
             // More expression types
-            Ok(None)
+            if directives.is_empty() {
+                Ok(None)
+            } else {
+                Err(Parser::error("expression following directives", first))
+            }
+        }?;
+        if let Some(expression_id) = resulting_expression {
+            self.module.expressions.add_directives(expression_id, directives);
         }
+        Ok(resulting_expression)
     }
 
     fn expect_closure_arg_defn(&mut self) -> ParseResult<ClosureArgDefn> {
