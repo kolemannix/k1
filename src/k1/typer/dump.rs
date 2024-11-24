@@ -173,13 +173,17 @@ impl TypedModule {
                 Ok(())
             }
             Type::TypeVariable(tv) => {
-                let scope_name = self
-                    .scopes
-                    .make_scope_name(self.scopes.get_scope(tv.scope_id), &self.ast.identifiers);
-                writ.write_str(&scope_name)?;
-                writ.write_str(".")?;
-                writ.write_str("$")?;
-                writ.write_str(self.ast.identifiers.get_name(tv.name))?;
+                if expand {
+                    let scope_name = self
+                        .scopes
+                        .make_scope_name(self.scopes.get_scope(tv.scope_id), &self.ast.identifiers);
+                    writ.write_str(&scope_name)?;
+                    writ.write_str(".")?;
+                    writ.write_str("$")?;
+                    writ.write_str(self.ast.identifiers.get_name(tv.name))?;
+                } else {
+                    writ.write_str(self.ast.identifiers.get_name(tv.name))?;
+                }
                 Ok(())
             }
             Type::Reference(r) => {

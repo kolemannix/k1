@@ -2674,12 +2674,13 @@ impl TypedModule {
             return Ok(());
         }
 
-        if let (Some(gen1), Some(gen2)) = (
+        if let (Some(spec1), Some(spec2)) = (
             self.types.get_generic_instance_info(expected),
             self.types.get_generic_instance_info(actual),
         ) {
-            return if gen1.generic_parent == gen2.generic_parent {
-                for (exp_param, act_param) in gen1.param_values.iter().zip(gen2.param_values.iter())
+            return if spec1.generic_parent == spec2.generic_parent {
+                for (index, (exp_param, act_param)) in
+                    spec1.param_values.iter().zip(spec2.param_values.iter()).enumerate()
                 {
                     debug!(
                         "Comparing params {} and {} inside {}",
@@ -2687,14 +2688,26 @@ impl TypedModule {
                         self.type_id_to_string(*act_param),
                         self.get_ident_str(
                             self.types
-                                .get(gen1.generic_parent)
+                                .get(spec1.generic_parent)
                                 .expect_generic()
                                 .type_defn_info
                                 .name
                         )
                     );
                     if let Err(msg) = self.check_types(*exp_param, *act_param, scope_id) {
-                        return Err(format!("Invalid generic type param: {}", msg));
+                        let generic = self.types.get(spec1.generic_parent).expect_generic();
+                        let param = &generic.params[index];
+                        let base_msg = format!(
+                            "Expected {}, but got {}",
+                            self.type_id_to_string(expected),
+                            self.type_id_to_string(actual),
+                        );
+                        let detail = format!(
+                            "Param '{}' is incorrect: {}",
+                            self.get_ident_str(param.name),
+                            msg
+                        );
+                        return Err(format!("{base_msg}: {detail}"));
                     }
                 }
                 Ok(())
@@ -3628,7 +3641,7 @@ impl TypedModule {
                     return failf!(span, "Could not infer element type for Array literal");
                 };
                 let array_new_fn_call = self.synth_function_call(
-                    qident!(self, span, ["Array"], "new"),
+                    qident!(self, span, ["Array"], "withCapacity"),
                     span,
                     array_lit_scope,
                     (
@@ -3967,7 +3980,15 @@ impl TypedModule {
         let body_scope = self.scopes.add_child_scope(scope_id, ScopeType::LoopExprBody, None, None);
         self.scopes.add_loop_info(body_scope, ScopeLoopInfo { break_type: expected_type });
 
-        let block = self.eval_block(&loop_expr.body.clone(), body_scope, expected_type, false)?;
+        // Expected type is handled by loop info above, its needed by 'break's but notably we do not
+        // want to require the loop's block to return a type other than Unit, so we pass None.
+        let expected_expression_type_for_block = None;
+        let block = self.eval_block(
+            &loop_expr.body.clone(),
+            body_scope,
+            expected_expression_type_for_block,
+            false,
+        )?;
 
         let loop_info = self.scopes.get_loop_info(body_scope).unwrap();
 
@@ -4499,7 +4520,8 @@ impl TypedModule {
         for parsed_case in cases.iter() {
             let pattern =
                 self.eval_pattern(parsed_case.pattern, target_expr.type_id, match_scope_id)?;
-            let arm_expr_span = self.ast.expressions.get(parsed_case.expression).get_span();
+            let arm_expr_span = self.ast.expressions.get_span(parsed_case.expression);
+            let arm_pattern_span = self.ast.get_pattern_span(parsed_case.pattern);
             let mut arm_block = self.synth_block(vec![], match_scope_id, arm_expr_span);
             let (pre_stmts, condition) =
                 self.eval_match_arm(&pattern, target_expr.clone(), &mut arm_block, match_scope_id)?;
@@ -4515,7 +4537,7 @@ impl TypedModule {
                     if let Err(msg) =
                         self.check_types(*expected_arm_type_id, arm_expr.get_type(), match_scope_id)
                     {
-                        return failf!(arm_expr_span, "Mismatching type for match case: {}", msg,);
+                        return failf!(arm_pattern_span, "Match arm has wrong type. {}", msg);
                     }
                 }
             }
@@ -5024,7 +5046,7 @@ impl TypedModule {
         };
         let yielded_coll_variable = if !is_do_block {
             let synth_function_call = self.synth_function_call(
-                qident!(self, body_span, ["Array"], "new"),
+                qident!(self, body_span, ["Array"], "withCapacity"),
                 body_span,
                 for_expr_scope,
                 (vec![body_block_result_type], vec![iteree_length_variable.variable_expr.clone()]),

@@ -7,6 +7,7 @@
 // - String handling
 // - Array operations
 
+//deftype Entry[V] = enum Empty, Deleted, Occupied(V)
 deftype HashMap[V] = {
   size: u64,
   entries: Array[{ key: string, value: V }?],
@@ -28,23 +29,17 @@ namespace HashMap {
   deftype Entry[V] = { key: string, value: V }?
 
   fn _make[V](cap: u64): HashMap[V] {
-    val entries: Array[Entry[V]]* = Array::new(cap).&;
-    mut i = 0: u64;
-    while i < cap {
-      entries.push(.None);
-      i = i + 1;
-    };
-    { size: 0, entries: entries.* }
+    { size: 0, entries: Array::filled(cap, .None) }
   }
 
   fn new[V](): HashMap[V] {
-    _make(2)
+    _make(0)
   }
 
   fn grow[V](self: HashMap[V]*): unit {
     val origSize = self.size;
     val oldEntries = self.entries;
-    val newCap = oldEntries.cap * 2;
+    val newCap = if oldEntries.cap == 0 1: u64 else oldEntries.cap * 2;
 
     val newMap = _make[V](newCap);
     referenceSet(self, newMap);
@@ -58,47 +53,52 @@ namespace HashMap {
     };
   }
 
-  fn _locateNoProbe[V](self: HashMap[V]*, key: string): Entry[V]*? {
+  fn _computeIndex[V](self: HashMap[V]*, key: string): u64 {
     val hash = fnv1a_hash(key);
     val index = hash % self.entries.len;
-    self.entries.getRef(index)
+    index
   }
 
   // Super naive fully linear probing
-  fn _probe[V](self: HashMap[V], startIndex: u64) -> Entry[V]* {
+  fn _probe[V](self: HashMap[V], startIndex: u64): Entry[V]* {
     mut probeIndex = startIndex;
-    mut done = false;
-    while not done {
+    loop {
       probeIndex = probeIndex + 1;
-      if probeIndex == self.entries.len {
-        probeIndex = 0
-      };
+      if probeIndex == self.entries.len { probeIndex = 0 };
+
       val entryRef = self.entries.getRef(probeIndex);
+      // TODO: match on reference
       if entryRef.* is .None {
-        // done = true;
-        return(entryRef);
-      };
+        return(entryRef)
+      }
+    }
   }
 
-  fn insert[V](self: HashMap[V]*, key: string, value: V): unit where V: Show {
-    val fillFactor = self.size as f32 / self.entries.len as f32;
-    if fillFactor > 0.7 {
+  fn fillFactor[V](self: HashMap[V]): f32 {
+    val fillDivisor = if self.entries.len == 0 1 as f32 else self.entries.len as f32;
+    val fillNumerator = if self.size == 0 1.0 else self.size as f32;
+    val fillFactor = fillNumerator / fillDivisor;
+    fillFactor
+  }
+
+  fn insert[V](self: HashMap[V]*, key: string, value: V): unit {
+    if self.fillFactor() > 0.7 {
       self.grow();
     };
-    val slotRef = self._locateNoProbe(key);
+    val index = self._computeIndex(key);
+    val entryRef = self.entries.getRef(index);
     val entry = { key: key, value: value };
-    switch slotRef.* {
+    switch entryRef.* {
       .None -> {
-        referenceSet(slotRef, .Some(entry));
+        referenceSet(entryRef, .Some(entry));
         self.size = self.size + 1;
       },
       .Some({ key: existingKey, value: _ }) -> {
         if existingKey == key {
-          val elem = { key: key, value: value };
-          slotRef.* = .Some(elem);
+          referenceSet(entryRef, .Some(entry));
         } else {
           val nextAvailableEntry = self._probe(index);
-          referenceSet(nextAvailableEntry, .Some(elem));
+          referenceSet(nextAvailableEntry, .Some(entry));
           self.size = self.size + 1;
         }
       }
@@ -106,8 +106,8 @@ namespace HashMap {
   }
 
   fn get[V](self: HashMap[V]*, key: string): V? {
-    val hash = fnv1a_hash(key);
-    val index = hash % self.entries.len;
+    val index = self._computeIndex(key);
+    // println("index for \{key}: \{index}");
     val slot = self.entries.get(index);
     switch slot {
       .None -> .None,
@@ -116,35 +116,30 @@ namespace HashMap {
           .Some(v)
         } else {
           mut probe_index = index;
-          mut retVal: V? = .None;
-
-          // todo: Return from inside loop? or break w/ value
-          mut done = false;
-          while not done {
+          loop {
             probe_index = probe_index + 1;
-            if probe_index == self.entries.len {
-              probe_index = 0;
-            };
-            if self.entries.get(probe_index) is .Some({ key: existingKey, value: v }) {
-              if existingKey == key {
-                retVal = .Some(v);
-                done = true;
-              }
-            };
-          };
-          retVal
+            if probe_index == self.entries.len { probe_index = 0; };
+
+            switch self.entries.get(probe_index) {
+              .Some({ key: existingKey, value: value }) -> {
+                if key == existingKey { break(.Some(value)) }
+              },
+              .None -> { break(Opt.None[V]) },
+            }
+          }
         }
       }
     };
   }
 
-  fn remove(self: HashMap[V]*, key: string): unit {
-
-  }
+  // fn remove[V](self: HashMap[V]*, key: string): unit {
+  // }
 
   fn dump[V](self: HashMap[V]): unit where V: Show {
-    print("Capacity: ");
-    printUInt(self.entries.cap);
+    val capacity = self.entries.len;
+    val size = self.size;
+    println("Capacity: \{capacity}");
+    println("Size: \{size}");
     println("");
     for self.entries do {
       printUInt(it_index);
@@ -160,11 +155,9 @@ namespace HashMap {
 
 }
 
-
-fn test(): unit {
+fn test(size: u64): unit {
   val myMap: HashMap[int]* = HashMap::new().&;
   mut i = 0: i64;
-  val size = 256: u64;
   while i < size as i64 {
     myMap.insert(i.show(), i);
     i = i + 1;
@@ -172,10 +165,18 @@ fn test(): unit {
   assert(myMap.size == size);
   i = 0;
   while i < size as i64 {
-    assert(myMap.get(i.show())! == i);
+    switch myMap.get(i.show()) {
+      .None -> println("None for \{i}!!!"),
+      .Some(v) -> assert(v == i),
+    };
     i = i + 1;
   };
   myMap.*.dump();
+}
+
+fn main(): int {
+  test(100000);
+  0
 }
 
 fn randByte(): u8 {
@@ -183,19 +184,11 @@ fn randByte(): u8 {
 }
 
 fn randString(len: uint): string {
-  val arr = Array::new[char](len).&;
+  val arr = Array::withCapacity[char](len).&;
   mut i: uint = 0;
   while i < len {
     arr.push(randByte() as char);
     i = i + 1;
   };
   string::fromChars(arr)
-}
-
-fn main(): int {
-  test();
-  // printUInt(42);
-  // printInt(42);
-  // printInt(-42);
-  0
 }

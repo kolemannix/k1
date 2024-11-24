@@ -21,8 +21,15 @@ namespace string {
     referenceSet(charRef, value)
   }
 
+  fn fromBytes(bytes: Array[byte]): string {
+    assert(sizeOf[char]() == sizeOf[byte]());
+    val copied = bytes.cloned();
+    { len: copied.len, data: copied.data }
+  }
+
   fn fromChars(bytes: Array[char]): string {
-    { len: bytes.len, data: bytes.data }
+    val copied = bytes.cloned();
+    { len: copied.len, data: copied.data }
   }
 
   fn isEmpty(self: string): bool {
@@ -42,7 +49,7 @@ namespace string {
 
   fn concat(self: string, other: string): string {
     val new_length = self.len + other.len;
-    val copied = Array::new[char](new_length).&;
+    val copied = Array::withCapacity[char](new_length).&;
 
     libc::memcpy(copied.data, self.data, self.len);
 
@@ -56,7 +63,7 @@ namespace string {
   fn appendChar(self: string, c: char): string {
     val new_length = self.len + 1;
 
-    val copied = Array::new[char](new_length).&;
+    val copied = Array::withCapacity[char](new_length).&;
     copied.len = new_length;
 
     libc::memcpy(copied.data, self.data, self.len);
@@ -66,14 +73,15 @@ namespace string {
   }
 
   fn splitByChar(self: string, delim: char): Array[string] {
-    val results = Array::empty[Array[char]]().&;
-    mut accum = Array::empty[char]().&;
+    val results = Array::new[Array[char]]().&;
+    mut accum = Array::new[char]().&;
     // Note(stdlib slow): TODO: use ranges instead to make this zero-copy!!
+    //                    We can point to the old string instead of building up new ones
     for c in self do {
       if c == delim {
-        if accum.nonEmpty() { 
+        if accum.nonEmpty() {
           results.push(accum);
-          accum = Array::empty[char]().&;
+          accum = Array::new[char]().&;
         }
       } else {
         accum.push(c);
