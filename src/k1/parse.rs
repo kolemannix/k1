@@ -2169,7 +2169,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     dest_type: type_expr_id,
                     span,
                 })))
-            } else if next.kind == K::Dot || (next.kind == K::QuestionMark && second.kind == K::Dot)
+            } else if (next.kind == K::Dot && !next.is_whitespace_preceeded())
+                || (next.kind == K::QuestionMark
+                    && (second.kind == K::Dot && !second.is_whitespace_preceeded()))
             {
                 let is_coalescing = next.kind == K::QuestionMark && second.kind == K::Dot;
                 // Field access syntax; a.b with optional bracketed type args []

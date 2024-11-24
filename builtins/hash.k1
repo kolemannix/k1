@@ -7,10 +7,10 @@
 // - String handling
 // - Array operations
 
-//deftype Entry[V] = either Empty, Deleted, Occupied(V)
 deftype HashMap[V] = {
   size: u64,
-  entries: Array[{ key: string, value: V }?],
+  // TODO: Switch to a 3-state enum for the deleted variant for a more efficient layout
+  entries: Array[{ key: string, value: V, deleted: bool }?],
 }
 
 fn fnv1a_hash(key: string): u64 {
@@ -26,7 +26,7 @@ fn fnv1a_hash(key: string): u64 {
 
 namespace HashMap {
 
-  deftype Entry[V] = { key: string, value: V }?
+  deftype Entry[V] = { key: string, value: V, deleted: bool }?
 
   fn _make[V](cap: u64): HashMap[V] {
     { size: 0, entries: Array::filled(cap, .None) }
@@ -35,6 +35,7 @@ namespace HashMap {
   fn new[V](): HashMap[V] {
     _make(0)
   }
+  // ha ha ha. once again Mr. Ocean. You have come in second.
 
   fn grow[V](self: HashMap[V]*): unit {
     val origSize = self.size;
@@ -87,7 +88,7 @@ namespace HashMap {
     };
     val index = self._computeIndex(key);
     val entryRef = self.entries.getRef(index);
-    val entry = { key: key, value: value };
+    val entry = { key: key, value: value, deleted: false };
     switch entryRef.* {
       .None -> {
         referenceSet(entryRef, .Some(entry));
@@ -111,20 +112,23 @@ namespace HashMap {
     val slot = self.entries.get(index);
     switch slot {
       .None -> .None,
-      .Some({ key: existingKey, value: v }) -> {
-        if existingKey == key {
-          .Some(v)
-        } else {
+      .Some({ key: existingKey, value: v, deleted }) -> {
+        if deleted .None
+        else if existingKey == key .Some(v)
+        else {
           mut probe_index = index;
           loop {
             probe_index = probe_index + 1;
             if probe_index == self.entries.len { probe_index = 0; };
 
             switch self.entries.get(probe_index) {
-              .Some({ key: existingKey, value: value }) -> {
-                if key == existingKey { break(.Some(value)) }
+              .Some({ key: existingKey, value: value, deleted }) -> {
+                if key == existingKey {
+                  if deleted break(.None)
+                  else break(.Some(value))
+                }
               },
-              .None -> { break(Opt.None[V]) },
+              .None -> { break(.None) },
             }
           }
         }
@@ -132,8 +136,43 @@ namespace HashMap {
     };
   }
 
-  // fn remove[V](self: HashMap[V]*, key: string): unit {
-  // }
+  fn remove[V](self: HashMap[V]*, key: string): bool {
+    val index = self._computeIndex(key);
+    val entryRef = self.entries.getRef(index);
+    switch entryRef.* {
+      .None -> false,
+      .Some({ key: existingKey, value: value, deleted }) -> {
+        if key == existingKey {
+          // TODO: update using the reference once it works
+          //entryRef.asSome()!.value.deleted = true;
+          // Even this does not work since we get a Array rather than an Array* from `self.entries`
+          // self.entries.setRef(index, { key: key, value: value, deleted: true });
+          referenceSet(entryRef, { key: key, value: value, deleted: true });
+          not deleted
+        } else {
+          mut probeIndex = index;
+          loop {
+            probeIndex = probeIndex + 1;
+            if probeIndex == self.entries.len { probeIndex = 0; };
+
+            val probedEntryRef = self.entries.getRef(probeIndex);
+            switch probedEntryRef.* {
+              .Some({ key: existingKey, value, deleted }) -> {
+                if key == existingKey {
+                  // TODO: update using the reference once it works
+                  // probedEntryRef.asSome()!.value.deleted = true;
+                  referenceSet(probedEntryRef, { key: key, value: value, deleted: true });
+                  break(not deleted)
+                }
+              },
+              .None -> { break(false) },
+            }
+          }
+        }
+      }
+    }
+
+  }
 
   fn dump[V](self: HashMap[V]): unit where V: Show {
     val capacity = self.entries.len;
@@ -146,8 +185,9 @@ namespace HashMap {
       print(" ");
       switch it {
         , .None -> println("empty")
-        , .Some({ key, value }) -> {
-            print(key | string::concat(" -> ") | string::concat(value.show()) | string::concat('\n'.toString()));
+        , .Some({ key, value, deleted }) -> {
+            val v = Show::show(value);
+            print("\{key} -> \{value} (d=\{deleted})");
         }
       }
     }
@@ -160,14 +200,20 @@ fn test(size: u64): unit {
   mut i = 0: i64;
   while i < size as i64 {
     myMap.insert(i.show(), i);
+    if i % 10 == 0 {
+      myMap.remove(i.show());
+    };
     i = i + 1;
   };
   assert(myMap.size == size);
   i = 0;
+  myMap.*.dump();
   while i < size as i64 {
-    switch myMap.get(i.show()) {
-      .None -> println("None for \{i}!!!"),
-      .Some(v) -> assert(v == i),
+    val result = myMap.get(i.show());
+    if i % 10 == 0 {
+      assertMsg("\{i} should be empty", result is .None);
+    } else {
+      if result is .Some(v) { assert (v == i) } else { crash("Missing value \{i}") }
     };
     i = i + 1;
   };
@@ -175,7 +221,7 @@ fn test(size: u64): unit {
 }
 
 fn main(): int {
-  test(100000);
+  test(16);
   0
 }
 

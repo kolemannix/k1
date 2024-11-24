@@ -351,6 +351,7 @@ impl Show for bool {
 impl Show for i64 {
   // We know this is super slow, relax, it'll be ok
   fn show(self: i64): string {
+    if self == 0 return("0");
     val neg = self < 0;
     mut remaining: i64 = if neg self * -1 else self;
     val buf = Array::withCapacity[char](8).&;
