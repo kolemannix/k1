@@ -4042,8 +4042,7 @@ impl TypedModule {
                         self.ast.expressions.add_expression(ParsedExpression::Variable(
                             parse::Variable { name: NamespacedIdentifier::naked(ident, span) },
                         ));
-                    let expr = self.eval_variable(variable_expr_id, block_scope, false)?;
-                    self.synth_show_call(expr, block_scope)?
+                    self.synth_show_ident_call(variable_expr_id, block_scope)?
                 }
             };
             debug_assert!(string_expr.get_type() == STRING_TYPE_ID);
@@ -5962,31 +5961,7 @@ impl TypedModule {
             }
         };
         let ability_fn_id = if method_id.is_none() {
-            match self.types.get(base_expr.get_type()) {
-                // For a type variable, we must check for impls in a different place
-                Type::TypeVariable(tv) => {
-                    if !tv.ability_impls.is_empty() {
-                        let mut matching_fns = Vec::new();
-                        for ability_id in tv.ability_impls.iter() {
-                            let ability = self.get_ability(*ability_id);
-                            let matching_fn = ability.find_function_by_name(fn_name);
-                            if let Some((_matching_index, generic_fn)) = matching_fn {
-                                matching_fns.push(generic_fn.function_id)
-                            }
-                        }
-                        if matching_fns.is_empty() {
-                            Ok(None)
-                        } else if matching_fns.len() > 1 {
-                            failf!(fn_call.span, "Ambiguous Type Variable ability")
-                        } else {
-                            Ok(Some(matching_fns[0]))
-                        }
-                    } else {
-                        Ok(None)
-                    }
-                }
-                _ => self.find_ability_implementation(fn_name, type_id, None, fn_call.span),
-            }?
+            self.find_ability_implementation(fn_name, type_id, None, fn_call.span)?
         } else {
             None
         };
@@ -6008,6 +5983,28 @@ impl TypedModule {
         only_ability_id: Option<AbilityId>,
         span: SpanId,
     ) -> TyperResult<Option<FunctionId>> {
+        // For a type variable, we must check for impls in a different place
+        if let Type::TypeVariable(tv) = self.types.get(type_id) {
+            return if !tv.ability_impls.is_empty() {
+                let mut matching_fns = Vec::new();
+                for ability_id in tv.ability_impls.iter() {
+                    let ability = self.get_ability(*ability_id);
+                    let matching_fn = ability.find_function_by_name(function_name);
+                    if let Some((_matching_index, generic_fn)) = matching_fn {
+                        matching_fns.push(generic_fn.function_id)
+                    }
+                }
+                if matching_fns.is_empty() {
+                    Ok(None)
+                } else if matching_fns.len() > 1 {
+                    failf!(span, "Ambiguous Type Variable ability")
+                } else {
+                    Ok(Some(matching_fns[0]))
+                }
+            } else {
+                Ok(None)
+            };
+        };
         let impls = self.ability_impls.iter().filter(|imp| {
             imp.type_id == type_id
             // Inlined Option.is_none_or
@@ -6040,7 +6037,17 @@ impl TypedModule {
         fn_call: &FnCall,
     ) -> TyperResult<Option<TypedExpr>> {
         let base_type_id: TypeId = base_expr.get_type();
-        let Type::Enum(e) = self.types.get(base_type_id) else { return Ok(None) };
+        let (e, is_reference) = match self.types.get(base_type_id) {
+            Type::Reference(r) => {
+                if let Type::Enum(e) = self.types.get(r.inner_type) {
+                    (e, true)
+                } else {
+                    return Ok(None);
+                }
+            }
+            Type::Enum(e) => (e, false),
+            _ => return Ok(None),
+        };
         let fn_name = self.get_ident_str(fn_call.name.name);
         if fn_name.starts_with("as") && fn_call.type_args.is_empty() && fn_call.args.len() == 1 {
             let span = fn_call.span;
@@ -6061,10 +6068,22 @@ impl TypedModule {
                 );
             };
             let variant_type_id = variant.my_type_id;
+            let variant_name = variant.name;
+            let variant_index = variant.index;
+            let resulting_type_id = if is_reference {
+                self.types.add_reference_type(variant_type_id)
+            } else {
+                variant_type_id
+            };
+            let base_expr_dereferenced = if is_reference {
+                self.synth_dereference(base_expr.clone())
+            } else {
+                base_expr.clone()
+            };
             let condition = TypedExpr::EnumIsVariant(TypedEnumIsVariantExpr {
-                target_expr: Box::new(base_expr.clone()),
-                variant_name: variant.name,
-                variant_index: variant.index,
+                target_expr: Box::new(base_expr_dereferenced.clone()),
+                variant_name,
+                variant_index,
                 span,
             });
             let parsed_id = fn_call.args[0].value.into();
@@ -6073,7 +6092,7 @@ impl TypedModule {
                 TypedExpr::Cast(TypedCast {
                     cast_type: CastType::KnownNoOp,
                     base_expr: Box::new(base_expr.clone()),
-                    target_type_id: variant.my_type_id,
+                    target_type_id: resulting_type_id,
                     span,
                 }),
             );
@@ -8619,19 +8638,24 @@ impl TypedModule {
         )
     }
 
-    fn synth_show_call(&mut self, caller: TypedExpr, scope_id: ScopeId) -> TyperResult<TypedExpr> {
+    fn synth_show_ident_call(
+        &mut self,
+        caller: ParsedExpressionId,
+        scope_id: ScopeId,
+    ) -> TyperResult<TypedExpr> {
+        let span = self.ast.expressions.get_span(caller);
         self.eval_function_call(
             &FnCall {
-                name: qident!(self, caller.get_span(), ["Show"], "show"),
+                name: qident!(self, span, ["Show"], "show"),
                 type_args: vec![],
-                args: vec![],
+                args: vec![parse::FnCallArg { name: None, value: caller }],
                 explicit_context_args: vec![],
-                span: caller.get_span(),
+                span,
                 is_method: false,
             },
             scope_id,
             None,
-            Some((vec![], vec![caller])),
+            None,
         )
     }
 

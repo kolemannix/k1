@@ -123,6 +123,10 @@
 - [ ] Fix named arguments
 - [x] return from while
 - [x] break from while
+- [ ] Working with references push
+  - [ ] EnumGetPayload on a reference doesn't give a reference
+  - [ ] Cannot match on references
+  - [ ] Match to get reference to each struct field, for example, use * for a dereferencing match
 - [ ] 'never' needs to work in every expression position
 - [ ] Move tests into single file, accumulate errors and allow inline assertions when a line should error.
       Probably one tests for failing compilation and one passing one for each major language area
@@ -199,7 +203,7 @@
 - [ ] Unmatched closing delim in namespace causes silent failure to parse rest of sources
 - [ ] Replace IdentifierId with global 'Symbol' where its a bug not to
 - [x] Parsing bug where first expr of block is namespaced with ::
-- [ ] Parsing bug where `if rest.startsWith("one") .Some(1: u64)` parses as `if rest.startsWith("one").Some(1: u64)`
+- [x] Parsing bug where `if rest.startsWith("one") .Some(1: u64)` parses as `if rest.startsWith("one").Some(1: u64)`
 - [x] ICE when assigning to struct member when struct is not a reference (self.module.types.get(field_access.base.get_type()).as_reference().is_some())
 
 # Minor Fix (possible good bite-sized videos)
