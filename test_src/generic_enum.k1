@@ -1,4 +1,4 @@
-deftype Result[T, E] = enum Ok(T) , Err(E)
+deftype Result[T, E] = either Ok(T) , Err(E)
 namespace Result {
   fn unwrap[T, E](self: Result[T, E]): T {
     self.asOk()!.value

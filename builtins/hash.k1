@@ -7,7 +7,7 @@
 // - String handling
 // - Array operations
 
-//deftype Entry[V] = enum Empty, Deleted, Occupied(V)
+//deftype Entry[V] = either Empty, Deleted, Occupied(V)
 deftype HashMap[V] = {
   size: u64,
   entries: Array[{ key: string, value: V }?],

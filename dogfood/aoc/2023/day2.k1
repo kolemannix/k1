@@ -1,4 +1,4 @@
-type Color = enum Red, Green, Blue
+type Color = either Red, Green, Blue
 
 impl Show for Color {
   fn show(self: Color): string {
