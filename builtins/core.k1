@@ -150,7 +150,7 @@ fn assert(context locn: CompilerSourceLoc)(value: bool): unit {
 }
 fn assertMsg(context locn: CompilerSourceLoc)(msg: string, value: bool): unit {
   if not value {
-    crash("ASSERT FAILED: ".concat(msg))
+    crash("ASSERT FAILED: \{msg}")
   };
 }
 
@@ -359,6 +359,8 @@ impl Show for i64 {
 
 impl Show for u64 {
   fn show(self: u64): string {
+    if self == 0 return("0");
+
     mut remaining: u64 = self;
     val buf = Array::new[char](8).&;
     while remaining > 0 {
@@ -393,7 +395,7 @@ impl Show for i8 {
 
 impl Equals for i64 {
   fn equals(self: i64, other: i64): bool {
-    // Because the types of self and other are i64, the compiler will not 
+    // Because the types of self and other are i64, the compiler will not
     // use the ability but rather do the intrinsic thing
     self == other
   }
