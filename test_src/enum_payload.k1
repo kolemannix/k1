@@ -1,4 +1,4 @@
-deftype Maybe = enum A , B(char) , C(string)
+deftype Maybe = either A , B(char) , C(string)
 
 fn main(): int {
   val a: Maybe = .A;

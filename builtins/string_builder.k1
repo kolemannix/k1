@@ -1,4 +1,4 @@
-deftype StringBuilder = { parts: Array[enum Char(char), String(string)]* }
+deftype StringBuilder = { parts: Array[either Char(char), String(string)]* }
 namespace StringBuilder {
   deftype alias Part = StringBuilder.parts.value.T
 

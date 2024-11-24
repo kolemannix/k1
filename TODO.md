@@ -128,7 +128,8 @@
       Probably one tests for failing compilation and one passing one for each major language area
 - [ ] Remove lvalue-based assignment from the language, use references to assign instead, introduce a desugaring for `referenceSet` (`set a := b`)
       - lvalue-based assignment stuff is just an abomination from an algebraic perspective, and probably inhibits learning
-- [ ] b"" strings that are of type... Slice[u8]
+- [ ] b"" strings that are of type Slice[u8]
+- [ ] Finish hashmap implementation
 - [ ] Builtin syntax for maps w/ Map[K, V]
 - [ ] Warnings/Errors
   - [ ] Unused var
@@ -137,8 +138,7 @@
       - `if self.slots.get(probe_index) is None {`
 - [x] Handle escaped chars in string literals
 - [ ] Friendliness pass
-  - [ ] Move to single '=' for equality
-  - [ ] Move to single ':=' for assignment / definition? Or just space; `let x 42`, `set x 52`
+  - [ ] Create a desugaring of referenceSet, make it match variable assignment ideally
   - [ ] Replace 'enum' keyword with 'either', ensure the ambiguous cases have good errors (inside struct, inside param list)
   - [x] 'when' keyword is bad; `switch` maybe or `case`, or resolve the ambiguity with `when <x> is {}`
   - [x] Replace `type` with `deftype` - It would be really nice _not_ to take the keyword 'type'. Just a thought from using Rust/Scala

@@ -7234,7 +7234,7 @@ impl TypedModule {
                     if let Err(msg) =
                         self.check_types(payload_type, payload_value.get_type(), scope)
                     {
-                        return failf!(span, "Enum payload type mismatch: {}", msg);
+                        return failf!(span, "Variant payload type mismatch: {}", msg);
                     }
                     Ok(Some(Box::new(payload_value)))
                 } else {

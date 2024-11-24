@@ -2,7 +2,7 @@ ability Num {
   fn num(self: Self): i32
 }
 
-deftype Tool = enum True , False , Iono
+deftype Tool = either True , False , Iono
 
 fn main(): int {
   val p: Tool = .True;

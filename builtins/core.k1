@@ -10,7 +10,7 @@ deftype f64 = builtin
 deftype Array[T] = { len: u64, cap: u64, data: Pointer }
 deftype string = { len: u64, data: Pointer }
 
-deftype Opt[T] = enum None, Some(T)
+deftype Opt[T] = either None, Some(T)
 
 deftype CompilerSourceLoc = { filename: string, line: u64 }
 
@@ -24,7 +24,7 @@ deftype alias int = i64
 deftype alias uint = u64
 deftype alias byte = u8
 
-// deftype TypeInfo = enum Unit, Boolean(enum False, True), Int,
+// deftype TypeInfo = either Unit, Boolean(either False, True), Int,
 //
 // deftype Any = {
 //   typeInfo: TypeInfo,

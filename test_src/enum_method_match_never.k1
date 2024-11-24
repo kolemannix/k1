@@ -1,4 +1,4 @@
-deftype E = enum A(int) , B
+deftype E = either A(int) , B
 namespace E {
   #debug
   fn value_if_a(self: E): int {

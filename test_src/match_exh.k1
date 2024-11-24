@@ -5,7 +5,7 @@ fn matchBool(b: bool): unit {
   }
 }
 
-deftype TriState = enum Yes, No, Failure({ reason: string })
+deftype TriState = either Yes, No, Failure({ reason: string })
 fn matchTristateOpt(t: TriState?): unit {
   switch t {
     .Some(.Yes) -> println("yes"),

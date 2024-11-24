@@ -1952,7 +1952,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             // Note: Here would be where we would support tuples (if we did paren tuples)
             self.expect_eat_token(K::CloseParen)?;
             Ok(Some(expr))
-        } else if first.kind == K::KeywordEnum {
+        } else if first.kind == K::KeywordEither {
             let enumm = self.expect_enum_type_expression()?;
             let type_expr_id = self.module.type_expressions.add(ParsedTypeExpression::Enum(enumm));
             Ok(Some(type_expr_id))
@@ -2054,7 +2054,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn expect_enum_type_expression(&mut self) -> ParseResult<ParsedEnumType> {
-        let keyword = self.expect_eat_token(K::KeywordEnum)?;
+        let keyword = self.expect_eat_token(K::KeywordEither)?;
         let mut variants = Vec::new();
         let mut first = true;
         loop {
