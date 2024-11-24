@@ -119,6 +119,9 @@
 - [x] Change reference and dereference syntax to x.& and x.*
 - [x] Fix context params when combined with generics
 - [x] string interpolation
+- [ ] Compiler directives
+    - [ ] Dump tast
+    - [ ] Conditional compilation
 - [ ] Fix named arguments
 - [x] return from while
 - [x] break from while
@@ -127,9 +130,6 @@
       Probably one tests for failing compilation and one passing one for each major language area
 - [ ] Remove lvalue-based assignment from the language, use references to assign instead, introduce a desugaring for `referenceSet` (`set a := b`)
       - lvalue-based assignment stuff is just an abomination from an algebraic perspective, and probably inhibits learning
-- [ ] Compiler directives
-    - [ ] Conditional compilation
-    - [ ] Dump tast
 - [ ] b"" strings that are of type... Slice[u8]
 - [ ] Builtin syntax for maps w/ Map[K, V]
 - [ ] Warnings/Errors

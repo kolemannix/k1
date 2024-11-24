@@ -1,9 +1,10 @@
 deftype E = enum A(int) , B
 namespace E {
+  #debug
   fn value_if_a(self: E): int {
     switch self {
-      , .A(i) -> i
-      , .B -> crash("This is a B!")
+      .A(i) -> i,
+      .B -> crash("This is a B!"),
     }
   }
 }

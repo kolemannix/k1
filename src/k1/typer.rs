@@ -18,11 +18,11 @@ use types::*;
 
 use crate::lex::{SpanId, Spans, TokenKind};
 use crate::parse::{
-    self, ForExpr, ForExprType, Identifiers, IfExpr, NamedTypeArg, NamespacedIdentifier,
-    NumericWidth, ParsedAbilityId, ParsedAbilityImplId, ParsedConstantId, ParsedExpressionId,
-    ParsedFunctionId, ParsedId, ParsedLoopExpr, ParsedNamespaceId, ParsedPattern, ParsedPatternId,
-    ParsedTypeDefnId, ParsedTypeExpression, ParsedTypeExpressionId, ParsedUnaryOpKind,
-    ParsedWhileExpr, Sources,
+    self, DirectiveKind, ForExpr, ForExprType, Identifiers, IfExpr, NamedTypeArg,
+    NamespacedIdentifier, NumericWidth, ParsedAbilityId, ParsedAbilityImplId, ParsedConstantId,
+    ParsedDirective, ParsedExpressionId, ParsedFunctionId, ParsedId, ParsedLoopExpr,
+    ParsedNamespaceId, ParsedPattern, ParsedPatternId, ParsedTypeDefnId, ParsedTypeExpression,
+    ParsedTypeExpressionId, ParsedUnaryOpKind, ParsedWhileExpr, Sources,
 };
 use crate::parse::{
     Block, FnCall, Identifier, Literal, ParsedExpression, ParsedModule, ParsedStmt,
@@ -306,6 +306,7 @@ pub struct TypedFunction {
     pub type_id: TypeId,
     #[allow(unused)]
     is_method_of: Option<TypeId>,
+    pub compiler_debug: bool,
     pub kind: TypedFunctionKind,
     pub span: SpanId,
 }
@@ -1353,6 +1354,7 @@ pub struct TypedModule {
     pub namespace_ast_mappings: HashMap<ParsedNamespaceId, NamespaceId>,
     pub function_ast_mappings: HashMap<ParsedFunctionId, FunctionId>,
     pub ability_impl_ast_mappings: HashMap<ParsedAbilityImplId, AbilityImplId>,
+    pub debug_level_stack: Vec<log::LevelFilter>,
 }
 
 impl TypedModule {
@@ -1396,7 +1398,19 @@ impl TypedModule {
             namespace_ast_mappings: HashMap::new(),
             function_ast_mappings: HashMap::new(),
             ability_impl_ast_mappings: HashMap::new(),
+            debug_level_stack: vec![log::max_level()],
         }
+    }
+
+    fn push_debug_level(&mut self) {
+        let level = log::LevelFilter::Debug;
+        self.debug_level_stack.push(level);
+        log::set_max_level(level);
+    }
+
+    fn pop_debug_level(&mut self) {
+        self.debug_level_stack.pop();
+        log::set_max_level(*self.debug_level_stack.last().unwrap());
     }
 
     pub fn function_iter(&self) -> impl Iterator<Item = (FunctionId, &TypedFunction)> {
@@ -3895,7 +3909,6 @@ impl TypedModule {
             }
             ParsedExpression::InterpolatedString(_is) => {
                 let res = self.eval_interpolated_string(expr_id, scope_id, expected_type)?;
-                eprintln!("interp!\n{}", self.expr_to_string(&res));
                 Ok(res)
             }
         }
@@ -4317,6 +4330,7 @@ impl TypedModule {
             parsed_id: expr_id.into(),
             type_id: function_type,
             is_method_of: None,
+            compiler_debug: false,
             kind: TypedFunctionKind::Closure,
             span,
         };
@@ -4650,6 +4664,7 @@ impl TypedModule {
                 condition_statements.extend(inner_condition_stmts);
                 let final_condition = match inner_condition {
                     None => is_variant_condition,
+                    Some(TypedExpr::Bool(true, _)) => is_variant_condition,
                     Some(inner_condition) => TypedExpr::BinaryOp(BinaryOp {
                         kind: BinaryOpKind::And,
                         ty: BOOL_TYPE_ID,
@@ -7223,6 +7238,14 @@ impl TypedModule {
         let companion_type_id = namespace.companion_type_id;
         let specialize = specialization_params.is_some();
         let parsed_function = self.ast.get_function(parsed_function_id).clone();
+        let debug_directive = parsed_function
+            .directives
+            .iter()
+            .find(|p| matches!(p.kind, DirectiveKind::CompilerDebug));
+        let is_debug = debug_directive.is_some();
+        if is_debug {
+            self.push_debug_level();
+        }
         let parsed_function_linkage = parsed_function.linkage;
         let parsed_function_ret_type = parsed_function.ret_type;
         let parsed_function_name = parsed_function.name;
@@ -7503,6 +7526,7 @@ impl TypedModule {
             parsed_id: parsed_function_id.into(),
             is_method_of,
             kind,
+            compiler_debug: is_debug,
             span: parsed_function_span,
             type_id: function_type_id,
         };
@@ -7524,7 +7548,6 @@ impl TypedModule {
             //
             // Bookkeeping to do when NOT specializing
             //
-
             if !self.scopes.add_function(parent_scope_id, parsed_function_name, function_id) {
                 return failf!(
                     parsed_function_span,
@@ -7550,6 +7573,11 @@ impl TypedModule {
 
         self.scopes.set_scope_owner_id(fn_scope_id, ScopeOwnerId::Function(function_id));
 
+        if is_debug {
+            eprintln!("DEBUG\n{}", self.function_id_to_string(function_id, false));
+            self.pop_debug_level();
+        }
+
         Ok(function_id)
     }
 
@@ -7559,6 +7587,7 @@ impl TypedModule {
 
     fn eval_function_body(&mut self, declaration_id: FunctionId) -> TyperResult<()> {
         let function = self.get_function(declaration_id);
+        let is_debug = function.compiler_debug;
         let function_name = function.name;
         let fn_scope_id = function.scope;
         let return_type = self.get_function_type(declaration_id).return_type;
@@ -7566,6 +7595,9 @@ impl TypedModule {
         let ast_id = function.parsed_id.as_function_id().expect("expected function id");
         let is_intrinsic = function.intrinsic_type.is_some();
         let is_ability_defn = matches!(function.kind, TypedFunctionKind::AbilityDefn(_));
+        if is_debug {
+            self.push_debug_level();
+        }
 
         let ast_fn_def = self.ast.get_function(ast_id);
         let function_span = ast_fn_def.span;
@@ -7597,6 +7629,10 @@ impl TypedModule {
         // Add the body now
         if let Some(body_block) = body_block {
             self.get_function_mut(declaration_id).body_block = Some(body_block);
+        }
+        if is_debug {
+            eprintln!("DEBUG\n{}", self.function_id_to_string(declaration_id, true));
+            self.pop_debug_level();
         }
         Ok(())
     }

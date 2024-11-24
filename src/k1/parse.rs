@@ -38,6 +38,22 @@ impl ParsedTypeExpressionId {
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
 pub struct ParsedPatternId(u32);
 
+#[derive(Debug, Clone)]
+pub enum DirectiveKind {
+    CompilerDebug,
+}
+#[derive(Debug, Clone)]
+pub enum DirectiveArg {
+    Ident(Identifier),
+}
+
+#[derive(Debug, Clone)]
+pub struct ParsedDirective {
+    pub kind: DirectiveKind,
+    pub args: Vec<DirectiveArg>,
+    pub span: SpanId,
+}
+
 pub type FileId = u32;
 
 #[cfg(test)]
@@ -895,6 +911,7 @@ pub struct ParsedFunction {
     pub block: Option<Block>,
     pub span: SpanId,
     pub linkage: Linkage,
+    pub directives: Vec<ParsedDirective>,
     pub id: ParsedFunctionId,
 }
 
@@ -1580,6 +1597,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     #[inline]
     fn peek(&self) -> Token {
         self.tokens.peek()
+    }
+
+    #[inline]
+    fn cursor_position(&self) -> usize {
+        self.tokens.cursor_position()
     }
 
     #[inline]
@@ -2896,8 +2918,39 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(ParsedTypeParamDefn { ident: ident_id, span: s.span, constraints: Vec::new() })
     }
 
+    fn parse_directives(&mut self) -> ParseResult<Vec<ParsedDirective>> {
+        fn expect_directive_arg(parser: &mut Parser) -> ParseResult<DirectiveArg> {
+            let name = parser.expect_eat_token(K::Ident)?;
+            let ident = parser.intern_ident_token(name);
+            Ok(DirectiveArg::Ident(ident))
+        }
+        let mut directives: Vec<ParsedDirective> = vec![];
+        while let Some(_hash) = self.eat_token(K::Hash) {
+            let kind_token = self.expect_eat_token(K::Ident)?;
+            let kind = match self.token_chars(kind_token) {
+                "debug" => DirectiveKind::CompilerDebug,
+                s => return Err(Parser::error(format!("Invalid directive: {s}"), kind_token)),
+            };
+
+            let (args, args_span) = self
+                .eat_delimited_if_opener(
+                    "directive arguments",
+                    K::OpenParen,
+                    K::Comma,
+                    K::CloseParen,
+                    expect_directive_arg,
+                )?
+                .unwrap_or((vec![], kind_token.span));
+            let span = self.extend_span(kind_token.span, args_span);
+            directives.push(ParsedDirective { kind, args, span })
+        }
+        Ok(directives)
+    }
+
     fn parse_function(&mut self) -> ParseResult<Option<ParsedFunctionId>> {
         trace!("parse_function");
+        let directives = self.parse_directives()?;
+        let initial_pos = self.cursor_position();
         let is_intrinsic = if self.peek().kind == K::KeywordIntern {
             self.tokens.advance();
             true
@@ -2925,7 +2978,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let fn_keyword = match self.expect_eat_token(K::KeywordFn) {
             Ok(f) => f,
             Err(e) => {
-                return if linkage != Linkage::Standard { Err(e) } else { Ok(None) };
+                return if self.cursor_position() != initial_pos { Err(e) } else { Ok(None) };
             }
         };
         let func_name = self.expect_eat_token(K::Ident)?;
@@ -2970,6 +3023,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             block,
             span,
             linkage,
+            directives,
             id: ParsedFunctionId(0),
         });
         Ok(Some(function_id))

@@ -80,6 +80,10 @@ impl<'toks> TokenIter<'toks> {
         tok
     }
 
+    pub fn cursor_position(&self) -> usize {
+        self.cursor
+    }
+
     #[inline]
     pub fn advance(&mut self) {
         self.cursor += 1;
@@ -176,6 +180,7 @@ pub enum TokenKind {
     Ampersand,
     Percent,
     BackSlash,
+    Hash,
 
     DoubleQuote,
     SingleQuote,
@@ -262,6 +267,7 @@ impl TokenKind {
             K::Ampersand => Some("&"),
             K::Percent => Some("%"),
             K::BackSlash => Some("\\"),
+            K::Hash => Some("#"),
 
             K::Plus => Some("+"),
             K::Minus => Some("-"),
@@ -308,6 +314,7 @@ impl TokenKind {
             '&' => Some(K::Ampersand),
             '%' => Some(K::Percent),
             '\\' => Some(K::BackSlash),
+            '#' => Some(K::Hash),
             _ => None,
         }
     }
