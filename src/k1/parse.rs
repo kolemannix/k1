@@ -216,7 +216,7 @@ pub struct Identifiers {
     intern_pool: string_interner::StringInterner<StringBackend>,
 }
 impl Identifiers {
-    pub const BUILTIN_IDENTS: [&'static str; 24] = [
+    pub const BUILTIN_IDENTS: [&'static str; 25] = [
         "self",
         "it",
         "unit",
@@ -241,6 +241,7 @@ impl Identifiers {
         "&",
         "*",
         "sb",
+        "payload",
     ];
 
     pub fn intern(&mut self, s: impl AsRef<str>) -> Identifier {
@@ -854,6 +855,12 @@ pub struct ParsedFunctionType {
 }
 
 #[derive(Debug, Clone)]
+pub struct ParsedTypeOf {
+    pub target_expr: ParsedExpressionId,
+    pub span: SpanId,
+}
+
+#[derive(Debug, Clone)]
 pub enum ParsedTypeExpression {
     Builtin(SpanId),
     Integer(ParsedNumericType),
@@ -864,6 +871,7 @@ pub enum ParsedTypeExpression {
     Enum(ParsedEnumType),
     DotMemberAccess(ParsedDotMemberAccess),
     Function(ParsedFunctionType),
+    TypeOf(ParsedTypeOf),
 }
 
 impl ParsedTypeExpression {
@@ -884,6 +892,7 @@ impl ParsedTypeExpression {
             ParsedTypeExpression::Enum(e) => e.span,
             ParsedTypeExpression::DotMemberAccess(a) => a.span,
             ParsedTypeExpression::Function(f) => f.span,
+            ParsedTypeExpression::TypeOf(tof) => tof.span,
         }
     }
 }
@@ -2026,6 +2035,17 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             if let Some(constant_expr) = maybe_constant_expr {
                 self.tokens.advance();
                 Ok(Some(self.module.type_expressions.add(constant_expr)))
+            } else if ident_chars == "typeOf" {
+                self.tokens.advance();
+                self.expect_eat_token(K::OpenParen)?;
+                let target_expr = self.expect_expression()?;
+                let end = self.expect_eat_token(K::CloseParen)?;
+                let span = self.extend_token_span(first, end);
+                Ok(Some(
+                    self.module
+                        .type_expressions
+                        .add(ParsedTypeExpression::TypeOf(ParsedTypeOf { target_expr, span })),
+                ))
             } else {
                 let base_name = self.expect_namespaced_ident()?;
                 // parameterized, namespaced type. Examples:
@@ -3528,6 +3548,12 @@ impl ParsedModule {
                 }
                 f.write_str(" -> ")?;
                 self.display_type_expression_id(fun.return_type, f)?;
+                Ok(())
+            }
+            ParsedTypeExpression::TypeOf(tof) => {
+                f.write_str("typeOf(")?;
+                self.display_expr_id(tof.target_expr, f)?;
+                f.write_str(")")?;
                 Ok(())
             }
         }

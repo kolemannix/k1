@@ -591,9 +591,10 @@ pub struct TypedEnumConstructor {
 #[derive(Debug, Clone)]
 pub struct GetEnumPayload {
     pub target_expr: Box<TypedExpr>,
-    pub payload_type_id: TypeId,
+    pub result_type_id: TypeId,
     pub variant_name: Identifier,
     pub variant_index: u32,
+    pub is_referencing: bool,
     pub span: SpanId,
 }
 
@@ -913,7 +914,7 @@ impl TypedExpr {
             TypedExpr::LoopExpr(loop_expr) => loop_expr.break_type,
             TypedExpr::EnumConstructor(enum_cons) => enum_cons.type_id,
             TypedExpr::EnumIsVariant(_is_variant) => BOOL_TYPE_ID,
-            TypedExpr::EnumGetPayload(as_variant) => as_variant.payload_type_id,
+            TypedExpr::EnumGetPayload(as_variant) => as_variant.result_type_id,
             TypedExpr::Cast(c) => c.target_type_id,
             TypedExpr::Return(_ret) => NEVER_TYPE_ID,
             TypedExpr::Break(_break) => NEVER_TYPE_ID,
@@ -1955,6 +1956,10 @@ impl TypedModule {
                     type_expr_id.into(),
                 );
                 Ok(closure_object_type)
+            }
+            ParsedTypeExpression::TypeOf(tof) => {
+                let expr = self.eval_expr(tof.target_expr, scope_id, None)?;
+                Ok(expr.get_type())
             }
         }?;
         Ok(base)
@@ -3242,7 +3247,7 @@ impl TypedModule {
         let original_base_expr_type = base_expr.get_type();
 
         // Perform auto-dereference for accesses that are not 'lvalue'-style or 'referencing' style
-        let base_type = match self.types.get(base_expr.get_type()) {
+        let (base_type, is_reference) = match self.types.get(base_expr.get_type()) {
             Type::Reference(reference_type) => {
                 if !is_assignment_lhs && !field_access.is_referencing {
                     // Dereference the base expression
@@ -3253,15 +3258,15 @@ impl TypedModule {
                         expr: Box::new(base_expr),
                     });
                 }
-                reference_type.inner_type
+                (reference_type.inner_type, true)
             }
             _other => {
                 if is_assignment_lhs {
                     return failf!(base_span, "Cannot assign to member of non-reference struct");
-                } else if field_access.is_referencing {
+                } else if field_access.is_referencing && !field_access.is_coalescing {
                     return failf!(base_span, "Field access target is not a pointer, so referencing access with * cannot be used");
                 } else {
-                    base_expr.get_type()
+                    (base_expr.get_type(), false)
                 }
             }
         };
@@ -3270,6 +3275,12 @@ impl TypedModule {
                 if let Some(opt) = t.as_optional() {
                     if !field_access.is_coalescing {
                         return failf!(span, "Optionals have no direct fields; did you mean to use the '?.' operator?");
+                    }
+                    if field_access.is_referencing {
+                        return failf!(
+                            span,
+                            "Cannot use referencing access with optional coalescing"
+                        );
                     }
                     let parsed_id: ParsedId = field_access_id.into();
                     let mut block = self.synth_block(vec![], scope_id, span);
@@ -3310,13 +3321,6 @@ impl TypedModule {
                         block_scope,
                         (vec![opt.inner_type], vec![base_expr_var.variable_expr]),
                     )?;
-                    // nocommit: Make this understands 'referencing' accesses, or better, change
-                    //           desugaring approach
-                    let field_type = if field_access.is_referencing {
-                        self.types.add_reference_type(field_type)
-                    } else {
-                        field_type
-                    };
                     let consequent = self.synth_optional_some(
                         parsed_id,
                         TypedExpr::StructFieldAccess(FieldAccess {
@@ -3324,7 +3328,7 @@ impl TypedModule {
                             target_field: field_name,
                             target_field_index: field_index as u32,
                             span,
-                            is_referencing: field_access.is_referencing,
+                            is_referencing: false,
                             result_type: field_type,
                             struct_type: opt.inner_type,
                         }),
@@ -3373,7 +3377,6 @@ impl TypedModule {
                 }))
             }
             Type::EnumVariant(ev) => {
-                // nocommit: Support referencing payload get as well!
                 if self.ast.identifiers.get_name(field_access.target) != "value" {
                     return failf!(
                         span,
@@ -3388,11 +3391,19 @@ impl TypedModule {
                         self.ast.identifiers.get_name(ev.name)
                     );
                 };
+                let variant_name = ev.name;
+                let variant_index = ev.index;
+                let result_type_id = if field_access.is_referencing {
+                    self.types.add_reference_type(payload_type_id)
+                } else {
+                    payload_type_id
+                };
                 Ok(TypedExpr::EnumGetPayload(GetEnumPayload {
                     target_expr: Box::new(base_expr),
-                    payload_type_id,
-                    variant_name: ev.name,
-                    variant_index: ev.index,
+                    result_type_id,
+                    variant_name,
+                    variant_index,
+                    is_referencing: field_access.is_referencing,
                     span,
                 }))
             }
@@ -4701,12 +4712,13 @@ impl TypedModule {
                     };
                     let payload_value = TypedExpr::EnumGetPayload(GetEnumPayload {
                         target_expr: Box::new(target_expr_variable_expr.into()),
-                        payload_type_id,
+                        result_type_id: payload_type_id,
                         variant_name: variant.name,
                         variant_index: variant.index,
+                        is_referencing: false,
                         span: enum_pattern.span,
                     });
-                    let payload_value_synth_name = self.ast.identifiers.intern("payload");
+                    let payload_value_synth_name = get_ident!(self, "payload");
                     let payload_variable = self.synth_variable_defn(
                         payload_value_synth_name,
                         payload_value,
@@ -6127,7 +6139,7 @@ impl TypedModule {
                     span,
                 }),
             );
-            let alternate = self.synth_optional_none(variant_type_id, parsed_id, span);
+            let alternate = self.synth_optional_none(resulting_type_id, parsed_id, span);
 
             Ok(Some(TypedExpr::If(Box::new(TypedIf {
                 ty: consequent.get_type(),
