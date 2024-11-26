@@ -119,6 +119,7 @@
 - [x] Change reference and dereference syntax to x.& and x.*
 - [x] Fix context params when combined with generics
 - [x] string interpolation
+- [x] typeOf(<anyexpr>)
 - [ ] Context location params are not being propagated
 - [ ] Fix named arguments
 - [x] return from while

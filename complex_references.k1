@@ -16,19 +16,35 @@ fn main(): int {
   structRef.x = 42;
   assert(xRef.* == 42);
 
-  val eitherRef: (either Yes(bool), No)* = .Yes(true).&;
+  val eitherRef: (either Yes(int), No)* = .Yes(3).&;
 
-  val yesValue: bool = eitherRef.asYes()!.value;
-  val yesRef: bool* = eitherRef.asYes()!.value*;
+  val yesValue: int = eitherRef.asYes()!.value;
+  val yesRef: typeOf(eitherRef).value.Yes* = eitherRef.asYes()!;
 
-  assert(yesRef.*);
-  assert(yesValue);
+  assert(yesRef.value == 3);
+  assert(yesRef.value*.* == 3);
+  assert(yesValue == 3);
+
+  referenceSet(eitherRef.asYes()!.value*, -3);
+  assert(yesRef.value == -3);
+  assert(yesRef.value*.* == -3);
+  assert(eitherRef.asYes()!.value == -3);
 
   // no restrictions on lhs except that it has to be a pointer,
   // this in conjunction with let* will mean we have pointers for
   // simple mutable ints, and should mean we can evaluate the lhs
   // of assignments as a normal expression
   // <any ptr> <- <expr>
+
+  val structOptRef: { x: int }*? = .Some({ x: 42 }.&);
+
+  if structOptRef is .Some(x) {
+    assert(x.x == 42);
+    x.x = 43;
+    assert(x.x == 43);
+  } else {
+    println("None")
+  };
 
   0
 }

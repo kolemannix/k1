@@ -1692,15 +1692,25 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(is_variant_bool.as_basic_value_enum().into())
             }
             TypedExpr::EnumGetPayload(enum_get_payload) => {
-                let enum_type =
-                    self.codegen_type(enum_get_payload.target_expr.get_type())?.expect_enum();
-                let enum_value = self
-                    .codegen_expr_basic_value(&enum_get_payload.target_expr)?
-                    .into_struct_value();
+                let enum_type = self
+                    .module
+                    .types
+                    .get_type_id_dereferenced(enum_get_payload.target_expr.get_type());
+                let enum_type = self.codegen_type(enum_type)?.expect_enum();
+                let enum_value = self.codegen_expr_basic_value(&enum_get_payload.target_expr)?;
                 let variant_type =
                     &enum_type.variant_structs[enum_get_payload.variant_index as usize];
-                let value_payload = self.get_enum_payload(variant_type.struct_type, enum_value);
-                Ok(value_payload.into())
+
+                if enum_get_payload.is_referencing {
+                    let enum_value = enum_value.into_pointer_value();
+                    let payload_pointer =
+                        self.get_enum_payload_reference(variant_type.struct_type, enum_value);
+                    Ok(payload_pointer.into())
+                } else {
+                    let enum_value = enum_value.into_struct_value();
+                    let value_payload = self.get_enum_payload(variant_type.struct_type, enum_value);
+                    Ok(value_payload.into())
+                }
             }
             TypedExpr::Cast(cast) => {
                 match cast.cast_type {
@@ -2205,6 +2215,18 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         self.builder.build_extract_value(enum_value, 0, "get_tag").unwrap().into_int_value()
     }
 
+    fn get_enum_payload_reference(
+        &self,
+        variant_type: StructType<'ctx>,
+        enum_pointer: PointerValue<'ctx>,
+    ) -> PointerValue<'ctx> {
+        let payload_ptr = self
+            .builder
+            .build_struct_gep(variant_type, enum_pointer, 1, "get_payload_ptr")
+            .unwrap();
+        payload_ptr
+    }
+
     fn get_enum_payload(
         &self,
         variant_type: StructType<'ctx>,
@@ -2215,6 +2237,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
         let ptr = self.builder.build_alloca(variant_type, "enum_ptr_for_payload");
         self.builder.build_store(ptr, enum_value);
+
+        // Cannot cast aggregate types :'(
         // let casted_ptr = self
         //     .builder
         //     .build_bitcast(ptr, variant_type.ptr_type(AddressSpace::default()), "variant_cast")
