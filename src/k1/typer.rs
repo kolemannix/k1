@@ -544,7 +544,9 @@ pub struct FieldAccess {
     pub base: Box<TypedExpr>,
     pub target_field: Identifier,
     pub target_field_index: u32,
-    pub ty: TypeId,
+    pub result_type: TypeId,
+    pub struct_type: TypeId,
+    pub is_referencing: bool,
     pub span: SpanId,
 }
 
@@ -901,7 +903,7 @@ impl TypedExpr {
             TypedExpr::Bool(_, _) => BOOL_TYPE_ID,
             TypedExpr::Struct(struc) => struc.type_id,
             TypedExpr::Variable(var) => var.type_id,
-            TypedExpr::StructFieldAccess(field_access) => field_access.ty,
+            TypedExpr::StructFieldAccess(field_access) => field_access.result_type,
             TypedExpr::BinaryOp(binary_op) => binary_op.ty,
             TypedExpr::UnaryOp(unary_op) => unary_op.type_id,
             TypedExpr::Block(b) => b.expr_type,
@@ -3170,6 +3172,7 @@ impl TypedModule {
     ) -> TyperResult<TypedExpr> {
         // Bailout case: Enum Constructor
         let span = field_access.span;
+        let base_span = self.ast.expressions.get_span(field_access.base);
         if let Some(enum_result) = self.handle_enum_constructor(
             field_access.base,
             field_access.target,
@@ -3182,6 +3185,7 @@ impl TypedModule {
             return Ok(enum_result);
         }
 
+        // Bailout case: .& stack reference generation (deprecated)
         if field_access.target == get_ident!(self, "&") {
             let expected_type = match expected_type.map(|t| self.types.get(t)) {
                 Some(Type::Reference(r)) => Some(r.inner_type),
@@ -3198,7 +3202,10 @@ impl TypedModule {
                 expr: Box::new(base_expr),
                 span,
             }));
-        } else if field_access.target == get_ident!(self, "*") {
+        };
+
+        // Bailout case: .* dereference operation
+        if field_access.target == get_ident!(self, "*") {
             // Example:
             // let x: int = intptr.*
             // The expected_type when we eval `*intptr` is int, so
@@ -3232,14 +3239,12 @@ impl TypedModule {
         }
 
         let mut base_expr = self.eval_expr(field_access.base, scope_id, None)?;
+        let original_base_expr_type = base_expr.get_type();
 
-        // Perform auto-dereference
-        let base_expr_type = base_expr.get_type();
-        let base_type = match self.types.get(base_expr_type) {
+        // Perform auto-dereference for accesses that are not 'lvalue'-style or 'referencing' style
+        let base_type = match self.types.get(base_expr.get_type()) {
             Type::Reference(reference_type) => {
-                // Auto de-reference everything for field access
-                let inner_type = self.types.get(reference_type.inner_type);
-                if !is_assignment_lhs {
+                if !is_assignment_lhs && !field_access.is_referencing {
                     // Dereference the base expression
                     base_expr = TypedExpr::UnaryOp(UnaryOp {
                         kind: UnaryOpKind::Dereference,
@@ -3248,19 +3253,21 @@ impl TypedModule {
                         expr: Box::new(base_expr),
                     });
                 }
-                inner_type
+                reference_type.inner_type
             }
-            other => {
+            _other => {
                 if is_assignment_lhs {
-                    return failf!(span, "Cannot assign to member of non-reference struct");
+                    return failf!(base_span, "Cannot assign to member of non-reference struct");
+                } else if field_access.is_referencing {
+                    return failf!(base_span, "Field access target is not a pointer, so referencing access with * cannot be used");
                 } else {
-                    other
+                    base_expr.get_type()
                 }
             }
         };
-        match base_type {
-            Type::Enum(_opt_type) => {
-                if let Some(opt) = base_type.as_optional() {
+        match self.types.get(base_type) {
+            t @ Type::Enum(_opt_type) => {
+                if let Some(opt) = t.as_optional() {
                     if !field_access.is_coalescing {
                         return failf!(span, "Optionals have no direct fields; did you mean to use the '?.' operator?");
                     }
@@ -3284,7 +3291,7 @@ impl TypedModule {
                         return failf!(
                             span,
                             "?. must be used on optional structs, got {}",
-                            self.type_id_to_string(base_expr_type)
+                            self.type_id_to_string(original_base_expr_type)
                         );
                     };
                     let (field_index, target_field) =
@@ -3303,7 +3310,13 @@ impl TypedModule {
                         block_scope,
                         (vec![opt.inner_type], vec![base_expr_var.variable_expr]),
                     )?;
-                    let result_type = self.synth_optional_type(field_type, parsed_id);
+                    // nocommit: Make this understands 'referencing' accesses, or better, change
+                    //           desugaring approach
+                    let field_type = if field_access.is_referencing {
+                        self.types.add_reference_type(field_type)
+                    } else {
+                        field_type
+                    };
                     let consequent = self.synth_optional_some(
                         parsed_id,
                         TypedExpr::StructFieldAccess(FieldAccess {
@@ -3311,15 +3324,17 @@ impl TypedModule {
                             target_field: field_name,
                             target_field_index: field_index as u32,
                             span,
-                            ty: field_type,
+                            is_referencing: field_access.is_referencing,
+                            result_type: field_type,
+                            struct_type: opt.inner_type,
                         }),
                     );
                     let alternate = self.synth_optional_none(field_type, parsed_id, span);
                     let if_expr = TypedExpr::If(Box::new(TypedIf {
                         condition: has_value,
+                        ty: consequent.get_type(),
                         consequent,
                         alternate,
-                        ty: result_type,
                         span,
                     }));
                     block.push_stmt(base_expr_var.defn_stmt);
@@ -3342,15 +3357,23 @@ impl TypedModule {
                         ),
                         span,
                     ))?;
+                let result_type = if field_access.is_referencing {
+                    self.types.add_reference_type(target_field.type_id)
+                } else {
+                    target_field.type_id
+                };
                 Ok(TypedExpr::StructFieldAccess(FieldAccess {
                     base: Box::new(base_expr),
                     target_field: field_access.target,
                     target_field_index: field_index as u32,
-                    ty: target_field.type_id,
+                    result_type,
+                    is_referencing: field_access.is_referencing,
+                    struct_type: base_type,
                     span,
                 }))
             }
             Type::EnumVariant(ev) => {
+                // nocommit: Support referencing payload get as well!
                 if self.ast.identifiers.get_name(field_access.target) != "value" {
                     return failf!(
                         span,
@@ -4177,7 +4200,9 @@ impl TypedModule {
                         ))),
                         target_field: env_struct_field.name,
                         target_field_index: env_struct_field.index,
-                        ty: v.type_id,
+                        result_type: v.type_id,
+                        struct_type: env_struct_type,
+                        is_referencing: false,
                         span: pc.span,
                     });
                     let _ = std::mem::replace(body, env_field_access);
@@ -4612,7 +4637,9 @@ impl TypedModule {
                         base: Box::new(TypedExpr::Variable(target_expr_variable_expr.clone())),
                         target_field: pattern_field.name,
                         target_field_index: pattern_field.field_index,
-                        ty: pattern_field.field_type_id,
+                        result_type: pattern_field.field_type_id,
+                        struct_type: target_expr_variable_expr.type_id,
+                        is_referencing: false,
                         span: struct_pattern.span,
                     });
                     // I'm putting condition variables in the match scope id, but they really belong in the arms condition scope id, which
@@ -4952,7 +4979,9 @@ impl TypedModule {
                 base: Box::new(iteree_variable.variable_expr.clone()),
                 target_field: get_ident!(self, "len"),
                 target_field_index: 0,
-                ty: U64_TYPE_ID,
+                result_type: U64_TYPE_ID,
+                struct_type: iteree_type,
+                is_referencing: false,
                 span: body_span,
             })
         } else {
@@ -4960,7 +4989,9 @@ impl TypedModule {
                 base: Box::new(iteree_variable.variable_expr.clone()),
                 target_field: get_ident!(self, "len"),
                 target_field_index: 0,
-                ty: U64_TYPE_ID,
+                result_type: U64_TYPE_ID,
+                struct_type: iteree_type,
+                is_referencing: false,
                 span: body_span,
             })
         };
@@ -7180,8 +7211,11 @@ impl TypedModule {
                 None => match fn_name_str {
                     "sizeOf" => Some(IntrinsicFunction::SizeOf),
                     "alignOf" => Some(IntrinsicFunction::AlignOf),
-                    "typeId" => Some(IntrinsicFunction::TypeId),
                     "referenceSet" => Some(IntrinsicFunction::ReferenceSet),
+                    _ => None,
+                },
+                Some("types") => match fn_name_str {
+                    "typeId" => Some(IntrinsicFunction::TypeId),
                     _ => None,
                 },
                 Some("string") => match fn_name_str {
