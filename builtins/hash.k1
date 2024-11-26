@@ -140,11 +140,7 @@ namespace HashMap {
       .None -> false,
       .Some({ key: existingKey, value: value, deleted }) -> {
         if key == existingKey {
-          // TODO: update using the reference once it works
-          //entryRef.asSome()!.value.deleted = true;
-          // Even this does not work since we get a Array rather than an Array* from `self.entries`
-          // self.entries.setRef(index, { key: key, value: value, deleted: true });
-          referenceSet(entryRef, { key: key, value: value, deleted: true });
+          entryRef.asSome()!.value*.deleted = true;
           not deleted
         } else {
           mut probeIndex = index;
@@ -156,9 +152,7 @@ namespace HashMap {
             switch probedEntryRef.* {
               .Some({ key: existingKey, value, deleted }) -> {
                 if key == existingKey {
-                  // TODO: update using the reference once it works
-                  // probedEntryRef.asSome()!.value.deleted = true;
-                  referenceSet(probedEntryRef, { key: key, value: value, deleted: true });
+                  probedEntryRef.asSome()!.value*.deleted = true;
                   break(not deleted)
                 }
               },
@@ -203,7 +197,7 @@ fn test(size: u64): unit {
     i = i + 1;
   };
   i = 0;
-  // myMap.*.dump();
+  // myMap.dump();
   while i < size as i64 {
     val result = myMap.get(i.show());
     if i % 5 == 0 {
@@ -213,7 +207,7 @@ fn test(size: u64): unit {
     };
     i = i + 1;
   };
-  // myMap.*.dump();
+  // myMap.dump();
 }
 
 fn main(): int {
