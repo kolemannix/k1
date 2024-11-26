@@ -124,8 +124,11 @@
 - [x] return from while
 - [x] break from while
 - [ ] Make an ability for unwrap?!
-- [ ] Working with references push
-  - [ ] EnumGetPayload on a reference doesn't give a reference
+- [ ] Working with references push, specifically struct and either references
+  - [ ] Kill .& because so unsound, use let* for those cases
+    - [ ] Not the worst thing to use let* for the c-interop case of needing a pointer, that's what .& was doing anyway
+  - [ ] EnumGetPayload on a reference doesn't give a reference (and shouldn't always, what syntax to specify)
+  - [ ] FieldAccess on a reference doesn't give a reference (and shouldn't always, what syntax to specify)
   - [ ] Cannot match on references
   - [ ] Match to get reference to each struct field, for example, use * for a dereferencing match
 - [ ] 'never' needs to work in every expression position

@@ -358,7 +358,8 @@ pub struct FieldAccess {
     pub base: ParsedExpressionId,
     pub target: Identifier,
     pub type_args: Vec<NamedTypeArg>,
-    pub is_coalescing: bool, // ?.
+    pub is_coalescing: bool,  // ?.
+    pub is_referencing: bool, // *.
     pub span: SpanId,
 }
 
@@ -1642,9 +1643,21 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Parser::tok_chars(&self.module.spans, self.source(), tok)
     }
 
-    fn eat_token(&mut self, target_token: TokenKind) -> Option<Token> {
+    fn maybe_consume_next(&mut self, target_token: TokenKind) -> Option<Token> {
         let tok = self.peek();
         if tok.kind == target_token {
+            self.tokens.advance();
+            trace!("eat_token SUCCESS '{}'", target_token);
+            Some(tok)
+        } else {
+            trace!("eat_token MISS '{}'", target_token);
+            None
+        }
+    }
+
+    fn maybe_consume_next_no_whitespace(&mut self, target_token: TokenKind) -> Option<Token> {
+        let tok = self.peek();
+        if tok.kind == target_token && !tok.is_whitespace_preceeded() {
             self.tokens.advance();
             trace!("eat_token SUCCESS '{}'", target_token);
             Some(tok)
@@ -1657,6 +1670,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     fn error(expected: impl AsRef<str>, token: Token) -> ParseError {
         ParseError { expected: expected.as_ref().to_owned(), token, cause: None, lex_error: None }
     }
+
     fn error_cause(expected: impl AsRef<str>, token: Token, cause: ParseError) -> ParseError {
         ParseError {
             expected: expected.as_ref().to_owned(),
@@ -1667,7 +1681,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn expect_eat_token(&mut self, target_token: TokenKind) -> ParseResult<Token> {
-        let result = self.eat_token(target_token);
+        let result = self.maybe_consume_next(target_token);
         match result {
             None => {
                 let actual = self.peek();
@@ -2173,7 +2187,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 || (next.kind == K::QuestionMark
                     && (second.kind == K::Dot && !second.is_whitespace_preceeded()))
             {
-                let is_coalescing = next.kind == K::QuestionMark && second.kind == K::Dot;
+                let is_coalescing = next.kind == K::QuestionMark;
                 // Field access syntax; a.b with optional bracketed type args []
                 self.tokens.advance();
                 if is_coalescing {
@@ -2214,12 +2228,14 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                         self.get_expression_span(result),
                         type_args_span.unwrap_or(target.span),
                     );
+                    let trailing_asterisk = self.maybe_consume_next_no_whitespace(K::Asterisk);
                     let target = self.intern_ident_token(target);
                     Some(self.add_expression(ParsedExpression::FieldAccess(FieldAccess {
                         base: result,
                         target,
                         type_args,
                         is_coalescing,
+                        is_referencing: trailing_asterisk.is_some(),
                         span,
                     })))
                 }
@@ -2680,7 +2696,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         };
         let is_mutable = eaten_keyword.kind == K::KeywordMut;
         let name_token = self.expect_eat_token(K::Ident)?;
-        let typ = match self.eat_token(K::Colon) {
+        let typ = match self.maybe_consume_next(K::Colon) {
             None => Ok(None),
             Some(_) => self.parse_type_expression(),
         }?;
@@ -2701,7 +2717,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn parse_const(&mut self) -> ParseResult<Option<ParsedConstantId>> {
         trace!("parse_const");
-        let Some(keyword_val_token) = self.eat_token(K::KeywordVal) else {
+        let Some(keyword_val_token) = self.maybe_consume_next(K::KeywordVal) else {
             return Ok(None);
         };
         let name_token = self.expect_eat_token(K::Ident)?;
@@ -2858,7 +2874,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                         let span = self.module.spans.extend(start_span, terminator.span);
                         break Ok((v, span, terminator));
                     }
-                    let found_delim = self.eat_token(delim);
+                    let found_delim = self.maybe_consume_next(delim);
                     if found_delim.is_none() {
                         trace!("eat_delimited missing delimiter.");
                         break Err(Parser::error(delim, self.peek()));
@@ -2880,7 +2896,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn parse_if_expr(&mut self) -> ParseResult<Option<IfExpr>> {
-        let Some(if_keyword) = self.eat_token(TokenKind::KeywordIf) else { return Ok(None) };
+        let Some(if_keyword) = self.maybe_consume_next(TokenKind::KeywordIf) else {
+            return Ok(None);
+        };
         let condition_expr =
             Parser::expect("conditional expression", if_keyword, self.parse_expression())?;
         let consequent_expr =
@@ -2936,7 +2954,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn parse_block(&mut self) -> ParseResult<Option<Block>> {
-        let Some(block_start) = self.eat_token(K::OpenBrace) else {
+        let Some(block_start) = self.maybe_consume_next(K::OpenBrace) else {
             return Ok(None);
         };
         let parse_statement =
@@ -2960,7 +2978,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             Ok(DirectiveArg::Ident(ident))
         }
         let mut directives: Vec<ParsedDirective> = vec![];
-        while let Some(_hash) = self.eat_token(K::Hash) {
+        while let Some(_hash) = self.maybe_consume_next(K::Hash) {
             let kind_token = self.expect_eat_token(K::Ident)?;
             let kind = match self.token_chars(kind_token) {
                 "debug" => DirectiveKind::CompilerDebug,
@@ -3090,7 +3108,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn parse_ability_defn(&mut self) -> ParseResult<Option<ParsedAbilityId>> {
-        let keyword_ability = self.eat_token(K::KeywordAbility);
+        let keyword_ability = self.maybe_consume_next(K::KeywordAbility);
         let Some(keyword_ability) = keyword_ability else {
             return Ok(None);
         };
@@ -3113,7 +3131,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn parse_ability_impl(&mut self) -> ParseResult<Option<ParsedAbilityImplId>> {
-        let keyword_impl = self.eat_token(K::KeywordImpl);
+        let keyword_impl = self.maybe_consume_next(K::KeywordImpl);
         let Some(keyword_impl) = keyword_impl else {
             return Ok(None);
         };
@@ -3152,7 +3170,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn parse_type_defn(&mut self) -> ParseResult<Option<ParsedTypeDefnId>> {
-        let keyword_type = self.eat_token(K::KeywordDefType);
+        let keyword_type = self.maybe_consume_next(K::KeywordDefType);
         let Some(keyword_type) = keyword_type else {
             return Ok(None);
         };

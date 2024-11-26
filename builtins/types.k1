@@ -1,0 +1,33 @@
+namespace types {
+
+  intern fn typeId[T](): u64
+  // intern fn typeInfo(typeId: u64): TypeInfo
+
+  // deftype TypeKind = either
+  //   Unit,
+  //   Char,
+  //   Integer(either U8, U16, U32, U64, I8, I16, I32, I64),
+  //   Float(either F32, F64),
+  //   Boolean,
+  //   Pointer,
+  //   Struct({
+  //     fields: Array[{ name: string, type: TypeInfo, offset: u64 }],
+  //   }),
+  //   Either({
+  //     variants: Array[{ name: string, payload: TypeInfo? }],
+  //     payloadOffset: u64,
+  //   }),
+  //   Reference({ inner: TypeInfo* })
+  //   Other(string)
+
+  // deftype TypeInfo = {
+  //   id: u64,
+  //   layout: { size: u64, align: u64 },
+  // }
+
+  // deftype Any = {
+  //   typeInfo: TypeInfo,
+  //   value: Pointer
+  // }
+
+}

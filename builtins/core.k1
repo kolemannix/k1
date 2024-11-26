@@ -16,20 +16,13 @@ deftype CompilerSourceLoc = { filename: string, line: u64 }
 
 // One day
 // ability OrElse[T] {
-//   fn hasValue(): bool
+//   fn hasValue(self: Self): bool
 //   fn unwrap(): T
 // }
 
 deftype alias int = i64
 deftype alias uint = u64
 deftype alias byte = u8
-
-// deftype TypeInfo = either Unit, Boolean(either False, True), Int,
-//
-// deftype Any = {
-//   typeInfo: TypeInfo,
-//   value: Pointer
-// }
 
 // Must have ability id 0
 ability Equals {
@@ -43,7 +36,6 @@ ability Show {
 
 intern fn sizeOf[T](): u64
 intern fn alignOf[T](): u64
-intern fn typeId[T](): bool
 
 fn new[T](value: T): T* {
   val ptr = _k1_malloc(sizeOf[T]());

@@ -137,6 +137,7 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
         parse_file(Path::new("builtins/core.k1"));
         parse_file(Path::new("builtins/opt.k1"));
         parse_file(Path::new("builtins/string.k1"));
+        parse_file(Path::new("builtins/types.k1"));
         parse_file(Path::new("builtins/string_builder.k1"));
         parse_file(Path::new("builtins/bitwise.k1"));
     }

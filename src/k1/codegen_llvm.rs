@@ -1561,21 +1561,36 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(struct_value.as_basic_value_enum().into())
             }
             TypedExpr::StructFieldAccess(field_access) => {
-                // Codegen the field's loaded value
-                let struc = self.codegen_expr_basic_value(&field_access.base)?;
-                let struct_struct = struc.into_struct_value();
-                let field_value = self
-                    .builder
-                    .build_extract_value(
-                        struct_struct,
-                        field_access.target_field_index,
-                        &format!(
-                            "struc.{}",
-                            self.module.ast.identifiers.get_name(field_access.target_field)
-                        ),
-                    )
-                    .unwrap();
-                Ok(field_value.into())
+                let name = &format!(
+                    "struc.{}",
+                    self.module.ast.identifiers.get_name(field_access.target_field)
+                );
+                if field_access.is_referencing {
+                    // Codegen the field's memory location
+                    let struc = self.codegen_expr_basic_value(&field_access.base)?;
+                    let struct_pointer = struc.into_pointer_value();
+                    let struct_llvm_type = self.codegen_type(field_access.struct_type)?;
+                    let struct_physical_type = struct_llvm_type.expect_struct().struct_type;
+                    let field_pointer = self
+                        .builder
+                        .build_struct_gep(
+                            struct_physical_type,
+                            struct_pointer,
+                            field_access.target_field_index,
+                            name,
+                        )
+                        .unwrap();
+                    Ok(field_pointer.into())
+                } else {
+                    // Codegen the field's loaded value
+                    let struc = self.codegen_expr_basic_value(&field_access.base)?;
+                    let struct_struct = struc.into_struct_value();
+                    let field_value = self
+                        .builder
+                        .build_extract_value(struct_struct, field_access.target_field_index, name)
+                        .unwrap();
+                    Ok(field_value.into())
+                }
             }
             TypedExpr::If(if_expr) => self.codegen_if_else(if_expr),
             TypedExpr::WhileLoop(while_expr) => self.codegen_while_expr(while_expr),
