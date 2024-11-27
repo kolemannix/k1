@@ -1,15 +1,15 @@
 fn main(): int {
-  let counter: int = 3;
+  let* counter = 3;
 
   let inc = \(x: int) {
-    referenceSet(counter.&, counter + 1);
+    referenceSet(counter, counter.* + 1);
   };
 
   inc(0);
   inc(0);
   inc(0);
 
-  printIt(counter);
+  assert(counter.* == 6);
 
   0
 }

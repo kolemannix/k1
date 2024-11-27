@@ -122,12 +122,16 @@ namespace sys {
 }
 
 fn crash(context locn: CompilerSourceLoc)(msg: string): never {
-  _k1_crash(msg.&, locn.filename.&, locn.line.&);
+  let* msgPtr = msg;
+  let* filename = locn.filename;
+  let* line = locn.line;
+  _k1_crash(msgPtr, filename, line);
 }
 
 namespace Files {
   fn readToString(path: string): string {
-    _k1_readFileToString(path.&)
+    let* pathRef = path;
+    _k1_readFileToString(pathRef)
   }
 }
 
@@ -148,7 +152,7 @@ fn assertMsg(context locn: CompilerSourceLoc)(msg: string, value: bool): unit {
 
 namespace char {
   fn toString(self: char): string {
-    let arr = Array::withCapacity[char](1).&;
+    let* arr = Array::withCapacity[char](1);
     arr.push(self);
     string::fromChars(arr.*);
   }
@@ -171,8 +175,8 @@ namespace Array {
 
   fn filled[T](size: u64, value: T): Array[T] {
     // TODO(stdlib perf): memcpy this where T is 'Copy'
-    let array: Array[T]* = Array::withCapacity(size).&;
-    mut i = 0: u64;
+    let* array: Array[T]* = Array::withCapacity(size);
+    let mut i = 0: u64;
     while i < size {
       array.push(value);
       i = i + 1;
@@ -289,8 +293,8 @@ namespace Array {
 
   // I know I know I know I know
   fn reversed[T](self: Array[T]): Array[T] {
-    let reversed = Array::withCapacity[T](self.len).&;
-    mut i = self.len - 1;
+    let* reversed = Array::withCapacity[T](self.len);
+    let mut i = self.len - 1;
     while (i >= 0) {
       reversed.push(self.get(i));
       i = i - 1;
@@ -322,7 +326,7 @@ impl Equals for Array[int] {
     if self.len != other.len {
       false
     } else {
-      mut i: u64 = 0;
+      let mut i: u64 = 0;
       while i < self.len {
         if self.get(i) != other.get(i) {
           return(false);
@@ -345,8 +349,8 @@ impl Show for i64 {
   fn show(self: i64): string {
     if self == 0 return("0");
     let neg = self < 0;
-    mut remaining: i64 = if neg self * -1 else self;
-    let buf = Array::withCapacity[char](8).&;
+    let mut remaining: i64 = if neg self * -1 else self;
+    let* buf = Array::withCapacity[char](8);
     while remaining > 0 {
       let d = remaining % 10;
       let c = (d + 48) as u8 as char;
@@ -371,8 +375,8 @@ impl Show for u64 {
   fn show(self: u64): string {
     if self == 0 return("0");
 
-    mut remaining: u64 = self;
-    let buf = Array::withCapacity[char](8).&;
+    let mut remaining: u64 = self;
+    let* buf = Array::withCapacity[char](8);
     while remaining > 0 {
       let d = remaining % 10;
       let c = (d + 48) as u8 as char;

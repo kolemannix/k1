@@ -16,7 +16,7 @@ deftype HashMap[V] = {
 fn fnv1a_hash(key: string): u64 {
   let FNV_PRIME: u64 = 1099511628211;
   let FNV_OFFSET: u64 = 14695981039346656037;
-  mut hash_value = FNV_OFFSET;
+  let mut hash_value = FNV_OFFSET;
   for c in key do {
     hash_value = Bitwise::xor(hash_value, c as u8 as u64);
     hash_value = hash_value * FNV_PRIME;
@@ -60,7 +60,7 @@ namespace HashMap {
 
   // Super naive fully linear probing
   fn _probe[V](self: HashMap[V], startIndex: u64): Entry[V]* {
-    mut probeIndex = startIndex;
+    let mut probeIndex = startIndex;
     loop {
       probeIndex = probeIndex + 1;
       if probeIndex == self.entries.len { probeIndex = 0 };
@@ -113,7 +113,7 @@ namespace HashMap {
         if existingKey == key {
           if deleted .None else .Some(v)
         } else {
-          mut probe_index = index;
+          let mut probe_index = index;
           loop {
             probe_index = probe_index + 1;
             if probe_index == self.entries.len { probe_index = 0; };
@@ -143,7 +143,7 @@ namespace HashMap {
           entryRef.asSome()!.value*.deleted = true;
           not deleted
         } else {
-          mut probeIndex = index;
+          let mut probeIndex = index;
           loop {
             probeIndex = probeIndex + 1;
             if probeIndex == self.entries.len { probeIndex = 0; };
@@ -187,8 +187,8 @@ namespace HashMap {
 }
 
 fn test(size: u64): unit {
-  let myMap: HashMap[int]* = HashMap::new().&;
-  mut i = 0: i64;
+  let* myMap = HashMap::new[int]();
+  let mut i = 0: i64;
   while i < size as i64 {
     myMap.insert(i.show(), i);
     if i % 5 == 0 {
@@ -220,8 +220,8 @@ fn randByte(): u8 {
 }
 
 fn randString(len: uint): string {
-  let arr = Array::withCapacity[char](len).&;
-  mut i: uint = 0;
+  let* arr = Array::withCapacity[char](len);
+  let mut i: uint = 0;
   while i < len {
     arr.push(randByte() as char);
     i = i + 1;

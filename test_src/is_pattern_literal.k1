@@ -35,7 +35,7 @@ fn main(): int {
   };
 
   // Else works
-  mut else_ran = false;
+  let mut else_ran = false;
   if foo is { x: 200 } { () } else {
     else_ran = true;
   };

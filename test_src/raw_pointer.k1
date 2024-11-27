@@ -1,7 +1,7 @@
 deftype Point = { x: int, y: int, z: int }
 
 fn main(): int {
-  let point: Point* = { x: 10, y: 20, z: 30 }.&;
+  let* point: Point* = { x: 10, y: 20, z: 30 };
   let pointPtr = point as Pointer;
 
   let point2 = pointPtr as Point*;

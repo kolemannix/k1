@@ -1,9 +1,9 @@
 fn main(): int {
-  let xs = Array::new[int]().&;
+  let* xs = Array::new[int]();
   assert(xs.cap == 0);
   assert(xs.len == 0);
 
-  mut i = 0: u64;
+  let mut i = 0: u64;
   while i < 5 {
     assert(xs.len == i);
     xs.push(i as i64);

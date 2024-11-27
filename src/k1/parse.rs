@@ -2696,7 +2696,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         trace!("parse_val_def");
 
         let eaten_keyword = match self.peek() {
-            t if t.kind == K::KeywordLet || t.kind == K::KeywordMut => {
+            t if t.kind == K::KeywordLet => {
                 self.tokens.advance();
                 t
             }
@@ -2706,7 +2706,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         };
         let is_reference = self.maybe_consume_next_no_whitespace(K::Asterisk).is_some();
         let is_context = self.maybe_consume_next(K::KeywordContext).is_some();
-        let is_mutable = eaten_keyword.kind == K::KeywordMut;
+        let is_mutable = self.maybe_consume_next(K::KeywordMut).is_some();
         let name_token = self.expect_eat_token(K::Ident)?;
         let typ = match self.maybe_consume_next(K::Colon) {
             None => Ok(None),

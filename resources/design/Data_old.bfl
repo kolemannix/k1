@@ -50,7 +50,7 @@ if (anon_type: Type.record) {
 }
 let fooJsonWriter = impl JsonWriter[Foo] {
   fn write(value: Foo) = {
-    mut buffer = JsonObject::empty();
+    let mut buffer = JsonObject::empty();
     let fields = Foo.fields.map { f =>
       buffer.append(toJsType(f.type), toJsValue(value.getField(f));
     }

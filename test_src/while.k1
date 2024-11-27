@@ -1,6 +1,6 @@
 fn whileSimple(): unit {
-  mut i: int = 10;
-  mut iters = 0;
+  let mut i: int = 10;
+  let mut iters = 0;
   while i > -10 {
     i = i - 1;
     iters = iters + 1;

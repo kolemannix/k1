@@ -20,9 +20,9 @@ I guess this makes it more of a 'parse tree' repr than an AST if it has no seman
 any 'operator's in it
 
 
-    fn parse_expression(mut this, allow_assignments: bool, allow_newlines: bool) throws -> ParsedExpression {
-        mut expr_stack: [ParsedExpression] = []
-        mut last_precedence = 1000000
+    fn parse_expression(let mut this, allow_assignments: bool, allow_newlines: bool) throws -> ParsedExpression {
+        let mut expr_stack: [ParsedExpression] = []
+        let mut last_precedence = 1000000
 
         let lhs = .parse_operand()
         expr_stack.push(lhs)

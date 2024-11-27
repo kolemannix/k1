@@ -27,11 +27,11 @@ fn main(): int {
     green: 13,
     blue: 14
   };
-  mut goodGamesSum: u64 = 0;
+  let mut goodGamesSum: u64 = 0;
   for line in input.splitByChar('\n') do {
     let id = it_index + 1;
     let line = line.splitByChar(':').get(1);
-    mut isGoodGame = true;
+    let mut isGoodGame = true;
     let rounds = for round in line.splitByChar(';') yield {
       let values = round.splitByChar(',');
       let values: Array[{ amount: int, color: Color }] = for value in values yield {
