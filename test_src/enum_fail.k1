@@ -1,7 +1,7 @@
 deftype E = either A(int) , B , C
 
 fn main(): int {
-  val x: E = .A(true);
+  let x: E = .A(true);
   0
 }
 //errmsg: Variant payload type mismatch: Expected i64 but got bool

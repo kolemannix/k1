@@ -5,7 +5,7 @@ fn rand(): bool {
 }
 
 fn doit(): int {
-  val x: unit = if rand() {
+  let x: unit = if rand() {
     return(1)
   };
 

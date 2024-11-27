@@ -2,7 +2,7 @@ fn foo(): int {
   return true;
 }
 fn main(): int {
-  val cond: bool = 1;
+  let cond: bool = 1;
   return 0;
 }
 // 2 ERRORS

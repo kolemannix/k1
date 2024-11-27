@@ -47,7 +47,7 @@
   - [x] syntax: optional pipe separator
   - [x] Enum methods
 - [x] Type cleanup
-  - [x] Order of eval (topology through defer/skip)
+  - [x] Order of elet (topology through defer/skip)
   - [x] named struct and enum fix
   - [x] Newtypes (opaque)
   - [x] Aliases
@@ -154,7 +154,7 @@
 - [x] Remove tag literals, make enum tags per-enum
 - [ ] Imports (need design around modules)
 - [ ] Add ranges, as stdlib thing
-      `sealed abstract class Range(val start: Int, val end: Int, val step: Int)`
+      `sealed abstract class Range(let start: Int, let end: Int, let step: Int)`
 - [ ] Make demo readme / site
 - [ ] Generic abilities (ability From<T> { ... })
 - [ ] Define clear 'platform layer' (crash, alloc/free, other?). Then we could do an LLVM interp platform and a rust interpreter platform
@@ -268,7 +268,7 @@
   - [x] add string.length function
   - [x] char.to_string()
 - [x] Concatenate strings (in userland; slow)
-- [x] Infer val types
+- [x] Infer let types
 - [x] Extern keyword, then
 - [x] Link at build time not via LLVM module
 - [x] Use ctx.const_string for printf format strings

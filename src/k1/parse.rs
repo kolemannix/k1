@@ -303,6 +303,7 @@ pub struct ValDef {
     // TODO: Move to a flags struct for ValDef
     pub is_mutable: bool,
     pub is_context: bool,
+    pub is_referencing: bool,
     pub span: SpanId,
 }
 
@@ -752,7 +753,7 @@ pub struct ForExpr {
 
 #[derive(Debug, Clone)]
 pub enum ParsedStmt {
-    ValDef(ValDef),                     // val x = 42
+    ValDef(ValDef),                     // let x = 42
     Assignment(Assignment),             // x = 42
     LoneExpression(ParsedExpressionId), // println("asdfasdf")
 }
@@ -2693,27 +2694,18 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn parse_val_def(&mut self) -> ParseResult<Option<ValDef>> {
         trace!("parse_val_def");
-        let is_context = if self.peek().kind == K::KeywordContext {
-            self.tokens.advance();
-            true
-        } else {
-            false
-        };
-        let any_modifiers = is_context;
 
         let eaten_keyword = match self.peek() {
-            t if t.kind == K::KeywordVal || t.kind == K::KeywordMut => {
+            t if t.kind == K::KeywordLet || t.kind == K::KeywordMut => {
                 self.tokens.advance();
                 t
             }
-            t => {
-                if any_modifiers {
-                    return Err(Parser::error("val or mut", t));
-                } else {
-                    return Ok(None);
-                }
+            _ => {
+                return Ok(None);
             }
         };
+        let is_reference = self.maybe_consume_next_no_whitespace(K::Asterisk).is_some();
+        let is_context = self.maybe_consume_next(K::KeywordContext).is_some();
         let is_mutable = eaten_keyword.kind == K::KeywordMut;
         let name_token = self.expect_eat_token(K::Ident)?;
         let typ = match self.maybe_consume_next(K::Colon) {
@@ -2731,13 +2723,14 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             value: initializer_expression,
             is_mutable,
             is_context,
+            is_referencing: is_reference,
             span,
         }))
     }
 
     fn parse_const(&mut self) -> ParseResult<Option<ParsedConstantId>> {
         trace!("parse_const");
-        let Some(keyword_val_token) = self.maybe_consume_next(K::KeywordVal) else {
+        let Some(keyword_let_token) = self.maybe_consume_next(K::KeywordLet) else {
             return Ok(None);
         };
         let name_token = self.expect_eat_token(K::Ident)?;
@@ -2745,7 +2738,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let typ = Parser::expect("type_expression", self.peek(), self.parse_type_expression())?;
         self.expect_eat_token(K::Equals)?;
         let value_expr = Parser::expect("expression", self.peek(), self.parse_expression())?;
-        let span = self.extend_span(keyword_val_token.span, self.get_expression_span(value_expr));
+        let span = self.extend_span(keyword_let_token.span, self.get_expression_span(value_expr));
         let name = self.intern_ident_token(name_token);
         let constant_id = self.module.add_constant(ParsedConstant {
             name,

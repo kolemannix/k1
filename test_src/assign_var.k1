@@ -1,19 +1,21 @@
 fn foo(): int {
-  mut result: int = 0;
+  let* result = 0;
   if true {
-    result = 11;
+    referenceSet(result, 11);
   } else {
-    result = 12;
+    referenceSet(result, 12);
   };
   result
 }
 
 fn main(): int {
-  printInt(foo());
-  mut count: int = 0;
-  count = 1;
-  printInt(count);
-  count = 2;
-  printInt(count);
+
+  assert(foo() == 11);
+
+  let* count = 0;
+  referenceSet(count, 1);
+  assert(count.* == 1);
+  referenceSet(count, 2);
+  assert(count.* == 2);
   0
 }

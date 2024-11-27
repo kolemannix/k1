@@ -3,10 +3,10 @@
 fn main(): int {
   rt.createPool("people");
 
-  context val pool = rt.getPool("people");
+  context let pool = rt.getPool("people");
 
   for [1,2,3,4,5] {
-    val person = new({ name: "George", age: i });
+    let person = new({ name: "George", age: i });
     person
   }
 }

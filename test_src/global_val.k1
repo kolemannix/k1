@@ -1,5 +1,5 @@
-val foo: int = 42;
-val bar: int = 31;
+let foo: int = 42;
+let bar: int = 31;
 
 fn main(): int {
   assert(foo == 42);

@@ -18,14 +18,14 @@ impl Num for Point {
 fn main(): int {
 
   // Method-style call
-  val three = 3: i32;
+  let three = 3: i32;
   assert(three.num() == 3);
 
   // Qualified call
   assert(Num::num(3: i32) == 3);
 
   // Method-style call on user-defined type
-  val p = { x: 1, y: 2 }: Point;
+  let p = { x: 1, y: 2 }: Point;
   assert(p.num() == 3);
 
   0

@@ -1,10 +1,10 @@
 fn singleNever(b: bool): int {
-  val x: int = if not b {
+  let x: int = if not b {
     crash("Uh oh!")
   } else {
     0
   };
-  val y: int = if b {
+  let y: int = if b {
     0
   } else {
     crash("Uh oh!")
@@ -13,7 +13,7 @@ fn singleNever(b: bool): int {
 }
 
 fn bothNever(b: bool): int {
-  val x: int = if not b {
+  let x: int = if not b {
     crash("Uh oh!")
   } else {
     crash("Ahh!")

@@ -1,11 +1,11 @@
 fn main(): int {
-  val x = { min: 4, max: 11 }.&;
+  let x = { min: 4, max: 11 }.&;
   x.min = 2;
   assert(x.min == 2);
 
   // Checks that field access on non-pointer also works
   // (tricky codegen thing)
-  val y = { min: 3 };
+  let y = { min: 3 };
   assert(y.min == 3);
   assert({ min: 3}.min == 3);
 

@@ -14,11 +14,11 @@ namespace Point2 {
 
 fn main(): int {
   // Should work because Point is a proper type
-  val p: Point = { x: 0, y: 0 };
+  let p: Point = { x: 0, y: 0 };
   p.sum();
 
   // Should not work because Point2 is a type alias
-  val p2: Point2 = { x: 0, y: 0 };
+  let p2: Point2 = { x: 0, y: 0 };
   p2.sum();
 
   0

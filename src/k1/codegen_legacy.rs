@@ -47,7 +47,7 @@ impl<'ctx> CodeGen<'ctx> {
     fn allocate_val(&self, val: &ValDef) -> inkwell::values::PointerValue {
         match val.typ {
             None => {
-                panic!("val def needs a type by codegen");
+                panic!("let def needs a type by codegen");
             }
             Some(TypeExpression::Primitive(TypePrimitive::Int)) => {
                 let ptr = self.builder.build_alloca(self.context.i32_type(), &val.name.0);
@@ -79,7 +79,7 @@ impl<'ctx> CodeGen<'ctx> {
                         match typ {
                             Primitive(TypePrimitive::Int) => {
                                 let llvm_ty = self.context.i32_type();
-                                let llvm_val =
+                                let llvm_let =
                                     module.add_global(llvm_ty, Some(AddressSpace::Const), &name.0);
                                 llvm_val.set_constant(true);
                                 llvm_val.set_initializer(
@@ -105,7 +105,7 @@ impl<'ctx> CodeGen<'ctx> {
                             self.context.i32_type().fn_type(&params, false)
                         }
                     };
-                    let fn_val = module.add_function(&fn_def.name.0, fn_ty, None);
+                    let fn_let = module.add_function(&fn_def.name.0, fn_ty, None);
                     fn_val
                         .get_param_iter()
                         .enumerate()

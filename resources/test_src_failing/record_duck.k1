@@ -11,7 +11,7 @@ fn quack(d: { quack: int}): int {
 }
 
 fn main(): int {
-  val duck: Duck = {
+  let duck: Duck = {
     quack: 555
   };
   printInt(quack(duck));

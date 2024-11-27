@@ -1,6 +1,6 @@
 fn main(): int {
-  val x: string = "abc";
-  val conc = x.concat(x);
+  let x: string = "abc";
+  let conc = x.concat(x);
   // printInt(conc.length());
   // println(conc);
   // println("abcabc");

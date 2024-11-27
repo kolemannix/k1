@@ -1,5 +1,5 @@
 fn main(): int {
-  val xs = Array::new[int]().&;
+  let xs = Array::new[int]().&;
   assert(xs.cap == 0);
   assert(xs.len == 0);
 
@@ -19,10 +19,10 @@ fn main(): int {
   assert(xs.last()! == 4);
   assert(xs.* == [0,1,2,3,4]);
 
-  val xs2 = xs.cloned();
+  let xs2 = xs.cloned();
   assert(xs2 == xs.*);
 
-  val empty = []: Array[byte];
+  let empty = []: Array[byte];
   assert(empty.cloned() == empty);
 
   0

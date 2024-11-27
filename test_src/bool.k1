@@ -4,8 +4,8 @@ fn should_not_run(): bool {
 }
 
 fn main(x: int): int {
-  val t = true;
-  val f = false;
+  let t = true;
+  let f = false;
   assert(not (t and f));
 
   // Short-circuiting is guaranteed

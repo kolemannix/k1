@@ -1,7 +1,7 @@
 fn main(): int {
-  val c: char = '!';
+  let c: char = '!';
   assert(c == '!');
-  val s = c.toString();
+  let s = c.toString();
   print(s);
   //println(s);
   assert(s.len == 1);

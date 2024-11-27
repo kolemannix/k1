@@ -6,7 +6,7 @@ deftype Point = {
 }
 
 fn main(): int {
-  val zero: Point = {
+  let zero: Point = {
     x: 0, y: 298, z: 42, isGood: true
   };
   printInt(zero.z);

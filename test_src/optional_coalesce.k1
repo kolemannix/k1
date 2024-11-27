@@ -1,10 +1,10 @@
 fn noNum(): int? { .None }
 fn someNum(): int? { 100 }
 fn main(): int {
-  val result = noNum() ? 42;
+  let result = noNum() ? 42;
   assert(result == 42);
 
-  val result = someNum() ? 41;
+  let result = someNum() ? 41;
   assert(result == 100);
   0
 }

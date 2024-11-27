@@ -1,7 +1,7 @@
 fn main(): int {
-  val counter: int = 3;
+  let counter: int = 3;
 
-  val inc = \(x: int) {
+  let inc = \(x: int) {
     referenceSet(counter.&, counter + 1);
   };
 

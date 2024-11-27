@@ -5,8 +5,8 @@ impl Equals for { a: int } {
 }
 
 fn main(): int {
-  val asdf = { a: 3 };
-  val asdf2 = { a: 4 };
+  let asdf = { a: 3 };
+  let asdf2 = { a: 4 };
   assert(asdf != asdf2);
   assert({a: 4} == asdf2);
   0

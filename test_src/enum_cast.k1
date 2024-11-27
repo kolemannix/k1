@@ -1,9 +1,9 @@
 deftype E = either A(int), B, C
 
 fn main(): int {
-  val x: E = .A(42);
-  val y = .A(42): E.A;
-  val xAsA: E.A? = x.asA();
+  let x: E = .A(42);
+  let y = .A(42): E.A;
+  let xAsA: E.A? = x.asA();
   assert(xAsA!.value == y.value);
   0
 }

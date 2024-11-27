@@ -1,4 +1,4 @@
-val max_bound: int = 42;
+let max_bound: int = 42;
 
 type Point = {
   x: int,
@@ -7,7 +7,7 @@ type Point = {
 
 fn main(): int {
   print("Hello, World!");
-  val x: int = 0;
+  let x: int = 0;
   mut y: int = 1;
   y = y + max_bound;
   return 0;

@@ -38,8 +38,8 @@ intern fn sizeOf[T](): u64
 intern fn alignOf[T](): u64
 
 fn new[T](value: T): T* {
-  val ptr = _k1_malloc(sizeOf[T]());
-  val t = ptr as T*;
+  let ptr = _k1_malloc(sizeOf[T]());
+  let t = ptr as T*;
   referenceSet(t, value);
   t
 }
@@ -99,18 +99,18 @@ fn printUInt(value: u64): unit {
   print(value.show())
 }
 fn print(value: string): unit {
-  val fmt = "%.*s\0".data;
+  let fmt = "%.*s\0".data;
   libc::printfString(fmt, value.len as i32, value.data);
   ()
 }
 
 fn printIt[T](value: T): unit where T: Show {
-  val s = value.show();
+  let s = value.show();
   print(s)
 }
 
 fn println(value: string): unit {
-  val fmt = "%.*s\n\0".data;
+  let fmt = "%.*s\n\0".data;
   libc::printfString(fmt, value.len as i32, value.data);
   ()
 }
@@ -148,13 +148,13 @@ fn assertMsg(context locn: CompilerSourceLoc)(msg: string, value: bool): unit {
 
 namespace char {
   fn toString(self: char): string {
-    val arr = Array::withCapacity[char](1).&;
+    let arr = Array::withCapacity[char](1).&;
     arr.push(self);
     string::fromChars(arr.*);
   }
 
   fn toAsciiDigit(self: char): u8? {
-    val i_code = self as u8;
+    let i_code = self as u8;
     if i_code >= 48 and i_code <= 57 {
       i_code - 48
     } else {
@@ -171,7 +171,7 @@ namespace Array {
 
   fn filled[T](size: u64, value: T): Array[T] {
     // TODO(stdlib perf): memcpy this where T is 'Copy'
-    val array: Array[T]* = Array::withCapacity(size).&;
+    let array: Array[T]* = Array::withCapacity(size).&;
     mut i = 0: u64;
     while i < size {
       array.push(value);
@@ -181,10 +181,10 @@ namespace Array {
   }
 
   fn withCapacity[T](cap: u64): Array[T] {
-    val data = if cap == 0 {
+    let data = if cap == 0 {
       Pointer::null()
     } else {
-      val sizeBytes = sizeOf[T]() * cap;
+      let sizeBytes = sizeOf[T]() * cap;
       _k1_malloc(sizeBytes)
     };
     { len: 0, cap: cap, data: data }
@@ -194,31 +194,31 @@ namespace Array {
     if index >= self.len {
       crash("Array index out of bounds")
     };
-    val tRef: T* = self.data.refAtIndex[T](index);
+    let tRef: T* = self.data.refAtIndex[T](index);
     tRef
   }
 
   fn set[T](self: Array[T], index: u64, elem: T): unit {
-    val tRef = self.getRef(index);
+    let tRef = self.getRef(index);
     referenceSet(tRef, elem);
   }
 
   fn get[T](self: Array[T], index: u64): T {
-    val tRef = self.getRef(index);
+    let tRef = self.getRef(index);
     tRef.*
   }
 
   fn _grow[T](self: Array[T]*): unit {
-    val tSize = sizeOf[T]();
-    val newCap: u64 = if self.cap == 0 {
+    let tSize = sizeOf[T]();
+    let newCap: u64 = if self.cap == 0 {
       // For large elements, just allocate what's needed
       if tSize >= 1024 1 else 8
     } else {
       self.cap * 2
     };
-    val newSize = newCap * sizeOf[T]();
+    let newSize = newCap * sizeOf[T]();
 
-    val ptr = if self.data.isNull() {
+    let ptr = if self.data.isNull() {
       _k1_malloc(newSize)
     } else {
       libc::realloc(self.data, newSize)
@@ -232,14 +232,14 @@ namespace Array {
   }
 
   fn cloned[T](self: Array[T]): Array[T] {
-    val numBytes = sizeOf[T]() * self.cap;
-    val newBuffer = _k1_malloc(numBytes);
+    let numBytes = sizeOf[T]() * self.cap;
+    let newBuffer = _k1_malloc(numBytes);
     libc::memcpy(newBuffer, self.data, numBytes);
     { len: self.len, cap: self.cap, data: newBuffer }
   }
 
   fn push[T](self: Array[T]*, elem: T): unit {
-    val startLength = self.len;
+    let startLength = self.len;
     if startLength == self.cap {
       self._grow();
     };
@@ -289,7 +289,7 @@ namespace Array {
 
   // I know I know I know I know
   fn reversed[T](self: Array[T]): Array[T] {
-    val reversed = Array::withCapacity[T](self.len).&;
+    let reversed = Array::withCapacity[T](self.len).&;
     mut i = self.len - 1;
     while (i >= 0) {
       reversed.push(self.get(i));
@@ -344,12 +344,12 @@ impl Show for i64 {
   // We know this is super slow, relax, it'll be ok
   fn show(self: i64): string {
     if self == 0 return("0");
-    val neg = self < 0;
+    let neg = self < 0;
     mut remaining: i64 = if neg self * -1 else self;
-    val buf = Array::withCapacity[char](8).&;
+    let buf = Array::withCapacity[char](8).&;
     while remaining > 0 {
-      val d = remaining % 10;
-      val c = (d + 48) as u8 as char;
+      let d = remaining % 10;
+      let c = (d + 48) as u8 as char;
       buf.push(c);
       remaining = remaining / 10;
     };
@@ -362,7 +362,7 @@ impl Show for i64 {
     // Since we know its bytes we could do simd stuff or even just 64 bits at a time
     // Which I guess is technically 'simd' too
     // Why did inference break here??
-    val rev = buf.*.reversed();
+    let rev = buf.*.reversed();
     string::fromChars(rev)
   }
 }
@@ -372,15 +372,15 @@ impl Show for u64 {
     if self == 0 return("0");
 
     mut remaining: u64 = self;
-    val buf = Array::withCapacity[char](8).&;
+    let buf = Array::withCapacity[char](8).&;
     while remaining > 0 {
-      val d = remaining % 10;
-      val c = (d + 48) as u8 as char;
+      let d = remaining % 10;
+      let c = (d + 48) as u8 as char;
       buf.push(c);
       remaining = remaining / 10;
     };
 
-    val rev = buf.*.reversed();
+    let rev = buf.*.reversed();
     string::fromChars(rev)
   }
 }

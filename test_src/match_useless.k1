@@ -1,7 +1,7 @@
 deftype Foo = { x: int, y: bool? }
 fn main(): int {
-  val foo: Foo = { x: 1, y: .None };
-  val y = switch foo {
+  let foo: Foo = { x: 1, y: .None };
+  let y = switch foo {
     { x, y: .Some(true) } -> x,
     { x, y: .Some(false) } -> x,
     { x, y: .Some(false) } -> x,
