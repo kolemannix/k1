@@ -6,6 +6,8 @@ k1 is a statically-typed systems programming language that combines modern ergon
 
 The language aims to combine the control and efficiency of systems programming with modern language ergonomics, making it suitable for everything from low-level system tools to high-level application development without switching languages.
 
+Check out the [TODO](TODO.md) for a glimpse into the development flow, or the [test_src/](test_src/) dir to see what the language can currently do!
+
 It features:
 
 ### Type System
