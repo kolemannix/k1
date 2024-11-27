@@ -447,7 +447,6 @@ pub struct BinaryOp {
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub enum UnaryOpKind {
     BooleanNegation,
-    Reference,
     Dereference,
     ReferenceToInt,
 }
@@ -456,7 +455,6 @@ impl Display for UnaryOpKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             UnaryOpKind::BooleanNegation => f.write_str("not "),
-            UnaryOpKind::Reference => f.write_char('&'),
             UnaryOpKind::Dereference => f.write_char('*'),
             UnaryOpKind::ReferenceToInt => f.write_str("(*int)"),
         }
@@ -3191,25 +3189,6 @@ impl TypedModule {
             return Ok(enum_result);
         }
 
-        // Bailout case: .& stack reference generation (deprecated)
-        if field_access.target == get_ident!(self, "&") {
-            let expected_type = match expected_type.map(|t| self.types.get(t)) {
-                Some(Type::Reference(r)) => Some(r.inner_type),
-                Some(_unrelated) => None,
-                None => None,
-            };
-            let base_expr = self.eval_expr(field_access.base, scope_id, expected_type)?;
-            let type_id = self
-                .types
-                .add_type(Type::Reference(ReferenceType { inner_type: base_expr.get_type() }));
-            return Ok(TypedExpr::UnaryOp(UnaryOp {
-                kind: UnaryOpKind::Reference,
-                type_id,
-                expr: Box::new(base_expr),
-                span,
-            }));
-        };
-
         // Bailout case: .* dereference operation
         if field_access.target == get_ident!(self, "*") {
             // Example:
@@ -3685,10 +3664,12 @@ impl TypedModule {
                         })],
                     ),
                 )?;
-                let array_new_expr = self.synth_reference(array_new_fn_call);
-                let array_variable = self.synth_variable_defn_simple(
+                let array_variable = self.synth_variable_defn(
                     get_ident!(self, "array_literal"),
-                    array_new_expr,
+                    array_new_fn_call,
+                    false,
+                    false,
+                    true,
                     array_lit_scope,
                 );
                 let mut set_elements = Vec::with_capacity(element_count);
@@ -8587,15 +8568,6 @@ impl TypedModule {
             span,
             lhs: Box::new(lhs),
             rhs: Box::new(rhs),
-        })
-    }
-
-    fn synth_reference(&mut self, base: TypedExpr) -> TypedExpr {
-        TypedExpr::UnaryOp(UnaryOp {
-            kind: UnaryOpKind::Reference,
-            type_id: self.types.add_reference_type(base.get_type()),
-            span: base.get_span(),
-            expr: Box::new(base),
         })
     }
 

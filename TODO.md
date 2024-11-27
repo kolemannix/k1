@@ -126,10 +126,10 @@
 - [x] break from while
 - [ ] Make an ability for unwrap?!
 - [ ] Working with references push, specifically struct and either references
-  - [ ] Kill .& because so unsound, use let* for those cases
-    - [ ] Not the worst thing to use let* for the c-interop case of needing a pointer, that's what .& was doing anyway
-  - [ ] EnumGetPayload on a reference doesn't give a reference (and shouldn't always, what syntax to specify)
-  - [ ] FieldAccess on a reference doesn't give a reference (and shouldn't always, what syntax to specify)
+  - [x] Kill .& because so unsound, use let* for those cases
+    - [x] Not the worst thing to use let* for the c-interop case of needing a pointer, that's what .& was doing anyway
+  - [x] EnumGetPayload on a reference doesn't give a reference (and shouldn't always, what syntax to specify)
+  - [x] FieldAccess on a reference doesn't give a reference (and shouldn't always, what syntax to specify)
   - [ ] Cannot match on references
   - [ ] Match to get reference to each struct field, for example, use * for a dereferencing match
 - [ ] 'never' needs to work in every expression position
@@ -139,7 +139,8 @@
       - lvalue-based assignment stuff is just an abomination from an algebraic perspective, and probably inhibits learning
 - [ ] b"" strings that are of type Slice[u8]
 - [ ] Finish hashmap implementation
-- [ ] Builtin syntax for maps w/ Map[K, V]
+- [ ] Builtin syntax for maps
+  - [ ] [key:value] empty: [:]
 - [ ] Warnings/Errors
   - [ ] Unused var
   - [ ] Unused type bound
