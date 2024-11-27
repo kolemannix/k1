@@ -2,6 +2,6 @@ deftype Config = { foo: int, bar: int }
 
 fn main(): int {
   let xs = []: Array[int];
-  mut maybe_config = { foo: 1, bar: 2 }: Config?;
+  let mut maybe_config = { foo: 1, bar: 2 }: Config?;
   0
 }

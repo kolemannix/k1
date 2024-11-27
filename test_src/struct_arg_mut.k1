@@ -13,7 +13,7 @@ namespace Foo {
 }
 
 fn main(): int {
-  let x: Foo* = Foo::new(42).&;
+  let* x: Foo* = Foo::new(42);
   assert(x.x == 42);
   assert(x.getValue() == 42);
   x.setValue(41);

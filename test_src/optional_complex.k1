@@ -1,14 +1,14 @@
 deftype Point = { x: int?, y: int }
 
 fn main(): int {
-  mut my_point: Point = { x: 42, y: 0 };
+  let mut my_point: Point = { x: 42, y: 0 };
   if my_point.x is .Some(my_x) {
     assert(my_x == 42);
   } else {
     assert(false);
   };
 
-  mut my_arr: Array[Point?] = [{ x: 42, y: 3}, .None];
+  let mut my_arr: Array[Point?] = [{ x: 42, y: 3}, .None];
   if my_arr.get(0) is .Some(a) {
     assert(a.y == 3);
   };

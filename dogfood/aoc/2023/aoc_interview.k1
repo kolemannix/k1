@@ -1,6 +1,6 @@
 fn unique(arr: Array<char>): bool {
   let seen = []: Array<char>;
-  mut ret = true;
+  let mut ret = true;
   for c in arr do {
       for s in seen do {
           if c == s {
@@ -14,8 +14,8 @@ fn unique(arr: Array<char>): bool {
 
 fn main(): int {
   let input = "bvwbjplbgvbhsrlpgdmjqwftvncz";
-  mut i = 0;
-  mut done = false;
+  let mut i = 0;
+  let mut done = false;
   for input do {
       if not done {
         let i = it_index;

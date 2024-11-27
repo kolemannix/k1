@@ -6,7 +6,7 @@ fn map[T, U](a: Array[T], f: \T -> U): Array[U] {
 // We could instead specialize the function on the closure type
 // and get static dispatch
 fn filter[T](a: Array[T], f: \T -> bool): Array[T] {
-  let keep = Array::new[T]().&;
+  let* keep = Array::new[T]();
   for i in a do { if f(i) keep.push(i) };
   keep
 }

@@ -2,7 +2,7 @@ fn main(): int {
   // In call argument
   println(crash("call arg"));
   // In assignment rhs
-  mut x = 123;
+  let mut x = 123;
   x = crash("assgn lhs");
 
   // In binop

@@ -43,7 +43,7 @@ fn basic_fn() -> Result<(), ParseError> {
     fn basic(x: u64, y: u64): u64 {
       println(42, 42, 42);
       let x = 0;
-      mut y = 2;
+      let mut y = 2;
       y = { 1; 2; 3 };
       y = add(42, 42);
       add(x, y)

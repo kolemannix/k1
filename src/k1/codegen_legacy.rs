@@ -62,7 +62,7 @@ impl<'ctx> CodeGen<'ctx> {
             }
         }
     }
-    pub fn codegen_module(&mut self, ast: &Module) -> String {
+    pub fn codegen_module(&let mut self, ast: &Module) -> String {
         let module = self.context.create_module(&ast.name.0);
         let format_str = {
             let global =

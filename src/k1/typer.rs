@@ -7051,10 +7051,28 @@ impl TypedModule {
                     None => None,
                     Some(&type_expr) => Some(self.eval_type_expr(type_expr, scope_id)?),
                 };
-                let value_expr = self.eval_expr(val_def.value, scope_id, provided_type)?;
+                let expected_type = match provided_type {
+                    Some(provided_type) => {
+                        if val_def.is_referencing {
+                            let Type::Reference(expected_reference_type) =
+                                self.types.get(provided_type)
+                            else {
+                                return failf!(
+                                    val_def.span,
+                                    "Expected type must be a reference type when using let*"
+                                );
+                            };
+                            Some(expected_reference_type.inner_type)
+                        } else {
+                            Some(provided_type)
+                        }
+                    }
+                    None => None,
+                };
+                let value_expr = self.eval_expr(val_def.value, scope_id, expected_type)?;
                 let actual_type = value_expr.get_type();
 
-                if let Some(expected_type) = provided_type {
+                if let Some(expected_type) = expected_type {
                     if let Err(msg) = self.check_types(expected_type, actual_type, scope_id) {
                         return make_fail_span(
                             format!("Local variable type mismatch: {}", msg),

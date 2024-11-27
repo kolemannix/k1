@@ -37,7 +37,7 @@ namespace string {
   }
 
   fn indexOf(self: string, c: char): i64 {
-    mut i: u64 = 0;
+    let mut i: u64 = 0;
     while i < self.len {
       if self.get(i) == c {
         return(i as i64);
@@ -49,7 +49,7 @@ namespace string {
 
   fn concat(self: string, other: string): string {
     let new_length = self.len + other.len;
-    let copied = Array::withCapacity[char](new_length).&;
+    let* copied = Array::withCapacity[char](new_length);
 
     libc::memcpy(copied.data, self.data, self.len);
 
@@ -63,7 +63,7 @@ namespace string {
   fn appendChar(self: string, c: char): string {
     let new_length = self.len + 1;
 
-    let copied = Array::withCapacity[char](new_length).&;
+    let* copied = Array::withCapacity[char](new_length);
     copied.len = new_length;
 
     libc::memcpy(copied.data, self.data, self.len);
@@ -73,15 +73,15 @@ namespace string {
   }
 
   fn splitByChar(self: string, delim: char): Array[string] {
-    let results = Array::new[Array[char]]().&;
-    mut accum = Array::new[char]().&;
+    let* results = Array::new[Array[char]]();
+    let* accum = Array::new[char]();
     // Note(stdlib slow): TODO: use ranges instead to make this zero-copy!!
     //                    We can point to the old string instead of building up new ones
     for c in self do {
       if c == delim {
         if accum.nonEmpty() {
           results.push(accum);
-          accum = Array::new[char]().&;
+          referenceSet(accum, Array::new[char]())
         }
       } else {
         accum.push(c);
@@ -97,7 +97,7 @@ namespace string {
   }
 
   fn indexOfString(self: string, target: string): u64? {
-    mut i: u64 = 0;
+    let mut i: u64 = 0;
     while i < self.len {
       if i + target.len >= self.len {
         return(.None)
@@ -135,8 +135,8 @@ namespace string {
     if self.isEmpty() { return(.None) };
 
     let neg = self.get(0) == '-';
-    mut i: u64 = if neg 1 else 0;
-    mut total: u64 = 0;
+    let mut i: u64 = if neg 1 else 0;
+    let mut total: u64 = 0;
     while i < self.len {
       let c = self.get(i);
       let digit = c.toAsciiDigit();
@@ -166,7 +166,7 @@ impl Equals for Array[string] {
     if self.len != other.len {
       false
     } else {
-      mut i: u64 = 0;
+      let mut i: u64 = 0;
       while i < self.len {
         if self.get(i) != other.get(i) {
           return(false);
@@ -182,7 +182,7 @@ impl Equals for Array[string] {
 // Note(stdlib slow): Need efficient string building
 impl Show for Array[string] {
   fn show(self: Array[string]): string {
-    mut builder: string = "[";
+    let mut builder: string = "[";
     for s in self do {
       builder = builder.concat(s);
       let last = it_index == self.len - 1;

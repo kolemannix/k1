@@ -1,5 +1,5 @@
 fn main(): int {
-  let structRef: { x: int }* = { x: 42 }.&;
+  let* structRef = { x: 42 };
 
   let xValue: int = structRef.x*;
   let xRef: int* = structRef.x*;
@@ -16,7 +16,7 @@ fn main(): int {
   structRef.x = 42;
   assert(xRef.* == 42);
 
-  let eitherRef: (either Yes(int), No)* = .Yes(3).&;
+  let* eitherRef: (either Yes(int), No)* = .Yes(3);
 
   let yesValue: int = eitherRef.asYes()!.value;
   let yesRef: typeOf(eitherRef).value.Yes* = eitherRef.asYes()!;
@@ -36,7 +36,8 @@ fn main(): int {
   // of assignments as a normal expression
   // <any ptr> <- <expr>
 
-  let structOptRef: { x: int }*? = .Some({ x: 42 }.&);
+  let* innerStructRef = { x: 42 };
+  let structOptRef: { x: int }*? = .Some(innerStructRef);
 
   if structOptRef is .Some(x) {
     assert(x.x == 42);

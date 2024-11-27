@@ -21,15 +21,15 @@ namespace StringBuilder {
     self.parts.push(.Char(b as char))
   }
   fn len(self: StringBuilder): u64 {
-    let len: u64* = 0.&;
+    let mut len = 0: u64;
     for part in self.parts.* do {
       let partLen = switch part { .Char(_) -> 1: u64, .String(s) -> s.len };
-      referenceSet(len, partLen);
+      len = len + partLen;
     };
-    len.*
+    len
   }
   fn build(self: StringBuilder): string {
-    let bytes = Array::withCapacity[char](self.len()).&;
+    let* bytes = Array::withCapacity[char](self.len());
     for part in self.parts.* do {
       switch part {
         .Char(c) -> bytes.push(c),

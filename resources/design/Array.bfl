@@ -9,7 +9,7 @@ Dict<key = int, value = String>
 // Jakt has both [T] and Array[T]
 // TS has both T[] and Array<T>
 // I think its not worth it
-fn sort<T>(x: mut Array<T>): () fails String {
+fn sort<T>(x: let mut Array<T>): () fails String {
 
 }
 
