@@ -1627,11 +1627,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         );
                         Ok(value.into())
                     }
-                    UnaryOpKind::Reference => {
-                        let value_location = self.builder.build_alloca(value.get_type(), "ref");
-                        self.builder.build_store(value_location, value);
-                        Ok(value_location.as_basic_value_enum().into())
-                    }
                     UnaryOpKind::BooleanNegation => {
                         let truncated = self.bool_to_i1(value.into_int_value(), "bool_trunc4neg");
                         let negated = self.builder.build_not(truncated, "i1_negated");
