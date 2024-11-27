@@ -14,7 +14,10 @@ It features:
 - **Strong Static Typing** with limited, fast, and predictable type inference
 - **Algebraic Data Types** via `either` for tagged unions and structs for product types
 - **Generics** with support for type constraints through abilities (traits)
-- **Deeply expression-oriented** in the value context _and_ the type context
+- **Deeply expression-oriented** 
+  - `loop` with `break(<expr>)`, 
+  - `if` expressions that support a single pattern
+  - A `never` type that allows simplifying types while handling cases
 - **First-class Optional Types** with ergonomic `?` and `?.` operators and pattern matching
 - **Reference Types** with distinct pointer and reference semantics
 - **Anonymous structs and enums** allow for lightweight, low-boilerplate, zero-cost data modeling
@@ -32,8 +35,7 @@ It features:
 ### Systems Programming facilities
 - **Direct Memory Management** with `Pointer` operations and introspectable type layouts
 - **Foreign Function Interface** through external function declarations
-- **Bit Manipulation** operations through the Bitwise ability
-- **Raw Pointer Operations** including null pointer checks and pointer casting
+- **Bit Manipulation** operations
 - **Fixed-Size Integer Types** (u8/i8 through u64/i64)
 - **Platform Integration** through libc bindings
 

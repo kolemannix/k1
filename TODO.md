@@ -120,18 +120,19 @@
 - [x] Fix context params when combined with generics
 - [x] string interpolation
 - [x] typeOf(<anyexpr>)
-- [ ] Context location params are not being propagated
-- [ ] Fix named arguments
-- [x] return from while
-- [x] break from while
-- [ ] Make an ability for unwrap?!
 - [ ] Working with references push, specifically struct and either references
+  - [ ] A nice syntax for `referenceSet`
   - [x] Kill .& because so unsound, use let* for those cases
     - [x] Not the worst thing to use let* for the c-interop case of needing a pointer, that's what .& was doing anyway
   - [x] EnumGetPayload on a reference doesn't give a reference (and shouldn't always, what syntax to specify)
   - [x] FieldAccess on a reference doesn't give a reference (and shouldn't always, what syntax to specify)
   - [ ] Cannot match on references
   - [ ] Match to get reference to each struct field, for example, use * for a dereferencing match
+- [ ] Context location params are not being propagated
+- [ ] Fix named arguments
+- [x] return from while
+- [x] break from while
+- [ ] Make an ability for unwrap?!
 - [ ] 'never' needs to work in every expression position
 - [ ] Move tests into single file, accumulate errors and allow inline assertions when a line should error.
       Probably one tests for failing compilation and one passing one for each major language area
