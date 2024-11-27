@@ -1,5 +1,5 @@
 fn unique(arr: Array<char>): bool {
-  val seen = []: Array<char>;
+  let seen = []: Array<char>;
   mut ret = true;
   for c in arr do {
       for s in seen do {
@@ -13,13 +13,13 @@ fn unique(arr: Array<char>): bool {
 }
 
 fn main(): int {
-  val input = "bvwbjplbgvbhsrlpgdmjqwftvncz";
+  let input = "bvwbjplbgvbhsrlpgdmjqwftvncz";
   mut i = 0;
   mut done = false;
   for input do {
       if not done {
-        val i = it_index;
-        val sub = [input[i], input[i + 1], input[i + 2], input[i + 3]];
+        let i = it_index;
+        let sub = [input[i], input[i + 1], input[i + 2], input[i + 3]];
         if unique(sub) {
           printInt(i + 4);
           done = true

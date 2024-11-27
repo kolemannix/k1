@@ -9,8 +9,8 @@ namespace E {
   }
 }
 fn main(): int {
-  val x: E = .A(42);
-  val y: E.A = .A(42);
+  let x: E = .A(42);
+  let y: E.A = .A(42);
   #debug assert(x.value_if_a() == y.value_if_a());
   assert((.B: E).value_if_a() == 0);
   0

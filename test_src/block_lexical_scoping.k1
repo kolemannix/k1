@@ -1,5 +1,5 @@
 fn main(): int {
-  { val foo = 100 };
+  { let foo = 100 };
   assert(foo == 100);
   0
 }

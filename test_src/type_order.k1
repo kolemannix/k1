@@ -6,6 +6,6 @@ ability ToPoint {
 }
 
 fn main(): int {
-    val x: Point = { x: 1, y: 2 };
+    let x: Point = { x: 1, y: 2 };
     0
 }

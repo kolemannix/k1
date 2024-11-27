@@ -25,7 +25,7 @@ type Animal = oneof {
   Cat = record { isOrange: bool }
 };
 // Unlike in Rust, Animal.Dog is a proper type of its own.
-val tucker = Dog { breed: "Brittany" };
+let tucker = Dog { breed: "Brittany" };
 
 type UserView = UserRow.type - [:password, :modified_at]
 
@@ -34,13 +34,13 @@ type Foo = record {
   bytes: Array[byte]
 } + record { id: Id };
 
-val anon_record = { x: 5, y: 10 }; // record { }
-val anon_record = {};
+let anon_record = { x: 5, y: 10 }; // record { }
+let anon_record = {};
 
 // Block or empty record?
 if true {} else {};
 
-val anon_type: Type = anon_record.type;
+let anon_type: Type = anon_record.type;
 // .type asks the compiler to generate type info
 // This works since Type is an enum so there's a variant field to branch on at runtime
 if (anon_type: Type.record) {
@@ -48,15 +48,15 @@ if (anon_type: Type.record) {
   // i.e., anon_type: Type.record
   anon_type.fields
 }
-val fooJsonWriter = impl JsonWriter[Foo] {
+let fooJsonWriter = impl JsonWriter[Foo] {
   fn write(value: Foo) = {
     mut buffer = JsonObject::empty();
-    val fields = Foo.fields.map { f =>
+    let fields = Foo.fields.map { f =>
       buffer.append(toJsType(f.type), toJsValue(value.getField(f));
     }
   }
 }
-val anonJsonWriter = impl JsonWriter[anon_type] {
+let anonJsonWriter = impl JsonWriter[anon_type] {
   fn write(a: anon_type)
 }
 anon_type.fields.map(f => println(f.name));

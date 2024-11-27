@@ -1,6 +1,6 @@
 fn main(): int {
-  val x = 3;
-  val x = 4;
+  let x = 3;
+  let x = 4;
   assert(x == 4);
   0
 }

@@ -1283,44 +1283,62 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         struc
     }
 
-    fn codegen_val(&mut self, val: &ValDef) -> CodegenResult<LlvmValue<'ctx>> {
-        let value = self.codegen_expr(&val.initializer)?;
+    fn codegen_let(&mut self, let_stmt: &LetStmt) -> CodegenResult<LlvmValue<'ctx>> {
+        let value = self.codegen_expr(&let_stmt.initializer)?;
 
         if let LlvmValue::Never(instr) = value {
             return Ok(LlvmValue::Never(instr));
         }
-        let value = value.expect_basic_value();
 
-        let variable_type = self.codegen_type(val.variable_type)?;
-        let variable = self.module.variables.get_variable(val.variable_id);
+        // If this is a let*, then we put the rhs behind another alloca so that we end up
+        // with a pointer to the value
+        let value = if let_stmt.is_referencing {
+            let basic_value = value.expect_basic_value();
+            let value_ptr = self.builder.build_alloca(basic_value.get_type(), "");
+            self.builder.build_store(value_ptr, basic_value);
+            value_ptr.as_basic_value_enum()
+        } else {
+            value.expect_basic_value()
+        };
+
+        let variable_type = self.codegen_type(let_stmt.variable_type)?;
+        let variable = self.module.variables.get_variable(let_stmt.variable_id);
         let variable_ptr =
             self.builder.build_alloca(value.get_type(), self.get_ident_name(variable.name));
-        trace!("codegen_val {}: pointee_ty: {variable_type:?}", self.get_ident_name(variable.name));
-        // We're always storing a pointer
-        // in self.variables that, when loaded, gives the actual type of the variable
-        let store_instr = self.builder.build_store(variable_ptr, value);
-        self.debug.debug_builder.insert_declare_before_instruction(
-            variable_ptr,
-            Some(self.debug.debug_builder.create_auto_variable(
-                self.debug.current_scope(),
-                self.get_ident_name(variable.name),
-                self.debug.current_file(),
-                self.get_line_number(val.span),
-                variable_type.debug_type(),
-                true,
-                0,
-                WORD_SIZE_BITS as u32,
-            )),
-            None,
-            self.builder.get_current_debug_location().unwrap(),
-            store_instr,
+
+        trace!(
+            "codegen_let referencing={} {}: pointee_ty: {variable_type:?}",
+            let_stmt.is_referencing,
+            self.get_ident_name(variable.name)
         );
+
+        // We're always storing a pointer in self.variables that, when loaded, gives the actual type of the variable
+        let store_instr = self.builder.build_store(variable_ptr, value);
+
+        if !self.module.get_ident_str(variable.name).starts_with("__") {
+            self.debug.debug_builder.insert_declare_before_instruction(
+                variable_ptr,
+                Some(self.debug.debug_builder.create_auto_variable(
+                    self.debug.current_scope(),
+                    self.get_ident_name(variable.name),
+                    self.debug.current_file(),
+                    self.get_line_number(let_stmt.span),
+                    variable_type.debug_type(),
+                    true,
+                    0,
+                    WORD_SIZE_BITS as u32,
+                )),
+                None,
+                self.builder.get_current_debug_location().unwrap(),
+                store_instr,
+            );
+        }
         let pointer = Pointer {
             pointer: variable_ptr,
-            pointee_type_id: val.variable_type,
+            pointee_type_id: let_stmt.variable_type,
             pointee_llvm_type: variable_type.physical_value_type(),
         };
-        self.variables.insert(val.variable_id, pointer);
+        self.variables.insert(let_stmt.variable_id, pointer);
         Ok(variable_ptr.into())
     }
 
@@ -2471,8 +2489,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             match stmt {
                 TypedStmt::Expr(expr) => last = self.codegen_expr(expr)?,
-                TypedStmt::ValDef(val_def) => {
-                    let value = self.codegen_val(val_def)?;
+                TypedStmt::Let(val_def) => {
+                    let value = self.codegen_let(val_def)?;
                     last = if val_def.variable_type == NEVER_TYPE_ID { value } else { unit_value };
                 }
                 TypedStmt::Assignment(assignment) => {

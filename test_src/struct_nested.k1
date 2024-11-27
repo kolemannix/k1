@@ -8,13 +8,13 @@ fn block_area(b: Block): int {
 }
 
 fn main(): int {
-  val b: Block = {
+  let b: Block = {
     position: { x: 1, y: 1, width: 50, height: 50 },
     text: 42
   };
-  val area: int = block_area(b);
+  let area: int = block_area(b);
   assert(area == 2500);
-  val area2: int = block_area({ position: { x: 1, y: 1, width: 50, height: 50 }, text: 42 });
+  let area2: int = block_area({ position: { x: 1, y: 1, width: 50, height: 50 }, text: 42 });
   assert(area2 == 2500);
   0
 }

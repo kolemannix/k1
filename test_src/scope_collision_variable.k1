@@ -1,7 +1,7 @@
-val x: int = 3;
+let x: int = 3;
 
 fn main(x: int): int {
-  val x: int = 42;
+  let x: int = 42;
   assert(x == 42);
   0
 }

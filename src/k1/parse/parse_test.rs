@@ -42,7 +42,7 @@ fn basic_fn() -> Result<(), ParseError> {
     let src = r#"
     fn basic(x: u64, y: u64): u64 {
       println(42, 42, 42);
-      val x = 0;
+      let x = 0;
       mut y = 2;
       y = { 1; 2; 3 };
       y = add(42, 42);
@@ -72,7 +72,7 @@ fn string_literal() -> ParseResult<()> {
 #[test]
 fn infix() -> Result<(), ParseError> {
     let mut module = make_test_module();
-    let mut parser = set_up("val x = a + b * doStuff(1, 2)", &mut module);
+    let mut parser = set_up("let x = a + b * doStuff(1, 2)", &mut module);
     let result = parser.parse_statement()?;
     if let Some(ParsedStmt::ValDef(ValDef { value: expr_id, .. })) = result {
         let ParsedExpression::BinaryOp(op) = module.expressions.get(expr_id) else { panic!() };

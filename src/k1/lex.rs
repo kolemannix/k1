@@ -125,7 +125,7 @@ pub enum TokenKind {
     Char,
 
     KeywordFn,
-    KeywordVal,
+    KeywordLet,
     KeywordMut,
     KeywordAnd,
     KeywordOr,
@@ -213,7 +213,7 @@ impl TokenKind {
     pub fn get_repr(&self) -> Option<&'static str> {
         match self {
             K::KeywordFn => Some("fn"),
-            K::KeywordVal => Some("val"),
+            K::KeywordLet => Some("let"),
             K::KeywordMut => Some("mut"),
             K::KeywordAnd => Some("and"),
             K::KeywordOr => Some("or"),
@@ -336,7 +336,7 @@ impl TokenKind {
     pub fn token_from_str(str: &str) -> Option<TokenKind> {
         match str {
             "fn" => Some(K::KeywordFn),
-            "val" => Some(K::KeywordVal),
+            "let" => Some(K::KeywordLet),
             "mut" => Some(K::KeywordMut),
             "and" => Some(K::KeywordAnd),
             "or" => Some(K::KeywordOr),
@@ -375,7 +375,7 @@ impl TokenKind {
     pub fn is_keyword(&self) -> bool {
         match self {
             K::KeywordFn => true,
-            K::KeywordVal => true,
+            K::KeywordLet => true,
             K::KeywordMut => true,
             K::KeywordAnd => true,
             K::KeywordOr => true,
@@ -747,11 +747,11 @@ mod test {
 
     #[test]
     fn case1() -> anyhow::Result<()> {
-        let input = "val x = println(4)";
+        let input = "let x = println(4)";
         expect_token_kinds(
             input,
             vec![
-                K::KeywordVal,
+                K::KeywordLet,
                 K::Ident,
                 K::Equals,
                 K::Ident,
@@ -801,11 +801,11 @@ mod test {
 
     #[test]
     fn literal_string() -> anyhow::Result<()> {
-        let input = "val x = println(\"foobear\")";
+        let input = "let x = println(\"foobear\")";
         expect_token_kinds(
             input,
             vec![
-                K::KeywordVal,
+                K::KeywordLet,
                 K::Ident,
                 K::Equals,
                 K::Ident,
@@ -818,10 +818,10 @@ mod test {
 
     #[test]
     fn ending_ident() -> anyhow::Result<()> {
-        let input = "val x = a + b";
+        let input = "let x = a + b";
         expect_token_kinds(
             input,
-            vec![K::KeywordVal, K::Ident, K::Equals, K::Ident, K::Plus, K::Ident],
+            vec![K::KeywordLet, K::Ident, K::Equals, K::Ident, K::Plus, K::Ident],
         )
     }
 
@@ -834,7 +834,7 @@ mod test {
     #[test]
     fn line_comment() -> anyhow::Result<()> {
         let input = r#"// Hello, world
-        val foo: int = 74;
+        let foo: int = 74;
         // <test harness> expected output
         //
         "#;
@@ -845,7 +845,7 @@ mod test {
         assert_eq!(
             vec![
                 K::LineComment,
-                K::KeywordVal,
+                K::KeywordLet,
                 K::Ident,
                 K::Colon,
                 K::Ident,

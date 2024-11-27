@@ -1,6 +1,6 @@
 fn main(): int {
-  val s = "asdf";
-  val charCodes: Array[int] = for c in s yield {
+  let s = "asdf";
+  let charCodes: Array[int] = for c in s yield {
     c as int
   };
   assert(charCodes.get(0) == 97);

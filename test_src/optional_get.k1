@@ -1,17 +1,17 @@
 deftype Point = { x: int, y: int? }
 
 fn main(): int {
-  val p: Point? = { x: 1, y: 2 };
+  let p: Point? = { x: 1, y: 2 };
   assert(p!.x == 1);
   assert(p!.y! == 2);
 
-  val b = true: bool?;
+  let b = true: bool?;
   if b is .Some(x) {
     assert(x);
   };
 
   assertMsg("a", Opt::hasValue[bool](b));
-  val c: int? = .None;
+  let c: int? = .None;
   assertMsg("b", not c.hasValue());
 
   assertMsg("c", types::typeId[Point.y.Some.value]() == types::typeId[int]());

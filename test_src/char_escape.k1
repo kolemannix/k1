@@ -1,5 +1,5 @@
 fn main(): int {
-  val c = '\n';
+  let c = '\n';
   assert(c as u8 == 10);
   assert(c.toString().len == 1);
   0

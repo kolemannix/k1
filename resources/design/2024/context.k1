@@ -27,10 +27,10 @@ fn parse_expr(ctx: Context, caller_loc: Loc)(tokens: Array<Token>, index: int): 
 }
 
 fn main() {
-  val tokens = lexer::go();
+  let tokens = lexer::go();
 
-  context val ctx = { symbols: Symbols::new() };
-  val ast = parse_expr(tokens, 0);
+  context let ctx = { symbols: Symbols::new() };
+  let ast = parse_expr(tokens, 0);
 }
 
 

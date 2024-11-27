@@ -1,5 +1,5 @@
 fn main(): int {
-  val pi: f64 = 3.14159;
+  let pi: f64 = 3.14159;
   assert(3.0 > 2.0);
   assert(3.0 >= 3.0);
   assert(not 3.0 > 3.0);

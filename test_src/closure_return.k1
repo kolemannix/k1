@@ -1,6 +1,6 @@
 fn main(): int {
-  val getThree = \(-> int) { return(3) };
-  val nullary = \() 4;
+  let getThree = \(-> int) { return(3) };
+  let nullary = \() 4;
   assert(getThree() == 3);
   assert(nullary() == 4);
 

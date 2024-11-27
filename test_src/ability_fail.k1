@@ -5,7 +5,7 @@ ability Num {
 deftype Tool = either True , False , Iono
 
 fn main(): int {
-  val p: Tool = .True;
+  let p: Tool = .True;
   assert(p.num() == 1);
 
   0

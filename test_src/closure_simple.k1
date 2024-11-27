@@ -6,7 +6,7 @@ fn map[T, U](a: Array[T], f: \T -> U): Array[U] {
 // We could instead specialize the function on the closure type
 // and get static dispatch
 fn filter[T](a: Array[T], f: \T -> bool): Array[T] {
-  val keep = Array::new[T]().&;
+  let keep = Array::new[T]().&;
   for i in a do { if f(i) keep.push(i) };
   keep
 }
@@ -14,16 +14,16 @@ fn filter[T](a: Array[T], f: \T -> bool): Array[T] {
 fn staticAddOne(x: int): int { x + 1 }
 
 fn main(): int {
-  val addOne = \(x: int) x + 1;
-  val addOne2 = addOne;
-  val addOne3 = \(i: int) staticAddOne(i);
+  let addOne = \(x: int) x + 1;
+  let addOne2 = addOne;
+  let addOne3 = \(i: int) staticAddOne(i);
 
   assert(addOne(1) == 2);
   assert(addOne2(2) == 3);
   assert(addOne3(3) == 4);
 
 
-  val result = [1,2,3,5,6,7,8]
+  let result = [1,2,3,5,6,7,8]
   | map(\(x: int) x + 1)
   | filter(\(x: int) x % 2 == 0);
 

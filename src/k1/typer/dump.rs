@@ -399,11 +399,11 @@ impl TypedModule {
         writ.write_str(&"  ".repeat(indentation))?;
         match stmt {
             TypedStmt::Expr(expr) => self.display_expr(expr, writ, indentation),
-            TypedStmt::ValDef(val_def) => {
-                writ.write_str("val ")?;
-                self.display_variable(self.variables.get_variable(val_def.variable_id), writ)?;
+            TypedStmt::Let(let_stmt) => {
+                writ.write_str("let ")?;
+                self.display_variable(self.variables.get_variable(let_stmt.variable_id), writ)?;
                 writ.write_str(" = ")?;
-                self.display_expr(&val_def.initializer, writ, indentation)
+                self.display_expr(&let_stmt.initializer, writ, indentation)
             }
             TypedStmt::Assignment(assignment) => {
                 self.display_expr(&assignment.destination, writ, indentation)?;

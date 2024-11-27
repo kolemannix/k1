@@ -4,7 +4,7 @@ impl Show for { name: string, weight: int } {
 
 fn main(): int {
 
-  val user = { name: "Bob", weight: 199 };
+  let user = { name: "Bob", weight: 199 };
   assert("Hello, '\{user}'!" == "Hello, 'Bob: 199'!");
 
   0

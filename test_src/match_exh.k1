@@ -51,7 +51,7 @@ fn main(): int {
   matchBool(false);
   matchOptBool(.Some(false));
 
-  val yes: TriState = .Yes;
+  let yes: TriState = .Yes;
   matchTristateOpt(.Some(yes));
   matchTristateOpt(.Some(.Yes));
   matchTristateOpt(.Some(.Failure({ reason: "because" })));

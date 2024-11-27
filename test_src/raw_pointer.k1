@@ -1,17 +1,17 @@
 deftype Point = { x: int, y: int, z: int }
 
 fn main(): int {
-  val point: Point* = { x: 10, y: 20, z: 30 }.&;
-  val pointPtr = point as Pointer;
+  let point: Point* = { x: 10, y: 20, z: 30 }.&;
+  let pointPtr = point as Pointer;
 
-  val point2 = pointPtr as Point*;
+  let point2 = pointPtr as Point*;
   assert(point2.x == 10);
   assert(point2.y == 20);
 
   // Move 8 bytes
   assert(sizeOf[int]() == 8);
-  val pointShifted = ((pointPtr as u64) + sizeOf[int]()) as Pointer;
-  val point3 = pointShifted as Point*;
+  let pointShifted = ((pointPtr as u64) + sizeOf[int]()) as Pointer;
+  let point3 = pointShifted as Point*;
 
   // x is now y, y is now z, z is now random bits
   assert(point3.x == 20);

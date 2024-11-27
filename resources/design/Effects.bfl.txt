@@ -31,7 +31,7 @@ fn unsafe_load(path: string): Async[(), Array[Byte]]  {
 }
 
 fn load(path: string): FileOp[Array[Byte]] {
-  val result: Try[IOError, Array[Byte]] = FS.load(path).retryN(3).await;
+  let result: Try[IOError, Array[Byte]] = FS.load(path).retryN(3).await;
   // if can be used only on Try and Option, (and boolean of course), not on data!
   // though I suppose if it were powered by a 2-branch interface you could write your own
   if (result) { bytes =>

@@ -1,8 +1,8 @@
-val z: int = 1337;
+let z: int = 1337;
 
 fn add_stuff(x: int, y: int): int {
-  val b: int = x + 1;
-  val foo: int = b + z;
+  let b: int = x + 1;
+  let foo: int = b + z;
   foo + y
 }
 
@@ -11,7 +11,7 @@ fn mult(x: int, y: int): int {
 }
 
 fn main(): int {
-  val x = (1 * 100 * 2) / 3;
+  let x = (1 * 100 * 2) / 3;
   assert(x == 66);
 
   assert(50 >= 50);
@@ -20,7 +20,7 @@ fn main(): int {
   assert(50 <= 50);
   assert(49 <= 50);
 
-  val y = x - 14;
+  let y = x - 14;
 
   assert(y == 52);
   assert(y > 51);
@@ -32,7 +32,7 @@ fn main(): int {
   assert(-10 % 2 == 0);
 
   assert(add_stuff(y = 2, x = 1) == 1341);
-  val multResult: int = mult(
+  let multResult: int = mult(
     55,
     2 + 3 + 3,
   );

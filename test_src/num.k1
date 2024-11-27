@@ -5,10 +5,10 @@ fn test(a: u8, b: u8): u8 {
 fn main(): int {
   // This test is unfinished
   printInt(test(255, 255) as int);
-  val b: u8 = 255;
-  val x = 0xcafebabe;
-  val y = 0xdeadbeef;
-  val a: u8 = 0b11111111;
+  let b: u8 = 255;
+  let x = 0xcafebabe;
+  let y = 0xdeadbeef;
+  let a: u8 = 0b11111111;
   Bits::bitAnd(x, y);
 
   0

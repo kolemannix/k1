@@ -14,8 +14,8 @@ deftype HashMap[V] = {
 }
 
 fn fnv1a_hash(key: string): u64 {
-  val FNV_PRIME: u64 = 1099511628211;
-  val FNV_OFFSET: u64 = 14695981039346656037;
+  let FNV_PRIME: u64 = 1099511628211;
+  let FNV_OFFSET: u64 = 14695981039346656037;
   mut hash_value = FNV_OFFSET;
   for c in key do {
     hash_value = Bitwise::xor(hash_value, c as u8 as u64);
@@ -38,11 +38,11 @@ namespace HashMap {
   // ha ha ha. once again Mr. Ocean. You have come in second.
 
   fn grow[V](self: HashMap[V]*): unit {
-    val origSize = self.size;
-    val oldEntries = self.entries;
-    val newCap = if oldEntries.cap == 0 1: u64 else oldEntries.cap * 2;
+    let origSize = self.size;
+    let oldEntries = self.entries;
+    let newCap = if oldEntries.cap == 0 1: u64 else oldEntries.cap * 2;
 
-    val newMap = _make[V](newCap);
+    let newMap = _make[V](newCap);
     referenceSet(self, newMap);
 
     for v in oldEntries do {
@@ -53,8 +53,8 @@ namespace HashMap {
   }
 
   fn _computeIndex[V](self: HashMap[V]*, key: string): u64 {
-    val hash = fnv1a_hash(key);
-    val index = hash % self.entries.len;
+    let hash = fnv1a_hash(key);
+    let index = hash % self.entries.len;
     index
   }
 
@@ -65,7 +65,7 @@ namespace HashMap {
       probeIndex = probeIndex + 1;
       if probeIndex == self.entries.len { probeIndex = 0 };
 
-      val entryRef = self.entries.getRef(probeIndex);
+      let entryRef = self.entries.getRef(probeIndex);
       // TODO: match on reference
       if entryRef.* is .None {
         return(entryRef)
@@ -74,9 +74,9 @@ namespace HashMap {
   }
 
   fn fillFactor[V](self: HashMap[V]): f32 {
-    val fillDivisor = if self.entries.len == 0 1 as f32 else self.entries.len as f32;
-    val fillNumerator = if self.size == 0 1.0 else self.size as f32;
-    val fillFactor = fillNumerator / fillDivisor;
+    let fillDivisor = if self.entries.len == 0 1 as f32 else self.entries.len as f32;
+    let fillNumerator = if self.size == 0 1.0 else self.size as f32;
+    let fillFactor = fillNumerator / fillDivisor;
     fillFactor
   }
 
@@ -84,9 +84,9 @@ namespace HashMap {
     if self.fillFactor() > 0.7 {
       self.grow();
     };
-    val index = self._computeIndex(key);
-    val entryRef = self.entries.getRef(index);
-    val entry = { key: key, value: value, deleted: false };
+    let index = self._computeIndex(key);
+    let entryRef = self.entries.getRef(index);
+    let entry = { key: key, value: value, deleted: false };
     switch entryRef.* {
       .None -> {
         referenceSet(entryRef, .Some(entry));
@@ -96,7 +96,7 @@ namespace HashMap {
         if existingKey == key {
           referenceSet(entryRef, .Some(entry));
         } else {
-          val nextAvailableEntry = self._probe(index);
+          let nextAvailableEntry = self._probe(index);
           referenceSet(nextAvailableEntry, .Some(entry));
           self.size = self.size + 1;
         }
@@ -105,8 +105,8 @@ namespace HashMap {
   }
 
   fn get[V](self: HashMap[V]*, key: string): V? {
-    val index = self._computeIndex(key);
-    val slot = self.entries.get(index);
+    let index = self._computeIndex(key);
+    let slot = self.entries.get(index);
     switch slot {
       .None -> .None,
       .Some({ key: existingKey, value: v, deleted }) -> {
@@ -134,8 +134,8 @@ namespace HashMap {
   }
 
   fn remove[V](self: HashMap[V]*, key: string): bool {
-    val index = self._computeIndex(key);
-    val entryRef = self.entries.getRef(index);
+    let index = self._computeIndex(key);
+    let entryRef = self.entries.getRef(index);
     switch entryRef.* {
       .None -> false,
       .Some({ key: existingKey, value: value, deleted }) -> {
@@ -148,7 +148,7 @@ namespace HashMap {
             probeIndex = probeIndex + 1;
             if probeIndex == self.entries.len { probeIndex = 0; };
 
-            val probedEntryRef = self.entries.getRef(probeIndex);
+            let probedEntryRef = self.entries.getRef(probeIndex);
             switch probedEntryRef.* {
               .Some({ key: existingKey, value, deleted }) -> {
                 if key == existingKey {
@@ -166,8 +166,8 @@ namespace HashMap {
   }
 
   fn dump[V](self: HashMap[V]): unit where V: Show {
-    val capacity = self.entries.len;
-    val size = self.size;
+    let capacity = self.entries.len;
+    let size = self.size;
     println("Capacity: \{capacity}");
     println("Size: \{size}");
     println("");
@@ -177,7 +177,7 @@ namespace HashMap {
       switch it {
         , .None -> println("empty")
         , .Some({ key, value, deleted }) -> {
-            val v = Show::show(value);
+            let v = Show::show(value);
             println("\{key} -> \{value} (d=\{deleted})");
         }
       }
@@ -187,7 +187,7 @@ namespace HashMap {
 }
 
 fn test(size: u64): unit {
-  val myMap: HashMap[int]* = HashMap::new().&;
+  let myMap: HashMap[int]* = HashMap::new().&;
   mut i = 0: i64;
   while i < size as i64 {
     myMap.insert(i.show(), i);
@@ -199,7 +199,7 @@ fn test(size: u64): unit {
   i = 0;
   // myMap.dump();
   while i < size as i64 {
-    val result = myMap.get(i.show());
+    let result = myMap.get(i.show());
     if i % 5 == 0 {
       assertMsg("\{i} should be empty", result is .None);
     } else {
@@ -220,7 +220,7 @@ fn randByte(): u8 {
 }
 
 fn randString(len: uint): string {
-  val arr = Array::withCapacity[char](len).&;
+  let arr = Array::withCapacity[char](len).&;
   mut i: uint = 0;
   while i < len {
     arr.push(randByte() as char);

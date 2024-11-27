@@ -1,6 +1,6 @@
 fn loopBreak(): unit {
-  val x: int = loop {
-    val inner: int = if true {
+  let x: int = loop {
+    let inner: int = if true {
       break(3)
     } else {
       4
@@ -10,14 +10,14 @@ fn loopBreak(): unit {
 }
 
 fn loopNested(): unit {
-  val result = loop {
+  let result = loop {
     break(loop { break(10) })
   };
   assert(result == 10)
 }
 
 fn loopFalse(): unit {
-  val x = loop {
+  let x = loop {
     break(3);
   };
   assert(x == 3)

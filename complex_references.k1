@@ -1,8 +1,8 @@
 fn main(): int {
-  val structRef: { x: int }* = { x: 42 }.&;
+  let structRef: { x: int }* = { x: 42 }.&;
 
-  val xValue: int = structRef.x*;
-  val xRef: int* = structRef.x*;
+  let xValue: int = structRef.x*;
+  let xRef: int* = structRef.x*;
 
   assert(xRef.* == xValue);
   assert(structRef.*.x == structRef.x);
@@ -16,10 +16,10 @@ fn main(): int {
   structRef.x = 42;
   assert(xRef.* == 42);
 
-  val eitherRef: (either Yes(int), No)* = .Yes(3).&;
+  let eitherRef: (either Yes(int), No)* = .Yes(3).&;
 
-  val yesValue: int = eitherRef.asYes()!.value;
-  val yesRef: typeOf(eitherRef).value.Yes* = eitherRef.asYes()!;
+  let yesValue: int = eitherRef.asYes()!.value;
+  let yesRef: typeOf(eitherRef).value.Yes* = eitherRef.asYes()!;
 
   assert(yesRef.value == 3);
   assert(yesRef.value*.* == 3);
@@ -36,7 +36,7 @@ fn main(): int {
   // of assignments as a normal expression
   // <any ptr> <- <expr>
 
-  val structOptRef: { x: int }*? = .Some({ x: 42 }.&);
+  let structOptRef: { x: int }*? = .Some({ x: 42 }.&);
 
   if structOptRef is .Some(x) {
     assert(x.x == 42);

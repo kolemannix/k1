@@ -1,5 +1,5 @@
 fn main(): int {
-  val empty: Array[int] = [];
+  let empty: Array[int] = [];
   // assert(empty != [1]);
   assert(empty == empty);
   assert([3] == [3]);

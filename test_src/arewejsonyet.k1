@@ -7,18 +7,18 @@ deftype Json = either
   , JsObject(Array[{ key: string, value: Json }])
 
 fn main(): int {
-  val obj: Json = .JsStr("hello");
-  val null: Json = .JsNull;
+  let obj: Json = .JsStr("hello");
+  let null: Json = .JsNull;
   assert(obj is .JsStr("hello"));
   assert(null is .JsNull);
 
-  val obj2: Json = .JsArray([.JsStr("hello"), .JsNumber("123")]);
+  let obj2: Json = .JsArray([.JsStr("hello"), .JsNumber("123")]);
   assert(obj2.asJsArray()!.value.get(0) is .JsStr("hello"));
   assert(obj2.asJsArray()!.value.get(1) is .JsNumber("123"));
 
   // TODO: Causes stack overflow due to no indirection
   // type Node = { value: string, child: Node? }
-  // val n: Node = { value: "hello", child: None };
+  // let n: Node = { value: "hello", child: None };
 
   0
 }

@@ -12,10 +12,10 @@ namespace Result {
 }
 
 fn main(): int {
-    val x1: Result[int, string] = .Ok(-3);
-    val x2: Result[int, string] = .Err("Some error message");
+    let x1: Result[int, string] = .Ok(-3);
+    let x2: Result[int, string] = .Err("Some error message");
 
-    val x1Ok = x1.asOk()!;
+    let x1Ok = x1.asOk()!;
 
     // This tests type inference for enums
     assert(Result::unwrap(x1) == -3);
@@ -23,7 +23,7 @@ fn main(): int {
     assert(x1Ok.unwrap() == -3);
 
     // Shows that we can talk about the payload type
-    val b: Result[int, string].Ok.value = 42;
+    let b: Result[int, string].Ok.value = 42;
 
     x1.show();
     x2.show();

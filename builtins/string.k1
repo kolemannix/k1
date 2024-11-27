@@ -8,27 +8,27 @@ namespace string {
     if index >= self.len {
       crash("string index out of bounds: ".concat(index.show()))
     };
-    val charRef: char* = self.data.refAtIndex(index);
+    let charRef: char* = self.data.refAtIndex(index);
     charRef
   }
 
   fn get(self: string, index: u64): char {
-    val charRef: char* = self.getRef(index);
+    let charRef: char* = self.getRef(index);
     charRef.*
   }
   fn set(self: string, index: u64, value: char): unit {
-    val charRef: char* = self.getRef(index);
+    let charRef: char* = self.getRef(index);
     referenceSet(charRef, value)
   }
 
   fn fromBytes(bytes: Array[byte]): string {
     assert(sizeOf[char]() == sizeOf[byte]());
-    val copied = bytes.cloned();
+    let copied = bytes.cloned();
     { len: copied.len, data: copied.data }
   }
 
   fn fromChars(bytes: Array[char]): string {
-    val copied = bytes.cloned();
+    let copied = bytes.cloned();
     { len: copied.len, data: copied.data }
   }
 
@@ -48,12 +48,12 @@ namespace string {
   }
 
   fn concat(self: string, other: string): string {
-    val new_length = self.len + other.len;
-    val copied = Array::withCapacity[char](new_length).&;
+    let new_length = self.len + other.len;
+    let copied = Array::withCapacity[char](new_length).&;
 
     libc::memcpy(copied.data, self.data, self.len);
 
-    val offset = copied.data as u64 + self.len;
+    let offset = copied.data as u64 + self.len;
     libc::memcpy(offset as Pointer, other.data, other.len);
 
     copied.len = new_length;
@@ -61,9 +61,9 @@ namespace string {
   }
 
   fn appendChar(self: string, c: char): string {
-    val new_length = self.len + 1;
+    let new_length = self.len + 1;
 
-    val copied = Array::withCapacity[char](new_length).&;
+    let copied = Array::withCapacity[char](new_length).&;
     copied.len = new_length;
 
     libc::memcpy(copied.data, self.data, self.len);
@@ -73,7 +73,7 @@ namespace string {
   }
 
   fn splitByChar(self: string, delim: char): Array[string] {
-    val results = Array::new[Array[char]]().&;
+    let results = Array::new[Array[char]]().&;
     mut accum = Array::new[char]().&;
     // Note(stdlib slow): TODO: use ranges instead to make this zero-copy!!
     //                    We can point to the old string instead of building up new ones
@@ -102,7 +102,7 @@ namespace string {
       if i + target.len >= self.len {
         return(.None)
       };
-      val sub = self.substring(i, i + target.len);
+      let sub = self.substring(i, i + target.len);
       if sub == target { return(i) };
       i = i + 1;
     };
@@ -113,13 +113,13 @@ namespace string {
     if start >= self.len or start < 0 {
       crash("substring start index out of bounds: ".concat(start.show()))
     };
-    val end = if end >= self.len self.len else end;
+    let end = if end >= self.len self.len else end;
     if end < start {
       return("")
     };
-    val newLen = end - start;
-    val newDataU64 = (self.data as u64) + (sizeOf[char]() * start);
-    val newData = newDataU64 as Pointer;
+    let newLen = end - start;
+    let newDataU64 = (self.data as u64) + (sizeOf[char]() * start);
+    let newData = newDataU64 as Pointer;
     { len: newLen, data: newData }
   }
 
@@ -134,12 +134,12 @@ namespace string {
   fn toInt(self: string): int? {
     if self.isEmpty() { return(.None) };
 
-    val neg = self.get(0) == '-';
+    let neg = self.get(0) == '-';
     mut i: u64 = if neg 1 else 0;
     mut total: u64 = 0;
     while i < self.len {
-      val c = self.get(i);
-      val digit = c.toAsciiDigit();
+      let c = self.get(i);
+      let digit = c.toAsciiDigit();
       if digit is .Some(digit) {
         total = (total * 10) + digit as u64;
       } else {
@@ -156,7 +156,7 @@ namespace string {
 impl Equals for string {
   fn equals(self: string, that: string): bool {
     if self.len != that.len { return(false) };
-    val compareResult = libc::memcmp(self.data, that.data, self.len);
+    let compareResult = libc::memcmp(self.data, that.data, self.len);
     compareResult == 0
   }
 }
@@ -185,7 +185,7 @@ impl Show for Array[string] {
     mut builder: string = "[";
     for s in self do {
       builder = builder.concat(s);
-      val last = it_index == self.len - 1;
+      let last = it_index == self.len - 1;
       if not last {
         builder = builder.concat(", ");
       };

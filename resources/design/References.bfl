@@ -1,5 +1,5 @@
 type Point = { x: Int, y: Int }
 
 // This creates a heap-allocated reference to an integer.
-val x: Int* =  42.new();
-val x: Point* = { x : 1, y : 2}.new();
+let x: Int* =  42.new();
+let x: Point* = { x : 1, y : 2}.new();
