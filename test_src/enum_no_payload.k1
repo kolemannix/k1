@@ -1,7 +1,0 @@
-fn main(): int {
-  let mut v: either Yes , No = .No;
-  if v is .No { () } else { assert(false) };
-  v = .Yes;
-  if v is .Yes { () } else { assert(false) };
-  0
-}

@@ -1,26 +1,27 @@
-fn main(): int {
+fn forString(): int {
+  let s = "asdf";
+  let charCodes: Array[int] = for c in s yield {
+    c as int
+  };
+  assert(charCodes.get(0) == 97);
+  assert(charCodes.get(1) == 115);
+  assert(charCodes.get(2) == 100);
+  assert(charCodes.get(3) == 102);
+  0
+}
+
+fn forYield(): unit {
   let squares: Array[int] = for it in [1, 5, 9, 12] yield { it * it };
   assert(squares.len == 4);
   assert(squares.get(0) == 1);
   assert(squares.get(1) == 25);
   assert(squares.get(2) == 81);
   assert(squares.get(3) == 144);
+}
 
-  // Desugared(ish)
-  // let squares = {
-  //   let mut counter_uniq: int = 0;
-  //   let iteree: Array<int> = [1, 5, 9, 12];
-  //   let iteree_length: int = length_2(iteree);
-  //   let yielded_coll: Array<int> = new_2(iteree_length);
-  //   while counter_uniq < iteree_length {
-  //     let it: int = iteree[counter_uniq];
-  //     let block_expr_val: int = {
-  //       it * it;
-  //     };
-  //     yielded_coll[counter_uniq] = block_expr_val;
-  //     counter_uniq = counter_uniq + 1;
-  //   };
-  //   yielded_coll;
-  // }
+fn main(): int {
+  forString();
+  forYield();
+
   0
 }

@@ -1,7 +1,0 @@
-let x: int = 3;
-
-fn main(x: int): int {
-  let x: int = 42;
-  assert(x == 42);
-  0
-}

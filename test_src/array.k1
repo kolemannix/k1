@@ -1,4 +1,4 @@
-fn main(): int {
+fn arrayFill(): int {
   let* xs = Array::new[int]();
   assert(xs.cap == 0);
   assert(xs.len == 0);
@@ -25,5 +25,40 @@ fn main(): int {
   let empty = []: Array[byte];
   assert(empty.cloned() == empty);
 
+  0
+}
+
+deftype Point = {
+  x: int,
+  y: int,
+  z: int,
+}
+
+fn arrayOfStructs(): int {
+  let* xs = [{ x: 1, y: 2, z: 3}: Point];
+  let mut i = 0;
+  while i < 100 {
+    xs.push({ x: 1, y: 2, z: 3});
+    i = i + 1;
+  };
+
+  assert(xs.len == 101);
+  assert(xs.cap == 128);
+  0
+}
+
+fn arrayEquality(): int {
+  let empty: Array[int] = [];
+  assert(empty != [1]);
+  assert(empty == empty);
+  assert([3] == [3]);
+  assert(["asdf", "2"] != ["asdf", "3"]);
+  0
+}
+
+fn main(): int {
+  arrayOfStructs();
+  arrayFill();
+  arrayEquality();
   0
 }

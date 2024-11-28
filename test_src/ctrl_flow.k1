@@ -1,10 +1,32 @@
-fn rand(): bool {
-  // Expression is of type never, but return type is bool.
-  // never <: bool
+fn ifBasic(): int {
+  let cond: bool = false;
+  let result: int = if cond 42 else 1337;
+  assert(result == 1337);
+  0
+}
+
+fn ifNoElse(): int {
+  // Gets unit type
+  let mut x = 0;
+  let expr: unit = if true {
+    x = 42;
+  };
+  assert(x == 42);
+  assert(expr == ());
+
+  // Even if one branch is 'never'
+  let expr: unit = if false {
+    crash("never happens");
+  };
+  0
+}
+
+fn returnSimple(): bool {
   return(true)
 }
 
-fn doit(): int {
+fn rand(): bool { true }
+fn returnFromIf(): int {
   let x: unit = if rand() {
     return(1)
   };
@@ -12,9 +34,39 @@ fn doit(): int {
   0
 }
 
-fn main(): int {
-  print("doit: ");
-  printInt(doit());
+fn loopBreak(): unit {
+  let x: int = loop {
+    let inner: int = if true {
+      break(3)
+    } else {
+      4
+    }
+  };
+  assert(x == 3)
+}
 
+fn loopNested(): unit {
+  let result = loop {
+    break(loop { break(10) })
+  };
+  assert(result == 10)
+}
+
+fn loopFalse(): unit {
+  let x = loop {
+    break(3);
+  };
+  assert(x == 3)
+}
+
+fn main(): int {
+  ifBasic();
+  ifNoElse();
+  assert(returnSimple());
+  assert(returnFromIf() == 1);
+
+  loopBreak();
+  loopNested();
+  loopFalse();
   0
 }
