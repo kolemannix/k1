@@ -13,6 +13,38 @@ fn filter[T](a: Array[T], f: \T -> bool): Array[T] {
 
 fn staticAddOne(x: int): int { x + 1 }
 
+fn captures(): unit {
+  let closedOver: int = 3;
+
+  let add = \(x: int) {
+    let addOne = \(y: int) y + 1;
+    addOne(x) + closedOver + addOne(closedOver) + (if closedOver == 3 1 else 0);
+  };
+
+  assert(add(3) == 12);
+}
+
+fn captureMut(): unit {
+  let* counter = 3;
+
+  let inc = \(x: int) {
+    referenceSet(counter, counter.* + 1);
+  };
+
+  inc(0);
+  inc(0);
+  inc(0);
+
+  assert(counter.* == 6);
+}
+
+fn closureReturn(): unit {
+  let getThree = \(-> int) { return(3) };
+  let nullary = \() 4;
+  assert(getThree() == 3);
+  assert(nullary() == 4);
+}
+
 fn main(): int {
   let addOne = \(x: int) x + 1;
   let addOne2 = addOne;
@@ -28,6 +60,10 @@ fn main(): int {
   | filter(\(x: int) x % 2 == 0);
 
   assert(result == [2, 4, 6, 8]);
+
+  captures();
+  captureMut();
+  closureReturn();
 
   0
 }

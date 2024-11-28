@@ -1,0 +1,32 @@
+fn assignVar(): unit {
+  let mut count = 0;
+  count = 1;
+  assert(count == 1);
+  count = 2;
+  assert(count == 2);
+}
+
+fn assignVarRef(): unit {
+  let* count = 0;
+  referenceSet(count, 1);
+  assert(count.* == 1);
+  referenceSet(count, 2);
+  assert(count.* == 2);
+}
+
+fn assignStruct(): unit {
+  let* x = { min: 4, max: 11 };
+  x.min = 2;
+  assert(x.min == 2);
+
+  let y = { min: 3 };
+  assert(y.min == 3);
+  assert({ min: 3}.min == 3);
+}
+
+fn main(): int {
+  assignVarRef();
+  assignVar();
+  assignStruct();
+  0
+}

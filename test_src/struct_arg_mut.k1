@@ -1,24 +1,71 @@
-deftype Foo = { x: int, y: bool }
-
-namespace Foo {
-  fn getValue(self: Foo): int {
-    self.x
-  }
-  fn setValue(self: Foo*, x: int): unit {
-    self.x = x;
-  }
-  fn new(x: int): Foo {
-    { x: x, y: false }
-  }
+deftype Point = {
+  x: int,
+  y: int,
+  z: int,
+  isGood: bool
+}
+fn basicStruct(): int {
+  let zero: Point = {
+    x: 0, y: 298, z: 42, isGood: true
+  };
+  assert(zero.x == 0);
+  assert(zero.z == 42);
+  assert(zero.isGood);
+  assert(zero.y == 298);
+  0
 }
 
-fn main(): int {
+deftype Foo = { x: int, y: bool }
+namespace Foo {
+  fn getValue(self: Foo): int { self.x }
+  fn setValue(self: Foo*, x: int): unit { self.x = x; }
+  fn new(x: int): Foo { { x: x, y: false } }
+}
+
+fn structArgMut(): unit {
   let* x: Foo* = Foo::new(42);
   assert(x.x == 42);
   assert(x.getValue() == 42);
   x.setValue(41);
   assert(x.getValue() == 41);
   assert(not x.y);
+}
+
+impl Equals for { a: int } {
+  fn equals(self: { a: int }, other: { a: int }): bool {
+    self.a == other.a
+  }
+}
+fn eqAnon(): unit {
+  let foo = { a: 3 };
+  let bar = { a: 4 };
+  assert(foo != bar);
+  assert({a: 4} == bar);
+}
+
+
+deftype Block = {
+  position: { x: int, y: int, width: int, height: int },
+  text: int
+}
+
+fn block_area(b: Block): int { b.position.width * b.position.height }
+
+fn structNested(): unit {
+  let b: Block = {
+    position: { x: 1, y: 1, width: 50, height: 50 },
+    text: 42
+  };
+  let area: int = block_area(b);
+  assert(area == 2500);
+  let area2: int = block_area({ position: { x: 1, y: 1, width: 50, height: 50 }, text: 42 });
+  assert(area2 == 2500);
+}
+
+fn main(): int {
+  basicStruct();
+  structArgMut();
+  eqAnon();
+  structNested();
   0
 }
-//exitcode: 0

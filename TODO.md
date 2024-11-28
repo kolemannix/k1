@@ -151,6 +151,7 @@
 - [ ] Friendliness pass
   - [ ] Create a desugaring of referenceSet, make it match variable assignment ideally
   - [ ] Replace 'enum' keyword with 'either', ensure the ambiguous cases have good errors (inside struct, inside param list)
+  - [ ] Replace 'unit' with an empty struct, encoded as `{}` at the type level and `{}` at the value level
   - [x] 'when' keyword is bad; `switch` maybe or `case`, or resolve the ambiguity with `when <x> is {}`
   - [x] Replace `type` with `deftype` - It would be really nice _not_ to take the keyword 'type'. Just a thought from using Rust/Scala
 - [x] Remove tag literals, make enum tags per-enum
