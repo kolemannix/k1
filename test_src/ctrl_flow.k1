@@ -59,11 +59,21 @@ fn loopFalse(): unit {
   assert(x == 3)
 }
 
+fn doCrash(): bool {
+    crash("should not run");
+}
+
 fn main(): int {
+
   ifBasic();
   ifNoElse();
   assert(returnSimple());
   assert(returnFromIf() == 1);
+
+  // Short-circuiting is guaranteed
+  if (false and doCrash()) {
+    ()
+  };
 
   loopBreak();
   loopNested();
