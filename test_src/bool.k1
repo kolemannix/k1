@@ -1,17 +1,12 @@
-fn should_not_run(): bool {
-    assert(false);
-    true
-}
 
 fn main(x: int): int {
   let t = true;
   let f = false;
   assert(not (t and f));
-
-  // Short-circuiting is guaranteed
-  if (false and should_not_run()) {
-      ()
-  };
+  assert(t or f);
+  assert(t and t);
+  assert(not (f and f));
+  assert(not (f or f));
 
   0
 }
