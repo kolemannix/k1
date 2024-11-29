@@ -121,7 +121,9 @@
 - [x] string interpolation
 - [x] typeOf(<anyexpr>)
 - [ ] Working with references push, specifically struct and either references
-  - [ ] A nice syntax for `referenceSet`
+  - [x] A nice syntax for `referenceSet`
+  - [ ] New assignment operator, not `=` (`<-`)
+  - [ ] Make EnumGetPayload a valid lhs?
   - [x] Kill .& because so unsound, use let* for those cases
     - [x] Not the worst thing to use let* for the c-interop case of needing a pointer, that's what .& was doing anyway
   - [x] EnumGetPayload on a reference doesn't give a reference (and shouldn't always, what syntax to specify)
@@ -134,10 +136,9 @@
 - [x] break from while
 - [ ] Make an ability for unwrap?!
 - [ ] 'never' needs to work in every expression position
-- [ ] Move tests into single file, accumulate errors and allow inline assertions when a line should error.
-      Probably one tests for failing compilation and one passing one for each major language area
-- [ ] Remove lvalue-based assignment from the language, use references to assign instead, introduce a desugaring for `referenceSet` (`set a := b`)
-      - lvalue-based assignment stuff is just an abomination from an algebraic perspective, and probably inhibits learning
+- [x] Move tests into fewer files
+- [ ] accumulate test errors and allow inline assertions when a line should error.
+      - Probably one tests for failing compilation and one passing one for each major language area
 - [ ] b"" strings that are of type Slice[u8]
 - [ ] Finish hashmap implementation
 - [ ] Builtin syntax for maps
@@ -149,13 +150,15 @@
       - `if self.slots.get(probe_index) is None {`
 - [x] Handle escaped chars in string literals
 - [ ] Friendliness pass
-  - [ ] Create a desugaring of referenceSet, make it match variable assignment ideally
-  - [ ] Replace 'enum' keyword with 'either', ensure the ambiguous cases have good errors (inside struct, inside param list)
+  - [x] Replace 'enum' keyword with 'either', ensure the ambiguous cases have good errors (inside struct, inside param list)
   - [ ] Replace 'unit' with an empty struct, encoded as `{}` at the type level and `{}` at the value level
   - [x] 'when' keyword is bad; `switch` maybe or `case`, or resolve the ambiguity with `when <x> is {}`
   - [x] Replace `type` with `deftype` - It would be really nice _not_ to take the keyword 'type'. Just a thought from using Rust/Scala
 - [x] Remove tag literals, make enum tags per-enum
+- [ ] Struct shorthand syntax
 - [ ] Imports (need design around modules)
+  - Perhaps, only what is imported from main is compiled, besides the builtins?
+  - Would require a new pass for only imports
 - [ ] Add ranges, as stdlib thing
       `sealed abstract class Range(let start: Int, let end: Int, let step: Int)`
 - [ ] Make demo readme / site

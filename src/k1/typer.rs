@@ -1048,7 +1048,7 @@ impl TypedStmt {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TyperError {
     message: String,
     span: SpanId,
@@ -2420,13 +2420,13 @@ impl TypedModule {
         scope_id: ScopeId,
     ) -> TyperResult<TypeId> {
         let ty = self.eval_type_expr(parsed_type_expr, scope_id)?;
-        match ty {
-            UNIT_TYPE_ID => Ok(ty),
-            CHAR_TYPE_ID => Ok(ty),
-            I64_TYPE_ID => Ok(ty),
-            BOOL_TYPE_ID => Ok(ty),
-            STRING_TYPE_ID => Ok(ty),
-            POINTER_TYPE_ID => Ok(ty),
+        match self.types.get(ty) {
+            Type::Unit(_) => Ok(ty),
+            Type::Char(_) => Ok(ty),
+            Type::Bool(_) => Ok(ty),
+            Type::Pointer(_) => Ok(ty),
+            Type::Integer(_) => Ok(ty),
+            _t if ty == STRING_TYPE_ID => Ok(ty),
             _ => failf!(
                 self.ast.get_type_expression_span(parsed_type_expr),
                 "Only scalar types allowed in constants",
@@ -2816,19 +2816,16 @@ impl TypedModule {
                             return self.check_types(expected_resolved, actual, scope_id);
                         }
                     } else {
-                        // return if allow_unbound_typevar {
-                        //     debug!(
-                        //         "failed to resolve type var {}; allowing typecheck to pass for actual value {}",
-                        //         self.type_id_to_string(expected),
-                        //         self.type_id_to_string(actual)
-                        //     );
-                        //     Ok(())
-                        // } else {
+                        debug!(
+                            "failed to resolve type var {}; allowing typecheck to pass for actual value {}",
+                            self.type_id_to_string(expected),
+                            self.type_id_to_string(actual)
+                        );
+                        // return Ok(());
                         return Err(format!(
                             "failed to resolve expected type {}",
                             self.type_id_to_string(expected),
                         ));
-                        // };
                     }
                 }
                 if let Type::TypeVariable(actual_type_var) = act {
@@ -3190,15 +3187,14 @@ impl TypedModule {
         }
 
         // Bailout case: .* dereference operation
+        // nocommit: fn eval_dereference
         if field_access.target == get_ident!(self, "*") {
             // Example:
             // let x: int = intptr.*
             // The expected_type when we elet `*intptr` is int, so
             // the expected_type when we elet `intptr` should be *int
             let expected_type = match expected_type {
-                Some(expected) => Some(
-                    self.types.add_type(Type::Reference(ReferenceType { inner_type: expected })),
-                ),
+                Some(expected) => Some(self.types.add_reference_type(expected)),
                 None => None,
             };
             let base_expr = self.eval_expr(field_access.base, scope_id, expected_type)?;
@@ -3210,11 +3206,6 @@ impl TypedModule {
                     ),
                     span,
                 ))?;
-            debug!(
-                "AUTO DEREFERENCING: {}: {}",
-                self.expr_to_string(&base_expr),
-                self.type_id_to_string(base_expr.get_type())
-            );
             return Ok(TypedExpr::UnaryOp(UnaryOp {
                 kind: UnaryOpKind::Dereference,
                 type_id: reference_type.inner_type,
@@ -3619,7 +3610,7 @@ impl TypedModule {
         let expr = self.ast.expressions.get(expr_id);
         match expr {
             ParsedExpression::Array(array_expr) => {
-                let mut element_type: Option<TypeId> = match expected_type {
+                let expected_element_type: Option<TypeId> = match expected_type {
                     Some(type_id) => match self.types.get(type_id).as_array_instance() {
                         Some(arr) => Ok(Some(arr.element_type)),
                         None => Ok(None),
@@ -3632,10 +3623,12 @@ impl TypedModule {
 
                 let mut array_lit_block = self.synth_block(vec![], scope_id, span);
                 let array_lit_scope = array_lit_block.scope_id;
+                let mut element_type = None;
                 let elements: Vec<TypedExpr> = {
                     let mut elements = Vec::with_capacity(element_count);
                     for elem in parsed_elements.iter() {
-                        let element_expr = self.eval_expr(*elem, scope_id, element_type)?;
+                        let element_expr =
+                            self.eval_expr(*elem, scope_id, expected_element_type)?;
                         if element_type.is_none() {
                             element_type = Some(element_expr.get_type())
                         } else if let Err(msg) = self.check_types(
@@ -3649,9 +3642,10 @@ impl TypedModule {
                     }
                     elements
                 };
-                let Some(element_type) = element_type else {
-                    return failf!(span, "Could not infer element type for Array literal");
-                };
+                // FIXME: This typing is very suspicious, I'm not sure how to type it when there
+                //        are no elements, I don't have an 'Unknown' type but maybe that's the
+                //        ticket.
+                let element_type = element_type.or(expected_element_type).unwrap_or(UNIT_TYPE_ID);
                 let array_new_fn_call = self.synth_function_call(
                     qident!(self, span, ["Array"], "withCapacity"),
                     span,
@@ -6605,13 +6599,40 @@ impl TypedModule {
                     calling_scope,
                     true,
                 )?;
+
+                if let Some(call_expected_type) = expected_type_id {
+                    debug!(
+                        "Using expected type {} to try to infer call to {}",
+                        self.type_id_to_string(call_expected_type),
+                        self.get_ident_str(fn_call.name.name)
+                    );
+                    self.solve_generic_params(
+                        &mut solved_params,
+                        call_expected_type,
+                        function_return_type,
+                        calling_scope,
+                        fn_call.span,
+                    )?;
+                }
+
                 for (param_index, (expr, gen_param)) in args_and_params.iter().enumerate() {
+                    if solved_params.len() == generic_type_params.len() {
+                        break;
+                    }
                     // We don't care if this fails; sometimes we can't
                     // evaluate an expression before inferring types
                     // That's ok because
                     // 1) We hope that other arguments will have more luck
                     // 2) We will evaluate these expressions again when we actually
                     //    do typechecking, if we manage to solve the generics
+                    //
+                    // Update: I kinda care that it fails, it really shouldn't,
+                    // and I'd like to be able to uncomment this line.
+                    // I think this is just hiding other bugs
+                    //
+                    // if expr.is_err() {
+                    //     return Err(expr.as_ref().unwrap_err().clone());
+                    // }
                     if let Ok(expr) = expr {
                         debug!(
                             "solving {}: {} w/ param {}",
@@ -6636,23 +6657,8 @@ impl TypedModule {
                 }
 
                 if solved_params.len() < generic_type_params.len() {
-                    if let Some(call_expected_type) = expected_type_id {
-                        debug!(
-                            "Unsolved after all arguments; using expected type {} to try to infer call to {}",
-                            self.type_id_to_string(call_expected_type),
-                            self.get_ident_str(fn_call.name.name)
-                        );
-                        self.solve_generic_params(
-                            &mut solved_params,
-                            call_expected_type,
-                            function_return_type,
-                            calling_scope,
-                            fn_call.span,
-                        )?;
-                    }
-                }
-
-                if solved_params.len() < generic_type_params.len() {
+                    // nocommit: Improve this message by listing failed arg exprs, then if none,
+                    // listing solved and unsolved params
                     return failf!(
                         fn_call.span,
                         "Could not infer all type parameters for function call to {}",

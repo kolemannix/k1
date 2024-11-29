@@ -17,7 +17,7 @@ use inkwell::debug_info::{
 use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::module::{Linkage as LlvmLinkage, Module as LlvmModule};
 use inkwell::passes::PassManager;
-use inkwell::targets::{InitializationConfig, Target, TargetData, TargetMachine};
+use inkwell::targets::{InitializationConfig, Target, TargetData, TargetMachine, TargetTriple};
 use inkwell::types::{
     AnyType, AnyTypeEnum, BasicMetadataTypeEnum, BasicType, BasicTypeEnum,
     FunctionType as LlvmFunctionType, IntType, PointerType, StructType, VoidType,
@@ -2505,10 +2505,19 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             let field_ptr = self.codegen_expr_lvalue(&assignment.destination)?;
                             let rhs = self.codegen_expr_basic_value(&assignment.value)?;
                             self.builder.build_store(field_ptr, rhs);
-                            last = unit_value
+                            last = unit_value;
                         }
-                        _ => {
-                            panic!("Invalid assignment lhs")
+                        TypedExpr::UnaryOp(deref_op)
+                            if deref_op.kind == UnaryOpKind::Dereference =>
+                        {
+                            let lhs_ptr =
+                                self.codegen_expr_basic_value(&deref_op.expr)?.into_pointer_value();
+                            let rhs = self.codegen_expr_basic_value(&assignment.value)?;
+                            self.builder.build_store(lhs_ptr, rhs);
+                            last = unit_value;
+                        }
+                        e => {
+                            panic!("Invalid assignment lhs: {}", self.module.expr_to_string(e))
                         }
                     }
                 }
@@ -2814,8 +2823,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     fn set_up_machine(module: &mut LlvmModule) -> TargetMachine {
         // Target::initialize_aarch64(&InitializationConfig::default());
         Target::initialize_native(&InitializationConfig::default()).unwrap();
-        let triple = TargetMachine::get_default_triple();
-        // let triple = TargetTriple::create("arm64-apple-macosx14.4.0");
+        // let triple = TargetMachine::get_default_triple();
+        let triple = TargetTriple::create("arm64-apple-macosx14.4.0");
         let target = Target::from_triple(&triple).unwrap();
         let machine = target
             .create_target_machine(

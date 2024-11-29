@@ -140,6 +140,7 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
         parse_file(Path::new("builtins/types.k1"));
         parse_file(Path::new("builtins/string_builder.k1"));
         parse_file(Path::new("builtins/bitwise.k1"));
+        parse_file(Path::new("builtins/allocator.k1"));
     }
 
     for f in dir_entries.iter() {
@@ -184,6 +185,7 @@ pub fn write_executable(debug: bool, out_dir: &str, module_name: &str) -> Result
     build_cmd.args([
         // "-v",
         if debug { "-g" } else { "" },
+        if debug { "-fsanitize=address,undefined" } else { "" },
         if debug { "-O0" } else { "-O3" },
         "-Woverride-module",
         "-mmacosx-version-min=14.4",
