@@ -1,0 +1,79 @@
+deftype Arena = {
+  id: string,
+  basePtr: Pointer,
+  curAddr: u64,
+  maxAddr: u64
+}
+namespace Arena {
+  let mb: u64 = 0x100000;
+  let gb: u64 = 0x40000000;
+
+  fn regionSizeBytes(self: Arena): u64 {
+    self.maxAddr - (self.basePtr as u64)
+  }
+
+  // Aligns 'base' to the next available value that is aligned with `align`
+  fn alignTo(baseAddress: u64, alignBytes: u64): u64 {
+    let mask = alignBytes - 1;
+    let sum = baseAddress + mask;
+    let aligned = Bitwise::bitAnd(sum, Bitwise::bitNot(mask));
+    if aligned != baseAddress {
+      println("Aligned \{baseAddress} to \{aligned}!")
+    };
+    aligned
+  }
+
+  fn new(id: string, initialMb: u64): Arena {
+    let capacity = initialMb * mb;
+    let basePtr = libc::calloc(capacity, 1);
+    if basePtr.isNull() crash("calloc for Arena failed");
+    {
+      id: id,
+      basePtr: basePtr,
+      curAddr: basePtr as u64,
+      maxAddr: basePtr as u64 + capacity
+    }
+  }
+
+  fn push[T](self: Arena*, t: T): T* {
+    let size = sizeOf[T]();
+    let alignBytes = alignOf[T]();
+    let newBase = alignTo(self.curAddr, alignBytes);
+    let newEnd = newBase + size;
+    if newEnd > self.maxAddr {
+      let id = self.id;
+      crash("Heap \{id} is out of space to allocate a T")
+    };
+
+    self.curAddr = newEnd;
+
+    let ref: T* = newBase as Pointer as T*;
+    ref.* = t;
+    ref
+  }
+
+  fn freeAll(self: Arena*): unit {
+    let id = self.id;
+    let size = self.regionSizeBytes();
+    println("[arena \{id}] Freeing \{size}");
+    libc::memset(self.basePtr, 0 as u32, size);
+    self.curAddr = (self.basePtr as u64);
+  }
+}
+deftype ObjectPool = {}
+
+deftype Allocator = {
+  arenas: Array[Arena],
+  pools: Array[ObjectPool],
+}
+
+namespace Allocator {
+  fn initDefault(): Allocator {
+    let temp_arena = Arena::new(id = "temp", initialMb = 10);
+    {
+      arenas: [temp_arena],
+      pools: []
+    }: Allocator
+  }
+
+}

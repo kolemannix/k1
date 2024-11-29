@@ -15,9 +15,11 @@ fn assignVarRef(): unit {
 }
 
 fn assignStruct(): unit {
-  let* x = { min: 4, max: 11 };
+  let* mut x = { min: 4, max: 11 };
   x.min = 2;
   assert(x.min == 2);
+  x = new({ min: 1, max: 1 });
+  x.* = { min: 1, max: 1 };
 
   let y = { min: 3 };
   assert(y.min == 3);

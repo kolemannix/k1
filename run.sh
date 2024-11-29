@@ -4,4 +4,4 @@ set -x
 # Exit on errors
 set -e
 export RUST_BACKTRACE=1
-cargo run -- --run $1
+cargo run -- --run $@

@@ -25,7 +25,10 @@ fn main(): int {
   assert(yesRef.value*.* == 3);
   assert(yesValue == 3);
 
-  referenceSet(eitherRef.asYes()!.value*, -3);
+  // nocommit: Make EnumGetPayload a valid lhs?
+  // eitherRef.asYes()!.value = -3;
+
+  eitherRef.asYes()!.value*.* = -3;
   assert(yesRef.value == -3);
   assert(yesRef.value*.* == -3);
   assert(eitherRef.asYes()!.value == -3);
@@ -44,7 +47,7 @@ fn main(): int {
     x.x = 43;
     assert(x.x == 43);
   } else {
-    println("None")
+    crash("None")
   };
 
   0

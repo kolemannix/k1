@@ -59,8 +59,9 @@ namespace libc {
 
   extern(printf) fn printfString(formatStr: Pointer, len: i32, cString: Pointer): i32
   extern(memcpy) fn memcpy(dst: Pointer, src: Pointer, count: u64): Pointer
-  extern(memset) fn memset(src: Pointer, count: u64, value: u8): Pointer
+  extern(memset) fn memset(src: Pointer, value: u32, count: u64): Pointer
   extern(memcmp) fn memcmp(s1: Pointer, s2: Pointer, size: u64): i32
+  extern(calloc) fn calloc(count: u64, size: u64): Pointer
 
   extern(realloc) fn realloc(ptr: Pointer, size: u64): Pointer
   extern(arc4random_uniform) fn arc4random_uniform(upperBound: u32): u32
