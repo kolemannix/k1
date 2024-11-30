@@ -1723,6 +1723,7 @@ impl TypedModule {
                         name: ast_field.name,
                         type_id: ty,
                         index: index as u32,
+                        private: ast_field.private,
                     })
                 }
                 let struct_defn = StructType {
@@ -2774,16 +2775,21 @@ impl TypedModule {
                 )
             }
             (Type::Function(f1), Type::Function(f2)) => {
+                if f1.params.len() != f2.params.len() {
+                    return Err(format!(
+                        "Wrong parameter count: expected {} but got {}",
+                        f1.params.len(),
+                        f2.params.len()
+                    ));
+                }
                 if let Err(msg) = self.check_types(f1.return_type, f2.return_type, scope_id) {
-                    Err(format!("Wrong return type: {}", msg))
+                    Err(format!(
+                        "Wrong return type: expected {} but got {}: {}",
+                        self.type_id_to_string(expected),
+                        self.type_id_to_string(actual),
+                        msg
+                    ))
                 } else {
-                    if f1.params.len() != f2.params.len() {
-                        return Err(format!(
-                            "Wrong parameter count: expected {} but got {}",
-                            f1.params.len(),
-                            f2.params.len()
-                        ));
-                    }
                     for (p1, p2) in f1.params.iter().zip(f2.params.iter()) {
                         if p1.is_context && p2.is_context {
                             continue;
@@ -2816,14 +2822,16 @@ impl TypedModule {
                             return self.check_types(expected_resolved, actual, scope_id);
                         }
                     } else {
-                        debug!(
-                            "failed to resolve type var {}; allowing typecheck to pass for actual value {}",
+                        eprintln!(
+                            "failed to resolve type var {} for {}",
                             self.type_id_to_string(expected),
                             self.type_id_to_string(actual)
                         );
                         // return Ok(());
                         return Err(format!(
-                            "failed to resolve expected type {}",
+                            "Expected {} but got {}: failed to resolve expected type {}",
+                            self.type_id_to_string(expected),
+                            self.type_id_to_string(actual),
                             self.type_id_to_string(expected),
                         ));
                     }
@@ -3218,7 +3226,7 @@ impl TypedModule {
         let original_base_expr_type = base_expr.get_type();
 
         // Perform auto-dereference for accesses that are not 'lvalue'-style or 'referencing' style
-        let (base_type, is_reference) = match self.types.get(base_expr.get_type()) {
+        let (base_type, _is_reference) = match self.types.get(base_expr.get_type()) {
             Type::Reference(reference_type) => {
                 if !is_assignment_lhs && !field_access.is_referencing {
                     // Dereference the base expression
@@ -3330,6 +3338,18 @@ impl TypedModule {
                         ),
                         span,
                     ))?;
+                if target_field.private {
+                    let companion_namespace =
+                        struct_type.type_defn_info.as_ref().and_then(|d| d.companion_namespace);
+
+                    if !self.is_inside_companion_scope(companion_namespace, scope_id) {
+                        return failf!(
+                            span,
+                            "Field {} is inaccessible from here",
+                            self.get_ident_str(target_field.name)
+                        );
+                    }
+                }
                 let result_type = if field_access.is_referencing {
                     self.types.add_reference_type(target_field.type_id)
                 } else {
@@ -3403,21 +3423,13 @@ impl TypedModule {
     }
 
     /// Used for
-    /// - Auto Some()-boxing,
-    /// - auto-referencing,
     /// - de-referencing,
-    /// - enum construction
-    /// - enum variant construction
-    /// - Statically-known Function to dynamic function object struct
-    /// - Opaque type instance construction if in definition namespace
-    ///   This is a good place to do this because we just typechecked an expression, and
-    ///   we know the expected type.
     fn coerce_expression_to_expected_type(
         &mut self,
         expected_type_id: TypeId,
         expression: TypedExpr,
-        scope_id: ScopeId,
-        parsed_id: ParsedId,
+        _scope_id: ScopeId,
+        _parsed_id: ParsedId,
     ) -> CoerceResult {
         debug!(
             "coerce {}: {} to {}",
@@ -3425,43 +3437,6 @@ impl TypedModule {
             self.type_id_to_string(expression.get_type()).blue(),
             self.type_id_to_string(expected_type_id).blue()
         );
-        if let expected_type @ Type::Enum(_e) = self.types.get(expected_type_id) {
-            // Lift values to Some(...) if the expr isn't even an option
-            if let Some(_optional_type) = expected_type.as_optional() {
-                if self.types.get(expression.get_type()).as_optional().is_none() {
-                    return CoerceResult::Coerced(
-                        "some-lift",
-                        self.synth_optional_some(parsed_id, expression),
-                    );
-                }
-            }
-        };
-        if let Type::OpaqueAlias(opaque) = self.types.get(expected_type_id) {
-            // Note: The opaque conversion should probably be something more clear like a cast
-            //       that only works in here, or a function thats only available inside?
-            // We'll revisit opaques when we make generics work for them fully!
-            if !self.is_inside_companion_scope(opaque.type_defn_info.companion_namespace, scope_id)
-            {
-                return CoerceResult::Fail(expression);
-            }
-            let Ok(_) = self.check_types(opaque.aliasee, expression.get_type(), scope_id) else {
-                return CoerceResult::Fail(expression);
-            };
-            debug!(
-                "coerce into opaque from {} to {}",
-                self.type_id_to_string(expression.get_type()),
-                self.type_id_to_string(expected_type_id)
-            );
-            return CoerceResult::Coerced(
-                "opaque into",
-                TypedExpr::Cast(TypedCast {
-                    span: expression.get_span(),
-                    base_expr: Box::new(expression),
-                    target_type_id: expected_type_id,
-                    cast_type: CastType::KnownNoOp,
-                }),
-            );
-        };
         if self.types.get(expected_type_id).as_reference().is_none() {
             // We only do this if the expected type is not a reference at all. Meaning,
             // if your expected type is T*, and you pass a T**, you need to de-reference that yourself.
@@ -3479,34 +3454,6 @@ impl TypedModule {
                     }),
                 );
             }
-        };
-
-        // Match on actual type
-        if let Type::OpaqueAlias(expression_opaque) = self.types.get(expression.get_type()) {
-            if !self.is_inside_companion_scope(
-                expression_opaque.type_defn_info.companion_namespace,
-                scope_id,
-            ) {
-                return CoerceResult::Fail(expression);
-            }
-            let Ok(_) = self.check_types(expected_type_id, expression_opaque.aliasee, scope_id)
-            else {
-                return CoerceResult::Fail(expression);
-            };
-            debug!(
-                "coerce out of opaque from {} to {}",
-                self.type_id_to_string(expression.get_type()),
-                self.type_id_to_string(expression_opaque.aliasee)
-            );
-            return CoerceResult::Coerced(
-                "opaque out",
-                TypedExpr::Cast(TypedCast {
-                    target_type_id: expression_opaque.aliasee,
-                    cast_type: CastType::KnownNoOp,
-                    span: expression.get_span(),
-                    base_expr: Box::new(expression),
-                }),
-            );
         };
         CoerceResult::Fail(expression)
     }
@@ -3553,34 +3500,23 @@ impl TypedModule {
         // We gotta get rid of this coerce step its involved in every bug
         let result = if let Some(expected_type_id) = expected_type {
             // Try to coerce if types don't match
-            debug!(
-                "is coerce needed for {}: {}?",
-                self.expr_to_string(&base_result),
-                self.type_id_to_string(base_result.get_type())
-            );
-            if let Err(_msg) = self.check_types(expected_type_id, base_result.get_type(), scope_id)
-            {
-                let new_expr = match self.coerce_expression_to_expected_type(
-                    expected_type_id,
-                    base_result,
-                    scope_id,
-                    expr_id.into(),
-                ) {
-                    CoerceResult::Fail(base_result) => base_result,
-                    CoerceResult::Coerced(reason, new_expr) => {
-                        debug!(
-                            "coerce succeeded with rule {reason} and resulted in expr {}: {}",
-                            self.expr_to_string(&new_expr),
-                            self.type_id_to_string(new_expr.get_type())
-                        );
-                        new_expr
-                    }
-                };
-                Ok(new_expr)
-            } else {
-                debug!("\t is coerce needed?: no");
-                Ok(base_result)
-            }
+            let new_expr = match self.coerce_expression_to_expected_type(
+                expected_type_id,
+                base_result,
+                scope_id,
+                expr_id.into(),
+            ) {
+                CoerceResult::Fail(base_result) => base_result,
+                CoerceResult::Coerced(reason, new_expr) => {
+                    debug!(
+                        "coerce succeeded with rule {reason} and resulted in expr {}: {}",
+                        self.expr_to_string(&new_expr),
+                        self.type_id_to_string(new_expr.get_type())
+                    );
+                    new_expr
+                }
+            };
+            Ok(new_expr)
         } else {
             Ok(base_result)
         }?;
@@ -3719,6 +3655,7 @@ impl TypedModule {
                         name: ast_field.name,
                         type_id: expr.get_type(),
                         index: index as u32,
+                        private: false,
                     });
                     field_values.push(StructField { name: ast_field.name, expr });
                 }
@@ -4286,7 +4223,12 @@ impl TypedModule {
             .enumerate()
             .map(|(index, captured_variable_id)| {
                 let v = self.variables.get_variable(*captured_variable_id);
-                StructTypeField { type_id: v.type_id, name: v.name, index: index as u32 }
+                StructTypeField {
+                    type_id: v.type_id,
+                    name: v.name,
+                    index: index as u32,
+                    private: false,
+                }
             })
             .collect();
         let env_field_exprs = closure_captures
@@ -5432,11 +5374,11 @@ impl TypedModule {
         expected_type: Option<TypeId>,
         span: SpanId,
     ) -> TyperResult<TypedExpr> {
-        // debug!(
-        //     "heres the pipe {} | {}",
-        //     self.ast.expr_id_to_string(lhs),
-        //     self.ast.expr_id_to_string(rhs)
-        // );
+        eprintln!(
+            "heres the pipe {} | {}",
+            self.ast.expr_id_to_string(lhs),
+            self.ast.expr_id_to_string(rhs)
+        );
         let new_fn_call = match self.ast.expressions.get(rhs) {
             ParsedExpression::Variable(var) => {
                 let args = vec![parse::FnCallArg { name: None, value: lhs }];
@@ -6630,6 +6572,7 @@ impl TypedModule {
                     // and I'd like to be able to uncomment this line.
                     // I think this is just hiding other bugs
                     //
+
                     // if expr.is_err() {
                     //     return Err(expr.as_ref().unwrap_err().clone());
                     // }

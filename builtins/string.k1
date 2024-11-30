@@ -103,7 +103,7 @@ namespace string {
         return(.None)
       };
       let sub = self.substring(i, i + target.len);
-      if sub == target { return(i) };
+      if sub == target { return(.Some(i)) };
       i = i + 1;
     };
     .None
@@ -148,7 +148,9 @@ namespace string {
       i = i + 1;
     };
 
-    if neg { (total as i64) * -1 } else { total as i64 }
+    some(
+      if neg { (total as i64) * -1 } else { total as i64 }
+    )
   }
 
 }

@@ -15,7 +15,7 @@ fn main(): int {
   let b: Box[int] = { value: 0 };
   let c: Box[bool] = { value: true };
   let c2: Box[bool] = { value: false };
-  let c3: Box[bool?] = { value: false };
+  let c3: Box[bool?] = { value: .Some(false) };
   let c4: Box[bool*] = { value: new(false) };
   assert(b.value == 0);
   assert(c.value == true);
@@ -23,7 +23,7 @@ fn main(): int {
   assert(c3.value! == false);
   assert(c4.value.* == false);
 
-  let p: Pair[int, bool] = { t: 0, u: true };
+  let p: Pair[int, bool] = { t: some(0), u: some(true) };
   assert(p.t! == 0);
   assert(p.u! == true);
   assert(p.t[int, bool]()! == 0);
