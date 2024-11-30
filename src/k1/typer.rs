@@ -319,7 +319,7 @@ pub struct FunctionTypeParam {
 
 #[derive(Debug, Clone, Copy)]
 pub struct TypeParam {
-    pub ident: Identifier,
+    pub name: Identifier,
     pub type_id: TypeId,
 }
 
@@ -3415,12 +3415,6 @@ impl TypedModule {
         _scope_id: ScopeId,
         _parsed_id: ParsedId,
     ) -> CoerceResult {
-        debug!(
-            "coerce {}: {} to {}",
-            self.expr_to_string(&expression).blue(),
-            self.type_id_to_string(expression.get_type()).blue(),
-            self.type_id_to_string(expected_type_id).blue()
-        );
         if self.types.get(expected_type_id).as_reference().is_none() {
             // We only do this if the expected type is not a reference at all. Meaning,
             // if your expected type is T*, and you pass a T**, you need to de-reference that yourself.
@@ -3523,9 +3517,10 @@ impl TypedModule {
         expected_type: Option<TypeId>,
     ) -> TyperResult<TypedExpr> {
         debug!(
-            "eval_expr_inner: {}: {:?}",
+            "{}\neval_expr_inner: {}: {}",
+            self.ast.get_span_content(self.ast.expressions.get_span(expr_id)),
             &self.ast.expr_id_to_string(expr_id),
-            expected_type.map(|t| self.type_id_to_string(t))
+            expected_type.map(|t| self.type_id_to_string(t)).unwrap_or("nohint".to_string())
         );
         let expr = self.ast.expressions.get(expr_id);
         match expr {
@@ -3604,7 +3599,6 @@ impl TypedModule {
                 let dereference_array_literal =
                     self.synth_dereference(array_variable.variable_expr);
                 array_lit_block.push_expr(dereference_array_literal);
-                debug!("array_literal_desugar {}", self.block_to_string(&array_lit_block));
                 Ok(TypedExpr::Block(array_lit_block))
             }
             ParsedExpression::Struct(ast_struct) => {
@@ -6126,7 +6120,7 @@ impl TypedModule {
                                             .iter()
                                             .zip(spec_info.param_values.iter())
                                             .map(|(g_param, type_id)| TypeParam {
-                                                ident: g_param.name,
+                                                name: g_param.name,
                                                 type_id: *type_id,
                                             })
                                             .collect()
@@ -6167,7 +6161,7 @@ impl TypedModule {
                         g_params.clone().iter().zip(type_args.iter())
                     {
                         let type_id = self.eval_type_expr(passed_type_expr.type_expr, scope)?;
-                        solved_params.push(TypeParam { ident: generic_param.name, type_id });
+                        solved_params.push(TypeParam { name: generic_param.name, type_id });
                     }
                     solved_params
                 };
@@ -6202,7 +6196,6 @@ impl TypedModule {
         calling_scope: ScopeId,
         tolerate_missing_context_args: bool,
     ) -> TyperResult<Vec<(TyperResult<TypedExpr>, &'params FnArgType)>> {
-        debug!("align_args {}", self.get_ident_str(fn_call.name.name));
         let explicit_context_args = !fn_call.explicit_context_args.is_empty();
         let mut final_args: Vec<(TyperResult<TypedExpr>, &FnArgType)> = Vec::new();
         if !explicit_context_args {
@@ -6329,7 +6322,6 @@ impl TypedModule {
         aligned_args: Vec<(TyperResult<TypedExpr>, &FnArgType)>,
         calling_scope: ScopeId,
     ) -> TyperResult<Vec<TypedExpr>> {
-        debug!("check_call_arguments {}", self.get_ident_str(call_name));
         let mut successful_args = Vec::new();
         for (expr, param) in aligned_args.into_iter() {
             let expr = expr?;
@@ -6429,7 +6421,7 @@ impl TypedModule {
                         ta.iter()
                             .enumerate()
                             .map(|(idx, type_id)| TypeParam {
-                                ident: type_params[idx].type_param.ident,
+                                name: type_params[idx].type_param.name,
                                 type_id: *type_id,
                             })
                             .collect()
@@ -6511,7 +6503,7 @@ impl TypedModule {
                 for (idx, type_arg) in passed_type_args.iter().enumerate() {
                     let param = &generic_type_params[idx];
                     let type_id = self.eval_type_expr(type_arg.type_expr, calling_scope)?;
-                    evaled_params.push(TypeParam { ident: param.type_param.ident, type_id });
+                    evaled_params.push(TypeParam { name: param.type_param.name, type_id });
                 }
                 evaled_params
             }
@@ -6557,9 +6549,9 @@ impl TypedModule {
                     // I think this is just hiding other bugs
                     //
 
-                    // if expr.is_err() {
-                    //     return Err(expr.as_ref().unwrap_err().clone());
-                    // }
+                    if expr.is_err() {
+                        return Err(expr.as_ref().unwrap_err().clone());
+                    }
                     if let Ok(expr) = expr {
                         debug!(
                             "solving {}: {} w/ param {}",
@@ -6584,12 +6576,31 @@ impl TypedModule {
                 }
 
                 if solved_params.len() < generic_type_params.len() {
-                    // nocommit: Improve this message by listing failed arg exprs, then if none,
-                    // listing solved and unsolved params
+                    let mut detail: String = String::new();
+                    let mut first = true;
+                    for generic_param in &generic_type_params {
+                        let solution = solved_params
+                            .iter()
+                            .find(|tp| tp.name == generic_param.type_param.name)
+                            .map(|tp| self.get_ident_str(tp.name))
+                            .unwrap_or("Unknown");
+                        if first {
+                            first = false;
+                        } else {
+                            detail.write_char('\n').unwrap();
+                        };
+                        write!(
+                            detail,
+                            "{} := {}",
+                            self.get_ident_str(generic_param.type_param.name),
+                            solution
+                        )
+                        .unwrap();
+                    }
                     return failf!(
                         fn_call.span,
-                        "Could not infer all type parameters for function call to {}",
-                        self.get_ident_str(generic_name)
+                        "Could not infer all type arguments for {}\n{detail}",
+                        self.get_ident_str(generic_name),
                     );
                 } else {
                     solved_params
@@ -6613,7 +6624,7 @@ impl TypedModule {
                         fn_call.span,
                         "Cannot invoke function '{}' with type parameter {} = {}; does not satisfy ability constraint {}",
                         self.get_ident_str(fn_call.name.name),
-                        self.get_ident_str(param_defn.type_param.ident),
+                        self.get_ident_str(param_defn.type_param.name),
                         self.type_id_to_string(param_given.type_id),
                         self.get_ident_str(self.get_ability(*constrained_ability_id).name),
                     );
@@ -6678,9 +6689,25 @@ impl TypedModule {
             (_, Type::TypeVariable(tv)) => {
                 // If the type param is used in the type of the argument, we can infer
                 // the type param from the type of the argument
-                let solved_param = TypeParam { ident: tv.name, type_id: passed_expr };
-                let existing_solution =
-                    solved_params.iter().find(|p| p.ident == solved_param.ident);
+                let solved_param = TypeParam { name: tv.name, type_id: passed_expr };
+                let existing_solution = solved_params.iter().find(|p| p.name == solved_param.name);
+
+                // This doesn't quite work because sometimes the right answer
+                // is a type variable from somewhere else, like when
+                // specializing Array.grow on Array.push.T = Array.filter.U
+                // let is_unbound_type_var =
+                //     if let Type::TypeVariable(tv) = self.types.get(passed_expr) {
+                //         self.scopes.find_type(scope_id, tv.name).is_none()
+                //     } else {
+                //         false
+                //     };
+                // if is_unbound_type_var {
+                //     eprintln!(
+                //         "{} is_unbound_type_var={is_unbound_type_var}",
+                //         self.get_ident_str(tv.name)
+                //     );
+                //     return Ok(());
+                // }
 
                 // Only push if we haven't solved this type parameter yet
                 if let Some(existing_solution) = existing_solution {
@@ -6690,7 +6717,7 @@ impl TypedModule {
                         return make_fail_span(
                             format!(
                                 "Conflicting type parameters for type param {} in call: {}",
-                                self.get_ident_str(solved_param.ident),
+                                self.get_ident_str(solved_param.name),
                                 msg
                             ),
                             span,
@@ -6698,13 +6725,13 @@ impl TypedModule {
                     } else {
                         debug!(
                             "We double-solved type param {} but that's ok because it matched",
-                            self.get_ident_str(existing_solution.ident)
+                            self.get_ident_str(existing_solution.name)
                         )
                     }
                 } else {
                     debug!(
                         "\tsolve_generic_params solved {} := {}",
-                        self.get_ident_str(solved_param.ident),
+                        self.get_ident_str(solved_param.name),
                         self.type_id_to_string(solved_param.type_id)
                     );
                     solved_params.push(solved_param);
@@ -6893,19 +6920,19 @@ impl TypedModule {
         for type_param in inferred_or_passed_type_args.iter() {
             debug!(
                 "Adding type param {}: {} to scope for specialized function {}",
-                self.get_ident_str(type_param.ident),
+                self.get_ident_str(type_param.name),
                 self.type_id_to_string(type_param.type_id),
                 name
             );
             if !self
                 .scopes
                 .get_scope_mut(spec_fn_scope_id)
-                .add_type(type_param.ident, type_param.type_id)
+                .add_type(type_param.name, type_param.type_id)
             {
                 return failf!(
                     generic_function_span,
                     "Type {} already existed in spec fn scope",
-                    self.get_ident_str(type_param.ident)
+                    self.get_ident_str(type_param.name)
                 );
             }
         }
@@ -7314,7 +7341,7 @@ impl TypedModule {
                     .find_type(parent_scope_id, self_ident_id)
                     .expect("should be a Self type param inside ability defn");
                 type_params.push(FunctionTypeParam {
-                    type_param: TypeParam { ident: self_ident_id, type_id: self_type_id },
+                    type_param: TypeParam { name: self_ident_id, type_id: self_type_id },
                     ability_constraints: vec![],
                 })
             }
@@ -7345,10 +7372,7 @@ impl TypedModule {
                 let type_variable_id = self.types.add_type(Type::TypeVariable(type_variable));
                 let fn_scope = self.scopes.get_scope_mut(fn_scope_id);
                 let type_param = FunctionTypeParam {
-                    type_param: TypeParam {
-                        ident: type_parameter.ident,
-                        type_id: type_variable_id,
-                    },
+                    type_param: TypeParam { name: type_parameter.ident, type_id: type_variable_id },
                     ability_constraints: checked_constraints,
                 };
                 type_params.push(type_param);

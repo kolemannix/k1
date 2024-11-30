@@ -411,12 +411,22 @@ impl Scopes {
 
     pub fn make_scope_name(&self, scope: &Scope, identifiers: &Identifiers) -> String {
         let mut name = match scope.name {
-            Some(name) => (*identifiers.get_name(name)).to_string(),
-            None => scope.scope_type.short_name().to_string(),
-        };
+            Some(name) => {
+                let n = identifiers.get_name(name);
+                if n == "_root" {
+                    ""
+                } else {
+                    n
+                }
+            }
+            None => scope.scope_type.short_name(),
+        }
+        .to_string();
         if let Some(p) = scope.parent {
             let parent_scope = self.get_scope(p);
-            name = format!("{}.{}", self.make_scope_name(parent_scope, identifiers), name);
+            if !name.is_empty() {
+                name = format!("{}.{}", self.make_scope_name(parent_scope, identifiers), name);
+            }
         }
         name
     }

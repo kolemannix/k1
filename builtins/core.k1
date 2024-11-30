@@ -44,6 +44,7 @@ fn new[T](value: T): T* {
   t
 }
 
+fn identity[T](value: T): T { value }
 
 // What will become platform stuff
 

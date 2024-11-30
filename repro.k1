@@ -1,0 +1,8 @@
+fn main(): int {
+  let x = identity(identity(12));
+  assert(x == 12);
+
+  let y: Array[bool] = identity(identity([]));
+  assert(typeOf(y) == typeOf([true]));
+  0
+}
