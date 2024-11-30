@@ -320,7 +320,6 @@ pub enum Type {
     /// of reasons that make programming nice. Unlike in Rust :()
     EnumVariant(TypedEnumVariant),
     Never(TypeDefnInfo),
-    OpaqueAlias(OpaqueTypeAlias),
     Generic(GenericType),
     Function(FunctionType),
     Closure(ClosureType),
@@ -350,7 +349,6 @@ impl Type {
             Type::TypeVariable(_t) => None,
             Type::Enum(e) => Some(e.ast_node),
             Type::EnumVariant(_ev) => None,
-            Type::OpaqueAlias(opaque) => Some(opaque.ast_id.into()),
             Type::Generic(gen) => Some(gen.ast_id.into()),
             Type::Function(_fun) => None,
             Type::Closure(clos) => Some(clos.parsed_id),
@@ -601,7 +599,6 @@ impl Types {
             Type::Reference(_) => None,
             Type::TypeVariable(_) => None,
             Type::Never(_) => None,
-            Type::OpaqueAlias(_opaque) => None,
             Type::Generic(_gen) => None,
             Type::Function(_) => None,
             Type::Closure(_) => None,
@@ -624,7 +621,6 @@ impl Types {
             Type::Reference(_) => None,
             Type::TypeVariable(_) => None,
             Type::Never(info) => Some(info),
-            Type::OpaqueAlias(opaque) => Some(&opaque.type_defn_info),
             Type::Generic(gen) => Some(&gen.type_defn_info),
             Type::Function(f) => f.defn_info.as_ref(),
             Type::Closure(_c) => None,
@@ -740,7 +736,7 @@ impl Types {
                         return true;
                     }
                 }
-                return false;
+                false
             }
             Type::Reference(refer) => self.does_type_reference_type_variables(refer.inner_type),
             Type::Enum(e) => {
@@ -751,7 +747,7 @@ impl Types {
                         }
                     }
                 }
-                return false;
+                false
             }
             Type::EnumVariant(ev) => {
                 if let Some(payload) = ev.payload {
@@ -759,10 +755,9 @@ impl Types {
                         return true;
                     }
                 }
-                return false;
+                false
             }
             Type::Never(_) => false,
-            Type::OpaqueAlias(opaque) => self.does_type_reference_type_variables(opaque.aliasee),
             Type::Generic(_gen) => true,
             Type::Function(fun) => {
                 for param in fun.params.iter() {
@@ -773,7 +768,7 @@ impl Types {
                 if self.does_type_reference_type_variables(fun.return_type) {
                     return true;
                 }
-                return false;
+                false
             }
             Type::Closure(closure) => {
                 self.does_type_reference_type_variables(closure.function_type)
@@ -819,7 +814,6 @@ impl Types {
             Type::Enum(_) => None,
             Type::EnumVariant(_) => None,
             Type::Never(_) => None,
-            Type::OpaqueAlias(_opaque) => None,
             Type::Generic(_gen) => None,
             Type::Function(_fun) => None,
             Type::Closure(_closure) => None,
@@ -889,7 +883,6 @@ impl Types {
                 }
             }
             Type::Never(_) => (),
-            Type::OpaqueAlias(_) => todo!(),
             Type::Generic(_) => unreachable!(),
             Type::Function(_f) => todo!(),
             Type::Closure(_c) => todo!(),
@@ -946,8 +939,6 @@ impl Types {
             }
             // We never really want to de-dupe this type as its inherently unique
             (Type::EnumVariant(_ev1), Type::EnumVariant(_ev2)) => false,
-            // We never really want to de-dupe this type as its inherently unique
-            (Type::OpaqueAlias(_opa1), Type::OpaqueAlias(_opa2)) => false,
             // We never really want to de-dupe this type as its inherently unique
             (Type::Generic(_g1), Type::Generic(_g2)) => false,
             (Type::Function(f1), Type::Function(f2)) => {

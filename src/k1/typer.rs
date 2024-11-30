@@ -1550,32 +1550,17 @@ impl TypedModule {
             };
             Ok(self.types.add_type(Type::Generic(gen)))
         } else if parsed_type_defn.flags.is_alias() {
-            if parsed_type_defn.flags.is_opaque() {
-                // Opaque alias
-                debug!(
-                    "Generating an opaque alias for a {} with companion namespace {:?}",
-                    self.type_id_to_string(resulting_type_id),
-                    type_defn_info.companion_namespace,
-                );
-                let alias = OpaqueTypeAlias {
-                    ast_id: parsed_type_defn_id,
-                    aliasee: resulting_type_id,
-                    type_defn_info,
-                };
-                Ok(self.types.add_type(Type::OpaqueAlias(alias)))
-            } else {
-                // Transparent alias
-                match self.types.get(resulting_type_id) {
-                    Type::Never(_) => {
-                        failf!(parsed_type_defn.span, "Why would you alias 'never'")
-                    }
-                    _ => {
-                        debug!(
-                            "Creating transparent alias type defn for type: {}",
-                            self.type_id_to_string(resulting_type_id)
-                        );
-                        Ok(resulting_type_id)
-                    }
+            // Transparent alias
+            match self.types.get(resulting_type_id) {
+                Type::Never(_) => {
+                    failf!(parsed_type_defn.span, "Why would you alias 'never'")
+                }
+                _ => {
+                    debug!(
+                        "Creating transparent alias type defn for type: {}",
+                        self.type_id_to_string(resulting_type_id)
+                    );
+                    Ok(resulting_type_id)
                 }
             }
         } else {
@@ -2411,7 +2396,6 @@ impl TypedModule {
             Type::RecursiveReference(_) => unreachable!(
                 "instantiate_generic_type is not expected to be called on RecursiveReference"
             ),
-            Type::OpaqueAlias(_opaque) => type_id,
         }
     }
 

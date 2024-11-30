@@ -238,12 +238,6 @@ impl TypedModule {
                 Ok(())
             }
             Type::Never(_) => writ.write_str("never"),
-            Type::OpaqueAlias(opaque) => {
-                writ.write_str(self.get_ident_str(opaque.type_defn_info.name))?;
-                writ.write_str("(")?;
-                self.display_type_id(opaque.aliasee, expand, writ)?;
-                writ.write_str(")")
-            }
             Type::Generic(gen) => {
                 writ.write_str(self.get_ident_str(gen.type_defn_info.name))?;
                 writ.write_str("[")?;
