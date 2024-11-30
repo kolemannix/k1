@@ -1148,7 +1148,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     .as_type();
                 Ok(LlvmVoidType { void_type: self.ctx.void_type(), di_type }.into())
             }
-            Type::OpaqueAlias(opaque) => self.codegen_type_inner(opaque.aliasee, depth + 1),
             Type::RecursiveReference(rr) => {
                 if depth == 0 {
                     // If this is not a recursive call, we already built this type

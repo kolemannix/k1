@@ -3205,9 +3205,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             if text == "alias" {
                 flags.set_alias();
                 self.tokens.advance()
-            } else if text == "opaque" {
-                flags.set_opaque();
-                self.tokens.advance()
             } else {
                 break;
             }
