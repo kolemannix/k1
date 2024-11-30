@@ -1,12 +1,16 @@
-fn identity2[TT](t: TT): TT { t }
-fn identity[T](t: T): T {
-  identity2[T](t)
+fn identityNested[T](t: T): T {
+  identity(t)
 }
-// fn identity[T>(t: T): T { t }
 
 fn main(): int {
-  assert(identity(4) == 4);
-  assert(identity(true));
-  assert(identity({ value: 42 }).value == 42);
+
+  let x = identity(identity(12));
+  assert(x == 12);
+
+  let y: Array[bool] = identity(identity([]));
+
+  assert(identityNested(4) == 4);
+  assert(identityNested(true));
+  assert(identityNested({ value: 42 }).value == 42);
   0
 }

@@ -1,5 +1,7 @@
 fn map[T, U](a: Array[T], f: \T -> U): Array[U] {
-  for i in a yield { f(i) }
+  let* us = Array::withCapacity[U](a.len);
+  for i in a do { us.push[U](f(i)) };
+  us.*
 }
 
 // Todo: this performs dynamic dispatch, always
