@@ -1,11 +1,11 @@
-deftype alias opaque UserId = int
+deftype UserId = { private inner: int }
 namespace UserId {
   fn make(value: int): UserId {
-    value
+    { inner: value }
   }
 
   fn toInt(self: UserId): int {
-    self
+    self.inner
   }
 
 }

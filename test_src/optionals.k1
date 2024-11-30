@@ -1,11 +1,11 @@
 deftype Point = { x: int, y: int? }
 
 fn testCoalesce(): int {
-  let p: Point? = { x: 1, y: 2 };
+  let p: Point? = .Some({ x: 1, y: .Some(2) });
   assert(p!.x == 1);
   assert(p!.y! == 2);
 
-  let b = true: bool?;
+  let b = .Some(true): bool?;
   if b is .Some(x) {
     assert(x);
   };
@@ -21,24 +21,24 @@ fn testCoalesce(): int {
 
 fn testCoalesceAccessor(): unit {
   let maybeUser = Opt.Some({ name: "Koleman", age: 31 });
-  assert(maybeUser?.age == 31);
-  assert(maybeUser?.name == "Koleman");
+  assert(maybeUser?.age! == 31);
+  assert(maybeUser?.name! == "Koleman");
 }
 
 fn noNum(): int? { .None }
-fn someNum(): int? { 100 }
+fn someNum(): int? { .Some(100) }
 
 deftype WeirdPoint = { x: int?, y: int }
 
 fn testComplex(): int {
-  let my_point: WeirdPoint = { x: 42, y: 0 };
+  let my_point: WeirdPoint = { x: .Some(42), y: 0 };
   if my_point.x is .Some(my_x) {
     assert(my_x == 42);
   } else {
     assert(false);
   };
 
-  let mut my_arr: Array[WeirdPoint?] = [{ x: 42, y: 3}, .None];
+  let mut my_arr: Array[WeirdPoint?] = [.Some({ x: .Some(42), y: 3}), .None];
   if my_arr.get(0) is .Some(a) {
     assert(a.y == 3);
   };

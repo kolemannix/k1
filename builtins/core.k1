@@ -161,7 +161,7 @@ namespace char {
   fn toAsciiDigit(self: char): u8? {
     let i_code = self as u8;
     if i_code >= 48 and i_code <= 57 {
-      i_code - 48
+      .Some(i_code - 48)
     } else {
       .None
     }
@@ -262,9 +262,8 @@ namespace Array {
   }
 
   fn firstRef[T](self: Array[T]): T*? {
-    // This exercises both Some-wrapping, .None-promotion, and deftype hinting through ifs!
     if not self.isEmpty() {
-      self.getRef(0)
+      .Some(self.getRef(0))
     } else {
       .None
     }
@@ -279,7 +278,7 @@ namespace Array {
 
   fn lastRef[T](self: Array[T]): T*? {
     if not self.isEmpty() {
-      self.getRef(self.len - 1)
+      .Some(self.getRef(self.len - 1))
     } else {
       .None
     }

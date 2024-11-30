@@ -30,6 +30,7 @@ pub struct StructTypeField {
     pub name: Identifier,
     pub type_id: TypeId,
     pub index: u32,
+    pub private: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -671,11 +672,13 @@ impl Types {
                 name: identifiers.get("fn_ptr").unwrap(),
                 type_id: fn_ptr_type,
                 index: 0,
+                private: false,
             },
             StructTypeField {
                 name: identifiers.get("env_ptr").unwrap(),
                 type_id: env_ptr_type,
                 index: 1,
+                private: false,
             },
         ];
         let struct_representation = self.add_type(Type::Struct(StructType {

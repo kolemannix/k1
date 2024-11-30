@@ -17,7 +17,7 @@ fn main(): int {
   let s4: _root::State.On = _root::State.On(());
 
   let s5 = StateHard.On(.Some(42));
-  let s6: StateHard = StateHard.On(42);
+  let s6: StateHard = StateHard.On(.Some(42));
   let s7: StateHard = StateHard.On(.None);
 
   // A collision to make sure it works
