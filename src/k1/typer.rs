@@ -6549,9 +6549,9 @@ impl TypedModule {
                     // I think this is just hiding other bugs
                     //
 
-                    if expr.is_err() {
-                        return Err(expr.as_ref().unwrap_err().clone());
-                    }
+                    // if expr.is_err() {
+                    //     return Err(expr.as_ref().unwrap_err().clone());
+                    // }
                     if let Ok(expr) = expr {
                         debug!(
                             "solving {}: {} w/ param {}",

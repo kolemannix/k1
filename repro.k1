@@ -1,8 +1,13 @@
-fn main(): int {
-  let x = identity(identity(12));
-  assert(x == 12);
+fn grow[T](value: T): unit { () }
 
-  let y: Array[bool] = identity(identity([]));
-  assert(typeOf(y) == typeOf([true]));
+fn push[T](value: T): unit {
+  grow(value);
+}
+
+fn go[U](value: U): unit {
+  push[U](value)
+}
+
+fn main(): int {
   0
 }
