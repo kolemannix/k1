@@ -81,7 +81,7 @@ namespace HashMap {
   }
 
   fn insert[V](self: HashMap[V]*, key: string, value: V): unit {
-    if self.fillFactor() > 0.7 {
+    if self.*.fillFactor() > 0.7 {
       self.grow();
     };
     let index = self._computeIndex(key);
@@ -96,7 +96,7 @@ namespace HashMap {
         if existingKey == key {
           referenceSet(entryRef, .Some(entry));
         } else {
-          let nextAvailableEntry = self._probe(index);
+          let nextAvailableEntry = self.*._probe(index);
           referenceSet(nextAvailableEntry, .Some(entry));
           self.size = self.size + 1;
         }

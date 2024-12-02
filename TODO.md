@@ -121,8 +121,8 @@
 - [x] string interpolation
 - [x] typeOf(<anyexpr>)
 - [x] Remove coercion from the language (only dereference is left)
-- [ ] Rework Opaques
-  - [ ] Just use structs with private fields
+- [x] Rework Opaques
+  - [x] Just use structs with private fields
 - [ ] Working with references push, specifically struct and either references
   - [x] A nice syntax for `referenceSet`
   - [ ] New assignment operator, not `=` (`<-`)
