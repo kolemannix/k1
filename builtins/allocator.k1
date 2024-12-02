@@ -45,10 +45,10 @@ namespace Arena {
       crash("Heap \{id} is out of space to allocate a T")
     };
 
-    self.curAddr = newEnd;
+    self.curAddr* <- newEnd;
 
     let ref: T* = newBase as Pointer as T*;
-    ref.* = t;
+    ref <- t;
     ref
   }
 
@@ -57,7 +57,7 @@ namespace Arena {
     let size = self.regionSizeBytes();
     println("[arena \{id}] Freeing \{size}");
     libc::memset(self.basePtr, 0 as u32, size);
-    self.curAddr = (self.basePtr as u64);
+    self.curAddr* <- (self.basePtr as u64);
   }
 }
 deftype ObjectPool = {}

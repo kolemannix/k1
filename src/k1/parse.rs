@@ -716,6 +716,13 @@ pub struct Assignment {
 }
 
 #[derive(Debug, Clone)]
+pub struct SetStmt {
+    pub lhs: ParsedExpressionId,
+    pub rhs: ParsedExpressionId,
+    pub span: SpanId,
+}
+
+#[derive(Debug, Clone)]
 pub struct IfExpr {
     pub cond: ParsedExpressionId,
     pub cons: ParsedExpressionId,
@@ -755,6 +762,7 @@ pub struct ForExpr {
 pub enum ParsedStmt {
     ValDef(ValDef),                     // let x = 42
     Assignment(Assignment),             // x = 42
+    SetRef(SetStmt),                    // x <- 42
     LoneExpression(ParsedExpressionId), // println("asdfasdf")
 }
 
@@ -1237,6 +1245,7 @@ impl ParsedModule {
         match stmt {
             ParsedStmt::ValDef(v) => v.span,
             ParsedStmt::Assignment(a) => a.span,
+            ParsedStmt::SetRef(s) => s.span,
             ParsedStmt::LoneExpression(expr_id) => self.expressions.get_span(*expr_id),
         }
     }
@@ -1366,7 +1375,7 @@ pub fn print_error(module: &ParsedModule, parse_error: &ParseError) {
         let source = module.sources.get_source(lex_error.file_id);
         let line = source.get_line(lex_error.line_index as usize).unwrap();
 
-        println!(
+        eprintln!(
             "Lexing error at {}/{}:{}\n{}\n{}",
             source.directory,
             source.filename,
@@ -1392,7 +1401,7 @@ pub fn print_error(module: &ParsedModule, parse_error: &ParseError) {
     use colored::*;
 
     print_error_location(&module.spans, &module.sources, span);
-    println!("\tExpected '{}', but got '{}'\n", parse_error.expected.blue(), got_str,);
+    eprintln!("\tExpected '{}', but got '{}'\n", parse_error.expected.blue(), got_str,);
 }
 
 pub fn print_error_location(spans: &Spans, sources: &Sources, span_id: SpanId) {
@@ -1410,7 +1419,7 @@ pub fn print_error_location(spans: &Spans, sources: &Sources, span_id: SpanId) {
     let thingies = "^".repeat(highlight_length);
     let spaces = " ".repeat((span.start - line.start_char) as usize);
     let code = format!("  ->{}\n  ->{spaces}{thingies}", &line.content);
-    println!(
+    eprintln!(
         "  {} at {}/{}:{}\n\n{code}",
         "Error".red(),
         source.directory,
@@ -2758,16 +2767,18 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(Some(constant_id))
     }
 
-    fn parse_assignment(&mut self, lhs: ParsedExpressionId) -> ParseResult<Assignment> {
-        let _valid_lhs = match self.get_expression(lhs) {
-            ParsedExpression::FieldAccess(_) => true,
-            ParsedExpression::Variable(_) => true,
-            _ => false,
-        };
+    fn expect_assignment(&mut self, lhs: ParsedExpressionId) -> ParseResult<Assignment> {
         self.expect_eat_token(K::Equals)?;
         let rhs = self.expect_expression()?;
         let span = self.extend_expr_span(lhs, rhs);
         Ok(Assignment { lhs, rhs, span })
+    }
+
+    fn expect_set_stmt(&mut self, lhs: ParsedExpressionId) -> ParseResult<SetStmt> {
+        self.expect_eat_token(K::LThinArrow)?;
+        let rhs = self.expect_expression()?;
+        let span = self.extend_expr_span(lhs, rhs);
+        Ok(SetStmt { lhs, rhs, span })
     }
 
     fn eat_fn_arg_def(&mut self, is_context: bool) -> ParseResult<FnArgDef> {
@@ -2964,8 +2975,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             // - Validate expr type, since only some exprs can be LHS of an assignment
             // - Build assignment
             if peeked.kind == K::Equals {
-                let assgn = self.parse_assignment(expr)?;
+                let assgn = self.expect_assignment(expr)?;
                 Ok(Some(ParsedStmt::Assignment(assgn)))
+            } else if peeked.kind == K::LThinArrow {
+                let set = self.expect_set_stmt(expr)?;
+                Ok(Some(ParsedStmt::SetRef(set)))
             } else {
                 Ok(Some(ParsedStmt::LoneExpression(expr)))
             }

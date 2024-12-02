@@ -7,12 +7,15 @@ deftype Pointer = builtin
 deftype f32 = builtin
 deftype f64 = builtin
 
+deftype Slice[T] = { len: u64, data: Pointer }
+
 deftype Array[T] = { len: u64, cap: u64, data: Pointer }
 deftype string = { len: u64, data: Pointer }
 
 deftype Opt[T] = either None, Some(T)
 
 deftype CompilerSourceLoc = { filename: string, line: u64 }
+
 
 // One day
 // ability OrElse[T] {
@@ -31,8 +34,35 @@ ability Equals {
 
 ability Show {
   // TODO: make this use an allocator. How does it get passed conveniently?
-  #debug fn show(self: Self): string
+  fn show(self: Self): string
 }
+
+// What will become platform stuff
+
+extern fn _k1_readFileToString(path: string*): string
+extern fn _k1_crash(reason: string*, file: string*, line: u64): never
+
+// Straight to libc, for now
+namespace libc {
+  extern(exit) fn exit(code: i32): never
+
+  extern(printf) fn printfString(formatStr: Pointer, len: i32, cString: Pointer): i32
+  extern(write)  fn write(fileNo: i32, data: Pointer, count: u64, offset: u64): u64
+  extern(memcpy) fn memcpy(dst: Pointer, src: Pointer, count: u64): Pointer
+  extern(memset) fn memset(src: Pointer, value: u32, count: u64): Pointer
+  extern(memcmp) fn memcmp(s1: Pointer, s2: Pointer, size: u64): i32
+  extern(calloc) fn calloc(count: u64, size: u64): Pointer
+
+  extern(malloc) fn malloc(size: u64): Pointer
+  extern(free) fn free(ptr: Pointer): unit
+
+  extern(realloc) fn realloc(ptr: Pointer, size: u64): Pointer
+  extern(arc4random_uniform) fn arc4random_uniform(upperBound: u32): u32
+
+  extern(abort) fn abort(): never
+}
+
+// End What will become platform stuff
 
 intern fn sizeOf[T](): u64
 intern fn alignOf[T](): u64
@@ -46,3 +76,16 @@ ability Bitwise {
   fn shiftRight(self: Self, other: Self): Self
 }
 
+namespace Opt {
+  fn hasValue[T](self: T?): bool {
+    self is .Some(_)
+  }
+
+  fn get[T](self: T?): T {
+    if self is .Some(t) {
+      t
+    } else {
+      crash("Opt.get on None")
+    }
+  }
+}

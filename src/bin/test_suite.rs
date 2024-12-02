@@ -112,16 +112,20 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
                         unimplemented!("error line test")
                     }
                     TestExpectation::AbortErrorMessage { .. } => {
+                        module.print_error(err);
                         bail!(
-                            "{filename}: Expected abort but got compile error: {}",
+                            "{filename}\n\tExpected: abort\n\tgot    : compile error '{}'",
                             err.to_string()
                         )
                     }
-                    TestExpectation::ExitCode(expected_code) => bail!(
-                        "{filename}: Expected exit code {} but got compile error: {}",
-                        expected_code,
-                        err.to_string()
-                    ),
+                    TestExpectation::ExitCode(expected_code) => {
+                        module.print_error(err);
+                        bail!(
+                            "{filename}\n\tExpected: exit code {}\n\tgot     : compile error: {}",
+                            expected_code,
+                            err.to_string()
+                        )
+                    }
                 }
             }
             None => {

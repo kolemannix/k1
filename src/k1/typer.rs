@@ -448,7 +448,6 @@ pub struct BinaryOp {
 pub enum UnaryOpKind {
     BooleanNegation,
     Dereference,
-    ReferenceToInt,
 }
 
 impl Display for UnaryOpKind {
@@ -456,7 +455,6 @@ impl Display for UnaryOpKind {
         match self {
             UnaryOpKind::BooleanNegation => f.write_str("not "),
             UnaryOpKind::Dereference => f.write_char('*'),
-            UnaryOpKind::ReferenceToInt => f.write_str("(*int)"),
         }
     }
 }
@@ -982,11 +980,18 @@ pub struct LetStmt {
     pub span: SpanId,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssignmentKind {
+    Value,
+    Reference,
+}
+
 #[derive(Debug, Clone)]
 pub struct Assignment {
     pub destination: Box<TypedExpr>,
     pub value: Box<TypedExpr>,
     pub span: SpanId,
+    pub kind: AssignmentKind,
 }
 
 #[derive(Debug, Clone)]
@@ -1267,7 +1272,7 @@ fn make_fail_ast_id<A, T: AsRef<str>>(
     Err(make_error(message, span))
 }
 
-fn print_error(spans: &Spans, sources: &Sources, message: impl AsRef<str>, span: SpanId) {
+pub fn print_error(spans: &Spans, sources: &Sources, message: impl AsRef<str>, span: SpanId) {
     parse::print_error_location(spans, sources, span);
     eprintln!("\t{}", message.as_ref());
 }
@@ -3105,13 +3110,10 @@ impl TypedModule {
                     let variable_is_above_closure = self
                         .scopes
                         .scope_has_ancestor(nearest_parent_closure_scope, variable_scope_id);
-                    eprintln!(
-                        "variable_is_above_closure {} {variable_is_above_closure}",
-                        self.get_ident_str(variable.name.name)
-                    );
                     let variable_is_global = self.variables.get_variable(variable_id).is_global;
 
                     let is_capture = variable_is_above_closure && !variable_is_global;
+                    debug!("{}, is_capture={is_capture}", self.get_ident_str(variable.name.name));
                     if is_capture {
                         self.scopes.add_capture(nearest_parent_closure_scope, variable_id);
                         true
@@ -3179,38 +3181,15 @@ impl TypedModule {
         }
 
         // Bailout case: .* dereference operation
-        // nocommit: fn eval_dereference
         if field_access.target == get_ident!(self, "*") {
-            // Example:
-            // let x: int = intptr.*
-            // The expected_type when we elet `*intptr` is int, so
-            // the expected_type when we elet `intptr` should be *int
-            let expected_type = match expected_type {
-                Some(expected) => Some(self.types.add_reference_type(expected)),
-                None => None,
-            };
-            let base_expr = self.eval_expr(field_access.base, scope_id, expected_type)?;
-            let reference_type =
-                self.types.get(base_expr.get_type()).as_reference().ok_or(make_error(
-                    format!(
-                        "Cannot dereference non-reference type: {}",
-                        self.type_id_to_string(base_expr.get_type())
-                    ),
-                    span,
-                ))?;
-            return Ok(TypedExpr::UnaryOp(UnaryOp {
-                kind: UnaryOpKind::Dereference,
-                type_id: reference_type.inner_type,
-                expr: Box::new(base_expr),
-                span,
-            }));
+            return self.eval_dereference(field_access, scope_id, expected_type, span);
         }
 
         let mut base_expr = self.eval_expr(field_access.base, scope_id, None)?;
         let original_base_expr_type = base_expr.get_type();
 
         // Perform auto-dereference for accesses that are not 'lvalue'-style or 'referencing' style
-        let (base_type, _is_reference) = match self.types.get(base_expr.get_type()) {
+        let (base_type, is_reference) = match self.types.get(base_expr.get_type()) {
             Type::Reference(reference_type) => {
                 if !is_assignment_lhs && !field_access.is_referencing {
                     // Dereference the base expression
@@ -3314,6 +3293,9 @@ impl TypedModule {
                 }
             }
             Type::Struct(struct_type) => {
+                if is_assignment_lhs && !is_reference {
+                    return failf!(span, "Struct must be a reference to be assignable");
+                }
                 let (field_index, target_field) =
                     struct_type.find_field(field_access.target).ok_or(make_error(
                         format!(
@@ -3364,6 +3346,9 @@ impl TypedModule {
                         self.ast.identifiers.get_name(ev.name)
                     );
                 };
+                if is_assignment_lhs && !is_reference {
+                    return failf!(span, "Enum must be a reference to be assignable");
+                }
                 let variant_name = ev.name;
                 let variant_index = ev.index;
                 let result_type_id = if field_access.is_referencing {
@@ -3389,21 +3374,36 @@ impl TypedModule {
         }
     }
 
-    fn eval_assignment_lhs_expr(
+    fn eval_dereference(
         &mut self,
-        expr: ParsedExpressionId,
+        field_access: &parse::FieldAccess,
         scope_id: ScopeId,
-        _expected_type: Option<TypeId>,
+        expected_type: Option<TypeId>,
+        span: SpanId,
     ) -> TyperResult<TypedExpr> {
-        match self.ast.expressions.get(expr) {
-            ParsedExpression::Variable(_variable) => self.eval_variable(expr, scope_id, true),
-            ParsedExpression::FieldAccess(field_access) => {
-                self.eval_field_access(expr, &field_access.clone(), scope_id, true, None)
-            }
-            other => {
-                failf!(other.get_span(), "Invalid assignment lhs: {:?}", other)
-            }
-        }
+        // Example:
+        // let x: int = intptr.*
+        // The expected_type when we get `*intptr` is int, so
+        // the expected_type when we get `intptr` should be *int
+        let expected_type = match expected_type {
+            Some(expected) => Some(self.types.add_reference_type(expected)),
+            None => None,
+        };
+        let base_expr = self.eval_expr(field_access.base, scope_id, expected_type)?;
+        let reference_type =
+            self.types.get(base_expr.get_type()).as_reference().ok_or(make_error(
+                format!(
+                    "Cannot dereference non-reference type: {}",
+                    self.type_id_to_string(base_expr.get_type())
+                ),
+                span,
+            ))?;
+        Ok(TypedExpr::UnaryOp(UnaryOp {
+            kind: UnaryOpKind::Dereference,
+            type_id: reference_type.inner_type,
+            expr: Box::new(base_expr),
+            span,
+        }))
     }
 
     /// Used for
@@ -5032,6 +5032,7 @@ impl TypedModule {
                 span: iterable_span,
             })),
             span: iterable_span,
+            kind: AssignmentKind::Value,
         }));
         while_block.statements.push(index_increment_statement);
 
@@ -5352,11 +5353,6 @@ impl TypedModule {
         expected_type: Option<TypeId>,
         span: SpanId,
     ) -> TyperResult<TypedExpr> {
-        eprintln!(
-            "heres the pipe {} | {}",
-            self.ast.expr_id_to_string(lhs),
-            self.ast.expr_id_to_string(rhs)
-        );
         let new_fn_call = match self.ast.expressions.get(rhs) {
             ParsedExpression::Variable(var) => {
                 let args = vec![parse::FnCallArg { name: None, value: lhs }];
@@ -7062,18 +7058,44 @@ impl TypedModule {
                 Ok(val_def_stmt)
             }
             ParsedStmt::Assignment(assignment) => {
-                // let lhs = self.eval_expr(&assignment.lhs, scope_id, None)?;
-                let lhs = self.eval_assignment_lhs_expr(assignment.lhs, scope_id, None)?;
+                let ParsedExpression::Variable(_) = self.ast.expressions.get(assignment.lhs) else {
+                    return failf!(
+                        self.ast.expressions.get_span(assignment.lhs),
+                        "Value assignment destination must be a variable"
+                    );
+                };
+                let lhs = self.eval_variable(assignment.lhs, scope_id, true)?;
                 let rhs = self.eval_expr(assignment.rhs, scope_id, Some(lhs.get_type()))?;
                 if let Err(msg) = self.check_types(lhs.get_type(), rhs.get_type(), scope_id) {
-                    return failf!(assignment.span, "Invalid types for assignment: {}", msg,);
+                    return failf!(assignment.span, "Invalid type for assignment: {}", msg,);
                 }
-                let expr = TypedStmt::Assignment(Box::new(Assignment {
+                Ok(TypedStmt::Assignment(Box::new(Assignment {
                     destination: Box::new(lhs),
                     value: Box::new(rhs),
                     span: assignment.span,
-                }));
-                Ok(expr)
+                    kind: AssignmentKind::Value,
+                })))
+            }
+            ParsedStmt::SetRef(set_stmt) => {
+                let lhs = self.eval_expr(set_stmt.lhs, scope_id, None)?;
+                let Some(lhs_type) = self.types.get(lhs.get_type()).as_reference() else {
+                    return failf!(
+                        self.ast.expressions.get_span(set_stmt.lhs),
+                        "Expected a reference type; got {}",
+                        self.type_id_to_string(lhs.get_type())
+                    );
+                };
+                let expected_rhs = lhs_type.inner_type;
+                let rhs = self.eval_expr(set_stmt.rhs, scope_id, Some(expected_rhs))?;
+                if let Err(msg) = self.check_types(expected_rhs, rhs.get_type(), scope_id) {
+                    return failf!(set_stmt.span, "Invalid type for assignment: {}", msg,);
+                }
+                Ok(TypedStmt::Assignment(Box::new(Assignment {
+                    destination: Box::new(lhs),
+                    value: Box::new(rhs),
+                    span: set_stmt.span,
+                    kind: AssignmentKind::Reference,
+                })))
             }
             ParsedStmt::LoneExpression(expression) => {
                 let expr = self.eval_expr(*expression, scope_id, expected_type)?;
@@ -7175,6 +7197,7 @@ impl TypedModule {
                 None => match fn_name_str {
                     "sizeOf" => Some(IntrinsicFunction::SizeOf),
                     "alignOf" => Some(IntrinsicFunction::AlignOf),
+                    // nocommit: delete referenceSet
                     "referenceSet" => Some(IntrinsicFunction::ReferenceSet),
                     _ => None,
                 },
@@ -7182,13 +7205,8 @@ impl TypedModule {
                     "typeId" => Some(IntrinsicFunction::TypeId),
                     _ => None,
                 },
-                Some("string") => match fn_name_str {
-                    // Ability impl
-                    _ => None,
-                },
-                Some("Array") => match fn_name_str {
-                    _ => None,
-                },
+                Some("string") => None,
+                Some("Array") => None,
                 Some("char") => None,
                 Some("Pointer") => match fn_name_str {
                     "refAtIndex" => Some(IntrinsicFunction::PointerIndex),
@@ -7536,11 +7554,6 @@ impl TypedModule {
             None => UNIT_TYPE_ID,
             Some(type_expr) => self.eval_type_expr(type_expr, fn_scope_id)?,
         };
-        debug!(
-            "*** ret type for {} is {}",
-            self.get_ident_str(name),
-            self.type_id_to_string(return_type),
-        );
 
         let kind = if let Some(spec) = specialization_params {
             self.get_function(spec.generic_parent_function).kind
@@ -7628,6 +7641,7 @@ impl TypedModule {
 
         if is_debug {
             eprintln!("DEBUG\n{}", self.function_id_to_string(function_id, false));
+            eprintln!("FUNCTION SCOPE\n{}", self.scope_id_to_string(fn_scope_id));
             self.pop_debug_level();
         }
 
@@ -7660,7 +7674,10 @@ impl TypedModule {
             Some(block_ast) => {
                 // Note(clone): Intern blocks
                 if self.types.does_type_reference_type_variables(function_type_id) {
-                    eprintln!("*******SKIP");
+                    debug!(
+                        "Skipping typecheck of generic body for {}",
+                        self.function_id_to_string(declaration_id, true)
+                    );
                     return Ok(());
                 }
                 let block_ast = block_ast.clone();
@@ -8258,6 +8275,16 @@ impl TypedModule {
             }
             panic!("Unevaluated type defns!!!")
         }
+        //
+        // This just ensures our SLICE_TYPE_ID constant is correct
+        // Eventually we need a better way of doing this
+        {
+            let slice_generic = self.types.get(SLICE_TYPE_ID).expect_generic();
+            let slice_struct = self.types.get(slice_generic.inner).expect_struct();
+            debug_assert!(slice_generic.type_defn_info.scope == self.scopes.get_root_scope_id());
+            debug_assert!(slice_generic.type_defn_info.name == get_ident!(self, "Slice"));
+            debug_assert!(slice_struct.fields.len() == 2);
+        }
 
         // This just ensures our ARRAY_TYPE_ID constant is correct
         // Eventually we need a better way of doing this
@@ -8699,17 +8726,7 @@ impl TypedModule {
         TypedExpr::Struct(Struct { fields, type_id: struct_type_id, span })
     }
 
-    fn synth_function_reference_expr(
-        &mut self,
-        function_id: FunctionId,
-        span: SpanId,
-    ) -> TypedExpr {
-        let fn_type = self.get_function(function_id).type_id;
-        let fn_reference_type = self.types.add_reference_type(fn_type);
-        TypedExpr::FunctionName(FunctionReferenceExpr {
-            function_id,
-            span,
-            type_id: fn_reference_type,
-        })
+    pub fn print_error(&self, error: &TyperError) {
+        print_error(&self.ast.spans, &self.ast.sources, &error.message, error.span);
     }
 }

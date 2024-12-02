@@ -14,6 +14,8 @@ impl Ordered for int {
 
 fn sorted[T](input: Array[T]): Array[T] where T: Ordered {
   let* sorted = Array::withCapacity(input.len);
+  crash("unimplemented");
+  sorted
 }
 
 
