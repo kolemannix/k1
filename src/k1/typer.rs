@@ -7642,6 +7642,7 @@ impl TypedModule {
         let function = self.get_function(declaration_id);
         let is_debug = function.compiler_debug;
         let function_name = function.name;
+        let function_type_id = function.type_id;
         let fn_scope_id = function.scope;
         let return_type = self.get_function_type(declaration_id).return_type;
         let is_extern = matches!(function.linkage, Linkage::External(_));
@@ -7658,6 +7659,10 @@ impl TypedModule {
         let body_block = match ast_fn_def.block.as_ref() {
             Some(block_ast) => {
                 // Note(clone): Intern blocks
+                if self.types.does_type_reference_type_variables(function_type_id) {
+                    eprintln!("*******SKIP");
+                    return Ok(());
+                }
                 let block_ast = block_ast.clone();
                 let block = self.eval_block(&block_ast, fn_scope_id, Some(return_type), true)?;
                 debug!(
