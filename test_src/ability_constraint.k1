@@ -2,15 +2,18 @@ ability Num {
   fn num(self: Self): i32
 }
 
+impl Show for i64 {
+  fn show(self: i64): string { "todo" }
+}
+
 fn add[T](a: T, b: T): i32 where T: Num, T: Show {
-  println(a.show());
-  println("+");
-  println(b.show());
+  a.show();
+  b.show();
   a.num() + b.num()
 }
 
 impl Num for int {
-  fn num(self: Self): i32 {
+  fn num(self: int): i32 {
     self as i32
   }
 }

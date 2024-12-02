@@ -301,6 +301,14 @@ pub struct ClosureObjectType {
 }
 
 #[derive(Debug, Clone)]
+pub struct UnknownType {
+    pub span: SpanId,
+    pub variable_to_solve: TypeId,
+    // Maybe
+    // pub type_variable: TypeId,
+}
+
+#[derive(Debug, Clone)]
 pub enum Type {
     Unit(TypeDefnInfo),
     Char(TypeDefnInfo),
@@ -325,6 +333,7 @@ pub enum Type {
     Closure(ClosureType),
     ClosureObject(ClosureObjectType),
     RecursiveReference(RecursiveReference),
+    Unknown(UnknownType),
 }
 
 impl Type {
@@ -354,6 +363,7 @@ impl Type {
             Type::Closure(clos) => Some(clos.parsed_id),
             Type::ClosureObject(clos_obj) => Some(clos_obj.parsed_id),
             Type::RecursiveReference(r) => Some(ParsedId::TypeDefn(r.parsed_id)),
+            Type::Unknown(_u) => None,
         }
     }
 
@@ -565,6 +575,11 @@ impl Types {
     }
 
     #[inline]
+    pub fn get_resolved_no_follow(&self, type_id: TypeId, scopes: &Scopes) -> &Type {
+        &self.types[type_id.0 as usize]
+    }
+
+    #[inline]
     pub fn get_no_follow(&self, type_id: TypeId) -> &Type {
         &self.types[type_id.0 as usize]
     }
@@ -604,6 +619,7 @@ impl Types {
             Type::Closure(_) => None,
             Type::ClosureObject(_) => None,
             Type::RecursiveReference(_) => None,
+            Type::Unknown(_) => None,
         }
     }
 
@@ -626,6 +642,7 @@ impl Types {
             Type::Closure(_c) => None,
             Type::ClosureObject(_) => None,
             Type::RecursiveReference(_) => None,
+            Type::Unknown(_) => None,
         }
     }
 
@@ -777,6 +794,7 @@ impl Types {
             // But a closure object is generic if its function is generic
             Type::ClosureObject(co) => self.does_type_reference_type_variables(co.function_type),
             Type::RecursiveReference(_rr) => false,
+            Type::Unknown(_) => true,
         }
     }
 
@@ -819,6 +837,7 @@ impl Types {
             Type::Closure(_closure) => None,
             Type::ClosureObject(_co) => None,
             Type::RecursiveReference(_) => None,
+            Type::Unknown(_) => None,
         }
     }
 
@@ -888,6 +907,7 @@ impl Types {
             Type::Closure(_c) => todo!(),
             Type::ClosureObject(_co) => todo!(),
             Type::RecursiveReference(_rr) => (),
+            Type::Unknown(_) => (),
         }
     }
 

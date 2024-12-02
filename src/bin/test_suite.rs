@@ -88,7 +88,7 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
     let args = k1::compiler::Args {
         no_llvm_opt: true,
         debug: true,
-        no_core: false,
+        no_std: false,
         write_llvm: true,
         dump_module: false,
         run: false,
@@ -228,7 +228,7 @@ pub fn main() -> Result<()> {
                     None => all_tests.push(path.to_path_buf()),
                     Some(f) => {
                         let name_stem = path.file_stem().unwrap().to_string_lossy();
-                        if name_stem.contains(&*f) {
+                        if name_stem.contains(f) {
                             all_tests.push(path.to_path_buf())
                         }
                     }

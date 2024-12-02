@@ -1,4 +1,4 @@
-use log::trace;
+use log::{debug, trace};
 
 use std::{
     collections::{hash_map::Entry, HashMap},
@@ -282,7 +282,6 @@ impl Scopes {
 
     pub fn find_type(&self, scope_id: ScopeId, ident: Identifier) -> Option<TypeId> {
         let scope = self.get_scope(scope_id);
-        trace!("Find type {} in {:?}", ident, scope.types);
         if let v @ Some(_r) = scope.find_type(ident) {
             return v;
         }
@@ -337,6 +336,21 @@ impl Scopes {
                 Some(parent) => self.remove_pending_type_defn(parent, ident),
                 None => false,
             }
+        }
+    }
+
+    pub fn find_type_variable_binding(
+        &self,
+        scope_id: ScopeId,
+        type_variable_id: TypeId,
+    ) -> Option<TypeId> {
+        let scope = self.get_scope(scope_id);
+        if let v @ Some(_r) = scope.find_type_binding(type_variable_id) {
+            return v;
+        }
+        match scope.parent {
+            Some(parent) => self.find_type_variable_binding(parent, type_variable_id),
+            None => None,
         }
     }
 
@@ -559,6 +573,7 @@ pub struct Scope {
     pub functions: HashMap<Identifier, FunctionId>,
     pub namespaces: HashMap<Identifier, NamespaceId>,
     pub types: HashMap<Identifier, TypeId>,
+    pub type_variable_bindings: HashMap<TypeId, TypeId>,
     pub abilities: HashMap<Identifier, AbilityId>,
     // FIXME: Add abilities here so they participate in the type defn phase
     pub pending_type_defns: HashMap<Identifier, ParsedTypeDefnId>,
@@ -584,6 +599,7 @@ impl Scope {
             functions: HashMap::new(),
             namespaces: HashMap::new(),
             types: HashMap::new(),
+            type_variable_bindings: HashMap::new(),
             abilities: HashMap::new(),
             pending_type_defns: HashMap::new(),
             parent: None,
@@ -596,10 +612,6 @@ impl Scope {
     }
 
     pub fn add_variable(&mut self, ident: Identifier, value: VariableId) {
-        // This accomplishes shadowing by overwriting the name in the scope.
-        // I think this is ok because the variable itself (by variable id)
-        // is not lost, in case we wanted to do some analysis.
-        // Still, might need to mark it shadowed explicitly?
         self.variables.insert(ident, value);
     }
 
@@ -641,8 +653,30 @@ impl Scope {
         }
     }
 
+    pub fn remove_type(&mut self, ident: Identifier) {
+        self.types.remove(&ident);
+    }
+
     pub fn find_type(&self, ident: Identifier) -> Option<TypeId> {
         self.types.get(&ident).copied()
+    }
+
+    #[must_use]
+    pub fn add_type_variable_binding(&mut self, type_variable_id: TypeId, value: TypeId) -> bool {
+        if let Entry::Vacant(e) = self.type_variable_bindings.entry(type_variable_id) {
+            e.insert(value);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn remove_type_variable_binding(&mut self, type_variable_id: TypeId) {
+        self.type_variable_bindings.remove(&type_variable_id);
+    }
+
+    pub fn find_type_binding(&self, type_variable_id: TypeId) -> Option<TypeId> {
+        self.type_variable_bindings.get(&type_variable_id).copied()
     }
 
     #[must_use]

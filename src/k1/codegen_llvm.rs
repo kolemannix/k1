@@ -1231,6 +1231,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             Type::Generic(_) => {
                 panic!("Cannot codegen a Generic; something went wrong in typecheck")
             }
+            Type::Unknown(_) => {
+                panic!("Cannot codegen an Unknown; something went wrong in typecheck")
+            }
         }?;
         if !no_cache {
             self.llvm_types.borrow_mut().insert(type_id, codegened_type.clone());

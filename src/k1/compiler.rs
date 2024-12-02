@@ -22,9 +22,10 @@ use clap::Parser;
 #[derive(Parser, Debug, Clone)]
 #[command(author, version, about, long_about = None)]
 pub struct Args {
-    /// No core
+    /// No standard library, include only what is needed to make the compiler function
+    /// which is builtin.k1
     #[arg(short, long, default_value_t = false)]
-    pub no_core: bool,
+    pub no_std: bool,
 
     /// Output an LLVM IR file at out_dir/{module_name}.ll
     #[arg(long, default_value_t = true)]
@@ -90,7 +91,7 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
 
     let src_filter = if !is_dir { Some(|p: &Path| *p == *src_path) } else { None };
 
-    let use_core = !args.no_core;
+    let no_std = args.no_std;
 
     let mut parsed_module = ParsedModule::make(module_name.to_string());
 
@@ -133,7 +134,9 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
         }
     };
 
-    if use_core {
+    parse_file(Path::new("builtins/builtin.k1"));
+
+    if !no_std {
         parse_file(Path::new("builtins/core.k1"));
         parse_file(Path::new("builtins/opt.k1"));
         parse_file(Path::new("builtins/string.k1"));
@@ -185,8 +188,9 @@ pub fn write_executable(debug: bool, out_dir: &str, module_name: &str) -> Result
     build_cmd.args([
         // "-v",
         if debug { "-g" } else { "" },
-        if debug { "-fsanitize=address,undefined" } else { "" },
         if debug { "-O0" } else { "-O3" },
+        if debug { "-fsanitize=address,undefined" } else { "" },
+        if debug { "-fno-omit-frame-pointer" } else { "" },
         "-Woverride-module",
         "-mmacosx-version-min=14.4",
         &format!("{}/{}.ll", out_dir, module_name),
@@ -225,11 +229,17 @@ pub fn codegen_module<'ctx, 'module>(
     let mut codegen = Codegen::create(ctx, typed_module, args.debug, llvm_optimize);
     let module_name = codegen.name().to_string();
     if let Err(e) = codegen.codegen_module() {
+        if args.dump_module {
+            println!("{}", typed_module);
+        }
         print_error_location(&codegen.module.ast.spans, &codegen.module.ast.sources, e.span);
         eprintln!("Codegen error: {}", e.message);
         anyhow::bail!(e)
     }
     if let Err(e) = codegen.optimize(llvm_optimize) {
+        if args.dump_module {
+            println!("{}", typed_module);
+        }
         eprintln!("Codegen error: {}", e);
         anyhow::bail!(e)
     };

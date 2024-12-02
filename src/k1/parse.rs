@@ -216,8 +216,9 @@ pub struct Identifiers {
     intern_pool: string_interner::StringInterner<StringBackend>,
 }
 impl Identifiers {
-    pub const BUILTIN_IDENTS: [&'static str; 25] = [
+    pub const BUILTIN_IDENTS: [&'static str; 27] = [
         "self",
+        "Self",
         "it",
         "unit",
         "char",
@@ -242,6 +243,7 @@ impl Identifiers {
         "*",
         "sb",
         "payload",
+        "Bitwise",
     ];
 
     pub fn intern(&mut self, s: impl AsRef<str>) -> Identifier {
@@ -1198,6 +1200,10 @@ impl ParsedModule {
 
     pub fn get_function(&self, id: ParsedFunctionId) -> &ParsedFunction {
         &self.functions[id.0 as usize]
+    }
+
+    pub fn get_function_mut(&mut self, id: ParsedFunctionId) -> &mut ParsedFunction {
+        &mut self.functions[id.0 as usize]
     }
 
     pub fn add_function(&mut self, mut function: ParsedFunction) -> ParsedFunctionId {
