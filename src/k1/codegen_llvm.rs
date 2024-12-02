@@ -1415,69 +1415,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         Ok(self.codegen_expr(expr)?.expect_basic_value())
     }
 
-    fn codegen_expr_lvalue(&mut self, expr: &TypedExpr) -> CodegenResult<PointerValue<'ctx>> {
-        trace!("codegen expr lvalue\n{}", self.module.expr_to_string(expr));
-        // We need only match on expression types that are allowed to appear as lvalues. That means:
-        // - Variables
-        // - Struct members
-        match expr {
-            TypedExpr::Variable(ir_var) => {
-                if let Some(pointer) = self.variables.get(&ir_var.variable_id) {
-                    trace!(
-                        "codegen variable (lvalue) got pointee type {:?}",
-                        pointer.pointee_llvm_type
-                    );
-                    Ok(pointer.pointer)
-                } else {
-                    Err(CodegenError {
-                        message: format!(
-                            "No pointer found for variable (lvalue) {}",
-                            self.module.expr_to_string(expr)
-                        ),
-                        span: expr.get_span(),
-                    })
-                }
-            }
-            TypedExpr::StructFieldAccess(field_access) => {
-                // Expect pointer since since is an lvalue, which means field_access.base is actually a reference
-                // to a struct.
-                // But do not use the lvalue version of codegen_expr() since that gives us a pointer to the pointer!
-                debug_assert!(self
-                    .module
-                    .types
-                    .get(field_access.base.get_type())
-                    .as_reference()
-                    .is_some());
-
-                let struct_type =
-                    self.module.types.get_type_id_dereferenced(field_access.base.get_type());
-                let struct_type = self.codegen_type(struct_type)?.physical_value_type();
-
-                let struct_pointer = self
-                    .codegen_expr(&field_access.base)?
-                    .expect_basic_value()
-                    .into_pointer_value();
-                let field_ptr = self
-                    .builder
-                    .build_struct_gep(
-                        struct_type,
-                        struct_pointer,
-                        field_access.target_field_index,
-                        &format!(
-                            "struct.{}",
-                            self.module.ast.identifiers.get_name(field_access.target_field)
-                        ),
-                    )
-                    .unwrap();
-                Ok(field_ptr)
-            }
-            _ => Err(CodegenError {
-                message: format!("Unexpected lvalue: {}", self.module.expr_to_string(expr)),
-                span: expr.get_span(),
-            }),
-        }
-    }
-
     fn codegen_expr(&mut self, expr: &TypedExpr) -> CodegenResult<LlvmValue<'ctx>> {
         self.set_debug_location(expr.get_span());
         trace!("codegen expr\n{}", self.module.expr_to_string(expr));
@@ -1631,14 +1568,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         let negated = self.builder.build_not(truncated, "i1_negated");
                         let promoted = self.i1_to_bool(negated, "negated");
                         Ok(promoted.as_basic_value_enum().into())
-                    }
-                    UnaryOpKind::ReferenceToInt => {
-                        let as_int = self.builder.build_ptr_to_int(
-                            value.into_pointer_value(),
-                            self.builtin_types.int,
-                            "ptr_as_int",
-                        );
-                        Ok(as_int.as_basic_value_enum().into())
                     }
                 }
             }
@@ -2488,37 +2417,34 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     last = if val_def.variable_type == NEVER_TYPE_ID { value } else { unit_value };
                 }
                 TypedStmt::Assignment(assignment) => {
-                    match assignment.destination.deref() {
-                        // ASSIGNMENT! We're in lvalue land. We need to get the pointer to the
-                        // destination, and be sure to call the correct variant of codegen_expr
-                        TypedExpr::Variable(v) => {
-                            let destination_ptr =
-                                *self.variables.get(&v.variable_id).expect("Missing variable");
-                            let initializer = self.codegen_expr_basic_value(&assignment.value)?;
-                            self.builder.build_store(destination_ptr.pointer, initializer);
+                    let rhs = self.codegen_expr_basic_value(&assignment.value)?;
+                    let lhs_pointer = match assignment.kind {
+                        AssignmentKind::Value => {
+                            match assignment.destination.deref() {
+                                // ASSIGNMENT! We're in lvalue land. We need to get the pointer to the
+                                // destination, and be sure to call the correct variant of codegen_expr
+                                TypedExpr::Variable(v) => {
+                                    let destination_ptr = *self
+                                        .variables
+                                        .get(&v.variable_id)
+                                        .expect("Missing variable");
+                                    destination_ptr.pointer
+                                }
+                                e => {
+                                    panic!(
+                                        "Invalid assignment lhs: {}",
+                                        self.module.expr_to_string(e)
+                                    )
+                                }
+                            }
+                        }
+                        AssignmentKind::Reference => self
+                            .codegen_expr_basic_value(&assignment.destination)?
+                            .into_pointer_value(),
+                    };
 
-                            last = unit_value;
-                        }
-                        TypedExpr::StructFieldAccess(_field_access) => {
-                            // We use codegen_expr_lvalue to get the pointer to the accessed field
-                            let field_ptr = self.codegen_expr_lvalue(&assignment.destination)?;
-                            let rhs = self.codegen_expr_basic_value(&assignment.value)?;
-                            self.builder.build_store(field_ptr, rhs);
-                            last = unit_value;
-                        }
-                        TypedExpr::UnaryOp(deref_op)
-                            if deref_op.kind == UnaryOpKind::Dereference =>
-                        {
-                            let lhs_ptr =
-                                self.codegen_expr_basic_value(&deref_op.expr)?.into_pointer_value();
-                            let rhs = self.codegen_expr_basic_value(&assignment.value)?;
-                            self.builder.build_store(lhs_ptr, rhs);
-                            last = unit_value;
-                        }
-                        e => {
-                            panic!("Invalid assignment lhs: {}", self.module.expr_to_string(e))
-                        }
-                    }
+                    self.builder.build_store(lhs_pointer, rhs);
+                    last = unit_value;
                 }
             }
         }

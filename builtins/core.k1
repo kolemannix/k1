@@ -1,26 +1,16 @@
-// What will become platform stuff
-
-extern fn _k1_readFileToString(path: string*): string
-extern fn _k1_crash(reason: string*, file: string*, line: u64): never
-
-extern fn _k1_malloc(size: u64): Pointer
-extern fn _k1_free(ptr: Pointer): unit
-
-// Straight to libc, for now
-namespace libc {
-  extern(exit) fn exit(code: i32): never
-
-  extern(printf) fn printfString(formatStr: Pointer, len: i32, cString: Pointer): i32
-  extern(memcpy) fn memcpy(dst: Pointer, src: Pointer, count: u64): Pointer
-  extern(memset) fn memset(src: Pointer, value: u32, count: u64): Pointer
-  extern(memcmp) fn memcmp(s1: Pointer, s2: Pointer, size: u64): i32
-  extern(calloc) fn calloc(count: u64, size: u64): Pointer
-
-  extern(realloc) fn realloc(ptr: Pointer, size: u64): Pointer
-  extern(arc4random_uniform) fn arc4random_uniform(upperBound: u32): u32
+fn assert(context locn: CompilerSourceLoc)(value: bool): unit {
+  if not value {
+    crash("ASSERT FAILED")
+  };
 }
 
-// End What will become platform stuff
+fn crash(context locn: CompilerSourceLoc)(msg: string): never {
+  let filename = locn.filename;
+  let line = locn.line;
+  let s = "\{msg} at \{filename}:\{line}\n";
+  libc::write(2, s.toCString(), s.len, 0);
+  libc::abort()
+}
 
 intern fn referenceSet[T](t: T*, value: T): unit
 
@@ -45,9 +35,9 @@ impl Equals for Pointer {
 }
 
 fn new[T](value: T): T* {
-  let ptr = _k1_malloc(sizeOf[T]());
+  let ptr = libc::malloc(sizeOf[T]());
   let t = ptr as T*;
-  referenceSet(t, value);
+  t <- value;
   t
 }
 
@@ -87,13 +77,6 @@ namespace sys {
   }
 }
 
-fn crash(context locn: CompilerSourceLoc)(msg: string): never {
-  let* msgPtr = msg;
-  let* filename = locn.filename;
-  let* line = locn.line;
-  _k1_crash(msgPtr, filename, line);
-}
-
 namespace Files {
   fn readToString(path: string): string {
     let* pathRef = path;
@@ -101,15 +84,6 @@ namespace Files {
   }
 }
 
-fn printBool(value: bool): unit {
-  if value { print("true") } else { print("false") }
-}
-
-fn assert(context locn: CompilerSourceLoc)(value: bool): unit {
-  if not value {
-    crash("ASSERT FAILED")
-  };
-}
 fn assertMsg(context locn: CompilerSourceLoc)(msg: string, value: bool): unit {
   if not value {
     crash("ASSERT FAILED: \{msg}")
@@ -155,7 +129,7 @@ namespace Array {
       Pointer::null()
     } else {
       let sizeBytes = sizeOf[T]() * cap;
-      _k1_malloc(sizeBytes)
+      libc::malloc(sizeBytes)
     };
     { len: 0, cap: cap, data: data }
   }
@@ -170,7 +144,7 @@ namespace Array {
 
   fn set[T](self: Array[T], index: u64, elem: T): unit {
     let tRef = self.getRef(index);
-    referenceSet(tRef, elem);
+    tRef <- elem;
   }
 
   fn get[T](self: Array[T], index: u64): T {
@@ -189,7 +163,7 @@ namespace Array {
     let newSize = newCap * sizeOf[T]();
 
     let ptr = if self.data.isNull() {
-      _k1_malloc(newSize)
+      libc::malloc(newSize)
     } else {
       libc::realloc(self.data, newSize)
     };
@@ -197,13 +171,13 @@ namespace Array {
       crash("allocation failed in array grow");
     };
 
-    self.data = ptr;
-    self.cap = newCap;
+    self.data* <- ptr;
+    self.cap* <- newCap;
   }
 
   fn cloned[T](self: Array[T]): Array[T] {
     let numBytes = sizeOf[T]() * self.cap;
-    let newBuffer = _k1_malloc(numBytes);
+    let newBuffer = libc::malloc(numBytes);
     libc::memcpy(newBuffer, self.data, numBytes);
     { len: self.len, cap: self.cap, data: newBuffer }
   }
@@ -213,7 +187,7 @@ namespace Array {
     if startLength == self.cap {
       self._grow();
     };
-    self.len = startLength + 1;
+    self.len* <- startLength + 1;
     self.*.set(startLength, elem);
     ()
   }

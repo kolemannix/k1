@@ -90,7 +90,7 @@ namespace HashMap {
     switch entryRef.* {
       .None -> {
         referenceSet(entryRef, .Some(entry));
-        self.size = self.size + 1;
+        self.size* <- self.size + 1;
       },
       .Some({ key: existingKey, value: _ }) -> {
         if existingKey == key {
@@ -98,7 +98,7 @@ namespace HashMap {
         } else {
           let nextAvailableEntry = self.*._probe(index);
           referenceSet(nextAvailableEntry, .Some(entry));
-          self.size = self.size + 1;
+          self.size* <- self.size + 1;
         }
       }
     };
@@ -140,7 +140,7 @@ namespace HashMap {
       .None -> false,
       .Some({ key: existingKey, value: value, deleted }) -> {
         if key == existingKey {
-          entryRef.asSome()!.value*.deleted = true;
+          entryRef.asSome()!.value*.deleted* <- true;
           not deleted
         } else {
           let mut probeIndex = index;
@@ -152,7 +152,7 @@ namespace HashMap {
             switch probedEntryRef.* {
               .Some({ key: existingKey, value, deleted }) -> {
                 if key == existingKey {
-                  probedEntryRef.asSome()!.value*.deleted = true;
+                  probedEntryRef.asSome()!.value*.deleted* <- true;
                   break(not deleted)
                 }
               },

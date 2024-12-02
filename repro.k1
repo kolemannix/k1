@@ -8,6 +8,6 @@ fn go[U](value: U): unit {
   push[U](value)
 }
 
-fn main(): int {
+#debug fn main(): int {
   0
 }

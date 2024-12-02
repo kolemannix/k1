@@ -56,7 +56,7 @@ namespace string {
     let offset = copied.data as u64 + self.len;
     libc::memcpy(offset as Pointer, other.data, other.len);
 
-    copied.len = new_length;
+    copied.len* <- new_length;
     fromChars(copied)
   }
 
@@ -64,7 +64,7 @@ namespace string {
     let new_length = self.len + 1;
 
     let* copied = Array::withCapacity[char](new_length);
-    copied.len = new_length;
+    copied.len* <- new_length;
 
     libc::memcpy(copied.data, self.data, self.len);
     copied.set(self.len, c);

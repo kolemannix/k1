@@ -43,9 +43,9 @@ impl Display for TypedModule {
 
 /// Dumping impl
 impl TypedModule {
-    pub fn scope_to_string(&self, scope: &Scope) -> String {
+    pub fn scope_id_to_string(&self, scope_id: ScopeId) -> String {
         let mut s = String::new();
-        self.display_scope(scope, &mut s).unwrap();
+        self.display_scope(self.scopes.get_scope(scope_id), &mut s).unwrap();
         s
     }
 
@@ -401,7 +401,10 @@ impl TypedModule {
             }
             TypedStmt::Assignment(assignment) => {
                 self.display_expr(&assignment.destination, writ, indentation)?;
-                writ.write_str(" = ")?;
+                match assignment.kind {
+                    AssignmentKind::Value => writ.write_str(" = ")?,
+                    AssignmentKind::Reference => writ.write_str(" <- ")?,
+                }
                 self.display_expr(&assignment.value, writ, indentation)
             }
         }
@@ -506,10 +509,16 @@ impl TypedModule {
                 writ.write_str("loop ")?;
                 self.display_block(&loop_expr.body, writ, indentation)
             }
-            TypedExpr::UnaryOp(unary_op) => {
-                writ.write_fmt(format_args!("{}", unary_op.kind))?;
-                self.display_expr(&unary_op.expr, writ, indentation)
-            }
+            TypedExpr::UnaryOp(unary_op) => match unary_op.kind {
+                UnaryOpKind::BooleanNegation => {
+                    writ.write_str("not ")?;
+                    self.display_expr(&unary_op.expr, writ, indentation)
+                }
+                UnaryOpKind::Dereference => {
+                    self.display_expr(&unary_op.expr, writ, indentation)?;
+                    writ.write_str(".*")
+                }
+            },
             TypedExpr::BinaryOp(binary_op) => {
                 self.display_expr(&binary_op.lhs, writ, indentation)?;
                 write!(writ, " {} ", binary_op.kind)?;

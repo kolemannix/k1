@@ -100,9 +100,12 @@ pub const POINTER_TYPE_ID: TypeId = TypeId(12);
 pub const F32_TYPE_ID: TypeId = TypeId(13);
 pub const F64_TYPE_ID: TypeId = TypeId(14);
 
-pub const ARRAY_TYPE_ID: TypeId = TypeId(17);
-pub const STRING_TYPE_ID: TypeId = TypeId(18);
-pub const OPTIONAL_TYPE_ID: TypeId = TypeId(23);
+pub const SLICE_TYPE_ID: TypeId = TypeId(17);
+
+pub const ARRAY_TYPE_ID: TypeId = TypeId(20);
+pub const STRING_TYPE_ID: TypeId = TypeId(21);
+pub const OPTIONAL_TYPE_ID: TypeId = TypeId(26);
+pub const COMPILER_SOURCE_LOC: TypeId = TypeId(27);
 
 #[derive(Debug, Clone)]
 pub struct ArrayType {
