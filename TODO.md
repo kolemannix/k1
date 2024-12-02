@@ -123,16 +123,17 @@
 - [x] Remove coercion from the language (only dereference is left)
 - [x] Rework Opaques
   - [x] Just use structs with private fields
-- [ ] Working with references push, specifically struct and either references
+- [x] Working with references push, specifically struct and either references
   - [x] A nice syntax for `referenceSet`
-  - [ ] New assignment operator, not `=` (`<-`)
-  - [ ] Make EnumGetPayload a valid lhs?
+  - [x] New assignment operator, not `=` (`<-`)
+  - [x] Make EnumGetPayload a valid lhs?
   - [x] Kill .& because so unsound, use let* for those cases
     - [x] Not the worst thing to use let* for the c-interop case of needing a pointer, that's what .& was doing anyway
   - [x] EnumGetPayload on a reference doesn't give a reference (and shouldn't always, what syntax to specify)
   - [x] FieldAccess on a reference doesn't give a reference (and shouldn't always, what syntax to specify)
-  - [ ] Cannot match on references
+- [ ] Matching on references
   - [ ] Match to get reference to each struct field, for example, use * for a dereferencing match
+  - [ ] Match to get reference to enum payload
 - [ ] Context location params are not being propagated
 - [ ] Fix named arguments
 - [x] return from while

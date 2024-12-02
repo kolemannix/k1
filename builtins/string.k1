@@ -18,7 +18,7 @@ namespace string {
   }
   fn set(self: string, index: u64, value: char): unit {
     let charRef: char* = self.getRef(index);
-    referenceSet(charRef, value)
+    charRef <- value
   }
 
   fn fromBytes(bytes: Array[byte]): string {
@@ -81,7 +81,7 @@ namespace string {
       if c == delim {
         if accum.*.nonEmpty() {
           results.push(accum);
-          referenceSet(accum, Array::new[char]())
+          accum <- Array::new[char]()
         }
       } else {
         accum.push(c);

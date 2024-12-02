@@ -2382,14 +2382,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 };
                 Ok(result_pointer.as_basic_value_enum().into())
             }
-            IntrinsicFunction::ReferenceSet => {
-                //  intern fn referenceSet[T](t: T*, value: T): unit
-                let reference_value =
-                    self.codegen_expr_basic_value(&call.args[0])?.into_pointer_value();
-                let actual_value = self.codegen_expr_basic_value(&call.args[1])?;
-                self.builder.build_store(reference_value, actual_value);
-                Ok(self.builtin_types.unit_value.as_basic_value_enum().into())
-            }
         }
     }
 

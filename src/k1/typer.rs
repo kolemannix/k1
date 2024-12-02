@@ -1182,7 +1182,6 @@ pub enum IntrinsicFunction {
     BitShiftLeft,
     BitShiftRight,
     PointerIndex,
-    ReferenceSet,
 }
 
 impl IntrinsicFunction {
@@ -1198,7 +1197,6 @@ impl IntrinsicFunction {
             IntrinsicFunction::BitShiftLeft => true,
             IntrinsicFunction::BitShiftRight => true,
             IntrinsicFunction::PointerIndex => true,
-            IntrinsicFunction::ReferenceSet => true,
         }
     }
 }
@@ -7197,8 +7195,6 @@ impl TypedModule {
                 None => match fn_name_str {
                     "sizeOf" => Some(IntrinsicFunction::SizeOf),
                     "alignOf" => Some(IntrinsicFunction::AlignOf),
-                    // nocommit: delete referenceSet
-                    "referenceSet" => Some(IntrinsicFunction::ReferenceSet),
                     _ => None,
                 },
                 Some("types") => match fn_name_str {
