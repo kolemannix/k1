@@ -1,11 +1,11 @@
 // This table exercises:
 // - Generics
 // - References/pointers
-// - Structs and enums (Option type)
+// - Structs and enums
 // - Loops and control flow
-// - Basic numeric operations
+// - Numeric operations
 // - String handling
-// - Array operations
+// - Builds on Array which is implemented in k1
 
 deftype HashMap[V] = {
   size: u64,
@@ -43,7 +43,7 @@ namespace HashMap {
     let newCap = if oldEntries.cap == 0 1: u64 else oldEntries.cap * 2;
 
     let newMap = _make[V](newCap);
-    referenceSet(self, newMap);
+    self <- newMap;
 
     for v in oldEntries do {
       if v is .Some(v) {
@@ -89,15 +89,15 @@ namespace HashMap {
     let entry = { key: key, value: value, deleted: false };
     switch entryRef.* {
       .None -> {
-        referenceSet(entryRef, .Some(entry));
+        entryRef <- .Some(entry);
         self.size* <- self.size + 1;
       },
       .Some({ key: existingKey, value: _ }) -> {
         if existingKey == key {
-          referenceSet(entryRef, .Some(entry));
+          entryRef <- .Some(entry);
         } else {
           let nextAvailableEntry = self.*._probe(index);
-          referenceSet(nextAvailableEntry, .Some(entry));
+          nextAvailableEntry <- .Some(entry);
           self.size* <- self.size + 1;
         }
       }

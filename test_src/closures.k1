@@ -30,7 +30,7 @@ fn captureMut(): unit {
   let* counter = 3;
 
   let inc = \(x: int) {
-    referenceSet(counter, counter.* + 1);
+    counter <- counter.* + 1;
   };
 
   inc(0);

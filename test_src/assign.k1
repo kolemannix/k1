@@ -8,9 +8,9 @@ fn assignVar(): unit {
 
 fn assignVarRef(): unit {
   let* count = 0;
-  referenceSet(count, 1);
+  count <- 1;
   assert(count.* == 1);
-  referenceSet(count, 2);
+  count <- 2;
   assert(count.* == 2);
 }
 
@@ -39,7 +39,6 @@ fn complexReferences(): int {
   assert(yesRef.value*.* == 3);
   assert(yesValue == 3);
 
-  // nocommit: Make EnumGetPayload a valid lhs?
   eitherRef.asYes()!.value* <- -3;
 
   assert(yesRef.value == -3);

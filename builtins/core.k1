@@ -12,8 +12,6 @@ fn crash(context locn: CompilerSourceLoc)(msg: string): never {
   libc::abort()
 }
 
-intern fn referenceSet[T](t: T*, value: T): unit
-
 namespace Pointer {
   fn null(): Pointer { 0 as u64 as Pointer }
 
