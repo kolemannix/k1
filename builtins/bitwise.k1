@@ -7,15 +7,6 @@ namespace Bits {
   intern fn shiftRight(a: int, b: int): int
 }
 
-ability Bitwise {
-  fn bitNot(self: Self): Self
-  fn bitAnd(self: Self, other: Self): Self
-  fn bitOr(self: Self, other: Self): Self
-  fn xor(self: Self, other: Self): Self
-  fn shiftLeft(self: Self, other: Self): Self
-  fn shiftRight(self: Self, other: Self): Self
-}
-
 impl Bitwise for u8 {
   intern fn bitNot(self: u8): u8
   intern fn bitAnd(self: u8, other: u8): u8

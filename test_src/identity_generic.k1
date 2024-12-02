@@ -4,8 +4,8 @@ fn identityNested[T](t: T): T {
 
 fn main(): int {
 
-  // TODO
-  // let x = identity(identity(12));
+  let x = identity(identity(11));
+  assert(x == 11);
   let x = identity(12);
   assert(x == 12);
 

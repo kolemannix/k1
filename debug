@@ -3,6 +3,7 @@
 set -x
 # Exit on errors
 set -e
+FILENAME=${@: -1}
+filename=$(basename $FILENAME .k1)
 export RUST_BACKTRACE=1
-filename=$(basename $1 .k1)
-RUST_LOG=debug cargo run -- --debug --no-llvm-opt $1; lldb .k1-out/$filename.out
+RUST_LOG=debug cargo run -- --debug --no-llvm-opt $@; lldb .k1-out/$filename.out

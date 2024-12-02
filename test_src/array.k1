@@ -10,16 +10,16 @@ fn arrayFill(): int {
     i = i + 1;
   };
   assert(xs.len == 5);
-  assert(xs.get(0) == 0);
-  assert(xs.get(1) == 1);
-  assert(xs.get(2) == 2);
-  assert(xs.get(3) == 3);
-  assert(xs.get(4) == 4);
-  assert(xs.first()! == 0);
-  assert(xs.last()! == 4);
+  assert(xs.*.get(0) == 0);
+  assert(xs.*.get(1) == 1);
+  assert(xs.*.get(2) == 2);
+  assert(xs.*.get(3) == 3);
+  assert(xs.*.get(4) == 4);
+  assert(xs.*.first()! == 0);
+  assert(xs.*.last()! == 4);
   assert(xs.* == [0,1,2,3,4]);
 
-  let xs2 = xs.cloned();
+  let xs2 = xs.*.cloned();
   assert(xs2 == xs.*);
 
   let empty = []: Array[byte];
