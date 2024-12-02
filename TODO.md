@@ -120,7 +120,7 @@
 - [x] Fix context params when combined with generics
 - [x] string interpolation
 - [x] typeOf(<anyexpr>)
-- [ ] Remove coercion from the language
+- [x] Remove coercion from the language (only dereference is left)
 - [ ] Rework Opaques
   - [ ] Just use structs with private fields
 - [ ] Working with references push, specifically struct and either references

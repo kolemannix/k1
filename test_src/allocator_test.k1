@@ -10,7 +10,7 @@ fn main(): int {
 
   a.freeAll();
 
-  printIt(b);
+  printIt(b.*);
 
 
   0

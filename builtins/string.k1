@@ -79,7 +79,7 @@ namespace string {
     //                    We can point to the old string instead of building up new ones
     for c in self do {
       if c == delim {
-        if accum.nonEmpty() {
+        if accum.*.nonEmpty() {
           results.push(accum);
           referenceSet(accum, Array::new[char]())
         }
@@ -87,7 +87,7 @@ namespace string {
         accum.push(c);
       };
     };
-    if accum.nonEmpty() {
+    if accum.*.nonEmpty() {
       results.push(accum);
     };
 

@@ -24,7 +24,7 @@ use clap::Parser;
 pub struct Args {
     /// No core
     #[arg(short, long, default_value_t = false)]
-    pub no_core: bool,
+    pub no_std: bool,
 
     /// Output an LLVM IR file at out_dir/{module_name}.ll
     #[arg(long, default_value_t = true)]
@@ -90,7 +90,7 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
 
     let src_filter = if !is_dir { Some(|p: &Path| *p == *src_path) } else { None };
 
-    let use_core = !args.no_core;
+    let use_std = !args.no_std;
 
     let mut parsed_module = ParsedModule::make(module_name.to_string());
 
@@ -133,7 +133,9 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
         }
     };
 
-    if use_core {
+    parse_file(Path::new("builtins/builtin.k1"));
+
+    if use_std {
         parse_file(Path::new("builtins/core.k1"));
         parse_file(Path::new("builtins/opt.k1"));
         parse_file(Path::new("builtins/string.k1"));

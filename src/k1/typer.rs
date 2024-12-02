@@ -6305,7 +6305,13 @@ impl TypedModule {
                             self.get_ident_str(fn_param.name).red()
                         );
                     };
-                    let expected_type_for_param = Some(fn_param.type_id);
+                    let expected_type_for_param =
+                        if self.types.does_type_reference_type_variables(fn_param.type_id) {
+                            None
+                        } else {
+                            Some(fn_param.type_id)
+                        };
+
                     let expr_result =
                         self.eval_expr(param.value, calling_scope, expected_type_for_param);
                     expr_result

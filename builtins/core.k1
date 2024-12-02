@@ -1,51 +1,3 @@
-deftype unit = builtin
-deftype char = builtin
-deftype bool = builtin
-deftype never = builtin
-deftype Pointer = builtin
-
-deftype f32 = builtin
-deftype f64 = builtin
-
-deftype Array[T] = { len: u64, cap: u64, data: Pointer }
-deftype string = { len: u64, data: Pointer }
-
-deftype Opt[T] = either None, Some(T)
-
-deftype CompilerSourceLoc = { filename: string, line: u64 }
-
-// One day
-// ability OrElse[T] {
-//   fn hasValue(self: Self): bool
-//   fn unwrap(): T
-// }
-
-deftype alias int = i64
-deftype alias uint = u64
-deftype alias byte = u8
-
-// Must have ability id 0
-ability Equals {
-  fn equals(self: Self, other: Self): bool
-}
-
-ability Show {
-  // TODO: make this use an allocator. How does it get passed conveniently?
-  fn show(self: Self): string
-}
-
-intern fn sizeOf[T](): u64
-intern fn alignOf[T](): u64
-
-fn new[T](value: T): T* {
-  let ptr = _k1_malloc(sizeOf[T]());
-  let t = ptr as T*;
-  referenceSet(t, value);
-  t
-}
-
-fn identity[T](value: T): T { value }
-
 // What will become platform stuff
 
 extern fn _k1_readFileToString(path: string*): string
@@ -92,6 +44,16 @@ impl Equals for Pointer {
   }
 }
 
+fn new[T](value: T): T* {
+  let ptr = _k1_malloc(sizeOf[T]());
+  let t = ptr as T*;
+  referenceSet(t, value);
+  t
+}
+
+fn identity[T](value: T): T { value }
+
+
 //deftype alias opaque string = { len: u64, data: Pointer }
 
 fn printInt(value: i64): unit {
@@ -107,7 +69,9 @@ fn print(value: string): unit {
 }
 
 fn printIt[T](value: T): unit where T: Show {
-  let s = value.show();
+  // nocommit
+  // let s = value.show();
+  let s = "todo";
   print(s)
 }
 
@@ -250,7 +214,7 @@ namespace Array {
       self._grow();
     };
     self.len = startLength + 1;
-    self.set(startLength, elem);
+    self.*.set(startLength, elem);
     ()
   }
 
@@ -309,6 +273,7 @@ namespace Array {
       self.push(e)
     }
   }
+
 }
 
 impl Equals for Array[u8] {
