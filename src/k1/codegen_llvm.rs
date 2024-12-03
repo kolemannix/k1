@@ -368,7 +368,6 @@ struct BuiltinTypes<'ctx> {
     false_value: IntValue<'ctx>,
     i1: IntType<'ctx>,
     char: IntType<'ctx>,
-    c_str: PointerType<'ctx>,
     ptr: PointerType<'ctx>,
     ptr_sized_int: IntType<'ctx>,
 }
@@ -608,7 +607,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             false_value: ctx.i8_type().const_int(0, false),
             i1: ctx.bool_type(),
             char: char_type,
-            c_str: char_type.ptr_type(AddressSpace::default()),
             // It doesn't matter what type the pointer points to; its irrelevant in LLVM
             // since pointers do not actually have types
             ptr: ctx.i64_type().ptr_type(AddressSpace::default()),
