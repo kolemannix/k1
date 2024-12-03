@@ -8,7 +8,7 @@ fn crash(context locn: CompilerSourceLoc)(msg: string): never {
   let filename = locn.filename;
   let line = locn.line;
   let s = "\{msg} at \{filename}:\{line}\n";
-  libc::write(2, s.toCString(), s.len, 0);
+  eprint(s);
   libc::abort()
 }
 
@@ -41,32 +41,33 @@ fn new[T](value: T): T* {
 
 fn identity[T](value: T): T { value }
 
-
-//deftype alias opaque string = { len: u64, data: Pointer }
-
 fn printInt(value: i64): unit {
   print(value.show())
 }
 fn printUInt(value: u64): unit {
   print(value.show())
 }
-fn print(value: string): unit {
-  let fmt = "%.*s\0".data;
-  libc::printfString(fmt, value.len as i32, value.data);
-  ()
-}
 
 fn printIt[T](value: T): unit where T: Show {
-  // nocommit
-  // let s = value.show();
-  let s = "todo";
+  let s = value.show();
   print(s)
 }
 
-fn println(value: string): unit {
-  let fmt = "%.*s\n\0".data;
-  libc::printfString(fmt, value.len as i32, value.data);
+fn print(s: string): unit {
+  let s = s.appendChar('\n');
+  libc::write(1, s.data, s.len, 0);
   ()
+}
+fn println(s: string): unit {
+  print(s.appendChar('\n'));
+}
+
+fn eprint(s: string): unit {
+  libc::write(2, s.data, s.len, 0);
+  ()
+}
+fn eprintln(s: string): unit {
+  eprint(s.appendChar('\n'));
 }
 
 namespace sys {
@@ -246,6 +247,57 @@ namespace Array {
     }
   }
 
+  fn swap[T](self: Array[T]*, indexA: u64, indexB: u64): unit {
+    let aRef = self.getRef(indexA);
+    let bRef = self.getRef(indexB);
+    let bValue = bRef.*;
+    bRef <- aRef.*;
+    aRef <- bValue;
+  }
+
+  fn sort[T](input: Array[T]*): unit where T: Comparable {
+  
+    if input.len <= 1 return(());
+  
+    let pivot = input.*.get(input.len / 2);
+  
+    let* left = Array::new[T]();
+    let* right = Array::new[T]();
+    let* equal = Array::new[T]();
+  
+    for item in input.* do {
+      switch item.compare(pivot) {
+        .Less -> left.push(item),
+        .Equal -> equal.push(item),
+        .Greater -> right.push(item)
+      }
+    };
+  
+    left.sort();
+    right.sort();
+  
+    let mut i: u64 = 0;
+    for item in left.* do {
+      input.set(i, item);
+      i = i + 1;
+    };
+  
+    for item in equal.* do {
+      input.set(i, item);
+      i = i + 1;
+    };
+  
+    for item in right.* do {
+      input.set(i, item);
+      i = i + 1;
+    };
+  }
+
+  fn sorted[T](self: Array[T]): Array[T] {
+    let* copy = self.cloned();
+    copy.sort();
+    copy.*
+  }
 }
 
 impl Equals for Array[u8] {
@@ -306,6 +358,24 @@ impl Show for i64 {
     // Why did inference break here??
     let rev = buf.*.reversed();
     string::fromChars(rev)
+  }
+}
+
+impl Comparable for i64 {
+  fn compare(self: i64, other: i64): Ordering {
+    if self == other .Equal else if self > other .Greater else .Less
+  }
+}
+
+impl Comparable for u64 {
+  fn compare(self: u64, other: u64): Ordering {
+    if self == other .Equal else if self > other .Greater else .Less
+  }
+}
+
+impl Comparable for u8 {
+  fn compare(self: u8, other: u8): Ordering {
+    if self == other .Equal else if self > other .Greater else .Less
   }
 }
 

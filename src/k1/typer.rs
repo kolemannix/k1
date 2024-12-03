@@ -57,6 +57,7 @@ pub struct TypedAbilityFunctionRef {
 pub const EQUALS_ABILITY_ID: AbilityId = AbilityId(0);
 pub const SHOW_ABILITY_ID: AbilityId = AbilityId(1);
 pub const BITWISE_ABILITY_ID: AbilityId = AbilityId(2);
+pub const COMPARABLE_ABILITY_ID: AbilityId = AbilityId(3);
 
 pub const CLOSURE_ENV_PARAM_NAME: &str = "__clos_env";
 
@@ -8315,6 +8316,16 @@ impl TypedModule {
             debug_assert!(optional_generic.type_defn_info.name == get_ident!(self, "Opt"));
             debug_assert!(inner.as_enum().unwrap().variants.len() == 2);
         }
+        //
+        // This just ensures our ORDERING_TYPE_ID constant is correct
+        // Eventually we need a better way of doing this
+        {
+            let ordering_enum = self.types.get(ORDERING_TYPE_ID).expect_enum();
+            debug_assert!(ordering_enum.variants.len() == 3);
+            debug_assert!(
+                ordering_enum.type_defn_info.as_ref().unwrap().name == get_ident!(self, "Ordering")
+            );
+        }
 
         // Everything else declaration phase
         let root_ns_id = NamespaceId(0);
@@ -8336,6 +8347,9 @@ impl TypedModule {
 
         debug_assert!(self.get_ability(EQUALS_ABILITY_ID).name == get_ident!(self, "Equals"));
         debug_assert!(self.get_ability(BITWISE_ABILITY_ID).name == get_ident!(self, "Bitwise"));
+        debug_assert!(
+            self.get_ability(COMPARABLE_ABILITY_ID).name == get_ident!(self, "Comparable")
+        );
 
         // Everything else evaluation phase
         eprintln!(">> Phase 5 evaluate rest of definitions (functions, constants, abilities)");

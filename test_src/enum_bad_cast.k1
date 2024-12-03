@@ -1,4 +1,4 @@
-deftype E = either A(int) , B(int) , C
+deftype E = either A(int), B(int), C
 
 fn main(): int {
   let x: E = .A(42);

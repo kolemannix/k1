@@ -16,6 +16,7 @@ deftype Opt[T] = either None, Some(T)
 
 deftype CompilerSourceLoc = { filename: string, line: u64 }
 
+deftype Ordering = either Less, Equal, Greater
 
 // One day
 // ability OrElse[T] {
@@ -75,6 +76,11 @@ ability Bitwise {
   fn shiftLeft(self: Self, other: Self): Self
   fn shiftRight(self: Self, other: Self): Self
 }
+
+ability Comparable {
+  fn compare(self: Self, other: Self): Ordering
+}
+
 
 namespace Opt {
   fn hasValue[T](self: T?): bool {

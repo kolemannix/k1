@@ -106,6 +106,7 @@ pub const ARRAY_TYPE_ID: TypeId = TypeId(20);
 pub const STRING_TYPE_ID: TypeId = TypeId(21);
 pub const OPTIONAL_TYPE_ID: TypeId = TypeId(26);
 pub const COMPILER_SOURCE_LOC: TypeId = TypeId(27);
+pub const ORDERING_TYPE_ID: TypeId = TypeId(31);
 
 #[derive(Debug, Clone)]
 pub struct ArrayType {
@@ -432,7 +433,7 @@ impl Type {
     pub fn expect_enum(&self) -> &TypedEnum {
         match self {
             Type::Enum(e) => e,
-            _ => panic!("expected enum"),
+            _ => panic!("expected enum on {:?}", self),
         }
     }
 
