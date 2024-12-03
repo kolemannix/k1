@@ -591,32 +591,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let target_data = machine.get_target_data();
 
         let pointers = HashMap::new();
-        let format_int_str = {
-            let global = llvm_module.add_global(ctx.i8_type().array_type(4), None, "formatInt");
-            global.set_constant(true);
-            global.set_unnamed_addr(true);
-            global.set_initializer(&i8_array_from_str(ctx, "%li\0"));
-            global
-        };
-        let format_uint_str = {
-            let global = llvm_module.add_global(ctx.i8_type().array_type(5), None, "formatUInt");
-            global.set_constant(true);
-            global.set_unnamed_addr(true);
-            global.set_initializer(&i8_array_from_str(ctx, "%llu\0"));
-            global
-        };
-        let format_str_str = {
-            let global = llvm_module.add_global(ctx.i8_type().array_type(5), None, "formatString");
-            global.set_constant(true);
-            global.set_unnamed_addr(true);
-            global.set_initializer(&i8_array_from_str(ctx, "%.*s\0"));
-            global
-        };
         let globals = HashMap::new();
-        let mut builtin_globals: HashMap<String, GlobalValue<'ctx>> = HashMap::new();
-        builtin_globals.insert("formatInt".to_string(), format_int_str);
-        builtin_globals.insert("formatUInt".to_string(), format_uint_str);
-        builtin_globals.insert("formatString".to_string(), format_str_str);
         let int = ctx.i64_type();
 
         let closure_environments = HashMap::new();
@@ -2091,24 +2066,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         }
     }
 
-    fn _build_k1_crash(&self, msg: &str, span_id: SpanId) -> InstructionValue {
-        let msg_string = self.const_string_ptr(msg, "crash_msg");
-        let span = self.module.ast.spans.get(span_id);
-        let line = self.module.ast.sources.get_line_for_span(span).unwrap();
-        let filename = self
-            .const_string_ptr(&self.module.ast.sources.source_by_span(span).filename, "filename");
-        self.builder.build_call(
-            self.llvm_module.get_function("_k1_crash").unwrap(),
-            &[
-                msg_string.into(),
-                filename.into(),
-                self.builtin_types.int.const_int(line.line_index as u64 + 1, false).into(),
-            ],
-            "crash",
-        );
-        self.builder.build_unreachable()
-    }
-
     fn build_conditional_branch(
         &mut self,
         cond: IntValue<'ctx>,
@@ -2589,15 +2546,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             TyperLinkage::External(Some(name)) => self.module.get_ident_str(name),
             _ => &self.module.make_qualified_name(function.scope, function.name, "__", true),
         };
-        //
-        // FIXME: Allow indicating this on externs in source!
-        //        Or can we please just use 'write' :^)
-        let is_printf = llvm_name == "printf";
-        let fn_ty = if is_printf {
-            self.ctx.i32_type().fn_type(&[self.builtin_types.ptr.as_basic_type_enum().into()], true)
-        } else {
-            return_type.fn_type(&param_metadata_types, false)
-        };
+        let fn_ty = return_type.fn_type(&param_metadata_types, false);
         let llvm_linkage = match function.linkage {
             TyperLinkage::Standard => None,
             TyperLinkage::External(_name) => Some(LlvmLinkage::External),
