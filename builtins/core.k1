@@ -248,8 +248,8 @@ namespace Array {
   }
 
   fn swap[T](self: Array[T]*, indexA: u64, indexB: u64): unit {
-    let aRef = self.getRef(indexA);
-    let bRef = self.getRef(indexB);
+    let aRef = self.*.getRef(indexA);
+    let bRef = self.*.getRef(indexB);
     let bValue = bRef.*;
     bRef <- aRef.*;
     aRef <- bValue;
@@ -259,11 +259,12 @@ namespace Array {
   
     if input.len <= 1 return(());
   
-    let pivot = input.*.get(input.len / 2);
+    let halfIndex = input.len / 2;
+    let pivot = input.*.get(halfIndex);
   
-    let* left = Array::new[T]();
-    let* right = Array::new[T]();
-    let* equal = Array::new[T]();
+    let* left = Array::withCapacity[T](halfIndex);
+    let* right = Array::withCapacity[T](halfIndex);
+    let* equal = Array::withCapacity[T](4);
   
     for item in input.* do {
       switch item.compare(pivot) {
