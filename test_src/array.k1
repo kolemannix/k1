@@ -121,6 +121,16 @@ fn testSort(): unit {
   ]);
 }
 
+fn testSwap(): unit {
+  let* a = [1,2];
+  a.swap(0,1);
+  assert(a.* == [2,1]);
+  a.swap(1,0);
+  assert(a.* == [1,2]);
+  a.swap(1,1);
+  assert(a.* == [1,2]);
+}
+
 // End sort stuff
 
 fn main(): int {
@@ -128,5 +138,6 @@ fn main(): int {
   arrayFill();
   arrayEquality();
   testSort();
+  testSwap();
   0
 }
