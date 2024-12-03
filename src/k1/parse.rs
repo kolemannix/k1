@@ -3130,7 +3130,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         &mut self,
         type_constraints: &mut Vec<ParsedTypeConstraint>,
     ) -> ParseResult<()> {
-        // FIXME: Sloppy: Assumes there's an opening brace after the constraints
+        // FIXME(brittle parsing): Assumes there's an opening brace after the constraints
         let (constraints, _span) = self.eat_delimited(
             "type constraints",
             K::Comma,

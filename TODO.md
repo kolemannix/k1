@@ -220,17 +220,13 @@
 - [x] Parsing bug where first expr of block is namespaced with ::
 - [x] Parsing bug where `if rest.startsWith("one") .Some(1: u64)` parses as `if rest.startsWith("one").Some(1: u64)`
 - [x] ICE when assigning to struct member when struct is not a reference (self.module.types.get(field_access.base.get_type()).as_reference().is_some())
+- [ ] Require indirection for recursive types; and make them actually really work
 
 # Minor Fix (possible good bite-sized videos)
-- [x] // FIXME: Am I crazy or is this just always tok_buf.len()?!?!?!
+- [x] Lexer cleanup > Am I crazy or is this just always tok_buf.len()?!?!?!
 - [ ] type suffixes on int literals 123u32, 4u8, etc
 - [ ] Inference improvements
   - assert(sizeOf[Text]() == 16 + 32); rhs should infer to u64
-  - expected type not passed to this else branch (involves generics + some lifting though)
-        if rest.startsWith("one") Opt.Some(1: u64) else
-        if rest.startsWith("two")   2          else
-        > else branch type did not match then branch type: Invalid generic type param: Expected u64 but got i64
-- [ ] Require indirection for recursive types
 - [x] Precedence of dereference (and i guess unary ops in general) should be higher
       Kinda fixed by removing all unary ops except 'not'
 

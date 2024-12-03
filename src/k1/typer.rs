@@ -3556,7 +3556,7 @@ impl TypedModule {
                     }
                     elements
                 };
-                // FIXME: This typing is very suspicious, I'm not sure how to type it when there
+                // Note: Typing of array literals is very suspicious, I'm not sure how to type it when there
                 //        are no elements, I don't have an 'Unknown' type but maybe that's the
                 //        ticket.
                 let element_type = element_type.or(expected_element_type).unwrap_or(UNIT_TYPE_ID);
@@ -7296,6 +7296,10 @@ impl TypedModule {
         parsed_function_id: ParsedFunctionId,
         // Note: messy: parent_scope_id is only used if not specializing
         // FIXME: use Either for arguments to this function
+        // We can actually remove this and have this function put
+        // the type params into its own scope for specialization
+        // The issue is abilities that do some weird stuff with binding
+        // Self
         parent_scope_id: ScopeId,
         specialization_params_owned: Option<SpecializationParams>,
         // ALSO IGNORED WHEN SPECIALIZING
