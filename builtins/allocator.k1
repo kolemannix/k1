@@ -35,21 +35,36 @@ namespace Arena {
     }
   }
 
+  fn pushRaw(self: Arena*, size: u64, align: u64): Pointer {
+    let dataStart = alignTo(self.curAddr, align);
+    let newEnd = dataStart + size;
+    if newEnd > self.maxAddr {
+      let id = self.id;
+      crash("Heap \{id} is out of space to allocate \{size} bytes")
+    };
+
+    self.curAddr* <- newEnd;
+    dataStart as Pointer
+  }
+
   fn push[T](self: Arena*, t: T): T* {
-    let size = sizeOf[T]();
-    let alignBytes = alignOf[T]();
-    let newBase = alignTo(self.curAddr, alignBytes);
-    let newEnd = newBase + size;
+    let dataStart = self.pushRaw(sizeOf[T](), alignOf[T]());
+
+    let ref: T* = dataStart as T*;
+    ref <- t;
+    ref
+  }
+
+  fn pushBytes(self: Arena*, count: u64): Pointer {
+    let dataStart = self.curAddr;
+    let newEnd = self.curAddr + count;
     if newEnd > self.maxAddr {
       let id = self.id;
       crash("Heap \{id} is out of space to allocate a T")
     };
 
     self.curAddr* <- newEnd;
-
-    let ref: T* = newBase as Pointer as T*;
-    ref <- t;
-    ref
+    dataStart as Pointer
   }
 
   fn freeAll(self: Arena*): unit {
@@ -75,5 +90,7 @@ namespace Allocator {
       pools: []
     }: Allocator
   }
+
+  fn tempArena(self: Allocator): Arena* { self.arenas.getRef(0) }
 
 }
