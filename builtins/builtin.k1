@@ -7,8 +7,7 @@ deftype Pointer = builtin
 deftype f32 = builtin
 deftype f64 = builtin
 
-// TODO deftype Buffer[T] = { len: u64, data: T* }
-deftype Slice[T] = { len: u64, data: Pointer }
+deftype Buffer[T] = { len: u64, data: Pointer }
 
 // TODO deftype List[T] = { size: u64, buffer: Buffer[T] }
 // TODO deftype string = { private buffer: Buffer[char]  }
@@ -96,5 +95,133 @@ namespace Opt {
     } else {
       crash("Opt.get on None")
     }
+  }
+}
+
+namespace Buffer {
+
+  fn _allocate[T](count: u64): Buffer[T] {
+    let data = if count == 0 {
+      Pointer::null()
+    } else {
+      let sizeBytes = lenBytes[T](count);
+      libc::malloc(sizeBytes)
+    };
+    { len: count, data: data }
+  }
+
+  // nocommit: Should use sizeOfStride
+  fn lenBytes[T](count: u64): u64 { count * sizeOf[T]() }
+
+  fn empty[T](): Buffer[T] {
+    _allocate[T](0)
+  }
+
+  fn filled[T](size: u64, value: T): Buffer[T] {
+    let buf: Buffer[T] = buf::_allocate(size);
+    let mut i = 0: u64;
+    while i < size {
+      buf.data.refAtIndex(i) <- value;
+      i = i + 1;
+    };
+    buf.*
+  }
+
+  fn getRef[T](self: Buffer[T], index: u64): T* {
+    if index >= self.len {
+      crash("Buffer index out of bounds")
+    };
+    self.data.refAtIndex[T](index)
+  }
+
+  fn set[T](self: Buffer[T], index: u64, elem: T): unit {
+    let tRef = self.getRef(index);
+    tRef <- elem;
+  }
+
+  fn get[T](self: Buffer[T], index: u64): T {
+    let tRef = self.getRef(index);
+    tRef.*
+  }
+
+  fn cloned[T](self: Buffer[T]): Buffer[T] {
+    let numBytes = sizeOf[T]() * self.cap;
+    let newBuffer = libc::malloc(numBytes);
+    libc::memcpy(newBuffer, self.data, numBytes);
+    { len: self.len, data: newBuffer }
+  }
+
+  fn isEmpty[T](self: Buffer[T]): bool {
+    self.len == 0
+  }
+
+  fn nonEmpty[T](self: Buffer[T]): bool {
+    self.len > 0
+  }
+
+  fn firstRef[T](self: Buffer[T]): T*? {
+    if not self.isEmpty() {
+      .Some(self.getRef(0))
+    } else {
+      .None
+    }
+  }
+
+  fn first[T](self: Buffer[T]): T? {
+    switch self.firstRef() {
+      .None -> .None,
+      .Some(firstRef) -> .Some(firstRef.*)
+    }
+  }
+
+  fn lastRef[T](self: Buffer[T]): T*? {
+    if not self.isEmpty() {
+      .Some(self.getRef(self.len - 1))
+    } else {
+      .None
+    }
+  }
+
+  fn last[T](self: Buffer[T]): T? {
+    switch self.lastRef() {
+      .None -> .None,
+      .Some(lastRef) -> .Some(lastRef.*)
+    }
+  }
+
+  // I know I know I know I know
+  fn reversed[T](self: Buffer[T]): Buffer[T] {
+    let* reversed = Buffer::_allocate[T](self.len);
+    let mut i = self.len - 1;
+    while (i >= 0) {
+      let index = self.len - i;
+      reversed.set(index, self.get(i));
+      i = i - 1;
+    };
+    reversed
+  }
+
+  // TODO(stdlib slow)
+  fn concat[T](self: Buffer[T]*, other: Buffer[T]): unit {
+    let new = _allocate[T](self.len + other.len);
+    libc::memcpy(new.data, self.data, self.len);
+    libc::memcpy(new.data, self.data, self.len);
+    for e in other do {
+      self.push(e)
+    }
+  }
+
+  fn swap[T](self: Buffer[T]*, indexA: u64, indexB: u64): unit {
+    let aRef = self.*.getRef(indexA);
+    let bRef = self.*.getRef(indexB);
+    let bValue = bRef.*;
+    bRef <- aRef.*;
+    aRef <- bValue;
+  }
+
+  fn sorted[T](self: Buffer[T]): Buffer[T] {
+    let* array = Array::wrapBuffer(self);
+    array.sort();
+    array.toBuffer()
   }
 }

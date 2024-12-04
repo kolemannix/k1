@@ -1174,6 +1174,7 @@ impl Namespaces {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IntrinsicFunction {
     SizeOf,
+    SizeOfStride,
     AlignOf,
     TypeId,
     BitNot,
@@ -1189,6 +1190,7 @@ impl IntrinsicFunction {
     pub fn is_inlined(self) -> bool {
         match self {
             IntrinsicFunction::SizeOf => true,
+            IntrinsicFunction::SizeOfStride => true,
             IntrinsicFunction::AlignOf => true,
             IntrinsicFunction::TypeId => true,
             IntrinsicFunction::BitNot => true,
@@ -6972,10 +6974,15 @@ impl TypedModule {
                 TypedFunctionKind::AbilityDefn(_) => false,
                 TypedFunctionKind::Closure => true,
                 TypedFunctionKind::Standard | TypedFunctionKind::AbilityImpl { .. } => {
-                    let is_generic =
-                        self.types.does_type_reference_type_variables(function.type_id);
-                    debug!("{} is_generic? {is_generic}", self.function_to_string(function, false));
-                    !is_generic
+                    function.type_params.is_empty() && {
+                        let is_generic =
+                            self.types.does_type_reference_type_variables(function.type_id);
+                        debug!(
+                            "{} is_generic? {is_generic}",
+                            self.function_to_string(function, false)
+                        );
+                        !is_generic
+                    }
                 }
             },
         }
@@ -8277,14 +8284,14 @@ impl TypedModule {
             panic!("Unevaluated type defns!!!")
         }
         //
-        // This just ensures our SLICE_TYPE_ID constant is correct
+        // This just ensures our BUFFER_TYPE_ID constant is correct
         // Eventually we need a better way of doing this
         {
-            let slice_generic = self.types.get(SLICE_TYPE_ID).expect_generic();
-            let slice_struct = self.types.get(slice_generic.inner).expect_struct();
-            debug_assert!(slice_generic.type_defn_info.scope == self.scopes.get_root_scope_id());
-            debug_assert!(slice_generic.type_defn_info.name == get_ident!(self, "Slice"));
-            debug_assert!(slice_struct.fields.len() == 2);
+            let buffer_generic = self.types.get(BUFFER_TYPE_ID).expect_generic();
+            let buffer_struct = self.types.get(buffer_generic.inner).expect_struct();
+            debug_assert!(buffer_generic.type_defn_info.scope == self.scopes.get_root_scope_id());
+            debug_assert!(buffer_generic.type_defn_info.name == get_ident!(self, "Buffer"));
+            debug_assert!(buffer_struct.fields.len() == 2);
         }
 
         // This just ensures our ARRAY_TYPE_ID constant is correct
@@ -8373,7 +8380,10 @@ impl TypedModule {
 
     pub fn get_span_for_type_id(&self, type_id: TypeId) -> Option<SpanId> {
         let t = self.types.get(type_id);
-        t.ast_node().map(|parsed_id| self.ast.get_span_for_id(parsed_id))
+        match t {
+            Type::TypeVariable(tv) => Some(tv.span),
+            t => t.ast_node().map(|parsed_id| self.ast.get_span_for_id(parsed_id)),
+        }
     }
 
     pub fn make_qualified_name(
