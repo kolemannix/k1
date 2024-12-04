@@ -67,6 +67,7 @@ impl Error for CodegenError {}
 
 fn size_info(td: &TargetData, typ: &dyn AnyType) -> SizeInfo {
     SizeInfo {
+        stride_bits: td.get_abi_size(typ) as u32 * 8,
         size_bits: td.get_bit_size(typ) as u32,
         align_bits: td.get_preferred_alignment(typ) * 8,
     }
@@ -122,11 +123,17 @@ impl<'ctx> From<BasicValueEnum<'ctx>> for LlvmValue<'ctx> {
 pub struct SizeInfo {
     size_bits: u32,
     align_bits: u32,
+    /// Stride represents the space between the start of 2 successive elements, it bumps to the
+    /// next aligned slot. This must be used by builtin Buffer functionality in order to be correct
+    stride_bits: u32,
 }
 impl SizeInfo {
-    pub const POINTER: SizeInfo =
-        SizeInfo { size_bits: WORD_SIZE_BITS as u32, align_bits: WORD_SIZE_BITS as u32 };
-    pub const ZERO: SizeInfo = SizeInfo { size_bits: 0, align_bits: 0 };
+    pub const POINTER: SizeInfo = SizeInfo {
+        size_bits: WORD_SIZE_BITS as u32,
+        align_bits: WORD_SIZE_BITS as u32,
+        stride_bits: WORD_SIZE_BITS as u32,
+    };
+    pub const ZERO: SizeInfo = SizeInfo { size_bits: 0, align_bits: 0, stride_bits: 0 };
 
     /// https://learn.microsoft.com/en-us/cpp/c-language/alignment-c?view=msvc-170
     /// struct and union types have an alignment equal to the largest alignment of any member.
@@ -147,11 +154,11 @@ impl SizeInfo {
                 max_align = size.align_bits
             }
         }
-        SizeInfo { size_bits: total_size, align_bits: max_align }
+        SizeInfo { size_bits: total_size, align_bits: max_align, stride_bits: total_size }
     }
 
     pub fn scalar_value(size_bits: u32) -> SizeInfo {
-        SizeInfo { size_bits, align_bits: size_bits }
+        SizeInfo { size_bits, align_bits: size_bits, stride_bits: size_bits }
     }
 }
 
@@ -2275,10 +2282,26 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let size_value = self.builtin_types.int.const_int(size_bytes as u64, false);
                 Ok(size_value.as_basic_value_enum().into())
             }
-            IntrinsicFunction::AlignOf => {
+            IntrinsicFunction::SizeOfStride => {
+                // nocommit: For stride size, instead of asking llvm for the stride size, and guessing
+                // which function to call, we could use the gep trick instead:
+                // GEP on a null array to the 2nd element
+                // nocommit: DRY these 3 ops
                 let type_param = &call.type_args[0];
                 let llvm_type = self.codegen_type(type_param.type_id)?;
                 let size = self.size_info(&llvm_type.value_any_type());
+                let size_bytes = size.stride_bits / 8;
+                let size_value = self.builtin_types.int.const_int(size_bytes as u64, false);
+                Ok(size_value.as_basic_value_enum().into())
+            }
+            IntrinsicFunction::AlignOf => {
+                let type_param = &call.type_args[0];
+                // nocommit: the alignment of an enum needs to be the largest alignment of
+                // its variants, NOT the alignment of its 'base struct' repr, since that has
+                // a packed struct in it, which causes alignment to be 1!
+                let llvm_type = self.codegen_type(type_param.type_id)?;
+                let size = self.size_info(&llvm_type.value_any_type());
+                eprintln!("size: {:?} of {:?}", size, llvm_type.physical_value_type());
                 let align_bytes = size.align_bits / 8;
                 let align_value = self.builtin_types.int.const_int(align_bytes as u64, false);
                 Ok(align_value.as_basic_value_enum().into())
@@ -2323,6 +2346,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             IntrinsicFunction::PointerIndex => {
                 //  Reference:
                 //  intern fn refAtIndex[T](self: Pointer, index: u64): T*
+                // NOCOMMIT: This needs to use stride not just size!!
                 let pointee_ty_arg = call.type_args[0];
                 let elem_type = self.codegen_type(pointee_ty_arg.type_id)?;
                 let ptr = self.codegen_expr_basic_value(&call.args[0])?.into_pointer_value();

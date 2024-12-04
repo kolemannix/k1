@@ -1,13 +1,4 @@
-fn grow[T](value: T): unit { () }
-
-fn push[T](value: T): unit {
-  grow(value);
-}
-
-fn go[U](value: U): unit {
-  push[U](value)
-}
-
-#debug fn main(): int {
+fn main(): int {
+  let b = Buffer::empty[int]();
   0
 }

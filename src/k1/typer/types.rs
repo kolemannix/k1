@@ -100,7 +100,7 @@ pub const POINTER_TYPE_ID: TypeId = TypeId(12);
 pub const F32_TYPE_ID: TypeId = TypeId(13);
 pub const F64_TYPE_ID: TypeId = TypeId(14);
 
-pub const SLICE_TYPE_ID: TypeId = TypeId(17);
+pub const BUFFER_TYPE_ID: TypeId = TypeId(17);
 
 pub const ARRAY_TYPE_ID: TypeId = TypeId(20);
 pub const STRING_TYPE_ID: TypeId = TypeId(21);
