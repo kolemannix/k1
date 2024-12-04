@@ -7,8 +7,11 @@ deftype Pointer = builtin
 deftype f32 = builtin
 deftype f64 = builtin
 
+// TODO deftype Buffer[T] = { len: u64, data: T* }
 deftype Slice[T] = { len: u64, data: Pointer }
 
+// TODO deftype List[T] = { size: u64, buffer: Buffer[T] }
+// TODO deftype string = { private buffer: Buffer[char]  }
 deftype Array[T] = { len: u64, cap: u64, data: Pointer }
 deftype string = { len: u64, data: Pointer }
 
@@ -17,12 +20,6 @@ deftype Opt[T] = either None, Some(T)
 deftype CompilerSourceLoc = { filename: string, line: u64 }
 
 deftype Ordering = either Less, Equal, Greater
-
-// One day
-// ability OrElse[T] {
-//   fn hasValue(self: Self): bool
-//   fn unwrap(): T
-// }
 
 deftype alias int = i64
 deftype alias uint = u64
@@ -33,15 +30,17 @@ ability Equals {
   fn equals(self: Self, other: Self): bool
 }
 
+// Must have ability id 1
 ability Show {
   // TODO: make this use an allocator. How does it get passed conveniently?
   fn show(self: Self): string
 }
 
-// What will become platform stuff
-
-extern fn _k1_readFileToString(path: string*): string
-extern fn _k1_crash(reason: string*, file: string*, line: u64): never
+// TODO: a harness main that sets up the allocator
+// fn main(): i32 {
+//   let allocator = Allocator::initDefault();
+//   
+// }
 
 // Straight to libc, for now
 namespace libc {
@@ -63,8 +62,6 @@ namespace libc {
   extern(abort) fn abort(): never
 }
 
-// End What will become platform stuff
-
 intern fn sizeOf[T](): u64
 intern fn alignOf[T](): u64
 
@@ -82,6 +79,12 @@ ability Comparable {
 }
 
 
+// This lives in builtin because there's syntax that uses it (opt!)
+// One day that will just use the Unwrap ability
+// ability Unwrap[T] {
+//   fn hasValue(self: Self): bool
+//   fn unwrap(): T
+// }
 namespace Opt {
   fn hasValue[T](self: T?): bool {
     self is .Some(_)

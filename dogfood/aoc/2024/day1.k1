@@ -1,16 +1,25 @@
 fn main(): int {
-  println("Hello, AOC!");
-  let input = "3   4\n4   3\n2   5\n1   3\n3   9\n3   3";
-  let input = Files::readToString("/Users/knix/dev/k1/dogfood/aoc/2024/day1.txt");
-  let* left = Array::new[int]();
+  let context alloc = Allocator::initDefault();
+  let input = files::readToString("/Users/knix/dev/k1/dogfood/aoc/2024/day1.txt");
+
+  let left = alloc.tempArena().push(Array::new[int]());
+  // let* left = Array::new[int]();
   let* right = Array::new[int]();
+
   for line in input.splitByChar('\n') do {
-    let l = line.substring(0, 5);
-    let r = line.substring(8, 13);
-    crash("uh oh");
-    left.push(l);
-    right.push(r);
-    println("\{l} \{r}");
+    left.push(line.substring(0, 5).toInt()!);
+    right.push(line.substring(8, 13).toInt()!);
   };
+
+  left.sort(); 
+  right.sort();
+
+  let mut sumDiffs = 0;
+  for l in left.* do {
+    let r = right.*.get(it_index);
+    let diff = if l > r l - r else r - l;
+    sumDiffs = sumDiffs + diff;
+  };
+  println("Answer: \{sumDiffs}");
   0
 }

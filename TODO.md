@@ -131,14 +131,17 @@
     - [x] Not the worst thing to use let* for the c-interop case of needing a pointer, that's what .& was doing anyway
   - [x] EnumGetPayload on a reference doesn't give a reference (and shouldn't always, what syntax to specify)
   - [x] FieldAccess on a reference doesn't give a reference (and shouldn't always, what syntax to specify)
+- [ ] Array/Slice/string rework to Buffer/List/Array
+- [ ] Typecheck 'main'
+- [ ] Rename Pointer to Address?
 - [ ] Matching on references
   - [ ] Match to get reference to each struct field, for example, use * for a dereferencing match
   - [ ] Match to get reference to enum payload
+- [ ] ? operator is really the 'else' operator, can implement using an 'Else' ability or 'Unwrap' ability
 - [ ] Context location params are not being propagated
 - [ ] Fix named arguments
 - [x] return from while
 - [x] break from while
-- [ ] Make an ability for unwrap?!
 - [ ] 'never' needs to work in every expression position
 - [x] Move tests into fewer files
 - [ ] accumulate test errors and allow inline assertions when a line should error.

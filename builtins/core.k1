@@ -41,6 +41,8 @@ fn new[T](value: T): T* {
 
 fn identity[T](value: T): T { value }
 
+fn ignore[T](value: T): unit { () }
+
 fn printInt(value: i64): unit {
   print(value.show())
 }
@@ -76,11 +78,35 @@ namespace sys {
   }
 }
 
-namespace Files {
-  fn readToString(path: string): string {
-    let* pathRef = path;
-    _k1_readFileToString(pathRef)
+namespace files {
+  let SEEK_END: i32 = 2;
+  let SEEK_SET: i32 = 0;
+  namespace unix {
+    extern(fopen)  fn fopen(path: Pointer, modeCString: Pointer): Pointer
+    extern(fseek)  fn fseek(fileDesc: Pointer, offset: u64, whence: i32): i32
+    extern(fread)  fn fread(buffer: Pointer, size: u64, num: u64, stream: Pointer): u64
+    extern(fclose) fn fclose(fileDesc: Pointer): i32
+    extern(ftell)  fn ftell(fileDesc: Pointer): u64
   }
+  fn readToString(context alloc: Allocator)(path: string): string {
+    let filenameCString = path.toCString();
+  
+    let file = files::unix::fopen(filenameCString, "r".toCString());
+    files::unix::fseek(file, 0, SEEK_END);
+    let fsize = files::unix::ftell(file);
+    let buf = alloc.tempArena().pushBytes(fsize);
+  
+    files::unix::fseek(file, 0, SEEK_SET);
+    files::unix::fread(buf, fsize, 1, file);
+    let string = { len: fsize, data: buf };
+    files::unix::fclose(file);
+
+    libc::free(filenameCString);
+
+    string
+  }
+
+
 }
 
 fn assertMsg(context locn: CompilerSourceLoc)(msg: string, value: bool): unit {
