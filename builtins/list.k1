@@ -1,0 +1,170 @@
+// A growable, ordered collection of elements.
+// Backed by an efficient, contiguously allocated buffer
+namespace List {
+
+  ///////////////////////////
+  // Construction functions
+
+  fn new[T](): List[T] {
+    withCapacity[T](0)
+  }
+
+  fn filled[T](size: u64, value: T): List[T] {
+    let buffer = Buffer::filled(size, value);
+    { len: size, buffer: buffer }
+  }
+
+  fn withCapacity[T](cap: u64): List[T] {
+    let buffer = Buffer::_allocate[T](cap);
+    { len: 0, buffer: buffer }
+  }
+
+  fn wrapBuffer[T](buffer: Buffer[T]): List[T] {
+    { len: buffer.len, buffer: buffer }
+  }
+
+  fn cap[T](self: List[T]): u64 { self.buffer.len }
+
+  fn getRef[T](self: List[T], index: u64): T* {
+    self.buffer.getRef[T](index)
+  }
+
+  fn set[T](self: List[T], index: u64, elem: T): unit {
+    self.buffer.set(index, elem);
+  }
+
+  fn get[T](self: List[T], index: u64): T {
+    self.buffer.get(index)
+  }
+
+  fn _grow[T](self: List[T]*): unit {
+    let elemSize = sizeOf[T]();
+    let newCap: u64 = if self.buffer.isEmpty() {
+      // For large elements, just allocate what's needed - Rust's RawVec does this :)
+      if elemSize >= 1024 1 else 8
+    } else {
+      self.*.cap() * 2
+    };
+    let newBuffer = self.buffer._enlargedClone[T](newCap);
+    self.buffer* <- newBuffer;
+  }
+
+  fn cloned[T](self: List[T]): List[T] {
+    let newBuffer = self.buffer.cloned();
+    { len: self.len, buffer: newBuffer }
+  }
+
+  fn push[T](self: List[T]*, elem: T): unit {
+    let startLength = self.len;
+    if startLength == self.*.cap() {
+      self._grow();
+    };
+    self.len* <- startLength + 1;
+    self.*.set(startLength, elem);
+    ()
+  }
+
+  fn isEmpty[T](self: List[T]): bool {
+    self.len == 0
+  }
+
+  fn nonEmpty[T](self: List[T]): bool {
+    self.len > 0
+  }
+
+  fn firstRef[T](self: List[T]): T*? {
+    if self.nonEmpty() {
+      .Some(self.getRef(0))
+    } else {
+      .None
+    }
+  }
+
+  fn first[T](self: List[T]): T? {
+    switch self.firstRef() {
+      .None -> .None,
+      .Some(firstRef) -> .Some(firstRef.*)
+    }
+  }
+
+  fn lastRef[T](self: List[T]): T*? {
+    if self.nonEmpty() {
+      .Some(self.getRef(self.len - 1))
+    } else {
+      .None
+    }
+  }
+
+  fn last[T](self: List[T]): T? {
+    switch self.lastRef() {
+      .None -> .None,
+      .Some(lastRef) -> .Some(lastRef.*)
+    }
+  }
+
+  fn reversed[T](self: List[T]): List[T] {
+    let newBuffer = self.buffer.reversed();
+    { len: self.len, buffer: newBuffer }
+  }
+
+  fn appendAll[T](self: List[T]*, other: Buffer[T]): unit {
+    // TODO(call reserve() here)
+    // nocommit Make Buffer iterable
+    for e in List::wrapBuffer(other) do {
+      self.push(e)
+    }
+  }
+
+  fn swap[T](self: List[T]*, indexA: u64, indexB: u64): unit {
+    let aRef = self.*.getRef(indexA);
+    let bRef = self.*.getRef(indexB);
+    let bValue = bRef.*;
+    bRef <- aRef.*;
+    aRef <- bValue;
+  }
+
+  fn sort[T](input: List[T]*): unit where T: Comparable {
+  
+    if input.len <= 1 return(());
+  
+    let halfIndex = input.len / 2;
+    let pivot = input.*.get(halfIndex);
+  
+    let* left = List::withCapacity[T](halfIndex);
+    let* right = List::withCapacity[T](halfIndex);
+    let* equal = List::withCapacity[T](4);
+  
+    for item in input.* do {
+      switch item.compare(pivot) {
+        .Less -> left.push(item),
+        .Equal -> equal.push(item),
+        .Greater -> right.push(item)
+      }
+    };
+  
+    left.sort();
+    right.sort();
+  
+    let mut i: u64 = 0;
+    for item in left.* do {
+      input.*.set(i, item);
+      i = i + 1;
+    };
+  
+    for item in equal.* do {
+      input.*.set(i, item);
+      i = i + 1;
+    };
+  
+    for item in right.* do {
+      input.*.set(i, item);
+      i = i + 1;
+    };
+  }
+
+  fn sorted[T](self: List[T]): List[T] where T: Comparable {
+    let* copy = self.cloned();
+    copy.sort();
+    copy.*
+  }
+}

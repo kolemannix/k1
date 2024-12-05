@@ -138,6 +138,7 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
     if use_std {
         parse_file(Path::new("builtins/core.k1"));
         parse_file(Path::new("builtins/opt.k1"));
+        parse_file(Path::new("builtins/list.k1"));
         parse_file(Path::new("builtins/string.k1"));
         parse_file(Path::new("builtins/types.k1"));
         parse_file(Path::new("builtins/string_builder.k1"));
@@ -161,10 +162,11 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
     info!("parsing took {}ms", parsing_elapsed.as_millis());
 
     let mut typed_module = TypedModule::new(parsed_module);
-    if let Err(_e) = typed_module.run() {
+    if let Err(e) = typed_module.run() {
         if args.dump_module {
             println!("{}", typed_module);
         }
+        eprintln!("{}", e);
         return Err(CompileModuleError {
             parsed_module: None,
             module: Some(Box::new(typed_module)),

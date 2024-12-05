@@ -9,14 +9,14 @@ impl Display for TypedModule {
         f.write_str("\n")?;
         f.write_str("--- TYPES ---\n")?;
         for (id, ty) in self.types.iter() {
-            write!(f, "type {:02} ", id)?;
+            write!(f, "type {:02} {:10} ", id, ty.kind_name())?;
             self.display_type(ty, true, f)?;
             f.write_str("\n")?;
         }
         f.write_str("--- Namespaces ---\n")?;
         for (id, namespace) in self.namespaces.iter() {
             write!(f, "ns {:02} ", id.0)?;
-            f.write_str(self.get_ident_str(namespace.name))?;
+            f.write_str(self.name_of(namespace.name))?;
             f.write_str("\n")?;
         }
         f.write_str("--- Variables ---\n")?;
@@ -70,7 +70,7 @@ impl TypedModule {
         }
         for (ident, type_id) in scope.types.iter() {
             writ.write_str("\t")?;
-            writ.write_str(self.get_ident_str(*ident))?;
+            writ.write_str(self.name_of(*ident))?;
             writ.write_str(" := ")?;
             self.display_type_id(*type_id, true, writ)?;
             writ.write_str("\n")?;
@@ -78,7 +78,7 @@ impl TypedModule {
         for (id, namespace_id) in scope.namespaces.iter() {
             write!(writ, "{} ", id)?;
             let namespace = self.namespaces.get(*namespace_id);
-            writ.write_str(self.get_ident_str(namespace.name))?;
+            writ.write_str(self.name_of(namespace.name))?;
             writ.write_str("\n")?;
         }
         Ok(())
@@ -88,7 +88,7 @@ impl TypedModule {
         if var.is_mutable {
             writ.write_str("mut ")?;
         }
-        writ.write_str(self.get_ident_str(var.name))?;
+        writ.write_str(self.name_of(var.name))?;
         writ.write_str(": ")?;
         self.display_type_id(var.type_id, false, writ)
     }
@@ -158,7 +158,7 @@ impl TypedModule {
             Type::Pointer(_) => writ.write_str("Pointer"),
             Type::Struct(struc) => {
                 if let Some(defn_info) = struc.type_defn_info.as_ref() {
-                    writ.write_str(self.get_ident_str(defn_info.name))?;
+                    writ.write_str(self.name_of(defn_info.name))?;
                     if let Some(spec_info) = struc.generic_instance_info.as_ref() {
                         self.display_instance_info(writ, spec_info, expand)?;
                     }
@@ -192,7 +192,7 @@ impl TypedModule {
             }
             Type::Enum(e) => {
                 if let Some(defn_info) = e.type_defn_info.as_ref() {
-                    writ.write_str(self.get_ident_str(defn_info.name))?;
+                    writ.write_str(self.name_of(defn_info.name))?;
                     if let Some(spec_info) = e.generic_instance_info.as_ref() {
                         self.display_instance_info(writ, spec_info, expand)?;
                     }
@@ -223,7 +223,7 @@ impl TypedModule {
             Type::EnumVariant(ev) => {
                 let e = self.types.get(ev.enum_type_id).expect_enum();
                 if let Some(defn_info) = e.type_defn_info.as_ref() {
-                    writ.write_str(self.get_ident_str(defn_info.name))?;
+                    writ.write_str(self.name_of(defn_info.name))?;
                     if let Some(spec_info) = e.generic_instance_info.as_ref() {
                         self.display_instance_info(writ, spec_info, expand)?;
                     }
@@ -239,10 +239,10 @@ impl TypedModule {
             }
             Type::Never(_) => writ.write_str("never"),
             Type::Generic(gen) => {
-                writ.write_str(self.get_ident_str(gen.type_defn_info.name))?;
+                writ.write_str(self.name_of(gen.type_defn_info.name))?;
                 writ.write_str("[")?;
                 for (idx, param) in gen.params.iter().enumerate() {
-                    writ.write_str(self.get_ident_str(param.name))?;
+                    writ.write_str(self.name_of(param.name))?;
                     let last = idx == gen.params.len() - 1;
                     if !last {
                         writ.write_str(", ")?;
@@ -286,7 +286,7 @@ impl TypedModule {
                     writ.write_str("pending")
                 } else {
                     let info = self.types.get_defn_info(rr.root_type_id).unwrap();
-                    writ.write_str(self.get_ident_str(info.name))?;
+                    writ.write_str(self.name_of(info.name))?;
                     Ok(())
                 }
             }
@@ -320,35 +320,45 @@ impl TypedModule {
     pub fn display_function(
         &self,
         function: &TypedFunction,
-        writ: &mut impl Write,
+        w: &mut impl Write,
         display_block: bool,
     ) -> std::fmt::Result {
         if matches!(function.linkage, Linkage::External(_)) {
-            writ.write_str("extern ")?;
+            w.write_str("extern ")?;
         }
         if function.linkage == Linkage::Intrinsic {
-            writ.write_str("intern ")?;
+            w.write_str("intern ")?;
         }
 
-        writ.write_str("fn ")?;
-        writ.write_str(self.get_ident_str(function.name))?;
-        writ.write_str("(")?;
+        w.write_str("fn ")?;
+        w.write_str(self.name_of(function.name))?;
+        if !function.type_params.is_empty() {
+            w.write_char('[')?;
+            for (idx, tp) in function.type_params.iter().enumerate() {
+                if idx > 0 {
+                    w.write_str(", ")?;
+                }
+                self.write_ident(w, tp.named_type.name)?;
+            }
+            w.write_char(']')?;
+        }
+        w.write_char('(')?;
         let function_type = self.types.get(function.type_id).as_function().unwrap();
         for (idx, param) in function_type.params.iter().enumerate() {
             if idx > 0 {
-                writ.write_str(", ")?;
+                w.write_str(", ")?;
             }
-            writ.write_str(self.get_ident_str(param.name))?;
-            writ.write_str(": ")?;
-            self.display_type_id(param.type_id, false, writ)?;
+            w.write_str(self.name_of(param.name))?;
+            w.write_str(": ")?;
+            self.display_type_id(param.type_id, false, w)?;
         }
-        writ.write_str(")")?;
-        writ.write_str(": ")?;
-        self.display_type_id(function_type.return_type, false, writ)?;
+        w.write_str(")")?;
+        w.write_str(": ")?;
+        self.display_type_id(function_type.return_type, false, w)?;
         if display_block {
-            writ.write_str(" ")?;
+            w.write_str(" ")?;
             if let Some(block) = &function.body_block {
-                self.display_block(block, writ, 0)?;
+                self.display_block(block, w, 0)?;
             }
         }
         Ok(())
@@ -444,7 +454,7 @@ impl TypedModule {
                         writ.write_str(",\n")?;
                     }
                     writ.write_str(&"  ".repeat(indentation + 1))?;
-                    writ.write_str(self.get_ident_str(field.name))?;
+                    writ.write_str(self.name_of(field.name))?;
                     writ.write_str(": ")?;
                     self.display_expr(&field.expr, writ, indentation)?;
                 }
@@ -454,22 +464,22 @@ impl TypedModule {
             }
             TypedExpr::Variable(v) => {
                 let variable = self.variables.get_variable(v.variable_id);
-                writ.write_str(self.get_ident_str(variable.name))
+                writ.write_str(self.name_of(variable.name))
             }
             TypedExpr::StructFieldAccess(field_access) => {
                 self.display_expr(&field_access.base, writ, indentation)?;
                 writ.write_str(".")?;
-                writ.write_str(self.get_ident_str(field_access.target_field))
+                writ.write_str(self.name_of(field_access.target_field))
             }
             TypedExpr::Call(fn_call) => {
                 match &fn_call.callee {
                     Callee::StaticClosure { function_id, .. } => {
                         let name = self.get_function(*function_id).name;
-                        writ.write_str(self.get_ident_str(name))?;
+                        writ.write_str(self.name_of(name))?;
                     }
                     Callee::StaticFunction(function_id) => {
                         let name = self.get_function(*function_id).name;
-                        writ.write_str(self.get_ident_str(name))?;
+                        writ.write_str(self.name_of(name))?;
                     }
                     Callee::DynamicFunction(callee_expr) => {
                         self.display_expr(callee_expr, writ, indentation)?;
@@ -526,7 +536,7 @@ impl TypedModule {
             }
             TypedExpr::EnumConstructor(enum_constr) => {
                 writ.write_str(".")?;
-                writ.write_str(self.get_ident_str(enum_constr.variant_name))?;
+                writ.write_str(self.name_of(enum_constr.variant_name))?;
                 if let Some(payload) = &enum_constr.payload {
                     writ.write_str("(")?;
                     self.display_expr(payload, writ, indentation)?;
@@ -564,7 +574,7 @@ impl TypedModule {
                 let closure_type = self.types.get(closure_expr.closure_type).as_closure().unwrap();
                 let fn_type = self.types.get(closure_type.function_type).as_function().unwrap();
                 for arg in fn_type.params.iter() {
-                    writ.write_str(self.get_ident_str(arg.name))?;
+                    writ.write_str(self.name_of(arg.name))?;
                     writ.write_str(": ")?;
                     self.display_type_id(arg.type_id, false, writ)?;
                 }
@@ -576,12 +586,12 @@ impl TypedModule {
             }
             TypedExpr::FunctionName(fn_name_expr) => {
                 let fun = self.get_function(fn_name_expr.function_id);
-                writ.write_str(self.get_ident_str(fun.name))
+                writ.write_str(self.name_of(fun.name))
             }
             TypedExpr::PendingCapture(pending_capture) => {
                 writ.write_str("capture(")?;
                 let variable = self.variables.get_variable(pending_capture.captured_variable_id);
-                writ.write_str(self.get_ident_str(variable.name))?;
+                writ.write_str(self.name_of(variable.name))?;
                 writ.write_str(")")?;
                 Ok(())
             }
@@ -616,7 +626,7 @@ impl TypedModule {
             PatternConstructor::Struct { fields } => {
                 writ.write_str("{ ")?;
                 for (index, (field_name, field_pattern)) in fields.iter().enumerate() {
-                    writ.write_str(self.get_ident_str(*field_name))?;
+                    writ.write_str(self.name_of(*field_name))?;
                     writ.write_str(": ")?;
                     self.display_pattern_ctor(field_pattern, writ)?;
                     let last = index == fields.len() - 1;
@@ -630,7 +640,7 @@ impl TypedModule {
                 Ok(())
             }
             PatternConstructor::Enum { variant_name, inner } => {
-                writ.write_str(self.get_ident_str(*variant_name))?;
+                writ.write_str(self.name_of(*variant_name))?;
                 if let Some(payload) = inner.as_ref() {
                     writ.write_str("(")?;
                     self.display_pattern_ctor(payload, writ)?;
@@ -659,10 +669,10 @@ impl TypedModule {
             TypedPattern::LiteralFloat(value, _) => write!(writ, "{value}"),
             TypedPattern::LiteralBool(value, _) => write!(writ, "{value}"),
             TypedPattern::LiteralString(s, _) => write!(writ, "\"{s}\""),
-            TypedPattern::Variable(var) => writ.write_str(self.get_ident_str(var.name)),
+            TypedPattern::Variable(var) => writ.write_str(self.name_of(var.name)),
             TypedPattern::Wildcard(_) => writ.write_str("_"),
             TypedPattern::Enum(enum_pat) => {
-                writ.write_str(self.get_ident_str(enum_pat.variant_tag_name))?;
+                writ.write_str(self.name_of(enum_pat.variant_tag_name))?;
                 if let Some(payload) = enum_pat.payload.as_ref() {
                     writ.write_str("(")?;
                     self.display_pattern(payload, writ)?;
@@ -673,7 +683,7 @@ impl TypedModule {
             TypedPattern::Struct(struct_pat) => {
                 writ.write_str("{ ")?;
                 for (index, field_pat) in struct_pat.fields.iter().enumerate() {
-                    writ.write_str(self.get_ident_str(field_pat.name))?;
+                    writ.write_str(self.name_of(field_pat.name))?;
                     writ.write_str(": ")?;
                     self.display_pattern(&field_pat.pattern, writ)?;
                     let last = index == struct_pat.fields.len() - 1;
@@ -693,5 +703,36 @@ impl TypedModule {
         let mut s = String::new();
         self.display_pattern(pattern, &mut s).unwrap();
         s
+    }
+
+    pub fn pretty_print_types(&self, types: &[TypeId]) -> String {
+        let mut s = String::new();
+        let mut first = true;
+        for (index, type_id) in types.iter().enumerate() {
+            if !first {
+                s.push('\n')
+            }
+            write!(s, "{index:02} := {}", self.type_id_to_string(*type_id)).unwrap();
+            first = false;
+        }
+        s
+    }
+
+    pub fn pretty_print_named_types(&self, types: &[NamedType]) -> String {
+        let mut s = String::new();
+        let mut first = true;
+        for nt in types {
+            if !first {
+                s.push('\n')
+            }
+            write!(s, "{} := {}", self.name_of(nt.name), self.type_id_to_string(nt.type_id))
+                .unwrap();
+            first = false;
+        }
+        s
+    }
+
+    fn write_ident(&self, w: &mut impl Write, ident: Identifier) -> std::fmt::Result {
+        w.write_str(self.name_of(ident))
     }
 }

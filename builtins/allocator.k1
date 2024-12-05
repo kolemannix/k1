@@ -78,8 +78,8 @@ namespace Arena {
 deftype ObjectPool = {}
 
 deftype Allocator = {
-  arenas: Array[Arena],
-  pools: Array[ObjectPool],
+  arenas: List[Arena],
+  pools: List[ObjectPool],
 }
 
 namespace Allocator {

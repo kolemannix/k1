@@ -129,7 +129,7 @@ impl ParsedId {
 }
 
 #[derive(Debug, Clone)]
-pub struct ArrayExpr {
+pub struct ListExpr {
     pub elements: Vec<ParsedExpressionId>,
     pub span: SpanId,
 }
@@ -228,12 +228,12 @@ impl Identifiers {
         "iteree",
         "it_index",
         "as",
-        "array_lit",
+        "list_lit",
         "yielded_coll",
         "iteree_length",
         "block_expr_val",
         "optelse_lhs",
-        "array_literal",
+        "list_literal",
         "CompilerSourceLoc",
         "__clos_env",
         "fn_ptr",
@@ -523,7 +523,7 @@ pub enum ParsedExpression {
     /// ```md
     /// [<expr>, <expr>, <expr>]
     /// ```
-    Array(ArrayExpr),
+    ListLiteral(ListExpr),
     /// ```md
     /// <opt: expr>!
     /// ```
@@ -583,7 +583,7 @@ impl ParsedExpression {
             Self::While(while_expr) => while_expr.span,
             Self::Loop(loop_expr) => loop_expr.span,
             Self::Struct(struc) => struc.span,
-            Self::Array(array_expr) => array_expr.span,
+            Self::ListLiteral(list_expr) => list_expr.span,
             Self::OptionalGet(optional_get) => optional_get.span,
             Self::For(for_expr) => for_expr.span,
             Self::AnonEnumVariant(tag_expr) => tag_expr.span,
@@ -609,7 +609,7 @@ impl ParsedExpression {
             Self::While(_while_expr) => false,
             Self::Loop(_loop) => false,
             Self::Struct(_struct) => false,
-            Self::Array(_array_expr) => false,
+            Self::ListLiteral(_list_expr) => false,
             Self::OptionalGet(_optional_get) => false,
             Self::For(_) => false,
             Self::AnonEnumVariant(_) => false,
@@ -2177,18 +2177,20 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Parser::expect("Function argument", self.peek(), res)
     }
 
-    fn parse_struct(&mut self) -> ParseResult<Option<Struct>> {
+    fn expect_struct_field(&mut self) -> ParseResult<StructField> {
+        let name = self.expect_eat_token(K::Ident)?;
+        self.expect_eat_token(K::Colon)?;
+        let expr = self.expect_expression()?;
+        Ok(StructField { name: self.intern_ident_token(name), expr })
+    }
+
+    fn parse_struct_value(&mut self) -> ParseResult<Option<Struct>> {
         let Some((fields, span)) = self.eat_delimited_if_opener(
             "Struct",
             K::OpenBrace,
             K::Comma,
             K::CloseBrace,
-            |parser| {
-                let name = parser.expect_eat_token(K::Ident)?;
-                parser.expect_eat_token(K::Colon)?;
-                let expr = Parser::expect("expression", parser.peek(), parser.parse_expression())?;
-                Ok(StructField { name: parser.intern_ident_token(name), expr })
-            },
+            Parser::expect_struct_field,
         )?
         else {
             return Ok(None);
@@ -2611,7 +2613,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     self.add_expression(ParsedExpression::Struct(Struct { fields: vec![], span })),
                 ))
             } else if second.kind == K::Ident && third.kind == K::Colon {
-                let struc = Parser::expect("struct", first, self.parse_struct())?;
+                let struc = Parser::expect("struct", first, self.parse_struct_value())?;
                 Ok(Some(self.add_expression(ParsedExpression::Struct(struc))))
             } else {
                 match self.parse_block()? {
@@ -2623,16 +2625,18 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             let if_expr = Parser::expect("If Expression", first, self.parse_if_expr())?;
             Ok(Some(self.add_expression(ParsedExpression::If(if_expr))))
         } else if first.kind == K::OpenBracket {
-            // Array
+            // list
             let start = self.expect_eat_token(K::OpenBracket)?;
             let (elements, elements_span) = self.eat_delimited(
-                "Array elements",
+                "list elements",
                 TokenKind::Comma,
                 TokenKind::CloseBracket,
                 |p| Parser::expect("expression", start, p.parse_expression()),
             )?;
             let span = self.extend_span(start.span, elements_span);
-            Ok(Some(self.add_expression(ParsedExpression::Array(ArrayExpr { elements, span }))))
+            Ok(Some(
+                self.add_expression(ParsedExpression::ListLiteral(ListExpr { elements, span })),
+            ))
         } else {
             // More expression types
             if directives.is_empty() {
@@ -3112,7 +3116,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             span,
             linkage,
             directives,
-            id: ParsedFunctionId(0),
+            id: ParsedFunctionId(u32::MAX),
         });
         Ok(Some(function_id))
     }
@@ -3410,7 +3414,9 @@ impl ParsedModule {
                 Ok(())
             }
             ParsedExpression::Struct(struc) => f.write_fmt(format_args!("{:?}", struc)),
-            ParsedExpression::Array(array_expr) => f.write_fmt(format_args!("{:?}", array_expr)),
+            ParsedExpression::ListLiteral(list_expr) => {
+                f.write_fmt(format_args!("{:?}", list_expr))
+            }
             ParsedExpression::OptionalGet(optional_get) => {
                 f.write_fmt(format_args!("{:?}", optional_get))
             }

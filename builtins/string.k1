@@ -1,44 +1,42 @@
 // TODO: CString type
-// type alias opaque CString = Pointer
-// namespace CString { }
+deftype alias CString = { ptr: Pointer }
+namespace CString { 
+}
 
 namespace string {
 
-  fn getRef(self: string, index: u64): char* {
-    if index >= self.len {
-      crash("string index out of bounds: ".concat(index.show()))
-    };
-    let charRef: char* = self.data.refAtIndex(index);
-    charRef
-  }
-
   fn get(self: string, index: u64): char {
-    let charRef: char* = self.getRef(index);
-    charRef.*
-  }
-  fn set(self: string, index: u64, value: char): unit {
-    let charRef: char* = self.getRef(index);
-    charRef <- value
+    self.buffer.get(index)
   }
 
-  fn fromBytes(bytes: Array[byte]): string {
-    assert(sizeOf[char]() == sizeOf[byte]());
-    let copied = bytes.cloned();
-    { len: copied.len, data: copied.data }
+  fn fromBytes(buffer: Buffer[byte]): string {
+    let copied: Buffer[byte] = buffer.cloned();
+    let sneakyCasted: Buffer[char] = Buffer::fromRawParts(copied.len, copied.data);
+    { buffer: sneakyCasted }
   }
 
-  fn fromChars(bytes: Array[char]): string {
-    let copied = bytes.cloned();
-    { len: copied.len, data: copied.data }
+  fn fromBuffer(buffer: Buffer[char]): string {
+    let copied = buffer.cloned();
+    { buffer: copied }
+  }
+
+  fn wrapList(list: List[char]): string {
+    { buffer: list.buffer }
+  }
+
+  fn wrapBuffer(buffer: Buffer[char]): string {
+    { buffer: buffer }
   }
 
   fn isEmpty(self: string): bool {
-    self.len == 0
+    self.len() == 0
   }
+
+  fn len(self: string): u64 { self.buffer.len }
 
   fn indexOf(self: string, c: char): i64 {
     let mut i: u64 = 0;
-    while i < self.len {
+    while i < self.len() {
       if self.get(i) == c {
         return(i as i64);
       };
@@ -48,40 +46,26 @@ namespace string {
   }
 
   fn concat(self: string, other: string): string {
-    let new_length = self.len + other.len;
-    let* copied = Array::withCapacity[char](new_length);
-
-    libc::memcpy(copied.data, self.data, self.len);
-
-    let offset = copied.data as u64 + self.len;
-    libc::memcpy(offset as Pointer, other.data, other.len);
-
-    copied.len* <- new_length;
-    fromChars(copied)
+    fromBuffer(self.buffer.concat(other.buffer))
   }
 
   fn appendChar(self: string, c: char): string {
-    let new_length = self.len + 1;
-
-    let* copied = Array::withCapacity[char](new_length);
-    copied.len* <- new_length;
-
-    libc::memcpy(copied.data, self.data, self.len);
-    copied.set(self.len, c);
-
-    fromChars(copied)
+    let newLength = self.len() + 1;
+    let newBuffer = self.buffer._enlargedClone(newLength);
+    newBuffer.set(self.len(), c);
+    fromBuffer(newBuffer)
   }
 
-  fn splitByChar(self: string, delim: char): Array[string] {
-    let* results = Array::new[Array[char]]();
-    let* accum = Array::new[char]();
+  fn splitByChar(self: string, delim: char): List[string] {
+    let* results = List::new[List[char]]();
+    let* accum = List::new[char]();
     // Note(stdlib slow): TODO: use ranges instead to make this zero-copy!!
     //                    We can point to the old string instead of building up new ones
     for c in self do {
       if c == delim {
         if accum.*.nonEmpty() {
           results.push(accum);
-          accum <- Array::new[char]()
+          accum <- List::new[char]()
         }
       } else {
         accum.push(c);
@@ -91,18 +75,18 @@ namespace string {
       results.push(accum);
     };
 
-    for buf in results.* yield {
-      string::fromChars(buf)
+    for list in results.* yield {
+      string::wrapList(list)
     }
   }
 
   fn indexOfString(self: string, target: string): u64? {
     let mut i: u64 = 0;
-    while i < self.len {
-      if i + target.len >= self.len {
+    while i < self.len() {
+      if i + target.len() >= self.len() {
         return(.None)
       };
-      let sub = self.substring(i, i + target.len);
+      let sub = self.substring(i, i + target.len());
       if sub == target { return(.Some(i)) };
       i = i + 1;
     };
@@ -110,25 +94,15 @@ namespace string {
   }
 
   fn substring(self: string, start: u64, end: u64): string {
-    if start >= self.len or start < 0 {
-      crash("substring start index out of bounds: ".concat(start.show()))
-    };
-    let end = if end >= self.len self.len else end;
-    if end < start {
-      return("")
-    };
-    let newLen = end - start;
-    let newDataU64 = (self.data as u64) + (sizeOf[char]() * start);
-    let newData = newDataU64 as Pointer;
-    { len: newLen, data: newData }
+    { buffer: self.buffer.slice(start, end) }
   }
 
   fn startsWith(self: string, other: string): bool {
-    self.substring(0, other.len) == other
+    self.substring(0, other.len()) == other
   }
 
   fn toCString(self: string): Pointer {
-    self.appendChar('\0').data
+    self.appendChar('\0').buffer.data
   }
 
   fn toInt(self: string): int? {
@@ -137,7 +111,7 @@ namespace string {
     let neg = self.get(0) == '-';
     let mut i: u64 = if neg 1 else 0;
     let mut total: u64 = 0;
-    while i < self.len {
+    while i < self.len() {
       let c = self.get(i);
       let digit = c.toAsciiDigit();
       if digit is .Some(digit) {
@@ -157,14 +131,12 @@ namespace string {
 
 impl Equals for string {
   fn equals(self: string, that: string): bool {
-    if self.len != that.len { return(false) };
-    let compareResult = libc::memcmp(self.data, that.data, self.len);
-    compareResult == 0
+    self.buffer == that.buffer
   }
 }
 
-impl Equals for Array[string] {
-  fn equals(self: Array[string], other: Array[string]): bool {
+impl Equals for List[string] {
+  fn equals(self: List[string], other: List[string]): bool {
     if self.len != other.len {
       false
     } else {
@@ -182,17 +154,18 @@ impl Equals for Array[string] {
 
 // One day? impl Show for Array[T] ???
 // Note(stdlib slow): Need efficient string building
-impl Show for Array[string] {
-  fn show(self: Array[string]): string {
-    let mut builder: string = "[";
+impl Show for List[string] {
+  fn show(self: List[string]): string {
+    let b = StringBuilder::new();
     for s in self do {
-      builder = builder.concat(s);
+      b.putString(s);
       let last = it_index == self.len - 1;
       if not last {
-        builder = builder.concat(", ");
+        b.putString(", ");
       };
     };
-    builder.concat("]")
+    b.putChar(']');
+    b.build()
   }
 }
 
