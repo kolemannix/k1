@@ -59,10 +59,10 @@ fn genericEnum(): unit {
 
     assert(x1.show() == "Ok: -3\n");
     assert(x2.show() == "Error: Some error message\n");
-    printIt(sizeOf[Result[int, string].Ok]());
-    printIt(alignOf[Result[int, string].Ok]());
-    assert(sizeOf[Result[int, string].Ok]() == 24);
-    assert(alignOf[Result[int, string].Ok]() == 8);
+
+    assert(sizeOf[Result[int, string]]() == 24);
+    assert(sizeOfStride[Result[int, string]]() == 24);
+    assert(alignOf[Result[int, string]]() == 8);
 }
 
 fn main(): int {

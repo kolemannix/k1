@@ -102,6 +102,7 @@ impl<'ctx> LlvmValue<'ctx> {
         self.as_basic_value().expect_right("Expected BasicValue on never value")
     }
 
+    #[allow(unused)]
     fn expect_never(&self) -> InstructionValue<'ctx> {
         self.as_basic_value().expect_left("Expected Never on a real value")
     }
@@ -167,6 +168,7 @@ struct LlvmPointerType<'ctx> {
     #[allow(unused)]
     type_id: TypeId,
     pointer_type: PointerType<'ctx>,
+    #[allow(unused)]
     pointee_type: AnyTypeEnum<'ctx>,
     di_type: DIType<'ctx>,
 }
@@ -283,6 +285,7 @@ impl<'ctx> LlvmType<'ctx> {
         }
     }
 
+    #[allow(unused)]
     pub fn expect_pointer(&self) -> LlvmPointerType<'ctx> {
         match self {
             LlvmType::Pointer(pointer) => *pointer,
@@ -357,6 +360,7 @@ impl<'ctx> LlvmType<'ctx> {
         }
     }
 
+    #[allow(unused)]
     fn is_void(&self) -> bool {
         match self {
             LlvmType::Void(_) => true,
@@ -1294,7 +1298,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         // We're always storing a pointer in self.variables that, when loaded, gives the actual type of the variable
         let store_instr = self.builder.build_store(variable_ptr, value);
 
-        if !self.module.get_ident_str(variable.name).starts_with("__") {
+        if !self.module.name_of(variable.name).starts_with("__") {
             self.debug.debug_builder.insert_declare_before_instruction(
                 variable_ptr,
                 Some(self.debug.debug_builder.create_auto_variable(
@@ -1421,38 +1425,51 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             TypedExpr::Str(string_value, _) => {
                 // Get a hold of the type for 'string' (its just a struct that we expect to exist!)
                 let string_type = self.codegen_type(STRING_TYPE_ID).unwrap();
-                let string_struct = string_type.physical_value_type().into_struct_type();
+                let string_wrapper_struct = string_type.physical_value_type().into_struct_type();
+                let char_buffer_struct =
+                    string_wrapper_struct.get_field_type_at_index(0).unwrap().into_struct_type();
 
                 // Ensure the string layout is what we expect
+                // deftype string = { buffer: Buffer[char] }
                 debug_assert!(
-                    string_struct
+                    char_buffer_struct
                         .get_field_type_at_index(0)
                         .unwrap()
                         .into_int_type()
                         .get_bit_width()
                         == 64
                 );
-                debug_assert!(string_struct.get_field_type_at_index(1).unwrap().is_pointer_type());
-                debug_assert!(string_struct.count_fields() == 2);
+                debug_assert!(char_buffer_struct
+                    .get_field_type_at_index(1)
+                    .unwrap()
+                    .is_pointer_type());
+                debug_assert!(char_buffer_struct.count_fields() == 2);
 
                 let global_str_data = self.llvm_module.add_global(
                     self.builtin_types.char.array_type(string_value.len() as u32),
                     None,
-                    "string_lit_data",
+                    "str_data",
                 );
                 global_str_data.set_initializer(&i8_array_from_str(self.ctx, string_value));
                 global_str_data.set_constant(true);
-                let global_value = self.llvm_module.add_global(string_struct, None, "string_lit");
+                let global_str_value = string_wrapper_struct
+                    .const_named_struct(&[char_buffer_struct
+                        .const_named_struct(&[
+                            self.builtin_types
+                                .int
+                                .const_int(string_value.len() as u64, true)
+                                .into(),
+                            global_str_data.as_pointer_value().into(),
+                        ])
+                        .as_basic_value_enum()])
+                    .as_basic_value_enum();
+                let global_value = self.llvm_module.add_global(string_wrapper_struct, None, "str");
                 global_value.set_constant(true);
-                let value = string_struct.const_named_struct(&[
-                    self.builtin_types.int.const_int(string_value.len() as u64, true).into(),
-                    global_str_data.as_pointer_value().into(),
-                ]);
-                global_value.set_initializer(&value);
+                global_value.set_initializer(&global_str_value);
                 let loaded = self.builder.build_load(
-                    string_struct,
+                    string_wrapper_struct,
                     global_value.as_pointer_value(),
-                    "str_struct",
+                    "",
                 );
                 Ok(loaded.into())
             }
@@ -2565,7 +2582,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let return_type = self.codegen_type(function_type.return_type)?;
 
         let llvm_name = match function.linkage {
-            TyperLinkage::External(Some(name)) => self.module.get_ident_str(name),
+            TyperLinkage::External(Some(name)) => self.module.name_of(name),
             _ => &self.module.make_qualified_name(function.scope, function.name, "__", true),
         };
         let fn_ty = return_type.fn_type(&param_metadata_types, false);
@@ -2686,7 +2703,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     let llvm_global = self.llvm_module.add_global(
                         llvm_value.get_type(),
                         Some(AddressSpace::default()),
-                        self.module.get_ident_str(variable.name),
+                        self.module.name_of(variable.name),
                     );
                     llvm_global.set_constant(true);
                     llvm_global.set_initializer(&llvm_value);

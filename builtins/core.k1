@@ -57,7 +57,7 @@ fn printIt[T](value: T): unit where T: Show {
 
 fn print(s: string): unit {
   let s = s.appendChar('\n');
-  libc::write(1, s.data, s.len, 0);
+  libc::write(1, s.buffer.data, s.len(), 0);
   ()
 }
 fn println(s: string): unit {
@@ -65,7 +65,7 @@ fn println(s: string): unit {
 }
 
 fn eprint(s: string): unit {
-  libc::write(2, s.data, s.len, 0);
+  libc::write(2, s.buffer.data, s.len(), 0);
   ()
 }
 fn eprintln(s: string): unit {
@@ -82,31 +82,30 @@ namespace files {
   let SEEK_END: i32 = 2;
   let SEEK_SET: i32 = 0;
   namespace unix {
-    extern(fopen)  fn fopen(path: Pointer, modeCString: Pointer): Pointer
+    extern(fopen)  fn fopen(pathCString: Pointer, modeCString: Pointer): Pointer
     extern(fseek)  fn fseek(fileDesc: Pointer, offset: u64, whence: i32): i32
     extern(fread)  fn fread(buffer: Pointer, size: u64, num: u64, stream: Pointer): u64
     extern(fclose) fn fclose(fileDesc: Pointer): i32
     extern(ftell)  fn ftell(fileDesc: Pointer): u64
   }
+
   fn readToString(context alloc: Allocator)(path: string): string {
     let filenameCString = path.toCString();
   
     let file = files::unix::fopen(filenameCString, "r".toCString());
     files::unix::fseek(file, 0, SEEK_END);
-    let fsize = files::unix::ftell(file);
-    let buf = alloc.tempArena().pushBytes(fsize);
+    let fileSizeBytes = files::unix::ftell(file);
+    let buf = alloc.tempArena().pushBytes(fileSizeBytes);
   
     files::unix::fseek(file, 0, SEEK_SET);
-    files::unix::fread(buf, fsize, 1, file);
-    let string = { len: fsize, data: buf };
+    files::unix::fread(buf, fileSizeBytes, 1, file);
+    let string = string::wrapBuffer(Buffer::fromRawParts(fileSizeBytes, buf));
     files::unix::fclose(file);
 
     libc::free(filenameCString);
 
     string
   }
-
-
 }
 
 fn assertMsg(context locn: CompilerSourceLoc)(msg: string, value: bool): unit {
@@ -117,9 +116,7 @@ fn assertMsg(context locn: CompilerSourceLoc)(msg: string, value: bool): unit {
 
 namespace char {
   fn toString(self: char): string {
-    let* arr = Array::withCapacity[char](1);
-    arr.push(self);
-    string::fromChars(arr.*);
+    string::wrapList([self])
   }
 
   fn toAsciiDigit(self: char): u8? {
@@ -132,233 +129,15 @@ namespace char {
   }
 }
 
-namespace Array {
-
-  fn new[T](): Array[T] {
-    withCapacity[T](0)
-  }
-
-  fn filled[T](size: u64, value: T): Array[T] {
-    // TODO(stdlib perf): memcpy this where T is 'Copy'
-    let* array: Array[T]* = Array::withCapacity(size);
-    let mut i = 0: u64;
-    while i < size {
-      array.push(value);
-      i = i + 1;
-    };
-    array.*
-  }
-
-  fn withCapacity[T](cap: u64): Array[T] {
-    let data = if cap == 0 {
-      Pointer::null()
-    } else {
-      let sizeBytes = sizeOf[T]() * cap;
-      libc::malloc(sizeBytes)
-    };
-    { len: 0, cap: cap, data: data }
-  }
-
-  fn getRef[T](self: Array[T], index: u64): T* {
-    if index >= self.len {
-      crash("Array index out of bounds")
-    };
-    let tRef: T* = self.data.refAtIndex[T](index);
-    tRef
-  }
-
-  fn set[T](self: Array[T], index: u64, elem: T): unit {
-    let tRef = self.getRef(index);
-    tRef <- elem;
-  }
-
-  fn get[T](self: Array[T], index: u64): T {
-    let tRef = self.getRef(index);
-    tRef.*
-  }
-
-  fn _grow[T](self: Array[T]*): unit {
-    let tSize = sizeOf[T]();
-    let newCap: u64 = if self.cap == 0 {
-      // For large elements, just allocate what's needed
-      if tSize >= 1024 1 else 8
-    } else {
-      self.cap * 2
-    };
-    let newSize = newCap * sizeOf[T]();
-
-    let ptr = if self.data.isNull() {
-      libc::malloc(newSize)
-    } else {
-      libc::realloc(self.data, newSize)
-    };
-    if ptr.isNull() {
-      crash("allocation failed in array grow");
-    };
-
-    self.data* <- ptr;
-    self.cap* <- newCap;
-  }
-
-  fn cloned[T](self: Array[T]): Array[T] {
-    let numBytes = sizeOf[T]() * self.cap;
-    let newBuffer = libc::malloc(numBytes);
-    libc::memcpy(newBuffer, self.data, numBytes);
-    { len: self.len, cap: self.cap, data: newBuffer }
-  }
-
-  fn push[T](self: Array[T]*, elem: T): unit {
-    let startLength = self.len;
-    if startLength == self.cap {
-      self._grow();
-    };
-    self.len* <- startLength + 1;
-    self.*.set(startLength, elem);
-    ()
-  }
-
-  fn isEmpty[T](self: Array[T]): bool {
-    self.len == 0
-  }
-
-  fn nonEmpty[T](self: Array[T]): bool {
-    self.len > 0
-  }
-
-  fn firstRef[T](self: Array[T]): T*? {
-    if not self.isEmpty() {
-      .Some(self.getRef(0))
-    } else {
-      .None
-    }
-  }
-
-  fn first[T](self: Array[T]): T? {
-    switch self.firstRef() {
-      .None -> .None,
-      .Some(firstRef) -> .Some(firstRef.*)
-    }
-  }
-
-  fn lastRef[T](self: Array[T]): T*? {
-    if not self.isEmpty() {
-      .Some(self.getRef(self.len - 1))
-    } else {
-      .None
-    }
-  }
-
-  fn last[T](self: Array[T]): T? {
-    switch self.lastRef() {
-      .None -> .None,
-      .Some(lastRef) -> .Some(lastRef.*)
-    }
-  }
-
-  // I know I know I know I know
-  fn reversed[T](self: Array[T]): Array[T] {
-    let* reversed = Array::withCapacity[T](self.len);
-    let mut i = self.len - 1;
-    while (i >= 0) {
-      reversed.push(self.get(i));
-      i = i - 1;
-    };
-    reversed
-  }
-
-  // TODO(stdlib slow)
-  fn concat[T](self: Array[T]*, other: Array[T]): unit {
-    for e in other do {
-      self.push(e)
-    }
-  }
-
-  fn swap[T](self: Array[T]*, indexA: u64, indexB: u64): unit {
-    let aRef = self.*.getRef(indexA);
-    let bRef = self.*.getRef(indexB);
-    let bValue = bRef.*;
-    bRef <- aRef.*;
-    aRef <- bValue;
-  }
-
-  fn sort[T](input: Array[T]*): unit where T: Comparable {
-  
-    if input.len <= 1 return(());
-  
-    let halfIndex = input.len / 2;
-    let pivot = input.*.get(halfIndex);
-  
-    let* left = Array::withCapacity[T](halfIndex);
-    let* right = Array::withCapacity[T](halfIndex);
-    let* equal = Array::withCapacity[T](4);
-  
-    for item in input.* do {
-      switch item.compare(pivot) {
-        .Less -> left.push(item),
-        .Equal -> equal.push(item),
-        .Greater -> right.push(item)
-      }
-    };
-  
-    left.sort();
-    right.sort();
-  
-    let mut i: u64 = 0;
-    for item in left.* do {
-      input.set(i, item);
-      i = i + 1;
-    };
-  
-    for item in equal.* do {
-      input.set(i, item);
-      i = i + 1;
-    };
-  
-    for item in right.* do {
-      input.set(i, item);
-      i = i + 1;
-    };
-  }
-
-  fn sorted[T](self: Array[T]): Array[T] {
-    let* copy = self.cloned();
-    copy.sort();
-    copy.*
-  }
+impl Equals for List[u8] {
+  fn equals(self: List[u8], other: List[u8]): bool { self.buffer == other.buffer }
 }
 
-impl Equals for Array[u8] {
-  fn equals(self: Array[u8], other: Array[u8]): bool {
-    if self.len != other.len {
-      false
-    } else {
-      libc::memcmp(self.data, other.data, self.len) == 0
-    }
-  }
-}
-
-impl Equals for Array[int] {
-  // todo: Obviously this should be a memcmp
-  fn equals(self: Array[int], other: Array[int]): bool {
-    if self.len != other.len {
-      false
-    } else {
-      let mut i: u64 = 0;
-      while i < self.len {
-        if self.get(i) != other.get(i) {
-          return(false);
-        };
-        i = i + 1;
-      };
-      true
-    }
-  }
-}
+impl Equals for List[int] {
+  fn equals(self: List[int], other: List[int]): bool { self.buffer == other.buffer }
 
 impl Show for bool {
-  fn show(self: bool): string {
-    if self "true" else "false"
-  }
+  fn show(self: bool): string { if self "true" else "false" }
 }
 
 impl Show for i64 {
@@ -367,7 +146,7 @@ impl Show for i64 {
     if self == 0 return("0");
     let neg = self < 0;
     let mut remaining: i64 = if neg self * -1 else self;
-    let* buf = Array::withCapacity[char](8);
+    let* buf = List::withCapacity[char](8);
     while remaining > 0 {
       let d = remaining % 10;
       let c = (d + 48) as u8 as char;
@@ -384,7 +163,7 @@ impl Show for i64 {
     // Which I guess is technically 'simd' too
     // Why did inference break here??
     let rev = buf.*.reversed();
-    string::fromChars(rev)
+    string::wrapList(rev)
   }
 }
 
@@ -411,7 +190,7 @@ impl Show for u64 {
     if self == 0 return("0");
 
     let mut remaining: u64 = self;
-    let* buf = Array::withCapacity[char](8);
+    let* buf = List::withCapacity[char](8);
     while remaining > 0 {
       let d = remaining % 10;
       let c = (d + 48) as u8 as char;
@@ -420,7 +199,7 @@ impl Show for u64 {
     };
 
     let rev = buf.*.reversed();
-    string::fromChars(rev)
+    string::wrapList(rev)
   }
 }
 

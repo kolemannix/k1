@@ -21,7 +21,7 @@ impl TypeId {
 
 impl Display for TypeId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0.to_string())
+        self.0.fmt(f)
     }
 }
 
@@ -102,14 +102,14 @@ pub const F64_TYPE_ID: TypeId = TypeId(14);
 
 pub const BUFFER_TYPE_ID: TypeId = TypeId(17);
 
-pub const ARRAY_TYPE_ID: TypeId = TypeId(20);
-pub const STRING_TYPE_ID: TypeId = TypeId(21);
-pub const OPTIONAL_TYPE_ID: TypeId = TypeId(26);
-pub const COMPILER_SOURCE_LOC: TypeId = TypeId(27);
-pub const ORDERING_TYPE_ID: TypeId = TypeId(31);
+pub const LIST_TYPE_ID: TypeId = TypeId(21);
+pub const STRING_TYPE_ID: TypeId = TypeId(23);
+pub const OPTIONAL_TYPE_ID: TypeId = TypeId(28);
+pub const COMPILER_SOURCE_LOC: TypeId = TypeId(29);
+pub const ORDERING_TYPE_ID: TypeId = TypeId(33);
 
 #[derive(Debug, Clone)]
-pub struct ArrayType {
+pub struct ListType {
     pub element_type: TypeId,
 }
 
@@ -332,6 +332,28 @@ pub enum Type {
 }
 
 impl Type {
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            Type::Unit(_) => "scalar",
+            Type::Char(_) => "scalar",
+            Type::Integer(_) => "scalar",
+            Type::Float(_) => "scalar",
+            Type::Bool(_) => "scalar",
+            Type::Pointer(_) => "pointer",
+            Type::Struct(_) => "struct",
+            Type::Reference(_) => "reference",
+            Type::TypeVariable(_) => "tvar",
+            Type::Enum(_) => "enum",
+            Type::EnumVariant(_) => "variant",
+            Type::Never(_) => "never",
+            Type::Generic(_) => "generic",
+            Type::Function(_) => "function",
+            Type::Closure(_) => "closure",
+            Type::ClosureObject(_) => "closure obj",
+            Type::RecursiveReference(_) => "recurse",
+        }
+    }
+
     // Note: This is kind of a codegen concern that doesn't belong in this layer,
     //       but it has some implications for typechecking, and I'm not super worried
     //       about platform independence in the middle-end right now
@@ -361,11 +383,11 @@ impl Type {
         }
     }
 
-    pub fn as_array_instance(&self) -> Option<ArrayType> {
+    pub fn as_list_instance(&self) -> Option<ListType> {
         if let Type::Struct(s) = self {
             s.generic_instance_info.as_ref().and_then(|spec_info| {
-                if spec_info.generic_parent == ARRAY_TYPE_ID {
-                    Some(ArrayType { element_type: spec_info.param_values[0] })
+                if spec_info.generic_parent == LIST_TYPE_ID {
+                    Some(ListType { element_type: spec_info.param_values[0] })
                 } else {
                     None
                 }
@@ -716,74 +738,6 @@ impl Types {
         }
     }
 
-    /// Recursively checks if given type contains any type variables
-    /// Note: We could cache whether or not a type is generic on insertion into the type pool
-    ///       But types are not immutable so this could be a dangerous idea!
-    pub fn does_type_reference_type_variables(&self, type_id: TypeId) -> bool {
-        if let Some(spec_info) = self.get_generic_instance_info(type_id) {
-            return spec_info
-                .param_values
-                .iter()
-                .any(|t| self.does_type_reference_type_variables(*t));
-        }
-        match self.get_no_follow(type_id) {
-            Type::TypeVariable(_) => true,
-            Type::Unit(_) => false,
-            Type::Char(_) => false,
-            Type::Integer(_) => false,
-            Type::Float(_) => false,
-            Type::Bool(_) => false,
-            Type::Pointer(_) => false,
-            Type::Struct(struc) => {
-                for field in struc.fields.iter() {
-                    if self.does_type_reference_type_variables(field.type_id) {
-                        return true;
-                    }
-                }
-                false
-            }
-            Type::Reference(refer) => self.does_type_reference_type_variables(refer.inner_type),
-            Type::Enum(e) => {
-                for v in e.variants.iter() {
-                    if let Some(payload) = v.payload {
-                        if self.does_type_reference_type_variables(payload) {
-                            return true;
-                        }
-                    }
-                }
-                false
-            }
-            Type::EnumVariant(ev) => {
-                if let Some(payload) = ev.payload {
-                    if self.does_type_reference_type_variables(payload) {
-                        return true;
-                    }
-                }
-                false
-            }
-            Type::Never(_) => false,
-            Type::Generic(_gen) => true,
-            Type::Function(fun) => {
-                for param in fun.params.iter() {
-                    if self.does_type_reference_type_variables(param.type_id) {
-                        return true;
-                    }
-                }
-                if self.does_type_reference_type_variables(fun.return_type) {
-                    return true;
-                }
-                false
-            }
-            Type::Closure(closure) => {
-                self.does_type_reference_type_variables(closure.function_type)
-                    || self.does_type_reference_type_variables(closure.env_type)
-            }
-            // But a closure object is generic if its function is generic
-            Type::ClosureObject(co) => self.does_type_reference_type_variables(co.function_type),
-            Type::RecursiveReference(_rr) => false,
-        }
-    }
-
     pub fn item_type_of_iterable(
         &self,
         identifiers: &Identifiers,
@@ -797,10 +751,10 @@ impl Types {
             Type::Float(_) => None,
             Type::Bool(_) => None,
             Type::Pointer(_) => None,
-            // Check for Array and string since they are currently structs
+            // Check for List and string since they are currently structs
             t @ Type::Struct(struc) => {
-                if let Some(array_type) = t.as_array_instance() {
-                    Some(array_type.element_type)
+                if let Some(list_type) = t.as_list_instance() {
+                    Some(list_type.element_type)
                 } else if let Some(defn_info) = struc.type_defn_info.as_ref() {
                     if defn_info.name == identifiers.get("string").unwrap()
                         && defn_info.scope == scopes.get_root_scope_id()
@@ -896,7 +850,7 @@ impl Types {
     }
 
     fn type_id_eq(&self, type1: TypeId, type2: TypeId) -> bool {
-        self.type_eq(&self.get(type1), &self.get(type2))
+        self.type_eq(self.get(type1), self.get(type2))
     }
 
     fn type_eq(&self, type1: &Type, type2: &Type) -> bool {
@@ -919,7 +873,7 @@ impl Types {
                         return false;
                     }
                 }
-                return true;
+                true
             }
             (Type::Reference(r1), Type::Reference(r2)) => r1.inner_type == r2.inner_type,
             (Type::TypeVariable(t1), Type::TypeVariable(t2)) => {
@@ -955,7 +909,7 @@ impl Types {
                         .zip(f2.params.iter())
                         .all(|(p1, p2)| self.type_id_eq(p1.type_id, p2.type_id));
                 };
-                return false;
+                false
             }
             (Type::Closure(_c1), Type::Closure(_c2)) => false,
             _ => false,

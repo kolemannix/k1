@@ -131,9 +131,9 @@
     - [x] Not the worst thing to use let* for the c-interop case of needing a pointer, that's what .& was doing anyway
   - [x] EnumGetPayload on a reference doesn't give a reference (and shouldn't always, what syntax to specify)
   - [x] FieldAccess on a reference doesn't give a reference (and shouldn't always, what syntax to specify)
-- [ ] Array/Slice/string rework to Buffer/List/Array
+- [ ] Array/Slice/string rework to Buffer/List, and eventually Array (fixed size at compile time)
+- [ ] Re-write specialization to be simpler.
 - [ ] Typecheck 'main'
-- [ ] Rename Pointer to Address?
 - [ ] Matching on references
   - [ ] Match to get reference to each struct field, for example, use * for a dereferencing match
   - [ ] Match to get reference to enum payload
