@@ -70,7 +70,7 @@ namespace List {
 
   fn slice[T](self: List[T], start: u64, end: u64): Buffer[T] {
     if self.len == 0 return(Buffer::empty[T]());
-    if end >= self.len { crash("List slice end out of bounds: \{end}") };
+    if end > self.len { crash("List slice end out of bounds: \{end}") };
     self.buffer.slice(start, end)
   }
 

@@ -1075,6 +1075,10 @@ impl ParsedExpressionPool {
     pub fn get_span(&self, id: ParsedExpressionId) -> SpanId {
         self.get(id).get_span()
     }
+
+    pub fn count(&self) -> usize {
+        self.expressions.len()
+    }
 }
 
 #[derive(Debug, Default, Clone)]
