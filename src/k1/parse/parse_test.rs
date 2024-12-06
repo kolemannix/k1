@@ -159,14 +159,14 @@ fn dot_accessor() -> ParseResult<()> {
 
 #[test]
 fn type_parameter_single() -> ParseResult<()> {
-    let (mut _module, type_expr) = test_single_type_expr("Array[unit]")?;
+    let (mut _module, type_expr) = test_single_type_expr("List[unit]")?;
     assert!(matches!(type_expr, ParsedTypeExpression::TypeApplication(_)));
     Ok(())
 }
 
 #[test]
 fn type_parameter_multi() -> ParseResult<()> {
-    let (module, type_expr) = test_single_type_expr("Map[u8, Array[u8]]")?;
+    let (module, type_expr) = test_single_type_expr("Map[u8, List[u8]]")?;
     let ParsedTypeExpression::TypeApplication(app) = type_expr else {
         panic!("Expected type application")
     };
@@ -330,7 +330,7 @@ fn type_hint() -> ParseResult<()> {
 
 #[test]
 fn type_hint_binop() -> ParseResult<()> {
-    let input = "(3!: int + 4: Array[bool]): int";
+    let input = "(3!: int + 4: List[bool]): int";
     let (module, _expr, expr_id) = test_single_expr_with_id(input)?;
     let type_hint = module.get_expression_type_hint(expr_id).unwrap();
     assert_eq!(module.type_expression_to_string(type_hint), "int");
@@ -344,6 +344,23 @@ fn tag_literals() -> ParseResult<()> {
     let type_hint = module.get_expression_type_hint(expr_id).unwrap();
     assert_eq!(&module.expr_id_to_string(expr_id), ".Foo");
     assert_eq!(module.type_expression_to_string(type_hint), "A.Foo");
+    Ok(())
+}
+
+#[test]
+fn unclosed_ability_impl() -> ParseResult<()> {
+    let input = r#"impl Equals for List[int] {
+  fn equals(self: List[int], other: List[int]): bool { self.buffer == other.buffer }
+
+impl Show for bool {
+  fn show(self: bool): string { if self "true" else "false" }
+}
+  "#;
+    let mut module = make_test_module();
+    let mut parser = set_up(input, &mut module);
+    let ability_result = parser.parse_definition();
+    eprintln!("{:?}", ability_result);
+    assert!(ability_result.is_err());
     Ok(())
 }
 

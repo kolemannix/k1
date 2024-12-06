@@ -21,18 +21,22 @@ namespace string {
   }
 
   fn wrapList(list: List[char]): string {
-    { buffer: list.buffer }
+    { buffer: list.toBuffer() }
   }
 
   fn wrapBuffer(buffer: Buffer[char]): string {
     { buffer: buffer }
   }
 
-  fn isEmpty(self: string): bool {
-    self.len() == 0
+  fn len(self: string): u64 { self.buffer.len }
+
+  fn isEmpty(self: string): bool { self.len() == 0 }
+  fn nonEmpty(self: string): bool { self.len() != 0 }
+
+  fn first(self: string): char? {
+    if self.nonEmpty() .Some(self.get(0)) else .None
   }
 
-  fn len(self: string): u64 { self.buffer.len }
 
   fn indexOf(self: string, c: char): i64 {
     let mut i: u64 = 0;
@@ -57,15 +61,15 @@ namespace string {
   }
 
   fn splitByChar(self: string, delim: char): List[string] {
-    let* results = List::new[List[char]]();
-    let* accum = List::new[char]();
+    let* results = List::empty[List[char]]();
+    let* accum = List::empty[char]();
     // Note(stdlib slow): TODO: use ranges instead to make this zero-copy!!
     //                    We can point to the old string instead of building up new ones
     for c in self do {
       if c == delim {
         if accum.*.nonEmpty() {
           results.push(accum);
-          accum <- List::new[char]()
+          accum <- List::empty[char]()
         }
       } else {
         accum.push(c);
@@ -152,7 +156,7 @@ impl Equals for List[string] {
   }
 }
 
-// One day? impl Show for Array[T] ???
+// One day? impl Show for List[T] ???
 // Note(stdlib slow): Need efficient string building
 impl Show for List[string] {
   fn show(self: List[string]): string {

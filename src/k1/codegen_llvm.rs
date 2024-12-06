@@ -2363,7 +2363,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             IntrinsicFunction::PointerIndex => {
                 //  Reference:
                 //  intern fn refAtIndex[T](self: Pointer, index: u64): T*
-                // NOCOMMIT: This needs to use stride not just size!!
                 let pointee_ty_arg = call.type_args[0];
                 let elem_type = self.codegen_type(pointee_ty_arg.type_id)?;
                 let ptr = self.codegen_expr_basic_value(&call.args[0])?.into_pointer_value();

@@ -5,6 +5,6 @@ fn increment(x: int*): unit {
 fn main(): int {
   let i: int* = 0;
   increment(i);
-  printInt(*i);
+  printIt(*i);
   0
 }

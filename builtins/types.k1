@@ -11,10 +11,10 @@ namespace types {
   //   Boolean,
   //   Pointer,
   //   Struct({
-  //     fields: Array[{ name: string, type: TypeInfo, offset: u64 }],
+  //     fields: List[{ name: string, type: TypeInfo, offset: u64 }],
   //   }),
   //   Either({
-  //     variants: Array[{ name: string, payload: TypeInfo? }],
+  //     variants: List[{ name: string, payload: TypeInfo? }],
   //     payloadOffset: u64,
   //   }),
   //   Reference({ inner: TypeInfo* })

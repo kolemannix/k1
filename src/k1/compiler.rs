@@ -137,6 +137,7 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
 
     if use_std {
         parse_file(Path::new("builtins/core.k1"));
+        parse_file(Path::new("builtins/buffer.k1"));
         parse_file(Path::new("builtins/opt.k1"));
         parse_file(Path::new("builtins/list.k1"));
         parse_file(Path::new("builtins/string.k1"));

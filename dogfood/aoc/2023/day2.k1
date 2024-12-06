@@ -27,7 +27,7 @@ fn main(): int {
     let mut isGoodGame = true;
     let rounds = for round in line.splitByChar(';') yield {
       let values = round.splitByChar(',');
-      let values: Array[{ amount: int, color: Color }] = for value in values yield {
+      let values: List[{ amount: int, color: Color }] = for value in values yield {
         let amountColor = value.splitByChar(' ');
         let amount = amountColor.get(0).toInt() ? crash("Bad amount: ".concat(value));
         let color: Color = switch amountColor.get(1) {

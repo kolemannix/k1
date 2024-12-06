@@ -19,7 +19,7 @@ input.split("\n").zipWithIndex.foreach { case (lline, index) =>
   var isGoodGame = true
   val rounds = line.split(";").map { round =>
     val valuesRaw = round.split(',')
-    val values: Array[Value] = valuesRaw.map { value =>
+    val values: List[Value] = valuesRaw.map { value =>
       val amountColor = value.split(' ').filter(_.nonEmpty)
       println(amountColor.toSeq)
       val amount = amountColor(0).toIntOption.get

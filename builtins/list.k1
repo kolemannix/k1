@@ -5,7 +5,7 @@ namespace List {
   ///////////////////////////
   // Construction functions
 
-  fn new[T](): List[T] {
+  fn empty[T](): List[T] {
     withCapacity[T](0)
   }
 
@@ -21,6 +21,10 @@ namespace List {
 
   fn wrapBuffer[T](buffer: Buffer[T]): List[T] {
     { len: buffer.len, buffer: buffer }
+  }
+
+  fn toBuffer[T](self: List[T]): Buffer[T] {
+    self.buffer.slice(0, self.len)
   }
 
   fn cap[T](self: List[T]): u64 { self.buffer.len }
@@ -64,6 +68,12 @@ namespace List {
     ()
   }
 
+  fn slice[T](self: List[T], start: u64, end: u64): Buffer[T] {
+    if self.len == 0 return(Buffer::empty[T]());
+    if end >= self.len { crash("List slice end out of bounds: \{end}") };
+    self.buffer.slice(start, end)
+  }
+
   fn isEmpty[T](self: List[T]): bool {
     self.len == 0
   }
@@ -102,15 +112,24 @@ namespace List {
     }
   }
 
-  fn reversed[T](self: List[T]): List[T] {
-    let newBuffer = self.buffer.reversed();
-    { len: self.len, buffer: newBuffer }
+  fn reverse[T](self: List[T]*): unit {
+    let mut i = 0:u64;
+    while (i < (self.len / 2:u64)) {
+      let j = self.len - i - 1;
+      self.swap(i, j);
+      i = i + 1;
+    }
   }
 
-  fn appendAll[T](self: List[T]*, other: Buffer[T]): unit {
+  fn reversed[T](self: List[T]): List[T] {
+    let* clone = self.cloned();
+    clone.reverse[T]();
+    clone.*
+  }
+
+  fn concat[T](self: List[T]*, other: List[T]): unit {
     // TODO(call reserve() here)
-    // nocommit Make Buffer iterable
-    for e in List::wrapBuffer(other) do {
+    for e in other do {
       self.push(e)
     }
   }
@@ -168,3 +187,12 @@ namespace List {
     copy.*
   }
 }
+
+impl Equals for List[u8] {
+  fn equals(self: List[u8], other: List[u8]): bool { self.toBuffer() == other.toBuffer() }
+}
+
+impl Equals for List[int] {
+  fn equals(self: List[int], other: List[int]): bool { self.toBuffer() == other.toBuffer() }
+}
+

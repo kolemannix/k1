@@ -1,6 +1,6 @@
 fn listFill(): int {
-  let* xs = list::new[int]();
-  assert(xs.cap == 0);
+  let* xs = List::empty[int]();
+  assert(xs.*.cap() == 0);
   assert(xs.len == 0);
 
   let mut i = 0: u64;
@@ -17,15 +17,37 @@ fn listFill(): int {
   assert(xs.*.get(4) == 4);
   assert(xs.*.first()! == 0);
   assert(xs.*.last()! == 4);
-  assert(xs.* == [0,1,2,3,4]);
+
+  let exp = #debug [0,1,2,3,4];
+  assert(xs.* == exp);
 
   let xs2 = xs.*.cloned();
   assert(xs2 == xs.*);
 
-  let empty = []: list[byte];
+  let empty = []: List[byte];
+  let emptyCloned = empty.cloned();
+  assert(empty.len == emptyCloned.len);
   assert(empty.cloned() == empty);
 
   0
+}
+
+fn listSlice(): unit {
+  let* a = [1,2,3];
+  let slice = a.*.slice(0,2);
+  assert(slice.len == 2);
+  assert(slice.get(0) == 1);
+  assert(slice.get(1) == 2);
+
+  let emptyList = []: List[int];
+  let emptySlice = emptyList.slice(0,0);
+  assert(emptySlice.len == 0);
+
+  let fullSlice = a.*.slice(0,3);
+  assert(fullSlice.len == 3);
+  assert(fullSlice.get(0) == 1);
+  assert(fullSlice.get(1) == 2);
+  assert(fullSlice.get(2) == 3);
 }
 
 deftype Point = {
@@ -43,12 +65,12 @@ fn listOfStructs(): int {
   };
 
   assert(xs.len == 101);
-  assert(xs.cap == 128);
+  assert(xs.*.cap() == 128);
   0
 }
 
 fn listEquality(): int {
-  let empty: list[int] = [];
+  let empty: List[int] = [];
   assert(empty != [1]);
   assert(empty == empty);
   assert([3] == [3]);
@@ -78,7 +100,7 @@ impl Equals for { rank: int, payload: string } {
   }
 }
 
-impl Equals for list[{ rank: int, payload: string }] {
+impl Equals for List[{ rank: int, payload: string }] {
   fn equals(self: Self, other: Self): bool {
     if self.len != other.len {
       false
@@ -95,12 +117,12 @@ impl Equals for list[{ rank: int, payload: string }] {
   }
 }
 
-fn testSortInt(input: list[int], expected: list[int]): unit {
+fn testSortInt(input: List[int], expected: List[int]): unit {
   let sorted = input.sorted();
   assert(sorted == expected);
 }
 
-fn testSortOther(input: list[{ rank: int, payload: string }], expected: list[{ rank: int, payload: string }]): unit {
+fn testSortOther(input: List[{ rank: int, payload: string }], expected: List[{ rank: int, payload: string }]): unit {
   let sorted = input.sorted();
   assert(sorted == expected);
 }
@@ -135,6 +157,7 @@ fn testSwap(): unit {
 
 fn main(): int {
   listOfStructs();
+  listSlice();
   listFill();
   listEquality();
   testSort();

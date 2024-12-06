@@ -1,4 +1,4 @@
-deftype alias PointList = Array[Point]
+deftype alias PointList = List[Point]
 deftype alias Point = { x: int, y: int }
 
 ability ToPoint {

@@ -1,6 +1,6 @@
 fn forString(): int {
   let s = "asdf";
-  let charCodes: Array[int] = for c in s yield {
+  let charCodes: List[int] = for c in s yield {
     c as int
   };
   assert(charCodes.get(0) == 97);
@@ -11,7 +11,7 @@ fn forString(): int {
 }
 
 fn forYield(): unit {
-  let squares: Array[int] = for it in [1, 5, 9, 12] yield { it * it };
+  let squares: List[int] = for it in [1, 5, 9, 12] yield { it * it };
   assert(squares.len == 4);
   assert(squares.get(0) == 1);
   assert(squares.get(1) == 25);

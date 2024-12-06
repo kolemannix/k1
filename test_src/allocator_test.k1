@@ -3,9 +3,9 @@ fn main(): int {
 
   let b = a.push(true);
   let p = a.push({ x: 10, y: 10 });
-  printInt(p.x);
+  printIt(p.x);
   let s = a.push("Hello, memory");
-  assert(s.len == 13);
+  assert(s.len() == 13);
   println(s);
 
   a.freeAll();

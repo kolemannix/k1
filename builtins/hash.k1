@@ -5,12 +5,12 @@
 // - Loops and control flow
 // - Numeric operations
 // - String handling
-// - Builds on Array which is implemented in k1
+// - Builds on List which is implemented in k1
 
 deftype HashMap[V] = {
   size: u64,
   // TODO: Switch to a 3-state enum for the deleted variant for a more efficient layout
-  entries: Array[{ key: string, value: V, deleted: bool }?],
+  entries: List[{ key: string, value: V, deleted: bool }?],
 }
 
 fn fnv1a_hash(key: string): u64 {
@@ -29,7 +29,7 @@ namespace HashMap {
   deftype Entry[V] = { key: string, value: V, deleted: bool }?
 
   fn _make[V](cap: u64): HashMap[V] {
-    { size: 0, entries: Array::filled(cap, .None) }
+    { size: 0, entries: List::filled(cap, .None) }
   }
 
   fn new[V](): HashMap[V] {
@@ -220,7 +220,7 @@ fn randByte(): u8 {
 }
 
 fn randString(len: uint): string {
-  let* arr = Array::withCapacity[char](len);
+  let* arr = List::withCapacity[char](len);
   let mut i: uint = 0;
   while i < len {
     arr.push(randByte() as char);
