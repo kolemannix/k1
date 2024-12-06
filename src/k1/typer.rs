@@ -309,6 +309,7 @@ pub struct TypedFunction {
     pub compiler_debug: bool,
     pub kind: TypedFunctionKind,
     pub span: SpanId,
+    pub is_concrete: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -4330,7 +4331,7 @@ impl TypedModule {
         let name_string = self.make_qualified_name(scope_id, name, "__", true);
         let name = self.ast.identifiers.intern(name_string);
 
-        let function = TypedFunction {
+        let mut function = TypedFunction {
             name,
             scope: closure_scope_id,
             param_variables: param_variables.into(),
@@ -4346,7 +4347,11 @@ impl TypedModule {
             compiler_debug: false,
             kind: TypedFunctionKind::Closure,
             span,
+            is_concrete: false,
         };
+        let is_concrete = self.is_function_concrete(&function);
+        function.is_concrete = is_concrete;
+
         let body_function_id = self.add_function(function);
         let closure_type_id = self.types.add_closure(
             &self.ast.identifiers,
@@ -7022,7 +7027,7 @@ impl TypedModule {
         Ok(specialized_function_id)
     }
 
-    pub fn should_codegen_function(&self, function: &TypedFunction) -> bool {
+    pub fn is_function_concrete(&self, function: &TypedFunction) -> bool {
         match function.intrinsic_type {
             Some(intrinsic) if intrinsic.is_inlined() => false,
             _ => match &function.kind {
@@ -7036,10 +7041,12 @@ impl TypedModule {
                             .iter()
                             .any(|nt| self.does_type_reference_type_variables(nt.type_id)),
                     };
-                    // debug!(
-                    //     "should_codegen_function={b} for {}",
-                    //     self.function_to_string(function, false)
-                    // );
+                    if function.compiler_debug {
+                        eprintln!(
+                            "is_function_concrete={b} for {}",
+                            self.function_to_string(function, false)
+                        );
+                    }
                     b
                 }
             },
@@ -7660,7 +7667,7 @@ impl TypedModule {
             None
         };
 
-        let function = TypedFunction {
+        let mut function = TypedFunction {
             name,
             scope: fn_scope_id,
             param_variables,
@@ -7676,7 +7683,11 @@ impl TypedModule {
             compiler_debug: is_debug,
             span: parsed_function_span,
             type_id: function_type_id,
+            is_concrete: false,
         };
+        let is_concrete = self.is_function_concrete(&function);
+        function.is_concrete = is_concrete;
+
         let actual_function_id = self.add_function(function);
         debug_assert!(actual_function_id == function_id);
 
@@ -7738,8 +7749,6 @@ impl TypedModule {
         }
         let function = self.get_function(declaration_id);
         let function_name = function.name;
-        let specialization_info = function.specialization_info.as_ref();
-        let function_type_id = function.type_id;
         let fn_scope_id = function.scope;
         let return_type = self.get_function_type(declaration_id).return_type;
         let is_extern = matches!(function.linkage, Linkage::External(_));
@@ -7759,16 +7768,12 @@ impl TypedModule {
                 return make_fail_span("unexpected function implementation", function_span)
             }
             Some(block_ast) => {
-                if let Some(specialization_info) = specialization_info {
-                    let is_not_concrete = self.does_type_reference_type_variables(function_type_id);
-                    if is_not_concrete {
-                        debug!(
-                        "Skipping typecheck of body for non-concrete specialization of {} on params {}",
+                if !function.is_concrete {
+                    debug!(
+                        "Skipping typecheck of body for non-concrete specialization of {}",
                         self.function_id_to_string(declaration_id, true),
-                        self.pretty_print_named_types(&specialization_info.specialized_type_params)
                     );
-                        return Ok(());
-                    }
+                    return Ok(());
                 };
                 // Note(clone): Intern blocks
                 let block_ast = block_ast.clone();
@@ -8456,6 +8461,7 @@ impl TypedModule {
             // debug!("{}", self);
             bail!("{} failed typechecking with {} errors", self.name(), self.errors.len())
         }
+
         Ok(())
     }
 

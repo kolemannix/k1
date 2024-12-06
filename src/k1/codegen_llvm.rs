@@ -2291,37 +2291,21 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         call: &Call,
     ) -> CodegenResult<LlvmValue<'ctx>> {
         match intrinsic_type {
-            IntrinsicFunction::SizeOf => {
+            IntrinsicFunction::SizeOf
+            | IntrinsicFunction::SizeOfStride
+            | IntrinsicFunction::AlignOf => {
                 let type_param = &call.type_args[0];
                 let llvm_type = self.codegen_type(type_param.type_id)?;
                 let size = self.size_info(&llvm_type.value_any_type());
-                let size_bytes = size.size_bits / 8;
-                let size_value = self.builtin_types.int.const_int(size_bytes as u64, false);
+                let num_bits = match intrinsic_type {
+                    IntrinsicFunction::SizeOf => size.size_bits,
+                    IntrinsicFunction::SizeOfStride => size.stride_bits,
+                    IntrinsicFunction::AlignOf => size.align_bits,
+                    _ => unreachable!(),
+                };
+                let num_bytes = num_bits / 8;
+                let size_value = self.builtin_types.int.const_int(num_bytes as u64, false);
                 Ok(size_value.as_basic_value_enum().into())
-            }
-            IntrinsicFunction::SizeOfStride => {
-                // nocommit: For stride size, instead of asking llvm for the stride size, and guessing
-                // which function to call, we could use the gep trick instead:
-                // GEP on a null array to the 2nd element
-                // nocommit: DRY these 3 ops
-                let type_param = &call.type_args[0];
-                let llvm_type = self.codegen_type(type_param.type_id)?;
-                let size = self.size_info(&llvm_type.value_any_type());
-                let size_bytes = size.stride_bits / 8;
-                let size_value = self.builtin_types.int.const_int(size_bytes as u64, false);
-                Ok(size_value.as_basic_value_enum().into())
-            }
-            IntrinsicFunction::AlignOf => {
-                let type_param = &call.type_args[0];
-                // nocommit: the alignment of an enum needs to be the largest alignment of
-                // its variants, NOT the alignment of its 'base struct' repr, since that has
-                // a packed struct in it, which causes alignment to be 1!
-                let llvm_type = self.codegen_type(type_param.type_id)?;
-                let size = self.size_info(&llvm_type.value_any_type());
-                eprintln!("size: {:?} of {:?}", size, llvm_type.physical_value_type());
-                let align_bytes = size.align_bits / 8;
-                let align_value = self.builtin_types.int.const_int(align_bytes as u64, false);
-                Ok(align_value.as_basic_value_enum().into())
             }
             IntrinsicFunction::BitNot => {
                 let input_value = self.codegen_expr_basic_value(&call.args[0])?.into_int_value();
@@ -2712,10 +2696,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
         }
         for (id, function) in self.module.function_iter() {
-            if self.module.should_codegen_function(function) {
+            if function.is_concrete {
                 self.codegen_function_or_get(id)?;
             }
         }
+        // self.codegen_function_or_get(self.module.get_main_function_id().unwrap())?;
         info!("codegen phase 'ir' took {}ms", start.elapsed().as_millis());
         Ok(())
     }

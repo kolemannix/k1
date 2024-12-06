@@ -738,6 +738,10 @@ impl Types {
         }
     }
 
+    pub fn type_count(&self) -> usize {
+        self.types.len()
+    }
+
     pub fn item_type_of_iterable(
         &self,
         identifiers: &Identifiers,

@@ -51,16 +51,12 @@ namespace Buffer {
   fn filled[T](size: u64, value: T): Buffer[T] {
     let buf: Buffer[T] = _allocate[T](size);
     let mut i = 0: u64;
-    // TODO: could be a series of memcpy calls
     while i < size {
       buf.set(i, value);
       i = i + 1;
     };
     buf
   }
-
-  // 1 2 3 4 5, len=5
-  // slice(5, 5) == 
 
 
   fn slice[T](self: Buffer[T], start: u64, end: u64): Buffer[T] {
@@ -70,7 +66,7 @@ namespace Buffer {
     if start >= self.len or start < 0 {
       crash("slice start index out of bounds: \{start}")
     };
-    let end = if end >= self.len self.len else end;
+    let end = if end >  self.len self.len else end;
     let newLen = end - start;
     let newBase = self.getRef(start) as Pointer;
     { len: newLen, data: newBase }

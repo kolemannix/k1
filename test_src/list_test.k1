@@ -18,7 +18,7 @@ fn listFill(): int {
   assert(xs.*.first()! == 0);
   assert(xs.*.last()! == 4);
 
-  let exp = #debug [0,1,2,3,4];
+  let exp = [0,1,2,3,4];
   assert(xs.* == exp);
 
   let xs2 = xs.*.cloned();
