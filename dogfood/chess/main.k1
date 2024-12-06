@@ -1,4 +1,4 @@
-deftype Square = enum
+deftype Square = either
   Blank
   , Pawn
   , Knight
@@ -7,105 +7,102 @@ deftype Square = enum
   , Queen
   , King
 
-fn as_digit(c: char): int? {
-  let i_code = c.toInt();
-  let ret = i_code >= 48 and i_code <= 57;
-  if ret {
-    i_code - 48
-  } else {
-    None
+namespace Square {
+  fn charSymbol(self: Square): char {
+    switch self {
+       .Blank  -> '-',
+       .Pawn   -> 'P',
+       .Knight -> 'N',
+       .Bishop -> 'B',
+       .Rook   -> 'R',
+       .Queen  -> 'Q',
+       .King   -> 'K',
+    };
   }
 }
 
-fn from_xy(x: int, y: int): int {
+fn from_xy(x: u8, y: u8): u8 {
   x + y * 8
 }
-fn from_name(s: string): int {
-  let file = switch s[0] {
-    , 'a' -> 0
-    , 'b' -> 1
-    , 'c' -> 2
-    , 'd' -> 3
-    , 'e' -> 4
-    , 'f' -> 5
-    , 'g' -> 6
-    , 'h' -> 7
+fn from_name(s: string): u8 {
+  let file = switch s.first()! {
+     'a' -> 0:u8,
+     'b' -> 1,
+     'c' -> 2,
+     'd' -> 3,
+     'e' -> 4,
+     'f' -> 5,
+     'g' -> 6,
+     'h' -> 7,
+     _ -> crash("bad tile name: \{s}")
   };
-  let rank = as_digit(s[1])! - 1;
+  let rank = (s.get(2).toAsciiDigit()! - 1);
   file + rank * 8
 }
 
-fn dump(board: Array<Square>): unit {
+fn dump(board: List[Square]): unit {
   for square in board do {
-    switch square {
-      , .Blank -> print("-")
-      , .Pawn -> print("P")
-      , .Knight -> print("N")
-      , .Bishop -> print("B")
-      , .Rook -> print("R")
-      , .Queen -> print("Q")
-      , .King -> print("K")
-    };
+    let symbol = square.charSymbol();
+    printIt(symbol);
     if it_index % 8 == 7 {
       println("");
     };
   }
 }
 
-fn startPos(): Array<Square> {
-  let board: Array<Square> = Array::withCapacity<Square>(64);
-  for board do {
-    board[it_index] = .Blank;
-  };
-  board[0] = .Rook;
-  board[1] = .Knight;
-  board[2] = .Bishop;
-  board[3] = .Queen;
-  board[4] = .King;
-  board[5] = .Bishop;
-  board[6] = .Knight;
-  board[7] = .Rook;
-  board[8] = .Pawn;
-  board[9] = .Pawn;
-  board[10] = .Pawn;
-  board[11] = .Pawn;
-  board[12] = .Pawn;
-  board[13] = .Pawn;
-  board[14] = .Pawn;
-  board[15] = .Pawn;
-  board[48] = .Pawn;
-  board[49] = .Pawn;
-  board[50] = .Pawn;
-  board[51] = .Pawn;
-  board[52] = .Pawn;
-  board[53] = .Pawn;
-  board[54] = .Pawn;
-  board[55] = .Pawn;
-  board[56] = .Rook;
-  board[57] = .Knight;
-  board[58] = .Bishop;
-  board[59] = .Queen;
-  board[60] = .King;
-  board[61] = .Bishop;
-  board[62] = .Knight;
-  board[63] = .Rook;
+fn startPos(): List[Square] {
+  let board = List::filled[Square](64, .Blank);
+  board.set(0, .Rook);
+  board.set(1, .Knight);
+  board.set(2, .Bishop);
+  board.set(3, .Queen);
+  board.set(4, .King);
+  board.set(5, .Bishop);
+  board.set(6, .Knight);
+  board.set(7, .Rook);
+  board.set(8, .Pawn);
+  board.set(9, .Pawn);
+  board.set(10, .Pawn);
+  board.set(11, .Pawn);
+  board.set(12, .Pawn);
+  board.set(13, .Pawn);
+  board.set(14, .Pawn);
+  board.set(15, .Pawn);
+  board.set(48, .Pawn);
+  board.set(49, .Pawn);
+  board.set(50, .Pawn);
+  board.set(51, .Pawn);
+  board.set(52, .Pawn);
+  board.set(53, .Pawn);
+  board.set(54, .Pawn);
+  board.set(55, .Pawn);
+  board.set(56, .Rook);
+  board.set(57, .Knight);
+  board.set(58, .Bishop);
+  board.set(59, .Queen);
+  board.set(60, .King);
+  board.set(61, .Bishop);
+  board.set(62, .Knight);
+  board.set(63, .Rook);
   board
 }
 
 fn main(): int {
-  let board: Array<Square> = startPos();
+  println("Hello, Chess!");
+  let board: List[Square] = startPos();
   dump(board);
 
   let move1 = {
     from: from_name("e2"),
     to: from_name("e4")
   };
-  printInt(move1.from);
+  printIt(move1.from);
   println("");
-  printInt(move1.to);
+  printIt(move1.to);
 
-  board[move1.to] = board[move1.from];
-  board[move1.from] = .Blank;
+  board.set(move1.to as u64, board.get(move1.from as u64));
+  board.set(move1.from as u64, .Blank);
+
   println("");
   dump(board);
 

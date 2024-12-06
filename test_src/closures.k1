@@ -1,4 +1,4 @@
-fn map[T, U](a: List[T], f: \T -> U): Array[U] {
+fn map[T, U](a: List[T], f: \T -> U): List[U] {
   let* us = List::withCapacity[U](a.len);
   for i in a do { us.push[U](f(i)) };
   us.*
@@ -7,8 +7,8 @@ fn map[T, U](a: List[T], f: \T -> U): Array[U] {
 // Todo: this performs dynamic dispatch, always
 // We could instead specialize the function on the closure type
 // and get static dispatch
-fn filter[T](a: List[T], f: \T -> bool): Array[T] {
-  let* keep = List::new[T]();
+fn filter[T](a: List[T], f: \T -> bool): List[T] {
+  let* keep = List::empty[T]();
   for i in a do { if f(i) keep.push(i) };
   keep
 }

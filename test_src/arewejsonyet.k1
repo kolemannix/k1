@@ -3,8 +3,8 @@ deftype Json = either
   , JsNumber(string)
   , JsBool(bool)
   , JsNull
-  , JsArray(Array[Json])
-  , JsObject(Array[{ key: string, value: Json }])
+  , JsArray(List[Json])
+  , JsObject(List[{ key: string, value: Json }])
 
 fn main(): int {
   let obj: Json = .JsStr("hello");

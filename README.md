@@ -87,7 +87,7 @@ fn main(): int {
   };
   let mut goodGamesSum: u64 = 0;
 
-  // TODO: I should enhance this using an `Array.filter` closure now
+  // TODO: I should enhance this using an `List.filter` closure now
   for line in input.splitByChar('\n') do {
     let id = it_index + 1;
     let line = line.splitByChar(':').get(1);
@@ -96,7 +96,7 @@ fn main(): int {
 
       // Parse the puzzle input
       let values = round.splitByChar(',');
-      let values: Array[{ amount: int, color: Color }] = for value in values yield {
+      let values: List[{ amount: int, color: Color }] = for value in values yield {
         let amountColor = value.splitByChar(' ');
         let amount = amountColor.get(0).toInt() ? crash("Bad amount: \{value}");
         let color: Color = switch amountColor.get(1) {

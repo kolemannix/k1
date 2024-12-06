@@ -2,7 +2,7 @@ fn day2(): int {
   let input: string = Files::readToString("/Users/knix/dev/k1/dogfood/aoc/2023/1.txt");
   let lines = input.splitByChar('\n');
   let lineDigits = for line in lines yield {
-    let* digits: Array[i64]* = [];
+    let* digits: List[i64]* = [];
     for c in line do {
       let thisDigit: i64? = if c.toAsciiDigit() is .Some(d) {
         .Some(d as i64)
@@ -35,7 +35,7 @@ fn day2(): int {
       };
     };
   };
-  println("sum is ".concat(sum.show()));
+  println("sum is \{sum}");
   sum
 }
 
@@ -44,7 +44,7 @@ fn main(): int {
   print("The file was ");
   printUInt(input.len);
   println(" characters long");
-  let* digits: Array[Array[int]]* = [];
+  let* digits: List[List[int]]* = [];
   let mut line: u64 = 0;
   let mut first = true;
   for c in input do {
@@ -70,9 +70,7 @@ fn main(): int {
       };
     };
   };
-  print("sum is ");
-  printInt(sum);
-  println("");
+  println("sum is \{sum}");
 
   day2();
   0

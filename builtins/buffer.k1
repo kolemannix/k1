@@ -1,0 +1,197 @@
+// Represents a Contiguously allocated segment of memory that
+// is alleged to store values of type T. This is an inherently
+// unsafe type as all of the memory is not guaranteed to be populated
+// 
+// I'm going to introduce a safe wrapper around it that is meant to be used
+// as your 'slice' type, and we'll rename this, perhaps, to RawBuffer
+// It'll be the same thing except for a 'Promise' from the creator that
+// its fully populated
+namespace Buffer {
+
+  fn bufferLenBytes[T](count: u64): u64 { count * sizeOfStride[T]() }
+
+  fn fromRawParts[T](len: u64, data: Pointer): Buffer[T] { 
+    { len: len, data: data }
+  }
+
+  fn _allocate[T](count: u64): Buffer[T] {
+    let data = if count == 0 {
+      Pointer::null()
+    } else {
+      let sizeBytes = bufferLenBytes[T](count);
+      libc::malloc(sizeBytes)
+    };
+    { len: count, data: data }
+  }
+
+  fn _copyFrom[T](source: Buffer[T], dest: Buffer[T], count: u64): unit {
+    if count >  source.len {
+      crash("Buffer copy source index out of bounds: \{count}")
+    };
+    if count >  dest.len {
+      crash("Buffer copy dest index out of bounds: \{count}")
+    };
+    let numBytes = bufferLenBytes[T](count);
+    libc::memcpy(dst = dest.data, src = source.data, count = numBytes);
+    ()
+  }
+
+  fn _enlargedClone[T](self: Buffer[T], newCount: u64): Buffer[T] {
+    let newBuffer = _allocate[T](newCount);
+    _copyFrom[T](self, newBuffer, self.len);
+    newBuffer
+  }
+
+  fn lenBytes[T](self: Buffer[T]): u64 { bufferLenBytes[T](self.len) }
+
+  fn empty[T](): Buffer[T] {
+    _allocate[T](0)
+  }
+
+  fn filled[T](size: u64, value: T): Buffer[T] {
+    let buf: Buffer[T] = _allocate[T](size);
+    let mut i = 0: u64;
+    // TODO: could be a series of memcpy calls
+    while i < size {
+      buf.set(i, value);
+      i = i + 1;
+    };
+    buf
+  }
+
+  // 1 2 3 4 5, len=5
+  // slice(5, 5) == 
+
+
+  fn slice[T](self: Buffer[T], start: u64, end: u64): Buffer[T] {
+    if end < start or self.len == 0 {
+      return(empty[T]())
+    };
+    if start >= self.len or start < 0 {
+      crash("slice start index out of bounds: \{start}")
+    };
+    let end = if end >= self.len self.len else end;
+    let newLen = end - start;
+    let newBase = self.getRef(start) as Pointer;
+    { len: newLen, data: newBase }
+  }
+
+  fn take[T](self: Buffer[T], count: u64): Buffer[T] { self.slice(0,     count) }
+  fn drop[T](self: Buffer[T], count: u64): Buffer[T] { self.slice(count, self.len) }
+
+  fn getRef[T](self: Buffer[T], index: u64): T* {
+    if index >= self.len {
+      crash("Buffer index out of bounds")
+    };
+    self.data.refAtIndex[T](index)
+  }
+
+  fn set[T](self: Buffer[T], index: u64, elem: T): unit {
+    let tRef = self.getRef(index);
+    tRef <- elem;
+  }
+
+  fn get[T](self: Buffer[T], index: u64): T {
+    let tRef = self.getRef(index);
+    tRef.*
+  }
+
+  fn cloned[T](self: Buffer[T]): Buffer[T] {
+    let numBytes = self.lenBytes();
+    let newBuffer = libc::malloc(numBytes);
+    libc::memcpy(dst = newBuffer, src = self.data, count = numBytes);
+    { len: self.len, data: newBuffer }
+  }
+
+  fn isEmpty[T](self: Buffer[T]): bool {
+    self.len == 0
+  }
+
+  fn nonEmpty[T](self: Buffer[T]): bool {
+    self.len > 0
+  }
+
+  fn firstRef[T](self: Buffer[T]): T*? {
+    if not self.isEmpty() {
+      .Some(self.getRef(0))
+    } else {
+      .None
+    }
+  }
+
+  fn first[T](self: Buffer[T]): T? {
+    switch self.firstRef() {
+      .None -> .None,
+      .Some(firstRef) -> .Some(firstRef.*)
+    }
+  }
+
+  fn lastRef[T](self: Buffer[T]): T*? {
+    if not self.isEmpty() {
+      .Some(self.getRef(self.len - 1))
+    } else {
+      .None
+    }
+  }
+
+  fn last[T](self: Buffer[T]): T? {
+    switch self.lastRef() {
+      .None -> .None,
+      .Some(lastRef) -> .Some(lastRef.*)
+    }
+  }
+
+  fn concat[T](self: Buffer[T], other: Buffer[T]): Buffer[T] {
+    let new = self._enlargedClone[T](self.len + other.len);
+    _copyFrom(
+      source = other, 
+      dest = new.slice(self.len, self.len + other.len), 
+      count = other.len
+    );
+    new
+  }
+
+  fn swap[T](self: Buffer[T]*, indexA: u64, indexB: u64): unit {
+    let aRef = self.*.getRef(indexA);
+    let bRef = self.*.getRef(indexB);
+    let bValue = bRef.*;
+    bRef <- aRef.*;
+    aRef <- bValue;
+  }
+
+  fn sorted[T](self: Buffer[T]): Buffer[T] where T: Comparable {
+    let* list = List::wrapBuffer(self);
+    list.sort();
+    list.*.toBuffer()
+  }
+}
+
+impl Equals for Buffer[u8] {
+  fn equals(self: Buffer[u8], other: Buffer[u8]): bool {
+    if self.len != other.len {
+      false
+    } else {
+      libc::memcmp(self.data, other.data, self.lenBytes()) == 0
+    }
+  }
+}
+
+impl Equals for Buffer[char] {
+  fn equals(self: Buffer[char], other: Buffer[char]): bool {
+    if self.len != other.len {
+      false
+    } else {
+      libc::memcmp(self.data, other.data, self.lenBytes()) == 0
+    }
+  }
+}
+
+impl Equals for Buffer[int] {
+  fn equals(self: Buffer[int], other: Buffer[int]): bool {
+    if self.len != other.len {
+      false
+    } else {
+      libc::memcmp(self.data, other.data, self.lenBytes()) == 0
+    }
+  }
+}

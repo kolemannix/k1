@@ -9,7 +9,7 @@ fn main(): int {
   let x = identity(12);
   assert(x == 12);
 
-  let y: Array[bool] = identity(identity([]));
+  let y: List[bool] = identity(identity([]));
 
   assert(identityNested(4) == 4);
   assert(identityNested(true));

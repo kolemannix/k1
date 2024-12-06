@@ -1461,7 +1461,6 @@ impl TypedModule {
     /// Note: We could cache whether or not a type is generic on insertion into the type pool
     ///       But types are not immutable so this could be a dangerous idea!
     pub fn does_type_reference_type_variables(&self, type_id: TypeId) -> bool {
-        eprintln!("does_type_reference_type_variables on {}", self.type_id_to_string(type_id));
         if let Some(spec_info) = self.types.get_generic_instance_info(type_id) {
             return spec_info
                 .param_values
@@ -5134,9 +5133,17 @@ impl TypedModule {
             .find(|imple| imple.type_id == type_id && imple.ability_id == ability_id)
             .ok_or(make_error(
                 format!(
-                    "Missing ability '{}' implementation for '{}'",
+                    "Missing ability '{}' implementation for '{}'. Impls:\n{}",
                     self.ast.identifiers.get_name(self.get_ability(ability_id).name),
-                    self.type_id_to_string(type_id)
+                    self.type_id_to_string(type_id),
+                    self.pretty_print_types(
+                        &self
+                            .ability_impls
+                            .iter()
+                            .filter(|imple| imple.ability_id == ability_id)
+                            .map(|imple| { imple.type_id })
+                            .collect::<Vec<_>>()
+                    )
                 ),
                 span_for_error,
             ))
@@ -6961,8 +6968,18 @@ impl TypedModule {
             None,
         );
 
-        let mut new_name = "".to_string();
-        new_name.push_str(&name);
+        let spec_num = specializations.len() + 1;
+        let new_name = format!(
+            "{name}_spec_{spec_num}_{}",
+            inferred_or_passed_type_args
+                .iter()
+                .map(|nt| self.type_id_to_string(nt.type_id))
+                .collect::<Vec<_>>()
+                .join("_")
+        );
+
+        self.scopes.get_scope_mut(spec_fn_scope_id).name =
+            Some(self.ast.identifiers.intern(&new_name));
 
         // Add type_args to scope by name and typecheck them against the actual params
         for type_param in inferred_or_passed_type_args.iter() {
@@ -6984,17 +7001,6 @@ impl TypedModule {
                 );
             }
         }
-        new_name.push_str("_spec_");
-        new_name.push_str(
-            &inferred_or_passed_type_args
-                .iter()
-                .map(|nt| self.type_id_to_string(nt.type_id))
-                .collect::<Vec<_>>()
-                .join("_"),
-        );
-
-        self.scopes.get_scope_mut(spec_fn_scope_id).name =
-            Some(self.ast.identifiers.intern(&new_name));
 
         // TODO: Specialization logic is weirdly divided between this function and
         // eval_function_predecl, resulting in a lot of edge cases or ignoring some arguments
@@ -7030,16 +7036,11 @@ impl TypedModule {
                             .iter()
                             .any(|nt| self.does_type_reference_type_variables(nt.type_id)),
                     };
-                    debug!(
-                        "should_codegen_function={b} for {}",
-                        self.function_to_string(function, false)
-                    );
+                    // debug!(
+                    //     "should_codegen_function={b} for {}",
+                    //     self.function_to_string(function, false)
+                    // );
                     b
-                    //function.type_params.is_empty() && {
-                    //    let is_at_all_generic =
-                    //        self.types.does_type_reference_type_variables(function.type_id);
-                    //    !is_at_all_generic
-                    //}
                 }
             },
         }
@@ -8359,8 +8360,6 @@ impl TypedModule {
             }
             panic!("Unevaluated type defns!!!")
         }
-
-        eprintln!("{self}");
 
         //
         // This just ensures our BUFFER_TYPE_ID constant is correct

@@ -1,4 +1,4 @@
-fn addTracked(context hist: Array[string]*)(x: int, y: int): int {
+fn addTracked(context hist: List[string]*)(x: int, y: int): int {
   hist.push(x.show().concat(" + ").concat(y.show()));
   x + y
 }
@@ -8,7 +8,7 @@ fn addAll(context a: u8, b: u16)(x: int, y: int): int {
 }
 
 fn main(): int {
-  let context history: Array[string]* = new([]);
+  let context history: List[string]* = new([]);
 
   assert(addTracked(context history)(1,2) == 3);
 

@@ -3180,7 +3180,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
         // Functions or auto
         let next = self.peek();
-        let mut functions = Vec::new();
+        let mut functions = Vec::with_capacity(2);
         let final_token = if next.kind == K::KeywordAuto {
             self.tokens.advance();
             next
@@ -3327,9 +3327,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 }
                 Ok(None) => break,
             }
-        }
-        while let Some(def) = self.parse_definition()? {
-            new_definitions.push(def)
         }
         if self.tokens.peek().kind != K::Eof {
             if self.module.errors.is_empty() {

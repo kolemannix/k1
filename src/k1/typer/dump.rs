@@ -404,7 +404,11 @@ impl TypedModule {
         match stmt {
             TypedStmt::Expr(expr) => self.display_expr(expr, writ, indentation),
             TypedStmt::Let(let_stmt) => {
-                writ.write_str("let ")?;
+                if let_stmt.is_referencing {
+                    writ.write_str("let* ")?;
+                } else {
+                    writ.write_str("let ")?;
+                }
                 self.display_variable(self.variables.get_variable(let_stmt.variable_id), writ)?;
                 writ.write_str(" = ")?;
                 self.display_expr(&let_stmt.initializer, writ, indentation)

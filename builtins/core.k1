@@ -43,13 +43,6 @@ fn identity[T](value: T): T { value }
 
 fn ignore[T](value: T): unit { () }
 
-fn printInt(value: i64): unit {
-  print(value.show())
-}
-fn printUInt(value: u64): unit {
-  print(value.show())
-}
-
 fn printIt[T](value: T): unit where T: Show {
   let s = value.show();
   print(s)
@@ -129,16 +122,8 @@ namespace char {
   }
 }
 
-impl Equals for List[u8] {
-  fn equals(self: List[u8], other: List[u8]): bool { self.buffer == other.buffer }
-}
-
-impl Equals for List[int] {
-  fn equals(self: List[int], other: List[int]): bool { self.buffer == other.buffer }
-
-impl Show for bool {
-  fn show(self: bool): string { if self "true" else "false" }
-}
+impl Show for bool { fn show(self: bool): string { if self "true" else "false" } }
+impl Show for char { fn show(self: char): string { self.toString() } }
 
 impl Show for i64 {
   // We know this is super slow, relax, it'll be ok
@@ -200,6 +185,12 @@ impl Show for u64 {
 
     let rev = buf.*.reversed();
     string::wrapList(rev)
+  }
+}
+
+impl Show for u8 {
+  fn show(self: u8): string {
+    (self as u64).show()
   }
 }
 
