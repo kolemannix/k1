@@ -17,7 +17,33 @@ use parse::{lex_text, ParsedModule, Source};
 
 use std::path::PathBuf;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum Command {
+    Check {
+        /// File
+        file: PathBuf,
+    },
+    Build {
+        /// File
+        file: PathBuf,
+    },
+    Run {
+        /// File
+        file: PathBuf,
+    },
+}
+
+impl Command {
+    pub fn file(&self) -> &PathBuf {
+        match self {
+            Command::Check { file } => file,
+            Command::Build { file } => file,
+            Command::Run { file } => file,
+        }
+    }
+}
 
 #[derive(Parser, Debug, Clone)]
 #[command(author, version, about, long_about = None)]
@@ -27,7 +53,7 @@ pub struct Args {
     pub no_std: bool,
 
     /// Output an LLVM IR file at out_dir/{module_name}.ll
-    #[arg(long, default_value_t = true)]
+    #[arg(long, default_value_t = false)]
     pub write_llvm: bool,
 
     /// No Optimize
@@ -42,16 +68,18 @@ pub struct Args {
     #[arg(long)]
     pub debug: bool,
 
-    /// Run after compiling
-    #[arg(long, default_value_t = false)]
-    pub run: bool,
-
     /// GUI
     #[arg(long, default_value_t = false)]
     pub gui: bool,
 
-    /// File
-    pub file: PathBuf,
+    #[command(subcommand)]
+    pub command: Command,
+}
+
+impl Args {
+    pub fn file(&self) -> &PathBuf {
+        self.command.file()
+    }
 }
 
 /// Type size assertion. The first argument is a type and the second argument is its expected size.
@@ -77,7 +105,7 @@ pub struct CompileModuleError {
 /// - module name is the name of the file.
 pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileModuleError> {
     let start_parse = std::time::Instant::now();
-    let src_path = &args.file.canonicalize().unwrap();
+    let src_path = &args.file().canonicalize().unwrap();
     let is_dir = src_path.is_dir();
     let (src_dir, module_name) = if is_dir {
         let src_dir = src_path.canonicalize().unwrap();
@@ -203,12 +231,6 @@ pub fn write_executable(debug: bool, out_dir: &str, module_name: &str) -> Result
         &format!("{}/{}.ll", out_dir, module_name),
         "-o",
         &format!("{}/{}.out", out_dir, module_name),
-        // "-L",
-        // "k1lib/zig-out/lib",
-        "-L",
-        "k1lib",
-        "-l",
-        "k1lib",
     ]);
     log::info!("Build Command: {:?}", build_cmd);
     let build_status = build_cmd.status()?;
@@ -219,7 +241,7 @@ pub fn write_executable(debug: bool, out_dir: &str, module_name: &str) -> Result
     }
 
     let elapsed = clang_time.elapsed();
-    info!("codegen phase 'clang' took {}ms", elapsed.as_millis());
+    info!("codegen phase 'link optimized executable' took {}ms", elapsed.as_millis());
     Ok(())
 }
 

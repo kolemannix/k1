@@ -131,8 +131,13 @@
     - [x] Not the worst thing to use let* for the c-interop case of needing a pointer, that's what .& was doing anyway
   - [x] EnumGetPayload on a reference doesn't give a reference (and shouldn't always, what syntax to specify)
   - [x] FieldAccess on a reference doesn't give a reference (and shouldn't always, what syntax to specify)
-- [ ] Array/Slice/string rework to Buffer/List, and eventually Array (fixed size at compile time)
+- [x] Array/Slice/string rework to Buffer/List, and eventually Array (fixed size at compile time)
+- [x] Do away with k1lib.c?
+- [ ] Replace 'unit' with an empty struct, encoded as `{}` at the type level and `{}` at the value level
 - [ ] Re-write specialization to be simpler.
+- [ ] Imports (need design around modules)
+  - [ ] Perhaps, only what is imported from main is compiled, besides the builtins?
+  - [ ] Would require a new pass for only imports
 - [ ] Typecheck 'main'
 - [ ] Matching on references
   - [ ] Match to get reference to each struct field, for example, use * for a dereferencing match
@@ -144,9 +149,9 @@
 - [x] break from while
 - [ ] 'never' needs to work in every expression position
 - [x] Move tests into fewer files
-- [ ] accumulate test errors and allow inline assertions when a line should error.
-      - Probably one tests for failing compilation and one passing one for each major language area
-- [ ] b"" strings that are of type Slice[u8]
+- [ ] accumulate test errors and support inline test comment assertions when a line should produce a compiler error.
+      - Probably one test for failing compilation and one passing one for each major language area
+- [ ] b"" strings that are of type Buffer[u8]
 - [ ] Finish hashmap implementation
 - [ ] Builtin syntax for maps
   - [ ] [key:value] empty: [:]
@@ -156,30 +161,25 @@
   - [ ] Disallow naked variable patterns in 'is' OR Disallow capital variables, require capital enum variants...
       - `if self.slots.get(probe_index) is None {`
 - [x] Handle escaped chars in string literals
-- [ ] Friendliness pass
+- [x] Friendliness pass
   - [x] Replace 'enum' keyword with 'either', ensure the ambiguous cases have good errors (inside struct, inside param list)
-  - [ ] Replace 'unit' with an empty struct, encoded as `{}` at the type level and `{}` at the value level
   - [x] 'when' keyword is bad; `switch` maybe or `case`, or resolve the ambiguity with `when <x> is {}`
   - [x] Replace `type` with `deftype` - It would be really nice _not_ to take the keyword 'type'. Just a thought from using Rust/Scala
 - [x] Remove tag literals, make enum tags per-enum
 - [ ] Struct shorthand syntax
-- [ ] Imports (need design around modules)
-  - Perhaps, only what is imported from main is compiled, besides the builtins?
-  - Would require a new pass for only imports
 - [ ] Add ranges, as stdlib thing
       `sealed abstract class Range(let start: Int, let end: Int, let step: Int)`
 - [ ] Make demo readme / site
 - [ ] Generic abilities (ability From<T> { ... })
 - [ ] Define clear 'platform layer' (crash, alloc/free, other?). Then we could do an LLVM interp platform and a rust interpreter platform
-- [ ] RTTI story and 'any' type
+- [ ] Runtime type info story, typeOf, typeInfo, and 'any' type
 - [ ] Ability-based iteration
-- [ ] Mark types as trivially copyable or not
 - [ ] Conditional compile directive
+- [ ] Mark types as trivially copyable or not
 ^ The builtin array would be NOT copyable so that you don't accidentally alias the data ptr
-- [ ] German/Umbra strings
 - [ ] Ability constraints on generics (not strictly needed since we have them on functions)
-- [ ] Do away with k1lib.c?
 - [ ] Test handling of NaN and Infinity, other float edge cases
+- [ ] German/Umbra strings
 
 ## Non-goals at least for now
 - [ ] Memory safety / solving the 'aliasing' problem, not because its unimportant but because I have other interests
@@ -199,10 +199,8 @@
 ## Compiler
 - [ ] LLVM: avoid loading aggregate values directly
 - [ ] Use smallvec
-- [ ] Invoke LLVM from in-memory repr?
 - [ ] UTF8
 - [ ] Intern ParsedBlock and ParsedStatement
-- [ ] Think about introducing type 'kind' and check_kind next time we need to typecheck on shape but not _really_ typecheck such as when inferring
 
 ## Error story
 - [ ] As values, of course.

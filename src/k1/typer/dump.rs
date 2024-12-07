@@ -93,7 +93,12 @@ impl TypedModule {
         self.display_type_id(var.type_id, false, writ)
     }
 
-    fn display_type_id(&self, ty: TypeId, expand: bool, writ: &mut impl Write) -> std::fmt::Result {
+    pub fn display_type_id(
+        &self,
+        ty: TypeId,
+        expand: bool,
+        writ: &mut impl Write,
+    ) -> std::fmt::Result {
         let ty = self.types.get_no_follow(ty);
         self.display_type(ty, expand, writ)
     }

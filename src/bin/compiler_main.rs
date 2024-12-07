@@ -2,7 +2,7 @@ use std::sync::{Arc, RwLock};
 use std::thread::{self, JoinHandle};
 
 use clap::Parser;
-use k1::compiler::Args;
+use k1::compiler::{Args, Command};
 use k1::typer::TypedModule;
 use k1::{compiler, gui};
 use log::info;
@@ -29,14 +29,22 @@ fn main() {
         let module_name = module.name();
         info!("done waiting on compile thread");
         let llvm_ctx = inkwell::context::Context::create();
-        let _codegen = match compiler::codegen_module(&args, &llvm_ctx, &module, out_dir, true) {
-            Ok(codegen) => codegen,
-            Err(_err) => {
+        if matches!(args.command, Command::Check { .. }) {
+            std::process::exit(0)
+        };
+        match compiler::codegen_module(&args, &llvm_ctx, &module, out_dir, true) {
+            Ok(_codegen) => {
+                if matches!(args.command, Command::Build { .. }) {
+                    std::process::exit(0)
+                };
+                compiler::run_compiled_program(out_dir, module_name);
+                std::process::exit(0);
+            }
+            Err(err) => {
+                eprintln!("Codegen error: {err}");
                 std::process::exit(1);
             }
         };
-        compiler::run_compiled_program(out_dir, module_name);
-        std::process::exit(0);
     }
 
     let module_handle: Arc<RwLock<Option<TypedModule>>> = Arc::new(RwLock::new(None));
@@ -88,37 +96,6 @@ fn main() {
         })
         .unwrap();
 
-    if args.run && !args.gui {
-        info!("waiting on compile thread");
-        loop {
-            let module = module_handle.try_read();
-            if module.is_ok() && module.unwrap().is_some() {
-                break;
-            } else {
-                thread::sleep(std::time::Duration::from_millis(1000));
-            }
-        }
-        let module_read = module_handle.read().unwrap();
-        let module = module_read.as_ref().unwrap();
-        if !module.errors.is_empty() {
-        } else {
-            let module_name = module.name();
-            info!("done waiting on compile thread");
-            compiler::run_compiled_program(out_dir, module_name);
-        }
-    } else if args.gui {
-        let mut gui = gui::Gui::init(module_handle.clone(), compile_sender, run_sender);
-
-        gui.run_loop();
-    } else {
-        info!("waiting on compile thread");
-        loop {
-            let module = module_handle.try_read();
-            if module.is_ok() && module.unwrap().is_some() {
-                break;
-            } else {
-                thread::sleep(std::time::Duration::from_millis(100));
-            }
-        }
-    }
+    let mut gui = gui::Gui::init(module_handle.clone(), compile_sender, run_sender);
+    gui.run_loop();
 }

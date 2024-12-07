@@ -1378,6 +1378,7 @@ impl TypedModule {
                 Type::Integer(IntegerType::I32),
                 Type::Integer(IntegerType::I64),
             ],
+            existing_types_mapping: HashMap::new(),
             type_defn_mapping: HashMap::new(),
             placeholder_mapping: HashMap::new(),
         };
@@ -6387,7 +6388,7 @@ impl TypedModule {
         aligned_args: Vec<(TyperResult<TypedExpr>, &FnArgType)>,
         calling_scope: ScopeId,
     ) -> TyperResult<Vec<TypedExpr>> {
-        let mut successful_args = Vec::new();
+        let mut successful_args = Vec::with_capacity(aligned_args.len());
         for (expr, param) in aligned_args.into_iter() {
             let expr = expr?;
             if let Err(e) = self.check_types(param.type_id, expr.get_type(), calling_scope) {
@@ -6973,15 +6974,15 @@ impl TypedModule {
             None,
         );
 
-        let spec_num = specializations.len() + 1;
-        let new_name = format!(
-            "{name}_spec_{spec_num}_{}",
-            inferred_or_passed_type_args
-                .iter()
-                .map(|nt| self.type_id_to_string(nt.type_id))
-                .collect::<Vec<_>>()
-                .join("_")
-        );
+        let new_name = {
+            let mut new_name = String::with_capacity(256);
+            let spec_num = specializations.len() + 1;
+            write!(new_name, "{name}_spec_{spec_num}_").unwrap();
+            for nt in inferred_or_passed_type_args {
+                self.display_type_id(nt.type_id, false, &mut new_name).unwrap()
+            }
+            new_name
+        };
 
         self.scopes.get_scope_mut(spec_fn_scope_id).name =
             Some(self.ast.identifiers.intern(&new_name));

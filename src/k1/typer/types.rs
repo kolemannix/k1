@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
+use std::hash::Hasher;
 
 use crate::typer::scopes::*;
 
@@ -52,6 +53,13 @@ pub struct TypeDefnInfo {
     // If there's a corresponding namespace for this type defn, this is it
     pub companion_namespace: Option<NamespaceId>,
     pub ast_id: ParsedId,
+}
+
+impl std::hash::Hash for TypeDefnInfo {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+        self.scope.hash(state);
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -331,6 +339,173 @@ pub enum Type {
     RecursiveReference(RecursiveReference),
 }
 
+impl Eq for Type {}
+
+impl PartialEq for Type {
+    fn eq(&self, other: &Type) -> bool {
+        match (self, other) {
+            (Type::Unit(_), Type::Unit(_)) => true,
+            (Type::Char(_), Type::Char(_)) => true,
+            (Type::Integer(int1), Type::Integer(int2)) => int1 == int2,
+            (Type::Float(f1), Type::Float(f2)) => f1.size == f2.size,
+            (Type::Bool(_), Type::Bool(_)) => true,
+            (Type::Pointer(_), Type::Pointer(_)) => true,
+            (Type::Struct(s1), Type::Struct(s2)) => {
+                if s1.is_named() || s2.is_named() {
+                    return false;
+                }
+                if s1.fields.len() != s2.fields.len() {
+                    return false;
+                }
+                for (index, f1) in s1.fields.iter().enumerate() {
+                    let f2 = &s2.fields[index];
+                    let mismatch = f1.name != f2.name || f1.type_id != f2.type_id;
+                    if mismatch {
+                        return false;
+                    }
+                }
+                true
+            }
+            (Type::Reference(r1), Type::Reference(r2)) => r1.inner_type == r2.inner_type,
+            (Type::TypeVariable(t1), Type::TypeVariable(t2)) => {
+                t1.name == t2.name && t1.scope_id == t2.scope_id
+            }
+            (Type::Enum(e1), Type::Enum(e2)) => {
+                if e1.type_defn_info.is_some() || e2.type_defn_info.is_some() {
+                    return false;
+                }
+                if e1.variants.len() != e2.variants.len() {
+                    return false;
+                }
+                for (index, v1) in e1.variants.iter().enumerate() {
+                    let v2 = &e2.variants[index];
+                    let mismatch = v1.name != v2.name || v1.payload != v2.payload;
+                    if mismatch {
+                        return false;
+                    }
+                }
+                true
+            }
+            // We never really want to de-dupe this type as its inherently unique
+            (Type::EnumVariant(_ev1), Type::EnumVariant(_ev2)) => false,
+            (Type::Never(_), Type::Never(_)) => true,
+            // We never really want to de-dupe this type as its inherently unique
+            (Type::Generic(_g1), Type::Generic(_g2)) => false,
+            (Type::Function(f1), Type::Function(f2)) => {
+                if f1.return_type == f2.return_type && f1.params.len() == f2.params.len() {
+                    return f1
+                        .params
+                        .iter()
+                        .zip(f2.params.iter())
+                        .all(|(p1, p2)| p1.type_id == p2.type_id);
+                };
+                false
+            }
+            (Type::Closure(_c1), Type::Closure(_c2)) => false,
+            (Type::ClosureObject(_co1), Type::ClosureObject(_co2)) => false,
+            (Type::RecursiveReference(rr1), Type::RecursiveReference(rr2)) => {
+                rr1.root_type_id == rr2.root_type_id
+            }
+            _ => false,
+        }
+    }
+}
+
+impl std::hash::Hash for Type {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            Type::Unit(_) => "unit".hash(state),
+            Type::Char(_) => "char".hash(state),
+            Type::Integer(int1) => match int1 {
+                IntegerType::U8 => "u8".hash(state),
+                IntegerType::U16 => "u16".hash(state),
+                IntegerType::U32 => "u32".hash(state),
+                IntegerType::U64 => "u64".hash(state),
+                IntegerType::I8 => "i8".hash(state),
+                IntegerType::I16 => "i16".hash(state),
+                IntegerType::I32 => "i32".hash(state),
+                IntegerType::I64 => "i64".hash(state),
+            },
+            Type::Bool(_) => "bool".hash(state),
+            Type::Struct(s) => {
+                "struct".hash(state);
+                if let Some(type_defn_info) = &s.type_defn_info {
+                    type_defn_info.hash(state);
+                } else {
+                    s.fields.len().hash(state);
+                    for f in &s.fields {
+                        f.name.hash(state);
+                        f.type_id.hash(state);
+                    }
+                }
+            }
+            Type::Reference(r) => {
+                "ref".hash(state);
+                r.inner_type.hash(state);
+            }
+            Type::TypeVariable(tvar) => {
+                "tvar".hash(state);
+                tvar.name.hash(state);
+                tvar.scope_id.hash(state);
+            }
+            Type::Enum(e) => {
+                "enum".hash(state);
+                if let Some(type_defn_info) = &e.type_defn_info {
+                    type_defn_info.hash(state);
+                } else {
+                    e.variants.len().hash(state);
+                    for v in e.variants.iter() {
+                        v.name.hash(state);
+                        v.payload.hash(state);
+                    }
+                }
+            }
+            // We never really want to de-dupe this type as its inherently unique
+            Type::EnumVariant(variant) => {
+                "variant".hash(state);
+                variant.enum_type_id.hash(state);
+                variant.name.hash(state);
+                variant.payload.hash(state);
+            }
+            Type::Generic(gen) => {
+                "gen".hash(state);
+                gen.type_defn_info.hash(state);
+            }
+            Type::Function(fun) => {
+                "fun".hash(state);
+                fun.defn_info.hash(state);
+                fun.return_type.hash(state);
+                for param in &fun.params {
+                    param.name.hash(state);
+                    param.type_id.hash(state);
+                }
+            }
+            Type::Closure(c) => {
+                "closure".hash(state);
+                c.parsed_id.hash(state);
+                c.function_type.hash(state)
+            }
+            Type::Float(ft) => {
+                "float".hash(state);
+                ft.size.bit_width().hash(state);
+            }
+            Type::Pointer(_) => {
+                "ptr".hash(state);
+            }
+            Type::Never(_) => "never".hash(state),
+            Type::ClosureObject(co) => {
+                "closure_object".hash(state);
+                co.function_type.hash(state);
+                co.struct_representation.hash(state);
+            }
+            Type::RecursiveReference(rr) => {
+                "recurse".hash(state);
+                rr.root_type_id.hash(state);
+            }
+        }
+    }
+}
+
 impl Type {
     pub fn kind_name(&self) -> &'static str {
         match self {
@@ -536,6 +711,10 @@ impl Type {
 #[derive(Default, Debug)]
 pub struct Types {
     pub types: Vec<Type>,
+    /// We use this to efficiently check if we already have seen a type,
+    /// and retrieve its ID if so. We used to iterate the pool but it
+    /// got slow
+    pub existing_types_mapping: HashMap<Type, TypeId>,
     pub type_defn_mapping: HashMap<ParsedTypeDefnId, TypeId>,
     pub placeholder_mapping: HashMap<ParsedTypeDefnId, TypeId>,
 }
@@ -543,10 +722,8 @@ pub struct Types {
 impl Types {
     pub fn add_type_ext(&mut self, typ: Type, dedupe: bool) -> TypeId {
         if dedupe {
-            for (existing_type_id, existing_type) in self.iter() {
-                if self.type_eq(existing_type, &typ) {
-                    return existing_type_id;
-                }
+            if let Some(&existing_type_id) = self.existing_types_mapping.get(&typ) {
+                return existing_type_id;
             }
         }
 
@@ -561,10 +738,14 @@ impl Types {
                     let variant_id = TypeId(next_type_id.0 + v.index);
                     v.my_type_id = variant_id;
                     v.enum_type_id = enum_type_id;
-                    self.types.push(Type::EnumVariant(v.clone()));
+                    let variant = Type::EnumVariant(v.clone());
+                    self.types.push(variant.clone());
+                    self.existing_types_mapping.insert(variant, variant_id);
                 }
 
-                self.types.push(Type::Enum(e));
+                let e = Type::Enum(e);
+                self.types.push(e.clone());
+                self.existing_types_mapping.insert(e, enum_type_id);
                 enum_type_id
             }
             Type::EnumVariant(_ev) => {
@@ -572,7 +753,8 @@ impl Types {
             }
             _ => {
                 let type_id = self.next_type_id();
-                self.types.push(typ);
+                self.types.push(typ.clone());
+                self.existing_types_mapping.insert(typ, type_id);
                 type_id
             }
         }
@@ -850,73 +1032,6 @@ impl Types {
             Type::Closure(_c) => todo!(),
             Type::ClosureObject(_co) => todo!(),
             Type::RecursiveReference(_rr) => (),
-        }
-    }
-
-    fn type_id_eq(&self, type1: TypeId, type2: TypeId) -> bool {
-        self.type_eq(self.get(type1), self.get(type2))
-    }
-
-    fn type_eq(&self, type1: &Type, type2: &Type) -> bool {
-        match (type1, type2) {
-            (Type::Unit(_), Type::Unit(_)) => true,
-            (Type::Char(_), Type::Char(_)) => true,
-            (Type::Integer(int1), Type::Integer(int2)) => int1 == int2,
-            (Type::Bool(_), Type::Bool(_)) => true,
-            (Type::Struct(r1), Type::Struct(r2)) => {
-                if r1.is_named() || r2.is_named() {
-                    return false;
-                }
-                if r1.fields.len() != r2.fields.len() {
-                    return false;
-                }
-                for (index, f1) in r1.fields.iter().enumerate() {
-                    let f2 = &r2.fields[index];
-                    let mismatch = f1.name != f2.name || f1.type_id != f2.type_id;
-                    if mismatch {
-                        return false;
-                    }
-                }
-                true
-            }
-            (Type::Reference(r1), Type::Reference(r2)) => r1.inner_type == r2.inner_type,
-            (Type::TypeVariable(t1), Type::TypeVariable(t2)) => {
-                t1.name == t2.name && t1.scope_id == t2.scope_id
-            }
-            (Type::Enum(e1), Type::Enum(e2)) => {
-                if e1.type_defn_info.is_some() || e2.type_defn_info.is_some() {
-                    return false;
-                }
-                if e1.variants.len() != e2.variants.len() {
-                    return false;
-                }
-                for (index, v1) in e1.variants.iter().enumerate() {
-                    let v2 = &e2.variants[index];
-                    let mismatch = v1.name != v2.name || v1.payload != v2.payload;
-                    if mismatch {
-                        return false;
-                    }
-                }
-                true
-            }
-            // We never really want to de-dupe this type as its inherently unique
-            (Type::EnumVariant(_ev1), Type::EnumVariant(_ev2)) => false,
-            // We never really want to de-dupe this type as its inherently unique
-            (Type::Generic(_g1), Type::Generic(_g2)) => false,
-            (Type::Function(f1), Type::Function(f2)) => {
-                if self.type_id_eq(f1.return_type, f2.return_type)
-                    && f1.params.len() == f2.params.len()
-                {
-                    return f1
-                        .params
-                        .iter()
-                        .zip(f2.params.iter())
-                        .all(|(p1, p2)| self.type_id_eq(p1.type_id, p2.type_id));
-                };
-                false
-            }
-            (Type::Closure(_c1), Type::Closure(_c2)) => false,
-            _ => false,
         }
     }
 }
