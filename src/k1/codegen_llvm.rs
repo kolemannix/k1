@@ -591,7 +591,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         llvm_module.set_source_file_name(&module.ast.sources.get_main().filename);
         // Example of linking an LLVM module
         // let stdlib_module = ctx
-        //     .create_module_from_ir(MemoryBuffer::create_from_file(Path::new("nxlib/llvm")).unwrap())
+        //     .create_module_from_ir(MemoryBuffer::create_from_file(Path::new("k1lib/llvm")).unwrap())
         //     .unwrap();
         // llvm_module.link_in_module(stdlib_module).unwrap();
 

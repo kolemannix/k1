@@ -10,7 +10,7 @@ use anyhow::{bail, Result};
 use clap::Parser;
 use colored::Colorize;
 use inkwell::context::Context;
-use k1::compiler;
+use k1::compiler::{self, Command};
 use std::os::unix::prelude::ExitStatusExt;
 
 #[derive(Parser, Debug, Clone)]
@@ -91,9 +91,8 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
         no_std: false,
         write_llvm: true,
         dump_module: false,
-        run: false,
-        file: path.as_ref().to_owned(),
         gui: false,
+        command: Command::Build { file: path.as_ref().to_owned() },
     };
     let compile_result = compiler::compile_module(&args);
     let expectation = get_test_expectation(path.as_ref());
@@ -232,7 +231,7 @@ pub fn main() -> Result<()> {
                     None => all_tests.push(path.to_path_buf()),
                     Some(f) => {
                         let name_stem = path.file_stem().unwrap().to_string_lossy();
-                        if name_stem.contains(&*f) {
+                        if name_stem.contains(f) {
                             all_tests.push(path.to_path_buf())
                         }
                     }
