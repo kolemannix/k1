@@ -288,9 +288,9 @@ impl TypedModule {
             }
             Type::RecursiveReference(rr) => {
                 if rr.is_pending() {
-                    writ.write_str("pending")
+                    writ.write_str("<pending recursive ref>")
                 } else {
-                    let info = self.types.get_defn_info(rr.root_type_id).unwrap();
+                    let info = self.types.get_type_defn_info(rr.root_type_id).unwrap();
                     writ.write_str(self.name_of(info.name))?;
                     Ok(())
                 }
