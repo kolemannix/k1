@@ -146,6 +146,8 @@ pub struct TypedEnumVariant {
     pub name: Identifier,
     pub index: u32,
     pub payload: Option<TypeId>,
+    // Always matches the info of this variant's enum
+    pub type_defn_info: Option<TypeDefnInfo>,
 }
 
 #[derive(Debug, Clone)]
@@ -184,7 +186,6 @@ pub struct GenericTypeParam {
 pub struct GenericType {
     pub params: Vec<GenericTypeParam>,
     pub inner: TypeId,
-    pub ast_id: ParsedTypeDefnId,
     pub type_defn_info: TypeDefnInfo,
     pub specializations: HashMap<Vec<TypeId>, TypeId>,
 }
@@ -550,11 +551,33 @@ impl Type {
             Type::TypeVariable(_t) => None,
             Type::Enum(e) => Some(e.ast_node),
             Type::EnumVariant(_ev) => None,
-            Type::Generic(gen) => Some(gen.ast_id.into()),
+            Type::Generic(gen) => Some(gen.type_defn_info.ast_id.into()),
             Type::Function(_fun) => None,
             Type::Closure(clos) => Some(clos.parsed_id),
             Type::ClosureObject(clos_obj) => Some(clos_obj.parsed_id),
             Type::RecursiveReference(r) => Some(ParsedId::TypeDefn(r.parsed_id)),
+        }
+    }
+
+    pub fn defn_info(&self) -> Option<&TypeDefnInfo> {
+        match self {
+            Type::Unit(defn_info)
+            | Type::Char(defn_info)
+            | Type::Bool(defn_info)
+            | Type::Pointer(defn_info)
+            | Type::Never(defn_info) => Some(defn_info),
+            Type::Float(ft) => Some(&ft.defn_info),
+            Type::Integer(_) => None,
+            Type::Struct(t) => t.type_defn_info.as_ref(),
+            Type::Reference(_t) => None,
+            Type::TypeVariable(_t) => None,
+            Type::Enum(e) => e.type_defn_info.as_ref(),
+            Type::EnumVariant(ev) => ev.type_defn_info.as_ref(),
+            Type::Generic(gen) => Some(&gen.type_defn_info),
+            Type::Function(_fun) => None,
+            Type::Closure(_clos) => None,
+            Type::ClosureObject(_clos_obj) => None,
+            Type::RecursiveReference(_r) => None,
         }
     }
 
@@ -815,26 +838,8 @@ impl Types {
         }
     }
 
-    pub fn get_defn_info(&self, type_id: TypeId) -> Option<&TypeDefnInfo> {
-        match self.get(type_id) {
-            Type::Enum(e) => e.type_defn_info.as_ref(),
-            Type::EnumVariant(ev) => self.get_defn_info(ev.enum_type_id),
-            Type::Struct(s) => s.type_defn_info.as_ref(),
-            Type::Unit(info) => Some(info),
-            Type::Char(info) => Some(info),
-            Type::Integer(_) => None,
-            Type::Float(f) => Some(&f.defn_info),
-            Type::Bool(info) => Some(info),
-            Type::Pointer(info) => Some(info),
-            Type::Reference(_) => None,
-            Type::TypeVariable(_) => None,
-            Type::Never(info) => Some(info),
-            Type::Generic(gen) => Some(&gen.type_defn_info),
-            Type::Function(f) => f.defn_info.as_ref(),
-            Type::Closure(_c) => None,
-            Type::ClosureObject(_) => None,
-            Type::RecursiveReference(_) => None,
-        }
+    pub fn get_type_defn_info(&self, type_id: TypeId) -> Option<&TypeDefnInfo> {
+        self.get(type_id).defn_info()
     }
 
     pub fn add_closure(
@@ -979,7 +984,7 @@ impl Types {
     }
 
     // Ended up storing redirects as RecursiveReference, but keeping this around
-    // Ah I also got this confused with substitute_in_type which is actually used for generic instantiation
+    // Ah I also got this confused with instantiate_generic_type which is actually used for generic instantiation
     // This one looks like it mutates the type tree instead of making a new type
     pub fn replace_type(
         &mut self,

@@ -1323,6 +1323,10 @@ impl ParsedModule {
         }
     }
 
+    pub fn get_line_for_span_id(&self, span_id: SpanId) -> Option<&Line> {
+        self.sources.get_line_for_span(self.spans.get(span_id))
+    }
+
     pub fn get_span_for_id(&self, parsed_id: ParsedId) -> SpanId {
         match parsed_id {
             ParsedId::Function(id) => self.get_function(id).span,

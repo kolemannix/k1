@@ -1147,7 +1147,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     let defn_info = self
                         .module
                         .types
-                        .get_defn_info(rr.root_type_id)
+                        .get_type_defn_info(rr.root_type_id)
                         .expect("recursive type must have defn info");
 
                     // FIXME: This needs to codegen the name in a standardized way so it matches
@@ -2501,11 +2501,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let return_type = return_type.debug_type();
         let dbg_param_types =
             &param_types.iter().map(|param_type| param_type.debug_type()).collect::<Vec<_>>();
-        let span = self.module.ast.spans.get(function.span);
-        let function_line_number =
-            self.module.ast.sources.get_line_for_span(span).expect("line for span").line_index + 1;
+        let span_id = self.module.ast.get_span_for_id(function.parsed_id);
+        let function_file_id = self.module.ast.spans.get(span_id).file_id;
+        let function_line = self.module.ast.get_line_for_span_id(span_id).expect("line for span");
+        let function_line_number = function_line.line_number();
         let function_scope_start_line_number = function_line_number;
-        let function_file = self.debug.files.get(&span.file_id).unwrap();
+        let function_file = self.debug.files.get(&function_file_id).unwrap();
         let dbg_fn_type = self.debug.debug_builder.create_subroutine_type(
             *function_file,
             Some(return_type),
@@ -2545,11 +2546,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let function_line_number = self
             .module
             .ast
-            .sources
-            .get_line_for_span(self.module.ast.spans.get(function.span))
+            .get_line_for_span_id(self.module.ast.get_span_for_id(function.parsed_id))
             .expect("line for span")
-            .line_index
-            + 1;
+            .line_number();
 
         let maybe_starting_block = self.builder.get_insert_block();
 
@@ -2575,7 +2574,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             TyperLinkage::Intrinsic => None,
         };
         if self.llvm_module.get_function(llvm_name).is_some() {
-            return err!(function.span, "Dupe function name: {}", llvm_name);
+            return err!(
+                self.module.ast.get_span_for_id(function.parsed_id),
+                "Dupe function name: {}",
+                llvm_name
+            );
         }
         let fn_val = self.llvm_module.add_function(llvm_name, fn_ty, llvm_linkage);
 
