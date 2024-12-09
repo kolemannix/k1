@@ -924,9 +924,9 @@ pub struct ParsedTypeConstraint {
 #[derive(Debug, Clone)]
 pub struct ParsedFunction {
     pub name: Identifier,
-    pub type_args: Vec<ParsedTypeParamDefn>,
+    pub type_params: Vec<ParsedTypeParamDefn>,
     pub args: Vec<FnArgDef>,
-    pub context_args: Vec<FnArgDef>,
+    pub context_params: Vec<FnArgDef>,
     pub ret_type: Option<ParsedTypeExpressionId>,
     pub block: Option<Block>,
     pub span: SpanId,
@@ -3116,9 +3116,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         }
         let function_id = self.module.add_function(ParsedFunction {
             name: func_name_id,
-            type_args: type_arguments,
+            type_params: type_arguments,
             args,
-            context_args,
+            context_params: context_args,
             ret_type,
             block,
             span,
