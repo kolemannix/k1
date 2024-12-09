@@ -205,7 +205,8 @@ impl TypedModule {
                         writ.write_str("(")?;
                     }
                 }
-                if expand {
+                let is_named = e.type_defn_info.is_some();
+                if !is_named || expand {
                     writ.write_str("enum ")?;
                     for (idx, v) in e.variants.iter().enumerate() {
                         writ.write_str(self.ast.identifiers.get_name(v.name))?;
@@ -219,7 +220,7 @@ impl TypedModule {
                             writ.write_str(" | ")?;
                         }
                     }
-                    if let Some(_defn_info) = e.type_defn_info.as_ref() {
+                    if is_named {
                         writ.write_str(")")?;
                     }
                 }
