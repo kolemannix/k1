@@ -8034,6 +8034,9 @@ impl TypedModule {
                     impl_function_span,
                 );
             }
+
+            // nocommit: This is the wrong wrong way to check this
+            // we should instead perform a substitution of Self := target_type and then check that the signatures match!
             for (index, specialized_param) in specialized.params.iter().enumerate() {
                 let generic_param = &generic.params[index];
                 if let Err(msg) = self.check_types(
