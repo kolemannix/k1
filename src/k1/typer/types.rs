@@ -850,7 +850,6 @@ impl Types {
         body_function_id: FunctionId,
         parsed_id: ParsedId,
     ) -> TypeId {
-        let env_type = environment_struct.get_type();
         let closure_type_id = self.add_type(Type::Closure(ClosureType {
             function_type: function_type_id,
             env_type: environment_struct.get_type(),
@@ -859,8 +858,7 @@ impl Types {
             environment_struct,
             closure_object_type: TypeId::PENDING,
         }));
-        let closure_object_type =
-            self.add_closure_object(identifiers, function_type_id, env_type, parsed_id);
+        let closure_object_type = self.add_closure_object(identifiers, function_type_id, parsed_id);
         if let Type::Closure(c) = self.get_mut(closure_type_id) {
             c.closure_object_type = closure_object_type;
         }
@@ -871,10 +869,15 @@ impl Types {
         &mut self,
         identifiers: &Identifiers,
         function_type_id: TypeId,
-        env_type: TypeId,
         parsed_id: ParsedId,
     ) -> TypeId {
         let fn_ptr_type = self.add_reference_type(function_type_id);
+        let env_type = self.add_type(Type::Struct(StructType {
+            fields: vec![],
+            type_defn_info: None,
+            generic_instance_info: None,
+            ast_node: parsed_id,
+        }));
         let env_ptr_type = self.add_reference_type(env_type);
         let fields = vec![
             StructTypeField {

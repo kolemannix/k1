@@ -31,6 +31,9 @@ use crate::strings;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FunctionId(pub u32);
+impl FunctionId {
+    pub const PENDING: FunctionId = FunctionId(u32::MAX);
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct VariableId(u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -274,7 +277,7 @@ pub struct SpecializationParams {
 #[derive(Debug, Clone)]
 pub struct SpecializationInfo {
     pub parent_function: FunctionId,
-    pub specialized_type_params: Vec<NamedType>,
+    pub type_arguments: Vec<NamedType>,
     pub specialized_function_id: FunctionId,
     pub specialized_function_type: TypeId,
 }
@@ -547,35 +550,6 @@ pub struct FieldAccess {
     pub result_type: TypeId,
     pub struct_type: TypeId,
     pub is_referencing: bool,
-    pub span: SpanId,
-}
-
-#[derive(Debug, Clone)]
-pub struct IndexOp {
-    pub base_expr: Box<TypedExpr>,
-    pub index_expr: Box<TypedExpr>,
-    pub result_type: TypeId,
-    pub span: SpanId,
-}
-
-#[derive(Debug, Clone)]
-pub struct OptionalSome {
-    pub inner_expr: Box<TypedExpr>,
-    pub type_id: TypeId,
-}
-
-#[derive(Debug, Clone)]
-pub struct OptionalGet {
-    pub inner_expr: Box<TypedExpr>,
-    pub result_type_id: TypeId,
-    pub span: SpanId,
-    pub checked: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct TypedTagExpr {
-    pub name: Identifier,
-    pub type_id: TypeId,
     pub span: SpanId,
 }
 
@@ -1993,16 +1967,9 @@ impl TypedModule {
                     defn_info: None,
                 }));
 
-                let env_type = self.types.add_type(Type::Struct(StructType {
-                    fields: vec![],
-                    type_defn_info: None,
-                    generic_instance_info: None,
-                    ast_node: type_expr_id.into(),
-                }));
                 let closure_object_type = self.types.add_closure_object(
                     &self.ast.identifiers,
                     function_type_id,
-                    env_type,
                     type_expr_id.into(),
                 );
                 Ok(closure_object_type)
@@ -2300,7 +2267,13 @@ impl TypedModule {
         // of each type param should be and call instantiate_generic_type
         //
         // This happens when specializing a type that contains an Opt[T], for example.
-        // nocommit: is this an optimization or a correctness hack?
+        //
+        // Things don't seem to work without this special case, but I kinda think they should.
+        // I guess the problem is that we don't 'inherit' generic instance info
+        //
+        // Ok now doing that, and not wrongly setting generic instance info on the nested types,
+        // but stuff still doesn't compile. Should figure out why
+
         if let Some(spec_info) = self.types.get_generic_instance_info(type_id) {
             // A,   B,    T
             // int, bool, char
@@ -2312,7 +2285,7 @@ impl TypedModule {
                 .iter()
                 .map(|prev_type_id| {
                     self.substitute_in_type(
-                        generic_parent_to_attach,
+                        None,
                         *prev_type_id,
                         None,
                         substitution_pairs,
@@ -2322,41 +2295,21 @@ impl TypedModule {
                 .collect();
             return self.instantiate_generic_type(generic_parent, new_parameter_values, parsed_id);
         };
+
         let matching_subst_pair = substitution_pairs.iter().find(|pair| pair.from == type_id);
         if let Some(matching_pair) = matching_subst_pair {
             return matching_pair.to;
         }
-        // Don't even need to match; this could just replace blindly and be more reusable
-        // For example, it could replace Unknowns w/ real values, not just TVars
+
         match self.types.get(type_id) {
-            // Type::TypeVariable(_t) => {
-            //     let generic_param = substitution_targets
-            //         .iter()
-            //         .enumerate()
-            //         .find(|(_, target_type)| *target_type == type_id);
-            //     match generic_param {
-            //         None => {
-            //             debug!("NOT substituting {}", self.type_id_to_string(type_id).red(),);
-            //             type_id
-            //         }
-            //         Some((param_index, _generic_param)) => {
-            //             let corresponding_type = substitution_values[param_index];
-            //             debug!(
-            //                 "substituting {} -> {}",
-            //                 self.type_id_to_string(type_id),
-            //                 self.type_id_to_string(corresponding_type),
-            //             );
-            //             corresponding_type
-            //         }
-            //     }
-            // }
             Type::Struct(struc) => {
                 let mut new_fields = struc.fields.clone();
                 let mut any_change = false;
                 let original_defn_info = struc.type_defn_info.clone();
+                let original_instance_info = struc.generic_instance_info.clone();
                 for field in new_fields.iter_mut() {
                     let new_field_type_id = self.substitute_in_type(
-                        generic_parent_to_attach,
+                        None,
                         field.type_id,
                         None,
                         substitution_pairs,
@@ -2368,11 +2321,12 @@ impl TypedModule {
                     field.type_id = new_field_type_id;
                 }
                 if force_new || any_change {
-                    let generic_instance_info =
-                        generic_parent_to_attach.map(|parent| GenericInstanceInfo {
+                    let generic_instance_info = generic_parent_to_attach
+                        .map(|parent| GenericInstanceInfo {
                             generic_parent: parent,
                             param_values: substitution_pairs.iter().map(|p| p.to).collect(),
-                        });
+                        })
+                        .or(original_instance_info);
                     let specialized_struct = StructType {
                         fields: new_fields,
                         type_defn_info: defn_info_to_attach.or(original_defn_info),
@@ -2388,10 +2342,11 @@ impl TypedModule {
                 let mut new_variants = e.variants.clone();
                 let mut any_changed = false;
                 let original_defn_info = e.type_defn_info.clone();
+                let original_instance_info = e.generic_instance_info.clone();
                 for variant in new_variants.iter_mut() {
                     let new_payload_id = variant.payload.map(|payload_type_id| {
                         self.substitute_in_type(
-                            generic_parent_to_attach,
+                            None,
                             payload_type_id,
                             None,
                             substitution_pairs,
@@ -2407,11 +2362,12 @@ impl TypedModule {
                     }
                 }
                 if force_new || any_changed {
-                    let generic_instance_info =
-                        generic_parent_to_attach.map(|parent| GenericInstanceInfo {
+                    let generic_instance_info = generic_parent_to_attach
+                        .map(|parent| GenericInstanceInfo {
                             generic_parent: parent,
                             param_values: substitution_pairs.iter().map(|p| p.to).collect(),
-                        });
+                        })
+                        .or(original_instance_info);
                     let new_enum = TypedEnum {
                         variants: new_variants,
                         ast_node: parsed_id,
@@ -2426,13 +2382,8 @@ impl TypedModule {
             }
             Type::Reference(reference) => {
                 let ref_inner = reference.inner_type;
-                let new_inner = self.substitute_in_type(
-                    generic_parent_to_attach,
-                    ref_inner,
-                    None,
-                    substitution_pairs,
-                    parsed_id,
-                );
+                let new_inner =
+                    self.substitute_in_type(None, ref_inner, None, substitution_pairs, parsed_id);
                 if force_new || new_inner != ref_inner {
                     let specialized_reference = ReferenceType { inner_type: new_inner };
                     self.types.add_type(Type::Reference(specialized_reference))
@@ -2440,7 +2391,6 @@ impl TypedModule {
                     type_id
                 }
             }
-            //nocommit
             Type::TypeVariable(_) => type_id,
             Type::Unit(_)
             | Type::Char(_)
@@ -2449,29 +2399,72 @@ impl TypedModule {
             | Type::Bool(_)
             | Type::Pointer(_) => type_id,
             Type::EnumVariant(_) => {
-                unreachable!(
-                    "instantiate_generic_type is not expected to be called on an EnumVariant"
-                )
+                unreachable!("substitute_in_type is not expected to be called on an EnumVariant")
             }
             Type::Generic(_) => {
-                unreachable!("instantiate_generic_type is not expected to be called on a Generic")
+                unreachable!("substitute_in_type is not expected to be called on a Generic")
             }
-            Type::Function(_) => {
-                unreachable!("instantiate_generic_type is not expected to be called on a Function")
+            Type::Function(fun_type) => {
+                let mut new_fun_type = fun_type.clone();
+                let mut any_new = false;
+                let new_return_type = self.substitute_in_type(
+                    None,
+                    fun_type.return_type,
+                    None,
+                    substitution_pairs,
+                    parsed_id,
+                );
+                if new_return_type != new_fun_type.return_type {
+                    any_new = true
+                };
+                new_fun_type.return_type = new_return_type;
+                for param in new_fun_type.params.iter_mut() {
+                    let new_param_type = self.substitute_in_type(
+                        None,
+                        param.type_id,
+                        None,
+                        substitution_pairs,
+                        parsed_id,
+                    );
+                    if new_param_type != param.type_id {
+                        any_new = true;
+                    }
+                    param.type_id = new_param_type;
+                }
+                if force_new || any_new {
+                    if defn_info_to_attach.as_ref().is_some() {
+                        new_fun_type.defn_info = defn_info_to_attach;
+                    }
+                    let new_function_type_id = self.types.add_type(Type::Function(new_fun_type));
+                    new_function_type_id
+                } else {
+                    type_id
+                }
             }
             Type::Closure(_) => {
-                unreachable!("instantiate_generic_type is not expected to be called on a Closure")
+                unreachable!("substitute_in_type is not expected to be called on a Closure")
             }
-            Type::ClosureObject(_) => {
-                unreachable!(
-                    "instantiate_generic_type is not expected to be called on a ClosureObject"
-                )
+            Type::ClosureObject(co) => {
+                let co_fn_type = co.function_type;
+                let co_parsed_id = co.parsed_id;
+                let new_fn_type = self.substitute_in_type(
+                    None,
+                    co.function_type,
+                    None,
+                    substitution_pairs,
+                    co_parsed_id,
+                );
+                if new_fn_type != co_fn_type || force_new {
+                    self.types.add_closure_object(&self.ast.identifiers, new_fn_type, co_parsed_id)
+                } else {
+                    type_id
+                }
             }
             Type::Never(_) => {
-                unreachable!("instantiate_generic_type is not expected to be called on never")
+                unreachable!("substitute_in_type is not expected to be called on never")
             }
             Type::RecursiveReference(_) => unreachable!(
-                "instantiate_generic_type is not expected to be called on RecursiveReference"
+                "substitute_in_type is not expected to be called on RecursiveReference"
             ),
         }
     }
@@ -2958,6 +2951,12 @@ impl TypedModule {
 
     fn add_function(&mut self, mut function: TypedFunction) -> FunctionId {
         let id = self.next_function_id();
+        if let Some(specialization_info) = &mut function.specialization_info {
+            specialization_info.specialized_function_id = id;
+            self.get_function_mut(specialization_info.parent_function)
+                .child_specializations
+                .push(specialization_info.clone());
+        }
         let is_concrete = self.is_function_concrete(&function);
         function.is_concrete = is_concrete;
         self.functions.push(function);
@@ -6259,6 +6258,7 @@ impl TypedModule {
         }
     }
 
+    // nocommit: Make this not evaluate expressions, just purely align args with params
     fn align_call_arguments_with_parameters<'params>(
         &mut self,
         fn_call: &FnCall,
@@ -6515,8 +6515,7 @@ impl TypedModule {
                     )?,
                 };
 
-                let function_id =
-                    self.get_specialized_function_for_call(&type_args, function_id)?;
+                let function_id = self.specialize_function_signature(&type_args, function_id)?;
 
                 let specialized_params = &self.get_function_type(function_id).params.clone();
                 let aligned_args = self.align_call_arguments_with_parameters(
@@ -6943,7 +6942,7 @@ impl TypedModule {
         }
     }
 
-    fn specialize_function_new(
+    fn specialize_function_signature(
         &mut self,
         type_arguments: &[NamedType],
         generic_function_id: FunctionId,
@@ -6951,12 +6950,12 @@ impl TypedModule {
         let generic_function = self.get_function(generic_function_id);
 
         for existing_specialization in &generic_function.child_specializations {
-            if existing_specialization.specialized_type_params == type_arguments {
+            if existing_specialization.type_arguments == type_arguments {
                 debug!(
                     "Found existing specialization for function {} with types: {}",
                     self.name_of(generic_function.name),
                     existing_specialization
-                        .specialized_type_params
+                        .type_arguments
                         .iter()
                         .map(|named_type| self.type_id_to_string(named_type.type_id))
                         .collect::<Vec<_>>()
@@ -6965,16 +6964,24 @@ impl TypedModule {
                 return Ok(existing_specialization.specialized_function_id);
             }
         }
-        let intrinsic_type = generic_function.intrinsic_type;
+        let specialized_name_string = {
+            let mut new_name = String::with_capacity(256);
+            let spec_num = generic_function.child_specializations.len() + 1;
+            write!(new_name, "{}_spec_", self.name_of(generic_function.name)).unwrap();
+            for nt in type_arguments {
+                self.display_type_id(nt.type_id, false, &mut new_name).unwrap()
+            }
+            write!(new_name, "_{spec_num}").unwrap();
+            new_name
+        };
         let generic_function_parent_scope = self
             .scopes
             .get_scope(generic_function.scope)
             .parent
             .expect("No function scope should be a root scope");
-        let generic_function_parsed_id = generic_function.parsed_id;
 
         // Transform the signature of the generic function by substituting
-        let generic_function_type = self.get_function_type(generic_function_id);
+        let generic_function_type_id = generic_function.type_id;
         let pairs: Vec<_> = generic_function
             .type_params
             .iter()
@@ -6986,168 +6993,145 @@ impl TypedModule {
             .collect();
         let specialized_function_type_id = self.substitute_in_type(
             None,
-            generic_function.type_id,
+            generic_function_type_id,
             None,
             &pairs,
-            generic_function_parsed_id,
+            generic_function.parsed_id,
         );
         let specialized_function_type =
             self.types.get(specialized_function_type_id).as_function().unwrap();
 
-        let new_name: Identifier = todo!();
+        let specialized_name = self.ast.identifiers.intern(&specialized_name_string);
         let spec_fn_scope = self.scopes.add_child_scope(
             generic_function_parent_scope,
             ScopeType::FunctionScope,
             None,
-            Some(new_name),
+            Some(specialized_name),
         );
+
+        for nt in type_arguments {
+            let _ = self.scopes.add_type(spec_fn_scope, nt.name, nt.type_id);
+        }
 
         let param_variables: Vec<VariableId> = specialized_function_type
             .params
             .iter()
             .map(|param| {
-                self.variables.add_variable(Variable {
+                let variable_id = self.variables.add_variable(Variable {
                     type_id: param.type_id,
                     name: param.name,
                     is_mutable: false,
                     owner_scope: spec_fn_scope,
                     is_context: param.is_context,
                     is_global: false,
-                })
+                });
+                self.scopes.add_variable(spec_fn_scope, param.name, variable_id);
+                variable_id
             })
             .collect();
         let specialization_info = SpecializationInfo {
-            parent_function: todo!(),
-            specialized_type_params: todo!(),
-            specialized_function_id: todo!(),
-            specialized_function_type: todo!(),
+            parent_function: generic_function_id,
+            type_arguments: Vec::from(type_arguments),
+            specialized_function_id: FunctionId::PENDING,
+            specialized_function_type: specialized_function_type_id,
         };
-        let has_body = generic_function.body_block.is_some();
-        let new_function = TypedFunction {
-            name: new_name,
-            scope: generic_function_parent_scope,
+        let generic_function = self.get_function(generic_function_id);
+        let has_body = self
+            .ast
+            .get_function(generic_function.parsed_id.as_function_id().unwrap())
+            .block
+            .is_some();
+        let specialized_function = TypedFunction {
+            name: specialized_name,
+            scope: spec_fn_scope,
             param_variables,
             type_params: vec![],
-            body_block: generic_function.body_block.clone(),
-            intrinsic_type,
+            body_block: None,
+            intrinsic_type: generic_function.intrinsic_type,
             linkage: generic_function.linkage,
             child_specializations: vec![],
-            specialization_info: Some(specialization_info.clone()),
-            parsed_id: generic_function_parsed_id,
+            specialization_info: Some(specialization_info),
+            parsed_id: generic_function.parsed_id,
             type_id: specialized_function_type_id,
             compiler_debug: generic_function.compiler_debug,
             kind: generic_function.kind,
             is_concrete: false,
         };
-        let function_id = self.add_function(new_function);
+        let specialized_function_id = self.add_function(specialized_function);
+        let is_concrete = self.get_function(specialized_function_id).is_concrete;
 
-        self.get_function_mut(generic_function_id).child_specializations.push(specialization_info);
-        if has_body {
-            self.functions_pending_body_specialization.push(function_id);
+        self.scopes
+            .set_scope_owner_id(spec_fn_scope, ScopeOwnerId::Function(specialized_function_id));
+
+        debug!(
+            "Specializing sig (has_body={has_body}, is_concrete={is_concrete}) of {}",
+            self.function_id_to_string(generic_function_id, false)
+        );
+        if has_body && is_concrete {
+            self.functions_pending_body_specialization.push(specialized_function_id);
         }
 
-        Ok(function_id)
+        Ok(specialized_function_id)
     }
 
     fn specialize_function_body(&mut self, function_id: FunctionId) -> TyperResult<()> {
-        todo!("specialize_function_body")
-    }
+        debug!("Specializing body of {}", self.function_id_to_string(function_id, false));
+        let specialized_function = self.get_function(function_id);
+        let specialized_return_type = self.get_function_type(function_id).return_type;
+        let spec_info = specialized_function.specialization_info.as_ref().unwrap();
+        let parent_function = self.get_function(spec_info.parent_function);
+        debug_assert!(parent_function.body_block.is_some());
 
-    fn get_specialized_function_for_call(
-        &mut self,
-        inferred_or_passed_type_args: &[NamedType],
-        generic_function_id: FunctionId,
-    ) -> TyperResult<FunctionId> {
-        let generic_function = self.get_function(generic_function_id);
-        let intrinsic_type = generic_function.intrinsic_type;
-        let generic_function_parent_scope = self
-            .scopes
-            .get_scope(generic_function.scope)
-            .parent
-            .expect("No function scope should be a root scope");
-        let generic_function_ast_id = generic_function.parsed_id;
-        let generic_function_span = self.ast.get_span_for_id(generic_function_ast_id);
-        let specializations = generic_function.child_specializations.clone();
-        let name = String::from(self.name_of(generic_function.name));
-        // drop(generic_function);
-
-        for existing_specialization in specializations.iter() {
-            if existing_specialization.specialized_type_params == inferred_or_passed_type_args {
-                let types_stringified = existing_specialization
-                    .specialized_type_params
-                    .iter()
-                    .map(|named_type| self.type_id_to_string(named_type.type_id))
-                    .collect::<Vec<_>>()
-                    .join("_");
-                debug!(
-                    "Found existing specialization for function {} with types: {}",
-                    name, types_stringified
-                );
-                return Ok(existing_specialization.specialized_function_id);
-            }
-        }
-
-        // Place specializations as siblings aside their generic parent
-        // Just don't add them as functions to the parent scope so they can't be resolved
-        let spec_fn_scope_id = self.scopes.add_child_scope(
-            generic_function_parent_scope,
-            ScopeType::FunctionScope,
-            None,
-            None,
-        );
-
-        let new_name = {
-            let mut new_name = String::with_capacity(256);
-            let spec_num = specializations.len() + 1;
-            write!(new_name, "{name}_spec_{spec_num}_").unwrap();
-            for nt in inferred_or_passed_type_args {
-                self.display_type_id(nt.type_id, false, &mut new_name).unwrap()
-            }
-            new_name
-        };
-
-        self.scopes.get_scope_mut(spec_fn_scope_id).name =
-            Some(self.ast.identifiers.intern(&new_name));
-
-        // Add type_args to scope by name and typecheck them against the actual params
-        for type_param in inferred_or_passed_type_args.iter() {
-            debug!(
-                "Adding type param {}: {} to scope for specialized function {}",
-                self.name_of(type_param.name),
-                self.type_id_to_string(type_param.type_id),
-                name
-            );
-            if !self
-                .scopes
-                .get_scope_mut(spec_fn_scope_id)
-                .add_type(type_param.name, type_param.type_id)
-            {
-                return failf!(
-                    generic_function_span,
-                    "Type {} already existed in spec fn scope",
-                    self.name_of(type_param.name)
-                );
-            }
-        }
-
-        // TODO: Specialization logic is weirdly divided between this function and
-        // eval_function_predecl, resulting in a lot of edge cases or ignoring some arguments
-        // inside eval_function_predecl. I think that function should just fully handle specialization
-        // It's almost like get_specialized_function_for_call belongs _INSIDE_ eval_function_predecl instead of
-        // outside. I think things will be much nicer and less buggy if we clean this up
-        let new_name_ident = self.ast.identifiers.intern(&new_name);
-        let specialized_function_id = self.specialize_function(
-            generic_function_ast_id.as_function_id().unwrap(),
-            SpecializationParams {
-                fn_scope_id: spec_fn_scope_id,
-                new_name: new_name_ident,
-                known_intrinsic: intrinsic_type,
-                generic_parent_function: generic_function_id,
-                passed_type_ids: inferred_or_passed_type_args.into(),
-            },
+        // Approach 1: Re-run whole body w/ bound types
+        // Downside: cloning, extra work, etc
+        // Upside: way way less code.
+        // Have to bind type names that shouldn't exist, kinda
+        let block_ast = self
+            .ast
+            .get_function(parent_function.parsed_id.as_function_id().unwrap())
+            .block
+            .as_ref()
+            .unwrap()
+            .clone();
+        let block = self.eval_block(
+            &block_ast,
+            specialized_function.scope,
+            Some(specialized_return_type),
+            true,
         )?;
 
-        Ok(specialized_function_id)
+        self.get_function_mut(function_id).body_block = Some(block);
+        Ok(())
+
+        // Approach 2: Perform a transformation on the generic body
+        // Downside: lots of code, probably
+        // Upside: seemingly simpler, mechanical transformation? Code is only called from one
+        // context
+        // When you a call,
+        // - Check the function's spec info, substitute our pairs into the passed_params
+        // - If different, specialize using those passed params, and swap the call
+        // Example:
+        // grow.$T := int
+        // let newBuffer = self.buffer._enlargedClone[T](newCap);
+        // called: enlargedClone_spec_grow.$T
+        // passed params: T := grow.$T
+        // substitute:    grow.$T -> int
+        // new passed params: T := int
+        // NOT EQUAL, specialize enlargedClone using T := int, swap in function id
+        //
+        //
+        //
+        //
+        // let mut body_copy = parent_function.body_block.as_ref().unwrap().clone();
+        // let mut specialized_block =
+        //     self.synth_block(vec![], specialized_function.scope, body_copy.span);
+        // for stmt in &mut body_copy.statements {
+        //     let new_stmt = match stmt {
+        //         TypedStmt::Expr(_) => walk_,
+        //         TypedStmt::Let(_) => todo!(),
+        //         TypedStmt::Assignment(_) => todo!(),
+        //     }
+        // }
     }
 
     pub fn is_function_concrete(&self, function: &TypedFunction) -> bool {
@@ -7159,7 +7143,7 @@ impl TypedModule {
                     let b = match &function.specialization_info {
                         None => function.type_params.is_empty(),
                         Some(spec_info) => !spec_info
-                            .specialized_type_params
+                            .type_arguments
                             .iter()
                             .any(|nt| self.does_type_reference_type_variables(nt.type_id)),
                     };
@@ -7779,7 +7763,7 @@ impl TypedModule {
             Some(SpecializationInfo {
                 parent_function: specialization_params.generic_parent_function,
                 specialized_function_id: function_id,
-                specialized_type_params: specialization_params.passed_type_ids,
+                type_arguments: specialization_params.passed_type_ids,
                 specialized_function_type: function_type_id,
             })
         } else {
@@ -7881,7 +7865,7 @@ impl TypedModule {
                 return make_fail_span("unexpected function implementation", function_span)
             }
             Some(block_ast) => {
-                if !function.is_concrete {
+                if function.specialization_info.is_some() && !function.is_concrete {
                     debug!(
                         "Skipping typecheck of body for non-concrete specialization of {}",
                         self.function_id_to_string(declaration_id, true),
@@ -7917,26 +7901,6 @@ impl TypedModule {
             self.pop_debug_level();
         }
         Ok(())
-    }
-
-    fn specialize_function(
-        &mut self,
-        parsed_function_id: ParsedFunctionId,
-        specialization_params: SpecializationParams,
-    ) -> TyperResult<FunctionId> {
-        let specialized_function_id = self.eval_function_predecl(
-            parsed_function_id,
-            // messy: This scope is unused when specializing, so we just pass the root
-            self.scopes.get_root_scope_id(),
-            Some(specialization_params),
-            None,
-            None,
-            self.get_root_namespace_id(),
-        )?;
-        // TODO: Do the body later, otherwise mutually recursive functions
-        //       cause a deep stack
-        self.eval_function_body(specialized_function_id)?;
-        Ok(specialized_function_id)
     }
 
     fn eval_ability_defn(
@@ -8574,15 +8538,19 @@ impl TypedModule {
             bail!("{} failed typechecking with {} errors", self.name(), self.errors.len())
         }
 
-        eprintln!(
-            ">> Phase 6 specialize function bodies: {}",
-            self.functions_pending_body_specialization.len()
-        );
-        for function_id in &self.functions_pending_body_specialization.clone() {
-            let result = self.specialize_function_body(*function_id);
-            if let Err(e) = result {
-                self.print_error(&e);
-                self.errors.push(e);
+        while !self.functions_pending_body_specialization.is_empty() {
+            eprintln!(
+                ">> Phase 6 specialize function bodies: {}",
+                self.functions_pending_body_specialization.len()
+            );
+            let clone = self.functions_pending_body_specialization.clone();
+            self.functions_pending_body_specialization.clear();
+            for function_id in &clone {
+                let result = self.specialize_function_body(*function_id);
+                if let Err(e) = result {
+                    self.print_error(&e);
+                    self.errors.push(e);
+                }
             }
         }
         if !self.errors.is_empty() {

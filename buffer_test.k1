@@ -90,16 +90,16 @@ fn bufferConcat(): unit {
 }
 
 fn bufferSwap(): unit {
-  let buf = Buffer::filled(3, 0);
-  buf.set(0, 10);
-  buf.set(1, 20);
-  buf.set(2, 30);
+  let* buf = Buffer::filled(3, 0);
+  buf.*.set(0, 10);
+  buf.*.set(1, 20);
+  buf.*.set(2, 30);
 
-  bufRef.swap(0, 2);
+  buf.swap(0, 2);
 
-  assert(bufRef.get(0) == 30);
-  assert(bufRef.get(1) == 20);
-  assert(bufRef.get(2) == 10);
+  assert(buf.*.get(0) == 30);
+  assert(buf.*.get(1) == 20);
+  assert(buf.*.get(2) == 10);
 }
 
 fn bufferClone(): unit {
