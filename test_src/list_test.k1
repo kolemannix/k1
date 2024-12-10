@@ -103,7 +103,7 @@ impl Equals for { rank: int, payload: string } {
 impl Equals for List[{ rank: int, payload: string }] {
   fn equals(self: Self, other: Self): bool {
     if self.len != other.len {
-      false
+      (false)
     } else {
       let mut i: u64 = 0;
       while i < self.len {

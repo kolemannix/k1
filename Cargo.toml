@@ -18,7 +18,7 @@ inkwell = { git = "https://github.com/TheDan64/inkwell", branch = "master", feat
     "llvm15-0",
 ] }
 log = "0.4.17"
-smallvec = "1.10.0"
+smallvec = "1.13.2"
 string-interner = "0.17.0"
 zstd-sys = "2.0.8"
 either = "1.9.0"

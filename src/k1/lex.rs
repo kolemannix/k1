@@ -56,6 +56,12 @@ impl Spans {
     }
 }
 
+impl Default for Spans {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Display for LexError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_fmt(format_args!("LexError at line {}: {}", self.line_index, self.msg))
