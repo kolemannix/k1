@@ -61,7 +61,6 @@ fn string_literal() -> ParseResult<()> {
     let (module, result) = test_single_expr(r#""hello world""#)?;
     let ParsedExpression::Literal(Literal::String(s, span_id)) = result else { panic!() };
     let span = module.spans.get(span_id);
-    // TODO: We need to store 2 spans, one for the whole literal construct including quotes and one for the string itself
     assert_eq!(&s, "hello world");
     assert_eq!(span.start, 1);
     assert_eq!(span.len, 11);
@@ -83,7 +82,7 @@ fn infix() -> Result<(), ParseError> {
             lhs: operand1,
             rhs: operand2,
             ..
-        }) = &*module.expressions.get(op.rhs)
+        }) = module.expressions.get(op.rhs)
         {
             assert_eq!(*operation, BinaryOpKind::Multiply);
             assert!(matches!(*module.expressions.get(*operand1), ParsedExpression::Variable(_)));
@@ -122,9 +121,9 @@ fn fn_args_literal() -> Result<(), ParseError> {
         let idents = &module.identifiers;
         assert_eq!(idents.get_name(fn_call.name.name), "f");
         assert_eq!(idents.get_name(args[0].name.unwrap()), "myarg");
-        assert!(ParsedExpression::is_literal(&module.expressions.get(args[0].value)));
-        assert!(ParsedExpression::is_literal(&module.expressions.get(args[1].value)));
-        assert!(ParsedExpression::is_literal(&module.expressions.get(args[2].value)));
+        assert!(ParsedExpression::is_literal(module.expressions.get(args[0].value)));
+        assert!(ParsedExpression::is_literal(module.expressions.get(args[1].value)));
+        assert!(ParsedExpression::is_literal(module.expressions.get(args[1].value)));
         assert_eq!(args.len(), 3);
     } else {
         panic!("fail");
@@ -272,7 +271,7 @@ fn generic_method_call_lhs_expr() -> Result<(), ParseError> {
     assert_eq!(call.name.name, parser.identifiers.intern("baz"));
     let type_arg = parser.type_expressions.get(call.type_args[0].type_expr);
     assert!(type_arg.is_integer());
-    assert!(matches!(&*parser.expressions.get(call.args[1].value), ParsedExpression::Literal(_)));
+    assert!(matches!(parser.expressions.get(call.args[1].value), ParsedExpression::Literal(_)));
     Ok(())
 }
 

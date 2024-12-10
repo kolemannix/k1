@@ -3704,7 +3704,15 @@ impl TypedModule {
                         .as_ref()
                         .and_then(|(_, rec)| rec.find_field(ast_field.name));
                     let expected_type_id = expected_field.map(|(_, f)| f.type_id);
-                    let expr = self.eval_expr(ast_field.expr, scope_id, expected_type_id)?;
+                    let parsed_expr = match ast_field.expr.as_ref() {
+                        None => self.ast.expressions.add_expression(ParsedExpression::Variable(
+                            parse::Variable {
+                                name: NamespacedIdentifier::naked(ast_field.name, ast_field.span),
+                            },
+                        )),
+                        Some(expr) => *expr,
+                    };
+                    let expr = self.eval_expr(parsed_expr, scope_id, expected_type_id)?;
                     field_defns.push(StructTypeField {
                         name: ast_field.name,
                         type_id: expr.get_type(),

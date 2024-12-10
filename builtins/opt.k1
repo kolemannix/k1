@@ -4,11 +4,7 @@ fn some[T](value: T): Opt[T].Some { Opt.Some[T](value) }
 
 fn opt_equals[T](a: Opt[T], b: Opt[T]): bool where T: Equals {
   if a is .Some(at) {
-    if b is .Some(bt) {
-      at == bt
-    } else {
-      false
-    }
+    if b is .Some(bt) at == bt else false
   } else {
     b is .None
   }

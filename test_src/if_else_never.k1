@@ -1,14 +1,6 @@
 fn singleNever(b: bool): int {
-  let x: int = if not b {
-    crash("Uh oh!")
-  } else {
-    0
-  };
-  let y: int = if b {
-    0
-  } else {
-    crash("Uh oh!")
-  };
+  let x: int = if not b crash("Uh oh!") else 0;
+  let y: int = if b 0 else crash("Uh oh!");
   x + y
 }
 
@@ -25,4 +17,4 @@ fn main(): int {
   bothNever(false);
   0
 }
-//abortmsg: Uh oh! at if_else_never.k1:17
+//abortmsg: Uh oh! at if_else_never.k1:9

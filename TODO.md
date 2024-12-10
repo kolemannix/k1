@@ -134,7 +134,8 @@
 - [x] Array/Slice/string rework to Buffer/List, and eventually Array (fixed size at compile time)
 - [x] Do away with k1lib.c?
 - [ ] Replace 'unit' with an empty struct, encoded as `{}` at the type level and `{}` at the value level
-- [ ] Re-write specialization to be simpler.
+- [x] Re-write signature specialization to be simpler.
+- [ ] Re-write body specialization to not re-typecheck but instead transform the typed tree
 - [ ] Imports (need design around modules)
   - [ ] Perhaps, only what is imported from main is compiled, besides the builtins?
   - [ ] Would require a new pass for only imports

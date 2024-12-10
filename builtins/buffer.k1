@@ -164,9 +164,7 @@ namespace Buffer {
 
 impl Equals for Buffer[u8] {
   fn equals(self: Buffer[u8], other: Buffer[u8]): bool {
-    if self.len != other.len {
-      false
-    } else {
+    if self.len != other.len false else {
       libc::memcmp(self.data, other.data, self.lenBytes()) == 0
     }
   }
@@ -174,9 +172,7 @@ impl Equals for Buffer[u8] {
 
 impl Equals for Buffer[char] {
   fn equals(self: Buffer[char], other: Buffer[char]): bool {
-    if self.len != other.len {
-      false
-    } else {
+    if self.len != other.len false else {
       libc::memcmp(self.data, other.data, self.lenBytes()) == 0
     }
   }
@@ -184,9 +180,7 @@ impl Equals for Buffer[char] {
 
 impl Equals for Buffer[int] {
   fn equals(self: Buffer[int], other: Buffer[int]): bool {
-    if self.len != other.len {
-      false
-    } else {
+    if self.len != other.len false else {
       libc::memcmp(self.data, other.data, self.lenBytes()) == 0
     }
   }

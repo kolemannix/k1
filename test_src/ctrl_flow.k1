@@ -38,9 +38,8 @@ fn loopBreak(): unit {
   let x: int = loop {
     let inner: int = if true {
       break(3)
-    } else {
-      4
-    }
+    } else 4
+    
   };
   assert(x == 3)
 }
@@ -60,7 +59,7 @@ fn loopFalse(): unit {
 }
 
 fn doCrash(): bool {
-    crash("should not run");
+  crash("should not run");
 }
 
 fn main(): int {

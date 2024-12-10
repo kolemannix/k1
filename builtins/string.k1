@@ -141,9 +141,7 @@ impl Equals for string {
 
 impl Equals for List[string] {
   fn equals(self: List[string], other: List[string]): bool {
-    if self.len != other.len {
-      false
-    } else {
+    if self.len != other.len false else {
       let mut i: u64 = 0;
       while i < self.len {
         if self.get(i) != other.get(i) {
