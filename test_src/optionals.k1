@@ -1,6 +1,6 @@
 deftype Point = { x: int, y: int? }
 
-fn testCoalesce(): int {
+fn testBasics(): int {
   let p: Point? = .Some({ x: 1, y: .Some(2) });
   assert(p!.x == 1);
   assert(p!.y! == 2);
@@ -25,9 +25,6 @@ fn testCoalesceAccessor(): unit {
   assert(maybeUser?.name! == "Koleman");
 }
 
-fn noNum(): int? { .None }
-fn someNum(): int? { .Some(100) }
-
 deftype WeirdPoint = { x: int?, y: int }
 
 fn testComplex(): int {
@@ -46,17 +43,23 @@ fn testComplex(): int {
   0
 }
 
-fn main(): int {
+fn noNum(): int? { .None }
+fn someNum(): int? { .Some(100) }
 
+fn optElseOperator(): unit {
   let result = noNum() ? 42;
   assert(result == 42);
 
   let result = someNum() ? 41;
   assert(result == 100);
+}
 
-  testCoalesce();
+fn main(): int {
+
+  testBasics();
   testComplex();
   testCoalesceAccessor();
+  optElseOperator();
 
   0
 }

@@ -6,7 +6,8 @@ pub mod types;
 use std::cmp::Ordering;
 use std::collections::{HashMap, VecDeque};
 use std::error::Error;
-use std::fmt::{Display, Formatter, Write};
+use std::fmt::{Display, Formatter};
+use std::io::stderr;
 
 use anyhow::bail;
 use colored::Colorize;
@@ -233,12 +234,6 @@ impl TypedBlock {
     pub fn is_single_unit_block(&self) -> bool {
         self.statements.len() == 1 && self.statements[0].is_unit_expr()
     }
-
-    pub fn control_flow_type(&self) -> ControlFlowType {
-        self.statements
-            .last()
-            .map_or(ControlFlowType::Value(UNIT_TYPE_ID), |s| s.control_flow_type())
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -365,6 +360,7 @@ pub enum BinaryOpKind {
 
 impl Display for BinaryOpKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        use std::fmt::Write;
         match self {
             BinaryOpKind::Add => f.write_char('+'),
             BinaryOpKind::Subtract => f.write_char('-'),
@@ -453,14 +449,13 @@ pub struct BinaryOp {
 
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub enum UnaryOpKind {
-    BooleanNegation,
     Dereference,
 }
 
 impl Display for UnaryOpKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        use std::fmt::Write;
         match self {
-            UnaryOpKind::BooleanNegation => f.write_str("not "),
             UnaryOpKind::Dereference => f.write_char('*'),
         }
     }
@@ -509,7 +504,7 @@ pub struct Call {
     /// Specifically sizeOf[T], there's no actual value to specialize on, kinda of a hack would be
     /// better to specialize anyway and inline? idk
     pub type_args: Vec<NamedType>,
-    pub ret_type: TypeId,
+    pub return_type: TypeId,
     pub span: SpanId,
 }
 
@@ -774,14 +769,6 @@ pub struct TypedBreak {
 }
 
 #[derive(Debug, Clone)]
-pub enum ControlFlowType {
-    Returns(TypeId),
-    Value(TypeId),
-    Breaks(TypeId),
-    //Continues,
-}
-
-#[derive(Debug, Clone)]
 pub struct ClosureExpr {
     pub closure_type: TypeId,
     pub span: SpanId,
@@ -805,6 +792,7 @@ pub struct PendingCaptureExpr {
 pub struct WhileLoop {
     pub cond: Box<TypedExpr>,
     pub body: Box<TypedBlock>,
+    pub type_id: TypeId,
     pub span: SpanId,
 }
 
@@ -882,9 +870,9 @@ impl TypedExpr {
             TypedExpr::BinaryOp(binary_op) => binary_op.ty,
             TypedExpr::UnaryOp(unary_op) => unary_op.type_id,
             TypedExpr::Block(b) => b.expr_type,
-            TypedExpr::Call(call) => call.ret_type,
+            TypedExpr::Call(call) => call.return_type,
             TypedExpr::If(ir_if) => ir_if.ty,
-            TypedExpr::WhileLoop(_while_loop) => UNIT_TYPE_ID,
+            TypedExpr::WhileLoop(while_loop) => while_loop.type_id,
             TypedExpr::LoopExpr(loop_expr) => loop_expr.break_type,
             TypedExpr::EnumConstructor(enum_cons) => enum_cons.type_id,
             TypedExpr::EnumIsVariant(_is_variant) => BOOL_TYPE_ID,
@@ -925,14 +913,6 @@ impl TypedExpr {
             TypedExpr::Closure(closure) => closure.span,
             TypedExpr::FunctionName(f) => f.span,
             TypedExpr::PendingCapture(pc) => pc.span,
-        }
-    }
-
-    pub fn control_flow_type(&self) -> ControlFlowType {
-        match self {
-            TypedExpr::Return(ret) => ControlFlowType::Returns(ret.value.get_type()),
-            TypedExpr::Block(block) => block.control_flow_type(),
-            _ => ControlFlowType::Value(self.get_type()),
         }
     }
 
@@ -1006,7 +986,7 @@ impl TypedStmt {
                 }
             }
             TypedStmt::Assignment(assgn) => {
-                if assgn.destination.get_type() == NEVER_TYPE_ID {
+                if assgn.value.get_type() == NEVER_TYPE_ID {
                     NEVER_TYPE_ID
                 } else {
                     UNIT_TYPE_ID
@@ -1022,12 +1002,8 @@ impl TypedStmt {
         false
     }
 
-    pub fn control_flow_type(&self) -> ControlFlowType {
-        match self {
-            TypedStmt::Expr(expr) => expr.control_flow_type(),
-            TypedStmt::Let(_) => ControlFlowType::Value(UNIT_TYPE_ID),
-            TypedStmt::Assignment(_) => ControlFlowType::Value(UNIT_TYPE_ID),
-        }
+    pub fn is_divergent(&self) -> bool {
+        self.get_type() == NEVER_TYPE_ID
     }
 }
 
@@ -1059,6 +1035,7 @@ struct SynthedVariable {
     pub variable_id: VariableId,
     pub defn_stmt: TypedStmt,
     pub variable_expr: TypedExpr,
+    pub parsed_expr: ParsedExpressionId,
 }
 
 #[derive(Debug)]
@@ -1154,6 +1131,7 @@ pub enum IntrinsicFunction {
     SizeOfStride,
     AlignOf,
     TypeId,
+    BoolNegate,
     BitNot,
     BitAnd,
     BitOr,
@@ -1170,6 +1148,7 @@ impl IntrinsicFunction {
             IntrinsicFunction::SizeOfStride => true,
             IntrinsicFunction::AlignOf => true,
             IntrinsicFunction::TypeId => true,
+            IntrinsicFunction::BoolNegate => true,
             IntrinsicFunction::BitNot => true,
             IntrinsicFunction::BitAnd => true,
             IntrinsicFunction::BitOr => true,
@@ -1250,9 +1229,16 @@ fn make_fail_ast_id<A, T: AsRef<str>>(
     Err(make_error(message, span))
 }
 
-pub fn print_error(spans: &Spans, sources: &Sources, message: impl AsRef<str>, span: SpanId) {
-    parse::print_error_location(spans, sources, span);
-    eprintln!("\t{}", message.as_ref());
+pub fn write_error(
+    w: &mut impl std::io::Write,
+    spans: &Spans,
+    sources: &Sources,
+    message: impl AsRef<str>,
+    span: SpanId,
+) -> std::io::Result<()> {
+    parse::write_error_location(w, spans, sources, span)?;
+    write!(w, "\t{}", message.as_ref())?;
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -3307,12 +3293,14 @@ impl TypedModule {
                         base_expr,
                         block_scope,
                     );
-                    let has_value = self.synth_function_call(
-                        qident!(self, span, ["Opt"], "hasValue"),
-                        span,
+                    let has_value = self.synth_typed_function_call(
+                        self.ident_opt_has_value(span),
+                        vec![opt.inner_type],
+                        vec![base_expr_var.variable_expr.clone()],
                         block_scope,
-                        (vec![opt.inner_type], vec![base_expr_var.variable_expr.clone()]),
+                        None,
                     )?;
+
                     let st @ Type::Struct(struct_type) = self.types.get(opt.inner_type) else {
                         return failf!(
                             span,
@@ -3331,11 +3319,12 @@ impl TypedModule {
                         ))?;
                     let field_type = target_field.type_id;
                     let field_name = target_field.name;
-                    let opt_unwrap = self.synth_function_call(
-                        qident!(self, span, ["Opt"], "get"),
-                        span,
+                    let opt_unwrap = self.synth_typed_function_call(
+                        self.ident_opt_get(span),
+                        vec![opt.inner_type],
+                        vec![base_expr_var.variable_expr],
                         block_scope,
-                        (vec![opt.inner_type], vec![base_expr_var.variable_expr]),
+                        None,
                     )?;
                     let consequent = self.synth_optional_some(
                         parsed_id,
@@ -3637,18 +3626,18 @@ impl TypedModule {
                 // Note: Typing of list literals is very suspicious, I'm not sure how to type it when there
                 //        are no elements, I don't have an 'Unknown' type but maybe that's the
                 //        ticket.
-                let element_type = element_type.or(expected_element_type).unwrap_or(UNIT_TYPE_ID);
-                let list_new_fn_call = self.synth_function_call(
+                let Some(element_type) = element_type.or(expected_element_type) else {
+                    return failf!(span, "Not enough information to determine empty list type");
+                };
+                let list_new_fn_call = self.synth_typed_function_call(
                     qident!(self, span, ["List"], "withCapacity"),
-                    span,
+                    vec![element_type],
+                    vec![TypedExpr::Integer(TypedIntegerExpr {
+                        value: TypedIntegerValue::U64(element_count as u64),
+                        span,
+                    })],
                     list_lit_scope,
-                    (
-                        vec![element_type],
-                        vec![TypedExpr::Integer(TypedIntegerExpr {
-                            value: TypedIntegerValue::U64(element_count as u64),
-                            span,
-                        })],
-                    ),
+                    None,
                 )?;
                 let list_variable = self.synth_variable_defn(
                     get_ident!(self, "list_literal"),
@@ -3660,16 +3649,14 @@ impl TypedModule {
                 );
                 let mut set_elements = Vec::with_capacity(element_count);
                 for element_value_expr in elements.into_iter() {
-                    let element_set = TypedStmt::Expr(Box::new(self.synth_function_call(
+                    let push_element = TypedStmt::Expr(Box::new(self.synth_typed_function_call(
                         qident!(self, span, ["List"], "push"),
-                        span,
+                        vec![element_type],
+                        vec![list_variable.variable_expr.clone(), element_value_expr],
                         list_lit_scope,
-                        (
-                            vec![element_type],
-                            vec![list_variable.variable_expr.clone(), element_value_expr],
-                        ),
+                        None,
                     )?));
-                    set_elements.push(element_set);
+                    set_elements.push(push_element);
                 }
                 list_lit_block.statements.push(list_variable.defn_stmt);
                 list_lit_block.statements.extend(set_elements);
@@ -3757,23 +3744,15 @@ impl TypedModule {
             ParsedExpression::Loop(loop_expr) => {
                 self.eval_loop_expr(&loop_expr.clone(), scope_id, expected_type)
             }
-            ParsedExpression::BinaryOp(binary_op) => {
-                let binary_op = binary_op.clone();
-                self.eval_binary_op(&binary_op, scope_id, expected_type)
+            ParsedExpression::BinaryOp(_binary_op) => {
+                self.eval_binary_op(expr_id, scope_id, expected_type)
             }
             ParsedExpression::UnaryOp(op) => {
                 let op = op.clone();
                 match op.op_kind {
                     ParsedUnaryOpKind::BooleanNegation => {
-                        let base_expr = self.eval_expr(op.expr, scope_id, expected_type)?;
-                        self.check_types(BOOL_TYPE_ID, base_expr.get_type(), scope_id)
-                            .map_err(|s| make_error(s, op.span))?;
-                        Ok(TypedExpr::UnaryOp(UnaryOp {
-                            kind: UnaryOpKind::BooleanNegation,
-                            type_id: BOOL_TYPE_ID,
-                            expr: Box::new(base_expr),
-                            span: op.span,
-                        }))
+                        let negated_expr = self.synth_bool_not(op.expr);
+                        self.eval_expr(negated_expr, scope_id, expected_type)
                     }
                 }
             }
@@ -3806,14 +3785,14 @@ impl TypedModule {
                 Ok(TypedExpr::Block(block))
             }
             ParsedExpression::FnCall(fn_call) => {
-                let call =
-                    self.eval_function_call(&fn_call.clone(), scope_id, expected_type, None)?;
-                Ok(call)
+                self.eval_function_call(&fn_call.clone(), scope_id, expected_type, None)
             }
             ParsedExpression::OptionalGet(optional_get) => {
                 let span = optional_get.span;
                 let base = self.eval_expr_inner(optional_get.base, scope_id, expected_type)?;
                 // This is where we would use an 'unwrap' trait instead!!
+                // This could just be a UnaryOp
+                // nocommit If I remove this check, we should just get a failed function call typecheck. confirm this
                 let Some(optional_type) = self.types.get(base.get_type()).as_optional() else {
                     return make_fail_span(
                         format!(
@@ -3823,13 +3802,13 @@ impl TypedModule {
                         span,
                     );
                 };
-                let get_fn_call = self.synth_function_call(
-                    qident!(self, span, ["Opt"], "get"),
-                    span,
+                self.synth_typed_function_call(
+                    self.ident_opt_get(span),
+                    vec![optional_type.inner_type],
+                    vec![base],
                     scope_id,
-                    (vec![optional_type.inner_type], vec![base]),
-                )?;
-                Ok(get_fn_call)
+                    None,
+                )
             }
             ParsedExpression::For(for_expr) => {
                 self.eval_for_expr(&for_expr.clone(), scope_id, expected_type)
@@ -3871,7 +3850,7 @@ impl TypedModule {
                     failf!(anon_enum.span, "No variant named {}", self.name_of(anon_enum.name))
                 }
             }
-            ParsedExpression::EnumConstructor(e) => {
+            ParsedExpression::EnumDotConstructor(e) => {
                 let span = e.span;
                 let expected_type = expected_type.ok_or(make_error(
                     "Could not infer enum type from context; try supplying the name",
@@ -3883,7 +3862,7 @@ impl TypedModule {
                         Type::EnumVariant(ev) => Ok(ev.enum_type_id),
                         _ => failf!(
                             e.span,
-                            "Expected type {} but got enum constructor",
+                            "Could not infer expected enum type for '.' shorthand; expected type was {}",
                             self.type_id_to_string(expected_type)
                         ),
                     }
@@ -3965,9 +3944,11 @@ impl TypedModule {
         self.scopes.add_loop_info(body_scope, ScopeLoopInfo { break_type: Some(UNIT_TYPE_ID) });
 
         let block = self.eval_block(&parsed_block.clone(), body_scope, expected_type, false)?;
+        let loop_type = if cond.get_type() == NEVER_TYPE_ID { NEVER_TYPE_ID } else { UNIT_TYPE_ID };
         Ok(TypedExpr::WhileLoop(WhileLoop {
             cond: Box::new(cond),
             body: Box::new(block),
+            type_id: loop_type,
             span: while_expr.span,
         }))
     }
@@ -4015,17 +3996,15 @@ impl TypedModule {
         let mut block = self.synth_block(vec![], scope_id, span);
         let block_scope = block.scope_id;
         let part_count = is.parts.len();
-        let new_string_builder = self.synth_function_call(
+        let new_string_builder = self.synth_typed_function_call(
             qident!(self, span, ["StringBuilder"], "withCapacity"),
-            span,
+            vec![],
+            vec![TypedExpr::Integer(TypedIntegerExpr {
+                value: TypedIntegerValue::U64(part_count as u64),
+                span,
+            })],
             block_scope,
-            (
-                vec![],
-                vec![TypedExpr::Integer(TypedIntegerExpr {
-                    value: TypedIntegerValue::U64(part_count as u64),
-                    span,
-                })],
-            ),
+            None,
         )?;
         let string_builder_var = self.synth_variable_defn_simple(
             get_ident!(self, "sb"),
@@ -4045,19 +4024,21 @@ impl TypedModule {
                 }
             };
             debug_assert!(string_expr.get_type() == STRING_TYPE_ID);
-            let push_call = self.synth_function_call(
+            let push_call = self.synth_typed_function_call(
                 qident!(self, span, ["StringBuilder"], "putString"),
-                span,
+                vec![],
+                vec![string_builder_var.variable_expr.clone(), string_expr],
                 block_scope,
-                (vec![], vec![string_builder_var.variable_expr.clone(), string_expr]),
+                None,
             )?;
             block.push_expr(push_call);
         }
-        let build_call = self.synth_function_call(
+        let build_call = self.synth_typed_function_call(
             qident!(self, span, ["StringBuilder"], "build"),
-            span,
+            vec![],
+            vec![string_builder_var.variable_expr],
             block_scope,
-            (vec![], vec![string_builder_var.variable_expr]),
+            None,
         )?;
         block.push_expr(build_call);
         Ok(TypedExpr::Block(block))
@@ -4465,11 +4446,12 @@ impl TypedModule {
     ) -> TyperResult<TypedExpr> {
         if cases.is_empty() {
             let message_expr = TypedExpr::Str("Match Error".to_string(), span_if_no_cases);
-            self.synth_function_call(
+            self.synth_typed_function_call(
                 qident!(self, span_if_no_cases, "crash"),
-                span_if_no_cases,
+                vec![],
+                vec![message_expr],
                 scope_id,
-                (vec![], vec![message_expr]),
+                None,
             )
         } else {
             let (case_condition, case_body) = cases.pop_front().unwrap();
@@ -4992,38 +4974,26 @@ impl TypedModule {
             variable_type: item_type,
             is_referencing: false,
             initializer: if is_string_iteree {
-                self.synth_function_call(
-                    NamespacedIdentifier {
-                        namespaces: vec![get_ident!(self, "string")],
-                        name: get_ident!(self, "get"),
-                        span: body_span,
-                    },
-                    body_span,
+                self.synth_typed_function_call(
+                    qident!(self, body_span, ["string"], "get"),
+                    vec![],
+                    vec![
+                        iteree_variable.variable_expr.clone(),
+                        index_variable.variable_expr.clone(),
+                    ],
                     while_scope_id,
-                    (
-                        vec![],
-                        vec![
-                            iteree_variable.variable_expr.clone(),
-                            index_variable.variable_expr.clone(),
-                        ],
-                    ),
+                    None,
                 )?
             } else {
-                self.synth_function_call(
-                    NamespacedIdentifier {
-                        namespaces: vec![get_ident!(self, "List")],
-                        name: get_ident!(self, "get"),
-                        span: body_span,
-                    },
-                    body_span,
+                self.synth_typed_function_call(
+                    qident!(self, body_span, ["List"], "get"),
+                    vec![item_type],
+                    vec![
+                        iteree_variable.variable_expr.clone(),
+                        index_variable.variable_expr.clone(),
+                    ],
                     while_scope_id,
-                    (
-                        vec![item_type],
-                        vec![
-                            iteree_variable.variable_expr.clone(),
-                            index_variable.variable_expr.clone(),
-                        ],
-                    ),
+                    None,
                 )?
             },
             span: body_span,
@@ -5048,11 +5018,12 @@ impl TypedModule {
             )
         };
         let yielded_coll_variable = if !is_do_block {
-            let synth_function_call = self.synth_function_call(
+            let synth_function_call = self.synth_typed_function_call(
                 qident!(self, body_span, ["List"], "withCapacity"),
-                body_span,
+                vec![body_block_result_type],
+                vec![iteree_length_variable.variable_expr.clone()],
                 for_expr_scope,
-                (vec![body_block_result_type], vec![iteree_length_variable.variable_expr.clone()]),
+                None,
             )?;
             Some(self.synth_variable_defn(
                 get_ident!(self, "yielded_coll"),
@@ -5082,17 +5053,15 @@ impl TypedModule {
 
         // Assign element to yielded list
         if let Some(yielded_coll_variable) = &yielded_coll_variable {
-            let element_assign = TypedStmt::Expr(Box::new(self.synth_function_call(
+            let element_assign = TypedStmt::Expr(Box::new(self.synth_typed_function_call(
                 qident!(self, body_span, ["List"], "push"),
-                body_span,
+                vec![body_block_result_type],
+                vec![
+                    yielded_coll_variable.variable_expr.clone(),
+                    user_block_variable.variable_expr,
+                ],
                 for_expr_scope,
-                (
-                    vec![body_block_result_type],
-                    vec![
-                        yielded_coll_variable.variable_expr.clone(),
-                        user_block_variable.variable_expr,
-                    ],
-                ),
+                None,
             )?));
             while_block.statements.push(element_assign);
         }
@@ -5124,6 +5093,7 @@ impl TypedModule {
                 span: iterable_span,
             })),
             body: Box::new(while_block),
+            type_id: UNIT_TYPE_ID,
             span: for_expr.span,
         });
 
@@ -5180,7 +5150,7 @@ impl TypedModule {
 
     fn eval_binary_op(
         &mut self,
-        binary_op: &parse::BinaryOp,
+        binary_op_id: ParsedExpressionId,
         scope_id: ScopeId,
         expected_type: Option<TypeId>,
     ) -> TyperResult<TypedExpr> {
@@ -5194,6 +5164,10 @@ impl TypedModule {
             }
         }
         // Special cases: Equality, OptionalElse, and Pipe
+        let ParsedExpression::BinaryOp(binary_op) = self.ast.expressions.get(binary_op_id).clone()
+        else {
+            unreachable!()
+        };
         match binary_op.op_kind {
             BinaryOpKind::Pipe => {
                 return self.eval_pipe_expr(
@@ -5207,7 +5181,7 @@ impl TypedModule {
             BinaryOpKind::Equals | BinaryOpKind::NotEquals => {
                 let lhs = self.eval_expr(binary_op.lhs, scope_id, None)?;
                 if !is_scalar_for_equals(lhs.get_type()) {
-                    return self.eval_equality_expr(lhs, binary_op, scope_id, expected_type);
+                    return self.eval_equality_expr(binary_op_id, scope_id, expected_type);
                 }
             }
             BinaryOpKind::OptionalElse => {
@@ -5233,6 +5207,7 @@ impl TypedModule {
         let kind = binary_op.op_kind;
         let lhs_type_id = lhs.get_type();
         let result_type = match self.types.get(lhs_type_id) {
+            Type::Never(_) => Ok(NEVER_TYPE_ID),
             Type::Float(_) | Type::Integer(_) => match kind {
                 BinaryOpKind::Add => Ok(lhs_type_id),
                 BinaryOpKind::Subtract => Ok(lhs_type_id),
@@ -5293,19 +5268,20 @@ impl TypedModule {
             }
         }?;
 
+        debug_assert!(kind.is_symmetric_binop());
         // At this point I think all operations are symmetric but we'll leave this here
         // to signal that invariant and in case things change
-        let expected_rhs_type = if kind.is_symmetric_binop() { Some(lhs.get_type()) } else { None };
-        let rhs = self.eval_expr(binary_op.rhs, scope_id, expected_rhs_type)?;
+        let rhs = self.eval_expr(binary_op.rhs, scope_id, Some(lhs.get_type()))?;
 
-        if kind.is_symmetric_binop() {
-            // We already confirmed that the LHS is valid for this operation, and
-            // if the op is symmetric, we just have to check the RHS matches
-            if let Err(msg) = self.check_types(lhs.get_type(), rhs.get_type(), scope_id) {
-                return failf!(binary_op.span, "operand types did not match: {msg}");
-            }
-        } else {
-            panic!("Unexpected asymmetric binop down here {}", kind)
+        let result_type = match rhs.get_type() {
+            NEVER_TYPE_ID => NEVER_TYPE_ID,
+            _other => result_type,
+        };
+
+        // We already confirmed that the LHS is valid for this operation, and
+        // if the op is symmetric, we just have to check the RHS matches
+        if let Err(msg) = self.check_types(lhs.get_type(), rhs.get_type(), scope_id) {
+            return failf!(rhs.get_span(), "operand types did not match: {msg}");
         }
 
         let expr = TypedExpr::BinaryOp(BinaryOp {
@@ -5347,17 +5323,19 @@ impl TypedModule {
             lhs,
             coalesce_block.scope_id,
         );
-        let lhs_has_value = self.synth_function_call(
-            qident!(self, span, ["Opt"], "hasValue"),
-            span,
+        let lhs_has_value = self.synth_typed_function_call(
+            self.ident_opt_has_value(span),
+            vec![lhs_inner],
+            vec![lhs_variable.variable_expr.clone()],
             coalesce_block.scope_id,
-            (vec![lhs_inner], vec![lhs_variable.variable_expr.clone()]),
+            None,
         )?;
-        let lhs_get_expr = self.synth_function_call(
-            qident!(self, span, ["Opt"], "get"),
-            span,
+        let lhs_get_expr = self.synth_typed_function_call(
+            self.ident_opt_get(span),
+            vec![lhs_inner],
+            vec![lhs_variable.variable_expr],
             coalesce_block.scope_id,
-            (vec![lhs_inner], vec![lhs_variable.variable_expr]),
+            None,
         )?;
 
         let if_else = TypedExpr::If(Box::new(TypedIf {
@@ -5374,21 +5352,22 @@ impl TypedModule {
 
     fn eval_equality_expr(
         &mut self,
-        lhs: TypedExpr,
-        binary_op: &parse::BinaryOp,
+        binary_op_id: ParsedExpressionId,
         scope_id: ScopeId,
-        _expected_type: Option<TypeId>,
+        _expected_type_id: Option<TypeId>,
     ) -> TyperResult<TypedExpr> {
-        assert!(
-            binary_op.op_kind == BinaryOpKind::Equals
-                || binary_op.op_kind == BinaryOpKind::NotEquals
-        );
-        // let lhs = self.eval_expr(binary_op.lhs, scope_id, None)?;
-        let lhs_type_id = lhs.get_type();
-        let equals_expr = match self.types.get(lhs_type_id) {
+        let ParsedExpression::BinaryOp(binary_op) = self.ast.expressions.get(binary_op_id).clone()
+        else {
+            unreachable!()
+        };
+
+        let lhs = self.eval_expr(binary_op.lhs, scope_id, None)?;
+        let lhs_type = lhs.get_type();
+        let equality_result = match self.types.get(lhs_type) {
             Type::TypeVariable(_type_var) => {
-                let rhs = self.eval_expr(binary_op.rhs, scope_id, Some(lhs.get_type()))?;
-                if let Err(msg) = self.check_types(lhs.get_type(), rhs.get_type(), scope_id) {
+                // nocommit: Very suspicious special case for type variables in eval_equality_expr
+                let rhs = self.eval_expr(binary_op.rhs, scope_id, Some(lhs_type))?;
+                if let Err(msg) = self.check_types(lhs_type, rhs.get_type(), scope_id) {
                     return make_fail_span(
                         format!("Type mismatch on equality of 2 generic variables: {}", msg),
                         binary_op.span,
@@ -5406,13 +5385,13 @@ impl TypedModule {
                 if other_lhs_type.is_scalar_int_value() {
                     panic!("Scalar ints shouldnt be passed to eval_equality_expr")
                 }
-                let rhs = self.eval_expr(binary_op.rhs, scope_id, Some(lhs.get_type()))?;
-                if rhs.get_type() != lhs_type_id {
+                let rhs = self.eval_expr(binary_op.rhs, scope_id, Some(lhs_type))?;
+                if rhs.get_type() != lhs_type {
                     failf!(
                         binary_op.span,
                         "Right hand side type '{}' did not match {}",
                         self.type_id_to_string(rhs.get_type()),
-                        self.type_id_to_string(lhs.get_type())
+                        self.type_id_to_string(lhs_type)
                     )
                 } else {
                     let call_expr = self.synth_equals_call(lhs, rhs, binary_op.span)?;
@@ -5420,16 +5399,18 @@ impl TypedModule {
                 }
             }
         }?;
-        if binary_op.op_kind == BinaryOpKind::Equals {
-            Ok(equals_expr)
-        } else {
-            Ok(TypedExpr::UnaryOp(UnaryOp {
-                kind: UnaryOpKind::BooleanNegation,
-                type_id: BOOL_TYPE_ID,
-                expr: Box::new(equals_expr),
-                span: binary_op.span,
-            }))
-        }
+        let final_result = match binary_op.op_kind {
+            BinaryOpKind::Equals => equality_result,
+            BinaryOpKind::NotEquals => self.synth_typed_function_call(
+                qident!(self, binary_op.span, ["bool"], "negated"),
+                vec![],
+                vec![equality_result],
+                scope_id,
+                _expected_type_id,
+            )?,
+            _ => unreachable!(),
+        };
+        Ok(final_result)
     }
 
     fn eval_pipe_expr(
@@ -5450,6 +5431,7 @@ impl TypedModule {
                     explicit_context_args: vec![],
                     span,
                     is_method: false,
+                    id: ParsedExpressionId::PENDING,
                 }
             }
             ParsedExpression::FnCall(fn_call) => {
@@ -5463,6 +5445,7 @@ impl TypedModule {
                     explicit_context_args: vec![],
                     span,
                     is_method: false,
+                    id: ParsedExpressionId::PENDING,
                 }
             }
             _ => {
@@ -5472,7 +5455,10 @@ impl TypedModule {
                 )
             }
         };
-        self.eval_function_call(&new_fn_call, scope_id, expected_type, None)
+        let new_fn_call_id =
+            self.ast.expressions.add_expression(ParsedExpression::FnCall(new_fn_call));
+        let new_fn_call_clone = self.ast.expressions.get(new_fn_call_id).expect_fn_call().clone();
+        self.eval_function_call(&new_fn_call_clone, scope_id, expected_type, None)
     }
 
     fn synth_equals_call(
@@ -5490,7 +5476,7 @@ impl TypedModule {
             callee: Callee::make_static(equals_implementation_function_id),
             args: vec![lhs, rhs],
             type_args: Vec::new(),
-            ret_type: BOOL_TYPE_ID,
+            return_type: BOOL_TYPE_ID,
             span,
         });
         Ok(call_expr)
@@ -5627,6 +5613,7 @@ impl TypedModule {
         expected_type: Option<TypeId>,
     ) -> TyperResult<Either<TypedExpr, Callee>> {
         let fn_name = fn_call.name.name;
+        let call_span = fn_call.span;
         if let Some(builtin_result) =
             self.handle_builtin_function_call_lookalikes(fn_call, calling_scope)?
         {
@@ -5638,20 +5625,24 @@ impl TypedModule {
             debug_assert!(fn_call.name.namespaces.is_empty())
         }
 
+        let first_arg = fn_call.args.first().cloned();
+        let second_arg = fn_call.args.get(1).cloned();
         if fn_call.is_method {
             // Special case for enum constructors which are syntactically also function calls
             // This can't use known_args, so keep in mind that we can't synth enum constructors via
             // this codepath, have to do it directly :/
+            // nocommit known_args disclaimer can go
             //
             // Perhaps handle_enum_constructor could be updated to work with a TypedExpr base
             // as well, provided it is a Variable expr
             if let Some(base_arg) = fn_call.args.first() {
+                let type_args = fn_call.type_args.clone();
                 if let Some(enum_constr) = self.handle_enum_constructor(
                     base_arg.value,
-                    fn_call.name.name,
-                    fn_call.args.get(1).map(|param| param.value),
+                    fn_name,
+                    second_arg.map(|param| param.value),
                     expected_type,
-                    &fn_call.type_args,
+                    &type_args,
                     calling_scope,
                     fn_call.span,
                 )? {
@@ -5664,7 +5655,7 @@ impl TypedModule {
             Some((_, args)) if !args.is_empty() => {
                 Some(MaybeTypedExpr::Typed(args.first().unwrap().clone()))
             }
-            _ => match fn_call.args.first() {
+            _ => match first_arg {
                 None => None,
                 Some(first) => Some(MaybeTypedExpr::Parsed(first.value)),
             },
@@ -5696,7 +5687,7 @@ impl TypedModule {
                     if let Some(ability_id) = function_ability_id {
                         let base_expr = first_arg_expr.ok_or(make_error(
                             "Ability functions must have at least one argument",
-                            fn_call.span,
+                            call_span,
                         ))?;
                         let base_expr = match base_expr {
                             MaybeTypedExpr::Parsed(parsed) => {
@@ -5705,29 +5696,34 @@ impl TypedModule {
                             MaybeTypedExpr::Typed(expr) => expr,
                         };
                         let function_id = self.find_ability_implementation(
-                            fn_name,
+                            fn_call.name.name,
                             base_expr.get_type(),
                             Some(ability_id),
-                            fn_call.span,
+                            call_span,
                         )?;
                         let function_id = function_id.ok_or(errf!(
-                            fn_call.span,
+                            call_span,
                             "Type {} does not implement ability {}",
                             self.type_id_to_string(base_expr.get_type()),
-                            self.name_of(fn_name)
+                            self.name_of(fn_call.name.name)
                         ))?;
                         Ok(Either::Right(Callee::make_static(function_id)))
                     } else {
                         Ok(Either::Right(Callee::make_static(function_id)))
                     }
                 } else {
-                    let fn_not_found =
-                        || failf!(fn_call.span, "Function not found: '{}'", self.name_of(fn_name));
+                    let fn_not_found = || {
+                        failf!(
+                            call_span,
+                            "Function not found: '{}'",
+                            self.name_of(fn_call.name.name)
+                        )
+                    };
                     if !fn_call.name.namespaces.is_empty() {
                         return fn_not_found();
                     }
                     if let Some((variable_id, _scope_id)) =
-                        self.scopes.find_variable(calling_scope, fn_name)
+                        self.scopes.find_variable(calling_scope, fn_call.name.name)
                     {
                         let function_variable = self.variables.get_variable(variable_id);
                         match self.types.get(function_variable.type_id) {
@@ -5779,6 +5775,7 @@ impl TypedModule {
         fn_call: &FnCall,
         calling_scope: ScopeId,
     ) -> TyperResult<Option<TypedExpr>> {
+        let call_span = fn_call.span;
         match self.name_of(fn_call.name.name) {
             "return" => {
                 if fn_call.args.len() != 1 {
@@ -5817,28 +5814,28 @@ impl TypedModule {
                 if let Err(msg) =
                     self.check_types(expected_return_type, return_value.get_type(), calling_scope)
                 {
-                    return failf!(fn_call.span, "Returned wrong type: {msg}");
+                    return failf!(call_span, "Returned wrong type: {msg}");
                 }
                 Ok(Some(TypedExpr::Return(TypedReturn {
                     value: Box::new(return_value),
-                    span: fn_call.span,
+                    span: call_span,
                 })))
             }
             "break" => {
                 if fn_call.args.len() > 1 {
-                    return make_fail_span("break(...) must have 0 or 1 argument", fn_call.span);
+                    return make_fail_span("break(...) must have 0 or 1 argument", call_span);
                 }
                 // Determine based on loop type if break with value is allowed
                 let Some((enclosing_loop_scope_id, loop_type)) =
                     self.scopes.nearest_parent_loop(calling_scope)
                 else {
-                    return failf!(fn_call.span, "break(...) outside of while loop");
+                    return failf!(call_span, "break(...) outside of while loop");
                 };
                 let expected_break_type: Option<TypeId> =
                     self.scopes.get_loop_info(enclosing_loop_scope_id).unwrap().break_type;
 
                 let break_value = match fn_call.args.first() {
-                    None => TypedExpr::Unit(fn_call.span),
+                    None => TypedExpr::Unit(call_span),
                     Some(fn_call_arg) => {
                         // ALTERNATIVE: Allow break with value from `while` loops but require the type to implement the `Default` trait
                         match loop_type {
@@ -5849,7 +5846,7 @@ impl TypedModule {
                             )?,
                             LoopType::While => {
                                 return failf!(
-                                    fn_call.span,
+                                    call_span,
                                     "break with value is only allowed in `loop` loops, because loop body may not ever be executed"
                                 )
                             }
@@ -5865,7 +5862,7 @@ impl TypedModule {
                     if let Err(msg) =
                         self.check_types(expected_break_type, actual_break_type, calling_scope)
                     {
-                        return failf!(fn_call.span, "Break with wrong type: {msg}");
+                        return failf!(call_span, "Break with wrong type: {msg}");
                     }
                 } else {
                     self.scopes.add_loop_info(
@@ -5878,7 +5875,7 @@ impl TypedModule {
                     value: Box::new(break_value),
                     loop_scope: enclosing_loop_scope_id,
                     loop_type,
-                    span: fn_call.span,
+                    span: call_span,
                 })))
             }
             "continue" => {
@@ -5886,22 +5883,22 @@ impl TypedModule {
             }
             "compilerFile" => {
                 if !fn_call.args.is_empty() {
-                    return make_fail_span("compilerFile() takes no arguments", fn_call.span);
+                    return make_fail_span("compilerFile() takes no arguments", call_span);
                 }
-                let span = self.ast.spans.get(fn_call.span);
+                let span = self.ast.spans.get(call_span);
                 let filename = &self.ast.sources.source_by_span(span).filename;
-                let string_expr = TypedExpr::Str(filename.clone(), fn_call.span);
+                let string_expr = TypedExpr::Str(filename.clone(), call_span);
                 Ok(Some(string_expr))
             }
             "compilerLine" => {
                 if !fn_call.args.is_empty() {
-                    return make_fail_span("compilerLine() takes no arguments", fn_call.span);
+                    return make_fail_span("compilerLine() takes no arguments", call_span);
                 }
                 let span = self.ast.spans.get(fn_call.span);
                 let line = self.ast.sources.get_line_for_span(span).unwrap();
                 let int_expr = TypedExpr::Integer(TypedIntegerExpr {
                     value: TypedIntegerValue::U64(line.line_number() as u64),
-                    span: fn_call.span,
+                    span: call_span,
                 });
                 Ok(Some(int_expr))
             }
@@ -5916,8 +5913,6 @@ impl TypedModule {
         calling_scope: ScopeId,
         _expected_type: Option<TypeId>,
     ) -> TyperResult<Either<TypedExpr, Callee>> {
-        let fn_name = fn_call.name.name;
-
         // Handle the special case of the synthesized enum 'as{Variant}' methods
         let base_expr = match base_expr {
             MaybeTypedExpr::Typed(expr) => expr,
@@ -5925,19 +5920,20 @@ impl TypedModule {
                 self.eval_expr(parsed_expr_id, calling_scope, None)?
             }
         };
+
         if let Some(enum_as_result) = self.handle_enum_as(&base_expr, fn_call)? {
             return Ok(Either::Left(enum_as_result));
         }
+
+        let fn_name = fn_call.name.name;
+        let call_span = fn_call.span;
 
         let type_id = base_expr.get_type();
         let base_for_method_derefed = self.types.get_type_id_dereferenced(type_id);
         let method_id = match self.types.get(base_for_method_derefed) {
             Type::Enum(e) => {
                 let Some(enum_defn_info) = e.type_defn_info.as_ref() else {
-                    return make_fail_span(
-                        "Anonymous enums currently have no methods",
-                        fn_call.span,
-                    );
+                    return make_fail_span("Anonymous enums currently have no methods", call_span);
                 };
                 if let Some(enum_companion_ns) = enum_defn_info.companion_namespace {
                     let enum_scope = self.get_namespace_scope(enum_companion_ns);
@@ -5960,14 +5956,14 @@ impl TypedModule {
             }
         };
         let ability_fn_id = if method_id.is_none() {
-            self.find_ability_implementation(fn_name, type_id, None, fn_call.span)?
+            self.find_ability_implementation(fn_name, type_id, None, call_span)?
         } else {
             None
         };
         match method_id.or(ability_fn_id) {
             Some(function_id) => Ok(Either::Right(Callee::make_static(function_id))),
             None => failf!(
-                fn_call.span,
+                call_span,
                 "Method '{}' does not exist on type {}",
                 self.name_of(fn_name),
                 self.type_id_to_string(type_id),
@@ -6266,7 +6262,6 @@ impl TypedModule {
         }
     }
 
-    // nocommit: Make this not evaluate expressions, just purely align args with params
     fn align_call_arguments_with_parameters<'params>(
         &mut self,
         fn_call: &FnCall,
@@ -6274,64 +6269,66 @@ impl TypedModule {
         pre_evaled_params: Option<Vec<TypedExpr>>,
         calling_scope: ScopeId,
         tolerate_missing_context_args: bool,
-    ) -> TyperResult<Vec<(TyperResult<TypedExpr>, &'params FnArgType)>> {
+    ) -> TyperResult<Vec<(MaybeTypedExpr, &'params FnArgType)>> {
+        let fn_name = fn_call.name.name;
+        let span = fn_call.span;
         let explicit_context_args = !fn_call.explicit_context_args.is_empty();
-        let mut final_args: Vec<(TyperResult<TypedExpr>, &FnArgType)> = Vec::new();
+        let mut final_args: Vec<(MaybeTypedExpr, &FnArgType)> = Vec::new();
         if !explicit_context_args {
             for context_param in params.iter().filter(|p| p.is_context) {
-                let is_source_loc =
-                    self.types.get_type_defn_info(context_param.type_id).is_some_and(|defn_info| {
-                        defn_info.name == get_ident!(self, "CompilerSourceLoc")
-                            && defn_info.scope == self.scopes.get_root_scope_id()
-                    });
-                if is_source_loc {
-                    let span = self.ast.spans.get(fn_call.span);
-                    let source = self.ast.sources.get_source(span.file_id);
-                    let line = source.get_line_for_span(span).unwrap();
-                    let source_loc_expr = TypedExpr::Struct(Struct {
-                        fields: vec![
-                            StructField {
-                                name: get_ident!(self, "filename"),
-                                expr: TypedExpr::Str(source.filename.clone(), fn_call.span),
-                            },
-                            StructField {
-                                name: get_ident!(self, "line"),
-                                expr: TypedExpr::Integer(TypedIntegerExpr {
-                                    value: TypedIntegerValue::U64(line.line_number() as u64),
-                                    span: fn_call.span,
-                                }),
-                            },
-                        ],
-                        type_id: context_param.type_id,
-                        span: fn_call.span,
-                    });
-                    final_args.push((Ok(source_loc_expr), context_param));
+                if let Some(found_id) =
+                    self.scopes.find_context_variable_by_type(calling_scope, context_param.type_id)
+                {
+                    let found = self.variables.get_variable(found_id);
+                    final_args.push((
+                        MaybeTypedExpr::Typed(TypedExpr::Variable(VariableExpr {
+                            variable_id: found_id,
+                            type_id: found.type_id,
+                            span,
+                        })),
+                        context_param,
+                    ));
                 } else {
-                    let Some(found_id) = self
-                        .scopes
-                        .find_context_variable_by_type(calling_scope, context_param.type_id)
-                    else {
-                        if !tolerate_missing_context_args {
-                            return failf!(
-                            fn_call.span,
+                    let is_source_loc = self
+                        .types
+                        .get_type_defn_info(context_param.type_id)
+                        .is_some_and(|defn_info| {
+                            defn_info.name == get_ident!(self, "CompilerSourceLoc")
+                                && defn_info.scope == self.scopes.get_root_scope_id()
+                        });
+                    if is_source_loc {
+                        let the_span = self.ast.spans.get(span);
+                        let source = self.ast.sources.get_source(the_span.file_id);
+                        let line = source.get_line_for_span(the_span).unwrap();
+                        let source_loc_expr = TypedExpr::Struct(Struct {
+                            fields: vec![
+                                StructField {
+                                    name: get_ident!(self, "filename"),
+                                    expr: TypedExpr::Str(source.filename.clone(), span),
+                                },
+                                StructField {
+                                    name: get_ident!(self, "line"),
+                                    expr: TypedExpr::Integer(TypedIntegerExpr {
+                                        value: TypedIntegerValue::U64(line.line_number() as u64),
+                                        span,
+                                    }),
+                                },
+                            ],
+                            type_id: context_param.type_id,
+                            span,
+                        });
+                        final_args.push((MaybeTypedExpr::Typed(source_loc_expr), context_param));
+                    } else if !tolerate_missing_context_args {
+                        return failf!(
+                            span,
                             "Failed to find context parameter '{}'. No context variables of type {} are in scope",
                             self.name_of(context_param.name),
                             self.type_id_to_string(context_param.type_id)
                         );
-                        } else {
-                            continue;
-                        }
-                    };
-                    let found = self.variables.get_variable(found_id);
-                    final_args.push((
-                        Ok(TypedExpr::Variable(VariableExpr {
-                            variable_id: found_id,
-                            type_id: found.type_id,
-                            span: fn_call.span,
-                        })),
-                        context_param,
-                    ));
-                }
+                    } else {
+                        continue;
+                    }
+                };
             }
         }
 
@@ -6347,7 +6344,7 @@ impl TypedModule {
             .unwrap_or(actual_passed_args.clone().count());
         if total_passed != total_expected {
             return failf!(
-                fn_call.span,
+                span,
                 "Incorrect number of arguments to {}: expected {}, got {}",
                 self.name_of(fn_call.name.name),
                 total_expected,
@@ -6369,9 +6366,10 @@ impl TypedModule {
             &mut params.iter().filter(|p| !p.is_context)
         };
 
+        // nocommit: Split the code path for pre-evaled and not
         for (param_index, fn_param) in expected_literal_params.enumerate() {
             let expr_result = match pre_evaled_params.next() {
-                Some(e) => Ok(e),
+                Some(e) => MaybeTypedExpr::Typed(e),
                 None => {
                     let matching_arg_by_name =
                         actual_passed_args.clone().find(|arg| arg.name == Some(fn_param.name));
@@ -6379,26 +6377,28 @@ impl TypedModule {
                         matching_arg_by_name.or(actual_passed_args.clone().nth(param_index));
                     let Some(param) = matching_arg else {
                         return failf!(
-                            fn_call.span,
+                            span,
                             "Missing argument to {}: {}",
-                            self.ast.identifiers.get_name(fn_call.name.name).blue(),
+                            self.ast.identifiers.get_name(fn_name).blue(),
                             self.name_of(fn_param.name).red()
                         );
                     };
+                    MaybeTypedExpr::Parsed(param.value)
+                    // // nocommit can remove this commentary
                     // FIXME: This is a workaround for not being able to deal with type variables
                     // properly during inference, so we just don't infer at all when type variables
                     // are involved. This can be fixed by introducing an 'Unknown' type hole type
                     // during inference, I think
-                    let expected_type_for_param =
-                        if self.does_type_reference_type_variables(fn_param.type_id) {
-                            None
-                        } else {
-                            Some(fn_param.type_id)
-                        };
+                    // let expected_type_for_param =
+                    //     if self.does_type_reference_type_variables(fn_param.type_id) {
+                    //         None
+                    //     } else {
+                    //         Some(fn_param.type_id)
+                    //     };
 
-                    let expr_result =
-                        self.eval_expr(param.value, calling_scope, expected_type_for_param);
-                    expr_result
+                    //let expr_result =
+                    //    self.eval_expr(param.value, calling_scope, expected_type_for_param);
+                    //expr_result
                 }
             };
             final_args.push((expr_result, fn_param));
@@ -6406,19 +6406,26 @@ impl TypedModule {
         Ok(final_args)
     }
 
+    // This is once we're done inferring.
+    // While inferring, we should eval one at a time so that the first arg can inform
+    // the hinting of the second
+    //
+    // Example:
+    // fn push[T](ts: Array[T], t: T)
+    // push(xs: Array[X], x <- expected type is X, not T)
     fn check_call_arguments(
         &mut self,
         call_name: Identifier,
-        aligned_args: Vec<(TyperResult<TypedExpr>, &FnArgType)>,
+        aligned_args: Vec<(TypedExpr, &FnArgType)>,
         calling_scope: ScopeId,
     ) -> TyperResult<Vec<TypedExpr>> {
         let mut successful_args = Vec::with_capacity(aligned_args.len());
         for (expr, param) in aligned_args.into_iter() {
-            let expr = expr?;
             if let Err(e) = self.check_types(param.type_id, expr.get_type(), calling_scope) {
                 return failf!(
                     expr.get_span(),
-                    "Invalid parameter type passed to function {}: {}",
+                    "Invalid parameter {} type passed to function {}: {}",
+                    self.name_of(param.name),
                     self.name_of(call_name),
                     e
                 );
@@ -6460,6 +6467,7 @@ impl TypedModule {
         expected_type_id: Option<TypeId>,
         known_args: Option<(Vec<TypeId>, Vec<TypedExpr>)>,
     ) -> TyperResult<TypedExpr> {
+        let span = fn_call.span;
         assert!(
             fn_call.args.is_empty() || known_args.is_none(),
             "cannot pass both typed value args and parsed value args to eval_function_call"
@@ -6474,16 +6482,15 @@ impl TypedModule {
             Either::Right(callee) => callee,
         };
 
-        let span = fn_call.span;
-
         // Now that we have resolved to a function id, we need to specialize it if generic
         let original_function = callee.maybe_function_id().map(|f| self.get_function(f));
         let is_generic = original_function.is_some_and(|f| !f.type_params.is_empty());
 
-        let (callee, typechecked_arguments, type_args) = match is_generic {
+        let (callee, typechecked_arguments, type_args, return_type) = match is_generic {
             false => {
                 let original_function_type =
                     self.types.get(self.get_callee_function_type(&callee)).as_function().unwrap();
+                let original_function_return_type = original_function_type.return_type;
                 let params = &original_function_type.params.clone();
                 let aligned_args = self.align_call_arguments_with_parameters(
                     fn_call,
@@ -6492,10 +6499,22 @@ impl TypedModule {
                     scope_id,
                     false,
                 )?;
+                // Easy mode: just evaluate them
+                let mut typed_args = Vec::with_capacity(aligned_args.len());
+                for (maybe_typed_expr, fn_arg_type) in aligned_args.into_iter() {
+                    let expr = match maybe_typed_expr {
+                        MaybeTypedExpr::Typed(typed) => typed,
+                        MaybeTypedExpr::Parsed(parsed) => {
+                            self.eval_expr(parsed, scope_id, Some(fn_arg_type.type_id))?
+                        }
+                    };
+                    typed_args.push((expr, fn_arg_type))
+                }
                 (
                     callee,
-                    self.check_call_arguments(fn_call.name.name, aligned_args, scope_id)?,
+                    self.check_call_arguments(fn_call.name.name, typed_args, scope_id)?,
                     Vec::new(),
+                    original_function_return_type,
                 )
             }
             true => {
@@ -6525,33 +6544,50 @@ impl TypedModule {
 
                 let function_id = self.specialize_function_signature(&type_args, function_id)?;
 
-                let specialized_params = &self.get_function_type(function_id).params.clone();
+                let specialized_fn_type = &self.get_function_type(function_id);
+                let specialized_params = specialized_fn_type.params.clone();
+                let specialized_return_type = specialized_fn_type.return_type;
                 let aligned_args = self.align_call_arguments_with_parameters(
                     fn_call,
-                    specialized_params,
+                    &specialized_params,
                     known_args.map(|ka| ka.1),
                     scope_id,
                     false,
                 )?;
+                let mut typed_args = Vec::with_capacity(aligned_args.len());
+                for (maybe_typed_expr, fn_arg_type) in aligned_args.into_iter() {
+                    let expr = match maybe_typed_expr {
+                        MaybeTypedExpr::Typed(typed) => typed,
+                        MaybeTypedExpr::Parsed(parsed) => {
+                            self.eval_expr(parsed, scope_id, Some(fn_arg_type.type_id))?
+                        }
+                    };
+                    typed_args.push((expr, fn_arg_type))
+                }
                 let typechecked_args =
-                    self.check_call_arguments(fn_call.name.name, aligned_args, scope_id)?;
+                    self.check_call_arguments(fn_call.name.name, typed_args, scope_id)?;
 
-                (Callee::make_static(function_id), typechecked_args, type_args)
+                (
+                    Callee::make_static(function_id),
+                    typechecked_args,
+                    type_args,
+                    specialized_return_type,
+                )
             }
         };
 
-        let new_return_type = self
-            .types
-            .get(self.get_callee_function_type(&callee))
-            .as_function()
-            .unwrap()
-            .return_type;
+        let call_return_type =
+            if typechecked_arguments.iter().any(|arg| arg.get_type() == NEVER_TYPE_ID) {
+                NEVER_TYPE_ID
+            } else {
+                return_type
+            };
 
         let call = Call {
             callee,
             args: typechecked_arguments,
             type_args,
-            ret_type: new_return_type,
+            return_type: call_return_type,
             span,
         };
         Ok(TypedExpr::Call(call))
@@ -6603,22 +6639,7 @@ impl TypedModule {
                     true,
                 )?;
 
-                if let Some(call_expected_type) = expected_type_id {
-                    debug!(
-                        "Using expected type {} to try to infer call to {}",
-                        self.type_id_to_string(call_expected_type),
-                        self.name_of(fn_call.name.name)
-                    );
-                    self.solve_generic_params(
-                        &mut solved_params,
-                        call_expected_type,
-                        function_return_type,
-                        calling_scope,
-                        fn_call.span,
-                    )?;
-                }
-
-                for (param_index, (expr, gen_param)) in args_and_params.iter().enumerate() {
+                for (param_index, (expr, gen_param)) in args_and_params.into_iter().enumerate() {
                     if solved_params.len() == generic_type_params.len() {
                         break;
                     }
@@ -6637,12 +6658,30 @@ impl TypedModule {
                     // if expr.is_err() {
                     //     return Err(expr.as_ref().unwrap_err().clone());
                     // }
+                    let expr = match expr {
+                        MaybeTypedExpr::Typed(typed) => Ok(typed),
+                        MaybeTypedExpr::Parsed(parsed_expr) => {
+                            // TODO: Here is where all the improvement can be made
+                            // we can bind the type variables to 'Unknown' types
+                            // and then be allowed to use them for inference.
+                            //
+                            // Then we can either substitute or re-evaluate
+                            // So we'd remove the below workaround for not passing expected_type
+                            let expected_type_for_param =
+                                if self.does_type_reference_type_variables(gen_param.type_id) {
+                                    None
+                                } else {
+                                    Some(gen_param.type_id)
+                                };
+                            self.eval_expr(parsed_expr, calling_scope, expected_type_for_param)
+                        }
+                    };
                     if let Ok(expr) = expr {
                         debug!(
                             "solving {}: {} w/ param {}",
                             self.name_of(gen_param.name),
                             self.type_id_to_string(gen_param.type_id),
-                            self.expr_to_string(expr)
+                            self.expr_to_string(&expr)
                         );
                         self.solve_generic_params(
                             &mut solved_params,
@@ -6654,9 +6693,22 @@ impl TypedModule {
                     } else {
                         eprintln!("Just fyi eval_expr failed during inference: {expr:?}")
                     }
-                    if solved_params.len() == generic_type_params.len() {
-                        debug!("Solved after {}/{} params", param_index, generic_params.len());
-                        break;
+                }
+
+                if solved_params.len() < generic_type_params.len() {
+                    if let Some(call_expected_type) = expected_type_id {
+                        debug!(
+                            "Using expected type {} to try to infer call to {}",
+                            self.type_id_to_string(call_expected_type),
+                            self.name_of(fn_call.name.name)
+                        );
+                        self.solve_generic_params(
+                            &mut solved_params,
+                            call_expected_type,
+                            function_return_type,
+                            calling_scope,
+                            fn_call.span,
+                        )?;
                     }
                 }
 
@@ -6672,8 +6724,9 @@ impl TypedModule {
                         if first {
                             first = false;
                         } else {
-                            detail.write_char('\n').unwrap();
+                            detail.push('\n');
                         };
+                        use std::fmt::Write;
                         write!(
                             detail,
                             "{} := {}",
@@ -6693,6 +6746,7 @@ impl TypedModule {
             }
         };
 
+        // Enforce ability constraints, or other constraints in the future?
         for (param_defn, param_given) in generic_type_params.iter().zip(type_params.iter()) {
             for constrained_ability_id in param_defn.ability_constraints.iter() {
                 let has_impl = match self.types.get(param_given.type_id) {
@@ -6732,11 +6786,11 @@ impl TypedModule {
         // int                    T                 -> T := int
         // List[int]             List[T]          -> T := int
         // Pair[int, string]      Pair[T, U]        -> T := int, U := string
-        // Pair[int, string]      Pair[T, U]        -> T := int, U := string
         // fn(int) -> int         Fn(T) -> T        -> T := int
         // fn() -> List[string]  Fn() -> List[T]  -> T := string
-        // expr: int arg: T
-        // T := int
+        //
+        // ???
+        // List[int]             F[int]          -> F := List
         debug!(
             "solve_generic_params passed {} in slot {}",
             self.type_id_to_string(passed_expr).blue(),
@@ -6973,6 +7027,7 @@ impl TypedModule {
             }
         }
         let specialized_name_string = {
+            use std::fmt::Write;
             let mut new_name = String::with_capacity(256);
             let spec_num = generic_function.child_specializations.len() + 1;
             write!(new_name, "{}_spec_", self.name_of(generic_function.name)).unwrap();
@@ -7297,8 +7352,9 @@ impl TypedModule {
     ) -> TyperResult<TypedBlock> {
         let mut statements = Vec::with_capacity(block.stmts.len());
         let mut last_expr_type: TypeId = UNIT_TYPE_ID;
+        let mut last_stmt_is_divergent = false;
         for (index, stmt) in block.stmts.iter().enumerate() {
-            if last_expr_type == NEVER_TYPE_ID {
+            if last_stmt_is_divergent {
                 return failf!(
                     self.ast.get_stmt_span(stmt),
                     "Dead code following divergent statement",
@@ -7308,10 +7364,11 @@ impl TypedModule {
             let expected_type = if is_last { expected_type } else { None };
 
             let stmt = self.eval_stmt(stmt, scope_id, expected_type)?;
+            last_stmt_is_divergent = stmt.is_divergent();
             last_expr_type = stmt.get_type();
 
             if is_last && needs_terminator {
-                if last_expr_type == NEVER_TYPE_ID {
+                if last_stmt_is_divergent {
                     // No action needed; terminator exists
                     statements.push(stmt);
                 } else {
@@ -7387,6 +7444,10 @@ impl TypedModule {
                 },
                 Some("types") => match fn_name_str {
                     "typeId" => Some(IntrinsicFunction::TypeId),
+                    _ => None,
+                },
+                Some("bool") => match fn_name_str {
+                    "negated" => Some(IntrinsicFunction::BoolNegate),
                     _ => None,
                 },
                 Some("string") => None,
@@ -7465,9 +7526,14 @@ impl TypedModule {
                 }
             }
         }?;
-        let output_type = match expected_type.map(|t| self.types.get(t)) {
-            Some(Type::EnumVariant(ev)) if ev.my_type_id == variant_type_id => variant_type_id,
-            _ => enum_type,
+        let never_payload = payload.as_ref().is_some_and(|p| p.get_type() == NEVER_TYPE_ID);
+        let output_type = if never_payload {
+            NEVER_TYPE_ID
+        } else {
+            match expected_type.map(|t| self.types.get(t)) {
+                Some(Type::EnumVariant(ev)) if ev.my_type_id == variant_type_id => variant_type_id,
+                _ => enum_type,
+            }
         };
         Ok(TypedExpr::EnumConstructor(TypedEnumConstructor {
             type_id: output_type,
@@ -8346,11 +8412,13 @@ impl TypedModule {
 
         let root_namespace_id = self.ast.get_root_namespace().id;
 
+        let mut err_writer = stderr();
+
         // Namespace phase
         eprintln!(">> Phase 1 declare namespaces");
         let ns_phase_res = self.eval_namespace_ns_phase(root_namespace_id, None);
         if let Err(e) = ns_phase_res {
-            print_error(&self.ast.spans, &self.ast.sources, &e.message, e.span);
+            write_error(&mut err_writer, &self.ast.spans, &self.ast.sources, &e.message, e.span)?;
             self.errors.push(e);
         }
         if !self.errors.is_empty() {
@@ -8365,7 +8433,7 @@ impl TypedModule {
         eprintln!(">> Phase 2 declare types");
         let type_defn_result = self.eval_namespace_type_defn_phase(root_namespace_id);
         if let Err(e) = type_defn_result {
-            print_error(&self.ast.spans, &self.ast.sources, &e.message, e.span);
+            write_error(&mut err_writer, &self.ast.spans, &self.ast.sources, &e.message, e.span)?;
             self.errors.push(e);
         }
         if !self.errors.is_empty() {
@@ -8375,7 +8443,7 @@ impl TypedModule {
         eprintln!(">> Phase 3 evaluate types");
         let type_eval_result = self.eval_namespace_type_eval_phase(root_namespace_id);
         if let Err(e) = type_eval_result {
-            print_error(&self.ast.spans, &self.ast.sources, &e.message, e.span);
+            write_error(&mut err_writer, &self.ast.spans, &self.ast.sources, &e.message, e.span)?;
             self.errors.push(e);
         }
         if !self.errors.is_empty() {
@@ -8458,7 +8526,13 @@ impl TypedModule {
                 root_ns_id,
             );
             if let Err(e) = result {
-                print_error(&self.ast.spans, &self.ast.sources, &e.message, e.span);
+                write_error(
+                    &mut err_writer,
+                    &self.ast.spans,
+                    &self.ast.sources,
+                    &e.message,
+                    e.span,
+                )?;
                 self.errors.push(e);
             }
         }
@@ -8477,7 +8551,13 @@ impl TypedModule {
         for &parsed_definition_id in self.ast.get_root_namespace().definitions.clone().iter() {
             let result = self.eval_definition(parsed_definition_id, root_scope_id);
             if let Err(e) = result {
-                print_error(&self.ast.spans, &self.ast.sources, &e.message, e.span);
+                write_error(
+                    &mut err_writer,
+                    &self.ast.spans,
+                    &self.ast.sources,
+                    &e.message,
+                    e.span,
+                )?;
                 self.errors.push(e);
             }
         }
@@ -8495,7 +8575,7 @@ impl TypedModule {
             for function_id in &clone {
                 let result = self.specialize_function_body(*function_id);
                 if let Err(e) = result {
-                    self.print_error(&e);
+                    self.write_error(&mut err_writer, &e)?;
                     self.errors.push(e);
                 }
             }
@@ -8810,29 +8890,68 @@ impl TypedModule {
             is_referencing,
             span,
         }));
+        let parsed_expr =
+            self.ast.expressions.add_expression(ParsedExpression::Variable(parse::Variable {
+                name: NamespacedIdentifier::naked(name, span),
+            }));
         self.scopes.add_variable(owner_scope, new_ident, variable_id);
-        SynthedVariable { variable_id, defn_stmt, variable_expr }
+        SynthedVariable { variable_id, defn_stmt, variable_expr, parsed_expr }
     }
 
-    fn synth_function_call(
+    fn synth_parsed_function_call(
         &mut self,
         name: NamespacedIdentifier,
-        span: SpanId,
+        type_args: Vec<ParsedTypeExpressionId>,
+        args: Vec<ParsedExpressionId>,
+    ) -> ParsedExpressionId {
+        let span = name.span;
+        let type_args = type_args.iter().map(|id| NamedTypeArg::unnamed(*id)).collect();
+        let args = args.iter().map(|id| parse::FnCallArg::unnamed(*id)).collect();
+        self.ast.expressions.add_expression(ParsedExpression::FnCall(FnCall {
+            name,
+            type_args,
+            args,
+            explicit_context_args: vec![],
+            span,
+            is_method: false,
+            id: ParsedExpressionId::PENDING,
+        }))
+    }
+
+    fn synth_typed_function_call(
+        &mut self,
+        name: NamespacedIdentifier,
+        type_args: Vec<TypeId>,
+        args: Vec<TypedExpr>,
         scope_id: ScopeId,
-        known_args: (Vec<TypeId>, Vec<TypedExpr>),
+        expected_type_id: Option<TypeId>,
     ) -> TyperResult<TypedExpr> {
-        self.eval_function_call(
-            &FnCall {
-                name,
-                type_args: vec![],
-                args: vec![],
-                explicit_context_args: vec![],
-                span,
-                is_method: false,
-            },
-            scope_id,
-            None,
-            Some(known_args),
+        let call_id = self.synth_parsed_function_call(name, vec![], vec![]);
+        let call = self.ast.expressions.get(call_id).expect_fn_call().clone();
+        self.eval_function_call(&call, scope_id, expected_type_id, Some((type_args, args)))
+    }
+
+    fn ident_opt_has_value(&self, span: SpanId) -> NamespacedIdentifier {
+        qident!(self, span, ["Opt"], "hasValue")
+    }
+
+    fn ident_opt_get(&self, span: SpanId) -> NamespacedIdentifier {
+        qident!(self, span, ["Opt"], "get")
+    }
+
+    fn synth_type_of_expr(&mut self, expr: ParsedExpressionId) -> ParsedTypeExpressionId {
+        let span = self.ast.expressions.get_span(expr);
+        self.ast
+            .type_expressions
+            .add(ParsedTypeExpression::TypeOf(parse::ParsedTypeOf { target_expr: expr, span }))
+    }
+
+    fn synth_bool_not(&mut self, base: ParsedExpressionId) -> ParsedExpressionId {
+        let span = self.ast.expressions.get_span(base);
+        self.synth_parsed_function_call(
+            qident!(self, span, ["bool"], "negated"),
+            vec![],
+            vec![base],
         )
     }
 
@@ -8842,19 +8961,13 @@ impl TypedModule {
         scope_id: ScopeId,
     ) -> TyperResult<TypedExpr> {
         let span = self.ast.expressions.get_span(caller);
-        self.eval_function_call(
-            &FnCall {
-                name: qident!(self, span, ["Show"], "show"),
-                type_args: vec![],
-                args: vec![parse::FnCallArg { name: None, value: caller }],
-                explicit_context_args: vec![],
-                span,
-                is_method: false,
-            },
-            scope_id,
-            None,
-            None,
-        )
+        let call_id = self.synth_parsed_function_call(
+            qident!(self, span, ["Show"], "show"),
+            vec![],
+            vec![caller],
+        );
+        let call = self.ast.expressions.get(call_id).expect_fn_call().clone();
+        self.eval_function_call(&call, scope_id, None, None)
     }
 
     fn synth_struct_expr(
@@ -8879,7 +8992,11 @@ impl TypedModule {
         TypedExpr::Struct(Struct { fields, type_id: struct_type_id, span })
     }
 
-    pub fn print_error(&self, error: &TyperError) {
-        print_error(&self.ast.spans, &self.ast.sources, &error.message, error.span);
+    pub fn write_error(
+        &self,
+        w: &mut impl std::io::Write,
+        error: &TyperError,
+    ) -> std::io::Result<()> {
+        write_error(w, &self.ast.spans, &self.ast.sources, &error.message, error.span)
     }
 }

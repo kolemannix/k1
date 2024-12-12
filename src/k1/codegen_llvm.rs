@@ -1560,12 +1560,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         );
                         Ok(value.into())
                     }
-                    UnaryOpKind::BooleanNegation => {
-                        let truncated = self.bool_to_i1(value.into_int_value(), "bool_trunc4neg");
-                        let negated = self.builder.build_not(truncated, "i1_negated");
-                        let promoted = self.i1_to_bool(negated, "negated");
-                        Ok(promoted.as_basic_value_enum().into())
-                    }
                 }
             }
             TypedExpr::Block(block) => {
@@ -2247,7 +2241,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         match callsite_value.try_as_basic_value() {
             either::Either::Left(value) => Ok(LlvmValue::BasicValue(value)),
             either::Either::Right(_instr) => {
-                if call.ret_type == NEVER_TYPE_ID {
+                if call.return_type == NEVER_TYPE_ID {
                     let unreachable = self.builder.build_unreachable();
                     Ok(LlvmValue::Never(unreachable))
                 } else {
@@ -2306,6 +2300,13 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let num_bytes = num_bits / 8;
                 let size_value = self.builtin_types.int.const_int(num_bytes as u64, false);
                 Ok(size_value.as_basic_value_enum().into())
+            }
+            IntrinsicFunction::BoolNegate => {
+                let input_value = self.codegen_expr_basic_value(&call.args[0])?.into_int_value();
+                let truncated = self.bool_to_i1(input_value, "");
+                let negated = self.builder.build_not(truncated, "");
+                let promoted = self.i1_to_bool(negated, "");
+                Ok(promoted.as_basic_value_enum().into())
             }
             IntrinsicFunction::BitNot => {
                 let input_value = self.codegen_expr_basic_value(&call.args[0])?.into_int_value();

@@ -94,3 +94,7 @@ namespace Opt {
     }
   }
 }
+
+namespace bool {
+  intern fn negated(self: bool): bool
+}
