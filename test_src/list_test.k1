@@ -33,7 +33,7 @@ fn listFill(): int {
 }
 
 fn listSlice(): unit {
-  let* a = [1,2,3];
+  let* a =  [1,2,3];
   let slice = a.*.slice(0,2);
   assert(slice.len == 2);
   assert(slice.get(0) == 1);

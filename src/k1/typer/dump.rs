@@ -530,10 +530,6 @@ impl TypedModule {
                 self.display_block(&loop_expr.body, writ, indentation)
             }
             TypedExpr::UnaryOp(unary_op) => match unary_op.kind {
-                UnaryOpKind::BooleanNegation => {
-                    writ.write_str("not ")?;
-                    self.display_expr(&unary_op.expr, writ, indentation)
-                }
                 UnaryOpKind::Dereference => {
                     self.display_expr(&unary_op.expr, writ, indentation)?;
                     writ.write_str(".*")

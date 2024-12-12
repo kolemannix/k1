@@ -22,6 +22,9 @@ pub struct ParsedAbilityImplId(u32);
 pub struct ParsedNamespaceId(u32);
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
 pub struct ParsedExpressionId(u32);
+impl ParsedExpressionId {
+    pub const PENDING: ParsedExpressionId = ParsedExpressionId(u32::MAX);
+}
 impl Display for ParsedExpressionId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
@@ -215,7 +218,7 @@ pub struct Identifiers {
     intern_pool: string_interner::StringInterner<StringBackend>,
 }
 impl Identifiers {
-    pub const BUILTIN_IDENTS: [&'static str; 25] = [
+    pub const BUILTIN_IDENTS: [&'static str; 26] = [
         "self",
         "it",
         "unit",
@@ -224,6 +227,7 @@ impl Identifiers {
         "length",
         "hasValue",
         "get",
+        "not",
         "iteree",
         "it_index",
         "as",
@@ -272,10 +276,22 @@ pub struct FnCallArg {
     pub value: ParsedExpressionId,
 }
 
+impl FnCallArg {
+    pub fn unnamed(value: ParsedExpressionId) -> FnCallArg {
+        FnCallArg { value, name: None }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct NamedTypeArg {
     pub name: Option<Identifier>,
     pub type_expr: ParsedTypeExpressionId,
+}
+
+impl NamedTypeArg {
+    pub fn unnamed(type_expr: ParsedTypeExpressionId) -> NamedTypeArg {
+        NamedTypeArg { type_expr, name: None }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -286,6 +302,7 @@ pub struct FnCall {
     pub explicit_context_args: Vec<FnCallArg>,
     pub span: SpanId,
     pub is_method: bool,
+    pub id: ParsedExpressionId,
 }
 
 impl FnCall {
@@ -540,7 +557,7 @@ pub enum ParsedExpression {
     /// ```md
     /// .A(<expr>)
     /// ```
-    EnumConstructor(ParsedEnumConstructor),
+    EnumDotConstructor(ParsedEnumConstructor),
     /// ```md
     /// <expr> is <pat>
     /// ```
@@ -588,7 +605,7 @@ impl ParsedExpression {
             Self::OptionalGet(optional_get) => optional_get.span,
             Self::For(for_expr) => for_expr.span,
             Self::AnonEnumVariant(tag_expr) => tag_expr.span,
-            Self::EnumConstructor(e) => e.span,
+            Self::EnumDotConstructor(e) => e.span,
             Self::Is(is_expr) => is_expr.span,
             Self::Match(match_expr) => match_expr.span,
             Self::AsCast(as_cast) => as_cast.span,
@@ -614,7 +631,7 @@ impl ParsedExpression {
             Self::OptionalGet(_optional_get) => false,
             Self::For(_) => false,
             Self::AnonEnumVariant(_) => false,
-            Self::EnumConstructor(_) => false,
+            Self::EnumDotConstructor(_) => false,
             Self::Is(_) => false,
             Self::Match(_) => false,
             Self::AsCast(_) => false,
@@ -1063,10 +1080,13 @@ impl ParsedExpressionPool {
         self.directives.get(&id).map(|v| &v[..]).unwrap_or(&[])
     }
 
-    pub fn add_expression(&mut self, expression: ParsedExpression) -> ParsedExpressionId {
-        let id = self.expressions.len();
+    pub fn add_expression(&mut self, mut expression: ParsedExpression) -> ParsedExpressionId {
+        let id = ParsedExpressionId(self.expressions.len() as u32);
+        if let ParsedExpression::FnCall(call) = &mut expression {
+            call.id = id;
+        }
         self.expressions.push(expression);
-        ParsedExpressionId(id as u32)
+        id
     }
 
     pub fn get(&self, id: ParsedExpressionId) -> &ParsedExpression {
@@ -1409,16 +1429,22 @@ pub fn print_error(module: &ParsedModule, parse_error: &ParseError) {
 
     use colored::*;
 
-    print_error_location(&module.spans, &module.sources, span);
+    let mut stderr = std::io::stderr();
+    write_error_location(&mut stderr, &module.spans, &module.sources, span).unwrap();
     eprintln!("\tExpected '{}', but got '{}'\n", parse_error.expected.blue(), got_str,);
 }
 
-pub fn print_error_location(spans: &Spans, sources: &Sources, span_id: SpanId) {
+pub fn write_error_location(
+    w: &mut impl std::io::Write,
+    spans: &Spans,
+    sources: &Sources,
+    span_id: SpanId,
+) -> std::io::Result<()> {
     let span = spans.get(span_id);
     let source = sources.source_by_span(span);
     let Some(line) = source.get_line_for_span(span) else {
-        eprintln!("Error: could not find line for span {:?}", span);
-        return;
+        write!(w, "Error: could not find line for span {:?}", span)?;
+        return Ok(());
     };
     use colored::*;
 
@@ -1428,13 +1454,14 @@ pub fn print_error_location(spans: &Spans, sources: &Sources, span_id: SpanId) {
     let thingies = "^".repeat(highlight_length);
     let spaces = " ".repeat((span.start - line.start_char) as usize);
     let code = format!("  ->{}\n  ->{spaces}{thingies}", &line.content);
-    eprintln!(
+    write!(
+        w,
         "  {} at {}/{}:{}\n\n{code}",
         "Error".red(),
         source.directory,
         source.filename,
         line.line_index + 1,
-    );
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -2287,6 +2314,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                         explicit_context_args: context_args,
                         span,
                         is_method: true,
+                        id: ParsedExpressionId::PENDING,
                     })))
                 } else {
                     // a.b[int] <complete expression>
@@ -2593,7 +2621,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let payload = self.expect_expression()?;
                 let close_paren = self.expect_eat_token(K::CloseParen)?;
                 let span = self.extend_token_span(first, close_paren);
-                Ok(Some(self.add_expression(ParsedExpression::EnumConstructor(
+                Ok(Some(self.add_expression(ParsedExpression::EnumDotConstructor(
                     ParsedEnumConstructor { variant_name: tag_name, payload, span },
                 ))))
             } else {
@@ -2622,6 +2650,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     explicit_context_args: context_args,
                     span,
                     is_method: false,
+                    id: ParsedExpressionId::PENDING,
                 }))))
             } else {
                 // The last thing it can be is a simple variable reference expression
@@ -3442,7 +3471,7 @@ impl ParsedModule {
                 f.write_char('.')?;
                 f.write_str(self.identifiers.get_name(tag_expr.name))
             }
-            ParsedExpression::EnumConstructor(e) => {
+            ParsedExpression::EnumDotConstructor(e) => {
                 f.write_char('.')?;
                 f.write_str(self.identifiers.get_name(e.variant_name))?;
                 f.write_str("(")?;

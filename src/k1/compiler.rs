@@ -5,7 +5,7 @@ use std::os::unix::prelude::ExitStatusExt;
 use std::path::Path;
 use std::time::Instant;
 
-use crate::parse::print_error_location;
+use crate::parse::write_error_location;
 use crate::parse::{self, print_error};
 use crate::typer::TypedModule;
 use anyhow::{bail, Result};
@@ -258,7 +258,13 @@ pub fn codegen_module<'ctx, 'module>(
     let mut codegen = Codegen::create(ctx, typed_module, args.debug, llvm_optimize);
     let module_name = codegen.name().to_string();
     if let Err(e) = codegen.codegen_module() {
-        print_error_location(&codegen.module.ast.spans, &codegen.module.ast.sources, e.span);
+        write_error_location(
+            &mut std::io::stderr(),
+            &codegen.module.ast.spans,
+            &codegen.module.ast.sources,
+            e.span,
+        )
+        .unwrap();
         eprintln!("Codegen error: {}", e.message);
         anyhow::bail!(e)
     }
