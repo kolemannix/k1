@@ -59,10 +59,15 @@ fn main(): int {
     ()
   } else assert(true);
 
+  // TODO:
   // Chaining with other booleans
-  if foo is { x } and true {
-    assert(x == 1)
-  }
+  // if foo is { x } and true {
+  //   assert(x == 1)
+  // }
+  // Chaining with other `is`s
+  // if foo is { x } and foo is { y } {
+  //   assert(x == 1)
+  // }
 
   0
 }

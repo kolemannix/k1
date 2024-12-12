@@ -3792,7 +3792,6 @@ impl TypedModule {
                 let base = self.eval_expr_inner(optional_get.base, scope_id, expected_type)?;
                 // This is where we would use an 'unwrap' trait instead!!
                 // This could just be a UnaryOp
-                // nocommit If I remove this check, we should just get a failed function call typecheck. confirm this
                 let Some(optional_type) = self.types.get(base.get_type()).as_optional() else {
                     return make_fail_span(
                         format!(
@@ -5365,14 +5364,7 @@ impl TypedModule {
         let lhs_type = lhs.get_type();
         let equality_result = match self.types.get(lhs_type) {
             Type::TypeVariable(_type_var) => {
-                // nocommit: Very suspicious special case for type variables in eval_equality_expr
                 let rhs = self.eval_expr(binary_op.rhs, scope_id, Some(lhs_type))?;
-                if let Err(msg) = self.check_types(lhs_type, rhs.get_type(), scope_id) {
-                    return make_fail_span(
-                        format!("Type mismatch on equality of 2 generic variables: {}", msg),
-                        binary_op.span,
-                    );
-                }
                 Ok(TypedExpr::BinaryOp(BinaryOp {
                     kind: BinaryOpKind::Equals,
                     ty: BOOL_TYPE_ID,
@@ -5629,9 +5621,6 @@ impl TypedModule {
         let second_arg = fn_call.args.get(1).cloned();
         if fn_call.is_method {
             // Special case for enum constructors which are syntactically also function calls
-            // This can't use known_args, so keep in mind that we can't synth enum constructors via
-            // this codepath, have to do it directly :/
-            // nocommit known_args disclaimer can go
             //
             // Perhaps handle_enum_constructor could be updated to work with a TypedExpr base
             // as well, provided it is a Variable expr
@@ -6352,13 +6341,9 @@ impl TypedModule {
             );
         }
 
-        let mut pre_evaled_params = match pre_evaled_params {
-            Some(v) => v.into_iter(),
-            None => Vec::new().into_iter(),
-        };
-
         // If the user opted to pass context params explicitly, then check all params
-        // If the user did not, then just check the non-context params
+        // If the user did not, then just check the non-context params, since the compiler is responsible
+        // for looking up context params
         let expected_literal_params: &mut dyn Iterator<Item = &FnArgType> = if explicit_context_args
         {
             &mut params.iter()
@@ -6366,53 +6351,30 @@ impl TypedModule {
             &mut params.iter().filter(|p| !p.is_context)
         };
 
-        // nocommit: Split the code path for pre-evaled and not
-        for (param_index, fn_param) in expected_literal_params.enumerate() {
-            let expr_result = match pre_evaled_params.next() {
-                Some(e) => MaybeTypedExpr::Typed(e),
-                None => {
-                    let matching_arg_by_name =
-                        actual_passed_args.clone().find(|arg| arg.name == Some(fn_param.name));
-                    let matching_arg =
-                        matching_arg_by_name.or(actual_passed_args.clone().nth(param_index));
-                    let Some(param) = matching_arg else {
-                        return failf!(
-                            span,
-                            "Missing argument to {}: {}",
-                            self.ast.identifiers.get_name(fn_name).blue(),
-                            self.name_of(fn_param.name).red()
-                        );
-                    };
-                    MaybeTypedExpr::Parsed(param.value)
-                    // // nocommit can remove this commentary
-                    // FIXME: This is a workaround for not being able to deal with type variables
-                    // properly during inference, so we just don't infer at all when type variables
-                    // are involved. This can be fixed by introducing an 'Unknown' type hole type
-                    // during inference, I think
-                    // let expected_type_for_param =
-                    //     if self.does_type_reference_type_variables(fn_param.type_id) {
-                    //         None
-                    //     } else {
-                    //         Some(fn_param.type_id)
-                    //     };
-
-                    //let expr_result =
-                    //    self.eval_expr(param.value, calling_scope, expected_type_for_param);
-                    //expr_result
-                }
-            };
-            final_args.push((expr_result, fn_param));
+        if let Some(pre_evaled_params) = pre_evaled_params {
+            for (expr, param) in pre_evaled_params.into_iter().zip(expected_literal_params) {
+                final_args.push((MaybeTypedExpr::Typed(expr), param))
+            }
+        } else {
+            for (param_index, fn_param) in expected_literal_params.enumerate() {
+                let matching_arg_by_name =
+                    actual_passed_args.clone().find(|arg| arg.name == Some(fn_param.name));
+                let matching_arg =
+                    matching_arg_by_name.or(actual_passed_args.clone().nth(param_index));
+                let Some(param) = matching_arg else {
+                    return failf!(
+                        span,
+                        "Missing argument to {}: {}",
+                        self.ast.identifiers.get_name(fn_name).blue(),
+                        self.name_of(fn_param.name).red()
+                    );
+                };
+                final_args.push((MaybeTypedExpr::Parsed(param.value), fn_param));
+            }
         }
         Ok(final_args)
     }
 
-    // This is once we're done inferring.
-    // While inferring, we should eval one at a time so that the first arg can inform
-    // the hinting of the second
-    //
-    // Example:
-    // fn push[T](ts: Array[T], t: T)
-    // push(xs: Array[X], x <- expected type is X, not T)
     fn check_call_arguments(
         &mut self,
         call_name: Identifier,
@@ -6639,7 +6601,7 @@ impl TypedModule {
                     true,
                 )?;
 
-                for (param_index, (expr, gen_param)) in args_and_params.into_iter().enumerate() {
+                for (expr, gen_param) in args_and_params.into_iter() {
                     if solved_params.len() == generic_type_params.len() {
                         break;
                     }
@@ -6654,10 +6616,6 @@ impl TypedModule {
                     // and I'd like to be able to uncomment this line.
                     // I think this is just hiding other bugs
                     //
-
-                    // if expr.is_err() {
-                    //     return Err(expr.as_ref().unwrap_err().clone());
-                    // }
                     let expr = match expr {
                         MaybeTypedExpr::Typed(typed) => Ok(typed),
                         MaybeTypedExpr::Parsed(parsed_expr) => {
@@ -6674,6 +6632,7 @@ impl TypedModule {
                                     Some(gen_param.type_id)
                                 };
                             self.eval_expr(parsed_expr, calling_scope, expected_type_for_param)
+                            // self.eval_expr(parsed_expr, calling_scope, Some(gen_param.type_id))
                         }
                     };
                     if let Ok(expr) = expr {
@@ -6691,7 +6650,11 @@ impl TypedModule {
                             fn_call.span,
                         )?;
                     } else {
-                        eprintln!("Just fyi eval_expr failed during inference: {expr:?}")
+                        // eprintln!("Just fyi eval_expr failed during inference: {expr:?}")
+                        return failf!(
+                            expr.unwrap_err().span,
+                            "Just fyi eval_expr failed during inference: {expr:?}"
+                        );
                     }
                 }
 
