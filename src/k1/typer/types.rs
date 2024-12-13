@@ -739,6 +739,7 @@ pub struct Types {
     /// got slow
     pub existing_types_mapping: HashMap<Type, TypeId>,
     pub type_defn_mapping: HashMap<ParsedTypeDefnId, TypeId>,
+    pub ability_mapping: HashMap<ParsedAbilityId, AbilityId>,
     pub placeholder_mapping: HashMap<ParsedTypeDefnId, TypeId>,
 }
 
@@ -984,6 +985,21 @@ impl Types {
 
     pub fn find_type_defn_mapping(&mut self, type_defn_id: ParsedTypeDefnId) -> Option<TypeId> {
         self.type_defn_mapping.get(&type_defn_id).copied()
+    }
+
+    pub fn add_ability_mapping(
+        &mut self,
+        parsed_ability_id: ParsedAbilityId,
+        ability_id: AbilityId,
+    ) -> bool {
+        self.ability_mapping.insert(parsed_ability_id, ability_id).is_none()
+    }
+
+    pub fn find_ability_mapping(
+        &mut self,
+        parsed_ability_id: ParsedAbilityId,
+    ) -> Option<AbilityId> {
+        self.ability_mapping.get(&parsed_ability_id).copied()
     }
 
     // Ended up storing redirects as RecursiveReference, but keeping this around

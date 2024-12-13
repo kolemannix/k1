@@ -8,7 +8,7 @@ use std::{
 use crate::{
     errf,
     lex::SpanId,
-    parse::{Identifiers, NamespacedIdentifier, ParsedTypeDefnId},
+    parse::{Identifiers, NamespacedIdentifier, ParsedAbilityId, ParsedTypeDefnId},
     typer::{
         make_error, AbilityId, FunctionId, Identifier, LoopType, NamespaceId, Namespaces, TypeId,
         TyperResult, VariableId,
@@ -340,6 +340,21 @@ impl Scopes {
         }
     }
 
+    pub fn find_pending_ability(
+        &self,
+        scope_id: ScopeId,
+        ident: Identifier,
+    ) -> Option<(ParsedAbilityId, ScopeId)> {
+        let scope = self.get_scope(scope_id);
+        if let Some(defn) = scope.find_pending_ability(ident) {
+            return Some((defn, scope_id));
+        }
+        match scope.parent {
+            Some(parent) => self.find_pending_ability(parent, ident),
+            None => None,
+        }
+    }
+
     pub fn scope_has_ancestor(&self, scope_id: ScopeId, ancestor: ScopeId) -> bool {
         let scope = self.get_scope(scope_id);
         match scope.parent {
@@ -555,13 +570,13 @@ pub struct Scope {
     pub namespaces: HashMap<Identifier, NamespaceId>,
     pub types: HashMap<Identifier, TypeId>,
     pub abilities: HashMap<Identifier, AbilityId>,
-    // FIXME: Add abilities here so they participate in the type defn phase
     pub pending_type_defns: HashMap<Identifier, ParsedTypeDefnId>,
+    pub pending_ability_defns: HashMap<Identifier, ParsedAbilityId>,
     pub parent: Option<ScopeId>,
     pub children: Vec<ScopeId>,
     pub scope_type: ScopeType,
     pub owner_id: Option<ScopeOwnerId>,
-    /// Name is just used for pretty-printing and debugging scopes don't really have names
+    /// Name is just used for pretty-printing and debugging; scopes don't really have names
     pub name: Option<Identifier>,
     pub depth: usize,
 }
@@ -581,6 +596,7 @@ impl Scope {
             types: HashMap::new(),
             abilities: HashMap::new(),
             pending_type_defns: HashMap::new(),
+            pending_ability_defns: HashMap::new(),
             parent: None,
             children: Vec::new(),
             scope_type,
@@ -702,5 +718,29 @@ impl Scope {
 
     pub fn remove_pending_type_defn(&mut self, ident: Identifier) -> bool {
         self.pending_type_defns.remove(&ident).is_some()
+    }
+
+    #[must_use]
+    pub fn add_pending_ability_defn(
+        &mut self,
+        ident: Identifier,
+        parsed_defn_id: ParsedAbilityId,
+    ) -> bool {
+        if let std::collections::hash_map::Entry::Vacant(e) =
+            self.pending_ability_defns.entry(ident)
+        {
+            e.insert(parsed_defn_id);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn find_pending_ability(&self, ident: Identifier) -> Option<ParsedAbilityId> {
+        self.pending_ability_defns.get(&ident).copied()
+    }
+
+    pub fn remove_pending_ability_defn(&mut self, ident: Identifier) -> bool {
+        self.pending_ability_defns.remove(&ident).is_some()
     }
 }

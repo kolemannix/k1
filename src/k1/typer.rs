@@ -1237,7 +1237,7 @@ pub fn write_error(
     span: SpanId,
 ) -> std::io::Result<()> {
     parse::write_error_location(w, spans, sources, span)?;
-    write!(w, "\t{}", message.as_ref())?;
+    writeln!(w, "\t{}", message.as_ref())?;
     Ok(())
 }
 
@@ -1344,6 +1344,7 @@ impl TypedModule {
             ],
             existing_types_mapping: HashMap::new(),
             type_defn_mapping: HashMap::new(),
+            ability_mapping: HashMap::new(),
             placeholder_mapping: HashMap::new(),
         };
         debug_assert!(matches!(*types.get(U8_TYPE_ID), Type::Integer(IntegerType::U8)));
@@ -6650,11 +6651,11 @@ impl TypedModule {
                             fn_call.span,
                         )?;
                     } else {
-                        // eprintln!("Just fyi eval_expr failed during inference: {expr:?}")
-                        return failf!(
-                            expr.unwrap_err().span,
-                            "Just fyi eval_expr failed during inference: {expr:?}"
-                        );
+                        eprintln!("Just fyi eval_expr failed during inference: {expr:?}")
+                        // return failf!(
+                        //     expr.unwrap_err().span,
+                        //     "Just fyi eval_expr failed during inference: {expr:?}"
+                        // );
                     }
                 }
 
@@ -7572,19 +7573,8 @@ impl TypedModule {
         for type_parameter in parsed_function_type_params.iter() {
             let mut checked_constraints = Vec::new();
             for parsed_constraint in type_parameter.constraints.iter() {
-                let ability_id = self
-                    .scopes
-                    .find_ability_namespaced(
-                        parent_scope_id,
-                        &parsed_constraint.ability_name,
-                        &self.namespaces,
-                        &self.ast.identifiers,
-                    )?
-                    .ok_or(errf!(
-                        parsed_constraint.ability_name.span,
-                        "Failed to resolve ability {}",
-                        self.name_of(parsed_constraint.ability_name.name)
-                    ))?;
+                let ability_id =
+                    self.find_ability_or_evaluate(&parsed_constraint.ability_name, fn_scope_id)?;
                 checked_constraints.push(ability_id);
             }
             let type_variable = TypeVariable {
@@ -7885,11 +7875,14 @@ impl TypedModule {
         Ok(())
     }
 
-    fn eval_ability_defn(
+    fn eval_ability(
         &mut self,
         parsed_ability_id: ParsedAbilityId,
         scope_id: ScopeId,
-    ) -> TyperResult<()> {
+    ) -> TyperResult<AbilityId> {
+        if let Some(ability_id) = self.types.find_ability_mapping(parsed_ability_id) {
+            return Ok(ability_id);
+        }
         let parsed_ability = self.ast.get_ability(parsed_ability_id).clone();
         let parent_namespace_id = self
             .namespaces
@@ -7953,6 +7946,7 @@ impl TypedModule {
                 self.name_of(parsed_ability.name)
             );
         }
+        self.types.add_ability_mapping(parsed_ability_id, ability_id);
         self.scopes.set_scope_owner_id(ability_scope_id, ScopeOwnerId::Ability(ability_id));
 
         let mut typed_functions: Vec<TypedAbilityFunctionRef> =
@@ -7969,7 +7963,41 @@ impl TypedModule {
             typed_functions.push(TypedAbilityFunctionRef { function_name, function_id });
         }
         self.abilities[ability_id.0 as usize].functions = typed_functions;
-        Ok(())
+        Ok(ability_id)
+    }
+
+    fn find_ability_or_evaluate(
+        &mut self,
+        ability_name: &NamespacedIdentifier,
+        scope_id: ScopeId,
+    ) -> TyperResult<AbilityId> {
+        let found_ability_id = self.scopes.find_ability_namespaced(
+            scope_id,
+            ability_name,
+            &self.namespaces,
+            &self.ast.identifiers,
+        )?;
+        found_ability_id.map(Ok).unwrap_or({
+            match self.scopes.find_pending_ability(scope_id, ability_name.name) {
+                None => {
+                    failf!(
+                        ability_name.span,
+                        "Failed to resolve ability {}",
+                        self.name_of(ability_name.name)
+                    )
+                }
+                Some((pending_ability, ability_scope)) => {
+                    let line = self.ast.get_line_for_span_id(ability_name.span).unwrap();
+                    eprintln!(
+                        "Recursing into pending ability {} from {}",
+                        self.name_of(ability_name.name),
+                        line.content
+                    );
+                    let ability_id = self.eval_ability(pending_ability, ability_scope)?;
+                    Ok(ability_id)
+                }
+            }
+        })
     }
 
     fn eval_ability_impl_decl(
@@ -7981,14 +8009,11 @@ impl TypedModule {
         let span = parsed_ability_impl.span;
         let ability_name = parsed_ability_impl.ability_name;
         let parsed_functions = parsed_ability_impl.functions.clone();
-        // FIXME: Search from current scope. I'm just not sure how we want to do ability scoping
-        let Some(ability_id) = self.scopes.get_root_scope().find_ability(ability_name) else {
-            return make_fail_span(
-                format!("Ability does not exist: {}", self.name_of(ability_name)),
-                span,
-            );
-        };
         let target_type = self.eval_type_expr(parsed_ability_impl.target_type, scope_id)?;
+        let ability_id = self
+            .find_ability_or_evaluate(&NamespacedIdentifier::naked(ability_name, span), scope_id)?;
+        // FIXME: This searches from the root scope. I'm just not sure how we want to do ability scoping
+        //        This should be fixable easily once imports are implemented
 
         // Scoping / orphan / coherence: For now, let's globally allow only one implementation per (Ability, Target Type) pair
         // Check for existing implementation
@@ -8184,17 +8209,27 @@ impl TypedModule {
             self.ast.get_namespace(parsed_namespace_id).definitions.clone().iter()
         {
             if let ParsedId::TypeDefn(type_defn_id) = parsed_definition_id {
-                let parsed_type_defn = self.ast.get_type_defn(type_defn_id).clone();
+                let parsed_type_defn = self.ast.get_type_defn(type_defn_id);
+                let name = parsed_type_defn.name;
+                let span = parsed_type_defn.span;
                 let added = self
                     .scopes
                     .get_scope_mut(namespace_scope_id)
-                    .add_pending_type_defn(parsed_type_defn.name, type_defn_id);
+                    .add_pending_type_defn(name, type_defn_id);
                 if !added {
-                    return failf!(
-                        parsed_type_defn.span,
-                        "Type {} exists",
-                        self.name_of(parsed_type_defn.name)
-                    );
+                    return failf!(span, "Type {} exists", self.name_of(name));
+                }
+            }
+            if let ParsedId::Ability(parsed_ability_id) = parsed_definition_id {
+                let parsed_ability_defn = self.ast.get_ability(parsed_ability_id);
+                let name = parsed_ability_defn.name;
+                let span = parsed_ability_defn.span;
+                let added = self
+                    .scopes
+                    .get_scope_mut(namespace_scope_id)
+                    .add_pending_ability_defn(name, parsed_ability_id);
+                if !added {
+                    return failf!(span, "Ability {} exists", self.name_of(name));
                 }
             }
             if let ParsedId::Namespace(namespace_id) = parsed_definition_id {
@@ -8213,11 +8248,11 @@ impl TypedModule {
         let namespace_scope_id = namespace.scope_id;
         let parsed_namespace = self.ast.get_namespace(parsed_namespace_id);
 
-        for parsed_defn_id in parsed_namespace.definitions.clone().iter() {
-            if let ParsedId::TypeDefn(type_defn_id) = parsed_defn_id {
+        for parsed_definition_id in parsed_namespace.definitions.clone().iter() {
+            if let ParsedId::TypeDefn(type_defn_id) = parsed_definition_id {
                 self.eval_type_defn(*type_defn_id, namespace_scope_id)?;
             }
-            if let ParsedId::Namespace(namespace_id) = parsed_defn_id {
+            if let ParsedId::Namespace(namespace_id) = parsed_definition_id {
                 self.eval_namespace_type_eval_phase(*namespace_id)?;
             }
         }
@@ -8272,8 +8307,7 @@ impl TypedModule {
                 Ok(())
             }
             ParsedId::Ability(parsed_ability_id) => {
-                // FIXME: Move to type defn phase
-                self.eval_ability_defn(parsed_ability_id, scope_id)?;
+                self.eval_ability(parsed_ability_id, scope_id)?;
                 Ok(())
             }
             ParsedId::AbilityImpl(ability_impl) => {
@@ -8281,7 +8315,7 @@ impl TypedModule {
                 Ok(())
             }
             other_id => {
-                panic!("Was asked to elet definition of a non-definition ast node {:?}", other_id)
+                panic!("Was asked to eval definition of a non-definition ast node {:?}", other_id)
             }
         }
     }
