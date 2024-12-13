@@ -1443,7 +1443,7 @@ pub fn write_error_location(
     let span = spans.get(span_id);
     let source = sources.source_by_span(span);
     let Some(line) = source.get_line_for_span(span) else {
-        write!(w, "Error: could not find line for span {:?}", span)?;
+        writeln!(w, "Error: could not find line for span {:?}", span)?;
         return Ok(());
     };
     use colored::*;
@@ -1454,7 +1454,7 @@ pub fn write_error_location(
     let thingies = "^".repeat(highlight_length);
     let spaces = " ".repeat((span.start - line.start_char) as usize);
     let code = format!("  ->{}\n  ->{spaces}{thingies}", &line.content);
-    write!(
+    writeln!(
         w,
         "  {} at {}/{}:{}\n\n{code}",
         "Error".red(),

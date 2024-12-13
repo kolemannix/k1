@@ -1,0 +1,27 @@
+impl SayHello for Foo {
+  fn hello(self: Foo): MyString { 
+    { s: self.name  }
+  }
+}
+
+fn takesHelloer[T](t: T): MyString where T: SayHello {
+  t.hello()
+}
+
+ability SayHello {
+  fn hello(self: Self): MyString {
+    { s: "Hello" }
+  }
+}
+
+
+fn main(): int {
+  let foo: Foo = { name: "Joe" };
+  foo.hello();
+  assert(takesHelloer(foo).s == "Joe");
+  0
+}
+
+deftype MyString = { s: string }
+
+deftype Foo = { name: string }
