@@ -39,6 +39,8 @@ impl ParsedTypeExpressionId {
 }
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
 pub struct ParsedPatternId(u32);
+#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
+pub struct ParsedUseId(u32);
 
 #[derive(Debug, Clone)]
 pub enum DirectiveKind {
@@ -56,6 +58,19 @@ pub struct ParsedDirective {
     pub span: SpanId,
 }
 
+#[derive(Debug, Clone)]
+pub enum UseKind {
+    Type,
+    Default,
+}
+
+#[derive(Debug, Clone)]
+pub struct ParsedUse {
+    pub target: NamespacedIdentifier,
+    pub alias: Option<Identifier>,
+    pub span: SpanId,
+}
+
 pub type FileId = u32;
 
 #[cfg(test)]
@@ -63,6 +78,7 @@ mod parse_test;
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
 pub enum ParsedId {
+    Use(ParsedUseId),
     Function(ParsedFunctionId),
     TypeDefn(ParsedTypeDefnId),
     Namespace(ParsedNamespaceId),
@@ -115,7 +131,7 @@ impl From<ParsedFunctionId> for ParsedId {
 }
 
 impl ParsedId {
-    pub fn is_definition(&self) -> bool {
+    pub fn is_valid_definition(&self) -> bool {
         match self {
             ParsedId::Function(_) => true,
             ParsedId::TypeDefn(_) => true,
@@ -126,6 +142,7 @@ impl ParsedId {
             ParsedId::Expression(_) => false,
             ParsedId::TypeExpression(_) => false,
             ParsedId::Pattern(_) => false,
+            ParsedId::Use(_) => true,
         }
     }
 }
@@ -777,7 +794,14 @@ pub struct ForExpr {
 }
 
 #[derive(Debug, Clone)]
+pub struct UseStmt {
+    pub use_id: ParsedUseId,
+    pub span: SpanId,
+}
+
+#[derive(Debug, Clone)]
 pub enum ParsedStmt {
+    Use(UseStmt),                       // use core/list/new as foo
     ValDef(ValDef),                     // let x = 42
     Assignment(Assignment),             // x = 42
     SetRef(SetStmt),                    // x <- 42
@@ -1118,6 +1142,21 @@ impl ParsedTypeExpressionPool {
 }
 
 #[derive(Debug, Default, Clone)]
+pub struct ParsedUsePool {
+    uses: Vec<ParsedUse>,
+}
+impl ParsedUsePool {
+    pub fn add_use(&mut self, r#use: ParsedUse) -> ParsedUseId {
+        let id = self.uses.len();
+        self.uses.push(r#use);
+        ParsedUseId(id as u32)
+    }
+    pub fn get_use(&self, id: ParsedUseId) -> &ParsedUse {
+        &self.uses[id.0 as usize]
+    }
+}
+
+#[derive(Debug, Default, Clone)]
 pub struct ParsedPatternPool {
     patterns: Vec<ParsedPattern>,
 }
@@ -1185,19 +1224,11 @@ pub struct ParsedModule {
     pub abilities: Vec<ParsedAbility>,
     pub ability_impls: Vec<ParsedAbilityImplementation>,
     pub sources: Sources,
-    /// Using RefCell here just so we can mutably access
-    /// the identifiers without having mutable access to
-    /// the entire AST module. Lets me wait to decide
-    /// where things actually live
-    ///
-    /// After reading the Roc codebase, I think the move
-    /// is to move away from these big structs and just have top-level functions
-    /// so we can be more granular about what is mutable when. You can create an 'Env'
-    /// struct to reduce the number of parameters, but this Env will also suffer from that problem sometimes
     pub identifiers: Identifiers,
     pub expressions: ParsedExpressionPool,
     pub type_expressions: ParsedTypeExpressionPool,
     pub patterns: ParsedPatternPool,
+    pub uses: ParsedUsePool,
     pub errors: Vec<ParseError>,
 }
 
@@ -1220,6 +1251,7 @@ impl ParsedModule {
             expressions: ParsedExpressionPool::default(),
             type_expressions: ParsedTypeExpressionPool::default(),
             patterns: ParsedPatternPool::default(),
+            uses: ParsedUsePool::default(),
             errors: Vec::new(),
         }
     }
@@ -1268,6 +1300,7 @@ impl ParsedModule {
 
     pub fn get_stmt_span(&self, stmt: &ParsedStmt) -> SpanId {
         match stmt {
+            ParsedStmt::Use(u) => u.span,
             ParsedStmt::ValDef(v) => v.span,
             ParsedStmt::Assignment(a) => a.span,
             ParsedStmt::SetRef(s) => s.span,
@@ -1359,6 +1392,7 @@ impl ParsedModule {
             ParsedId::Expression(id) => self.expressions.get_span(id),
             ParsedId::TypeExpression(id) => self.get_type_expression_span(id),
             ParsedId::Pattern(id) => self.get_pattern_span(id),
+            ParsedId::Use(id) => self.uses.get_use(id).span,
         }
     }
 }
@@ -1578,6 +1612,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         self.extend_span(tok1.span, tok2.span)
     }
 
+    fn extend_to_here(&mut self, span: SpanId) -> SpanId {
+        self.extend_span(span, self.peek_back().span)
+    }
+
     fn extend_span(&mut self, span1: SpanId, span2: SpanId) -> SpanId {
         self.module.spans.extend(span1, span2)
     }
@@ -1688,6 +1726,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     #[inline]
     fn peek_three(&self) -> (Token, Token, Token) {
         self.tokens.peek_three()
+    }
+
+    #[inline]
+    fn peek_back(&self) -> Token {
+        self.tokens.peek_back()
     }
 
     fn chars_at_span<'source>(
@@ -2477,9 +2520,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     fn expect_namespaced_ident(&mut self) -> ParseResult<NamespacedIdentifier> {
         let (first, second) = self.tokens.peek_two();
         let mut namespaces = Vec::new();
-        if second.kind == K::ColonColon && !second.is_whitespace_preceeded() {
-            // Namespaced expression; foo::
-            // Loop until we don't see a ::
+        if second.kind == K::Slash && !second.is_whitespace_preceeded() {
+            // Namespaced expression; foo/
+            // Loop until we don't see a /
             namespaces.push(self.intern_ident_token(first));
             self.advance(); // ident
             self.advance(); // coloncolon
@@ -2487,9 +2530,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 trace!("Parsing namespaces {:?}", namespaces);
                 let (a, b) = self.tokens.peek_two();
                 trace!("Parsing namespaces peeked 3 {} {}", a.kind, b.kind);
-                if a.kind == K::Ident && b.kind == K::ColonColon {
+                if a.kind == K::Ident && b.kind == K::Slash {
                     self.advance(); // ident
-                    self.advance(); // coloncolon
+                    self.advance(); // slash
                     namespaces.push(self.intern_ident_token(a));
                 } else {
                     break;
@@ -3020,7 +3063,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn parse_statement(&mut self) -> ParseResult<Option<ParsedStmt>> {
         trace!("eat_statement {:?}", self.peek());
-        if let Some(val_def) = self.parse_val_def()? {
+        if let Some(use_id) = self.parse_use()? {
+            let span = self.module.uses.get_use(use_id).span;
+            Ok(Some(ParsedStmt::Use(UseStmt { span, use_id })))
+        } else if let Some(val_def) = self.parse_val_def()? {
             Ok(Some(ParsedStmt::ValDef(val_def)))
         } else if let Some(expr) = self.parse_expression()? {
             let peeked = self.peek();
@@ -3333,8 +3379,29 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(Some(namespace_id))
     }
 
+    fn parse_use(&mut self) -> ParseResult<Option<ParsedUseId>> {
+        let Some(use_token) = self.maybe_consume_next(K::KeywordUse) else {
+            return Ok(None);
+        };
+
+        let namespaced_ident = self.expect_namespaced_ident()?;
+        let alias = if let Some(_as_token) = self.maybe_consume_next(K::KeywordAs) {
+            let alias_token = self.expect_eat_token(K::Ident)?;
+            let alias_ident = self.intern_ident_token(alias_token);
+            Some(alias_ident)
+        } else {
+            None
+        };
+        let span = self.extend_to_here(use_token.span);
+        let parsed_use_id =
+            self.module.uses.add_use(ParsedUse { target: namespaced_ident, alias, span });
+        Ok(Some(parsed_use_id))
+    }
+
     fn parse_definition(&mut self) -> ParseResult<Option<ParsedId>> {
-        if let Some(ns) = self.parse_namespace()? {
+        if let Some(use_id) = self.parse_use()? {
+            Ok(Some(ParsedId::Use(use_id)))
+        } else if let Some(ns) = self.parse_namespace()? {
             Ok(Some(ParsedId::Namespace(ns)))
         } else if let Some(constant_id) = self.parse_const()? {
             self.expect_eat_token(K::Semicolon)?;

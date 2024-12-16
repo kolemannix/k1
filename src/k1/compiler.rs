@@ -273,7 +273,7 @@ pub fn codegen_module<'ctx, 'module>(
         anyhow::bail!(e)
     };
 
-    if args.write_llvm {
+    if args.write_llvm || do_write_executable {
         let llvm_text = codegen.output_llvm_ir_text();
         let mut f = File::create(format!("{}/{}.ll", out_dir, &module_name))
             .expect("Failed to create .ll file");

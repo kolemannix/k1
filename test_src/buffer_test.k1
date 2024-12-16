@@ -1,5 +1,5 @@
 fn bufferEmpty(): unit {
-  let empty = Buffer::empty[int]();
+  let empty = Buffer/empty[int]();
   assert(empty.len == 0);
   assert(empty.isEmpty());
   assert(not empty.nonEmpty());
@@ -8,7 +8,7 @@ fn bufferEmpty(): unit {
 }
 
 fn bufferFilled(): unit {
-  let buf = Buffer::filled(5, 42);
+  let buf = Buffer/filled(5, 42);
   assert(buf.len == 5);
   assert(not buf.isEmpty());
   assert(buf.nonEmpty());
@@ -21,7 +21,7 @@ fn bufferFilled(): unit {
 }
 
 fn bufferGetSet(): unit {
-  let buf = Buffer::filled(3, 0);
+  let buf = Buffer/filled(3, 0);
   buf.set(0, 10);
   buf.set(1, 20);
   buf.set(2, 30);
@@ -32,7 +32,7 @@ fn bufferGetSet(): unit {
 }
 
 fn bufferFirstLast(): unit {
-  let buf = Buffer::filled(3, 0);
+  let buf = Buffer/filled(3, 0);
   buf.set(0, 10);
   buf.set(1, 20);
   buf.set(2, 30);
@@ -42,7 +42,7 @@ fn bufferFirstLast(): unit {
 }
 
 fn bufferSlice(): unit {
-  let buf = Buffer::filled(5, 0);
+  let buf = Buffer/filled(5, 0);
   let mut i = 0: u64;
   while i < 5 {
     buf.set(i, i as int);
@@ -57,7 +57,7 @@ fn bufferSlice(): unit {
 }
 
 fn bufferTakeDrop(): unit {
-  let buf = Buffer::filled(5, 0);
+  let buf = Buffer/filled(5, 0);
   let mut i = 0: u64;
   while i < 5 {
     buf.set(i, i as int);
@@ -78,8 +78,8 @@ fn bufferTakeDrop(): unit {
 }
 
 fn bufferConcat(): unit {
-  let buf1 = Buffer::filled(2, 1);
-  let buf2 = Buffer::filled(2, 2);
+  let buf1 = Buffer/filled(2, 1);
+  let buf2 = Buffer/filled(2, 2);
 
   let combined = buf1.concat(buf2);
   assert(combined.len == 4);
@@ -90,7 +90,7 @@ fn bufferConcat(): unit {
 }
 
 fn bufferSwap(): unit {
-  let* buf = Buffer::filled(3, 0);
+  let* buf = Buffer/filled(3, 0);
   buf.*.set(0, 10);
   buf.*.set(1, 20);
   buf.*.set(2, 30);
@@ -103,7 +103,7 @@ fn bufferSwap(): unit {
 }
 
 fn bufferClone(): unit {
-  let original = Buffer::filled(3, 0);
+  let original = Buffer/filled(3, 0);
   original.set(0, 10);
   original.set(1, 20);
   original.set(2, 30);

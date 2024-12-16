@@ -16,7 +16,7 @@ namespace Arena {
   fn alignTo(baseAddress: u64, alignBytes: u64): u64 {
     let mask = alignBytes - 1;
     let sum = baseAddress + mask;
-    let aligned = Bitwise::bitAnd(sum, Bitwise::bitNot(mask));
+    let aligned = Bitwise/bitAnd(sum, Bitwise/bitNot(mask));
     if aligned != baseAddress {
       println("Aligned \{baseAddress} to \{aligned}!")
     };
@@ -25,7 +25,7 @@ namespace Arena {
 
   fn new(id: string, initialMb: u64): Arena {
     let capacity = initialMb * mb;
-    let basePtr = libc::calloc(capacity, 1);
+    let basePtr = libc/calloc(capacity, 1);
     if basePtr.isNull() crash("calloc for Arena failed");
     {
       id: id,
@@ -71,7 +71,7 @@ namespace Arena {
     let id = self.id;
     let size = self.regionSizeBytes();
     println("[arena \{id}] Freeing \{size}");
-    libc::memset(self.basePtr, 0 as u32, size);
+    libc/memset(self.basePtr, 0 as u32, size);
     self.curAddr* <- (self.basePtr as u64);
   }
 }
@@ -84,7 +84,7 @@ deftype Allocator = {
 
 namespace Allocator {
   fn initDefault(): Allocator {
-    let temp_arena = Arena::new(id = "temp", initialMb = 10);
+    let temp_arena = Arena/new(id = "temp", initialMb = 10);
     {
       arenas: [temp_arena],
       pools: []

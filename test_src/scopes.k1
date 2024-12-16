@@ -20,7 +20,7 @@ fn scopeCollision(x: int): int {
   0
 }
 
-// Tests that the method gets assigned to the right Foo::value()
+// Tests that the method gets assigned to the right Foo/value()
 fn namespaceAlias(): unit {
   let x: Alias = {x:1};
   assert(x.value() == 1);

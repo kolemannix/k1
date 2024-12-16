@@ -3,10 +3,10 @@ fn doIt(foo: bool, bar: u32): u32 {
 }
 
 fn main(): int {
-  assert(types::typeId[doIt.return]() == types::typeId[u32]());
+  assert(types/typeId[doIt.return]() == types/typeId[u32]());
 
-  assert(types::typeId[doIt.foo]() == types::typeId[bool]());
+  assert(types/typeId[doIt.foo]() == types/typeId[bool]());
 
-  assert(types::typeId[doIt.bar]() == types::typeId[doIt.return]());
+  assert(types/typeId[doIt.bar]() == types/typeId[doIt.return]());
   0
 }

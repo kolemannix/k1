@@ -1,5 +1,5 @@
 fn listFill(): int {
-  let* xs = List::empty[int]();
+  let* xs = List/empty[int]();
   assert(xs.*.cap() == 0);
   assert(xs.len == 0);
 

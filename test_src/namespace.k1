@@ -1,16 +1,16 @@
 namespace Baz {
   namespace BazI {
-    fn name(): string  { "Baz::BazI" }
+    fn name(): string  { "Baz/BazI" }
   }
 }
 
 namespace BazI {
-  fn name(): string { "_root::BazI" }
+  fn name(): string { "_root/BazI" }
 }
 
 fn main(): int {
-  assert(Baz::BazI::name() == "Baz::BazI");
-  assert(BazI::name() == "_root::BazI");
+  assert(Baz/BazI/name() == "Baz/BazI");
+  assert(BazI/name() == "_root/BazI");
 
   0
 }

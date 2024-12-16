@@ -11,7 +11,7 @@ namespace UserId {
 }
 
 fn main(): int {
-  let user_id: UserId = UserId::make(11);
+  let user_id: UserId = UserId/make(11);
   assert(user_id.toInt() == 11);
   0
 }

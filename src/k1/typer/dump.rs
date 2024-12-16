@@ -53,15 +53,23 @@ impl TypedModule {
         let scope_name = self.scopes.make_scope_name(scope, &self.ast.identifiers);
         writeln!(writ, "{}", scope_name)?;
 
+        if !scope.variables.is_empty() {
+            writ.write_str("\tVARS\n")?;
+        }
         for (id, variable_id) in scope.variables.iter() {
             let variable = self.variables.get_variable(*variable_id);
-            write!(writ, "\t{} ", id)?;
+            write!(writ, "\t{} -> ", self.name_of(*id))?;
             self.display_variable(variable, writ)?;
             writ.write_str("\n")?;
         }
-        for function_id in scope.functions.values() {
+        if !scope.functions.is_empty() {
+            writ.write_str("\tFUNCTIONS\n")?;
+        }
+        for (name, function_id) in scope.functions.iter() {
             let function = self.get_function(*function_id);
             writ.write_str("\t")?;
+            self.write_ident(writ, *name)?;
+            writ.write_str(" -> ")?;
             self.display_function(function, writ, false)?;
             writ.write_str("\n")?;
         }
@@ -70,13 +78,16 @@ impl TypedModule {
         }
         for (ident, type_id) in scope.types.iter() {
             writ.write_str("\t")?;
-            writ.write_str(self.name_of(*ident))?;
-            writ.write_str(" := ")?;
+            self.write_ident(writ, *ident)?;
+            writ.write_str(" -> ")?;
             self.display_type_id(*type_id, true, writ)?;
             writ.write_str("\n")?;
         }
+        if !scope.namespaces.is_empty() {
+            writ.write_str("\tNAMESPACES\n")?;
+        }
         for (id, namespace_id) in scope.namespaces.iter() {
-            write!(writ, "{} ", id)?;
+            write!(writ, "{} -> ", id)?;
             let namespace = self.namespaces.get(*namespace_id);
             writ.write_str(self.name_of(namespace.name))?;
             writ.write_str("\n")?;
@@ -740,5 +751,23 @@ impl TypedModule {
 
     fn write_ident(&self, w: &mut impl Write, ident: Identifier) -> std::fmt::Result {
         w.write_str(self.name_of(ident))
+    }
+
+    pub fn display_namespaced_identifier(
+        &self,
+        w: &mut impl Write,
+        ident: &NamespacedIdentifier,
+    ) -> std::fmt::Result {
+        for ns in &ident.namespaces {
+            self.write_ident(w, *ns)?;
+            write!(w, "/")?;
+        }
+        self.write_ident(w, ident.name)
+    }
+
+    pub fn namespaced_identifier_to_string(&self, ident: &NamespacedIdentifier) -> String {
+        let mut s = String::with_capacity(32);
+        self.display_namespaced_identifier(&mut s, ident).unwrap();
+        s
     }
 }

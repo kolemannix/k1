@@ -22,7 +22,7 @@ fn main(): int {
   assert(three.num() == 3);
 
   // Qualified call
-  assert(Num::num(3: i32) == 3);
+  assert(Num/num(3: i32) == 3);
 
   // Method-style call on user-defined type
   let p = { x: 1, y: 2 }: Point;

@@ -18,7 +18,7 @@ fn fnv1a_hash(key: string): u64 {
   let FNV_OFFSET: u64 = 14695981039346656037;
   let mut hash_value = FNV_OFFSET;
   for c in key do {
-    hash_value = Bitwise::xor(hash_value, c as u8 as u64);
+    hash_value = Bitwise/xor(hash_value, c as u8 as u64);
     hash_value = hash_value * FNV_PRIME;
   };
   hash_value
@@ -29,7 +29,7 @@ namespace HashMap {
   deftype Entry[V] = { key: string, value: V, deleted: bool }?
 
   fn _make[V](cap: u64): HashMap[V] {
-    { size: 0, entries: List::filled(cap, .None) }
+    { size: 0, entries: List/filled(cap, .None) }
   }
 
   fn new[V](): HashMap[V] {
@@ -177,7 +177,7 @@ namespace HashMap {
       switch it {
         , .None -> println("empty")
         , .Some({ key, value, deleted }) -> {
-            let v = Show::show(value);
+            let v = Show/show(value);
             println("\{key} -> \{value} (d=\{deleted})");
         }
       }
@@ -187,7 +187,7 @@ namespace HashMap {
 }
 
 fn test(size: u64): unit {
-  let* myMap = HashMap::new[int]();
+  let* myMap = HashMap/new[int]();
   let mut i = 0: i64;
   while i < size as i64 {
     myMap.insert(i.show(), i);
@@ -216,15 +216,15 @@ fn main(): int {
 }
 
 fn randByte(): u8 {
-  (libc::arc4random_uniform(26) + 65) as u8
+  (libc/arc4random_uniform(26) + 65) as u8
 }
 
 fn randString(len: uint): string {
-  let* arr = List::withCapacity[char](len);
+  let* arr = List/withCapacity[char](len);
   let mut i: uint = 0;
   while i < len {
     arr.push(randByte() as char);
     i = i + 1;
   };
-  string::fromChars(arr)
+  string/fromChars(arr)
 }

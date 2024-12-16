@@ -27,9 +27,9 @@ fn parse_expr(ctx: Context, caller_loc: Loc)(tokens: Array<Token>, index: int): 
 }
 
 fn main() {
-  let tokens = lexer::go();
+  let tokens = lexer/go();
 
-  context let ctx = { symbols: Symbols::new() };
+  context let ctx = { symbols: Symbols/new() };
   let ast = parse_expr(tokens, 0);
 }
 

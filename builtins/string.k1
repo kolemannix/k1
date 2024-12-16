@@ -11,7 +11,7 @@ namespace string {
 
   fn fromBytes(buffer: Buffer[byte]): string {
     let copied: Buffer[byte] = buffer.cloned();
-    let sneakyCasted: Buffer[char] = Buffer::fromRawParts(copied.len, copied.data);
+    let sneakyCasted: Buffer[char] = Buffer/fromRawParts(copied.len, copied.data);
     { buffer: sneakyCasted }
   }
 
@@ -61,15 +61,15 @@ namespace string {
   }
 
   fn splitByChar(self: string, delim: char): List[string] {
-    let* results = List::empty[List[char]]();
-    let* accum = List::empty[char]();
+    let* results = List/empty[List[char]]();
+    let* accum = List/empty[char]();
     // Note(stdlib slow): TODO: use ranges instead to make this zero-copy!!
     //                    We can point to the old string instead of building up new ones
     for c in self do {
       if c == delim {
         if accum.*.nonEmpty() {
           results.push(accum);
-          accum <- List::empty[char]()
+          accum <- List/empty[char]()
         }
       } else {
         accum.push(c);
@@ -80,7 +80,7 @@ namespace string {
     };
 
     for list in results.* yield {
-      string::wrapList(list)
+      string/wrapList(list)
     }
   }
 
@@ -158,7 +158,7 @@ impl Equals for List[string] {
 // Note(stdlib slow): Need efficient string building
 impl Show for List[string] {
   fn show(self: List[string]): string {
-    let b = StringBuilder::new();
+    let b = StringBuilder/new();
     for s in self do {
       b.putString(s);
       let last = it_index == self.len - 1;

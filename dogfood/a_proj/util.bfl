@@ -3,7 +3,9 @@ fn hello(): string {
 }
 
 namespace util {
-  fn util_hello(): string {
-    "Hello from util_hello!"
-  }
+  fn utilHello(): string { "Hello from utilHello!" }
+}
+
+namespace util {
+  fn util_goodbye(): string { "Goodbye from utilGoodbye!" }
 }

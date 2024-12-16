@@ -3,7 +3,7 @@ namespace StringBuilder {
   deftype alias Part = StringBuilder.parts.value.T
 
   fn withCapacity(cap: u64): StringBuilder {
-    let parts = _root::new(List::withCapacity[Part](cap));
+    let parts = _root/new(List/withCapacity[Part](cap));
     { parts: parts }
   }
 
@@ -29,7 +29,7 @@ namespace StringBuilder {
     len
   }
   fn build(self: StringBuilder): string {
-    let* bytes = List::withCapacity[char](self.len());
+    let* bytes = List/withCapacity[char](self.len());
     for part in self.parts.* do {
       switch part {
         .Char(c) -> bytes.push(c),
@@ -40,6 +40,6 @@ namespace StringBuilder {
         }
       }
     };
-    string::wrapList(bytes)
+    string/wrapList(bytes)
   }
 }

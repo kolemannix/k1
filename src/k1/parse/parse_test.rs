@@ -292,7 +292,7 @@ fn char_value() -> ParseResult<()> {
 
 #[test]
 fn namespaced_fncall() -> ParseResult<()> {
-    let input = "foo::bar::baz()";
+    let input = "foo/bar/baz()";
     let (mut parser, result) = test_single_expr(input)?;
     let ParsedExpression::FnCall(fn_call) = result else {
         dbg!(result);
@@ -306,7 +306,7 @@ fn namespaced_fncall() -> ParseResult<()> {
 }
 #[test]
 fn namespaced_val() -> ParseResult<()> {
-    let input = "foo::bar::baz";
+    let input = "foo/bar/baz";
     let (mut parser, result) = test_single_expr(input)?;
     let ParsedExpression::Variable(variable) = result else {
         dbg!(result);
