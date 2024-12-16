@@ -8213,36 +8213,40 @@ impl TypedModule {
         Ok(())
     }
 
-    fn eval_definition(&mut self, def: ParsedId, scope_id: ScopeId) -> TyperResult<()> {
+    fn eval_definition(&mut self, def: ParsedId, scope_id: ScopeId) {
         match def {
-            ParsedId::Use(parsed_use_id) => self.eval_use_definition(scope_id, parsed_use_id),
+            ParsedId::Use(parsed_use_id) => {
+                if let Err(e) = self.eval_use_definition(scope_id, parsed_use_id) {
+                    self.push_error(e)
+                }
+            }
             ParsedId::Namespace(namespace) => {
-                self.eval_namespace(namespace)?;
-                Ok(())
+                if let Err(e) = self.eval_namespace(namespace) {
+                    self.push_error(e);
+                };
             }
             ParsedId::Constant(_const_val) => {
                 // Nothing to do in this phase for a const
-                Ok(())
             }
             ParsedId::Function(parsed_function_id) => {
                 let function_declaration_id = self
                     .function_ast_mappings
                     .get(&parsed_function_id)
                     .expect("function predecl lookup failed");
-                self.eval_function_body(*function_declaration_id)?;
-                Ok(())
+                if let Err(e) = self.eval_function_body(*function_declaration_id) {
+                    self.push_error(e);
+                };
             }
             ParsedId::TypeDefn(_type_defn_id) => {
                 // Done in prior phase
-                Ok(())
             }
             ParsedId::Ability(_ability) => {
                 // Nothing to do in this phase for an ability
-                Ok(())
             }
             ParsedId::AbilityImpl(ability_impl) => {
-                self.eval_ability_impl(ability_impl, scope_id)?;
-                Ok(())
+                if let Err(e) = self.eval_ability_impl(ability_impl, scope_id) {
+                    self.push_error(e);
+                };
             }
             other_id => {
                 panic!("Was asked to eval definition of a non-definition ast node {:?}", other_id)
@@ -8372,7 +8376,7 @@ impl TypedModule {
         let namespace_id = *self.namespace_ast_mappings.get(&ast_namespace.id).unwrap();
         let ns_scope_id = self.namespaces.get(namespace_id).scope_id;
         for defn in &ast_namespace.definitions {
-            self.eval_definition(*defn, ns_scope_id)?;
+            self.eval_definition(*defn, ns_scope_id);
         }
         Ok(namespace_id)
     }
@@ -8642,11 +8646,7 @@ impl TypedModule {
         // Everything else evaluation phase
         eprintln!(">> Phase 5 evaluate rest of definitions (functions, constants, abilities)");
         for &parsed_definition_id in self.ast.get_root_namespace().definitions.clone().iter() {
-            let result = self.eval_definition(parsed_definition_id, root_scope_id);
-            if let Err(e) = result {
-                self.write_error(&mut err_writer, &e)?;
-                self.errors.push(e);
-            }
+            self.eval_definition(parsed_definition_id, root_scope_id);
         }
         let unresolved_uses: Vec<_> =
             self.use_statuses.iter().filter(|use_status| !use_status.1.is_resolved()).collect();
@@ -9093,6 +9093,11 @@ impl TypedModule {
             fields.push(StructField { name: field.name, expr: field_expr });
         }
         TypedExpr::Struct(Struct { fields, type_id: struct_type_id, span })
+    }
+
+    pub fn push_error(&mut self, e: TyperError) {
+        self.write_error(&mut std::io::stderr(), &e).unwrap();
+        self.errors.push(e);
     }
 
     pub fn write_error(
