@@ -1317,6 +1317,15 @@ pub enum UseStatus {
     Resolved(UseableSymbol),
 }
 
+impl UseStatus {
+    pub fn is_resolved(&self) -> bool {
+        match self {
+            UseStatus::Resolved(_) => true,
+            UseStatus::Unresolved => false,
+        }
+    }
+}
+
 pub struct TypedModule {
     pub ast: ParsedModule,
     functions: Vec<TypedFunction>,
@@ -8249,11 +8258,11 @@ impl TypedModule {
         let parsed_use = self.ast.uses.get_use(parsed_use_id);
         let status_entry = self.use_statuses.get(&parsed_use_id);
         let is_fulfilled = match status_entry {
-            Some(UseStatus::Resolved(_)) => true,
+            Some(se) if se.is_resolved() => true,
             _ => false,
         };
         if !is_fulfilled {
-            debug!(
+            eprintln!(
                 "Handling unfulfilled use {}",
                 self.namespaced_identifier_to_string(&parsed_use.target)
             );
@@ -8269,6 +8278,10 @@ impl TypedModule {
                     parsed_use.alias.unwrap_or(parsed_use.target.name),
                 );
                 self.use_statuses.insert(parsed_use_id, UseStatus::Resolved(symbol));
+                eprintln!("Inserting resolved use");
+            } else {
+                self.use_statuses.insert(parsed_use_id, UseStatus::Unresolved);
+                eprintln!("Inserting unresolved use");
             }
         }
         Ok(())
@@ -8513,23 +8526,8 @@ impl TypedModule {
         eprintln!(">> Phase 2 declare types");
         let type_defn_result = self.eval_namespace_type_decl_phase(root_namespace_id);
         if let Err(e) = type_defn_result {
-            write_error(&mut err_writer, &self.ast.spans, &self.ast.sources, &e.message, e.span)?;
+            self.write_error(&mut err_writer, &e)?;
             self.errors.push(e);
-        }
-        let unresolved_uses: Vec<_> = self
-            .use_statuses
-            .iter()
-            .filter(|use_status| matches!(use_status.1, UseStatus::Unresolved))
-            .collect();
-        if !unresolved_uses.is_empty() {
-            for (parsed_use_id, _status) in &unresolved_uses {
-                let parsed_use = self.ast.uses.get_use(**parsed_use_id);
-                self.errors.push(errf!(
-                    parsed_use.span,
-                    "Unresolved use of {}",
-                    self.name_of(parsed_use.target.name)
-                ))
-            }
         }
         if !self.errors.is_empty() {
             bail!("{} failed type definition phase with {} errors", self.name(), self.errors.len())
@@ -8538,7 +8536,7 @@ impl TypedModule {
         eprintln!(">> Phase 3 evaluate types");
         let type_eval_result = self.eval_namespace_type_eval_phase(root_namespace_id);
         if let Err(e) = type_eval_result {
-            write_error(&mut err_writer, &self.ast.spans, &self.ast.sources, &e.message, e.span)?;
+            self.write_error(&mut err_writer, &e)?;
             self.errors.push(e);
         }
         if !self.errors.is_empty() {
@@ -8646,23 +8644,32 @@ impl TypedModule {
         for &parsed_definition_id in self.ast.get_root_namespace().definitions.clone().iter() {
             let result = self.eval_definition(parsed_definition_id, root_scope_id);
             if let Err(e) = result {
-                write_error(
-                    &mut err_writer,
-                    &self.ast.spans,
-                    &self.ast.sources,
-                    &e.message,
-                    e.span,
-                )?;
+                self.write_error(&mut err_writer, &e)?;
                 self.errors.push(e);
+            }
+        }
+        let unresolved_uses: Vec<_> =
+            self.use_statuses.iter().filter(|use_status| !use_status.1.is_resolved()).collect();
+        if !unresolved_uses.is_empty() {
+            for (parsed_use_id, _status) in &unresolved_uses {
+                let parsed_use = self.ast.uses.get_use(**parsed_use_id);
+                let error = errf!(
+                    parsed_use.span,
+                    "Unresolved use of {}",
+                    self.name_of(parsed_use.target.name)
+                );
+                self.write_error(&mut err_writer, &error)?;
+                self.errors.push(error)
             }
         }
         if !self.errors.is_empty() {
             bail!("{} failed typechecking with {} errors", self.name(), self.errors.len())
         }
 
+        let mut pass = 0;
         while !self.functions_pending_body_specialization.is_empty() {
             eprintln!(
-                ">> Phase 6 specialize function bodies: {}",
+                ">> Phase 6 specialize function bodies: {} (pass {pass})",
                 self.functions_pending_body_specialization.len()
             );
             let clone = self.functions_pending_body_specialization.clone();
@@ -8674,6 +8681,7 @@ impl TypedModule {
                     self.errors.push(e);
                 }
             }
+            pass += 1;
         }
         if !self.errors.is_empty() {
             bail!("{} failed specialize with {} errors", self.name(), self.errors.len())

@@ -1,6 +1,6 @@
+// Use a function from top-level
 use types/typeId
-use types/asdfasdf
-  // Use a constant from top-level
+// Use a constant from top-level
 use files/unix/SEEK_END as SEEKEND
 
 namespace foo {
@@ -8,11 +8,11 @@ namespace foo {
 }
 
 fn main(): int {
-  // Use a function
+  // Use a function from stmt w/ alias
   use types/typeId as typeIdAlias;
   assert(typeIdAlias[never]() == typeId[never]()); 
 
-  // Use a constant
+  // Use a constant from stmt w/ alias
   use files/unix/SEEK_END as S;
   assert(S == files/unix/SEEK_END);
   assert(SEEKEND == files/unix/SEEK_END);
