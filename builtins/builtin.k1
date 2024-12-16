@@ -82,17 +82,6 @@ ability Comparable {
 //   fn hasValue(self: Self): bool
 //   fn unwrap(): T
 // }
-namespace Opt {
-  fn hasValue[T](self: T?): bool {
-    self is .Some(_)
-  }
-
-  fn get[T](self: T?): T {
-    if self is .Some(t) t else {
-      crash("Opt.get on None")
-    }
-  }
-}
 
 namespace bool {
   intern fn negated(self: bool): bool
