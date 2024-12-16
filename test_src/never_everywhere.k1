@@ -1,13 +1,14 @@
 fn callArgument(): never { println(crash("call arg")) }
 fn letRhs(): unit { let mut x = crash("letRhs") }
 fn assgnRhs(): never { let mut x = 123; x = crash("assgn rhs") }
-fn binopLhs(): never { crash("") + 4 }
+// should fail to compile anyway
+// fn binopLhs(): never { crash("") + 4 }
 fn binopRhs(): never { 4 + crash("") }
 fn unop(): never { not crash("") }
 fn whileCond(): never { while crash("asdf") { () } }
 fn enumConstrPayload(): never { Opt.Some(crash("asdf")) }
 fn getEnumPayload(): i64 { 
-  let x: never = Opt.Some(crash(""));
+  let x: int? = Opt.Some(crash(""));
   let y: int? = x;
   y!
 }

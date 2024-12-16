@@ -133,15 +133,17 @@
   - [x] FieldAccess on a reference doesn't give a reference (and shouldn't always, what syntax to specify)
 - [x] Array/Slice/string rework to Buffer/List, and eventually Array (fixed size at compile time)
 - [x] Do away with k1lib.c?
-- [ ] Test Struct shorthand syntax
+- [x] Test Struct shorthand syntax
+- [x] Imports
+  - [x] types
+  - [x] functions
+  - [x] constants
+  - [x] namespaces
 - [ ] 'call' method syntax (Scala's 'apply' feature)
 - [ ] +other special function names that work like ==?)
 - [ ] Replace 'unit' with an empty struct, encoded as `{}` at the type level and `{}` at the value level
 - [x] Re-write signature specialization to be simpler.
 - [ ] Re-write body specialization to not re-typecheck but instead transform the typed tree
-- [ ] Imports (need design around modules)
-  - [ ] Perhaps, only what is imported from main is compiled, besides the builtins?
-  - [ ] Would require a new pass for only imports
 - [ ] Typecheck 'main'
 - [ ] Matching on references
   - [ ] Match to get reference to each struct field, for example, use * for a dereferencing match
