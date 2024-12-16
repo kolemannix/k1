@@ -1,8 +1,12 @@
-use util::utilHello;
+use util/utilHello;
+
+namespace util/hello/world {
+  
+}
 
 fn main(): int {
   println(hello());
   println(utilHello());
-  println(util::utilGoodbye());
+  println(util/utilGoodbye());
   0
 }
