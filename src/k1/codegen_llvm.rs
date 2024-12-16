@@ -412,13 +412,18 @@ pub struct LoopInfo<'ctx> {
     pub end_block: BasicBlock<'ctx>,
 }
 
+pub struct CodegenedFunction<'ctx> {
+    pub function_value: FunctionValue<'ctx>,
+    pub instruction_count: usize,
+}
+
 pub struct Codegen<'ctx, 'module> {
     ctx: &'ctx Context,
     pub module: &'module TypedModule,
     llvm_module: LlvmModule<'ctx>,
     llvm_machine: TargetMachine,
     builder: Builder<'ctx>,
-    llvm_functions: HashMap<FunctionId, FunctionValue<'ctx>>,
+    pub llvm_functions: HashMap<FunctionId, CodegenedFunction<'ctx>>,
     llvm_types: RefCell<HashMap<TypeId, LlvmType<'ctx>>>,
     /// The type of stored pointers here should be one level higher than the type of the
     /// value pointed to. This is so that it can be used reliably, without matching or
@@ -677,6 +682,24 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         line.line_index + 1
     }
 
+    fn write_type_name(
+        &self,
+        w: &mut impl std::io::Write,
+        type_id: TypeId,
+        defn_info: Option<&TypeDefnInfo>,
+    ) {
+        match defn_info {
+            None => write!(w, "{}", type_id).unwrap(),
+            Some(info) => self.module.write_qualified_name(w, info.scope, info.name, "/", true),
+        }
+    }
+
+    fn codegen_type_name(&self, type_id: TypeId, defn_info: Option<&TypeDefnInfo>) -> String {
+        let mut s = Vec::with_capacity(64);
+        self.write_type_name(&mut s, type_id, defn_info);
+        String::from_utf8(s).unwrap()
+    }
+
     fn make_debug_struct_type<'names>(
         &self,
         name: &str,
@@ -852,9 +875,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             .into()),
             Type::Pointer(_) => {
-                // We represent this as a LlvmValueType, not a LlvmPointerType, since its
-                // our 'raw' pointer that is really a 'number' wrapper and has no target type
-                // attached
+                // We don't know what it points to, so we just say 'bytes' for the best debugger
+                // experience
                 let placeholder_pointee = self.codegen_type(I8_TYPE_ID)?.debug_type();
                 Ok(LlvmValueType {
                     type_id: POINTER_TYPE_ID,
@@ -879,11 +901,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let field_count = struc.fields.len();
                 let mut field_types = Vec::with_capacity(field_count);
                 let mut field_basic_types = Vec::with_capacity(field_count);
-                let name = struc
-                    .type_defn_info
-                    .as_ref()
-                    .map(|info| self.get_ident_name(info.name).to_string())
-                    .unwrap_or("<anon_struct>".to_string());
+                let name = self.codegen_type_name(type_id, struc.type_defn_info.as_ref());
                 for field in &struc.fields {
                     let field_llvm_type = self.codegen_type_inner(field.type_id, depth + 1)?;
                     field_basic_types.push(field_llvm_type.physical_value_type());
@@ -931,6 +949,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 .into())
             }
             Type::Enum(enum_type) => {
+                let enum_name = enum_type
+                    .type_defn_info
+                    .as_ref()
+                    .map(|info| self.module.make_qualified_name(info.scope, info.name, ".", true))
+                    .unwrap_or(type_id.to_string());
                 let mut variant_structs = Vec::with_capacity(enum_type.variants.len());
                 if enum_type.variants.len() >= u8::MAX as usize {
                     panic!("too many enum variants for now");
@@ -949,6 +972,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     .unwrap()
                     .as_type();
                 for variant in enum_type.variants.iter() {
+                    let variant_name = format!("{enum_name}.{}", self.get_ident_name(variant.name));
                     let (variant_struct, variant_struct_debug) = if let Some(payload_type_id) =
                         variant.payload
                     {
@@ -962,10 +986,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             false,
                         );
                         let debug_struct = self.make_debug_struct_type(
-                            &format!(
-                                "variant_{}",
-                                self.module.ast.identifiers.get_name(variant.name)
-                            ),
+                            &variant_name,
                             &struc,
                             SpanId::NONE,
                             &[
@@ -984,10 +1005,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         let s = self.ctx.struct_type(&[tag_int_type.as_basic_type_enum()], false);
                         let debug_struct = {
                             self.make_debug_struct_type(
-                                &format!(
-                                    "variant_{}",
-                                    self.module.ast.identifiers.get_name(variant.name)
-                                ),
+                                &variant_name,
                                 &s,
                                 SpanId::NONE,
                                 &[StructDebugMember {
@@ -1083,18 +1101,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             .as_type()
                     })
                     .collect();
-                let name = enum_type
-                    .type_defn_info
-                    .as_ref()
-                    .map(|info| self.module.ast.identifiers.get_name(info.name).to_string())
-                    .unwrap_or(type_id.to_string());
-                let name = &format!("{name}_{type_id}");
                 let debug_union_type = self
                     .debug
                     .debug_builder
                     .create_union_type(
                         self.debug.current_scope(),
-                        name,
+                        &enum_name,
                         self.debug.current_file(),
                         0,
                         enum_size.size_bits as u64,
@@ -1102,7 +1114,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         0,
                         &member_types,
                         0,
-                        name,
+                        &enum_name,
                     )
                     .as_type();
 
@@ -1150,16 +1162,15 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         .get_type_defn_info(rr.root_type_id)
                         .expect("recursive type must have defn info");
 
-                    // FIXME: This needs to codegen the name in a standardized way so it matches
-                    let name = self.get_ident_name(defn_info.name);
-                    let s = self.ctx.opaque_struct_type(name);
+                    let name = self.codegen_type_name(type_id, Some(defn_info));
+                    let s = self.ctx.opaque_struct_type(&name);
 
                     no_cache = true;
                     Ok(LlvmType::StructType(LlvmStructType {
                         type_id,
                         struct_type: s,
                         fields: Vec::new(),
-                        di_type: self.make_debug_struct_type(name, &s, SpanId::NONE, &[]),
+                        di_type: self.make_debug_struct_type(&name, &s, SpanId::NONE, &[]),
                         size: SizeInfo::ZERO,
                     }))
                 }
@@ -2537,7 +2548,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         function_id: FunctionId,
     ) -> CodegenResult<FunctionValue<'ctx>> {
         if let Some(function) = self.llvm_functions.get(&function_id) {
-            return Ok(*function);
+            return Ok(function.function_value);
         }
         debug!("\ncodegen function\n{}", self.module.function_id_to_string(function_id, true));
 
@@ -2566,7 +2577,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
         let llvm_name = match function.linkage {
             TyperLinkage::External(Some(name)) => self.module.name_of(name),
-            _ => &self.module.make_qualified_name(function.scope, function.name, "__", true),
+            _ => &self.module.make_qualified_name(function.scope, function.name, ".", true),
         };
         let fn_ty = return_type.fn_type(&param_metadata_types, false);
         let llvm_linkage = match function.linkage {
@@ -2581,19 +2592,20 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 llvm_name
             );
         }
-        let fn_val = self.llvm_module.add_function(llvm_name, fn_ty, llvm_linkage);
+        let function_value = self.llvm_module.add_function(llvm_name, fn_ty, llvm_linkage);
 
-        self.llvm_functions.insert(function_id, fn_val);
+        self.llvm_functions
+            .insert(function_id, CodegenedFunction { function_value, instruction_count: 0 });
 
         if matches!(function.linkage, Linkage::External(_)) {
-            return Ok(fn_val);
+            return Ok(function_value);
         }
 
         let di_subprogram = self.push_function_debug_info(function, &return_type, &param_types)?;
 
-        let entry_block = self.ctx.append_basic_block(fn_val, "entry");
+        let entry_block = self.ctx.append_basic_block(function_value, "entry");
         self.builder.position_at_end(entry_block);
-        for (i, param) in fn_val.get_param_iter().enumerate() {
+        for (i, param) in function_value.get_param_iter().enumerate() {
             let typed_param = &function_type.params[i];
             let ty = self.codegen_type(typed_param.type_id)?;
             let param_name = self.module.ast.identifiers.get_name(typed_param.name);
@@ -2654,8 +2666,23 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             self.builder.position_at_end(start_block);
         }
         self.debug.pop_scope();
-        fn_val.set_subprogram(di_subprogram);
-        Ok(fn_val)
+        function_value.set_subprogram(di_subprogram);
+
+        {
+            let mut count = 0;
+            let mut cur_blk: Option<BasicBlock<'ctx>> = function_value.get_first_basic_block();
+            loop {
+                let Some(blk) = cur_blk else { break };
+                let mut cur_inst = blk.get_first_instruction();
+                while let Some(inst) = cur_inst {
+                    count += 1;
+                    cur_inst = inst.get_next_instruction();
+                }
+                cur_blk = blk.get_next_basic_block();
+            }
+            self.llvm_functions.get_mut(&function_id).unwrap().instruction_count = count;
+        }
+        Ok(function_value)
     }
 
     fn codegen_integer_value(
@@ -2699,12 +2726,13 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 _ => unimplemented!("constants must be integers"),
             }
         }
-        for (id, function) in self.module.function_iter() {
-            if function.is_concrete {
-                self.codegen_function_or_get(id)?;
-            }
-        }
-        // self.codegen_function_or_get(self.module.get_main_function_id().unwrap())?;
+        // TODO: Codegen only the exported functions as well as the necessary ones
+        // for (id, function) in self.module.function_iter() {
+        //     if function.is_concrete {
+        //         self.codegen_function_or_get(id)?;
+        //     }
+        // }
+        self.codegen_function_or_get(self.module.get_main_function_id().unwrap())?;
         info!("codegen phase 'ir' took {}ms", start.elapsed().as_millis());
         Ok(())
     }
@@ -2809,7 +2837,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         };
         let llvm_function = self.llvm_functions.get(&main_fn_id).unwrap();
         eprintln!("Interpreting {}", self.module.name());
-        let return_value = unsafe { engine.run_function(*llvm_function, &[]) };
+        let return_value = unsafe { engine.run_function(llvm_function.function_value, &[]) };
         let res: u64 = return_value.as_int(true);
         Ok(res)
     }

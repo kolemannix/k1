@@ -72,6 +72,10 @@ pub struct Args {
     #[arg(long, default_value_t = false)]
     pub gui: bool,
 
+    /// Log LLVM Instruction Counts
+    #[arg(long, default_value_t = false)]
+    pub llvm_counts: bool,
+
     #[command(subcommand)]
     pub command: Command,
 }
@@ -283,6 +287,20 @@ pub fn codegen_module<'ctx, 'module>(
 
     if do_write_executable {
         write_executable(args.debug, out_dir, &module_name)?;
+    }
+
+    if args.llvm_counts {
+        let mut instruction_counts = codegen
+            .llvm_functions
+            .values()
+            .map(|llvm_fn| {
+                (llvm_fn.function_value.get_name().to_string_lossy(), llvm_fn.instruction_count)
+            })
+            .collect::<Vec<_>>();
+        instruction_counts.sort_by_key(|f| f.1);
+        for (name, count) in &instruction_counts {
+            eprintln!("{name}: {count}")
+        }
     }
 
     Ok(codegen)
