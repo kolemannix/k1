@@ -2,7 +2,7 @@ fn fib(n: int): int {
   switch n {
       0 -> 0,
       1 -> 1,
-      _ -> fib(n + -1) + fib(n + -2)
+      _ -> fib(n - 1) + fib(n - 2)
   }
 }
 
@@ -11,4 +11,3 @@ fn main(): int {
   assert(result == 89);
   0
 }
-// 89

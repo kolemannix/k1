@@ -7,7 +7,7 @@ fn main(): int {
   let x = 0xcafebabe;
   let y = 0xdeadbeef;
   let a: u8 = 0b11111111;
-  Bits::bitAnd(x, y);
+  Bits/bitAnd(x, y);
   // TODO: assert results
 
   0

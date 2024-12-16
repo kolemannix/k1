@@ -1,4 +1,4 @@
-use log::trace;
+use log::{debug, trace};
 
 use std::{
     collections::{hash_map::Entry, HashMap},
@@ -280,11 +280,11 @@ impl Scopes {
         self.get_scope_mut(scope_id).add_type(ident, ty)
     }
 
-    pub fn find_type(&self, scope_id: ScopeId, ident: Identifier) -> Option<TypeId> {
+    pub fn find_type(&self, scope_id: ScopeId, ident: Identifier) -> Option<(TypeId, ScopeId)> {
         let scope = self.get_scope(scope_id);
         trace!("Find type {} in {:?}", ident, scope.types);
         if let v @ Some(_r) = scope.find_type(ident) {
-            return v;
+            return v.map(|v| (v, scope_id));
         }
         match scope.parent {
             Some(parent) => self.find_type(parent, ident),
@@ -298,7 +298,7 @@ impl Scopes {
         type_name: &NamespacedIdentifier,
         namespaces: &Namespaces,
         identifiers: &Identifiers,
-    ) -> TyperResult<Option<TypeId>> {
+    ) -> TyperResult<Option<(TypeId, ScopeId)>> {
         if type_name.namespaces.is_empty() {
             Ok(self.find_type(scope_id, type_name.name))
         } else {
@@ -309,7 +309,10 @@ impl Scopes {
                 identifiers,
                 type_name.span,
             )?;
-            Ok(self.get_scope(scope_to_search).find_type(type_name.name))
+            Ok(self
+                .get_scope(scope_to_search)
+                .find_type(type_name.name)
+                .map(|t| (t, scope_to_search)))
         }
     }
 
@@ -490,6 +493,79 @@ impl Scopes {
         }
     }
 
+    pub fn find_useable_symbol(
+        &self,
+        scope_id: ScopeId,
+        name: &NamespacedIdentifier,
+        namespaces: &Namespaces,
+        identifiers: &Identifiers,
+    ) -> TyperResult<Option<UseableSymbol>> {
+        let scope_id_to_search = self.traverse_namespace_chain(
+            scope_id,
+            &name.namespaces,
+            namespaces,
+            identifiers,
+            name.span,
+        )?;
+        let scope_to_search = self.get_scope(scope_id_to_search);
+
+        debug!(
+            "Searching scope for useable symbol: {}, Functions:\n{:?}",
+            self.make_scope_name(scope_to_search, identifiers),
+            scope_to_search.functions.iter().collect::<Vec<_>>()
+        );
+
+        if let Some(function_id) = scope_to_search.find_function(name.name) {
+            Ok(Some(UseableSymbol {
+                source_scope: scope_id_to_search,
+                id: UseableSymbolId::Function(function_id),
+            }))
+        } else if let Some(type_id) = scope_to_search.find_type(name.name) {
+            Ok(Some(UseableSymbol {
+                source_scope: scope_id_to_search,
+                id: UseableSymbolId::Type(type_id),
+            }))
+        } else if let Some(variable_id) = scope_to_search.find_variable(name.name) {
+            Ok(Some(UseableSymbol {
+                source_scope: scope_id_to_search,
+                id: UseableSymbolId::Constant(variable_id),
+            }))
+        } else if let Some(ns_id) = scope_to_search.find_namespace(name.name) {
+            Ok(Some(UseableSymbol {
+                source_scope: scope_id_to_search,
+                id: UseableSymbolId::Namespace(ns_id),
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn add_use_binding(
+        &mut self,
+        scope_id: ScopeId,
+        useable_symbol: UseableSymbol,
+        name_to_use: Identifier,
+    ) {
+        match useable_symbol.id {
+            UseableSymbolId::Function(function_id) => {
+                // Discard because 'use's should shadow
+                let _ = self.add_function(scope_id, name_to_use, function_id);
+            }
+            UseableSymbolId::Constant(variable_id) => {
+                self.add_variable(scope_id, name_to_use, variable_id);
+            }
+            UseableSymbolId::Type(type_id) => {
+                // Discard because 'use's should shadow
+                let _ = self.add_type(scope_id, name_to_use, type_id);
+            }
+            UseableSymbolId::Namespace(ns_id) => {
+                // Discard because 'use's should shadow
+                let s = self.get_scope_mut(scope_id);
+                let _ = s.add_namespace(name_to_use, ns_id);
+            }
+        }
+    }
+
     pub fn find_ability_namespaced(
         &self,
         scope_id: ScopeId,
@@ -560,6 +636,20 @@ impl ScopeOwnerId {
             _ => panic!("Expected ability scope owner"),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct UseableSymbol {
+    id: UseableSymbolId,
+    source_scope: ScopeId,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum UseableSymbolId {
+    Function(FunctionId),
+    Constant(VariableId),
+    Type(TypeId),
+    Namespace(NamespaceId),
 }
 
 #[derive(Debug)]

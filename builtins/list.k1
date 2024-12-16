@@ -10,12 +10,12 @@ namespace List {
   }
 
   fn filled[T](size: u64, value: T): List[T] {
-    let buffer = Buffer::filled(size, value);
+    let buffer = Buffer/filled(size, value);
     { len: size, buffer: buffer }
   }
 
   fn withCapacity[T](cap: u64): List[T] {
-    let buffer = Buffer::_allocate[T](cap);
+    let buffer = Buffer/_allocate[T](cap);
     { len: 0, buffer: buffer }
   }
 
@@ -69,7 +69,7 @@ namespace List {
   }
 
   fn slice[T](self: List[T], start: u64, end: u64): Buffer[T] {
-    if self.len == 0 return(Buffer::empty[T]());
+    if self.len == 0 return(Buffer/empty[T]());
     if end > self.len { crash("List slice end out of bounds: \{end}") };
     self.buffer.slice(start, end)
   }
@@ -149,9 +149,9 @@ namespace List {
     let halfIndex = input.len / 2;
     let pivot = input.*.get(halfIndex);
   
-    let* left = List::withCapacity[T](halfIndex);
-    let* right = List::withCapacity[T](halfIndex);
-    let* equal = List::withCapacity[T](4);
+    let* left = List/withCapacity[T](halfIndex);
+    let* right = List/withCapacity[T](halfIndex);
+    let* equal = List/withCapacity[T](4);
   
     for item in input.* do {
       switch item.compare(pivot) {

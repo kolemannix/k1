@@ -12,7 +12,7 @@ impl Show for Color {
 
 fn main(): int {
 
-  let input: string = Files::readToString("/Users/knix/dev/k1/dogfood/aoc/2023/2.txt");
+  let input: string = Files/readToString("/Users/knix/dev/k1/dogfood/aoc/2023/2.txt");
 
   println("Hello, day 2!");
   let supply = {

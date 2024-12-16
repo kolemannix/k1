@@ -16,23 +16,23 @@ namespace Buffer {
 
   fn _allocate[T](count: u64): Buffer[T] {
     let data = if count == 0 {
-      Pointer::null()
+      Pointer/null()
     } else {
       let sizeBytes = bufferLenBytes[T](count);
-      libc::malloc(sizeBytes)
+      libc/malloc(sizeBytes)
     };
     { len: count, data: data }
   }
 
   fn _copyFrom[T](source: Buffer[T], dest: Buffer[T], count: u64): unit {
-    if count >  source.len {
+    if count > source.len {
       crash("Buffer copy source index out of bounds: \{count}")
     };
-    if count >  dest.len {
+    if count > dest.len {
       crash("Buffer copy dest index out of bounds: \{count}")
     };
     let numBytes = bufferLenBytes[T](count);
-    libc::memcpy(dst = dest.data, src = source.data, count = numBytes);
+    libc/memcpy(dst = dest.data, src = source.data, count = numBytes);
     ()
   }
 
@@ -94,8 +94,8 @@ namespace Buffer {
 
   fn cloned[T](self: Buffer[T]): Buffer[T] {
     let numBytes = self.lenBytes();
-    let newBuffer = libc::malloc(numBytes);
-    libc::memcpy(dst = newBuffer, src = self.data, count = numBytes);
+    let newBuffer = libc/malloc(numBytes);
+    libc/memcpy(dst = newBuffer, src = self.data, count = numBytes);
     { len: self.len, data: newBuffer }
   }
 
@@ -156,7 +156,7 @@ namespace Buffer {
   }
 
   fn sorted[T](self: Buffer[T]): Buffer[T] where T: Comparable {
-    let* list = List::wrapBuffer(self);
+    let* list = List/wrapBuffer(self);
     list.sort();
     list.*.toBuffer()
   }
@@ -165,7 +165,7 @@ namespace Buffer {
 impl Equals for Buffer[u8] {
   fn equals(self: Buffer[u8], other: Buffer[u8]): bool {
     if self.len != other.len false else {
-      libc::memcmp(self.data, other.data, self.lenBytes()) == 0
+      libc/memcmp(self.data, other.data, self.lenBytes()) == 0
     }
   }
 }
@@ -173,7 +173,7 @@ impl Equals for Buffer[u8] {
 impl Equals for Buffer[char] {
   fn equals(self: Buffer[char], other: Buffer[char]): bool {
     if self.len != other.len false else {
-      libc::memcmp(self.data, other.data, self.lenBytes()) == 0
+      libc/memcmp(self.data, other.data, self.lenBytes()) == 0
     }
   }
 }
@@ -181,7 +181,7 @@ impl Equals for Buffer[char] {
 impl Equals for Buffer[int] {
   fn equals(self: Buffer[int], other: Buffer[int]): bool {
     if self.len != other.len false else {
-      libc::memcmp(self.data, other.data, self.lenBytes()) == 0
+      libc/memcmp(self.data, other.data, self.lenBytes()) == 0
     }
   }
 }

@@ -133,6 +133,9 @@
   - [x] FieldAccess on a reference doesn't give a reference (and shouldn't always, what syntax to specify)
 - [x] Array/Slice/string rework to Buffer/List, and eventually Array (fixed size at compile time)
 - [x] Do away with k1lib.c?
+- [ ] Test Struct shorthand syntax
+- [ ] 'call' method syntax (Scala's 'apply' feature)
+- [ ] +other special function names that work like ==?)
 - [ ] Replace 'unit' with an empty struct, encoded as `{}` at the type level and `{}` at the value level
 - [x] Re-write signature specialization to be simpler.
 - [ ] Re-write body specialization to not re-typecheck but instead transform the typed tree
@@ -143,6 +146,7 @@
 - [ ] Matching on references
   - [ ] Match to get reference to each struct field, for example, use * for a dereferencing match
   - [ ] Match to get reference to enum payload
+- [ ] Generic abilities (ability From<T> { ... })
 - [ ] ? operator is really the 'else' operator, can implement using an 'Else' ability or 'Unwrap' ability
 - [ ] Context location params are not being propagated
 - [ ] Fix named arguments
@@ -156,7 +160,7 @@
 - [ ] Finish hashmap implementation
 - [ ] Builtin syntax for maps
   - [ ] [key:value] empty: [:]
-- [ ] Warnings/Errors
+- [ ] Introduce Warnings
   - [ ] Unused var
   - [ ] Unused type bound
   - [ ] Disallow naked variable patterns in 'is' OR Disallow capital variables, require capital enum variants...
@@ -167,20 +171,16 @@
   - [x] 'when' keyword is bad; `switch` maybe or `case`, or resolve the ambiguity with `when <x> is {}`
   - [x] Replace `type` with `deftype` - It would be really nice _not_ to take the keyword 'type'. Just a thought from using Rust/Scala
 - [x] Remove tag literals, make enum tags per-enum
-- [ ] Struct shorthand syntax
-- [ ] Add ranges, as stdlib thing
+- [ ] Add ranges in stdlib
       `sealed abstract class Range(let start: Int, let end: Int, let step: Int)`
 - [ ] Make demo readme / site
-- [ ] Generic abilities (ability From<T> { ... })
 - [ ] Define clear 'platform layer' (crash, alloc/free, other?). Then we could do an LLVM interp platform and a rust interpreter platform
 - [ ] Runtime type info story, typeOf, typeInfo, and 'any' type
 - [ ] Ability-based iteration
 - [ ] Conditional compile directive
 - [ ] Mark types as trivially copyable or not
 ^ The builtin array would be NOT copyable so that you don't accidentally alias the data ptr
-- [ ] Ability constraints on generics (not strictly needed since we have them on functions)
-- [ ] Test handling of NaN and Infinity, other float edge cases
-- [ ] German/Umbra strings
+- [ ] Ability constraints on generics
 
 ## Non-goals at least for now
 - [ ] Memory safety / solving the 'aliasing' problem, not because its unimportant but because I have other interests
@@ -196,6 +196,8 @@
   - (Monad ability would require closures and generic abilities)
 - [ ] Require named fncall args by default; and allow anonymous w/ declaration like Jakt?
 - [ ] as! for fallible casting and as? for optional casting
+- [ ] Test handling of NaN and Infinity, other float edge cases
+- [ ] German/Umbra strings
 
 ## Compiler
 - [ ] LLVM: avoid loading aggregate values directly

@@ -1,10 +1,10 @@
 fn main(): int {
-  let context alloc = Allocator::initDefault();
-  let input = files::readToString("/Users/knix/dev/k1/dogfood/aoc/2024/day1.txt");
+  let context alloc = Allocator/initDefault();
+  let input = files/readToString("/Users/knix/dev/k1/dogfood/aoc/2024/day1.txt");
 
-  let left = alloc.tempArena().push(Array::new[int]());
-  // let* left = Array::new[int]();
-  let* right = Array::new[int]();
+  let left = alloc.tempArena().push(Array/new[int]());
+  // let* left = Array/new[int]();
+  let* right = Array/new[int]();
 
   for line in input.splitByChar('\n') do {
     left.push(line.substring(0, 5).toInt()!);

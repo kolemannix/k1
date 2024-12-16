@@ -1,5 +1,8 @@
+use util::utilHello;
+
 fn main(): int {
   println(hello());
-  println(util::util_hello());
+  println(utilHello());
+  println(util::utilGoodbye());
   0
 }

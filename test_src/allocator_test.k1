@@ -1,5 +1,5 @@
 fn main(): int {
-  let* a = Arena::new(id = "temp", initialMb = 1);
+  let* a = Arena/new(id = "temp", initialMb = 1);
 
   let b = a.push(true);
   let p = a.push({ x: 10, y: 10 });

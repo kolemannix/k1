@@ -120,6 +120,11 @@ impl<'toks> TokenIter<'toks> {
     pub fn peek_three(&self) -> (Token, Token, Token) {
         (self.peek_n(0), self.peek_n(1), self.peek_n(2))
     }
+
+    #[inline]
+    pub fn peek_back(&self) -> Token {
+        self.peek_n(-1)
+    }
 }
 
 #[repr(u8)]
@@ -137,7 +142,6 @@ pub enum TokenKind {
     KeywordOr,
     KeywordIf,
     KeywordElse,
-    KeywordRecord,
     KeywordDefType,
     KeywordWhile,
     KeywordLoop,
@@ -159,6 +163,7 @@ pub enum TokenKind {
     KeywordBuiltin,
     KeywordWhere,
     KeywordContext,
+    KeywordUse,
 
     Slash,
     LineComment,
@@ -225,7 +230,6 @@ impl TokenKind {
             K::KeywordOr => Some("or"),
             K::KeywordIf => Some("if"),
             K::KeywordElse => Some("else"),
-            K::KeywordRecord => Some("record"),
             K::KeywordDefType => Some("deftype"),
             K::KeywordWhile => Some("while"),
             K::KeywordLoop => Some("loop"),
@@ -247,6 +251,7 @@ impl TokenKind {
             K::KeywordBuiltin => Some("builtin"),
             K::KeywordWhere => Some("where"),
             K::KeywordContext => Some("context"),
+            K::KeywordUse => Some("use"),
 
             K::Slash => Some("/"),
             K::LineComment => Some("//"),
@@ -348,7 +353,6 @@ impl TokenKind {
             "or" => Some(K::KeywordOr),
             "if" => Some(K::KeywordIf),
             "else" => Some(K::KeywordElse),
-            "record" => Some(K::KeywordRecord),
             "deftype" => Some(K::KeywordDefType),
             "while" => Some(K::KeywordWhile),
             "loop" => Some(K::KeywordLoop),
@@ -370,6 +374,7 @@ impl TokenKind {
             "builtin" => Some(K::KeywordBuiltin),
             "where" => Some(K::KeywordWhere),
             "context" => Some(K::KeywordContext),
+            "use" => Some(K::KeywordUse),
             "==" => Some(K::EqualsEquals),
             "!=" => Some(K::BangEquals),
             "<=" => Some(K::LessThanEqual),
@@ -406,6 +411,7 @@ impl TokenKind {
             K::KeywordBuiltin => true,
             K::KeywordWhere => true,
             K::KeywordContext => true,
+            K::KeywordUse => true,
             _ => false,
         }
     }

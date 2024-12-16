@@ -9,7 +9,7 @@ fn crash(context locn: CompilerSourceLoc)(msg: string): never {
   let line = locn.line;
   let s = "\{msg} at \{filename}:\{line}\n";
   eprint(s);
-  libc::abort()
+  libc/abort()
 }
 
 namespace Pointer {
@@ -33,7 +33,7 @@ impl Equals for Pointer {
 }
 
 fn new[T](value: T): T* {
-  let ptr = libc::malloc(sizeOf[T]());
+  let ptr = libc/malloc(sizeOf[T]());
   let t = ptr as T*;
   t <- value;
   t
@@ -50,7 +50,7 @@ fn printIt[T](value: T): unit where T: Show {
 
 fn print(s: string): unit {
   let s = s.appendChar('\n');
-  libc::write(1, s.buffer.data, s.len(), 0);
+  libc/write(1, s.buffer.data, s.len(), 0);
   ()
 }
 fn println(s: string): unit {
@@ -58,7 +58,7 @@ fn println(s: string): unit {
 }
 
 fn eprint(s: string): unit {
-  libc::write(2, s.buffer.data, s.len(), 0);
+  libc/write(2, s.buffer.data, s.len(), 0);
   ()
 }
 fn eprintln(s: string): unit {
@@ -67,14 +67,14 @@ fn eprintln(s: string): unit {
 
 namespace sys {
   fn exit(code: i32): never {
-    libc::exit(code)
+    libc/exit(code)
   }
 }
 
 namespace files {
-  let SEEK_END: i32 = 2;
-  let SEEK_SET: i32 = 0;
   namespace unix {
+    let SEEK_END: i32 = 2;
+    let SEEK_SET: i32 = 0;
     extern(fopen)  fn fopen(pathCString: Pointer, modeCString: Pointer): Pointer
     extern(fseek)  fn fseek(fileDesc: Pointer, offset: u64, whence: i32): i32
     extern(fread)  fn fread(buffer: Pointer, size: u64, num: u64, stream: Pointer): u64
@@ -85,17 +85,17 @@ namespace files {
   fn readToString(context alloc: Allocator)(path: string): string {
     let filenameCString = path.toCString();
   
-    let file = files::unix::fopen(filenameCString, "r".toCString());
-    files::unix::fseek(file, 0, SEEK_END);
-    let fileSizeBytes = files::unix::ftell(file);
+    let file = files/unix/fopen(filenameCString, "r".toCString());
+    files/unix/fseek(file, 0, unix/SEEK_END);
+    let fileSizeBytes = files/unix/ftell(file);
     let buf = alloc.tempArena().pushBytes(fileSizeBytes);
   
-    files::unix::fseek(file, 0, SEEK_SET);
-    files::unix::fread(buf, fileSizeBytes, 1, file);
-    let string = string::wrapBuffer(Buffer::fromRawParts(fileSizeBytes, buf));
-    files::unix::fclose(file);
+    files/unix/fseek(file, 0, unix/SEEK_SET);
+    files/unix/fread(buf, fileSizeBytes, 1, file);
+    let string = string/wrapBuffer(Buffer/fromRawParts(fileSizeBytes, buf));
+    files/unix/fclose(file);
 
-    libc::free(filenameCString);
+    libc/free(filenameCString);
 
     string
   }
@@ -109,7 +109,7 @@ fn assertMsg(context locn: CompilerSourceLoc)(msg: string, value: bool): unit {
 
 namespace char {
   fn toString(self: char): string {
-    string::wrapList([self])
+    string/wrapList([self])
   }
 
   fn toAsciiDigit(self: char): u8? {
@@ -131,7 +131,7 @@ impl Show for i64 {
     if self == 0 return("0");
     let neg = self < 0;
     let mut remaining: i64 = if neg self * -1 else self;
-    let* buf = List::withCapacity[char](8);
+    let* buf = List/withCapacity[char](8);
     while remaining > 0 {
       let d = remaining % 10;
       let c = (d + 48) as u8 as char;
@@ -148,7 +148,7 @@ impl Show for i64 {
     // Which I guess is technically 'simd' too
     // Why did inference break here??
     let rev = buf.*.reversed();
-    string::wrapList(rev)
+    string/wrapList(rev)
   }
 }
 
@@ -175,7 +175,7 @@ impl Show for u64 {
     if self == 0 return("0");
 
     let mut remaining: u64 = self;
-    let* buf = List::withCapacity[char](8);
+    let* buf = List/withCapacity[char](8);
     while remaining > 0 {
       let d = remaining % 10;
       let c = (d + 48) as u8 as char;
@@ -184,7 +184,7 @@ impl Show for u64 {
     };
 
     let rev = buf.*.reversed();
-    string::wrapList(rev)
+    string/wrapList(rev)
   }
 }
 

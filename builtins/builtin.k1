@@ -35,7 +35,7 @@ ability Show {
 
 // TODO: a harness main that sets up the allocator
 // fn main(): i32 {
-//   let allocator = Allocator::initDefault();
+//   let allocator = Allocator/initDefault();
 //   
 // }
 
@@ -43,7 +43,6 @@ ability Show {
 namespace libc {
   extern(exit) fn exit(code: i32): never
 
-  extern(printf) fn printfString(formatStr: Pointer, len: i32, cString: Pointer): i32
   extern(write)  fn write(fileNo: i32, data: Pointer, count: u64, offset: u64): u64
   extern(memcpy) fn memcpy(dst: Pointer, src: Pointer, count: u64): Pointer
   extern(memset) fn memset(src: Pointer, value: u32, count: u64): Pointer

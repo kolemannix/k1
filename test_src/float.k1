@@ -29,9 +29,9 @@ fn main(): int {
   assert(5.0 % 2.0 == 1.0);
 
   // TODO: Special values
-  // assert(1.0/0.0 is f64::INFINITY);
-  // assert(-1.0/0.0 is f64::NEG_INFINITY);
-  // assert(0.0/0.0 is f64::NaN);
+  // assert(1.0/0.0 is f64/INFINITY);
+  // assert(-1.0/0.0 is f64/NEG_INFINITY);
+  // assert(0.0/0.0 is f64/NaN);
 
   // TODO: Scientific notation seems important
   // TODO: Exponentiation operations

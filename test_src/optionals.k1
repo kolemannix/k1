@@ -10,11 +10,11 @@ fn testBasics(): int {
     assert(x);
   };
 
-  assertMsg("a", Opt::hasValue[bool](b));
+  assertMsg("a", Opt/hasValue[bool](b));
   let c: int? = .None;
   assertMsg("b", not c.hasValue());
 
-  assertMsg("c", types::typeId[Point.y.Some.value]() == types::typeId[int]());
+  assertMsg("c", types/typeId[Point.y.Some.value]() == types/typeId[int]());
 
   0
 }

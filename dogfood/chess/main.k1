@@ -51,7 +51,7 @@ fn dump(board: List[Square]): unit {
 }
 
 fn startPos(): List[Square] {
-  let board = List::filled[Square](64, .Blank);
+  let board = List/filled[Square](64, .Blank);
   board.set(0, .Rook);
   board.set(1, .Knight);
   board.set(2, .Bishop);

@@ -23,7 +23,7 @@ use crate::parse::{
     NamespacedIdentifier, NumericWidth, ParsedAbilityId, ParsedAbilityImplId, ParsedConstantId,
     ParsedExpressionId, ParsedFunctionId, ParsedId, ParsedLoopExpr, ParsedNamespaceId,
     ParsedPattern, ParsedPatternId, ParsedTypeDefnId, ParsedTypeExpression, ParsedTypeExpressionId,
-    ParsedUnaryOpKind, ParsedWhileExpr, Sources,
+    ParsedUnaryOpKind, ParsedUseId, ParsedWhileExpr, Sources,
 };
 use crate::parse::{
     Block, FnCall, Identifier, Literal, ParsedExpression, ParsedModule, ParsedStmt,
@@ -1311,6 +1311,12 @@ pub struct Symbol {
     pub identifier: Identifier,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum UseStatus {
+    Unresolved,
+    Resolved(UseableSymbol),
+}
+
 pub struct TypedModule {
     pub ast: ParsedModule,
     functions: Vec<TypedFunction>,
@@ -1325,6 +1331,13 @@ pub struct TypedModule {
     pub namespace_ast_mappings: HashMap<ParsedNamespaceId, NamespaceId>,
     pub function_ast_mappings: HashMap<ParsedFunctionId, FunctionId>,
     pub ability_impl_ast_mappings: HashMap<ParsedAbilityImplId, AbilityImplId>,
+    /// We don't know about functions during the type discovery phase, so a 'use'
+    /// that targets a function could miss. Rather than make the user
+    /// specify 'use type' vs 'use fn', etc, we just keep track of
+    /// whether a 'use' ever hits. If a use never hits, we'll report
+    /// an error after the last phase where handle them, which should be
+    /// function declarations
+    pub use_statuses: HashMap<ParsedUseId, UseStatus>,
     pub debug_level_stack: Vec<log::LevelFilter>,
     pub functions_pending_body_specialization: Vec<FunctionId>,
 }
@@ -1359,7 +1372,6 @@ impl TypedModule {
         let scopes = Scopes::make();
         let namespaces = Namespaces { namespaces: Vec::new() };
         TypedModule {
-            ast: parsed_module,
             functions: Vec::new(),
             variables: Variables::default(),
             types,
@@ -1369,11 +1381,13 @@ impl TypedModule {
             namespaces,
             abilities: Vec::new(),
             ability_impls: Vec::new(),
-            namespace_ast_mappings: HashMap::new(),
-            function_ast_mappings: HashMap::new(),
+            namespace_ast_mappings: HashMap::with_capacity(parsed_module.namespaces.len() * 2),
+            function_ast_mappings: HashMap::with_capacity(parsed_module.functions.len() * 2),
             ability_impl_ast_mappings: HashMap::new(),
+            use_statuses: HashMap::new(),
             debug_level_stack: vec![log::max_level()],
             functions_pending_body_specialization: vec![],
+            ast: parsed_module,
         }
     }
 
@@ -2106,7 +2120,7 @@ impl TypedModule {
             &self.namespaces,
             &self.ast.identifiers,
         )? {
-            Some(type_id) => {
+            Some((type_id, _)) => {
                 if has_type_params {
                     let mut evaled_type_params: Vec<TypeId> =
                         Vec::with_capacity(ty_app.params.len());
@@ -2480,7 +2494,7 @@ impl TypedModule {
         &self,
         pat_expr: ParsedPatternId,
         target_type_id: TypeId,
-        scope_id: ScopeId,
+        _scope_id: ScopeId,
     ) -> TyperResult<TypedPattern> {
         let parsed_pattern_expr = self.ast.patterns.get_pattern(pat_expr);
         match parsed_pattern_expr {
@@ -2507,7 +2521,6 @@ impl TypedModule {
                         match self.eval_numeric_value(
                             &num_lit.text,
                             num_lit.span,
-                            scope_id,
                             Some(target_type_id),
                         )? {
                             TypedExpr::Integer(value) => match self.types.get(target_type_id) {
@@ -2585,7 +2598,7 @@ impl TypedModule {
                             enum_pattern.span,
                         ))?;
                         let payload_pattern =
-                            self.eval_pattern(*payload_expr, payload_type_id, scope_id)?;
+                            self.eval_pattern(*payload_expr, payload_type_id, _scope_id)?;
                         Some(Box::new(payload_pattern))
                     }
                 };
@@ -2626,7 +2639,7 @@ impl TypedModule {
                         )?;
                     let field_type_id = expected_field.type_id;
                     let field_pattern =
-                        self.eval_pattern(*field_parsed_pattern_id, field_type_id, scope_id)?;
+                        self.eval_pattern(*field_parsed_pattern_id, field_type_id, _scope_id)?;
                     fields.push(TypedStructPatternField {
                         name: *field_name,
                         pattern: field_pattern,
@@ -2851,7 +2864,7 @@ impl TypedModule {
             (exp, act) => {
                 // Resolve type variables
                 if let Type::TypeVariable(expected_type_var) = exp {
-                    if let Some(expected_resolved) =
+                    if let Some((expected_resolved, _)) =
                         self.scopes.find_type(scope_id, expected_type_var.name)
                     {
                         // We will recursively just resolve to the same type variable without this check
@@ -2875,7 +2888,7 @@ impl TypedModule {
                     }
                 }
                 if let Type::TypeVariable(actual_type_var) = act {
-                    if let Some(actual_resolved) =
+                    if let Some((actual_resolved, _)) =
                         self.scopes.find_type(scope_id, actual_type_var.name)
                     {
                         // We will recursively just resolve to the same type variable without this check
@@ -2904,10 +2917,9 @@ impl TypedModule {
         let parsed_constant = self.ast.get_constant(parsed_constant_id);
         let constant_name = parsed_constant.name;
         let constant_span = parsed_constant.span;
-        let root_scope_id = self.scopes.get_root_scope_id();
         let expr = match self.ast.expressions.get(parsed_constant.value_expr) {
             ParsedExpression::Literal(Literal::Numeric(integer)) => {
-                self.eval_numeric_value(&integer.text, integer.span, root_scope_id, Some(type_id))?
+                self.eval_numeric_value(&integer.text, integer.span, Some(type_id))?
             }
             ParsedExpression::Literal(Literal::Bool(b, span)) => TypedExpr::Bool(*b, *span),
             ParsedExpression::Literal(Literal::Char(c, span)) => TypedExpr::Char(*c, *span),
@@ -2922,12 +2934,12 @@ impl TypedModule {
             name: constant_name,
             type_id,
             is_mutable: false,
-            owner_scope: root_scope_id,
+            owner_scope: scope_id,
             is_context: false,
             is_global: true,
         });
         self.constants.push(Constant { variable_id, expr, ty: type_id, span: constant_span });
-        self.scopes.add_variable(root_scope_id, constant_name, variable_id);
+        self.scopes.add_variable(scope_id, constant_name, variable_id);
         Ok(variable_id)
     }
 
@@ -3005,7 +3017,6 @@ impl TypedModule {
         &self,
         parsed_text: &str,
         span: SpanId,
-        _scope_id: ScopeId,
         expected_type_id: Option<TypeId>,
     ) -> TyperResult<TypedExpr> {
         if parsed_text.contains('.') {
@@ -3762,7 +3773,7 @@ impl TypedModule {
                 Ok(TypedExpr::Char(*byte, *span))
             }
             ParsedExpression::Literal(Literal::Numeric(int)) => {
-                self.eval_numeric_value(&int.text, int.span, scope_id, expected_type)
+                self.eval_numeric_value(&int.text, int.span, expected_type)
             }
             ParsedExpression::Literal(Literal::Bool(b, span)) => {
                 let expr = TypedExpr::Bool(*b, *span);
@@ -6108,7 +6119,7 @@ impl TypedModule {
         let ParsedExpression::Variable(v) = self.ast.expressions.get(base_expr) else {
             return Ok(None);
         };
-        let Some(base_type_in_scope) = self.scopes.find_type_namespaced(
+        let Some((base_type_in_scope, _)) = self.scopes.find_type_namespaced(
             scope,
             &v.name,
             &self.namespaces,
@@ -7191,8 +7202,32 @@ impl TypedModule {
         stmt: &ParsedStmt,
         scope_id: ScopeId,
         expected_type: Option<TypeId>,
-    ) -> TyperResult<TypedStmt> {
+    ) -> TyperResult<Option<TypedStmt>> {
         match stmt {
+            ParsedStmt::Use(use_stmt) => {
+                let parsed_use = self.ast.uses.get_use(use_stmt.use_id);
+                // These uses should always hit since we only do 1 pass inside function bodies, and
+                // at that point all symbols are resolvable
+                let Some(useable_symbol) = self.scopes.find_useable_symbol(
+                    scope_id,
+                    &parsed_use.target,
+                    &self.namespaces,
+                    &self.ast.identifiers,
+                )?
+                else {
+                    return failf!(
+                        parsed_use.target.span,
+                        "Could not find {}",
+                        self.name_of(parsed_use.target.name)
+                    );
+                };
+                self.scopes.add_use_binding(
+                    scope_id,
+                    useable_symbol,
+                    parsed_use.alias.unwrap_or(parsed_use.target.name),
+                );
+                Ok(None)
+            }
             ParsedStmt::ValDef(val_def) => {
                 let provided_type = match val_def.type_expr.as_ref() {
                     None => None,
@@ -7259,7 +7294,7 @@ impl TypedModule {
                 } else {
                     self.scopes.add_variable(scope_id, val_def.name, variable_id);
                 }
-                Ok(val_def_stmt)
+                Ok(Some(val_def_stmt))
             }
             ParsedStmt::Assignment(assignment) => {
                 let ParsedExpression::Variable(_) = self.ast.expressions.get(assignment.lhs) else {
@@ -7273,12 +7308,12 @@ impl TypedModule {
                 if let Err(msg) = self.check_types(lhs.get_type(), rhs.get_type(), scope_id) {
                     return failf!(assignment.span, "Invalid type for assignment: {}", msg,);
                 }
-                Ok(TypedStmt::Assignment(Box::new(Assignment {
+                Ok(Some(TypedStmt::Assignment(Box::new(Assignment {
                     destination: Box::new(lhs),
                     value: Box::new(rhs),
                     span: assignment.span,
                     kind: AssignmentKind::Value,
-                })))
+                }))))
             }
             ParsedStmt::SetRef(set_stmt) => {
                 let lhs = self.eval_expr(set_stmt.lhs, scope_id, None)?;
@@ -7294,16 +7329,16 @@ impl TypedModule {
                 if let Err(msg) = self.check_types(expected_rhs, rhs.get_type(), scope_id) {
                     return failf!(set_stmt.span, "Invalid type for assignment: {}", msg,);
                 }
-                Ok(TypedStmt::Assignment(Box::new(Assignment {
+                Ok(Some(TypedStmt::Assignment(Box::new(Assignment {
                     destination: Box::new(lhs),
                     value: Box::new(rhs),
                     span: set_stmt.span,
                     kind: AssignmentKind::Reference,
-                })))
+                }))))
             }
             ParsedStmt::LoneExpression(expression) => {
                 let expr = self.eval_expr(*expression, scope_id, expected_type)?;
-                Ok(TypedStmt::Expr(Box::new(expr)))
+                Ok(Some(TypedStmt::Expr(Box::new(expr))))
             }
         }
     }
@@ -7327,7 +7362,9 @@ impl TypedModule {
             let is_last = index == block.stmts.len() - 1;
             let expected_type = if is_last { expected_type } else { None };
 
-            let stmt = self.eval_stmt(stmt, scope_id, expected_type)?;
+            let Some(stmt) = self.eval_stmt(stmt, scope_id, expected_type)? else {
+                continue;
+            };
             last_stmt_is_divergent = stmt.is_divergent();
             last_expr_type = stmt.get_type();
 
@@ -7564,7 +7601,8 @@ impl TypedModule {
             let self_type_id = self
                 .scopes
                 .find_type(parent_scope_id, self_ident_id)
-                .expect("should be a Self type param inside ability defn");
+                .expect("should be a Self type param inside ability defn")
+                .0;
             type_params.push(FunctionTypeParam {
                 named_type: NamedType { name: self_ident_id, type_id: self_type_id },
                 ability_constraints: vec![],
@@ -7782,6 +7820,9 @@ impl TypedModule {
             );
         }
 
+        // FIXME: Don't add types by name for fn types, but instead update type resolution
+        //        to look for functions at a lower priority than proper types.
+        //        This was preventing 'use' from using functions without hacking the priority
         let type_added =
             self.scopes.add_type(parent_scope_id, parsed_function_name, function_type_id);
         if !type_added {
@@ -7988,7 +8029,7 @@ impl TypedModule {
                 }
                 Some((pending_ability, ability_scope)) => {
                     let line = self.ast.get_line_for_span_id(ability_name.span).unwrap();
-                    eprintln!(
+                    debug!(
                         "Recursing into pending ability {} from {}",
                         self.name_of(ability_name.name),
                         line.content
@@ -8165,6 +8206,7 @@ impl TypedModule {
 
     fn eval_definition(&mut self, def: ParsedId, scope_id: ScopeId) -> TyperResult<()> {
         match def {
+            ParsedId::Use(parsed_use_id) => self.eval_use_definition(scope_id, parsed_use_id),
             ParsedId::Namespace(namespace) => {
                 self.eval_namespace(namespace)?;
                 Ok(())
@@ -8194,12 +8236,48 @@ impl TypedModule {
                 Ok(())
             }
             other_id => {
-                panic!("Was asked to elet definition of a non-definition ast node {:?}", other_id)
+                panic!("Was asked to eval definition of a non-definition ast node {:?}", other_id)
             }
         }
     }
 
-    fn eval_namespace_type_defn_phase(
+    fn eval_use_definition(
+        &mut self,
+        scope_id: ScopeId,
+        parsed_use_id: ParsedUseId,
+    ) -> TyperResult<()> {
+        let parsed_use = self.ast.uses.get_use(parsed_use_id);
+        let status_entry = self.use_statuses.get(&parsed_use_id);
+        let is_fulfilled = match status_entry {
+            Some(UseStatus::Resolved(_)) => true,
+            _ => false,
+        };
+        if !is_fulfilled {
+            debug!(
+                "Handling unfulfilled use {}",
+                self.namespaced_identifier_to_string(&parsed_use.target)
+            );
+            if let Some(symbol) = self.scopes.find_useable_symbol(
+                scope_id,
+                &parsed_use.target,
+                &self.namespaces,
+                &self.ast.identifiers,
+            )? {
+                self.scopes.add_use_binding(
+                    scope_id,
+                    symbol,
+                    parsed_use.alias.unwrap_or(parsed_use.target.name),
+                );
+                self.use_statuses.insert(parsed_use_id, UseStatus::Resolved(symbol));
+            }
+        }
+        Ok(())
+    }
+
+    // Evaluate a namespace during the Type Declaration phase:
+    // This means finding all the type declarations in the namespace and registering their names,
+    // then recursing down into child namespaces and doing the same
+    fn eval_namespace_type_decl_phase(
         &mut self,
         parsed_namespace_id: ParsedNamespaceId,
     ) -> TyperResult<()> {
@@ -8208,6 +8286,9 @@ impl TypedModule {
         for &parsed_definition_id in
             self.ast.get_namespace(parsed_namespace_id).definitions.clone().iter()
         {
+            if let ParsedId::Use(parsed_use_id) = parsed_definition_id {
+                self.eval_use_definition(namespace_scope_id, parsed_use_id)?;
+            }
             if let ParsedId::TypeDefn(type_defn_id) = parsed_definition_id {
                 let parsed_type_defn = self.ast.get_type_defn(type_defn_id);
                 let name = parsed_type_defn.name;
@@ -8233,7 +8314,7 @@ impl TypedModule {
                 }
             }
             if let ParsedId::Namespace(namespace_id) = parsed_definition_id {
-                self.eval_namespace_type_defn_phase(namespace_id)?;
+                self.eval_namespace_type_decl_phase(namespace_id)?;
             }
         }
         Ok(())
@@ -8290,6 +8371,7 @@ impl TypedModule {
         namespace_id: NamespaceId,
     ) -> TyperResult<()> {
         match defn_id {
+            ParsedId::Use(_use_id) => Ok(()),
             ParsedId::Namespace(namespace_id) => {
                 self.eval_namespace_declaration_phase(namespace_id)?;
                 Ok(())
@@ -8376,6 +8458,7 @@ impl TypedModule {
 
                 let parent_scope = self.scopes.get_scope_mut(parent_scope_id);
                 if !parent_scope.add_namespace(name, namespace_id) {
+                    // nocommit: Allow extending namespaces
                     return failf!(span, "Namespace name {} is taken", self.name_of(name).blue());
                 }
 
@@ -8385,7 +8468,7 @@ impl TypedModule {
         }
     }
 
-    fn eval_namespace_ns_phase(
+    fn eval_namespace_namespace_phase(
         &mut self,
         parsed_namespace_id: ParsedNamespaceId,
         parent_scope: Option<ScopeId>,
@@ -8398,7 +8481,7 @@ impl TypedModule {
         for defn in &ast_namespace.definitions {
             if let ParsedId::Namespace(namespace_id) = defn {
                 let _namespace_id =
-                    self.eval_namespace_ns_phase(*namespace_id, Some(namespace_scope_id))?;
+                    self.eval_namespace_namespace_phase(*namespace_id, Some(namespace_scope_id))?;
             }
         }
         Ok(namespace_id)
@@ -8413,7 +8496,7 @@ impl TypedModule {
 
         // Namespace phase
         eprintln!(">> Phase 1 declare namespaces");
-        let ns_phase_res = self.eval_namespace_ns_phase(root_namespace_id, None);
+        let ns_phase_res = self.eval_namespace_namespace_phase(root_namespace_id, None);
         if let Err(e) = ns_phase_res {
             write_error(&mut err_writer, &self.ast.spans, &self.ast.sources, &e.message, e.span)?;
             self.errors.push(e);
@@ -8428,10 +8511,25 @@ impl TypedModule {
 
         // Pending Type declaration phase
         eprintln!(">> Phase 2 declare types");
-        let type_defn_result = self.eval_namespace_type_defn_phase(root_namespace_id);
+        let type_defn_result = self.eval_namespace_type_decl_phase(root_namespace_id);
         if let Err(e) = type_defn_result {
             write_error(&mut err_writer, &self.ast.spans, &self.ast.sources, &e.message, e.span)?;
             self.errors.push(e);
+        }
+        let unresolved_uses: Vec<_> = self
+            .use_statuses
+            .iter()
+            .filter(|use_status| matches!(use_status.1, UseStatus::Unresolved))
+            .collect();
+        if !unresolved_uses.is_empty() {
+            for (parsed_use_id, _status) in &unresolved_uses {
+                let parsed_use = self.ast.uses.get_use(**parsed_use_id);
+                self.errors.push(errf!(
+                    parsed_use.span,
+                    "Unresolved use of {}",
+                    self.name_of(parsed_use.target.name)
+                ))
+            }
         }
         if !self.errors.is_empty() {
             bail!("{} failed type definition phase with {} errors", self.name(), self.errors.len())
