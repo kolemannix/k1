@@ -8698,27 +8698,6 @@ impl TypedModule {
         }
     }
 
-    pub fn make_qualified_name(
-        &self,
-        scope: ScopeId,
-        name: Identifier,
-        delimiter: &str,
-        skip_root: bool,
-    ) -> String {
-        let starting_namespace = self.scopes.nearest_parent_namespace(scope);
-        let namespace_chain = self.namespaces.name_chain(starting_namespace);
-        let mut s = String::new();
-        for identifier in namespace_chain.iter() {
-            let ident_str = self.name_of(*identifier);
-            if !skip_root || ident_str != "_root" {
-                s.push_str(ident_str);
-                s.push_str(delimiter);
-            }
-        }
-        s.push_str(self.name_of(name));
-        s
-    }
-
     fn generate_constructors_for_type(
         &self,
         type_id: TypeId,
@@ -9098,6 +9077,40 @@ impl TypedModule {
     pub fn push_error(&mut self, e: TyperError) {
         self.write_error(&mut std::io::stderr(), &e).unwrap();
         self.errors.push(e);
+    }
+
+    pub fn write_qualified_name(
+        &self,
+        w: &mut impl std::io::Write,
+        scope: ScopeId,
+        name: Identifier,
+        delimiter: &str,
+        skip_root: bool,
+    ) {
+        let starting_namespace = self.scopes.nearest_parent_namespace(scope);
+        let namespace_chain = self.namespaces.name_chain(starting_namespace);
+        for identifier in namespace_chain.iter() {
+            let ident_str = self.name_of(*identifier);
+
+            let is_root = ident_str == "_root";
+            if !(skip_root && is_root) {
+                write!(w, "{ident_str}").unwrap();
+                write!(w, "{delimiter}").unwrap();
+            }
+        }
+        write!(w, "{}", self.name_of(name)).unwrap();
+    }
+
+    pub fn make_qualified_name(
+        &self,
+        scope: ScopeId,
+        name: Identifier,
+        delimiter: &str,
+        skip_root: bool,
+    ) -> String {
+        let mut buf = Vec::with_capacity(64);
+        self.write_qualified_name(&mut buf, scope, name, delimiter, skip_root);
+        String::from_utf8(buf).unwrap()
     }
 
     pub fn write_error(
