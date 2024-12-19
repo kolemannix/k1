@@ -1035,6 +1035,7 @@ struct SynthedVariable {
     pub variable_id: VariableId,
     pub defn_stmt: TypedStmt,
     pub variable_expr: TypedExpr,
+    #[allow(unused)]
     pub parsed_expr: ParsedExpressionId,
 }
 
@@ -2005,7 +2006,7 @@ impl TypedModule {
             panic_at_disco!("Expected TypeApplication")
         };
         let ty_app = ty_app.clone();
-        match self.name_of(ty_app.base_name.name) {
+        match self.name_of(ty_app.name.name) {
             "_struct_combine" => {
                 if ty_app.params.len() != 2 {
                     return failf!(ty_app.span, "Expected 2 type parameters for _struct_combine");
@@ -2117,12 +2118,8 @@ impl TypedModule {
             panic_at_disco!("Expected TypeApplication")
         };
 
-        let base_name = &ty_app.base_name;
+        let base_name = &ty_app.name;
         let name = base_name.name;
-        // if ty_app.base_name.namespaces.is_empty() && name == get_ident!(self, "never") {
-        //     return Ok(NEVER_TYPE_ID);
-        // }
-        let has_type_params = !ty_app.params.is_empty();
         match self.scopes.find_type_namespaced(
             scope_id,
             base_name,
@@ -2130,16 +2127,18 @@ impl TypedModule {
             &self.ast.identifiers,
         )? {
             Some((type_id, _)) => {
-                if has_type_params {
-                    let mut evaled_type_params: Vec<TypeId> =
-                        Vec::with_capacity(ty_app.params.len());
-                    let Type::Generic(_) = self.types.get(type_id) else {
+                if let Type::Generic(g) = self.types.get(type_id) {
+                    if ty_app.params.len() != g.params.len() {
                         return failf!(
                             ty_app.span,
-                            "Type '{}' does not take type parameters",
-                            self.name_of(ty_app.base_name.name)
+                            "Type {} expects {} type arguments, got {}",
+                            self.namespaced_identifier_to_string(&ty_app.name),
+                            g.params.len(),
+                            ty_app.params.len()
                         );
-                    };
+                    }
+                    let mut evaled_type_params: Vec<TypeId> =
+                        Vec::with_capacity(ty_app.params.len());
                     for parsed_param in ty_app.params.clone().iter() {
                         let param_type_id = self.eval_type_expr_defn(
                             parsed_param.type_expr,
@@ -9021,6 +9020,7 @@ impl TypedModule {
         qident!(self, span, ["Opt"], "get")
     }
 
+    #[allow(unused)]
     fn synth_type_of_expr(&mut self, expr: ParsedExpressionId) -> ParsedTypeExpressionId {
         let span = self.ast.expressions.get_span(expr);
         self.ast
