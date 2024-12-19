@@ -829,7 +829,7 @@ pub struct StructType {
 
 #[derive(Debug, Clone)]
 pub struct TypeApplication {
-    pub base_name: NamespacedIdentifier,
+    pub name: NamespacedIdentifier,
     pub params: Vec<NamedTypeArg>,
     pub span: SpanId,
 }
@@ -2180,7 +2180,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let (type_params, type_params_span) = self.parse_optional_type_args()?;
                 let span = self.extend_span_maybe(first.span, type_params_span);
                 Ok(Some(self.module.type_expressions.add(ParsedTypeExpression::TypeApplication(
-                    TypeApplication { base_name, params: type_params, span },
+                    TypeApplication { name: base_name, params: type_params, span },
                 ))))
             }
         } else if first.kind == K::OpenBrace {
@@ -3645,7 +3645,7 @@ impl ParsedModule {
                 f.write_str(" }")
             }
             ParsedTypeExpression::TypeApplication(tapp) => {
-                display_namespaced_identifier(f, &self.identifiers, &tapp.base_name, "::")?;
+                display_namespaced_identifier(f, &self.identifiers, &tapp.name, "::")?;
                 if !tapp.params.is_empty() {
                     f.write_str("[")?;
                     for tparam in tapp.params.iter() {
