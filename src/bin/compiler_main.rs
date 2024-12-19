@@ -7,7 +7,7 @@ use k1::typer::TypedModule;
 use k1::{compiler, gui};
 use log::info;
 
-fn main() {
+fn main() -> anyhow::Result<()> {
     env_logger::init();
     let args = Args::parse();
     info!("{:#?}", args);
@@ -98,4 +98,5 @@ fn main() {
 
     let mut gui = gui::Gui::init(module_handle.clone(), compile_sender, run_sender);
     gui.run_loop();
+    Ok(())
 }

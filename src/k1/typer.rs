@@ -1009,8 +1009,8 @@ impl TypedStmt {
 
 #[derive(Debug, Clone)]
 pub struct TyperError {
-    message: String,
-    span: SpanId,
+    pub message: String,
+    pub span: SpanId,
 }
 
 impl TyperError {
@@ -2119,9 +2119,9 @@ impl TypedModule {
 
         let base_name = &ty_app.base_name;
         let name = base_name.name;
-        if ty_app.base_name.namespaces.is_empty() && name == get_ident!(self, "never") {
-            return Ok(NEVER_TYPE_ID);
-        }
+        // if ty_app.base_name.namespaces.is_empty() && name == get_ident!(self, "never") {
+        //     return Ok(NEVER_TYPE_ID);
+        // }
         let has_type_params = !ty_app.params.is_empty();
         match self.scopes.find_type_namespaced(
             scope_id,
@@ -5692,7 +5692,7 @@ impl TypedModule {
                 )? {
                     // If this function is an ability definition, its not enough to return it.
                     // We need to ensure the type it was called with implements the ability,
-                    // and while we're at it we can return the function id of the actual specialized implementation
+                    // and while we're at it we can return the function id of the actual implementation
                     let function_ability_id = self.get_function(function_id).kind.ability_id();
                     if let Some(ability_id) = function_ability_id {
                         let base_expr = first_arg_expr.ok_or(make_error(
@@ -5705,18 +5705,20 @@ impl TypedModule {
                             }
                             MaybeTypedExpr::Typed(expr) => expr,
                         };
-                        let function_id = self.find_ability_implementation(
+                        let Some(function_id) = self.find_ability_implementation(
                             fn_call.name.name,
                             base_expr.get_type(),
                             Some(ability_id),
                             call_span,
-                        )?;
-                        let function_id = function_id.ok_or(errf!(
-                            call_span,
-                            "Type {} does not implement ability {}",
-                            self.type_id_to_string(base_expr.get_type()),
-                            self.name_of(fn_call.name.name)
-                        ))?;
+                        )?
+                        else {
+                            return failf!(
+                                call_span,
+                                "Type {} does not implement ability {}",
+                                self.type_id_to_string(base_expr.get_type()),
+                                self.name_of(fn_call.name.name)
+                            );
+                        };
                         Ok(Either::Right(Callee::make_static(function_id)))
                     } else {
                         Ok(Either::Right(Callee::make_static(function_id)))
@@ -5905,7 +5907,7 @@ impl TypedModule {
                     return make_fail_span("compilerLine() takes no arguments", call_span);
                 }
                 let span = self.ast.spans.get(fn_call.span);
-                let line = self.ast.sources.get_line_for_span(span).unwrap();
+                let line = self.ast.sources.get_line_for_span_start(span).unwrap();
                 let int_expr = TypedExpr::Integer(TypedIntegerExpr {
                     value: TypedIntegerValue::U64(line.line_number() as u64),
                     span: call_span,
@@ -6309,7 +6311,7 @@ impl TypedModule {
                     if is_source_loc {
                         let the_span = self.ast.spans.get(span);
                         let source = self.ast.sources.get_source(the_span.file_id);
-                        let line = source.get_line_for_span(the_span).unwrap();
+                        let line = source.get_line_for_span_start(the_span).unwrap();
                         let source_loc_expr = TypedExpr::Struct(Struct {
                             fields: vec![
                                 StructField {
@@ -8037,7 +8039,7 @@ impl TypedModule {
                     )
                 }
                 Some((pending_ability, ability_scope)) => {
-                    let line = self.ast.get_line_for_span_id(ability_name.span).unwrap();
+                    let (line, _) = self.ast.get_lines_for_span_id(ability_name.span).unwrap();
                     debug!(
                         "Recursing into pending ability {} from {}",
                         self.name_of(ability_name.name),
@@ -8062,8 +8064,6 @@ impl TypedModule {
         let target_type = self.eval_type_expr(parsed_ability_impl.target_type, scope_id)?;
         let ability_id = self
             .find_ability_or_evaluate(&NamespacedIdentifier::naked(ability_name, span), scope_id)?;
-        // FIXME: This searches from the root scope. I'm just not sure how we want to do ability scoping
-        //        This should be fixable easily once imports are implemented
 
         // Scoping / orphan / coherence: For now, let's globally allow only one implementation per (Ability, Target Type) pair
         // Check for existing implementation

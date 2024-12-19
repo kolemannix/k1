@@ -1191,8 +1191,14 @@ impl Sources {
         &self.sources[file_id as usize]
     }
 
-    pub fn get_line_for_span(&self, span: Span) -> Option<&Line> {
-        self.sources[span.file_id as usize].get_line_for_span(span)
+    pub fn get_line_for_span_start(&self, span: Span) -> Option<&Line> {
+        self.sources[span.file_id as usize].get_line_for_span_start(span)
+    }
+
+    pub fn get_lines_for_span(&self, span: Span) -> Option<(&Line, &Line)> {
+        let start = self.sources[span.file_id as usize].get_line_for_offset(span.start)?;
+        let end = self.sources[span.file_id as usize].get_line_for_offset(span.end())?;
+        Some((start, end))
     }
 
     pub fn get_span_content(&self, span: Span) -> &str {
@@ -1377,8 +1383,8 @@ impl ParsedModule {
         }
     }
 
-    pub fn get_line_for_span_id(&self, span_id: SpanId) -> Option<&Line> {
-        self.sources.get_line_for_span(self.spans.get(span_id))
+    pub fn get_lines_for_span_id(&self, span_id: SpanId) -> Option<(&Line, &Line)> {
+        self.sources.get_lines_for_span(self.spans.get(span_id))
     }
 
     pub fn get_span_for_id(&self, parsed_id: ParsedId) -> SpanId {
@@ -1400,22 +1406,34 @@ impl ParsedModule {
 pub type ParseResult<A> = anyhow::Result<A, ParseError>;
 
 #[derive(Debug, Clone)]
-pub struct ParseError {
-    pub expected: String,
-    pub token: Token,
-    pub cause: Option<Box<ParseError>>,
-    pub lex_error: Option<LexError>,
+pub enum ParseError {
+    Parse { message: String, token: Token, cause: Option<Box<ParseError>> },
+    Lex(LexError),
 }
 
 impl ParseError {
     pub fn span(&self) -> SpanId {
-        self.token.span
+        match self {
+            ParseError::Lex(lex_error) => lex_error.span,
+            ParseError::Parse { token, .. } => token.span,
+        }
     }
 }
 
 impl Display for ParseError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("{:?}", self))
+        match self {
+            ParseError::Lex(lex_error) => {
+                write!(f, "LexError: {}", lex_error.message)
+            }
+            ParseError::Parse { message, token, cause } => {
+                if let Some(cause) = &cause {
+                    cause.fmt(f)?;
+                    writeln!(f)?;
+                }
+                write!(f, "ParseError: {}, at {}", message, token.kind)
+            }
+        }
     }
 }
 impl std::error::Error for ParseError {}
@@ -1427,45 +1445,39 @@ pub fn get_span_source_line<'sources>(
 ) -> &'sources Line {
     let span = spans.get(span_id);
     let source = sources.source_by_span(span);
-    let Some(line) = source.get_line_for_span(span) else {
+    let Some(line) = source.get_line_for_span_start(span) else {
         panic!("Error: could not find line for span {:?}", span)
     };
     line
 }
 
 pub fn print_error(module: &ParsedModule, parse_error: &ParseError) {
-    if let Some(lex_error) = parse_error.lex_error.as_ref() {
-        let source = module.sources.get_source(lex_error.file_id);
-        let line = source.get_line(lex_error.line_index as usize).unwrap();
-
-        eprintln!(
-            "Lexing error at {}/{}:{}\n{}\n{}",
-            source.directory,
-            source.filename,
-            lex_error.line_index + 1,
-            line.content,
-            lex_error.msg
-        );
-        return;
-    }
-    let span = parse_error.span();
-
-    if let Some(cause) = &parse_error.cause {
-        print_error(module, cause);
-    }
-    let got_str = if parse_error.token.kind == K::Ident {
-        let span = module.spans.get(parse_error.token.span);
-        let source = module.sources.source_by_span(span);
-        Parser::tok_chars(&module.spans, source, parse_error.token).to_string()
-    } else {
-        parse_error.token.kind.to_string()
-    };
-
-    use colored::*;
-
     let mut stderr = std::io::stderr();
-    write_error_location(&mut stderr, &module.spans, &module.sources, span).unwrap();
-    eprintln!("\tExpected '{}', but got '{}'\n", parse_error.expected.blue(), got_str,);
+
+    match parse_error {
+        ParseError::Lex(lex_error) => {
+            write_error_location(&mut stderr, &module.spans, &module.sources, lex_error.span)
+                .unwrap();
+            eprintln!("{}", lex_error.message);
+        }
+        ParseError::Parse { message, token, cause } => {
+            let span = parse_error.span();
+
+            if let Some(cause) = cause {
+                print_error(module, cause);
+            }
+            let got_str = if token.kind == K::Ident {
+                let span = module.spans.get(token.span);
+                let source = module.sources.source_by_span(span);
+                Parser::tok_chars(&module.spans, source, *token).to_string()
+            } else {
+                token.kind.to_string()
+            };
+
+            write_error_location(&mut stderr, &module.spans, &module.sources, span).unwrap();
+            eprintln!("{message} at '{}'\n", got_str);
+        }
+    }
 }
 
 pub fn write_error_location(
@@ -1476,7 +1488,7 @@ pub fn write_error_location(
 ) -> std::io::Result<()> {
     let span = spans.get(span_id);
     let source = sources.source_by_span(span);
-    let Some(line) = source.get_line_for_span(span) else {
+    let Some(line) = source.get_line_for_span_start(span) else {
         writeln!(w, "Error: could not find line for span {:?}", span)?;
         return Ok(());
     };
@@ -1567,7 +1579,11 @@ impl Source {
         self.lines.get(line_index)
     }
 
-    pub fn get_line_for_span(&self, span: Span) -> Option<&Line> {
+    pub fn get_line_for_offset(&self, offset: u32) -> Option<&Line> {
+        self.lines.iter().find(|line| (line.start_char..=line.end_char()).contains(&offset))
+    }
+
+    pub fn get_line_for_span_start(&self, span: Span) -> Option<&Line> {
         self.lines.iter().find(|line| {
             let line_end = line.end_char();
             line.start_char <= span.start && line_end >= span.start
@@ -1597,11 +1613,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn expect<A>(what: &str, current: Token, value: ParseResult<Option<A>>) -> ParseResult<A> {
         match value {
-            Ok(None) => Err(ParseError {
-                expected: what.to_string(),
+            Ok(None) => Err(ParseError::Parse {
+                message: format!("Expected {what}"),
                 token: current,
                 cause: None,
-                lex_error: None,
             }),
             Ok(Some(a)) => Ok(a),
             Err(e) => Err(e),
@@ -1654,7 +1669,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 if next.kind == K::Comma {
                     self.advance();
                 } else if next.kind != K::CloseBrace {
-                    return Err(Parser::error("comma or close brace", next));
+                    return Err(Parser::error_expected("comma or close brace", next));
                 }
             }
             let end = self.expect_eat_token(K::CloseBrace)?;
@@ -1697,7 +1712,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 Ok(pattern_id)
             }
         } else {
-            Err(Parser::error("Expected pattern expression", self.peek()))
+            Err(Parser::error_expected("pattern expression", self.peek()))
         }
     }
 }
@@ -1776,16 +1791,19 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         }
     }
 
-    fn error(expected: impl AsRef<str>, token: Token) -> ParseError {
-        ParseError { expected: expected.as_ref().to_owned(), token, cause: None, lex_error: None }
+    fn error(message: impl AsRef<str>, token: Token) -> ParseError {
+        ParseError::Parse { message: message.as_ref().to_string(), token, cause: None }
     }
 
-    fn error_cause(expected: impl AsRef<str>, token: Token, cause: ParseError) -> ParseError {
-        ParseError {
-            expected: expected.as_ref().to_owned(),
+    fn error_expected(expected: impl AsRef<str>, token: Token) -> ParseError {
+        ParseError::Parse { message: format!("Expected {}", expected.as_ref()), token, cause: None }
+    }
+
+    fn error_cause(message: impl AsRef<str>, token: Token, cause: ParseError) -> ParseError {
+        ParseError::Parse {
+            message: message.as_ref().to_owned(),
             token,
             cause: Some(Box::new(cause)),
-            lex_error: None,
         }
     }
 
@@ -1971,7 +1989,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     let numeric = Literal::Numeric(ParsedNumericLiteral { text: s, span });
                     Ok(Some(self.add_expression(ParsedExpression::Literal(numeric))))
                 } else {
-                    Err(Parser::error("number following '-'", second))
+                    Err(Parser::error_expected("number following '-'", second))
                 }
             }
             (K::Ident, _) => {
@@ -2210,7 +2228,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
             let tag = self.peek();
             if tag.kind != K::Ident {
-                return Err(Parser::error("Identifier for enum variant", tag));
+                return Err(Parser::error_expected("Identifier for enum variant", tag));
             }
             let tag_name = self.intern_ident_token(tag);
             self.advance();
@@ -2231,7 +2249,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             first = false;
         }
         let last_variant_span =
-            variants.last().ok_or(Parser::error("At least one variant", keyword))?.span;
+            variants.last().ok_or(Parser::error_expected("At least one variant", keyword))?.span;
         let span = self.extend_span(keyword.span, last_variant_span);
         Ok(ParsedEnumType { variants, span })
     }
@@ -2252,7 +2270,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             }
             Ok(None) => {
                 if named {
-                    Err(Parser::error("expression", self.peek()))
+                    Err(Parser::error_expected("expression", self.peek()))
                 } else {
                     Ok(None)
                 }
@@ -2334,7 +2352,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     K::Ampersand => self.tokens.next(),
                     K::Asterisk => self.tokens.next(),
                     _k => {
-                        return Err(Parser::error(
+                        return Err(Parser::error_expected(
                             "Field name, identifiers or referencing operator",
                             self.peek(),
                         ))
@@ -2594,7 +2612,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 if next.kind == K::Comma {
                     self.advance();
                 } else if next.kind != K::CloseBrace {
-                    return Err(Parser::error("comma or close brace", next));
+                    return Err(Parser::error_expected("comma or close brace", next));
                 }
             }
             let close = self.expect_eat_token(K::CloseBrace)?;
@@ -2654,7 +2672,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             self.advance();
 
             if self.token_chars(second).chars().next().unwrap().is_lowercase() {
-                return Err(Parser::error("Uppercase tag name", second));
+                return Err(Parser::error("Variant names must be uppercase", second));
             }
             let tag_name = self.intern_ident_token(second);
 
@@ -2709,7 +2727,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 Ok(Some(self.add_expression(ParsedExpression::Struct(struct_value))))
             } else {
                 match self.parse_block()? {
-                    None => Err(Parser::error("block", self.peek())),
+                    None => Err(Parser::error_expected("block", self.peek())),
                     Some(block) => Ok(Some(self.add_expression(ParsedExpression::Block(block)))),
                 }
             }
@@ -2734,7 +2752,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             if directives.is_empty() {
                 Ok(None)
             } else {
-                Err(Parser::error("expression following directives", first))
+                Err(Parser::error_expected("expression following directives", first))
             }
         }?;
         if let Some(expression_id) = resulting_expression {
@@ -3005,7 +3023,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     let found_delim = self.maybe_consume_next(delim);
                     if found_delim.is_none() {
                         trace!("eat_delimited missing delimiter.");
-                        break Err(Parser::error(delim, self.peek()));
+                        break Err(Parser::error_expected(delim, self.peek()));
                     }
                 }
                 Err(e) => {
@@ -3419,7 +3437,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         }
     }
 
-    pub fn parse_module(&mut self) -> ParseResult<()> {
+    pub fn parse_module(&mut self) {
         let root_namespace_id = if self.module.namespaces.is_empty() {
             let name = self.module.identifiers.intern("_root");
             self.module.add_namespace(ParsedNamespace {
@@ -3437,6 +3455,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             match self.parse_definition() {
                 Ok(Some(def)) => new_definitions.push(def),
                 Err(err) => {
+                    print_error(self.module, &err);
                     self.module.errors.push(err);
                     // For now, break on first parse error
                     break;
@@ -3444,20 +3463,15 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 Ok(None) => break,
             }
         }
-        if self.tokens.peek().kind != K::Eof {
-            if self.module.errors.is_empty() {
-                let err =
-                    Parser::error("End of file or start of new definition", self.tokens.peek());
-                self.module.errors.push(err.clone());
-                return Err(err);
-            } else {
-                return Err(self.module.errors.last().unwrap().clone());
-            }
+        if self.tokens.peek().kind != K::Eof && self.module.errors.is_empty() {
+            let err = Parser::error_expected(
+                "End of file or start of new definition",
+                self.tokens.peek(),
+            );
+            self.module.errors.push(err.clone());
         }
 
         self.module.get_namespace_mut(root_namespace_id).definitions.extend(new_definitions);
-
-        Ok(())
     }
 }
 
@@ -3710,12 +3724,7 @@ pub fn lex_text(module: &mut ParsedModule, source: Source) -> ParseResult<Vec<To
     module.sources.insert(source);
     let text = &module.sources.get_source(file_id).content;
     let mut lexer = Lexer::make(text, &mut module.spans, file_id);
-    let tokens = lexer.run().map_err(|lex_error| ParseError {
-        token: EOF_TOKEN,
-        cause: None,
-        lex_error: Some(lex_error),
-        expected: "lexing to succeed".to_string(),
-    })?;
+    let tokens = lexer.run().map_err(ParseError::Lex)?;
 
     let token_vec: Vec<Token> =
         tokens.into_iter().filter(|token| token.kind != K::LineComment).collect();
@@ -3731,10 +3740,10 @@ pub fn test_parse_module(source: Source) -> ParseResult<ParsedModule> {
     let token_vec = lex_text(&mut module, source)?;
     let mut parser = Parser::make(&token_vec, file_id, &mut module);
 
-    let result = parser.parse_module();
-    if let Err(e) = result {
-        print_error(&module, &e);
-        Err(e)
+    parser.parse_module();
+    if let Some(e) = module.errors.first() {
+        print_error(&module, e);
+        Err(e.clone())
     } else {
         Ok(module)
     }

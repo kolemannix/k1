@@ -95,9 +95,9 @@ macro_rules! static_assert_size {
     };
 }
 
-pub struct CompileModuleError {
-    pub parsed_module: Option<Box<ParsedModule>>,
-    pub module: Option<Box<TypedModule>>,
+pub enum CompileModuleError {
+    ParseFailure(Box<ParsedModule>),
+    TyperFailure(Box<TypedModule>),
 }
 
 /// If `args.file` points to a directory,
@@ -109,7 +109,10 @@ pub struct CompileModuleError {
 /// - module name is the name of the file.
 pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileModuleError> {
     let start_parse = std::time::Instant::now();
-    let src_path = &args.file().canonicalize().unwrap();
+    let src_path = &args
+        .file()
+        .canonicalize()
+        .unwrap_or_else(|_| panic!("Failed to load source path: {:?}", args.file()));
     let is_dir = src_path.is_dir();
     let (src_dir, module_name) = if is_dir {
         let src_dir = src_path.canonicalize().unwrap();
@@ -120,7 +123,11 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
         (src_dir, src_path.file_stem().unwrap().to_str().unwrap().to_string())
     };
 
-    let src_filter = if !is_dir { Some(|p: &Path| *p == *src_path) } else { None };
+    let src_filter: Box<dyn Fn(&Path) -> bool> = if !is_dir {
+        Box::new(|p: &Path| *p == *src_path)
+    } else {
+        Box::new(|p: &Path| p.extension().is_some_and(|ext| ext == "k1"))
+    };
 
     let use_std = !args.no_std;
 
@@ -130,17 +137,20 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
         let mut ents = fs::read_dir(src_dir)
             .unwrap()
             .filter_map(|item| item.ok())
-            .filter(|item| src_filter.as_ref().map_or(true, |filter| filter(&item.path())))
+            .filter(|item| src_filter(&item.path()))
             .collect::<Vec<_>>();
         ents.sort_by_key(|ent1| ent1.file_name());
         ents
     };
-    let mut parse_errors = Vec::new();
 
     let mut parse_file = |path: &Path| {
-        let content = fs::read_to_string(path).unwrap();
+        let content = fs::read_to_string(path)
+            .unwrap_or_else(|_| panic!("Failed to open file to parse: {:?}", path));
         let name = path.file_name().unwrap();
-        eprintln!("Parsing {}", name.to_string_lossy());
+        if name == "main.k1" {
+            dbg!(&content);
+        }
+        info!("Parsing {}", name.to_string_lossy());
         let file_id = parsed_module.sources.next_file_id();
         let source = Source::make(
             file_id,
@@ -152,47 +162,51 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
             Ok(token_vec) => token_vec,
             Err(e) => {
                 print_error(&parsed_module, &e);
-                parse_errors.push(e);
+                parsed_module.errors.push(e);
                 return;
             }
         };
         let mut parser = parse::Parser::make(&token_vec, file_id, &mut parsed_module);
 
-        let result = parser.parse_module();
-        if let Err(e) = result {
-            print_error(&parsed_module, &e);
-            parse_errors.push(e);
-        }
+        parser.parse_module();
     };
 
-    parse_file(Path::new("builtins/builtin.k1"));
+    let stdlib_dir = std::env::var("K1_LIB_DIR").unwrap_or("stdlib".to_string());
+    let stdlib_dir = Path::new(&stdlib_dir);
+
+    let builtin_src = "builtin.k1";
+
+    parse_file(&stdlib_dir.join(Path::new(builtin_src)));
+
+    let stdlib_files = [
+        "core.k1",
+        "buffer.k1",
+        "opt.k1",
+        "list.k1",
+        "string.k1",
+        "types.k1",
+        "string_builder.k1",
+        "bitwise.k1",
+        "allocator.k1",
+    ];
 
     if use_std {
-        parse_file(Path::new("builtins/core.k1"));
-        parse_file(Path::new("builtins/buffer.k1"));
-        parse_file(Path::new("builtins/opt.k1"));
-        parse_file(Path::new("builtins/list.k1"));
-        parse_file(Path::new("builtins/string.k1"));
-        parse_file(Path::new("builtins/types.k1"));
-        parse_file(Path::new("builtins/string_builder.k1"));
-        parse_file(Path::new("builtins/bitwise.k1"));
-        parse_file(Path::new("builtins/allocator.k1"));
+        for f in stdlib_files {
+            parse_file(&stdlib_dir.join(Path::new(f)));
+        }
     }
 
     for f in dir_entries.iter() {
         parse_file(&f.path());
     }
 
-    if !parse_errors.is_empty() {
-        return Err(CompileModuleError {
-            parsed_module: Some(Box::new(parsed_module)),
-            module: None,
-        });
-    }
-
     let type_start = Instant::now();
     let parsing_elapsed = type_start.duration_since(start_parse);
     info!("parsing took {}ms", parsing_elapsed.as_millis());
+
+    if !parsed_module.errors.is_empty() {
+        return Err(CompileModuleError::ParseFailure(Box::new(parsed_module)));
+    }
 
     let mut typed_module = TypedModule::new(parsed_module);
     if let Err(e) = typed_module.run() {
@@ -200,10 +214,7 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
             println!("{}", typed_module);
         }
         eprintln!("{}", e);
-        return Err(CompileModuleError {
-            parsed_module: None,
-            module: Some(Box::new(typed_module)),
-        });
+        return Err(CompileModuleError::TyperFailure(Box::new(typed_module)));
     };
     let typing_elapsed = type_start.elapsed();
     if args.dump_module {

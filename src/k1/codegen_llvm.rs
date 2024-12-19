@@ -659,7 +659,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     fn set_debug_location(&self, span: SpanId) -> DILocation<'ctx> {
         let span = self.module.ast.spans.get(span);
-        let line = self.module.ast.sources.get_line_for_span(span).expect("No line for span");
+        let line = self.module.ast.sources.get_line_for_span_start(span).expect("No line for span");
         let column = span.start - line.start_char;
         let locn = self.debug.debug_builder.create_debug_location(
             self.ctx,
@@ -678,7 +678,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     fn get_line_number(&self, span: SpanId) -> u32 {
         let span = self.module.ast.spans.get(span);
-        let line = self.module.ast.sources.get_line_for_span(span).expect("No line for span");
+        let line = self.module.ast.sources.get_line_for_span_start(span).expect("No line for span");
         line.line_index + 1
     }
 
@@ -2515,7 +2515,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             &param_types.iter().map(|param_type| param_type.debug_type()).collect::<Vec<_>>();
         let span_id = self.module.ast.get_span_for_id(function.parsed_id);
         let function_file_id = self.module.ast.spans.get(span_id).file_id;
-        let function_line = self.module.ast.get_line_for_span_id(span_id).expect("line for span");
+        let (function_line, _) =
+            self.module.ast.get_lines_for_span_id(span_id).expect("line for span");
         let function_line_number = function_line.line_number();
         let function_scope_start_line_number = function_line_number;
         let function_file = self.debug.files.get(&function_file_id).unwrap();
@@ -2558,8 +2559,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let function_line_number = self
             .module
             .ast
-            .get_line_for_span_id(self.module.ast.get_span_for_id(function.parsed_id))
+            .get_lines_for_span_id(self.module.ast.get_span_for_id(function.parsed_id))
             .expect("line for span")
+            .1
             .line_number();
 
         let maybe_starting_block = self.builder.get_insert_block();
