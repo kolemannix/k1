@@ -12,9 +12,9 @@ pub const EOF_TOKEN: Token = Token { span: SpanId::NONE, kind: TokenKind::Eof, f
 
 #[derive(Debug, Clone)]
 pub struct LexError {
-    pub msg: String,
-    pub line_index: u32,
+    pub message: String,
     pub file_id: FileId,
+    pub span: SpanId,
 }
 
 pub type LexResult<A> = anyhow::Result<A, LexError>;
@@ -64,7 +64,7 @@ impl Default for Spans {
 
 impl Display for LexError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.write_fmt(format_args!("LexError at line {}: {}", self.line_index, self.msg))
+        write!(f, "LexError in file {}: {}", self.file_id, self.message)
     }
 }
 impl std::error::Error for LexError {}
@@ -456,6 +456,7 @@ pub struct Span {
 impl Span {
     pub const NONE: Span = Span { file_id: 0, start: 0, len: 0 };
 
+    #[inline]
     pub fn end(&self) -> u32 {
         self.start + self.len
     }
@@ -505,6 +506,15 @@ impl Token {
     }
 }
 
+macro_rules! errf {
+    ($self:expr, $pos:expr, $($format_args:expr),* $(,)?) => {
+        {
+            let s: String = format!($($format_args),*);
+            Lexer::make_error($self, s, $pos, 1)
+        }
+    };
+}
+
 pub struct Lexer<'a, 'spans> {
     pub file_id: FileId,
     content: Chars<'a>,
@@ -522,8 +532,9 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
         Lexer { file_id, content: input.chars(), spans, line_index: 0, pos: 0 }
     }
 
-    fn err(&self, msg: impl Into<String>) -> LexError {
-        LexError { msg: msg.into(), line_index: self.line_index, file_id: self.file_id }
+    fn make_error(&mut self, message: String, start: u32, len: u32) -> LexError {
+        let span = self.add_span(start, len);
+        LexError { message, file_id: self.file_id, span }
     }
 
     pub fn run(&mut self) -> LexResult<Vec<Token>> {
@@ -585,6 +596,9 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                     self.advance();
                     continue;
                 } else if c == '\\' && next == '{' {
+                    // One day we'll handle these differently than regular escaped chars
+                    // If we support either a subset of the language or the full language inside
+                    // interpolated strings
                     tok_buf.push(c);
                     tok_buf.push(next);
                     self.advance();
@@ -594,7 +608,12 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                     self.advance();
                     break Some(make_buffered_token(self, K::String, &tok_buf, n));
                 } else if c == '\n' {
-                    return Err(self.err("No newlines inside strings"));
+                    let string_start_quote = n - tok_buf.len() as u32 - 1;
+                    return Err(self.make_error(
+                        "Encountered newline inside string".to_string(),
+                        string_start_quote,
+                        tok_buf.len() as u32 + 1,
+                    ));
                 } else {
                     tok_buf.push(c);
                     self.advance();
@@ -688,7 +707,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
 
                 // case: Continue an ident
                 if tok_buf.len() == 1 && tok_buf.starts_with('_') && c == '_' {
-                    return Err(self.err("Identifiers cannot begin with __"));
+                    return Err(errf!(self, n, "Identifiers cannot begin with __"));
                 }
                 tok_buf.push(c);
             // We can possibly remove this check; it would be handled next loop

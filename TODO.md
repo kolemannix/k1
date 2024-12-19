@@ -142,7 +142,7 @@
 - [ ] 'call' method syntax (Scala's 'apply' feature)
 - [ ] +other special function names that work like ==?)
 - [ ] LLVM cleanup
--  [ ] avoid loads/stores of aggregate types where we can, so routine uses of 'struct's and 'enum's
+-  [ ] avoid uses of aggregate *values* where we can: so routine uses of 'struct's and 'enum's
 -  [ ] Move allocas to entry block. "Doing this is actually quite easy as LLVM provides functions you can use to retrieve the entry block for a function and insert instructions into it."
 - [ ] Replace 'unit' with an empty struct, encoded as `{}` at the type level and `{}` at the value level
 - [x] Re-write signature specialization to be simpler.
@@ -154,7 +154,7 @@
 - [ ] Generic abilities (ability From<T> { ... })
 - [ ] ? operator is really the 'else' operator, can implement using an 'Else' ability or 'Unwrap' ability
 - [ ] Context location params are not being propagated
-- [ ] Fix named arguments
+- [ ] Test and fix named arguments
 - [x] return from while
 - [x] break from while
 - [ ] 'never' needs to work in every expression position

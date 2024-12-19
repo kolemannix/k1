@@ -10,7 +10,7 @@ use anyhow::{bail, Result};
 use clap::Parser;
 use colored::Colorize;
 use inkwell::context::Context;
-use k1::compiler::{self, Command};
+use k1::compiler::{self, Command, CompileModuleError};
 use std::os::unix::prelude::ExitStatusExt;
 
 #[derive(Parser, Debug, Clone)]
@@ -92,46 +92,45 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
         write_llvm: true,
         dump_module: false,
         gui: false,
+        llvm_counts: false,
         command: Command::Build { file: path.as_ref().to_owned() },
     };
     let compile_result = compiler::compile_module(&args);
     let expectation = get_test_expectation(path.as_ref());
     match compile_result {
-        Err(err) => match err.module.as_ref() {
-            Some(module) => {
-                let err = &module.errors[0];
-                match expectation {
-                    TestExpectation::CompileErrorMessage { message } => {
-                        // Check for message!
-                        if !err.to_string().contains(&message) {
-                            bail!("{filename}: Failed with unexpected message: {}", err.to_string())
-                        }
-                    }
-                    TestExpectation::CompileErrorLine { .. } => {
-                        unimplemented!("error line test")
-                    }
-                    TestExpectation::AbortErrorMessage { .. } => {
-                        let mut buf = Vec::new();
-                        module.write_error(&mut buf, err).unwrap();
-                        let s = String::from_utf8_lossy(&buf);
-                        bail!("{filename}\n\tExpected: abort\n\tgot    : compile error '{}'", s)
-                    }
-                    TestExpectation::ExitCode(expected_code) => {
-                        let mut buf = Vec::new();
-                        module.write_error(&mut buf, err).unwrap();
-                        let s = String::from_utf8_lossy(&buf);
-                        bail!(
-                            "{filename}\n\tExpected: exit code {}\n\tgot     : compile error: {}",
-                            expected_code,
-                            s
-                        )
+        Err(CompileModuleError::TyperFailure(module)) => {
+            let err = &module.errors[0];
+            match expectation {
+                TestExpectation::CompileErrorMessage { message } => {
+                    // Check for message!
+                    if !err.to_string().contains(&message) {
+                        bail!("{filename}: Failed with unexpected message: {}", err.to_string())
                     }
                 }
+                TestExpectation::CompileErrorLine { .. } => {
+                    unimplemented!("error line test")
+                }
+                TestExpectation::AbortErrorMessage { .. } => {
+                    let mut buf = Vec::new();
+                    module.write_error(&mut buf, err).unwrap();
+                    let s = String::from_utf8_lossy(&buf);
+                    bail!("{filename}\n\tExpected: abort\n\tgot    : compile error '{}'", s)
+                }
+                TestExpectation::ExitCode(expected_code) => {
+                    let mut buf = Vec::new();
+                    module.write_error(&mut buf, err).unwrap();
+                    let s = String::from_utf8_lossy(&buf);
+                    bail!(
+                        "{filename}\n\tExpected: exit code {}\n\tgot     : compile error: {}",
+                        expected_code,
+                        s
+                    )
+                }
             }
-            None => {
-                bail!("{} Failed during parsing, probably", filename)
-            }
-        },
+        }
+        Err(CompileModuleError::ParseFailure(_parsed_module)) => {
+            bail!("{} Failed during parsing", filename)
+        }
         Ok(typed_module) => {
             let name = typed_module.name();
             let expect_exit = matches!(

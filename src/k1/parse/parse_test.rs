@@ -191,14 +191,14 @@ fn core_only() -> Result<(), ParseError> {
     env_logger::init();
     let core_source = Source::make(
         0,
-        "builtins".to_string(),
+        "stdlib".to_string(),
         "core.k1".to_string(),
-        fs::read_to_string("builtins/core.k1").unwrap(),
+        fs::read_to_string("stdlib/core.k1").unwrap(),
     );
     let module = test_parse_module(core_source)?;
     assert_eq!(&module.name, "core");
     assert_eq!(&module.sources.get_main().filename, "core.k1");
-    assert_eq!(&module.sources.get_main().directory, "builtins");
+    assert_eq!(&module.sources.get_main().directory, "stdlib");
     assert!(!module.get_root_namespace().definitions.is_empty());
     Ok(())
 }

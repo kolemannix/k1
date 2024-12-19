@@ -1,16 +1,19 @@
 // This table exercises:
 // - Generics
 // - References/pointers
-// - Structs and enums
+// - Structs and enums, optionals
+// - Pattern matching
 // - Loops and control flow
 // - Numeric operations
 // - String handling
 // - Builds on List which is implemented in k1
 
+
+deftype Entry[V] = { key: string, value: V, deleted: bool }?
 deftype HashMap[V] = {
   size: u64,
   // TODO: Switch to a 3-state enum for the deleted variant for a more efficient layout
-  entries: List[{ key: string, value: V, deleted: bool }?],
+  entries: List[Entry[V]],
 }
 
 fn fnv1a_hash(key: string): u64 {
@@ -26,8 +29,6 @@ fn fnv1a_hash(key: string): u64 {
 
 namespace HashMap {
 
-  deftype Entry[V] = { key: string, value: V, deleted: bool }?
-
   fn _make[V](cap: u64): HashMap[V] {
     { size: 0, entries: List/filled(cap, .None) }
   }
@@ -35,12 +36,11 @@ namespace HashMap {
   fn new[V](): HashMap[V] {
     _make(0)
   }
-  // ha ha ha. once again Mr. Ocean. You have come in second.
 
   fn grow[V](self: HashMap[V]*): unit {
     let origSize = self.size;
     let oldEntries = self.entries;
-    let newCap = if oldEntries.cap == 0 1: u64 else oldEntries.cap * 2;
+    let newCap = if oldEntries.cap() == 0 1: u64 else oldEntries.cap() * 2;
 
     let newMap = _make[V](newCap);
     self <- newMap;
@@ -172,7 +172,7 @@ namespace HashMap {
     println("Size: \{size}");
     println("");
     for self.entries do {
-      printUInt(it_index);
+      printIt(it_index);
       print(" ");
       switch it {
         , .None -> println("empty")
@@ -226,5 +226,5 @@ fn randString(len: uint): string {
     arr.push(randByte() as char);
     i = i + 1;
   };
-  string/fromChars(arr)
+  string/fromBuffer(arr.toBuffer())
 }
