@@ -139,6 +139,12 @@
   - [x] functions
   - [x] constants
   - [x] namespaces
+- [ ] Namespace stuff
+  - [x] Imports via `use`
+  - [ ] Change keyword to `space`
+  - [ ] `namespace <ident>;` to namespace whole file; `end namespace <ident>` to end optionally
+  - [ ] Allow namespace extension via simple multiple blocks of same name in same scope
+  - [ ] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`
 - [ ] 'call' method syntax (Scala's 'apply' feature)
 - [ ] +other special function names that work like ==?)
 - [ ] LLVM cleanup

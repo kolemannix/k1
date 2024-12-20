@@ -1,17 +1,17 @@
-deftype Point = { x: int, y: int, z: int }
+deftype Point3 = { x: int, y: int, z: int }
 
 fn main(): int {
-  let* point: Point* = { x: 10, y: 20, z: 30 };
+  let* point: Point3* = { x: 10, y: 20, z: 30 };
   let pointPtr = point as Pointer;
 
-  let point2 = pointPtr as Point*;
+  let point2 = pointPtr as Point3*;
   assert(point2.x == 10);
   assert(point2.y == 20);
 
   // Move 8 bytes
   assert(sizeOf[int]() == 8);
   let pointShifted = ((pointPtr as u64) + sizeOf[int]()) as Pointer;
-  let point3 = pointShifted as Point*;
+  let point3 = pointShifted as Point3*;
 
   // x is now y, y is now z, z is now random bits
   assert(point3.x == 20);

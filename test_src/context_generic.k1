@@ -1,6 +1,6 @@
-deftype Box[T] = { value: T }
+deftype MyBox[T] = { value: T }
 
-fn box[T](context foo: T)(value: T): Box[T] {
+fn box[T](context foo: T)(value: T): MyBox[T] {
   { value: value }
 }
 

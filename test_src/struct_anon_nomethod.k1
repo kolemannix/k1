@@ -1,24 +1,24 @@
-deftype Point = { x: int, y: int }
-namespace Point {
-  fn sum(self: Point): int {
+deftype PointNamed = { x: int, y: int }
+namespace PointNamed {
+  fn sum(self: PointNamed): int {
       self.x + self.y
   }
 }
 
-deftype alias Point2 = { x: int, y: int }
-namespace Point2 {
-  fn sum(self: Point2): int {
+deftype alias PointAlias = { x: int, y: int }
+namespace PointAlias {
+  fn sum(self: PointAlias): int {
     self.x + self.y
   }
 }
 
 fn main(): int {
-  // Should work because Point is a proper type
-  let p: Point = { x: 0, y: 0 };
+  // Should work because PointNamed is a proper type
+  let p: PointNamed = { x: 0, y: 0 };
   p.sum();
 
-  // Should not work because Point2 is a type alias
-  let p2: Point2 = { x: 0, y: 0 };
+  // Should not work because PointAlias is a type alias
+  let p2: PointAlias = { x: 0, y: 0 };
   p2.sum();
 
   0

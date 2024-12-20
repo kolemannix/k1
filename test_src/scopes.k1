@@ -1,3 +1,4 @@
+namespace scopes {
 deftype Foo = { x: int }
 deftype alias Alias = Foo
 
@@ -26,8 +27,10 @@ fn namespaceAlias(): unit {
   assert(x.value() == 1);
 }
 
+} // end namespace
+
 fn main(): int {
-  scopeCollision(12);
-  namespaceAlias();
+  scopes/scopeCollision(12);
+  scopes/namespaceAlias();
   0
 }

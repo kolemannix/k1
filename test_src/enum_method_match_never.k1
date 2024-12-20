@@ -1,18 +1,20 @@
-deftype E = either A(int) , B
-namespace E {
-  #debug
-  fn value_if_a(self: E): int {
-    switch self {
-      .A(i) -> i,
-      .B -> crash("This is a B!"),
+namespace enum_method_match_never {
+  deftype E = either A(int) , B
+  namespace E {
+    #debug
+    fn value_if_a(self: E): int {
+      switch self {
+        .A(i) -> i,
+        .B -> crash("This is a B!"),
+      }
     }
   }
-}
-fn main(): int {
-  let x: E = .A(42);
-  let y: E.A = .A(42);
-  #debug assert(x.value_if_a() == y.value_if_a());
-  assert((.B: E).value_if_a() == 0);
-  0
+  fn main(): int {
+    let x: E = .A(42);
+    let y: E.A = .A(42);
+    #debug assert(x.value_if_a() == y.value_if_a());
+    assert((.B: E).value_if_a() == 0);
+    0
+  }
 }
 //abortmsg: This is a B!

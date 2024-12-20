@@ -1,3 +1,4 @@
+namespace optional_bad_get {
 deftype Point = { x: int, y: int? }
 
 fn main(): int {
@@ -5,4 +6,7 @@ fn main(): int {
   assert(n!.x == 1);
   0
 }
+
+} // end namespace
+
 //abortmsg: Opt.get on None

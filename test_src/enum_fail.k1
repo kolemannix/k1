@@ -1,7 +1,9 @@
-deftype E = either A(int) , B , C
-
-fn main(): int {
-  let x: E = .A(true);
-  0
+namespace enum_fail {
+  deftype E = either A(int) , B , C
+  
+  fn main(): int {
+    let x: E = .A(true);
+    0
+  }
 }
 //errmsg: Variant payload type mismatch: Expected i64 but got bool

@@ -1,3 +1,4 @@
+namespace type_order {
 deftype alias PointList = List[Point]
 deftype alias Point = { x: int, y: int }
 
@@ -5,7 +6,11 @@ ability ToPoint {
   fn toPoint(self: Self): Point
 }
 
+} // end namespace
+
 fn main(): int {
-    let x: Point = { x: 1, y: 2 };
-    0
+  let x: type_order/Point = { x: 1, y: 2 };
+  0
 }
+
+

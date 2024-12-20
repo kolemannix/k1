@@ -1,3 +1,4 @@
+namespace ability_fail {
 ability Num {
   fn num(self: Self): i32
 }
@@ -9,5 +10,6 @@ fn main(): int {
   assert(p.num() == 1);
 
   0
+}
 }
 //errmsg: Method 'num' does not exist on type Tool

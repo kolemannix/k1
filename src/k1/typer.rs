@@ -8285,7 +8285,9 @@ impl TypedModule {
             self.ast.get_namespace(parsed_namespace_id).definitions.clone().iter()
         {
             if let ParsedId::Use(parsed_use_id) = parsed_definition_id {
-                self.eval_use_definition(namespace_scope_id, parsed_use_id)?;
+                if let Err(e) = self.eval_use_definition(namespace_scope_id, parsed_use_id) {
+                    self.push_error(e);
+                }
             }
             if let ParsedId::TypeDefn(type_defn_id) = parsed_definition_id {
                 let parsed_type_defn = self.ast.get_type_defn(type_defn_id);
@@ -8296,7 +8298,7 @@ impl TypedModule {
                     .get_scope_mut(namespace_scope_id)
                     .add_pending_type_defn(name, type_defn_id);
                 if !added {
-                    return failf!(span, "Type {} exists", self.name_of(name));
+                    self.push_error(errf!(span, "Type {} exists", self.name_of(name)));
                 }
             }
             if let ParsedId::Ability(parsed_ability_id) = parsed_definition_id {
@@ -8308,11 +8310,13 @@ impl TypedModule {
                     .get_scope_mut(namespace_scope_id)
                     .add_pending_ability_defn(name, parsed_ability_id);
                 if !added {
-                    return failf!(span, "Ability {} exists", self.name_of(name));
+                    self.push_error(errf!(span, "Ability {} exists", self.name_of(name)));
                 }
             }
             if let ParsedId::Namespace(namespace_id) = parsed_definition_id {
-                self.eval_namespace_type_decl_phase(namespace_id)?;
+                if let Err(e) = self.eval_namespace_type_decl_phase(namespace_id) {
+                    self.push_error(e);
+                }
             }
         }
         Ok(())
