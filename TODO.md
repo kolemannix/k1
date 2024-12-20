@@ -144,7 +144,7 @@
 - [ ] LLVM cleanup
 -  [ ] avoid uses of aggregate *values* where we can: so routine uses of 'struct's and 'enum's
 -  [ ] Move allocas to entry block. "Doing this is actually quite easy as LLVM provides functions you can use to retrieve the entry block for a function and insert instructions into it."
-- [ ] Replace 'unit' with an empty struct, encoded as `{}` at the type level and `{}` at the value level
+- [ ] Replace 'unit' with an empty struct, encoded as `{}` at the type level and `{}` at the value level. This would remove a whole base type
 - [x] Re-write signature specialization to be simpler.
 - [ ] Re-write body specialization to not re-typecheck but instead transform the typed tree
 - [ ] Typecheck 'main'
