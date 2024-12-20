@@ -6,7 +6,7 @@
 // as your 'slice' type, and we'll rename this, perhaps, to RawBuffer
 // It'll be the same thing except for a 'Promise' from the creator that
 // its fully populated
-namespace Buffer {
+ns Buffer {
 
   fn bufferLenBytes[T](count: u64): u64 { count * sizeOfStride[T]() }
 

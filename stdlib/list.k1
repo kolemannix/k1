@@ -1,6 +1,6 @@
 // A growable, ordered collection of elements.
 // Backed by an efficient, contiguously allocated buffer
-namespace List {
+ns List {
 
   ///////////////////////////
   // Construction functions

@@ -7,7 +7,7 @@ deftype Square = either
   , Queen
   , King
 
-namespace Square {
+ns Square {
   fn charSymbol(self: Square): char {
     switch self {
        .Blank  -> '-',

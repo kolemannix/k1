@@ -1,4 +1,4 @@
-namespace struct_test {
+ns struct_test {
 
 deftype Point = { x: int, y: int, z: int, isGood: bool }
 fn basicStruct(): int {
@@ -13,7 +13,7 @@ fn basicStruct(): int {
 }
 
 deftype Foo = { x: int, y: bool }
-namespace Foo {
+ns Foo {
   fn getValue(self: Foo): int { self.x }
   fn setValue(self: Foo*, x: int): unit { self.x* <- x; }
   fn new(x: int): Foo { { x: x, y: false } }

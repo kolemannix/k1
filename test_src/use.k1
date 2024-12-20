@@ -3,7 +3,7 @@ use types/typeId
 // Use a constant from top-level
 use files/unix/SEEK_END as SEEKEND
 
-namespace foo {
+ns foo {
   fn getOne(): int { 1 }
 }
 

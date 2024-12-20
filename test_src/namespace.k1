@@ -1,10 +1,10 @@
-namespace Baz {
-  namespace BazI {
+ns Baz {
+  ns BazI {
     fn name(): string  { "Baz/BazI" }
   }
 }
 
-namespace BazI {
+ns BazI {
   fn name(): string { "_root/BazI" }
 }
 

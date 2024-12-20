@@ -27,7 +27,7 @@ fn fnv1a_hash(key: string): u64 {
   hash_value
 }
 
-namespace HashMap {
+ns HashMap {
 
   fn _make[V](cap: u64): HashMap[V] {
     { size: 0, entries: List/filled(cap, .None) }

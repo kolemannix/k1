@@ -1,9 +1,9 @@
 // TODO: CString type
 deftype alias CString = { ptr: Pointer }
-namespace CString { 
+ns CString { 
 }
 
-namespace string {
+ns string {
 
   fn get(self: string, index: u64): char {
     self.buffer.get(index)

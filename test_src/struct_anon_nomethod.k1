@@ -1,12 +1,12 @@
 deftype PointNamed = { x: int, y: int }
-namespace PointNamed {
+ns PointNamed {
   fn sum(self: PointNamed): int {
       self.x + self.y
   }
 }
 
 deftype alias PointAlias = { x: int, y: int }
-namespace PointAlias {
+ns PointAlias {
   fn sum(self: PointAlias): int {
     self.x + self.y
   }
