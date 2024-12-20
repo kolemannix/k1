@@ -6,3 +6,4 @@ zig-out
 .bsp
 .metals
 .scala-build
+k1_lsp.log*
