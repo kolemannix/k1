@@ -8038,7 +8038,7 @@ impl TypedModule {
                 None => {
                     failf!(
                         ability_name.span,
-                        "Failed to resolve ability {}",
+                        "No ability '{}' is in scope",
                         self.name_of(ability_name.name)
                     )
                 }
@@ -8138,54 +8138,31 @@ impl TypedModule {
                 self.get_root_namespace_id(),
             )?;
 
-            let specialized = self.get_function_type(function_impl);
-            let generic = self.get_function_type(ability_function_ref.function_id);
-            if specialized.params.len() != generic.params.len() {
-                return make_fail_span(
-                    format!(
-                        "Invalid implementation of {} in ability {}: wrong number of parameters",
-                        self.ast.identifiers.get_name(ability_function_ref.function_name),
-                        self.ast.identifiers.get_name(ability_name)
-                    ),
+            let specialized = self.get_function(function_impl).type_id;
+
+            let generic_type = self.get_function(ability_function_ref.function_id).type_id;
+            // nocommit: Store ability Self type in a more explicit way?
+            let ability_self_type =
+                self.scopes.find_type(ability_scope, get_ident!(self, "Self")).unwrap().0;
+
+            // We check that the signature of the provided impl function matches
+            // the signature of the generic function with target_type substituted for Self
+            let substituted_root_type = self.substitute_in_type(
+                None,
+                generic_type,
+                None,
+                &[TypeSubstitutionPair { from: ability_self_type, to: target_type }],
+                ParsedId::AbilityImpl(parsed_id),
+            );
+
+            if let Err(msg) = self.check_types(substituted_root_type, specialized, scope_id) {
+                return failf!(
                     impl_function_span,
+                    "Invalid implementation of {} in ability {}: {msg}",
+                    self.ast.identifiers.get_name(ability_function_ref.function_name),
+                    self.ast.identifiers.get_name(ability_name)
                 );
             }
-
-            // nocommit: This is the wrong wrong way to check this
-            // we should instead perform a substitution of Self := target_type and then check that the signatures match!
-            for (index, specialized_param) in specialized.params.iter().enumerate() {
-                let generic_param = &generic.params[index];
-                if let Err(msg) = self.check_types(
-                    generic_param.type_id,
-                    specialized_param.type_id,
-                    impl_scope_id,
-                ) {
-                    return make_fail_span(
-                        format!(
-                            "Invalid implementation of {} in ability {} for parameter {}: {}",
-                            self.ast.identifiers.get_name(ability_function_ref.function_name),
-                            self.ast.identifiers.get_name(ability_name),
-                            self.ast.identifiers.get_name(generic_param.name),
-                            msg
-                        ),
-                        impl_function_span,
-                    );
-                }
-            }
-            if let Err(msg) =
-                self.check_types(generic.return_type, specialized.return_type, impl_scope_id)
-            {
-                return make_fail_span(
-                    format!(
-                        "Invalid implementation of '{}' in ability '{}': Wrong return type: {}",
-                        self.ast.identifiers.get_name(ability_function_ref.function_name),
-                        self.ast.identifiers.get_name(ability_name),
-                        msg
-                    ),
-                    impl_function_span,
-                );
-            }
-
             typed_functions.push(function_impl);
         }
 

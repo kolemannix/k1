@@ -1,6 +1,6 @@
 fn listFill(): int {
   let* xs = List/empty[int]();
-  assert(xs.*.cap() == 0);
+  assert(xs.cap() == 0);
   assert(xs.len == 0);
 
   let mut i = 0: u64;
@@ -10,18 +10,18 @@ fn listFill(): int {
     i = i + 1;
   };
   assert(xs.len == 5);
-  assert(xs.*.get(0) == 0);
-  assert(xs.*.get(1) == 1);
-  assert(xs.*.get(2) == 2);
-  assert(xs.*.get(3) == 3);
-  assert(xs.*.get(4) == 4);
-  assert(xs.*.first()! == 0);
-  assert(xs.*.last()! == 4);
+  assert(xs.get(0) == 0);
+  assert(xs.get(1) == 1);
+  assert(xs.get(2) == 2);
+  assert(xs.get(3) == 3);
+  assert(xs.get(4) == 4);
+  assert(xs.first()! == 0);
+  assert(xs.last()! == 4);
 
   let exp = [0,1,2,3,4];
   assert(xs.* == exp);
 
-  let xs2 = xs.*.cloned();
+  let xs2 = xs.cloned();
   assert(xs2 == xs.*);
 
   let empty = []: List[byte];
@@ -34,7 +34,7 @@ fn listFill(): int {
 
 fn listSlice(): unit {
   let* a =  [1,2,3];
-  let slice = a.*.slice(0,2);
+  let slice = a.slice(0,2);
   assert(slice.len == 2);
   assert(slice.get(0) == 1);
   assert(slice.get(1) == 2);
@@ -43,7 +43,7 @@ fn listSlice(): unit {
   let emptySlice = emptyList.slice(0,0);
   assert(emptySlice.len == 0);
 
-  let fullSlice = a.*.slice(0,3);
+  let fullSlice = a.slice(0,3);
   assert(fullSlice.len == 3);
   assert(fullSlice.get(0) == 1);
   assert(fullSlice.get(1) == 2);
@@ -65,7 +65,7 @@ fn listOfStructs(): int {
   };
 
   assert(xs.len == 101);
-  assert(xs.*.cap() == 128);
+  assert(xs.cap() == 128);
   0
 }
 
