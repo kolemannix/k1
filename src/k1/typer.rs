@@ -2118,11 +2118,11 @@ impl TypedModule {
             panic_at_disco!("Expected TypeApplication")
         };
 
-        let base_name = &ty_app.name;
-        let name = base_name.name;
+        let ty_app_name = &ty_app.name;
+        let name = ty_app_name.name;
         match self.scopes.find_type_namespaced(
             scope_id,
-            base_name,
+            ty_app_name,
             &self.namespaces,
             &self.ast.identifiers,
         )? {
@@ -2153,42 +2153,60 @@ impl TypedModule {
                 }
             }
             None => {
-                // Checks for recursion by name; does not work with namespaced names (?)
-                // , JsList(List[Json]) -> , JsList(_root::List[Json])
-                if context.inner_type_defn_info.as_ref().map(|info| info.name) == Some(name) {
-                    let type_defn_info = context.inner_type_defn_info.as_ref().unwrap();
-                    let type_defn_id = type_defn_info.ast_id.expect_type_defn();
-                    let placeholder_type_id = match self
-                        .types
-                        .placeholder_mapping
-                        .get(&type_defn_id)
-                    {
-                        None => {
-                            eprintln!("Inserting recursive reference for {}", self.name_of(name));
-                            let type_id =
-                                self.types.add_type(Type::RecursiveReference(RecursiveReference {
-                                    parsed_id: type_defn_id,
-                                    root_type_id: TypeId::PENDING,
-                                }));
-                            self.types.placeholder_mapping.insert(type_defn_id, type_id);
-                            type_id
-                        }
-                        Some(type_id) => *type_id,
-                    };
-                    Ok(placeholder_type_id)
-                } else {
-                    match self.scopes.find_pending_type_defn(scope_id, name) {
-                        None => {
-                            failf!(ty_app.span, "No type named {} is in scope", self.name_of(name),)
-                        }
-                        Some((pending_defn_id, pending_defn_scope_id)) => {
-                            eprintln!(
-                                "Recursing into pending type defn {}",
-                                self.name_of(self.ast.get_type_defn(pending_defn_id).name)
-                            );
-                            let type_id =
-                                self.eval_type_defn(pending_defn_id, pending_defn_scope_id)?;
-                            Ok(type_id)
+                match self.scopes.find_function_namespaced(
+                    scope_id,
+                    ty_app_name,
+                    &self.namespaces,
+                    &self.ast.identifiers,
+                )? {
+                    Some(function_id) => Ok(self.get_function(function_id).type_id),
+                    None => {
+                        // Checks for recursion by name; does not work with namespaced names (?)
+                        // , JsList(List[Json]) -> , JsList(_root::List[Json])
+                        if context.inner_type_defn_info.as_ref().map(|info| info.name) == Some(name)
+                        {
+                            let type_defn_info = context.inner_type_defn_info.as_ref().unwrap();
+                            let type_defn_id = type_defn_info.ast_id.expect_type_defn();
+                            let placeholder_type_id =
+                                match self.types.placeholder_mapping.get(&type_defn_id) {
+                                    None => {
+                                        eprintln!(
+                                            "Inserting recursive reference for {}",
+                                            self.name_of(name)
+                                        );
+                                        let type_id = self.types.add_type(
+                                            Type::RecursiveReference(RecursiveReference {
+                                                parsed_id: type_defn_id,
+                                                root_type_id: TypeId::PENDING,
+                                            }),
+                                        );
+                                        self.types
+                                            .placeholder_mapping
+                                            .insert(type_defn_id, type_id);
+                                        type_id
+                                    }
+                                    Some(type_id) => *type_id,
+                                };
+                            Ok(placeholder_type_id)
+                        } else {
+                            match self.scopes.find_pending_type_defn(scope_id, name) {
+                                None => {
+                                    failf!(
+                                        ty_app.span,
+                                        "No type named {} is in scope",
+                                        self.name_of(name),
+                                    )
+                                }
+                                Some((pending_defn_id, pending_defn_scope_id)) => {
+                                    eprintln!(
+                                        "Recursing into pending type defn {}",
+                                        self.name_of(self.ast.get_type_defn(pending_defn_id).name)
+                                    );
+                                    let type_id = self
+                                        .eval_type_defn(pending_defn_id, pending_defn_scope_id)?;
+                                    Ok(type_id)
+                                }
+                            }
                         }
                     }
                 }
@@ -7826,19 +7844,6 @@ impl TypedModule {
             return failf!(
                 parsed_function_span,
                 "Function name {} is taken",
-                self.name_of(parsed_function_name)
-            );
-        }
-
-        // FIXME: Don't add types by name for fn types, but instead update type resolution
-        //        to look for functions at a lower priority than proper types.
-        //        This was preventing 'use' from using functions without hacking the priority
-        let type_added =
-            self.scopes.add_type(parent_scope_id, parsed_function_name, function_type_id);
-        if !type_added {
-            return failf!(
-                parsed_function_span,
-                "Function name '{}' is taken (in typespace)",
                 self.name_of(parsed_function_name)
             );
         }
