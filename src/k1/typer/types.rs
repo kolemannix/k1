@@ -266,7 +266,7 @@ impl IntegerType {
 // }
 
 #[derive(Debug, Clone)]
-pub struct FnArgType {
+pub struct FnParamType {
     pub name: Identifier,
     pub type_id: TypeId,
     pub is_context: bool,
@@ -276,7 +276,7 @@ pub struct FnArgType {
 
 #[derive(Debug, Clone)]
 pub struct FunctionType {
-    pub params: Vec<FnArgType>,
+    pub params: Vec<FnParamType>,
     pub return_type: TypeId,
     pub defn_info: Option<TypeDefnInfo>,
 }
@@ -586,6 +586,20 @@ impl Type {
             s.generic_instance_info.as_ref().and_then(|spec_info| {
                 if spec_info.generic_parent == LIST_TYPE_ID {
                     Some(ListType { element_type: spec_info.param_values[0] })
+                } else {
+                    None
+                }
+            })
+        } else {
+            None
+        }
+    }
+
+    pub fn as_buffer_instance(&self) -> Option<&GenericInstanceInfo> {
+        if let Type::Struct(s) = self {
+            s.generic_instance_info.as_ref().and_then(|spec_info| {
+                if spec_info.generic_parent == BUFFER_TYPE_ID {
+                    Some(spec_info)
                 } else {
                     None
                 }

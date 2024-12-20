@@ -19,6 +19,10 @@ namespace List {
     { len: 0, buffer: buffer }
   }
 
+  fn single[T](value: T): List[T] {
+    filled[T](1, value)
+  }
+
   fn wrapBuffer[T](buffer: Buffer[T]): List[T] {
     { len: buffer.len, buffer: buffer }
   }
