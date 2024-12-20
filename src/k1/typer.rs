@@ -249,8 +249,8 @@ pub struct FnArgDefn {
 }
 
 impl FnArgDefn {
-    pub fn to_fn_arg_type(&self) -> FnArgType {
-        FnArgType {
+    pub fn to_fn_arg_type(&self) -> FnParamType {
+        FnParamType {
             name: self.name,
             type_id: self.type_id,
             is_context: self.is_context,
@@ -1944,7 +1944,7 @@ impl TypedModule {
             // 2 member struct with a function pointer and an environment pointer
             ParsedTypeExpression::Function(fun_type) => {
                 let fun_type = fun_type.clone();
-                let mut params: Vec<FnArgType> = Vec::with_capacity(fun_type.params.len());
+                let mut params: Vec<FnParamType> = Vec::with_capacity(fun_type.params.len());
                 let empty_struct_id = self.types.add_type(Type::Struct(StructType {
                     type_defn_info: None,
                     fields: vec![],
@@ -1952,7 +1952,7 @@ impl TypedModule {
                     generic_instance_info: None,
                 }));
                 let empty_struct_reference_id = self.types.add_reference_type(empty_struct_id);
-                params.push(FnArgType {
+                params.push(FnParamType {
                     type_id: empty_struct_reference_id,
                     name: get_ident!(self, "__clos_env"),
                     is_context: false,
@@ -1963,7 +1963,7 @@ impl TypedModule {
                     let type_id = self.eval_type_expr(*param, scope_id)?;
                     let span = self.ast.get_type_expression_span(*param);
                     let name = self.ast.identifiers.intern(format!("param_{}", index));
-                    params.push(FnArgType {
+                    params.push(FnParamType {
                         type_id,
                         name,
                         is_context: false,
@@ -4224,7 +4224,7 @@ impl TypedModule {
                     expected_ty.type_id
                 }
             };
-            typed_params.push_back(FnArgType {
+            typed_params.push_back(FnParamType {
                 name: arg.binding,
                 type_id: arg_type_id,
                 is_context: false,
@@ -4310,7 +4310,7 @@ impl TypedModule {
             self.synth_struct_expr(environment_struct_type, env_field_exprs, scope_id, body_span);
         let environment_struct_reference_type =
             self.types.add_reference_type(environment_struct_type);
-        let environment_param = FnArgType {
+        let environment_param = FnParamType {
             name: get_ident!(self, CLOSURE_ENV_PARAM_NAME),
             type_id: environment_struct_reference_type,
             is_context: false,
@@ -6276,15 +6276,15 @@ impl TypedModule {
     fn align_call_arguments_with_parameters<'params>(
         &mut self,
         fn_call: &FnCall,
-        params: &'params [FnArgType],
+        params: &'params [FnParamType],
         pre_evaled_params: Option<Vec<TypedExpr>>,
         calling_scope: ScopeId,
         tolerate_missing_context_args: bool,
-    ) -> TyperResult<Vec<(MaybeTypedExpr, &'params FnArgType)>> {
+    ) -> TyperResult<Vec<(MaybeTypedExpr, &'params FnParamType)>> {
         let fn_name = fn_call.name.name;
         let span = fn_call.span;
         let explicit_context_args = !fn_call.explicit_context_args.is_empty();
-        let mut final_args: Vec<(MaybeTypedExpr, &FnArgType)> = Vec::new();
+        let mut final_args: Vec<(MaybeTypedExpr, &FnParamType)> = Vec::new();
         if !explicit_context_args {
             for context_param in params.iter().filter(|p| p.is_context) {
                 if let Some(found_id) =
@@ -6366,12 +6366,12 @@ impl TypedModule {
         // If the user opted to pass context params explicitly, then check all params
         // If the user did not, then just check the non-context params, since the compiler is responsible
         // for looking up context params
-        let expected_literal_params: &mut dyn Iterator<Item = &FnArgType> = if explicit_context_args
-        {
-            &mut params.iter()
-        } else {
-            &mut params.iter().filter(|p| !p.is_context)
-        };
+        let expected_literal_params: &mut dyn Iterator<Item = &FnParamType> =
+            if explicit_context_args {
+                &mut params.iter()
+            } else {
+                &mut params.iter().filter(|p| !p.is_context)
+            };
 
         if let Some(pre_evaled_params) = pre_evaled_params {
             for (expr, param) in pre_evaled_params.into_iter().zip(expected_literal_params) {
@@ -6400,7 +6400,7 @@ impl TypedModule {
     fn check_call_arguments(
         &mut self,
         call_name: Identifier,
-        aligned_args: Vec<(TypedExpr, &FnArgType)>,
+        aligned_args: Vec<(TypedExpr, &FnParamType)>,
         calling_scope: ScopeId,
     ) -> TyperResult<Vec<TypedExpr>> {
         let mut successful_args = Vec::with_capacity(aligned_args.len());
@@ -6647,14 +6647,14 @@ impl TypedModule {
                             //
                             // Then we can either substitute or re-evaluate
                             // So we'd remove the below workaround for not passing expected_type
-                            let expected_type_for_param =
-                                if self.does_type_reference_type_variables(gen_param.type_id) {
-                                    None
-                                } else {
-                                    Some(gen_param.type_id)
-                                };
-                            self.eval_expr(parsed_expr, calling_scope, expected_type_for_param)
-                            // self.eval_expr(parsed_expr, calling_scope, Some(gen_param.type_id))
+                            // let expected_type_for_param =
+                            //     if self.does_type_reference_type_variables(gen_param.type_id) {
+                            //         None
+                            //     } else {
+                            //         Some(gen_param.type_id)
+                            //     };
+                            // self.eval_expr(parsed_expr, calling_scope, expected_type_for_param)
+                            self.eval_expr(parsed_expr, calling_scope, Some(gen_param.type_id))
                         }
                     };
                     if let Ok(expr) = expr {
@@ -7649,7 +7649,7 @@ impl TypedModule {
         );
 
         // Process arguments
-        let mut param_types: Vec<FnArgType> = Vec::with_capacity(parsed_function_args.len());
+        let mut param_types: Vec<FnParamType> = Vec::with_capacity(parsed_function_args.len());
         let mut param_variables = Vec::with_capacity(parsed_function_args.len());
         for (idx, fn_arg) in
             parsed_function_context_params.iter().chain(parsed_function_args.iter()).enumerate()
@@ -7728,7 +7728,7 @@ impl TypedModule {
 
             let is_context = fn_arg.modifiers.is_context();
             let variable_id = self.variables.add_variable(variable);
-            param_types.push(FnArgType {
+            param_types.push(FnParamType {
                 name: fn_arg.name,
                 type_id,
                 is_context,

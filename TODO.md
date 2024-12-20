@@ -162,9 +162,7 @@
 - [ ] accumulate test errors and support inline test comment assertions when a line should produce a compiler error.
       - Probably one test for failing compilation and one passing one for each major language area
 - [ ] b"" strings that are of type Buffer[u8]
-- [ ] Finish hashmap implementation
-- [ ] Builtin syntax for maps
-  - [ ] [key:value] empty: [:]
+- [x] Finish hashmap implementation
 - [ ] Introduce Warnings
   - [ ] Unused var
   - [ ] Unused type bound

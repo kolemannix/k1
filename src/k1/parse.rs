@@ -2254,34 +2254,18 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(ParsedEnumType { variants, span })
     }
 
-    fn parse_fn_arg(&mut self) -> ParseResult<Option<FnCallArg>> {
-        let (one, two) = self.tokens.peek_two();
-        let named = if one.kind == K::Ident && two.kind == K::Equals {
+    fn expect_fn_arg(&mut self) -> ParseResult<FnCallArg> {
+        let (first, second) = self.tokens.peek_two();
+        let named = if first.kind == K::Ident && second.kind == K::Equals {
             self.advance();
             self.advance();
             true
         } else {
             false
         };
-        match self.parse_expression() {
-            Ok(Some(expr)) => {
-                let name = if named { Some(self.intern_ident_token(one)) } else { None };
-                Ok(Some(FnCallArg { name, value: expr }))
-            }
-            Ok(None) => {
-                if named {
-                    Err(Parser::error_expected("expression", self.peek()))
-                } else {
-                    Ok(None)
-                }
-            }
-            Err(e) => Err(e),
-        }
-    }
-
-    fn expect_fn_arg(&mut self) -> ParseResult<FnCallArg> {
-        let res = self.parse_fn_arg();
-        Parser::expect("Function argument", self.peek(), res)
+        let expr = self.expect_expression()?;
+        let name = if named { Some(self.intern_ident_token(first)) } else { None };
+        Ok(FnCallArg { name, value: expr })
     }
 
     fn expect_struct_field(&mut self) -> ParseResult<StructValueField> {
