@@ -1,4 +1,4 @@
-namespace types {
+ns types {
 
   intern fn typeId[T](): u64
   // intern fn typeInfo(typeId: u64): TypeInfo

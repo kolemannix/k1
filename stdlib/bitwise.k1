@@ -1,4 +1,4 @@
-namespace Bits {
+ns Bits {
   intern fn bitNot(a: int): int
   intern fn bitAnd(a: int, b: int): int
   intern fn bitOr(a: int, b: int): int

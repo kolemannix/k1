@@ -31,7 +31,7 @@ fn enumPayload(): unit {
 }
 
 deftype Result[T, E] = either Ok(T), Err(E)
-namespace Result {
+ns Result {
   fn unwrap[T, E](self: Result[T, E]): T {
     self.asOk()!.value
   }

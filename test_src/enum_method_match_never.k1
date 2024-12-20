@@ -1,6 +1,6 @@
-namespace enum_method_match_never {
+ns enum_method_match_never {
   deftype E = either A(int), B
-  namespace E {
+  ns E {
     fn value_if_a(self: E): int {
       switch self {
         .A(i) -> i,

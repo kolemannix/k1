@@ -1,5 +1,5 @@
 deftype UserId = { private inner: int }
-namespace UserId {
+ns UserId {
   fn make(value: int): UserId {
     { inner: value }
   }

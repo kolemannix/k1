@@ -1,4 +1,4 @@
-namespace Opt {
+ns Opt {
   fn hasValue[T](self: T?): bool {
     self is .Some(_)
   }

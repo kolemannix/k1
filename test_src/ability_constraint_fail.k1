@@ -1,4 +1,4 @@
-namespace ability_constraint_fail {
+ns ability_constraint_fail {
 ability Num {
   fn num(self: Self): i32
 }

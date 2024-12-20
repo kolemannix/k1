@@ -1,6 +1,6 @@
 type Loc = { file: string, line: u32 }
 
-namespace Parser;
+ns Parser;
 
 type alias opaque Symbols = Array<{ name: string, value: Ast }>
 type Context = __struct_combine({ symbols: Symbols }, DefaultContext)
@@ -34,4 +34,4 @@ fn main() {
 }
 
 
-namespace end;
+ns end;

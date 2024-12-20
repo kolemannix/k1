@@ -1,5 +1,5 @@
 deftype StringBuilder = { parts: List[either Char(char), String(string)]* }
-namespace StringBuilder {
+ns StringBuilder {
   deftype alias Part = StringBuilder.parts.value.T
 
   fn withCapacity(cap: u64): StringBuilder {

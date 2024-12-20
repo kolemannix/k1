@@ -1,3 +1,22 @@
+ns libc {
+  extern(exit) fn exit(code: i32): never
+
+  extern(write)  fn write(fileNo: i32, data: Pointer, count: u64, offset: u64): u64
+  extern(memcpy) fn memcpy(dst: Pointer, src: Pointer, count: u64): Pointer
+  extern(memset) fn memset(src: Pointer, value: u32, count: u64): Pointer
+  extern(memcmp) fn memcmp(s1: Pointer, s2: Pointer, size: u64): i32
+  extern(calloc) fn calloc(count: u64, size: u64): Pointer
+
+  extern(malloc) fn malloc(size: u64): Pointer
+  extern(free) fn free(ptr: Pointer): unit
+
+  extern(realloc) fn realloc(ptr: Pointer, size: u64): Pointer
+  extern(arc4random_uniform) fn arc4random_uniform(upperBound: u32): u32
+
+  extern(abort) fn abort(): never
+}
+
+
 fn assert(context locn: CompilerSourceLoc)(value: bool): unit {
   if not value {
     crash("ASSERT FAILED")
@@ -12,7 +31,7 @@ fn crash(context locn: CompilerSourceLoc)(msg: string): never {
   libc/abort()
 }
 
-namespace Pointer {
+ns Pointer {
   fn null(): Pointer { 0 as u64 as Pointer }
 
   fn isNull(self: Pointer): bool {
@@ -65,14 +84,14 @@ fn eprintln(s: string): unit {
   eprint(s.appendChar('\n'));
 }
 
-namespace sys {
+ns sys {
   fn exit(code: i32): never {
     libc/exit(code)
   }
 }
 
-namespace files {
-  namespace unix {
+ns files {
+  ns unix {
     let SEEK_END: i32 = 2;
     let SEEK_SET: i32 = 0;
     extern(fopen)  fn fopen(pathCString: Pointer, modeCString: Pointer): Pointer
@@ -107,7 +126,7 @@ fn assertMsg(context locn: CompilerSourceLoc)(msg: string, value: bool): unit {
   };
 }
 
-namespace char {
+ns char {
   fn toString(self: char): string {
     string/wrapList([self])
   }

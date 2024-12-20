@@ -1,4 +1,4 @@
-namespace ability_fail {
+ns ability_fail {
 ability Num {
   fn num(self: Self): i32
 }

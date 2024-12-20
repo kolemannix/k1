@@ -1,4 +1,4 @@
-namespace list_test {
+ns list_test {
 fn listFill(): int {
   let* xs = List/empty[int]();
   assert(xs.cap() == 0);
@@ -154,7 +154,7 @@ fn testSwap(): unit {
   assert(a.* == [1,2]);
 }
 
-} // end namespace
+} // end ns
 
 fn main(): int {
   list_test/listOfStructs();

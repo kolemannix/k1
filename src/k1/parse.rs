@@ -1812,7 +1812,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         match result {
             None => {
                 let actual = self.peek();
-                Err(Parser::error(target_token, actual))
+                Err(Parser::error_expected(target_token, actual))
             }
             Some(t) => Ok(t),
         }
@@ -3351,7 +3351,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             value_expr: type_expr,
             span,
             type_params,
-            id: ParsedTypeDefnId(0), // The id is set by add_typedefn
+            id: ParsedTypeDefnId(u32::MAX), // The id is set by add_typedefn
             flags,
         });
         Ok(Some(type_defn_id))
@@ -3364,14 +3364,25 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         };
         self.advance();
         let ident = self.expect_eat_token(K::Ident)?;
-        self.expect_eat_token(K::OpenBrace)?;
+        let is_braced = match self.tokens.next() {
+            t if t.kind == K::OpenBrace => true,  // namespace asdf {
+            t if t.kind == K::Semicolon => false, // namespace asdf;
+            t => return Err(Parser::error_expected("{ or ;", t)),
+        };
         let mut definitions = Vec::new();
         while let Some(def) = self.parse_definition()? {
             definitions.push(def);
         }
-        let close = self.expect_eat_token(K::CloseBrace)?;
+        if is_braced {
+            self.expect_eat_token(K::CloseBrace)?;
+        } else {
+            let is_end = self.peek().kind == K::Eof;
+            if !is_end {
+                return Err(Parser::error_expected("end of file", self.peek()));
+            }
+        }
         let name = self.intern_ident_token(ident);
-        let span = self.extend_token_span(keyword, close);
+        let span = self.extend_to_here(keyword.span);
         let namespace_id = self.module.add_namespace(ParsedNamespace {
             name,
             definitions,

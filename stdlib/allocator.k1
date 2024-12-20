@@ -4,7 +4,7 @@ deftype Arena = {
   curAddr: u64,
   maxAddr: u64
 }
-namespace Arena {
+ns Arena {
   let mb: u64 = 0x100000;
   let gb: u64 = 0x40000000;
 
@@ -82,7 +82,7 @@ deftype Allocator = {
   pools: List[ObjectPool],
 }
 
-namespace Allocator {
+ns Allocator {
   fn initDefault(): Allocator {
     let temp_arena = Arena/new(id = "temp", initialMb = 10);
     {
