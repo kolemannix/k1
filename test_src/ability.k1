@@ -34,7 +34,7 @@ fn main(): int {
 // This is below 'main' so that
 // it tests for order-independence of the impls
 impl Num for i32 {
-  fn num(self: Self): bool {
+  fn num(self: Self): i32 {
     self
   }
 }

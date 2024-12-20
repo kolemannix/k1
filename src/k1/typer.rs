@@ -7991,10 +7991,8 @@ impl TypedModule {
             ast_id: parsed_ability.id,
         };
         let ability_id = self.add_ability(typed_ability);
-        let added = self
-            .scopes
-            .get_scope_mut(self.scopes.get_root_scope_id())
-            .add_ability(parsed_ability.name, ability_id);
+        let added =
+            self.scopes.get_scope_mut(scope_id).add_ability(parsed_ability.name, ability_id);
         if !added {
             return failf!(
                 parsed_ability.span,
