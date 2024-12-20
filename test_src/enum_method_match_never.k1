@@ -1,7 +1,6 @@
 namespace enum_method_match_never {
-  deftype E = either A(int) , B
+  deftype E = either A(int), B
   namespace E {
-    #debug
     fn value_if_a(self: E): int {
       switch self {
         .A(i) -> i,
@@ -9,12 +8,14 @@ namespace enum_method_match_never {
       }
     }
   }
-  fn main(): int {
+}
+
+fn main(): int {
+    use enum_method_match_never/E;
     let x: E = .A(42);
     let y: E.A = .A(42);
-    #debug assert(x.value_if_a() == y.value_if_a());
+    assert(x.value_if_a() == y.value_if_a());
     assert((.B: E).value_if_a() == 0);
     0
   }
-}
 //abortmsg: This is a B!

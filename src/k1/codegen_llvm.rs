@@ -2734,7 +2734,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         //         self.codegen_function_or_get(id)?;
         //     }
         // }
-        self.codegen_function_or_get(self.module.get_main_function_id().unwrap())?;
+        self.codegen_function_or_get(
+            self.module.get_main_function_id().expect("missing main function"),
+        )?;
         info!("codegen phase 'ir' took {}ms", start.elapsed().as_millis());
         Ok(())
     }

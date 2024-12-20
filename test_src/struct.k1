@@ -70,5 +70,6 @@ fn run(): unit {
 }
 
 fn main(): int {
-  struct_test/run()
+  struct_test/run();
+  0
 }
