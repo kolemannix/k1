@@ -1,3 +1,4 @@
+namespace match_useless {
 deftype Foo = { x: int, y: bool? }
 fn main(): int {
   let foo: Foo = { x: 1, y: .None };
@@ -10,4 +11,6 @@ fn main(): int {
   assert(y == 3);
   0
 }
+
+} // end namespace
 //errmsg: Useless pattern: { x: x, y: Some(false) }

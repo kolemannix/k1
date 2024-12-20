@@ -1,3 +1,4 @@
+namespace list_test {
 fn listFill(): int {
   let* xs = List/empty[int]();
   assert(xs.cap() == 0);
@@ -153,14 +154,14 @@ fn testSwap(): unit {
   assert(a.* == [1,2]);
 }
 
-// End sort stuff
+} // end namespace
 
 fn main(): int {
-  listOfStructs();
-  listSlice();
-  listFill();
-  listEquality();
-  testSort();
-  testSwap();
+  list_test/listOfStructs();
+  list_test/listSlice();
+  list_test/listFill();
+  list_test/listEquality();
+  list_test/testSort();
+  list_test/testSwap();
   0
 }

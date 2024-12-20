@@ -1,3 +1,5 @@
+namespace struct_test {
+
 deftype Point = { x: int, y: int, z: int, isGood: bool }
 fn basicStruct(): int {
   let zero: Point = {
@@ -58,10 +60,15 @@ fn structNested(): unit {
   assert(area2 == 2500);
 }
 
-fn main(): int {
+fn run(): unit {
   basicStruct();
   structArgMut();
   eqAnon();
   structNested();
-  0
+}
+
+}
+
+fn main(): int {
+  struct_test/run()
 }
