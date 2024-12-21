@@ -1517,12 +1517,12 @@ impl TypedModule {
         }
     }
 
-    // New design:
+    // New recursive types design:
     // - recursive references stay, because its actually better for codegen
     // - Use ParsedTypeDefnId as payload for uniqueness of the RecursiveReference type
-    // - codegen_type will stop as recursive references and do an opaque struct, I think that's the only way
+    // - codegen_type will stop at recursive references and do an opaque struct
     // - Require that we're inside a struct or enum root in order to do a recursive definition
-    // - Update the RecursiveReference to point to the real type_id once elet comes back
+    // - Update the RecursiveReference to point to the real type_id once eval comes back
     fn eval_type_defn(
         &mut self,
         parsed_type_defn_id: ParsedTypeDefnId,
@@ -8428,7 +8428,7 @@ impl TypedModule {
                 // Add _root ns to the root scope as well so users can use it
                 let root_scope = self.scopes.get_scope_mut(root_scope_id);
                 if !root_scope.add_namespace(name, root_namespace_id) {
-                    return failf!(span, "Root namespace was taken, hmmmm",);
+                    return failf!(span, "Root namespace was taken, hmmmm");
                 }
 
                 self.namespace_ast_mappings.insert(parsed_namespace_id, root_namespace_id);
@@ -8444,7 +8444,7 @@ impl TypedModule {
                 let parent_ns_id = self
                     .namespaces
                     .namespace_for_scope(parent_scope_id)
-                    .expect("ns should be defined immediately above a namespace");
+                    .expect("namespace must be defined inside another namespace");
 
                 let namespace = Namespace {
                     name,
@@ -8458,7 +8458,6 @@ impl TypedModule {
 
                 let parent_scope = self.scopes.get_scope_mut(parent_scope_id);
                 if !parent_scope.add_namespace(name, namespace_id) {
-                    // nocommit: Allow extending namespaces
                     return failf!(span, "Namespace name {} is taken", self.name_of(name).blue());
                 }
 
@@ -8474,7 +8473,23 @@ impl TypedModule {
         parent_scope: Option<ScopeId>,
     ) -> TyperResult<NamespaceId> {
         let ast_namespace = self.ast.get_namespace(parsed_namespace_id).clone();
-        let namespace_id = self.create_namespace(parsed_namespace_id, parent_scope)?;
+
+        // Detect extension case, which cannot happen for root
+        let namespace_id = if let Some(parent_scope) = parent_scope {
+            if let Some(existing) = self.scopes.find_namespace(parent_scope, ast_namespace.name) {
+                // Map this separate namespace AST node to the same semantic namespace
+                self.namespace_ast_mappings.insert(parsed_namespace_id, existing);
+                eprintln!(
+                    "Inserting re-definition node for ns {}",
+                    self.name_of(ast_namespace.name)
+                );
+                existing
+            } else {
+                self.create_namespace(parsed_namespace_id, Some(parent_scope))?
+            }
+        } else {
+            self.create_namespace(parsed_namespace_id, parent_scope)?
+        };
 
         let namespace_scope_id = self.namespaces.get(namespace_id).scope_id;
 

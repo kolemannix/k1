@@ -143,9 +143,9 @@
 - [ ] BTs via Runtime_Support_Crash_Handler?
 - [ ] Namespace stuff
   - [x] Imports via `use`
-  - [ ] Change keyword to `ns`
-  - [ ] `namespace <ident>;` to namespace whole file; `end namespace <ident>` to end optionally
-  - [ ] Allow namespace extension via simple multiple blocks of same name in same scope
+  - [x] Change keyword to `ns`
+  - [x] `namespace <ident>;` to namespace whole file
+  - [x] Allow namespace extension via simple multiple blocks of same name in same scope
   - [ ] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`
 - [ ] 'call' method syntax (Scala's 'apply' feature)
 - [ ] +other special function names that work like ==?)
