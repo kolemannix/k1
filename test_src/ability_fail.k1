@@ -12,4 +12,4 @@ fn main(): int {
   0
 }
 }
-//errmsg: Method 'num' does not exist on type Tool
+//errmsg: Type Tool does not implement ability num

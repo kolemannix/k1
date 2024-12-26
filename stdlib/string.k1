@@ -9,6 +9,12 @@ ns string {
     self.buffer.get(index)
   }
 
+  fn toBytes(self: string): Buffer[byte] {
+    let copied: Buffer[char] = self.buffer.cloned();
+    let sneakyCasted: Buffer[byte] = Buffer/fromRawParts[byte](copied.len, copied.data);
+    sneakyCasted
+  }
+
   fn fromBytes(buffer: Buffer[byte]): string {
     let copied: Buffer[byte] = buffer.cloned();
     let sneakyCasted: Buffer[char] = Buffer/fromRawParts(copied.len, copied.data);
