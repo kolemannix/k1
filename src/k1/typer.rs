@@ -6192,6 +6192,7 @@ impl TypedModule {
             if !failed_exprs.is_empty() {
                 return Err(failed_exprs.into_iter().next().unwrap());
             } else {
+                // nocommit: Message here communicating what we couldn't solve
                 return failf!(call_span, "Bad call to ability function, TODO MSG");
             }
         };
@@ -6878,10 +6879,6 @@ impl TypedModule {
                     true,
                 )?;
 
-                // nocommit: This solve loop can be cleaned up with 2 major changes
-                // - X slot-based solving to reduce the bookkeeping burden
-                // - Accumulated failed exprs and use for reporting
-                // - On failure, messaging should blame the caller, not the failed inference
                 let mut failed_exprs = Vec::new();
                 for (expr, gen_param) in args_and_params.into_iter() {
                     if solution_set.all_solved() {
@@ -7987,9 +7984,10 @@ impl TypedModule {
 
         let name = match ability_impl_type {
             Some(target_type) => self.ast.identifiers.intern(format!(
-                "{}_impl_{}",
+                "{}_{}_{}",
+                self.name_of(self.get_ability(ability_id.unwrap()).name),
+                self.type_id_to_string(target_type),
                 self.ast.identifiers.get_name(parsed_function_name),
-                target_type
             )),
             None => parsed_function.name,
         };
@@ -8522,7 +8520,6 @@ impl TypedModule {
             .get_scope_mut(impl_scope_id)
             .add_type(get_ident!(self, "Self"), impl_self_type);
 
-        // nocommit: Prevent extra arguments, here and in eval_ability_expr
         for impl_param in ability.parameters.iter().filter(|p| p.is_impl_param) {
             let Some(matching_arg) =
                 ability_expr.arguments.iter().find(|arg| arg.name == impl_param.name)
