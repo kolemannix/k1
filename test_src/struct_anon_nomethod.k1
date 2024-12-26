@@ -23,4 +23,4 @@ fn main(): int {
 
   0
 }
-//errmsg: Method 'sum' does not exist on type {x: i64, y: i64}
+//errmsg: Method 'sum' does not exist on type: '{x: i64, y: i64}'

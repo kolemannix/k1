@@ -125,7 +125,6 @@ pub struct ListType {
 pub struct TypeVariable {
     pub name: Identifier,
     pub scope_id: ScopeId,
-    pub ability_impls: Vec<AbilityId>,
     pub span: SpanId,
 }
 
@@ -180,6 +179,13 @@ pub struct OpaqueTypeAlias {
 pub struct GenericTypeParam {
     pub name: Identifier,
     pub type_id: TypeId,
+    pub span: SpanId,
+}
+
+impl From<&GenericTypeParam> for NamedType {
+    fn from(param: &GenericTypeParam) -> Self {
+        NamedType { name: param.name, type_id: param.type_id }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -272,6 +278,12 @@ pub struct FnParamType {
     pub is_context: bool,
     pub is_closure_env: bool,
     pub span: SpanId,
+}
+
+impl From<&FnParamType> for NamedType {
+    fn from(param: &FnParamType) -> Self {
+        NamedType { name: param.name, type_id: param.type_id }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -820,6 +832,14 @@ impl Types {
         match self.get_no_follow(type_id) {
             Type::RecursiveReference(rr) => self.get(rr.root_type_id),
             t => t,
+        }
+    }
+
+    pub fn get_type_variable(&self, type_id: TypeId) -> &TypeVariable {
+        if let Type::TypeVariable(tv) = self.get(type_id) {
+            tv
+        } else {
+            panic!("Expected type variable on type {}", type_id)
         }
     }
 

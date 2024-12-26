@@ -5,4 +5,4 @@ set -x
 set -e
 export RUST_BACKTRACE=1
 
-clang -g -shared -Wall -o k1lib/libk1lib.a k1lib/k1lib.c
+cargo build --features lsp --bin lsp

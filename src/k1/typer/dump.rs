@@ -51,7 +51,16 @@ impl TypedModule {
 
     pub fn display_scope(&self, scope: &Scope, writ: &mut impl Write) -> std::fmt::Result {
         let scope_name = self.scopes.make_scope_name(scope, &self.ast.identifiers);
-        writeln!(writ, "{}", scope_name)?;
+        let parent = scope
+            .parent
+            .map(|p| self.scopes.make_scope_name(self.scopes.get_scope(p), &self.ast.identifiers));
+        writeln!(
+            writ,
+            "{} {} (parent: {})",
+            scope_name,
+            scope.scope_type.short_name(),
+            parent.unwrap_or("_ROOT_".to_string())
+        )?;
 
         if !scope.variables.is_empty() {
             writ.write_str("\tVARS\n")?;
@@ -735,12 +744,12 @@ impl TypedModule {
         s
     }
 
-    pub fn pretty_print_named_types(&self, types: &[NamedType]) -> String {
+    pub fn pretty_print_named_types(&self, types: &[NamedType], sep: &str) -> String {
         let mut s = String::new();
         let mut first = true;
         for nt in types {
             if !first {
-                s.push('\n')
+                s.push_str(sep)
             }
             write!(s, "{} := {}", self.name_of(nt.name), self.type_id_to_string(nt.type_id))
                 .unwrap();
@@ -749,7 +758,7 @@ impl TypedModule {
         s
     }
 
-    fn write_ident(&self, w: &mut impl Write, ident: Identifier) -> std::fmt::Result {
+    pub fn write_ident(&self, w: &mut impl Write, ident: Identifier) -> std::fmt::Result {
         w.write_str(self.name_of(ident))
     }
 

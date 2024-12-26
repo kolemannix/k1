@@ -2734,9 +2734,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         //         self.codegen_function_or_get(id)?;
         //     }
         // }
-        self.codegen_function_or_get(
-            self.module.get_main_function_id().expect("missing main function"),
-        )?;
+        let Some(main_function_id) = self.module.get_main_function_id() else {
+            return err!(SpanId::NONE, "Module {} has no main function", self.module.name());
+        };
+        self.codegen_function_or_get(main_function_id)?;
         info!("codegen phase 'ir' took {}ms", start.elapsed().as_millis());
         Ok(())
     }

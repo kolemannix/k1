@@ -139,6 +139,13 @@
   - [x] functions
   - [x] constants
   - [x] namespaces
+- [ ] Convert NamedType to a trait
+- [x] Ability call resolution rework
+  - [x] Remove restriction that first arg is Self by
+  - [x] Reworking resolution to find a function by name first, then Solve for 'self' by unifying call and signature, then find the impl
+- [ ] Fully generic abilities with separate 'input' vs 'output' type parameters
+- [ ] nocompile(<expr>) intrinsic! yields an actual runtime constant string for assertions?!
+       `let result1 = compiler/nocompile(1 + "asdf"); assert(result1.startsWith("Type mismatch"))`
 - [ ] More explicit companion ns via injecting `for` keyword `ns (for) type {`
 - [ ] BTs via Runtime_Support_Crash_Handler?
 - [ ] Namespace stuff
@@ -146,9 +153,8 @@
   - [x] Change keyword to `ns`
   - [x] `namespace <ident>;` to namespace whole file
   - [x] Allow namespace extension via simple multiple blocks of same name in same scope
-  - [ ] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`
 - [ ] 'call' method syntax (Scala's 'apply' feature)
-- [ ] +other special function names that work like ==?)
+- [ ] Operator 'overloading' story, +other special function names that work like ==?), make == less special
 - [ ] LLVM cleanup
 -  [ ] avoid uses of aggregate *values* where we can: so routine uses of 'struct's and 'enum's
 -  [ ] Move allocas to entry block. "Doing this is actually quite easy as LLVM provides functions you can use to retrieve the entry block for a function and insert instructions into it."
@@ -159,7 +165,6 @@
 - [ ] Matching on references
   - [ ] Match to get reference to each struct field, for example, use * for a dereferencing match
   - [ ] Match to get reference to enum payload
-- [ ] Generic abilities (ability From<T> { ... })
 - [ ] ? operator is really the 'else' operator, can implement using an 'Else' ability or 'Unwrap' ability
 - [ ] Context location params are not being propagated
 - [ ] Test and fix named arguments
@@ -185,6 +190,7 @@
 - [ ] Add ranges in stdlib
       `sealed abstract class Range(let start: Int, let end: Int, let step: Int)`
 - [ ] Make demo readme / site
+- [ ] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`
 - [ ] Define clear 'platform layer' (crash, alloc/free, other?). Then we could do an LLVM interp platform and a rust interpreter platform
 - [ ] Runtime type info story, typeOf, typeInfo, and 'any' type
 - [ ] Ability-based iteration

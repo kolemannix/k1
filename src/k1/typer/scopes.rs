@@ -1,7 +1,7 @@
 use log::{debug, trace};
 
 use std::{
-    collections::{hash_map::Entry, HashMap},
+    collections::{hash_map::Entry, HashMap, HashSet},
     fmt::Display,
 };
 
@@ -152,6 +152,10 @@ impl Scopes {
         self.get_scope_mut(id).owner_id = Some(owner_id);
     }
 
+    pub fn get_scope_owner(&self, scope_id: ScopeId) -> Option<ScopeOwnerId> {
+        self.get_scope(scope_id).owner_id
+    }
+
     pub fn find_namespace(&self, scope: ScopeId, ident: Identifier) -> Option<NamespaceId> {
         let scope = self.get_scope(scope);
         if let ns @ Some(_r) = scope.find_namespace(ident) {
@@ -256,8 +260,8 @@ impl Scopes {
 
     pub fn find_function(&self, scope: ScopeId, ident: Identifier) -> Option<FunctionId> {
         let scope = self.get_scope(scope);
-        if let f @ Some(_r) = scope.find_function(ident) {
-            return f;
+        if let Some(function_id) = scope.find_function(ident) {
+            return Some(function_id);
         }
         match scope.parent {
             Some(parent) => self.find_function(parent, ident),
@@ -482,7 +486,7 @@ impl Scopes {
         Ok(cur_scope_id)
     }
 
-    fn find_ability(&self, scope_id: ScopeId, name: Identifier) -> Option<AbilityId> {
+    pub fn find_ability(&self, scope_id: ScopeId, name: Identifier) -> Option<AbilityId> {
         let scope = self.get_scope(scope_id);
         if let Some(ability_id) = scope.find_ability(name) {
             return Some(ability_id);
@@ -490,6 +494,20 @@ impl Scopes {
         match scope.parent {
             Some(parent_scope_id) => self.find_ability(parent_scope_id, name),
             None => None,
+        }
+    }
+
+    pub fn find_abilities_in_scope(&self, scope_id: ScopeId) -> HashSet<AbilityId> {
+        let scope = self.get_scope(scope_id);
+        let mut abilities = HashSet::new();
+        abilities.extend(scope.abilities.values());
+        match scope.parent {
+            Some(parent_scope_id) => {
+                let from_parent = self.find_abilities_in_scope(parent_scope_id);
+                abilities.extend(from_parent);
+                abilities
+            }
+            None => abilities,
         }
     }
 
@@ -636,11 +654,19 @@ impl ScopeOwnerId {
             _ => panic!("Expected ability scope owner"),
         }
     }
+
+    pub fn as_namespace(&self) -> Option<NamespaceId> {
+        match self {
+            ScopeOwnerId::Namespace(ns_id) => Some(*ns_id),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct UseableSymbol {
     id: UseableSymbolId,
+    #[allow(unused)]
     source_scope: ScopeId,
 }
 

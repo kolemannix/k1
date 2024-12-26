@@ -62,7 +62,7 @@ fn identity[T](value: T): T { value }
 
 fn ignore[T](value: T): unit { () }
 
-fn printIt[T](value: T): unit where T: Show {
+fn printIt[T: Show](value: T): unit  {
   let s = value.show();
   print(s)
 }
