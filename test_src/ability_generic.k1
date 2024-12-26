@@ -1,10 +1,12 @@
 deftype Point[T] = { x: T, y: T }
 
 impl To[T = string] for i32 {
-  fn to(self: Self): string { Show/show[i32](self) }
+  fn to(self: Self): string { "i32" }
+  // fn to(self: Self): string { Show/show[i32](self) }
 }
 impl To[T = string] for i64 {
-  fn to(self: Self): string { Show/show[i64](self) }
+  fn to(self: Self): string { "i64" }
+  // fn to(self: Self): string { Show/show[i64](self) }
 }
 
 ability Add[Rhs: To[T = string], impl Output] {
@@ -19,6 +21,7 @@ impl Add[Rhs = i64, Output = i64] for i32 {
   fn add(self: i32, other: i64): i64 { (self as i64) + other }
 }
 
+// TODO: generic impls
 // impl[T: Add] Add[Rhs = Point[T], Output = Point[T]] for Point[T] {
 //   fn add(self: Point[T], other: Point[T]): Point[T] { 
 //     { x: add(self.x, other.x), y: add(self.y, other.y) }
@@ -42,7 +45,16 @@ ability To[T] {
 //   fn next(self: Listerator[T]): T? { self.l.get(self.pos) }
 // }
 
+impl To[T = char] for byte {
+  fn to(self: byte): char {
+    self as char
+  }
+
+}
+
 fn main(): unit {
+
+  let btoc: char = (101: u8).to();
 
   let p: Point[i32] = { x: 1, y: 2 };
 
