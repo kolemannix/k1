@@ -12,4 +12,4 @@ fn main(): int {
   0
 }
 }
-//errmsg: Type Tool does not implement ability num
+//errmsg: Type Tool does not implement ability Num

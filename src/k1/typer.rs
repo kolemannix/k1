@@ -367,12 +367,17 @@ impl TypeSolutionSet {
     pub fn get_solution_mut(&mut self, type_id: TypeId) -> Option<&mut TypeSolution> {
         self.solutions.iter_mut().find(|s| s.variable_type_id == type_id)
     }
-    pub fn expect_solutions(&self) -> Vec<NamedType> {
+    pub fn get_solutions(&self) -> Option<Vec<NamedType>> {
         self.solutions
             .iter()
-            .map(|s| NamedType { name: s.name, type_id: s.solved_type_id.unwrap() })
+            .map(|s| s.solved_type_id.map(|type_id| NamedType { name: s.name, type_id }))
             .collect()
     }
+}
+
+enum TypeSolutionResult {
+    Matching,
+    NonMatching(&'static str),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -6165,12 +6170,21 @@ impl TypedModule {
             let expr = self.eval_expr(arg.value, calling_scope, Some(param.type_id));
             match expr {
                 Err(error) => failed_exprs.push(error),
-                Ok(expr) => self.solve_generic_params(
-                    &mut solution_set,
-                    expr.get_type(),
-                    param.type_id,
-                    expr.get_span(),
-                )?,
+                Ok(expr) => {
+                    if let TypeSolutionResult::NonMatching(msg) = self.solve_generic_params(
+                        &mut solution_set,
+                        expr.get_type(),
+                        param.type_id,
+                        expr.get_span(),
+                    )? {
+                        return failf!(
+                            expr.get_span(),
+                            "Invalid argument {msg}: expected {} but got {}",
+                            self.type_id_to_string(param.type_id),
+                            self.type_id_to_string(expr.get_type())
+                        );
+                    };
+                }
             }
             // We break early since there's no point continuing to evaluate code
             // once we've solved all params
@@ -6188,19 +6202,19 @@ impl TypedModule {
                 )?;
             }
         };
-        if !solution_set.all_solved() {
+        let Some(solved_params) = solution_set.get_solutions() else {
             if !failed_exprs.is_empty() {
                 return Err(failed_exprs.into_iter().next().unwrap());
             } else {
-                // nocommit: Message here communicating what we couldn't solve
-                return failf!(call_span, "Bad call to ability function, TODO MSG");
+                use std::fmt::Write;
+                let mut detail = String::new();
+                writeln!(&mut detail, "Failed to resolve ability call:").unwrap();
+                self.display_solution_set(&mut detail, &solution_set);
+                return failf!(call_span, "{}", detail);
             }
         };
-        let solved_params: Vec<NamedType> = solution_set.expect_solutions();
         let (solved_self, solved_rest) = solved_params.split_at(1);
         let solved_self = solved_self.first().unwrap();
-
-        eprintln!("Sorted solved params without self: {:?}", solved_rest);
 
         let does_not_implement = || {
             failf!(
@@ -6219,14 +6233,20 @@ impl TypedModule {
         // 2a) Generate auto impl if that's what we find, cache it at low prio
         // 3) Return impl fn id, which can be used for nice type inference since
         //    its got the trait's generics baked in already
-        let Some(function_id) = self.find_ability_function_implementation(
-            fn_call.name.name,
-            solved_self.type_id,
-            actual_ability_id,
-        ) else {
+        let Some(impl_handle) =
+            self.find_ability_implementation(solved_self.type_id, actual_ability_id)
+        else {
             return does_not_implement();
         };
-        Ok(function_id)
+        let ability = self.get_ability(impl_handle.ability_id);
+        let matching = ability.find_function_by_name(fn_call.name.name);
+        if let Some((matching_index, _generic_fn)) = matching {
+            let impl_fn_id =
+                self.get_ability_impl(impl_handle.full_impl_id).function_at_index(matching_index);
+            Ok(impl_fn_id)
+        } else {
+            does_not_implement()
+        }
     }
 
     fn resolve_concrete_ability(
@@ -6236,48 +6256,28 @@ impl TypedModule {
     ) -> Option<AbilityId> {
         match &self.get_ability(ability_id).kind {
             TypedAbilityKind::Concrete => Some(ability_id),
-            TypedAbilityKind::Generic { specializations } => {
-                eprintln!(
-                    "Searching specs... {}",
-                    specializations
-                        .iter()
-                        .map(|s| self.pretty_print_named_types(&s.arguments, ", "))
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                );
-                specializations
-                    .iter()
-                    .find(|s| s.arguments == params)
-                    .map(|specn_info| specn_info.specialized_child)
-            }
+            TypedAbilityKind::Generic { specializations } => specializations
+                .iter()
+                .find(|s| s.arguments == params)
+                .map(|specn_info| specn_info.specialized_child),
             TypedAbilityKind::Specialized(_) => {
                 unreachable!("specializations are not resolvable by name")
             }
         }
     }
 
-    fn find_ability_function_implementation(
+    fn find_ability_implementation(
         &self,
-        function_name: Identifier,
         type_id: TypeId,
         ability_id: AbilityId,
-    ) -> Option<FunctionId> {
-        let imp = self
-            .ability_impl_table
+    ) -> Option<AbilityImplHandle> {
+        self.ability_impl_table
             .get(&type_id)
             .map(|v| &v[..])
             .unwrap_or_default()
             .iter()
-            .find(|imp| imp.ability_id == ability_id)?;
-        // nocommit: Tidy this up
-        let ability = self.get_ability(imp.ability_id);
-        let matching = ability.find_function_by_name(function_name);
-        if let Some((matching_index, _generic_fn)) = matching {
-            let impl_fn_id =
-                self.get_ability_impl(imp.full_impl_id).function_at_index(matching_index);
-            return Some(impl_fn_id);
-        }
-        None
+            .find(|imp| imp.ability_id == ability_id)
+            .copied()
     }
 
     fn handle_enum_as(
@@ -6478,16 +6478,25 @@ impl TypedModule {
                                     .map(|gp| TypeSolution::from(&NamedType::from(gp)))
                                     .collect(),
                             };
-                            self.solve_generic_params(
-                                &mut solution_set,
-                                passed_expr_type,
-                                generic_variant_payload,
-                                span,
-                            )?;
-                            if !solution_set.all_solved() {
+                            if let TypeSolutionResult::NonMatching(msg) = self
+                                .solve_generic_params(
+                                    &mut solution_set,
+                                    passed_expr_type,
+                                    generic_variant_payload,
+                                    span,
+                                )?
+                            {
+                                return failf!(
+                                    payload.get_span(),
+                                    "Invalid enum payload: {msg}: expected {} but got {}",
+                                    self.type_id_to_string(generic_variant_payload),
+                                    self.type_id_to_string(passed_expr_type)
+                                );
+                            };
+                            let Some(solutions) = solution_set.get_solutions() else {
                                 return failf!(span, "Could not infer type for generic enum");
-                            }
-                            solution_set.expect_solutions()
+                            };
+                            solutions
                         }
                     }
                 } else {
@@ -6839,7 +6848,6 @@ impl TypedModule {
         let function_return_type = generic_function_type.return_type;
         let generic_type_params = generic_function.type_params.clone();
         debug_assert!(!generic_type_params.is_empty());
-        let generic_name = generic_function.name;
         let generic_params = generic_function_type.params.clone();
         let passed_type_args = &fn_call.type_args;
         let type_params = match passed_type_args.is_empty() {
@@ -6904,12 +6912,21 @@ impl TypedModule {
                                 self.type_id_to_string(gen_param.type_id),
                                 self.expr_to_string(&expr)
                             );
-                            self.solve_generic_params(
-                                &mut solution_set,
-                                expr.get_type(),
-                                gen_param.type_id,
-                                fn_call.span,
-                            )?;
+                            if let TypeSolutionResult::NonMatching(msg) = self
+                                .solve_generic_params(
+                                    &mut solution_set,
+                                    expr.get_type(),
+                                    gen_param.type_id,
+                                    fn_call.span,
+                                )?
+                            {
+                                return failf!(
+                                    expr.get_span(),
+                                    "Invalid argument: {msg}: expected {} but got {}",
+                                    self.type_id_to_string(gen_param.type_id),
+                                    self.type_id_to_string(expr.get_type())
+                                );
+                            };
                         }
                         Err(e) => {
                             eprintln!("Just fyi eval_expr failed during inference: {e}");
@@ -6938,41 +6955,20 @@ impl TypedModule {
                     }
                 }
 
-                // nocommit: type safety of all_solved / expect_solutions()
-                if !solution_set.all_solved() {
-                    if !failed_exprs.is_empty() {
-                        return Err(failed_exprs.into_iter().next().unwrap());
+                match solution_set.get_solutions() {
+                    None => {
+                        if !failed_exprs.is_empty() {
+                            return Err(failed_exprs.into_iter().next().unwrap());
+                        }
+                        let mut detail: String = String::new();
+                        self.display_solution_set(&mut detail, &solution_set);
+                        return failf!(
+                            fn_call.span,
+                            "Not enough information to resolved this call\n:{}",
+                            detail
+                        );
                     }
-                    let mut detail: String = String::new();
-                    let mut first = true;
-                    for generic_param in &generic_type_params {
-                        let solution = solution_set
-                            .solutions
-                            .iter()
-                            .find(|tp| tp.name == generic_param.named_type.name)
-                            .map(|tp| self.name_of(tp.name))
-                            .unwrap_or("Unknown");
-                        if first {
-                            first = false;
-                        } else {
-                            detail.push('\n');
-                        };
-                        use std::fmt::Write;
-                        write!(
-                            detail,
-                            "{} := {}",
-                            self.name_of(generic_param.named_type.name),
-                            solution
-                        )
-                        .unwrap();
-                    }
-                    return failf!(
-                        fn_call.span,
-                        "Could not infer all type arguments for {}\n{detail}",
-                        self.name_of(generic_name),
-                    );
-                } else {
-                    solution_set.expect_solutions()
+                    Some(solutions) => solutions,
                 }
             }
         };
@@ -7004,7 +7000,7 @@ impl TypedModule {
         passed_type: TypeId,
         slot_type: TypeId,
         span: SpanId,
-    ) -> TyperResult<()> {
+    ) -> TyperResult<TypeSolutionResult> {
         // passed_expr              slot_type -> result
         //
         // int                    T                 -> T := int
@@ -7020,6 +7016,7 @@ impl TypedModule {
             self.type_id_to_string(passed_type).blue(),
             self.type_id_to_string(slot_type).blue()
         );
+
         if let (Some(passed_info), Some(arg_info)) = (
             self.types.get_generic_instance_info(passed_type),
             self.types.get_generic_instance_info(slot_type),
@@ -7039,7 +7036,7 @@ impl TypedModule {
             } else {
                 debug!("compared generic instances but they didn't match parent types");
             }
-            return Ok(());
+            return Ok(TypeSolutionResult::Matching);
         }
 
         match (self.types.get(passed_type), self.types.get(slot_type)) {
@@ -7075,7 +7072,7 @@ impl TypedModule {
                         }
                     },
                 }
-                Ok(())
+                Ok(TypeSolutionResult::Matching)
             }
             (Type::Reference(passed_refer), Type::Reference(refer)) => self.solve_generic_params(
                 solved_params,
@@ -7090,16 +7087,17 @@ impl TypedModule {
                 // get_first({ a: 1, b: 2})
                 // passed_expr: Pair<int, int>, argument_type: Pair<T, U>
                 // passed expr: { a: int, b: int }, argument_type: { a: T, b: U }
-                // Structs must have all same field names
+                //
+                // Structs must have all same field names in same order
                 let passed_fields = &passed_struct.fields;
                 let fields = &struc.fields;
                 if passed_fields.len() != fields.len() {
-                    return Ok(());
+                    return Ok(TypeSolutionResult::NonMatching("field count"));
                 }
                 for (idx, field) in fields.iter().enumerate() {
                     let passed_field = &passed_fields[idx];
                     if field.name != passed_field.name {
-                        return Ok(());
+                        return Ok(TypeSolutionResult::NonMatching("field names"));
                     }
                     self.solve_generic_params(
                         solved_params,
@@ -7108,7 +7106,7 @@ impl TypedModule {
                         span,
                     )?;
                 }
-                Ok(())
+                Ok(TypeSolutionResult::Matching)
             }
             (Type::Enum(passed_enum), Type::Enum(param_enum_type)) => {
                 // Enum example
@@ -7123,12 +7121,12 @@ impl TypedModule {
                 let passed_variants = &passed_enum.variants;
                 let variants = &param_enum_type.variants;
                 if passed_variants.len() != variants.len() {
-                    return Ok(());
+                    return Ok(TypeSolutionResult::NonMatching("variant count"));
                 }
                 for (idx, variant) in variants.iter().enumerate() {
                     let passed_variant = &passed_variants[idx];
                     if variant.name != passed_variant.name {
-                        return Ok(());
+                        return Ok(TypeSolutionResult::NonMatching("variant names"));
                     }
                     if let Some(passed_payload) = passed_variant.payload {
                         if let Some(param_payload) = variant.payload {
@@ -7139,12 +7137,12 @@ impl TypedModule {
                                 span,
                             )?;
                         } else {
-                            return Ok(());
+                            return Ok(TypeSolutionResult::NonMatching("payloads"));
                         }
                     }
                 }
 
-                Ok(())
+                Ok(TypeSolutionResult::Matching)
             }
             (Type::EnumVariant(passed_enum_variant), Type::Enum(_param_enum_type_variant)) => self
                 .solve_generic_params(
@@ -7166,7 +7164,7 @@ impl TypedModule {
                             passed_param.type_id,
                             param_param.type_id,
                             span,
-                        )?
+                        )?;
                     }
                     self.solve_generic_params(
                         solved_params,
@@ -7175,7 +7173,7 @@ impl TypedModule {
                         span,
                     )
                 } else {
-                    Ok(())
+                    Ok(TypeSolutionResult::NonMatching("parameter count"))
                 }
             }
             (Type::Closure(passed_closure), Type::ClosureObject(param_closure)) => self
@@ -7192,11 +7190,29 @@ impl TypedModule {
                     param_closure.function_type,
                     span,
                 ),
-            // nocommit: Consider a mode where we fail on mismatched shapes, to get
-            // an error like
-            // "cannot unify List[T] with int*" instead of
-            // "unable to solve all type params"
-            _ => Ok(()),
+            (_, _) if passed_type == slot_type => Ok(TypeSolutionResult::Matching),
+            _ => Ok(TypeSolutionResult::NonMatching("Unrelated types")),
+        }
+    }
+
+    fn display_solution_set(&self, w: &mut impl std::fmt::Write, solution_set: &TypeSolutionSet) {
+        let mut first = true;
+        for solution in &solution_set.solutions {
+            write!(
+                w,
+                "{} := {}",
+                self.name_of(solution.name),
+                solution
+                    .solved_type_id
+                    .map(|t| self.type_id_to_string(t))
+                    .unwrap_or("?".to_string())
+            )
+            .unwrap();
+            if first {
+                first = false;
+            } else {
+                w.write_char('\n').unwrap();
+            };
         }
     }
 
@@ -8555,7 +8571,6 @@ impl TypedModule {
             let _ = self.scopes.get_scope_mut(impl_scope_id).add_type(impl_param.name, arg_type);
         }
 
-        // nocommit: Prevent extra functions too?
         for ability_function_ref in &ability.functions {
             let Some((parsed_impl_function_id, impl_function_span)) =
                 parsed_functions.iter().find_map(|&fn_id| {
@@ -8576,6 +8591,19 @@ impl TypedModule {
                     span,
                 );
             };
+            // Report extra functions too
+            for &parsed_fn in &parsed_functions {
+                let parsed_fn_name = self.ast.get_function(parsed_fn).name;
+                let Some(_ability_function_ref) =
+                    ability.functions.iter().find(|f| f.function_name == parsed_fn_name)
+                else {
+                    return failf!(
+                        span,
+                        "Extra function in ability impl: {}",
+                        self.name_of(parsed_fn_name)
+                    );
+                };
+            }
 
             let function_impl = self.eval_function_declaration(
                 parsed_impl_function_id,
@@ -9114,7 +9142,7 @@ impl TypedModule {
             }
         }
         if !self.errors.is_empty() {
-            bail!("{} failed typechecking with {} errors", self.name(), self.errors.len())
+            bail!("Module {} failed typechecking with {} errors", self.name(), self.errors.len())
         }
 
         let mut pass = 0;
