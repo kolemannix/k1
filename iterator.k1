@@ -1,0 +1,45 @@
+ability Iterator[impl Item] {
+  fn next(self: Self*): Item?
+}
+impl Iterator[Item = int] for ListIterator[int] {
+  fn next(self: ListIterator[int]*): int? { 
+    if self.pos < self.l.len {
+      let ret = some(self.l.get(self.pos));
+      self.pos* <- self.pos + 1;
+      ret
+    } else .None
+  }
+}
+
+ability Iterable[impl I: Iterator] {
+  fn iter(self: Self): I
+}
+impl Iterable[I = ListIterator[int]] for List[int] {
+  fn iter(self: List[int]): I {
+    newListIterator(self)
+  }
+}
+
+impl Show for i64? {
+  fn show(self: i64?): string { if self is .Some(i) "Some(\{i})" else "None" }
+}
+
+fn main(): int {
+  let l = [1,2,3];
+  let* i = l.iter();
+  printIt(i.next());
+  printIt(i.next());
+  printIt(i.next());
+  printIt(i.next());
+  0
+}
+
+deftype ListIterator[T] = {
+  l: List[T],
+  pos: u64
+}
+
+fn newListIterator[T](l: List[T]): ListIterator[T] {
+  { l, pos: 0 }
+}
+
