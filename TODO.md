@@ -139,12 +139,11 @@
   - [x] functions
   - [x] constants
   - [x] namespaces
-- [ ] Convert NamedType to a trait
 - [x] Ability call resolution rework
   - [x] Remove restriction that first arg is Self by
   - [x] Reworking resolution to find a function by name first, then Solve for 'self' by unifying call and signature, then find the impl
-- [ ] Fully generic abilities with separate 'input' vs 'output' type parameters
-- [ ] nocompile(<expr>) intrinsic! yields an actual runtime constant string for assertions?!
+- [x] Fully generic abilities with separate 'input' vs 'output' type parameters
+- [x] nocompile(<expr>) intrinsic! yields an actual runtime constant string for assertions?!
        `let result1 = compiler/nocompile(1 + "asdf"); assert(result1.startsWith("Type mismatch"))`
 - [ ] More explicit companion ns via injecting `for` keyword `ns (for) type {`
 - [ ] BTs via Runtime_Support_Crash_Handler?
@@ -218,6 +217,7 @@
 
 ## Compiler
 - [ ] LLVM: avoid loading aggregate values directly
+- [ ] Convert NamedType to a trait
 - [ ] Use smallvec
 - [ ] UTF8
 - [ ] Intern ParsedBlock and ParsedStatement
