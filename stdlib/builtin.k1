@@ -46,6 +46,10 @@ intern fn sizeOf[T](): u64
 intern fn sizeOfStride[T](): u64
 intern fn alignOf[T](): u64
 
+ns compiler {
+  intern fn location(): CompilerSourceLoc
+}
+
 ability Bitwise {
   fn bitNot(self: Self): Self
   fn bitAnd(self: Self, other: Self): Self

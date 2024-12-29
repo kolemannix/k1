@@ -2373,6 +2373,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 };
                 Ok(result_pointer.as_basic_value_enum().into())
             }
+            IntrinsicFunction::CompilerSourceLocation => {
+                unreachable!("CompilerSourceLocation is handled in typechecking phase")
+            }
         }
     }
 

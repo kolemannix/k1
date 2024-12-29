@@ -1,0 +1,7 @@
+fn main(): int {
+  let x = compiler/location();
+  assert(x.filename == "compiler_test.k1");
+  assert(x.line == 2);
+  assert(compiler/testCompile(2 + "asdf") is .Some(_));
+  0
+}

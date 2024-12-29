@@ -1,5 +1,0 @@
-fn main(): int {
-  assert(compilerFile() == "compiler_file.k1");
-  assert(compilerLine() == 3);
-  0
-}

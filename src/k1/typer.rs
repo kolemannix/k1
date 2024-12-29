@@ -1214,6 +1214,7 @@ pub enum IntrinsicFunction {
     BitShiftLeft,
     BitShiftRight,
     PointerIndex,
+    CompilerSourceLocation,
 }
 
 impl IntrinsicFunction {
@@ -1231,6 +1232,7 @@ impl IntrinsicFunction {
             IntrinsicFunction::BitShiftLeft => true,
             IntrinsicFunction::BitShiftRight => true,
             IntrinsicFunction::PointerIndex => true,
+            IntrinsicFunction::CompilerSourceLocation => true,
         }
     }
 }
@@ -2050,7 +2052,7 @@ impl TypedModule {
                 let empty_struct_reference_id = self.types.add_reference_type(empty_struct_id);
                 params.push(FnParamType {
                     type_id: empty_struct_reference_id,
-                    name: get_ident!(self, "__clos_env"),
+                    name: get_ident!(self, CLOSURE_ENV_PARAM_NAME),
                     is_context: false,
                     is_closure_env: true,
                     span: fun_type.span,
@@ -5785,7 +5787,6 @@ impl TypedModule {
         calling_scope: ScopeId,
         expected_type: Option<TypeId>,
     ) -> TyperResult<Either<TypedExpr, Callee>> {
-        let fn_name = fn_call.name.name;
         let call_span = fn_call.span;
         if let Some(builtin_result) =
             self.handle_builtin_function_call_lookalikes(fn_call, calling_scope)?
@@ -5793,39 +5794,11 @@ impl TypedModule {
             return Ok(Either::Left(builtin_result));
         }
 
-        if fn_call.is_method {
-            // You can't do method call syntax _and_ namespace the name: foo.ns/send()
-            debug_assert!(fn_call.name.namespaces.is_empty())
-        }
-
-        let first_arg = fn_call.args.first().cloned();
-        let second_arg = fn_call.args.get(1).cloned();
-        if fn_call.is_method {
-            // Special case for enum constructors which are syntactically also function calls
-            //
-            // Perhaps handle_enum_constructor could be updated to work with a TypedExpr base
-            // as well, provided it is a Variable expr
-            if let Some(base_arg) = fn_call.args.first() {
-                let type_args = fn_call.type_args.clone();
-                if let Some(enum_constr) = self.handle_enum_constructor(
-                    base_arg.value,
-                    fn_name,
-                    second_arg.map(|param| param.value),
-                    expected_type,
-                    &type_args,
-                    calling_scope,
-                    fn_call.span,
-                )? {
-                    return Ok(Either::Left(enum_constr));
-                }
-            }
-        }
-
         let first_arg_expr: Option<MaybeTypedExpr> = match known_args.as_ref() {
             Some((_, args)) if !args.is_empty() => {
                 Some(MaybeTypedExpr::Typed(args.first().unwrap().clone()))
             }
-            _ => match first_arg {
+            _ => match fn_call.args.first() {
                 None => None,
                 Some(first) => Some(MaybeTypedExpr::Parsed(first.value)),
             },
@@ -5843,7 +5816,6 @@ impl TypedModule {
                 expected_type,
             ),
             false => {
-                // Resolve non-method call
                 if let Some(function_id) = self.scopes.find_function_namespaced(
                     calling_scope,
                     &fn_call.name,
@@ -6034,26 +6006,22 @@ impl TypedModule {
             "continue" => {
                 todo!("implement continue")
             }
-            "compilerFile" => {
-                if !fn_call.args.is_empty() {
-                    return make_fail_span("compilerFile() takes no arguments", call_span);
+            "testCompile" => {
+                if fn_call.args.len() != 1 {
+                    return make_fail_span("testCompile takes one argument", call_span);
                 }
-                let span = self.ast.spans.get(call_span);
-                let filename = &self.ast.sources.source_by_span(span).filename;
-                let string_expr = TypedExpr::Str(filename.clone(), call_span);
-                Ok(Some(string_expr))
-            }
-            "compilerLine" => {
-                if !fn_call.args.is_empty() {
-                    return make_fail_span("compilerLine() takes no arguments", call_span);
-                }
-                let span = self.ast.spans.get(fn_call.span);
-                let line = self.ast.sources.get_line_for_span_start(span).unwrap();
-                let int_expr = TypedExpr::Integer(TypedIntegerExpr {
-                    value: TypedIntegerValue::U64(line.line_number() as u64),
-                    span: call_span,
-                });
-                Ok(Some(int_expr))
+                let arg = &fn_call.args[0];
+                let result = self.eval_expr(arg.value, calling_scope, None);
+                let expr = match result {
+                    Err(typer_error) => self.synth_optional_some(
+                        fn_call.id.into(),
+                        TypedExpr::Str(typer_error.message, call_span),
+                    ),
+                    Ok(_expr) => {
+                        self.synth_optional_none(STRING_TYPE_ID, fn_call.id.into(), call_span)
+                    }
+                };
+                Ok(Some(expr))
             }
             _ => Ok(None),
         }
@@ -6066,6 +6034,25 @@ impl TypedModule {
         calling_scope: ScopeId,
         expected_type_id: Option<TypeId>,
     ) -> TyperResult<Either<TypedExpr, Callee>> {
+        debug_assert!(fn_call.name.namespaces.is_empty());
+        let fn_name = fn_call.name.name;
+        let second_arg = fn_call.args.get(1).cloned();
+
+        if let Some(base_arg) = fn_call.args.first() {
+            let type_args = fn_call.type_args.clone();
+            if let Some(enum_constr) = self.handle_enum_constructor(
+                base_arg.value,
+                fn_name,
+                second_arg.map(|param| param.value),
+                expected_type_id,
+                &type_args,
+                calling_scope,
+                fn_call.span,
+            )? {
+                return Ok(Either::Left(enum_constr));
+            }
+        }
+
         let base_expr = match base_expr {
             MaybeTypedExpr::Typed(expr) => expr,
             MaybeTypedExpr::Parsed(parsed_expr_id) => {
@@ -6078,7 +6065,6 @@ impl TypedModule {
             return Ok(Either::Left(enum_as_result));
         }
 
-        let fn_name = fn_call.name.name;
         let call_span = fn_call.span;
 
         let type_id = base_expr.get_type();
@@ -6093,6 +6079,7 @@ impl TypedModule {
                 return Ok(Either::Right(Callee::make_static(method_id)));
             }
         };
+
         let method_not_found = || {
             failf!(
                 call_span,
@@ -6567,27 +6554,8 @@ impl TypedModule {
                                 && defn_info.scope == self.scopes.get_root_scope_id()
                         });
                     if is_source_loc {
-                        let the_span = self.ast.spans.get(span);
-                        let source = self.ast.sources.get_source(the_span.file_id);
-                        let line = source.get_line_for_span_start(the_span).unwrap();
-                        let source_loc_expr = TypedExpr::Struct(Struct {
-                            fields: vec![
-                                StructField {
-                                    name: get_ident!(self, "filename"),
-                                    expr: TypedExpr::Str(source.filename.clone(), span),
-                                },
-                                StructField {
-                                    name: get_ident!(self, "line"),
-                                    expr: TypedExpr::Integer(TypedIntegerExpr {
-                                        value: TypedIntegerValue::U64(line.line_number() as u64),
-                                        span,
-                                    }),
-                                },
-                            ],
-                            type_id: context_param.type_id,
-                            span,
-                        });
-                        final_args.push((MaybeTypedExpr::Typed(source_loc_expr), context_param));
+                        let expr = self.synth_source_location(span);
+                        final_args.push((MaybeTypedExpr::Typed(expr), context_param));
                     } else if !tolerate_missing_context_args {
                         return failf!(
                             span,
@@ -6602,7 +6570,8 @@ impl TypedModule {
             }
         }
 
-        let is_closure = params.first().is_some_and(|p| p.name == get_ident!(self, "__clos_env"));
+        let is_closure =
+            params.first().is_some_and(|p| p.name == get_ident!(self, CLOSURE_ENV_PARAM_NAME));
         let params = if is_closure { &params[1..] } else { params };
         let explicit_param_count = params.iter().filter(|p| !p.is_context).count();
         let total_expected =
@@ -6833,7 +6802,20 @@ impl TypedModule {
             return_type: call_return_type,
             span,
         };
-        Ok(TypedExpr::Call(call))
+
+        if let Some(intrinsic_type) =
+            call.callee.maybe_function_id().and_then(|id| self.get_function(id).intrinsic_type)
+        {
+            match intrinsic_type {
+                IntrinsicFunction::CompilerSourceLocation => {
+                    let source_location = self.synth_source_location(span);
+                    Ok(source_location)
+                }
+                _ => Ok(TypedExpr::Call(call)),
+            }
+        } else {
+            Ok(TypedExpr::Call(call))
+        }
     }
 
     fn infer_and_constrain_call_type_args(
@@ -7682,6 +7664,10 @@ impl TypedModule {
                 },
                 Some("types") => match fn_name_str {
                     "typeId" => Some(IntrinsicFunction::TypeId),
+                    _ => None,
+                },
+                Some("compiler") => match fn_name_str {
+                    "location" => Some(IntrinsicFunction::CompilerSourceLocation),
                     _ => None,
                 },
                 Some("bool") => match fn_name_str {
@@ -9552,6 +9538,29 @@ impl TypedModule {
             fields.push(StructField { name: field.name, expr: field_expr });
         }
         TypedExpr::Struct(Struct { fields, type_id: struct_type_id, span })
+    }
+
+    fn synth_source_location(&self, span: SpanId) -> TypedExpr {
+        let the_span = self.ast.spans.get(span);
+        let source = self.ast.sources.get_source(the_span.file_id);
+        let line = source.get_line_for_span_start(the_span).unwrap();
+        TypedExpr::Struct(Struct {
+            fields: vec![
+                StructField {
+                    name: get_ident!(self, "filename"),
+                    expr: TypedExpr::Str(source.filename.clone(), span),
+                },
+                StructField {
+                    name: get_ident!(self, "line"),
+                    expr: TypedExpr::Integer(TypedIntegerExpr {
+                        value: TypedIntegerValue::U64(line.line_number() as u64),
+                        span,
+                    }),
+                },
+            ],
+            type_id: COMPILER_SOURCE_LOC_TYPE_ID,
+            span,
+        })
     }
 
     pub fn push_error(&mut self, e: TyperError) {
