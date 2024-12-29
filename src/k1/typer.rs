@@ -125,11 +125,35 @@ pub enum TypedAbilityKind {
     Specialized(AbilitySpec9nInfo),
 }
 
+impl TypedAbilityKind {
+    pub fn specializations(&self) -> &[AbilitySpec9nInfo] {
+        match self {
+            TypedAbilityKind::Concrete => &[],
+            TypedAbilityKind::Generic { specializations } => specializations,
+            TypedAbilityKind::Specialized(_) => &[],
+        }
+    }
+
+    pub fn is_concrete(&self) -> bool {
+        matches!(self, TypedAbilityKind::Concrete)
+    }
+
+    pub fn is_generic(&self) -> bool {
+        matches!(self, TypedAbilityKind::Generic { .. })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TypedAbilityParam {
     name: Identifier,
     type_variable_id: TypeId,
     is_impl_param: bool,
+}
+
+impl TypedAbilityParam {
+    fn is_ability_side_param(&self) -> bool {
+        !self.is_impl_param
+    }
 }
 
 impl From<&TypedAbilityParam> for NamedType {
@@ -5825,8 +5849,14 @@ impl TypedModule {
                     if let Some(function_ability_id) =
                         self.get_function(function_id).kind.ability_id()
                     {
+                        let function_ability_index = self
+                            .get_ability(function_ability_id)
+                            .find_function_by_name(fn_call.name.name)
+                            .unwrap()
+                            .0;
                         let function_id = self.resolve_ability_call(
                             function_id,
+                            function_ability_index,
                             function_ability_id,
                             fn_call,
                             calling_scope,
@@ -6097,7 +6127,7 @@ impl TypedModule {
                 .map(|a| self.name_of(self.get_ability(*a).name))
                 .collect::<Vec<_>>()
         );
-        let Some((_, ability_function_ref)) = abilities_in_scope
+        let Some((ability_function_index, ability_function_ref)) = abilities_in_scope
             .iter()
             .find_map(|ability_id| self.get_ability(*ability_id).find_function_by_name(fn_name))
         else {
@@ -6110,6 +6140,7 @@ impl TypedModule {
         };
         let ability_impl_fn_id = self.resolve_ability_call(
             ability_function_ref.function_id,
+            ability_function_index,
             ability_id,
             fn_call,
             calling_scope,
@@ -6121,6 +6152,7 @@ impl TypedModule {
     fn resolve_ability_call(
         &mut self,
         function_id: FunctionId,
+        function_ability_index: usize,
         ability_id: AbilityId,
         fn_call: &FnCall,
         calling_scope: ScopeId,
@@ -6225,15 +6257,10 @@ impl TypedModule {
         else {
             return does_not_implement();
         };
-        let ability = self.get_ability(impl_handle.ability_id);
-        let matching = ability.find_function_by_name(fn_call.name.name);
-        if let Some((matching_index, _generic_fn)) = matching {
-            let impl_fn_id =
-                self.get_ability_impl(impl_handle.full_impl_id).function_at_index(matching_index);
-            Ok(impl_fn_id)
-        } else {
-            does_not_implement()
-        }
+        let impl_fn_id = self
+            .get_ability_impl(impl_handle.full_impl_id)
+            .function_at_index(function_ability_index);
+        Ok(impl_fn_id)
     }
 
     fn resolve_concrete_ability(
@@ -7780,10 +7807,7 @@ impl TypedModule {
         let ability_parameters = ability.parameters.clone();
         let ability_namespace_id = ability.namespace_id;
         let ability_parent_scope = self.scopes.get_scope(ability.scope_id).parent.unwrap();
-        let specializations = match &self.get_ability(generic_ability_id).kind {
-            TypedAbilityKind::Generic { specializations } => specializations,
-            _ => &vec![],
-        };
+        let specializations = self.get_ability(generic_ability_id).kind.specializations();
         if let Some(cached_specialization) =
             specializations.iter().find(|spec| spec.arguments == arguments)
         {
@@ -7918,11 +7942,12 @@ impl TypedModule {
         scope_id: ScopeId,
     ) -> TyperResult<AbilityId> {
         let ability_id = self.find_ability_or_declare(&ability_expr.name, scope_id)?;
-        if ability_expr.arguments.is_empty() {
-            return Ok(ability_id);
-        };
-
         let ability = self.get_ability(ability_id);
+
+        if ability.kind.is_concrete() {
+            return Ok(ability_id);
+        }
+
         let ability_parameters = ability.parameters.clone();
 
         // Catch unrecognized arguments first
@@ -8373,7 +8398,8 @@ impl TypedModule {
                 is_impl_param: ability_param.is_impl_param,
             })
         }
-        let kind = if !ability_params.is_empty() {
+        let has_ability_side_params = ability_params.iter().any(|p| p.is_ability_side_param());
+        let kind = if has_ability_side_params {
             TypedAbilityKind::Generic { specializations: vec![] }
         } else {
             TypedAbilityKind::Concrete
