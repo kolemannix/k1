@@ -113,7 +113,7 @@ pub const BUFFER_TYPE_ID: TypeId = TypeId(17);
 pub const LIST_TYPE_ID: TypeId = TypeId(21);
 pub const STRING_TYPE_ID: TypeId = TypeId(23);
 pub const OPTIONAL_TYPE_ID: TypeId = TypeId(28);
-pub const COMPILER_SOURCE_LOC: TypeId = TypeId(29);
+pub const COMPILER_SOURCE_LOC_TYPE_ID: TypeId = TypeId(29);
 pub const ORDERING_TYPE_ID: TypeId = TypeId(33);
 
 #[derive(Debug, Clone)]
