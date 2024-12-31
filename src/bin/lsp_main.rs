@@ -127,7 +127,6 @@ impl Backend {
             no_llvm_opt: false,
             dump_module: false,
             debug: false,
-            gui: false,
             llvm_counts: false,
             command: k1::compiler::Command::Check {
                 file: root_uri.as_ref().unwrap().path().into(),

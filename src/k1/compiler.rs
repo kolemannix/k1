@@ -68,10 +68,6 @@ pub struct Args {
     #[arg(long)]
     pub debug: bool,
 
-    /// GUI
-    #[arg(long, default_value_t = false)]
-    pub gui: bool,
-
     /// Log LLVM Instruction Counts
     #[arg(long, default_value_t = false)]
     pub llvm_counts: bool,
@@ -290,6 +286,7 @@ pub fn codegen_module<'ctx, 'module>(
 
     if args.write_llvm || do_write_executable {
         let llvm_text = codegen.output_llvm_ir_text();
+        // nocommit: Create outdir if it doesn't exist
         let mut f = File::create(format!("{}/{}.ll", out_dir, &module_name))
             .expect("Failed to create .ll file");
         f.write_all(llvm_text.as_bytes()).unwrap();

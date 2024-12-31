@@ -1,0 +1,14 @@
+let alloc: uint = 0;
+fn setAlloc(): unit { 
+  let p = alloc as Pointer as Allocator*;
+  p <- Allocator/initDefault();
+}
+fn alloc(): Allocator* {
+  (alloc as Pointer) as Allocator*
+}
+
+fn main(): int {
+  setAlloc();
+  alloc().tempArena().pushBytes(8);
+  0
+}

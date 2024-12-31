@@ -64,8 +64,6 @@ ability Comparable {
 }
 
 
-// This lives in builtin because there's syntax that uses it (opt!)
-// One day that will just use the Unwrap ability
 // ability Unwrap[T] {
 //   fn hasValue(self: Self): bool
 //   fn unwrap(): T

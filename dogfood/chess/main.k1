@@ -1,11 +1,5 @@
 deftype Square = either
-  Blank
-  , Pawn
-  , Knight
-  , Bishop
-  , Rook
-  , Queen
-  , King
+  Blank, Pawn, Knight, Bishop, Rook, Queen, King
 
 ns Square {
   fn charSymbol(self: Square): char {
@@ -25,8 +19,8 @@ fn from_xy(x: u8, y: u8): u8 {
   x + y * 8
 }
 fn from_name(s: string): u8 {
-  let file = switch s.first()! {
-     'a' -> 0:u8,
+  let file: u8 = switch s.first()! {
+     'a' -> 0,
      'b' -> 1,
      'c' -> 2,
      'd' -> 3,
@@ -51,7 +45,7 @@ fn dump(board: List[Square]): unit {
 }
 
 fn startPos(): List[Square] {
-  let board = List/filled[Square](64, .Blank);
+  let board = List/filled[Square](64, .Pawn);
   board.set(0, .Rook);
   board.set(1, .Knight);
   board.set(2, .Bishop);
@@ -60,22 +54,7 @@ fn startPos(): List[Square] {
   board.set(5, .Bishop);
   board.set(6, .Knight);
   board.set(7, .Rook);
-  board.set(8, .Pawn);
-  board.set(9, .Pawn);
-  board.set(10, .Pawn);
-  board.set(11, .Pawn);
-  board.set(12, .Pawn);
-  board.set(13, .Pawn);
-  board.set(14, .Pawn);
-  board.set(15, .Pawn);
-  board.set(48, .Pawn);
-  board.set(49, .Pawn);
-  board.set(50, .Pawn);
-  board.set(51, .Pawn);
-  board.set(52, .Pawn);
-  board.set(53, .Pawn);
-  board.set(54, .Pawn);
-  board.set(55, .Pawn);
+
   board.set(56, .Rook);
   board.set(57, .Knight);
   board.set(58, .Bishop);

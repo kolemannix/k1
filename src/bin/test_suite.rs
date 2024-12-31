@@ -91,7 +91,6 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
         no_std: false,
         write_llvm: true,
         dump_module: false,
-        gui: false,
         llvm_counts: false,
         command: Command::Build { file: path.as_ref().to_owned() },
     };
