@@ -1,6 +1,5 @@
 pub mod codegen_llvm;
 pub mod compiler;
-pub mod gui;
 pub mod lex;
 pub mod parse;
 mod strings;
