@@ -6503,7 +6503,10 @@ impl TypedModule {
             )
         };
 
-        self.check_ability_arguments(ability_id, solved_rest, call_span).map_err(|e| {
+        // We only solve for the ability-side params, so we pass a flag to check_ability_arguments
+        // indicating that we aren't providing the impl params
+        let skip_impl_check = true;
+        self.check_ability_arguments(ability_id, solved_rest, call_span, skip_impl_check).map_err(|e| {
             errf!(
                 e.span,
                 "I thought I found a matching ability call, but the arguments didn't check out. This is likely a bug {}",
@@ -8086,6 +8089,7 @@ impl TypedModule {
         ability_id: AbilityId,
         arguments: &[SimpleNamedType],
         span: SpanId,
+        skip_impl_check: bool,
     ) -> TyperResult<(Vec<SimpleNamedType>, Vec<SimpleNamedType>)> {
         let ability = self.get_ability(ability_id);
         let ability_parameters = ability.parameters.clone();
@@ -8100,10 +8104,12 @@ impl TypedModule {
 
         let mut ability_arguments = Vec::with_capacity(arguments.len());
         let mut impl_arguments = Vec::with_capacity(arguments.len());
-        for param in ability_parameters.iter() {
+        for param in
+            ability_parameters.iter().filter(|p| !skip_impl_check || p.is_ability_side_param())
+        {
             let Some(matching_arg) = arguments.iter().find(|a| a.name == param.name) else {
                 return failf!(
-                    param.span,
+                    span,
                     "Missing argument for ability parameter {}",
                     self.name_of(param.name)
                 );
@@ -8116,9 +8122,9 @@ impl TypedModule {
                 span,
             )?;
             if param.is_impl_param {
-                impl_arguments.push(matching_arg.clone())
+                impl_arguments.push(*matching_arg)
             } else {
-                ability_arguments.push(matching_arg.clone())
+                ability_arguments.push(*matching_arg)
             };
         }
 
@@ -8270,7 +8276,7 @@ impl TypedModule {
         }
 
         let (ability_args, impl_args) =
-            self.check_ability_arguments(ability_id, &arguments, ability_expr.span)?;
+            self.check_ability_arguments(ability_id, &arguments, ability_expr.span, false)?;
         Ok((ability_id, ability_args, impl_args))
     }
 
