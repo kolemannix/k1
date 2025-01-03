@@ -1,0 +1,69 @@
+deftype Point[T] = { x: T, y: T }
+
+ability Add[Rhs, impl Output] {
+  fn add(self: Self, rhs: Rhs): Output
+}
+
+impl Add[Rhs = i32, Output = i32] for i32 {
+  fn add(self: i32, rhs: Rhs): i32 { self + rhs }
+}
+
+impl Add[Rhs = i64, Output = i64] for i32 {
+  fn add(self: i32, rhs: i64): i64 { (self as i64) + rhs }
+}
+
+ns Foob {
+  deftype alias myInt = int
+  
+  impl Add[Rhs = myInt, Output = myInt] for myInt {
+    fn add(self: myInt, rhs: myInt): myInt { self + rhs }
+  }
+}
+
+// TODO: generic impls
+// nocommit: When constraining a type w/ ability, the impl params are actually necessary
+//           This is fine because to resolve a constraint we need to find an impl,
+//           So we just need one more step to check that the impl types line up.
+//           Currently we'll allow any old impl, and we will use the actual output type...
+//           but I think it could cause scenarios where we allow a type based on constraint but the
+//           mono code doesn't compile because the output type of the chosen impl is not what we stipulated in the constraint
+
+impl[T: Add[Rhs = T, Output = T]] Add[Rhs = Point[T], Output = Point[T]] for Point[T] {
+  fn add(self: Point[T], other: Point[T]): Point[T] { 
+    { x: self.x.add(other.x), y: self.y.add(other.y) }
+  }
+}
+
+ability From[T] { fn from(t: T): Self }
+ability To[T] { fn to(self: Self): T }
+
+impl To[T = string] for i32 {
+  fn to(self: Self): string { Show/show[i32](self) }
+}
+impl To[T = string] for i64 {
+  fn to(self: Self): string { Show/show[i64](self) }
+}
+impl To[T = char] for byte {
+  fn to(self: byte): char { self as char }
+}
+
+fn main(): unit {
+
+  let btoc: char = (101: u8).to();
+
+  let p: Point[i32] = { x: 1, y: 2 };
+
+  let x: i32 = 4;
+
+  let a1 = x.add(12: i64);
+  let a2 = x.add(10: i32);
+
+  assert(a1 == 16);
+  assert(a2 == 14: i32);
+
+  // Generic Impls
+  p.add(p);
+
+
+  ()
+}

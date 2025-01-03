@@ -364,7 +364,7 @@ impl TypedModule {
                 if idx > 0 {
                     w.write_str(", ")?;
                 }
-                self.write_ident(w, tp.named_type.name)?;
+                self.write_ident(w, tp.name)?;
             }
             w.write_char(']')?;
         }
@@ -744,7 +744,7 @@ impl TypedModule {
         s
     }
 
-    pub fn pretty_print_named_types(&self, types: &[NamedType], sep: &str) -> String {
+    pub fn pretty_print_named_types(&self, types: &[SimpleNamedType], sep: &str) -> String {
         let mut s = String::new();
         let mut first = true;
         for nt in types {

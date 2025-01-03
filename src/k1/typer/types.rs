@@ -182,9 +182,12 @@ pub struct GenericTypeParam {
     pub span: SpanId,
 }
 
-impl From<&GenericTypeParam> for NamedType {
-    fn from(param: &GenericTypeParam) -> Self {
-        NamedType { name: param.name, type_id: param.type_id }
+impl NamedType for GenericTypeParam {
+    fn name(&self) -> Identifier {
+        self.name
+    }
+    fn type_id(&self) -> TypeId {
+        self.type_id
     }
 }
 
@@ -280,9 +283,9 @@ pub struct FnParamType {
     pub span: SpanId,
 }
 
-impl From<&FnParamType> for NamedType {
+impl From<&FnParamType> for SimpleNamedType {
     fn from(param: &FnParamType) -> Self {
-        NamedType { name: param.name, type_id: param.type_id }
+        SimpleNamedType { name: param.name, type_id: param.type_id }
     }
 }
 
@@ -837,6 +840,14 @@ impl Types {
 
     pub fn get_type_variable(&self, type_id: TypeId) -> &TypeVariable {
         if let Type::TypeVariable(tv) = self.get(type_id) {
+            tv
+        } else {
+            panic!("Expected type variable on type {}", type_id)
+        }
+    }
+
+    pub fn get_type_variable_mut(&mut self, type_id: TypeId) -> &mut TypeVariable {
+        if let Type::TypeVariable(tv) = self.get_mut(type_id) {
             tv
         } else {
             panic!("Expected type variable on type {}", type_id)

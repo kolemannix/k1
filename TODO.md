@@ -145,6 +145,8 @@
 - [x] Fully generic abilities with separate 'input' vs 'output' type parameters
 - [x] nocompile(<expr>) intrinsic! yields an actual runtime constant string for assertions?!
        `let result1 = compiler/nocompile(1 + "asdf"); assert(result1.startsWith("Type mismatch"))`
+- [ ] Improve LLVM opt pipeline https://www.reddit.com/r/Compilers/comments/1hqmd7x/recommended_llvm_passes/
+      https://llvm.org/docs/NewPassManager.html#just-tell-me-how-to-run-the-default-optimization-pipeline-with-the-new-pass-manager
 - [ ] More explicit companion ns via injecting `for` keyword `ns (for) type {`
 - [ ] BTs via Runtime_Support_Crash_Handler?
 - [ ] Namespace stuff
