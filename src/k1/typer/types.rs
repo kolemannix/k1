@@ -283,12 +283,6 @@ pub struct FnParamType {
     pub span: SpanId,
 }
 
-impl From<&FnParamType> for SimpleNamedType {
-    fn from(param: &FnParamType) -> Self {
-        SimpleNamedType { name: param.name, type_id: param.type_id }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct FunctionType {
     pub params: Vec<FnParamType>,
@@ -489,10 +483,10 @@ impl std::hash::Hash for Type {
             }
             Type::Function(fun) => {
                 "fun".hash(state);
-                fun.defn_info.hash(state);
                 fun.return_type.hash(state);
                 for param in &fun.params {
-                    param.name.hash(state);
+                    param.is_context.hash(state);
+                    param.is_closure_env.hash(state);
                     param.type_id.hash(state);
                 }
             }

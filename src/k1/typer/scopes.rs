@@ -117,6 +117,17 @@ impl Scopes {
         0 as ScopeId
     }
 
+    pub fn add_sibling_scope(
+        &mut self,
+        sibling_scope_id: ScopeId,
+        scope_type: ScopeType,
+        scope_owner_id: Option<ScopeOwnerId>,
+        name: Option<Identifier>,
+    ) -> ScopeId {
+        let parent = self.get_scope(sibling_scope_id).parent.unwrap();
+        self.add_child_scope(parent, scope_type, scope_owner_id, name)
+    }
+
     pub fn add_child_scope(
         &mut self,
         parent_scope_id: ScopeId,

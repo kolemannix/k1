@@ -9,7 +9,7 @@ impl Add[Rhs = i32, Output = i32] for i32 {
 }
 
 impl Add[Rhs = i64, Output = i64] for i32 {
-  fn add(self: i32, rhs: i64): i64 { (self as i64) + rhs }
+ fn add(self: i32, rhs: i64): i64 { (self as i64) + rhs }
 }
 
 ns Foob {
@@ -20,17 +20,11 @@ ns Foob {
   }
 }
 
-// TODO: generic impls
-// nocommit: When constraining a type w/ ability, the impl params are actually necessary
-//           This is fine because to resolve a constraint we need to find an impl,
-//           So we just need one more step to check that the impl types line up.
-//           Currently we'll allow any old impl, and we will use the actual output type...
-//           but I think it could cause scenarios where we allow a type based on constraint but the
-//           mono code doesn't compile because the output type of the chosen impl is not what we stipulated in the constraint
-
 impl[T: Add[Rhs = T, Output = T]] Add[Rhs = Point[T], Output = Point[T]] for Point[T] {
   fn add(self: Point[T], other: Point[T]): Point[T] { 
-    { x: self.x.add(other.x), y: self.y.add(other.y) }
+    let newX: T = self.x.add(other.x);
+    let newY: T = self.y.add(other.y);
+    { x: newX, y: newY }
   }
 }
 
@@ -51,18 +45,20 @@ fn main(): unit {
 
   let btoc: char = (101: u8).to();
 
-  let p: Point[i32] = { x: 1, y: 2 };
-
   let x: i32 = 4;
 
-  let a1 = x.add(12: i64);
-  let a2 = x.add(10: i32);
+  let add32 = x.add(10: i32);
+  assert(add32 == 14);
 
-  assert(a1 == 16);
-  assert(a2 == 14: i32);
+  let add64 = x.add(12: i64);
+  assert(add64 == 16: i64);
 
-  // Generic Impls
-  p.add(p);
+  // Blanket Impls
+  let p: Point[i32] = { x: 1, y: 2 };
+  let added: Point[i32] = p.add(p);
+  assert(added.x == (1 + 1) as i32);
+  assert(added.y == (2 + 2) as i32);
+  #debug() (p.add(p));
 
 
   ()

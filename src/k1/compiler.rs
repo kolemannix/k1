@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use crate::parse::write_error_location;
 use crate::parse::{self, print_error};
-use crate::typer::TypedModule;
+use crate::typer::{ErrorLevel, TypedModule};
 use anyhow::{bail, Result};
 use inkwell::context::Context;
 use log::info;
@@ -274,6 +274,7 @@ pub fn codegen_module<'ctx, 'module>(
             &codegen.module.ast.spans,
             &codegen.module.ast.sources,
             e.span,
+            ErrorLevel::Error,
         )
         .unwrap();
         eprintln!("Codegen error: {}", e.message);
