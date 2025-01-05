@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::hash::Hasher;
 
+use fxhash::FxHashMap;
+
 use crate::typer::scopes::*;
 
 use crate::parse::Identifier;
@@ -182,9 +184,12 @@ pub struct GenericTypeParam {
     pub span: SpanId,
 }
 
-impl From<&GenericTypeParam> for NamedType {
-    fn from(param: &GenericTypeParam) -> Self {
-        NamedType { name: param.name, type_id: param.type_id }
+impl NamedType for GenericTypeParam {
+    fn name(&self) -> Identifier {
+        self.name
+    }
+    fn type_id(&self) -> TypeId {
+        self.type_id
     }
 }
 
@@ -278,12 +283,6 @@ pub struct FnParamType {
     pub is_context: bool,
     pub is_closure_env: bool,
     pub span: SpanId,
-}
-
-impl From<&FnParamType> for NamedType {
-    fn from(param: &FnParamType) -> Self {
-        NamedType { name: param.name, type_id: param.type_id }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -486,10 +485,10 @@ impl std::hash::Hash for Type {
             }
             Type::Function(fun) => {
                 "fun".hash(state);
-                fun.defn_info.hash(state);
                 fun.return_type.hash(state);
                 for param in &fun.params {
-                    param.name.hash(state);
+                    param.is_context.hash(state);
+                    param.is_closure_env.hash(state);
                     param.type_id.hash(state);
                 }
             }
@@ -757,16 +756,16 @@ impl Type {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct Types {
     pub types: Vec<Type>,
     /// We use this to efficiently check if we already have seen a type,
     /// and retrieve its ID if so. We used to iterate the pool but it
     /// got slow
-    pub existing_types_mapping: HashMap<Type, TypeId>,
-    pub type_defn_mapping: HashMap<ParsedTypeDefnId, TypeId>,
-    pub ability_mapping: HashMap<ParsedAbilityId, AbilityId>,
-    pub placeholder_mapping: HashMap<ParsedTypeDefnId, TypeId>,
+    pub existing_types_mapping: FxHashMap<Type, TypeId>,
+    pub type_defn_mapping: FxHashMap<ParsedTypeDefnId, TypeId>,
+    pub ability_mapping: FxHashMap<ParsedAbilityId, AbilityId>,
+    pub placeholder_mapping: FxHashMap<ParsedTypeDefnId, TypeId>,
 }
 
 impl Types {
@@ -837,6 +836,14 @@ impl Types {
 
     pub fn get_type_variable(&self, type_id: TypeId) -> &TypeVariable {
         if let Type::TypeVariable(tv) = self.get(type_id) {
+            tv
+        } else {
+            panic!("Expected type variable on type {}", type_id)
+        }
+    }
+
+    pub fn get_type_variable_mut(&mut self, type_id: TypeId) -> &mut TypeVariable {
+        if let Type::TypeVariable(tv) = self.get_mut(type_id) {
             tv
         } else {
             panic!("Expected type variable on type {}", type_id)

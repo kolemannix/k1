@@ -1,10 +1,6 @@
-use std::sync::{Arc, RwLock};
-use std::thread::{self, JoinHandle};
-
 use clap::Parser;
+use k1::compiler;
 use k1::compiler::{Args, Command};
-use k1::typer::TypedModule;
-use k1::{compiler};
 use log::info;
 
 fn main() -> anyhow::Result<()> {
@@ -15,27 +11,28 @@ fn main() -> anyhow::Result<()> {
     info!("k1 Compiler v0.1.0");
 
     let out_dir = ".k1-out";
+    std::fs::create_dir_all(out_dir)?;
 
-        let Ok(module) = compiler::compile_module(&args) else {
+    let Ok(module) = compiler::compile_module(&args) else {
+        std::process::exit(1);
+    };
+    let module_name = module.name();
+    info!("done waiting on compile thread");
+    let llvm_ctx = inkwell::context::Context::create();
+    if matches!(args.command, Command::Check { .. }) {
+        std::process::exit(0)
+    };
+    match compiler::codegen_module(&args, &llvm_ctx, &module, out_dir, true) {
+        Ok(_codegen) => {
+            if matches!(args.command, Command::Build { .. }) {
+                std::process::exit(0)
+            };
+            compiler::run_compiled_program(out_dir, module_name);
+            std::process::exit(0);
+        }
+        Err(err) => {
+            eprintln!("Codegen error: {err}");
             std::process::exit(1);
-        };
-        let module_name = module.name();
-        info!("done waiting on compile thread");
-        let llvm_ctx = inkwell::context::Context::create();
-        if matches!(args.command, Command::Check { .. }) {
-            std::process::exit(0)
-        };
-        match compiler::codegen_module(&args, &llvm_ctx, &module, out_dir, true) {
-            Ok(_codegen) => {
-                if matches!(args.command, Command::Build { .. }) {
-                    std::process::exit(0)
-                };
-                compiler::run_compiled_program(out_dir, module_name);
-                std::process::exit(0);
-            }
-            Err(err) => {
-                eprintln!("Codegen error: {err}");
-                std::process::exit(1);
-            }
-        };
-    }
+        }
+    };
+}

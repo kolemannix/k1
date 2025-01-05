@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fmt::{Display, Formatter, Write};
 
 use crate::lex::*;
-use crate::typer::{BinaryOpKind, Linkage};
+use crate::typer::{BinaryOpKind, ErrorLevel, Linkage};
 use log::trace;
 use string_interner::backend::StringBackend;
 use string_interner::Symbol;
@@ -1507,8 +1507,14 @@ pub fn print_error(module: &ParsedModule, parse_error: &ParseError) {
 
     match parse_error {
         ParseError::Lex(lex_error) => {
-            write_error_location(&mut stderr, &module.spans, &module.sources, lex_error.span)
-                .unwrap();
+            write_error_location(
+                &mut stderr,
+                &module.spans,
+                &module.sources,
+                lex_error.span,
+                ErrorLevel::Error,
+            )
+            .unwrap();
             eprintln!("{}", lex_error.message);
         }
         ParseError::Parse { message, token, cause } => {
@@ -1525,7 +1531,14 @@ pub fn print_error(module: &ParsedModule, parse_error: &ParseError) {
                 token.kind.to_string()
             };
 
-            write_error_location(&mut stderr, &module.spans, &module.sources, span).unwrap();
+            write_error_location(
+                &mut stderr,
+                &module.spans,
+                &module.sources,
+                span,
+                ErrorLevel::Error,
+            )
+            .unwrap();
             eprintln!("{message} at '{}'\n", got_str);
         }
     }
@@ -1536,11 +1549,12 @@ pub fn write_error_location(
     spans: &Spans,
     sources: &Sources,
     span_id: SpanId,
+    level: ErrorLevel,
 ) -> std::io::Result<()> {
     let span = spans.get(span_id);
     let source = sources.source_by_span(span);
     let Some(line) = source.get_line_for_span_start(span) else {
-        writeln!(w, "Error: could not find line for span {:?}", span)?;
+        writeln!(w, "Critical Error: could not find line for span {:?}", span)?;
         return Ok(());
     };
     use colored::*;
@@ -1554,7 +1568,12 @@ pub fn write_error_location(
     writeln!(
         w,
         "  {} at {}/{}:{}\n\n{code}",
-        "Error".red(),
+        match level {
+            ErrorLevel::Error => "Error".red(),
+            ErrorLevel::Warn => "Warning".yellow(),
+            ErrorLevel::Info => "Info".yellow(),
+            ErrorLevel::Hint => "Hint".yellow(),
+        },
         source.directory,
         source.filename,
         line.line_index + 1,

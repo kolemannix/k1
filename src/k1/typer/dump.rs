@@ -4,6 +4,7 @@ use super::*;
 
 impl Display for TypedModule {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let skip_variables = true;
         f.write_str("Module ")?;
         f.write_str(&self.ast.name)?;
         f.write_str("\n")?;
@@ -19,17 +20,28 @@ impl Display for TypedModule {
             f.write_str(self.name_of(namespace.name))?;
             f.write_str("\n")?;
         }
-        f.write_str("--- Variables ---\n")?;
-        for (id, variable) in self.variables.iter() {
-            write!(f, "var {:02} ", id.0)?;
-            self.display_variable(variable, f)?;
-            f.write_str("\n")?;
+        if !skip_variables {
+            f.write_str("--- Variables ---\n")?;
+            for (id, variable) in self.variables.iter() {
+                write!(f, "var {:02} ", id.0)?;
+                self.display_variable(variable, f)?;
+                f.write_str("\n")?;
+            }
         }
         f.write_str("--- Functions ---\n")?;
         for (id, func) in self.function_iter() {
             write!(f, "fn {:02} ", id.0)?;
             self.display_function(func, f, false)?;
             f.write_str("\n")?;
+        }
+        f.write_str("--- Ability Impls ---\n")?;
+        for (self_type_id, impls) in self.ability_impl_table.iter() {
+            writeln!(f, "impls for {}", self.type_id_to_string_ext(*self_type_id, true))?;
+            for impl_handle in impls {
+                f.write_str("\t")?;
+                self.display_ability_impl(f, impl_handle.full_impl_id, true)?;
+                f.write_str("\n")?;
+            }
         }
         f.write_str("--- Scopes ---\n")?;
         for (id, scope) in self.scopes.iter() {
@@ -66,7 +78,7 @@ impl TypedModule {
             writ.write_str("\tVARS\n")?;
         }
         for (id, variable_id) in scope.variables.iter() {
-            let variable = self.variables.get_variable(*variable_id);
+            let variable = self.variables.get(*variable_id);
             write!(writ, "\t{} -> ", self.name_of(*id))?;
             self.display_variable(variable, writ)?;
             writ.write_str("\n")?;
@@ -364,7 +376,7 @@ impl TypedModule {
                 if idx > 0 {
                     w.write_str(", ")?;
                 }
-                self.write_ident(w, tp.named_type.name)?;
+                self.write_ident(w, tp.name)?;
             }
             w.write_char(']')?;
         }
@@ -385,6 +397,8 @@ impl TypedModule {
             w.write_str(" ")?;
             if let Some(block) = &function.body_block {
                 self.display_block(block, w, 0)?;
+            } else {
+                w.write_str("{no_block}")?;
             }
         }
         Ok(())
@@ -435,7 +449,7 @@ impl TypedModule {
                 } else {
                     writ.write_str("let ")?;
                 }
-                self.display_variable(self.variables.get_variable(let_stmt.variable_id), writ)?;
+                self.display_variable(self.variables.get(let_stmt.variable_id), writ)?;
                 writ.write_str(" = ")?;
                 self.display_expr(&let_stmt.initializer, writ, indentation)
             }
@@ -493,7 +507,7 @@ impl TypedModule {
                 writ.write_str("}")
             }
             TypedExpr::Variable(v) => {
-                let variable = self.variables.get_variable(v.variable_id);
+                let variable = self.variables.get(v.variable_id);
                 writ.write_str(self.name_of(variable.name))
             }
             TypedExpr::StructFieldAccess(field_access) => {
@@ -616,7 +630,7 @@ impl TypedModule {
             }
             TypedExpr::PendingCapture(pending_capture) => {
                 writ.write_str("capture(")?;
-                let variable = self.variables.get_variable(pending_capture.captured_variable_id);
+                let variable = self.variables.get(pending_capture.captured_variable_id);
                 writ.write_str(self.name_of(variable.name))?;
                 writ.write_str(")")?;
                 Ok(())
@@ -725,6 +739,52 @@ impl TypedModule {
         }
     }
 
+    pub fn display_named_type(&self, w: &mut impl Write, nt: impl NamedType) -> std::fmt::Result {
+        write!(w, "{} := {}", self.name_of(nt.name()), self.type_id_to_string(nt.type_id()))
+    }
+
+    pub fn named_type_to_string(&self, nt: impl NamedType) -> String {
+        let mut s: String = String::with_capacity(128);
+        self.display_named_type(&mut s, nt).unwrap();
+        s
+    }
+
+    pub fn display_ability_impl(
+        &self,
+        w: &mut impl Write,
+        id: AbilityImplId,
+        display_functions: bool,
+    ) -> std::fmt::Result {
+        let i = self.get_ability_impl(id);
+        let ab = self.get_ability(i.ability_id);
+        let kind_str = match i.kind {
+            AbilityImplKind::Concrete => "concrete",
+            AbilityImplKind::Blanket { .. } => "blanket",
+            AbilityImplKind::DerivedFromBlanket { .. } => "derived",
+            AbilityImplKind::VariableConstraint => "constraint",
+        };
+        write!(w, "{kind_str:10} ")?;
+        self.write_ident(w, ab.name)?;
+        if !i.impl_arguments.is_empty() {
+            write!(w, "[impl ")?;
+            for impl_arg in &i.impl_arguments {
+                self.display_named_type(w, impl_arg)?;
+            }
+            write!(w, "]")?;
+        }
+        write!(w, " for ")?;
+        self.display_type_id(i.self_type_id, false, w)?;
+        if display_functions {
+            w.write_str(" {\n")?;
+            for fn_id in &i.functions {
+                w.write_str("\t\t")?;
+                self.display_function(self.get_function(*fn_id), w, true)?;
+                writeln!(w)?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn pattern_to_string(&self, pattern: &TypedPattern) -> String {
         let mut s = String::new();
         self.display_pattern(pattern, &mut s).unwrap();
@@ -744,7 +804,7 @@ impl TypedModule {
         s
     }
 
-    pub fn pretty_print_named_types(&self, types: &[NamedType], sep: &str) -> String {
+    pub fn pretty_print_named_types(&self, types: &[SimpleNamedType], sep: &str) -> String {
         let mut s = String::new();
         let mut first = true;
         for nt in types {

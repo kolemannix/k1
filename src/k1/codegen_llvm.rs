@@ -1296,7 +1296,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         };
 
         let variable_type = self.codegen_type(let_stmt.variable_type)?;
-        let variable = self.module.variables.get_variable(let_stmt.variable_id);
+        let variable = self.module.variables.get(let_stmt.variable_id);
         let variable_ptr =
             self.builder.build_alloca(value.get_type(), self.get_ident_name(variable.name));
 
@@ -2718,7 +2718,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             match &constant.expr {
                 TypedExpr::Integer(integer) => {
                     let llvm_value = self.codegen_integer_value(integer)?;
-                    let variable = self.module.variables.get_variable(constant.variable_id);
+                    let variable = self.module.variables.get(constant.variable_id);
                     let llvm_global = self.llvm_module.add_global(
                         llvm_value.get_type(),
                         Some(AddressSpace::default()),
