@@ -9,9 +9,11 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::io::stderr;
 
+use ahash::HashMapExt;
 use anyhow::bail;
 use colored::Colorize;
 use either::Either;
+use fxhash::FxHashMap;
 use log::{debug, trace};
 
 use scopes::*;
@@ -405,7 +407,7 @@ pub struct TypedFunction {
 pub struct TypeParam {
     pub name: Identifier,
     pub type_id: TypeId,
-    pub span: SpanId, // pub ability_constraints: Vec<AbilityId>,
+    pub span: SpanId,
 }
 
 impl NamedType for &TypeParam {
@@ -461,13 +463,23 @@ impl TypeSolutionSet {
     pub fn all_solved(&self) -> bool {
         self.solutions.iter().all(|s| s.solved_type_id.is_some())
     }
+
     pub fn get_solution_mut(&mut self, type_id: TypeId) -> Option<&mut PendingTypeSolution> {
         self.solutions.iter_mut().find(|s| s.variable_type_id == type_id)
     }
+
     pub fn get_solutions(&self) -> Option<Vec<SimpleNamedType>> {
         self.solutions
             .iter()
             .map(|s| s.solved_type_id.map(|type_id| SimpleNamedType { name: s.name, type_id }))
+            .collect()
+    }
+
+    pub fn get_unsolved(&self) -> Vec<SimpleNamedType> {
+        self.solutions
+            .iter()
+            .filter(|s| s.solved_type_id.is_none())
+            .map(|s| SimpleNamedType { name: s.name, type_id: s.variable_type_id })
             .collect()
     }
 }
@@ -1456,7 +1468,7 @@ pub fn write_error(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AbilityImplKind {
     Concrete,
-    Blanket { base_ability: AbilityId },
+    Blanket { base_ability: AbilityId, parsed_id: ParsedAbilityImplId },
     DerivedFromBlanket { blanket_impl_id: AbilityImplId },
     VariableConstraint,
 }
@@ -1464,7 +1476,7 @@ pub enum AbilityImplKind {
 impl AbilityImplKind {
     pub fn blanket_parent(&self) -> Option<AbilityId> {
         match self {
-            AbilityImplKind::Blanket { base_ability: parent_ability } => Some(*parent_ability),
+            AbilityImplKind::Blanket { base_ability: parent_ability, .. } => Some(*parent_ability),
             _ => None,
         }
     }
@@ -1626,19 +1638,19 @@ pub struct TypedModule {
     pub abilities: Vec<TypedAbility>,
     pub ability_impls: Vec<TypedAbilityImpl>,
     /// Key is 'self' type
-    pub ability_impl_table: HashMap<TypeId, Vec<AbilityImplHandle>>,
+    pub ability_impl_table: FxHashMap<TypeId, Vec<AbilityImplHandle>>,
     /// Key is base ability id
-    pub blanket_impls: HashMap<AbilityId, Vec<AbilityImplId>>,
-    pub namespace_ast_mappings: HashMap<ParsedNamespaceId, NamespaceId>,
-    pub function_ast_mappings: HashMap<ParsedFunctionId, FunctionId>,
-    pub ability_impl_ast_mappings: HashMap<ParsedAbilityImplId, AbilityImplId>,
+    pub blanket_impls: FxHashMap<AbilityId, Vec<AbilityImplId>>,
+    pub namespace_ast_mappings: FxHashMap<ParsedNamespaceId, NamespaceId>,
+    pub function_ast_mappings: FxHashMap<ParsedFunctionId, FunctionId>,
+    pub ability_impl_ast_mappings: FxHashMap<ParsedAbilityImplId, AbilityImplId>,
     /// We don't know about functions during the type discovery phase, so a 'use'
     /// that targets a function could miss. Rather than make the user
     /// specify 'use type' vs 'use fn', etc, we just keep track of
     /// whether a 'use' ever hits. If a use never hits, we'll report
     /// an error after the last phase where handle them, which should be
     /// function declarations
-    pub use_statuses: HashMap<ParsedUseId, UseStatus>,
+    pub use_statuses: FxHashMap<ParsedUseId, UseStatus>,
     pub debug_level_stack: Vec<log::LevelFilter>,
     pub functions_pending_body_specialization: Vec<FunctionId>,
 }
@@ -1656,10 +1668,10 @@ impl TypedModule {
                 Type::Integer(IntegerType::I32),
                 Type::Integer(IntegerType::I64),
             ],
-            existing_types_mapping: HashMap::new(),
-            type_defn_mapping: HashMap::new(),
-            ability_mapping: HashMap::new(),
-            placeholder_mapping: HashMap::new(),
+            existing_types_mapping: FxHashMap::new(),
+            type_defn_mapping: FxHashMap::new(),
+            ability_mapping: FxHashMap::new(),
+            placeholder_mapping: FxHashMap::new(),
         };
         debug_assert!(matches!(*types.get(U8_TYPE_ID), Type::Integer(IntegerType::U8)));
         debug_assert!(matches!(*types.get(U16_TYPE_ID), Type::Integer(IntegerType::U16)));
@@ -1682,12 +1694,12 @@ impl TypedModule {
             namespaces,
             abilities: Vec::with_capacity(parsed_module.abilities.len() * 2),
             ability_impls: Vec::with_capacity(parsed_module.ability_impls.len() * 2),
-            ability_impl_table: HashMap::new(),
-            blanket_impls: HashMap::new(),
-            namespace_ast_mappings: HashMap::with_capacity(parsed_module.namespaces.len() * 2),
-            function_ast_mappings: HashMap::with_capacity(parsed_module.functions.len() * 2),
-            ability_impl_ast_mappings: HashMap::new(),
-            use_statuses: HashMap::new(),
+            ability_impl_table: FxHashMap::new(),
+            blanket_impls: FxHashMap::new(),
+            namespace_ast_mappings: FxHashMap::with_capacity(parsed_module.namespaces.len() * 2),
+            function_ast_mappings: FxHashMap::with_capacity(parsed_module.functions.len() * 2),
+            ability_impl_ast_mappings: FxHashMap::new(),
+            use_statuses: FxHashMap::new(),
             debug_level_stack: vec![log::max_level()],
             functions_pending_body_specialization: vec![],
             ast: parsed_module,
@@ -3339,7 +3351,8 @@ impl TypedModule {
         type_id
     }
 
-    // nocommit: avoid Vec
+    // Hard to avoid returning a Vec here without returning an impl Iterator which I don't wanna
+    // mess with
     pub fn get_constrained_ability_impls_for_type(
         &self,
         type_id: TypeId,
@@ -3400,7 +3413,7 @@ impl TypedModule {
         let target_base_ability_id = self.get_ability_base(target_ability_id);
         if let Some(blanket_impls_for_base) = self.blanket_impls.get(&target_base_ability_id) {
             for blanket_impl_id in blanket_impls_for_base.clone() {
-                match self.apply_blanket_implementation(
+                match self.try_apply_blanket_implementation(
                     blanket_impl_id,
                     self_type_id,
                     target_ability_id,
@@ -3415,7 +3428,7 @@ impl TypedModule {
         None
     }
 
-    pub fn apply_blanket_implementation(
+    pub fn try_apply_blanket_implementation(
         &mut self,
         blanket_impl_id: AbilityImplId,
         self_type_id: TypeId,
@@ -3425,6 +3438,9 @@ impl TypedModule {
         let target_ability = self.get_ability(target_ability_id);
         let target_ability_args = target_ability.kind.arguments();
         let blanket_impl = self.get_ability_impl(blanket_impl_id);
+        let AbilityImplKind::Blanket { parsed_id, .. } = blanket_impl.kind else {
+            unreachable!("Expected a blanket impl")
+        };
         let target_base = target_ability.parent_ability_id().unwrap_or(target_ability_id);
         // The 'self' type of the generic impl might contain type parameters that we need to solve.
         // But what if it doesn't? Need examples
@@ -3476,7 +3492,7 @@ impl TypedModule {
         if let Err(solve_error) = self.solve_generic_params(
             &mut solution_set,
             self_type_id,
-            blanket_ability.self_type_id,
+            blanket_impl.self_type_id,
             span,
         ) {
             debug!("Bailing due to error; {solve_error}");
@@ -3484,29 +3500,57 @@ impl TypedModule {
         };
         match solution_set.get_solutions() {
             None => {
-                debug!("No blanket dice...");
+                debug!(
+                    "Could not solve all blanket impl params: {}",
+                    self.pretty_print_named_types(&solution_set.get_unsolved(), ", ")
+                );
                 None
             }
             Some(solutions) => {
-                // 'Run' the blanket ability using 'solutions'
-
-                // Ensure the solutions meet the constraints
-                for (param, solution) in solution_set.solutions.iter().zip(solutions.iter()) {
-                    if let Err(mut e) = self.check_type_constraints(
-                        solution.name,
-                        param.variable_type_id,
+                // 'Specialize' the constraints:
+                // - For each constraint, run the expression with the binding for T from a child
+                //   scope of the blanket impl scope
+                // - Then check if the solution implements _that_ ability, by factoring
+                //   out the actual inner check from check_type_constraints
+                let constraint_checking_scope = self.scopes.add_sibling_scope(
+                    blanket_impl.scope_id,
+                    ScopeType::AbilityImpl,
+                    None,
+                    None,
+                );
+                let parsed_blanket_impl = self.ast.get_ability_impl(parsed_id);
+                for (parsed_param, solution) in
+                    parsed_blanket_impl.generic_impl_params.clone().iter().zip(solutions.iter())
+                {
+                    let _ = self.scopes.add_type(
+                        constraint_checking_scope,
+                        parsed_param.name,
                         solution.type_id,
-                        span,
-                    ) {
-                        e.message = format!(
-                            "Blanket impl almost matched but had wrong output type; {}",
-                            e.message
-                        );
-                        e.level = ErrorLevel::Info;
-                        self.write_error(&mut std::io::stderr(), &e).unwrap();
-                        return None;
+                    );
+                    for constraint in parsed_param.constraints.iter() {
+                        let constraint_signature = match constraint {
+                            parse::ParsedTypeConstraintExpr::Ability(parsed_ability_expr) => self
+                                .eval_ability_expr(parsed_ability_expr, constraint_checking_scope)
+                                .unwrap(),
+                        };
+                        if let Err(mut e) = self.check_type_constraint(
+                            solution.type_id,
+                            constraint_signature,
+                            parsed_param.name,
+                            span,
+                        ) {
+                            e.message = format!(
+                                "Blanket impl almost matched but a constraint was unsatisfied; {}",
+                                e.message
+                            );
+                            e.level = ErrorLevel::Info;
+                            self.write_error(&mut std::io::stderr(), &e).unwrap();
+                            return None;
+                        }
                     }
                 }
+
+                // 'Run' the blanket ability using 'solutions'
                 let impl_handle = self
                     .instantiate_blanket_impl(self_type_id, blanket_impl_id, &solutions)
                     .unwrap_or_else(|e| self.ice("Failed to instantiate blanket impl", Some(&e)));
@@ -3524,7 +3568,6 @@ impl TypedModule {
         let blanket_impl = self.get_ability_impl(blanket_impl_id).clone();
         let blanket_ability_args =
             self.get_ability(blanket_impl.ability_id).kind.arguments().to_vec();
-        eprintln!("Instantiating with {}", self.pretty_print_named_types(solutions, "\n"));
 
         let generic_parent = blanket_impl.kind.blanket_parent().unwrap();
 
@@ -3568,7 +3611,7 @@ impl TypedModule {
         let kind = AbilityImplKind::DerivedFromBlanket { blanket_impl_id };
         for blanket_fn in &blanket_impl.functions {
             let blanket_fn = self.get_function(*blanket_fn);
-            eprintln!("Specializing fn {}", self.name_of(blanket_fn.name));
+            debug!("Specializing blanket fn {}", self.name_of(blanket_fn.name));
             let parsed_fn = blanket_fn.parsed_id.as_function_id().unwrap();
             let specialized_function_id = self.eval_function_declaration(
                 parsed_fn,
@@ -8172,6 +8215,47 @@ impl TypedModule {
         }))
     }
 
+    fn check_type_constraint(
+        &mut self,
+        target_type: TypeId,
+        signature: TypedAbilitySignature,
+        name: Identifier,
+        span: SpanId,
+    ) -> TyperResult<()> {
+        if let Some(impl_handle) =
+            self.find_ability_impl_for_type(target_type, signature.ability_id, span)
+        {
+            let found_impl = self.get_ability_impl(impl_handle.full_impl_id);
+            debug_assert!(signature.impl_arguments.len() == found_impl.impl_arguments.len());
+            for (constraint_arg, passed_arg) in
+                signature.impl_arguments.iter().zip(found_impl.impl_arguments.iter())
+            {
+                debug_assert!(constraint_arg.name == passed_arg.name);
+                if constraint_arg.type_id != passed_arg.type_id {
+                    return failf!(
+                            span,
+                            "Provided type {} := {} does implement required ability {}, but the implementation parameter {} is wrong: Expected type was {} but the actual implementation uses {}",
+                            self.name_of(name),
+                            self.type_id_to_string(target_type),
+                            self.name_of(self.get_ability(signature.ability_id).name),
+                            self.name_of(constraint_arg.name),
+                            self.type_id_to_string(constraint_arg.type_id),
+                            self.type_id_to_string(passed_arg.type_id),
+                        );
+                }
+            }
+            Ok(())
+        } else {
+            failf!(
+                span,
+                "Provided type {} for {} does not implement required ability {}",
+                self.type_id_to_string(target_type),
+                self.name_of(name),
+                self.name_of(self.get_ability(signature.ability_id).name)
+            )
+        }
+    }
+
     fn check_type_constraints(
         &mut self,
         param_name: Identifier,
@@ -8181,38 +8265,14 @@ impl TypedModule {
     ) -> TyperResult<()> {
         let constraints = self.get_constrained_ability_impls_for_type(param_type).to_vec();
         for constraint in &constraints {
-            if let Some(impl_handle) =
-                self.find_ability_impl_for_type(passed_type, constraint.ability_id, span)
-            {
-                let found_impl = self.get_ability_impl(impl_handle.full_impl_id);
-                let constraint_impl = self.get_ability_impl(constraint.full_impl_id);
-                debug_assert!(
-                    constraint_impl.impl_arguments.len() == found_impl.impl_arguments.len()
-                );
-                for (constraint_arg, passed_arg) in
-                    constraint_impl.impl_arguments.iter().zip(found_impl.impl_arguments.iter())
-                {
-                    debug_assert!(constraint_arg.name == passed_arg.name);
-                    if constraint_arg.type_id != passed_arg.type_id {
-                        return failf!(
-                            span,
-                            "Provided type {} does implement required ability {}, but the implementation parameters for {} differ. Expected type was {}",
-                            self.type_id_to_string(passed_type),
-                            self.name_of(self.get_ability(constraint.ability_id).name),
-                            self.name_of(param_name),
-                            self.type_id_to_string(constraint_arg.type_id)
-                        );
-                    }
-                }
-            } else {
-                return failf!(
-                    span,
-                    "Provided type {} for {} does not implement required ability {}",
-                    self.type_id_to_string(passed_type),
-                    self.name_of(param_name),
-                    self.name_of(self.get_ability(constraint.ability_id).name)
-                );
-            }
+            let signature = TypedAbilitySignature {
+                ability_id: constraint.ability_id,
+                impl_arguments: self
+                    .get_ability_impl(constraint.full_impl_id)
+                    .impl_arguments
+                    .clone(),
+            };
+            self.check_type_constraint(passed_type, signature, param_name, span)?;
         }
         Ok(())
     }
@@ -9081,7 +9141,7 @@ impl TypedModule {
                 matching_arg.span,
             )?;
 
-            eprintln!(
+            debug!(
                 "Binding impl param {} to {}",
                 self.name_of(impl_param.name),
                 self.type_id_to_string(arg_type)
@@ -9094,7 +9154,7 @@ impl TypedModule {
         let kind = if parsed_ability_impl.generic_impl_params.is_empty() {
             AbilityImplKind::Concrete
         } else {
-            AbilityImplKind::Blanket { base_ability: base_ability_id }
+            AbilityImplKind::Blanket { base_ability: base_ability_id, parsed_id }
         };
 
         let mut typed_functions = Vec::with_capacity(ability.functions.len());

@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::hash::Hasher;
 
+use fxhash::FxHashMap;
+
 use crate::typer::scopes::*;
 
 use crate::parse::Identifier;
@@ -754,16 +756,16 @@ impl Type {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct Types {
     pub types: Vec<Type>,
     /// We use this to efficiently check if we already have seen a type,
     /// and retrieve its ID if so. We used to iterate the pool but it
     /// got slow
-    pub existing_types_mapping: HashMap<Type, TypeId>,
-    pub type_defn_mapping: HashMap<ParsedTypeDefnId, TypeId>,
-    pub ability_mapping: HashMap<ParsedAbilityId, AbilityId>,
-    pub placeholder_mapping: HashMap<ParsedTypeDefnId, TypeId>,
+    pub existing_types_mapping: FxHashMap<Type, TypeId>,
+    pub type_defn_mapping: FxHashMap<ParsedTypeDefnId, TypeId>,
+    pub ability_mapping: FxHashMap<ParsedAbilityId, AbilityId>,
+    pub placeholder_mapping: FxHashMap<ParsedTypeDefnId, TypeId>,
 }
 
 impl Types {

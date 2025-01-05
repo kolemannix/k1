@@ -1,3 +1,5 @@
+use ahash::HashMapExt;
+use fxhash::FxHashMap;
 use log::{debug, trace};
 
 use std::{
@@ -691,14 +693,14 @@ pub enum UseableSymbolId {
 
 #[derive(Debug)]
 pub struct Scope {
-    pub variables: HashMap<Identifier, VariableId>,
-    pub context_variables_by_type: HashMap<TypeId, VariableId>,
-    pub functions: HashMap<Identifier, FunctionId>,
-    pub namespaces: HashMap<Identifier, NamespaceId>,
-    pub types: HashMap<Identifier, TypeId>,
-    pub abilities: HashMap<Identifier, AbilityId>,
-    pub pending_type_defns: HashMap<Identifier, ParsedTypeDefnId>,
-    pub pending_ability_defns: HashMap<Identifier, ParsedAbilityId>,
+    pub variables: FxHashMap<Identifier, VariableId>,
+    pub context_variables_by_type: FxHashMap<TypeId, VariableId>,
+    pub functions: FxHashMap<Identifier, FunctionId>,
+    pub namespaces: FxHashMap<Identifier, NamespaceId>,
+    pub types: FxHashMap<Identifier, TypeId>,
+    pub abilities: FxHashMap<Identifier, AbilityId>,
+    pub pending_type_defns: FxHashMap<Identifier, ParsedTypeDefnId>,
+    pub pending_ability_defns: FxHashMap<Identifier, ParsedAbilityId>,
     pub parent: Option<ScopeId>,
     pub children: Vec<ScopeId>,
     pub scope_type: ScopeType,
@@ -716,14 +718,14 @@ impl Scope {
         depth: usize,
     ) -> Scope {
         Scope {
-            variables: HashMap::new(),
-            context_variables_by_type: HashMap::new(),
-            functions: HashMap::new(),
-            namespaces: HashMap::new(),
-            types: HashMap::new(),
-            abilities: HashMap::new(),
-            pending_type_defns: HashMap::new(),
-            pending_ability_defns: HashMap::new(),
+            variables: FxHashMap::new(),
+            context_variables_by_type: FxHashMap::new(),
+            functions: FxHashMap::new(),
+            namespaces: FxHashMap::new(),
+            types: FxHashMap::new(),
+            abilities: FxHashMap::new(),
+            pending_type_defns: FxHashMap::new(),
+            pending_ability_defns: FxHashMap::new(),
             parent: None,
             children: Vec::new(),
             scope_type,

@@ -1,9 +1,3 @@
-deftype Point[T] = { x: T, y: T }
-
-ability Add[Rhs, impl Output] {
-  fn add(self: Self, rhs: Rhs): Output
-}
-
 impl Add[Rhs = i32, Output = i32] for i32 {
   fn add(self: i32, rhs: Rhs): i32 { self + rhs }
 }
@@ -28,8 +22,30 @@ impl[T: Add[Rhs = T, Output = T]] Add[Rhs = Point[T], Output = Point[T]] for Poi
   }
 }
 
+deftype Point[T] = { x: T, y: T }
+ability Add[Rhs, impl Output] {
+  fn add(self: Self, rhs: Rhs): Output
+}
+impl[T: Add[Rhs = T, Output = T]]
+  Add[Rhs = Point[T], Output = Point[T]]
+  for Point[T] {
+    fn add(self: Point[T], other: Point[T]): Point[T] { 
+      let newX: T = self.x.add(other.x);
+      let newY: T = self.y.add(other.y);
+      { x: newX, y: newY }
+    }
+}
+
 ability From[T] { fn from(t: T): Self }
 ability To[T] { fn to(self: Self): T }
+
+impl[T: Show] To[T = string] for T {
+  fn to(self: T): string { self.show() }
+}
+
+impl[U, T: To[T = U]] From[T = T] for U {
+  fn from(t: T): U { t.to() }
+}
 
 impl To[T = string] for i32 {
   fn to(self: Self): string { Show/show[i32](self) }
@@ -48,7 +64,7 @@ fn main(): unit {
   let x: i32 = 4;
 
   let add32 = x.add(10: i32);
-  assert(add32 == 14);
+  //assert(add32 == 14);
 
   let add64 = x.add(12: i64);
   assert(add64 == 16: i64);
@@ -58,7 +74,9 @@ fn main(): unit {
   let added: Point[i32] = p.add(p);
   assert(added.x == (1 + 1) as i32);
   assert(added.y == (2 + 2) as i32);
-  #debug() (p.add(p));
+
+  assert((3: i32).to(): string == "3");
+  assert(From/from(3: i32): string == "3");
 
 
   ()

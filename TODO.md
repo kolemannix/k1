@@ -143,13 +143,17 @@
   - [x] Remove restriction that first arg is Self by
   - [x] Reworking resolution to find a function by name first, then Solve for 'self' by unifying call and signature, then find the impl
 - [x] Fully generic abilities with separate 'input' vs 'output' type parameters
+- [x] Blanket ability implementations
 - [x] nocompile(<expr>) intrinsic! yields an actual runtime constant string for assertions?!
        `let result1 = compiler/nocompile(1 + "asdf"); assert(result1.startsWith("Type mismatch"))`
+- [ ] Migrate ? to use an ability
+- [ ] Migrate `for` loops to use an ability
+- [ ] Add "or return error" operator based on an ability
 - [ ] Improve LLVM opt pipeline https://www.reddit.com/r/Compilers/comments/1hqmd7x/recommended_llvm_passes/
       https://llvm.org/docs/NewPassManager.html#just-tell-me-how-to-run-the-default-optimization-pipeline-with-the-new-pass-manager
 - [ ] More explicit companion ns via injecting `for` keyword `ns (for) type {`
 - [ ] BTs via Runtime_Support_Crash_Handler?
-- [ ] Namespace stuff
+- [x] Namespace stuff
   - [x] Imports via `use`
   - [x] Change keyword to `ns`
   - [x] `namespace <ident>;` to namespace whole file
@@ -166,7 +170,6 @@
 - [ ] Matching on references
   - [ ] Match to get reference to each struct field, for example, use * for a dereferencing match
   - [ ] Match to get reference to enum payload
-- [ ] ? operator is really the 'else' operator, can implement using an 'Else' ability or 'Unwrap' ability
 - [ ] Context location params are not being propagated
 - [ ] Test and fix named arguments
 - [x] return from while

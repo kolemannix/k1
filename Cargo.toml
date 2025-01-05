@@ -27,6 +27,8 @@ smallvec = "1.13.2"
 string-interner = "0.17.0"
 zstd-sys = "2.0.8"
 either = "1.9.0"
+ahash = "0.8.11"
+fxhash = "0.2.1"
 
 # lsp-only deps
 tower-lsp = { version = "0.20.0", optional = true }

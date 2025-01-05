@@ -63,10 +63,14 @@ ability Comparable {
   fn compare(self: Self, other: Self): Ordering
 }
 
-
 // ability Unwrap[T] {
 //   fn hasValue(self: Self): bool
 //   fn unwrap(): T
+// }
+// 
+// ability HasError {
+//   fn isSuccess(self: Self): bool
+//   fn getError(self: Self): bool
 // }
 
 ns bool {
