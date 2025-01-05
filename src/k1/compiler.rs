@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use crate::parse::write_error_location;
 use crate::parse::{self, print_error};
-use crate::typer::TypedModule;
+use crate::typer::{ErrorLevel, TypedModule};
 use anyhow::{bail, Result};
 use inkwell::context::Context;
 use log::info;
@@ -274,6 +274,7 @@ pub fn codegen_module<'ctx, 'module>(
             &codegen.module.ast.spans,
             &codegen.module.ast.sources,
             e.span,
+            ErrorLevel::Error,
         )
         .unwrap();
         eprintln!("Codegen error: {}", e.message);
@@ -286,11 +287,9 @@ pub fn codegen_module<'ctx, 'module>(
 
     if args.write_llvm || do_write_executable {
         let llvm_text = codegen.output_llvm_ir_text();
-        // nocommit: Create outdir if it doesn't exist
         let mut f = File::create(format!("{}/{}.ll", out_dir, &module_name))
             .expect("Failed to create .ll file");
         f.write_all(llvm_text.as_bytes()).unwrap();
-        // println!("{}", codegen.output_llvm_ir_text());
     }
 
     if do_write_executable {

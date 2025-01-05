@@ -18,4 +18,4 @@ fn main(): int {
 }
 
 }
-//errmsg: Cannot invoke function 'add' with type parameter T = string; does not satisfy ability constraint Num
+//errmsg: Cannot invoke function 'add' with given types. Provided type string for T does not implement required ability Num

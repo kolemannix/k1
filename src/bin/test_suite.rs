@@ -84,6 +84,7 @@ fn get_test_expectation(test_file: &Path) -> TestExpectation {
 
 fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<()> {
     let out_dir = ".k1-out/test_suite";
+    std::fs::create_dir_all(out_dir)?;
     let filename = path.as_ref().file_name().unwrap().to_str().unwrap();
     let args = k1::compiler::Args {
         no_llvm_opt: true,

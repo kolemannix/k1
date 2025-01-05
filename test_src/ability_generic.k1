@@ -1,70 +1,82 @@
-deftype Point[T] = { x: T, y: T }
-
-impl To[T = string] for i32 {
-  fn to(self: Self): string { "i32" }
-  // fn to(self: Self): string { Show/show[i32](self) }
-}
-impl To[T = string] for i64 {
-  fn to(self: Self): string { "i64" }
-  // fn to(self: Self): string { Show/show[i64](self) }
-}
-
-ability Add[Rhs: To[T = string], impl Output] {
-  fn add(self: Self, rhs: Rhs): Output
-}
-
 impl Add[Rhs = i32, Output = i32] for i32 {
-  fn add(self: i32, other: Rhs): i32 { self + other }
+  fn add(self: i32, rhs: Rhs): i32 { self + rhs }
 }
 
 impl Add[Rhs = i64, Output = i64] for i32 {
-  fn add(self: i32, other: i64): i64 { (self as i64) + other }
+ fn add(self: i32, rhs: i64): i64 { (self as i64) + rhs }
 }
 
-// TODO: generic impls
-// impl[T: Add] Add[Rhs = Point[T], Output = Point[T]] for Point[T] {
-//   fn add(self: Point[T], other: Point[T]): Point[T] { 
-//     { x: add(self.x, other.x), y: add(self.y, other.y) }
-//   }
-// }
-
-ability From[T] {
-  fn from(t: T): Self
-}
-
-ability To[T] {
-  fn to(self: Self): T
-}
-
-// ability Iterator(out Item) {
-//   fn next(self: Self): Item? 
-// }
-// deftype Listerator[T] = { l: List[T]*, pos: u64 }
-// 
-// impl Iterator[out Item = T] for Listerator[T] {
-//   fn next(self: Listerator[T]): T? { self.l.get(self.pos) }
-// }
-
-impl To[T = char] for byte {
-  fn to(self: byte): char {
-    self as char
+ns Foob {
+  deftype alias myInt = int
+  
+  impl Add[Rhs = myInt, Output = myInt] for myInt {
+    fn add(self: myInt, rhs: myInt): myInt { self + rhs }
   }
+}
 
+impl[T: Add[Rhs = T, Output = T]] Add[Rhs = Point[T], Output = Point[T]] for Point[T] {
+  fn add(self: Point[T], other: Point[T]): Point[T] { 
+    let newX: T = self.x.add(other.x);
+    let newY: T = self.y.add(other.y);
+    { x: newX, y: newY }
+  }
+}
+
+deftype Point[T] = { x: T, y: T }
+ability Add[Rhs, impl Output] {
+  fn add(self: Self, rhs: Rhs): Output
+}
+impl[T: Add[Rhs = T, Output = T]]
+  Add[Rhs = Point[T], Output = Point[T]]
+  for Point[T] {
+    fn add(self: Point[T], other: Point[T]): Point[T] { 
+      let newX: T = self.x.add(other.x);
+      let newY: T = self.y.add(other.y);
+      { x: newX, y: newY }
+    }
+}
+
+ability From[T] { fn from(t: T): Self }
+ability To[T] { fn to(self: Self): T }
+
+impl[T: Show] To[T = string] for T {
+  fn to(self: T): string { self.show() }
+}
+
+impl[U, T: To[T = U]] From[T = T] for U {
+  fn from(t: T): U { t.to() }
+}
+
+impl To[T = string] for i32 {
+  fn to(self: Self): string { Show/show[i32](self) }
+}
+impl To[T = string] for i64 {
+  fn to(self: Self): string { Show/show[i64](self) }
+}
+impl To[T = char] for byte {
+  fn to(self: byte): char { self as char }
 }
 
 fn main(): unit {
 
   let btoc: char = (101: u8).to();
 
-  let p: Point[i32] = { x: 1, y: 2 };
-
   let x: i32 = 4;
 
-  let a1 = x.add(12: i64);
-  let a2 = x.add(10: i32);
+  let add32 = x.add(10: i32);
+  //assert(add32 == 14);
 
-  assert(a1 == 16);
-  assert(a2 == 14: i32);
+  let add64 = x.add(12: i64);
+  assert(add64 == 16: i64);
+
+  // Blanket Impls
+  let p: Point[i32] = { x: 1, y: 2 };
+  let added: Point[i32] = p.add(p);
+  assert(added.x == (1 + 1) as i32);
+  assert(added.y == (2 + 2) as i32);
+
+  assert((3: i32).to(): string == "3");
+  assert(From/from(3: i32): string == "3");
 
 
   ()
