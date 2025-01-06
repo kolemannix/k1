@@ -145,31 +145,15 @@ impl Equals for string {
   }
 }
 
-impl Equals for List[string] {
-  fn equals(self: List[string], other: List[string]): bool {
-    if self.len != other.len false else {
-      let mut i: u64 = 0;
-      while i < self.len {
-        if self.get(i) != other.get(i) {
-          return(false);
-        };
-        i = i + 1;
-      };
-      true
-    }
-  }
-}
-
-// One day? impl Show for List[T] ???
-// Note(stdlib slow): Need efficient string building
-impl Show for List[string] {
-  fn show(self: List[string]): string {
+impl[T: Show] Show for List[T] {
+  fn show(self: List[T]): string {
     let b = StringBuilder/new();
+    b.putChar('[');
     for s in self do {
-      b.putString(s);
+      b.putString(s.show());
       let last = it_index == self.len - 1;
       if not last {
-        b.putString(", ");
+        b.putString(",");
       };
     };
     b.putChar(']');
@@ -179,10 +163,4 @@ impl Show for List[string] {
 
 impl Show for string {
   fn show(self: string): string { self }
-}
-
-impl Equals for Opt[string] {
-  fn equals(self: Opt[string], other: Opt[string]): bool {
-    opt_equals(self, other)
-  }
 }

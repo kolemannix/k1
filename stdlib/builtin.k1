@@ -63,14 +63,19 @@ ability Comparable {
   fn compare(self: Self, other: Self): Ordering
 }
 
-// ability Unwrap[T] {
-//   fn hasValue(self: Self): bool
-//   fn unwrap(): T
+ability Unwrap[impl Inner] {
+  fn hasValue(self: Self): bool
+  fn unwrap(self: Self): Inner
+}
+
+// inline fn unwrap_or[U, V: Unwrap[Inner = U]](v: V, backup: int): U {
+//   if v.hasValue() v.unwrap() else backup
 // }
+
 // 
-// ability HasError {
+// ability Resulty {
 //   fn isSuccess(self: Self): bool
-//   fn getError(self: Self): bool
+//   fn getError(self: Self): E
 // }
 
 ns bool {

@@ -64,6 +64,7 @@ pub const EQUALS_ABILITY_ID: AbilityId = AbilityId(0);
 pub const SHOW_ABILITY_ID: AbilityId = AbilityId(1);
 pub const BITWISE_ABILITY_ID: AbilityId = AbilityId(2);
 pub const COMPARABLE_ABILITY_ID: AbilityId = AbilityId(3);
+pub const UNWRAP_ABILITY_ID: AbilityId = AbilityId(4);
 
 pub const CLOSURE_ENV_PARAM_NAME: &str = "__clos_env";
 
@@ -5790,30 +5791,26 @@ impl TypedModule {
     }
 
     fn expect_ability_implementation(
-        &self,
-        ability_id: AbilityId,
+        &mut self,
         type_id: TypeId,
+        ability_id: AbilityId,
         span_for_error: SpanId,
-    ) -> TyperResult<&TypedAbilityImpl> {
-        self.ability_impls
-            .iter()
-            .find(|imple| imple.self_type_id == type_id && imple.ability_id == ability_id)
-            .ok_or(make_error(
-                format!(
-                    "Missing ability '{}' implementation for '{}'. Impls:\n{}",
-                    self.ast.identifiers.get_name(self.get_ability(ability_id).name),
-                    self.type_id_to_string(type_id),
-                    self.pretty_print_types(
-                        &self
-                            .ability_impls
-                            .iter()
-                            .filter(|imple| imple.ability_id == ability_id)
-                            .map(|imple| { imple.self_type_id })
-                            .collect::<Vec<_>>()
-                    )
-                ),
+    ) -> TyperResult<AbilityImplHandle> {
+        self.find_ability_impl_for_type(type_id, ability_id, span_for_error).ok_or(errf!(
                 span_for_error,
-            ))
+                    "Missing ability '{}' implementation for '{}'. It implements the following abilities:\n{}",
+                    self.name_of(self.get_ability(ability_id).name),
+                    self.type_id_to_string(type_id),
+        &self
+            .ability_impl_table
+            .get(&type_id)
+            .unwrap_or(&vec![])
+            .iter()
+            .map(|h| self.ability_signature_to_string(h.ability_id, &self.get_ability_impl(h.full_impl_id).impl_arguments))
+            .collect::<Vec<_>>()
+            .join("\n")
+                    )
+            )
     }
 
     fn eval_binary_op(
@@ -5969,21 +5966,24 @@ impl TypedModule {
         scope_id: ScopeId,
         span: SpanId,
     ) -> TyperResult<TypedExpr> {
-        // LHS must be an optional and RHS must be its contained type
+        // LHS must implement Unwrap and RHS must be its contained type
         let lhs = self.eval_expr(lhs, scope_id, None)?;
-        let Some(lhs_optional) = self.types.get(lhs.get_type()).as_optional() else {
-            return failf!(
-                span,
-                "'else' operator can only be used on an optional; type was '{}'",
-                self.type_id_to_string(lhs.get_type())
-            );
-        };
-        let lhs_inner = lhs_optional.inner_type;
+        let unwrap_impl = self
+            .expect_ability_implementation(lhs.get_type(), UNWRAP_ABILITY_ID, span)
+            .map_err(|e| {
+                errf!(
+                    span,
+                    "'?' operator can only be used on a type that implements `Unwrap`. {}",
+                    e.message,
+                )
+            })?;
+        let unwrap_impl = self.get_ability_impl(unwrap_impl.full_impl_id);
+        let output_type = unwrap_impl.impl_arguments[0].type_id;
 
-        let rhs = self.eval_expr(rhs, scope_id, Some(lhs_inner))?;
+        let rhs = self.eval_expr(rhs, scope_id, Some(output_type))?;
         let rhs_type = rhs.get_type();
-        if let Err(msg) = self.check_types(lhs_inner, rhs_type, scope_id) {
-            return failf!(span, "'else' value incompatible with optional: {}", msg,);
+        if let Err(msg) = self.check_types(output_type, rhs_type, scope_id) {
+            return failf!(span, "RHS value incompatible with `Unwrap` output of LHS: {}", msg);
         }
         let mut coalesce_block = self.synth_block(vec![], scope_id, span);
         let lhs_variable = self.synth_variable_defn_simple(
@@ -5992,15 +5992,15 @@ impl TypedModule {
             coalesce_block.scope_id,
         );
         let lhs_has_value = self.synth_typed_function_call(
-            self.ident_opt_has_value(span),
-            vec![lhs_inner],
+            qident!(self, span, ["Unwrap"], "hasValue"),
+            vec![],
             vec![lhs_variable.variable_expr.clone()],
             coalesce_block.scope_id,
             None,
         )?;
         let lhs_get_expr = self.synth_typed_function_call(
-            self.ident_opt_get(span),
-            vec![lhs_inner],
+            qident!(self, span, ["Unwrap"], "unwrap"),
+            vec![],
             vec![lhs_variable.variable_expr],
             coalesce_block.scope_id,
             None,
@@ -6010,7 +6010,7 @@ impl TypedModule {
             condition: lhs_has_value,
             consequent: lhs_get_expr,
             alternate: rhs,
-            ty: lhs_inner,
+            ty: output_type,
             span,
         }));
         coalesce_block.push_stmt(lhs_variable.defn_stmt);
@@ -6123,13 +6123,14 @@ impl TypedModule {
     }
 
     fn synth_equals_call(
-        &self,
+        &mut self,
         lhs: TypedExpr,
         rhs: TypedExpr,
         span: SpanId,
     ) -> TyperResult<TypedExpr> {
         let implementation =
-            self.expect_ability_implementation(EQUALS_ABILITY_ID, lhs.get_type(), span)?;
+            self.expect_ability_implementation(lhs.get_type(), EQUALS_ABILITY_ID, span)?;
+        let implementation = self.get_ability_impl(implementation.full_impl_id);
         let ability = self.get_ability(EQUALS_ABILITY_ID);
         let equals_index = ability.find_function_by_name(get_ident!(self, "equals")).unwrap().0;
         let equals_implementation_function_id = implementation.function_at_index(equals_index);
@@ -6298,6 +6299,7 @@ impl TypedModule {
             true => self.resolve_parsed_function_call_method(
                 first_arg_expr.unwrap(),
                 fn_call,
+                known_args,
                 calling_scope,
                 expected_type,
             ),
@@ -6321,6 +6323,7 @@ impl TypedModule {
                             function_ability_index,
                             function_ability_id,
                             fn_call,
+                            known_args,
                             calling_scope,
                             expected_type,
                         )?;
@@ -6520,6 +6523,7 @@ impl TypedModule {
         &mut self,
         base_expr: MaybeTypedExpr,
         fn_call: &FnCall,
+        known_args: Option<&(Vec<TypeId>, Vec<TypedExpr>)>,
         calling_scope: ScopeId,
         expected_type_id: Option<TypeId>,
     ) -> TyperResult<Either<TypedExpr, Callee>> {
@@ -6602,6 +6606,7 @@ impl TypedModule {
             ability_function_index,
             ability_id,
             fn_call,
+            known_args,
             calling_scope,
             expected_type_id,
         )?;
@@ -6614,6 +6619,8 @@ impl TypedModule {
         function_ability_index: usize,
         ability_id: AbilityId,
         fn_call: &FnCall,
+        // nocommit: KnownArgs cleanup to just use MaybeTypedExpr?
+        known_args: Option<&(Vec<TypeId>, Vec<TypedExpr>)>,
         calling_scope: ScopeId,
         expected_type_id: Option<TypeId>,
     ) -> TyperResult<FunctionId> {
@@ -6625,8 +6632,9 @@ impl TypedModule {
         let ability_self_type_id = self.get_ability(ability_id).self_type_id;
         //
         // 1) Solve for 'self'
-        if fn_call.args.len() != ability_fn_signature.params.len() {
-            return failf!(call_span, "Mismatching arg count when trying to resolve ability call; this probably doesn't handle context params properly");
+        let passed_len = known_args.map(|ka| ka.1.len()).unwrap_or(fn_call.args.len());
+        if passed_len != ability_fn_signature.params.len() {
+            return failf!(call_span, "Mismatching arg count when trying to resolve ability call to {} (this probably doesn't handle context params properly)", self.name_of(fn_call.name.name));
         }
         // Future TODO: Make sure we handle context params correctly,
         // skipping them if not passed explicitly, and utilizing them if passed explicitly
@@ -6647,8 +6655,17 @@ impl TypedModule {
             }),
         };
         let mut failed_exprs: Vec<TyperError> = Vec::new();
-        for (arg, param) in fn_call.args.iter().zip(ability_fn_params.iter()) {
-            let expr = self.eval_expr(arg.value, calling_scope, Some(param.type_id));
+        let passed_args: &mut dyn Iterator<Item = MaybeTypedExpr> = match known_args {
+            Some(ka) => &mut ka.1.clone().into_iter().map(MaybeTypedExpr::Typed),
+            None => &mut fn_call.args.iter().map(|arg| MaybeTypedExpr::Parsed(arg.value)),
+        };
+        for (arg, param) in passed_args.zip(ability_fn_params.iter()) {
+            let expr = match arg {
+                MaybeTypedExpr::Typed(expr) => Ok(expr),
+                MaybeTypedExpr::Parsed(parsed_expr) => {
+                    self.eval_expr(parsed_expr, calling_scope, Some(param.type_id))
+                }
+            };
             match expr {
                 Err(error) => failed_exprs.push(error),
                 Ok(expr) => {

@@ -147,6 +147,7 @@
 - [x] nocompile(<expr>) intrinsic! yields an actual runtime constant string for assertions?!
        `let result1 = compiler/nocompile(1 + "asdf"); assert(result1.startsWith("Type mismatch"))`
 - [ ] Migrate ? to use an ability
+- [ ] `inline` functions (like Scala3's)
 - [ ] Migrate `for` loops to use an ability
 - [ ] Add "or return error" operator based on an ability
 - [ ] Improve LLVM opt pipeline https://www.reddit.com/r/Compilers/comments/1hqmd7x/recommended_llvm_passes/

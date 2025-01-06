@@ -749,6 +749,33 @@ impl TypedModule {
         s
     }
 
+    pub fn display_ability_signature(
+        &self,
+        w: &mut impl Write,
+        ability_id: AbilityId,
+        impl_arguments: &[SimpleNamedType],
+    ) -> std::fmt::Result {
+        self.write_ident(w, self.get_ability(ability_id).name)?;
+        if !impl_arguments.is_empty() {
+            write!(w, "[impl ")?;
+            for impl_arg in impl_arguments {
+                self.display_named_type(w, impl_arg)?;
+            }
+            write!(w, "]")?;
+        }
+        Ok(())
+    }
+
+    pub fn ability_signature_to_string(
+        &self,
+        ability_id: AbilityId,
+        impl_arguments: &[SimpleNamedType],
+    ) -> String {
+        let mut s = String::new();
+        self.display_ability_signature(&mut s, ability_id, impl_arguments).unwrap();
+        s
+    }
+
     pub fn display_ability_impl(
         &self,
         w: &mut impl Write,
@@ -756,7 +783,6 @@ impl TypedModule {
         display_functions: bool,
     ) -> std::fmt::Result {
         let i = self.get_ability_impl(id);
-        let ab = self.get_ability(i.ability_id);
         let kind_str = match i.kind {
             AbilityImplKind::Concrete => "concrete",
             AbilityImplKind::Blanket { .. } => "blanket",
@@ -764,14 +790,7 @@ impl TypedModule {
             AbilityImplKind::VariableConstraint => "constraint",
         };
         write!(w, "{kind_str:10} ")?;
-        self.write_ident(w, ab.name)?;
-        if !i.impl_arguments.is_empty() {
-            write!(w, "[impl ")?;
-            for impl_arg in &i.impl_arguments {
-                self.display_named_type(w, impl_arg)?;
-            }
-            write!(w, "]")?;
-        }
+        self.display_ability_signature(w, i.ability_id, &i.impl_arguments)?;
         write!(w, " for ")?;
         self.display_type_id(i.self_type_id, false, w)?;
         if display_functions {

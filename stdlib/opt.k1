@@ -8,22 +8,31 @@ ns Opt {
       crash("Opt.get on None")
     }
   }
+
+  // I'm leaving this separate function here 
+  // because at one point it exercised a really weird compiler bug
+  fn opt_equals[T](a: Opt[T], b: Opt[T]): bool where T: Equals {
+    if a is .Some(at) {
+      if b is .Some(bt) at == bt else false
+    } else {
+      b is .None
+    }
+  }
+
 }
 
-// Convenience constructors due to highly ubiquitous nature of Opt
+// Convenience constructors in the global scope for Opt instances
 fn none[T](): Opt[T].None { Opt.None[T] }
 fn some[T](value: T): Opt[T].Some { Opt.Some[T](value) }
 
-fn opt_equals[T](a: Opt[T], b: Opt[T]): bool where T: Equals {
-  if a is .Some(at) {
-    if b is .Some(bt) at == bt else false
-  } else {
-    b is .None
+
+impl[T: Equals] Equals for Opt[T] {
+  fn equals(self: Opt[T], other: Opt[T]): bool {
+    Opt/opt_equals(self, other)
   }
 }
 
-impl Equals for Opt[i64] {
-  fn equals(self: Opt[i64], other: Opt[i64]): bool {
-    opt_equals(self, other)
-  }
+impl[T] Unwrap[Inner = T] for Opt[T] {
+  fn hasValue(self: Opt[T]): bool { self.hasValue() }
+  fn unwrap(self: Opt[T]): T { self.get() }
 }
