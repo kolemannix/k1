@@ -163,5 +163,6 @@ fn main(): int {
   list_test/listEquality();
   list_test/testSort();
   list_test/testSwap();
+  assert([1,2,3].show() == "[1,2,3]");
   0
 }

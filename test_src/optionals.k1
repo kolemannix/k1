@@ -54,12 +54,20 @@ fn optElseOperator(): unit {
   assert(result == 100);
 }
 
+
+fn blanketImpls(): unit {
+  assert(some(4) == some(4));
+  assert(some(2).unwrap() == 2);
+  assert(some(true).unwrap() != false);
+}
+
 fn main(): int {
 
   testBasics();
   testComplex();
   testCoalesceAccessor();
   optElseOperator();
+  blanketImpls();
 
   0
 }

@@ -27,6 +27,7 @@ ns List {
     { len: buffer.len, buffer: buffer }
   }
 
+  // Return only the part of our buffer with Ts in it!!!
   fn toBuffer[T](self: List[T]): Buffer[T] {
     self.buffer.slice(0, self.len)
   }
@@ -200,3 +201,18 @@ impl Equals for List[int] {
   fn equals(self: List[int], other: List[int]): bool { self.toBuffer() == other.toBuffer() }
 }
 
+
+impl[T: Equals] Equals for List[T] {
+  fn equals(self: List[T], other: List[T]): bool {
+    if self.len != other.len false else {
+      let mut i: u64 = 0;
+      while i < self.len {
+        if self.get(i) != other.get(i) {
+          return(false);
+        };
+        i = i + 1;
+      };
+      true
+    }
+  }
+}
