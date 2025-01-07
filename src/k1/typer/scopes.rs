@@ -17,7 +17,14 @@ use crate::{
     },
 };
 
-pub type ScopeId = u32;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ScopeId(u32);
+
+impl Display for ScopeId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum ScopeType {
@@ -108,15 +115,15 @@ impl Scopes {
     pub fn add_root_scope(&mut self, name: Option<Identifier>) -> ScopeId {
         debug_assert!(self.scopes.is_empty());
         self.scopes.push(Scope::make(ScopeType::Namespace, None, name, 0));
-        0 as ScopeId
+        ScopeId(0)
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (ScopeId, &Scope)> {
-        self.scopes.iter().enumerate().map(|(idx, s)| (idx as ScopeId, s))
+        self.scopes.iter().enumerate().map(|(idx, s)| (ScopeId(idx as u32), s))
     }
 
     pub fn get_root_scope_id(&self) -> ScopeId {
-        0 as ScopeId
+        ScopeId(0)
     }
 
     pub fn add_sibling_scope(
@@ -137,7 +144,7 @@ impl Scopes {
         scope_owner_id: Option<ScopeOwnerId>,
         name: Option<Identifier>,
     ) -> ScopeId {
-        let id = self.scopes.len() as ScopeId;
+        let id = ScopeId(self.scopes.len() as u32);
         let parent_scope = self.get_scope_mut(parent_scope_id);
         parent_scope.children.push(id);
         let depth = parent_scope.depth + 1;
@@ -150,7 +157,7 @@ impl Scopes {
     }
 
     pub fn get_scope(&self, id: ScopeId) -> &Scope {
-        &self.scopes[id as usize]
+        &self.scopes[id.0 as usize]
     }
 
     pub fn get_root_scope(&self) -> &Scope {
@@ -158,7 +165,7 @@ impl Scopes {
     }
 
     pub fn get_scope_mut(&mut self, id: ScopeId) -> &mut Scope {
-        &mut self.scopes[id as usize]
+        &mut self.scopes[id.0 as usize]
     }
 
     pub fn set_scope_owner_id(&mut self, id: ScopeId, owner_id: ScopeOwnerId) {
@@ -769,6 +776,10 @@ impl Scope {
 
     pub fn find_context_variable_by_type(&self, type_id: TypeId) -> Option<VariableId> {
         self.context_variables_by_type.get(&type_id).copied()
+    }
+
+    pub fn overwrite_type(&mut self, ident: Identifier, ty: TypeId) -> bool {
+        self.types.insert(ident, ty).is_some()
     }
 
     #[must_use]
