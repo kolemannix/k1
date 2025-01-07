@@ -36,24 +36,27 @@ impl[T: Add[Rhs = T, Output = T]]
     }
 }
 
-ability From[T] { fn from(t: T): Self }
-ability To[T] { fn to(self: Self): T }
+ability From[F] { fn from(t: F): Self }
+ability To[To] { fn to(self: Self): To }
 
-impl[T: Show] To[T = string] for T {
+impl[T: Show] To[To = string] for T {
   fn to(self: T): string { self.show() }
 }
 
-impl[U, T: To[T = U]] From[T = T] for U {
+// There's some sort of bug with scoping because
+// if I use T instead of To for the name in To,
+// this impl does not compile. Does not sound fun to fix tbh
+impl[U, T: To[To = U]] From[F = T] for U {
   fn from(t: T): U { t.to() }
 }
 
-impl To[T = string] for i32 {
+impl To[To = string] for i32 {
   fn to(self: Self): string { Show/show[i32](self) }
 }
-impl To[T = string] for i64 {
+impl To[To = string] for i64 {
   fn to(self: Self): string { Show/show[i64](self) }
 }
-impl To[T = char] for byte {
+impl To[To = char] for byte {
   fn to(self: byte): char { self as char }
 }
 
