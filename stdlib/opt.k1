@@ -35,4 +35,5 @@ impl[T: Equals] Equals for Opt[T] {
 impl[T] Unwrap[Inner = T] for Opt[T] {
   fn hasValue(self: Opt[T]): bool { self.hasValue() }
   fn unwrap(self: Opt[T]): T { self.get() }
+  fn make(t: T): Self { Opt.Some(t) }
 }

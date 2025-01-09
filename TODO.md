@@ -148,6 +148,8 @@
        `let result1 = compiler/nocompile(1 + "asdf"); assert(result1.startsWith("Type mismatch"))`
 - [x] Migrate ? to use an ability
 - [x] Add "or return error" operator based on an ability
+- [ ] Convert try to postfix: hello.try (hearkening to .await)
+- [ ] ! operator should now just call Unwrap.unwrap()
 - [ ] Typecheck 'main'
 - [ ] `inline` functions (like Scala3's)
 - [ ] Migrate `for` loops to use an ability

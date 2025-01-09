@@ -9,36 +9,27 @@ fn canFailBool(): Result[bool, Error] { .Ok(false) }
 
 impl Try[T = int, E = Error] for Foo {
   fn makeError(e: E): Self   { { a: false } }
-  fn makeSuccess(t: T): Self { { a: true  } }
+  fn makeOk(t: T): Self { { a: true  } }
 
-  fn isSuccess(self: Self): bool { self.a }
-  fn getSuccess(self: Self): T  { 3 }
+  fn isOk(self: Self): bool { self.a }
+  fn getOk(self: Self): T  { 3 }
   fn getError(self: Self): E { "FooError" }
 }
 
 fn fails(b: bool): Result[bool, Error] {
   let value: Result[int, Error] = .Err("woops");
-  let i = try(value);
+  let i = value.try;
   .Ok(i % 2 == 0)
 }
 
-impl[S, F] Try[T = S, E = F] for Result[S, F] {
-  fn makeError(e: E): Self   { .Err(e) }
-  fn makeSuccess(t: T): Self { .Ok(t) }
-
-  fn isSuccess(self: Self): bool { self is .Ok(_) }
-  fn getSuccess(self: Self): T  { self.asOk()!.value }
-  fn getError(self: Self): E { self.asErr()!.value }
-}
-
 fn main(): Result[int, Error] {
-  let result: int = try(canFailInt());
+  let result: int = canFailInt().try;
   assert(result == 42);
-  let result: int = try({ a: true }: Foo);
+  let result: int = ({ a: true }: Foo).try;
   assert(result == 3);
 
   let c = \(b: bool -> Result[bool, Error]) {
-    let i = try(fails(true));
+    let i = fails(true).try;
     .Ok(not i)
   };
   let res = c(false);

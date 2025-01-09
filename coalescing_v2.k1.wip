@@ -1,0 +1,24 @@
+fn main(): int {
+  // Steps to make coalescing accessor work and be ability-based
+  // - Named type params for fn calls (to unify the syntax)
+  // - (optional, but missing) A syntax for specifying ability Self type
+  // - A new AST node (AbilityCall, written like below: ability expr (requiring Self = ) + '/' + <fn_call>)
+  // - To typecheck that, just look up the impl, and do a kinda special fn call with a known function id
+  A
+  < To[String, int?] > / <to(none())>
+
+  let maybeUser = Opt.Some({ name: "Koleman", age: some({ a: 31 }) });
+  assert(maybeUser?.age?.a.! == 31);
+  // { if maybeUser.hasValue() { 
+  //   let a = maybeUser.!.age; 
+  //   #if a is unwrap {
+  //     if a.hasValue() Unwrap/[typeOf(maybeUser)]/make(a.unwrap()) else Unwrap/[typeOf(maybeUser)]/empty()
+  //   } else {
+  //     Unwrap[typeOf(maybeUser)]/make(a)
+  //   }
+  // }
+  // nocommit test mixing types
+  let resultUser = Opt.Some({ name: "Koleman", age: Result.Ok({ a: 31 }) });
+
+  0
+}

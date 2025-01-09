@@ -235,38 +235,6 @@ pub struct Identifiers {
     intern_pool: string_interner::StringInterner<StringBackend>,
 }
 impl Identifiers {
-    pub const BUILTIN_IDENTS: [&'static str; 29] = [
-        "main",
-        "self",
-        "it",
-        "unit",
-        "char",
-        "string",
-        "length",
-        "hasValue",
-        "get",
-        "not",
-        "iteree",
-        "it_index",
-        "as",
-        "list_lit",
-        "withCapacity",
-        "yielded_coll",
-        "iteree_length",
-        "block_expr_val",
-        "optelse_lhs",
-        "list_literal",
-        "CompilerSourceLoc",
-        "__clos_env",
-        "fn_ptr",
-        "env_ptr",
-        "&",
-        "*",
-        "sb",
-        "payload",
-        "try_value",
-    ];
-
     pub fn intern(&mut self, s: impl AsRef<str>) -> Identifier {
         let s = self.intern_pool.get_or_intern(&s);
         Identifier(s)
@@ -563,10 +531,6 @@ pub enum ParsedExpression {
     /// ```
     ListLiteral(ListExpr),
     /// ```md
-    /// <opt: expr>!
-    /// ```
-    OptionalGet(OptionalGet),
-    /// ```md
     /// for <ident> in <coll: expr> do <body: expr>
     /// ```
     For(ForExpr),
@@ -622,7 +586,6 @@ impl ParsedExpression {
             Self::Loop(loop_expr) => loop_expr.span,
             Self::Struct(struc) => struc.span,
             Self::ListLiteral(list_expr) => list_expr.span,
-            Self::OptionalGet(optional_get) => optional_get.span,
             Self::For(for_expr) => for_expr.span,
             Self::AnonEnumVariant(tag_expr) => tag_expr.span,
             Self::EnumDotConstructor(e) => e.span,
@@ -648,7 +611,6 @@ impl ParsedExpression {
             Self::Loop(_loop) => false,
             Self::Struct(_struct) => false,
             Self::ListLiteral(_list_expr) => false,
-            Self::OptionalGet(_optional_get) => false,
             Self::For(_) => false,
             Self::AnonEnumVariant(_) => false,
             Self::EnumDotConstructor(_) => false,
@@ -2356,15 +2318,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         // Looping for postfix ops inspired by Jakt's parser
         let with_postfix: ParsedExpressionId = loop {
             let (next, second) = self.peek_two();
-            let new_result = if next.kind == K::Bang {
-                // Optional uwrap `config!.url`
-                self.advance();
-                let span = self.extend_span(self.get_expression_span(result), next.span);
-                Some(self.add_expression(ParsedExpression::OptionalGet(OptionalGet {
-                    base: result,
-                    span,
-                })))
-            } else if next.kind == K::KeywordAs {
+            let new_result = if next.kind == K::KeywordAs {
                 self.advance();
                 let type_expr_id = self.expect_type_expression()?;
                 let span = self.extend_span(
@@ -2390,9 +2344,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     K::Ident => self.tokens.next(),
                     K::Ampersand => self.tokens.next(),
                     K::Asterisk => self.tokens.next(),
+                    K::Bang => self.tokens.next(),
                     _k => {
                         return Err(error_expected(
-                            "Field name, identifiers or referencing operator",
+                            "Field name, or postfix &, *, or !",
                             self.peek(),
                         ))
                     }
@@ -2732,9 +2687,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         } else if let Some(literal_id) = self.parse_literal()? {
             Ok(Some(literal_id))
         } else if first.kind == K::Ident {
-            // FnCall
             let namespaced_ident = self.expect_namespaced_ident()?;
             let second = self.tokens.peek();
+            // FnCall
             if second.kind == K::OpenBracket || second.kind == K::OpenParen {
                 trace!("parse_expression FnCall");
                 let (type_args, _type_args_span) = self.parse_optional_type_args()?;
@@ -3670,9 +3625,6 @@ impl ParsedModule {
             ParsedExpression::ListLiteral(list_expr) => {
                 f.write_fmt(format_args!("{:?}", list_expr))
             }
-            ParsedExpression::OptionalGet(optional_get) => {
-                f.write_fmt(format_args!("{:?}", optional_get))
-            }
             ParsedExpression::For(for_expr) => f.write_fmt(format_args!("{:?}", for_expr)),
             ParsedExpression::AnonEnumVariant(tag_expr) => {
                 f.write_char('.')?;
@@ -3873,4 +3825,40 @@ pub fn test_parse_module(source: Source) -> ParseResult<ParsedModule> {
     } else {
         Ok(module)
     }
+}
+
+impl Identifiers {
+    pub const BUILTIN_IDENTS: [&'static str; 31] = [
+        "main",
+        "self",
+        "it",
+        "unit",
+        "char",
+        "string",
+        "length",
+        "hasValue",
+        "get",
+        "not",
+        "iteree",
+        "it_index",
+        "as",
+        "list_lit",
+        "withCapacity",
+        "yielded_coll",
+        "iteree_length",
+        "block_expr_val",
+        "optelse_lhs",
+        "list_literal",
+        "CompilerSourceLoc",
+        "__clos_env",
+        "fn_ptr",
+        "env_ptr",
+        "&",
+        "*",
+        "!",
+        "sb",
+        "payload",
+        "try",
+        "try_value",
+    ];
 }

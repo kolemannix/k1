@@ -20,14 +20,14 @@ fn main(): int {
   assert(b.value == 0);
   assert(c.value == true);
   assert(c2.value == false);
-  assert(c3.value! == false);
+  assert(c3.value.! == false);
   assert(c4.value.* == false);
 
   let p: Pair[int, bool] = { t: some(0), u: some(true) };
-  assert(p.t! == 0);
-  assert(p.u! == true);
-  assert(p.t[int, bool]()! == 0);
-  assert(p.t()! == 0);
+  assert(p.t.! == 0);
+  assert(p.u.! == true);
+  assert(p.t[int, bool]().! == 0);
+  assert(p.t().! == 0);
 
   let nested: Box[Box[Box[int]]] = { value: { value: { value: 42 } } };
   assert(unboxIt(nested) == 42);

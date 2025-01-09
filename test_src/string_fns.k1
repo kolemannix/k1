@@ -15,16 +15,16 @@ fn main(): int {
   assert("a...".splitByChar('.') == ["a"]);
   assert("..".splitByChar('.') == []);
 
-  assert("hello".indexOfString("hel")! == 0);
-  assert("hello".indexOfString("")! == 0);
-  assert("hello".indexOfString("e")! == 1);
+  assert("hello".indexOfString("hel").! == 0);
+  assert("hello".indexOfString("").! == 0);
+  assert("hello".indexOfString("e").! == 1);
   assert("hello".indexOfString("x") is .None);
 
-  assert("123".toInt()! == 123);
-  assert("-123".toInt()! == -123);
+  assert("123".toInt().! == 123);
+  assert("-123".toInt().! == -123);
   assert(not "--".toInt().hasValue());
   assert(not "123a".toInt().hasValue());
-  assert("12399999".toInt()! == 12399999);
+  assert("12399999".toInt().! == 12399999);
 
   0
 }

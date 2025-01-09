@@ -329,7 +329,7 @@ fn type_hint() -> ParseResult<()> {
 
 #[test]
 fn type_hint_binop() -> ParseResult<()> {
-    let input = "(3!: int + 4: List[bool]): int";
+    let input = "(3.!: int + 4: List[bool]): int";
     let (module, _expr, expr_id) = test_single_expr_with_id(input)?;
     let type_hint = module.get_expression_type_hint(expr_id).unwrap();
     assert_eq!(module.type_expression_to_string(type_hint), "int");

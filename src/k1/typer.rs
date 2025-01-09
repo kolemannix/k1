@@ -3930,7 +3930,44 @@ impl TypedModule {
 
         // Bailout case: .* dereference operation
         if field_access.target == get_ident!(self, "*") {
-            return self.eval_dereference(field_access, scope_id, expected_type, span);
+            return self.eval_dereference(field_access.base, scope_id, expected_type, span);
+        }
+
+        // Bailout case: .! unwrap operation
+        if field_access.target == get_ident!(self, "!") {
+            if field_access.is_coalescing {
+                return failf!(field_access.span, "Cannot use ?. with unwrap operator");
+            }
+            if field_access.is_referencing {
+                return failf!(field_access.span, "Cannot use * with unwrap operator");
+            }
+            if is_assignment_lhs {
+                return failf!(field_access.span, "Cannot assign to unwrap operator");
+            }
+            return self.eval_unwrap_operator(
+                field_access.base,
+                scope_id,
+                expected_type,
+                field_access.span,
+            );
+        }
+
+        if field_access.target == get_ident!(self, "try") {
+            if field_access.is_coalescing {
+                return failf!(field_access.span, "Cannot use ?. with try operator");
+            }
+            if field_access.is_referencing {
+                return failf!(field_access.span, "Cannot use * with try operator");
+            }
+            if is_assignment_lhs {
+                return failf!(field_access.span, "Cannot assign to try operator");
+            }
+            return self.eval_try_operator(
+                field_access.base,
+                scope_id,
+                expected_type,
+                field_access.span,
+            );
         }
 
         let mut base_expr = self.eval_expr(field_access.base, scope_id, None)?;
@@ -3969,9 +4006,13 @@ impl TypedModule {
                     if field_access.is_referencing {
                         return failf!(
                             span,
-                            "Cannot use referencing access with optional coalescing"
+                            "Cannot use referencing access with optional chaining"
                         );
                     }
+                    // TODO: This can be re-written in terms of 'Unwrap' if we supply a
+                    //           'wrap' function that wraps (optional Some equivalent)
+                    // It doesn't really support chaining yet, kinda useless so I also won't make it ability-based yet
+                    // See coalescing_v2.wip for plan
                     let mut block = self.synth_block(vec![], scope_id, span);
                     let block_scope = block.scope_id;
                     let base_expr_var = self.synth_variable_defn_simple(
@@ -4124,9 +4165,127 @@ impl TypedModule {
         }
     }
 
+    fn eval_try_operator(
+        &mut self,
+        operand: ParsedExpressionId,
+        scope_id: ScopeId,
+        _expected_type: Option<TypeId>,
+        span: SpanId,
+    ) -> TyperResult<TypedExpr> {
+        let block_return_type = self.get_expected_return_type(scope_id, span)?;
+        let block_try_impl = self.expect_ability_implementation(
+                    block_return_type,
+                    TRY_ABILITY_ID,
+                    span,
+                ).map_err(|mut e| {
+                        e.message = format!("`.try` can only be used from a function or closure that returns a type implementing `Try`. {}", e.message);
+                        e
+                    })?;
+        let try_value_original_expr = self.eval_expr(operand, scope_id, None)?;
+        let try_value_type = try_value_original_expr.get_type();
+        let value_try_impl =
+            self.expect_ability_implementation(try_value_type, TRY_ABILITY_ID, span)?;
+        let block_impl_args = &self.get_ability_impl(block_try_impl.full_impl_id).impl_arguments;
+        let value_impl_args = &self.get_ability_impl(value_try_impl.full_impl_id).impl_arguments;
+        let block_error_type = block_impl_args
+            .iter()
+            .find(|nt| nt.name == get_ident!(self, "E"))
+            .map(|nt| nt.type_id)
+            .unwrap();
+        let error_type = value_impl_args
+            .iter()
+            .find(|nt| nt.name == get_ident!(self, "E"))
+            .map(|nt| nt.type_id)
+            .unwrap();
+        if let Err(msg) = self.check_types(block_error_type, error_type, scope_id) {
+            return failf!(span, "This function expects a Try, but with a different Error type than the value: {msg}");
+        };
+        let value_success_type = value_impl_args
+            .iter()
+            .find(|nt| nt.name == get_ident!(self, "T"))
+            .map(|nt| nt.type_id)
+            .unwrap();
+        let mut result_block = self.synth_block(vec![], scope_id, span);
+        let try_value_var = self.synth_variable_defn_simple(
+            get_ident!(self, "try_value"),
+            try_value_original_expr,
+            result_block.scope_id,
+        );
+        let is_ok_call = self.synth_typed_function_call(
+            qident!(self, span, ["Try"], "isOk"),
+            vec![],
+            vec![try_value_var.variable_expr.clone()],
+            result_block.scope_id,
+            None,
+        )?;
+        let get_ok_call = self.synth_typed_function_call(
+            qident!(self, span, ["Try"], "getOk"),
+            vec![],
+            vec![try_value_var.variable_expr.clone()],
+            result_block.scope_id,
+            None,
+        )?;
+        // FIXME: Consider alternatives for calling the block's makeError function
+        //        in a less brittle way?
+        let block_make_error_fn = self.get_ability_impl(block_try_impl.full_impl_id).functions[0];
+        eprintln!(
+            "TYPE OF make_error: {}",
+            self.type_id_to_string(self.get_function(block_make_error_fn).type_id)
+        );
+
+        let get_error_call = self.synth_typed_function_call(
+            qident!(self, span, ["Try"], "getError"),
+            vec![],
+            vec![try_value_var.variable_expr],
+            result_block.scope_id,
+            None,
+        )?;
+        let make_error_call = TypedExpr::Call(Call {
+            callee: Callee::StaticFunction(block_make_error_fn),
+            args: vec![get_error_call],
+            type_args: vec![],
+            return_type: block_error_type,
+            span,
+        });
+        let return_error_expr =
+            TypedExpr::Return(TypedReturn { value: Box::new(make_error_call), span });
+        let if_expr = TypedExpr::If(Box::new(TypedIf {
+            condition: is_ok_call,
+            consequent: get_ok_call,
+            alternate: return_error_expr,
+            ty: value_success_type,
+            span,
+        }));
+
+        result_block.push_stmt(try_value_var.defn_stmt);
+        result_block.push_expr(if_expr);
+
+        eprintln!("{}", self.block_to_string(&result_block));
+        Ok(TypedExpr::Block(result_block))
+    }
+
+    fn eval_unwrap_operator(
+        &mut self,
+        operand: ParsedExpressionId,
+        scope_id: ScopeId,
+        _expected_type: Option<TypeId>,
+        span: SpanId,
+    ) -> TyperResult<TypedExpr> {
+        let operand_expr = self.eval_expr_inner(operand, scope_id, None)?;
+        let _unwrap_impl =
+            self.expect_ability_implementation(operand_expr.get_type(), UNWRAP_ABILITY_ID, span)?;
+        self.synth_typed_function_call(
+            qident!(self, span, ["Unwrap"], "unwrap"),
+            vec![],
+            vec![operand_expr],
+            scope_id,
+            None,
+        )
+    }
+
     fn eval_dereference(
         &mut self,
-        field_access: &parse::FieldAccess,
+        operand: ParsedExpressionId,
         scope_id: ScopeId,
         expected_type: Option<TypeId>,
         span: SpanId,
@@ -4139,7 +4298,7 @@ impl TypedModule {
             Some(expected) => Some(self.types.add_reference_type(expected)),
             None => None,
         };
-        let base_expr = self.eval_expr(field_access.base, scope_id, expected_type)?;
+        let base_expr = self.eval_expr(operand, scope_id, expected_type)?;
         let reference_type =
             self.types.get(base_expr.get_type()).as_reference().ok_or(make_error(
                 format!(
@@ -4158,14 +4317,22 @@ impl TypedModule {
 
     /// Used for
     /// - de-referencing,
+    /// Probably unsound. I'd like to remove and re-introduce coercion as part of subtyping.
+    /// However, not sure if we should do it for references, because I'd like to move that to an
+    /// ability so that we can have different types of references written in userspace
     fn coerce_expression_to_expected_type(
         &mut self,
         expected_type_id: TypeId,
         expression: TypedExpr,
-        _scope_id: ScopeId,
+        scope_id: ScopeId,
         _parsed_id: ParsedId,
     ) -> CoerceResult {
-        if self.types.get(expected_type_id).as_reference().is_none() {
+        if self
+            .types
+            .get(self.get_type_id_resolved(expected_type_id, scope_id))
+            .as_reference()
+            .is_none()
+        {
             // We only do this if the expected type is not a reference at all. Meaning,
             // if your expected type is T*, and you pass a T**, you need to de-reference that yourself.
             // This rule won't help you or do anything for nested references
@@ -4473,28 +4640,6 @@ impl TypedModule {
             }
             ParsedExpression::FnCall(fn_call) => {
                 self.eval_function_call(&fn_call.clone(), scope_id, expected_type, None)
-            }
-            ParsedExpression::OptionalGet(optional_get) => {
-                let span = optional_get.span;
-                let base = self.eval_expr_inner(optional_get.base, scope_id, expected_type)?;
-                // This is where we would use an 'unwrap' trait instead!!
-                // This could just be a UnaryOp
-                let Some(optional_type) = self.types.get(base.get_type()).as_optional() else {
-                    return make_fail_span(
-                        format!(
-                            "Cannot get value with ! from non-optional type: {}",
-                            self.type_id_to_string(base.get_type())
-                        ),
-                        span,
-                    );
-                };
-                self.synth_typed_function_call(
-                    self.ident_opt_get(span),
-                    vec![optional_type.inner_type],
-                    vec![base],
-                    scope_id,
-                    None,
-                )
             }
             ParsedExpression::For(for_expr) => {
                 self.eval_for_expr(&for_expr.clone(), scope_id, expected_type)
@@ -6524,109 +6669,6 @@ impl TypedModule {
                     Ok(_expr) => self.synth_optional_none(STRING_TYPE_ID, call_span),
                 };
                 Ok(Some(expr))
-            }
-            "try" => {
-                if fn_call.args.len() != 1 {
-                    return make_fail_span("try takes one argument", call_span);
-                }
-                // This is where we could enhance to support 'try' blocks
-                let block_return_type = self.get_expected_return_type(calling_scope, call_span)?;
-                let block_try_impl = self.expect_ability_implementation(
-                    block_return_type,
-                    TRY_ABILITY_ID,
-                    call_span,
-                ).map_err(|mut e| {
-                        e.message = format!("`try` can only be used from a function or closure that returns a type implementing `Try`. {}", e.message);
-                        e
-                    })?;
-                let arg = &fn_call.args[0];
-                // Let's do better here
-                let try_value_original_expr = self.eval_expr(arg.value, calling_scope, None)?;
-                let try_value_type = try_value_original_expr.get_type();
-                let value_try_impl =
-                    self.expect_ability_implementation(try_value_type, TRY_ABILITY_ID, call_span)?;
-                let block_impl_args =
-                    &self.get_ability_impl(block_try_impl.full_impl_id).impl_arguments;
-                let value_impl_args =
-                    &self.get_ability_impl(value_try_impl.full_impl_id).impl_arguments;
-                let block_error_type = block_impl_args
-                    .iter()
-                    .find(|nt| nt.name == get_ident!(self, "E"))
-                    .map(|nt| nt.type_id)
-                    .unwrap();
-                let error_type = value_impl_args
-                    .iter()
-                    .find(|nt| nt.name == get_ident!(self, "E"))
-                    .map(|nt| nt.type_id)
-                    .unwrap();
-                if let Err(msg) = self.check_types(block_error_type, error_type, calling_scope) {
-                    return failf!(call_span, "This function expects a Try, but with a different Error type than the value: {msg}");
-                };
-                let value_success_type = value_impl_args
-                    .iter()
-                    .find(|nt| nt.name == get_ident!(self, "T"))
-                    .map(|nt| nt.type_id)
-                    .unwrap();
-                let mut result_block = self.synth_block(vec![], calling_scope, call_span);
-                let try_value_var = self.synth_variable_defn_simple(
-                    get_ident!(self, "try_value"),
-                    try_value_original_expr,
-                    result_block.scope_id,
-                );
-                let is_success_call = self.synth_typed_function_call(
-                    qident!(self, call_span, ["Try"], "isSuccess"),
-                    vec![],
-                    vec![try_value_var.variable_expr.clone()],
-                    result_block.scope_id,
-                    None,
-                )?;
-                let get_success_call = self.synth_typed_function_call(
-                    qident!(self, call_span, ["Try"], "getSuccess"),
-                    vec![],
-                    vec![try_value_var.variable_expr.clone()],
-                    result_block.scope_id,
-                    None,
-                )?;
-                // FIXME: Consider alternatives for calling the block's makeError function
-                //        in a less brittle way?
-                let block_make_error_fn =
-                    self.get_ability_impl(block_try_impl.full_impl_id).functions[0];
-                eprintln!(
-                    "TYPE OF make_error: {}",
-                    self.type_id_to_string(self.get_function(block_make_error_fn).type_id)
-                );
-
-                let get_error_call = self.synth_typed_function_call(
-                    qident!(self, call_span, ["Try"], "getError"),
-                    vec![],
-                    vec![try_value_var.variable_expr],
-                    result_block.scope_id,
-                    None,
-                )?;
-                let make_error_call = TypedExpr::Call(Call {
-                    callee: Callee::StaticFunction(block_make_error_fn),
-                    args: vec![get_error_call],
-                    type_args: vec![],
-                    return_type: block_error_type,
-                    span: call_span,
-                });
-                let return_error_expr = TypedExpr::Return(TypedReturn {
-                    value: Box::new(make_error_call),
-                    span: call_span,
-                });
-                let if_expr = TypedExpr::If(Box::new(TypedIf {
-                    condition: is_success_call,
-                    consequent: get_success_call,
-                    alternate: return_error_expr,
-                    ty: value_success_type,
-                    span: call_span,
-                }));
-
-                result_block.push_stmt(try_value_var.defn_stmt);
-                result_block.push_expr(if_expr);
-
-                eprintln!("{}", self.block_to_string(&result_block));
-                Ok(Some(TypedExpr::Block(result_block)))
             }
             _ => Ok(None),
         }
