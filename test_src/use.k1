@@ -24,7 +24,7 @@ fn main(): int {
   // Use a generic type
   use _root/Opt as Optional;
   let helloOpt: Optional[str] = some("Hello");
-  assert(hello == helloOpt!);
+  assert(hello == helloOpt.!);
 
   // Use a namespace
   use _root/foo as fooAlias;

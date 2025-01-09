@@ -19,7 +19,7 @@ fn from_xy(x: u8, y: u8): u8 {
   x + y * 8
 }
 fn from_name(s: string): u8 {
-  let file: u8 = switch s.first()! {
+  let file: u8 = switch s.first().! {
      'a' -> 0,
      'b' -> 1,
      'c' -> 2,
@@ -30,7 +30,7 @@ fn from_name(s: string): u8 {
      'h' -> 7,
      _ -> crash("bad tile name: \{s}")
   };
-  let rank = (s.get(2).toAsciiDigit()! - 1);
+  let rank = (s.get(2).toAsciiDigit().! - 1);
   file + rank * 8
 }
 

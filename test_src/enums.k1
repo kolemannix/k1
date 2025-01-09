@@ -20,20 +20,20 @@ fn enumPayload(): unit {
     assert(x == 'x');
   } else crash("");
   assert(b is .B(_));
-  assert(b.asB()!.value == 'x');
+  assert(b.asB().!.value == 'x');
 
   if c is .C("hello, enums") {
     ()
   } else crash("");
   assert(c is .C(_));
-  assert(c.asC()!.value == "hello, enums");
+  assert(c.asC().!.value == "hello, enums");
 
 }
 
 deftype MyResult[T, E] = either Ok(T), Err(E)
 ns MyResult {
   fn unwrap[T, E](self: MyResult[T, E]): T {
-    self.asOk()!.value
+    self.asOk().!.value
   }
   fn show[T: Show, E: Show](self: MyResult[T, E]): string { 
     switch self {
@@ -47,7 +47,7 @@ fn genericEnum(): unit {
     let x1: MyResult[int, string] = .Ok(-3);
     let x2: MyResult[int, string] = .Err("Some error message");
 
-    let x1Ok = x1.asOk()!;
+    let x1Ok = x1.asOk().!;
 
     // This tests type inference for enums
     assert(MyResult/unwrap(x1) == -3);

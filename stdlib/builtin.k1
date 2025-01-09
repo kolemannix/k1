@@ -68,16 +68,26 @@ ability Comparable {
 ability Unwrap[impl Inner] {
   fn hasValue(self: Self): bool
   fn unwrap(self: Self): Inner
+  fn make(inner: Inner): Self
 }
 
 ability Try[impl T, impl E] {
   // DO NOT REORDER makeError must be first! (FIXME)
   fn makeError(e: E): Self
-  fn makeSuccess(t: T): Self
+  fn makeOk(t: T): Self
 
-  fn isSuccess(self: Self): bool
+  fn isOk(self: Self): bool
   fn getError(self: Self): E
-  fn getSuccess(self: Self): T
+  fn getOk(self: Self): T
+}
+
+impl[S, F] Try[T = S, E = F] for Result[S, F] {
+  fn makeError(e: E): Self   { .Err(e) }
+  fn makeOk(t: T): Self { .Ok(t) }
+
+  fn isOk(self: Self): bool { self is .Ok(_) }
+  fn getOk(self: Self): T  { self.asOk().!.value }
+  fn getError(self: Self): E { self.asErr().!.value }
 }
 
 // inline fn unwrap_or[U, V: Unwrap[Inner = U]](v: V, backup: int): U {

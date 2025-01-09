@@ -16,8 +16,8 @@ fn listFill(): int {
   assert(xs.get(2) == 2);
   assert(xs.get(3) == 3);
   assert(xs.get(4) == 4);
-  assert(xs.first()! == 0);
-  assert(xs.last()! == 4);
+  assert(xs.first().! == 0);
+  assert(xs.last().! == 4);
 
   let exp = [0,1,2,3,4];
   assert(xs.* == exp);

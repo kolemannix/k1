@@ -140,7 +140,7 @@ ns HashMap {
       .None -> false,
       .Some({ key: existingKey, value: value, deleted }) -> {
         if key == existingKey {
-          entryRef.asSome()!.value*.deleted* <- true;
+          entryRef.asSome().!.value*.deleted* <- true;
           not deleted
         } else {
           let mut probeIndex = index;
@@ -152,7 +152,7 @@ ns HashMap {
             switch probedEntryRef.* {
               .Some({ key: existingKey, value, deleted }) -> {
                 if key == existingKey {
-                  probedEntryRef.asSome()!.value*.deleted* <- true;
+                  probedEntryRef.asSome().!.value*.deleted* <- true;
                   break(not deleted)
                 }
               },
