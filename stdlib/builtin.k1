@@ -21,6 +21,8 @@ deftype CompilerSourceLoc = { filename: string, line: u64 }
 
 deftype Ordering = either Less, Equal, Greater
 
+deftype Result[T, E] = either Ok(T), Err(E)
+
 deftype alias int = i64
 deftype alias uint = u64
 deftype alias byte = u8
@@ -68,15 +70,20 @@ ability Unwrap[impl Inner] {
   fn unwrap(self: Self): Inner
 }
 
+ability Try[impl T, impl E] {
+  // DO NOT REORDER makeError must be first! (FIXME)
+  fn makeError(e: E): Self
+  fn makeSuccess(t: T): Self
+
+  fn isSuccess(self: Self): bool
+  fn getError(self: Self): E
+  fn getSuccess(self: Self): T
+}
+
 // inline fn unwrap_or[U, V: Unwrap[Inner = U]](v: V, backup: int): U {
 //   if v.hasValue() v.unwrap() else backup
 // }
 
-// 
-// ability Resulty {
-//   fn isSuccess(self: Self): bool
-//   fn getError(self: Self): E
-// }
 
 ns bool {
   intern fn negated(self: bool): bool

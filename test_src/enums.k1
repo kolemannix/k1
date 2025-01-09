@@ -30,12 +30,12 @@ fn enumPayload(): unit {
 
 }
 
-deftype Result[T, E] = either Ok(T), Err(E)
-ns Result {
-  fn unwrap[T, E](self: Result[T, E]): T {
+deftype MyResult[T, E] = either Ok(T), Err(E)
+ns MyResult {
+  fn unwrap[T, E](self: MyResult[T, E]): T {
     self.asOk()!.value
   }
-  fn show(self: Result[int, string]): string {
+  fn show[T: Show, E: Show](self: MyResult[T, E]): string { 
     switch self {
       .Ok(v) -> { "Ok: \{v}\n" },
       .Err(e) -> { "Error: \{e}\n" }
@@ -44,25 +44,25 @@ ns Result {
 }
 
 fn genericEnum(): unit {
-    let x1: Result[int, string] = .Ok(-3);
-    let x2: Result[int, string] = .Err("Some error message");
+    let x1: MyResult[int, string] = .Ok(-3);
+    let x2: MyResult[int, string] = .Err("Some error message");
 
     let x1Ok = x1.asOk()!;
 
     // This tests type inference for enums
-    assert(Result/unwrap(x1) == -3);
+    assert(MyResult/unwrap(x1) == -3);
     assert(x1.unwrap() == -3);
     assert(x1Ok.unwrap() == -3);
 
     // Shows that we can talk about the payload type
-    let b: Result[int, string].Ok.value = 42;
+    let b: MyResult[int, string].Ok.value = 42;
 
     assert(x1.show() == "Ok: -3\n");
     assert(x2.show() == "Error: Some error message\n");
 
-    assert(sizeOf[Result[int, string]]() == 24);
-    assert(sizeOfStride[Result[int, string]]() == 24);
-    assert(alignOf[Result[int, string]]() == 8);
+    assert(sizeOf[MyResult[int, string]]() == 24);
+    assert(sizeOfStride[MyResult[int, string]]() == 24);
+    assert(alignOf[MyResult[int, string]]() == 8);
 }
 
 fn main(): int {

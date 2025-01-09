@@ -235,7 +235,7 @@ pub struct Identifiers {
     intern_pool: string_interner::StringInterner<StringBackend>,
 }
 impl Identifiers {
-    pub const BUILTIN_IDENTS: [&'static str; 28] = [
+    pub const BUILTIN_IDENTS: [&'static str; 29] = [
         "main",
         "self",
         "it",
@@ -264,6 +264,7 @@ impl Identifiers {
         "*",
         "sb",
         "payload",
+        "try_value",
     ];
 
     pub fn intern(&mut self, s: impl AsRef<str>) -> Identifier {
@@ -832,7 +833,7 @@ pub struct StructType {
 #[derive(Debug, Clone)]
 pub struct TypeApplication {
     pub name: NamespacedIdentifier,
-    pub params: Vec<NamedTypeArg>,
+    pub args: Vec<NamedTypeArg>,
     pub span: SpanId,
 }
 
@@ -982,7 +983,7 @@ pub struct ParsedTypeConstraint {
 pub struct ParsedFunction {
     pub name: Identifier,
     pub type_params: Vec<ParsedTypeParam>,
-    pub args: Vec<FnArgDef>,
+    pub params: Vec<FnArgDef>,
     pub context_params: Vec<FnArgDef>,
     pub ret_type: Option<ParsedTypeExpressionId>,
     pub block: Option<Block>,
@@ -2234,7 +2235,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let (type_params, type_params_span) = self.parse_optional_type_args()?;
                 let span = self.extend_span_maybe(first.span, type_params_span);
                 Ok(Some(self.module.type_expressions.add(ParsedTypeExpression::TypeApplication(
-                    TypeApplication { name: base_name, params: type_params, span },
+                    TypeApplication { name: base_name, args: type_params, span },
                 ))))
             }
         } else if first.kind == K::OpenBrace {
@@ -3161,35 +3162,25 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(Some(Block { stmts: block_statements, span }))
     }
 
-    fn expect_type_param(&mut self, terminator: TokenKind) -> ParseResult<ParsedTypeParam> {
+    fn expect_type_param(&mut self) -> ParseResult<ParsedTypeParam> {
         // fn foo[T: Into[bool] and Into[Baz], U: Into[int]]
         //        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
         //           ^^^^^^^^^^     ^^^^^^^^^^^^^^^^^^^^^^^
         //           constraints
         let name_token = self.expect_eat_token(K::Ident)?;
         let name = self.intern_ident_token(name_token);
-        let constraints = self.eat_delimited_if_opener(
-            "Type Variable Constraints",
-            K::Colon,
-            K::KeywordAnd,
-            &[K::Comma, terminator],
-            Parser::expect_type_constraint_expr,
-        )?;
-        //
-        // This is a bit hackish, but type_params are usually parsed
-        // inside a repeating [ , ] context. If we ended with a ] on our
-        // last constraint, the caller will be expecting that ] to terminate
-        // the entire param sequence. So we walk it back.
-        //
-        // Ideally we wouldn't require such context from outside, or at least
-        // if we do we could find a way to express this desire _not_ to consume some
-        // terminators in a more obvious way
-        let actual_terminator = self.peek_back();
-        if actual_terminator.kind == terminator {
-            self.tokens.retreat();
+        let mut constraints = vec![];
+        if self.maybe_consume_next(K::Colon).is_some() {
+            loop {
+                constraints.push(self.expect_type_constraint_expr()?);
+                if self.peek().kind != K::KeywordAnd {
+                    break;
+                } else {
+                    self.advance()
+                }
+            }
         }
-        let span = self.extend_span_maybe(name_token.span, constraints.as_ref().map(|c| c.1));
-        let constraints = constraints.map(|c| c.0).unwrap_or_default();
+        let span = self.extend_to_here(name_token.span);
         Ok(ParsedTypeParam { name, span, constraints })
     }
 
@@ -3264,7 +3255,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     "Type arguments",
                     TokenKind::Comma,
                     &[TokenKind::CloseBracket],
-                    |p| p.expect_type_param(K::CloseBracket),
+                    |p| p.expect_type_param(),
                 )?;
                 type_args
             } else {
@@ -3293,7 +3284,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let function_id = self.module.add_function(ParsedFunction {
             name: func_name_id,
             type_params: type_arguments,
-            args,
+            params: args,
             context_params: context_args,
             ret_type,
             block,
@@ -3421,7 +3412,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 K::OpenBracket,
                 K::Comma,
                 &[K::CloseBracket],
-                |p| p.expect_type_param(K::CloseBracket),
+                |p| p.expect_type_param(),
             )?
             .map(|res| res.0)
             .unwrap_or_default();
@@ -3477,7 +3468,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             self.advance();
             let (type_args, _type_arg_span) =
                 self.eat_delimited("Type arguments", K::Comma, &[K::CloseBracket], |p| {
-                    p.expect_type_param(K::CloseBracket)
+                    p.expect_type_param()
                 })?;
             type_args
         } else {
@@ -3781,9 +3772,9 @@ impl ParsedModule {
             }
             ParsedTypeExpression::TypeApplication(tapp) => {
                 display_namespaced_identifier(f, &self.identifiers, &tapp.name, "::")?;
-                if !tapp.params.is_empty() {
+                if !tapp.args.is_empty() {
                     f.write_str("[")?;
-                    for tparam in tapp.params.iter() {
+                    for tparam in tapp.args.iter() {
                         self.display_type_expression_id(tparam.type_expr, f)?;
                         f.write_str(", ")?;
                     }
