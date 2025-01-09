@@ -15,10 +15,10 @@ impl Show for ListIterator[int] {
   fn show(self: Self): string { crash("") }
 }
 
-ability Iterable[impl I: Iterator] {
+ability Iterable[impl IItem, impl I: Iterator[Item = IItem]] {
   fn iter(self: Self): I
 }
-impl Iterable[I = ListIterator[int]] for List[int] {
+impl Iterable[IItem = int, I = ListIterator[int]] for List[int] {
   fn iter(self: List[int]): I {
     newListIterator(self)
   }
@@ -35,7 +35,8 @@ impl Show for i64? {
 
 fn testIterator(): int {
   let l = [1,2,3];
-  let* i = l.iter();
+  let* i: ListIterator[int]* = l.iter();
+  let n: int? = i.next();
   printIt(i.next());
   printIt(i.next());
   printIt(i.next());

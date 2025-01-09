@@ -65,6 +65,7 @@ pub const SHOW_ABILITY_ID: AbilityId = AbilityId(1);
 pub const BITWISE_ABILITY_ID: AbilityId = AbilityId(2);
 pub const COMPARABLE_ABILITY_ID: AbilityId = AbilityId(3);
 pub const UNWRAP_ABILITY_ID: AbilityId = AbilityId(4);
+pub const TRY_ABILITY_ID: AbilityId = AbilityId(5);
 
 pub const CLOSURE_ENV_PARAM_NAME: &str = "__clos_env";
 
@@ -2323,16 +2324,16 @@ impl TypedModule {
         let ty_app = ty_app.clone();
         match self.name_of(ty_app.name.name) {
             "_struct_combine" => {
-                if ty_app.params.len() != 2 {
+                if ty_app.args.len() != 2 {
                     return failf!(ty_app.span, "Expected 2 type parameters for _struct_combine");
                 }
                 let arg1 = self.eval_type_expr_defn(
-                    ty_app.params[0].type_expr,
+                    ty_app.args[0].type_expr,
                     scope_id,
                     context.no_attach_defn_info(),
                 )?;
                 let arg2 = self.eval_type_expr_defn(
-                    ty_app.params[1].type_expr,
+                    ty_app.args[1].type_expr,
                     scope_id,
                     context.no_attach_defn_info(),
                 )?;
@@ -2379,16 +2380,16 @@ impl TypedModule {
                 Ok(Some(type_id))
             }
             "_struct_remove" => {
-                if ty_app.params.len() != 2 {
+                if ty_app.args.len() != 2 {
                     return failf!(ty_app.span, "Expected 2 type parameters for _struct_remove");
                 }
                 let arg1 = self.eval_type_expr_defn(
-                    ty_app.params[0].type_expr,
+                    ty_app.args[0].type_expr,
                     scope_id,
                     context.no_attach_defn_info(),
                 )?;
                 let arg2 = self.eval_type_expr_defn(
-                    ty_app.params[1].type_expr,
+                    ty_app.args[1].type_expr,
                     scope_id,
                     context.no_attach_defn_info(),
                 )?;
@@ -2443,26 +2444,25 @@ impl TypedModule {
         )? {
             Some((type_id, _)) => {
                 if let Type::Generic(g) = self.types.get(type_id) {
-                    if ty_app.params.len() != g.params.len() {
+                    if ty_app.args.len() != g.params.len() {
                         return failf!(
                             ty_app.span,
                             "Type {} expects {} type arguments, got {}",
                             self.namespaced_identifier_to_string(&ty_app.name),
                             g.params.len(),
-                            ty_app.params.len()
+                            ty_app.args.len()
                         );
                     }
-                    let mut evaled_type_params: Vec<TypeId> =
-                        Vec::with_capacity(ty_app.params.len());
-                    for parsed_param in ty_app.params.clone().iter() {
+                    let mut type_arguments: Vec<TypeId> = Vec::with_capacity(ty_app.args.len());
+                    for parsed_param in ty_app.args.clone().iter() {
                         let param_type_id = self.eval_type_expr_defn(
                             parsed_param.type_expr,
                             scope_id,
                             context.no_attach_defn_info(),
                         )?;
-                        evaled_type_params.push(param_type_id);
+                        type_arguments.push(param_type_id);
                     }
-                    Ok(self.instantiate_generic_type(type_id, evaled_type_params))
+                    Ok(self.instantiate_generic_type(type_id, type_arguments))
                 } else {
                     Ok(self.get_type_id_resolved(type_id, scope_id))
                 }
@@ -2532,16 +2532,16 @@ impl TypedModule {
     fn instantiate_generic_type(
         &mut self,
         generic_type: TypeId,
-        passed_params: Vec<TypeId>,
+        type_arguments: Vec<TypeId>,
     ) -> TypeId {
         let gen = self.types.get(generic_type).expect_generic();
-        match gen.specializations.get(&passed_params) {
+        match gen.specializations.get(&type_arguments) {
             Some(existing) => {
                 debug!(
-                    "Using cached generic instance {} for {} params {:?}",
+                    "Using cached generic instance {} for {} args {:?}",
                     self.type_id_to_string(*existing),
                     self.name_of(gen.type_defn_info.name),
-                    passed_params
+                    type_arguments
                         .clone()
                         .iter()
                         .map(|p| self.type_id_to_string_ext(*p, false))
@@ -2550,14 +2550,14 @@ impl TypedModule {
                 *existing
             }
             None => {
-                debug_assert!(gen.params.len() == passed_params.len());
+                debug_assert!(gen.params.len() == type_arguments.len());
                 let type_defn_info = gen.type_defn_info.clone();
                 // Note: This is where we'd check constraints on the pairs:
                 // that each passed params meets the constraints of the generic param
                 let substitution_pairs: Vec<TypeSubstitutionPair> = gen
                     .params
                     .iter()
-                    .zip(&passed_params)
+                    .zip(&type_arguments)
                     .map(|(type_param, passed_type_arg)| TypeSubstitutionPair {
                         from: type_param.type_id,
                         to: *passed_type_arg,
@@ -2586,7 +2586,7 @@ impl TypedModule {
                     );
                 }
                 if let Type::Generic(gen) = self.types.get_mut(generic_type) {
-                    gen.specializations.insert(passed_params, specialized_type);
+                    gen.specializations.insert(type_arguments, specialized_type);
                 };
                 specialized_type
             }
@@ -3413,7 +3413,7 @@ impl TypedModule {
                     target_ability_id,
                     span,
                 ) {
-                    None => eprintln!("Blanket impl didn't work"),
+                    None => debug!("Blanket impl didn't work"),
                     Some(impl_handle) => return Some(impl_handle),
                 }
             }
@@ -3587,18 +3587,15 @@ impl TypedModule {
             })
             .collect();
 
-        // This adds 'Self' and any ability params into scope so that it still works to use 'Self'
-        // or 'Rhs' by their param names in the impl
-        for (name, value) in self.scopes.get_scope(blanket_impl.scope_id).types.clone().iter() {
-            let _ = self.scopes.add_type(new_impl_scope, *name, *value);
-        }
-
         let mut substituted_ability_args = Vec::with_capacity(blanket_ability_args.len());
         for blanket_arg in blanket_ability_args {
             // Substitute T, U, V, in for each
             let substituted_type = self.substitute_in_type(None, blanket_arg.type_id, None, &pairs);
-            substituted_ability_args
-                .push(SimpleNamedType { name: blanket_arg.name, type_id: substituted_type });
+            let nt = SimpleNamedType { name: blanket_arg.name, type_id: substituted_type };
+            substituted_ability_args.push(nt);
+            if !self.scopes.add_type(new_impl_scope, blanket_arg.name, substituted_type) {
+                panic!("uh oh")
+            };
         }
         let concrete_ability_id =
             self.specialize_ability(generic_parent, substituted_ability_args, blanket_impl.span)?;
@@ -3608,12 +3605,21 @@ impl TypedModule {
             // Substitute T, U, V, in for each
             let substituted_type =
                 self.substitute_in_type(None, blanket_impl_arg.type_id, None, &pairs);
-            substituted_impl_arguments
-                .push(SimpleNamedType { name: blanket_impl_arg.name, type_id: substituted_type })
+            let nt = SimpleNamedType { name: blanket_impl_arg.name, type_id: substituted_type };
+            substituted_impl_arguments.push(nt);
+            if !self.scopes.add_type(new_impl_scope, blanket_impl_arg.name, substituted_type) {
+                panic!("uh oh")
+            };
         }
+
+        let _ = self.scopes.add_type(new_impl_scope, get_ident!(self, "Self"), self_type_id);
 
         let mut specialized_function_ids = Vec::new();
         let kind = AbilityImplKind::DerivedFromBlanket { blanket_impl_id };
+        debug!(
+            "blanket impl instance scope before function specialization: {}",
+            self.scope_id_to_string(new_impl_scope)
+        );
         for blanket_fn in &blanket_impl.functions {
             let blanket_fn = self.get_function(*blanket_fn);
             let parsed_fn = blanket_fn.parsed_id.as_function_id().unwrap();
@@ -3628,7 +3634,7 @@ impl TypedModule {
                 self.get_root_namespace_id(),
             )?;
             self.eval_function_body(specialized_function_id)?;
-            debug!(
+            eprintln!(
                 "Specialized blanket fn type {}",
                 self.type_id_to_string(self.get_function(specialized_function_id).type_id)
             );
@@ -6397,6 +6403,38 @@ impl TypedModule {
         }
     }
 
+    fn get_expected_return_type(&self, scope_id: ScopeId, span: SpanId) -> TyperResult<TypeId> {
+        if let Some(enclosing_closure) = self.scopes.nearest_parent_closure(scope_id) {
+            let Some(expected_return_type) =
+                self.scopes.get_closure_info(enclosing_closure).unwrap().expected_return_type
+            else {
+                return failf!(span, "Closure must have explicit return type, or known return type from context, to use early returns.");
+            };
+            Ok(expected_return_type)
+        } else {
+            let Some(enclosing_function) = self.scopes.nearest_parent_function(scope_id) else {
+                return failf!(span, "No parent function; cannot return");
+            };
+            let expected_return_type = self.get_function_type(enclosing_function).return_type;
+            Ok(expected_return_type)
+        }
+    }
+
+    fn eval_return(
+        &mut self,
+        parsed_expr: ParsedExpressionId,
+        scope_id: ScopeId,
+        span: SpanId,
+    ) -> TyperResult<TypedExpr> {
+        let expected_return_type = self.get_expected_return_type(scope_id, span)?;
+        let return_value = self.eval_expr(parsed_expr, scope_id, Some(expected_return_type))?;
+        if let Err(msg) = self.check_types(expected_return_type, return_value.get_type(), scope_id)
+        {
+            return failf!(span, "Returned wrong type: {msg}");
+        }
+        Ok(TypedExpr::Return(TypedReturn { value: Box::new(return_value), span }))
+    }
+
     fn handle_builtin_function_call_lookalikes(
         &mut self,
         fn_call: &FnCall,
@@ -6411,42 +6449,7 @@ impl TypedModule {
                         fn_call.span,
                     );
                 }
-                let expected_return_type = if let Some(enclosing_closure) =
-                    self.scopes.nearest_parent_closure(calling_scope)
-                {
-                    let Some(expected_return_type) = self
-                        .scopes
-                        .get_closure_info(enclosing_closure)
-                        .unwrap()
-                        .expected_return_type
-                    else {
-                        return failf!(fn_call.span, "Closure must have explicit return type, or known return type from context, to use early returns.");
-                    };
-                    expected_return_type
-                } else {
-                    let Some(enclosing_function) =
-                        self.scopes.nearest_parent_function(calling_scope)
-                    else {
-                        return failf!(fn_call.span, "No parent function; cannot return");
-                    };
-                    let expected_return_type =
-                        self.get_function_type(enclosing_function).return_type;
-                    expected_return_type
-                };
-                let return_value = self.eval_expr(
-                    fn_call.args[0].value,
-                    calling_scope,
-                    Some(expected_return_type),
-                )?;
-                if let Err(msg) =
-                    self.check_types(expected_return_type, return_value.get_type(), calling_scope)
-                {
-                    return failf!(call_span, "Returned wrong type: {msg}");
-                }
-                Ok(Some(TypedExpr::Return(TypedReturn {
-                    value: Box::new(return_value),
-                    span: call_span,
-                })))
+                Ok(Some(self.eval_return(fn_call.args[0].value, calling_scope, call_span)?))
             }
             "break" => {
                 if fn_call.args.len() > 1 {
@@ -6521,6 +6524,109 @@ impl TypedModule {
                     Ok(_expr) => self.synth_optional_none(STRING_TYPE_ID, call_span),
                 };
                 Ok(Some(expr))
+            }
+            "try" => {
+                if fn_call.args.len() != 1 {
+                    return make_fail_span("try takes one argument", call_span);
+                }
+                // This is where we could enhance to support 'try' blocks
+                let block_return_type = self.get_expected_return_type(calling_scope, call_span)?;
+                let block_try_impl = self.expect_ability_implementation(
+                    block_return_type,
+                    TRY_ABILITY_ID,
+                    call_span,
+                ).map_err(|mut e| {
+                        e.message = format!("`try` can only be used from a function or closure that returns a type implementing `Try`. {}", e.message);
+                        e
+                    })?;
+                let arg = &fn_call.args[0];
+                // Let's do better here
+                let try_value_original_expr = self.eval_expr(arg.value, calling_scope, None)?;
+                let try_value_type = try_value_original_expr.get_type();
+                let value_try_impl =
+                    self.expect_ability_implementation(try_value_type, TRY_ABILITY_ID, call_span)?;
+                let block_impl_args =
+                    &self.get_ability_impl(block_try_impl.full_impl_id).impl_arguments;
+                let value_impl_args =
+                    &self.get_ability_impl(value_try_impl.full_impl_id).impl_arguments;
+                let block_error_type = block_impl_args
+                    .iter()
+                    .find(|nt| nt.name == get_ident!(self, "E"))
+                    .map(|nt| nt.type_id)
+                    .unwrap();
+                let error_type = value_impl_args
+                    .iter()
+                    .find(|nt| nt.name == get_ident!(self, "E"))
+                    .map(|nt| nt.type_id)
+                    .unwrap();
+                if let Err(msg) = self.check_types(block_error_type, error_type, calling_scope) {
+                    return failf!(call_span, "This function expects a Try, but with a different Error type than the value: {msg}");
+                };
+                let value_success_type = value_impl_args
+                    .iter()
+                    .find(|nt| nt.name == get_ident!(self, "T"))
+                    .map(|nt| nt.type_id)
+                    .unwrap();
+                let mut result_block = self.synth_block(vec![], calling_scope, call_span);
+                let try_value_var = self.synth_variable_defn_simple(
+                    get_ident!(self, "try_value"),
+                    try_value_original_expr,
+                    result_block.scope_id,
+                );
+                let is_success_call = self.synth_typed_function_call(
+                    qident!(self, call_span, ["Try"], "isSuccess"),
+                    vec![],
+                    vec![try_value_var.variable_expr.clone()],
+                    result_block.scope_id,
+                    None,
+                )?;
+                let get_success_call = self.synth_typed_function_call(
+                    qident!(self, call_span, ["Try"], "getSuccess"),
+                    vec![],
+                    vec![try_value_var.variable_expr.clone()],
+                    result_block.scope_id,
+                    None,
+                )?;
+                // FIXME: Consider alternatives for calling the block's makeError function
+                //        in a less brittle way?
+                let block_make_error_fn =
+                    self.get_ability_impl(block_try_impl.full_impl_id).functions[0];
+                eprintln!(
+                    "TYPE OF make_error: {}",
+                    self.type_id_to_string(self.get_function(block_make_error_fn).type_id)
+                );
+
+                let get_error_call = self.synth_typed_function_call(
+                    qident!(self, call_span, ["Try"], "getError"),
+                    vec![],
+                    vec![try_value_var.variable_expr],
+                    result_block.scope_id,
+                    None,
+                )?;
+                let make_error_call = TypedExpr::Call(Call {
+                    callee: Callee::StaticFunction(block_make_error_fn),
+                    args: vec![get_error_call],
+                    type_args: vec![],
+                    return_type: block_error_type,
+                    span: call_span,
+                });
+                let return_error_expr = TypedExpr::Return(TypedReturn {
+                    value: Box::new(make_error_call),
+                    span: call_span,
+                });
+                let if_expr = TypedExpr::If(Box::new(TypedIf {
+                    condition: is_success_call,
+                    consequent: get_success_call,
+                    alternate: return_error_expr,
+                    ty: value_success_type,
+                    span: call_span,
+                }));
+
+                result_block.push_stmt(try_value_var.defn_stmt);
+                result_block.push_expr(if_expr);
+
+                eprintln!("{}", self.block_to_string(&result_block));
+                Ok(Some(TypedExpr::Block(result_block)))
             }
             _ => Ok(None),
         }
@@ -8544,7 +8650,7 @@ impl TypedModule {
         let parsed_function_ret_type = parsed_function.ret_type;
         let parsed_function_name = parsed_function.name;
         let parsed_function_span = parsed_function.span;
-        let parsed_function_args = parsed_function.args.clone();
+        let parsed_function_params = parsed_function.params.clone();
         let parsed_function_context_params = parsed_function.context_params.clone();
         let parsed_function_type_params = parsed_function.type_params.clone();
 
@@ -8632,17 +8738,17 @@ impl TypedModule {
             }
         }
 
-        // Process arguments
-        let mut param_types: Vec<FnParamType> = Vec::with_capacity(parsed_function_args.len());
-        let mut param_variables = Vec::with_capacity(parsed_function_args.len());
-        for (idx, fn_arg) in
-            parsed_function_context_params.iter().chain(parsed_function_args.iter()).enumerate()
+        // Process parameters
+        let mut param_types: Vec<FnParamType> = Vec::with_capacity(parsed_function_params.len());
+        let mut param_variables = Vec::with_capacity(parsed_function_params.len());
+        for (idx, fn_param) in
+            parsed_function_context_params.iter().chain(parsed_function_params.iter()).enumerate()
         {
-            let type_id = self.eval_type_expr(fn_arg.ty, fn_scope_id)?;
+            let type_id = self.eval_type_expr(fn_param.ty, fn_scope_id)?;
 
             // First arg Self shenanigans
             if idx == 0 {
-                let name_is_self = self.ast.identifiers.get_name(fn_arg.name) == "self";
+                let name_is_self = self.ast.identifiers.get_name(fn_param.name) == "self";
 
                 // If the first argument is named self, check if it's a method of the companion type
                 let is_ability_fn = ability_id.is_some();
@@ -8659,15 +8765,15 @@ impl TypedModule {
                                     let ok = spec_info.generic_parent == companion_type_id;
                                     if !ok {
                                         return failf!(
-                                            fn_arg.span,
-                                            "First argument named 'self' did not have a companion type",
+                                            fn_param.span,
+                                            "First parameter named 'self' did not have a companion type",
                                         );
                                     }
                                 }
                                 _other => {
                                     return failf!(
-                                        fn_arg.span,
-                                        "First argument named 'self' must be of the companion type, expected {} got {}, {} vs {}",
+                                        fn_param.span,
+                                        "First parameter named 'self' must be of the companion type, expected {} got {}, {} vs {}",
                                         self.type_id_to_string(companion_type_id),
                                         self.type_id_to_string(type_id),
                                         companion_type_id,
@@ -8679,47 +8785,47 @@ impl TypedModule {
                     } else {
                         return make_fail_span(
                             "Cannot use name 'self' unless defining a method",
-                            fn_arg.span,
+                            fn_param.span,
                         );
                     }
                 };
             }
 
             let variable = Variable {
-                name: fn_arg.name,
+                name: fn_param.name,
                 type_id,
                 is_mutable: false,
                 owner_scope: fn_scope_id,
-                is_context: fn_arg.modifiers.is_context(),
+                is_context: fn_param.modifiers.is_context(),
                 is_global: false,
             };
 
-            let is_context = fn_arg.modifiers.is_context();
+            let is_context = fn_param.modifiers.is_context();
             let variable_id = self.variables.add_variable(variable);
             param_types.push(FnParamType {
-                name: fn_arg.name,
+                name: fn_param.name,
                 type_id,
                 is_context,
                 is_closure_env: false,
-                span: fn_arg.span,
+                span: fn_param.span,
             });
             param_variables.push(variable_id);
             if is_context {
                 let inserted = self.scopes.add_context_variable(
                     fn_scope_id,
-                    fn_arg.name,
+                    fn_param.name,
                     variable_id,
                     type_id,
                 );
                 if !inserted {
                     return failf!(
-                        fn_arg.span,
+                        fn_param.span,
                         "Duplicate context parameters for type {}",
                         self.type_id_to_string(type_id)
                     );
                 }
             } else {
-                self.scopes.add_variable(fn_scope_id, fn_arg.name, variable_id)
+                self.scopes.add_variable(fn_scope_id, fn_param.name, variable_id)
             }
         }
 

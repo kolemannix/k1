@@ -169,14 +169,14 @@ fn type_parameter_multi() -> ParseResult<()> {
     let ParsedTypeExpression::TypeApplication(app) = type_expr else {
         panic!("Expected type application")
     };
-    assert_eq!(app.params.len(), 2);
+    assert_eq!(app.args.len(), 2);
     let ParsedTypeExpression::TypeApplication(inner_app) =
-        module.type_expressions.get(app.params[1].type_expr)
+        module.type_expressions.get(app.args[1].type_expr)
     else {
         panic!("Expected second param to be a type application");
     };
     assert!(matches!(
-        module.type_expressions.get(inner_app.params[0].type_expr),
+        module.type_expressions.get(inner_app.args[0].type_expr),
         ParsedTypeExpression::Integer(ParsedNumericType {
             width: NumericWidth::B8,
             signed: false,
