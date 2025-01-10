@@ -1,7 +1,6 @@
 ns Opt {
-  fn hasValue[T](self: T?): bool {
-    self is .Some(_)
-  }
+  fn isSome[T](self: T?): bool { self is .Some(_) }
+  fn isNone[T](self: T?): bool { self is .None }
 
   fn get[T](self: T?): T {
     if self is .Some(t) t else {
@@ -28,12 +27,20 @@ fn some[T](value: T): Opt[T].Some { Opt.Some[T](value) }
 
 impl[T: Equals] Equals for Opt[T] {
   fn equals(self: Opt[T], other: Opt[T]): bool {
+    // I'm leaving this separate function call here 
+    // because at one point it exercised a really weird compiler bug
     Opt/opt_equals(self, other)
   }
 }
 
 impl[T] Unwrap[Inner = T] for Opt[T] {
-  fn hasValue(self: Opt[T]): bool { self.hasValue() }
+  fn hasValue(self: Opt[T]): bool { self is .Some(_) }
   fn unwrap(self: Opt[T]): T { self.get() }
   fn make(t: T): Self { Opt.Some(t) }
+}
+
+impl[T: Show] Show for Opt[T] {
+  fn show(self: Opt[T]): string {
+    if self is .Some(v) "Some(\{v})" else "None"
+  }
 }

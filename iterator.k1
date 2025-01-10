@@ -1,55 +1,40 @@
-ability Iterator[impl Item] {
-  fn next(self: Self*): Item?
-}
+ns IteratorTest {
 impl[T] Iterator[Item = T] for ListIterator[T] {
   fn next(self: ListIterator[T]*): Item? { 
-    let ret = some(self.l.get(self.pos));
-    if self.pos < self.l.len {
+    if self.pos < self.list.len {
+      let ret = some(self.list.get(self.pos));
       self.pos* <- self.pos + 1;
       ret
     } else .None
   }
-}
-
-impl Show for ListIterator[int] {
-  fn show(self: Self): string { crash("") }
-}
-
-ability Iterable[impl IItem, impl I: Iterator[Item = IItem]] {
-  fn iter(self: Self): I
-}
-impl Iterable[IItem = int, I = ListIterator[int]] for List[int] {
-  fn iter(self: List[int]): I {
-    newListIterator(self)
+  fn remainingGuess(self: Self): u64? { 
+    some(self.list.len - self.pos)
   }
-}
-// impl[T] Iterable[I = ListIterator[T]] for List[T] {
-//   fn iter(self: List[int]): I {
-//     newListIterator(self)
-//   }
-// }
-
-impl Show for i64? {
-  fn show(self: i64?): string { if self is .Some(i) "Some(\{i})" else "None" }
-}
-
-fn testIterator(): int {
-  let l = [1,2,3];
-  let* i: ListIterator[int]* = l.iter();
-  let n: int? = i.next();
-  printIt(i.next());
-  printIt(i.next());
-  printIt(i.next());
-  printIt(i.next());
-  0
 }
 
 deftype ListIterator[T] = {
-  l: List[T],
+  list: List[T],
   pos: u64
 }
-
-fn newListIterator[T](l: List[T]): ListIterator[T] {
-  { l, pos: 0 }
+impl[T] Iterable[Item = T, I = ListIterator[T]] for List[T] {
+  fn iter(self: Self): I {
+    { list: self, pos: 0 }
+  }
 }
 
+fn test(): int {
+  let l = [1,2,3];
+  let* i: ListIterator[int]* = l.iter();
+  assert(i.next().! == 1);
+  assert(i.next().! == 2);
+  assert(i.next().! == 3);
+  assert(i.next().isNone());
+  0
+}
+
+} // end IteratorTest
+
+fn main(): int {
+  IteratorTest/test();
+  0
+}

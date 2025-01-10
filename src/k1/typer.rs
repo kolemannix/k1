@@ -8425,9 +8425,9 @@ impl TypedModule {
         } else {
             failf!(
                 span,
-                "Provided type {} for {} does not implement required ability {}",
-                self.type_id_to_string(target_type),
+                "Provided type for {} is {} which does not implement required ability {}",
                 self.name_of(name),
+                self.type_id_to_string(target_type),
                 self.name_of(self.get_ability(signature.ability_id).name)
             )
         }
@@ -10267,6 +10267,7 @@ impl TypedModule {
         self.eval_function_call(&call, scope_id, expected_type_id, Some((type_args, args)))
     }
 
+    // These are only used by the old coalescing accessor and should be removed when its rebuilt
     fn ident_opt_has_value(&self, span: SpanId) -> NamespacedIdentifier {
         qident!(self, span, ["Opt"], "hasValue")
     }
