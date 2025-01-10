@@ -81,6 +81,15 @@ ability Try[impl T, impl E] {
   fn getOk(self: Self): T
 }
 
+ability Iterator[impl Item] {
+  fn next(self: Self*): Item?
+  fn remainingGuess(self: Self): u64?
+}
+
+ability Iterable[impl Item, impl I: Iterator[Item = Item]] {
+  fn iter(self: Self): I
+}
+
 impl[S, F] Try[T = S, E = F] for Result[S, F] {
   fn makeError(e: E): Self   { .Err(e) }
   fn makeOk(t: T): Self { .Ok(t) }

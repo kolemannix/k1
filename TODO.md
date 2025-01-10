@@ -148,11 +148,13 @@
        `let result1 = compiler/nocompile(1 + "asdf"); assert(result1.startsWith("Type mismatch"))`
 - [x] Migrate ? to use an ability
 - [x] Add "or return error" operator based on an ability
-- [ ] Convert try to postfix: hello.try (hearkening to .await)
-- [ ] ! operator should now just call Unwrap.unwrap()
+- [x] Convert try to postfix: hello.try (hearkening to .await)
+- [x] ! operator should now just call Unwrap.unwrap()
+- [ ] Bug: if a blanket impl fails to typecheck, we should not use it. Currently we ice trying to instantiate it 
+- [ ] Bug: ability impls kinda have to be provided in order, since they can depend on each other
+- [ ] Migrate `for` loops to use a core Iterator ability
 - [ ] Typecheck 'main'
 - [ ] `inline` functions (like Scala3's)
-- [ ] Migrate `for` loops to use an ability
 - [ ] Improve LLVM opt pipeline https://www.reddit.com/r/Compilers/comments/1hqmd7x/recommended_llvm_passes/
       https://llvm.org/docs/NewPassManager.html#just-tell-me-how-to-run-the-default-optimization-pipeline-with-the-new-pass-manager
 - [ ] More explicit companion ns via injecting `for` keyword `ns (for) type {`
