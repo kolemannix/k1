@@ -150,9 +150,10 @@
 - [x] Add "or return error" operator based on an ability
 - [x] Convert try to postfix: hello.try (hearkening to .await)
 - [x] ! operator should now just call Unwrap.unwrap()
-- [ ] Bug: if a blanket impl fails to typecheck, we should not use it. Currently we ice trying to instantiate it 
+- [x] Bug: if a blanket impl fails to typecheck, we should not use it. Currently we ice trying to instantiate it 
+- [ ] Bug: technically I should require that the blanket impl params appear in the Self type expression
 - [ ] Bug: ability impls kinda have to be provided in order, since they can depend on each other
-- [ ] Migrate `for` loops to use a core Iterator ability
+- [x] Migrate `for` loops to use a core Iterator ability
 - [ ] Typecheck 'main'
 - [ ] `inline` functions (like Scala3's)
 - [ ] Improve LLVM opt pipeline https://www.reddit.com/r/Compilers/comments/1hqmd7x/recommended_llvm_passes/
@@ -165,7 +166,7 @@
   - [x] `namespace <ident>;` to namespace whole file
   - [x] Allow namespace extension via simple multiple blocks of same name in same scope
 - [ ] 'call' method syntax (Scala's 'apply' feature)
-- [ ] Rename ability to interface? This one is sticky, but I don't like ability
+- [ ] Rename ability. 'behavior' / 'provide'
 - [ ] Operator 'overloading' story, +other special function names that work like ==?), make == less special
 - [ ] LLVM cleanup
 -  [ ] avoid uses of aggregate *values* where we can: so routine uses of 'struct's and 'enum's
@@ -203,7 +204,7 @@
 - [ ] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`
 - [ ] Define clear 'platform layer' (crash, alloc/free, other?). Then we could do an LLVM interp platform and a rust interpreter platform
 - [ ] Runtime type info story, typeOf, typeInfo, and 'any' type
-- [ ] Ability-based iteration
+- [x] Ability-based iteration
 - [ ] Conditional compile directive
 - [ ] Mark types as trivially copyable or not
 ^ The builtin array would be NOT copyable so that you don't accidentally alias the data ptr

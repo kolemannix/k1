@@ -16,7 +16,7 @@ fn main(): int {
 
   let mut sumDiffs = 0;
   for l in left.* do {
-    let r = right.*.get(it_index);
+    let r = right.*.get(itIndex);
     let diff = if l > r l - r else r - l;
     sumDiffs = sumDiffs + diff;
   };

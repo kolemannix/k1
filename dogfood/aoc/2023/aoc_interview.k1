@@ -18,7 +18,7 @@ fn main(): int {
   let mut done = false;
   for input do {
       if not done {
-        let i = it_index;
+        let i = itIndex;
         let sub = [input[i], input[i + 1], input[i + 2], input[i + 3]];
         if unique(sub) {
           printInt(i + 4);

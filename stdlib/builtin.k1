@@ -72,7 +72,8 @@ ability Unwrap[impl Inner] {
 }
 
 ability Try[impl T, impl E] {
-  // DO NOT REORDER makeError must be first! (FIXME)
+  // DO NOT REORDER `try` internal operation expects
+  // makeError to be first! (FIXME)
   fn makeError(e: E): Self
   fn makeOk(t: T): Self
 
@@ -83,11 +84,13 @@ ability Try[impl T, impl E] {
 
 ability Iterator[impl Item] {
   fn next(self: Self*): Item?
-  fn remainingGuess(self: Self): u64?
+  fn sizeHint(self: Self): { atLeast: u64, atMost: u64? }
+  fn advanceBy(self: Self*, n: u64): unit
+  fn nth(self: Self*, n: u64): Item?
 }
 
 ability Iterable[impl Item, impl I: Iterator[Item = Item]] {
-  fn iter(self: Self): I
+  fn iterator(self: Self): I
 }
 
 impl[S, F] Try[T = S, E = F] for Result[S, F] {

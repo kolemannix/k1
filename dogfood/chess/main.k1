@@ -1,8 +1,57 @@
-deftype Square = either
+// The efficient representation, a Bitboard encoding
+deftype Color = either White, Black
+deftype GameState = {
+  wPawns: u64,
+  wKnights: u64,
+  wBishops: u64,
+  wRooks: u64,
+  wQueens: u64,
+  wKings: u64,
+
+  bPawns: u64,
+  bKnights: u64,
+  bBishops: u64,
+  bRooks: u64,
+  bQueens: u64,
+  bKings: u64,
+
+  castleRights: u8,
+  enPassantSquare: u8?,
+  turn: Color
+}
+
+ns GameState {
+  fn startPos(): GameState {
+    let wPawns   = 0b0000000000000000000000000000000000000000000000001111111100000000: u64;
+    let wKnights = 0b0000000000000000000000000000000000000000000000000000000001000010: u64;
+    let wBishops = 0b0000000000000000000000000000000000000000000000000000000000100100: u64;
+    let wRooks   = 0b0000000000000000000000000000000000000000000000000000000010000001: u64;
+    let wQueens  = 0b0000000000000000000000000000000000000000000000000000000000010000: u64;
+    let wKings   = 0b0000000000000000000000000000000000000000000000000000000000001000: u64;
+    let bPawns   = 0b0000000011111111000000000000000000000000000000000000000000000000: u64;
+    let bKnights = 0b0100001000000000000000000000000000000000000000000000000000000000: u64;
+    let bBishops = 0b0010010000000000000000000000000000000000000000000000000000000000: u64;
+    let bRooks   = 0b1000000100000000000000000000000000000000000000000000000000000000: u64;
+    let bQueens  = 0b0001000000000000000000000000000000000000000000000000000000000000: u64;
+    let bKings   = 0b0000100000000000000000000000000000000000000000000000000000000000: u64;
+    { wPawns, wKnights, wBishops, wRooks, wQueens, wKings, 
+      bPawns, bKnights, bBishops, bRooks, bQueens, bKings, 
+      castleRights: 0b00000011, enPassantSquare: some(0: u8), turn: .White }
+  }
+
+  fn genMoves(self: GameState): List[BitMove] {
+    crash("todo")
+  }
+}
+
+deftype BitMove = { from: u8, to: u8 }
+
+// The intuitive representation, a List[SquareState]
+deftype SquareState = either
   Blank, Pawn, Knight, Bishop, Rook, Queen, King
 
-ns Square {
-  fn charSymbol(self: Square): char {
+ns SquareState {
+  fn charSymbol(self: SquareState): char {
     switch self {
        .Blank  -> '-',
        .Pawn   -> 'P',
@@ -15,37 +64,61 @@ ns Square {
   }
 }
 
-fn from_xy(x: u8, y: u8): u8 {
-  x + y * 8
-}
-fn from_name(s: string): u8 {
-  let file: u8 = switch s.first().! {
-     'a' -> 0,
-     'b' -> 1,
-     'c' -> 2,
-     'd' -> 3,
-     'e' -> 4,
-     'f' -> 5,
-     'g' -> 6,
-     'h' -> 7,
-     _ -> crash("bad tile name: \{s}")
-  };
-  let rank = (s.get(2).toAsciiDigit().! - 1);
-  file + rank * 8
+deftype Square = { rank: u8, file: u8 }
+
+ns Square {
+  fn fromRankFile(x: u8, y: u8): Square {
+    { rank: y, file: x }
+  }
+  fn fromName(s: string): Square {
+    let file: u8 = switch s.first().! {
+       'a' -> 0,
+       'b' -> 1,
+       'c' -> 2,
+       'd' -> 3,
+       'e' -> 4,
+       'f' -> 5,
+       'g' -> 6,
+       'h' -> 7,
+       _ -> crash("bad tile name: \{s}")
+    };
+    let rank = (s.get(1).toAsciiDigit().! - 1);
+    fromRankFile(file, rank)
+  }
 }
 
-fn dump(board: List[Square]): unit {
+impl Show for Square {
+  fn show(self: Square): string {
+    let file = switch self.file {
+      0 -> 'a',
+      1 -> 'b',
+      2 -> 'c',
+      3 -> 'd',
+      4 -> 'e',
+      5 -> 'f',
+      6 -> 'g',
+      7 -> 'h',
+      _ -> crash("Bad file")
+    };
+    let rank = self.rank + 1;
+    "\{file}\{rank}"
+  }
+
+}
+
+
+fn dump(board: List[SquareState]): unit {
   for square in board do {
     let symbol = square.charSymbol();
     printIt(symbol);
-    if it_index % 8 == 7 {
+    if itIndex % 8 == 7 {
       println("");
     };
   }
 }
 
-fn startPos(): List[Square] {
-  let board = List/filled[Square](64, .Pawn);
+fn startPos(): List[SquareState] {
+  let board = List/filled[SquareState](64, .Pawn);
   board.set(0, .Rook);
   board.set(1, .Knight);
   board.set(2, .Bishop);
@@ -68,22 +141,22 @@ fn startPos(): List[Square] {
 
 fn main(): int {
   println("Hello, Chess!");
-  let board: List[Square] = startPos();
+  let board: List[SquareState] = startPos();
   dump(board);
 
   let move1 = {
-    from: from_name("e2"),
-    to: from_name("e4")
+    from: Square/fromName("e2"),
+    to: Square/fromName("e4")
   };
   printIt(move1.from);
   println("");
   printIt(move1.to);
 
-  board.set(move1.to as u64, board.get(move1.from as u64));
-  board.set(move1.from as u64, .Blank);
+  //board.set(move1.to as u64, board.get(move1.from as u64));
+  //board.set(move1.from as u64, .Blank);
 
-  println("");
-  dump(board);
+  //println("");
+  //dump(board);
 
   0
 }

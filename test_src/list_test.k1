@@ -101,23 +101,6 @@ impl Equals for { rank: int, payload: string } {
   }
 }
 
-impl Equals for List[{ rank: int, payload: string }] {
-  fn equals(self: Self, other: Self): bool {
-    if self.len != other.len {
-      (false)
-    } else {
-      let mut i: u64 = 0;
-      while i < self.len {
-        if self.get(i) != other.get(i) {
-          return(false);
-        };
-        i = i + 1;
-      };
-      true
-    }
-  }
-}
-
 fn testSortInt(input: List[int], expected: List[int]): unit {
   let sorted = input.sorted();
   assert(sorted == expected);
@@ -154,6 +137,21 @@ fn testSwap(): unit {
   assert(a.* == [1,2]);
 }
 
+fn iterator(): int {
+  let l = [1,2,3];
+  let* i = l.iterator();
+  assert(i.sizeHint().atLeast == 3);
+  assert(i.next().! == 1);
+  assert(i.next().! == 2);
+  assert(i.next().! == 3);
+  assert(i.next().isNone());
+  let* i2 = l.iterator();
+  assert(i2.nth(2) == .Some(3));
+  let* i3 = l.iterator();
+  assert(i3.nth(10) == .None);
+  0
+}
+
 } // end ns
 
 fn main(): int {
@@ -163,6 +161,7 @@ fn main(): int {
   list_test/listEquality();
   list_test/testSort();
   list_test/testSwap();
+  list_test/iterator();
   assert([1,2,3].show() == "[1,2,3]");
   0
 }

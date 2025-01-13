@@ -7,7 +7,7 @@ fn day2(): int {
       let thisDigit: i64? = if c.toAsciiDigit() is .Some(d) {
         .Some(d as i64)
       } else {
-        let rest = line.substring(it_index, line.len);
+        let rest = line.substring(itIndex, line.len);
         if rest.startsWith("one")   1    else 
         if rest.startsWith("two")   2    else 
         if rest.startsWith("three") 3    else 

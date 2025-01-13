@@ -22,7 +22,7 @@ fn main(): int {
   };
   let mut goodGamesSum: u64 = 0;
   for line in input.splitByChar('\n') do {
-    let id = it_index + 1;
+    let id = itIndex + 1;
     let line = line.splitByChar(':').get(1);
     let mut isGoodGame = true;
     let rounds = for round in line.splitByChar(';') yield {

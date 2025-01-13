@@ -1,0 +1,19 @@
+ability Foo {
+  fn a(self: Self): unit
+  fn b(self: Self): unit
+}
+
+impl Foo for string {
+  fn a(self: Self): unit {
+    self.b()
+  }
+  fn b(self: Self): unit {
+    ()
+  }
+}
+
+fn main(): int {
+  "".a();
+  "".b();
+  0
+}

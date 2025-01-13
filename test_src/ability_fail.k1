@@ -12,4 +12,4 @@ fn main(): int {
   0
 }
 }
-//errmsg: Type Tool does not implement ability Num
+//errmsg: Call to num with type Self = Tool does not work, since it does not implement ability Num

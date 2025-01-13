@@ -43,7 +43,16 @@ ns List {
   }
 
   fn get[T](self: List[T], index: u64): T {
+    if index >= self.len {
+      crash("List index out of bounds")
+    };
     self.buffer.get(index)
+  }
+
+  fn getOpt[T](self: List[T], index: u64): T? {
+    if index >= self.len {
+      .None
+    } else .Some(self.buffer.get(index))
   }
 
   fn _grow[T](self: List[T]*): unit {
@@ -201,7 +210,6 @@ impl Equals for List[int] {
   fn equals(self: List[int], other: List[int]): bool { self.toBuffer() == other.toBuffer() }
 }
 
-
 impl[T: Equals] Equals for List[T] {
   fn equals(self: List[T], other: List[T]): bool {
     if self.len != other.len false else {
@@ -214,5 +222,58 @@ impl[T: Equals] Equals for List[T] {
       };
       true
     }
+  }
+}
+
+deftype BufferIterator[T] = {
+  buf: Buffer[T],
+  pos: u64
+}
+ns BufferIterator {
+  fn fromBuffer[T](buf: Buffer[T]): BufferIterator[T] { 
+    { buf, pos: 0 }
+  }
+}
+
+impl[T] Iterator[Item = T] for BufferIterator[T] {
+  fn next(self: BufferIterator[T]*): Item? { 
+    if self.pos < self.buf.len {
+      let ret = some(self.buf.get(self.pos));
+      self.pos* <- self.pos + 1;
+      ret
+    } else .None
+  }
+  fn sizeHint(self: Self): { atLeast: u64, atMost: u64? } { 
+    let rem = self.buf.len - self.pos;
+    { atLeast: rem, atMost: some(rem) }
+  }
+  fn advanceBy(self: Self*, n: u64): unit {
+    self.pos* <- self.pos + n
+  }
+  fn nth(self: Self*, n: u64): Item? {
+    self.advanceBy(n - 1);
+    self.next()
+  }
+}
+
+impl[T] Iterable[Item = T, I = BufferIterator[T]] for List[T] {
+  fn iterator(self: Self): I {
+    BufferIterator/fromBuffer(self.toBuffer())
+  }
+}
+
+impl[T: Show] Show for List[T] {
+  fn show(self: List[T]): string {
+    let b = StringBuilder/new();
+    b.putChar('[');
+    for s in self do {
+      b.putString(s.show());
+      let last = itIndex == self.len - 1;
+      if not last {
+        b.putString(",");
+      };
+    };
+    b.putChar(']');
+    b.build()
   }
 }

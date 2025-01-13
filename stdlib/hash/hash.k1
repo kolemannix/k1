@@ -172,7 +172,7 @@ ns HashMap {
     println("Size: \{size}");
     println("");
     for self.entries do {
-      printIt(it_index);
+      printIt(itIndex);
       print(" ");
       switch it {
         , .None -> println("empty")
