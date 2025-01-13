@@ -10,9 +10,9 @@ fn testBasics(): int {
     assert(x);
   };
 
-  assertMsg("a", Opt/hasValue[bool](b));
+  assertMsg("a", Opt/isSome[bool](b));
   let c: int? = .None;
-  assertMsg("b", not c.hasValue());
+  assertMsg("b", not c.isSome());
 
   assertMsg("c", types/typeId[PointMaybeY.y.Some.value]() == types/typeId[int]());
 

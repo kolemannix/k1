@@ -3828,7 +3828,7 @@ pub fn test_parse_module(source: Source) -> ParseResult<ParsedModule> {
 }
 
 impl Identifiers {
-    pub const BUILTIN_IDENTS: [&'static str; 31] = [
+    pub const BUILTIN_IDENTS: [&'static str; 32] = [
         "main",
         "self",
         "it",
@@ -3839,12 +3839,13 @@ impl Identifiers {
         "hasValue",
         "get",
         "not",
+        "iter",
         "iteree",
         "it_index",
         "as",
         "list_lit",
         "withCapacity",
-        "yielded_coll",
+        "yieldedColl",
         "iteree_length",
         "block_expr_val",
         "optelse_lhs",

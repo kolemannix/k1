@@ -66,6 +66,8 @@ pub const BITWISE_ABILITY_ID: AbilityId = AbilityId(2);
 pub const COMPARABLE_ABILITY_ID: AbilityId = AbilityId(3);
 pub const UNWRAP_ABILITY_ID: AbilityId = AbilityId(4);
 pub const TRY_ABILITY_ID: AbilityId = AbilityId(5);
+pub const ITERATOR_ABILITY_ID: AbilityId = AbilityId(6);
+pub const ITERABLE_ABILITY_ID: AbilityId = AbilityId(7);
 
 pub const CLOSURE_ENV_PARAM_NAME: &str = "__clos_env";
 
@@ -144,6 +146,10 @@ impl TypedAbilityKind {
             TypedAbilityKind::Generic { specializations } => specializations,
             TypedAbilityKind::Specialized(_) => &[],
         }
+    }
+
+    pub fn is_specialized(&self) -> bool {
+        matches!(self, TypedAbilityKind::Specialized(_))
     }
 
     pub fn is_concrete(&self) -> bool {
@@ -375,14 +381,25 @@ pub enum TypedFunctionKind {
     Closure,
     AbilityDefn(AbilityId),
     AbilityImpl(AbilityId, TypeId),
+    AbilityImplDerivedBlanket(FunctionId, AbilityId, TypeId),
 }
 impl TypedFunctionKind {
+    pub fn blanket_parent_function_id(&self) -> Option<FunctionId> {
+        match self {
+            TypedFunctionKind::Standard => None,
+            TypedFunctionKind::Closure => None,
+            TypedFunctionKind::AbilityDefn(_) => None,
+            TypedFunctionKind::AbilityImpl(_, _) => None,
+            TypedFunctionKind::AbilityImplDerivedBlanket(function_id, _, _) => Some(*function_id),
+        }
+    }
     pub fn ability_id(&self) -> Option<AbilityId> {
         match self {
             TypedFunctionKind::Standard => None,
             TypedFunctionKind::Closure => None,
             TypedFunctionKind::AbilityDefn(ability_id) => Some(*ability_id),
             TypedFunctionKind::AbilityImpl(ability_id, _) => Some(*ability_id),
+            TypedFunctionKind::AbilityImplDerivedBlanket(_, ability_id, _) => Some(*ability_id),
         }
     }
 }
@@ -1515,6 +1532,9 @@ pub struct TypedAbilityImpl {
     pub functions: Vec<FunctionId>,
     pub scope_id: ScopeId,
     pub span: SpanId,
+    /// I need this so that I don't try to instantiate blanket implementations that fail
+    /// typechecking nocommit we can just skip the body
+    pub compile_errors: Vec<TyperError>,
 }
 
 impl TypedAbilityImpl {
@@ -1526,6 +1546,7 @@ impl TypedAbilityImpl {
 pub struct FunctionAbilityImplContextInfo {
     pub self_type_id: TypeId,
     pub impl_kind: AbilityImplKind,
+    pub blanket_parent_function: Option<FunctionId>,
 }
 
 // Passed to eval_function_declaration to inform
@@ -1544,10 +1565,15 @@ impl FunctionAbilityContextInfo {
         ability_id: AbilityId,
         self_type_id: TypeId,
         impl_kind: AbilityImplKind,
+        blanket_parent_function: Option<FunctionId>,
     ) -> Self {
         FunctionAbilityContextInfo {
             ability_id,
-            impl_info: Some(FunctionAbilityImplContextInfo { self_type_id, impl_kind }),
+            impl_info: Some(FunctionAbilityImplContextInfo {
+                self_type_id,
+                impl_kind,
+                blanket_parent_function,
+            }),
         }
     }
 }
@@ -3031,11 +3057,7 @@ impl TypedModule {
         if let Type::TypeVariable(tvar) = self.types.get(type_id) {
             match self.scopes.find_type(scope_id, tvar.name) {
                 None => {
-                    eprintln!(
-                        "Unresolved type_id. Maybe we should bind it to itself, if possible {}. Scope:\n{}",
-                        self.name_of(tvar.name),
-                        self.scope_id_to_string(scope_id),
-                    );
+                    debug!("Unresolved type_id. {}", self.name_of(tvar.name));
                     type_id
                 }
                 Some((resolved, _)) => {
@@ -3306,6 +3328,7 @@ impl TypedModule {
                         implemented_ability.ability_id,
                         type_variable_id,
                         impl_kind,
+                        None,
                     )),
                     self.get_root_namespace_id(),
                 );
@@ -3327,6 +3350,7 @@ impl TypedModule {
             functions,
             scope_id,
             span,
+            compile_errors: vec![],
         });
     }
 
@@ -3429,9 +3453,13 @@ impl TypedModule {
         target_ability_id: AbilityId,
         span: SpanId,
     ) -> Option<AbilityImplHandle> {
+        let blanket_impl = self.get_ability_impl(blanket_impl_id);
+        if !blanket_impl.compile_errors.is_empty() {
+            debug!("Blanket impl failed compile; skipping");
+            return None;
+        }
         let target_ability = self.get_ability(target_ability_id);
         let target_ability_args = target_ability.kind.arguments();
-        let blanket_impl = self.get_ability_impl(blanket_impl_id);
         let AbilityImplKind::Blanket { parsed_id, .. } = blanket_impl.kind else {
             unreachable!("Expected a blanket impl")
         };
@@ -3620,8 +3648,8 @@ impl TypedModule {
             "blanket impl instance scope before function specialization: {}",
             self.scope_id_to_string(new_impl_scope)
         );
-        for blanket_fn in &blanket_impl.functions {
-            let blanket_fn = self.get_function(*blanket_fn);
+        for blanket_fn_id in &blanket_impl.functions {
+            let blanket_fn = self.get_function(*blanket_fn_id);
             let parsed_fn = blanket_fn.parsed_id.as_function_id().unwrap();
             let specialized_function_id = self.eval_function_declaration(
                 parsed_fn,
@@ -3630,14 +3658,14 @@ impl TypedModule {
                     concrete_ability_id,
                     self_type_id,
                     kind,
+                    Some(*blanket_fn_id),
                 )),
                 self.get_root_namespace_id(),
             )?;
-            self.eval_function_body(specialized_function_id)?;
-            eprintln!(
-                "Specialized blanket fn type {}",
-                self.type_id_to_string(self.get_function(specialized_function_id).type_id)
-            );
+            // HEADS UP --------> Recently swapped these; this fixes an issue
+            // where blanket bodies were running too early but may have broken things
+            self.functions_pending_body_specialization.push(specialized_function_id);
+            // self.eval_function_body(specialized_function_id)?;
             specialized_function_ids.push(specialized_function_id);
         }
 
@@ -3650,6 +3678,7 @@ impl TypedModule {
             functions: specialized_function_ids,
             scope_id: new_impl_scope,
             span: blanket_impl.span,
+            compile_errors: vec![],
         });
         Ok(AbilityImplHandle { ability_id: concrete_ability_id, full_impl_id: id })
     }
@@ -5532,7 +5561,7 @@ impl TypedModule {
             }
             TypedPattern::Variable(variable_pattern) => {
                 let variable_ident = variable_pattern.name;
-                let binding_variable = self.synth_visible_variable_defn(
+                let binding_variable = self.synth_variable_defn_visible(
                     variable_ident,
                     target_expr_variable_expr.into(),
                     arm_block.scope_id,
@@ -5722,31 +5751,23 @@ impl TypedModule {
         let binding_ident = for_expr.binding.unwrap_or(get_ident!(self, "it"));
         let iterable_expr = self.eval_expr(for_expr.iterable_expr, scope_id, None)?;
         let iteree_type = iterable_expr.get_type();
-        let is_string_iteree = iteree_type == STRING_TYPE_ID;
         let iterable_span = iterable_expr.get_span();
         let body_span = for_expr.body_block.span;
 
-        let Some(item_type) =
-            self.types.item_type_of_iterable(&self.ast.identifiers, &self.scopes, iteree_type)
-        else {
-            return make_fail_span(
-                format!(
-                    "Type {} is not iterable",
-                    self.type_id_to_string(iterable_expr.get_type())
-                ),
-                iterable_span,
-            );
-        };
+        let iter_impl =
+            self.expect_ability_implementation(iteree_type, ITERABLE_ABILITY_ID, iterable_span)?;
+        let item_type = self.get_ability_impl(iter_impl.full_impl_id).impl_arguments[0].type_id;
 
         let is_do_block = for_expr.expr_type == ForExprType::Do;
 
         // We de-sugar the 'for ... do' expr into a typed while loop, synthesizing
         // a few local variables in order to achieve this.
 
-        let for_expr_scope = self.scopes.add_child_scope(scope_id, ScopeType::ForExpr, None, None);
+        let outer_for_expr_scope =
+            self.scopes.add_child_scope(scope_id, ScopeType::ForExpr, None, None);
 
         let index_variable = self.synth_variable_defn(
-            get_ident!(self, "it_index"),
+            get_ident!(self, "itIndex"),
             TypedExpr::Integer(TypedIntegerExpr {
                 value: TypedIntegerValue::U64(0),
                 span: for_expr.body_block.span,
@@ -5754,89 +5775,61 @@ impl TypedModule {
             true,
             true,
             false,
-            for_expr_scope,
+            outer_for_expr_scope,
         );
-        let iteree_variable = self.synth_variable_defn_simple(
-            get_ident!(self, "iteree"),
-            iterable_expr,
-            for_expr_scope,
+        let get_iterator_call = self.synth_typed_function_call(
+            qident!(self, body_span, ["Iterable"], "iterator"),
+            vec![],
+            vec![iterable_expr],
+            outer_for_expr_scope,
+            None,
+        )?;
+        let iterator_variable = self.synth_variable_defn(
+            get_ident!(self, "iter"),
+            get_iterator_call,
+            false,
+            false,
+            true, //is_referencing
+            outer_for_expr_scope,
         );
-        let iteree_length_call = if is_string_iteree {
-            TypedExpr::StructFieldAccess(FieldAccess {
-                base: Box::new(iteree_variable.variable_expr.clone()),
-                target_field: get_ident!(self, "len"),
-                target_field_index: 0,
-                result_type: U64_TYPE_ID,
-                struct_type: iteree_type,
-                is_referencing: false,
-                span: body_span,
-            })
-        } else {
-            TypedExpr::StructFieldAccess(FieldAccess {
-                base: Box::new(iteree_variable.variable_expr.clone()),
-                target_field: get_ident!(self, "len"),
-                target_field_index: 0,
-                result_type: U64_TYPE_ID,
-                struct_type: iteree_type,
-                is_referencing: false,
-                span: body_span,
-            })
-        };
-        let iteree_length_ident = get_ident!(self, "iteree_length");
-        let iteree_length_variable = self.synth_variable_defn_simple(
-            iteree_length_ident,
-            iteree_length_call,
-            for_expr_scope,
-        );
-
-        let while_scope_id =
-            self.scopes.add_child_scope(for_expr_scope, ScopeType::WhileLoopBody, None, None);
-        let binding_variable_id = self.variables.add_variable(Variable {
-            name: binding_ident,
-            type_id: item_type,
-            is_mutable: false,
-            owner_scope: while_scope_id,
-            is_context: false,
-            is_global: false,
-        });
-        self.scopes.add_variable(while_scope_id, binding_ident, binding_variable_id);
-        let iteration_element_val_def = TypedStmt::Let(Box::new(LetStmt {
-            variable_id: binding_variable_id,
-            variable_type: item_type,
-            is_referencing: false,
-            initializer: if is_string_iteree {
-                self.synth_typed_function_call(
-                    qident!(self, body_span, ["string"], "get"),
-                    vec![],
-                    vec![
-                        iteree_variable.variable_expr.clone(),
-                        index_variable.variable_expr.clone(),
-                    ],
-                    while_scope_id,
-                    None,
-                )?
-            } else {
-                self.synth_typed_function_call(
-                    qident!(self, body_span, ["List"], "get"),
-                    vec![item_type],
-                    vec![
-                        iteree_variable.variable_expr.clone(),
-                        index_variable.variable_expr.clone(),
-                    ],
-                    while_scope_id,
-                    None,
-                )?
-            },
-            span: body_span,
-        }));
-
-        let body_scope_id =
-            self.scopes.add_child_scope(while_scope_id, ScopeType::LexicalBlock, None, None);
+        let mut loop_block = self.synth_block(vec![], outer_for_expr_scope, body_span);
+        let loop_scope_id = loop_block.scope_id;
         let expected_block_type = expected_type
             .and_then(|t| self.types.get(t).as_list_instance())
             .map(|list_type| list_type.element_type);
-        let body_block =
-            self.eval_block(&for_expr.body_block, body_scope_id, expected_block_type, false)?;
+
+        let mut consequent_block = self.synth_block(vec![], loop_scope_id, iterable_span);
+
+        let iterator_next_call = self.synth_typed_function_call(
+            qident!(self, body_span, ["Iterator"], "next"),
+            vec![],
+            vec![iterator_variable.variable_expr.clone()],
+            loop_scope_id,
+            None,
+        )?;
+        let next_variable = self.synth_variable_defn_simple(
+            get_ident!(self, "next"),
+            iterator_next_call,
+            loop_scope_id,
+        );
+        let next_unwrap_call = self.synth_typed_function_call(
+            qident!(self, iterable_span, ["Unwrap"], "unwrap"),
+            vec![],
+            vec![next_variable.variable_expr.clone()],
+            consequent_block.scope_id,
+            None,
+        )?;
+        let binding_variable = self.synth_variable_defn_visible(
+            binding_ident,
+            next_unwrap_call,
+            consequent_block.scope_id,
+        );
+        let body_block = self.eval_block(
+            &for_expr.body_block,
+            consequent_block.scope_id,
+            expected_block_type,
+            false,
+        )?;
         let body_block_result_type = body_block.expr_type;
 
         let resulting_type = if is_do_block {
@@ -5845,39 +5838,52 @@ impl TypedModule {
             self.instantiate_generic_type(LIST_TYPE_ID, vec![body_block_result_type])
         };
         let yielded_coll_variable = if !is_do_block {
+            let iterator_deref = self.synth_dereference(iterator_variable.variable_expr.clone());
+            let size_hint_call = self.synth_typed_function_call(
+                qident!(self, body_span, ["Iterator"], "sizeHint"),
+                vec![],
+                vec![iterator_deref],
+                outer_for_expr_scope,
+                None,
+            )?;
+            let size_hint_lower_bound = TypedExpr::StructFieldAccess(FieldAccess {
+                struct_type: size_hint_call.get_type(),
+                base: Box::new(size_hint_call),
+                target_field: get_ident!(self, "atLeast"),
+                target_field_index: 0,
+                result_type: U64_TYPE_ID,
+                is_referencing: false,
+                span: iterable_span,
+            });
             let synth_function_call = self.synth_typed_function_call(
                 qident!(self, body_span, ["List"], "withCapacity"),
                 vec![body_block_result_type],
-                vec![iteree_length_variable.variable_expr.clone()],
-                for_expr_scope,
+                vec![size_hint_lower_bound],
+                outer_for_expr_scope,
                 None,
             )?;
             Some(self.synth_variable_defn(
-                get_ident!(self, "yielded_coll"),
+                get_ident!(self, "yieldedColl"),
                 synth_function_call,
                 false,
                 false,
                 true,
-                for_expr_scope,
+                outer_for_expr_scope,
             ))
         } else {
             None
         };
-        let mut while_block = TypedBlock {
-            expr_type: UNIT_TYPE_ID,
-            scope_id: while_scope_id,
-            statements: Vec::new(),
-            span: body_span,
-        };
-        // Prepend the let def to the body block
-        while_block.statements.push(iteration_element_val_def);
+
+        loop_block.push_stmt(next_variable.defn_stmt); // let next = iter.next();
+
         let user_block_variable = self.synth_variable_defn_simple(
             get_ident!(self, "block_expr_val"),
             TypedExpr::Block(body_block),
-            while_scope_id,
+            consequent_block.scope_id,
         );
-        while_block.statements.push(user_block_variable.defn_stmt);
 
+        consequent_block.statements.push(binding_variable.defn_stmt);
+        consequent_block.statements.push(user_block_variable.defn_stmt);
         // Assign element to yielded list
         if let Some(yielded_coll_variable) = &yielded_coll_variable {
             let element_assign = TypedStmt::Expr(Box::new(self.synth_typed_function_call(
@@ -5887,11 +5893,36 @@ impl TypedModule {
                     yielded_coll_variable.variable_expr.clone(),
                     user_block_variable.variable_expr,
                 ],
-                for_expr_scope,
+                outer_for_expr_scope,
                 None,
             )?));
-            while_block.statements.push(element_assign);
+            consequent_block.statements.push(element_assign);
         }
+
+        let next_is_some_call = self.synth_typed_function_call(
+            qident!(self, body_span, ["Opt"], "isSome"),
+            vec![item_type],
+            vec![next_variable.variable_expr],
+            loop_scope_id,
+            None,
+        )?;
+        let break_block = self.synth_block(
+            vec![TypedStmt::Expr(Box::new(TypedExpr::Break(TypedBreak {
+                value: Box::new(TypedExpr::Unit(body_span)),
+                loop_scope: loop_scope_id,
+                loop_type: LoopType::Loop,
+                span: body_span,
+            })))],
+            loop_scope_id,
+            body_span,
+        );
+        loop_block.push_expr(TypedExpr::If(Box::new(TypedIf {
+            condition: next_is_some_call,
+            consequent: TypedExpr::Block(consequent_block),
+            alternate: TypedExpr::Block(break_block),
+            ty: UNIT_TYPE_ID,
+            span: body_span,
+        })));
 
         // Append the index increment to the body block
         let index_increment_statement = TypedStmt::Assignment(Box::new(Assignment {
@@ -5909,36 +5940,28 @@ impl TypedModule {
             span: iterable_span,
             kind: AssignmentKind::Value,
         }));
-        while_block.statements.push(index_increment_statement);
+        loop_block.statements.push(index_increment_statement);
 
-        let while_expr = TypedExpr::WhileLoop(WhileLoop {
-            cond: Box::new(TypedExpr::BinaryOp(BinaryOp {
-                kind: BinaryOpKind::Less,
-                ty: BOOL_TYPE_ID,
-                lhs: Box::new(index_variable.variable_expr.clone()),
-                rhs: Box::new(iteree_length_variable.variable_expr),
-                span: iterable_span,
-            })),
-            body: Box::new(while_block),
-            type_id: UNIT_TYPE_ID,
+        let loop_expr = TypedExpr::LoopExpr(LoopExpr {
+            body: Box::new(loop_block),
+            break_type: UNIT_TYPE_ID,
             span: for_expr.span,
         });
 
         let mut for_expr_initial_statements = Vec::with_capacity(4);
         for_expr_initial_statements.push(index_variable.defn_stmt);
-        for_expr_initial_statements.push(iteree_variable.defn_stmt);
-        for_expr_initial_statements.push(iteree_length_variable.defn_stmt);
+        for_expr_initial_statements.push(iterator_variable.defn_stmt);
         if let Some(yielded_coll_variable) = &yielded_coll_variable {
             for_expr_initial_statements.push(yielded_coll_variable.defn_stmt.clone());
         }
         let mut for_expr_block = TypedBlock {
             expr_type: resulting_type,
-            scope_id: for_expr_scope,
+            scope_id: outer_for_expr_scope,
             statements: for_expr_initial_statements,
             span: for_expr.body_block.span,
         };
 
-        for_expr_block.push_expr(while_expr);
+        for_expr_block.push_expr(loop_expr);
         if let Some(yielded_coll_variable) = yielded_coll_variable {
             let yield_expr = self.synth_dereference(yielded_coll_variable.variable_expr);
             for_expr_block.push_expr(yield_expr);
@@ -6774,7 +6797,6 @@ impl TypedModule {
         function_ability_index: usize,
         ability_id: AbilityId,
         fn_call: &FnCall,
-        // nocommit: KnownArgs cleanup to just use MaybeTypedExpr?
         known_args: Option<&(Vec<TypeId>, Vec<TypedExpr>)>,
         calling_scope: ScopeId,
         expected_type_id: Option<TypeId>,
@@ -6872,10 +6894,10 @@ impl TypedModule {
         let does_not_implement = |m: &TypedModule| {
             failf!(
                 call_span,
-                "Type {} does not implement ability {} ({})",
+                "Call to {} with type Self = {} does not work, since it does not implement ability {}",
+                m.name_of(m.get_function(function_id).name),
                 m.type_id_to_string(solved_self.type_id),
-                m.name_of(m.get_ability(ability_id).name),
-                m.pretty_print_named_types(solved_rest, ", ")
+                m.ability_signature_to_string(ability_id, &[]),
             )
         };
 
@@ -7955,8 +7977,15 @@ impl TypedModule {
     fn specialize_function_body(&mut self, function_id: FunctionId) -> TyperResult<()> {
         let specialized_function = self.get_function(function_id);
         let specialized_return_type = self.get_function_type(function_id).return_type;
-        let spec_info = specialized_function.specialization_info.as_ref().unwrap();
-        let parent_function = self.get_function(spec_info.parent_function);
+        let parent_function = specialized_function
+            .specialization_info
+            .as_ref()
+            .map(|spec_info| spec_info.parent_function)
+            .or(specialized_function.kind.blanket_parent_function_id())
+            .expect(
+                "specialize_function_body wants a normal specialization or a blanket impl defn",
+            );
+        let parent_function = self.get_function(parent_function);
         debug_assert!(parent_function.body_block.is_some());
 
         // Approach 1: Re-run whole body w/ bound types
@@ -7979,36 +8008,6 @@ impl TypedModule {
 
         self.get_function_mut(function_id).body_block = Some(block);
         Ok(())
-
-        // Approach 2: Perform a transformation on the generic body
-        // Downside: lots of code, probably
-        // Upside: seemingly simpler, mechanical transformation? Code is only called from one
-        // context
-        // When you a call,
-        // - Check the function's spec info, substitute our pairs into the passed_params
-        // - If different, specialize using those passed params, and swap the call
-        // Example:
-        // grow.$T := int
-        // let newBuffer = self.buffer._enlargedClone[T](newCap);
-        // called: enlargedClone_spec_grow.$T
-        // passed params: T := grow.$T
-        // substitute:    grow.$T -> int
-        // new passed params: T := int
-        // NOT EQUAL, specialize enlargedClone using T := int, swap in function id
-        //
-        //
-        //
-        //
-        // let mut body_copy = parent_function.body_block.as_ref().unwrap().clone();
-        // let mut specialized_block =
-        //     self.synth_block(vec![], specialized_function.scope, body_copy.span);
-        // for stmt in &mut body_copy.statements {
-        //     let new_stmt = match stmt {
-        //         TypedStmt::Expr(_) => walk_,
-        //         TypedStmt::Let(_) => todo!(),
-        //         TypedStmt::Assignment(_) => todo!(),
-        //     }
-        // }
     }
 
     pub fn is_function_concrete(&self, function: &TypedFunction) -> bool {
@@ -8697,19 +8696,20 @@ impl TypedModule {
         let parsed_function_type_params = parsed_function.type_params.clone();
 
         let is_ability_decl = ability_info.as_ref().is_some_and(|info| info.impl_info.is_none());
-        let _is_ability_impl = ability_info.as_ref().is_some_and(|info| info.impl_info.is_some());
+        let is_ability_impl = ability_info.as_ref().is_some_and(|info| info.impl_info.is_some());
         let ability_id = ability_info.as_ref().map(|info| info.ability_id);
         let impl_info = ability_info.as_ref().and_then(|info| info.impl_info.as_ref());
         let ability_kind = ability_id.map(|id| &self.get_ability(id).kind);
         let impl_self_type = impl_info.map(|impl_info| impl_info.self_type_id);
-        let skip_ast_mapping = ability_kind
-            .is_some_and(|kind| matches!(kind, TypedAbilityKind::Specialized(_)))
-            || ability_info.is_some_and(|info| {
-                info.impl_info.is_some_and(|impl_info| {
+        let ability_kind_is_specialized = ability_kind.is_some_and(|kind| kind.is_specialized());
+        let skip_ast_mapping = ability_kind_is_specialized
+            || ability_info.as_ref().is_some_and(|info| {
+                info.impl_info.as_ref().is_some_and(|impl_info| {
                     impl_info.impl_kind.is_derived_from_blanket()
                         || impl_info.impl_kind.is_variable_constraint()
                 })
             });
+        let resolvable_by_name = !is_ability_impl && !ability_kind_is_specialized;
 
         let name = match impl_self_type {
             Some(target_type) => self.ast.identifiers.intern(format!(
@@ -8894,14 +8894,26 @@ impl TypedModule {
             Some(type_expr) => self.eval_type_expr(type_expr, fn_scope_id)?,
         };
 
-        let kind = if let Some(ability) = ability_id {
-            if let Some(type_id) = impl_self_type {
-                TypedFunctionKind::AbilityImpl(ability, type_id)
-            } else {
-                TypedFunctionKind::AbilityDefn(ability)
-            }
-        } else {
-            TypedFunctionKind::Standard
+        let kind = match ability_info.as_ref() {
+            None => TypedFunctionKind::Standard,
+            Some(ability_info) => match ability_info.impl_info.as_ref() {
+                None => TypedFunctionKind::AbilityDefn(ability_info.ability_id),
+                Some(impl_info) => match impl_info.impl_kind {
+                    AbilityImplKind::Concrete
+                    | AbilityImplKind::Blanket { .. }
+                    | AbilityImplKind::VariableConstraint => TypedFunctionKind::AbilityImpl(
+                        ability_info.ability_id,
+                        impl_info.self_type_id,
+                    ),
+                    AbilityImplKind::DerivedFromBlanket { .. } => {
+                        TypedFunctionKind::AbilityImplDerivedBlanket(
+                            impl_info.blanket_parent_function.unwrap(),
+                            ability_info.ability_id,
+                            impl_info.self_type_id,
+                        )
+                    }
+                },
+            },
         };
 
         let function_type_id = self.types.add_type(Type::Function(FunctionType {
@@ -8935,16 +8947,19 @@ impl TypedModule {
         });
         debug_assert!(actual_function_id == function_id);
 
-        //
-        // Bookkeeping
-        //
-        if !self.scopes.add_function(parent_scope_id, parsed_function_name, function_id) {
-            return failf!(
-                parsed_function_span,
-                "Function name {} is taken",
-                self.name_of(parsed_function_name)
-            );
-        }
+        if resolvable_by_name {
+            // debug!(
+            //     "Adding function to scope since it should be the original resolvable copy: {}",
+            //     self.name_of(name)
+            // );
+            if !self.scopes.add_function(parent_scope_id, parsed_function_name, function_id) {
+                return failf!(
+                    parsed_function_span,
+                    "Function name {} is taken",
+                    self.name_of(parsed_function_name)
+                );
+            }
+        };
 
         // In this case, we re-evaluate the ast-node for the ability specialization, so we expect
         // to run it more than once, and don't want to fail
@@ -9392,7 +9407,12 @@ impl TypedModule {
             let function_impl = self.eval_function_declaration(
                 parsed_impl_function_id,
                 impl_scope_id,
-                Some(FunctionAbilityContextInfo::ability_impl(ability_id, impl_self_type, kind)),
+                Some(FunctionAbilityContextInfo::ability_impl(
+                    ability_id,
+                    impl_self_type,
+                    kind,
+                    None,
+                )),
                 // fixme: Root namespace?! A: namespace is only used for companion type stuff, so
                 // this isn't doing any harm for now
                 self.get_root_namespace_id(),
@@ -9432,6 +9452,7 @@ impl TypedModule {
             functions: typed_functions,
             scope_id: impl_scope_id,
             span,
+            compile_errors: vec![],
         });
 
         if kind.is_blanket() {
@@ -9453,7 +9474,10 @@ impl TypedModule {
         let ability_impl = self.get_ability_impl(ability_impl_id);
 
         for impl_fn in ability_impl.functions.clone().iter() {
-            self.eval_function_body(*impl_fn)?
+            if let Err(e) = self.eval_function_body(*impl_fn) {
+                self.get_ability_impl_mut(ability_impl_id).compile_errors.push(e.clone());
+                self.push_error(e);
+            }
         }
 
         Ok(())
@@ -10177,7 +10201,7 @@ impl TypedModule {
     }
 
     /// Creates a user-code-visible variable
-    fn synth_visible_variable_defn(
+    fn synth_variable_defn_visible(
         &mut self,
         name: Identifier,
         initializer: TypedExpr,
@@ -10269,7 +10293,7 @@ impl TypedModule {
 
     // These are only used by the old coalescing accessor and should be removed when its rebuilt
     fn ident_opt_has_value(&self, span: SpanId) -> NamespacedIdentifier {
-        qident!(self, span, ["Opt"], "hasValue")
+        qident!(self, span, ["Opt"], "isSome")
     }
 
     fn ident_opt_get(&self, span: SpanId) -> NamespacedIdentifier {

@@ -145,22 +145,14 @@ impl Equals for string {
   }
 }
 
-impl[T: Show] Show for List[T] {
-  fn show(self: List[T]): string {
-    let b = StringBuilder/new();
-    b.putChar('[');
-    for s in self do {
-      b.putString(s.show());
-      let last = it_index == self.len - 1;
-      if not last {
-        b.putString(",");
-      };
-    };
-    b.putChar(']');
-    b.build()
-  }
-}
-
 impl Show for string {
   fn show(self: string): string { self }
+}
+
+impl Iterable[Item = char, I = BufferIterator[char]] for string {
+  fn iterator(self: string): I { BufferIterator/fromBuffer(self.buffer) }
+}
+
+impl Iterable[Item = char, I = BufferIterator[char]] for string* {
+  fn iterator(self: string*): I { self.*.iterator() }
 }
