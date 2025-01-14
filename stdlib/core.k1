@@ -1,7 +1,8 @@
 ns libc {
   extern(exit) fn exit(code: i32): never
 
-  extern(write)  fn write(fileNo: i32, data: Pointer, count: u64, offset: u64): u64
+  extern(read) fn read(fileNo: i32, buffer: Pointer, count: u64, offset: u64): i64
+  extern(write) fn write(fileNo: i32, data: Pointer, count: u64, offset: u64): u64
   extern(memcpy) fn memcpy(dst: Pointer, src: Pointer, count: u64): Pointer
   extern(memset) fn memset(src: Pointer, value: u32, count: u64): Pointer
   extern(memcmp) fn memcmp(s1: Pointer, s2: Pointer, size: u64): i32
