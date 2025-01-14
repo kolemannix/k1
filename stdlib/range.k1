@@ -1,0 +1,51 @@
+deftype IntRange = { start: int, end: int }
+ns IntRange {
+  fn make(start: int, end: int): IntRange { { start, end } }
+  fn upTo(end: int): IntRange { { start: 0, end } }
+}
+deftype IntRangeIterator = { range: IntRange, offset: i64 }
+
+ns IntRangeIterator {
+  fn make(range: IntRange): IntRangeIterator { { range, offset: 0 } }
+
+  fn position(self: IntRangeIterator): int { self.range.start + self.offset }
+  fn size(self: IntRangeIterator): int { self.range.end - self.range.start }
+  fn stepBy(self: IntRangeIterator*, n: uint): bool { 
+    let nextPos = self.position() + (n as int);
+    if nextPos >= self.range.end false else {
+      self.offset* <- self.offset + (n as int);
+      true
+    }
+  }
+  fn current(self: IntRangeIterator): int {
+    self.range.start + self.offset
+  }
+}
+
+impl Iterator[Item = int] for IntRangeIterator {
+  fn next(self: Self*): int? {
+     if self.position() >= self.range.end {
+       .None
+     } else {
+       let current = self.current();
+       self.offset* <- self.offset + 1;
+       .Some(current)
+     }
+  }
+  fn sizeHint(self: Self): { atLeast: uint, atMost: uint? } {
+    let remaining = self.range.end - self.position();
+    { atLeast: remaining as uint, atMost: .Some(remaining as uint) }
+  }
+  fn advanceBy(self: Self*, n: uint): unit {
+    self.stepBy(n);
+    ()
+  }
+  fn nth(self: Self*, n: uint): int? {
+    self.stepBy(n); 
+    self.next()
+  }
+}
+
+impl Iterable[Item = int, I = IntRangeIterator] for IntRange {
+  fn iterator(self: IntRange): IntRangeIterator { IntRangeIterator/make(self) }
+}

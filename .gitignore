@@ -7,3 +7,4 @@ zig-out
 .metals
 .scala-build
 k1_lsp.log*
+.aider*
