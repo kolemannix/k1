@@ -204,6 +204,18 @@ impl Literal {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct Identifier(string_interner::symbol::SymbolU32);
 
+impl Ord for Identifier {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.cmp(&other.0)
+    }
+}
+
+impl PartialOrd for Identifier {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 impl From<Identifier> for usize {
     fn from(value: Identifier) -> Self {
         value.0.to_usize()
@@ -430,7 +442,7 @@ pub struct ParsedIsExpression {
 
 #[derive(Debug, Clone)]
 pub struct ParsedMatchCase {
-    pub pattern: ParsedPatternId,
+    pub patterns: smallvec::SmallVec<[ParsedPatternId; 1]>,
     pub expression: ParsedExpressionId,
 }
 
@@ -2596,12 +2608,19 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             }
             let mut cases = Vec::new();
             while self.peek().kind != K::CloseBrace {
-                let arm_pattern_id = self.expect_pattern()?;
+                let mut arm_pattern_ids = smallvec::smallvec![];
+                loop {
+                    let arm_pattern_id = self.expect_pattern()?;
+                    arm_pattern_ids.push(arm_pattern_id);
+                    if self.maybe_consume_next(K::KeywordOr).is_none() {
+                        break;
+                    }
+                }
 
                 self.expect_eat_token(K::RThinArrow)?;
 
                 let arm_expr_id = self.expect_expression()?;
-                cases.push(ParsedMatchCase { pattern: arm_pattern_id, expression: arm_expr_id });
+                cases.push(ParsedMatchCase { patterns: arm_pattern_ids, expression: arm_expr_id });
                 let next = self.peek();
                 if next.kind == K::Comma {
                     self.advance();
@@ -3646,11 +3665,18 @@ impl ParsedModule {
                 f.write_str("switch ")?;
                 self.display_expr_id(match_expr.target_expression, f)?;
                 f.write_str(" {")?;
-                for ParsedMatchCase { pattern, expression } in match_expr.cases.iter() {
-                    f.write_str(" , ")?;
-                    self.display_pattern_expression_id(*pattern, f)?;
+                for ParsedMatchCase { patterns, expression } in match_expr.cases.iter() {
+                    f.write_str("")?;
+                    for (pattern_index, pattern_id) in patterns.iter().enumerate() {
+                        self.display_pattern_expression_id(*pattern_id, f)?;
+                        let is_last = pattern_index == patterns.len() - 1;
+                        if !is_last {
+                            f.write_str(" or ")?;
+                        }
+                    }
                     f.write_str(" -> ")?;
                     self.display_expr_id(*expression, f)?;
+                    f.write_str(",\n")?;
                 }
                 f.write_str(" }")
             }

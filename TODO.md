@@ -47,7 +47,7 @@
   - [x] syntax: optional pipe separator
   - [x] Enum methods
 - [x] Type cleanup
-  - [x] Order of elet (topology through defer/skip)
+  - [x] Order of eval (topology through defer/skip)
   - [x] named struct and enum fix
   - [x] Newtypes (opaque)
   - [x] Aliases
