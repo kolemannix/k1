@@ -99,11 +99,14 @@ ns sys {
     strings.toBuffer()
   }
 
-  fn readLine(buffer: Pointer, bufsize: u64): i32 {
+  fn readLine(): string {
+    let bufsize = 1024;
+    let buffer = libc/malloc(bufsize) as Pointer;
     let bytesRead = libc/read(0, buffer, bufsize - 1, 0);
     
     if bytesRead < 0 {
-      return(-1);
+      libc/free(buffer);
+      return("");
     };
     
     // Null-terminate the string
@@ -114,7 +117,9 @@ ns sys {
       buffer[bytesRead - 1] = 0 as u8;
     };
     
-    bytesRead as i32
+    let result = string/wrapBuffer(Buffer/fromRawParts(bytesRead as u64, buffer));
+    libc/free(buffer);
+    result
   }
 
 }
