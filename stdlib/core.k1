@@ -103,8 +103,7 @@ ns sys {
     let bytesRead = libc/read(0, buffer, bufsize - 1, 0);
     
     if bytesRead < 0 {
-      libc/perror("read");
-      return -1;
+      return(-1);
     };
     
     // Null-terminate the string
