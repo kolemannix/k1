@@ -15,6 +15,7 @@ use colored::Colorize;
 use either::Either;
 use fxhash::FxHashMap;
 use log::{debug, trace};
+use smallvec::smallvec;
 
 use scopes::*;
 use types::*;
@@ -166,6 +167,7 @@ pub struct TypedAbilityParam {
     name: Identifier,
     type_variable_id: TypeId,
     is_impl_param: bool,
+    #[allow(unused)]
     span: SpanId,
 }
 
@@ -253,6 +255,7 @@ pub struct TypedStructPattern {
 #[derive(Debug, Clone)]
 pub struct VariablePattern {
     pub name: Identifier,
+    pub type_id: TypeId,
     pub span: SpanId,
 }
 
@@ -277,6 +280,35 @@ pub enum TypedPattern {
 }
 
 impl TypedPattern {
+    pub fn all_bindings(&self) -> Vec<VariablePattern> {
+        let mut v: Vec<VariablePattern> = vec![];
+        // This sorts by the Identifier id, not the name itself, but that's absolutely fine
+        self.all_bindings_rec(&mut v);
+        v.sort_by_key(|vp| vp.name);
+        v
+    }
+    fn all_bindings_rec(&self, bindings: &mut Vec<VariablePattern>) {
+        match self {
+            TypedPattern::LiteralUnit(_) => (),
+            TypedPattern::LiteralChar(_, _) => (),
+            TypedPattern::LiteralInteger(_, _) => (),
+            TypedPattern::LiteralFloat(_, _) => (),
+            TypedPattern::LiteralBool(_, _) => (),
+            TypedPattern::LiteralString(_, _) => (),
+            TypedPattern::Variable(variable_pattern) => bindings.push(variable_pattern.clone()),
+            TypedPattern::Enum(enum_pattern) => {
+                if let Some(payload_pattern) = enum_pattern.payload.as_ref() {
+                    payload_pattern.all_bindings_rec(bindings)
+                }
+            }
+            TypedPattern::Struct(struct_pattern) => {
+                for field_pattern in struct_pattern.fields.iter() {
+                    field_pattern.pattern.all_bindings_rec(bindings)
+                }
+            }
+            TypedPattern::Wildcard(_) => (),
+        }
+    }
     pub fn is_innumerable_literal(&self) -> bool {
         match self {
             TypedPattern::LiteralChar(_, _span) => true,
@@ -2862,7 +2894,7 @@ impl TypedModule {
                                 }
                                 _ => failf!(
                                     self.ast.get_pattern_span(pat_expr),
-                                    "unrelated pattern type int will never match {}",
+                                    "integer literal pattern will never match {}",
                                     self.type_id_to_string(target_type_id)
                                 ),
                             },
@@ -2872,7 +2904,7 @@ impl TypedModule {
                                 }
                                 _ => failf!(
                                     self.ast.get_pattern_span(pat_expr),
-                                    "unrelated pattern type float will never match {}",
+                                    "float literal pattern will never match {}",
                                     self.type_id_to_string(target_type_id)
                                 ),
                             },
@@ -2885,31 +2917,32 @@ impl TypedModule {
                         Type::Bool(_) => Ok(TypedPattern::LiteralBool(*b, *span)),
                         _ => failf!(
                             self.ast.get_pattern_span(pat_expr),
-                            "unrelated pattern type bool will never match {}",
+                            "bool literal pattern will never match {}",
                             self.type_id_to_string(target_type_id)
                         ),
                     },
-                    // Clone would go away if we intern string literals
-                    // But I think this is where we'd interpolate and handle escapes and stuff so maybe there's always going
-                    // to be an allocation here. Should be same handling as non-pattern string literals
                     Literal::String(s, span) => match target_type_id {
                         STRING_TYPE_ID => Ok(TypedPattern::LiteralString(s.clone(), *span)),
                         _ => failf!(
                             self.ast.get_pattern_span(pat_expr),
-                            "unrelated pattern type string will never match {}",
+                            "string literal pattern will never match {}",
                             self.type_id_to_string(target_type_id)
                         ),
                     },
                 }
             }
             ParsedPattern::Variable(ident_id, span) => {
-                Ok(TypedPattern::Variable(VariablePattern { name: *ident_id, span: *span }))
+                Ok(TypedPattern::Variable(VariablePattern {
+                    name: *ident_id,
+                    type_id: target_type_id,
+                    span: *span,
+                }))
             }
             ParsedPattern::Enum(enum_pattern) => {
                 let Some((enum_type, _variant)) = self.types.get_as_enum(target_type_id) else {
                     return failf!(
                         enum_pattern.span,
-                        "Impossible pattern: Expected an enum type; but got {}",
+                        "Enum pattern will never match {}",
                         self.type_id_to_string(target_type_id)
                     );
                 };
@@ -4344,11 +4377,11 @@ impl TypedModule {
         }))
     }
 
-    /// Used for
-    /// - de-referencing,
-    /// Probably unsound. I'd like to remove and re-introduce coercion as part of subtyping.
-    /// However, not sure if we should do it for references, because I'd like to move that to an
-    /// ability so that we can have different types of references written in userspace
+    // Used for
+    // - de-referencing,
+    // Probably unsound. I'd like to remove and re-introduce coercion as part of subtyping.
+    // However, not sure if we should do it for references, because I'd like to move that to an
+    // ability so that we can have different types of references written in userspace
     fn coerce_expression_to_expected_type(
         &mut self,
         expected_type_id: TypeId,
@@ -4748,13 +4781,13 @@ impl TypedModule {
                     parse::ParsedExpression::Literal(parse::Literal::Bool(false, is_expr.span)),
                 );
                 let true_case = parse::ParsedMatchCase {
-                    pattern: is_expr.pattern,
+                    patterns: smallvec![is_expr.pattern],
                     expression: true_expression,
                 };
                 let wildcard_pattern =
                     self.ast.patterns.add_pattern(parse::ParsedPattern::Wildcard(is_expr.span));
                 let false_case = parse::ParsedMatchCase {
-                    pattern: wildcard_pattern,
+                    patterns: smallvec![wildcard_pattern],
                     expression: false_expression,
                 };
                 let as_match_expr = parse::ParsedMatchExpression {
@@ -5363,76 +5396,127 @@ impl TypedModule {
 
         let mut expected_arm_type_id = expected_type_id;
 
+        let mut all_patterns = Vec::with_capacity(cases.len());
         for parsed_case in cases.iter() {
-            let pattern =
-                self.eval_pattern(parsed_case.pattern, target_expr.type_id, match_scope_id)?;
             let arm_expr_span = self.ast.expressions.get_span(parsed_case.expression);
-            let arm_pattern_span = self.ast.get_pattern_span(parsed_case.pattern);
-            let mut arm_block = self.synth_block(vec![], match_scope_id, arm_expr_span);
-            let (pre_stmts, condition) =
-                self.eval_match_arm(&pattern, target_expr.clone(), &mut arm_block, match_scope_id)?;
+            let mut case_patterns = Vec::with_capacity(parsed_case.patterns.len());
+            let multi_pattern = parsed_case.patterns.len() > 1;
+            let mut expected_bindings: Option<Vec<VariablePattern>> = None;
+            for pattern_id in parsed_case.patterns.iter() {
+                let pattern =
+                    self.eval_pattern(*pattern_id, target_expr.type_id, match_scope_id)?;
 
-            // Once we've evaluated the arm pattern, we can elet the consequent expression inside of it,
-            // since the bindings are now in scope inside arm_block
-            let arm_expr =
-                self.eval_expr(parsed_case.expression, arm_block.scope_id, expected_arm_type_id)?;
-
-            if let Some(expected_arm_type_id) = expected_arm_type_id.as_ref() {
-                // Never is divergent so need not contribute to the overall type of the pattern
-                if arm_expr.get_type() != NEVER_TYPE_ID {
-                    if let Err(msg) =
-                        self.check_types(*expected_arm_type_id, arm_expr.get_type(), match_scope_id)
-                    {
-                        return failf!(arm_pattern_span, "Match arm has wrong type. {}", msg);
+                // If a match arm has multiple patterns, they must produce the exact same
+                // set of variable bindings: matching name and type
+                if multi_pattern {
+                    match &expected_bindings {
+                        None => {
+                            expected_bindings = Some(pattern.all_bindings());
+                        }
+                        Some(expected_bindings) => {
+                            let this_pattern_bindings = pattern.all_bindings();
+                            for (exp_binding, this_binding) in
+                                expected_bindings.iter().zip(this_pattern_bindings.iter())
+                            {
+                                if exp_binding.name != this_binding.name {
+                                    return failf!(this_binding.span, "Patterns in a multiple pattern arm must have the exact same bindings");
+                                }
+                                if exp_binding.type_id != this_binding.type_id {
+                                    return failf!(
+                                        this_binding.span, 
+                                        "Patterns in a multiple pattern arm must have the exact same bindings; but the type differs for {}: {} vs {}",
+                                        self.name_of(exp_binding.name), 
+                                        self.type_id_to_string(exp_binding.type_id),
+                                        self.type_id_to_string(this_binding.type_id)
+                                    );
+                                }
+                            }
+                        }
                     }
                 }
+
+                case_patterns.push(pattern.clone());
+                all_patterns.push(pattern);
             }
 
-            arm_block.push_expr(arm_expr);
+            for pattern in case_patterns.into_iter() {
+                // let arm_pattern_span = self.ast.get_pattern_span(parsed_case.pattern);
+                let mut arm_block = self.synth_block(vec![], match_scope_id, arm_expr_span);
+                let (pre_stmts, condition) = self.desugar_pattern_in_scope(
+                    &pattern,
+                    target_expr.clone(),
+                    &mut arm_block,
+                    match_scope_id,
+                )?;
 
-            if arm_block.expr_type != NEVER_TYPE_ID {
-                expected_arm_type_id = Some(arm_block.expr_type);
+                // Once we've evaluated the arm pattern, we can eval the consequent expression inside of it,
+                // since the bindings are now in scope inside arm_block
+                // TODO: principled unify of never
+                let arm_expr = self.eval_expr(
+                    parsed_case.expression,
+                    arm_block.scope_id,
+                    expected_arm_type_id,
+                )?;
+
+                if let Some(expected_arm_type_id) = expected_arm_type_id.as_ref() {
+                    // Never is divergent so need not contribute to the overall type of the pattern
+                    if arm_expr.get_type() != NEVER_TYPE_ID {
+                        if let Err(msg) = self.check_types(
+                            *expected_arm_type_id,
+                            arm_expr.get_type(),
+                            match_scope_id,
+                        ) {
+                            return failf!(arm_expr_span, "Match arm has wrong type. {}", msg);
+                        }
+                    }
+                }
+
+                arm_block.push_expr(arm_expr);
+
+                if arm_block.expr_type != NEVER_TYPE_ID {
+                    expected_arm_type_id = Some(arm_block.expr_type);
+                }
+                typed_cases.push(TypedMatchCase { pattern, pre_stmts, condition, arm_block });
             }
-            typed_cases.push(TypedMatchCase { pattern, pre_stmts, condition, arm_block });
         }
 
-        // Exhaustiveness Checking
-        if !partial {
-            let trial_constructors: Vec<PatternConstructor> =
-                self.generate_constructors_for_type(target_expr.type_id, target_expr.span);
-            let mut trial_alives: Vec<bool> = vec![true; trial_constructors.len()];
-            let mut pattern_scores: Vec<usize> = vec![0; typed_cases.len()];
-            'trial: for (trial_index, trial_expr) in trial_constructors.iter().enumerate() {
-                '_pattern: for (index, pattern) in typed_cases.iter().enumerate() {
-                    let pattern = &pattern.pattern;
-                    if TypedModule::pattern_matches(pattern, trial_expr) {
-                        pattern_scores[index] += 1;
-                        trial_alives[trial_index] = false;
-                        continue 'trial;
+
+            // Exhaustiveness Checking
+            if !partial {
+                let trial_constructors: Vec<PatternConstructor> =
+                    self.generate_constructors_for_type(target_expr.type_id, target_expr.span);
+                let mut trial_alives: Vec<bool> = vec![true; trial_constructors.len()];
+                let mut pattern_kill_counts: Vec<usize> = vec![0; all_patterns.len()];
+                'trial: for (trial_index, trial_expr) in trial_constructors.iter().enumerate() {
+                    '_pattern: for (index, pattern) in all_patterns.iter().enumerate() {
+                        if TypedModule::pattern_matches(pattern, trial_expr) {
+                            pattern_kill_counts[index] += 1;
+                            trial_alives[trial_index] = false;
+                            continue 'trial;
+                        }
                     }
                 }
-            }
 
-            if let Some(alive_index) = trial_alives.iter().position(|p| *p) {
-                let pattern = &trial_constructors[alive_index];
-                return failf!(
-                    target_expr.span,
-                    "Unhandled pattern: {}",
-                    self.pattern_ctor_to_string(pattern)
-                );
-            }
-
-            if let Some(useless_index) = pattern_scores.iter().position(|p| *p == 0) {
-                let pattern = &typed_cases[useless_index].pattern;
-                if !pattern.is_innumerable_literal() {
+                if let Some(alive_index) = trial_alives.iter().position(|p| *p) {
+                    let pattern = &trial_constructors[alive_index];
                     return failf!(
-                        pattern.span_id(),
-                        "Useless pattern: {}",
-                        self.pattern_to_string(pattern)
+                        target_expr.span,
+                        "Unhandled pattern: {}",
+                        self.pattern_ctor_to_string(pattern)
                     );
                 }
+
+                if let Some(useless_index) = pattern_kill_counts.iter().position(|p| *p == 0) {
+                    let pattern = &typed_cases[useless_index].pattern;
+                    if !pattern.is_innumerable_literal() {
+                        return failf!(
+                            pattern.span_id(),
+                            "Useless pattern: {}",
+                            self.pattern_to_string(pattern)
+                        );
+                    }
+                }
             }
-        }
 
         Ok(typed_cases)
     }
@@ -5441,7 +5525,7 @@ impl TypedModule {
     /// 1) a series of statements to bind variables that are used by the condition
     ///    FIXME!: These conditions should be in their own block; currently they pollute the match block
     /// 2) an expr that is expected to a boolean, representing the condition of the branch,
-    fn eval_match_arm(
+    fn desugar_pattern_in_scope(
         &mut self,
         pattern: &TypedPattern,
         target_expr_variable_expr: VariableExpr,
@@ -5475,7 +5559,7 @@ impl TypedModule {
                     );
                     condition_statements.push(struct_member_variable.defn_stmt);
 
-                    let (inner_condition_stmts, condition) = self.eval_match_arm(
+                    let (inner_condition_stmts, condition) = self.desugar_pattern_in_scope(
                         &pattern_field.pattern,
                         struct_member_variable.variable_expr.expect_variable(),
                         arm_block,
@@ -5534,7 +5618,7 @@ impl TypedModule {
                         arm_block.scope_id,
                     );
                     let mut stmts = vec![payload_variable.defn_stmt];
-                    let (inner_pattern_stmts, cond) = self.eval_match_arm(
+                    let (inner_pattern_stmts, cond) = self.desugar_pattern_in_scope(
                         payload_pattern,
                         payload_variable.variable_expr.expect_variable(),
                         arm_block,
@@ -6349,8 +6433,8 @@ impl TypedModule {
             let wildcard_pattern_id =
                 self.ast.patterns.add_pattern(parse::ParsedPattern::Wildcard(if_expr.span));
             let cases = vec![
-                parse::ParsedMatchCase { pattern: cond_pattern_id, expression: if_expr.cons },
-                parse::ParsedMatchCase { pattern: wildcard_pattern_id, expression: alternate_expr },
+                parse::ParsedMatchCase { patterns: smallvec![cond_pattern_id], expression: if_expr.cons },
+                parse::ParsedMatchCase { patterns: smallvec![wildcard_pattern_id], expression: alternate_expr },
             ];
             let match_expr = parse::ParsedMatchExpression {
                 target_expression: cond_expr_id,
