@@ -60,7 +60,7 @@ impl To[To = char] for byte {
   fn to(self: byte): char { self as char }
 }
 
-fn main(): unit {
+fn main(): int {
 
   let btoc: char = (101: u8).to();
 
@@ -82,5 +82,5 @@ fn main(): unit {
   assert(From/from(3: i32): string == "3");
 
 
-  ()
+  0
 }

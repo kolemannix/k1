@@ -1,5 +1,4 @@
-
-fn main(x: int): int {
+fn main(): int {
   let t = true;
   let f = false;
   assert(not (t and f));

@@ -22,7 +22,7 @@ fn fails(b: bool): Result[bool, Error] {
   .Ok(i % 2 == 0)
 }
 
-fn main(): Result[int, Error] {
+fn main(): Result[i32, Error] {
   let result: int = canFailInt().try;
   assert(result == 42);
   let result: int = ({ a: true }: Foo).try;
@@ -35,6 +35,5 @@ fn main(): Result[int, Error] {
   let res = c(false);
   assert(res is .Err("woops"));
 
-  //.Ok(result)
   .Ok(0)
 }
