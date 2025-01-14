@@ -98,6 +98,26 @@ ns sys {
     strings.toBuffer()
   }
 
+  // C Code here
+  int read_line(char *buffer, size_t bufsize) {
+     ssize_t bytes_read = read(STDIN_FILENO, buffer, bufsize - 1);
+     
+     if (bytes_read < 0) {
+         perror("read");
+         return -1;
+     }
+     
+     // Null-terminate the string
+     buffer[bytes_read] = '\0';
+     
+     // Remove trailing newline if present
+     if (bytes_read > 0 && buffer[bytes_read - 1] == '\n') {
+         buffer[bytes_read - 1] = '\0';
+     }
+     
+     return bytes_read;
+   }
+
 }
 
 ns files {
