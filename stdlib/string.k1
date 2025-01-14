@@ -1,5 +1,5 @@
 // TODO: CString type
-deftype alias CString = { ptr: Pointer }
+deftype alias CString = Pointer
 ns CString { 
 }
 
@@ -113,6 +113,21 @@ ns string {
 
   fn toCString(self: string): Pointer {
     self.appendChar('\0').buffer.data
+  }
+
+  fn fromCString(cString: Pointer): string {
+    let* self = List/empty[char]();
+    let mut i = 0: u64;
+    loop {
+      let c = cString.refAtIndex[char](i);
+      if c.* == '\0' {
+        break();
+      } else {
+        self.push(c);
+        i = i + 1;
+      }
+    };
+    wrapList(self)
   }
 
   fn toInt(self: string): int? {

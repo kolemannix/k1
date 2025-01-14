@@ -17,7 +17,9 @@ deftype string = { buffer: Buffer[char] }
 
 deftype Opt[T] = either None, Some(T)
 
-deftype CompilerSourceLoc = { filename: string, line: u64 }
+ns compiler {
+  deftype SourceLocation = { filename: string, line: u64 }
+}
 
 deftype Ordering = either Less, Equal, Greater
 
@@ -49,7 +51,7 @@ intern fn sizeOfStride[T](): u64
 intern fn alignOf[T](): u64
 
 ns compiler {
-  intern fn location(): CompilerSourceLoc
+  intern fn location(): SourceLocation
 }
 
 ability Bitwise {
