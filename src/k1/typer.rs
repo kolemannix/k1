@@ -3507,27 +3507,23 @@ impl TypedModule {
             unreachable!("Expected a blanket impl")
         };
         let target_base = target_ability.parent_ability_id().unwrap_or(target_ability_id);
-        // The 'self' type of the generic impl might contain type parameters that we need to solve.
-        // But what if it doesn't? Need examples
-        // impl[T: Add[Rhs = T, Output = T]] Add[Rhs = Point[T], Output = Point[T]] for Point[T] {
-        // impl[T] Add[Rhs = Point[T], Output = Point[T]] for Point[int] {
-        // Ability: Add[Point[T]], Self: Point[T]
-        // We have solved Self and all other params, so we know what Rhs and Self are
-        // Self := A, Rhs := B
-        // Add[Rhs = Point[T], Self = Point[T]] -> Rhs := A, Self := B
-        // Solve for T in Point[T] <-> A, Point[T] <-> B --> T := Solution
-        // If consistent and solved, 'run' the blanket impl with T := Solution, returning an
-        // ability impl handle
+
         let blanket_ability = self.get_ability(blanket_impl.ability_id);
         let blanket_base = blanket_ability.parent_ability_id().unwrap_or(blanket_impl.ability_id);
-
-        debug!("Trying blanket impl {}", self.name_of(blanket_ability.name));
 
         if blanket_base != target_base {
             debug!("Wrong blanket base {}", self.name_of(blanket_ability.name));
         }
 
         let blanket_arguments = blanket_ability.kind.arguments();
+
+        debug!(
+            "Trying blanket impl {} with blanket arguments {}, impl arguments {}",
+            self.name_of(blanket_ability.name),
+            self.pretty_print_named_types(blanket_arguments, ", "),
+            self.pretty_print_named_types(&blanket_impl.impl_arguments, ", "),
+        );
+
         if blanket_arguments.len() != target_ability_args.len() {
             debug!(
                 "Wrong arg count {} vs {}",
@@ -4300,8 +4296,8 @@ impl TypedModule {
         // FIXME: Consider alternatives for calling the block's makeError function
         //        in a less brittle way?
         let block_make_error_fn = self.get_ability_impl(block_try_impl.full_impl_id).functions[0];
-        eprintln!(
-            "TYPE OF make_error: {}",
+        debug!(
+            "type of make_error: {}",
             self.type_id_to_string(self.get_function(block_make_error_fn).type_id)
         );
 
@@ -6099,19 +6095,22 @@ impl TypedModule {
         span_for_error: SpanId,
     ) -> TyperResult<AbilityImplHandle> {
         self.find_ability_impl_for_type(type_id, ability_id, span_for_error).ok_or(errf!(
-                span_for_error,
-                "Missing ability '{}' implementation for '{}'. It implements the following abilities:\n{}",
-                self.name_of(self.get_ability(ability_id).name),
-                self.type_id_to_string(type_id),
-                &self
-                    .ability_impl_table
-                    .get(&type_id)
-                    .unwrap_or(&vec![])
-                    .iter()
-                    .map(|h| self.ability_signature_to_string(h.ability_id, &self.get_ability_impl(h.full_impl_id).impl_arguments))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-              ))
+            span_for_error,
+            "Missing ability '{}' for '{}'. It implements the following abilities:\n{}",
+            self.name_of(self.get_ability(ability_id).name),
+            self.type_id_to_string(type_id),
+            &self
+                .ability_impl_table
+                .get(&type_id)
+                .unwrap_or(&vec![])
+                .iter()
+                .map(|h| self.ability_signature_to_string(
+                    h.ability_id,
+                    &self.get_ability_impl(h.full_impl_id).impl_arguments
+                ))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ))
     }
 
     fn eval_binary_op(
@@ -6941,8 +6940,8 @@ impl TypedModule {
         if passed_len != ability_fn_signature.params.len() {
             return failf!(call_span, "Mismatching arg count when trying to resolve ability call to {} (this probably doesn't handle context params properly)", self.name_of(fn_call.name.name));
         }
-        // Future TODO: Make sure we handle context params correctly,
-        // skipping them if not passed explicitly, and utilizing them if passed explicitly
+        // Future TODO: Make sure we handle context params in ability functions correctly,
+        // Probably by: skipping them if not passed explicitly, and utilizing them if passed explicitly
         let mut solution_set = TypeSolutionSet {
             solutions: ({
                 let mut v = Vec::with_capacity(ability_params.len() + 1);
@@ -9025,41 +9024,6 @@ impl TypedModule {
             }
         }
 
-        // Typecheck 'main'
-        if namespace_id == self.get_root_namespace_id()
-            && parsed_function_name == get_ident!(self, "main")
-        {
-            match param_types.len() {
-                0 => Ok(()),
-                2 => {
-                    let count = param_types[0].type_id == U32_TYPE_ID;
-                    let values = param_types[1].type_id == POINTER_TYPE_ID;
-                    if !count {
-                        failf!(
-                            param_types[0].span,
-                            "First parameter must be {}",
-                            self.type_id_to_string(U32_TYPE_ID)
-                        )
-                    } else if !values {
-                        failf!(
-                            param_types[1].span,
-                            "Second parameter must be {}",
-                            self.type_id_to_string(POINTER_TYPE_ID)
-                        )
-                    } else {
-                        Ok(())
-                    }
-                }
-                n => failf!(
-                    param_types[0].span,
-                    "main must take exactly 0 or 2 parameters, got {}",
-                    n
-                ),
-            }
-        } else {
-            Ok(())
-        }?;
-
         let intrinsic_type = if parsed_function_linkage == Linkage::Intrinsic {
             let mut namespace_chain = self.namespaces.name_chain(namespace_id);
             let resolved = self
@@ -9081,6 +9045,56 @@ impl TypedModule {
         let return_type = match parsed_function_ret_type {
             None => UNIT_TYPE_ID,
             Some(type_expr) => self.eval_type_expr(type_expr, fn_scope_id)?,
+        };
+
+        // Typecheck 'main': It must take argc and argv of correct types, or nothing
+        // And it must return an integer, or an Unwrap[Inner = i32]
+        let is_main_fn = namespace_id == self.get_root_namespace_id()
+            && parsed_function_name == get_ident!(self, "main");
+        if is_main_fn {
+            match param_types.len() {
+                0 => {}
+                2 => {
+                    let count = param_types[0].type_id == U32_TYPE_ID;
+                    let values = param_types[1].type_id == POINTER_TYPE_ID;
+                    if !count {
+                        return failf!(
+                            param_types[0].span,
+                            "First parameter must be {}",
+                            self.type_id_to_string(U32_TYPE_ID)
+                        );
+                    } else if !values {
+                        return failf!(
+                            param_types[1].span,
+                            "Second parameter must be {}",
+                            self.type_id_to_string(POINTER_TYPE_ID)
+                        );
+                    }
+                }
+                n => {
+                    return failf!(
+                        param_types[0].span,
+                        "start must take exactly 0 or 2 parameters, got {}",
+                        n
+                    )
+                }
+            };
+            match return_type {
+                I64_TYPE_ID => {}
+                I32_TYPE_ID => {}
+                _other => {
+                    let result_impl = self.expect_ability_implementation(
+                        return_type,
+                        UNWRAP_ABILITY_ID,
+                        parsed_function_span,
+                    )?;
+                    let ok_type =
+                        self.get_ability_impl(result_impl.full_impl_id).impl_arguments[0].type_id;
+                    if let Err(msg) = self.check_types(I32_TYPE_ID, ok_type, fn_scope_id) {
+                        return failf!(parsed_function_span, "Incorrect result type; {}", msg);
+                    };
+                }
+            }
         };
 
         let kind = match ability_info.as_ref() {

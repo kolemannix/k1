@@ -10,6 +10,7 @@ New tagline? "C with typeclasses and tagged unions"
 - [ ] Library vs Binary, linker options, when do we 'link', in IR or as object files, ...
 - [ ] `inline` functions (like Scala3's)
 - [ ] Add array types: `Array[<type expr> x <int literal>]`
+- [ ] Bug: parameter names in function 'types': yes or no
 - [ ] Improve LLVM opt pipeline https://www.reddit.com/r/Compilers/comments/1hqmd7x/recommended_llvm_passes/
       https://llvm.org/docs/NewPassManager.html#just-tell-me-how-to-run-the-default-optimization-pipeline-with-the-new-pass-manager
 - [ ] More explicit companion ns via injecting `for` keyword `ns (for) type {`

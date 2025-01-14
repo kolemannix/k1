@@ -212,14 +212,13 @@ impl[T] Iterator[Item = T] for BufferIterator[T] {
     self.pos* <- self.pos + n
   }
   fn nth(self: Self*, n: u64): Item? {
-    self.advanceBy(n - 1);
+    self.advanceBy(n);
     self.next()
   }
 }
 
-impl[T] Iterable[Item = T, I = BufferIterator[T]] for List[T] {
+impl[T] Iterable[Item = T, I = BufferIterator[T]] for Buffer[T] {
   fn iterator(self: Self): I {
-    BufferIterator/fromBuffer(self.toBuffer())
+    BufferIterator/fromBuffer(self)
   }
 }
-

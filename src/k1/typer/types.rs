@@ -278,6 +278,8 @@ impl IntegerType {
 
 #[derive(Debug, Clone)]
 pub struct FnParamType {
+    // FIXME: Determine if param names are truly 'part' of the function type.
+    // For now, keeping them to fix some bugs
     pub name: Identifier,
     pub type_id: TypeId,
     pub is_context: bool,
@@ -487,6 +489,7 @@ impl std::hash::Hash for Type {
                 "fun".hash(state);
                 fun.return_type.hash(state);
                 for param in &fun.params {
+                    param.name.hash(state);
                     param.is_context.hash(state);
                     param.is_closure_env.hash(state);
                     param.type_id.hash(state);
