@@ -17,13 +17,13 @@ ns libc {
 }
 
 
-fn assert(context locn: CompilerSourceLoc)(value: bool): unit {
+fn assert(context locn: compiler/SourceLocation)(value: bool): unit {
   if not value {
     crash("ASSERT FAILED")
   };
 }
 
-fn crash(context locn: CompilerSourceLoc)(msg: string): never {
+fn crash(context locn: compiler/SourceLocation)(msg: string): never {
   let filename = locn.filename;
   let line = locn.line;
   let s = "\{msg} at \{filename}:\{line}\n";
@@ -68,7 +68,6 @@ fn printIt[T: Show](value: T): unit  {
 }
 
 fn print(s: string): unit {
-  let s = s.appendChar('\n');
   libc/write(1, s.buffer.data, s.len(), 0);
   ()
 }
@@ -120,7 +119,7 @@ ns files {
   }
 }
 
-fn assertMsg(context locn: CompilerSourceLoc)(msg: string, value: bool): unit {
+fn assertMsg(context locn: compiler/SourceLocation)(msg: string, value: bool): unit {
   if not value {
     crash("ASSERT FAILED: \{msg}")
   };

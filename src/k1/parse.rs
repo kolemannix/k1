@@ -3876,7 +3876,7 @@ impl Identifiers {
         "block_expr_val",
         "optelse_lhs",
         "list_literal",
-        "CompilerSourceLoc",
+        "SourceLocation",
         "__clos_env",
         "fn_ptr",
         "env_ptr",

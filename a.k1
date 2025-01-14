@@ -1,0 +1,20 @@
+fn parseMainArgs(argCount: u32, args: Pointer): Buffer[string] {
+  let mut i = 0: u32;
+  let buf = Buffer/fromRawParts[CString](argCount as u64, args);
+  let* strings = List/withCapacity[string](argCount as u64);
+  loop {
+    if i < argCount {
+      let arg = string/fromCString(buf.get(i as u64));
+      strings.push(arg);
+      i = i + 1;
+    } else break();
+  };
+  strings.toBuffer()
+}
+fn main(argCount: u32, args: Pointer): int {
+  let args = parseMainArgs(argCount, args);
+  for s in BufferIterator/fromBuffer(args) do {
+    println(s)
+  };
+  0
+}

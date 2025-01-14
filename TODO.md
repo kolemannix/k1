@@ -1,4 +1,120 @@
-# Project Completion Checklist
+New tagline? "C with typeclasses and tagged unions"
+
+- [ ] *Specializing functions on their provided closures to allow inlining and static dispatch*
+- [ ] Bug: technically I should require that the blanket impl params appear in the Self type expression
+- [ ] Typecheck 'main'
+- [ ] Dogfood: 'niched' integer abstraction (-1 as 'not found' but safely, vs using option and wasting space + adding more code)
+- [ ] boolean chains w/ binding ifs
+- [ ] Binding `while`
+- [ ] Private functions
+- [ ] Library vs Binary, linker options, when do we 'link', in IR or as object files, ...
+- [ ] `inline` functions (like Scala3's)
+- [ ] Add array types: `Array[<type expr> x <int literal>]`
+- [ ] Improve LLVM opt pipeline https://www.reddit.com/r/Compilers/comments/1hqmd7x/recommended_llvm_passes/
+      https://llvm.org/docs/NewPassManager.html#just-tell-me-how-to-run-the-default-optimization-pipeline-with-the-new-pass-manager
+- [ ] More explicit companion ns via injecting `for` keyword `ns (for) type {`
+- [ ] Stacktraces on crash
+- [ ] Rename ability. 'behavior' / 'provide'
+- [ ] Operator 'overloading' story. I think the story is just abilities. The question is do we move the syntax to the source: 
+      ability Equals { syntax(2, "==") fn }
+      This means that these would affect the parser. We'd have to add a new pass to find all the syntax definitions
+- [ ] Backend codegen cleanup
+-  [ ] avoid uses of aggregate *values* where we can: so routine uses of 'struct's and 'enum's
+-  [ ] Move allocas to entry block. "Doing this is actually quite easy as LLVM provides functions you can use to retrieve the entry block for a function and insert instructions into it."
+-  [ ] Upgrade to LLVM 17 (18?)
+- [ ] Matching on references
+  - [ ] Match to get reference to each struct field, for example, use * for a dereferencing match
+  - [ ] Match to get reference to enum payload
+- [x] Context location params are not being propagated
+- [x] Test and fix named arguments
+- [ ] 'never' needs to work in every expression position
+- [ ] accumulate test errors and support inline test comment assertions when a line should produce a compiler error.
+      - Probably one test for failing compilation and one passing one for each major language area
+- [ ] b"" strings that are of type Buffer[u8]
+- [ ] Introduce Warnings
+  - [ ] Unused var
+  - [ ] Unused type bound
+  - [ ] Disallow naked variable patterns in 'is' OR Disallow capital variables, require capital enum variants...
+      - `if self.slots.get(probe_index) is None {`
+- [ ] Add ranges in stdlib
+      `sealed abstract class Range(let start: Int, let end: Int, let step: Int)`
+- [ ] Make demo readme / site
+- [ ] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`
+- [ ] Define clear 'platform layer' (crash, alloc/free, other?). Then we could do an LLVM interp platform and a rust interpreter platform
+- [ ] Runtime type info story, typeOf, typeInfo, and 'any' type
+- [ ] Conditional compile directive
+- [ ] Mark types as trivially copyable or not
+^ The builtin array would be NOT copyable so that you don't accidentally alias the data ptr
+- [ ] Ability constraints on generics
+- [ ] Bug: ability impls kinda have to be provided in dependency order, since their constraints can depend on each other. I think I have to do a
+           'skip and progress' style of pass for them
+
+## Non-goals at least for now
+- Memory safety / solving the 'aliasing' problem, not because its unimportant but because I have other interests
+- Tuples. I don't think you need them if you have anonymous structs. The lack of names always makes them
+      easy to start using and very hard to maintain / read consumer code.
+      "In the beginning all you want is an anonymous tuple and in the end all you want are named fields"
+- Ability derivation (prefer a metaprogram solution)
+
+## Won't do
+- [ ] Replace 'unit' with an empty struct, encoded as `{}` at the type level and `{}` at the value level. This would remove a whole base type
+      This simplification comes at the cost of making empty struct quite special, so I think it's a sidegrade. Won't do
+- [ ] 'call' method syntax (Scala's 'apply' feature)
+
+## Maybe
+- [ ] 'join' types to form new enums/structs, statically, like Roc. `switch {strict|dynamic} ...`?
+- [ ] Require unsafe marker when unsafe stuff is used
+- [ ] Might be very cool to have builtin syntax for anything implementing a 'Monad' ability
+  - (Monad ability would require closures and generic abilities)
+- [ ] Require named fncall args by default; and allow anonymous w/ declaration like Jakt?
+- [ ] as! for fallible casting and as? for optional casting
+- [ ] Test handling of NaN and Infinity, other float edge cases
+- [ ] German/Umbra strings
+
+## Compiler
+- [ ] LLVM: avoid loading aggregate values directly
+- [x] Convert NamedType to a trait
+- [ ] Use smallvec
+- [ ] UTF8
+- [ ] Intern ParsedBlock and ParsedStatement
+
+## Error story
+- [x] As values, of course.
+- [x] A simple stdlib enum?
+- [x] A '?' operator for early return? We could do an ability for it!
+
+## Memory Management story
+- [ ] Figure out the pointer/reference story
+  - I want to do a minimal runtime with a user-visible heap, semi-auto memory management. Write the heap and main fn in C, call main from the 'runtime' main, which sets up a basic heap based on settings or something user-visible.
+  This will let us intern strings, etc. Kinda like the JVM, except its not
+  a VM, just a native runtime.
+  - If we introduce simple implicits for context passing, we can use this to pass heaps around
+  - Generational References combined w/ arena-style memory mgmt
+
+# Major fix
+- [x] Unmatched closing delim in namespace causes silent failure to parse rest of sources
+- [ ] Replace IdentifierId with global 'Symbol' where its a bug not to
+- [x] Parsing bug where first expr of block is namespaced with ::
+- [x] Parsing bug where `if rest.startsWith("one") .Some(1: u64)` parses as `if rest.startsWith("one").Some(1: u64)`
+- [x] ICE when assigning to struct member when struct is not a reference (self.module.types.get(field_access.base.get_type()).as_reference().is_some())
+- [ ] Require indirection for recursive types; and make them actually really work
+
+# Minor Fix (possible good bite-sized videos)
+- [x] Lexer cleanup > Am I crazy or is this just always tok_buf.len()?!?!?!
+- [ ] type suffixes on int literals 123u32, 4u8, etc
+- [ ] Inference improvements
+  - assert(sizeOf[Text]() == 16 + 32); rhs should infer to u64
+- [x] Precedence of dereference (and i guess unary ops in general) should be higher
+      Kinda fixed by removing all unary ops except 'not'
+
+# GUI checklist
+
+- [x] Get render loop working with access to module, ability to trigger compile, run
+- [ ] Render namespaces, use recursion over namespace for all functionality?
+- [ ] Search for a type?
+- [ ] One day allow updating or adding a single definition
+
+### 2024 
 
 - Fixing enums big time
   - [x] Rename Optional -> Opt
@@ -151,125 +267,24 @@
 - [x] Convert try to postfix: hello.try (hearkening to .await)
 - [x] ! operator should now just call Unwrap.unwrap()
 - [x] Bug: if a blanket impl fails to typecheck, we should not use it. Currently we ice trying to instantiate it 
-- [ ] Bug: technically I should require that the blanket impl params appear in the Self type expression
-- [ ] Bug: ability impls kinda have to be provided in order, since they can depend on each other
 - [x] Migrate `for` loops to use a core Iterator ability
-- [ ] Typecheck 'main'
-- [ ] `inline` functions (like Scala3's)
-- [ ] Improve LLVM opt pipeline https://www.reddit.com/r/Compilers/comments/1hqmd7x/recommended_llvm_passes/
-      https://llvm.org/docs/NewPassManager.html#just-tell-me-how-to-run-the-default-optimization-pipeline-with-the-new-pass-manager
-- [ ] More explicit companion ns via injecting `for` keyword `ns (for) type {`
-- [ ] BTs via Runtime_Support_Crash_Handler?
 - [x] Namespace stuff
   - [x] Imports via `use`
   - [x] Change keyword to `ns`
   - [x] `namespace <ident>;` to namespace whole file
   - [x] Allow namespace extension via simple multiple blocks of same name in same scope
-- [ ] 'call' method syntax (Scala's 'apply' feature)
-- [ ] Rename ability. 'behavior' / 'provide'
-- [ ] Operator 'overloading' story, +other special function names that work like ==?), make == less special
-- [ ] LLVM cleanup
--  [ ] avoid uses of aggregate *values* where we can: so routine uses of 'struct's and 'enum's
--  [ ] Move allocas to entry block. "Doing this is actually quite easy as LLVM provides functions you can use to retrieve the entry block for a function and insert instructions into it."
-- [ ] Replace 'unit' with an empty struct, encoded as `{}` at the type level and `{}` at the value level. This would remove a whole base type
 - [x] Re-write signature specialization to be simpler.
-- [ ] Re-write body specialization to not re-typecheck but instead transform the typed tree
-- [ ] Matching on references
-  - [ ] Match to get reference to each struct field, for example, use * for a dereferencing match
-  - [ ] Match to get reference to enum payload
-- [ ] Context location params are not being propagated
-- [ ] Test and fix named arguments
 - [x] return from while
 - [x] break from while
-- [ ] 'never' needs to work in every expression position
 - [x] Move tests into fewer files
-- [ ] accumulate test errors and support inline test comment assertions when a line should produce a compiler error.
-      - Probably one test for failing compilation and one passing one for each major language area
-- [ ] b"" strings that are of type Buffer[u8]
 - [x] Finish hashmap implementation
-- [ ] Introduce Warnings
-  - [ ] Unused var
-  - [ ] Unused type bound
-  - [ ] Disallow naked variable patterns in 'is' OR Disallow capital variables, require capital enum variants...
-      - `if self.slots.get(probe_index) is None {`
 - [x] Handle escaped chars in string literals
 - [x] Friendliness pass
   - [x] Replace 'enum' keyword with 'either', ensure the ambiguous cases have good errors (inside struct, inside param list)
   - [x] 'when' keyword is bad; `switch` maybe or `case`, or resolve the ambiguity with `when <x> is {}`
   - [x] Replace `type` with `deftype` - It would be really nice _not_ to take the keyword 'type'. Just a thought from using Rust/Scala
 - [x] Remove tag literals, make enum tags per-enum
-- [ ] Add ranges in stdlib
-      `sealed abstract class Range(let start: Int, let end: Int, let step: Int)`
-- [ ] Make demo readme / site
-- [ ] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`
-- [ ] Define clear 'platform layer' (crash, alloc/free, other?). Then we could do an LLVM interp platform and a rust interpreter platform
-- [ ] Runtime type info story, typeOf, typeInfo, and 'any' type
 - [x] Ability-based iteration
-- [ ] Conditional compile directive
-- [ ] Mark types as trivially copyable or not
-^ The builtin array would be NOT copyable so that you don't accidentally alias the data ptr
-- [ ] Ability constraints on generics
-
-## Non-goals at least for now
-- [ ] Memory safety / solving the 'aliasing' problem, not because its unimportant but because I have other interests
-- [ ] Tuples. I don't think you need them if you have anonymous structs. The lack of names always makes them
-      easy to start using and very hard to maintain / read consumer code.
-      "In the beginning all you want is an anonymous tuple and in the end all you want are named fields"
-- [ ] Ability derivation (prefer a metaprogram solution)
-
-## Maybe
-- [ ] 'join' types to form new enums/structs, statically, like Roc
-- [ ] Require unsafe marker when unsafe stuff is used
-- [ ] Might be very cool to have builtin syntax for anything implementing a 'Monad' ability
-  - (Monad ability would require closures and generic abilities)
-- [ ] Require named fncall args by default; and allow anonymous w/ declaration like Jakt?
-- [ ] as! for fallible casting and as? for optional casting
-- [ ] Test handling of NaN and Infinity, other float edge cases
-- [ ] German/Umbra strings
-
-## Compiler
-- [ ] LLVM: avoid loading aggregate values directly
-- [ ] Convert NamedType to a trait
-- [ ] Use smallvec
-- [ ] UTF8
-- [ ] Intern ParsedBlock and ParsedStatement
-
-## Error story
-- [ ] As values, of course.
-- [ ] A simple stdlib enum?
-- [ ] A '?' operator for early return? We could do an ability for it!
-
-## Memory Management story
-- [ ] Figure out the pointer/reference story
-  - I want to do a minimal runtime with a user-visible heap, semi-auto memory management. Write the heap and main fn in C, call main from the 'runtime' main, which sets up a basic heap based on settings or something user-visible.
-  This will let us intern strings, etc. Kinda like the JVM, except its not
-  a VM, just a native runtime.
-  - If we introduce simple implicits for context passing, we can use this to pass heaps around
-  - Generational References combined w/ arena-style memory mgmt
-
-# Major fix
-- [ ] Unmatched closing delim in namespace causes silent failure to parse rest of sources
-- [ ] Replace IdentifierId with global 'Symbol' where its a bug not to
-- [x] Parsing bug where first expr of block is namespaced with ::
-- [x] Parsing bug where `if rest.startsWith("one") .Some(1: u64)` parses as `if rest.startsWith("one").Some(1: u64)`
-- [x] ICE when assigning to struct member when struct is not a reference (self.module.types.get(field_access.base.get_type()).as_reference().is_some())
-- [ ] Require indirection for recursive types; and make them actually really work
-
-# Minor Fix (possible good bite-sized videos)
-- [x] Lexer cleanup > Am I crazy or is this just always tok_buf.len()?!?!?!
-- [ ] type suffixes on int literals 123u32, 4u8, etc
-- [ ] Inference improvements
-  - assert(sizeOf[Text]() == 16 + 32); rhs should infer to u64
-- [x] Precedence of dereference (and i guess unary ops in general) should be higher
-      Kinda fixed by removing all unary ops except 'not'
-
-# GUI checklist
-
-- [x] Get render loop working with access to module, ability to trigger compile, run
-- [ ] Render namespaces, use recursion over namespace for all functionality?
-- [ ] Search for a type?
-- [ ] One day allow updating or adding a single definition
-
 
 # Old todo list
 
@@ -389,8 +404,6 @@
 
 # Hacks to fix
 
-- [ ] main entrypoint properly. Typing of main? How to get main args?
-- [ ] Replace vectors with smallvec where appropriate
 - [x] Fix line comments
 - [x] Maybe eventually actually free some memory? lol
 - [x] Rename IR to typed-ast, since it's a tree not instruction set. TAST?

@@ -1370,6 +1370,16 @@ impl Namespaces {
             .map(|(index, namespace)| (NamespaceId(index as u32), namespace))
     }
 
+    pub fn find_child_by_name(
+        &self,
+        parent_id: NamespaceId,
+        name: Identifier,
+    ) -> Option<(NamespaceId, &Namespace)> {
+        self.iter().find(|(_id, ns)| {
+            ns.parent_id.is_some_and(|parent| parent == parent_id) && ns.name == name
+        })
+    }
+
     pub fn name_chain(&self, id: NamespaceId) -> VecDeque<Identifier> {
         let mut chain = VecDeque::with_capacity(8);
         let mut id = id;
@@ -5423,9 +5433,9 @@ impl TypedModule {
                                 }
                                 if exp_binding.type_id != this_binding.type_id {
                                     return failf!(
-                                        this_binding.span, 
+                                        this_binding.span,
                                         "Patterns in a multiple pattern arm must have the exact same bindings; but the type differs for {}: {} vs {}",
-                                        self.name_of(exp_binding.name), 
+                                        self.name_of(exp_binding.name),
                                         self.type_id_to_string(exp_binding.type_id),
                                         self.type_id_to_string(this_binding.type_id)
                                     );
@@ -5480,43 +5490,42 @@ impl TypedModule {
             }
         }
 
-
-            // Exhaustiveness Checking
-            if !partial {
-                let trial_constructors: Vec<PatternConstructor> =
-                    self.generate_constructors_for_type(target_expr.type_id, target_expr.span);
-                let mut trial_alives: Vec<bool> = vec![true; trial_constructors.len()];
-                let mut pattern_kill_counts: Vec<usize> = vec![0; all_patterns.len()];
-                'trial: for (trial_index, trial_expr) in trial_constructors.iter().enumerate() {
-                    '_pattern: for (index, pattern) in all_patterns.iter().enumerate() {
-                        if TypedModule::pattern_matches(pattern, trial_expr) {
-                            pattern_kill_counts[index] += 1;
-                            trial_alives[trial_index] = false;
-                            continue 'trial;
-                        }
-                    }
-                }
-
-                if let Some(alive_index) = trial_alives.iter().position(|p| *p) {
-                    let pattern = &trial_constructors[alive_index];
-                    return failf!(
-                        target_expr.span,
-                        "Unhandled pattern: {}",
-                        self.pattern_ctor_to_string(pattern)
-                    );
-                }
-
-                if let Some(useless_index) = pattern_kill_counts.iter().position(|p| *p == 0) {
-                    let pattern = &typed_cases[useless_index].pattern;
-                    if !pattern.is_innumerable_literal() {
-                        return failf!(
-                            pattern.span_id(),
-                            "Useless pattern: {}",
-                            self.pattern_to_string(pattern)
-                        );
+        // Exhaustiveness Checking
+        if !partial {
+            let trial_constructors: Vec<PatternConstructor> =
+                self.generate_constructors_for_type(target_expr.type_id, target_expr.span);
+            let mut trial_alives: Vec<bool> = vec![true; trial_constructors.len()];
+            let mut pattern_kill_counts: Vec<usize> = vec![0; all_patterns.len()];
+            'trial: for (trial_index, trial_expr) in trial_constructors.iter().enumerate() {
+                '_pattern: for (index, pattern) in all_patterns.iter().enumerate() {
+                    if TypedModule::pattern_matches(pattern, trial_expr) {
+                        pattern_kill_counts[index] += 1;
+                        trial_alives[trial_index] = false;
+                        continue 'trial;
                     }
                 }
             }
+
+            if let Some(alive_index) = trial_alives.iter().position(|p| *p) {
+                let pattern = &trial_constructors[alive_index];
+                return failf!(
+                    target_expr.span,
+                    "Unhandled pattern: {}",
+                    self.pattern_ctor_to_string(pattern)
+                );
+            }
+
+            if let Some(useless_index) = pattern_kill_counts.iter().position(|p| *p == 0) {
+                let pattern = &typed_cases[useless_index].pattern;
+                if !pattern.is_innumerable_literal() {
+                    return failf!(
+                        pattern.span_id(),
+                        "Useless pattern: {}",
+                        self.pattern_to_string(pattern)
+                    );
+                }
+            }
+        }
 
         Ok(typed_cases)
     }
@@ -5834,13 +5843,37 @@ impl TypedModule {
     ) -> TyperResult<TypedExpr> {
         let binding_ident = for_expr.binding.unwrap_or(get_ident!(self, "it"));
         let iterable_expr = self.eval_expr(for_expr.iterable_expr, scope_id, None)?;
-        let iteree_type = iterable_expr.get_type();
+        let iterable_type = iterable_expr.get_type();
         let iterable_span = iterable_expr.get_span();
         let body_span = for_expr.body_block.span;
 
-        let iter_impl =
-            self.expect_ability_implementation(iteree_type, ITERABLE_ABILITY_ID, iterable_span)?;
-        let item_type = self.get_ability_impl(iter_impl.full_impl_id).impl_arguments[0].type_id;
+        let (target_is_iterator, item_type) = match self.expect_ability_implementation(
+            iterable_type,
+            ITERABLE_ABILITY_ID,
+            iterable_span,
+        ) {
+            Err(_not_iterable) => {
+                match self.expect_ability_implementation(
+                    iterable_type,
+                    ITERATOR_ABILITY_ID,
+                    iterable_span,
+                ) {
+                    Err(_not_iterator) => {
+                        return failf!(
+                            iterable_span,
+                            "`for` loop target must be Iterable or an Iterator"
+                        )
+                    }
+                    Ok(iterator_impl) => (
+                        true,
+                        self.get_ability_impl(iterator_impl.full_impl_id).impl_arguments[0].type_id,
+                    ),
+                }
+            }
+            Ok(iterable_impl) => {
+                (false, self.get_ability_impl(iterable_impl.full_impl_id).impl_arguments[0].type_id)
+            }
+        };
 
         let is_do_block = for_expr.expr_type == ForExprType::Do;
 
@@ -5861,16 +5894,20 @@ impl TypedModule {
             false,
             outer_for_expr_scope,
         );
-        let get_iterator_call = self.synth_typed_function_call(
-            qident!(self, body_span, ["Iterable"], "iterator"),
-            vec![],
-            vec![iterable_expr],
-            outer_for_expr_scope,
-            None,
-        )?;
+        let iterator_initializer = if target_is_iterator {
+            iterable_expr
+        } else {
+            self.synth_typed_function_call(
+                qident!(self, body_span, ["Iterable"], "iterator"),
+                vec![],
+                vec![iterable_expr],
+                outer_for_expr_scope,
+                None,
+            )?
+        };
         let iterator_variable = self.synth_variable_defn(
             get_ident!(self, "iter"),
-            get_iterator_call,
+            iterator_initializer,
             false,
             false,
             true, //is_referencing
@@ -6063,19 +6100,18 @@ impl TypedModule {
     ) -> TyperResult<AbilityImplHandle> {
         self.find_ability_impl_for_type(type_id, ability_id, span_for_error).ok_or(errf!(
                 span_for_error,
-                    "Missing ability '{}' implementation for '{}'. It implements the following abilities:\n{}",
-                    self.name_of(self.get_ability(ability_id).name),
-                    self.type_id_to_string(type_id),
-        &self
-            .ability_impl_table
-            .get(&type_id)
-            .unwrap_or(&vec![])
-            .iter()
-            .map(|h| self.ability_signature_to_string(h.ability_id, &self.get_ability_impl(h.full_impl_id).impl_arguments))
-            .collect::<Vec<_>>()
-            .join("\n")
-                    )
-            )
+                "Missing ability '{}' implementation for '{}'. It implements the following abilities:\n{}",
+                self.name_of(self.get_ability(ability_id).name),
+                self.type_id_to_string(type_id),
+                &self
+                    .ability_impl_table
+                    .get(&type_id)
+                    .unwrap_or(&vec![])
+                    .iter()
+                    .map(|h| self.ability_signature_to_string(h.ability_id, &self.get_ability_impl(h.full_impl_id).impl_arguments))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+              ))
     }
 
     fn eval_binary_op(
@@ -6433,8 +6469,14 @@ impl TypedModule {
             let wildcard_pattern_id =
                 self.ast.patterns.add_pattern(parse::ParsedPattern::Wildcard(if_expr.span));
             let cases = vec![
-                parse::ParsedMatchCase { patterns: smallvec![cond_pattern_id], expression: if_expr.cons },
-                parse::ParsedMatchCase { patterns: smallvec![wildcard_pattern_id], expression: alternate_expr },
+                parse::ParsedMatchCase {
+                    patterns: smallvec![cond_pattern_id],
+                    expression: if_expr.cons,
+                },
+                parse::ParsedMatchCase {
+                    patterns: smallvec![wildcard_pattern_id],
+                    expression: alternate_expr,
+                },
             ];
             let match_expr = parse::ParsedMatchExpression {
                 target_expression: cond_expr_id,
@@ -6597,6 +6639,8 @@ impl TypedModule {
                         Ok(Either::Right(Callee::make_static(function_id)))
                     }
                 } else {
+                    // Function lookup failed, now we deal with lower priority 'callable' things
+                    // Such as closure objects or function pointers
                     let fn_not_found = || {
                         failf!(
                             call_span,
@@ -7268,6 +7312,7 @@ impl TypedModule {
         let fn_name = fn_call.name.name;
         let span = fn_call.span;
         let explicit_context_args = !fn_call.explicit_context_args.is_empty();
+        let named = fn_call.args.first().is_some_and(|arg| arg.name.is_some());
         let mut final_args: Vec<(MaybeTypedExpr, &FnParamType)> = Vec::new();
         if !explicit_context_args {
             for context_param in params.iter().filter(|p| p.is_context) {
@@ -7288,8 +7333,17 @@ impl TypedModule {
                         .types
                         .get_type_defn_info(context_param.type_id)
                         .is_some_and(|defn_info| {
-                            defn_info.name == get_ident!(self, "CompilerSourceLoc")
-                                && defn_info.scope == self.scopes.get_root_scope_id()
+                            defn_info.name == get_ident!(self, "SourceLocation")
+                                && defn_info.scope
+                                    == self
+                                        .namespaces
+                                        .find_child_by_name(
+                                            self.get_root_namespace_id(),
+                                            get_ident!(self, "compiler"),
+                                        )
+                                        .unwrap()
+                                        .1
+                                        .scope_id
                         });
                     if is_source_loc {
                         let expr = self.synth_source_location(span);
@@ -7345,15 +7399,32 @@ impl TypedModule {
             }
         } else {
             for (param_index, fn_param) in expected_literal_params.enumerate() {
-                let matching_arg_by_name =
-                    actual_passed_args.clone().find(|arg| arg.name == Some(fn_param.name));
-                let matching_arg =
-                    matching_arg_by_name.or(actual_passed_args.clone().nth(param_index));
-                let Some(param) = matching_arg else {
+                let matching_argument = if named {
+                    let Some(name_match) =
+                        actual_passed_args.clone().find(|arg| arg.name == Some(fn_param.name))
+                    else {
+                        return failf!(
+                            fn_call.span,
+                            "Missing named argument for parameter {}",
+                            self.name_of(fn_param.name)
+                        );
+                    };
+                    if let Some(dupe) = final_args
+                        .iter()
+                        .find(|(_arg, param)| param.name == name_match.name.unwrap())
+                    {
+                        let span = self.ast.expressions.get_span(name_match.value);
+                        return failf!(span, "Duplicate named argument: {}", dupe.1.name);
+                    };
+                    Some(name_match)
+                } else {
+                    actual_passed_args.clone().nth(param_index)
+                };
+                let Some(param) = matching_argument else {
                     return failf!(
                         span,
                         "Missing argument to {}: {}",
-                        self.ast.identifiers.get_name(fn_name).blue(),
+                        self.name_of(fn_name).blue(),
                         self.name_of(fn_param.name).red()
                     );
                 };
@@ -7365,7 +7436,7 @@ impl TypedModule {
 
     fn check_call_arguments(
         &mut self,
-        call_name: Identifier,
+        _call_name: Identifier,
         aligned_args: Vec<(TypedExpr, &FnParamType)>,
         calling_scope: ScopeId,
     ) -> TyperResult<Vec<TypedExpr>> {
@@ -7374,9 +7445,8 @@ impl TypedModule {
             if let Err(e) = self.check_types(param.type_id, expr.get_type(), calling_scope) {
                 return failf!(
                     expr.get_span(),
-                    "Invalid type passed for parameter {} to function {}: {}",
+                    "Invalid type for parameter {}: {}",
                     self.name_of(param.name),
-                    self.name_of(call_name),
                     e
                 );
             };
@@ -8954,6 +9024,41 @@ impl TypedModule {
                 self.scopes.add_variable(fn_scope_id, fn_param.name, variable_id)
             }
         }
+
+        // Typecheck 'main'
+        if namespace_id == self.get_root_namespace_id()
+            && parsed_function_name == get_ident!(self, "main")
+        {
+            match param_types.len() {
+                0 => Ok(()),
+                2 => {
+                    let count = param_types[0].type_id == U32_TYPE_ID;
+                    let values = param_types[1].type_id == POINTER_TYPE_ID;
+                    if !count {
+                        failf!(
+                            param_types[0].span,
+                            "First parameter must be {}",
+                            self.type_id_to_string(U32_TYPE_ID)
+                        )
+                    } else if !values {
+                        failf!(
+                            param_types[1].span,
+                            "Second parameter must be {}",
+                            self.type_id_to_string(POINTER_TYPE_ID)
+                        )
+                    } else {
+                        Ok(())
+                    }
+                }
+                n => failf!(
+                    param_types[0].span,
+                    "main must take exactly 0 or 2 parameters, got {}",
+                    n
+                ),
+            }
+        } else {
+            Ok(())
+        }?;
 
         let intrinsic_type = if parsed_function_linkage == Linkage::Intrinsic {
             let mut namespace_chain = self.namespaces.name_chain(namespace_id);
