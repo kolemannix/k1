@@ -184,6 +184,7 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
         "string_builder.k1",
         "bitwise.k1",
         "allocator.k1",
+        "range.k1",
     ];
 
     if use_std {
