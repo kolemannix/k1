@@ -1,0 +1,102 @@
+// The intuitive representation, a List[SquareState]
+deftype SquareState = either
+  Blank, 
+  WPawn, WKnight, WBishop, WRook, WQueen, WKing,
+  BPawn, BKnight, BBishop, BRook, BQueen, BKing
+
+ns SquareState {
+  fn charSymbol(self: SquareState): char {
+    switch self {
+       .Blank  -> '-',
+       .WPawn   -> 'P',
+       .WKnight -> 'N',
+       .WBishop -> 'B',
+       .WRook   -> 'R',
+       .WQueen  -> 'Q',
+       .WKing   -> 'K',
+       .BPawn   -> 'p',
+       .BKnight -> 'n',
+       .BBishop -> 'b',
+       .BRook   -> 'r',
+       .BQueen  -> 'q',
+       .BKing   -> 'k',
+    };
+  }
+}
+
+deftype Square = { rank: u8, file: u8 }
+
+ns Square {
+  fn fromRankFile(x: u8, y: u8): Square {
+    { rank: y, file: x }
+  }
+  fn fromName(s: string): Square {
+    let file: u8 = switch s.first().! {
+       'a' or 'A' -> 0,
+       'b' or 'B' -> 1,
+       'c' or 'C' -> 2,
+       'd' or 'D' -> 3,
+       'e' or 'E' -> 4,
+       'f' or 'F' -> 5,
+       'g' or 'G' -> 6,
+       'h' or 'H' -> 7,
+       _ -> crash("bad tile name: \{s}")
+    };
+    let rank = (s.get(1).toAsciiDigit().! - 1);
+    fromRankFile(file, rank)
+  }
+}
+
+impl Show for Square {
+  fn show(self: Square): string {
+    let file = switch self.file {
+      0 -> 'a',
+      1 -> 'b',
+      2 -> 'c',
+      3 -> 'd',
+      4 -> 'e',
+      5 -> 'f',
+      6 -> 'g',
+      7 -> 'h',
+      _ -> crash("Bad file")
+    };
+    let rank = self.rank + 1;
+    "\{file}\{rank}"
+  }
+
+}
+
+
+fn dump(board: List[SquareState]): unit {
+  for square in board do {
+    let symbol = square.charSymbol();
+    printIt(symbol);
+    if itIndex % 8 == 7 {
+      println("");
+    };
+  }
+}
+
+fn startPos(): List[SquareState] {
+  let board = List/filled[SquareState](64, .Blank);
+  board.set(0, .WRook);
+  board.set(1, .WKnight);
+  board.set(2, .WBishop);
+  board.set(3, .WQueen);
+  board.set(4, .WKing);
+  board.set(5, .WBishop);
+  board.set(6, .WKnight);
+  board.set(7, .WRook);
+  { let mut i = 0: u64; while i < 8 { board.set(i + 8, .WPawn) } };
+
+  { let mut i = 0: u64; while i < 8 { board.set(i + 48, .BPawn) } };
+  board.set(56, .BRook);
+  board.set(57, .BKnight);
+  board.set(58, .BBishop);
+  board.set(59, .BQueen);
+  board.set(60, .BKing);
+  board.set(61, .BBishop);
+  board.set(62, .BKnight);
+  board.set(63, .BRook);
+  board
+}
