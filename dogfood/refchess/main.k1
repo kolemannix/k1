@@ -46,24 +46,79 @@ ns GameState {
 
 deftype Move = { from: u8, to: u8 }
 
+fn cmdInfo(): string {
+  // Here you would register any options the engine supports
+  // println("option name Hash type spin default 16 min 1 max 32768");
+  // println("option name Skill Level type spin default 20 min 0 max 20");
+  [
+    "id name refchess alpha",
+    "id author Koleman Nix",
+    "uciok"
+  ].join("\n")
+}
+
+fn cmdGo(go: string): string {
+  "bestmove e2e4"
+  // Or if pondering:
+  // "bestmove e2e4 ponder e7e5";
+}
+
+fn cmdIsReady(): string {
+  "readyok"
+}
+
+fn cmdNewGame(): unit {
+  ()
+}
+
+
+fn handleCommand(context eng: Engine)(command: uci/Command): string? {
+  switch command {
+    .Uci -> some(cmdInfo()),
+    .Go(s) -> some(cmdGo(s)),
+    .IsReady -> some(cmdIsReady()),
+    .NewGame -> { cmdNewGame(); none() },
+    .Quit -> {
+      eprintln("Quitting");
+      sys/exit(0)
+    },
+    .Position(s) -> {
+      debugLog("Setting position: \{s}");
+      none()
+    }
+
+  }
+}
+
+deftype Engine = {}
+ns Engine {
+  fn inDebugMode(self: Engine): bool { true }
+}
+
+fn debugLog(context eng: Engine)(s: string): unit {
+  if eng.inDebugMode() {
+    println("[debug] \{s}");
+  }
+}
+
 fn main(): int {
-  println("Hello, Chess!");
-  let board: List[SquareState] = startPos();
-  dump(board);
-
-  let move1 = {
-    from: Square/fromName("e2"),
-    to: Square/fromName("e4")
+  // Initialize stdin reading
+  let context eng: Engine = {};
+  loop {
+    switch sys/readLine(2048) {
+      .Err(msg) -> { crash("Failed to readLine: \{msg}") },
+      .Ok(cmd) -> {
+        switch uci/parseCommand(cmd) {
+          .Err(msg) -> eprintln("[debug] Ignoring unknown command: \{msg}"),
+          .Ok(cmd) -> {
+            let response = handleCommand(cmd);
+            // If a command produces output, it goes to stdout with a newline added
+            if response is .Some(r) { println(r) };
+          }
+        }
+      }
+    }
   };
-  printIt(move1.from);
-  println("");
-  printIt(move1.to);
-
-  //board.set(move1.to as u64, board.get(move1.from as u64));
-  //board.set(move1.from as u64, .Blank);
-
-  //println("");
-  //dump(board);
-
+  
   0
 }

@@ -1,30 +1,30 @@
 // Copyright (c) Koleman Nix 2025
 // Partial credits to Claude
+ns uci;
 
-fn handleCommand(cmd: string): bool {
+deftype Command = either
+  Uci,
+  IsReady,
+  NewGame,
+  Quit,
+  Position(string),
+  Go(string)
+
+fn parseCommand(cmd: string): Result[Command, string] {
   println("[debug] received: \{cmd}");
   
   switch cmd {
     // Initial handshake: GUI sends "uci", engine responds with id and options
-    "uci" -> {
-      println("id name MyEngine 0.1");
-      println("id author Me");
-      
-      // Here you would register any options the engine supports
-      // println("option name Hash type spin default 16 min 1 max 32768");
-      // println("option name Skill Level type spin default 20 min 0 max 20");
-      
-      println("uciok");
-    },
+    "uci" -> .Ok(.Uci),
 
     // GUI checking if engine is initialized and ready
-    "isready" -> println("readyok"),
+    "isready" -> .Ok(.IsReady),
 
     // Request to start a new game
-    "ucinewgame" -> (),
+    "ucinewgame" -> .Ok(.NewGame),
 
     // GUI wants to quit
-    "quit" -> return(false),
+    "quit" -> .Ok(.Quit),
     
     // Commands that require more complex parsing
     _ -> {
@@ -34,22 +34,24 @@ fn handleCommand(cmd: string): bool {
         //   "position startpos moves e2e4 e7e5" - start pos then apply moves
         //   "position fen [fen string]" - start from FEN position
         //   "position fen [fen string] moves e2e4" - FEN position then moves
+
         
         // Example minimal parsing:
-        if cmd.startsWith("position startpos") {
-          println("[debug] setting up start position");
-          
-          // Check if there are moves to apply
-          if cmd.startsWith("position startpos moves ") {
-            let movesStr = cmd.substring(24, cmd.len());
-            println("[debug] applying moves: \{movesStr}");
-          }
-          
-        } else if cmd.startsWith("position fen ") {
-          println("[debug] setting up FEN position");
-          // Would parse FEN and any moves here
-        }
+        // if cmd.startsWith("position startpos") {
+        //   println("[debug] setting up start position");
+        //   
+        //   // Check if there are moves to apply
+        //   if cmd.startsWith("position startpos moves ") {
+        //     let movesStr = cmd.substring(24, cmd.len());
+        //     println("[debug] applying moves: \{movesStr}");
+        //   }
+        //   
+        // } else if cmd.startsWith("position fen ") {
+        //   println("[debug] setting up FEN position");
+        //   // Would parse FEN and any moves here
+        // }
 
+        .Ok(.Position(cmd.substring(8, cmd.len())))
       } else if cmd.startsWith("go ") {
         // "go" command tells engine to start calculating. Examples:
         //   "go infinite" - search until "stop" command
@@ -58,46 +60,8 @@ fn handleCommand(cmd: string): bool {
         //   "go nodes 10000" - search fixed number of nodes
         //   "go movetime 1000" - search for exactly 1 second
         
-        println("[debug] starting calculation");
-        
-        // After search, engine must output:
-        println("bestmove e2e4");
-        // Or if pondering:
-        // println("bestmove e2e4 ponder e7e5");
-      }
+        .Ok(.Go(cmd.substring(2, cmd.len())))
+      } else .Err("Unsupported command: \{cmd}")
     }
-  };
-  
-  true
+  }
 }
-
-fn main(): int {
-  // Initialize stdin reading
-  loop {
-    let line = readLine();
-    if line.isEmpty() continue();
-    
-    // Handle command and check if we should continue
-    if not handleCommand(line) break();
-  };
-  
-  0
-}
-
-// Helper to read a line from stdin
-fn readLine(): string {
-  let* chars = List/empty[char]();
-  let mut reading = true;
-  while reading {
-    let char = getChar();
-    if char == '\n' {
-      reading = false;
-    } else {
-      chars.push(char); 
-    }
-  };
-  string/wrapList(chars)
-}
-
-// Read a single char from stdin
-extern(getchar) fn getChar(): char

@@ -1075,7 +1075,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     .all(|size| size == enum_size.size_bits);
                 if !same_size_check {
                     panic!(
-                        "Enum codegen sizes were wrong. Base: {:?}, Variants: {:?}",
+                        "Enum codegen sizes were wrong for type: {}. Base: {:?}, Variants: {:?}",
+                        self.module.type_id_to_string(type_id),
                         &base_type,
                         variant_structs.iter().map(|v| v.struct_type).collect::<Vec<_>>()
                     );

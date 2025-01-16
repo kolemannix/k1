@@ -99,27 +99,24 @@ ns sys {
     strings.toBuffer()
   }
 
-  fn readLine(): string {
-    let bufsize = 1024;
-    let buffer = libc/malloc(bufsize) as Pointer;
-    let bytesRead = libc/read(0, buffer, bufsize - 1, 0);
+  fn readLine(maxLengthBytes: u64): Result[string, string] {
+    let* buffer = Buffer/_allocate[byte](maxLengthBytes);
+    let bytesRead = libc/read(0, buffer.data, buffer.len, 0);
     
     if bytesRead < 0 {
-      libc/free(buffer);
-      return("");
+      return(.Err("Failed to read line"));
     };
-    
-    // Null-terminate the string
-    buffer[bytesRead] = 0 as u8;
+
+    let length = bytesRead as u64 - 1;
     
     // Remove trailing newline if present
-    if bytesRead > 0 and buffer[bytesRead - 1] == '\n' {
-      buffer[bytesRead - 1] = 0 as u8;
+    if bytesRead > 0 and buffer.get(length) == ('\n' as u8) {
+      buffer.set(length, 0);
+      buffer.len* <- length;
     };
     
-    let result = string/wrapBuffer(Buffer/fromRawParts(bytesRead as u64, buffer));
-    libc/free(buffer);
-    result
+    let result = string/wrapBytes(buffer);
+    .Ok(result)
   }
 
 }

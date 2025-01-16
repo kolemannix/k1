@@ -309,13 +309,23 @@ impl TypedPattern {
             TypedPattern::Wildcard(_) => (),
         }
     }
-    pub fn is_innumerable_literal(&self) -> bool {
+    pub fn has_innumerable_literal(&self) -> bool {
         match self {
             TypedPattern::LiteralChar(_, _span) => true,
             TypedPattern::LiteralInteger(_, _span) => true,
             TypedPattern::LiteralFloat(_, _span) => true,
             TypedPattern::LiteralString(_, _span) => true,
-            _ => false,
+            TypedPattern::LiteralUnit(_span_id) => false,
+            TypedPattern::LiteralBool(_, _span_id) => false,
+            TypedPattern::Variable(_variable_pattern) => false,
+            TypedPattern::Enum(typed_enum_pattern) => {
+                typed_enum_pattern.payload.as_ref().is_some_and(|p| p.has_innumerable_literal())
+            }
+            TypedPattern::Struct(typed_struct_pattern) => typed_struct_pattern
+                .fields
+                .iter()
+                .any(|field_pattern| field_pattern.pattern.has_innumerable_literal()),
+            TypedPattern::Wildcard(_span_id) => false,
         }
     }
     pub fn span_id(&self) -> SpanId {
@@ -3802,6 +3812,10 @@ impl TypedModule {
         span: SpanId,
         expected_type_id: Option<TypeId>,
     ) -> TyperResult<TypedIntegerValue> {
+        eprintln!(
+            "eval_integer_value hint {}",
+            expected_type_id.map(|t| self.type_id_to_string(t)).unwrap_or("none".to_string())
+        );
         let expected_int_type = match expected_type_id {
             None => IntegerType::I64,
             Some(U8_TYPE_ID) => IntegerType::U8,
@@ -4486,8 +4500,9 @@ impl TypedModule {
         if is_debug {
             let expr_span = self.ast.expressions.get_span(expr_id);
             eprintln!(
-                "DEBUG EXPR\n{}\nRESULT\n{}",
+                "DEBUG EXPR\n{} hint {}\nRESULT\n{}",
                 self.ast.get_span_content(expr_span),
+                expected_type.map(|t| self.type_id_to_string(t)).unwrap_or("none".to_string()),
                 self.expr_to_string_with_type(&result)
             );
             self.pop_debug_level();
@@ -5274,13 +5289,13 @@ impl TypedModule {
         expected_type_id: Option<TypeId>,
         partial: bool,
     ) -> TyperResult<TypedExpr> {
-        let target_expr = {
-            let match_expr = self.ast.expressions.get(match_expr_id).as_match().unwrap();
-            if match_expr.cases.is_empty() {
-                return Err(make_error("Match expression with no arms", match_expr.span));
-            }
-            self.eval_expr(match_expr.target_expression, scope_id, None)?
-        };
+        let match_expr = self.ast.expressions.get(match_expr_id).as_match().unwrap();
+        let target_expr = self.eval_expr(match_expr.target_expression, scope_id, None)?;
+
+        let match_expr = self.ast.expressions.get(match_expr_id).as_match().unwrap();
+        if match_expr.cases.is_empty() {
+            return Err(make_error("Match expression with no arms", match_expr.span));
+        }
 
         let match_block_scope_id =
             self.scopes.add_child_scope(scope_id, ScopeType::LexicalBlock, None, None);
@@ -5513,7 +5528,7 @@ impl TypedModule {
 
             if let Some(useless_index) = pattern_kill_counts.iter().position(|p| *p == 0) {
                 let pattern = &typed_cases[useless_index].pattern;
-                if !pattern.is_innumerable_literal() {
+                if !pattern.has_innumerable_literal() {
                     return failf!(
                         pattern.span_id(),
                         "Useless pattern: {}",

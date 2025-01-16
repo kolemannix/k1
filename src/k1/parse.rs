@@ -1885,7 +1885,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     fn parse_literal(&mut self) -> ParseResult<Option<ParsedExpressionId>> {
         let (first, second) = self.tokens.peek_two();
         trace!("parse_literal {} {}", first.kind, second.kind);
-        return match (first.kind, second.kind) {
+        match (first.kind, second.kind) {
             (K::OpenParen, K::CloseParen) => {
                 trace!("parse_literal unit");
                 self.advance();
@@ -2050,7 +2050,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 }
             }
             _ => Ok(None),
-        };
+        }
     }
 
     fn parse_struct_type_field(&mut self) -> ParseResult<Option<StructTypeField>> {
@@ -2311,9 +2311,12 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn parse_struct_value(&mut self) -> ParseResult<Option<Struct>> {
         let (first, second, third) = self.peek_three();
-        let is_struct = first.kind == K::OpenBrace
+        let is_empty_struct = first.kind == K::OpenBrace && second.kind == K::CloseBrace;
+        let is_non_empty_struct = first.kind == K::OpenBrace
             && second.kind == K::Ident
+            // Covers single-field shorthand struct and regular structs
             && (third.kind == K::Comma || third.kind == K::CloseBrace || third.kind == K::Colon);
+        let is_struct = is_empty_struct || is_non_empty_struct;
         if !is_struct {
             return Ok(None);
         };

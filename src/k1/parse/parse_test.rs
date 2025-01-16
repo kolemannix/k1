@@ -376,3 +376,12 @@ fn when_pattern() -> ParseResult<()> {
     println!("{}", &module.expr_id_to_string(expr_id));
     Ok(())
 }
+
+#[test]
+fn empty_struct() -> ParseResult<()> {
+    let input = r#"{}"#;
+    let (module, expr, expr_id) = test_single_expr_with_id(input)?;
+    eprintln!("{:?}", &expr);
+    assert!(matches!(expr, ParsedExpression::Struct(_)));
+    Ok(())
+}
