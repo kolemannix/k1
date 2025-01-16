@@ -15,23 +15,27 @@ ns string {
     sneakyCasted
   }
 
-  fn fromBytes(buffer: Buffer[byte]): string {
-    let copied: Buffer[byte] = buffer.cloned();
-    let sneakyCasted: Buffer[char] = Buffer/fromRawParts(copied.len, copied.data);
-    { buffer: sneakyCasted }
-  }
-
-  fn fromBuffer(buffer: Buffer[char]): string {
-    let copied = buffer.cloned();
-    { buffer: copied }
-  }
-
   fn wrapList(list: List[char]): string {
     { buffer: list.toBuffer() }
   }
 
   fn wrapBuffer(buffer: Buffer[char]): string {
     { buffer: buffer }
+  }
+
+  fn wrapBytes(buffer: Buffer[byte]): string {
+    let sneakyCasted: Buffer[char] = Buffer/fromRawParts(buffer.len, buffer.data);
+    { buffer: sneakyCasted }
+  }
+
+  fn fromBytes(buffer: Buffer[byte]): string {
+    let copied: Buffer[byte] = buffer.cloned();
+    wrapBytes(copied)
+  }
+
+  fn fromBuffer(buffer: Buffer[char]): string {
+    let copied = buffer.cloned();
+    { buffer: copied }
   }
 
   fn len(self: string): u64 { self.buffer.len }

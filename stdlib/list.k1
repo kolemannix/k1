@@ -200,6 +200,18 @@ ns List {
     copy.sort();
     copy.*
   }
+
+  fn join[T: Show](self: List[T], sep: string): string {
+    let b = StringBuilder/new();
+    for s in self do {
+      b.putString(s.show());
+      let isLast = itIndex != self.len - 1;
+      if not isLast {
+        b.putChar('\n');
+      }
+    };
+    b.build()
+  }
 }
 
 impl Equals for List[u8] {

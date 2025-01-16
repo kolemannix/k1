@@ -143,9 +143,6 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
         let content = fs::read_to_string(path)
             .unwrap_or_else(|_| panic!("Failed to open file to parse: {:?}", path));
         let name = path.file_name().unwrap();
-        if name == "main.k1" {
-            dbg!(&content);
-        }
         info!("Parsing {}", name.to_string_lossy());
         let file_id = parsed_module.sources.next_file_id();
         let source = Source::make(
