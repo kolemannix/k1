@@ -29,6 +29,7 @@ fn crash(context locn: compiler/SourceLocation)(msg: string): never {
   let line = locn.line;
   let s = "\{msg} at \{filename}:\{line}\n";
   eprint(s);
+  sys/printBacktrace();
   libc/abort()
 }
 
@@ -85,6 +86,12 @@ fn eprintln(s: string): unit {
 }
 
 ns sys {
+
+  extern(_k1_show_backtrace) fn _k1_show_backtrace(): unit
+  fn printBacktrace(): unit {
+    _k1_show_backtrace();
+  }
+
   fn exit(code: i32): never {
     libc/exit(code)
   }

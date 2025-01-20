@@ -19,6 +19,14 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
+pub const MAC_SDK_VERSION: &str = "11.0.0";
+
+pub enum Platform {
+    MacOS,
+    Linux,
+    Windows,
+}
+
 #[derive(Debug, Clone, Subcommand)]
 pub enum Command {
     Check {
@@ -225,21 +233,33 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
     Ok(typed_module)
 }
 
-pub fn write_executable(debug: bool, out_dir: &str, module_name: &str) -> Result<()> {
+pub fn write_executable(debug: bool, out_dir: &Path, module_name: &Path) -> Result<()> {
     let clang_time = std::time::Instant::now();
     let mut build_cmd = std::process::Command::new("clang");
 
+    //opt/homebrew/opt/llvm@15/lib/libunwind.dylib
     // Note: Could we do this a lot more efficiently by just feeding the in-memory LLVM IR to libclang or whatever the library version is called.
+    let llvm_base = PathBuf::from(
+        std::env::var("LLVM_SYS_150_PREFIX").expect("could not find llvm at $LLVM_SYS_150_PREFIX"),
+    );
+    let llvm_lib_base = llvm_base.join("lib");
+    let ll_name = out_dir.join(module_name.with_extension("ll"));
+    let ll_file = ll_name.to_str().unwrap();
+    let out_name = out_dir.join(module_name.with_extension("out"));
+    let out_file = out_name.to_str().unwrap();
     build_cmd.args([
         // "-v",
         if debug { "-g" } else { "" },
         if debug { "-fsanitize=address,undefined" } else { "" },
         if debug { "-O0" } else { "-O3" },
-        "-Woverride-module",
-        "-mmacosx-version-min=14.4",
-        &format!("{}/{}.ll", out_dir, module_name),
+        "--library-directory",
+        llvm_lib_base.to_str().unwrap(),
+        &format!("-mmacosx-version-min={}", MAC_SDK_VERSION),
+        "-lunwind",
+        "rt/unwind.c",
+        ll_file,
         "-o",
-        &format!("{}/{}.out", out_dir, module_name),
+        out_file,
     ]);
     log::info!("Build Command: {:?}", build_cmd);
     let build_status = build_cmd.status()?;
@@ -262,10 +282,11 @@ pub fn codegen_module<'ctx, 'module>(
     do_write_executable: bool,
 ) -> Result<Codegen<'ctx, 'module>> {
     let llvm_optimize = !args.no_llvm_opt;
-    let out_dir = out_dir.as_ref();
+    let out_dir = PathBuf::from(out_dir.as_ref());
 
     let mut codegen = Codegen::create(ctx, typed_module, args.debug, llvm_optimize);
     let module_name = codegen.name().to_string();
+    let module_name_path = PathBuf::from(&module_name);
     if let Err(e) = codegen.codegen_module() {
         write_error_location(
             &mut std::io::stderr(),
@@ -285,13 +306,13 @@ pub fn codegen_module<'ctx, 'module>(
 
     if args.write_llvm || do_write_executable {
         let llvm_text = codegen.output_llvm_ir_text();
-        let mut f = File::create(format!("{}/{}.ll", out_dir, &module_name))
+        let mut f = File::create(out_dir.join(module_name_path.with_extension("ll")))
             .expect("Failed to create .ll file");
         f.write_all(llvm_text.as_bytes()).unwrap();
     }
 
     if do_write_executable {
-        write_executable(args.debug, out_dir, &module_name)?;
+        write_executable(args.debug, &out_dir, &module_name_path)?;
     }
 
     if args.llvm_counts {
