@@ -1,0 +1,21 @@
+deftype Part = either Char(i8), String({ x: i64, y: i64 })
+fn main(): int {
+
+  let* pRef: Part* = .Char(0);
+  let p = pRef.*;
+  let pPtr = pRef as Pointer;
+  let pData = pPtr as { a: u64, b: u64, c: u64 }*;
+  let pData = pData.*;
+  printIt(pData.a);
+  printIt(pData.b);
+  printIt(pData.c);
+
+
+  let x = [1,2,3];
+  let xs = x.show();
+  let y = "[1,2,3]";
+  assert(xs == y);
+
+  assert([1,2,3].show() == "[1,2,3]");
+  0
+}

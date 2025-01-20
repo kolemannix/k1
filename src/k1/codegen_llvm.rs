@@ -29,6 +29,7 @@ use inkwell::values::{
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel};
 use log::{debug, info, trace};
 
+use crate::compiler::MAC_SDK_VERSION;
 use crate::lex::SpanId;
 use crate::parse::{FileId, Identifier, NumericWidth};
 use crate::typer::scopes::ScopeId;
@@ -73,12 +74,21 @@ fn size_info(td: &TargetData, typ: &dyn AnyType) -> SizeInfo {
         abi_align_bits: td.get_abi_alignment(typ) * 8,
     };
     if sz.pref_align_bits != sz.abi_align_bits {
-        info!(
-            "Type has different preferred and abi alignments. Thought you'd like to know.\n{}. pref={}, abi={}",
+        // For some reason, llvm defaults the preferred alignment of all structs to 64 bits
+        // "a:0:64" in the default datalayout string
+        let is_single_member_struct = if typ.as_any_type_enum().is_struct_type() {
+            typ.as_any_type_enum().into_struct_type().count_fields() == 1
+        } else {
+            false
+        };
+        if !is_single_member_struct {
+            info!(
+            "Type has different preferred and abi alignments, and is not a single-member struct. Thought you'd like to know.\n{}. pref={}, abi={}",
             typ.print_to_string(),
             sz.pref_align_bits,
             sz.abi_align_bits
         )
+        }
     };
     sz
 }
@@ -97,14 +107,14 @@ struct StructDebugMember<'ctx, 'name> {
 #[derive(Debug, Clone, Copy)]
 enum LlvmValue<'ctx> {
     BasicValue(BasicValueEnum<'ctx>),
-    Pointer(PointerValue<'ctx>),
+    // Pointer(PointerValue<'ctx>),
     Never(InstructionValue<'ctx>),
 }
 impl<'ctx> LlvmValue<'ctx> {
     fn as_basic_value(self) -> Either<InstructionValue<'ctx>, BasicValueEnum<'ctx>> {
         match self {
             LlvmValue::BasicValue(bv) => Either::Right(bv),
-            LlvmValue::Pointer(p) => Either::Right(p.as_basic_value_enum()),
+            // LlvmValue::Pointer(p) => Either::Right(p.as_basic_value_enum()),
             LlvmValue::Never(instr) => Either::Left(instr),
         }
     }
@@ -118,11 +128,11 @@ impl<'ctx> LlvmValue<'ctx> {
     }
 }
 
-impl<'ctx> From<PointerValue<'ctx>> for LlvmValue<'ctx> {
-    fn from(pointer: PointerValue<'ctx>) -> Self {
-        LlvmValue::Pointer(pointer)
-    }
-}
+// impl<'ctx> From<PointerValue<'ctx>> for LlvmValue<'ctx> {
+//     fn from(pointer: PointerValue<'ctx>) -> Self {
+//         LlvmValue::Pointer(pointer)
+//     }
+// }
 
 impl<'ctx> From<BasicValueEnum<'ctx>> for LlvmValue<'ctx> {
     fn from(value: BasicValueEnum<'ctx>) -> Self {
@@ -1436,7 +1446,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             pointee_llvm_type: variable_type.physical_value_type(),
         };
         self.variables.insert(let_stmt.variable_id, pointer);
-        Ok(variable_ptr.into())
+        Ok(self.builtin_types.unit_value.as_basic_value_enum().into())
     }
 
     fn codegen_if_else(&mut self, ir_if: &TypedIf) -> CodegenResult<LlvmValue<'ctx>> {
@@ -1645,7 +1655,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             name,
                         )
                         .unwrap();
-                    Ok(field_pointer.into())
+                    Ok(field_pointer.as_basic_value_enum().into())
                 } else {
                     // Codegen the field's loaded value
                     let struc = self.codegen_expr_basic_value(&field_access.base)?;
@@ -1755,7 +1765,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     let enum_value = enum_value.into_pointer_value();
                     let payload_pointer = self
                         .get_enum_payload_reference(variant_type.variant_struct_type, enum_value);
-                    Ok(payload_pointer.into())
+                    Ok(payload_pointer.as_basic_value_enum().into())
                 } else {
                     let enum_value = enum_value.into_struct_value();
                     let value_payload = self.get_enum_payload(
@@ -2870,7 +2880,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         // let triple_str = TargetMachine::get_default_triple();
         // I use this explicit triple to avoid an annoying warning log. This will obviously
         // have to change to support other triples
-        let triple_str = "arm64-apple-macosx14.4.0";
+        let triple_str = &format!("arm64-apple-macosx{}", MAC_SDK_VERSION);
         let triple = TargetTriple::create(triple_str);
         let target = Target::from_triple(&triple).unwrap();
         let machine = target
