@@ -159,6 +159,7 @@ pub struct TypedEnum {
     /// Populated for specialized copies of generic enums, contains provenance info
     pub generic_instance_info: Option<GenericInstanceInfo>,
     pub ast_node: ParsedId,
+    pub explicit_tag_type: Option<TypeId>,
 }
 
 impl TypedEnum {

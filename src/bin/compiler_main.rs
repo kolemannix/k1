@@ -4,7 +4,11 @@ use k1::compiler::{Args, Command};
 use log::info;
 
 fn main() -> anyhow::Result<()> {
-    env_logger::init();
+    let l = Box::leak(Box::new(
+        env_logger::Builder::new().filter_level(log::LevelFilter::Debug).build(),
+    ));
+    log::set_logger(l).unwrap();
+    log::set_max_level(log::LevelFilter::Info);
     let args = Args::parse();
     info!("{:#?}", args);
 

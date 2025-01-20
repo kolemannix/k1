@@ -1,5 +1,10 @@
 New tagline? "C with typeclasses and tagged unions"
 
+'is' Bug 
+  ->      printIt(part is .Char(_));
+  ->              ^^^^^^^^^^^^^^^^
+	Match arm has wrong type. Expected T but got bool
+
 - [ ] *Specializing functions on their provided closures to allow inlining and static dispatch*
 - [ ] Bug: technically I should require that the blanket impl params appear in the Self type expression
 - [ ] Typecheck 'main'
@@ -42,8 +47,36 @@ New tagline? "C with typeclasses and tagged unions"
 - [ ] Make demo readme / site
 - [ ] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`
 - [ ] Define clear 'platform layer' (crash, alloc/free, other?). Then we could do an LLVM interp platform and a rust interpreter platform
+- [ ] Fix enum codegen, read Inko llvm backend (its inkwell + rust and does ABI compatible stuff https://yorickpeterse.com/articles/the-mess-that-is-handling-structure-arguments-and-returns-in-llvm/)
 - [ ] Runtime type info story, typeOf, typeInfo, and 'any' type
 - [ ] Conditional compile directive
+What types of expressions are allowed? It's compile-time execution of the condition.
+#if condition grammar:
+cc <comptime cond> := ctimebexpr | cconst
+cconst := ident
+ctimebexpr := <cc> and <cc> | <cc> or <cc> | not <cc>
+
+Conditional compilation constants from Odin
+ODIN_VERSION 	A string that represents the Odin compiler version being used. (e.g: dev-2023-04)
+ODIN_OS, ODIN_OS_STRING 	An enum value, or string, respectively, indicating what the target operating system is.
+ODIN_ENDIAN, ODIN_ENDIAN_STRING 	An enum value, or string, respectively, indicating what the endianness of the target is.
+ODIN_ARCH, ODIN_ARCH_STRING 	An enum value, or string, respectively, indicating what the CPU architecture of the target is.
+ODIN_DEBUG 	true if -debug command line switch is passed, which enables debug info generation.
+ODIN_DISABLE_ASSERT 	true if -disable-assert command line switch is passed, which removes all calls to assert from the compilation.
+ODIN_BUILD_MODE 	An enum value indicating what type of compiled output the user desires. (.Executable, .Dynamic, .Object, .Assembly, or .LLVM_IR.)
+ODIN_ERROR_POS_STYLE 	An enum value indicating what style is being used to print the source location of compile errors and warnings. (Default, Unix.)
+ODIN_DEFAULT_TO_NIL_ALLOCATOR 	true if -default-to-nil-allocator command lines switch is passed, which sets the initial allocator to an allocator that does nothing.
+ODIN_NO_DYNAMIC_LITERALS 	true if -no-dynamic-literals command line switch is passed, which prohibit dynamic array or map literals.
+ODIN_NO_CRT 	true if -no-crt command line switch is passed, which inhibits linking with the C Runtime Library, a.k.a. LibC.
+ODIN_USE_SEPARATE_MODULES 	true if -use-separate-modules command line switch is passed, which builds each package into its own object file, and then links them together, instead of performing a unity build.
+ODIN_TEST 	true if the code is being compiled via an invocation of odin test.
+ODIN_NO_ENTRY_POINT 	true if -no-entry-point command line switch is passed, which makes the declaration of a main procedure optional.
+ODIN_FOREIGN_ERROR_PROCEDURES 	true if -foreign-error-procedures command line switch is passed, which inhibits generation of runtime error procedures, so that they can be in a separate compilation unit.
+ODIN_NO_RTTI 	true if -disallow-rtti command line switch is passed, which inhibits generation of full Runtime Type Information.
+ODIN_ROOT 	Path to the folder containing the Odin compiler executable.
+ODIN_BUILD_PROJECT_NAME 	Name of the folder that contains the entry point.
+ODIN_VENDOR 	String which identifies the compiler being used. The official compiler sets this to "odin".
+ODIN_VALGRIND_SUPPORT 	true if Valgrind integration is supported on the target.
 - [ ] Mark types as trivially copyable or not
 ^ The builtin array would be NOT copyable so that you don't accidentally alias the data ptr
 - [ ] Ability constraints on generics
