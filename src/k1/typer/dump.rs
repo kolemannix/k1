@@ -135,6 +135,11 @@ impl TypedModule {
         self.display_type(ty, expand, writ)
     }
 
+    // Silly function but so commonly needed its worth the call-site ergonomics
+    pub fn type_id_option_to_string(&self, type_id: Option<TypeId>) -> String {
+        type_id.map(|t| self.type_id_to_string(t)).unwrap_or("<no type>".to_string())
+    }
+
     pub fn type_id_to_string(&self, type_id: TypeId) -> String {
         self.type_id_to_string_ext(type_id, false)
     }
@@ -810,14 +815,14 @@ impl TypedModule {
         s
     }
 
-    pub fn pretty_print_types(&self, types: &[TypeId]) -> String {
+    pub fn pretty_print_types(&self, types: &[TypeId], sep: &str) -> String {
         let mut s = String::new();
         let mut first = true;
-        for (index, type_id) in types.iter().enumerate() {
+        for type_id in types.iter() {
             if !first {
-                s.push('\n')
+                s.push_str(sep)
             }
-            write!(s, "{index:02} := {}", self.type_id_to_string(*type_id)).unwrap();
+            write!(s, "{}", self.type_id_to_string(*type_id)).unwrap();
             first = false;
         }
         s

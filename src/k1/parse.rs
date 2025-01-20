@@ -421,15 +421,15 @@ pub struct OptionalGet {
 }
 
 #[derive(Debug, Clone)]
-pub struct AnonEnumVariant {
-    pub name: Identifier,
+pub struct AnonEnumConstructor {
+    pub variant_name: Identifier,
+    pub payload: Option<ParsedExpressionId>,
     pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
 pub struct ParsedEnumConstructor {
     pub variant_name: Identifier,
-    pub payload: ParsedExpressionId,
     pub span: SpanId,
 }
 
@@ -548,12 +548,9 @@ pub enum ParsedExpression {
     For(ForExpr),
     /// ```md
     /// .<ident>
+    /// .<ident>(<expr>)
     /// ```
-    AnonEnumVariant(AnonEnumVariant),
-    /// ```md
-    /// .A(<expr>)
-    /// ```
-    EnumDotConstructor(ParsedEnumConstructor),
+    AnonEnumConstructor(AnonEnumConstructor),
     /// ```md
     /// <expr> is <pat>
     /// ```
@@ -599,8 +596,7 @@ impl ParsedExpression {
             Self::Struct(struc) => struc.span,
             Self::ListLiteral(list_expr) => list_expr.span,
             Self::For(for_expr) => for_expr.span,
-            Self::AnonEnumVariant(tag_expr) => tag_expr.span,
-            Self::EnumDotConstructor(e) => e.span,
+            Self::AnonEnumConstructor(tag_expr) => tag_expr.span,
             Self::Is(is_expr) => is_expr.span,
             Self::Match(match_expr) => match_expr.span,
             Self::AsCast(as_cast) => as_cast.span,
@@ -624,8 +620,7 @@ impl ParsedExpression {
             Self::Struct(_struct) => false,
             Self::ListLiteral(_list_expr) => false,
             Self::For(_) => false,
-            Self::AnonEnumVariant(_) => false,
-            Self::EnumDotConstructor(_) => false,
+            Self::AnonEnumConstructor(_) => false,
             Self::Is(_) => false,
             Self::Match(_) => false,
             Self::AsCast(_) => false,
@@ -2680,14 +2675,14 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 span,
             }))))
         } else if first.kind == K::Dot && second.kind == K::Ident {
-            // Tag Literal: .Red
+            // <dot> <ident> for example .Red
             self.advance();
             self.advance();
 
             if self.token_chars(second).chars().next().unwrap().is_lowercase() {
                 return Err(error("Variant names must be uppercase", second));
             }
-            let tag_name = self.intern_ident_token(second);
+            let variant_name = self.intern_ident_token(second);
 
             if third.kind == K::OpenParen {
                 // Enum Constructor
@@ -2695,16 +2690,15 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let payload = self.expect_expression()?;
                 let close_paren = self.expect_eat_token(K::CloseParen)?;
                 let span = self.extend_token_span(first, close_paren);
-                Ok(Some(self.add_expression(ParsedExpression::EnumDotConstructor(
-                    ParsedEnumConstructor { variant_name: tag_name, payload, span },
+                Ok(Some(self.add_expression(ParsedExpression::AnonEnumConstructor(
+                    AnonEnumConstructor { variant_name, payload: Some(payload), span },
                 ))))
             } else {
                 // Tag Literal
                 let span = self.extend_token_span(first, second);
-                Ok(Some(self.add_expression(ParsedExpression::AnonEnumVariant(AnonEnumVariant {
-                    name: tag_name,
-                    span,
-                }))))
+                Ok(Some(self.add_expression(ParsedExpression::AnonEnumConstructor(
+                    AnonEnumConstructor { variant_name, payload: None, span },
+                ))))
             }
         } else if let Some(literal_id) = self.parse_literal()? {
             Ok(Some(literal_id))
@@ -3648,16 +3642,15 @@ impl ParsedModule {
                 f.write_fmt(format_args!("{:?}", list_expr))
             }
             ParsedExpression::For(for_expr) => f.write_fmt(format_args!("{:?}", for_expr)),
-            ParsedExpression::AnonEnumVariant(tag_expr) => {
+            ParsedExpression::AnonEnumConstructor(anon_enum) => {
                 f.write_char('.')?;
-                f.write_str(self.identifiers.get_name(tag_expr.name))
-            }
-            ParsedExpression::EnumDotConstructor(e) => {
-                f.write_char('.')?;
-                f.write_str(self.identifiers.get_name(e.variant_name))?;
-                f.write_str("(")?;
-                self.display_expr_id(e.payload, f)?;
-                f.write_str(")")
+                f.write_str(self.identifiers.get_name(anon_enum.variant_name))?;
+                if let Some(payload) = anon_enum.payload.as_ref() {
+                    f.write_str("(")?;
+                    self.display_expr_id(*payload, f)?;
+                    f.write_str(")")?;
+                }
+                Ok(())
             }
             ParsedExpression::Is(is_expr) => {
                 self.display_expr_id(is_expr.target_expression, f)?;

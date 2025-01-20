@@ -1,0 +1,24 @@
+// fn wrapIt[T](t: T): T? {
+//   some(identity(identity(identity(t))))
+// }
+fn start(args: Buffer[string]): i32? {
+  // This does not infer to i32 because we solve that some.T := i64 first
+  // because we look at just the argument and parameter, which is enough since a hintless integer gives i64
+  // and we never use the return type. However, if we use return type first, we end up with the
+  // 'identity(identity(x))' bug again
+  // I could actually just solve this with a 'wider' integer type or like 'LITERAL' that can coerce to any integer type
+  #debug some(0)
+  // Whereas this works because there's no separate inference eval, we just find the enum
+  // and do substitutions
+
+  // I could add a constraint from the expected type!
+  // What if I use the return type if its _not_ an unsolved type variable? I think name collisions are possible unfortunately (wrapIt.T vs identity.T)
+  // Hmmmmmmm
+  //.Some(0)
+}
+
+fn main(argCount: u32, args: Pointer): i32 {
+  let args = sys/parseMainArgs(argCount, args);
+  start(args).!;
+  0
+}

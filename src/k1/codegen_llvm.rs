@@ -66,11 +66,21 @@ impl Display for CodegenError {
 impl Error for CodegenError {}
 
 fn size_info(td: &TargetData, typ: &dyn AnyType) -> SizeInfo {
-    SizeInfo {
+    let sz = SizeInfo {
         stride_bits: td.get_abi_size(typ) as u32 * 8,
         size_bits: td.get_bit_size(typ) as u32,
-        align_bits: td.get_preferred_alignment(typ) * 8,
-    }
+        pref_align_bits: td.get_preferred_alignment(typ) * 8,
+        abi_align_bits: td.get_abi_alignment(typ) * 8,
+    };
+    if sz.pref_align_bits != sz.abi_align_bits {
+        info!(
+            "Type has different preferred and abi alignments. Thought you'd like to know.\n{}. pref={}, abi={}",
+            typ.print_to_string(),
+            sz.pref_align_bits,
+            sz.abi_align_bits
+        )
+    };
+    sz
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -123,18 +133,21 @@ impl<'ctx> From<BasicValueEnum<'ctx>> for LlvmValue<'ctx> {
 #[derive(Debug, Clone, Copy)]
 pub struct SizeInfo {
     size_bits: u32,
-    align_bits: u32,
     /// Stride represents the space between the start of 2 successive elements, it bumps to the
     /// next aligned slot. This must be used by builtin Buffer functionality in order to be correct
     stride_bits: u32,
+    pref_align_bits: u32,
+    abi_align_bits: u32,
 }
 impl SizeInfo {
     pub const POINTER: SizeInfo = SizeInfo {
         size_bits: WORD_SIZE_BITS as u32,
-        align_bits: WORD_SIZE_BITS as u32,
         stride_bits: WORD_SIZE_BITS as u32,
+        pref_align_bits: WORD_SIZE_BITS as u32,
+        abi_align_bits: WORD_SIZE_BITS as u32,
     };
-    pub const ZERO: SizeInfo = SizeInfo { size_bits: 0, align_bits: 0, stride_bits: 0 };
+    pub const ZERO: SizeInfo =
+        SizeInfo { size_bits: 0, stride_bits: 0, pref_align_bits: 0, abi_align_bits: 0 };
 
     /// https://learn.microsoft.com/en-us/cpp/c-language/alignment-c?view=msvc-170
     /// struct and union types have an alignment equal to the largest alignment of any member.
@@ -151,15 +164,25 @@ impl SizeInfo {
         let mut total_size = 0;
         for size in sizes {
             total_size += size.size_bits;
-            if size.align_bits > max_align {
-                max_align = size.align_bits
+            if size.pref_align_bits > max_align {
+                max_align = size.pref_align_bits
             }
         }
-        SizeInfo { size_bits: total_size, align_bits: max_align, stride_bits: total_size }
+        SizeInfo {
+            size_bits: total_size,
+            stride_bits: total_size,
+            pref_align_bits: max_align,
+            abi_align_bits: max_align,
+        }
     }
 
     pub fn scalar_value(size_bits: u32) -> SizeInfo {
-        SizeInfo { size_bits, align_bits: size_bits, stride_bits: size_bits }
+        SizeInfo {
+            size_bits,
+            stride_bits: size_bits,
+            pref_align_bits: size_bits,
+            abi_align_bits: size_bits,
+        }
     }
 }
 
@@ -191,7 +214,8 @@ struct LlvmValueType<'ctx> {
 #[derive(Debug, Clone, Copy)]
 struct EnumVariantStructType<'ctx> {
     name: Identifier,
-    struct_type: StructType<'ctx>,
+    envelope_type: StructType<'ctx>,
+    variant_struct_type: StructType<'ctx>,
     tag_value: IntValue<'ctx>,
     di_type: DIType<'ctx>,
     size: SizeInfo,
@@ -381,29 +405,6 @@ struct BuiltinTypes<'ctx> {
     char: IntType<'ctx>,
     ptr: PointerType<'ctx>,
     ptr_sized_int: IntType<'ctx>,
-}
-
-impl<'ctx> BuiltinTypes<'ctx> {
-    fn padding_type(&self, size_bits: u32) -> inkwell::types::BasicTypeEnum<'ctx> {
-        debug_assert!(size_bits % 8 == 0);
-        let mut padding_members: Vec<BasicTypeEnum<'ctx>> = vec![];
-        let mut remaining_bits = size_bits;
-        while remaining_bits >= 64 {
-            padding_members.push(self.ctx.i64_type().into());
-            remaining_bits -= 64;
-        }
-        while remaining_bits >= 32 {
-            padding_members.push(self.ctx.i32_type().into());
-            remaining_bits -= 32;
-        }
-        while remaining_bits >= 8 {
-            padding_members.push(self.ctx.i8_type().into());
-            remaining_bits -= 8;
-        }
-        self.ctx.struct_type(&padding_members, true).as_basic_type_enum()
-        // self.ctx.custom_width_int_type(8).array_type(byte_count).as_basic_type_enum()
-        //self.ctx.custom_width_int_type(size_bits).as_basic_type_enum()
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -688,10 +689,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         type_id: TypeId,
         defn_info: Option<&TypeDefnInfo>,
     ) {
+        // FIXME: We need to revisit the entire story around names in codegen
+        let name = self.module.type_id_to_string(type_id);
         match defn_info {
-            None => write!(w, "{}", type_id).unwrap(),
-            Some(info) => self.module.write_qualified_name(w, info.scope, info.name, "/", true),
-        }
+            None => write!(w, "{}", name).unwrap(),
+            Some(info) => self.module.write_qualified_name(w, info.scope, &name, "/", true),
+        };
     }
 
     fn codegen_type_name(&self, type_id: TypeId, defn_info: Option<&TypeDefnInfo>) -> String {
@@ -736,7 +739,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.debug.current_file(),
                 line_number,
                 size.size_bits as u64,
-                size.align_bits,
+                size.pref_align_bits,
                 0,
                 None,
                 fields,
@@ -751,15 +754,68 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         Ok(self.codegen_type(type_id)?.debug_type())
     }
 
+    #[allow(unused)]
+    fn print_layout_info(&self) {
+        eprintln!(
+            "DATALAYOUT STR {}",
+            self.llvm_machine.get_target_data().get_data_layout().as_str().to_string_lossy()
+        );
+        eprintln!("i8: {:?}", self.size_info(&self.ctx.i8_type()));
+        eprintln!("i16: {:?}", self.size_info(&self.ctx.i16_type()));
+        eprintln!("i32: {:?}", self.size_info(&self.ctx.i32_type()));
+        eprintln!("i64: {:?}", self.size_info(&self.ctx.i64_type()));
+        eprintln!("ptr: {:?}", self.size_info(&self.builtin_types.ptr));
+        eprintln!(
+            "{{i8}}: {:?}",
+            self.size_info(
+                &self.ctx.struct_type(&[self.ctx.i8_type().as_basic_type_enum()], false)
+            )
+        );
+        eprintln!(
+            "{{i16}}: {:?}",
+            self.size_info(
+                &self.ctx.struct_type(&[self.ctx.i16_type().as_basic_type_enum()], false)
+            )
+        );
+        eprintln!(
+            "{{i32}}: {:?}",
+            self.size_info(
+                &self.ctx.struct_type(&[self.ctx.i32_type().as_basic_type_enum()], false)
+            )
+        );
+        eprintln!(
+            "{{ i8, i32 }}: {:?}",
+            self.size_info(&self.ctx.struct_type(
+                &[
+                    self.ctx.i8_type().as_basic_type_enum(),
+                    self.ctx.i32_type().as_basic_type_enum()
+                ],
+                false
+            ))
+        );
+        eprintln!(
+            "{{i64}}: {:?}",
+            self.size_info(
+                &self.ctx.struct_type(&[self.ctx.i64_type().as_basic_type_enum()], false)
+            )
+        );
+        eprintln!(
+            "{{ptr}}: {:?}",
+            self.size_info(
+                &self.ctx.struct_type(&[self.builtin_types.ptr.as_basic_type_enum()], false)
+            )
+        );
+    }
+
     fn codegen_type(&self, type_id: TypeId) -> CodegenResult<LlvmType<'ctx>> {
-        let result = self.llvm_types.borrow().get(&type_id).cloned();
-        if let Some(result) = result {
-            return Ok(result);
-        };
         self.codegen_type_inner(type_id, 0)
     }
 
     fn codegen_type_inner(&self, type_id: TypeId, depth: usize) -> CodegenResult<LlvmType<'ctx>> {
+        let result = self.llvm_types.borrow().get(&type_id).cloned();
+        if let Some(result) = result {
+            return Ok(result);
+        };
         let _dw_ate_address = 0x01;
         let dw_ate_boolean = 0x02;
         let _dw_ate_complex_float = 0x03;
@@ -949,18 +1005,59 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 .into())
             }
             Type::Enum(enum_type) => {
+                // self.print_layout_info();
+
                 let enum_name = enum_type
                     .type_defn_info
                     .as_ref()
-                    .map(|info| self.module.make_qualified_name(info.scope, info.name, ".", true))
+                    .map(|info| self.codegen_type_name(type_id, Some(info)))
                     .unwrap_or(type_id.to_string());
+                eprintln!("CODEGEN TYPE ENUM {enum_name}");
                 let mut variant_structs = Vec::with_capacity(enum_type.variants.len());
                 if enum_type.variants.len() >= u8::MAX as usize {
                     panic!("too many enum variants for now");
                 }
+
+                let mut payload_types = Vec::with_capacity(enum_type.variants.len());
+                for variant in enum_type.variants.iter() {
+                    if let Some(payload_type_id) = variant.payload {
+                        let variant_payload_type =
+                            self.codegen_type_inner(payload_type_id, depth + 1)?;
+                        payload_types.push(Some(variant_payload_type))
+                    } else {
+                        payload_types.push(None)
+                    }
+                }
+                let payload_max_alignment = payload_types
+                    .iter()
+                    .filter_map(|x| x.as_ref().map(|x| x.size_info().abi_align_bits))
+                    .max()
+                    .unwrap_or(0);
+                let word_size_int_type_id =
+                    if WORD_SIZE_BITS == 64 { U64_TYPE_ID } else { U32_TYPE_ID };
+                let tag_int_type_id = match enum_type.explicit_tag_type {
+                    Some(explicit_tag_type) => explicit_tag_type,
+                    None => {
+                        match payload_max_alignment {
+                            0 => U8_TYPE_ID, // No payloads case
+                            8 => U8_TYPE_ID,
+                            16 => U16_TYPE_ID,
+                            32 => U32_TYPE_ID,
+                            // If the payload(s) require to be aligned on a 64-bit or larger
+                            // boundary, there's no point in using a tag type smaller than the word
+                            // size
+                            64 => word_size_int_type_id,
+                            _ => word_size_int_type_id,
+                        }
+                    }
+                };
+                eprintln!(
+                    "Maximum payload alignment is {payload_max_alignment}, selected tag type {}",
+                    self.module.type_id_to_string(tag_int_type_id)
+                );
                 let tag_int_type =
-                    self.codegen_type(U8_TYPE_ID)?.physical_value_type().into_int_type();
-                let discriminant_field_debug = self
+                    self.codegen_type(tag_int_type_id)?.physical_value_type().into_int_type();
+                let tag_field_debug = self
                     .debug
                     .debug_builder
                     .create_basic_type(
@@ -971,115 +1068,120 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     )
                     .unwrap()
                     .as_type();
-                for variant in enum_type.variants.iter() {
+
+                for (variant, maybe_payload_type) in
+                    enum_type.variants.iter().zip(payload_types.into_iter())
+                {
                     let variant_name = format!("{enum_name}.{}", self.get_ident_name(variant.name));
-                    let (variant_struct, variant_struct_debug) = if let Some(payload_type_id) =
-                        variant.payload
-                    {
-                        let variant_payload_type =
-                            self.codegen_type_inner(payload_type_id, depth + 1)?;
-                        let struc = self.ctx.struct_type(
-                            &[
+                    let (variant_struct, variant_struct_debug) =
+                        if let Some(_payload_type_id) = variant.payload {
+                            let variant_payload_type = maybe_payload_type.unwrap();
+                            let fields = &[
                                 tag_int_type.as_basic_type_enum(),
                                 variant_payload_type.physical_value_type(),
-                            ],
-                            false,
-                        );
-                        let debug_struct = self.make_debug_struct_type(
-                            &variant_name,
-                            &struc,
-                            SpanId::NONE,
-                            &[
-                                StructDebugMember {
-                                    name: "tag",
-                                    di_type: discriminant_field_debug,
-                                },
-                                StructDebugMember {
-                                    name: "payload",
-                                    di_type: variant_payload_type.debug_type(),
-                                },
-                            ],
-                        );
-                        (struc, debug_struct)
-                    } else {
-                        let s = self.ctx.struct_type(&[tag_int_type.as_basic_type_enum()], false);
-                        let debug_struct = {
-                            self.make_debug_struct_type(
+                            ];
+                            let variant_struct_type =
+                                Codegen::make_named_struct(self.ctx, &variant_name, fields);
+                            let debug_struct = self.make_debug_struct_type(
                                 &variant_name,
-                                &s,
+                                &variant_struct_type,
                                 SpanId::NONE,
-                                &[StructDebugMember {
-                                    name: "tag",
-                                    di_type: discriminant_field_debug,
-                                }],
-                            )
+                                &[
+                                    StructDebugMember { name: "tag", di_type: tag_field_debug },
+                                    StructDebugMember {
+                                        name: "payload",
+                                        di_type: variant_payload_type.debug_type(),
+                                    },
+                                ],
+                            );
+                            (variant_struct_type, debug_struct)
+                        } else {
+                            let variant_struct_type = Codegen::make_named_struct(
+                                self.ctx,
+                                &variant_name,
+                                &[tag_int_type.as_basic_type_enum()],
+                            );
+                            let debug_struct = {
+                                self.make_debug_struct_type(
+                                    &variant_name,
+                                    &variant_struct_type,
+                                    SpanId::NONE,
+                                    &[StructDebugMember { name: "tag", di_type: tag_field_debug }],
+                                )
+                            };
+                            (variant_struct_type, debug_struct)
                         };
-                        (s, debug_struct)
-                    };
+                    eprintln!(
+                        "Variant {} {}, size is {:?}",
+                        variant_name,
+                        variant_struct.print_to_string(),
+                        self.size_info(&variant_struct)
+                    );
                     variant_structs.push(EnumVariantStructType {
                         name: variant.name,
-                        struct_type: variant_struct,
+                        envelope_type: self.ctx.struct_type(&[], false),
+                        variant_struct_type: variant_struct,
                         tag_value: tag_int_type.const_int(variant.index as u64, false),
                         di_type: variant_struct_debug,
                         size: self.size_info(&variant_struct),
                     });
                 }
 
-                let largest_variant_size =
-                    variant_structs.iter().map(|v| v.size.size_bits).max().unwrap();
+                // Enum sizing and layout rules:
+                // - Alignment of the enum is the max(alignment) of the variants
+                // - Size of the enum is the size of the largest variant, not necessarily the same
+                //   variant, plus alignment end padding
+                // - In order to get to a type that has this alignment and size, we copy clang and
+                //   'devise' a struct that will do it for us. This struct is simply 2 fields:
+                //   - First, the strictestly-aligned variant. This sets the alignment of our
+                //     struct
+                //   - Second, padding bytes such that we're at least as large as the largest
+                //     variant, and aligned to our own alignment
 
-                // Now that we know the full size, go back and pad each variant struct
-                for (index, variant_struct) in variant_structs.iter_mut().enumerate() {
-                    let size_diff_bits = largest_variant_size - variant_struct.size.size_bits;
-                    let mut fields = variant_struct.struct_type.get_field_types();
-                    if size_diff_bits != 0 {
-                        let padding = self.builtin_types.padding_type(size_diff_bits);
-                        fields.push(padding.as_basic_type_enum());
-                        debug!("Padding variant {} with {}", variant_struct.struct_type, padding);
-                        let variant = &enum_type.variants[index];
-                        let struct_name = &format!(
-                            "{}_{}",
-                            self.get_ident_name(variant.name),
-                            variant.payload.map(|p| p.to_string()).unwrap_or("".to_string()),
-                        );
-                        let variant_struct_type =
-                            Codegen::make_named_struct(self.ctx, struct_name, &fields);
+                let largest_variant =
+                    variant_structs.iter().max_by_key(|v| v.size.stride_bits).unwrap();
+                let strictest_aligned_variant =
+                    variant_structs.iter().max_by_key(|v| v.size.abi_align_bits).unwrap();
+                let enum_alignment = strictest_aligned_variant.size.abi_align_bits;
+                let largest_variant_size = largest_variant.size.size_bits;
 
-                        // We call size_info on a non-opaque copy to get the size
-                        let variant_struct_size = self.size_info(&variant_struct_type);
-                        variant_struct.struct_type = variant_struct_type;
-                        variant_struct.size = variant_struct_size;
-                    } else {
-                        debug!("Not padding variant {}", variant_struct.struct_type);
-                    }
-                }
-
-                let union_padding = self
-                    .builtin_types
-                    .padding_type(largest_variant_size - tag_int_type.get_bit_width());
-
-                let base_type = self.ctx.struct_type(
-                    &[tag_int_type.as_basic_type_enum(), union_padding.as_basic_type_enum()],
-                    false,
+                // largest variant size rounded up to multiple of strictest_aligned_variant
+                let enum_size_bits = largest_variant_size.div_ceil(enum_alignment) * enum_alignment;
+                let physical_type_padding_bits =
+                    enum_size_bits - strictest_aligned_variant.size.size_bits;
+                debug_assert!(physical_type_padding_bits % 8 == 0);
+                eprintln!(
+                    "type {} largest variant size={largest_variant_size}, align={enum_alignment}. Physical size: {}, end padding: {}",
+                    self.module.type_id_to_string(type_id), enum_size_bits, physical_type_padding_bits
                 );
 
-                let mut enum_size = self.size_info(&base_type);
+                let physical_type_fields: &[BasicTypeEnum<'ctx>] =
+                    if physical_type_padding_bits == 0 {
+                        &[strictest_aligned_variant.variant_struct_type.as_basic_type_enum()]
+                    } else {
+                        &[
+                            strictest_aligned_variant.variant_struct_type.as_basic_type_enum(),
+                            self.ctx
+                                .i8_type()
+                                .array_type(physical_type_padding_bits / 8)
+                                .as_basic_type_enum(),
+                        ]
+                    };
+                let physical_type =
+                    Codegen::make_named_struct(self.ctx, &enum_name, physical_type_fields);
+                let physical_type_size_info = self.size_info(&physical_type);
+                eprintln!(
+                    "Physical type: {} size info: {:?}",
+                    physical_type.print_to_string(),
+                    physical_type_size_info
+                );
+                debug_assert!(physical_type_size_info.size_bits == enum_size_bits);
+                debug_assert!(physical_type_size_info.stride_bits == enum_size_bits);
+                debug_assert!(physical_type_size_info.abi_align_bits == enum_alignment);
 
-                // Alignment is the largest alignment of any variant
-                enum_size.align_bits =
-                    variant_structs.iter().map(|v| v.size.align_bits).max().unwrap();
-
-                let same_size_check = variant_structs
-                    .iter()
-                    .map(|s| s.size.size_bits)
-                    .all(|size| size == enum_size.size_bits);
-                if !same_size_check {
-                    panic!(
-                        "Enum codegen sizes were wrong for type: {}. Base: {:?}, Variants: {:?}",
-                        self.module.type_id_to_string(type_id),
-                        &base_type,
-                        variant_structs.iter().map(|v| v.struct_type).collect::<Vec<_>>()
-                    );
+                // Now that we have the physical envelope representation, we add it to each variant
+                for variant_struct in variant_structs.iter_mut() {
+                    variant_struct.envelope_type = physical_type;
                 }
 
                 let member_types: Vec<_> = variant_structs
@@ -1094,7 +1196,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                                 self.debug.current_file(),
                                 0,
                                 variant.size.size_bits as u64,
-                                variant.size.align_bits,
+                                variant.size.pref_align_bits,
                                 0,
                                 0,
                                 variant.di_type,
@@ -1110,8 +1212,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         &enum_name,
                         self.debug.current_file(),
                         0,
-                        enum_size.size_bits as u64,
-                        enum_size.align_bits,
+                        enum_size_bits as u64,
+                        enum_alignment,
                         0,
                         &member_types,
                         0,
@@ -1122,10 +1224,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(LlvmEnumType {
                     type_id,
                     tag_type: tag_int_type,
-                    base_struct_type: base_type,
+                    base_struct_type: physical_type,
                     variant_structs,
                     di_type: debug_union_type,
-                    size: enum_size,
+                    size: physical_type_size_info,
                 }
                 .into())
             }
@@ -1589,13 +1691,13 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
                 let enum_variant = enum_type.variant_structs[enum_constr.variant_index as usize];
 
-                let enum_ptr = self.builder.build_alloca(enum_variant.struct_type, "enum_constr");
+                let enum_ptr = self.builder.build_alloca(enum_variant.envelope_type, "enum_constr");
 
                 // Store the tag_value in the first slot
                 let tag_pointer = self
                     .builder
                     .build_struct_gep(
-                        enum_variant.struct_type,
+                        enum_variant.variant_struct_type,
                         enum_ptr,
                         0,
                         &format!("enum_tag_{}", self.get_ident_name(variant_tag_name)),
@@ -1608,7 +1710,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     let payload_pointer = self
                         .builder
                         .build_struct_gep(
-                            enum_variant.struct_type,
+                            enum_variant.variant_struct_type,
                             enum_ptr,
                             1,
                             &format!("enum_payload_{}", self.get_ident_name(variant_tag_name)),
@@ -1632,7 +1734,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     .iter()
                     .find(|v| v.name == enum_is_variant.variant_name)
                     .unwrap();
-                let is_variant_bool = self.codegen_enum_is_variant(enum_value, variant.tag_value);
+                let is_variant_bool = self.codegen_enum_is_variant(
+                    enum_value,
+                    variant.tag_value,
+                    self.module.name_of(variant.name),
+                );
                 Ok(is_variant_bool.as_basic_value_enum().into())
             }
             TypedExpr::EnumGetPayload(enum_get_payload) => {
@@ -1647,12 +1753,16 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
                 if enum_get_payload.is_referencing {
                     let enum_value = enum_value.into_pointer_value();
-                    let payload_pointer =
-                        self.get_enum_payload_reference(variant_type.struct_type, enum_value);
+                    let payload_pointer = self
+                        .get_enum_payload_reference(variant_type.variant_struct_type, enum_value);
                     Ok(payload_pointer.into())
                 } else {
                     let enum_value = enum_value.into_struct_value();
-                    let value_payload = self.get_enum_payload(variant_type.struct_type, enum_value);
+                    let value_payload = self.get_enum_payload(
+                        variant_type.envelope_type,
+                        variant_type.variant_struct_type,
+                        enum_value,
+                    );
                     Ok(value_payload.into())
                 }
             }
@@ -2117,6 +2227,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         &mut self,
         enum_value: StructValue<'ctx>,
         variant_tag_value: IntValue<'ctx>,
+        variant_name: &str,
     ) -> IntValue<'ctx> {
         let enum_tag_value = self.get_enum_tag(enum_value);
         let is_equal = self.builder.build_int_compare(
@@ -2125,7 +2236,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             variant_tag_value,
             "is_variant_cmp",
         );
-        let is_equal_bool = self.i1_to_bool(is_equal, "is_variant");
+        let is_equal_bool = self.i1_to_bool(is_equal, &format!("is_variant_{}", variant_name));
         is_equal_bool
     }
 
@@ -2138,7 +2249,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     }
 
     fn get_enum_tag(&self, enum_value: StructValue<'ctx>) -> IntValue<'ctx> {
-        self.builder.build_extract_value(enum_value, 0, "get_tag").unwrap().into_int_value()
+        let s =
+            self.builder.build_extract_value(enum_value, 0, "get_tag").unwrap().into_struct_value();
+        self.builder.build_extract_value(s, 0, "get_tag").unwrap().into_int_value()
     }
 
     fn get_enum_payload_reference(
@@ -2155,13 +2268,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     fn get_enum_payload(
         &self,
+        envelope_type: StructType<'ctx>,
         variant_type: StructType<'ctx>,
         enum_value: StructValue<'ctx>,
     ) -> BasicValueEnum<'ctx> {
         // We have to use a pointer to the enum value to extract the payload
         // in the type of the variant; its like a reinterpret cast
 
-        let ptr = self.builder.build_alloca(variant_type, "enum_ptr_for_payload");
+        let ptr = self.builder.build_alloca(envelope_type, "enum_ptr_for_payload");
         self.builder.build_store(ptr, enum_value);
 
         // Cannot cast aggregate types :'(
@@ -2306,7 +2420,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let num_bits = match intrinsic_type {
                     IntrinsicFunction::SizeOf => size.size_bits,
                     IntrinsicFunction::SizeOfStride => size.stride_bits,
-                    IntrinsicFunction::AlignOf => size.align_bits,
+                    IntrinsicFunction::AlignOf => size.pref_align_bits,
                     _ => unreachable!(),
                 };
                 let num_bytes = num_bits / 8;
@@ -2753,8 +2867,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     fn set_up_machine(module: &mut LlvmModule) -> TargetMachine {
         // Target::initialize_aarch64(&InitializationConfig::default());
         Target::initialize_native(&InitializationConfig::default()).unwrap();
-        // let triple = TargetMachine::get_default_triple();
-        let triple = TargetTriple::create("arm64-apple-macosx14.4.0");
+        // let triple_str = TargetMachine::get_default_triple();
+        // I use this explicit triple to avoid an annoying warning log. This will obviously
+        // have to change to support other triples
+        let triple_str = "arm64-apple-macosx14.4.0";
+        let triple = TargetTriple::create(triple_str);
         let target = Target::from_triple(&triple).unwrap();
         let machine = target
             .create_target_machine(
@@ -2767,7 +2884,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             )
             .unwrap();
 
-        module.set_data_layout(&machine.get_target_data().get_data_layout());
+        let data_layout = &machine.get_target_data().get_data_layout();
+        info!(
+            "Initializing to 'native' target using triple {triple_str}. Layout: {}",
+            data_layout.as_str().to_string_lossy()
+        );
+        module.set_data_layout(data_layout);
         module.set_triple(&triple);
 
         machine
@@ -2782,10 +2904,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             self.llvm_module.strip_debug_info();
         }
         self.llvm_module.verify().map_err(|err| {
-            eprintln!("{}", self.llvm_module.to_string());
+            let llvm_text = self.output_llvm_ir_text();
+            let mut f = std::fs::File::create(format!("{}_fail.ll", self.name()))
+                .expect("Failed to create .ll file");
+            std::io::Write::write_all(&mut f, llvm_text.as_bytes()).unwrap();
             anyhow::anyhow!("Module '{}' failed validation: {}", self.name(), err.to_string_lossy())
         })?;
 
+        // FIXME: Use standard pass builders, see TODO.md
         let module_pass_manager: PassManager<LlvmModule<'ctx>> = PassManager::create(());
         if optimize {
             module_pass_manager.add_scalar_repl_aggregates_pass_ssa();
