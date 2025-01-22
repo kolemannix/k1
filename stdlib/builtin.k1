@@ -95,21 +95,6 @@ ability Iterable[impl Item, impl I: Iterator[Item = Item]] {
   fn iterator(self: Self): I
 }
 
-impl[S, F] Try[T = S, E = F] for Result[S, F] {
-  fn makeError(e: E): Self   { .Err(e) }
-  fn makeOk(t: T): Self { .Ok(t) }
-
-  fn isOk(self: Self): bool { self is .Ok(_) }
-  fn getOk(self: Self): T  { self.asOk().!.value }
-  fn getError(self: Self): E { self.asErr().!.value }
-}
-
-impl[S, F] Unwrap[Inner = S] for Result[S, F] {
-  fn hasValue(self: Self): bool { self is .Ok(_) }
-  fn unwrap(self: Self): Inner { self.getOk() }
-  fn make(inner: Inner): Self { Try/makeOk(inner) }
-}
-
 // inline fn unwrap_or[U, V: Unwrap[Inner = U]](v: V, backup: int): U {
 //   if v.hasValue() v.unwrap() else backup
 // }
