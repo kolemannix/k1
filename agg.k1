@@ -1,0 +1,51 @@
+// Functions later
+// fn getX(p: { x: int, y: int}): int { p.x }
+
+// starting point
+// ; Function Attrs: mustprogress nofree norecurse nosync nounwind readnone willreturn
+// define i64 @getX({ i64, i64 } %p) #0 {
+// entry:
+//   %p.fca.0.extract = extractvalue { i64, i64 } %p, 0
+//   %p.fca.1.extract = extractvalue { i64, i64 } %p, 1
+//   %loaded_value.fca.0.insert = insertvalue { i64, i64 } poison, i64 %p.fca.0.extract, 0
+//   %loaded_value.fca.1.insert = insertvalue { i64, i64 } %loaded_value.fca.0.insert, i64 %p.fca.1.extract, 1
+//   %struc.x = extractvalue { i64, i64 } %loaded_value.fca.1.insert, 0
+//   ret i64 %struc.x
+// }
+// Goal:
+// %x = getelementptr %p, 0, 1
+// ret i64 %x
+
+// Starting point
+// define i64 @main() {
+// entry:
+//   %p = alloca { i64, i64 }, align 8
+//   store { i64, i64 } { i64 3, i64 4 }, ptr %p, align 8
+//   %0 = load { { i64, ptr } }, ptr @str, align 8
+//   %struct_init_0 = insertvalue { { { i64, ptr } }, i64 } undef, { { i64, ptr } } %0, 0
+//   %struct_init_1 = insertvalue { { { i64, ptr } }, i64 } %struct_init_0, i64 33, 1
+//   %loaded_value = load { i64, i64 }, ptr %p, align 8
+//   %struc.x = extractvalue { i64, i64 } %loaded_value, 0
+//   %"==_i1" = icmp eq i64 %struc.x, 3
+//   %"==_res" = sext i1 %"==_i1" to i8
+//   %1 = call i8 @assert({ { { i64, ptr } }, i64 } %struct_init_1, i8 %"==_res")
+//   ret i64 0
+// }
+
+deftype alias P3 = { x: int, y: int, z: int }
+fn one(p: P3): int {
+  // if p.z == 3 println("YES");
+  p.z
+}
+fn two(p: P3*): int {
+  //if p.z == 3 println("YES");
+  p.z
+}
+
+fn main(): int {
+  // Test with agg, no agg, referencing, no referencing
+  let* p1 = { x: 1, y: 2, z: 3 };
+  let o = one(p1.*);
+  let t = two(p1);
+  t
+}
