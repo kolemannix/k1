@@ -10607,6 +10607,10 @@ impl TypedModule {
         write_error(w, &self.ast.spans, &self.ast.sources, &error.message, error.level, error.span)
     }
 
+    pub fn write_location(&self, w: &mut impl std::io::Write, span: SpanId) -> std::io::Result<()> {
+        parse::write_error_location(w, &self.ast.spans, &self.ast.sources, span, ErrorLevel::Error)
+    }
+
     pub fn ice(&self, msg: impl AsRef<str>, error: Option<&TyperError>) -> ! {
         if let Some(error) = error {
             self.write_error(&mut std::io::stderr(), error).unwrap();
