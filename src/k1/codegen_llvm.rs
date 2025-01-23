@@ -1,12 +1,15 @@
 use std::cell::RefCell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::ops::Deref;
 use std::path::Path;
 
+use ahash::HashMapExt;
 use anyhow::bail;
 use either::Either;
+use fxhash::FxHashMap;
+use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -93,6 +96,14 @@ fn size_info(td: &TargetData, typ: &dyn AnyType) -> SizeInfo {
     sz
 }
 
+// TODO: cache these by type id?
+struct K1LlvmFunctionType<'ctx> {
+    llvm_function_type: LlvmFunctionType<'ctx>,
+    param_types: Vec<K1LlvmType<'ctx>>,
+    return_type: K1LlvmType<'ctx>,
+    is_sret: bool,
+}
+
 #[derive(Debug, Copy, Clone)]
 struct BranchSetup<'ctx> {
     then_block: BasicBlock<'ctx>,
@@ -107,13 +118,13 @@ struct StructDebugMember<'ctx, 'name> {
 #[derive(Debug, Clone, Copy)]
 enum LlvmValue<'ctx> {
     BasicValue(BasicValueEnum<'ctx>),
-    Never(InstructionValue<'ctx>),
+    Void(InstructionValue<'ctx>),
 }
 impl<'ctx> LlvmValue<'ctx> {
     fn as_basic_value(self) -> Either<InstructionValue<'ctx>, BasicValueEnum<'ctx>> {
         match self {
             LlvmValue::BasicValue(bv) => Either::Right(bv),
-            LlvmValue::Never(instr) => Either::Left(instr),
+            LlvmValue::Void(instr) => Either::Left(instr),
         }
     }
     fn expect_basic_value(self) -> BasicValueEnum<'ctx> {
@@ -213,11 +224,12 @@ struct LlvmValueType<'ctx> {
     size: SizeInfo,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct EnumVariantStructType<'ctx> {
+#[derive(Debug, Clone)]
+struct EnumVariantType<'ctx> {
     name: Identifier,
     envelope_type: StructType<'ctx>,
     variant_struct_type: StructType<'ctx>,
+    payload_type: Option<K1LlvmType<'ctx>>,
     tag_value: IntValue<'ctx>,
     di_type: DIType<'ctx>,
     size: SizeInfo,
@@ -229,7 +241,7 @@ struct LlvmEnumType<'ctx> {
     #[allow(unused)]
     tag_type: IntType<'ctx>,
     base_struct_type: StructType<'ctx>,
-    variant_structs: Vec<EnumVariantStructType<'ctx>>,
+    variants: Vec<EnumVariantType<'ctx>>,
     di_type: DIType<'ctx>,
     size: SizeInfo,
 }
@@ -351,7 +363,7 @@ impl<'ctx> K1LlvmType<'ctx> {
     ) -> LlvmFunctionType<'ctx> {
         match self {
             K1LlvmType::Void(v) => v.void_type.fn_type(args, varargs),
-            other => other.rich_value_type().fn_type(args, varargs),
+            other => other.canonical_repr_type().fn_type(args, varargs),
         }
     }
 
@@ -399,7 +411,7 @@ impl<'ctx> K1LlvmType<'ctx> {
     fn value_any_type(&self) -> AnyTypeEnum<'ctx> {
         match self {
             K1LlvmType::Void(v) => v.void_type.as_any_type_enum(),
-            _ => self.rich_value_type().as_any_type_enum(),
+            _ => self.canonical_repr_type().as_any_type_enum(),
         }
     }
 
@@ -435,6 +447,7 @@ struct BuiltinTypes<'ctx> {
     char: IntType<'ctx>,
     ptr: PointerType<'ctx>,
     ptr_sized_int: IntType<'ctx>,
+    dynamic_closure_object: StructType<'ctx>,
 }
 
 #[derive(Clone, Copy)]
@@ -444,7 +457,9 @@ pub struct LoopInfo<'ctx> {
 }
 
 pub struct CodegenedFunction<'ctx> {
+    pub function_type: K1LlvmFunctionType<'ctx>,
     pub function_value: FunctionValue<'ctx>,
+    pub sret_pointer: Option<PointerValue<'ctx>>,
     pub instruction_count: usize,
 }
 
@@ -454,27 +469,25 @@ pub struct Codegen<'ctx, 'module> {
     llvm_module: LlvmModule<'ctx>,
     llvm_machine: TargetMachine,
     builder: Builder<'ctx>,
-    pub llvm_functions: HashMap<FunctionId, CodegenedFunction<'ctx>>,
-    llvm_types: RefCell<HashMap<TypeId, K1LlvmType<'ctx>>>,
-    /// The type of stored pointers here should be one level higher than the type of the
-    /// value pointed to. This is so that it can be used reliably, without matching or
-    /// checking, as a Pointer to the actual type
-    variables: HashMap<VariableId, VariablePointer<'ctx>>,
-    globals: HashMap<VariableId, GlobalValue<'ctx>>,
-    closure_environments: HashMap<TypeId, PointerValue<'ctx>>,
-    loops: HashMap<ScopeId, LoopInfo<'ctx>>,
+    pub llvm_functions: FxHashMap<FunctionId, CodegenedFunction<'ctx>>,
+    pub llvm_function_to_k1: FxHashMap<FunctionValue<'ctx>, FunctionId>,
+    llvm_types: RefCell<FxHashMap<TypeId, K1LlvmType<'ctx>>>,
+    variables: FxHashMap<VariableId, VariablePointer<'ctx>>,
+    globals: FxHashMap<VariableId, GlobalValue<'ctx>>,
+    closure_environments: FxHashMap<TypeId, PointerValue<'ctx>>,
+    loops: FxHashMap<ScopeId, LoopInfo<'ctx>>,
     builtin_types: BuiltinTypes<'ctx>,
     debug: DebugContext<'ctx>,
 }
 
 struct DebugContext<'ctx> {
-    files: HashMap<FileId, DIFile<'ctx>>,
+    files: FxHashMap<FileId, DIFile<'ctx>>,
     debug_builder: DebugInfoBuilder<'ctx>,
     #[allow(unused)]
     compile_unit: DICompileUnit<'ctx>,
     debug_stack: Vec<DebugStackEntry<'ctx>>,
     #[allow(unused)]
-    scopes: HashMap<ScopeId, DIScope<'ctx>>,
+    scopes: FxHashMap<ScopeId, DIScope<'ctx>>,
     strip_debug: bool,
 }
 
@@ -588,7 +601,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         // llvm_module.add_global_metadata("llvm.module.flags", &md3).unwrap();
         llvm_module.add_global_metadata("llvm.module.flags", &md4).unwrap();
 
-        let di_files: HashMap<FileId, DIFile> = module
+        let di_files: FxHashMap<FileId, DIFile> = module
             .ast
             .sources
             .iter()
@@ -601,7 +614,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             debug_builder,
             compile_unit,
             debug_stack: Vec::new(),
-            scopes: HashMap::new(),
+            scopes: FxHashMap::new(),
             strip_debug: !debug,
         };
         // May need to restore this
@@ -630,15 +643,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let machine = Codegen::set_up_machine(&mut llvm_module);
         let target_data = machine.get_target_data();
 
-        let pointers = HashMap::new();
-        let globals = HashMap::new();
-        let int = ctx.i64_type();
-
-        let closure_environments = HashMap::new();
-
+        let ptr = ctx.i64_type().ptr_type(AddressSpace::default());
         let builtin_types = BuiltinTypes {
             ctx,
-            int,
+            int: ctx.i64_type(),
             unit: ctx.i8_type(),
             unit_value: ctx.i8_type().const_int(0, false),
             // If we switch bools to i8, we need to cast to i1 for branches
@@ -650,8 +658,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             char: char_type,
             // It doesn't matter what type the pointer points to; its irrelevant in LLVM
             // since pointers do not actually have types
-            ptr: ctx.i64_type().ptr_type(AddressSpace::default()),
+            ptr,
             ptr_sized_int: ctx.ptr_sized_int_type(&target_data, None),
+            dynamic_closure_object: ctx
+                .struct_type(&[ptr.as_basic_type_enum(), ptr.as_basic_type_enum()], false),
         };
 
         Codegen {
@@ -660,12 +670,13 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             llvm_module,
             llvm_machine: machine,
             builder,
-            variables: pointers,
-            globals,
-            closure_environments,
-            loops: HashMap::new(),
-            llvm_functions: HashMap::new(),
-            llvm_types: RefCell::new(HashMap::new()),
+            variables: FxHashMap::new(),
+            globals: FxHashMap::new(),
+            closure_environments: FxHashMap::new(),
+            loops: FxHashMap::new(),
+            llvm_functions: FxHashMap::new(),
+            llvm_function_to_k1: FxHashMap::new(),
+            llvm_types: RefCell::new(FxHashMap::new()),
             builtin_types,
             debug: debug_context,
         }
@@ -1095,7 +1106,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     enum_type.variants.iter().zip(payload_types.into_iter())
                 {
                     let variant_name = format!("{enum_name}.{}", self.get_ident_name(variant.name));
-                    let (variant_struct, variant_struct_debug) =
+                    let (variant_struct, variant_struct_debug, payload_type) =
                         if let Some(_payload_type_id) = variant.payload {
                             let variant_payload_type = maybe_payload_type.unwrap();
                             let fields = &[
@@ -1116,7 +1127,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                                     },
                                 ],
                             );
-                            (variant_struct_type, debug_struct)
+                            (variant_struct_type, debug_struct, Some(variant_payload_type))
                         } else {
                             let variant_struct_type = Codegen::make_named_struct(
                                 self.ctx,
@@ -1131,7 +1142,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                                     &[StructDebugMember { name: "tag", di_type: tag_field_debug }],
                                 )
                             };
-                            (variant_struct_type, debug_struct)
+                            (variant_struct_type, debug_struct, None)
                         };
                     eprintln!(
                         "Variant {} {}, size is {:?}",
@@ -1139,10 +1150,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         variant_struct.print_to_string(),
                         self.size_info(&variant_struct)
                     );
-                    variant_structs.push(EnumVariantStructType {
+                    variant_structs.push(EnumVariantType {
                         name: variant.name,
                         envelope_type: self.ctx.struct_type(&[], false),
                         variant_struct_type: variant_struct,
+                        payload_type,
                         tag_value: tag_int_type.const_int(variant.index as u64, false),
                         di_type: variant_struct_debug,
                         size: self.size_info(&variant_struct),
@@ -1247,7 +1259,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     type_id,
                     tag_type: tag_int_type,
                     base_struct_type: physical_type,
-                    variant_structs,
+                    variants: variant_structs,
                     di_type: debug_union_type,
                     size: physical_type_size_info,
                 }
@@ -1301,7 +1313,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 }
             }
             Type::Function(_function_type) => {
-                let pointee = self.make_llvm_function_type(type_id)?;
+                let function_type = self.make_llvm_function_type(type_id)?;
+                let pointee_type = function_type.llvm_function_type;
                 let placeholder_pointee = self.codegen_type(I8_TYPE_ID)?.debug_type();
 
                 // nocommit: Function probably shouldn't use this, idk... I renamed it to Reference
@@ -1309,13 +1322,13 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 // happen to pass by pointer
                 Ok(K1LlvmType::Reference(LlvmReferenceType {
                     type_id,
-                    pointer_type: pointee.ptr_type(AddressSpace::default()),
-                    pointee_type: pointee.as_any_type_enum(),
+                    pointer_type: pointee_type.ptr_type(AddressSpace::default()),
+                    pointee_type: pointee_type.as_any_type_enum(),
                     di_type: self
                         .debug
                         .debug_builder
                         .create_pointer_type(
-                            "Pointer",
+                            "function_ptr",
                             placeholder_pointee,
                             self.builtin_types.ptr_sized_int.get_bit_width() as u64,
                             self.builtin_types.ptr_sized_int.get_bit_width(),
@@ -1369,20 +1382,35 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     fn make_llvm_function_type(
         &self,
         function_type_id: TypeId,
-    ) -> CodegenResult<LlvmFunctionType<'ctx>> {
+    ) -> CodegenResult<K1LlvmFunctionType<'ctx>> {
         let function_type = self.module.types.get(function_type_id).as_function().unwrap();
         let return_type = self.codegen_type(function_type.return_type)?;
-        let params: CodegenResult<Vec<BasicMetadataTypeEnum<'ctx>>> = function_type
-            .params
-            .iter()
-            .map(|p| {
-                self.codegen_type(p.type_id)
-                    .map(|t| BasicMetadataTypeEnum::from(t.rich_value_type()))
-            })
-            .collect();
-        let params: Vec<_> = params?;
-        let fn_type = return_type.fn_type(&params, false);
-        Ok(fn_type)
+        let is_sret = return_type.is_aggregate();
+        let mut param_types: Vec<K1LlvmType<'ctx>> =
+            Vec::with_capacity(function_type.params.len() + 1);
+        for p in function_type.params.iter() {
+            let param_type = self.codegen_type(p.type_id)?;
+            param_types.push(param_type)
+        }
+
+        let actual_params = if is_sret {
+            let mut p: Vec<BasicMetadataTypeEnum<'ctx>> = Vec::with_capacity(param_types.len() + 1);
+            p.push(return_type.canonical_repr_type().into());
+            p.extend(
+                param_types.iter().map(|p| BasicMetadataTypeEnum::from(p.canonical_repr_type())),
+            );
+            p
+        } else {
+            param_types.iter().map(|p| p.canonical_repr_type().into()).collect()
+        };
+
+        let fn_type = if is_sret {
+            self.ctx.void_type().fn_type(&actual_params, false)
+        } else {
+            return_type.fn_type(&actual_params, false)
+        };
+
+        Ok(K1LlvmFunctionType { llvm_function_type: fn_type, param_types, return_type, is_sret })
     }
 
     fn get_di_type_name(di_type: DIType<'ctx>) -> String {
@@ -1408,8 +1436,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     fn codegen_let(&mut self, let_stmt: &LetStmt) -> CodegenResult<LlvmValue<'ctx>> {
         let value = self.codegen_expr(&let_stmt.initializer)?;
 
-        if let LlvmValue::Never(instr) = value {
-            return Ok(LlvmValue::Never(instr));
+        if let LlvmValue::Void(instr) = value {
+            return Ok(LlvmValue::Void(instr));
         }
         let value = value.expect_basic_value();
 
@@ -1526,9 +1554,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         if ir_if.ty == NEVER_TYPE_ID {
             // Both branches are divergent
             let unreachable = self.builder.build_unreachable();
-            Ok(LlvmValue::Never(unreachable))
+            Ok(LlvmValue::Void(unreachable))
         } else {
-            let phi_value = self.builder.build_phi(typ.rich_value_type(), "if_phi");
+            let phi_value = self.builder.build_phi(typ.canonical_repr_type(), "if_phi");
             if let Some((cons_inc_block, cons_value)) = consequent_incoming {
                 phi_value.add_incoming(&[(&cons_value, cons_inc_block)]);
             };
@@ -1578,36 +1606,25 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         name: &str,
         make_copy: bool,
     ) -> BasicValueEnum<'ctx> {
-        match llvm_type {
-            //// References in the source language are not represented by a ptr to a ptr, but simply
-            //// by a single pointer. So we don't have to perform a load.
-            //K1LlvmType::Reference(r) => {
-            //    // For variables that point to references, they are already pointers
-            //    // so we just return them
-            //    eprintln!("Returning my actual pointer for reference type variable {}", name);
-            //    source.as_basic_value_enum()
-            //}
-            // Aggregates are already represented as pointers to their locations
-            // so nothing needs to be done
-            _ if llvm_type.is_aggregate() => {
-                // No-op; we want to interact with these types as pointers
-                eprintln!(
-                    "smart loading noop on type {}",
-                    self.module.type_id_to_string(llvm_type.type_id())
-                );
-                if make_copy {
-                    self.alloca_copy_entire_value(
-                        source,
-                        llvm_type.rich_value_type(),
-                        &format!("{name}_copy"),
-                    )
-                    .as_basic_value_enum()
-                } else {
-                    source.as_basic_value_enum()
-                }
+        if llvm_type.is_aggregate() {
+            // No-op; we want to interact with these types as pointers
+            debug!(
+                "smart loading noop on type {}",
+                self.module.type_id_to_string(llvm_type.type_id())
+            );
+            if make_copy {
+                self.alloca_copy_entire_value(
+                    source,
+                    llvm_type.rich_value_type(),
+                    &format!("{name}_copy"),
+                )
+                .as_basic_value_enum()
+            } else {
+                source.as_basic_value_enum()
             }
+        } else {
             // Scalars must be truly loaded
-            _ => self.builder.build_load(llvm_type.rich_value_type(), source, name),
+            self.builder.build_load(llvm_type.rich_value_type(), source, name)
         }
     }
 
@@ -1623,7 +1640,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     }
 
     fn memcpy_entire_value(
-        &mut self,
+        &self,
         dst: PointerValue<'ctx>,
         src: PointerValue<'ctx>,
         ty: BasicTypeEnum<'ctx>,
@@ -1637,29 +1654,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             .unwrap()
             .as_instruction_value()
             .unwrap()
-    }
-
-    fn load_k1_value_copy(
-        &mut self,
-        pointee_ty: BasicTypeEnum<'ctx>,
-        source: PointerValue<'ctx>,
-        name: &str,
-    ) -> BasicValueEnum<'ctx> {
-        eprintln!("load k1 value copy called with {}", pointee_ty.print_to_string());
-        // Maybe we need the K1 type, not sure yet, for now I'll just check if its an Llvm struct?
-        // I'm thinking about some structs we may actually want to load, but in that case we
-        // wouldn't call this function, right?
-        if pointee_ty.is_struct_type() || pointee_ty.is_array_type() {
-            eprintln!("smart loading noop on type {}", pointee_ty.print_to_string());
-            let copied_data = self.alloca_copy_entire_value(
-                source,
-                pointee_ty,
-                &format!("aggregate_copy_for_{}", name),
-            );
-            copied_data.as_basic_value_enum()
-        } else {
-            self.builder.build_load(pointee_ty, source, name)
-        }
     }
 
     fn codegen_expr(&mut self, expr: &TypedExpr) -> CodegenResult<LlvmValue<'ctx>> {
@@ -1729,12 +1723,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let global_value = self.llvm_module.add_global(string_wrapper_struct, None, "str");
                 global_value.set_constant(true);
                 global_value.set_initializer(&global_str_value);
-                let loaded = self.builder.build_load(
-                    string_wrapper_struct,
-                    global_value.as_pointer_value(),
-                    "",
-                );
-                Ok(loaded.into())
+                Ok(global_value.as_pointer_value().as_basic_value_enum().into())
             }
             TypedExpr::Variable(ir_var) => {
                 if let Some(pointer) = self.variables.get(&ir_var.variable_id) {
@@ -1798,22 +1787,22 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 }
             }
             TypedExpr::Struct(struc) => {
-                let struct_llvm_type =
-                    self.codegen_type(struc.type_id)?.rich_value_type().into_struct_type();
+                let struct_k1_llvm_type = self.codegen_type(struc.type_id)?.expect_struct();
+                let struct_llvm_type = struct_k1_llvm_type.struct_type;
                 let struct_ptr = self.builder.build_alloca(struct_llvm_type, "struct_literal");
                 for (idx, field) in struc.fields.iter().enumerate() {
                     let value = self.codegen_expr_basic_value(&field.expr)?;
-                    self.builder.build_store(
-                        self.builder
-                            .build_struct_gep(
-                                struct_llvm_type,
-                                struct_ptr,
-                                idx as u32,
-                                &format!("{}_load", self.module.name_of(field.name)),
-                            )
-                            .unwrap(),
-                        value,
-                    );
+                    let field_addr = self
+                        .builder
+                        .build_struct_gep(
+                            struct_llvm_type,
+                            struct_ptr,
+                            idx as u32,
+                            &format!("{}_store_addr", self.module.name_of(field.name)),
+                        )
+                        .unwrap();
+                    let field_type = &struct_k1_llvm_type.fields[idx];
+                    self.store_k1_value(field_type, field_addr, value)
                 }
                 Ok(struct_ptr.as_basic_value_enum().into())
             }
@@ -1884,7 +1873,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let enum_type = llvm_type.expect_enum();
                 let variant_tag_name = enum_constr.variant_name;
 
-                let enum_variant = enum_type.variant_structs[enum_constr.variant_index as usize];
+                let enum_variant = &enum_type.variants[enum_constr.variant_index as usize];
 
                 let enum_ptr = self.builder.build_alloca(enum_variant.envelope_type, "enum_constr");
 
@@ -1914,21 +1903,15 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     self.builder.build_store(payload_pointer, value);
                 }
 
-                let loaded_value =
-                    self.builder.build_load(enum_type.base_struct_type, enum_ptr, "enum_value");
-                Ok(loaded_value.into())
+                Ok(enum_ptr.as_basic_value_enum().into())
             }
             TypedExpr::EnumIsVariant(enum_is_variant) => {
                 let enum_value = self
                     .codegen_expr_basic_value(&enum_is_variant.target_expr)?
-                    .into_struct_value();
+                    .into_pointer_value();
                 let enum_llvm =
                     self.codegen_type(enum_is_variant.target_expr.get_type())?.expect_enum();
-                let variant = enum_llvm
-                    .variant_structs
-                    .iter()
-                    .find(|v| v.name == enum_is_variant.variant_name)
-                    .unwrap();
+                let variant = &enum_llvm.variants[enum_is_variant.variant_index as usize];
                 let is_variant_bool = self.codegen_enum_is_variant(
                     enum_value,
                     variant.tag_value,
@@ -1943,8 +1926,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     .get_type_id_dereferenced(enum_get_payload.target_expr.get_type());
                 let enum_type = self.codegen_type(enum_type)?.expect_enum();
                 let enum_value = self.codegen_expr_basic_value(&enum_get_payload.target_expr)?;
-                let variant_type =
-                    &enum_type.variant_structs[enum_get_payload.variant_index as usize];
+                let variant_type = &enum_type.variants[enum_get_payload.variant_index as usize];
 
                 if enum_get_payload.is_referencing {
                     let enum_value = enum_value.into_pointer_value();
@@ -1952,13 +1934,16 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         .get_enum_payload_reference(variant_type.variant_struct_type, enum_value);
                     Ok(payload_pointer.as_basic_value_enum().into())
                 } else {
-                    let enum_value = enum_value.into_struct_value();
-                    let value_payload = self.get_enum_payload(
-                        variant_type.envelope_type,
-                        variant_type.variant_struct_type,
-                        enum_value,
+                    let enum_value = enum_value.into_pointer_value();
+                    let payload_pointer = self
+                        .get_enum_payload_reference(variant_type.variant_struct_type, enum_value);
+                    let payload_copied = self.load_k1_value(
+                        variant_type.payload_type.as_ref().unwrap(),
+                        payload_pointer,
+                        "payload_by_value",
+                        true,
                     );
-                    Ok(value_payload.into())
+                    Ok(payload_copied.into())
                 }
             }
             TypedExpr::Cast(cast) => {
@@ -2101,8 +2086,31 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             TypedExpr::Return(ret) => {
                 let return_value = self.codegen_expr_basic_value(&ret.value)?;
-                let ret_inst = self.builder.build_return(Some(&return_value));
-                Ok(LlvmValue::Never(ret_inst))
+                let function = self.builder.get_insert_block().unwrap().get_parent().unwrap();
+                let function_id = self.llvm_function_to_k1.get(&function).unwrap();
+                let codegened_function = self.llvm_functions.get(function_id).unwrap();
+                match codegened_function.sret_pointer {
+                    None => {
+                        // Normal return
+                        let ret_inst = self.builder.build_return(Some(&return_value));
+                        Ok(LlvmValue::Void(ret_inst))
+                    }
+                    Some(sret_ptr) => {
+                        //if !return_value.is_pointer_value() {
+                        //    self.module
+                        //        .write_location(&mut std::io::stderr(), ret.value.get_span())
+                        //        .unwrap();
+                        //}
+                        // Store to the ptr and return void
+                        self.memcpy_entire_value(
+                            sret_ptr,
+                            return_value.into_pointer_value(),
+                            codegened_function.function_type.return_type.rich_value_type(),
+                        );
+                        // self.builder.build_store(sret_ptr, return_value);
+                        Ok(LlvmValue::Void(self.builder.build_return(None)))
+                    }
+                }
             }
             TypedExpr::Break(brk) => {
                 let loop_info = *self.loops.get(&brk.loop_scope).unwrap();
@@ -2111,7 +2119,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     self.builder.build_store(break_value_ptr, break_value);
                 }
                 let branch_inst = self.builder.build_unconditional_branch(loop_info.end_block);
-                Ok(LlvmValue::Never(branch_inst))
+                Ok(LlvmValue::Void(branch_inst))
             }
             TypedExpr::Closure(closure_expr) => {
                 let closure_type =
@@ -2142,23 +2150,26 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let closure_struct_type =
                     self.codegen_type(closure_object_type.struct_representation)?.expect_struct();
 
-                let ptr = self.builder.build_alloca(closure_struct_type.struct_type, "closure");
+                let closure_ptr =
+                    self.builder.build_alloca(closure_struct_type.struct_type, "closure");
                 let fn_ptr = self
                     .builder
-                    .build_struct_gep(closure_struct_type.struct_type, ptr, 0, "closure_fn")
+                    .build_struct_gep(closure_struct_type.struct_type, closure_ptr, 0, "closure_fn")
                     .unwrap();
                 let env_ptr = self
                     .builder
-                    .build_struct_gep(closure_struct_type.struct_type, ptr, 1, "closure_env")
+                    .build_struct_gep(
+                        closure_struct_type.struct_type,
+                        closure_ptr,
+                        1,
+                        "closure_env",
+                    )
                     .unwrap();
 
                 self.builder.build_store(fn_ptr, llvm_fn.as_global_value().as_pointer_value());
                 self.builder.build_store(env_ptr, environment_ptr);
 
-                let closure_struct =
-                    self.builder.build_load(closure_struct_type.struct_type, ptr, "closure");
-
-                Ok(LlvmValue::BasicValue(closure_struct))
+                Ok(closure_ptr.as_basic_value_enum().into())
             }
             TypedExpr::FunctionName(fn_name_expr) => {
                 let function_value = self.codegen_function_or_get(fn_name_expr.function_id)?;
@@ -2420,11 +2431,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     fn codegen_enum_is_variant(
         &mut self,
-        enum_value: StructValue<'ctx>,
+        enum_value: PointerValue<'ctx>,
         variant_tag_value: IntValue<'ctx>,
         variant_name: &str,
     ) -> IntValue<'ctx> {
-        let enum_tag_value = self.get_enum_tag(enum_value);
+        let enum_tag_value = self.get_enum_tag(variant_tag_value.get_type(), enum_value);
         let is_equal = self.builder.build_int_compare(
             IntPredicate::EQ,
             enum_tag_value,
@@ -2443,10 +2454,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         self.builder.build_int_cast(i1, self.builtin_types.boolean, name)
     }
 
-    fn get_enum_tag(&self, enum_value: StructValue<'ctx>) -> IntValue<'ctx> {
-        let s =
-            self.builder.build_extract_value(enum_value, 0, "get_tag").unwrap().into_struct_value();
-        self.builder.build_extract_value(s, 0, "get_tag").unwrap().into_int_value()
+    fn get_enum_tag(
+        &self,
+        tag_type: IntType<'ctx>,
+        enum_value: PointerValue<'ctx>,
+    ) -> IntValue<'ctx> {
+        // Just interpret the enum memory just as the int tag that is always at the start, no need to
+        // treat it as a struct
+        self.builder.build_load(tag_type, enum_value, "tag").into_int_value()
     }
 
     fn get_enum_payload_reference(
@@ -2461,32 +2476,32 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         payload_ptr
     }
 
-    fn get_enum_payload(
-        &self,
-        envelope_type: StructType<'ctx>,
-        variant_type: StructType<'ctx>,
-        enum_value: StructValue<'ctx>,
-    ) -> BasicValueEnum<'ctx> {
-        // We have to use a pointer to the enum value to extract the payload
-        // in the type of the variant; its like a reinterpret cast
-
-        let ptr = self.builder.build_alloca(envelope_type, "enum_ptr_for_payload");
-        self.builder.build_store(ptr, enum_value);
-
-        // Cannot cast aggregate types :'(
-        // let casted_ptr = self
-        //     .builder
-        //     .build_bitcast(ptr, variant_type.ptr_type(AddressSpace::default()), "variant_cast")
-        //     .into_pointer_value();
-        let payload_ptr =
-            self.builder.build_struct_gep(variant_type, ptr, 1, "get_payload_ptr").unwrap();
-        let payload_value = self.builder.build_load(
-            variant_type.get_field_type_at_index(1).unwrap(),
-            payload_ptr,
-            "get_payload",
-        );
-        payload_value
-    }
+    //fn get_enum_payload(
+    //    &self,
+    //    envelope_type: StructType<'ctx>,
+    //    variant_type: StructType<'ctx>,
+    //    enum_value: StructValue<'ctx>,
+    //) -> BasicValueEnum<'ctx> {
+    //    // We have to use a pointer to the enum value to extract the payload
+    //    // in the type of the variant; its like a reinterpret cast
+    //
+    //    let ptr = self.builder.build_alloca(envelope_type, "enum_ptr_for_payload");
+    //    self.builder.build_store(ptr, enum_value);
+    //
+    //    // Cannot cast aggregate types :'(
+    //    // let casted_ptr = self
+    //    //     .builder
+    //    //     .build_bitcast(ptr, variant_type.ptr_type(AddressSpace::default()), "variant_cast")
+    //    //     .into_pointer_value();
+    //    let payload_ptr =
+    //        self.builder.build_struct_gep(variant_type, ptr, 1, "get_payload_ptr").unwrap();
+    //    let payload_value = self.builder.build_load(
+    //        variant_type.get_field_type_at_index(1).unwrap(),
+    //        payload_ptr,
+    //        "get_payload",
+    //    );
+    //    payload_value
+    //}
 
     fn codegen_function_call(&mut self, call: &Call) -> CodegenResult<LlvmValue<'ctx>> {
         let typed_function = call.callee.maybe_function_id().map(|f| self.module.get_function(f));
@@ -2509,6 +2524,16 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         }
         let function_type = self.module.get_callee_function_type(&call.callee);
         let llvm_function_type = self.make_llvm_function_type(function_type)?;
+        let sret_alloca = if llvm_function_type.is_sret {
+            let sret_alloca = self
+                .builder
+                .build_alloca(llvm_function_type.return_type.rich_value_type(), "call_sret");
+            args.push_front(sret_alloca.into());
+            Some(sret_alloca)
+        } else {
+            None
+        };
+        let env_arg_index = if llvm_function_type.is_sret { 1 } else { 0 };
         let callsite_value = match &call.callee {
             Callee::StaticFunction(function_id) => {
                 let function_value = self.codegen_function_or_get(*function_id)?;
@@ -2519,7 +2544,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             Callee::StaticClosure { function_id, closure_type_id } => {
                 let closure_env_ptr =
                     self.closure_environments.get(closure_type_id).unwrap().as_basic_value_enum();
-                args.push_front(closure_env_ptr.into());
+                args.insert(env_arg_index, closure_env_ptr.into());
 
                 let function_value = self.codegen_function_or_get(*function_id)?;
 
@@ -2532,27 +2557,47 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
                 self.set_debug_location(call.span);
                 self.builder.build_indirect_call(
-                    llvm_function_type,
+                    llvm_function_type.llvm_function_type,
                     function_ptr,
                     args.make_contiguous(),
                     "",
                 )
             }
             Callee::DynamicClosure(callee_struct_expr) => {
+                eprintln!(
+                    "Type of callee_struct_expr is {}",
+                    self.module.type_id_to_string(callee_struct_expr.get_type())
+                );
+                let closure_object_type = self.builtin_types.dynamic_closure_object;
                 let callee_struct =
-                    self.codegen_expr_basic_value(callee_struct_expr)?.into_struct_value();
+                    self.codegen_expr_basic_value(callee_struct_expr)?.into_pointer_value();
+
+                self.set_debug_location(call.span);
+                let fn_ptr_gep = self
+                    .builder
+                    .build_struct_gep(closure_object_type, callee_struct, 0, "fn_ptr_gep")
+                    .unwrap();
                 let fn_ptr = self
                     .builder
-                    .build_extract_value(callee_struct, 0, "fn_ptr")
-                    .unwrap()
+                    .build_load(
+                        closure_object_type.get_field_type_at_index(0).unwrap(),
+                        fn_ptr_gep,
+                        "fn_ptr",
+                    )
                     .into_pointer_value();
-                let closure_env_ptr =
-                    self.builder.build_extract_value(callee_struct, 1, "env_ptr").unwrap();
-                args.push_front(closure_env_ptr.into());
+                let env_ptr_gep = self
+                    .builder
+                    .build_struct_gep(closure_object_type, callee_struct, 0, "env_ptr_gep")
+                    .unwrap();
+                let env_ptr = self.builder.build_load(
+                    closure_object_type.get_field_type_at_index(1).unwrap(),
+                    env_ptr_gep,
+                    "env_ptr",
+                );
+                args.insert(env_arg_index, env_ptr.into());
 
-                // self.set_debug_location(call.span);
                 self.builder.build_indirect_call(
-                    llvm_function_type,
+                    llvm_function_type.llvm_function_type,
                     fn_ptr,
                     args.make_contiguous(),
                     "",
@@ -2562,11 +2607,16 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         match callsite_value.try_as_basic_value() {
             either::Either::Left(value) => Ok(LlvmValue::BasicValue(value)),
             either::Either::Right(_instr) => {
-                if call.return_type == NEVER_TYPE_ID {
+                if llvm_function_type.is_sret {
+                    let sret_pointer = sret_alloca.unwrap();
+                    // We should technically 'load' this, but the load would be a no-op since
+                    // its an aggregate.
+                    Ok(sret_pointer.as_basic_value_enum().into())
+                } else if call.return_type == NEVER_TYPE_ID {
                     let unreachable = self.builder.build_unreachable();
-                    Ok(LlvmValue::Never(unreachable))
+                    Ok(LlvmValue::Void(unreachable))
                 } else {
-                    panic!("Function returned LLVM void but wasn't typed as never")
+                    panic!("Function returned LLVM void but wasn't typed as never and was not sret")
                 }
             }
         }
@@ -2588,16 +2638,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let g = self.llvm_module.add_global(string_struct_type, None, name);
         g.set_initializer(&string_struct);
         g.as_pointer_value()
-    }
-
-    #[allow(unused)]
-    fn const_string_loaded(&self, string: &str, name: &str) -> StructValue<'ctx> {
-        let string_type = self.codegen_type(STRING_TYPE_ID).unwrap();
-        let string_struct_type = string_type.rich_value_type().into_struct_type();
-        let ptr = self.const_string_ptr(string, name);
-        self.builder
-            .build_load(string_struct_type, ptr, &format!("{name}_loaded"))
-            .into_struct_value()
     }
 
     fn codegen_intrinsic_inline(
@@ -2702,7 +2742,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let mut last: LlvmValue<'ctx> = unit_value;
         self.set_debug_location(block.span);
         for stmt in &block.statements {
-            if let LlvmValue::Never(_never_instr) = last {
+            if let LlvmValue::Void(_never_instr) = last {
                 eprintln!("Aborting block after generating {}", _never_instr);
                 return Ok(last);
             }
@@ -2814,16 +2854,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         Ok(break_value.into())
     }
 
-    fn push_function_debug_info(
+    fn make_function_debug_info(
         &mut self,
-        function: &TypedFunction,
-        return_type: &K1LlvmType<'ctx>,
-        param_types: &[K1LlvmType<'ctx>],
-    ) -> CodegenResult<DISubprogram<'ctx>> {
-        let return_type = return_type.debug_type();
-        let dbg_param_types =
-            &param_types.iter().map(|param_type| param_type.debug_type()).collect::<Vec<_>>();
-        let span_id = self.module.ast.get_span_for_id(function.parsed_id);
+        function_name: &str,
+        function_span: SpanId,
+        return_type: DIType<'ctx>,
+        param_debug_types: &[DIType<'ctx>],
+    ) -> CodegenResult<(DISubprogram<'ctx>, DIFile<'ctx>)> {
+        let span_id = function_span;
         let function_file_id = self.module.ast.spans.get(span_id).file_id;
         let (function_line, _) =
             self.module.ast.get_lines_for_span_id(span_id).expect("line for span");
@@ -2833,12 +2871,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let dbg_fn_type = self.debug.debug_builder.create_subroutine_type(
             *function_file,
             Some(return_type),
-            dbg_param_types,
+            param_debug_types,
             0,
         );
         let di_subprogram = self.debug.debug_builder.create_function(
             self.debug.current_scope(),
-            self.module.ast.identifiers.get_name(function.name),
+            function_name,
             None,
             *function_file,
             function_line_number,
@@ -2849,9 +2887,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             0,
             false,
         );
-
-        self.debug.push_scope(di_subprogram.as_debug_info_scope(), *function_file);
-        Ok(di_subprogram)
+        Ok((di_subprogram, *function_file))
     }
 
     fn codegen_function_or_get(
@@ -2864,6 +2900,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         debug!("\ncodegen function\n{}", self.module.function_id_to_string(function_id, true));
 
         let function = self.module.get_function(function_id);
+        let function_type_id = function.type_id;
         let function_type = self.module.types.get(function.type_id).as_function().unwrap();
 
         let function_line_number = self
@@ -2880,18 +2917,30 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let mut param_metadata_types: Vec<BasicMetadataTypeEnum<'ctx>> =
             Vec::with_capacity(function_type.params.len());
 
+        let llvm_function_type = self.make_llvm_function_type(function_type_id)?;
+        let is_sret = llvm_function_type.is_sret;
+
+        let sret_attribute = if is_sret {
+            let struct_type = llvm_function_type.return_type.rich_value_type();
+            let sret_attribute = self.ctx.create_type_attribute(
+                Attribute::get_named_enum_kind_id("sret"),
+                struct_type.as_any_type_enum(),
+            );
+            Some(sret_attribute)
+        } else {
+            None
+        };
+
         for param in function_type.params.iter() {
             let res = self.codegen_type(param.type_id)?;
             param_metadata_types.push(BasicMetadataTypeEnum::from(res.canonical_repr_type()));
             param_types.push(res);
         }
-        let return_type = self.codegen_type(function_type.return_type)?;
 
         let llvm_name = match function.linkage {
             TyperLinkage::External(Some(name)) => self.module.name_of(name),
             _ => &self.module.make_qualified_name(function.scope, function.name, ".", true),
         };
-        let fn_ty = return_type.fn_type(&param_metadata_types, false);
         let llvm_linkage = match function.linkage {
             TyperLinkage::Standard => None,
             TyperLinkage::External(_name) => Some(LlvmLinkage::External),
@@ -2904,21 +2953,65 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 llvm_name
             );
         }
-        let function_value = self.llvm_module.add_function(llvm_name, fn_ty, llvm_linkage);
+        let function_value = self.llvm_module.add_function(
+            llvm_name,
+            llvm_function_type.llvm_function_type,
+            llvm_linkage,
+        );
+        if let Some(attribute) = sret_attribute {
+            function_value.add_attribute(AttributeLoc::Param(0), attribute);
+        }
 
-        self.llvm_functions
-            .insert(function_id, CodegenedFunction { function_value, instruction_count: 0 });
+        // nocommit: Test if debug info needs to be 'sret' converted
+        let function_span = self.module.ast.get_span_for_id(function.parsed_id);
+        let (di_subprogram, di_file) = self.make_function_debug_info(
+            self.module.name_of(function.name),
+            function_span,
+            llvm_function_type.return_type.debug_type(),
+            &llvm_function_type.param_types.iter().map(|t| t.debug_type()).collect::<Vec<_>>(),
+        )?;
+
+        self.llvm_functions.insert(
+            function_id,
+            CodegenedFunction {
+                function_type: llvm_function_type,
+                function_value,
+                sret_pointer: None,
+                instruction_count: 0,
+            },
+        );
+        self.llvm_function_to_k1.insert(function_value, function_id);
 
         if matches!(function.linkage, Linkage::External(_)) {
             return Ok(function_value);
         }
 
-        let di_subprogram = self.push_function_debug_info(function, &return_type, &param_types)?;
+        self.debug.push_scope(di_subprogram.as_debug_info_scope(), di_file);
 
         let entry_block = self.ctx.append_basic_block(function_value, "entry");
         self.builder.position_at_end(entry_block);
+        if is_sret {
+            self.llvm_functions.get_mut(&function_id).unwrap().sret_pointer =
+                Some(function_value.get_first_param().unwrap().into_pointer_value())
+        }
         for (i, param) in function_value.get_param_iter().enumerate() {
-            let typed_param = &function_type.params[i];
+            let sret_offset = if is_sret { 1 } else { 0 };
+            let is_sret_param = i == 0 && is_sret;
+            if is_sret_param {
+                param.set_name("sret_ptr");
+                continue;
+            }
+            let typed_param = if is_sret_param {
+                &FnParamType {
+                    name: self.module.ast.identifiers.get("ret").unwrap(),
+                    type_id: function_type.return_type,
+                    is_context: false,
+                    is_closure_env: false,
+                    span: self.module.ast.get_span_for_id(function.parsed_id),
+                }
+            } else {
+                &function_type.params[i - sret_offset]
+            };
             let ty = self.codegen_type(typed_param.type_id)?;
             let param_name = self.module.ast.identifiers.get_name(typed_param.name);
             trace!(
@@ -2957,7 +3050,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.set_debug_location(typed_param.span),
                 store_instr,
             );
-            let variable_id = function.param_variables[i];
+            let variable_id = function.param_variables[i - sret_offset];
             self.variables.insert(
                 variable_id,
                 VariablePointer {
@@ -2973,7 +3066,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let value = self
                     .codegen_intrinsic_function_body(intrinsic_type, function)?
                     .as_basic_value_enum();
-                LlvmValue::Never(self.builder.build_return(Some(&value)))
+                LlvmValue::Void(self.builder.build_return(Some(&value)))
             }
             None => {
                 let function_block = function.body_block.as_ref().unwrap_or_else(|| {
@@ -3034,10 +3127,16 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 TypedExpr::Integer(integer) => {
                     let llvm_value = self.codegen_integer_value(integer)?;
                     let variable = self.module.variables.get(constant.variable_id);
+                    let name = self.module.make_qualified_name(
+                        variable.owner_scope,
+                        variable.name,
+                        "__",
+                        false,
+                    );
                     let llvm_global = self.llvm_module.add_global(
                         llvm_value.get_type(),
                         Some(AddressSpace::default()),
-                        self.module.name_of(variable.name),
+                        &name,
                     );
                     llvm_global.set_constant(true);
                     llvm_global.set_initializer(&llvm_value);

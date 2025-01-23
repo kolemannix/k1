@@ -15,6 +15,17 @@ define i64 @one(ptr noundef %0) #0 {
 }
 
 ; Function Attrs: noinline nounwind optnone ssp uwtable(sync)
+define void @structRet(ptr noalias sret(%struct.P3) align 8 %0) #0 {
+  %2 = getelementptr inbounds %struct.P3, ptr %0, i32 0, i32 0
+  store i64 1, ptr %2, align 8
+  %3 = getelementptr inbounds %struct.P3, ptr %0, i32 0, i32 1
+  store i64 2, ptr %3, align 8
+  %4 = getelementptr inbounds %struct.P3, ptr %0, i32 0, i32 2
+  store i64 3, ptr %4, align 8
+  ret void
+}
+
+; Function Attrs: noinline nounwind optnone ssp uwtable(sync)
 define i32 @main() #0 {
   %1 = alloca i32, align 4
   %2 = alloca %struct.P3, align 8
@@ -26,17 +37,14 @@ define i32 @main() #0 {
   store i64 4, ptr %5, align 8
   %6 = getelementptr inbounds %struct.P3, ptr %2, i32 0, i32 2
   store i64 0, ptr %6, align 8
-  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %3, ptr align 8 %2, i64 24, i1 false)
-  %7 = call i64 @one(ptr noundef %3)
-  %8 = trunc i64 %7 to i32
-  ret i32 %8
+  call void @structRet(ptr sret(%struct.P3) align 8 %3)
+  %7 = getelementptr inbounds %struct.P3, ptr %3, i32 0, i32 2
+  %8 = load i64, ptr %7, align 8
+  %9 = trunc i64 %8 to i32
+  ret i32 %9
 }
 
-; Function Attrs: argmemonly nocallback nofree nounwind willreturn
-declare void @llvm.memcpy.p0.p0.i64(ptr noalias nocapture writeonly, ptr noalias nocapture readonly, i64, i1 immarg) #1
-
 attributes #0 = { noinline nounwind optnone ssp uwtable(sync) "frame-pointer"="non-leaf" "min-legal-vector-width"="0" "no-trapping-math"="true" "probe-stack"="__chkstk_darwin" "stack-protector-buffer-size"="8" "target-cpu"="apple-m1" "target-features"="+aes,+crc,+crypto,+dotprod,+fp-armv8,+fp16fml,+fullfp16,+lse,+neon,+ras,+rcpc,+rdm,+sha2,+sha3,+sm4,+v8.1a,+v8.2a,+v8.3a,+v8.4a,+v8.5a,+v8a,+zcm,+zcz" }
-attributes #1 = { argmemonly nocallback nofree nounwind willreturn }
 
 !llvm.module.flags = !{!0, !1, !2, !3, !4}
 !llvm.ident = !{!5}
