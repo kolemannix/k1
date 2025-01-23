@@ -42,10 +42,15 @@ fn two(p: P3*): int {
   p.z
 }
 
+fn retStruct(): P3 {
+  { x: 1, y: 2, z: 3 }
+}
+
 fn main(): int {
   // Test with agg, no agg, referencing, no referencing
   let* p1 = { x: 1, y: 2, z: 3 };
   let o = one(p1.*);
   let t = two(p1);
-  t
+  let p3 = retStruct();
+  p3.y
 }
