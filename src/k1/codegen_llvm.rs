@@ -428,7 +428,6 @@ impl<'ctx> K1LlvmType<'ctx> {
 }
 
 struct BuiltinTypes<'ctx> {
-    ctx: &'ctx Context,
     int: IntType<'ctx>,
     unit: IntType<'ctx>,
     unit_value: IntValue<'ctx>,
@@ -637,7 +636,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
         let ptr = ctx.i64_type().ptr_type(AddressSpace::default());
         let builtin_types = BuiltinTypes {
-            ctx,
             int: ctx.i64_type(),
             unit: ctx.i8_type(),
             unit_value: ctx.i8_type().const_int(0, false),
