@@ -65,6 +65,8 @@ ns List {
     };
     let newBuffer = self.buffer._enlargedClone[T](newCap);
     self.buffer* <- newBuffer;
+    0;
+    ()
   }
 
   fn cloned[T](self: List[T]): List[T] {

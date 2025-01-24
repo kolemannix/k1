@@ -110,6 +110,7 @@ pub const POINTER_TYPE_ID: TypeId = TypeId(12);
 pub const F32_TYPE_ID: TypeId = TypeId(13);
 pub const F64_TYPE_ID: TypeId = TypeId(14);
 
+pub const BUFFER_DATA_FIELD_NAME: &str = "data";
 pub const BUFFER_TYPE_ID: TypeId = TypeId(17);
 
 pub const LIST_TYPE_ID: TypeId = TypeId(21);
@@ -976,48 +977,6 @@ impl Types {
 
     pub fn type_count(&self) -> usize {
         self.types.len()
-    }
-
-    pub fn item_type_of_iterable(
-        &self,
-        identifiers: &Identifiers,
-        scopes: &Scopes,
-        type_id: TypeId,
-    ) -> Option<TypeId> {
-        match self.get(type_id) {
-            Type::Unit(_) => None,
-            Type::Char(_) => None,
-            Type::Integer(_) => None,
-            Type::Float(_) => None,
-            Type::Bool(_) => None,
-            Type::Pointer(_) => None,
-            // Check for List and string since they are currently structs
-            t @ Type::Struct(struc) => {
-                if let Some(list_type) = t.as_list_instance() {
-                    Some(list_type.element_type)
-                } else if let Some(defn_info) = struc.type_defn_info.as_ref() {
-                    if defn_info.name == identifiers.get("string").unwrap()
-                        && defn_info.scope == scopes.get_root_scope_id()
-                    {
-                        Some(CHAR_TYPE_ID)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            }
-            Type::Reference(_refer) => None,
-            Type::TypeVariable(_) => None,
-            Type::Enum(_) => None,
-            Type::EnumVariant(_) => None,
-            Type::Never(_) => None,
-            Type::Generic(_gen) => None,
-            Type::Function(_fun) => None,
-            Type::Closure(_closure) => None,
-            Type::ClosureObject(_co) => None,
-            Type::RecursiveReference(_) => None,
-        }
     }
 
     pub fn add_type_defn_mapping(

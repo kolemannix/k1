@@ -1621,7 +1621,7 @@ pub struct TypedAbilityImpl {
     pub scope_id: ScopeId,
     pub span: SpanId,
     /// I need this so that I don't try to instantiate blanket implementations that fail
-    /// typechecking nocommit we can just skip the body
+    /// typechecking
     pub compile_errors: Vec<TyperError>,
 }
 
@@ -10038,6 +10038,10 @@ impl TypedModule {
             debug_assert!(buffer_generic.type_defn_info.scope == self.scopes.get_root_scope_id());
             debug_assert!(buffer_generic.type_defn_info.name == get_ident!(self, "Buffer"));
             debug_assert!(buffer_struct.fields.len() == 2);
+            debug_assert!(
+                buffer_struct.fields.iter().map(|f| self.name_of(f.name)).collect::<Vec<_>>()
+                    == vec!["len", BUFFER_DATA_FIELD_NAME]
+            );
         }
 
         // This just ensures our LIST_TYPE_ID constant is correct

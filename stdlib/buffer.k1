@@ -199,9 +199,9 @@ ns BufferIterator {
 impl[T] Iterator[Item = T] for BufferIterator[T] {
   fn next(self: BufferIterator[T]*): Item? { 
     if self.pos < self.buf.len {
-      let ret = some(self.buf.get(self.pos));
+      let item = self.buf.get(self.pos);
       self.pos* <- self.pos + 1;
-      ret
+      some(item)
     } else .None
   }
   fn sizeHint(self: Self): { atLeast: u64, atMost: u64? } { 
