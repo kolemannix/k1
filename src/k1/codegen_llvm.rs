@@ -1321,10 +1321,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let function_type = self.make_llvm_function_type(type_id)?;
                 let pointee_type = function_type.llvm_function_type;
                 let placeholder_pointee = self.codegen_type(I8_TYPE_ID)?.debug_type();
-
-                // nocommit: Function probably shouldn't use this, idk... I renamed it to Reference
-                // so its clear that this is actually a reference in k1 not just something we
-                // happen to pass by pointer
                 Ok(K1LlvmType::Reference(LlvmReferenceType {
                     type_id,
                     pointer_type: pointee_type.ptr_type(AddressSpace::default()),
