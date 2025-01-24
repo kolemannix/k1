@@ -9,10 +9,8 @@ fn whileCond(): never { while crash("asdf") { () } }
 fn enumConstrPayload(): never { Opt.Some(crash("asdf")) }
 fn getEnumPayload(): i64 { 
   let x: int? = Opt.Some(crash(""));
-  let y: int? = x;
-  y.!
 }
-fn castTarget(): i64 { crash("") as i64 }
+fn castTarget(): i64 { crash(""): i64 }
 fn inReturn(): never { 
   return(crash("what"))
 }

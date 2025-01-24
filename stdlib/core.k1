@@ -17,6 +17,11 @@ ns libc {
   extern(abort) fn abort(): never
 }
 
+fn assertEquals[T: Show](context locn: compiler/SourceLocation)(a: T, b: T): unit {
+  if a != b {
+    crash("ASSERT FAILED: \{a} != \{b}")
+  }
+}
 
 fn assert(context locn: compiler/SourceLocation)(value: bool): unit {
   if not value {
@@ -27,9 +32,9 @@ fn assert(context locn: compiler/SourceLocation)(value: bool): unit {
 fn crash(context locn: compiler/SourceLocation)(msg: string): never {
   let filename = locn.filename;
   let line = locn.line;
+  sys/printBacktrace();
   let s = "\{msg} at \{filename}:\{line}\n";
   eprint(s);
-  sys/printBacktrace();
   libc/abort()
 }
 
