@@ -1,8 +1,0 @@
-fn main(): int {
-  let asdf = "asdf";
-  let locn: compiler/SourceLocation = {
-    filename: asdf,
-    line: 100,
-  };
-  crash(context locn)("uhoh")
-}

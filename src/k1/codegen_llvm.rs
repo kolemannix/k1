@@ -27,7 +27,7 @@ use inkwell::types::{
 };
 use inkwell::values::{
     ArrayValue, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue,
-    InstructionValue, IntValue, PointerValue, StructValue,
+    InstructionValue, IntValue, PointerValue,
 };
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel};
 use log::{debug, info, trace};
@@ -97,7 +97,7 @@ fn size_info(td: &TargetData, typ: &dyn AnyType) -> SizeInfo {
 }
 
 // TODO: cache these by type id?
-struct K1LlvmFunctionType<'ctx> {
+pub struct K1LlvmFunctionType<'ctx> {
     llvm_function_type: LlvmFunctionType<'ctx>,
     param_types: Vec<K1LlvmType<'ctx>>,
     return_type: K1LlvmType<'ctx>,
@@ -404,14 +404,6 @@ impl<'ctx> K1LlvmType<'ctx> {
             K1LlvmType::StructType(s) => s.struct_type.as_basic_type_enum(),
             K1LlvmType::Void(_) => panic!("No value type on Void / never"),
             K1LlvmType::Closure(c) => c.struct_type.as_basic_type_enum(),
-        }
-    }
-
-    #[allow(unused)]
-    fn value_any_type(&self) -> AnyTypeEnum<'ctx> {
-        match self {
-            K1LlvmType::Void(v) => v.void_type.as_any_type_enum(),
-            _ => self.canonical_repr_type().as_any_type_enum(),
         }
     }
 
@@ -785,6 +777,25 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             .as_type()
     }
 
+    fn make_pointer_type(&self, pointee_di_type: DIType<'ctx>) -> LlvmValueType<'ctx> {
+        LlvmValueType {
+            type_id: POINTER_TYPE_ID,
+            basic_type: self.builtin_types.ptr.as_basic_type_enum(),
+            size: self.size_info(&self.builtin_types.ptr),
+            di_type: self
+                .debug
+                .debug_builder
+                .create_pointer_type(
+                    "Pointer",
+                    pointee_di_type,
+                    self.builtin_types.ptr_sized_int.get_bit_width() as u64,
+                    self.builtin_types.ptr_sized_int.get_bit_width(),
+                    AddressSpace::default(),
+                )
+                .as_type(),
+        }
+    }
+
     fn get_debug_type(&self, type_id: TypeId) -> CodegenResult<DIType<'ctx>> {
         Ok(self.codegen_type(type_id)?.debug_type())
     }
@@ -958,7 +969,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     .create_basic_type(
                         "bool",
                         self.builtin_types.boolean.get_bit_width() as u64,
-                        dw_ate_signed,
+                        dw_ate_boolean,
                         0,
                     )
                     .unwrap()
@@ -968,47 +979,43 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             Type::Pointer(_) => {
                 // We don't know what it points to, so we just say 'bytes' for the best debugger
                 // experience
-                let placeholder_pointee = self.codegen_type(I8_TYPE_ID)?.debug_type();
-                Ok(LlvmValueType {
-                    type_id: POINTER_TYPE_ID,
-                    basic_type: self.builtin_types.ptr.as_basic_type_enum(),
-                    size: self.size_info(&self.builtin_types.ptr),
-                    di_type: self
-                        .debug
-                        .debug_builder
-                        .create_pointer_type(
-                            "Pointer",
-                            placeholder_pointee,
-                            self.builtin_types.ptr_sized_int.get_bit_width() as u64,
-                            self.builtin_types.ptr_sized_int.get_bit_width(),
-                            AddressSpace::default(),
-                        )
-                        .as_type(),
-                }
-                .into())
+                let placeholder_pointee = self.codegen_type(U8_TYPE_ID)?.debug_type();
+                Ok(self.make_pointer_type(placeholder_pointee).into())
             }
-            Type::Struct(struc) => {
+            ts @ Type::Struct(struc) => {
+                let buffer_instance = ts.as_buffer_instance();
                 trace!("generating llvm type for struct type {type_id}");
                 let field_count = struc.fields.len();
                 let mut field_types = Vec::with_capacity(field_count);
                 let mut field_basic_types = Vec::with_capacity(field_count);
+                let mut field_di_types: Vec<StructDebugMember> = Vec::with_capacity(field_count);
                 let name = self.codegen_type_name(type_id, struc.type_defn_info.as_ref());
                 for field in &struc.fields {
                     let field_llvm_type = self.codegen_type_inner(field.type_id, depth + 1)?;
+                    let debug_type = if buffer_instance.is_some()
+                        && field.name
+                            == self.module.ast.identifiers.get(BUFFER_DATA_FIELD_NAME).unwrap()
+                        && field.type_id == POINTER_TYPE_ID
+                    {
+                        let buffer_instance = buffer_instance.unwrap();
+                        let buffer_type_argument = buffer_instance.param_values[0];
+                        let element_type =
+                            self.codegen_type_inner(buffer_type_argument, depth + 1)?;
+                        let array_ptr_di_type = self.make_pointer_type(element_type.debug_type());
+                        array_ptr_di_type.di_type
+                    } else {
+                        field_llvm_type.debug_type()
+                    };
+                    field_di_types.push(StructDebugMember {
+                        name: self.module.ast.identifiers.get_name(field.name),
+                        di_type: debug_type,
+                    });
                     field_basic_types.push(field_llvm_type.rich_value_type());
                     field_types.push(field_llvm_type);
                 }
 
                 let llvm_struct_type = self.ctx.struct_type(&field_basic_types, false);
 
-                let mut field_di_types: Vec<StructDebugMember> = Vec::with_capacity(field_count);
-                for (index, field_llvm_type) in field_types.iter().enumerate() {
-                    let ident = struc.fields[index].name;
-                    field_di_types.push(StructDebugMember {
-                        name: self.module.ast.identifiers.get_name(ident),
-                        di_type: field_llvm_type.debug_type(),
-                    });
-                }
                 let size = self.size_info(&llvm_struct_type);
                 let di_type =
                     self.make_debug_struct_type(&name, &llvm_struct_type, span, &field_di_types);
@@ -1454,10 +1461,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             };
             let reference_inner_llvm_type = self.codegen_type(reference_type.inner_type)?;
             if reference_inner_llvm_type.is_aggregate() {
-                // nocommit test this My-copy may be unnecessary since whoever gives us this rhs value should be
-                // making a copy since this thing isn't behind a reference
-                //let my_copy = self.builder.build_alloca(reference_inner_llvm_type.physical_value_type(), "");
-                // self.memcpy_entire_value(my_copy, value, reference_inner_llvm_type.physical_value_type())
                 debug_assert!(value.is_pointer_value());
                 self.builder.build_store(variable_ptr, value)
             } else {
@@ -1467,15 +1470,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.builder.build_store(variable_ptr, value_ptr)
             }
         } else {
-            if variable_type.is_aggregate() {
-                self.memcpy_entire_value(
-                    variable_ptr,
-                    value.into_pointer_value(),
-                    variable_type.rich_value_type(),
-                )
-            } else {
-                self.builder.build_store(variable_ptr, value)
-            }
+            self.store_k1_value(&variable_type, variable_ptr, value)
         };
 
         trace!(
@@ -1585,7 +1580,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         Ok(self.codegen_expr(expr)?.expect_basic_value())
     }
 
-    /// This functions is responsible for 'loading' a value of some arbitrary type and giving
+    /// This function is responsible for 'loading' a value of some arbitrary type and giving
     /// it in its usable, canonical form to the caller.
     /// Example 1: struct field access
     /// the value after a struct field access: a.x
@@ -1593,14 +1588,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     ///   pointer, not a pointer into the struct that points to a pointer
     /// - If the K1 type of x is a {}, we can just return the result of the struct gep
     /// - if the K1 type of x is anything else, we need to load the struct gep into a local since
-    /// its a scalar value
+    ///   its a scalar value
     ///
     /// Does this mean that T** will never load? No, because that's the job of 'deref', not of
     /// 'load'. This 'load' isn't really a thing in the source language. Going from T** to T*
     /// changes the type in the source lang, so corresponds to a real deref instruction. Deref
     /// should not skip pointers... otherwise what are we doing
     fn load_k1_value(
-        &mut self,
+        &self,
         llvm_type: &K1LlvmType<'ctx>,
         source: PointerValue<'ctx>,
         name: &str,
@@ -1628,8 +1623,22 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         }
     }
 
+    /// Handles the storage of aggregates by doing a (hopefully) correct memcpy
+    fn store_k1_value(
+        &self,
+        llvm_type: &K1LlvmType<'ctx>,
+        dest: PointerValue<'ctx>,
+        value: BasicValueEnum<'ctx>,
+    ) -> InstructionValue<'ctx> {
+        if llvm_type.is_aggregate() {
+            self.memcpy_entire_value(dest, value.into_pointer_value(), llvm_type.rich_value_type())
+        } else {
+            self.builder.build_store(dest, value)
+        }
+    }
+
     fn alloca_copy_entire_value(
-        &mut self,
+        &self,
         src: PointerValue<'ctx>,
         ty: BasicTypeEnum<'ctx>,
         name: &str,
@@ -1728,50 +1737,18 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             TypedExpr::Variable(ir_var) => {
                 if let Some(pointer) = self.variables.get(&ir_var.variable_id) {
                     let llvm_type = self.codegen_type(ir_var.type_id)?;
-                    eprintln!(
+                    debug!(
                         "codegen variable {} got pointee type {:?}",
                         self.module.type_id_to_string(ir_var.type_id),
                         pointer.pointee_llvm_type
                     );
                     let var_name = self.module.variables.get(ir_var.variable_id).name;
-                    //let result_value = if let K1LlvmType::Reference(_) = &llvm_type {
-                    //    // Variable expressions have different semantics if the variable is
-                    //    // a reference
-                    //    // If we refer to a variable that is a reference, we mean its location or
-                    //    // address
-                    //    // If we refer to a variable that isn't a reference, we mean the 'value' at
-                    //    // that address:
-                    //    // let x: int; print(x)
-                    //    // let x = newPoint(1, 2); print(x)
-                    //    // x points to a struct, I want that pointer in this case since structs are
-                    //    // represented as pointers to their storage
-                    //    // Even though x they are both represented as 'alloca's, we needn't make
-                    //    // an extra one for pointer variables, just treat them differently with the
-                    //    // type information that we have
-                    //    pointer.pointer_value.as_basic_value_enum()
-                    //} else {
-                    //    // Loaded value
-                    //    self.load_k1_value(
-                    //        &llvm_type,
-                    //        pointer.pointer_value,
-                    //        &format!("{}_loaded", self.module.name_of(var_name)),
-                    //        false,
-                    //    )
-                    //};
                     let result_value = self.load_k1_value(
                         &llvm_type,
                         pointer.pointer_value,
                         &format!("{}_loaded", self.module.name_of(var_name)),
                         false,
                     );
-                    // If the thing is an aggregate, we want our own copy of it, since we're
-                    // accessing it by-value
-                    // nocommit: Maybe we just pass in OUR LlvmType here and use is_aggregate
-                    // I think this wants the 'real' type?
-
-                    // If the variable is a struct*, we're loading it one too many times because of
-                    // this call
-                    eprintln!("codegen variable ultimately returning {:?}", result_value);
                     Ok(result_value.into())
                 } else if let Some(global) = self.globals.get(&ir_var.variable_id) {
                     let value = global.get_initializer().unwrap();
@@ -1802,7 +1779,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         )
                         .unwrap();
                     let field_type = &struct_k1_llvm_type.fields[idx];
-                    self.store_k1_value(field_type, field_addr, value)
+                    self.store_k1_value(field_type, field_addr, value);
                 }
                 Ok(struct_ptr.as_basic_value_enum().into())
             }
@@ -1840,14 +1817,13 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     UnaryOpKind::Dereference => {
                         let value_ptr = value.into_pointer_value();
                         let pointee_ty = self.codegen_type(unary_op.type_id)?;
-                        eprintln!(
+                        debug!(
                             "Dereference: type {} w/ llvm value {} as llvm type {}",
                             self.module.type_id_to_string(unary_op.expr.get_type()),
                             value_ptr,
                             pointee_ty.canonical_repr_type().print_to_string()
                         );
                         let value = if pointee_ty.is_aggregate() {
-                            eprintln!("Dereference for aggregate is no-op");
                             value_ptr.as_basic_value_enum()
                         } else {
                             self.builder.build_load(
@@ -1900,7 +1876,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             &format!("enum_payload_{}", self.get_ident_name(variant_tag_name)),
                         )
                         .unwrap();
-                    self.builder.build_store(payload_pointer, value);
+                    let payload_type = enum_variant.payload_type.as_ref().unwrap();
+                    self.store_k1_value(payload_type, payload_pointer, value);
                 }
 
                 Ok(enum_ptr.as_basic_value_enum().into())
@@ -2125,11 +2102,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let closure_type =
                     self.module.types.get(closure_expr.closure_type).as_closure().unwrap();
                 let llvm_fn = self.codegen_function_or_get(closure_type.body_function_id)?;
-                let environment =
-                    self.codegen_expr_basic_value(&closure_type.environment_struct)?;
-                let environment_ptr = self.builder.build_alloca(environment.get_type(), "env");
+                let environment_ptr = self
+                    .codegen_expr_basic_value(&closure_type.environment_struct)?
+                    .into_pointer_value();
                 self.closure_environments.insert(closure_expr.closure_type, environment_ptr);
-                self.builder.build_store(environment_ptr, environment);
 
                 // The struct type for a closure's physical representation
                 // What I could do is distinguish between static and dynamic here
@@ -2564,10 +2540,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 )
             }
             Callee::DynamicClosure(callee_struct_expr) => {
-                eprintln!(
-                    "Type of callee_struct_expr is {}",
-                    self.module.type_id_to_string(callee_struct_expr.get_type())
-                );
                 let closure_object_type = self.builtin_types.dynamic_closure_object;
                 let callee_struct =
                     self.codegen_expr_basic_value(callee_struct_expr)?.into_pointer_value();
@@ -2651,7 +2623,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             | IntrinsicFunction::AlignOf => {
                 let type_param = &call.type_args[0];
                 let llvm_type = self.codegen_type(type_param.type_id)?;
-                let size = self.size_info(&llvm_type.value_any_type());
+                let size = self.size_info(&llvm_type.rich_value_type().as_any_type_enum());
                 let num_bits = match intrinsic_type {
                     IntrinsicFunction::SizeOf => size.size_bits,
                     IntrinsicFunction::SizeOfStride => size.stride_bits,
@@ -2754,6 +2726,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 }
                 TypedStmt::Assignment(assignment) => {
                     let rhs = self.codegen_expr_basic_value(&assignment.value)?;
+                    let value_type = self.codegen_type(assignment.value.get_type())?;
                     let lhs_pointer = match assignment.kind {
                         AssignmentKind::Value => {
                             match assignment.destination.deref() {
@@ -2779,7 +2752,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             .into_pointer_value(),
                     };
 
-                    self.builder.build_store(lhs_pointer, rhs);
+                    self.store_k1_value(&value_type, lhs_pointer, rhs);
                     last = unit_value;
                 }
             }
@@ -2849,8 +2822,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         }
 
         self.builder.position_at_end(loop_end_block);
-        let break_value =
-            self.builder.build_load(break_type.rich_value_type(), break_value_ptr, "loop_value");
+        let break_value = self.load_k1_value(&break_type, break_value_ptr, "loop_value", true);
         Ok(break_value.into())
     }
 
@@ -2962,7 +2934,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             function_value.add_attribute(AttributeLoc::Param(0), attribute);
         }
 
-        // nocommit: Test if debug info needs to be 'sret' converted
         let function_span = self.module.ast.get_span_for_id(function.parsed_id);
         let (di_subprogram, di_file) = self.make_function_debug_info(
             self.module.name_of(function.name),
@@ -3034,15 +3005,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 true,
                 0,
             );
-            // nocommit this duplicates what we do in codegen_let a bit.
-            // Why do I even need an alloca for each param? Maybe I should just represent variables
-            // as basic values not Pointers?
-            //let store_instr = self.builder.build_store(pointer, param);
-            let store_instr = if ty.is_aggregate() {
-                self.memcpy_entire_value(pointer, param.into_pointer_value(), ty.rich_value_type())
-            } else {
-                self.builder.build_store(pointer, param)
-            };
+            let store_instr = self.store_k1_value(&ty, pointer, param);
             self.debug.debug_builder.insert_declare_before_instruction(
                 pointer,
                 Some(di_local_variable),

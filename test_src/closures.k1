@@ -23,7 +23,7 @@ fn captures(): unit {
     addOne(x) + closedOver + addOne(closedOver) + (if closedOver == 3 1 else 0);
   };
 
-  assert(add(3) == 12);
+  assertEquals(add(3), 12);
 }
 
 fn captureMut(): unit {
@@ -52,10 +52,9 @@ fn main(): int {
   let addOne2 = addOne;
   let addOne3 = \(i: int) staticAddOne(i);
 
-  assert(addOne(1) == 2);
-  assert(addOne2(2) == 3);
-  assert(addOne3(3) == 4);
-
+  assertEquals(addOne(1), 2);
+  assertEquals(addOne2(2), 3);
+  assertEquals(addOne3(3), 4);
 
   let result = [1,2,3,5,6,7,8]
   | map(\(x: int) x + 1)
