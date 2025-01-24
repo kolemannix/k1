@@ -3038,21 +3038,22 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         self.debug.pop_scope();
         function_value.set_subprogram(di_subprogram);
 
-        {
-            let mut count = 0;
-            let mut cur_blk: Option<BasicBlock<'ctx>> = function_value.get_first_basic_block();
-            loop {
-                let Some(blk) = cur_blk else { break };
-                let mut cur_inst = blk.get_first_instruction();
-                while let Some(inst) = cur_inst {
-                    count += 1;
-                    cur_inst = inst.get_next_instruction();
-                }
-                cur_blk = blk.get_next_basic_block();
-            }
-            self.llvm_functions.get_mut(&function_id).unwrap().instruction_count = count;
-        }
         Ok(function_value)
+    }
+
+    fn count_function_instructions(function_value: FunctionValue<'ctx>) -> usize {
+        let mut count = 0;
+        let mut cur_blk: Option<BasicBlock<'ctx>> = function_value.get_first_basic_block();
+        loop {
+            let Some(blk) = cur_blk else { break };
+            let mut cur_inst = blk.get_first_instruction();
+            while let Some(inst) = cur_inst {
+                count += 1;
+                cur_inst = inst.get_next_instruction();
+            }
+            cur_blk = blk.get_next_basic_block();
+        }
+        count
     }
 
     fn codegen_integer_value(
@@ -3151,7 +3152,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         machine
     }
 
-    pub fn optimize(&mut self, optimize: bool) -> anyhow::Result<()> {
+    pub fn optimize_verify(&mut self, optimize: bool) -> anyhow::Result<()> {
         let start = std::time::Instant::now();
 
         if !self.debug.strip_debug {
@@ -3194,6 +3195,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         module_pass_manager.run_on(&self.llvm_module);
 
         info!("codegen phase 'optimize' took {}ms", start.elapsed().as_millis());
+        for (_, function) in self.llvm_functions.iter_mut() {
+            let new_count = Codegen::count_function_instructions(function.function_value);
+            function.instruction_count = new_count;
+        }
 
         Ok(())
     }
