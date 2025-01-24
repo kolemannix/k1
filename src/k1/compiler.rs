@@ -299,7 +299,7 @@ pub fn codegen_module<'ctx, 'module>(
         eprintln!("Codegen error: {}", e.message);
         anyhow::bail!(e)
     }
-    if let Err(e) = codegen.optimize(llvm_optimize) {
+    if let Err(e) = codegen.optimize_verify(llvm_optimize) {
         eprintln!("Codegen error: {}", e);
         anyhow::bail!(e)
     };
