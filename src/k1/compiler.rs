@@ -235,18 +235,19 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
 
 pub fn write_executable(debug: bool, out_dir: &Path, module_name: &Path) -> Result<()> {
     let clang_time = std::time::Instant::now();
-    let mut build_cmd = std::process::Command::new("clang");
 
     //opt/homebrew/opt/llvm@15/lib/libunwind.dylib
-    // Note: Could we do this a lot more efficiently by just feeding the in-memory LLVM IR to libclang or whatever the library version is called.
     let llvm_base = PathBuf::from(
-        std::env::var("LLVM_SYS_150_PREFIX").expect("could not find llvm at $LLVM_SYS_150_PREFIX"),
+        std::env::var("LLVM_SYS_180_PREFIX").expect("could not find llvm at $LLVM_SYS_180_PREFIX"),
     );
+    let clang_path = llvm_base.join("bin").join("clang");
+    let mut build_cmd = std::process::Command::new(clang_path);
     let llvm_lib_base = llvm_base.join("lib");
     let ll_name = out_dir.join(module_name.with_extension("ll"));
     let ll_file = ll_name.to_str().unwrap();
     let out_name = out_dir.join(module_name.with_extension("out"));
     let out_file = out_name.to_str().unwrap();
+    // Note: Could we do this a lot more efficiently by just feeding the in-memory LLVM IR to libclang or whatever the library version is called.
     build_cmd.args([
         // "-v",
         if debug { "-g" } else { "" },

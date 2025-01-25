@@ -22,8 +22,8 @@ use types::*;
 
 use crate::lex::{SpanId, Spans, TokenKind};
 use crate::parse::{
-    self, DirectiveKind, ForExpr, ForExprType, Identifiers, IfExpr, NamedTypeArg,
-    NamespacedIdentifier, NumericWidth, ParsedAbilityId, ParsedAbilityImplId, ParsedConstantId,
+    self, ForExpr, ForExprType, Identifiers, IfExpr, NamedTypeArg, NamespacedIdentifier,
+    NumericWidth, ParsedAbilityId, ParsedAbilityImplId, ParsedConstantId, ParsedDirective,
     ParsedExpressionId, ParsedFunctionId, ParsedId, ParsedLoopExpr, ParsedNamespaceId,
     ParsedPattern, ParsedPatternId, ParsedTypeDefnId, ParsedTypeExpression, ParsedTypeExpressionId,
     ParsedUnaryOpKind, ParsedUseId, ParsedWhileExpr, Sources,
@@ -3317,6 +3317,28 @@ impl TypedModule {
         }
     }
 
+    fn eval_const_expr(
+        &mut self,
+        expr: ParsedExpressionId,
+        expected_type_id: Option<TypeId>,
+        scope_id: ScopeId,
+    ) -> TyperResult<TypedExpr> {
+        let eval_ctx = EvalExprContext::from_scope(scope_id).with_expected_type(expected_type_id);
+        match self.ast.expressions.get(expr) {
+            ParsedExpression::Literal(Literal::Numeric(integer)) => {
+                Ok(self.eval_numeric_value(&integer.text, integer.span, eval_ctx))?
+            }
+            ParsedExpression::Literal(Literal::Bool(b, span)) => Ok(TypedExpr::Bool(*b, *span)),
+            ParsedExpression::Literal(Literal::Char(c, span)) => Ok(TypedExpr::Char(*c, *span)),
+            _other => {
+                failf!(
+                    self.ast.expressions.get_span(expr),
+                    "Only literals are currently supported as constants",
+                )
+            }
+        }
+    }
+
     fn eval_const(
         &mut self,
         parsed_constant_id: ParsedConstantId,
@@ -3327,21 +3349,7 @@ impl TypedModule {
         let parsed_constant = self.ast.get_constant(parsed_constant_id);
         let constant_name = parsed_constant.name;
         let constant_span = parsed_constant.span;
-        let expr = match self.ast.expressions.get(parsed_constant.value_expr) {
-            ParsedExpression::Literal(Literal::Numeric(integer)) => self.eval_numeric_value(
-                &integer.text,
-                integer.span,
-                EvalExprContext::from_scope(scope_id).with_expected_type(Some(type_id)),
-            )?,
-            ParsedExpression::Literal(Literal::Bool(b, span)) => TypedExpr::Bool(*b, *span),
-            ParsedExpression::Literal(Literal::Char(c, span)) => TypedExpr::Char(*c, *span),
-            _other => {
-                return make_fail_span(
-                    "Only literals are currently supported as constants",
-                    parsed_constant.span,
-                );
-            }
-        };
+        let expr = self.eval_const_expr(parsed_constant.value_expr, Some(type_id), scope_id)?;
         let variable_id = self.variables.add_variable(Variable {
             name: constant_name,
             type_id,
@@ -4489,10 +4497,34 @@ impl TypedModule {
     ) -> TyperResult<TypedExpr> {
         let directives = self.ast.expressions.get_directives(expr_id);
         let debug_directive =
-            directives.iter().find(|p| matches!(p.kind, DirectiveKind::CompilerDebug));
+            directives.iter().find(|p| matches!(p, ParsedDirective::CompilerDebug { .. }));
+        let conditional_compile_expr = directives.iter().find_map(|p| match p {
+            ParsedDirective::ConditionalCompile { condition, .. } => Some(*condition),
+            _ => None,
+        });
         let is_debug = debug_directive.is_some();
         if is_debug {
             self.push_debug_level();
+        }
+        let should_compile = match conditional_compile_expr {
+            None => true,
+            Some(condition) => {
+                let typed_condition =
+                    self.eval_const_expr(condition, Some(BOOL_TYPE_ID), ctx.scope_id)?;
+                match typed_condition {
+                    TypedExpr::Bool(b, _) => b,
+                    _ => {
+                        return failf!(
+                            self.ast.expressions.get_span(condition),
+                            "Only bool literals are allowed for now"
+                        )
+                    }
+                }
+            }
+        };
+        if !should_compile {
+            eprintln!("#if was false; yeeting in a unit for now");
+            return Ok(TypedExpr::Unit(self.ast.expressions.get_span(expr_id)));
         }
         ctx.expected_type_id = match self.ast.expressions.get_type_hint(expr_id) {
             Some(t) => {
@@ -8812,7 +8844,7 @@ impl TypedModule {
         let debug_directive = parsed_function
             .directives
             .iter()
-            .find(|p| matches!(p.kind, DirectiveKind::CompilerDebug));
+            .find(|p| matches!(p, ParsedDirective::CompilerDebug { .. }));
         let is_debug = debug_directive.is_some();
         if is_debug {
             self.push_debug_level();

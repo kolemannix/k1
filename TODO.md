@@ -9,31 +9,33 @@ New tagline? "C with typeclasses and tagged unions"
 - [ ] Bug: technically I should require that the blanket impl params appear in the Self type expression
 - [ ] Typecheck 'main'
 - [ ] Dogfood: 'niched' integer abstraction (-1 as 'not found' but safely, vs using option and wasting space + adding more code)
+      `impl Unwrap<Inner = u32> for i64`
 - [ ] boolean chains w/ binding ifs
 - [ ] Binding `while`
 - [ ] Private functions
 - [ ] Library vs Binary, linker options, when do we 'link', in IR or as object files, ...
 - [ ] `inline` functions (like Scala3's)
-- [ ] Add array types: `Array[<type expr> x <int literal>]`
+- [ ] Add fixed length array types: `Array[<type expr> x <int literal>]`
 - [ ] Bug: parameter names in function 'types': yes or no
-- [ ] Improve LLVM opt pipeline https://www.reddit.com/r/Compilers/comments/1hqmd7x/recommended_llvm_passes/
+- [x] Improve LLVM opt pipeline https://www.reddit.com/r/Compilers/comments/1hqmd7x/recommended_llvm_passes/
       https://llvm.org/docs/NewPassManager.html#just-tell-me-how-to-run-the-default-optimization-pipeline-with-the-new-pass-manager
 - [ ] More explicit companion ns via injecting `for` keyword `ns (for) type {`
-- [ ] Stacktraces on crash
+- [x] Stacktraces on crash (using libunwind and a little C program to call it: `rt/unwind.c`)
 - [ ] Rename ability. 'behavior' / 'provide'
 - [ ] Operator 'overloading' story. I think the story is just abilities. The question is do we move the syntax to the source: 
       ability Equals { syntax(2, "==") fn }
       This means that these would affect the parser. We'd have to add a new pass to find all the syntax definitions
-- [ ] Backend codegen cleanup
--  [ ] avoid uses of aggregate *values* where we can: so routine uses of 'struct's and 'enum's
--  [ ] Move allocas to entry block. "Doing this is actually quite easy as LLVM provides functions you can use to retrieve the entry block for a function and insert instructions into it."
--  [ ] Upgrade to LLVM 17 (18?)
+- [x] Backend codegen cleanup
+-  [x] avoid uses of aggregate *values* where we can: so routine uses of 'struct's and 'enum's
+-  [x] Move allocas to entry block. "Doing this is actually quite easy as LLVM provides functions you can use to retrieve the entry block for a function and insert instructions into it."
+    (handled by optimization passes for now)
+-  [x] Upgrade to LLVM 18
 - [ ] Matching on references
   - [ ] Match to get reference to each struct field, for example, use * for a dereferencing match
   - [ ] Match to get reference to enum payload
 - [x] Context location params are not being propagated
 - [x] Test and fix named arguments
-- [ ] 'never' needs to work in every expression position
+- [x] 'never' needs to work in every expression position (got close enough, might add more if one comes up)
 - [ ] accumulate test errors and support inline test comment assertions when a line should produce a compiler error.
       - Probably one test for failing compilation and one passing one for each major language area
 - [ ] b"" strings that are of type Buffer[u8]

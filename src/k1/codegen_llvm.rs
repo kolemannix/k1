@@ -11,7 +11,7 @@ use either::Either;
 use fxhash::FxHashMap;
 use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::basic_block::BasicBlock;
-use inkwell::builder::Builder;
+use inkwell::builder::{Builder, BuilderError};
 use inkwell::context::Context;
 use inkwell::debug_info::{
     AsDIScope, DICompileUnit, DIFile, DILocation, DIScope, DISubprogram, DIType, DWARFEmissionKind,
@@ -19,7 +19,7 @@ use inkwell::debug_info::{
 };
 use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::module::{Linkage as LlvmLinkage, Module as LlvmModule};
-use inkwell::passes::PassManager;
+use inkwell::passes::{PassBuilderOptions, PassManager};
 use inkwell::targets::{InitializationConfig, Target, TargetData, TargetMachine, TargetTriple};
 use inkwell::types::{
     AnyType, AnyTypeEnum, BasicMetadataTypeEnum, BasicType, BasicTypeEnum,
@@ -47,7 +47,7 @@ pub struct CodegenError {
     pub span: SpanId,
 }
 
-macro_rules! err {
+macro_rules! failf {
     ($span:expr, $($format_args:expr),*) => {
         {
             let s: String = format!($($format_args),*);
@@ -55,6 +55,18 @@ macro_rules! err {
                 message: s,
                 span: $span,
             })
+        }
+    };
+}
+
+macro_rules! errf {
+    ($span:expr, $($format_args:expr),*) => {
+        {
+            let s: String = format!($($format_args),*);
+            CodegenError {
+                message: s,
+                span: $span,
+            }
         }
     };
 }
@@ -94,6 +106,18 @@ fn size_info(td: &TargetData, typ: &dyn AnyType) -> SizeInfo {
         }
     };
     sz
+}
+
+trait BuilderResultExt {
+    type V;
+    fn to_err(self, span: SpanId) -> CodegenResult<Self::V>;
+}
+
+impl<T> BuilderResultExt for Result<T, BuilderError> {
+    type V = T;
+    fn to_err(self, span: SpanId) -> CodegenResult<Self::V> {
+        self.map_err(|e| errf!(span, "LLVM Error: {}", e))
+    }
 }
 
 // TODO: cache these by type id?
@@ -1027,7 +1051,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 .into())
             }
             Type::TypeVariable(v) => {
-                err!(span, "codegen was asked to codegen a type variable {:?}", v)
+                failf!(span, "codegen was asked to codegen a type variable {:?}", v)
             }
             Type::Reference(reference) => {
                 let inner_type = self.codegen_type_inner(reference.inner_type, depth + 1)?;
@@ -1446,7 +1470,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let variable = self.module.variables.get(let_stmt.variable_id);
         let variable_ptr = self
             .builder
-            .build_alloca(variable_type.rich_value_type(), self.get_ident_name(variable.name));
+            .build_alloca(variable_type.rich_value_type(), self.get_ident_name(variable.name))
+            .to_err(let_stmt.span)?;
         let store_instr = if let_stmt.is_referencing {
             // If this is a let*, then we put the rhs behind another alloca so that we end up
             // with a pointer to the value
@@ -1456,12 +1481,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             let reference_inner_llvm_type = self.codegen_type(reference_type.inner_type)?;
             if reference_inner_llvm_type.is_aggregate() {
                 debug_assert!(value.is_pointer_value());
-                self.builder.build_store(variable_ptr, value)
+                self.builder.build_store(variable_ptr, value).unwrap()
             } else {
-                let value_ptr =
-                    self.builder.build_alloca(reference_inner_llvm_type.rich_value_type(), "");
-                self.builder.build_store(value_ptr, value);
-                self.builder.build_store(variable_ptr, value_ptr)
+                let value_ptr = self
+                    .builder
+                    .build_alloca(reference_inner_llvm_type.rich_value_type(), "")
+                    .unwrap();
+                self.builder.build_store(value_ptr, value).unwrap();
+                self.builder.build_store(variable_ptr, value_ptr).unwrap()
             }
         } else {
             self.store_k1_value(&variable_type, variable_ptr, value)
@@ -1542,10 +1569,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
         if ir_if.ty == NEVER_TYPE_ID {
             // Both branches are divergent
-            let unreachable = self.builder.build_unreachable();
+            let unreachable = self.builder.build_unreachable().unwrap();
             Ok(LlvmValue::Void(unreachable))
         } else {
-            let phi_value = self.builder.build_phi(typ.canonical_repr_type(), "if_phi");
+            let phi_value = self.builder.build_phi(typ.canonical_repr_type(), "if_phi").unwrap();
             if let Some((cons_inc_block, cons_value)) = consequent_incoming {
                 phi_value.add_incoming(&[(&cons_value, cons_inc_block)]);
             };
@@ -1613,7 +1640,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
         } else {
             // Scalars must be truly loaded
-            self.builder.build_load(llvm_type.rich_value_type(), source, name)
+            self.builder.build_load(llvm_type.rich_value_type(), source, name).unwrap()
         }
     }
 
@@ -1627,7 +1654,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         if llvm_type.is_aggregate() {
             self.memcpy_entire_value(dest, value.into_pointer_value(), llvm_type.rich_value_type())
         } else {
-            self.builder.build_store(dest, value)
+            self.builder.build_store(dest, value).unwrap()
         }
     }
 
@@ -1637,7 +1664,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         ty: BasicTypeEnum<'ctx>,
         name: &str,
     ) -> PointerValue<'ctx> {
-        let dst = self.builder.build_alloca(ty, name);
+        let dst = self.builder.build_alloca(ty, name).unwrap();
         self.memcpy_entire_value(dst, src, ty);
         dst
     }
@@ -1760,7 +1787,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             TypedExpr::Struct(struc) => {
                 let struct_k1_llvm_type = self.codegen_type(struc.type_id)?.expect_struct();
                 let struct_llvm_type = struct_k1_llvm_type.struct_type;
-                let struct_ptr = self.builder.build_alloca(struct_llvm_type, "struct_literal");
+                let struct_ptr =
+                    self.builder.build_alloca(struct_llvm_type, "struct_literal").unwrap();
                 for (idx, field) in struc.fields.iter().enumerate() {
                     let value = self.codegen_expr_basic_value(&field.expr)?;
                     let field_addr = self
@@ -1820,11 +1848,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         let value = if pointee_ty.is_aggregate() {
                             value_ptr.as_basic_value_enum()
                         } else {
-                            self.builder.build_load(
-                                pointee_ty.canonical_repr_type(),
-                                value_ptr,
-                                "deref",
-                            )
+                            self.builder
+                                .build_load(pointee_ty.canonical_repr_type(), value_ptr, "deref")
+                                .unwrap()
                         };
                         Ok(value.into())
                     }
@@ -1845,7 +1871,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
                 let enum_variant = &enum_type.variants[enum_constr.variant_index as usize];
 
-                let enum_ptr = self.builder.build_alloca(enum_variant.envelope_type, "enum_constr");
+                let enum_ptr = self
+                    .builder
+                    .build_alloca(enum_variant.envelope_type, "enum_constr")
+                    .to_err(enum_constr.span)?;
 
                 // Store the tag_value in the first slot
                 let tag_pointer = self
@@ -1930,17 +1959,21 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         let integer_type =
                             self.module.types.get(cast.target_type_id).expect_integer();
                         let value: IntValue<'ctx> = if integer_type.is_signed() {
-                            self.builder.build_int_s_extend(
-                                int_value,
-                                llvm_type.rich_value_type().into_int_type(),
-                                "extend_cast",
-                            )
+                            self.builder
+                                .build_int_s_extend(
+                                    int_value,
+                                    llvm_type.rich_value_type().into_int_type(),
+                                    "extend_cast",
+                                )
+                                .unwrap()
                         } else {
-                            self.builder.build_int_z_extend(
-                                int_value,
-                                llvm_type.rich_value_type().into_int_type(),
-                                "extend_cast",
-                            )
+                            self.builder
+                                .build_int_z_extend(
+                                    int_value,
+                                    llvm_type.rich_value_type().into_int_type(),
+                                    "extend_cast",
+                                )
+                                .unwrap()
                         };
                         Ok(value.as_basic_value_enum().into())
                     }
@@ -1948,11 +1981,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         let value = self.codegen_expr_basic_value(&cast.base_expr)?;
                         let int_value = value.into_int_value();
                         let int_type = self.codegen_type(cast.target_type_id)?;
-                        let truncated_value = self.builder.build_int_truncate(
-                            int_value,
-                            int_type.rich_value_type().into_int_type(),
-                            "trunc_cast",
-                        );
+                        let truncated_value = self
+                            .builder
+                            .build_int_truncate(
+                                int_value,
+                                int_type.rich_value_type().into_int_type(),
+                                "trunc_cast",
+                            )
+                            .unwrap();
                         Ok(truncated_value.as_basic_value_enum().into())
                     }
                     CastType::FloatExtend => {
@@ -1962,8 +1998,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             .codegen_type(cast.target_type_id)?
                             .rich_value_type()
                             .into_float_type();
-                        let extended_value =
-                            self.builder.build_float_ext(from_value, float_dst_type, "fext");
+                        let extended_value = self
+                            .builder
+                            .build_float_ext(from_value, float_dst_type, "fext")
+                            .unwrap();
                         Ok(extended_value.as_basic_value_enum().into())
                     }
                     CastType::FloatTruncate => {
@@ -1973,8 +2011,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             .codegen_type(cast.target_type_id)?
                             .rich_value_type()
                             .into_float_type();
-                        let extended_value =
-                            self.builder.build_float_trunc(from_value, float_dst_type, "ftrunc");
+                        let extended_value = self
+                            .builder
+                            .build_float_trunc(from_value, float_dst_type, "ftrunc")
+                            .unwrap();
                         Ok(extended_value.as_basic_value_enum().into())
                     }
                     CastType::FloatToInteger => {
@@ -1985,17 +2025,13 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         let int_dest_k1_type =
                             self.module.types.get(cast.target_type_id).expect_integer();
                         let casted_int_value = if int_dest_k1_type.is_signed() {
-                            self.builder.build_float_to_signed_int(
-                                from_value,
-                                int_dst_type_llvm,
-                                "",
-                            )
+                            self.builder
+                                .build_float_to_signed_int(from_value, int_dst_type_llvm, "")
+                                .unwrap()
                         } else {
-                            self.builder.build_float_to_unsigned_int(
-                                from_value,
-                                int_dst_type_llvm,
-                                "",
-                            )
+                            self.builder
+                                .build_float_to_unsigned_int(from_value, int_dst_type_llvm, "")
+                                .unwrap()
                         };
                         Ok(casted_int_value.as_basic_value_enum().into())
                     }
@@ -2008,17 +2044,13 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         let float_dst_type_llvm =
                             float_dst_type.rich_value_type().into_float_type();
                         let casted_float_value = if from_int_k1_type.is_signed() {
-                            self.builder.build_signed_int_to_float(
-                                from_value,
-                                float_dst_type_llvm,
-                                "",
-                            )
+                            self.builder
+                                .build_signed_int_to_float(from_value, float_dst_type_llvm, "")
+                                .unwrap()
                         } else {
-                            self.builder.build_unsigned_int_to_float(
-                                from_value,
-                                float_dst_type_llvm,
-                                "",
-                            )
+                            self.builder
+                                .build_unsigned_int_to_float(from_value, float_dst_type_llvm, "")
+                                .unwrap()
                         };
                         Ok(casted_float_value.as_basic_value_enum().into())
                     }
@@ -2037,20 +2069,22 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     CastType::PointerToInteger => {
                         let ptr =
                             self.codegen_expr_basic_value(&cast.base_expr)?.into_pointer_value();
-                        let as_int = self.builder.build_ptr_to_int(
-                            ptr,
-                            self.builtin_types.ptr_sized_int,
-                            "ptrtoint_cast",
-                        );
+                        let as_int = self
+                            .builder
+                            .build_ptr_to_int(
+                                ptr,
+                                self.builtin_types.ptr_sized_int,
+                                "ptrtoint_cast",
+                            )
+                            .unwrap();
                         Ok(as_int.as_basic_value_enum().into())
                     }
                     CastType::IntegerToPointer => {
                         let int = self.codegen_expr_basic_value(&cast.base_expr)?.into_int_value();
-                        let as_ptr = self.builder.build_int_to_ptr(
-                            int,
-                            self.builtin_types.ptr,
-                            "inttoptr_cast",
-                        );
+                        let as_ptr = self
+                            .builder
+                            .build_int_to_ptr(int, self.builtin_types.ptr, "inttoptr_cast")
+                            .unwrap();
                         Ok(as_ptr.as_basic_value_enum().into())
                     }
                 }
@@ -2063,7 +2097,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 match codegened_function.sret_pointer {
                     None => {
                         // Normal return
-                        let ret_inst = self.builder.build_return(Some(&return_value));
+                        let ret_inst = self.builder.build_return(Some(&return_value)).unwrap();
                         Ok(LlvmValue::Void(ret_inst))
                     }
                     Some(sret_ptr) => {
@@ -2079,7 +2113,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             codegened_function.function_type.return_type.rich_value_type(),
                         );
                         // self.builder.build_store(sret_ptr, return_value);
-                        Ok(LlvmValue::Void(self.builder.build_return(None)))
+                        let ret = self.builder.build_return(None).unwrap();
+                        Ok(LlvmValue::Void(ret))
                     }
                 }
             }
@@ -2089,7 +2124,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 if let Some(break_value_ptr) = loop_info.break_value_ptr {
                     self.builder.build_store(break_value_ptr, break_value);
                 }
-                let branch_inst = self.builder.build_unconditional_branch(loop_info.end_block);
+                let branch_inst =
+                    self.builder.build_unconditional_branch(loop_info.end_block).unwrap();
                 Ok(LlvmValue::Void(branch_inst))
             }
             TypedExpr::Closure(closure_expr) => {
@@ -2121,7 +2157,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     self.codegen_type(closure_object_type.struct_representation)?.expect_struct();
 
                 let closure_ptr =
-                    self.builder.build_alloca(closure_struct_type.struct_type, "closure");
+                    self.builder.build_alloca(closure_struct_type.struct_type, "closure").unwrap();
                 let fn_ptr = self
                     .builder
                     .build_struct_gep(closure_struct_type.struct_type, closure_ptr, 0, "closure_fn")
@@ -2189,7 +2225,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         panic!("Unsupported bin op kind returning int: {}", bin_op.kind)
                     }
                 };
-                Ok(op_res.as_basic_value_enum().into())
+                let op_int_value = op_res.to_err(bin_op.span)?;
+                Ok(op_int_value.as_basic_value_enum().into())
             }
             Type::Float(_float_type) => {
                 let lhs_value = self.codegen_expr_basic_value(&bin_op.lhs)?.into_float_value();
@@ -2198,24 +2235,29 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     BinaryOpKind::Add => self
                         .builder
                         .build_float_add(lhs_value, rhs_value, "fadd")
+                        .unwrap()
                         .as_basic_value_enum(),
                     BinaryOpKind::Subtract => self
                         .builder
                         .build_float_sub(lhs_value, rhs_value, "fsub")
+                        .unwrap()
                         .as_basic_value_enum(),
                     BinaryOpKind::Multiply => self
                         .builder
                         .build_float_mul(lhs_value, rhs_value, "fmul")
+                        .unwrap()
                         .as_basic_value_enum(),
                     BinaryOpKind::Divide => self
                         .builder
                         .build_float_div(lhs_value, rhs_value, "fdiv")
+                        .unwrap()
                         .as_basic_value_enum(),
                     BinaryOpKind::And => unreachable!("bitwise 'and' is unsupported on float"),
                     BinaryOpKind::Or => unreachable!("bitwise 'or' is unsupported on float"),
                     BinaryOpKind::Rem => self
                         .builder
                         .build_float_rem(lhs_value, rhs_value, "frem")
+                        .unwrap()
                         .as_basic_value_enum(),
                     _ => {
                         panic!("Unsupported bin op kind returning float: {}", bin_op.kind)
@@ -2249,8 +2291,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
                             // label: and_result
                             self.builder.position_at_end(phi_destination);
-                            let result =
-                                self.builder.build_phi(self.builtin_types.boolean, "bool_and");
+                            let result = self
+                                .builder
+                                .build_phi(self.builtin_types.boolean, "bool_and")
+                                .unwrap();
                             result.add_incoming(&[
                                 (&rhs, rhs_incoming),
                                 (&self.builtin_types.false_value, short_circuit_branch.else_block),
@@ -2260,17 +2304,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         BinaryOpKind::Or => {
                             let rhs_int =
                                 self.codegen_expr_basic_value(&bin_op.rhs)?.into_int_value();
-                            self.builder.build_or(lhs, rhs_int, "bool_or")
+                            self.builder.build_or(lhs, rhs_int, "bool_or").unwrap()
                         }
                         BinaryOpKind::Equals => {
                             let rhs_int =
                                 self.codegen_expr_basic_value(&bin_op.rhs)?.into_int_value();
-                            self.builder.build_int_compare(
-                                IntPredicate::EQ,
-                                lhs,
-                                rhs_int,
-                                "bool_eq",
-                            )
+                            self.builder
+                                .build_int_compare(IntPredicate::EQ, lhs, rhs_int, "bool_eq")
+                                .unwrap()
                         }
                         _ => panic!("Unhandled binop combo"),
                     };
@@ -2283,16 +2324,19 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                                 self.codegen_expr_basic_value(&bin_op.lhs)?.into_float_value();
                             let rhs_float =
                                 self.codegen_expr_basic_value(&bin_op.rhs)?.into_float_value();
-                            let cmp_result = self.builder.build_float_compare(
-                                if bin_op.kind == BinaryOpKind::Equals {
-                                    FloatPredicate::OEQ
-                                } else {
-                                    FloatPredicate::ONE
-                                },
-                                lhs_float,
-                                rhs_float,
-                                &format!("f{}_i1", bin_op.kind),
-                            );
+                            let cmp_result = self
+                                .builder
+                                .build_float_compare(
+                                    if bin_op.kind == BinaryOpKind::Equals {
+                                        FloatPredicate::OEQ
+                                    } else {
+                                        FloatPredicate::ONE
+                                    },
+                                    lhs_float,
+                                    rhs_float,
+                                    &format!("f{}_i1", bin_op.kind),
+                                )
+                                .unwrap();
                             Ok(self
                                 .i1_to_bool(cmp_result, &format!("{}_res", bin_op.kind))
                                 .as_basic_value_enum()
@@ -2303,16 +2347,19 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                                 self.codegen_expr_basic_value(&bin_op.lhs)?.into_int_value();
                             let rhs_int =
                                 self.codegen_expr_basic_value(&bin_op.rhs)?.into_int_value();
-                            let cmp_result = self.builder.build_int_compare(
-                                if bin_op.kind == BinaryOpKind::Equals {
-                                    IntPredicate::EQ
-                                } else {
-                                    IntPredicate::NE
-                                },
-                                lhs_int,
-                                rhs_int,
-                                &format!("{}_i1", bin_op.kind),
-                            );
+                            let cmp_result = self
+                                .builder
+                                .build_int_compare(
+                                    if bin_op.kind == BinaryOpKind::Equals {
+                                        IntPredicate::EQ
+                                    } else {
+                                        IntPredicate::NE
+                                    },
+                                    lhs_int,
+                                    rhs_int,
+                                    &format!("{}_i1", bin_op.kind),
+                                )
+                                .unwrap();
                             Ok(self
                                 .i1_to_bool(cmp_result, &format!("{}_res", bin_op.kind))
                                 .as_basic_value_enum()
@@ -2338,12 +2385,15 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                                 BinaryOpKind::GreaterEqual => IntPredicate::SGE,
                                 _ => unreachable!("unexpected binop kind"),
                             };
-                            let i1_compare = self.builder.build_int_compare(
-                                pred,
-                                lhs_int,
-                                rhs_int,
-                                &format!("{}_i1", bin_op.kind),
-                            );
+                            let i1_compare = self
+                                .builder
+                                .build_int_compare(
+                                    pred,
+                                    lhs_int,
+                                    rhs_int,
+                                    &format!("{}_i1", bin_op.kind),
+                                )
+                                .unwrap();
                             Ok(self
                                 .i1_to_bool(i1_compare, &format!("{}_res", bin_op.kind))
                                 .as_basic_value_enum()
@@ -2361,12 +2411,15 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                                 BinaryOpKind::GreaterEqual => FloatPredicate::OGE,
                                 _ => unreachable!("unexpected binop kind"),
                             };
-                            let i1_compare = self.builder.build_float_compare(
-                                pred,
-                                lhs_float,
-                                rhs_float,
-                                &format!("f{}", bin_op.kind),
-                            );
+                            let i1_compare = self
+                                .builder
+                                .build_float_compare(
+                                    pred,
+                                    lhs_float,
+                                    rhs_float,
+                                    &format!("f{}", bin_op.kind),
+                                )
+                                .unwrap();
                             Ok(self.i1_to_bool(i1_compare, "").as_basic_value_enum().into())
                         }
                         _ => unreachable!("unexpected comparison operand; not float or int"),
@@ -2406,22 +2459,25 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         variant_name: &str,
     ) -> IntValue<'ctx> {
         let enum_tag_value = self.get_enum_tag(variant_tag_value.get_type(), enum_value);
-        let is_equal = self.builder.build_int_compare(
-            IntPredicate::EQ,
-            enum_tag_value,
-            variant_tag_value,
-            "is_variant_cmp",
-        );
+        let is_equal = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                enum_tag_value,
+                variant_tag_value,
+                "is_variant_cmp",
+            )
+            .unwrap();
         let is_equal_bool = self.i1_to_bool(is_equal, &format!("is_variant_{}", variant_name));
         is_equal_bool
     }
 
     fn bool_to_i1(&self, bool: IntValue<'ctx>, name: &str) -> IntValue<'ctx> {
-        self.builder.build_int_truncate(bool, self.builtin_types.i1, name)
+        self.builder.build_int_truncate(bool, self.builtin_types.i1, name).unwrap()
     }
 
     fn i1_to_bool(&self, i1: IntValue<'ctx>, name: &str) -> IntValue<'ctx> {
-        self.builder.build_int_cast(i1, self.builtin_types.boolean, name)
+        self.builder.build_int_cast(i1, self.builtin_types.boolean, name).unwrap()
     }
 
     fn get_enum_tag(
@@ -2431,7 +2487,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     ) -> IntValue<'ctx> {
         // Just interpret the enum memory just as the int tag that is always at the start, no need to
         // treat it as a struct
-        self.builder.build_load(tag_type, enum_value, "tag").into_int_value()
+        self.builder.build_load(tag_type, enum_value, "tag").unwrap().into_int_value()
     }
 
     fn get_enum_payload_reference(
@@ -2497,7 +2553,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let sret_alloca = if llvm_function_type.is_sret {
             let sret_alloca = self
                 .builder
-                .build_alloca(llvm_function_type.return_type.rich_value_type(), "call_sret");
+                .build_alloca(llvm_function_type.return_type.rich_value_type(), "call_sret")
+                .unwrap();
             args.push_front(sret_alloca.into());
             Some(sret_alloca)
         } else {
@@ -2509,7 +2566,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let function_value = self.codegen_function_or_get(*function_id)?;
 
                 self.set_debug_location(call.span);
-                self.builder.build_call(function_value, args.make_contiguous(), "")
+                self.builder.build_call(function_value, args.make_contiguous(), "").unwrap()
             }
             Callee::StaticClosure { function_id, closure_type_id } => {
                 let closure_env_ptr =
@@ -2519,19 +2576,21 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let function_value = self.codegen_function_or_get(*function_id)?;
 
                 self.set_debug_location(call.span);
-                self.builder.build_call(function_value, args.make_contiguous(), "")
+                self.builder.build_call(function_value, args.make_contiguous(), "").unwrap()
             }
             Callee::DynamicFunction(function_reference_expr) => {
                 let function_ptr =
                     self.codegen_expr_basic_value(function_reference_expr)?.into_pointer_value();
 
                 self.set_debug_location(call.span);
-                self.builder.build_indirect_call(
-                    llvm_function_type.llvm_function_type,
-                    function_ptr,
-                    args.make_contiguous(),
-                    "",
-                )
+                self.builder
+                    .build_indirect_call(
+                        llvm_function_type.llvm_function_type,
+                        function_ptr,
+                        args.make_contiguous(),
+                        "",
+                    )
+                    .unwrap()
             }
             Callee::DynamicClosure(callee_struct_expr) => {
                 let closure_object_type = self.builtin_types.dynamic_closure_object;
@@ -2550,24 +2609,30 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         fn_ptr_gep,
                         "fn_ptr",
                     )
+                    .unwrap()
                     .into_pointer_value();
                 let env_ptr_gep = self
                     .builder
                     .build_struct_gep(closure_object_type, callee_struct, 0, "env_ptr_gep")
                     .unwrap();
-                let env_ptr = self.builder.build_load(
-                    closure_object_type.get_field_type_at_index(1).unwrap(),
-                    env_ptr_gep,
-                    "env_ptr",
-                );
+                let env_ptr = self
+                    .builder
+                    .build_load(
+                        closure_object_type.get_field_type_at_index(1).unwrap(),
+                        env_ptr_gep,
+                        "env_ptr",
+                    )
+                    .unwrap();
                 args.insert(env_arg_index, env_ptr.into());
 
-                self.builder.build_indirect_call(
-                    llvm_function_type.llvm_function_type,
-                    fn_ptr,
-                    args.make_contiguous(),
-                    "",
-                )
+                self.builder
+                    .build_indirect_call(
+                        llvm_function_type.llvm_function_type,
+                        fn_ptr,
+                        args.make_contiguous(),
+                        "",
+                    )
+                    .unwrap()
             }
         };
         match callsite_value.try_as_basic_value() {
@@ -2579,7 +2644,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     // its an aggregate.
                     Ok(sret_pointer.as_basic_value_enum().into())
                 } else if call.return_type == NEVER_TYPE_ID {
-                    let unreachable = self.builder.build_unreachable();
+                    let unreachable = self.builder.build_unreachable().unwrap();
                     Ok(LlvmValue::Void(unreachable))
                 } else {
                     panic!("Function returned LLVM void but wasn't typed as never and was not sret")
@@ -2631,13 +2696,13 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             IntrinsicFunction::BoolNegate => {
                 let input_value = self.codegen_expr_basic_value(&call.args[0])?.into_int_value();
                 let truncated = self.bool_to_i1(input_value, "");
-                let negated = self.builder.build_not(truncated, "");
+                let negated = self.builder.build_not(truncated, "").unwrap();
                 let promoted = self.i1_to_bool(negated, "");
                 Ok(promoted.as_basic_value_enum().into())
             }
             IntrinsicFunction::BitNot => {
                 let input_value = self.codegen_expr_basic_value(&call.args[0])?.into_int_value();
-                let not_value = self.builder.build_not(input_value, "not");
+                let not_value = self.builder.build_not(input_value, "not").unwrap();
                 Ok(not_value.as_basic_value_enum().into())
             }
             IntrinsicFunction::BitAnd
@@ -2662,6 +2727,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     }
                     _ => unreachable!(),
                 };
+                let result = result.to_err(call.span)?;
                 Ok(result.as_basic_value_enum().into())
             }
             IntrinsicFunction::TypeId => {
@@ -2680,12 +2746,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let ptr = self.codegen_expr_basic_value(&call.args[0])?.into_pointer_value();
                 let index = self.codegen_expr_basic_value(&call.args[1])?.into_int_value();
                 let result_pointer = unsafe {
-                    self.builder.build_in_bounds_gep(
-                        elem_type.rich_value_type(),
-                        ptr,
-                        &[index],
-                        "refAtIndex",
-                    )
+                    self.builder
+                        .build_in_bounds_gep(
+                            elem_type.rich_value_type(),
+                            ptr,
+                            &[index],
+                            "refAtIndex",
+                        )
+                        .unwrap()
                 };
                 Ok(result_pointer.as_basic_value_enum().into())
             }
@@ -2797,7 +2865,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
         let break_type = self.codegen_type(loop_expr.break_type)?;
         // Optimization: skip if unit type
-        let break_value_ptr = self.builder.build_alloca(break_type.rich_value_type(), "break");
+        let break_value_ptr =
+            self.builder.build_alloca(break_type.rich_value_type(), "break").unwrap();
         self.loops.insert(
             loop_expr.body.scope_id,
             LoopInfo { break_value_ptr: Some(break_value_ptr), end_block: loop_end_block },
@@ -2913,7 +2982,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             TyperLinkage::Intrinsic => None,
         };
         if self.llvm_module.get_function(llvm_name).is_some() {
-            return err!(
+            return failf!(
                 self.module.ast.get_span_for_id(function.parsed_id),
                 "Dupe function name: {}",
                 llvm_name
@@ -2987,7 +3056,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             );
             param.set_name(&format!("{param_name}_arg"));
             self.set_debug_location(typed_param.span);
-            let pointer = self.builder.build_alloca(ty.rich_value_type(), param_name);
+            let pointer = self.builder.build_alloca(ty.rich_value_type(), param_name).unwrap();
             let arg_debug_type = self.get_debug_type(typed_param.type_id)?;
             let di_local_variable = self.debug.debug_builder.create_parameter_variable(
                 self.debug.current_scope(),
@@ -3023,7 +3092,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let value = self
                     .codegen_intrinsic_function_body(intrinsic_type, function)?
                     .as_basic_value_enum();
-                LlvmValue::Void(self.builder.build_return(Some(&value)))
+                let ret = self.builder.build_return(Some(&value)).unwrap();
+                LlvmValue::Void(ret)
             }
             None => {
                 let function_block = function.body_block.as_ref().unwrap_or_else(|| {
@@ -3110,7 +3180,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         //     }
         // }
         let Some(main_function_id) = self.module.get_main_function_id() else {
-            return err!(SpanId::NONE, "Module {} has no main function", self.module.name());
+            return failf!(SpanId::NONE, "Module {} has no main function", self.module.name());
         };
         self.codegen_function_or_get(main_function_id)?;
         info!("codegen phase 'ir' took {}ms", start.elapsed().as_millis());
@@ -3169,30 +3239,20 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         })?;
 
         // FIXME: Use standard pass builders, see TODO.md
-        let module_pass_manager: PassManager<LlvmModule<'ctx>> = PassManager::create(());
         if optimize {
-            module_pass_manager.add_scalar_repl_aggregates_pass_ssa();
-            module_pass_manager.add_promote_memory_to_register_pass();
-            module_pass_manager.add_new_gvn_pass();
-            module_pass_manager.add_aggressive_inst_combiner_pass();
-            module_pass_manager.add_memcpy_optimize_pass();
-            module_pass_manager.add_scoped_no_alias_aa_pass();
-            module_pass_manager.add_type_based_alias_analysis_pass();
-            module_pass_manager.add_sccp_pass();
-            module_pass_manager.add_aggressive_dce_pass();
-            module_pass_manager.add_ind_var_simplify_pass();
-            module_pass_manager.add_loop_idiom_pass();
-            module_pass_manager.add_loop_unroll_pass();
-            module_pass_manager.add_function_inlining_pass();
-            module_pass_manager.add_cfg_simplification_pass();
+            self.llvm_module
+                .run_passes("default<O3>", &self.llvm_machine, PassBuilderOptions::create())
+                .unwrap();
+        } else {
+            self.llvm_module
+                .run_passes("function(mem2reg)", &self.llvm_machine, PassBuilderOptions::create())
+                .unwrap();
         }
 
-        module_pass_manager.add_function_attrs_pass();
-        module_pass_manager.add_verifier_pass();
+        self.llvm_module.verify().unwrap();
 
-        self.llvm_machine.add_analysis_passes(&module_pass_manager);
-
-        module_pass_manager.run_on(&self.llvm_module);
+        // self.llvm_machine.add_analysis_passes(&module_pass_manager);
+        // module_pass_manager.run_on(&self.llvm_module);
 
         info!("codegen phase 'optimize' took {}ms", start.elapsed().as_millis());
         for (_, function) in self.llvm_functions.iter_mut() {
