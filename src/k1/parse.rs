@@ -43,25 +43,9 @@ pub struct ParsedPatternId(u32);
 pub struct ParsedUseId(u32);
 
 #[derive(Debug, Clone)]
-pub enum DirectiveKind {
-    CompilerDebug,
-}
-#[derive(Debug, Clone)]
-pub enum DirectiveArg {
-    Ident(Identifier),
-}
-
-#[derive(Debug, Clone)]
-pub struct ParsedDirective {
-    pub kind: DirectiveKind,
-    pub args: Vec<DirectiveArg>,
-    pub span: SpanId,
-}
-
-#[derive(Debug, Clone)]
-pub enum UseKind {
-    Type,
-    Default,
+pub enum ParsedDirective {
+    ConditionalCompile { condition: ParsedExpressionId, span: SpanId },
+    CompilerDebug { span: SpanId },
 }
 
 #[derive(Debug, Clone)]
@@ -2567,7 +2551,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(NamespacedIdentifier { namespaces, name: name_ident, span })
     }
 
-    /// Base expression means no postfix or binary ops
+    /// "Base" in "base expression" simply means ignoring postfix and
+    /// binary operations, in terms of recursion or induction, its an atom,
+    /// or a 'base case'
     fn parse_base_expression(&mut self) -> ParseResult<Option<ParsedExpressionId>> {
         let directives = self.parse_directives()?;
         let (first, second, third) = self.tokens.peek_three();
@@ -3155,31 +3141,22 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(ParsedTypeParam { name, span, constraints })
     }
 
+    /// Directives look like this: #<directive kind: ident>(<directive arg>, ...)
     fn parse_directives(&mut self) -> ParseResult<Vec<ParsedDirective>> {
-        fn expect_directive_arg(parser: &mut Parser) -> ParseResult<DirectiveArg> {
-            let name = parser.expect_eat_token(K::Ident)?;
-            let ident = parser.intern_ident_token(name);
-            Ok(DirectiveArg::Ident(ident))
-        }
         let mut directives: Vec<ParsedDirective> = vec![];
         while let Some(_hash) = self.maybe_consume_next(K::Hash) {
-            let kind_token = self.expect_eat_token(K::Ident)?;
-            let kind = match self.token_chars(kind_token) {
-                "debug" => DirectiveKind::CompilerDebug,
-                s => return Err(error(format!("Invalid directive: {s}"), kind_token)),
+            let directive = if let Some(keyword_if) = self.maybe_consume_next(K::KeywordIf) {
+                let condition = self.expect_expression()?;
+                let span = self.extend_span(keyword_if.span, self.get_expression_span(condition));
+                ParsedDirective::ConditionalCompile { condition, span }
+            } else {
+                let kind_token = self.expect_eat_token(K::Ident)?;
+                match self.token_chars(kind_token) {
+                    "debug" => ParsedDirective::CompilerDebug { span: kind_token.span },
+                    s => return Err(error(format!("Invalid directive kind: '{s}'"), kind_token)),
+                }
             };
-
-            let (args, args_span) = self
-                .eat_delimited_if_opener(
-                    "directive arguments",
-                    K::OpenParen,
-                    K::Comma,
-                    &[K::CloseParen],
-                    expect_directive_arg,
-                )?
-                .unwrap_or((vec![], kind_token.span));
-            let span = self.extend_span(kind_token.span, args_span);
-            directives.push(ParsedDirective { kind, args, span })
+            directives.push(directive)
         }
         Ok(directives)
     }

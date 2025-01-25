@@ -1,0 +1,9 @@
+fn main(): int {
+  #if(true) { 
+    println("Hello, world!")
+  };
+  #if(false) { 
+    println("I don't exist")
+  };
+  0
+}
