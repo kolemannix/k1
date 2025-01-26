@@ -128,6 +128,7 @@ impl Backend {
             dump_module: false,
             debug: false,
             llvm_counts: false,
+            target: None,
             command: k1::compiler::Command::Check {
                 file: root_uri.as_ref().unwrap().path().into(),
             },

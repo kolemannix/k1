@@ -21,10 +21,92 @@ use clap::{Parser, Subcommand};
 
 pub const MAC_SDK_VERSION: &str = "11.0.0";
 
-pub enum Platform {
-    MacOS,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetOs {
     Linux,
-    Windows,
+    MacOs,
+    Wasm,
+}
+
+impl TargetOs {
+    pub fn to_str(&self) -> &'static str {
+        match self {
+            TargetOs::Linux => "linux",
+            TargetOs::MacOs => "macos",
+            TargetOs::Wasm => "wasm",
+        }
+    }
+}
+
+pub fn detect_host_target() -> Option<Target> {
+    let (arch, word_size) = match std::env::consts::ARCH {
+        "x86" => (Arch::Intel, WordSize::W32),
+        "x86_64" => (Arch::Intel, WordSize::W64),
+        "arm" => (Arch::Arm, WordSize::W32),
+        "aarch64" => (Arch::Arm, WordSize::W64),
+        _ => return None,
+    };
+    let os = match std::env::consts::OS {
+        "linux" => Some(TargetOs::Linux),
+        "macos" => Some(TargetOs::MacOs),
+        _ => None,
+    };
+    Target::from(arch, word_size, os)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WordSize {
+    W32,
+    W64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Arch {
+    Intel,
+    Arm,
+    Wasm,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+/// For now, I just do a simple exhaustive enum of the triples I actually support
+/// rather than a 'target triple' type of struct where very few values of that type
+/// are actually valid
+pub enum Target {
+    LinuxIntel64,
+    MacOsArm64,
+    Wasm32,
+}
+
+impl Target {
+    pub fn from(arch: Arch, word_size: WordSize, os: Option<TargetOs>) -> Option<Self> {
+        match (arch, word_size, os) {
+            (Arch::Intel, WordSize::W64, Some(TargetOs::Linux)) => Some(Target::LinuxIntel64),
+            (Arch::Arm, WordSize::W64, Some(TargetOs::MacOs)) => Some(Target::MacOsArm64),
+            (Arch::Wasm, WordSize::W32, Some(TargetOs::Wasm)) => Some(Target::Wasm32),
+            _ => None,
+        }
+    }
+    pub fn word_size(&self) -> WordSize {
+        match self {
+            Target::LinuxIntel64 => WordSize::W64,
+            Target::MacOsArm64 => WordSize::W64,
+            Target::Wasm32 => WordSize::W32,
+        }
+    }
+    pub fn target_os(&self) -> TargetOs {
+        match self {
+            Target::LinuxIntel64 => TargetOs::Linux,
+            Target::MacOsArm64 => TargetOs::MacOs,
+            Target::Wasm32 => TargetOs::Wasm,
+        }
+    }
+    pub fn arch(&self) -> Arch {
+        match self {
+            Target::LinuxIntel64 => Arch::Intel,
+            Target::MacOsArm64 => Arch::Arm,
+            Target::Wasm32 => Arch::Wasm,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -41,6 +123,10 @@ pub enum Command {
         /// File
         file: PathBuf,
     },
+    Test {
+        /// File
+        file: PathBuf,
+    },
 }
 
 impl Command {
@@ -49,7 +135,24 @@ impl Command {
             Command::Check { file } => file,
             Command::Build { file } => file,
             Command::Run { file } => file,
+            Command::Test { file } => file,
         }
+    }
+
+    pub fn is_check(&self) -> bool {
+        matches!(self, Command::Check { .. })
+    }
+
+    pub fn is_build(&self) -> bool {
+        matches!(self, Command::Build { .. })
+    }
+
+    pub fn is_run(&self) -> bool {
+        matches!(self, Command::Run { .. })
+    }
+
+    pub fn is_test(&self) -> bool {
+        matches!(self, Command::Test { .. })
     }
 }
 
@@ -80,6 +183,9 @@ pub struct Args {
     #[arg(long, default_value_t = false)]
     pub llvm_counts: bool,
 
+    /// Target platform
+    pub target: Option<Target>,
+
     #[command(subcommand)]
     pub command: Command,
 }
@@ -88,6 +194,12 @@ impl Args {
     pub fn file(&self) -> &PathBuf {
         self.command.file()
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct CompilerConfig {
+    pub is_test_build: bool,
+    pub target: Target,
 }
 
 /// Type size assertion. The first argument is a type and the second argument is its expected size.
@@ -135,7 +247,12 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
 
     let use_std = !args.no_std;
 
-    let mut parsed_module = ParsedModule::make(module_name.to_string());
+    let target = args
+        .target
+        .or(detect_host_target())
+        .unwrap_or_else(|| panic!("Unsupported host; provide your target explicitly"));
+    let config = CompilerConfig { is_test_build: args.command.is_test(), target };
+    let mut parsed_module = ParsedModule::make(module_name.to_string(), config);
 
     let dir_entries = {
         let mut ents = fs::read_dir(src_dir)

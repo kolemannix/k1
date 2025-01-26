@@ -19,7 +19,7 @@ use inkwell::debug_info::{
 };
 use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::module::{Linkage as LlvmLinkage, Module as LlvmModule};
-use inkwell::passes::{PassBuilderOptions, PassManager};
+use inkwell::passes::PassBuilderOptions;
 use inkwell::targets::{InitializationConfig, Target, TargetData, TargetMachine, TargetTriple};
 use inkwell::types::{
     AnyType, AnyTypeEnum, BasicMetadataTypeEnum, BasicType, BasicTypeEnum,
@@ -225,10 +225,8 @@ impl SizeInfo {
 
 #[derive(Debug, Copy, Clone)]
 struct LlvmReferenceType<'ctx> {
-    #[allow(unused)]
     type_id: TypeId,
     pointer_type: PointerType<'ctx>,
-    #[allow(unused)]
     pointee_type: AnyTypeEnum<'ctx>,
     di_type: DIType<'ctx>,
 }
@@ -658,7 +656,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let machine = Codegen::set_up_machine(&mut llvm_module);
         let target_data = machine.get_target_data();
 
-        let ptr = ctx.i64_type().ptr_type(AddressSpace::default());
+        let ptr = ctx.ptr_type(AddressSpace::default());
         let builtin_types = BuiltinTypes {
             int: ctx.i64_type(),
             unit: ctx.i8_type(),
@@ -1538,7 +1536,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         // Entry block
         let condition = self.codegen_expr_basic_value(&ir_if.condition)?;
         let condition_value = self.bool_to_i1(condition.into_int_value(), "cond_i1");
-        self.builder.build_conditional_branch(condition_value, consequent_block, alternate_block);
+        self.builder
+            .build_conditional_branch(condition_value, consequent_block, alternate_block)
+            .unwrap();
 
         // Consequent Block
         self.builder.position_at_end(consequent_block);
@@ -1547,7 +1547,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             Either::Left(_) => None,
             Either::Right(value) => {
                 let consequent_final_block = self.builder.get_insert_block().unwrap();
-                self.builder.build_unconditional_branch(merge_block);
+                self.builder.build_unconditional_branch(merge_block).unwrap();
                 Some((consequent_final_block, value))
             }
         };
@@ -1559,7 +1559,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             Either::Left(_) => None,
             Either::Right(value) => {
                 let alternate_final_block = self.builder.get_insert_block().unwrap();
-                self.builder.build_unconditional_branch(merge_block);
+                self.builder.build_unconditional_branch(merge_block).unwrap();
                 Some((alternate_final_block, value))
             }
         };
@@ -1686,74 +1686,81 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             .unwrap()
     }
 
+    fn codegen_compile_time_value(
+        &self,
+        compile_time_value: &CompileTimeValue,
+    ) -> BasicValueEnum<'ctx> {
+        let result = match compile_time_value {
+            CompileTimeValue::Boolean(b) => match b {
+                true => self.builtin_types.true_value.as_basic_value_enum(),
+                false => self.builtin_types.false_value.as_basic_value_enum(),
+            },
+            CompileTimeValue::Char(byte) => {
+                self.builtin_types.char.const_int(*byte as u64, false).as_basic_value_enum()
+            }
+            CompileTimeValue::Integer(int_value) => self.codegen_integer_value(*int_value).unwrap(),
+            CompileTimeValue::Float(float_value) => self.codegen_float_value(*float_value).unwrap(),
+            CompileTimeValue::String(boxed_str) => self.codegen_string_literal(&boxed_str).unwrap(),
+        };
+        result
+    }
+
+    fn codegen_string_literal(&self, string_value: &str) -> CodegenResult<BasicValueEnum<'ctx>> {
+        // Get a hold of the type for 'string' (its just a struct that we expect to exist!)
+        let string_type = self.codegen_type(STRING_TYPE_ID)?;
+        let string_wrapper_struct = string_type.rich_value_type().into_struct_type();
+        let char_buffer_struct =
+            string_wrapper_struct.get_field_type_at_index(0).unwrap().into_struct_type();
+
+        // Ensure the string layout is what we expect
+        // deftype string = { buffer: Buffer[char] }
+        debug_assert!(
+            char_buffer_struct.get_field_type_at_index(0).unwrap().into_int_type().get_bit_width()
+                == 64
+        );
+        debug_assert!(char_buffer_struct.get_field_type_at_index(1).unwrap().is_pointer_type());
+        debug_assert!(char_buffer_struct.count_fields() == 2);
+
+        let global_str_data = self.llvm_module.add_global(
+            self.builtin_types.char.array_type(string_value.len() as u32),
+            None,
+            "str_data",
+        );
+        global_str_data.set_initializer(&i8_array_from_str(self.ctx, string_value));
+        global_str_data.set_constant(true);
+        let global_str_value = string_wrapper_struct
+            .const_named_struct(&[char_buffer_struct
+                .const_named_struct(&[
+                    self.builtin_types.int.const_int(string_value.len() as u64, true).into(),
+                    global_str_data.as_pointer_value().into(),
+                ])
+                .as_basic_value_enum()])
+            .as_basic_value_enum();
+        let global_value = self.llvm_module.add_global(string_wrapper_struct, None, "str");
+        global_value.set_constant(true);
+        global_value.set_initializer(&global_str_value);
+        Ok(global_value.as_pointer_value().as_basic_value_enum())
+    }
+
     fn codegen_expr(&mut self, expr: &TypedExpr) -> CodegenResult<LlvmValue<'ctx>> {
         self.set_debug_location(expr.get_span());
         trace!("codegen expr\n{}", self.module.expr_to_string(expr));
         match expr {
             TypedExpr::Unit(_) => Ok(self.builtin_types.unit_value.as_basic_value_enum().into()),
-            TypedExpr::Char(byte, _) => Ok(self
-                .builtin_types
-                .char
-                .const_int(*byte as u64, false)
-                .as_basic_value_enum()
-                .into()),
-            TypedExpr::Bool(b, _) => match b {
-                true => Ok(self.builtin_types.true_value.as_basic_value_enum().into()),
-                false => Ok(self.builtin_types.false_value.as_basic_value_enum().into()),
-            },
-            TypedExpr::Integer(integer) => {
-                let value = self.codegen_integer_value(integer)?;
-                Ok(value.into())
+            TypedExpr::Char(byte, _) => {
+                Ok(self.codegen_compile_time_value(&CompileTimeValue::Char(*byte)).into())
             }
+            TypedExpr::Bool(b, _) => {
+                Ok(self.codegen_compile_time_value(&CompileTimeValue::Boolean(*b)).into())
+            }
+            TypedExpr::Integer(integer) => Ok(self
+                .codegen_compile_time_value(&CompileTimeValue::Integer(integer.value))
+                .into()),
             TypedExpr::Float(float) => {
-                let value = self.codegen_float_value(float)?;
-                Ok(value.into())
+                Ok(self.codegen_compile_time_value(&CompileTimeValue::Float(float.value)).into())
             }
             TypedExpr::Str(string_value, _) => {
-                // Get a hold of the type for 'string' (its just a struct that we expect to exist!)
-                let string_type = self.codegen_type(STRING_TYPE_ID).unwrap();
-                let string_wrapper_struct = string_type.rich_value_type().into_struct_type();
-                let char_buffer_struct =
-                    string_wrapper_struct.get_field_type_at_index(0).unwrap().into_struct_type();
-
-                // Ensure the string layout is what we expect
-                // deftype string = { buffer: Buffer[char] }
-                debug_assert!(
-                    char_buffer_struct
-                        .get_field_type_at_index(0)
-                        .unwrap()
-                        .into_int_type()
-                        .get_bit_width()
-                        == 64
-                );
-                debug_assert!(char_buffer_struct
-                    .get_field_type_at_index(1)
-                    .unwrap()
-                    .is_pointer_type());
-                debug_assert!(char_buffer_struct.count_fields() == 2);
-
-                let global_str_data = self.llvm_module.add_global(
-                    self.builtin_types.char.array_type(string_value.len() as u32),
-                    None,
-                    "str_data",
-                );
-                global_str_data.set_initializer(&i8_array_from_str(self.ctx, string_value));
-                global_str_data.set_constant(true);
-                let global_str_value = string_wrapper_struct
-                    .const_named_struct(&[char_buffer_struct
-                        .const_named_struct(&[
-                            self.builtin_types
-                                .int
-                                .const_int(string_value.len() as u64, true)
-                                .into(),
-                            global_str_data.as_pointer_value().into(),
-                        ])
-                        .as_basic_value_enum()])
-                    .as_basic_value_enum();
-                let global_value = self.llvm_module.add_global(string_wrapper_struct, None, "str");
-                global_value.set_constant(true);
-                global_value.set_initializer(&global_str_value);
-                Ok(global_value.as_pointer_value().as_basic_value_enum().into())
+                Ok(self.codegen_string_literal(string_value)?.into())
             }
             TypedExpr::Variable(ir_var) => {
                 if let Some(pointer) = self.variables.get(&ir_var.variable_id) {
@@ -1886,7 +1893,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         &format!("enum_tag_{}", self.get_ident_name(variant_tag_name)),
                     )
                     .unwrap();
-                self.builder.build_store(tag_pointer, enum_variant.tag_value);
+                self.builder.build_store(tag_pointer, enum_variant.tag_value).unwrap();
 
                 if let Some(payload) = &enum_constr.payload {
                     let value = self.codegen_expr_basic_value(payload)?;
@@ -2122,7 +2129,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let loop_info = *self.loops.get(&brk.loop_scope).unwrap();
                 let break_value = self.codegen_expr_basic_value(&brk.value)?;
                 if let Some(break_value_ptr) = loop_info.break_value_ptr {
-                    self.builder.build_store(break_value_ptr, break_value);
+                    self.builder.build_store(break_value_ptr, break_value).unwrap();
                 }
                 let branch_inst =
                     self.builder.build_unconditional_branch(loop_info.end_block).unwrap();
@@ -2172,8 +2179,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     )
                     .unwrap();
 
-                self.builder.build_store(fn_ptr, llvm_fn.as_global_value().as_pointer_value());
-                self.builder.build_store(env_ptr, environment_ptr);
+                self.builder
+                    .build_store(fn_ptr, llvm_fn.as_global_value().as_pointer_value())
+                    .unwrap();
+                self.builder.build_store(env_ptr, environment_ptr).unwrap();
 
                 Ok(closure_ptr.as_basic_value_enum().into())
             }
@@ -2281,12 +2290,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
                             // Don't forget to grab the actual incoming block in case bin_op.rhs did branching!
                             let rhs_incoming = self.builder.get_insert_block().unwrap();
-                            self.builder.build_unconditional_branch(phi_destination);
+                            self.builder.build_unconditional_branch(phi_destination).unwrap();
                             // return rhs
 
                             // label: short_circuit; lhs was false
                             self.builder.position_at_end(short_circuit_branch.else_block);
-                            self.builder.build_unconditional_branch(phi_destination);
+                            self.builder.build_unconditional_branch(phi_destination).unwrap();
                             // return lhs aka false
 
                             // label: and_result
@@ -2441,7 +2450,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     ) -> BranchSetup<'ctx> {
         let then_block = self.append_basic_block(then_name);
         let else_block = self.append_basic_block(else_name);
-        self.builder.build_conditional_branch(cond, then_block, else_block);
+        self.builder.build_conditional_branch(cond, then_block, else_block).unwrap();
         BranchSetup { then_block, else_block }
     }
 
@@ -2732,10 +2741,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             IntrinsicFunction::TypeId => {
                 let type_param = &call.type_args[0];
-                let type_id_value = self.codegen_integer_value(&TypedIntegerExpr {
-                    value: TypedIntegerValue::U64(type_param.type_id.to_u64()),
-                    span: call.span,
-                })?;
+                let type_id_value = self
+                    .codegen_integer_value(TypedIntegerValue::U64(type_param.type_id.to_u64()))?;
                 Ok(type_id_value.into())
             }
             IntrinsicFunction::PointerIndex => {
@@ -2835,20 +2842,20 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         );
 
         // Go to the loop
-        self.builder.build_unconditional_branch(loop_entry_block);
+        self.builder.build_unconditional_branch(loop_entry_block).unwrap();
 
         self.builder.position_at_end(loop_entry_block);
         let cond = self.codegen_expr_basic_value(&while_loop.cond)?.into_int_value();
         let cond_i1 = self.bool_to_i1(cond, "while_cond");
 
-        self.builder.build_conditional_branch(cond_i1, loop_body_block, loop_end_block);
+        self.builder.build_conditional_branch(cond_i1, loop_body_block, loop_end_block).unwrap();
 
         self.builder.position_at_end(loop_body_block);
         let body_value = self.codegen_block(&while_loop.body)?;
         match body_value.as_basic_value() {
             Either::Left(_instr) => {}
             Either::Right(_bv) => {
-                self.builder.build_unconditional_branch(loop_entry_block);
+                self.builder.build_unconditional_branch(loop_entry_block).unwrap();
             }
         }
 
@@ -2873,14 +2880,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         );
 
         // Go to the body
-        self.builder.build_unconditional_branch(loop_body_block);
+        self.builder.build_unconditional_branch(loop_body_block).unwrap();
 
         self.builder.position_at_end(loop_body_block);
         let body_value = self.codegen_block(&loop_expr.body)?;
         match body_value.as_basic_value() {
             Either::Left(_instr) => {}
             Either::Right(_bv) => {
-                self.builder.build_unconditional_branch(loop_body_block);
+                self.builder.build_unconditional_branch(loop_body_block).unwrap();
             }
         }
 
@@ -3128,54 +3135,45 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     fn codegen_integer_value(
         &self,
-        integer: &TypedIntegerExpr,
+        integer: TypedIntegerValue,
     ) -> CodegenResult<BasicValueEnum<'ctx>> {
         let llvm_ty = self.codegen_type(integer.get_type())?;
         let llvm_int_ty = llvm_ty.rich_value_type().into_int_type();
         let Type::Integer(int_type) = self.module.types.get(llvm_ty.type_id()) else { panic!() };
         let llvm_value = if int_type.is_signed() {
-            llvm_int_ty.const_int(integer.value.as_u64(), true)
+            llvm_int_ty.const_int(integer.as_u64(), true)
         } else {
-            llvm_int_ty.const_int(integer.value.as_u64(), false)
+            llvm_int_ty.const_int(integer.as_u64(), false)
         };
         Ok(llvm_value.as_basic_value_enum())
     }
 
-    fn codegen_float_value(&self, float: &TypedFloatExpr) -> CodegenResult<BasicValueEnum<'ctx>> {
+    fn codegen_float_value(&self, float: TypedFloatValue) -> CodegenResult<BasicValueEnum<'ctx>> {
         let llvm_ty = self.codegen_type(float.get_type())?;
         let llvm_float_ty = llvm_ty.rich_value_type().into_float_type();
-        let llvm_value = llvm_float_ty.const_float(float.value.as_f64());
+        let llvm_value = llvm_float_ty.const_float(float.as_f64());
         Ok(llvm_value.as_basic_value_enum())
     }
 
     pub fn codegen_module(&mut self) -> CodegenResult<()> {
         let start = std::time::Instant::now();
         for constant in &self.module.constants {
-            match &constant.expr {
-                TypedExpr::Integer(integer) => {
-                    let llvm_value = self.codegen_integer_value(integer)?;
-                    let variable = self.module.variables.get(constant.variable_id);
-                    let name = self.module.make_qualified_name(
-                        variable.owner_scope,
-                        variable.name,
-                        "__",
-                        false,
-                    );
-                    let llvm_global = self.llvm_module.add_global(
-                        llvm_value.get_type(),
-                        Some(AddressSpace::default()),
-                        &name,
-                    );
-                    llvm_global.set_constant(true);
-                    llvm_global.set_initializer(&llvm_value);
-                    self.globals.insert(constant.variable_id, llvm_global);
-                }
-                _ => unimplemented!("constants must be integers"),
-            }
+            let llvm_value = self.codegen_compile_time_value(&constant.value);
+            let variable = self.module.variables.get(constant.variable_id);
+            let name =
+                self.module.make_qualified_name(variable.owner_scope, variable.name, "__", false);
+            let llvm_global = self.llvm_module.add_global(
+                llvm_value.get_type(),
+                Some(AddressSpace::default()),
+                &name,
+            );
+            llvm_global.set_constant(true);
+            llvm_global.set_initializer(&llvm_value);
+            self.globals.insert(constant.variable_id, llvm_global);
         }
-        // TODO: Codegen only the exported functions as well as the necessary ones
+        // TODO: Codegen the exported functions as well as the called ones
         // for (id, function) in self.module.function_iter() {
-        //     if function.is_concrete {
+        //     if function.linkage.is_exported() {
         //         self.codegen_function_or_get(id)?;
         //     }
         // }
