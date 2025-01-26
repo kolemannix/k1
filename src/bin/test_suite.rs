@@ -93,6 +93,7 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
         write_llvm: true,
         dump_module: false,
         llvm_counts: false,
+        target: None,
         command: Command::Build { file: path.as_ref().to_owned() },
     };
     let compile_result = compiler::compile_module(&args);

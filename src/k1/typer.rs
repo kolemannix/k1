@@ -31,7 +31,7 @@ use crate::parse::{
 use crate::parse::{
     Block, FnCall, Identifier, Literal, ParsedExpression, ParsedModule, ParsedStmt,
 };
-use crate::strings;
+use crate::{static_assert_size, strings};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FunctionId(pub u32);
@@ -44,9 +44,10 @@ pub struct VariableId(u32);
 pub struct NamespaceId(u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AbilityId(u32);
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AbilityImplId(u32);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ConstantId(u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Linkage {
@@ -125,13 +126,23 @@ enum MaybeTypedExpr {
     Typed(TypedExpr),
 }
 
+#[derive(Debug, Clone)]
+pub enum CompileTimeValue {
+    Boolean(bool),
+    Char(u8),
+    Integer(TypedIntegerValue),
+    Float(TypedFloatValue),
+    String(Box<str>),
+}
+static_assert_size!(CompileTimeValue, 24);
+
 /// Used for analyzing pattern matching
 #[derive(Debug, Clone)]
 pub enum PatternConstructor {
     Unit,
     BoolFalse,
     BoolTrue,
-    /// Note: These 4 (Char, String, Int, Float) will become more interesting if we implement exhaustive range-based matching like Rust's
+    /// Char, String, Int, Float will become more interesting if we implement exhaustive range-based matching like Rust's
     /// For now they exist as placeholders to indicate to the algorithm that something needs to be matched. We treat
     /// exact literals as NOT matching because they do not completely eliminate the pattern, and ignore those exact
     /// literal patterns when we report on 'Useless' patterns
@@ -893,6 +904,19 @@ pub enum TypedIntegerValue {
 }
 
 impl TypedIntegerValue {
+    pub fn get_type(&self) -> TypeId {
+        match self {
+            TypedIntegerValue::U8(_) => U8_TYPE_ID,
+            TypedIntegerValue::U16(_) => U16_TYPE_ID,
+            TypedIntegerValue::U32(_) => U32_TYPE_ID,
+            TypedIntegerValue::U64(_) => U64_TYPE_ID,
+            TypedIntegerValue::I8(_) => I8_TYPE_ID,
+            TypedIntegerValue::I16(_) => I16_TYPE_ID,
+            TypedIntegerValue::I32(_) => I32_TYPE_ID,
+            TypedIntegerValue::I64(_) => I64_TYPE_ID,
+        }
+    }
+
     pub fn as_u64(&self) -> u64 {
         match self {
             TypedIntegerValue::U8(v) => *v as u64,
@@ -930,16 +954,7 @@ pub struct TypedIntegerExpr {
 
 impl TypedIntegerExpr {
     pub fn get_type(&self) -> TypeId {
-        match self.value {
-            TypedIntegerValue::U8(_) => U8_TYPE_ID,
-            TypedIntegerValue::U16(_) => U16_TYPE_ID,
-            TypedIntegerValue::U32(_) => U32_TYPE_ID,
-            TypedIntegerValue::U64(_) => U64_TYPE_ID,
-            TypedIntegerValue::I8(_) => I8_TYPE_ID,
-            TypedIntegerValue::I16(_) => I16_TYPE_ID,
-            TypedIntegerValue::I32(_) => I32_TYPE_ID,
-            TypedIntegerValue::I64(_) => I64_TYPE_ID,
-        }
+        self.value.get_type()
     }
 }
 
@@ -1363,13 +1378,14 @@ pub struct Variable {
     pub is_mutable: bool,
     pub owner_scope: ScopeId,
     pub is_context: bool,
-    pub is_global: bool,
+    pub constant_id: Option<ConstantId>,
 }
 
 #[derive(Debug)]
 pub struct Constant {
     pub variable_id: VariableId,
-    pub expr: TypedExpr,
+    pub parsed_expr: ParsedExpressionId,
+    pub value: CompileTimeValue,
     pub ty: TypeId,
     pub span: SpanId,
 }
@@ -3322,24 +3338,69 @@ impl TypedModule {
         expr: ParsedExpressionId,
         expected_type_id: Option<TypeId>,
         scope_id: ScopeId,
-    ) -> TyperResult<TypedExpr> {
+        constant_name: Option<Identifier>,
+    ) -> TyperResult<CompileTimeValue> {
         let eval_ctx = EvalExprContext::from_scope(scope_id).with_expected_type(expected_type_id);
         match self.ast.expressions.get(expr) {
             ParsedExpression::Literal(Literal::Numeric(integer)) => {
-                Ok(self.eval_numeric_value(&integer.text, integer.span, eval_ctx))?
+                match self.eval_numeric_value(&integer.text, integer.span, eval_ctx)? {
+                    TypedExpr::Float(f) => Ok(CompileTimeValue::Float(f.value)),
+                    TypedExpr::Integer(i) => Ok(CompileTimeValue::Integer(i.value)),
+                    _ => unreachable!(),
+                }
             }
-            ParsedExpression::Literal(Literal::Bool(b, span)) => Ok(TypedExpr::Bool(*b, *span)),
-            ParsedExpression::Literal(Literal::Char(c, span)) => Ok(TypedExpr::Char(*c, *span)),
+            ParsedExpression::Literal(Literal::Bool(b, _span)) => Ok(CompileTimeValue::Boolean(*b)),
+            ParsedExpression::Literal(Literal::Char(c, _span)) => Ok(CompileTimeValue::Char(*c)),
+            ParsedExpression::Builtin(span) => {
+                if scope_id != self.scopes.get_root_scope_id() {
+                    return failf!(
+                        *span,
+                        "All the known builtins constants live in the root scope"
+                    );
+                }
+                match constant_name.map(|n| self.name_of(n)) {
+                    None => {
+                        failf!(*span, "builtin can only be used as a top-level expression")
+                    }
+                    Some("K1_TEST") => {
+                        let is_test_build = self.ast.config.is_test_build;
+                        Ok(CompileTimeValue::Boolean(is_test_build))
+                    }
+                    Some("K1_OS") => {
+                        // TODO: Ideally this is an enum! But we don't support comptime enums yet
+                        let os_str = self.ast.config.target.target_os().to_str();
+                        Ok(CompileTimeValue::String(os_str.to_owned().into_boxed_str()))
+                    }
+                    Some(s) => failf!(*span, "Unknown builtin name: {s}"),
+                }
+            }
+            ParsedExpression::Variable(variable) => {
+                let Some((v, _)) = self.scopes.find_variable_namespaced(
+                    scope_id,
+                    &variable.name,
+                    &self.namespaces,
+                    &self.ast.identifiers,
+                )?
+                else {
+                    return failf!(variable.name.span, "not found fixme");
+                };
+                let typed_variable = self.variables.get(v);
+                let Some(constant_id) = typed_variable.constant_id else {
+                    return failf!(variable.name.span, "var is not constant");
+                };
+                let constant = &self.constants[constant_id.0 as usize];
+                Ok(constant.value.clone())
+            }
             _other => {
                 failf!(
                     self.ast.expressions.get_span(expr),
-                    "Only literals are currently supported as constants",
+                    "Unsupported expression in 'constant' context",
                 )
             }
         }
     }
 
-    fn eval_const(
+    fn eval_constant(
         &mut self,
         parsed_constant_id: ParsedConstantId,
         scope_id: ScopeId,
@@ -3349,16 +3410,25 @@ impl TypedModule {
         let parsed_constant = self.ast.get_constant(parsed_constant_id);
         let constant_name = parsed_constant.name;
         let constant_span = parsed_constant.span;
-        let expr = self.eval_const_expr(parsed_constant.value_expr, Some(type_id), scope_id)?;
+        let parsed_expr_id = parsed_constant.value_expr;
+        let expr =
+            self.eval_const_expr(parsed_expr_id, Some(type_id), scope_id, Some(constant_name))?;
+        let constant_id = ConstantId(self.constants.len() as u32);
         let variable_id = self.variables.add_variable(Variable {
             name: constant_name,
             type_id,
             is_mutable: false,
             owner_scope: scope_id,
             is_context: false,
-            is_global: true,
+            constant_id: Some(constant_id),
         });
-        self.constants.push(Constant { variable_id, expr, ty: type_id, span: constant_span });
+        self.constants.push(Constant {
+            variable_id,
+            value: expr,
+            parsed_expr: parsed_expr_id,
+            ty: type_id,
+            span: constant_span,
+        });
         self.scopes.add_variable(scope_id, constant_name, variable_id);
         Ok(variable_id)
     }
@@ -4002,7 +4072,7 @@ impl TypedModule {
                     let variable_is_above_closure = self
                         .scopes
                         .scope_has_ancestor(nearest_parent_closure_scope, variable_scope_id);
-                    let variable_is_global = self.variables.get(variable_id).is_global;
+                    let variable_is_global = self.variables.get(variable_id).constant_id.is_some();
 
                     let is_capture = variable_is_above_closure && !variable_is_global;
                     debug!("{}, is_capture={is_capture}", self.name_of(variable.name.name));
@@ -4510,13 +4580,13 @@ impl TypedModule {
             None => true,
             Some(condition) => {
                 let typed_condition =
-                    self.eval_const_expr(condition, Some(BOOL_TYPE_ID), ctx.scope_id)?;
+                    self.eval_const_expr(condition, Some(BOOL_TYPE_ID), ctx.scope_id, None)?;
                 match typed_condition {
-                    TypedExpr::Bool(b, _) => b,
+                    CompileTimeValue::Boolean(b) => b,
                     _ => {
                         return failf!(
                             self.ast.expressions.get_span(condition),
-                            "Only bool literals are allowed for now"
+                            "Condition must be a compile-time-known boolean"
                         )
                     }
                 }
@@ -4865,6 +4935,9 @@ impl TypedModule {
                 let res = self.eval_interpolated_string(expr_id, ctx)?;
                 Ok(res)
             }
+            ParsedExpression::Builtin(span) => {
+                failf!(*span, "builtins are all currently constant")
+            }
         }
     }
 
@@ -5162,7 +5235,7 @@ impl TypedModule {
                 is_mutable: false,
                 owner_scope: closure_scope_id,
                 is_context: false,
-                is_global: false,
+                constant_id: None,
             });
             closure_scope.add_variable(name, variable_id);
             param_variables.push_back(variable_id)
@@ -5249,7 +5322,7 @@ impl TypedModule {
             is_mutable: false,
             owner_scope: closure_scope_id,
             is_context: false,
-            is_global: false,
+            constant_id: None,
         });
         typed_params.push_front(environment_param);
         param_variables.push_front(environment_param_variable_id);
@@ -8080,7 +8153,7 @@ impl TypedModule {
                     is_mutable: false,
                     owner_scope: spec_fn_scope,
                     is_context: specialized_param_type.is_context,
-                    is_global: false,
+                    constant_id: None,
                 });
                 self.scopes.add_variable(spec_fn_scope, name, variable_id);
                 variable_id
@@ -8270,7 +8343,7 @@ impl TypedModule {
                     type_id: variable_type,
                     owner_scope: ctx.scope_id,
                     is_context: val_def.is_context,
-                    is_global: false,
+                    constant_id: None,
                 });
                 let val_def_stmt = TypedStmt::Let(Box::new(LetStmt {
                     variable_type,
@@ -9001,7 +9074,7 @@ impl TypedModule {
                 is_mutable: false,
                 owner_scope: fn_scope_id,
                 is_context: fn_param.modifiers.is_context(),
-                is_global: false,
+                constant_id: None,
             };
 
             let is_context = fn_param.modifiers.is_context();
@@ -9884,7 +9957,7 @@ impl TypedModule {
                 Ok(())
             }
             ParsedId::Constant(constant_id) => {
-                let _variable_id: VariableId = self.eval_const(constant_id, scope_id)?;
+                let _variable_id: VariableId = self.eval_constant(constant_id, scope_id)?;
                 Ok(())
             }
             ParsedId::Function(parsed_function_id) => {
@@ -10459,7 +10532,7 @@ impl TypedModule {
             owner_scope,
             type_id,
             is_context: false,
-            is_global: false,
+            constant_id: None,
         };
         let variable_id = self.variables.add_variable(variable);
         let variable_expr = TypedExpr::Variable(VariableExpr { type_id, variable_id, span });

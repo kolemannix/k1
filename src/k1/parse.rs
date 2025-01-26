@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter, Write};
 
+use crate::compiler::CompilerConfig;
 use crate::lex::*;
 use crate::typer::{BinaryOpKind, ErrorLevel, Linkage};
 use log::trace;
@@ -551,6 +552,7 @@ pub enum ParsedExpression {
     /// ```
     AsCast(ParsedAsCast),
     Closure(ParsedClosure),
+    Builtin(SpanId),
 }
 
 impl ParsedExpression {
@@ -585,30 +587,7 @@ impl ParsedExpression {
             Self::Match(match_expr) => match_expr.span,
             Self::AsCast(as_cast) => as_cast.span,
             Self::Closure(closure) => closure.span,
-        }
-    }
-
-    pub fn is_assignable(&self) -> bool {
-        match self {
-            Self::Variable(_var) => true,
-            Self::FieldAccess(_acc) => true,
-            Self::BinaryOp(_op) => false,
-            Self::UnaryOp(_op) => false,
-            Self::Literal(_lit) => false,
-            Self::InterpolatedString(_is) => false,
-            Self::FnCall(_call) => false,
-            Self::Block(_block) => false,
-            Self::If(_if_expr) => false,
-            Self::While(_while_expr) => false,
-            Self::Loop(_loop) => false,
-            Self::Struct(_struct) => false,
-            Self::ListLiteral(_list_expr) => false,
-            Self::For(_) => false,
-            Self::AnonEnumConstructor(_) => false,
-            Self::Is(_) => false,
-            Self::Match(_) => false,
-            Self::AsCast(_) => false,
-            Self::Closure(_) => false,
+            Self::Builtin(span) => *span,
         }
     }
 
@@ -1215,6 +1194,7 @@ impl Sources {
 pub struct ParsedModule {
     pub name: String,
     pub name_id: Identifier,
+    pub config: CompilerConfig,
     pub spans: Spans,
     pub functions: Vec<ParsedFunction>,
     pub constants: Vec<ParsedConstant>,
@@ -1232,12 +1212,13 @@ pub struct ParsedModule {
 }
 
 impl ParsedModule {
-    pub fn make(name: String) -> ParsedModule {
+    pub fn make(name: String, config: CompilerConfig) -> ParsedModule {
         let mut identifiers = Identifiers::default();
         let name_id = identifiers.intern(&name);
         ParsedModule {
             name,
             name_id,
+            config,
             spans: Spans::new(),
             functions: Vec::new(),
             constants: Vec::new(),
@@ -1865,6 +1846,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let (first, second) = self.tokens.peek_two();
         trace!("parse_literal {} {}", first.kind, second.kind);
         match (first.kind, second.kind) {
+            (K::KeywordBuiltin, _) => {
+                self.advance();
+                Ok(Some(self.add_expression(ParsedExpression::Builtin(first.span))))
+            }
             (K::OpenParen, K::CloseParen) => {
                 trace!("parse_literal unit");
                 self.advance();
@@ -3563,6 +3548,7 @@ impl ParsedModule {
         f: &mut impl Write,
     ) -> std::fmt::Result {
         match self.expressions.get(expr) {
+            ParsedExpression::Builtin(_span) => f.write_str("builtin"),
             ParsedExpression::BinaryOp(op) => {
                 f.write_str("(")?;
                 self.display_expr_id(op.lhs, f)?;
@@ -3811,7 +3797,13 @@ pub fn lex_text(module: &mut ParsedModule, source: Source) -> ParseResult<Vec<To
 #[cfg(test)]
 pub fn test_parse_module(source: Source) -> ParseResult<ParsedModule> {
     let module_name = source.filename.split('.').next().unwrap().to_string();
-    let mut module = ParsedModule::make(module_name);
+    let mut module = ParsedModule::make(
+        module_name,
+        CompilerConfig {
+            is_test_build: false,
+            target: crate::compiler::detect_host_target().unwrap(),
+        },
+    );
 
     let file_id = source.file_id;
     let token_vec = lex_text(&mut module, source)?;

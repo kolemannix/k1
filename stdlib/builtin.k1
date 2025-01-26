@@ -1,6 +1,8 @@
 // Only code that is necessary for the compiler's operation
 // belongs in this file
 
+///////////
+// Types //
 deftype unit = builtin
 deftype char = builtin
 deftype bool = builtin
@@ -29,12 +31,20 @@ deftype alias int = i64
 deftype alias uint = u64
 deftype alias byte = u8
 
-// Must have ability id 0
+/////////////////////////////////
+// Compile-time builtin constants
+let K1_TEST: bool = builtin;
+let K1_OS: string = builtin; // Possible values: 'linux', 'macos', 'wasm'
+
+////////////////////////////////
+// Builtin Abilities
+
+// Equals must have ability id 0
 ability Equals {
   fn equals(self: Self, other: Self): bool
 }
 
-// Must have ability id 1
+// Show must have ability id 1
 ability Show {
   // TODO: make this use an allocator. How does it get passed conveniently?
   fn show(self: Self): string
