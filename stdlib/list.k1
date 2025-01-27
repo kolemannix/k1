@@ -19,6 +19,13 @@ ns List {
     { len: 0, buffer: buffer }
   }
 
+  fn reserve[T](self: List[T]*, count: u64): unit {
+    if self.cap() >= count { return(()) };
+    
+    let newBuffer = self.buffer._enlargedClone[T](count);
+    self.buffer* <- newBuffer;
+  }
+
   fn single[T](value: T): List[T] {
     filled[T](1, value)
   }
@@ -63,9 +70,7 @@ ns List {
     } else {
       self.*.cap() * 2
     };
-    let newBuffer = self.buffer._enlargedClone[T](newCap);
-    self.buffer* <- newBuffer;
-    0;
+    self.reserve(newCap);
     ()
   }
 

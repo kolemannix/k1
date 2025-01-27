@@ -3120,6 +3120,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     fn count_function_instructions(function_value: FunctionValue<'ctx>) -> usize {
         let mut count = 0;
+        // eprintln!("counting function {:?}", function_value.get_name().to_str());
         let mut cur_blk: Option<BasicBlock<'ctx>> = function_value.get_first_basic_block();
         loop {
             let Some(blk) = cur_blk else { break };

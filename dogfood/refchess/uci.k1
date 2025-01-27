@@ -1,5 +1,4 @@
-// Copyright (c) Koleman Nix 2025
-// Partial credits to Claude
+// Copyright (C) 2025 Koleman Nix 
 ns uci;
 
 deftype Command = either
@@ -8,7 +7,8 @@ deftype Command = either
   NewGame,
   Quit,
   Position(string),
-  Go(string)
+  Go(string),
+  Perft({ depth: u32 })
 
 fn parseCommand(cmd: string): Result[Command, string] {
   println("[debug] received: \{cmd}");
@@ -28,7 +28,11 @@ fn parseCommand(cmd: string): Result[Command, string] {
     
     // Commands that require more complex parsing
     _ -> {
-      if cmd.startsWith("position ") {
+      if cmd.startsWith("perft ") {
+         let parsedDepth = cmd.drop(6).toInt();
+         if parsedDepth is .Some(depth) { .Ok(.Perft({ depth: depth as u32 })) }
+         else .Err("Invalid perft command: \{cmd}")
+      } else if cmd.startsWith("position ") {
         // "position" command sets up a position to analyze:
         //   "position startpos" - start from initial position
         //   "position startpos moves e2e4 e7e5" - start pos then apply moves

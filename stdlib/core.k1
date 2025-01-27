@@ -174,7 +174,7 @@ ns char {
     string/wrapList([self])
   }
 
-  fn toAsciiDigit(self: char): u8? {
+  fn toDigitValue(self: char): u8? {
     let i_code = self as u8;
     if i_code >= 48 and i_code <= 57 {
       .Some(i_code - 48)
@@ -182,6 +182,13 @@ ns char {
       .None
     }
   }
+}
+
+// TODO(dogfood): writer Ability
+ability TextWriter {
+  fn writeChar(self: Self*, value: char): unit
+  fn writeString(self: Self*, value: string): unit
+  fn writeBuffer(self: Self*, buffer: Buffer[char]): unit
 }
 
 impl Show for bool { fn show(self: bool): string { if self "true" else "false" } }
@@ -232,11 +239,46 @@ impl Comparable for u8 {
   }
 }
 
+ns u8 {
+  fn toAsciiDigit(v: u8): char {
+    (v + 48) as char
+  }
+}
+
+fn formatUInt[W: TextWriter](context w: W*)(value: u64, base: u64): unit {
+  if value == 0 { w.writeChar('0'); return(()) }
+  else if value < (base * 2) {
+    let first: u64 = (value / base) * base;
+    let second: u64 = value % base;
+    let firstDigit = u8/toAsciiDigit(first as u8);
+    let secondDigit = u8/toAsciiDigit(second as u8);
+    w.writeChar(firstDigit);
+    w.writeChar(secondDigit);
+  } else {
+    let mut remaining: u64 = value;
+    // TODO(stdlib slow): Try to use stack space for small ones.
+    let* digits = List/withCapacity[char](8);
+    while remaining > 0 {
+      let d = remaining % base;
+      let c = u8/toAsciiDigit(d as u8);
+      digits.push(c);
+      remaining = remaining / base;
+    };
+
+    digits.reverse();
+
+    w.writeBuffer(digits.toBuffer());
+
+    ()
+  }
+}
+
 impl Show for u64 {
   fn show(self: u64): string {
     if self == 0 return("0");
 
     let mut remaining: u64 = self;
+    // TODO(stdlib slow): Try to use stack space for small ones
     let* buf = List/withCapacity[char](8);
     while remaining > 0 {
       let d = remaining % 10;
@@ -245,8 +287,14 @@ impl Show for u64 {
       remaining = remaining / 10;
     };
 
-    let rev = buf.*.reversed();
-    string/wrapList(rev)
+    buf.reverse();
+    string/wrapList(buf)
+  }
+}
+
+impl Show for u32 {
+  fn show(self: u32): string {
+    (self as u64).show()
   }
 }
 

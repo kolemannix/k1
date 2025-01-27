@@ -1,46 +1,191 @@
+// Copyright (C) 2025 Koleman Nix 
 // The efficient representation, a Bitboard encoding
 deftype Color = either White, Black
-deftype GameState = {
-  wPawns: u64,
-  wKnights: u64,
-  wBishops: u64,
-  wRooks: u64,
-  wQueens: u64,
-  wKings: u64,
+deftype alias Bitboard = u64
 
-  bPawns: u64,
-  bKnights: u64,
-  bBishops: u64,
-  bRooks: u64,
-  bQueens: u64,
-  bKings: u64,
+let RANK_1 :    Bitboard = 0x00000000000000FF;
+let RANK_2 :    Bitboard = 0x000000000000FF00;
+let RANK_3 :    Bitboard = 0x0000000000FF0000;
+let RANK_4 :    Bitboard = 0x00000000FF000000;
+let RANK_5 :    Bitboard = 0x000000FF00000000;
+let RANK_6 :    Bitboard = 0x0000FF0000000000;
+let RANK_7 :    Bitboard = 0x00FF000000000000;
+let RANK_8 :    Bitboard = 0xFF00000000000000;
+let A_FILE: Bitboard = 0x0101010101010101;
+let B_FILE: Bitboard = 0x0202020202020202;
+let C_FILE: Bitboard = 0x0404040404040404;
+
+let H_FILE: Bitboard = 0x8080808080808080;
+let NOT_A_FILE: Bitboard = 0xFEFEFEFEFEFEFEFE;
+let NOT_H_FILE: Bitboard = 0x7F7F7F7F7F7F7F7F;
+
+deftype GameState = {
+  wPawns: Bitboard,
+  wKnights: Bitboard,
+  wBishops: Bitboard,
+  wRooks: Bitboard,
+  wQueens: Bitboard,
+  wKings: Bitboard,
+
+  bPawns: Bitboard,
+  bKnights: Bitboard,
+  bBishops: Bitboard,
+  bRooks: Bitboard,
+  bQueens: Bitboard,
+  bKings: Bitboard,
 
   castleRights: u8,
-  enPassantFile: u8?,
+  enPassantFile: i8,
   turn: Color
+}
+
+impl TextWriter for List[char] {
+  fn writeChar(self: Self*, value: char): unit {
+    self.push(value);
+  }
+  fn writeString(self: Self*, value: string): unit {
+    self.writeBuffer(value.toBuffer())
+  }
+  fn writeBuffer(self: Self*, value: Buffer[char]): unit {
+    self.reserve(self.len + value.len);
+  }
+}
+
+fn valueAtSquare(b: Bitboard, index: u64): u64 {
+  let shifted = Bitwise/shiftRight(b, index);
+  let masked = Bitwise/bitAnd(shifted, 1: u64);
+  masked
+}
+
+fn isSet(b: Bitboard, index: u64): bool {
+  valueAtSquare(b, index) == 1
+}
+
+fn valueAtRank(b: Bitboard, rank: u64): u64 {
+  let rankStart = rank * 8;
+  let shifted = Bitwise/shiftRight(b, rankStart);
+  let masked = Bitwise/bitAnd(shifted, RANK_1);
+  masked
+}
+
+fn indexToBit(index: u64): Bitboard {
+  (1: u64).shiftLeft(index)
+}
+
+fn printBitboard(b: Bitboard): unit {
+  let* l = List/empty[char]();
+  writeBitboard(l, b);
+  println(string/wrapList(l))
+}
+
+fn writeBitboard[W: TextWriter](writer: W*, b: Bitboard): unit {
+  // Scanlines by rank backwards so it reads naturally
+  let mut rank = 7;
+  while rank >= 0 {
+    let rankStart = rank * 8;
+    // TODO(dogfood): formatUInt(base = 2) (also need padding specifier)
+    //formatUInt(context writer)(valueAtRank(b, rank as u64), base = 2);
+
+    for square in IntRange/make(rankStart, rankStart + 8) do {
+      let bit = valueAtSquare(b, square as u64);
+      writer.writeChar(u8/toAsciiDigit(bit as u8));
+    };
+    writer.writeChar('\n');
+    rank = rank - 1;
+  }
 }
 
 ns GameState {
   fn startPos(): GameState {
-    let wPawns   = 0b0000000000000000000000000000000000000000000000001111111100000000: u64;
-    let wKnights = 0b0000000000000000000000000000000000000000000000000000000001000010: u64;
-    let wBishops = 0b0000000000000000000000000000000000000000000000000000000000100100: u64;
-    let wRooks   = 0b0000000000000000000000000000000000000000000000000000000010000001: u64;
-    let wQueens  = 0b0000000000000000000000000000000000000000000000000000000000010000: u64;
-    let wKings   = 0b0000000000000000000000000000000000000000000000000000000000001000: u64;
-    let bPawns   = 0b0000000011111111000000000000000000000000000000000000000000000000: u64;
-    let bKnights = 0b0100001000000000000000000000000000000000000000000000000000000000: u64;
-    let bBishops = 0b0010010000000000000000000000000000000000000000000000000000000000: u64;
-    let bRooks   = 0b1000000100000000000000000000000000000000000000000000000000000000: u64;
-    let bQueens  = 0b0001000000000000000000000000000000000000000000000000000000000000: u64;
-    let bKings   = 0b0000100000000000000000000000000000000000000000000000000000000000: u64;
+    let wPawns   = 0b0000000000000000000000000000000000000000000000001111111100000000: Bitboard;
+    let wKnights = 0b0000000000000000000000000000000000000000000000000000000001000010: Bitboard;
+    let wBishops = 0b0000000000000000000000000000000000000000000000000000000000100100: Bitboard;
+    let wRooks   = 0b0000000000000000000000000000000000000000000000000000000010000001: Bitboard;
+    let wQueens  = 0b0000000000000000000000000000000000000000000000000000000000001000: Bitboard;
+    let wKings   = 0b0000000000000000000000000000000000000000000000000000000000010000: Bitboard;
+    let bPawns   = 0b0000000011111111000000000000000000000000000000000000000000000000: Bitboard;
+    let bKnights = 0b0100001000000000000000000000000000000000000000000000000000000000: Bitboard;
+    let bBishops = 0b0010010000000000000000000000000000000000000000000000000000000000: Bitboard;
+    let bRooks   = 0b1000000100000000000000000000000000000000000000000000000000000000: Bitboard;
+    let bQueens  = 0b0000100000000000000000000000000000000000000000000000000000000000: Bitboard;
+    let bKings   = 0b0001000000000000000000000000000000000000000000000000000000000000: Bitboard;
     { wPawns, wKnights, wBishops, wRooks, wQueens, wKings, 
       bPawns, bKnights, bBishops, bRooks, bQueens, bKings, 
-      castleRights: 0b00000011, enPassantFile: some(0: u8), turn: .White }
+      castleRights: 0b00000011, enPassantFile: -1, turn: .White }
+  }
+
+  fn printGrid(self: GameState): unit {
+    let* writer = List/withCapacity[char](128);
+    let mut rank = 7;
+    while rank >= 0 {
+      let rankStart = rank * 8;
+      for i in IntRange/make(rankStart, rankStart + 8) do {
+        let i = i as u64;
+        if isSet(self.wPawns, i) { writer.writeChar('P') }
+        else if isSet(self.wKnights, i) { writer.writeChar('N') }
+        else if isSet(self.wBishops, i) { writer.writeChar('B') }
+        else if isSet(self.wRooks, i) { writer.writeChar('R') }
+        else if isSet(self.wQueens, i) { writer.writeChar('Q') }
+        else if isSet(self.wKings, i) { writer.writeChar('K') }
+        else if isSet(self.bPawns, i) { writer.writeChar('p') }
+        else if isSet(self.bKnights, i) { writer.writeChar('n') }
+        else if isSet(self.bBishops, i) { writer.writeChar('b') }
+        else if isSet(self.bRooks, i) { writer.writeChar('r') }
+        else if isSet(self.bQueens, i) { writer.writeChar('q') }
+        else if isSet(self.bKings, i) { writer.writeChar('k') }
+        else { writer.writeChar('.') };
+      };
+      writer.writeChar('\n');
+      rank = rank - 1;
+    };
+    print(string/wrapList(writer));
+    println("--------\nabcdefgh");
   }
 
   fn genMoves(self: GameState): List[Move] {
-    crash("todo")
+    self.printGrid();
+    println("");
+    self.genWhitePawnMoves();
+  }
+
+  fn wOccupied(self: GameState): Bitboard {
+    self.wPawns.bitAnd(self.wKnights).bitAnd(self.wBishops).bitAnd(self.wRooks).bitAnd(self.wQueens).bitAnd(self.wKings)
+  }
+
+  fn bOccupied(self: GameState): Bitboard {
+    self.bPawns.bitAnd(self.bKnights).bitAnd(self.bBishops).bitAnd(self.bRooks).bitAnd(self.bQueens).bitAnd(self.bKings)
+  }
+
+  // todo(cache occupied)
+  fn occupied(self: GameState): Bitboard {
+    self.wOccupied().bitAnd(self.bOccupied())
+  }
+
+  // todo(cache not occupied)
+  fn notOccupied(self: GameState): Bitboard {
+    self.occupied().bitNot()
+  }
+
+  fn genWhitePawnMoves(self: GameState): List[Move] {
+     let* moves = List/empty[Move]();
+     let notOccupied = self.notOccupied();
+     // Single push: shift pawns up one rank if square is empty
+     let singlePush = (self.wPawns.shiftLeft(8)).bitAnd(notOccupied);
+     let singlePushSources = self.wPawns.bitAnd(singlePush.shiftRight(8));
+     println("White single push");
+     printBitboard(singlePush);
+     // Double push: for pawns on rank 2, shift up two ranks if both squares empty
+     let doublePush = ((singlePush.bitAnd(RANK_3)).shiftLeft(8)).bitAnd(notOccupied);
+     println("White double push");
+     printBitboard(doublePush);
+     if self.enPassantFile != -1 {
+        let enPassantTargetSquareIndex = self.enPassantFile as u64 + ((5*8) as u64);
+        let enPassantTargetSquareBit = indexToBit(enPassantTargetSquareIndex);
+        let enPassantTargetSquareOccupied = enPassantTargetSquareBit.bitAnd(self.bOccupied());
+        let enPassantAttackers = enPassantTargetSquareOccupied.bitAnd(enPassantTargetSquareBit.shiftLeft(1)).bitAnd(enPassantTargetSquareBit.shiftRight(1));
+        printBitboard(enPassantTargetSquareOccupied);
+     };
+     List/empty()
   }
 }
 
@@ -85,12 +230,17 @@ fn handleCommand(context eng: Engine)(command: uci/Command): string? {
     .Position(s) -> {
       debugLog("Setting position: \{s}");
       none()
+    },
+    .Perft({ depth }) -> {
+      debugLog("Handling perft depth \{depth}");
+      eng.game.genMoves();
+      none()
     }
 
   }
 }
 
-deftype Engine = {}
+deftype Engine = { game: GameState }
 ns Engine {
   fn inDebugMode(self: Engine): bool { true }
 }
@@ -101,24 +251,23 @@ fn debugLog(context eng: Engine)(s: string): unit {
   }
 }
 
-fn main(): int {
-  // Initialize stdin reading
-  let context eng: Engine = {};
+fn run(args: Buffer[string]): Result[i32, string] {
+  let context eng: Engine = { game: GameState/startPos() };
   loop {
-    switch sys/readLine(2048) {
-      .Err(msg) -> { crash("Failed to readLine: \{msg}") },
+    // TODO(dogfood): easy mapError before try
+    let cmd = sys/readLine(2048).try; 
+    switch uci/parseCommand(cmd) {
+      .Err(msg) -> eprintln("[debug] \{msg}"),
       .Ok(cmd) -> {
-        switch uci/parseCommand(cmd) {
-          .Err(msg) -> eprintln("[debug] Ignoring unknown command: \{msg}"),
-          .Ok(cmd) -> {
-            let response = handleCommand(cmd);
-            // If a command produces output, it goes to stdout with a newline added
-            if response is .Some(r) { println(r) };
-          }
-        }
+        let response = handleCommand(cmd);
+        // If a command produces output, it goes to stdout with a newline added
+        if response is .Some(r) { println(r) };
       }
     }
   };
-  
-  0
+}
+
+fn main(argCount: u32, args: Pointer): i32 {
+  let args = sys/parseMainArgs(argCount, args);
+  run(args).!
 }
