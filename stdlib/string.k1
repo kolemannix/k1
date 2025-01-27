@@ -10,9 +10,17 @@ ns string {
   }
 
   fn toBytes(self: string): Buffer[byte] {
-    let copied: Buffer[char] = self.buffer.cloned();
+    let copied: Buffer[char] = self.toBuffer();
     let sneakyCasted: Buffer[byte] = Buffer/fromRawParts[byte](copied.len, copied.data);
     sneakyCasted
+  }
+
+  fn toBuffer(self: string): Buffer[char] {
+    self.buffer.cloned()
+  }
+
+  fn toList(self: string): List[char] {
+    List/wrapBuffer(self.toBuffer())
   }
 
   fn wrapList(list: List[char]): string {
@@ -111,6 +119,9 @@ ns string {
     { buffer: self.buffer.slice(start, end) }
   }
 
+  fn take(self: string, count: u64): string { self.substring(0,     count) }
+  fn drop(self: string, count: u64): string { self.substring(count, self.len()) }
+
   fn startsWith(self: string, other: string): bool {
     self.substring(0, other.len()) == other
   }
@@ -142,7 +153,7 @@ ns string {
     let mut total: u64 = 0;
     while i < self.len() {
       let c = self.get(i);
-      let digit = c.toAsciiDigit();
+      let digit = c.toDigitValue();
       if digit is .Some(digit) {
         total = (total * 10) + digit as u64;
       } else {
