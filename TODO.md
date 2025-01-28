@@ -8,9 +8,10 @@ New tagline? "C with typeclasses and tagged unions"
 - [ ] *Specializing functions on their provided closures to allow inlining and static dispatch*
 - [ ] Bug: technically I should require that the blanket impl params appear in the Self type expression
 - [ ] Typecheck 'main'
-- [ ] Dogfood: 'niched' integer abstraction (-1 as 'not found' but safely, vs using option and wasting space + adding more code)
+- [ ] Dogfood idea: try to write a 'niched' integer abstraction (-1 as 'not found' but safely, vs using option and wasting space + adding more code)
       `impl Unwrap<Inner = u32> for i64`
 - [ ] boolean chains w/ binding ifs
+- [ ] 'if' guards on regular match
 - [ ] Binding `while`
 - [ ] Private functions
 - [ ] Library vs Binary, linker options, when do we 'link', in IR or as object files, ...
@@ -44,15 +45,15 @@ New tagline? "C with typeclasses and tagged unions"
   - [ ] Unused type bound
   - [ ] Disallow naked variable patterns in 'is' OR Disallow capital variables, require capital enum variants...
       - `if self.slots.get(probe_index) is None {`
-- [ ] Add ranges in stdlib
+- [x] Add simple int range in stdlib
       `sealed abstract class Range(let start: Int, let end: Int, let step: Int)`
 - [ ] Make demo readme / site
 - [ ] #include C equivalent? 
 - [ ] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`
 - [ ] Define clear 'platform layer' (crash, alloc/free, other?). Then we could do an LLVM interp platform and a rust interpreter platform
-- [ ] Fix enum codegen, read Inko llvm backend (its inkwell + rust and does ABI compatible stuff https://yorickpeterse.com/articles/the-mess-that-is-handling-structure-arguments-and-returns-in-llvm/)
+- [x] Fix enum codegen, read Inko llvm backend (its inkwell + rust and does ABI compatible stuff https://yorickpeterse.com/articles/the-mess-that-is-handling-structure-arguments-and-returns-in-llvm/)
 - [ ] Runtime type info story, typeOf, typeInfo, and 'any' type
-- [ ] Conditional compile directive
+- [x] Conditional compile directive
 - [ ] Support boolean operators in compile time expressions
 - [ ] Support arithmetic operators in compile time expressions
 cc <comptime cond> := ctimebexpr | cconst

@@ -1948,7 +1948,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         variant_type.payload_type.as_ref().unwrap(),
                         payload_pointer,
                         "payload_by_value",
-                        true,
+                        false,
                     );
                     Ok(payload_copied.into())
                 }
@@ -2892,7 +2892,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         }
 
         self.builder.position_at_end(loop_end_block);
-        let break_value = self.load_k1_value(&break_type, break_value_ptr, "loop_value", true);
+        let break_value = self.load_k1_value(&break_type, break_value_ptr, "loop_value", false);
         Ok(break_value.into())
     }
 
@@ -3237,7 +3237,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             anyhow::anyhow!("Module '{}' failed validation: {}", self.name(), err.to_string_lossy())
         })?;
 
-        // FIXME: Use standard pass builders, see TODO.md
         if optimize {
             self.llvm_module
                 .run_passes("default<O3>", &self.llvm_machine, PassBuilderOptions::create())
