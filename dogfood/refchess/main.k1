@@ -48,6 +48,8 @@ impl TextWriter for List[char] {
   }
   fn writeBuffer(self: Self*, value: Buffer[char]): unit {
     self.reserve(self.len + value.len);
+    // TODO memcpy value's data into our buffer
+    self.buffer.concat(value)
   }
 }
 

@@ -2309,6 +2309,20 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     dest_type: type_expr_id,
                     span,
                 })))
+            } else if next.kind == K::KeywordIs {
+                self.advance();
+                let pattern = self.expect_pattern()?;
+
+                let original_span = self.get_expression_span(result);
+                let pattern_span = self.module.get_pattern_span(pattern);
+                let span = self.extend_span(original_span, pattern_span);
+                let is_expression_id =
+                    self.add_expression(ParsedExpression::Is(ParsedIsExpression {
+                        target_expression: result,
+                        pattern,
+                        span,
+                    }));
+                Some(is_expression_id)
             } else if (next.kind == K::Dot && !next.is_whitespace_preceeded())
                 || (next.kind == K::QuestionMark
                     && (second.kind == K::Dot && !second.is_whitespace_preceeded()))
@@ -2468,22 +2482,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             let with_correct_binops = expr_stack.pop().unwrap().expect_expr();
             expr = with_correct_binops;
         };
-        if self.peek().kind == K::KeywordIs {
-            self.advance();
-            let pattern = self.expect_pattern()?;
-
-            let original_span = self.get_expression_span(expr);
-            let pattern_span = self.module.get_pattern_span(pattern);
-            let span = self.extend_span(original_span, pattern_span);
-            let is_expression_id = self.add_expression(ParsedExpression::Is(ParsedIsExpression {
-                target_expression: expr,
-                pattern,
-                span,
-            }));
-            Ok(Some(is_expression_id))
-        } else {
-            Ok(Some(expr))
-        }
+        Ok(Some(expr))
     }
 
     fn extend_expr_span(&mut self, expr1: ParsedExpressionId, expr2: ParsedExpressionId) -> SpanId {

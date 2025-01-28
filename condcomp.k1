@@ -1,3 +1,4 @@
+//nocommit finish this test
 fn main(): int {
   println("K1_TEST is \{K1_TEST}");
   println("K1_OS is \{K1_OS}");
