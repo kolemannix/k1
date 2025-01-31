@@ -10,14 +10,23 @@ New tagline? "C with typeclasses and tagged unions"
 - [ ] Typecheck 'main'
 - [ ] Dogfood idea: try to write a 'niched' integer abstraction (-1 as 'not found' but safely, vs using option and wasting space + adding more code)
       `impl Unwrap<Inner = u32> for i64`
-- [ ] boolean chains w/ binding ifs
-- [ ] 'if' guards on regular match
-- [ ] Binding `while`
+- [ ] Matching push
+  - [ ] boolean chains w/ binding ifs
+  - [x] Don't codegen conditions for arms that don't run
+  - [x] Remove 'statement conditions'
+  - [ ] Matching on references
+    - [ ] Match to get reference to each struct field, for example, use * for a dereferencing match
+    - [ ] Match to get reference to enum payload
+  - [ ] Write a function to typecheck TypedExprs, so we can typecheck synthesized code in debug builds!
+  - [ ] 'if' guards on regular match
+  - [ ] Binding `while`
+  - [ ] nocommit ASSERT FAILED: true != true at core.k1:23
 - [ ] Private functions
+- [ ] string interp at end puts unnecessary empty string part: `putString(__sb_1001, "");`
 - [ ] Library vs Binary, linker options, when do we 'link', in IR or as object files, ...
 - [ ] `inline` functions (like Scala3's)
 - [ ] Add fixed length array types: `Array[<type expr> x <int literal>]`
-- [ ] Bug: parameter names in function 'types': yes or no
+- [ ] Bug: Are parameter names part of a function type
 - [x] Improve LLVM opt pipeline https://www.reddit.com/r/Compilers/comments/1hqmd7x/recommended_llvm_passes/
       https://llvm.org/docs/NewPassManager.html#just-tell-me-how-to-run-the-default-optimization-pipeline-with-the-new-pass-manager
 - [ ] More explicit companion ns via injecting `for` keyword `ns (for) type {`
@@ -31,9 +40,6 @@ New tagline? "C with typeclasses and tagged unions"
 -  [x] Move allocas to entry block. "Doing this is actually quite easy as LLVM provides functions you can use to retrieve the entry block for a function and insert instructions into it."
     (handled by optimization passes for now)
 -  [x] Upgrade to LLVM 18
-- [ ] Matching on references
-  - [ ] Match to get reference to each struct field, for example, use * for a dereferencing match
-  - [ ] Match to get reference to enum payload
 - [x] Context location params are not being propagated
 - [x] Test and fix named arguments
 - [x] 'never' needs to work in every expression position (got close enough, might add more if one comes up)
@@ -78,10 +84,9 @@ ctimebexpr := <cc> and <cc> | <cc> or <cc> | not <cc>
 - [ ] 'call' method syntax (Scala's 'apply' feature)
 
 ## Maybe
-- [ ] 'join' types to form new enums/structs, statically, like Roc. `switch {strict|dynamic} ...`?
-- [ ] Require unsafe marker when unsafe stuff is used
+- [ ] 'join' types to form new enums/structs, statically. `switch {strict|dynamic} ...`? If dynamic, I'll build a sum or product based on the branches' types
 - [ ] Might be very cool to have builtin syntax for anything implementing a 'Monad' ability
-  - (Monad ability would require closures and generic abilities)
+  - (Monad ability would require closures and generic abilities, which we now have. Just need higher order type params `F[_]`
 - [ ] Require named fncall args by default; and allow anonymous w/ declaration like Jakt?
 - [ ] as! for fallible casting and as? for optional casting
 - [ ] Test handling of NaN and Infinity, other float edge cases

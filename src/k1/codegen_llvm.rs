@@ -88,23 +88,23 @@ fn size_info(td: &TargetData, typ: &dyn AnyType) -> SizeInfo {
         pref_align_bits: td.get_preferred_alignment(typ) * 8,
         abi_align_bits: td.get_abi_alignment(typ) * 8,
     };
-    if sz.pref_align_bits != sz.abi_align_bits {
-        // For some reason, llvm defaults the preferred alignment of all structs to 64 bits
-        // "a:0:64" in the default datalayout string
-        let is_single_member_struct = if typ.as_any_type_enum().is_struct_type() {
-            typ.as_any_type_enum().into_struct_type().count_fields() == 1
-        } else {
-            false
-        };
-        if !is_single_member_struct {
-            info!(
-            "Type has different preferred and abi alignments, and is not a single-member struct. Thought you'd like to know.\n{}. pref={}, abi={}",
-            typ.print_to_string(),
-            sz.pref_align_bits,
-            sz.abi_align_bits
-        )
-        }
-    };
+    // if sz.pref_align_bits != sz.abi_align_bits {
+    //     // For some reason, llvm defaults the preferred alignment of all structs to 64 bits
+    //     // "a:0:64" in the default datalayout string
+    //     let is_single_member_struct = if typ.as_any_type_enum().is_struct_type() {
+    //         typ.as_any_type_enum().into_struct_type().count_fields() == 1
+    //     } else {
+    //         false
+    //     };
+    //     if !is_single_member_struct {
+    //         info!(
+    //         "Type has different preferred and abi alignments, and is not a single-member struct. Thought you'd like to know.\n{}. pref={}, abi={}",
+    //         typ.print_to_string(),
+    //         sz.pref_align_bits,
+    //         sz.abi_align_bits
+    //     )
+    //     }
+    // };
     sz
 }
 
@@ -1072,7 +1072,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     .as_ref()
                     .map(|info| self.codegen_type_name(type_id, Some(info)))
                     .unwrap_or(type_id.to_string());
-                eprintln!("CODEGEN TYPE ENUM {enum_name}");
                 let mut variant_structs = Vec::with_capacity(enum_type.variants.len());
                 if enum_type.variants.len() >= u8::MAX as usize {
                     panic!("too many enum variants for now");
@@ -1111,7 +1110,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         }
                     }
                 };
-                eprintln!(
+                debug!(
                     "Maximum payload alignment is {payload_max_alignment}, selected tag type {}",
                     self.module.type_id_to_string(tag_int_type_id)
                 );
@@ -1171,7 +1170,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             };
                             (variant_struct_type, debug_struct, None)
                         };
-                    eprintln!(
+                    debug!(
                         "Variant {} {}, size is {:?}",
                         variant_name,
                         variant_struct.print_to_string(),
@@ -1211,7 +1210,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let physical_type_padding_bits =
                     enum_size_bits - strictest_aligned_variant.size.size_bits;
                 debug_assert!(physical_type_padding_bits % 8 == 0);
-                eprintln!(
+                debug!(
                     "type {} largest variant size={largest_variant_size}, align={enum_alignment}. Physical size: {}, end padding: {}",
                     self.module.type_id_to_string(type_id), enum_size_bits, physical_type_padding_bits
                 );
@@ -1231,7 +1230,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let physical_type =
                     Codegen::make_named_struct(self.ctx, &enum_name, physical_type_fields);
                 let physical_type_size_info = self.size_info(&physical_type);
-                eprintln!(
+                debug!(
                     "Physical type: {} size info: {:?}",
                     physical_type.print_to_string(),
                     physical_type_size_info

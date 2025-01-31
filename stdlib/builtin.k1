@@ -113,3 +113,11 @@ ability Iterable[impl Item, impl I: Iterator[Item = Item]] {
 ns bool {
   intern fn negated(self: bool): bool
 }
+
+impl Equals for bool {
+  fn equals(self: bool, other: bool): bool {
+    // Since the type is known to be 'bool' here, this won't recursively call this function, but instead
+    // dispatch to builtin integer equality
+    self == other
+  }
+}

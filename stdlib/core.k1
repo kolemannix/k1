@@ -17,7 +17,8 @@ ns libc {
   extern(abort) fn abort(): never
 }
 
-fn assertEquals[T: Show](context locn: compiler/SourceLocation)(a: T, b: T): unit {
+fn assertEquals[T: Show and Equals](context locn: compiler/SourceLocation)(a: T, b: T): unit {
+  println("assertEquals with \{a} and \{b}");
   if a != b {
     crash("ASSERT FAILED: \{a} != \{b}")
   }
