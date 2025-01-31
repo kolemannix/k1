@@ -592,7 +592,7 @@ impl TypedModule {
             TypedExpr::EnumIsVariant(is_variant_expr) => {
                 self.display_expr(&is_variant_expr.target_expr, writ, indentation)?;
                 writ.write_str(".is[.")?;
-                writ.write_str(self.ast.identifiers.get_name(is_variant_expr.variant_name))?;
+                self.write_ident(writ, is_variant_expr.variant_name)?;
                 writ.write_str("]()")
             }
             TypedExpr::Cast(cast) => {
@@ -602,7 +602,10 @@ impl TypedModule {
             }
             TypedExpr::EnumGetPayload(as_variant_expr) => {
                 self.display_expr(&as_variant_expr.target_expr, writ, indentation)?;
-                writ.write_str(".payload")
+                writ.write_str(".payload[")?;
+                self.write_ident(writ, as_variant_expr.variant_name)?;
+                writ.write_char(']')?;
+                Ok(())
             }
             TypedExpr::Return(ret) => {
                 writ.write_str("return(")?;

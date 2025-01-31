@@ -1,15 +1,12 @@
 fn main(): int {
-  // A "matching binop"
-  // Current single-condition case is just a degenerate case of matching binop
-  // In binop: if operation is and or or, and lhs or rhs is also a matching binop, which is either a single is expr or more, call into 
-  // "eval_matching_binop" or whatever
-  let x = some("foo");
-  let y = some("bar");
-  #debug if x is .Some(v) and y is .Some(t) and true {
-    v;
-    println("it is so!")
-  }
-
+  let x: either A(u8), B(u32), C(u64) = .B(4);
+  #debug switch x {
+    .A(a) -> {},
+    .B(20) -> {},
+    .C(30) -> {},
+    _ -> {}
+  };
+  0
     // nocommit We should not be generating `__payload_988` unless the condition is true!
     //  {
     //  let __match_target_530: Opt[string] = y;

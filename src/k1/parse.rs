@@ -1949,7 +1949,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     }
                 }
                 match mode {
-                    Mode::Base => parts.push(InterpolatedStringPart::String(buf)),
+                    Mode::Base => {
+                        if !buf.is_empty() {
+                            parts.push(InterpolatedStringPart::String(buf))
+                        }
+                    }
                     Mode::InterpIdent(s) => {
                         return Err(error(
                             format!("Unterminated interpolated identifier: {s}"),
@@ -3818,7 +3822,7 @@ pub fn test_parse_module(source: Source) -> ParseResult<ParsedModule> {
 }
 
 impl Identifiers {
-    pub const BUILTIN_IDENTS: [&'static str; 32] = [
+    pub const BUILTIN_IDENTS: [&'static str; 33] = [
         "main",
         "self",
         "it",
@@ -3851,5 +3855,6 @@ impl Identifiers {
         "payload",
         "try",
         "try_value",
+        "if_target",
     ];
 }
