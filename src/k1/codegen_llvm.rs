@@ -155,9 +155,11 @@ impl<'ctx> LlvmValue<'ctx> {
         self.as_basic_value().expect_right("Expected BasicValue on never value")
     }
 
-    #[allow(unused)]
-    fn expect_never(&self) -> InstructionValue<'ctx> {
-        self.as_basic_value().expect_left("Expected Never on a real value")
+    fn as_never(&self) -> Option<InstructionValue<'ctx>> {
+        match self {
+            LlvmValue::Void(instr) => Some(*instr),
+            _ => None,
+        }
     }
 }
 
@@ -1524,6 +1526,95 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         Ok(self.builtin_types.unit_value.as_basic_value_enum().into())
     }
 
+    fn codegen_match(&mut self, match_expr: &TypedMatchExpr) -> CodegenResult<LlvmValue<'ctx>> {
+        let let_stmt = match_expr.match_subject_let_stmt.as_let().unwrap();
+        let let_result = self.codegen_let(let_stmt)?;
+        if let_result.as_never().is_some() {
+            return Ok(let_result);
+        }
+        let _match_subject = self.variables.get(&let_stmt.variable_id).unwrap().pointer_value;
+
+        let start_block = self.builder.get_insert_block().unwrap();
+        let current_fn = start_block.get_parent().unwrap();
+        let mut arm_blocks = vec![];
+        for (index, _arm) in match_expr.arms.iter().enumerate() {
+            let arm_block = self.ctx.append_basic_block(current_fn, &format!("arm_{index}"));
+            let arm_consequent_block =
+                self.ctx.append_basic_block(current_fn, &format!("arm_cons_{index}"));
+            arm_blocks.push((arm_block, arm_consequent_block))
+        }
+
+        self.builder.build_unconditional_branch(arm_blocks[0].0).unwrap();
+
+        let fail_block = self.ctx.append_basic_block(current_fn, "match_fail");
+        self.builder.position_at_end(fail_block);
+        self.builder.build_unreachable().unwrap();
+
+        let match_end_block = self.ctx.append_basic_block(current_fn, "match_end");
+        self.builder.position_at_end(match_end_block);
+        let result_type = self.codegen_type(match_expr.result_type)?;
+        let result_value =
+            self.builder.build_phi(result_type.canonical_repr_type(), "match_result").unwrap();
+
+        for ((index, arm), (arm_block, arm_cons_block)) in
+            match_expr.arms.iter().enumerate().zip(arm_blocks.iter())
+        {
+            self.builder.position_at_end(*arm_block);
+            // I'm gonna do the bindings first, though the pattern_condition doesn't currently
+            // depend on them, we'd like it to to fully de-duplicate the matching code
+            for binding_stmt in &arm.pattern_bindings {
+                let binding_stmt = binding_stmt.as_let().unwrap();
+                self.codegen_let(binding_stmt)?;
+            }
+            let next_arm = arm_blocks.get(index + 1);
+            let next_arm_or_fail = next_arm.map(|p| p.0).unwrap_or(fail_block);
+
+            let guard_block = if let Some(guard_condition) = arm.guard_condition.as_ref() {
+                // Guard must be a boolean
+                let guard_block =
+                    self.ctx.insert_basic_block_after(*arm_block, &format!("arm_guard_{index}"));
+                self.builder.position_at_end(guard_block);
+                let guard_value = self.codegen_expr_basic_value(guard_condition)?;
+                let condition_value = self.bool_to_i1(guard_value.into_int_value(), "arm_guard_i1");
+                self.builder
+                    .build_conditional_branch(condition_value, *arm_cons_block, next_arm_or_fail)
+                    .unwrap();
+                self.builder.position_at_end(*arm_block);
+                Some(guard_block)
+            } else {
+                None
+            };
+
+            let pattern_condition = self.codegen_expr_basic_value(&arm.pattern_condition)?;
+            let pattern_condition_i1 =
+                self.bool_to_i1(pattern_condition.into_int_value(), "arm_pattern_i1");
+            self.builder
+                .build_conditional_branch(
+                    pattern_condition_i1,
+                    guard_block.unwrap_or(*arm_cons_block),
+                    next_arm_or_fail,
+                )
+                .unwrap();
+
+            self.builder.position_at_end(*arm_cons_block);
+            let LlvmValue::BasicValue(consequent) = self.codegen_expr(&arm.consequent_expr)? else {
+                // If the consequent crashes or returns early, this block is terminated so just
+                // continue to the next case
+                continue;
+            };
+
+            // Running the consequent could have landed us in a different basic block, so the
+            // incoming has to be from where we were when we built the 'consequent' value
+            let consequent_end_block = self.builder.get_insert_block().unwrap();
+            result_value.add_incoming(&[(&consequent, consequent_end_block)]);
+            self.builder.build_unconditional_branch(match_end_block).unwrap();
+        }
+
+        self.builder.position_at_end(match_end_block);
+
+        Ok(result_value.as_basic_value().into())
+    }
+
     fn codegen_if_else(&mut self, ir_if: &TypedIf) -> CodegenResult<LlvmValue<'ctx>> {
         let typ = self.codegen_type(ir_if.ty)?;
         let start_block = self.builder.get_insert_block().unwrap();
@@ -1836,6 +1927,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 }
             }
             TypedExpr::If(if_expr) => self.codegen_if_else(if_expr),
+            TypedExpr::Match(match_expr) => self.codegen_match(match_expr),
             TypedExpr::WhileLoop(while_expr) => self.codegen_while_expr(while_expr),
             TypedExpr::LoopExpr(loop_expr) => self.codegen_loop_expr(loop_expr),
             TypedExpr::BinaryOp(bin_op) => self.codegen_binop(bin_op),

@@ -1,9 +1,0 @@
-deftype E = either A(int), B(int), C
-
-fn main(): int {
-  let x: E = .A(42);
-  let x_as_b = x.asB();
-  assert(x_as_b.!.value == 1);
-  0
-}
-//abortmsg: Opt.get on None

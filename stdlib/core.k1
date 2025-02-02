@@ -18,7 +18,6 @@ ns libc {
 }
 
 fn assertEquals[T: Show and Equals](context locn: compiler/SourceLocation)(a: T, b: T): unit {
-  println("assertEquals with \{a} and \{b}");
   if a != b {
     crash("ASSERT FAILED: \{a} != \{b}")
   }
@@ -36,7 +35,7 @@ fn crash(context locn: compiler/SourceLocation)(msg: string): never {
   sys/printBacktrace();
   let s = "\{msg} at \{filename}:\{line}\n";
   eprint(s);
-  libc/abort()
+  libc/exit(101)
 }
 
 ns Pointer {

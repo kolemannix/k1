@@ -30,7 +30,10 @@ pub struct TestSuiteClapArgs {
 
 #[derive(Debug)]
 enum TestExpectation {
-    ExitCode(i32),
+    ExitCode {
+        code: i32,
+        message: Option<String>,
+    },
     CompileErrorMessage {
         message: String,
     },
@@ -45,13 +48,14 @@ enum TestExpectation {
 impl TestExpectation {
     fn exit_code(&self) -> Option<i32> {
         match self {
-            Self::ExitCode(c) => Some(*c),
+            Self::ExitCode { code, .. } => Some(*code),
             _ => None,
         }
     }
-    fn abort_message(&self) -> Option<&str> {
+    fn expected_message(&self) -> Option<&str> {
         match self {
             Self::AbortErrorMessage { message } => Some(message),
+            Self::ExitCode { message, .. } => message.as_ref().map(|s| s.as_str()),
             _ => None,
         }
     }
@@ -72,13 +76,19 @@ fn get_test_expectation(test_file: &Path) -> TestExpectation {
         TestExpectation::CompileErrorMessage { message: expected_error }
     } else if last_line.starts_with(exit_code_prefix) {
         let s: String = last_line.chars().skip(exit_code_prefix.len()).collect();
-        let as_i32: i32 = s.parse().unwrap();
-        TestExpectation::ExitCode(as_i32)
+        let exit_code_str: String = s.chars().take_while(|c| !c.is_whitespace()).collect();
+        let as_i32: i32 = exit_code_str.parse().unwrap();
+        let message: String =
+            s.chars().skip(exit_code_str.len()).skip_while(|c| c.is_whitespace()).collect();
+        TestExpectation::ExitCode {
+            code: as_i32,
+            message: if message.is_empty() { None } else { Some(message) },
+        }
     } else if last_line.starts_with(abort_msg_prefix) {
         let expected_error: String = last_line.chars().skip(abort_msg_prefix.len()).collect();
         TestExpectation::AbortErrorMessage { message: expected_error }
     } else {
-        TestExpectation::ExitCode(0)
+        TestExpectation::ExitCode { code: 0, message: None }
     }
 }
 
@@ -117,7 +127,7 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
                     let s = String::from_utf8_lossy(&buf);
                     bail!("{filename}\n\tExpected: abort\n\tgot    : compile error '{}'", s)
                 }
-                TestExpectation::ExitCode(expected_code) => {
+                TestExpectation::ExitCode { code: expected_code, .. } => {
                     let mut buf = Vec::new();
                     module.write_error(&mut buf, err).unwrap();
                     let s = String::from_utf8_lossy(&buf);
@@ -136,7 +146,7 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
             let name = typed_module.name();
             let expect_exit = matches!(
                 expectation,
-                TestExpectation::ExitCode(_) | TestExpectation::AbortErrorMessage { .. }
+                TestExpectation::ExitCode { .. } | TestExpectation::AbortErrorMessage { .. }
             );
             if expect_exit {
                 let output_executable = !interpret;
@@ -171,16 +181,18 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
                         }
                         Ok(output) => {
                             let run_status = output.status;
+                            let stderr_str = String::from_utf8_lossy(&output.stderr);
+                            let stderr_lines = stderr_str.lines();
+                            let last_stderr_line = stderr_lines.last();
                             if let Some(signal) = run_status.signal() {
                                 if signal == 5 {
                                     bail!("{name} terminated by trap signal: {signal}");
                                 } else if signal == 6 {
-                                    if let Some(expected_abort_message) =
-                                        expectation.abort_message()
+                                    if let TestExpectation::AbortErrorMessage {
+                                        message: expected_abort_message,
+                                    } = &expectation
                                     {
-                                        let stderr_str = String::from_utf8_lossy(&output.stderr);
-                                        let stderr_lines = stderr_str.lines();
-                                        match stderr_lines.last() {
+                                        match last_stderr_line {
                                             None =>
                                             bail!(
                                                 "{name} Expected abortmsg {expected_abort_message} but got abort with no output",
@@ -204,6 +216,21 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
                                     expectation.exit_code(),
                                     run_status.code(),
                                 );
+                            }
+                            if let Some(expected_exit_message) = expectation.expected_message() {
+                                match last_stderr_line {
+                                            None =>
+                                            bail!(
+                                                "{name} Expected exit message {expected_exit_message} but got exit with no output",
+                                            ),
+                                            Some(exit_msg) => {
+                                                if !exit_msg.contains(expected_exit_message) {
+                                                    bail!(
+                                                        "{name} exit message '{exit_msg}' did not match expected message: {expected_exit_message}"
+                                                    )
+                                                }
+                                            }
+                                        }
                             }
                         }
                     }
