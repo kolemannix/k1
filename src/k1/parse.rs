@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter, Write};
+use std::num::NonZeroU32;
 
 use crate::compiler::CompilerConfig;
 use crate::lex::*;
@@ -22,9 +23,14 @@ pub struct ParsedAbilityImplId(u32);
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
 pub struct ParsedNamespaceId(u32);
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
-pub struct ParsedExpressionId(u32);
+pub struct ParsedExpressionId(NonZeroU32);
 impl ParsedExpressionId {
-    pub const PENDING: ParsedExpressionId = ParsedExpressionId(u32::MAX);
+    pub const PENDING: ParsedExpressionId = ParsedExpressionId(NonZeroU32::MAX);
+}
+impl From<usize> for ParsedExpressionId {
+    fn from(value: usize) -> Self {
+        ParsedExpressionId(NonZeroU32::new(value as u32).expect("0 is not a valid expression id"))
+    }
 }
 impl Display for ParsedExpressionId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -428,12 +434,13 @@ pub struct ParsedIsExpression {
 #[derive(Debug, Clone)]
 pub struct ParsedMatchCase {
     pub patterns: smallvec::SmallVec<[ParsedPatternId; 1]>,
+    pub guard_condition_expr: Option<ParsedExpressionId>,
     pub expression: ParsedExpressionId,
 }
 
 #[derive(Debug, Clone)]
 pub struct ParsedMatchExpression {
-    pub target_expression: ParsedExpressionId,
+    pub match_subject: ParsedExpressionId,
     pub cases: Vec<ParsedMatchCase>,
     pub span: SpanId,
 }
@@ -667,6 +674,7 @@ pub struct ParsedSomePattern {
 // <ident> ::= [a-z]*
 // <enum> ::= "." <ident> ( "(" <pattern> ")" )?
 // <struct> ::= "{" ( <ident> ": " <pattern> ","? )* "}"
+
 #[derive(Debug, Clone)]
 pub enum ParsedPattern {
     Literal(ParsedExpressionId),
@@ -1077,7 +1085,7 @@ impl ParsedExpressionPool {
     }
 
     pub fn add_expression(&mut self, mut expression: ParsedExpression) -> ParsedExpressionId {
-        let id = ParsedExpressionId(self.expressions.len() as u32);
+        let id: ParsedExpressionId = (self.expressions.len() + 1).into();
         if let ParsedExpression::FnCall(call) = &mut expression {
             call.id = id;
         }
@@ -1086,7 +1094,8 @@ impl ParsedExpressionPool {
     }
 
     pub fn get(&self, id: ParsedExpressionId) -> &ParsedExpression {
-        &self.expressions[id.0 as usize]
+        let index = id.0.get() - 1;
+        &self.expressions[index as usize]
     }
 
     pub fn get_span(&self, id: ParsedExpressionId) -> SpanId {
@@ -1647,7 +1656,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         }
     }
 
-    fn expect_pattern(&mut self) -> ParseResult<ParsedPatternId> {
+    fn expect_parse_pattern(&mut self) -> ParseResult<ParsedPatternId> {
         let first = self.peek();
         if let Some(literal_id) = self.parse_literal()? {
             let pattern = ParsedPattern::Literal(literal_id);
@@ -1663,7 +1672,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let maybe_colon = self.peek();
                 let pattern_id = if maybe_colon.kind == K::Colon {
                     self.advance();
-                    self.expect_pattern()?
+                    self.expect_parse_pattern()?
                 } else {
                     // Assume variable binding pattern with same name as field
                     let pattern = ParsedPattern::Variable(ident, ident_token.span);
@@ -1688,7 +1697,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             let ident = self.intern_ident_token(ident_token);
             let (payload_pattern, span) = if self.peek().kind == K::OpenParen {
                 self.advance();
-                let payload_pattern_id = self.expect_pattern()?;
+                let payload_pattern_id = self.expect_parse_pattern()?;
                 let close_paren = self.expect_eat_token(K::CloseParen)?;
                 (Some(payload_pattern_id), self.module.spans.extend(dot.span, close_paren.span))
             } else {
@@ -2315,7 +2324,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 })))
             } else if next.kind == K::KeywordIs {
                 self.advance();
-                let pattern = self.expect_pattern()?;
+                let pattern = self.expect_parse_pattern()?;
 
                 let original_span = self.get_expression_span(result);
                 let pattern_span = self.module.get_pattern_span(pattern);
@@ -2582,17 +2591,27 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             while self.peek().kind != K::CloseBrace {
                 let mut arm_pattern_ids = smallvec::smallvec![];
                 loop {
-                    let arm_pattern_id = self.expect_pattern()?;
+                    let arm_pattern_id = self.expect_parse_pattern()?;
                     arm_pattern_ids.push(arm_pattern_id);
                     if self.maybe_consume_next(K::KeywordOr).is_none() {
                         break;
                     }
                 }
 
+                let guard_condition_expr = if self.maybe_consume_next(K::KeywordIf).is_some() {
+                    Some(self.expect_expression()?)
+                } else {
+                    None
+                };
+
                 self.expect_eat_token(K::RThinArrow)?;
 
                 let arm_expr_id = self.expect_expression()?;
-                cases.push(ParsedMatchCase { patterns: arm_pattern_ids, expression: arm_expr_id });
+                cases.push(ParsedMatchCase {
+                    patterns: arm_pattern_ids,
+                    guard_condition_expr,
+                    expression: arm_expr_id,
+                });
                 let next = self.peek();
                 if next.kind == K::Comma {
                     self.advance();
@@ -2602,7 +2621,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             }
             let close = self.expect_eat_token(K::CloseBrace)?;
             let span = self.extend_token_span(when_keyword, close);
-            let match_expr = ParsedMatchExpression { target_expression, cases, span };
+            let match_expr =
+                ParsedMatchExpression { match_subject: target_expression, cases, span };
             Ok(Some(self.add_expression(ParsedExpression::Match(match_expr))))
         } else if first.kind == K::KeywordFor {
             self.advance();
@@ -3625,9 +3645,11 @@ impl ParsedModule {
             }
             ParsedExpression::Match(match_expr) => {
                 f.write_str("switch ")?;
-                self.display_expr_id(match_expr.target_expression, f)?;
+                self.display_expr_id(match_expr.match_subject, f)?;
                 f.write_str(" {")?;
-                for ParsedMatchCase { patterns, expression } in match_expr.cases.iter() {
+                for ParsedMatchCase { patterns, guard_condition_expr, expression } in
+                    match_expr.cases.iter()
+                {
                     f.write_str("")?;
                     for (pattern_index, pattern_id) in patterns.iter().enumerate() {
                         self.display_pattern_expression_id(*pattern_id, f)?;
@@ -3635,6 +3657,10 @@ impl ParsedModule {
                         if !is_last {
                             f.write_str(" or ")?;
                         }
+                    }
+                    if let Some(guard_condition_expr) = guard_condition_expr {
+                        f.write_str(" if ")?;
+                        self.display_expr_id(*guard_condition_expr, f)?;
                     }
                     f.write_str(" -> ")?;
                     self.display_expr_id(*expression, f)?;

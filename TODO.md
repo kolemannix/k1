@@ -11,18 +11,24 @@ New tagline? "C with typeclasses and tagged unions"
 - [ ] Dogfood idea: try to write a 'niched' integer abstraction (-1 as 'not found' but safely, vs using option and wasting space + adding more code)
       `impl Unwrap<Inner = u32> for i64`
 - [ ] Matching push
-  - [ ] boolean chains w/ binding ifs
+  - [x] boolean chains w/ binding ifs
   - [x] Don't codegen conditions for arms that don't run
   - [x] Remove 'statement conditions'
+  - [x] Prevent shadowing
+  - [x] Rewrite codegen for match to allow for better control flow
+  - [x] 'if' guards on regular match
+  - [ ] Move pattern bindings for field access and enum payload back to variables to fully remove duplication (we can do this now that we have a place to put them that's per-arm)
+  - [ ] Look into converting 'matchin if' to also compile to a TypedMatch
+  - [ ] Binding `while`
   - [ ] Matching on references
     - [ ] Match to get reference to each struct field, for example, use * for a dereferencing match
     - [ ] Match to get reference to enum payload
-  - [ ] Write a function to typecheck TypedExprs, so we can typecheck synthesized code in debug builds!
-  - [ ] 'if' guards on regular match
-  - [ ] Binding `while`
-  - [ ] nocommit ASSERT FAILED: true != true at core.k1:23
-- [ ] Private functions
-- [ ] string interp at end puts unnecessary empty string part: `putString(__sb_1001, "");`
+  - [x] ASSERT FAILED: true != true at core.k1:23
+- [ ] Write a function to typecheck TypedExprs, so we can typecheck synthesized code in debug builds!
+- [ ] Fix closure types / get static dispatch for functions taking a closure directly
+- [ ] Implicit conversions based on a special ability that integrates with type inference (like Mojo's ImplicitlyIntable, etc)
+- [ ] Private functions? Private anything? So hard to call, such a philosophical question about hiding, safety, skill-floor vs skill-ceiling
+- [x] string interp at end puts unnecessary empty string part: `putString(__sb_1001, "");`
 - [ ] Library vs Binary, linker options, when do we 'link', in IR or as object files, ...
 - [ ] `inline` functions (like Scala3's)
 - [ ] Add fixed length array types: `Array[<type expr> x <int literal>]`

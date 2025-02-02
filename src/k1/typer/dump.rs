@@ -558,6 +558,30 @@ impl TypedModule {
                 }
                 Ok(())
             }
+            TypedExpr::Match(typed_match) => {
+                writ.write_str("switch ")?;
+                self.display_stmt(&typed_match.match_subject_let_stmt, writ, indentation)?;
+                writ.write_str(" {\n")?;
+                for (idx, case) in typed_match.arms.iter().enumerate() {
+                    writ.write_str(&"  ".repeat(indentation + 1))?;
+                    self.display_pattern(&case.pattern, writ)?;
+                    writ.write_str("{{")?;
+                    self.display_expr(&case.pattern_condition, writ, indentation)?;
+                    writ.write_str("}}")?;
+                    if let Some(guard_condition) = case.guard_condition.as_ref() {
+                        writ.write_str(" if ")?;
+                        self.display_expr(guard_condition, writ, indentation)?;
+                    }
+                    writ.write_str(" -> ")?;
+                    self.display_expr(&case.consequent_expr, writ, indentation)?;
+                    if idx < typed_match.arms.len() - 1 {
+                        writ.write_str(",\n")?;
+                    }
+                }
+                writ.write_str("\n")?;
+                writ.write_str(&"  ".repeat(indentation))?;
+                writ.write_str("}")
+            }
             TypedExpr::WhileLoop(while_loop) => {
                 writ.write_str("while ")?;
                 self.display_expr(&while_loop.cond, writ, indentation)?;
