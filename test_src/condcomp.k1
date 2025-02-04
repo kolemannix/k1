@@ -5,7 +5,7 @@ fn main(): int {
   assert(K1_OS == "macos");
   assert(K1_TEST == false);
 
-  #if(K2_TEST) { println("Testing is on") };
+  #if(K1_TEST) { println("Testing is on") };
 
   #if(false) { crash("will not get compiled") };
 

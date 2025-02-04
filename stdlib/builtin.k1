@@ -121,3 +121,5 @@ impl Equals for bool {
     self == other
   }
 }
+
+fn discard[T](t: T): unit { () }

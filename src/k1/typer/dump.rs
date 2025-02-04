@@ -560,14 +560,37 @@ impl TypedModule {
             }
             TypedExpr::Match(typed_match) => {
                 writ.write_str("switch ")?;
-                self.display_stmt(&typed_match.match_subject_let_stmt, writ, indentation)?;
+                for stmt in &typed_match.initial_let_statements {
+                    self.display_stmt(stmt, writ, indentation)?;
+                    writ.write_str("; ")?;
+                }
                 writ.write_str(" {\n")?;
                 for (idx, case) in typed_match.arms.iter().enumerate() {
+                    for (idx, setup_stmt) in case.setup_statements.iter().enumerate() {
+                        self.display_stmt(setup_stmt, writ, indentation + 1)?;
+                        if idx != case.setup_statements.len() - 1 {
+                            writ.write_str("\n")?;
+                        }
+                    }
+
                     writ.write_str(&"  ".repeat(indentation + 1))?;
-                    self.display_pattern(&case.pattern, writ)?;
-                    writ.write_str("{{")?;
+                    for (idx, pattern) in case.patterns.iter().enumerate() {
+                        self.display_pattern(pattern, writ)?;
+                        if idx != case.patterns.len() - 1 {
+                            writ.write_str(" and ")?;
+                        }
+                    }
+                    writ.write_str("(")?;
                     self.display_expr(&case.pattern_condition, writ, indentation)?;
-                    writ.write_str("}}")?;
+                    writ.write_str(")")?;
+
+                    for (idx, stmt) in case.pattern_bindings.iter().enumerate() {
+                        self.display_stmt(stmt, writ, indentation + 1)?;
+                        if idx != case.pattern_bindings.len() - 1 {
+                            writ.write_str("\n")?;
+                        }
+                    }
+
                     if let Some(guard_condition) = case.guard_condition.as_ref() {
                         writ.write_str(" if ")?;
                         self.display_expr(guard_condition, writ, indentation)?;

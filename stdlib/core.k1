@@ -35,7 +35,7 @@ fn crash(context locn: compiler/SourceLocation)(msg: string): never {
   sys/printBacktrace();
   let s = "\{msg} at \{filename}:\{line}\n";
   eprint(s);
-  libc/exit(101)
+  libc/exit(1)
 }
 
 ns Pointer {
