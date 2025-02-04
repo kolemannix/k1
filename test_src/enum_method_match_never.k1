@@ -27,4 +27,4 @@ fn main(): int {
     assert((.B: E).valueIfA() == 0);
     0
   }
-//exitcode: 101 This is a B!
+//exitcode: 1 This is a B!

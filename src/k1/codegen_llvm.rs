@@ -155,6 +155,7 @@ impl<'ctx> LlvmValue<'ctx> {
         self.as_basic_value().expect_right("Expected BasicValue on never value")
     }
 
+    #[allow(unused)]
     fn as_never(&self) -> Option<InstructionValue<'ctx>> {
         match self {
             LlvmValue::Void(instr) => Some(*instr),
@@ -229,6 +230,7 @@ impl SizeInfo {
 struct LlvmReferenceType<'ctx> {
     type_id: TypeId,
     pointer_type: PointerType<'ctx>,
+    #[allow(unused)]
     pointee_type: AnyTypeEnum<'ctx>,
     di_type: DIType<'ctx>,
 }
@@ -407,15 +409,17 @@ impl<'ctx> K1LlvmType<'ctx> {
         match self {
             K1LlvmType::Value(value) => value.basic_type,
             K1LlvmType::Reference(pointer) => pointer.pointer_type.as_basic_type_enum(),
-            K1LlvmType::EnumType(e) => {
-                e.base_struct_type.ptr_type(AddressSpace::default()).as_basic_type_enum()
-            }
+            K1LlvmType::EnumType(e) => e
+                .base_struct_type
+                .get_context()
+                .ptr_type(AddressSpace::default())
+                .as_basic_type_enum(),
             K1LlvmType::StructType(s) => {
-                s.struct_type.ptr_type(AddressSpace::default()).as_basic_type_enum()
+                s.struct_type.get_context().ptr_type(AddressSpace::default()).as_basic_type_enum()
             }
-            K1LlvmType::Void(_) => panic!("No value type on Void / never"),
+            K1LlvmType::Void(_) => panic!("No canonical repr type on Void / never"),
             K1LlvmType::Closure(c) => {
-                c.struct_type.ptr_type(AddressSpace::default()).as_basic_type_enum()
+                c.struct_type.get_context().ptr_type(AddressSpace::default()).as_basic_type_enum()
             }
         }
     }
@@ -426,7 +430,7 @@ impl<'ctx> K1LlvmType<'ctx> {
             K1LlvmType::Reference(pointer) => pointer.pointer_type.as_basic_type_enum(),
             K1LlvmType::EnumType(e) => e.base_struct_type.as_basic_type_enum(),
             K1LlvmType::StructType(s) => s.struct_type.as_basic_type_enum(),
-            K1LlvmType::Void(_) => panic!("No value type on Void / never"),
+            K1LlvmType::Void(_) => panic!("No rich value type on Void / never"),
             K1LlvmType::Closure(c) => c.struct_type.as_basic_type_enum(),
         }
     }
@@ -1058,7 +1062,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let inner_debug_type = inner_type.debug_type();
                 Ok(LlvmReferenceType {
                     type_id,
-                    pointer_type: inner_type.rich_value_type().ptr_type(AddressSpace::default()),
+                    pointer_type: self.builtin_types.ptr,
                     pointee_type: inner_type.rich_value_type().as_any_type_enum(),
                     di_type: self
                         .debug
@@ -1346,7 +1350,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let placeholder_pointee = self.codegen_type(I8_TYPE_ID)?.debug_type();
                 Ok(K1LlvmType::Reference(LlvmReferenceType {
                     type_id,
-                    pointer_type: pointee_type.ptr_type(AddressSpace::default()),
+                    pointer_type: self.builtin_types.ptr,
                     pointee_type: pointee_type.as_any_type_enum(),
                     di_type: self
                         .debug
@@ -1527,12 +1531,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     }
 
     fn codegen_match(&mut self, match_expr: &TypedMatchExpr) -> CodegenResult<LlvmValue<'ctx>> {
-        let let_stmt = match_expr.match_subject_let_stmt.as_let().unwrap();
-        let let_result = self.codegen_let(let_stmt)?;
-        if let_result.as_never().is_some() {
-            return Ok(let_result);
+        for stmt in &match_expr.initial_let_statements {
+            if let instr @ LlvmValue::Void(_) = self.codegen_statement(stmt)? {
+                return Ok(instr);
+            }
         }
-        let _match_subject = self.variables.get(&let_stmt.variable_id).unwrap().pointer_value;
 
         let start_block = self.builder.get_insert_block().unwrap();
         let current_fn = start_block.get_parent().unwrap();
@@ -1552,19 +1555,31 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
         let match_end_block = self.ctx.append_basic_block(current_fn, "match_end");
         self.builder.position_at_end(match_end_block);
-        let result_type = self.codegen_type(match_expr.result_type)?;
-        let result_value =
-            self.builder.build_phi(result_type.canonical_repr_type(), "match_result").unwrap();
+        let result_k1_type = self.codegen_type(match_expr.result_type)?;
 
-        for ((index, arm), (arm_block, arm_cons_block)) in
+        // If the whole match exits, there's no phi value
+        let result_value = if result_k1_type.type_id() == NEVER_TYPE_ID {
+            None
+        } else {
+            let phi_value = self
+                .builder
+                .build_phi(result_k1_type.canonical_repr_type(), "match_result")
+                .unwrap();
+            Some(phi_value)
+        };
+
+        'arm: for ((index, arm), (arm_block, arm_cons_block)) in
             match_expr.arms.iter().enumerate().zip(arm_blocks.iter())
         {
             self.builder.position_at_end(*arm_block);
             // I'm gonna do the bindings first, though the pattern_condition doesn't currently
             // depend on them, we'd like it to to fully de-duplicate the matching code
-            for binding_stmt in &arm.pattern_bindings {
-                let binding_stmt = binding_stmt.as_let().unwrap();
-                self.codegen_let(binding_stmt)?;
+            for setup_stmt in &arm.setup_statements {
+                if let LlvmValue::Void(_instr) = self.codegen_statement(setup_stmt)? {
+                    // If one of the scrutinees is a bot type, this block is terminated so just
+                    // continue to the next arm
+                    continue 'arm;
+                }
             }
             let next_arm = arm_blocks.get(index + 1);
             let next_arm_or_fail = next_arm.map(|p| p.0).unwrap_or(fail_block);
@@ -1596,6 +1611,13 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 )
                 .unwrap();
 
+            // Binding values must be visible to the guard block
+            self.builder.position_at_end(guard_block.unwrap_or(*arm_cons_block));
+            for binding_stmt in &arm.pattern_bindings {
+                let binding_stmt = binding_stmt.as_let().unwrap();
+                self.codegen_let(binding_stmt)?;
+            }
+
             self.builder.position_at_end(*arm_cons_block);
             let LlvmValue::BasicValue(consequent) = self.codegen_expr(&arm.consequent_expr)? else {
                 // If the consequent crashes or returns early, this block is terminated so just
@@ -1606,13 +1628,19 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             // Running the consequent could have landed us in a different basic block, so the
             // incoming has to be from where we were when we built the 'consequent' value
             let consequent_end_block = self.builder.get_insert_block().unwrap();
-            result_value.add_incoming(&[(&consequent, consequent_end_block)]);
+            if let Some(result_value) = result_value {
+                result_value.add_incoming(&[(&consequent, consequent_end_block)]);
+            }
             self.builder.build_unconditional_branch(match_end_block).unwrap();
         }
 
         self.builder.position_at_end(match_end_block);
 
-        Ok(result_value.as_basic_value().into())
+        if let Some(result_value) = result_value {
+            Ok(result_value.as_basic_value().into())
+        } else {
+            Ok(LlvmValue::Void(self.builder.build_unreachable().unwrap()))
+        }
     }
 
     fn codegen_if_else(&mut self, ir_if: &TypedIf) -> CodegenResult<LlvmValue<'ctx>> {
@@ -1790,7 +1818,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             CompileTimeValue::Integer(int_value) => self.codegen_integer_value(*int_value).unwrap(),
             CompileTimeValue::Float(float_value) => self.codegen_float_value(*float_value).unwrap(),
-            CompileTimeValue::String(boxed_str) => self.codegen_string_literal(&boxed_str).unwrap(),
+            CompileTimeValue::String(boxed_str) => self.codegen_string_literal(boxed_str).unwrap(),
         };
         result
     }
@@ -2044,149 +2072,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     Ok(payload_copied.into())
                 }
             }
-            TypedExpr::Cast(cast) => {
-                match cast.cast_type {
-                    CastType::KnownNoOp | CastType::Integer8ToChar => {
-                        let value = self.codegen_expr_basic_value(&cast.base_expr)?;
-                        Ok(value.into())
-                    }
-                    CastType::IntegerExtend | CastType::IntegerExtendFromChar => {
-                        let value = self.codegen_expr_basic_value(&cast.base_expr)?;
-                        let int_value = value.into_int_value();
-                        let llvm_type = self.codegen_type(cast.target_type_id)?;
-                        let integer_type =
-                            self.module.types.get(cast.target_type_id).expect_integer();
-                        let value: IntValue<'ctx> = if integer_type.is_signed() {
-                            self.builder
-                                .build_int_s_extend(
-                                    int_value,
-                                    llvm_type.rich_value_type().into_int_type(),
-                                    "extend_cast",
-                                )
-                                .unwrap()
-                        } else {
-                            self.builder
-                                .build_int_z_extend(
-                                    int_value,
-                                    llvm_type.rich_value_type().into_int_type(),
-                                    "extend_cast",
-                                )
-                                .unwrap()
-                        };
-                        Ok(value.as_basic_value_enum().into())
-                    }
-                    CastType::IntegerTruncate => {
-                        let value = self.codegen_expr_basic_value(&cast.base_expr)?;
-                        let int_value = value.into_int_value();
-                        let int_type = self.codegen_type(cast.target_type_id)?;
-                        let truncated_value = self
-                            .builder
-                            .build_int_truncate(
-                                int_value,
-                                int_type.rich_value_type().into_int_type(),
-                                "trunc_cast",
-                            )
-                            .unwrap();
-                        Ok(truncated_value.as_basic_value_enum().into())
-                    }
-                    CastType::FloatExtend => {
-                        let from_value =
-                            self.codegen_expr_basic_value(&cast.base_expr)?.into_float_value();
-                        let float_dst_type = self
-                            .codegen_type(cast.target_type_id)?
-                            .rich_value_type()
-                            .into_float_type();
-                        let extended_value = self
-                            .builder
-                            .build_float_ext(from_value, float_dst_type, "fext")
-                            .unwrap();
-                        Ok(extended_value.as_basic_value_enum().into())
-                    }
-                    CastType::FloatTruncate => {
-                        let from_value =
-                            self.codegen_expr_basic_value(&cast.base_expr)?.into_float_value();
-                        let float_dst_type = self
-                            .codegen_type(cast.target_type_id)?
-                            .rich_value_type()
-                            .into_float_type();
-                        let extended_value = self
-                            .builder
-                            .build_float_trunc(from_value, float_dst_type, "ftrunc")
-                            .unwrap();
-                        Ok(extended_value.as_basic_value_enum().into())
-                    }
-                    CastType::FloatToInteger => {
-                        let from_value =
-                            self.codegen_expr_basic_value(&cast.base_expr)?.into_float_value();
-                        let int_dst_type = self.codegen_type(cast.target_type_id)?;
-                        let int_dst_type_llvm = int_dst_type.rich_value_type().into_int_type();
-                        let int_dest_k1_type =
-                            self.module.types.get(cast.target_type_id).expect_integer();
-                        let casted_int_value = if int_dest_k1_type.is_signed() {
-                            self.builder
-                                .build_float_to_signed_int(from_value, int_dst_type_llvm, "")
-                                .unwrap()
-                        } else {
-                            self.builder
-                                .build_float_to_unsigned_int(from_value, int_dst_type_llvm, "")
-                                .unwrap()
-                        };
-                        Ok(casted_int_value.as_basic_value_enum().into())
-                    }
-                    CastType::IntegerToFloat => {
-                        let from_value =
-                            self.codegen_expr_basic_value(&cast.base_expr)?.into_int_value();
-                        let from_int_k1_type =
-                            self.module.types.get(cast.base_expr.get_type()).expect_integer();
-                        let float_dst_type = self.codegen_type(cast.target_type_id)?;
-                        let float_dst_type_llvm =
-                            float_dst_type.rich_value_type().into_float_type();
-                        let casted_float_value = if from_int_k1_type.is_signed() {
-                            self.builder
-                                .build_signed_int_to_float(from_value, float_dst_type_llvm, "")
-                                .unwrap()
-                        } else {
-                            self.builder
-                                .build_unsigned_int_to_float(from_value, float_dst_type_llvm, "")
-                                .unwrap()
-                        };
-                        Ok(casted_float_value.as_basic_value_enum().into())
-                    }
-                    CastType::PointerToReference => {
-                        // I think this is a complete no-op in the LLVM ir
-                        let pointer =
-                            self.codegen_expr_basic_value(&cast.base_expr)?.into_pointer_value();
-                        Ok(pointer.as_basic_value_enum().into())
-                    }
-                    CastType::ReferenceToPointer => {
-                        // I think this is a complete no-op in the LLVM ir
-                        let reference =
-                            self.codegen_expr_basic_value(&cast.base_expr)?.into_pointer_value();
-                        Ok(reference.as_basic_value_enum().into())
-                    }
-                    CastType::PointerToInteger => {
-                        let ptr =
-                            self.codegen_expr_basic_value(&cast.base_expr)?.into_pointer_value();
-                        let as_int = self
-                            .builder
-                            .build_ptr_to_int(
-                                ptr,
-                                self.builtin_types.ptr_sized_int,
-                                "ptrtoint_cast",
-                            )
-                            .unwrap();
-                        Ok(as_int.as_basic_value_enum().into())
-                    }
-                    CastType::IntegerToPointer => {
-                        let int = self.codegen_expr_basic_value(&cast.base_expr)?.into_int_value();
-                        let as_ptr = self
-                            .builder
-                            .build_int_to_ptr(int, self.builtin_types.ptr, "inttoptr_cast")
-                            .unwrap();
-                        Ok(as_ptr.as_basic_value_enum().into())
-                    }
-                }
-            }
+            TypedExpr::Cast(cast) => self.codegen_cast(cast),
             TypedExpr::Return(ret) => {
                 let return_value = self.codegen_expr_basic_value(&ret.value)?;
                 let function = self.builder.get_insert_block().unwrap().get_parent().unwrap();
@@ -2199,26 +2085,25 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         Ok(LlvmValue::Void(ret_inst))
                     }
                     Some(sret_ptr) => {
-                        //if !return_value.is_pointer_value() {
-                        //    self.module
-                        //        .write_location(&mut std::io::stderr(), ret.value.get_span())
-                        //        .unwrap();
-                        //}
-                        // Store to the ptr and return void
-                        self.memcpy_entire_value(
+                        // NOCOMMIT changed to build_k1_store()
+                        self.store_k1_value(
+                            &codegened_function.function_type.return_type,
                             sret_ptr,
-                            return_value.into_pointer_value(),
-                            codegened_function.function_type.return_type.rich_value_type(),
+                            return_value,
                         );
-                        // self.builder.build_store(sret_ptr, return_value);
+                        //self.memcpy_entire_value(
+                        //    sret_ptr,
+                        //    return_value.into_pointer_value(),
+                        //    codegened_function.function_type.return_type.rich_value_type(),
+                        //);
                         let ret = self.builder.build_return(None).unwrap();
                         Ok(LlvmValue::Void(ret))
                     }
                 }
             }
-            TypedExpr::Break(brk) => {
-                let loop_info = *self.loops.get(&brk.loop_scope).unwrap();
-                let break_value = self.codegen_expr_basic_value(&brk.value)?;
+            TypedExpr::Break(break_) => {
+                let loop_info = *self.loops.get(&break_.loop_scope).unwrap();
+                let break_value = self.codegen_expr_basic_value(&break_.value)?;
                 if let Some(break_value_ptr) = loop_info.break_value_ptr {
                     self.builder.build_store(break_value_ptr, break_value).unwrap();
                 }
@@ -2285,6 +2170,133 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             e @ TypedExpr::PendingCapture(_) => {
                 panic!("Unsupported expression: {e:?}")
+            }
+        }
+    }
+
+    fn codegen_cast(&mut self, cast: &TypedCast) -> CodegenResult<LlvmValue<'ctx>> {
+        match cast.cast_type {
+            CastType::KnownNoOp | CastType::Integer8ToChar => {
+                let value = self.codegen_expr_basic_value(&cast.base_expr)?;
+                Ok(value.into())
+            }
+            CastType::IntegerExtend | CastType::IntegerExtendFromChar => {
+                let value = self.codegen_expr_basic_value(&cast.base_expr)?;
+                let int_value = value.into_int_value();
+                let llvm_type = self.codegen_type(cast.target_type_id)?;
+                let integer_type = self.module.types.get(cast.target_type_id).expect_integer();
+                let value: IntValue<'ctx> = if integer_type.is_signed() {
+                    self.builder
+                        .build_int_s_extend(
+                            int_value,
+                            llvm_type.rich_value_type().into_int_type(),
+                            "extend_cast",
+                        )
+                        .unwrap()
+                } else {
+                    self.builder
+                        .build_int_z_extend(
+                            int_value,
+                            llvm_type.rich_value_type().into_int_type(),
+                            "extend_cast",
+                        )
+                        .unwrap()
+                };
+                Ok(value.as_basic_value_enum().into())
+            }
+            CastType::IntegerTruncate => {
+                let value = self.codegen_expr_basic_value(&cast.base_expr)?;
+                let int_value = value.into_int_value();
+                let int_type = self.codegen_type(cast.target_type_id)?;
+                let truncated_value = self
+                    .builder
+                    .build_int_truncate(
+                        int_value,
+                        int_type.rich_value_type().into_int_type(),
+                        "trunc_cast",
+                    )
+                    .unwrap();
+                Ok(truncated_value.as_basic_value_enum().into())
+            }
+            CastType::FloatExtend => {
+                let from_value = self.codegen_expr_basic_value(&cast.base_expr)?.into_float_value();
+                let float_dst_type =
+                    self.codegen_type(cast.target_type_id)?.rich_value_type().into_float_type();
+                let extended_value =
+                    self.builder.build_float_ext(from_value, float_dst_type, "fext").unwrap();
+                Ok(extended_value.as_basic_value_enum().into())
+            }
+            CastType::FloatTruncate => {
+                let from_value = self.codegen_expr_basic_value(&cast.base_expr)?.into_float_value();
+                let float_dst_type =
+                    self.codegen_type(cast.target_type_id)?.rich_value_type().into_float_type();
+                let extended_value =
+                    self.builder.build_float_trunc(from_value, float_dst_type, "ftrunc").unwrap();
+                Ok(extended_value.as_basic_value_enum().into())
+            }
+            CastType::FloatToInteger => {
+                let from_value = self.codegen_expr_basic_value(&cast.base_expr)?.into_float_value();
+                let int_dst_type = self.codegen_type(cast.target_type_id)?;
+                let int_dst_type_llvm = int_dst_type.rich_value_type().into_int_type();
+                let int_dest_k1_type = self.module.types.get(cast.target_type_id).expect_integer();
+                let casted_int_value = if int_dest_k1_type.is_signed() {
+                    self.builder
+                        .build_float_to_signed_int(from_value, int_dst_type_llvm, "")
+                        .unwrap()
+                } else {
+                    self.builder
+                        .build_float_to_unsigned_int(from_value, int_dst_type_llvm, "")
+                        .unwrap()
+                };
+                Ok(casted_int_value.as_basic_value_enum().into())
+            }
+            CastType::IntegerToFloat => {
+                let from_value = self.codegen_expr_basic_value(&cast.base_expr)?.into_int_value();
+                let from_int_k1_type =
+                    self.module.types.get(cast.base_expr.get_type()).expect_integer();
+                let float_dst_type = self.codegen_type(cast.target_type_id)?;
+                let float_dst_type_llvm = float_dst_type.rich_value_type().into_float_type();
+                let casted_float_value = if from_int_k1_type.is_signed() {
+                    self.builder
+                        .build_signed_int_to_float(from_value, float_dst_type_llvm, "")
+                        .unwrap()
+                } else {
+                    self.builder
+                        .build_unsigned_int_to_float(from_value, float_dst_type_llvm, "")
+                        .unwrap()
+                };
+                Ok(casted_float_value.as_basic_value_enum().into())
+            }
+            CastType::PointerToReference => {
+                // This is a complete no-op in the LLVM ir
+                // since llvm 'ptr' is untyped, and all we're doing
+                // here is adding a type to our pointer
+                let pointer = self.codegen_expr_basic_value(&cast.base_expr)?.into_pointer_value();
+                Ok(pointer.as_basic_value_enum().into())
+            }
+            CastType::ReferenceToPointer => {
+                // This is a complete no-op in the LLVM ir
+                // since llvm 'ptr' is untyped, and all we're doing
+                // here is removing the type from our pointer
+                let reference =
+                    self.codegen_expr_basic_value(&cast.base_expr)?.into_pointer_value();
+                Ok(reference.as_basic_value_enum().into())
+            }
+            CastType::PointerToInteger => {
+                let ptr = self.codegen_expr_basic_value(&cast.base_expr)?.into_pointer_value();
+                let as_int = self
+                    .builder
+                    .build_ptr_to_int(ptr, self.builtin_types.ptr_sized_int, "ptrtoint_cast")
+                    .unwrap();
+                Ok(as_int.as_basic_value_enum().into())
+            }
+            CastType::IntegerToPointer => {
+                let int = self.codegen_expr_basic_value(&cast.base_expr)?.into_int_value();
+                let as_ptr = self
+                    .builder
+                    .build_int_to_ptr(int, self.builtin_types.ptr, "inttoptr_cast")
+                    .unwrap();
+                Ok(as_ptr.as_basic_value_enum().into())
             }
         }
     }
@@ -2874,50 +2886,49 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let mut last: LlvmValue<'ctx> = unit_value;
         self.set_debug_location(block.span);
         for stmt in &block.statements {
-            if let LlvmValue::Void(_never_instr) = last {
-                eprintln!("Aborting block after generating {}", _never_instr);
-                return Ok(last);
+            if let LlvmValue::Void(never_instr) = last {
+                eprintln!("Aborting block after generating {}", never_instr);
+                break;
             }
-            match stmt {
-                TypedStmt::Expr(expr) => last = self.codegen_expr(expr)?,
-                TypedStmt::Let(val_def) => {
-                    let value = self.codegen_let(val_def)?;
-                    last = if val_def.variable_type == NEVER_TYPE_ID { value } else { unit_value };
-                }
-                TypedStmt::Assignment(assignment) => {
-                    let rhs = self.codegen_expr_basic_value(&assignment.value)?;
-                    let value_type = self.codegen_type(assignment.value.get_type())?;
-                    let lhs_pointer = match assignment.kind {
-                        AssignmentKind::Value => {
-                            match assignment.destination.deref() {
-                                // ASSIGNMENT! We're in lvalue land. We need to get the pointer to the
-                                // destination, and be sure to call the correct variant of codegen_expr
-                                TypedExpr::Variable(v) => {
-                                    let destination_ptr = *self
-                                        .variables
-                                        .get(&v.variable_id)
-                                        .expect("Missing variable");
-                                    destination_ptr.pointer_value
-                                }
-                                e => {
-                                    panic!(
-                                        "Invalid assignment lhs: {}",
-                                        self.module.expr_to_string(e)
-                                    )
-                                }
-                            }
-                        }
-                        AssignmentKind::Reference => self
-                            .codegen_expr_basic_value(&assignment.destination)?
-                            .into_pointer_value(),
-                    };
-
-                    self.store_k1_value(&value_type, lhs_pointer, rhs);
-                    last = unit_value;
-                }
-            }
+            last = self.codegen_statement(stmt)?;
         }
         Ok(last)
+    }
+
+    fn codegen_statement(&mut self, statement: &TypedStmt) -> CodegenResult<LlvmValue<'ctx>> {
+        match statement {
+            TypedStmt::Expr(expr) => self.codegen_expr(expr),
+            TypedStmt::Let(let_stmt) => self.codegen_let(let_stmt),
+            TypedStmt::Assignment(assignment) => {
+                let rhs = self.codegen_expr(&assignment.value)?;
+                let LlvmValue::BasicValue(rhs) = rhs else {
+                    return Ok(rhs);
+                };
+                let value_type = self.codegen_type(assignment.value.get_type())?;
+                let lhs_pointer = match assignment.kind {
+                    AssignmentKind::Value => {
+                        match assignment.destination.deref() {
+                            // ASSIGNMENT! We're in lvalue land. We need to get the pointer to the
+                            // destination, and be sure to call the correct variant of codegen_expr
+                            TypedExpr::Variable(v) => {
+                                let destination_ptr =
+                                    *self.variables.get(&v.variable_id).expect("Missing variable");
+                                destination_ptr.pointer_value
+                            }
+                            e => {
+                                panic!("Invalid assignment lhs: {}", self.module.expr_to_string(e))
+                            }
+                        }
+                    }
+                    AssignmentKind::Reference => {
+                        self.codegen_expr_basic_value(&assignment.destination)?.into_pointer_value()
+                    }
+                };
+
+                self.store_k1_value(&value_type, lhs_pointer, rhs);
+                Ok(self.builtin_types.unit_value.as_basic_value_enum().into())
+            }
+        }
     }
 
     fn codegen_while_expr(&mut self, while_loop: &WhileLoop) -> CodegenResult<LlvmValue<'ctx>> {
