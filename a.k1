@@ -2,10 +2,23 @@ fn main(): int {
   let* x = some(42);
   #debug while x.* is .Some(xx) {
     println("\{xx}");
-    let new = xx - 1;
-    if new == 0 break()
+    if xx == 0 break()
     else { 
       x <- some(xx - 1);
+    }
+  };
+
+  let* point = { x: 5, y: 2 };
+  if point is { x, y: 2 }* {
+    println("x is \{x}")
+  };
+
+  x <- some(5);
+  #debug while x is .Some(xx)* {
+    println("\{xx}");
+    if xx.* == 0 break()
+    else { 
+      xx <- xx.* - 1;
     }
   };
   0
