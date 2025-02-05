@@ -1126,6 +1126,17 @@ pub struct LoopExpr {
 }
 
 #[derive(Debug, Clone)]
+struct MatchingCondition {
+    #[allow(unused)]
+    all_patterns: Vec<TypedPattern>,
+    combined_condition: TypedExpr,
+    setup_statements: Vec<TypedStmt>,
+    binding_statements: Vec<TypedStmt>,
+    #[allow(unused)]
+    binding_eligible: bool,
+}
+
+#[derive(Debug, Clone)]
 /// The last arm's condition is guaranteed to always evaluate to 'true'
 pub struct TypedMatchExpr {
     pub initial_let_statements: Vec<TypedStmt>,
@@ -4174,7 +4185,7 @@ impl TypedModule {
         let base_span = self.ast.expressions.get_span(field_access.base);
         if let Some(enum_result) = self.handle_enum_constructor(
             field_access.base,
-            field_access.target,
+            field_access.field_name,
             None,
             &field_access.type_args,
             ctx,
@@ -4184,12 +4195,12 @@ impl TypedModule {
         }
 
         // Bailout case: .* dereference operation
-        if field_access.target == get_ident!(self, "*") {
+        if field_access.field_name == get_ident!(self, "*") {
             return self.eval_dereference(field_access.base, ctx, span);
         }
 
         // Bailout case: .! unwrap operation
-        if field_access.target == get_ident!(self, "!") {
+        if field_access.field_name == get_ident!(self, "!") {
             if field_access.is_coalescing {
                 return failf!(field_access.span, "Cannot use ?. with unwrap operator");
             }
@@ -4202,7 +4213,7 @@ impl TypedModule {
             return self.eval_unwrap_operator(field_access.base, ctx, field_access.span);
         }
 
-        if field_access.target == get_ident!(self, "try") {
+        if field_access.field_name == get_ident!(self, "try") {
             if field_access.is_coalescing {
                 return failf!(field_access.span, "Cannot use ?. with try operator");
             }
@@ -4261,7 +4272,7 @@ impl TypedModule {
                     let mut block = self.synth_block(vec![], ctx.scope_id, span);
                     let block_scope = block.scope_id;
                     let base_expr_var = self.synth_variable_defn_simple(
-                        field_access.target,
+                        field_access.field_name,
                         base_expr,
                         block_scope,
                     );
@@ -4280,10 +4291,10 @@ impl TypedModule {
                         );
                     };
                     let (field_index, target_field) =
-                        struct_type.find_field(field_access.target).ok_or(make_error(
+                        struct_type.find_field(field_access.field_name).ok_or(make_error(
                             format!(
                                 "Field {} not found on struct {}",
-                                self.ast.identifiers.get_name(field_access.target),
+                                self.ast.identifiers.get_name(field_access.field_name),
                                 self.type_to_string(st, false)
                             ),
                             span,
@@ -4321,7 +4332,7 @@ impl TypedModule {
                     failf!(
                         span,
                         "Field {} does not exist",
-                        self.ast.identifiers.get_name(field_access.target)
+                        self.ast.identifiers.get_name(field_access.field_name)
                     )
                 }
             }
@@ -4330,10 +4341,10 @@ impl TypedModule {
                     return failf!(span, "Struct must be a reference to be assignable");
                 }
                 let (field_index, target_field) =
-                    struct_type.find_field(field_access.target).ok_or(make_error(
+                    struct_type.find_field(field_access.field_name).ok_or(make_error(
                         format!(
                             "Field {} not found on struct {}",
-                            self.ast.identifiers.get_name(field_access.target),
+                            self.ast.identifiers.get_name(field_access.field_name),
                             self.type_to_string(st, false)
                         ),
                         span,
@@ -4357,7 +4368,7 @@ impl TypedModule {
                 };
                 Ok(TypedExpr::StructFieldAccess(FieldAccess {
                     base: Box::new(base_expr),
-                    target_field: field_access.target,
+                    target_field: field_access.field_name,
                     target_field_index: field_index as u32,
                     result_type,
                     is_referencing: field_access.is_referencing,
@@ -4366,11 +4377,11 @@ impl TypedModule {
                 }))
             }
             Type::EnumVariant(ev) => {
-                if self.ast.identifiers.get_name(field_access.target) != "value" {
+                if self.ast.identifiers.get_name(field_access.field_name) != "value" {
                     return failf!(
                         span,
                         "Field {} does not exist; try .value",
-                        self.ast.identifiers.get_name(field_access.target)
+                        self.ast.identifiers.get_name(field_access.field_name)
                     );
                 }
                 let Some(payload_type_id) = ev.payload else {
@@ -4402,7 +4413,7 @@ impl TypedModule {
             _ => failf!(
                 span,
                 "Field {} does not exist on type {}",
-                self.ast.identifiers.get_name(field_access.target),
+                self.ast.identifiers.get_name(field_access.field_name),
                 self.type_id_to_string(base_expr.get_type())
             ),
         }
@@ -4995,24 +5006,48 @@ impl TypedModule {
         while_expr: &ParsedWhileExpr,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExpr> {
-        let cond = self.eval_expr(while_expr.cond, ctx.with_expected_type(Some(BOOL_TYPE_ID)))?;
-        if let Err(msg) = self.check_types(BOOL_TYPE_ID, cond.get_type(), ctx.scope_id) {
-            return failf!(cond.get_span(), "Invalid while condition type: {msg}");
-        }
-
-        let ParsedExpression::Block(parsed_block) = self.ast.expressions.get(while_expr.body)
+        let ParsedExpression::Block(parsed_block) =
+            self.ast.expressions.get(while_expr.body).clone()
         else {
             return failf!(while_expr.span, "'while' body must be a block");
         };
-        let body_scope =
-            self.scopes.add_child_scope(ctx.scope_id, ScopeType::WhileLoopBody, None, None);
-        self.scopes.add_loop_info(body_scope, ScopeLoopInfo { break_type: Some(UNIT_TYPE_ID) });
+        let condition_span = self.ast.expressions.get_span(while_expr.cond);
+        let mut condition_block = self.synth_block(vec![], ctx.scope_id, condition_span);
+        let MatchingCondition { combined_condition, setup_statements, binding_statements, .. } =
+            self.eval_matching_condition(
+                while_expr.cond,
+                ctx.with_scope(condition_block.scope_id),
+            )?;
 
-        let block = self.eval_block(&parsed_block.clone(), ctx.with_scope(body_scope), false)?;
-        let loop_type = if cond.get_type() == NEVER_TYPE_ID { NEVER_TYPE_ID } else { UNIT_TYPE_ID };
+        for stmt in setup_statements {
+            condition_block.push_stmt(stmt)
+        }
+        condition_block.push_expr(combined_condition);
+        let body_block_scope_id = self.scopes.add_child_scope(
+            condition_block.scope_id,
+            ScopeType::WhileLoopBody,
+            None,
+            None,
+        );
+        self.scopes
+            .add_loop_info(body_block_scope_id, ScopeLoopInfo { break_type: Some(UNIT_TYPE_ID) });
+        let mut body_block = TypedBlock {
+            expr_type: UNIT_TYPE_ID,
+            statements: binding_statements,
+            scope_id: body_block_scope_id,
+            span: parsed_block.span,
+        };
+
+        let user_block =
+            self.eval_block(&parsed_block, ctx.with_scope(body_block.scope_id), false)?;
+        body_block.push_expr(TypedExpr::Block(user_block));
+
+        let loop_type =
+            if condition_block.expr_type == NEVER_TYPE_ID { NEVER_TYPE_ID } else { UNIT_TYPE_ID };
+
         Ok(TypedExpr::WhileLoop(WhileLoop {
-            cond: Box::new(cond),
-            body: Box::new(block),
+            cond: Box::new(TypedExpr::Block(condition_block)),
+            body: Box::new(body_block),
             type_id: loop_type,
             span: while_expr.span,
         }))
@@ -5730,17 +5765,9 @@ impl TypedModule {
                     )?;
                     boolean_exprs.push(condition);
                 }
-                let final_condition: TypedExpr = boolean_exprs
+                let final_condition = boolean_exprs
                     .into_iter()
-                    .reduce(|acc, expr| {
-                        TypedExpr::BinaryOp(BinaryOp {
-                            kind: BinaryOpKind::And,
-                            ty: BOOL_TYPE_ID,
-                            lhs: Box::new(acc),
-                            rhs: Box::new(expr),
-                            span: struct_pattern.span,
-                        })
-                    })
+                    .reduce(|a, b| self.synth_binary_op(BinaryOpKind::And, a, b))
                     .unwrap();
                 Ok(final_condition)
             }
@@ -6256,54 +6283,14 @@ impl TypedModule {
     // expressions, so this is not a simple one.
     // if x is .Some(v) and y is .Some("bar") and foo == 3
     fn eval_if_expr(&mut self, if_expr: &IfExpr, ctx: EvalExprContext) -> TyperResult<TypedExpr> {
-        let condition_span = self.ast.expressions.get_span(if_expr.cond);
-
         let match_scope_id =
             self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, None, None);
 
-        let mut conditions: Vec<TypedExpr> = Vec::new();
-        let mut setup_statements = vec![];
-        let mut binding_statements = vec![];
-        let mut all_patterns: Vec<TypedPattern> = vec![];
-        let mut allow_bindings: bool = true;
-        self.handle_matching_if_rec(
-            if_expr.cond,
-            &mut allow_bindings,
-            &mut all_patterns,
-            &mut conditions,
-            &mut setup_statements,
-            &mut binding_statements,
-            ctx.with_scope(match_scope_id).with_no_expected_type(),
-        )?;
-
-        let mut all_bindings = Vec::new();
-        for pattern in all_patterns.iter() {
-            pattern.all_bindings_rec(&mut all_bindings);
-        }
-        if allow_bindings {
-            all_bindings.sort_by_key(|p| p.name);
-            let dupe_binding =
-                all_bindings.windows(2).find(|window| window[0].name == window[1].name);
-            if let Some(dupe_binding) = dupe_binding {
-                return failf!(
-                    dupe_binding[1].span,
-                    "Duplicate binding of name '{}' within same matching if; normally we like shadowing but this is probably never good.",
-                    self.name_of(dupe_binding[1].name)
-                );
-            }
-        } else {
-            if !all_bindings.is_empty() {
-                return failf!(
-                    condition_span,
-                    "Cannot create bindings unless all patterns are connected by 'and'"
-                );
-            }
-        }
-
-        let patterns_combined_with_and = conditions
-            .into_iter()
-            .reduce(|a, b| self.synth_binary_op(BinaryOpKind::And, a, b))
-            .unwrap();
+        let MatchingCondition { combined_condition, setup_statements, binding_statements, .. } =
+            self.eval_matching_condition(
+                if_expr.cond,
+                ctx.with_scope(match_scope_id).with_no_expected_type(),
+            )?;
 
         let consequent = self.eval_expr(if_expr.cons, ctx.with_scope(match_scope_id))?;
 
@@ -6353,7 +6340,7 @@ impl TypedModule {
         let cons_arm = TypedMatchArm {
             patterns: smallvec![],
             setup_statements,
-            pattern_condition: patterns_combined_with_and,
+            pattern_condition: combined_condition,
             pattern_bindings: binding_statements,
             guard_condition: None,
             consequent_expr: consequent,
@@ -6374,9 +6361,71 @@ impl TypedModule {
         }))
     }
 
+    fn eval_matching_condition(
+        &mut self,
+        condition: ParsedExpressionId,
+        ctx: EvalExprContext,
+    ) -> TyperResult<MatchingCondition> {
+        let mut conditions: Vec<TypedExpr> = Vec::new();
+        let mut setup_statements = vec![];
+        let mut binding_statements = vec![];
+        let mut all_patterns: Vec<TypedPattern> = vec![];
+        let mut allow_bindings: bool = true;
+        self.handle_matching_if_rec(
+            condition,
+            &mut allow_bindings,
+            &mut all_patterns,
+            &mut conditions,
+            &mut setup_statements,
+            &mut binding_statements,
+            ctx,
+        )?;
+
+        let mut all_bindings = Vec::new();
+
+        // nocommit: more efficiently get all these bindings
+        for pattern in all_patterns.iter() {
+            pattern.all_bindings_rec(&mut all_bindings);
+        }
+        if allow_bindings {
+            // Bindings are allowed, fail if there are any duplicates
+            all_bindings.sort_by_key(|p| p.name);
+            let dupe_binding =
+                all_bindings.windows(2).find(|window| window[0].name == window[1].name);
+            if let Some(dupe_binding) = dupe_binding {
+                return failf!(
+                    dupe_binding[1].span,
+                    "Duplicate binding of name '{}' within same matching if; normally we like shadowing but this is probably never good.",
+                    self.name_of(dupe_binding[1].name)
+                );
+            }
+        } else {
+            // Bindings are disallowed due to the structure of the expressions
+            // but there is at least one binding
+            if let Some(b) = all_bindings.first() {
+                return failf!(
+                    b.span,
+                    "Cannot create bindings unless all patterns are connected by 'and'"
+                );
+            }
+        }
+
+        let patterns_combined_with_and = conditions
+            .into_iter()
+            .reduce(|a, b| self.synth_binary_op(BinaryOpKind::And, a, b))
+            .unwrap();
+        Ok(MatchingCondition {
+            all_patterns,
+            combined_condition: patterns_combined_with_and,
+            setup_statements,
+            binding_statements,
+            binding_eligible: allow_bindings,
+        })
+    }
+
     fn handle_matching_if_rec(
         &mut self,
-        expr: ParsedExpressionId,
+        parsed_expr_id: ParsedExpressionId,
         allow_bindings: &mut bool,
         all_patterns: &mut Vec<TypedPattern>,
         conditions: &mut Vec<TypedExpr>,
@@ -6384,7 +6433,8 @@ impl TypedModule {
         binding_statements: &mut Vec<TypedStmt>,
         ctx: EvalExprContext,
     ) -> TyperResult<()> {
-        match self.ast.expressions.get(expr) {
+        debug!("hmirec {allow_bindings}: {}", self.ast.expr_id_to_string(parsed_expr_id));
+        match self.ast.expressions.get(parsed_expr_id) {
             ParsedExpression::Is(is_expr) => {
                 let target_expr = is_expr.target_expression;
                 let pattern = is_expr.pattern;
@@ -6443,7 +6493,8 @@ impl TypedModule {
                     *allow_bindings = false;
                 };
                 let span = other.get_span();
-                let condition = self.eval_expr(expr, ctx.with_expected_type(Some(BOOL_TYPE_ID)))?;
+                let condition =
+                    self.eval_expr(parsed_expr_id, ctx.with_expected_type(Some(BOOL_TYPE_ID)))?;
                 if let Err(msg) = self.check_types(BOOL_TYPE_ID, condition.get_type(), ctx.scope_id)
                 {
                     return failf!(span, "Expected boolean condition: {msg}");
@@ -6959,7 +7010,7 @@ impl TypedModule {
                 let Some((enclosing_loop_scope_id, loop_type)) =
                     self.scopes.nearest_parent_loop(calling_scope)
                 else {
-                    return failf!(call_span, "break(...) outside of while loop");
+                    return failf!(call_span, "break(...) outside of loop");
                 };
                 let expected_break_type: Option<TypeId> =
                     self.scopes.get_loop_info(enclosing_loop_scope_id).unwrap().break_type;

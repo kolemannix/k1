@@ -149,11 +149,11 @@ fn dot_accessor() -> ParseResult<()> {
     let input = "a.b.c";
     let (module, result) = test_single_expr(input)?;
     let ParsedExpression::FieldAccess(access_op) = result else { panic!() };
-    assert_eq!(module.identifiers.get_name(access_op.target), "c");
+    assert_eq!(module.identifiers.get_name(access_op.field_name), "c");
     let ParsedExpression::FieldAccess(acc2) = module.expressions.get(access_op.base) else {
         panic!()
     };
-    assert_eq!(module.identifiers.get_name(acc2.target), "b");
+    assert_eq!(module.identifiers.get_name(acc2.field_name), "b");
     let ParsedExpression::Variable(v) = module.expressions.get(acc2.base) else { panic!() };
     assert_eq!(module.identifiers.get_name(v.name.name), "a");
     Ok(())

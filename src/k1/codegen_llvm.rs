@@ -2085,17 +2085,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         Ok(LlvmValue::Void(ret_inst))
                     }
                     Some(sret_ptr) => {
-                        // NOCOMMIT changed to build_k1_store()
                         self.store_k1_value(
                             &codegened_function.function_type.return_type,
                             sret_ptr,
                             return_value,
                         );
-                        //self.memcpy_entire_value(
-                        //    sret_ptr,
-                        //    return_value.into_pointer_value(),
-                        //    codegened_function.function_type.return_type.rich_value_type(),
-                        //);
                         let ret = self.builder.build_return(None).unwrap();
                         Ok(LlvmValue::Void(ret))
                     }

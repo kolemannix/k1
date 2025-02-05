@@ -17,9 +17,9 @@ New tagline? "C with typeclasses and tagged unions"
   - [x] Prevent shadowing
   - [x] Rewrite codegen for match to allow for better control flow
   - [x] 'if' guards on regular match
-  - [ ] Move pattern bindings for field access and enum payload back to variables to fully remove duplication (we can do this now that we have a place to put them that's per-arm)
+  - [x] Move pattern bindings for field access and enum payload back to variables to fully remove duplication (we can do this now that we have a place to put them that's per-arm)
   - [x] Look into converting 'matching if' to also compile to a TypedMatch
-  - [ ] Binding `while`
+  - [x] Binding `while`
   - [ ] Matching on references
     - [ ] Match to get reference to each struct field, for example, use * for a dereferencing match
     - [ ] Match to get reference to enum payload
