@@ -662,8 +662,8 @@ pub struct ParsedEnumPattern {
 }
 
 #[derive(Debug, Clone)]
-pub struct ParsedSomePattern {
-    pub inner_pattern: ParsedPatternId,
+pub struct ParsedReferencePattern {
+    pub inner: ParsedPatternId,
     pub span: SpanId,
 }
 
@@ -682,6 +682,7 @@ pub enum ParsedPattern {
     Struct(ParsedStructPattern),
     Enum(ParsedEnumPattern),
     Wildcard(SpanId),
+    Reference(ParsedReferencePattern),
 }
 
 impl ParsedPattern {}
@@ -1284,6 +1285,7 @@ impl ParsedModule {
             ParsedPattern::Variable(_var_pattern, span) => *span,
             ParsedPattern::Struct(struct_pattern) => struct_pattern.span,
             ParsedPattern::Wildcard(span) => *span,
+            ParsedPattern::Reference(r) => r.span,
         }
     }
 
@@ -1657,6 +1659,23 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn expect_parse_pattern(&mut self) -> ParseResult<ParsedPatternId> {
+        let mut pattern_id: ParsedPatternId = self.expect_pattern_base()?;
+        // Loop for postfix operations
+        loop {
+            if let Some(asterisk) = self.maybe_consume_next(K::Asterisk) {
+                let inner_span = self.module.get_pattern_span(pattern_id);
+                let span = self.extend_span(inner_span, asterisk.span);
+                pattern_id = self.module.patterns.add_pattern(ParsedPattern::Reference(
+                    ParsedReferencePattern { inner: pattern_id, span },
+                ))
+            } else {
+                break;
+            }
+        }
+        Ok(pattern_id)
+    }
+
+    fn expect_pattern_base(&mut self) -> ParseResult<ParsedPatternId> {
         let first = self.peek();
         if let Some(literal_id) = self.parse_literal()? {
             let pattern = ParsedPattern::Literal(literal_id);

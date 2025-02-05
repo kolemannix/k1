@@ -791,6 +791,11 @@ impl TypedModule {
                 writ.write_str("}")?;
                 Ok(())
             }
+            TypedPattern::Reference(reference_pattern) => {
+                self.display_pattern(&reference_pattern.inner_pattern, writ)?;
+                writ.write_str("*")?;
+                Ok(())
+            }
         }
     }
 

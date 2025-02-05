@@ -306,6 +306,12 @@ pub struct VariablePattern {
     pub span: SpanId,
 }
 
+#[derive(Debug, Clone)]
+pub struct TypedReferencePattern {
+    pub inner_pattern: Box<TypedPattern>,
+    pub span: SpanId,
+}
+
 // <pattern> ::= <literal> | <variable> | <enum> | <struc>
 // <literal> ::= "(" ")" | "\"" <ident> "\"" | [0-9]+ | "'" [a-z] "'" | "None"
 // <variable> ::= <ident>
@@ -324,6 +330,7 @@ pub enum TypedPattern {
     Enum(TypedEnumPattern),
     Struct(TypedStructPattern),
     Wildcard(SpanId),
+    Reference(TypedReferencePattern),
 }
 
 impl TypedPattern {
@@ -354,6 +361,7 @@ impl TypedPattern {
                 }
             }
             TypedPattern::Wildcard(_) => (),
+            TypedPattern::Reference(refer) => refer.inner_pattern.all_bindings_rec(bindings),
         }
     }
     pub fn has_innumerable_literal(&self) -> bool {
@@ -373,6 +381,7 @@ impl TypedPattern {
                 .iter()
                 .any(|field_pattern| field_pattern.pattern.has_innumerable_literal()),
             TypedPattern::Wildcard(_span_id) => false,
+            TypedPattern::Reference(refer) => refer.inner_pattern.has_innumerable_literal(),
         }
     }
     pub fn span_id(&self) -> SpanId {
@@ -387,6 +396,7 @@ impl TypedPattern {
             TypedPattern::Enum(enum_pattern) => enum_pattern.span,
             TypedPattern::Struct(struct_pattern) => struct_pattern.span,
             TypedPattern::Wildcard(span) => *span,
+            TypedPattern::Reference(refer) => refer.span,
         }
     }
 }
@@ -3150,6 +3160,25 @@ impl TypedModule {
                 };
                 Ok(TypedPattern::Struct(struct_pattern))
             }
+            ParsedPattern::Reference(reference_pattern) => {
+                let Type::Reference(r) = self.types.get(target_type_id) else {
+                    return failf!(
+                        reference_pattern.span,
+                        "Reference pattern will never match non-reference {}",
+                        self.type_id_to_string(target_type_id)
+                    );
+                };
+                let inner_pattern = self.compile_pattern(
+                    reference_pattern.inner,
+                    r.inner_type,
+                    scope_id,
+                    allow_bindings,
+                )?;
+                Ok(TypedPattern::Reference(TypedReferencePattern {
+                    inner_pattern: Box::new(inner_pattern),
+                    span: reference_pattern.span,
+                }))
+            }
         }
     }
 
@@ -5632,6 +5661,7 @@ impl TypedModule {
                     TypedExpr::Variable(target_expr.clone()),
                     &mut setup_statements,
                     &mut binding_statements,
+                    false,
                     arm_scope_id,
                 )?;
 
@@ -5733,6 +5763,7 @@ impl TypedModule {
         target_expr: TypedExpr,
         setup_statements: &mut Vec<TypedStmt>,
         binding_statements: &mut Vec<TypedStmt>,
+        is_immediately_inside_reference_pattern: bool,
         arm_scope_id: ScopeId,
     ) -> TyperResult<TypedExpr> {
         match pattern {
@@ -5740,13 +5771,19 @@ impl TypedModule {
                 let mut boolean_exprs: Vec<TypedExpr> =
                     Vec::with_capacity(struct_pattern.fields.len());
                 for pattern_field in struct_pattern.fields.iter() {
+                    let struct_type = self.types.get_type_id_dereferenced(target_expr.get_type());
+                    let is_referencing = is_immediately_inside_reference_pattern;
                     let get_struct_field = TypedExpr::StructFieldAccess(FieldAccess {
                         base: Box::new(target_expr.clone()),
                         target_field: pattern_field.name,
                         target_field_index: pattern_field.field_index,
-                        result_type: pattern_field.field_type_id,
-                        struct_type: target_expr.get_type(),
-                        is_referencing: false,
+                        result_type: if is_referencing {
+                            self.types.add_reference_type(pattern_field.field_type_id)
+                        } else {
+                            pattern_field.field_type_id
+                        },
+                        struct_type,
+                        is_referencing,
                         span: struct_pattern.span,
                     });
                     let var_name = self
@@ -5761,19 +5798,26 @@ impl TypedModule {
                         struct_field_variable.variable_expr,
                         setup_statements,
                         binding_statements,
+                        false,
                         arm_scope_id,
                     )?;
                     boolean_exprs.push(condition);
                 }
                 let final_condition = boolean_exprs
                     .into_iter()
-                    .reduce(|a, b| self.synth_binary_op(BinaryOpKind::And, a, b))
+                    .reduce(|a, b| self.synth_binary_bool_op(BinaryOpKind::And, a, b))
                     .unwrap();
                 Ok(final_condition)
             }
             TypedPattern::Enum(enum_pattern) => {
+                let is_referencing = is_immediately_inside_reference_pattern;
+                let is_variant_target = if is_referencing {
+                    self.synth_dereference(target_expr.clone())
+                } else {
+                    target_expr.clone()
+                };
                 let is_variant_condition = TypedExpr::EnumIsVariant(TypedEnumIsVariantExpr {
-                    target_expr: Box::new(target_expr.clone()),
+                    target_expr: Box::new(is_variant_target),
                     variant_name: enum_pattern.variant_tag_name,
                     variant_index: enum_pattern.variant_index,
                     span: enum_pattern.span,
@@ -5781,24 +5825,31 @@ impl TypedModule {
                 let inner_condition = if let Some(payload_pattern) = enum_pattern.payload.as_ref() {
                     let enum_type = self.types.get(enum_pattern.enum_type_id).expect_enum();
                     let variant = enum_type.variant_by_index(enum_pattern.variant_index).unwrap();
+                    let variant_name = variant.name;
+                    let variant_index = variant.index;
                     let Some(payload_type_id) = variant.payload else {
                         return make_fail_span(
                             "Impossible pattern: variant does not have payload",
                             enum_pattern.span,
                         );
                     };
+                    let result_type_id = if is_immediately_inside_reference_pattern {
+                        self.types.add_reference_type(payload_type_id)
+                    } else {
+                        payload_type_id
+                    };
                     let get_payload_expr = TypedExpr::EnumGetPayload(GetEnumPayload {
                         target_expr: Box::new(target_expr.clone()),
-                        result_type_id: payload_type_id,
-                        variant_name: variant.name,
-                        variant_index: variant.index,
-                        is_referencing: false,
+                        result_type_id,
+                        variant_name,
+                        variant_index,
+                        is_referencing: is_immediately_inside_reference_pattern,
                         span: enum_pattern.span,
                     });
                     let var_name = self
                         .ast
                         .identifiers
-                        .intern(format!("payload_{}", self.name_of(variant.name)));
+                        .intern(format!("payload_{}", self.name_of(variant_name)));
                     let payload_variable =
                         self.synth_variable_defn_simple(var_name, get_payload_expr, arm_scope_id);
                     setup_statements.push(payload_variable.defn_stmt);
@@ -5807,6 +5858,7 @@ impl TypedModule {
                         payload_variable.variable_expr,
                         setup_statements,
                         binding_statements,
+                        false,
                         arm_scope_id,
                     )?;
                     Some(condition)
@@ -5816,13 +5868,11 @@ impl TypedModule {
                 let final_condition = match inner_condition {
                     None => is_variant_condition,
                     Some(TypedExpr::Bool(true, _)) => is_variant_condition,
-                    Some(inner_condition) => TypedExpr::BinaryOp(BinaryOp {
-                        kind: BinaryOpKind::And,
-                        ty: BOOL_TYPE_ID,
-                        lhs: Box::new(is_variant_condition),
-                        rhs: Box::new(inner_condition),
-                        span: enum_pattern.span,
-                    }),
+                    Some(inner_condition) => self.synth_binary_bool_op(
+                        BinaryOpKind::And,
+                        is_variant_condition,
+                        inner_condition,
+                    ),
                 };
                 Ok(final_condition)
             }
@@ -5834,55 +5884,99 @@ impl TypedModule {
                 // `true` because variable patterns always match
                 Ok(TypedExpr::Bool(true, variable_pattern.span))
             }
-            TypedPattern::LiteralUnit(span) => Ok(TypedExpr::Bool(true, *span)),
-            TypedPattern::LiteralChar(byte, span) => {
-                let bin_op =
-                    self.synth_equals_binop(target_expr, TypedExpr::Char(*byte, *span), *span);
-                Ok(bin_op)
-            }
-            TypedPattern::LiteralInteger(int_value, span) => {
-                let bin_op = BinaryOp {
-                    kind: BinaryOpKind::Equals,
-                    ty: BOOL_TYPE_ID,
-                    lhs: Box::new(target_expr),
-                    rhs: Box::new(TypedExpr::Integer(TypedIntegerExpr {
-                        value: *int_value,
-                        span: *span,
-                    })),
-                    span: *span,
-                };
-                Ok(TypedExpr::BinaryOp(bin_op))
-            }
-            TypedPattern::LiteralFloat(float_value, span) => {
-                let bin_op = BinaryOp {
-                    kind: BinaryOpKind::Equals,
-                    ty: BOOL_TYPE_ID,
-                    lhs: Box::new(target_expr),
-                    rhs: Box::new(TypedExpr::Float(TypedFloatExpr {
-                        value: *float_value,
-                        span: *span,
-                    })),
-                    span: *span,
-                };
-                Ok(TypedExpr::BinaryOp(bin_op))
-            }
-            TypedPattern::LiteralBool(bool_value, span) => {
-                let bin_op = self.synth_equals_binop(
-                    target_expr,
-                    TypedExpr::Bool(*bool_value, *span),
-                    *span,
-                );
-                Ok(bin_op)
-            }
-            TypedPattern::LiteralString(string_value, span) => {
-                let condition = self.synth_equals_call(
-                    target_expr,
-                    TypedExpr::Str(string_value.clone(), *span),
-                    *span,
-                )?;
-                Ok(condition)
-            }
             TypedPattern::Wildcard(span) => Ok(TypedExpr::Bool(true, *span)),
+            TypedPattern::Reference(reference_pattern) => {
+                let target_expr = if is_immediately_inside_reference_pattern {
+                    self.synth_dereference(target_expr)
+                } else {
+                    target_expr
+                };
+                let inner_condition = self.compile_pattern_in_scope(
+                    &reference_pattern.inner_pattern,
+                    target_expr,
+                    setup_statements,
+                    binding_statements,
+                    true,
+                    arm_scope_id,
+                )?;
+                Ok(inner_condition)
+            }
+            pat => {
+                let is_literal = match pat {
+                    TypedPattern::LiteralUnit(_) => true,
+                    TypedPattern::LiteralChar(_, _) => true,
+                    TypedPattern::LiteralInteger(_, _) => true,
+                    TypedPattern::LiteralFloat(_, _) => true,
+                    TypedPattern::LiteralBool(_, _) => true,
+                    TypedPattern::LiteralString(_, _) => true,
+                    _ => false,
+                };
+                let target_expr = if is_literal {
+                    // Literal patterns don't do anything special for references; they just need to
+                    // function on the de-rereferenced target. Whereas structs, enums, even
+                    // reference patterns do different and unique things when matching on
+                    // references
+                    self.synth_dereference(target_expr)
+                } else {
+                    target_expr
+                };
+                match pat {
+                    TypedPattern::LiteralUnit(span) => Ok(TypedExpr::Bool(true, *span)),
+                    TypedPattern::LiteralChar(byte, span) => {
+                        let bin_op = self.synth_equals_binop(
+                            target_expr,
+                            TypedExpr::Char(*byte, *span),
+                            *span,
+                        );
+                        Ok(bin_op)
+                    }
+                    TypedPattern::LiteralInteger(int_value, span) => {
+                        let bin_op = BinaryOp {
+                            kind: BinaryOpKind::Equals,
+                            ty: BOOL_TYPE_ID,
+                            lhs: Box::new(target_expr),
+                            rhs: Box::new(TypedExpr::Integer(TypedIntegerExpr {
+                                value: *int_value,
+                                span: *span,
+                            })),
+                            span: *span,
+                        };
+                        Ok(TypedExpr::BinaryOp(bin_op))
+                    }
+                    TypedPattern::LiteralFloat(float_value, span) => {
+                        let bin_op = BinaryOp {
+                            kind: BinaryOpKind::Equals,
+                            ty: BOOL_TYPE_ID,
+                            lhs: Box::new(target_expr),
+                            rhs: Box::new(TypedExpr::Float(TypedFloatExpr {
+                                value: *float_value,
+                                span: *span,
+                            })),
+                            span: *span,
+                        };
+                        Ok(TypedExpr::BinaryOp(bin_op))
+                    }
+                    TypedPattern::LiteralBool(bool_value, span) => {
+                        let bin_op = self.synth_equals_binop(
+                            target_expr,
+                            TypedExpr::Bool(*bool_value, *span),
+                            *span,
+                        );
+                        Ok(bin_op)
+                    }
+                    TypedPattern::LiteralString(string_value, span) => {
+                        let condition = self.synth_equals_call(
+                            target_expr,
+                            TypedExpr::Str(string_value.clone(), *span),
+                            *span,
+                        )?;
+                        Ok(condition)
+                    }
+                    other_pat => {
+                        unreachable!("should only be literal patterns from here: {other_pat:?}")
+                    }
+                }
+            }
         }
     }
 
@@ -6412,7 +6506,7 @@ impl TypedModule {
 
         let patterns_combined_with_and = conditions
             .into_iter()
-            .reduce(|a, b| self.synth_binary_op(BinaryOpKind::And, a, b))
+            .reduce(|a, b| self.synth_binary_bool_op(BinaryOpKind::And, a, b))
             .unwrap();
         Ok(MatchingCondition {
             all_patterns,
@@ -6456,6 +6550,7 @@ impl TypedModule {
                     target_var.variable_expr,
                     setup_statements,
                     binding_statements,
+                    false,
                     ctx.scope_id,
                 )?;
                 all_patterns.push(pattern);
@@ -6611,8 +6706,13 @@ impl TypedModule {
                 BinaryOpKind::NotEquals => Ok(BOOL_TYPE_ID),
                 _ => failf!(binary_op.span, "Invalid operation on unit: {}", kind),
             },
-            _other => {
-                failf!(binary_op.span, "Invalid left-hand side of binary operation {}", kind)
+            other => {
+                failf!(
+                    binary_op.span,
+                    "Invalid left-hand side of binary operation {}: {}",
+                    kind,
+                    self.type_to_string(other, false)
+                )
             }
         }?;
 
@@ -10773,7 +10873,12 @@ impl TypedModule {
             .add(ParsedTypeExpression::TypeOf(parse::ParsedTypeOf { target_expr: expr, span }))
     }
 
-    fn synth_binary_op(&mut self, kind: BinaryOpKind, lhs: TypedExpr, rhs: TypedExpr) -> TypedExpr {
+    fn synth_binary_bool_op(
+        &mut self,
+        kind: BinaryOpKind,
+        lhs: TypedExpr,
+        rhs: TypedExpr,
+    ) -> TypedExpr {
         let span = self.ast.spans.extend(lhs.get_span(), rhs.get_span());
         TypedExpr::BinaryOp(BinaryOp {
             kind,

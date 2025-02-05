@@ -2471,7 +2471,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                                 .as_basic_value_enum()
                                 .into())
                         }
-                        _ => unreachable!("unreachable Equals/NotEquals call on type"),
+                        t => unreachable!(
+                            "unreachable Equals/NotEquals call on type: {}",
+                            self.module.type_to_string(t, false)
+                        ),
                     }
                 }
                 BinaryOpKind::Less
