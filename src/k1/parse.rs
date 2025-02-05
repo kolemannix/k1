@@ -365,7 +365,7 @@ impl Display for Variable {
 #[derive(Debug, Clone)]
 pub struct FieldAccess {
     pub base: ParsedExpressionId,
-    pub target: Identifier,
+    pub field_name: Identifier,
     pub type_args: Vec<NamedTypeArg>,
     pub is_coalescing: bool,  // ?.
     pub is_referencing: bool, // *.
@@ -2387,7 +2387,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     let target = self.intern_ident_token(target);
                     Some(self.add_expression(ParsedExpression::FieldAccess(FieldAccess {
                         base: result,
-                        target,
+                        field_name: target,
                         type_args,
                         is_coalescing,
                         is_referencing: trailing_asterisk.is_some(),
@@ -3609,7 +3609,12 @@ impl ParsedModule {
                 f.write_str(self.identifiers.get_name(var.name.name))?;
                 Ok(())
             }
-            ParsedExpression::FieldAccess(acc) => f.write_fmt(format_args!("{:?}", acc)),
+            ParsedExpression::FieldAccess(acc) => {
+                self.display_expr_id(acc.base, f)?;
+                f.write_str(".")?;
+                f.write_str(self.identifiers.get_name(acc.field_name))?;
+                Ok(())
+            }
             ParsedExpression::Block(block) => f.write_fmt(format_args!("{:?}", block)),
             ParsedExpression::If(if_expr) => f.write_fmt(format_args!("{:?}", if_expr)),
             ParsedExpression::While(while_expr) => {

@@ -1,8 +1,12 @@
 fn main(): int {
-  let x = switch "asdf" {
-    "asdf" -> true,
-    _ -> false
+  let* x = some(42);
+  #debug while x.* is .Some(xx) {
+    println("\{xx}");
+    let new = xx - 1;
+    if new == 0 break()
+    else { 
+      x <- some(xx - 1);
+    }
   };
-  assertEquals(x, true);
   0
 }
