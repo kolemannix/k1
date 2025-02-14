@@ -75,7 +75,7 @@ fn printIt[T: Show](value: T): unit  {
 }
 
 fn print(s: string): unit {
-  libc/write(1, s.buffer.data, s.len(), 0);
+  libc/write(1, s.buffer.data as Pointer, s.len(), 0);
   ()
 }
 fn println(s: string): unit {
@@ -83,7 +83,7 @@ fn println(s: string): unit {
 }
 
 fn eprint(s: string): unit {
-  libc/write(2, s.buffer.data, s.len(), 0);
+  libc/write(2, s.buffer.data as Pointer, s.len(), 0);
   ()
 }
 fn eprintln(s: string): unit {
@@ -113,7 +113,7 @@ ns sys {
 
   fn readLine(maxLengthBytes: u64): Result[string, string] {
     let* buffer = Buffer/_allocate[byte](maxLengthBytes);
-    let bytesRead = libc/read(0, buffer.data, buffer.len, 0);
+    let bytesRead = libc/read(0, buffer.data as Pointer, buffer.len, 0);
     
     if bytesRead < 0 {
       return(.Err("Failed to read line"));
@@ -123,6 +123,7 @@ ns sys {
     
     // Remove trailing newline if present
     if bytesRead > 0 and buffer.get(length) == ('\n' as u8) {
+      // nocommit buffer.set(length, 0);
       buffer.set(length, 0);
       buffer.len* <- length;
     };

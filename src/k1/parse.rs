@@ -859,7 +859,6 @@ pub struct ParsedTypeOf {
 #[derive(Debug, Clone)]
 pub enum ParsedTypeExpression {
     Builtin(SpanId),
-    Integer(ParsedNumericType),
     Struct(StructType),
     TypeApplication(TypeApplication),
     Optional(ParsedOptional),
@@ -872,15 +871,9 @@ pub enum ParsedTypeExpression {
 
 impl ParsedTypeExpression {
     #[inline]
-    pub fn is_integer(&self) -> bool {
-        matches!(self, ParsedTypeExpression::Integer(_))
-    }
-
-    #[inline]
     pub fn get_span(&self) -> SpanId {
         match self {
             ParsedTypeExpression::Builtin(span) => *span,
-            ParsedTypeExpression::Integer(int) => int.span,
             ParsedTypeExpression::Struct(struc) => struc.span,
             ParsedTypeExpression::TypeApplication(app) => app.span,
             ParsedTypeExpression::Optional(opt) => opt.span,
@@ -926,8 +919,9 @@ pub struct ParsedFunction {
     pub type_params: Vec<ParsedTypeParam>,
     pub params: Vec<FnArgDef>,
     pub context_params: Vec<FnArgDef>,
-    pub ret_type: Option<ParsedTypeExpressionId>,
+    pub ret_type: ParsedTypeExpressionId,
     pub block: Option<Block>,
+    pub signature_span: SpanId,
     pub span: SpanId,
     pub linkage: Linkage,
     pub directives: Vec<ParsedDirective>,
@@ -1477,6 +1471,7 @@ pub fn print_error(module: &ParsedModule, parse_error: &ParseError) {
                 token.kind.to_string()
             };
 
+            eprintln!("{message} at '{}'\n", got_str);
             write_error_location(
                 &mut stderr,
                 &module.spans,
@@ -1485,7 +1480,7 @@ pub fn print_error(module: &ParsedModule, parse_error: &ParseError) {
                 ErrorLevel::Error,
             )
             .unwrap();
-            eprintln!("{message} at '{}'\n", got_str);
+            eprintln!();
         }
     }
 }
@@ -2139,53 +2134,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             Ok(Some(builtin_id))
         } else if first.kind == K::Ident {
             let ident_chars = self.get_token_chars(first);
-            let maybe_constant_expr = match ident_chars {
-                "u8" => Some(ParsedTypeExpression::Integer(ParsedNumericType {
-                    width: NumericWidth::B8,
-                    signed: false,
-                    span: first.span,
-                })),
-                "u16" => Some(ParsedTypeExpression::Integer(ParsedNumericType {
-                    width: NumericWidth::B16,
-                    signed: false,
-                    span: first.span,
-                })),
-                "u32" => Some(ParsedTypeExpression::Integer(ParsedNumericType {
-                    width: NumericWidth::B32,
-                    signed: false,
-                    span: first.span,
-                })),
-                "u64" => Some(ParsedTypeExpression::Integer(ParsedNumericType {
-                    width: NumericWidth::B64,
-                    signed: false,
-                    span: first.span,
-                })),
-                "i8" => Some(ParsedTypeExpression::Integer(ParsedNumericType {
-                    width: NumericWidth::B8,
-                    signed: true,
-                    span: first.span,
-                })),
-                "i16" => Some(ParsedTypeExpression::Integer(ParsedNumericType {
-                    width: NumericWidth::B16,
-                    signed: true,
-                    span: first.span,
-                })),
-                "i32" => Some(ParsedTypeExpression::Integer(ParsedNumericType {
-                    width: NumericWidth::B32,
-                    signed: true,
-                    span: first.span,
-                })),
-                "i64" => Some(ParsedTypeExpression::Integer(ParsedNumericType {
-                    width: NumericWidth::B64,
-                    signed: true,
-                    span: first.span,
-                })),
-                _ => None,
-            };
-            if let Some(constant_expr) = maybe_constant_expr {
-                self.advance();
-                Ok(Some(self.module.type_expressions.add(constant_expr)))
-            } else if ident_chars == "typeOf" {
+            if ident_chars == "typeOf" {
                 self.advance();
                 self.expect_eat_token(K::OpenParen)?;
                 let target_expr = self.expect_expression()?;
@@ -3238,7 +3187,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             };
         let (context_args, args, args_span) = self.eat_fndef_args()?;
         self.expect_eat_token(K::Colon)?;
-        let ret_type = self.parse_type_expression()?;
+        let ret_type = self.expect_type_expression()?;
         let additional_type_constraints = if self.maybe_consume_next(K::KeywordWhere).is_some() {
             // FIXME(brittle parsing): Has to backtrack to un-consume the next token in the fn call;
             // the open brace
@@ -3253,6 +3202,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         } else {
             vec![]
         };
+        let signature_span = self.extend_to_here(func_name.span);
         let block = self.parse_block()?;
         let end_span = block.as_ref().map(|b| b.span).unwrap_or(args_span);
         let span = self.extend_span(fn_keyword.span, end_span);
@@ -3263,6 +3213,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             context_params: context_args,
             ret_type,
             block,
+            signature_span,
             span,
             linkage,
             directives,
@@ -3737,19 +3688,6 @@ impl ParsedModule {
         f: &mut impl Write,
     ) -> std::fmt::Result {
         match self.type_expressions.get(ty_expr_id) {
-            ParsedTypeExpression::Integer(n) => {
-                let s = match (n.signed, n.width) {
-                    (true, NumericWidth::B8) => "i8",
-                    (true, NumericWidth::B16) => "i16",
-                    (true, NumericWidth::B32) => "i32",
-                    (true, NumericWidth::B64) => "i64",
-                    (false, NumericWidth::B8) => "u8",
-                    (false, NumericWidth::B16) => "u16",
-                    (false, NumericWidth::B32) => "u32",
-                    (false, NumericWidth::B64) => "u64",
-                };
-                f.write_str(s)
-            }
             ParsedTypeExpression::Struct(struct_type) => {
                 f.write_str("{ ")?;
                 for field in struct_type.fields.iter() {

@@ -168,7 +168,7 @@ fn type_parameter_single() -> ParseResult<()> {
 
 #[test]
 fn type_parameter_multi() -> ParseResult<()> {
-    let (module, type_expr) = test_single_type_expr("Map[u8, List[u8]]")?;
+    let (module, type_expr) = test_single_type_expr("Map[bool, List[bool]]")?;
     let ParsedTypeExpression::TypeApplication(app) = type_expr else {
         panic!("Expected type application")
     };
@@ -180,11 +180,7 @@ fn type_parameter_multi() -> ParseResult<()> {
     };
     assert!(matches!(
         module.type_expressions.get(inner_app.args[0].type_expr),
-        ParsedTypeExpression::Integer(ParsedNumericType {
-            width: NumericWidth::B8,
-            signed: false,
-            ..
-        })
+        ParsedTypeExpression::TypeApplication(_)
     ));
     Ok(())
 }
@@ -273,15 +269,8 @@ fn generic_method_call_lhs_expr() -> Result<(), ParseError> {
     assert_eq!(fn_call.name.name, parser.identifiers.intern("getFn"));
     assert_eq!(call.name.name, parser.identifiers.intern("baz"));
     let type_arg = parser.type_expressions.get(call.type_args[0].type_expr);
-    assert!(type_arg.is_integer());
+    assert!(matches!(type_arg, ParsedTypeExpression::TypeApplication(_)));
     assert!(matches!(parser.expressions.get(call.args[1].value), ParsedExpression::Literal(_)));
-    Ok(())
-}
-
-#[test]
-fn char_type() -> ParseResult<()> {
-    let (_module, result) = test_single_type_expr("u8")?;
-    assert!(matches!(result, ParsedTypeExpression::Integer(_)));
     Ok(())
 }
 
@@ -383,7 +372,7 @@ fn when_pattern() -> ParseResult<()> {
 #[test]
 fn empty_struct() -> ParseResult<()> {
     let input = r#"{}"#;
-    let (module, expr, expr_id) = test_single_expr_with_id(input)?;
+    let (_module, expr, _expr_id) = test_single_expr_with_id(input)?;
     eprintln!("{:?}", &expr);
     assert!(matches!(expr, ParsedExpression::Struct(_)));
     Ok(())

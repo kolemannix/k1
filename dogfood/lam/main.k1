@@ -1,0 +1,30 @@
+deftype Interp = {
+  typeEnv: HashMap[string, Type],
+  sigEnv: HashMap[string, TypeSignature]
+}
+deftype Expr = either Int(i64), Abs, App
+
+// 'in' being a keyword sucks
+deftype TypeSignature = { vars: List[Type], ins: List[Type], out: Type }
+
+fn compile(expr: string): Result[Expr, string] {
+   println("Compiling: \{expr}");
+  .Err("unimplemented")
+}
+fn run(args: Buffer[string]): Result[i32, string] {
+  if args.len > 1 {
+    for arg in args.drop(1) do {
+      compile(arg)
+    };
+  };
+  loop {
+    // TODO(dogfood): easy mapError before try
+    let expr = sys/readLine(2048).try; 
+    compile(expr);
+  };
+}
+
+fn main(argCount: u32, args: Pointer): i32 {
+  let args = sys/parseMainArgs(argCount, args);
+  run(args).!
+}
