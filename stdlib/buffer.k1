@@ -10,18 +10,25 @@ ns Buffer {
 
   fn bufferLenBytes[T](count: u64): u64 { count * sizeOfStride[T]() }
 
+  fn dataPointer[T](self: Buffer[T]): Pointer { self.data as Pointer }
+
   fn fromRawParts[T](len: u64, data: Pointer): Buffer[T] { 
-    { len: len, data: data }
+    { len: len, data: data as T* }
+  }
+
+  fn fromBaseAndCount[T](len: u64, data: T*): Buffer[T] { 
+    { len: len, data }
   }
 
   fn _allocate[T](count: u64): Buffer[T] {
-    let data = if count == 0 {
+    let ptr = if count == 0 {
       Pointer/null()
     } else {
       let sizeBytes = bufferLenBytes[T](count);
       libc/malloc(sizeBytes)
     };
-    { len: count, data: data }
+    let data = ptr as T*;
+    { len: count, data }
   }
 
   fn _copyFrom[T](source: Buffer[T], dest: Buffer[T], count: u64): unit {
@@ -32,7 +39,7 @@ ns Buffer {
       crash("Buffer copy dest index out of bounds: \{count}")
     };
     let numBytes = bufferLenBytes[T](count);
-    libc/memcpy(dst = dest.data, src = source.data, count = numBytes);
+    libc/memcpy(dst = dest.dataPointer(), src = source.dataPointer(), count = numBytes);
     ()
   }
 
@@ -68,7 +75,7 @@ ns Buffer {
     };
     let end = if end >  self.len self.len else end;
     let newLen = end - start;
-    let newBase = self.getRef(start) as Pointer;
+    let newBase = self.getRef(start);
     { len: newLen, data: newBase }
   }
 
@@ -79,7 +86,7 @@ ns Buffer {
     if index >= self.len {
       crash("Buffer index out of bounds")
     };
-    self.data.refAtIndex[T](index)
+    self.dataPointer().refAtIndex[T](index)
   }
 
   fn set[T](self: Buffer[T], index: u64, elem: T): unit {
@@ -94,9 +101,9 @@ ns Buffer {
 
   fn cloned[T](self: Buffer[T]): Buffer[T] {
     let numBytes = self.lenBytes();
-    let newBuffer = libc/malloc(numBytes);
-    libc/memcpy(dst = newBuffer, src = self.data, count = numBytes);
-    { len: self.len, data: newBuffer }
+    let newBase = libc/malloc(numBytes);
+    libc/memcpy(dst = newBase, src = self.dataPointer(), count = numBytes);
+    { len: self.len, data: newBase as T* }
   }
 
   fn isEmpty[T](self: Buffer[T]): bool {
@@ -165,7 +172,7 @@ ns Buffer {
 impl Equals for Buffer[u8] {
   fn equals(self: Buffer[u8], other: Buffer[u8]): bool {
     if self.len != other.len false else {
-      libc/memcmp(self.data, other.data, self.lenBytes()) == 0
+      libc/memcmp(self.dataPointer(), other.dataPointer(), self.lenBytes()) == 0
     }
   }
 }
@@ -173,7 +180,7 @@ impl Equals for Buffer[u8] {
 impl Equals for Buffer[char] {
   fn equals(self: Buffer[char], other: Buffer[char]): bool {
     if self.len != other.len false else {
-      libc/memcmp(self.data, other.data, self.lenBytes()) == 0
+      libc/memcmp(self.dataPointer(), other.dataPointer(), self.lenBytes()) == 0
     }
   }
 }
@@ -181,7 +188,7 @@ impl Equals for Buffer[char] {
 impl Equals for Buffer[int] {
   fn equals(self: Buffer[int], other: Buffer[int]): bool {
     if self.len != other.len false else {
-      libc/memcmp(self.data, other.data, self.lenBytes()) == 0
+      libc/memcmp(self.dataPointer(), other.dataPointer(), self.lenBytes()) == 0
     }
   }
 }

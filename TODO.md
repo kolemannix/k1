@@ -5,12 +5,12 @@ New tagline? "C with typeclasses and tagged unions"
   ->              ^^^^^^^^^^^^^^^^
 	Match arm has wrong type. Expected T but got bool
 
-- [ ] *Specializing functions on their provided closures to allow inlining and static dispatch*
 - [ ] Bug: technically I should require that the blanket impl params appear in the Self type expression
+- [ ] Bug: Fix returning Result from main
 - [ ] Typecheck 'main'
 - [ ] Dogfood idea: try to write a 'niched' integer abstraction (-1 as 'not found' but safely, vs using option and wasting space + adding more code)
       `impl Unwrap<Inner = u32> for i64`
-- [ ] Matching push
+- [x] Matching push
   - [x] boolean chains w/ binding ifs
   - [x] Don't codegen conditions for arms that don't run
   - [x] Remove 'statement conditions'
@@ -20,12 +20,13 @@ New tagline? "C with typeclasses and tagged unions"
   - [x] Move pattern bindings for field access and enum payload back to variables to fully remove duplication (we can do this now that we have a place to put them that's per-arm)
   - [x] Look into converting 'matching if' to also compile to a TypedMatch
   - [x] Binding `while`
-  - [ ] Matching on references
-    - [ ] Match to get reference to each struct field, for example, use * for a dereferencing match
-    - [ ] Match to get reference to enum payload
+  - [x] Matching on references
+    - [x] Match to get reference to each struct field, for example, use * for a dereferencing match
+    - [x] Match to get reference to enum payload
   - [x] ASSERT FAILED: true != true at core.k1:23
 - [ ] Write a function to typecheck TypedExprs, so we can typecheck synthesized code in debug builds!
 - [ ] Fix closure types / get static dispatch for functions taking a closure directly
+- [ ] *Specializing functions on their provided closures to allow inlining and static dispatch*
 - [ ] Implicit conversions based on a special ability that integrates with type inference (like Mojo's ImplicitlyIntable, etc)
 - [ ] Private functions? Private anything? So hard to call, such a philosophical question about hiding, safety, skill-floor vs skill-ceiling
 - [x] string interp at end puts unnecessary empty string part: `putString(__sb_1001, "");`

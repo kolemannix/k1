@@ -11,7 +11,13 @@ impl Display for TypedModule {
         f.write_str("--- TYPES ---\n")?;
         for (id, ty) in self.types.iter() {
             write!(f, "type {:02} {:10} ", id, ty.kind_name())?;
-            self.display_type(ty, true, f)?;
+            self.display_type(ty, false, f)?;
+            let info = self.types.get_type_variable_info(id);
+            write!(
+                f,
+                "   [ tvars: {}, inference: {} ]",
+                info.type_variable_count, info.inference_variable_count
+            )?;
             f.write_str("\n")?;
         }
         f.write_str("--- Namespaces ---\n")?;
@@ -878,6 +884,29 @@ impl TypedModule {
                 s.push_str(sep)
             }
             write!(s, "{}", self.type_id_to_string(*type_id)).unwrap();
+            first = false;
+        }
+        s
+    }
+
+    pub fn pretty_print_type_substitutions(
+        &self,
+        types: &[TypeSubstitutionPair],
+        sep: &str,
+    ) -> String {
+        let mut s = String::new();
+        let mut first = true;
+        for pair in types.iter() {
+            if !first {
+                s.push_str(sep)
+            }
+            write!(
+                s,
+                "{} -> {}",
+                self.type_id_to_string_ext(pair.from, false),
+                self.type_id_to_string_ext(pair.to, false)
+            )
+            .unwrap();
             first = false;
         }
         s

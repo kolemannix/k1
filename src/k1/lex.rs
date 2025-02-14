@@ -462,6 +462,11 @@ impl Span {
     }
 
     pub fn extended(&self, other: Span) -> Span {
+        if cfg!(debug_assertions) {
+            if !(other.end() >= self.end()) {
+                panic!("Attempt to extend span from {} to {}", self.end(), other.end())
+            }
+        }
         debug_assert!(other.end() >= self.end());
         let mut copied = *self;
         let new_end = other.end();

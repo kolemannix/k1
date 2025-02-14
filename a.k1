@@ -1,25 +1,16 @@
+ability Add[Rhs, impl Output] {
+  fn add(self: Self, rhs: Rhs): Output
+}
+
+fn some[U](value: U): Opt[U].Some { Opt.Some[U](value) }
+fn identity[T](value: T): T { value }
 fn main(): int {
-  let* x = some(42);
-  #debug while x.* is .Some(xx) {
-    println("\{xx}");
-    if xx == 0 break()
-    else { 
-      x <- some(xx - 1);
-    }
-  };
+  let a = #debug identity(true): bool;
+  // #debug identity(true);
+  let b = #debug identity(identity(12));
+  let c = #debug some(identity(13));
 
-  let* point = { x: 5, y: 2 };
-  if point is { x, y: 2 }* {
-    println("x is \{x}")
-  };
+  // let d: u32 = Add/add(identity(1), identity(2));
 
-  x <- some(5);
-  #debug while x is .Some(xx)* {
-    println("\{xx}");
-    if xx.* == 0 break()
-    else { 
-      xx <- xx.* - 1;
-    }
-  };
   0
 }

@@ -3,16 +3,25 @@
 
 ///////////
 // Types //
-deftype unit = builtin
-deftype char = builtin
-deftype bool = builtin
-deftype never = builtin
+deftype u8  = builtin
+deftype u16 = builtin
+deftype u32 = builtin
+deftype u64 = builtin
+deftype i8  = builtin
+deftype i16 = builtin
+deftype i32 = builtin
+deftype i64 = builtin
+
+deftype unit    = builtin
+deftype char    = builtin
+deftype bool    = builtin
+deftype never   = builtin
 deftype Pointer = builtin
 
 deftype f32 = builtin
 deftype f64 = builtin
 
-deftype Buffer[T] = { len: u64, data: Pointer }
+deftype Buffer[T] = { len: u64, data: T* }
 
 deftype List[T] = { len: u64, private buffer: Buffer[T] }
 deftype string = { buffer: Buffer[char] }
