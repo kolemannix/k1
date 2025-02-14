@@ -1,16 +1,20 @@
-ability Add[Rhs, impl Output] {
-  fn add(self: Self, rhs: Rhs): Output
+
+fn combine[T](a: T, b: T): T {
+  a
 }
 
 fn some[U](value: U): Opt[U].Some { Opt.Some[U](value) }
+fn get[UU](value: Opt[UU]): UU { if value is .Some(u) u else crash("asdf") }
 fn identity[T](value: T): T { value }
 fn main(): int {
-  let a = #debug identity(true): bool;
+  let a = identity(true): bool;
   // #debug identity(true);
-  let b = #debug identity(identity(12));
-  let c = #debug some(identity(13));
+  let b = identity(identity(12));
+  let c = some(identity(13));
 
-  // let d: u32 = Add/add(identity(1), identity(2));
+  get(some(10)): u32;
+  let d: u32 = #debug combine(identity(4000), get(some(5000)));
+  //let d: u32 = combine(identity(10), identity(get(some(10))));
 
   0
 }
