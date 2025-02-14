@@ -73,6 +73,17 @@ pub const ITERABLE_ABILITY_ID: AbilityId = AbilityId(7);
 
 pub const CLOSURE_ENV_PARAM_NAME: &str = "__clos_env";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TypeSubstitutionPair {
+    from: TypeId,
+    to: TypeId,
+}
+
+pub struct InferenceContext {
+    pub origin_stack: Vec<ParsedExpressionId>,
+    pub constraints: Vec<TypeSubstitutionPair>,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct EvalExprContext {
     scope_id: ScopeId,
@@ -107,12 +118,6 @@ impl EvalExprContext {
     fn with_scope(&self, scope_id: ScopeId) -> EvalExprContext {
         EvalExprContext { scope_id, ..*self }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TypeSubstitutionPair {
-    from: TypeId,
-    to: TypeId,
 }
 
 enum CoerceResult {
@@ -559,6 +564,7 @@ impl NamedType for &SimpleNamedType {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct TypeSolutionSet {
     pub solutions: Vec<PendingTypeSolution>,
 }
@@ -602,7 +608,7 @@ impl TypeSolutionSet {
     }
 }
 
-enum TypeSolutionResult {
+enum TypeUnificationResult {
     Matching,
     NonMatching(&'static str),
 }
@@ -1635,7 +1641,7 @@ pub fn write_error(
     span: SpanId,
 ) -> std::io::Result<()> {
     parse::write_error_location(w, spans, sources, span, level)?;
-    writeln!(w, "\t{}", message.as_ref())?;
+    writeln!(w, "\t{}\n", message.as_ref())?;
     Ok(())
 }
 
@@ -1836,34 +1842,19 @@ pub struct TypedModule {
     pub use_statuses: FxHashMap<ParsedUseId, UseStatus>,
     pub debug_level_stack: Vec<log::LevelFilter>,
     pub functions_pending_body_specialization: Vec<FunctionId>,
+    inference_context: InferenceContext,
 }
 
 impl TypedModule {
     pub fn new(parsed_module: ParsedModule) -> TypedModule {
         let types = Types {
-            types: vec![
-                Type::Integer(IntegerType::U8),
-                Type::Integer(IntegerType::U16),
-                Type::Integer(IntegerType::U32),
-                Type::Integer(IntegerType::U64),
-                Type::Integer(IntegerType::I8),
-                Type::Integer(IntegerType::I16),
-                Type::Integer(IntegerType::I32),
-                Type::Integer(IntegerType::I64),
-            ],
+            types: Vec::new(),
             existing_types_mapping: FxHashMap::new(),
             type_defn_mapping: FxHashMap::new(),
+            type_variable_counts: FxHashMap::new(),
             ability_mapping: FxHashMap::new(),
             placeholder_mapping: FxHashMap::new(),
         };
-        debug_assert!(matches!(*types.get(U8_TYPE_ID), Type::Integer(IntegerType::U8)));
-        debug_assert!(matches!(*types.get(U16_TYPE_ID), Type::Integer(IntegerType::U16)));
-        debug_assert!(matches!(*types.get(U32_TYPE_ID), Type::Integer(IntegerType::U32)));
-        debug_assert!(matches!(*types.get(U64_TYPE_ID), Type::Integer(IntegerType::U64)));
-        debug_assert!(matches!(*types.get(I8_TYPE_ID), Type::Integer(IntegerType::I8)));
-        debug_assert!(matches!(*types.get(I16_TYPE_ID), Type::Integer(IntegerType::I16)));
-        debug_assert!(matches!(*types.get(I32_TYPE_ID), Type::Integer(IntegerType::I32)));
-        debug_assert!(matches!(*types.get(I64_TYPE_ID), Type::Integer(IntegerType::I64)));
 
         let scopes = Scopes::make();
         let namespaces = Namespaces { namespaces: Vec::new() };
@@ -1886,6 +1877,10 @@ impl TypedModule {
             debug_level_stack: vec![log::max_level()],
             functions_pending_body_specialization: vec![],
             ast: parsed_module,
+            inference_context: InferenceContext {
+                origin_stack: vec![],
+                constraints: Vec::with_capacity(128),
+            },
         }
     }
 
@@ -1945,74 +1940,6 @@ impl TypedModule {
         &mut self.abilities[ability_id.0 as usize]
     }
 
-    /// Recursively checks if given type contains any type variables
-    /// Note: We could cache whether or not a type is generic on insertion into the type pool
-    ///       But types are not immutable so this could be a dangerous idea!
-    pub fn does_type_reference_type_variables(&self, type_id: TypeId) -> bool {
-        if let Some(spec_info) = self.types.get_generic_instance_info(type_id) {
-            return spec_info
-                .param_values
-                .iter()
-                .any(|t| self.does_type_reference_type_variables(*t));
-        }
-        match self.types.get_no_follow(type_id) {
-            Type::TypeVariable(_) => true,
-            Type::Unit(_) => false,
-            Type::Char(_) => false,
-            Type::Integer(_) => false,
-            Type::Float(_) => false,
-            Type::Bool(_) => false,
-            Type::Pointer(_) => false,
-            Type::Struct(struc) => {
-                for field in struc.fields.iter() {
-                    if self.does_type_reference_type_variables(field.type_id) {
-                        return true;
-                    }
-                }
-                false
-            }
-            Type::Reference(refer) => self.does_type_reference_type_variables(refer.inner_type),
-            Type::Enum(e) => {
-                for v in e.variants.iter() {
-                    if let Some(payload) = v.payload {
-                        if self.does_type_reference_type_variables(payload) {
-                            return true;
-                        }
-                    }
-                }
-                false
-            }
-            Type::EnumVariant(ev) => {
-                if let Some(payload) = ev.payload {
-                    if self.does_type_reference_type_variables(payload) {
-                        return true;
-                    }
-                }
-                false
-            }
-            Type::Never(_) => false,
-            Type::Generic(_gen) => true,
-            Type::Function(fun) => {
-                for param in fun.params.iter() {
-                    if self.does_type_reference_type_variables(param.type_id) {
-                        return true;
-                    }
-                }
-                if self.does_type_reference_type_variables(fun.return_type) {
-                    return true;
-                }
-                false
-            }
-            Type::Closure(closure) => {
-                self.does_type_reference_type_variables(closure.function_type)
-                    || self.does_type_reference_type_variables(closure.env_type)
-            }
-            // But a closure object is generic if its function is generic
-            Type::ClosureObject(co) => self.does_type_reference_type_variables(co.function_type),
-            Type::RecursiveReference(_rr) => false,
-        }
-    }
-
     // New recursive types design:
     // - recursive references stay, because its actually better for codegen
     // - Use ParsedTypeDefnId as payload for uniqueness of the RecursiveReference type
@@ -2064,6 +1991,7 @@ impl TypedModule {
                     name: type_param.name,
                     scope_id: defn_scope_id,
                     span: type_param.span,
+                    is_inference_variable: false,
                 },
                 vec![],
             );
@@ -2127,6 +2055,7 @@ impl TypedModule {
                 | Type::Bool(_)
                 | Type::Never(_)
                 | Type::Pointer(_)
+                | Type::Integer(_)
                 | Type::Float(_) => Ok(resulting_type_id),
                 Type::Struct(_s) => Ok(resulting_type_id),
                 Type::Enum(_e) => Ok(resulting_type_id),
@@ -2221,19 +2150,49 @@ impl TypedModule {
                         assert!(id == F64_TYPE_ID);
                         Ok(id)
                     }
+                    "u8" => {
+                        let id = self.types.add_type(Type::Integer(IntegerType::U8));
+                        assert!(id == U8_TYPE_ID);
+                        Ok(id)
+                    }
+                    "u16" => {
+                        let id = self.types.add_type(Type::Integer(IntegerType::U16));
+                        assert!(id == U16_TYPE_ID);
+                        Ok(id)
+                    }
+                    "u32" => {
+                        let id = self.types.add_type(Type::Integer(IntegerType::U32));
+                        assert!(id == U32_TYPE_ID);
+                        Ok(id)
+                    }
+                    "u64" => {
+                        let id = self.types.add_type(Type::Integer(IntegerType::U64));
+                        assert!(id == U64_TYPE_ID);
+                        Ok(id)
+                    }
+                    "i8" => {
+                        let id = self.types.add_type(Type::Integer(IntegerType::I8));
+                        assert!(id == I8_TYPE_ID);
+                        Ok(id)
+                    }
+                    "i16" => {
+                        let id = self.types.add_type(Type::Integer(IntegerType::I16));
+                        assert!(id == I16_TYPE_ID);
+                        Ok(id)
+                    }
+                    "i32" => {
+                        let id = self.types.add_type(Type::Integer(IntegerType::I32));
+                        assert!(id == I32_TYPE_ID);
+                        Ok(id)
+                    }
+                    "i64" => {
+                        let id = self.types.add_type(Type::Integer(IntegerType::I64));
+                        assert!(id == I64_TYPE_ID);
+                        Ok(id)
+                    }
                     _ => failf!(*span, "Unknown builtin type '{}'", name),
                 }
             }
-            ParsedTypeExpression::Integer(num_type) => match (num_type.width, num_type.signed) {
-                (NumericWidth::B8, false) => Ok(U8_TYPE_ID),
-                (NumericWidth::B16, false) => Ok(U16_TYPE_ID),
-                (NumericWidth::B32, false) => Ok(U32_TYPE_ID),
-                (NumericWidth::B64, false) => Ok(U64_TYPE_ID),
-                (NumericWidth::B8, true) => Ok(I8_TYPE_ID),
-                (NumericWidth::B16, true) => Ok(I16_TYPE_ID),
-                (NumericWidth::B32, true) => Ok(I32_TYPE_ID),
-                (NumericWidth::B64, true) => Ok(I64_TYPE_ID),
-            },
             ParsedTypeExpression::Struct(struct_defn) => {
                 let struct_defn = struct_defn.clone();
                 let mut fields: Vec<StructTypeField> = Vec::new();
@@ -3117,9 +3076,9 @@ impl TypedModule {
             ParsedPattern::Struct(struct_pattern) => {
                 let target_type = self.types.get(target_type_id);
                 if struct_pattern.fields.is_empty() {
-                    return make_fail_span(
-                        "Useless pattern: Struct pattern has no fields; use wildcard pattern '_' instead",
+                    return failf!(
                         struct_pattern.span,
+                        "Useless pattern: Struct pattern has no fields; use wildcard pattern '_' instead",
                     );
                 }
                 let expected_struct = target_type.as_struct().ok_or_else(|| {
@@ -3249,7 +3208,7 @@ impl TypedModule {
         if let Type::TypeVariable(tvar) = self.types.get(type_id) {
             match self.scopes.find_type(scope_id, tvar.name) {
                 None => {
-                    debug!("Unresolved type_id. {}", self.name_of(tvar.name));
+                    debug!("Unresolved type variable. {}", self.name_of(tvar.name));
                     type_id
                 }
                 Some((resolved, _)) => {
@@ -3335,18 +3294,11 @@ impl TypedModule {
             (Type::Reference(o1), Type::Reference(o2)) => {
                 self.check_types(o1.inner_type, o2.inner_type, scope_id)
             }
-            (Type::Enum(_exp_enum), Type::Enum(_act_enum)) => {
-                // FIXME: Remove this expected == actual check
-                if expected == actual {
-                    Ok(())
-                } else {
-                    Err(format!(
-                        "expected enum {} but got enum {}",
-                        self.type_id_to_string(expected),
-                        self.type_id_to_string(actual)
-                    ))
-                }
-            }
+            (Type::Enum(_exp_enum), Type::Enum(_act_enum)) => Err(format!(
+                "expected enum {} but got enum {}",
+                self.type_id_to_string(expected),
+                self.type_id_to_string(actual)
+            )),
             (Type::Enum(_expected_enum), Type::EnumVariant(actual_variant)) => {
                 // This requires some more consideration, we need to actually insert a cast
                 // instruction to make the physical types exactly the same?
@@ -5798,7 +5750,7 @@ impl TypedModule {
                         struct_field_variable.variable_expr,
                         setup_statements,
                         binding_statements,
-                        false,
+                        is_referencing,
                         arm_scope_id,
                     )?;
                     boolean_exprs.push(condition);
@@ -5828,12 +5780,12 @@ impl TypedModule {
                     let variant_name = variant.name;
                     let variant_index = variant.index;
                     let Some(payload_type_id) = variant.payload else {
-                        return make_fail_span(
-                            "Impossible pattern: variant does not have payload",
+                        return failf!(
                             enum_pattern.span,
+                            "Impossible pattern: variant does not have payload",
                         );
                     };
-                    let result_type_id = if is_immediately_inside_reference_pattern {
+                    let result_type_id = if is_referencing {
                         self.types.add_reference_type(payload_type_id)
                     } else {
                         payload_type_id
@@ -5843,7 +5795,7 @@ impl TypedModule {
                         result_type_id,
                         variant_name,
                         variant_index,
-                        is_referencing: is_immediately_inside_reference_pattern,
+                        is_referencing,
                         span: enum_pattern.span,
                     });
                     let var_name = self
@@ -5858,7 +5810,7 @@ impl TypedModule {
                         payload_variable.variable_expr,
                         setup_statements,
                         binding_statements,
-                        false,
+                        is_referencing,
                         arm_scope_id,
                     )?;
                     Some(condition)
@@ -5868,11 +5820,13 @@ impl TypedModule {
                 let final_condition = match inner_condition {
                     None => is_variant_condition,
                     Some(TypedExpr::Bool(true, _)) => is_variant_condition,
-                    Some(inner_condition) => self.synth_binary_bool_op(
-                        BinaryOpKind::And,
-                        is_variant_condition,
-                        inner_condition,
-                    ),
+                    Some(inner_condition) => TypedExpr::BinaryOp(BinaryOp {
+                        kind: BinaryOpKind::And,
+                        ty: BOOL_TYPE_ID,
+                        lhs: Box::new(is_variant_condition),
+                        rhs: Box::new(inner_condition),
+                        span: enum_pattern.span,
+                    }),
                 };
                 Ok(final_condition)
             }
@@ -5902,16 +5856,16 @@ impl TypedModule {
                 Ok(inner_condition)
             }
             pat => {
-                let is_literal = match pat {
+                match pat {
                     TypedPattern::LiteralUnit(_) => true,
                     TypedPattern::LiteralChar(_, _) => true,
                     TypedPattern::LiteralInteger(_, _) => true,
                     TypedPattern::LiteralFloat(_, _) => true,
                     TypedPattern::LiteralBool(_, _) => true,
                     TypedPattern::LiteralString(_, _) => true,
-                    _ => false,
+                    _ => unreachable!("all non-literals should be handled by now"),
                 };
-                let target_expr = if is_literal {
+                let target_expr = if is_immediately_inside_reference_pattern {
                     // Literal patterns don't do anything special for references; they just need to
                     // function on the de-rereferenced target. Whereas structs, enums, even
                     // reference patterns do different and unique things when matching on
@@ -6417,9 +6371,10 @@ impl TypedModule {
             if let Err(msg) =
                 self.check_types(consequent.get_type(), alternate.get_type(), ctx.scope_id)
             {
-                return make_fail_span(
-                    format!("else branch type did not match then branch type: {}", msg),
+                return failf!(
                     alternate.get_span(),
+                    "else branch type did not match then branch type: {}",
+                    msg,
                 );
             };
             consequent.get_type()
@@ -7095,16 +7050,13 @@ impl TypedModule {
         match self.name_of(fn_call.name.name) {
             "return" => {
                 if fn_call.args.len() != 1 {
-                    return make_fail_span(
-                        "return(...) must have exactly one argument",
-                        fn_call.span,
-                    );
+                    return failf!(fn_call.span, "return(...) must have exactly one argument",);
                 }
                 Ok(Some(self.eval_return(fn_call.args[0].value, ctx, call_span)?))
             }
             "break" => {
                 if fn_call.args.len() > 1 {
-                    return make_fail_span("break(...) must have 0 or 1 argument", call_span);
+                    return failf!(call_span, "break(...) must have 0 or 1 argument");
                 }
                 // Determine based on loop type if break with value is allowed
                 let Some((enclosing_loop_scope_id, loop_type)) =
@@ -7163,7 +7115,7 @@ impl TypedModule {
             }
             "testCompile" => {
                 if fn_call.args.len() != 1 {
-                    return make_fail_span("testCompile takes one argument", call_span);
+                    return failf!(call_span, "testCompile takes one argument");
                 }
                 let arg = &fn_call.args[0];
                 let result = self.eval_expr(arg.value, ctx.with_no_expected_type());
@@ -7325,7 +7277,7 @@ impl TypedModule {
             match expr {
                 Err(error) => failed_exprs.push(error),
                 Ok(expr) => {
-                    if let TypeSolutionResult::NonMatching(msg) = self.solve_generic_params(
+                    if let TypeUnificationResult::NonMatching(msg) = self.solve_generic_params(
                         &mut solution_set,
                         expr.get_type(),
                         param.type_id,
@@ -7596,7 +7548,7 @@ impl TypedModule {
                         let mut solution_set = TypeSolutionSet {
                             solutions: g_params.iter().map(PendingTypeSolution::from).collect(),
                         };
-                        if let TypeSolutionResult::NonMatching(msg) = self.solve_generic_params(
+                        if let TypeUnificationResult::NonMatching(msg) = self.solve_generic_params(
                             &mut solution_set,
                             passed_expr_type,
                             generic_variant_payload,
@@ -7960,22 +7912,20 @@ impl TypedModule {
         ctx: EvalExprContext,
     ) -> TyperResult<Vec<SimpleNamedType>> {
         let generic_function = self.get_function(generic_function_id);
+        let generic_function_type_id = generic_function.type_id;
         let generic_function_type = self.get_function_type(generic_function_id);
-        let function_return_type = generic_function_type.return_type;
         let generic_type_params = generic_function.type_params.clone();
         debug_assert!(!generic_type_params.is_empty());
-        let generic_params = generic_function_type.params.clone();
+        let original_params = generic_function_type.params.clone();
         let passed_type_args = &fn_call.type_args;
         let type_params = match passed_type_args.is_empty() {
             false => {
                 if passed_type_args.len() != generic_type_params.len() {
-                    return make_fail_span(
-                        format!(
-                            "Expected {} type arguments but got {}",
-                            generic_type_params.len(),
-                            passed_type_args.len()
-                        ),
+                    return failf!(
                         fn_call.span,
+                        "Expected {} type arguments but got {}",
+                        generic_type_params.len(),
+                        passed_type_args.len()
                     );
                 }
                 let mut evaled_params = Vec::with_capacity(passed_type_args.len());
@@ -7987,38 +7937,79 @@ impl TypedModule {
                 evaled_params
             }
             true => {
-                let mut solution_set = TypeSolutionSet::from(generic_function.type_params.iter());
+                // let mut solution_set = TypeSolutionSet::from(generic_type_params.iter());
 
                 let args_and_params = self.align_call_arguments_with_parameters(
                     fn_call,
-                    &generic_params,
+                    &original_params,
                     None,
                     ctx.scope_id,
                     true,
                 )?;
 
-                // Playing with prioritizing the expected type, has bad consequences, need
-                // to understand. I think they all need to see each other's progress so we could
-                // actually pass increasing constraints like real inference
-                // if let Some(call_expected_type) = ctx.expected_type_id {
-                //     debug!(
-                //         "Using expected type {} to try to infer call to {}",
-                //         self.type_id_to_string(call_expected_type),
-                //         self.name_of(fn_call.name.name)
-                //     );
-                //     self.solve_generic_params(
-                //         &mut solution_set,
-                //         call_expected_type,
-                //         function_return_type,
-                //         fn_call.span,
-                //     )?;
-                // }
+                self.inference_context.origin_stack.push(fn_call.id);
+                // eprintln!("INFER {}", self.inference_context.origin_stack.len());
+
+                // nocommit: New scope type for inference throwaway scopes
+                //           Actually I may not need a scope since I'm not binding anything by
+                //           name? We'll see
+                let inference_scope =
+                    self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, None, None);
+                let mut instantation_set = vec![];
+                for (idx, param) in generic_type_params.iter().enumerate() {
+                    let ident = self.ast.identifiers.intern(format!("'{idx}"));
+                    // TBD: Regular ole type variable, special type of type variable,
+                    // or a whole new thing, TypeHole?
+                    let tv = self.types.add_type(Type::TypeVariable(TypeVariable {
+                        name: ident,
+                        scope_id: inference_scope,
+                        span: param.span,
+                        is_inference_variable: true,
+                    }));
+                    let _ = self.scopes.add_type(ctx.scope_id, param.name, tv);
+                    instantation_set.push(TypeSubstitutionPair { from: param.type_id, to: tv });
+                }
+                let new_fn_type_id = self.substitute_in_type(
+                    None,
+                    generic_function_type_id,
+                    None,
+                    &instantation_set,
+                );
+                let new_fn_ret_type =
+                    self.types.get(new_fn_type_id).as_function().unwrap().return_type;
+                debug!(
+                    "Instantiated fn type of {} for inference. Was: {}, is: {}",
+                    self.name_of(fn_call.name.name),
+                    self.type_id_to_string(generic_function_type_id),
+                    self.type_id_to_string(new_fn_type_id)
+                );
+
+                if let Some(call_expected_type) = ctx.expected_type_id {
+                    self.unify_and_find_substitutions(
+                        call_expected_type,
+                        new_fn_ret_type,
+                        fn_call.span,
+                    )?;
+                    debug!(
+                        "subst\n\t{}",
+                        self.pretty_print_type_substitutions(
+                            &self.inference_context.constraints,
+                            "\n"
+                        ),
+                    );
+                }
 
                 let mut failed_exprs = Vec::new();
-                for (expr, gen_param) in args_and_params.into_iter() {
-                    if solution_set.all_solved() {
-                        break;
-                    }
+                for (index, (expr, gen_param)) in args_and_params.into_iter().enumerate() {
+                    let type_hole =
+                        self.types.get(new_fn_type_id).as_function().unwrap().params[index].type_id;
+                    let current_substitutions = self.substitutions_if_consistent(
+                        &self.inference_context.constraints,
+                        fn_call.span,
+                    )?;
+                    let expected_type_so_far =
+                        current_substitutions.get(&type_hole).copied().unwrap_or(type_hole);
+
                     // We don't care if this fails; sometimes we can't
                     // evaluate an expression before inferring types
                     // That's ok because
@@ -8030,35 +8021,43 @@ impl TypedModule {
                         MaybeTypedExpr::Parsed(parsed_expr) => {
                             let inference_context = ctx
                                 .with_inference(true)
-                                .with_expected_type(Some(gen_param.type_id));
+                                .with_expected_type(Some(expected_type_so_far));
                             self.eval_expr(parsed_expr, inference_context)
                         }
                     };
                     match expr {
                         Ok(expr) => {
                             debug!(
-                                "solving {}: {} w/ param {}",
+                                "unify '{}': {} =:= {}",
                                 self.name_of(gen_param.name),
-                                self.type_id_to_string(gen_param.type_id),
-                                self.expr_to_string(&expr)
+                                self.expr_to_string_with_type(&expr),
+                                self.type_id_to_string(expected_type_so_far),
                             );
-                            if let TypeSolutionResult::NonMatching(msg) = self
-                                .solve_generic_params(
-                                    &mut solution_set,
+                            if let TypeUnificationResult::NonMatching(msg) = self
+                                .unify_and_find_substitutions(
                                     expr.get_type(),
-                                    gen_param.type_id,
+                                    expected_type_so_far,
                                     fn_call.span,
                                 )?
                             {
+                                self.inference_context.origin_stack.pop();
                                 return failf!(
                                     expr.get_span(),
                                     "Invalid argument: {msg}: expected {} but got {}",
-                                    self.type_id_to_string(gen_param.type_id),
+                                    self.type_id_to_string(expected_type_so_far),
                                     self.type_id_to_string(expr.get_type())
                                 );
                             };
+                            debug!(
+                                "subst\n\t{}",
+                                self.pretty_print_type_substitutions(
+                                    &self.inference_context.constraints,
+                                    "\n\t"
+                                ),
+                            );
                         }
                         Err(e) => {
+                            // Should stop happening since they should be BOUND
                             eprintln!("Just fyi eval_expr failed during inference: {e}");
                             failed_exprs.push(e);
                             // return failf!(
@@ -8069,37 +8068,59 @@ impl TypedModule {
                     }
                 }
 
-                if !solution_set.all_solved() {
-                    if let Some(call_expected_type) = ctx.expected_type_id {
-                        debug!(
-                            "Using expected type {} to try to infer call to {}",
-                            self.type_id_to_string(call_expected_type),
-                            self.name_of(fn_call.name.name)
-                        );
-                        self.solve_generic_params(
-                            &mut solution_set,
-                            call_expected_type,
-                            function_return_type,
-                            fn_call.span,
-                        )?;
-                    }
-                }
+                // TODO: enrich error
+                let final_substitutions = self.substitutions_if_consistent(
+                    &self.inference_context.constraints,
+                    fn_call.span,
+                )?;
 
-                match solution_set.get_solutions() {
-                    None => {
-                        if !failed_exprs.is_empty() {
-                            return Err(failed_exprs.into_iter().next().unwrap());
-                        }
-                        let mut detail: String = String::new();
-                        self.display_solution_set(&mut detail, &solution_set);
-                        return failf!(
-                            fn_call.span,
-                            "Not enough information to resolve this call\n:{}",
-                            detail
-                        );
-                    }
-                    Some(solutions) => solutions,
+                let mut solutions: Vec<SimpleNamedType> =
+                    Vec::with_capacity(instantation_set.len());
+                for (param_to_hole, param) in
+                    instantation_set.iter().zip(generic_type_params.iter())
+                {
+                    let corresponding_hole = param_to_hole.to;
+                    let solution = final_substitutions.get(&corresponding_hole).unwrap();
+                    solutions.push(SimpleNamedType { name: param.name, type_id: *solution })
                 }
+                let id = self.inference_context.origin_stack.pop().unwrap();
+                debug_assert!(id == fn_call.id);
+                if self.inference_context.origin_stack.is_empty() {
+                    //eprintln!("Resetting inference buffer");
+                    self.inference_context.constraints.clear();
+                }
+                solutions
+                //if !solution_set.all_solved() {
+                //    if let Some(call_expected_type) = ctx.expected_type_id {
+                //        debug!(
+                //            "Using expected type {} to try to infer call to {}",
+                //            self.type_id_to_string(call_expected_type),
+                //            self.name_of(fn_call.name.name)
+                //        );
+                //        self.solve_generic_params(
+                //            &mut solution_set,
+                //            call_expected_type,
+                //            function_return_type,
+                //            fn_call.span,
+                //        )?;
+                //    }
+                //}
+
+                //match solution_set.get_solutions() {
+                //    None => {
+                //        if !failed_exprs.is_empty() {
+                //            return Err(failed_exprs.into_iter().next().unwrap());
+                //        }
+                //        let mut detail: String = String::new();
+                //        self.display_solution_set(&mut detail, &solution_set);
+                //        return failf!(
+                //            fn_call.span,
+                //            "Not enough information to resolve this call\n:{}",
+                //            detail
+                //        );
+                //    }
+                //    Some(solutions) => solutions,
+                //}
             }
         };
 
@@ -8124,13 +8145,292 @@ impl TypedModule {
         Ok(type_params)
     }
 
+    // nocommit
+    // One major issue I'm seeing is that we're going to specialize functions on types like '?1'
+    // and '?2' all over the place. Is this necessary during inference, or can we finally do
+    // a different sort of pass just focused on learning and inferring types. We still have
+    // to resolve functions, and we still have to evaluate (untyped) blocks.
+    // For anything annotated we can skip evaluation!!!
+    //
+    // We can save the types in some tree or lookup table for the lowering pass
+
+    fn add_substitution(&self, set: &mut Vec<TypeSubstitutionPair>, pair: TypeSubstitutionPair) {
+        debug!(
+            "Applying substitution {} -> {} to set {}",
+            self.type_id_to_string(pair.from),
+            self.type_id_to_string(pair.to),
+            self.pretty_print_type_substitutions(set, ", ")
+        );
+        set.iter_mut().for_each(|existing| {
+            if existing.from == pair.from {
+                existing.from = pair.to
+            } else if pair.from == existing.to {
+                existing.to = pair.to
+            }
+        });
+
+        debug!("Got set {}", self.pretty_print_type_substitutions(set, ", "));
+
+        set.push(pair)
+    }
+
+    fn substitutions_if_consistent(
+        &self,
+        substitutions: &[TypeSubstitutionPair],
+        span: SpanId,
+    ) -> TyperResult<FxHashMap<TypeId, TypeId>> {
+        debug!("Is set consistent: {}", self.pretty_print_type_substitutions(substitutions, ", "));
+        let mut final_pairs = FxHashMap::new();
+        for subst in substitutions {
+            // nocommit: we should just not store identity substitutions as they carry no
+            // information
+            let identity_substitution = subst.from == subst.to;
+            if identity_substitution {
+                continue;
+            }
+            match final_pairs.entry(subst.from) {
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    e.insert(subst.to);
+                }
+                std::collections::hash_map::Entry::Occupied(occ) => {
+                    let dest = occ.get();
+                    if *dest != subst.to {
+                        // TODO: We could include attribution spans on substitutions
+                        return failf!(
+                            span,
+                            "Type {} needs to be {} but also needs to be {}",
+                            self.type_id_to_string(subst.from),
+                            self.type_id_to_string(subst.to),
+                            self.type_id_to_string(*dest),
+                        );
+                    }
+                }
+            }
+        }
+        Ok(final_pairs)
+    }
+
+    fn unify_and_find_substitutions(
+        &mut self,
+        passed_type: TypeId,
+        slot_type: TypeId,
+        span: SpanId,
+    ) -> TyperResult<TypeUnificationResult> {
+        // eprintln!("unify_and_find_substitutions slot {}", self.type_id_to_string(slot_type));
+        let counts = self.types.type_variable_counts.get(&slot_type).unwrap();
+        if counts.inference_variable_count == 0 {
+            debug!(
+                "I should skip this because it has no type holes in it: {}",
+                self.type_id_to_string(slot_type)
+            );
+        }
+        let mut inference_substitutions = std::mem::take(&mut self.inference_context.constraints);
+        let result = self.unify_and_find_substitutions_rec(
+            &mut inference_substitutions,
+            passed_type,
+            slot_type,
+            span,
+        )?;
+        self.inference_context.constraints = inference_substitutions;
+        Ok(result)
+    }
+
+    fn unify_and_find_substitutions_rec(
+        &self,
+        substitutions: &mut Vec<TypeSubstitutionPair>,
+        passed_type: TypeId,
+        slot_type: TypeId,
+        span: SpanId,
+    ) -> TyperResult<TypeUnificationResult> {
+        // nocommit: We could track whether types contain any type variables; there's
+        //           no point calling this on slot_type Json since it has no type variables in it
+
+        // passed_type           slot_type          -> result
+        //
+        // int                    T                 -> T := int
+        // List[int]              List[T]           -> T := int
+        // Pair[int, string]      Pair[T, U]        -> T := int, U := string
+        // fn(int) -> int         Fn(T) -> T        -> T := int
+        // fn() -> List[string]   Fn() -> List[T]   -> T := string
+        //
+        // Recursive
+        //
+        // deftype Json = either JsArray(List[Json]),
+        // Just run on all non-recursive members, which means we just no-op on recursivereference
+        //
+        // Higher-order types (I dont see why not?)
+        // List[int]              F[int]            -> F := List
+        debug!(
+            "unify_and_find_substitutions passed {} in slot {}",
+            self.type_id_to_string(passed_type).blue(),
+            self.type_id_to_string(slot_type).blue()
+        );
+
+        if let (Some(passed_info), Some(arg_info)) = (
+            self.types.get_generic_instance_info(passed_type),
+            self.types.get_generic_instance_info(slot_type),
+        ) {
+            // expr: NewList[int] arg: NewList[T]
+            if passed_info.generic_parent == arg_info.generic_parent {
+                debug!(
+                    "comparing generic instances of {}",
+                    self.type_id_to_string(arg_info.generic_parent)
+                );
+                // We can directly 'solve' every appearance of a type param here
+                for (passed_type, arg_slot) in
+                    passed_info.param_values.iter().zip(arg_info.param_values.iter())
+                {
+                    self.unify_and_find_substitutions_rec(
+                        substitutions,
+                        *passed_type,
+                        *arg_slot,
+                        span,
+                    )?;
+                }
+            } else {
+                debug!("compared generic instances but they didn't match parent types");
+            }
+            return Ok(TypeUnificationResult::Matching);
+        }
+
+        match (self.types.get_no_follow(passed_type), self.types.get_no_follow(slot_type)) {
+            (_actual_type, Type::TypeVariable(_expected_variable)) => {
+                // nocommit: Occurs check?
+                self.add_substitution(
+                    substitutions,
+                    TypeSubstitutionPair { from: slot_type, to: passed_type },
+                );
+                Ok(TypeUnificationResult::Matching)
+            }
+            (Type::Reference(passed_refer), Type::Reference(refer)) => self
+                .unify_and_find_substitutions_rec(
+                    substitutions,
+                    passed_refer.inner_type,
+                    refer.inner_type,
+                    span,
+                ),
+            (Type::Struct(passed_struct), Type::Struct(struc)) => {
+                // Struct example:
+                // type Pair<T, U> = { a: T, b: U }
+                // fn get_first<T, U>(p: Pair<T, U>): T { p.a }
+                // get_first({ a: 1, b: 2})
+                // passed_expr: Pair<int, int>, argument_type: Pair<T, U>
+                // passed expr: { a: int, b: int }, argument_type: { a: T, b: U }
+                //
+                // Structs must have all same field names in same order
+                let passed_fields = &passed_struct.fields;
+                let fields = &struc.fields;
+                if passed_fields.len() != fields.len() {
+                    return Ok(TypeUnificationResult::NonMatching("field count"));
+                }
+                for (idx, field) in fields.iter().enumerate() {
+                    let passed_field = &passed_fields[idx];
+                    if field.name != passed_field.name {
+                        return Ok(TypeUnificationResult::NonMatching("field names"));
+                    }
+                    self.unify_and_find_substitutions_rec(
+                        substitutions,
+                        passed_field.type_id,
+                        field.type_id,
+                        span,
+                    )?;
+                }
+                Ok(TypeUnificationResult::Matching)
+            }
+            (Type::Enum(passed_enum), Type::Enum(param_enum_type)) => {
+                // Enum example
+                // type Result<T, E> = enum Ok(T) | Err(E)
+                // fn unwrap<T, E>(self: Result<T, E>): T {
+                //  (self as Result<T,E>.Ok).payload
+                // }
+                // unwrap(Result<int, string>.Ok(1))
+                // passed_expr: Result<int, string>, argument_type: Result<T, E>
+                // passed_expr: enum Ok(int), Err(string), argument_type: enum Ok(T), Err(E)
+                // Enum must have same variants with same tags, walk each variant and recurse on its payload
+                let passed_variants = &passed_enum.variants;
+                let variants = &param_enum_type.variants;
+                if passed_variants.len() != variants.len() {
+                    return Ok(TypeUnificationResult::NonMatching("variant count"));
+                }
+                for (idx, variant) in variants.iter().enumerate() {
+                    let passed_variant = &passed_variants[idx];
+                    if variant.name != passed_variant.name {
+                        return Ok(TypeUnificationResult::NonMatching("variant names"));
+                    }
+                    if let Some(passed_payload) = passed_variant.payload {
+                        if let Some(param_payload) = variant.payload {
+                            self.unify_and_find_substitutions_rec(
+                                substitutions,
+                                passed_payload,
+                                param_payload,
+                                span,
+                            )?;
+                        } else {
+                            return Ok(TypeUnificationResult::NonMatching("payloads"));
+                        }
+                    }
+                }
+
+                Ok(TypeUnificationResult::Matching)
+            }
+            (Type::EnumVariant(passed_enum_variant), Type::Enum(_param_enum_type_variant)) => self
+                .unify_and_find_substitutions_rec(
+                    substitutions,
+                    passed_enum_variant.enum_type_id,
+                    slot_type,
+                    span,
+                ),
+            (Type::Function(passed_fn), Type::Function(param_fn)) => {
+                if passed_fn.params.len() == param_fn.params.len() {
+                    for (passed_param, param_param) in
+                        passed_fn.params.iter().zip(param_fn.params.iter())
+                    {
+                        if passed_param.is_closure_env && param_param.is_closure_env {
+                            continue;
+                        }
+                        self.unify_and_find_substitutions_rec(
+                            substitutions,
+                            passed_param.type_id,
+                            param_param.type_id,
+                            span,
+                        )?;
+                    }
+                    self.unify_and_find_substitutions_rec(
+                        substitutions,
+                        passed_fn.return_type,
+                        param_fn.return_type,
+                        span,
+                    )
+                } else {
+                    Ok(TypeUnificationResult::NonMatching("parameter count"))
+                }
+            }
+            (Type::Closure(passed_closure), Type::ClosureObject(param_closure)) => self
+                .unify_and_find_substitutions_rec(
+                    substitutions,
+                    passed_closure.function_type,
+                    param_closure.function_type,
+                    span,
+                ),
+            (Type::ClosureObject(passed_closure), Type::ClosureObject(param_closure)) => self
+                .unify_and_find_substitutions_rec(
+                    substitutions,
+                    passed_closure.function_type,
+                    param_closure.function_type,
+                    span,
+                ),
+            (_, _) if passed_type == slot_type => Ok(TypeUnificationResult::Matching),
+            _ => Ok(TypeUnificationResult::NonMatching("Unrelated types")),
+        }
+    }
+
     fn solve_generic_params(
         &self,
         solved_params: &mut TypeSolutionSet,
         passed_type: TypeId,
         slot_type: TypeId,
         span: SpanId,
-    ) -> TyperResult<TypeSolutionResult> {
+    ) -> TyperResult<TypeUnificationResult> {
         // passed_expr              slot_type -> result
         //
         // int                    T                 -> T := int
@@ -8166,7 +8466,7 @@ impl TypedModule {
             } else {
                 debug!("compared generic instances but they didn't match parent types");
             }
-            return Ok(TypeSolutionResult::Matching);
+            return Ok(TypeUnificationResult::Matching);
         }
 
         match (self.types.get(passed_type), self.types.get(slot_type)) {
@@ -8179,17 +8479,17 @@ impl TypedModule {
                         Some(existing_solution) => {
                             if existing_solution != passed_type {
                                 return failf!(
-                            span,
-                            "Conflicting type parameters for type param {} in call: {} and {}",
-                            self.name_of(solution.name),
-                            self.type_id_to_string(existing_solution),
-                            self.type_id_to_string(passed_type)
-                        );
+                                    span,
+                                    "Conflicting type parameters for type param {} in call: {} and {}",
+                                    self.name_of(solution.name),
+                                    self.type_id_to_string(existing_solution),
+                                    self.type_id_to_string(passed_type)
+                                );
                             } else {
                                 debug!(
-                            "We double-solved type param {} but that's ok because it matched",
-                            self.name_of(solution.name)
-                        )
+                                   "We double-solved type param {} but that's ok because it matched",
+                                   self.name_of(solution.name)
+                                )
                             }
                         }
                         None => {
@@ -8202,7 +8502,7 @@ impl TypedModule {
                         }
                     },
                 }
-                Ok(TypeSolutionResult::Matching)
+                Ok(TypeUnificationResult::Matching)
             }
             (Type::Reference(passed_refer), Type::Reference(refer)) => self.solve_generic_params(
                 solved_params,
@@ -8222,12 +8522,12 @@ impl TypedModule {
                 let passed_fields = &passed_struct.fields;
                 let fields = &struc.fields;
                 if passed_fields.len() != fields.len() {
-                    return Ok(TypeSolutionResult::NonMatching("field count"));
+                    return Ok(TypeUnificationResult::NonMatching("field count"));
                 }
                 for (idx, field) in fields.iter().enumerate() {
                     let passed_field = &passed_fields[idx];
                     if field.name != passed_field.name {
-                        return Ok(TypeSolutionResult::NonMatching("field names"));
+                        return Ok(TypeUnificationResult::NonMatching("field names"));
                     }
                     self.solve_generic_params(
                         solved_params,
@@ -8236,7 +8536,7 @@ impl TypedModule {
                         span,
                     )?;
                 }
-                Ok(TypeSolutionResult::Matching)
+                Ok(TypeUnificationResult::Matching)
             }
             (Type::Enum(passed_enum), Type::Enum(param_enum_type)) => {
                 // Enum example
@@ -8251,12 +8551,12 @@ impl TypedModule {
                 let passed_variants = &passed_enum.variants;
                 let variants = &param_enum_type.variants;
                 if passed_variants.len() != variants.len() {
-                    return Ok(TypeSolutionResult::NonMatching("variant count"));
+                    return Ok(TypeUnificationResult::NonMatching("variant count"));
                 }
                 for (idx, variant) in variants.iter().enumerate() {
                     let passed_variant = &passed_variants[idx];
                     if variant.name != passed_variant.name {
-                        return Ok(TypeSolutionResult::NonMatching("variant names"));
+                        return Ok(TypeUnificationResult::NonMatching("variant names"));
                     }
                     if let Some(passed_payload) = passed_variant.payload {
                         if let Some(param_payload) = variant.payload {
@@ -8267,12 +8567,12 @@ impl TypedModule {
                                 span,
                             )?;
                         } else {
-                            return Ok(TypeSolutionResult::NonMatching("payloads"));
+                            return Ok(TypeUnificationResult::NonMatching("payloads"));
                         }
                     }
                 }
 
-                Ok(TypeSolutionResult::Matching)
+                Ok(TypeUnificationResult::Matching)
             }
             (Type::EnumVariant(passed_enum_variant), Type::Enum(_param_enum_type_variant)) => self
                 .solve_generic_params(
@@ -8303,7 +8603,7 @@ impl TypedModule {
                         span,
                     )
                 } else {
-                    Ok(TypeSolutionResult::NonMatching("parameter count"))
+                    Ok(TypeUnificationResult::NonMatching("parameter count"))
                 }
             }
             (Type::Closure(passed_closure), Type::ClosureObject(param_closure)) => self
@@ -8320,8 +8620,8 @@ impl TypedModule {
                     param_closure.function_type,
                     span,
                 ),
-            (_, _) if passed_type == slot_type => Ok(TypeSolutionResult::Matching),
-            _ => Ok(TypeSolutionResult::NonMatching("Unrelated types")),
+            (_, _) if passed_type == slot_type => Ok(TypeUnificationResult::Matching),
+            _ => Ok(TypeUnificationResult::NonMatching("Unrelated types")),
         }
     }
 
@@ -8516,12 +8816,13 @@ impl TypedModule {
             _ => match &function.kind {
                 TypedFunctionKind::AbilityDefn(_) => false,
                 _other => {
+                    // nocommit: Could I just count the type vars for both branches for simplicity?
                     let is_concrete = match &function.specialization_info {
                         None => function.type_params.is_empty(),
-                        Some(spec_info) => !spec_info
-                            .type_arguments
-                            .iter()
-                            .any(|nt| self.does_type_reference_type_variables(nt.type_id)),
+                        Some(_spec_info) => {
+                            self.types.get_type_variable_info(function.type_id).type_variable_count
+                                == 0
+                        }
                     };
                     if function.compiler_debug {
                         eprintln!(
@@ -8594,10 +8895,7 @@ impl TypedModule {
 
                 if let Some(expected_type) = expected_type {
                     if let Err(msg) = self.check_types(expected_type, actual_type, ctx.scope_id) {
-                        return make_fail_span(
-                            format!("Local variable type mismatch: {}", msg),
-                            val_def.span,
-                        );
+                        return failf!(val_def.span, "Local variable type mismatch: {}", msg,);
                     }
                 };
 
@@ -9088,7 +9386,12 @@ impl TypedModule {
         };
         let self_ident = get_ident!(self, "Self");
         let new_self_type_id = self.add_type_variable(
-            TypeVariable { name: self_ident, scope_id: specialized_ability_scope, span },
+            TypeVariable {
+                name: self_ident,
+                scope_id: specialized_ability_scope,
+                span,
+                is_inference_variable: false,
+            },
             vec![],
         );
         let _ = self
@@ -9193,7 +9496,6 @@ impl TypedModule {
             self.push_debug_level();
         }
         let parsed_function_linkage = parsed_function.linkage;
-        let parsed_function_ret_type = parsed_function.ret_type;
         let parsed_function_name = parsed_function.name;
         let parsed_function_span = parsed_function.span;
         let parsed_function_params = parsed_function.params.clone();
@@ -9270,6 +9572,7 @@ impl TypedModule {
                     name: type_parameter.name,
                     scope_id: fn_scope_id,
                     span: type_parameter.span,
+                    is_inference_variable: false,
                 },
                 ability_constraints,
             );
@@ -9281,7 +9584,11 @@ impl TypedModule {
             };
             type_params.push(type_param);
             if !fn_scope.add_type(type_parameter.name, type_variable_id) {
-                return make_fail_span("Duplicate type variable name: {}", type_parameter.span);
+                return failf!(
+                    type_parameter.span,
+                    "Duplicate type variable name: {}",
+                    type_parameter.name
+                );
             }
         }
 
@@ -9330,9 +9637,9 @@ impl TypedModule {
                             }
                         }
                     } else {
-                        return make_fail_span(
-                            "Cannot use name 'self' unless defining a method",
+                        return failf!(
                             fn_param.span,
+                            "Cannot use name 'self' unless defining a method",
                         );
                     }
                 };
@@ -9394,10 +9701,7 @@ impl TypedModule {
         } else {
             None
         };
-        let return_type = match parsed_function_ret_type {
-            None => UNIT_TYPE_ID,
-            Some(type_expr) => self.eval_type_expr(type_expr, fn_scope_id)?,
-        };
+        let return_type = self.eval_type_expr(parsed_function.ret_type, fn_scope_id)?;
 
         // Typecheck 'main': It must take argc and argv of correct types, or nothing
         // And it must return an integer, or an Unwrap[Inner = i32]
@@ -9554,16 +9858,17 @@ impl TypedModule {
         let is_intrinsic = function.intrinsic_type.is_some();
         let is_ability_defn = matches!(function.kind, TypedFunctionKind::AbilityDefn(_));
 
-        let ast_fn_def = self.ast.get_function(ast_id);
-        let function_span = ast_fn_def.span;
+        let parsed_function = self.ast.get_function(ast_id);
+        let parsed_function_ret_type = parsed_function.ret_type;
+        let function_signature_span = parsed_function.signature_span;
 
         let is_abstract = is_intrinsic || is_extern || is_ability_defn;
 
-        let body_block = match ast_fn_def.block.as_ref() {
+        let body_block = match parsed_function.block.as_ref() {
             None if is_abstract => None,
-            None => return make_fail_span("function is missing implementation", function_span),
+            None => return failf!(function_signature_span, "function is missing implementation"),
             Some(_) if is_abstract => {
-                return make_fail_span("unexpected function implementation", function_span)
+                return failf!(function_signature_span, "unexpected function implementation")
             }
             Some(block_ast) => {
                 if function.specialization_info.is_some() && !function.is_concrete {
@@ -9586,8 +9891,10 @@ impl TypedModule {
                     self.type_id_to_string(block.expr_type)
                 );
                 if let Err(msg) = self.check_types(return_type, block.expr_type, fn_scope_id) {
+                    let return_type_span =
+                        self.ast.get_type_expression_span(parsed_function_ret_type);
                     return failf!(
-                        function_span,
+                        return_type_span,
                         "Function {} return type mismatch: {}",
                         self.name_of(function_name),
                         msg
@@ -9634,6 +9941,7 @@ impl TypedModule {
                 name: self_ident_id,
                 scope_id: ability_scope_id,
                 span: parsed_ability.span,
+                is_inference_variable: false,
             },
             vec![],
         );
@@ -9654,6 +9962,7 @@ impl TypedModule {
                     name: ability_param.name,
                     scope_id: ability_scope_id,
                     span: ability_param.span,
+                    is_inference_variable: false,
                 },
                 ability_impls,
             );
@@ -9796,6 +10105,7 @@ impl TypedModule {
                     name: generic_impl_param.name,
                     scope_id: impl_scope_id,
                     span: generic_impl_param.span,
+                    is_inference_variable: false,
                 },
                 // We create the variable with no constraints, then add them later, so that its
                 // constraints can reference itself
@@ -9940,13 +10250,11 @@ impl TypedModule {
                     }
                 })
             else {
-                return make_fail_span(
-                    format!(
-                        "Missing implementation for function '{}' in ability '{}'",
-                        &*self.name_of(ability_function_ref.function_name).blue(),
-                        &*self.name_of(ability_name).blue()
-                    ),
+                return failf!(
                     span,
+                    "Missing implementation for function '{}' in ability '{}'",
+                    self.name_of(ability_function_ref.function_name).blue(),
+                    self.name_of(ability_name).blue()
                 );
             };
             // Report extra functions too
@@ -10513,12 +10821,8 @@ impl TypedModule {
             bail!("Module {} failed typechecking with {} errors", self.name(), self.errors.len())
         }
 
-        let mut pass = 0;
+        eprintln!(">> Phase 6 specialize function bodies");
         while !self.functions_pending_body_specialization.is_empty() {
-            eprintln!(
-                ">> Phase 6 specialize function bodies: {} (pass {pass})",
-                self.functions_pending_body_specialization.len()
-            );
             let clone = self.functions_pending_body_specialization.clone();
             self.functions_pending_body_specialization.clear();
             for function_id in &clone {
@@ -10528,7 +10832,6 @@ impl TypedModule {
                     self.errors.push(e);
                 }
             }
-            pass += 1;
         }
         if !self.errors.is_empty() {
             bail!("{} failed specialize with {} errors", self.name(), self.errors.len())

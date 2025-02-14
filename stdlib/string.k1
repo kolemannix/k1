@@ -11,9 +11,11 @@ ns string {
 
   fn toBytes(self: string): Buffer[byte] {
     let copied: Buffer[char] = self.toBuffer();
-    let sneakyCasted: Buffer[byte] = Buffer/fromRawParts[byte](copied.len, copied.data);
+    let sneakyCasted: Buffer[byte] = Buffer/fromRawParts[byte](copied.len, copied.dataPointer());
     sneakyCasted
   }
+
+  fn innerBuffer(self: string): Buffer[char] { self.buffer }
 
   fn toBuffer(self: string): Buffer[char] {
     self.buffer.cloned()
@@ -32,7 +34,7 @@ ns string {
   }
 
   fn wrapBytes(buffer: Buffer[byte]): string {
-    let sneakyCasted: Buffer[char] = Buffer/fromRawParts(buffer.len, buffer.data);
+    let sneakyCasted: Buffer[char] = Buffer/fromRawParts[char](buffer.len, buffer.dataPointer());
     { buffer: sneakyCasted }
   }
 
@@ -127,7 +129,7 @@ ns string {
   }
 
   fn toCString(self: string): Pointer {
-    self.appendChar('\0').buffer.data
+    self.appendChar('\0').buffer.dataPointer()
   }
 
   fn fromCString(cString: Pointer): string {

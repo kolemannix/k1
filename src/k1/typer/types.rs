@@ -111,13 +111,13 @@ pub const F32_TYPE_ID: TypeId = TypeId(13);
 pub const F64_TYPE_ID: TypeId = TypeId(14);
 
 pub const BUFFER_DATA_FIELD_NAME: &str = "data";
-pub const BUFFER_TYPE_ID: TypeId = TypeId(17);
+pub const BUFFER_TYPE_ID: TypeId = TypeId(18);
 
-pub const LIST_TYPE_ID: TypeId = TypeId(21);
-pub const STRING_TYPE_ID: TypeId = TypeId(23);
-pub const OPTIONAL_TYPE_ID: TypeId = TypeId(28);
-pub const COMPILER_SOURCE_LOC_TYPE_ID: TypeId = TypeId(29);
-pub const ORDERING_TYPE_ID: TypeId = TypeId(33);
+pub const LIST_TYPE_ID: TypeId = TypeId(23);
+pub const STRING_TYPE_ID: TypeId = TypeId(26);
+pub const OPTIONAL_TYPE_ID: TypeId = TypeId(31);
+pub const COMPILER_SOURCE_LOC_TYPE_ID: TypeId = TypeId(32);
+pub const ORDERING_TYPE_ID: TypeId = TypeId(36);
 
 #[derive(Debug, Clone)]
 pub struct ListType {
@@ -129,6 +129,7 @@ pub struct TypeVariable {
     pub name: Identifier,
     pub scope_id: ScopeId,
     pub span: SpanId,
+    pub is_inference_variable: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -309,7 +310,7 @@ impl RecursiveReference {
 }
 
 #[derive(Debug, Clone)]
-pub struct ClosureType {
+pub struct LambdaType {
     pub function_type: TypeId,
     pub env_type: TypeId,
     pub parsed_id: ParsedId,
@@ -321,8 +322,9 @@ pub struct ClosureType {
     pub closure_object_type: TypeId,
 }
 
+/// I'd love for this to just become 'Dynamic' type
 #[derive(Debug, Clone)]
-pub struct ClosureObjectType {
+pub struct LambdaObjectType {
     pub function_type: TypeId,
     pub parsed_id: ParsedId,
     pub struct_representation: TypeId,
@@ -341,17 +343,19 @@ pub enum Type {
     Pointer(TypeDefnInfo),
     Struct(StructType),
     Reference(ReferenceType),
-    #[allow(clippy::enum_variant_names)]
-    TypeVariable(TypeVariable),
     Enum(TypedEnum),
     /// Enum variants are proper types of their own, for lots
     /// of reasons that make programming nice. Unlike in Rust :()
     EnumVariant(TypedEnumVariant),
+    /// The 'bottom', uninhabited type; used to indicate exits of the program
     Never(TypeDefnInfo),
-    Generic(GenericType),
     Function(FunctionType),
-    Closure(ClosureType),
-    ClosureObject(ClosureObjectType),
+    Closure(LambdaType),
+    ClosureObject(LambdaObjectType),
+    // Less physical types
+    Generic(GenericType),
+    #[allow(clippy::enum_variant_names)]
+    TypeVariable(TypeVariable),
     RecursiveReference(RecursiveReference),
 }
 
@@ -567,7 +571,7 @@ impl Type {
             Type::TypeVariable(_t) => None,
             Type::Enum(e) => Some(e.ast_node),
             Type::EnumVariant(_ev) => None,
-            Type::Generic(gen) => Some(gen.type_defn_info.ast_id.into()),
+            Type::Generic(gen) => Some(gen.type_defn_info.ast_id),
             Type::Function(_fun) => None,
             Type::Closure(clos) => Some(clos.parsed_id),
             Type::ClosureObject(clos_obj) => Some(clos_obj.parsed_id),
@@ -747,16 +751,35 @@ impl Type {
         }
     }
 
-    pub fn as_closure(&self) -> Option<&ClosureType> {
+    pub fn as_closure(&self) -> Option<&LambdaType> {
         match self {
             Type::Closure(c) => Some(c),
             _ => None,
         }
     }
-    pub fn as_closure_object(&self) -> Option<&ClosureObjectType> {
+    pub fn as_closure_object(&self) -> Option<&LambdaObjectType> {
         match self {
             Type::ClosureObject(co) => Some(co),
             _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct TypeVariableInfo {
+    pub inference_variable_count: u32,
+    pub type_variable_count: u32,
+}
+
+impl TypeVariableInfo {
+    const EMPTY: TypeVariableInfo =
+        TypeVariableInfo { inference_variable_count: 0, type_variable_count: 0 };
+
+    fn add(self, other: Self) -> Self {
+        Self {
+            inference_variable_count: self.inference_variable_count
+                + other.inference_variable_count,
+            type_variable_count: self.type_variable_count + other.type_variable_count,
         }
     }
 }
@@ -769,6 +792,7 @@ pub struct Types {
     /// got slow
     pub existing_types_mapping: FxHashMap<Type, TypeId>,
     pub type_defn_mapping: FxHashMap<ParsedTypeDefnId, TypeId>,
+    pub type_variable_counts: FxHashMap<TypeId, TypeVariableInfo>,
     pub ability_mapping: FxHashMap<ParsedAbilityId, AbilityId>,
     pub placeholder_mapping: FxHashMap<ParsedTypeDefnId, TypeId>,
 }
@@ -781,7 +805,7 @@ impl Types {
             }
         }
 
-        match typ {
+        let type_id = match typ {
             Type::Enum(mut e) => {
                 // Enums and variants are self-referential
                 // so we handle them specially
@@ -795,11 +819,15 @@ impl Types {
                     let variant = Type::EnumVariant(v.clone());
                     self.types.push(variant.clone());
                     self.existing_types_mapping.insert(variant, variant_id);
+                    let variant_variable_counts = self.count_type_variables(variant_id);
+                    self.type_variable_counts.insert(variant_id, variant_variable_counts);
                 }
 
                 let e = Type::Enum(e);
                 self.types.push(e.clone());
                 self.existing_types_mapping.insert(e, enum_type_id);
+                let variable_counts = self.count_type_variables(enum_type_id);
+                self.type_variable_counts.insert(enum_type_id, variable_counts);
                 enum_type_id
             }
             Type::EnumVariant(_ev) => {
@@ -809,9 +837,14 @@ impl Types {
                 let type_id = self.next_type_id();
                 self.types.push(typ.clone());
                 self.existing_types_mapping.insert(typ, type_id);
+
+                let variable_counts = self.count_type_variables(type_id);
+                self.type_variable_counts.insert(type_id, variable_counts);
                 type_id
             }
-        }
+        };
+
+        type_id
     }
 
     pub fn next_type_id(&self) -> TypeId {
@@ -864,7 +897,7 @@ impl Types {
     }
 
     pub fn get_generic_instance_info(&self, type_id: TypeId) -> Option<&GenericInstanceInfo> {
-        match self.get(type_id) {
+        match self.get_no_follow(type_id) {
             Type::Enum(e) => e.generic_instance_info.as_ref(),
             Type::EnumVariant(ev) => self.get_generic_instance_info(ev.enum_type_id),
             Type::Struct(s) => s.generic_instance_info.as_ref(),
@@ -897,7 +930,7 @@ impl Types {
         body_function_id: FunctionId,
         parsed_id: ParsedId,
     ) -> TypeId {
-        let closure_type_id = self.add_type(Type::Closure(ClosureType {
+        let closure_type_id = self.add_type(Type::Closure(LambdaType {
             function_type: function_type_id,
             env_type: environment_struct.get_type(),
             parsed_id,
@@ -946,7 +979,7 @@ impl Types {
             generic_instance_info: None,
             ast_node: parsed_id,
         }));
-        self.add_type(Type::ClosureObject(ClosureObjectType {
+        self.add_type(Type::ClosureObject(LambdaObjectType {
             function_type: function_type_id,
             parsed_id,
             struct_representation,
@@ -1006,60 +1039,77 @@ impl Types {
         self.ability_mapping.get(&parsed_ability_id).copied()
     }
 
-    // Ended up storing redirects as RecursiveReference, but keeping this around
-    // Ah I also got this confused with instantiate_generic_type which is actually used for generic instantiation
-    // This one looks like it mutates the type tree instead of making a new type
-    pub fn replace_type(
-        &mut self,
-        placeholder_id: TypeId,
-        replace_in: TypeId,
-        replace_with: TypeId,
-    ) {
-        match self.get_mut(replace_in) {
-            Type::Unit(_) => (),
-            Type::Char(_) => (),
-            Type::Integer(_) => (),
-            Type::Float(_) => (),
-            Type::Bool(_) => (),
-            Type::Pointer(_) => (),
-            Type::Struct(s) => {
-                for f in s.fields.clone().iter_mut() {
-                    if f.type_id == placeholder_id {
-                        f.type_id = replace_with;
-                    } else {
-                        self.replace_type(placeholder_id, f.type_id, replace_with);
-                    }
+    pub fn get_type_variable_info(&self, type_id: TypeId) -> TypeVariableInfo {
+        *self.type_variable_counts.get(&type_id).unwrap()
+    }
+
+    /// Recursively checks if given type contains any type variables
+    /// Note: We could cache whether or not a type is generic on insertion into the type pool
+    ///       But types are not immutable so this could be a dangerous idea!
+    pub fn count_type_variables(&self, type_id: TypeId) -> TypeVariableInfo {
+        const EMPTY: TypeVariableInfo = TypeVariableInfo::EMPTY;
+        // nocommit: I don't think we can trust this; since it assumes no type variables
+        //           occur in the rhs type independently, which may not be true. Well, where
+        //           would they come from, maybe it is fine.
+        //if let Some(spec_info) = self.get_generic_instance_info(type_id) {
+        //    return spec_info
+        //        .param_values
+        //        .iter()
+        //        .fold(EMPTY, |t1, type_id| t1.add(self.count_type_variables(*type_id)));
+        //}
+        match self.get_no_follow(type_id) {
+            Type::TypeVariable(tv) => TypeVariableInfo {
+                type_variable_count: 1,
+                inference_variable_count: if tv.is_inference_variable { 1 } else { 0 },
+            },
+            Type::Unit(_) => EMPTY,
+            Type::Char(_) => EMPTY,
+            Type::Integer(_) => EMPTY,
+            Type::Float(_) => EMPTY,
+            Type::Bool(_) => EMPTY,
+            Type::Pointer(_) => EMPTY,
+            Type::Struct(struc) => {
+                let mut result = EMPTY;
+                for field in struc.fields.iter() {
+                    result = result.add(self.count_type_variables(field.type_id))
                 }
+                result
             }
-            Type::Reference(refer) => {
-                let inner_type = refer.inner_type;
-                self.replace_type(placeholder_id, inner_type, replace_with)
-            }
-            Type::TypeVariable(_) => (),
+            Type::Reference(refer) => self.count_type_variables(refer.inner_type),
             Type::Enum(e) => {
-                for v in e.variants.clone().iter_mut() {
-                    if v.my_type_id == placeholder_id {
-                        v.my_type_id = replace_with;
-                    } else {
-                        self.replace_type(placeholder_id, v.my_type_id, replace_with)
+                let mut result = EMPTY;
+                for v in e.variants.iter() {
+                    if let Some(payload) = v.payload {
+                        result = result.add(self.count_type_variables(payload));
                     }
                 }
+                result
             }
             Type::EnumVariant(ev) => {
                 if let Some(payload) = ev.payload {
-                    if payload == placeholder_id {
-                        ev.payload = Some(replace_with);
-                    } else {
-                        self.replace_type(placeholder_id, payload, replace_with)
-                    }
+                    self.count_type_variables(payload)
+                } else {
+                    EMPTY
                 }
             }
-            Type::Never(_) => (),
-            Type::Generic(_) => unreachable!(),
-            Type::Function(_f) => todo!(),
-            Type::Closure(_c) => todo!(),
-            Type::ClosureObject(_co) => todo!(),
-            Type::RecursiveReference(_rr) => (),
+            Type::Never(_) => EMPTY,
+            // The real answer here would be, all the type variables on the RHS that aren't one of
+            // the params. In other words, all FREE type variables
+            Type::Generic(_gen) => EMPTY,
+            Type::Function(fun) => {
+                let mut result = EMPTY;
+                for param in fun.params.iter() {
+                    result = result.add(self.count_type_variables(param.type_id))
+                }
+                result = result.add(self.count_type_variables(fun.return_type));
+                result
+            }
+            Type::Closure(closure) => self
+                .count_type_variables(closure.function_type)
+                .add(self.count_type_variables(closure.env_type)),
+            // But a closure object is generic if its function is generic
+            Type::ClosureObject(co) => self.count_type_variables(co.function_type),
+            Type::RecursiveReference(_rr) => EMPTY,
         }
     }
 }
