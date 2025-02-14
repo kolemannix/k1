@@ -81,6 +81,7 @@ pub struct TypeSubstitutionPair {
 
 pub struct InferenceContext {
     pub origin_stack: Vec<ParsedExpressionId>,
+    pub vars: Vec<TypeId>,
     pub constraints: Vec<TypeSubstitutionPair>,
 }
 
@@ -1879,6 +1880,7 @@ impl TypedModule {
             ast: parsed_module,
             inference_context: InferenceContext {
                 origin_stack: vec![],
+                vars: Vec::with_capacity(128),
                 constraints: Vec::with_capacity(128),
             },
         }
@@ -7955,11 +7957,11 @@ impl TypedModule {
                 //           name? We'll see
                 let inference_scope =
                     self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, None, None);
-                let mut instantation_set = vec![];
+                let mut instantiation_set = vec![];
+                let inference_var_count = self.inference_context.vars.len();
                 for (idx, param) in generic_type_params.iter().enumerate() {
-                    let ident = self.ast.identifiers.intern(format!("'{idx}"));
-                    // TBD: Regular ole type variable, special type of type variable,
-                    // or a whole new thing, TypeHole?
+                    let hole_number = idx + inference_var_count;
+                    let ident = self.ast.identifiers.intern(format!("'{hole_number}"));
                     let tv = self.types.add_type(Type::TypeVariable(TypeVariable {
                         name: ident,
                         scope_id: inference_scope,
@@ -7967,13 +7969,14 @@ impl TypedModule {
                         is_inference_variable: true,
                     }));
                     let _ = self.scopes.add_type(ctx.scope_id, param.name, tv);
-                    instantation_set.push(TypeSubstitutionPair { from: param.type_id, to: tv });
+                    self.inference_context.vars.push(tv);
+                    instantiation_set.push(TypeSubstitutionPair { from: param.type_id, to: tv });
                 }
                 let new_fn_type_id = self.substitute_in_type(
                     None,
                     generic_function_type_id,
                     None,
-                    &instantation_set,
+                    &instantiation_set,
                 );
                 let new_fn_ret_type =
                     self.types.get(new_fn_type_id).as_function().unwrap().return_type;
@@ -7999,7 +8002,7 @@ impl TypedModule {
                     );
                 }
 
-                let mut failed_exprs = Vec::new();
+                let mut failed_exprs: Vec<TyperError> = Vec::new();
                 for (index, (expr, gen_param)) in args_and_params.into_iter().enumerate() {
                     let type_hole =
                         self.types.get(new_fn_type_id).as_function().unwrap().params[index].type_id;
@@ -8058,12 +8061,8 @@ impl TypedModule {
                         }
                         Err(e) => {
                             // Should stop happening since they should be BOUND
-                            eprintln!("Just fyi eval_expr failed during inference: {e}");
-                            failed_exprs.push(e);
-                            // return failf!(
-                            //     expr.unwrap_err().span,
-                            //     "Just fyi eval_expr failed during inference: {expr:?}"
-                            // );
+                            //failed_exprs.push(e.clone());
+                            return Err(e);
                         }
                     }
                 }
@@ -8075,9 +8074,9 @@ impl TypedModule {
                 )?;
 
                 let mut solutions: Vec<SimpleNamedType> =
-                    Vec::with_capacity(instantation_set.len());
+                    Vec::with_capacity(instantiation_set.len());
                 for (param_to_hole, param) in
-                    instantation_set.iter().zip(generic_type_params.iter())
+                    instantiation_set.iter().zip(generic_type_params.iter())
                 {
                     let corresponding_hole = param_to_hole.to;
                     let solution = final_substitutions.get(&corresponding_hole).unwrap();
@@ -8088,6 +8087,7 @@ impl TypedModule {
                 if self.inference_context.origin_stack.is_empty() {
                     //eprintln!("Resetting inference buffer");
                     self.inference_context.constraints.clear();
+                    self.inference_context.vars.clear();
                 }
                 solutions
                 //if !solution_set.all_solved() {
@@ -8154,24 +8154,34 @@ impl TypedModule {
     //
     // We can save the types in some tree or lookup table for the lowering pass
 
-    fn add_substitution(&self, set: &mut Vec<TypeSubstitutionPair>, pair: TypeSubstitutionPair) {
+    fn add_substitution(&self, mut set: Vec<TypeSubstitutionPair>, pair: TypeSubstitutionPair) {
         debug!(
             "Applying substitution {} -> {} to set {}",
             self.type_id_to_string(pair.from),
             self.type_id_to_string(pair.to),
-            self.pretty_print_type_substitutions(set, ", ")
+            self.pretty_print_type_substitutions(&set, ", ")
         );
-        set.iter_mut().for_each(|existing| {
-            if existing.from == pair.from {
-                existing.from = pair.to
-            } else if pair.from == existing.to {
-                existing.to = pair.to
-            }
-        });
+        let new_set = set
+            .iter()
+            .filter_map(|existing| {
+                let new_pair = if existing.from == pair.from {
+                    TypeSubstitutionPair { from: pair.to, to: existing.to }
+                } else if pair.from == existing.to {
+                    TypeSubstitutionPair { from: existing.from, to: pair.to }
+                } else {
+                    *existing
+                };
+                if new_pair.from == new_pair.to {
+                    None
+                } else {
+                    Some(new_pair)
+                }
+            })
+            .collect();
 
         debug!("Got set {}", self.pretty_print_type_substitutions(set, ", "));
 
-        set.push(pair)
+        set = new_set;
     }
 
     fn substitutions_if_consistent(

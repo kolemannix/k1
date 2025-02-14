@@ -39,6 +39,8 @@ ns List {
     self.buffer.slice(0, self.len)
   }
 
+  fn innerBuffer[T](self: List[T]): Buffer[T] { self.buffer }
+
   fn cap[T](self: List[T]): u64 { self.buffer.len }
 
   fn getRef[T](self: List[T], index: u64): T* {
