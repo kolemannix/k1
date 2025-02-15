@@ -3792,6 +3792,7 @@ pub fn test_parse_module(source: Source) -> ParseResult<ParsedModule> {
         module_name,
         CompilerConfig {
             is_test_build: false,
+            no_std: true,
             target: crate::compiler::detect_host_target().unwrap(),
         },
     );
@@ -3810,7 +3811,7 @@ pub fn test_parse_module(source: Source) -> ParseResult<ParsedModule> {
 }
 
 impl Identifiers {
-    pub const BUILTIN_IDENTS: [&'static str; 33] = [
+    pub const BUILTIN_IDENTS: [&'static str; 34] = [
         "main",
         "self",
         "it",
@@ -3844,5 +3845,6 @@ impl Identifiers {
         "try",
         "try_value",
         "if_target",
+        "crash",
     ];
 }

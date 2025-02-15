@@ -4,7 +4,11 @@ use std::fs;
 fn make_test_module() -> ParsedModule {
     ParsedModule::make(
         "unit_test".to_string(),
-        CompilerConfig { is_test_build: false, target: detect_host_target().unwrap() },
+        CompilerConfig {
+            is_test_build: false,
+            no_std: true,
+            target: detect_host_target().unwrap(),
+        },
     )
 }
 

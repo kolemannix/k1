@@ -527,6 +527,12 @@ pub struct TypedFunction {
     pub is_concrete: bool,
 }
 
+impl TypedFunction {
+    fn is_generic(&self) -> bool {
+        !self.type_params.is_empty()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TypeParam {
     pub name: Identifier,
@@ -611,6 +617,7 @@ impl TypeSolutionSet {
 
 enum TypeUnificationResult {
     Matching,
+    NoHoles,
     NonMatching(&'static str),
 }
 
@@ -1890,13 +1897,13 @@ impl TypedModule {
         let level = log::LevelFilter::Debug;
         self.debug_level_stack.push(level);
         log::set_max_level(level);
-        eprintln!("push max_level is now {}", log::max_level())
+        debug!("push max_level is now {}", log::max_level())
     }
 
     fn pop_debug_level(&mut self) {
         self.debug_level_stack.pop();
         log::set_max_level(*self.debug_level_stack.last().unwrap());
-        eprintln!("pop max_level is now {}", log::max_level())
+        debug!("pop max_level is now {}", log::max_level())
     }
 
     pub fn function_iter(&self) -> impl Iterator<Item = (FunctionId, &TypedFunction)> {
@@ -1989,11 +1996,10 @@ impl TypedModule {
             Vec::with_capacity(parsed_type_defn.type_params.len());
         for type_param in parsed_type_defn.type_params.iter() {
             let type_variable_id = self.add_type_variable(
-                TypeVariable {
+                TypeParameter {
                     name: type_param.name,
                     scope_id: defn_scope_id,
                     span: type_param.span,
-                    is_inference_variable: false,
                 },
                 vec![],
             );
@@ -2710,10 +2716,10 @@ impl TypedModule {
                 let inner = gen.inner;
 
                 let specialized_type = self.substitute_in_type(
-                    Some(generic_type),
                     inner,
-                    Some(type_defn_info),
                     &substitution_pairs,
+                    Some(generic_type),
+                    Some(type_defn_info),
                 );
                 if log::log_enabled!(log::Level::Debug) {
                     let gen = self.types.get(generic_type).expect_generic();
@@ -2739,10 +2745,10 @@ impl TypedModule {
 
     fn substitute_in_type(
         &mut self,
-        generic_parent_to_attach: Option<TypeId>,
         type_id: TypeId,
-        defn_info_to_attach: Option<TypeDefnInfo>,
         substitution_pairs: &[TypeSubstitutionPair],
+        generic_parent_to_attach: Option<TypeId>,
+        defn_info_to_attach: Option<TypeDefnInfo>,
     ) -> TypeId {
         let force_new = defn_info_to_attach.is_some();
         // If this type is already a generic instance of something, just
@@ -2767,7 +2773,7 @@ impl TypedModule {
                 .clone()
                 .iter()
                 .map(|prev_type_id| {
-                    self.substitute_in_type(None, *prev_type_id, None, substitution_pairs)
+                    self.substitute_in_type(*prev_type_id, substitution_pairs, None, None)
                 })
                 .collect();
             return self.instantiate_generic_type(generic_parent, new_parameter_values);
@@ -2787,7 +2793,7 @@ impl TypedModule {
                 let original_instance_info = struc.generic_instance_info.clone();
                 for field in new_fields.iter_mut() {
                     let new_field_type_id =
-                        self.substitute_in_type(None, field.type_id, None, substitution_pairs);
+                        self.substitute_in_type(field.type_id, substitution_pairs, None, None);
                     if new_field_type_id != field.type_id {
                         any_change = true;
                     }
@@ -2820,7 +2826,7 @@ impl TypedModule {
                 let original_explicit_tag_type = e.explicit_tag_type;
                 for variant in new_variants.iter_mut() {
                     let new_payload_id = variant.payload.map(|payload_type_id| {
-                        self.substitute_in_type(None, payload_type_id, None, substitution_pairs)
+                        self.substitute_in_type(payload_type_id, substitution_pairs, None, None)
                     });
                     if force_new || new_payload_id != variant.payload {
                         any_changed = true;
@@ -2852,7 +2858,7 @@ impl TypedModule {
             }
             Type::Reference(reference) => {
                 let ref_inner = reference.inner_type;
-                let new_inner = self.substitute_in_type(None, ref_inner, None, substitution_pairs);
+                let new_inner = self.substitute_in_type(ref_inner, substitution_pairs, None, None);
                 if force_new || new_inner != ref_inner {
                     let specialized_reference = ReferenceType { inner_type: new_inner };
                     self.types.add_type(Type::Reference(specialized_reference))
@@ -2860,7 +2866,8 @@ impl TypedModule {
                     type_id
                 }
             }
-            Type::TypeVariable(_) => type_id,
+            Type::TypeParameter(_) => type_id,
+            Type::InferenceHole(_) => type_id,
             Type::Unit(_)
             | Type::Char(_)
             | Type::Integer(_)
@@ -2877,14 +2884,14 @@ impl TypedModule {
                 let mut new_fun_type = fun_type.clone();
                 let mut any_new = false;
                 let new_return_type =
-                    self.substitute_in_type(None, fun_type.return_type, None, substitution_pairs);
+                    self.substitute_in_type(fun_type.return_type, substitution_pairs, None, None);
                 if new_return_type != new_fun_type.return_type {
                     any_new = true
                 };
                 new_fun_type.return_type = new_return_type;
                 for param in new_fun_type.params.iter_mut() {
                     let new_param_type =
-                        self.substitute_in_type(None, param.type_id, None, substitution_pairs);
+                        self.substitute_in_type(param.type_id, substitution_pairs, None, None);
                     if new_param_type != param.type_id {
                         any_new = true;
                     }
@@ -2907,7 +2914,7 @@ impl TypedModule {
                 let co_fn_type = co.function_type;
                 let co_parsed_id = co.parsed_id;
                 let new_fn_type =
-                    self.substitute_in_type(None, co.function_type, None, substitution_pairs);
+                    self.substitute_in_type(co.function_type, substitution_pairs, None, None);
                 if new_fn_type != co_fn_type || force_new {
                     self.types.add_closure_object(&self.ast.identifiers, new_fn_type, co_parsed_id)
                 } else {
@@ -3207,7 +3214,7 @@ impl TypedModule {
     }
 
     fn get_type_id_resolved(&self, type_id: TypeId, scope_id: ScopeId) -> TypeId {
-        if let Type::TypeVariable(tvar) = self.types.get(type_id) {
+        if let Type::TypeParameter(tvar) = self.types.get(type_id) {
             match self.scopes.find_type(scope_id, tvar.name) {
                 None => {
                     debug!("Unresolved type variable. {}", self.name_of(tvar.name));
@@ -3292,6 +3299,7 @@ impl TypedModule {
         }
 
         match (self.types.get(expected), self.types.get(actual)) {
+            //(Type::InferenceHole(_hole), any) => Ok(()),
             (Type::Struct(r1), Type::Struct(r2)) => self.typecheck_struct(r1, r2, scope_id),
             (Type::Reference(o1), Type::Reference(o2)) => {
                 self.check_types(o1.inner_type, o2.inner_type, scope_id)
@@ -3358,14 +3366,11 @@ impl TypedModule {
                 }
             }
             (_expected, Type::Never(_)) => Ok(()),
-            (_exp, _act) => {
-                // Resolve type variables
-                Err(format!(
-                    "Expected {} but got {}",
-                    self.type_id_to_string_ext(expected, false),
-                    self.type_id_to_string_ext(actual, false),
-                ))
-            }
+            (_exp, _act) => Err(format!(
+                "Expected {} but got {}",
+                self.type_id_to_string_ext(expected, false),
+                self.type_id_to_string_ext(actual, false),
+            )),
         }
     }
 
@@ -3407,6 +3412,7 @@ impl TypedModule {
                         let os_str = self.ast.config.target.target_os().to_str();
                         Ok(CompileTimeValue::String(os_str.to_owned().into_boxed_str()))
                     }
+                    Some("K1_NO_STD") => Ok(CompileTimeValue::Boolean(self.ast.config.no_std)),
                     Some(s) => failf!(*span, "Unknown builtin name: {s}"),
                 }
             }
@@ -3427,6 +3433,21 @@ impl TypedModule {
                 let constant = &self.constants[constant_id.0 as usize];
                 Ok(constant.value.clone())
             }
+            ParsedExpression::UnaryOp(op) => match op.op_kind {
+                ParsedUnaryOpKind::BooleanNegation => {
+                    let op_expr = op.expr;
+                    let inner =
+                        self.eval_const_expr(op_expr, Some(BOOL_TYPE_ID), eval_ctx.scope_id, None)?;
+                    let CompileTimeValue::Boolean(b) = &inner else {
+                        return failf!(
+                            self.ast.expressions.get_span(op_expr),
+                            "Expected constant boolean, got {:?}",
+                            inner
+                        );
+                    };
+                    Ok(CompileTimeValue::Boolean(!b))
+                }
+            },
             _other => {
                 failf!(
                     self.ast.expressions.get_span(expr),
@@ -3571,13 +3592,13 @@ impl TypedModule {
 
     fn add_type_variable(
         &mut self,
-        value: TypeVariable,
+        value: TypeParameter,
         ability_impls: Vec<TypedAbilitySignature>,
     ) -> TypeId {
         let span = value.span;
         let constrained_impl_scope =
             self.scopes.add_child_scope(value.scope_id, ScopeType::AbilityImpl, None, None);
-        let type_id = self.types.add_type(Type::TypeVariable(value));
+        let type_id = self.types.add_type(Type::TypeParameter(value));
         for ability_sig in ability_impls.into_iter() {
             self.add_constrained_ability_impl(type_id, ability_sig, constrained_impl_scope, span);
         }
@@ -3829,7 +3850,7 @@ impl TypedModule {
         let mut substituted_ability_args = Vec::with_capacity(blanket_ability_args.len());
         for blanket_arg in blanket_ability_args {
             // Substitute T, U, V, in for each
-            let substituted_type = self.substitute_in_type(None, blanket_arg.type_id, None, &pairs);
+            let substituted_type = self.substitute_in_type(blanket_arg.type_id, &pairs, None, None);
             let nt = SimpleNamedType { name: blanket_arg.name, type_id: substituted_type };
             substituted_ability_args.push(nt);
             if !self.scopes.add_type(new_impl_scope, blanket_arg.name, substituted_type) {
@@ -3843,7 +3864,7 @@ impl TypedModule {
         for blanket_impl_arg in &blanket_impl.impl_arguments {
             // Substitute T, U, V, in for each
             let substituted_type =
-                self.substitute_in_type(None, blanket_impl_arg.type_id, None, &pairs);
+                self.substitute_in_type(blanket_impl_arg.type_id, &pairs, None, None);
             let nt = SimpleNamedType { name: blanket_impl_arg.name, type_id: substituted_type };
             substituted_impl_arguments.push(nt);
             if !self.scopes.add_type(new_impl_scope, blanket_impl_arg.name, substituted_type) {
@@ -4054,7 +4075,11 @@ impl TypedModule {
                 IntegerType::I64 => parse_int!(I64, i64, dec_base, offset),
             };
             let value = value.map_err(|e| {
-                make_error(format!("Invalid integer {expected_int_type}: {e}"), span)
+                errf!(
+                    span,
+                    "Invalid {} integer {expected_int_type}: {e}",
+                    if expected_int_type.is_signed() { "signed" } else { "unsigned" }
+                )
             })?;
             Ok(value)
         }
@@ -4614,16 +4639,21 @@ impl TypedModule {
         if is_debug {
             self.push_debug_level();
         }
+        let mut self_ = scopeguard::guard(self, |s| {
+            if is_debug {
+                s.pop_debug_level()
+            }
+        });
         let should_compile = match conditional_compile_expr {
             None => true,
             Some(condition) => {
                 let typed_condition =
-                    self.eval_const_expr(condition, Some(BOOL_TYPE_ID), ctx.scope_id, None)?;
+                    self_.eval_const_expr(condition, Some(BOOL_TYPE_ID), ctx.scope_id, None)?;
                 match typed_condition {
                     CompileTimeValue::Boolean(b) => b,
                     _ => {
                         return failf!(
-                            self.ast.expressions.get_span(condition),
+                            self_.ast.expressions.get_span(condition),
                             "Condition must be a compile-time-known boolean"
                         )
                     }
@@ -4632,23 +4662,23 @@ impl TypedModule {
         };
         if !should_compile {
             eprintln!("#if was false; yeeting in a unit for now");
-            return Ok(TypedExpr::Unit(self.ast.expressions.get_span(expr_id)));
+            return Ok(TypedExpr::Unit(self_.ast.expressions.get_span(expr_id)));
         }
-        ctx.expected_type_id = match self.ast.expressions.get_type_hint(expr_id) {
+        ctx.expected_type_id = match self_.ast.expressions.get_type_hint(expr_id) {
             Some(t) => {
-                let type_id = self.eval_type_expr(t, ctx.scope_id)?;
+                let type_id = self_.eval_type_expr(t, ctx.scope_id)?;
                 Some(type_id)
             }
             None => ctx.expected_type_id,
         };
-        let base_result = self.eval_expr_inner(expr_id, ctx)?;
+        let base_result = self_.eval_expr_inner(expr_id, ctx)?;
 
         // FIXME: We gotta get rid of this coerce step its involved in every bug
         //        We can do instead a principled subtyping relation where a subtype decision
         //        is accompanied by a transformation expression
         let result = if let Some(expected_type_id) = &ctx.expected_type_id {
             // Try to coerce if types don't match
-            let new_expr = match self.coerce_expression_to_expected_type(
+            let new_expr = match self_.coerce_expression_to_expected_type(
                 *expected_type_id,
                 base_result,
                 ctx.scope_id,
@@ -4658,8 +4688,8 @@ impl TypedModule {
                 CoerceResult::Coerced(reason, new_expr) => {
                     debug!(
                         "coerce succeeded with rule {reason} and resulted in expr {}: {}",
-                        self.expr_to_string(&new_expr),
-                        self.type_id_to_string(new_expr.get_type())
+                        self_.expr_to_string(&new_expr),
+                        self_.type_id_to_string(new_expr.get_type())
                     );
                     new_expr
                 }
@@ -4669,14 +4699,13 @@ impl TypedModule {
             Ok(base_result)
         }?;
         if is_debug {
-            let expr_span = self.ast.expressions.get_span(expr_id);
+            let expr_span = self_.ast.expressions.get_span(expr_id);
             eprintln!(
                 "DEBUG EXPR\n{} hint {}\nRESULT\n{}",
-                self.ast.get_span_content(expr_span),
-                self.type_id_option_to_string(ctx.expected_type_id),
-                self.expr_to_string_with_type(&result)
+                self_.ast.get_span_content(expr_span),
+                self_.type_id_option_to_string(ctx.expected_type_id),
+                self_.expr_to_string_with_type(&result)
             );
-            self.pop_debug_level();
         };
         Ok(result)
     }
@@ -6432,9 +6461,8 @@ impl TypedModule {
             ctx,
         )?;
 
+        // TODO: allocations
         let mut all_bindings = Vec::new();
-
-        // nocommit: more efficiently get all these bindings
         for pattern in all_patterns.iter() {
             pattern.all_bindings_rec(&mut all_bindings);
         }
@@ -6770,7 +6798,7 @@ impl TypedModule {
         let lhs = self.eval_expr(binary_op.lhs, ctx.with_no_expected_type())?;
         let lhs_type = lhs.get_type();
         let equality_result = match self.types.get(lhs_type) {
-            Type::TypeVariable(_type_var) => {
+            Type::TypeParameter(_type_var) => {
                 let rhs = self.eval_expr(binary_op.rhs, ctx.with_expected_type(Some(lhs_type)))?;
                 Ok(TypedExpr::BinaryOp(BinaryOp {
                     kind: BinaryOpKind::Equals,
@@ -7240,7 +7268,7 @@ impl TypedModule {
         let ability_params = self.get_ability(ability_id).parameters.clone();
         let ability_self_type_id = self.get_ability(ability_id).self_type_id;
         //
-        // 1) Solve for 'self'
+        // 1) Solve for 'self' and all ability params
         let passed_len = known_args.map(|ka| ka.1.len()).unwrap_or(fn_call.args.len());
         if passed_len != ability_fn_signature.params.len() {
             return failf!(call_span, "Mismatching arg count when trying to resolve ability call to {} (this probably doesn't handle context params properly)", self.name_of(fn_call.name.name));
@@ -7478,6 +7506,8 @@ impl TypedModule {
             let Some(generic_variant) = inner_enum.variant_by_name(variant_name) else {
                 return Ok(None);
             };
+            // nocommit This is really calling a generic function that happens to be a constructor. If we instantiated a function type
+            // could we re-use our inference code?
             let g_params = g.params.clone();
             let g_name = g.type_defn_info.name;
             let generic_payload = match generic_variant.payload {
@@ -7792,7 +7822,7 @@ impl TypedModule {
 
         // Now that we have resolved to a function id, we need to specialize it if generic
         let original_function = callee.maybe_function_id().map(|f| self.get_function(f));
-        let is_generic = original_function.is_some_and(|f| !f.type_params.is_empty());
+        let is_generic = original_function.is_some_and(|f| f.is_generic());
 
         let (callee, typechecked_arguments, type_args, return_type) = match is_generic {
             false => {
@@ -7916,8 +7946,8 @@ impl TypedModule {
         let generic_function = self.get_function(generic_function_id);
         let generic_function_type_id = generic_function.type_id;
         let generic_function_type = self.get_function_type(generic_function_id);
+        debug_assert!(generic_function.is_generic());
         let generic_type_params = generic_function.type_params.clone();
-        debug_assert!(!generic_type_params.is_empty());
         let original_params = generic_function_type.params.clone();
         let passed_type_args = &fn_call.type_args;
         let type_params = match passed_type_args.is_empty() {
@@ -7939,8 +7969,6 @@ impl TypedModule {
                 evaled_params
             }
             true => {
-                // let mut solution_set = TypeSolutionSet::from(generic_type_params.iter());
-
                 let args_and_params = self.align_call_arguments_with_parameters(
                     fn_call,
                     &original_params,
@@ -7949,42 +7977,34 @@ impl TypedModule {
                     true,
                 )?;
 
+                // nocommmit: Ensure this stack doesn't get corrupted, using a scope guard
                 self.inference_context.origin_stack.push(fn_call.id);
-                // eprintln!("INFER {}", self.inference_context.origin_stack.len());
 
-                // nocommit: New scope type for inference throwaway scopes
-                //           Actually I may not need a scope since I'm not binding anything by
-                //           name? We'll see
-                let inference_scope =
-                    self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, None, None);
-                let mut instantiation_set = vec![];
+                let mut instantiation_set = Vec::with_capacity(generic_type_params.len());
                 let inference_var_count = self.inference_context.vars.len();
                 for (idx, param) in generic_type_params.iter().enumerate() {
-                    let hole_number = idx + inference_var_count;
-                    let ident = self.ast.identifiers.intern(format!("'{hole_number}"));
-                    let tv = self.types.add_type(Type::TypeVariable(TypeVariable {
-                        name: ident,
-                        scope_id: inference_scope,
+                    let hole_index = idx + inference_var_count;
+                    let tv = self.types.add_type(Type::InferenceHole(InferenceHoleType {
+                        index: hole_index as u32,
                         span: param.span,
-                        is_inference_variable: true,
                     }));
-                    let _ = self.scopes.add_type(ctx.scope_id, param.name, tv);
+                    // let _ = self.scopes.add_type(ctx.scope_id, param.name, tv);
                     self.inference_context.vars.push(tv);
                     instantiation_set.push(TypeSubstitutionPair { from: param.type_id, to: tv });
                 }
-                let new_fn_type_id = self.substitute_in_type(
-                    None,
+                let instantiated_fn_type_id = self.substitute_in_type(
                     generic_function_type_id,
-                    None,
                     &instantiation_set,
+                    None,
+                    None,
                 );
                 let new_fn_ret_type =
-                    self.types.get(new_fn_type_id).as_function().unwrap().return_type;
+                    self.types.get(instantiated_fn_type_id).as_function().unwrap().return_type;
                 debug!(
                     "Instantiated fn type of {} for inference. Was: {}, is: {}",
                     self.name_of(fn_call.name.name),
                     self.type_id_to_string(generic_function_type_id),
-                    self.type_id_to_string(new_fn_type_id)
+                    self.type_id_to_string(instantiated_fn_type_id)
                 );
 
                 if let Some(call_expected_type) = ctx.expected_type_id {
@@ -8002,23 +8022,22 @@ impl TypedModule {
                     );
                 }
 
-                let mut failed_exprs: Vec<TyperError> = Vec::new();
+                //let mut failed_exprs: Vec<TyperError> = Vec::new();
                 for (index, (expr, gen_param)) in args_and_params.into_iter().enumerate() {
-                    let type_hole =
-                        self.types.get(new_fn_type_id).as_function().unwrap().params[index].type_id;
+                    let param_type =
+                        self.types.get(instantiated_fn_type_id).as_function().unwrap().params
+                            [index]
+                            .type_id;
                     let current_substitutions = self.substitutions_if_consistent(
                         &self.inference_context.constraints,
                         fn_call.span,
                     )?;
-                    let expected_type_so_far =
-                        current_substitutions.get(&type_hole).copied().unwrap_or(type_hole);
+                    let s: Vec<_> = current_substitutions
+                        .into_iter()
+                        .map(|p| TypeSubstitutionPair { from: p.0, to: p.1 })
+                        .collect();
+                    let expected_type_so_far = self.substitute_in_type(param_type, &s, None, None);
 
-                    // We don't care if this fails; sometimes we can't
-                    // evaluate an expression before inferring types
-                    // That's ok because
-                    // 1) We hope that other arguments will have more luck
-                    // 2) We will evaluate these expressions again when we actually
-                    //    do typechecking, if we manage to solve the generics
                     let expr = match expr {
                         MaybeTypedExpr::Typed(typed) => Ok(typed),
                         MaybeTypedExpr::Parsed(parsed_expr) => {
@@ -8027,44 +8046,35 @@ impl TypedModule {
                                 .with_expected_type(Some(expected_type_so_far));
                             self.eval_expr(parsed_expr, inference_context)
                         }
-                    };
-                    match expr {
-                        Ok(expr) => {
-                            debug!(
-                                "unify '{}': {} =:= {}",
-                                self.name_of(gen_param.name),
-                                self.expr_to_string_with_type(&expr),
-                                self.type_id_to_string(expected_type_so_far),
-                            );
-                            if let TypeUnificationResult::NonMatching(msg) = self
-                                .unify_and_find_substitutions(
-                                    expr.get_type(),
-                                    expected_type_so_far,
-                                    fn_call.span,
-                                )?
-                            {
-                                self.inference_context.origin_stack.pop();
-                                return failf!(
+                    }?;
+                    debug!(
+                        "unify '{}': {} =:= {}",
+                        self.name_of(gen_param.name),
+                        self.expr_to_string_with_type(&expr),
+                        self.type_id_to_string(expected_type_so_far),
+                    );
+                    if let TypeUnificationResult::NonMatching(msg) = self
+                        .unify_and_find_substitutions(
+                            expr.get_type(),
+                            expected_type_so_far,
+                            fn_call.span,
+                        )?
+                    {
+                        self.inference_context.origin_stack.pop();
+                        return failf!(
                                     expr.get_span(),
-                                    "Invalid argument: {msg}: expected {} but got {}",
+                                    "Passed value does not match expected type: expected {} but got {}. {msg}",
                                     self.type_id_to_string(expected_type_so_far),
                                     self.type_id_to_string(expr.get_type())
                                 );
-                            };
-                            debug!(
-                                "subst\n\t{}",
-                                self.pretty_print_type_substitutions(
-                                    &self.inference_context.constraints,
-                                    "\n\t"
-                                ),
-                            );
-                        }
-                        Err(e) => {
-                            // Should stop happening since they should be BOUND
-                            //failed_exprs.push(e.clone());
-                            return Err(e);
-                        }
-                    }
+                    };
+                    debug!(
+                        "subst\n\t{}",
+                        self.pretty_print_type_substitutions(
+                            &self.inference_context.constraints,
+                            "\n\t"
+                        ),
+                    );
                 }
 
                 // TODO: enrich error
@@ -8079,7 +8089,13 @@ impl TypedModule {
                     instantiation_set.iter().zip(generic_type_params.iter())
                 {
                     let corresponding_hole = param_to_hole.to;
-                    let solution = final_substitutions.get(&corresponding_hole).unwrap();
+                    let Some(solution) = final_substitutions.get(&corresponding_hole) else {
+                        return failf!(
+                            fn_call.span,
+                            "No idea what {} should be",
+                            self.name_of(param.name)
+                        );
+                    };
                     solutions.push(SimpleNamedType { name: param.name, type_id: *solution })
                 }
                 let id = self.inference_context.origin_stack.pop().unwrap();
@@ -8153,35 +8169,31 @@ impl TypedModule {
     // For anything annotated we can skip evaluation!!!
     //
     // We can save the types in some tree or lookup table for the lowering pass
+    //fn get_type_of_expr(&mut self, expr: ParsedExpressionId, scope_id: ScopeId) -> Option<TypeId> {
+    //    None
+    //}
 
-    fn add_substitution(&self, mut set: Vec<TypeSubstitutionPair>, pair: TypeSubstitutionPair) {
+    fn add_substitution(&self, set: &mut Vec<TypeSubstitutionPair>, pair: TypeSubstitutionPair) {
         debug!(
             "Applying substitution {} -> {} to set {}",
             self.type_id_to_string(pair.from),
             self.type_id_to_string(pair.to),
-            self.pretty_print_type_substitutions(&set, ", ")
+            self.pretty_print_type_substitutions(set, ", ")
         );
-        let new_set = set
-            .iter()
-            .filter_map(|existing| {
-                let new_pair = if existing.from == pair.from {
-                    TypeSubstitutionPair { from: pair.to, to: existing.to }
-                } else if pair.from == existing.to {
-                    TypeSubstitutionPair { from: existing.from, to: pair.to }
-                } else {
-                    *existing
-                };
-                if new_pair.from == new_pair.to {
-                    None
-                } else {
-                    Some(new_pair)
-                }
-            })
-            .collect();
+        if pair.from == pair.to {
+            return;
+        }
+        set.iter_mut().for_each(|existing| {
+            if existing.from == pair.from {
+                existing.from = pair.to
+            } else if existing.to == pair.from {
+                existing.to = pair.to
+            };
+        });
+        set.retain(|pair| pair.from != pair.to);
+        set.push(pair);
 
         debug!("Got set {}", self.pretty_print_type_substitutions(set, ", "));
-
-        set = new_set;
     }
 
     fn substitutions_if_consistent(
@@ -8192,12 +8204,29 @@ impl TypedModule {
         debug!("Is set consistent: {}", self.pretty_print_type_substitutions(substitutions, ", "));
         let mut final_pairs = FxHashMap::new();
         for subst in substitutions {
-            // nocommit: we should just not store identity substitutions as they carry no
-            // information
-            let identity_substitution = subst.from == subst.to;
-            if identity_substitution {
-                continue;
-            }
+            // Validity first
+            // This maybe unnecessary since we are passing in our 'current guess'
+            // as the expected type once we have one, so we'll just get a failure when
+            // evaluating that node rather than an inconsistent substitution
+
+            //match self.types.get(subst.from) {
+            //    Type::TypeVariable(tv) if tv.is_inference_variable => {}
+            //    from => match self.types.get(subst.to) {
+            //        Type::TypeVariable(tv) if tv.is_inference_variable => {}
+            //        to => {
+            //            if subst.from != subst.to {
+            //                return failf!(
+            //                    span,
+            //                    "Contradicting substitution: {} -> {}",
+            //                    self.type_id_to_string(subst.from),
+            //                    self.type_id_to_string(subst.to)
+            //                );
+            //            }
+            //        }
+            //    },
+            //}
+
+            // Consistency
             match final_pairs.entry(subst.from) {
                 std::collections::hash_map::Entry::Vacant(e) => {
                     e.insert(subst.to);
@@ -8217,6 +8246,13 @@ impl TypedModule {
                 }
             }
         }
+        for p in final_pairs.iter() {
+            debug!(
+                "final_pair {} -> {}",
+                self.type_id_to_string(*p.0),
+                self.type_id_to_string(*p.1)
+            );
+        }
         Ok(final_pairs)
     }
 
@@ -8227,13 +8263,6 @@ impl TypedModule {
         span: SpanId,
     ) -> TyperResult<TypeUnificationResult> {
         // eprintln!("unify_and_find_substitutions slot {}", self.type_id_to_string(slot_type));
-        let counts = self.types.type_variable_counts.get(&slot_type).unwrap();
-        if counts.inference_variable_count == 0 {
-            debug!(
-                "I should skip this because it has no type holes in it: {}",
-                self.type_id_to_string(slot_type)
-            );
-        }
         let mut inference_substitutions = std::mem::take(&mut self.inference_context.constraints);
         let result = self.unify_and_find_substitutions_rec(
             &mut inference_substitutions,
@@ -8252,35 +8281,38 @@ impl TypedModule {
         slot_type: TypeId,
         span: SpanId,
     ) -> TyperResult<TypeUnificationResult> {
-        // nocommit: We could track whether types contain any type variables; there's
-        //           no point calling this on slot_type Json since it has no type variables in it
-
         // passed_type           slot_type          -> result
         //
-        // int                    T                 -> T := int
-        // List[int]              List[T]           -> T := int
-        // Pair[int, string]      Pair[T, U]        -> T := int, U := string
-        // fn(int) -> int         Fn(T) -> T        -> T := int
-        // fn() -> List[string]   Fn() -> List[T]   -> T := string
+        // int                    '0                 -> '0 := int
+        // List[int]              List['0]           -> '0 := int
+        // Pair[int, string]      Pair['0, '1]        -> '0 := int, '1 := string
+        // fn(int) -> int         Fn('0) -> '0        -> '0 := int
+        // fn() -> List[string]   Fn() -> List['0]   -> '0 := string
         //
         // Recursive
         //
-        // deftype Json = either JsArray(List[Json]),
-        // Just run on all non-recursive members, which means we just no-op on recursivereference
-        //
-        // Higher-order types (I dont see why not?)
+        // one day: Higher-order types (I dont see why not?)
         // List[int]              F[int]            -> F := List
         debug!(
             "unify_and_find_substitutions passed {} in slot {}",
             self.type_id_to_string(passed_type).blue(),
             self.type_id_to_string(slot_type).blue()
         );
+        let counts = self.types.type_variable_counts.get(&slot_type).unwrap();
+        if counts.inference_variable_count == 0 {
+            debug!(
+                "I should skip this because it has no type holes in it: {}",
+                self.type_id_to_string(slot_type)
+            );
+            return Ok(TypeUnificationResult::NoHoles);
+        }
 
+        // nocommit: This special case may be removable now
         if let (Some(passed_info), Some(arg_info)) = (
             self.types.get_generic_instance_info(passed_type),
             self.types.get_generic_instance_info(slot_type),
         ) {
-            // expr: NewList[int] arg: NewList[T]
+            // expr: NewList[int] arg: NewList['0]
             if passed_info.generic_parent == arg_info.generic_parent {
                 debug!(
                     "comparing generic instances of {}",
@@ -8304,8 +8336,10 @@ impl TypedModule {
         }
 
         match (self.types.get_no_follow(passed_type), self.types.get_no_follow(slot_type)) {
-            (_actual_type, Type::TypeVariable(_expected_variable)) => {
-                // nocommit: Occurs check?
+            (_actual_type, Type::InferenceHole(_expected_hole)) => {
+                // Note: We may eventually need an 'occurs' check to prevent recursive
+                // substitutions; for now they don't seem to be occurring though, and it'll
+                // be obvious if they ever do
                 self.add_substitution(
                     substitutions,
                     TypeSubstitutionPair { from: slot_type, to: passed_type },
@@ -8412,7 +8446,9 @@ impl TypedModule {
                         span,
                     )
                 } else {
-                    Ok(TypeUnificationResult::NonMatching("parameter count"))
+                    Ok(TypeUnificationResult::NonMatching(
+                        "Functions take a different number of arguments",
+                    ))
                 }
             }
             (Type::Closure(passed_closure), Type::ClosureObject(param_closure)) => self
@@ -8480,7 +8516,7 @@ impl TypedModule {
         }
 
         match (self.types.get(passed_type), self.types.get(slot_type)) {
-            (_, Type::TypeVariable(_tv)) => {
+            (_, Type::TypeParameter(_tv)) => {
                 // If the type param is used in the type of the argument, we can infer
                 // the type param from the type of the argument
                 match solved_params.get_solution_mut(slot_type) {
@@ -8489,17 +8525,17 @@ impl TypedModule {
                         Some(existing_solution) => {
                             if existing_solution != passed_type {
                                 return failf!(
-                                    span,
-                                    "Conflicting type parameters for type param {} in call: {} and {}",
-                                    self.name_of(solution.name),
-                                    self.type_id_to_string(existing_solution),
-                                    self.type_id_to_string(passed_type)
-                                );
+                                     span,
+                                     "Conflicting type parameters for type param {} in call: {} and {}",
+                                     self.name_of(solution.name),
+                                     self.type_id_to_string(existing_solution),
+                                     self.type_id_to_string(passed_type)
+                                 );
                             } else {
                                 debug!(
-                                   "We double-solved type param {} but that's ok because it matched",
-                                   self.name_of(solution.name)
-                                )
+                                    "We double-solved type param {} but that's ok because it matched",
+                                    self.name_of(solution.name)
+                                 )
                             }
                         }
                         None => {
@@ -8704,7 +8740,7 @@ impl TypedModule {
             })
             .collect();
         let specialized_function_type_id =
-            self.substitute_in_type(None, generic_function_type_id, None, &pairs);
+            self.substitute_in_type(generic_function_type_id, &pairs, None, None);
         let specialized_function_type =
             self.types.get(specialized_function_type_id).as_function().unwrap();
 
@@ -8830,8 +8866,8 @@ impl TypedModule {
                     let is_concrete = match &function.specialization_info {
                         None => function.type_params.is_empty(),
                         Some(_spec_info) => {
-                            self.types.get_type_variable_info(function.type_id).type_variable_count
-                                == 0
+                            let info = self.types.get_type_variable_info(function.type_id);
+                            info.type_parameter_count == 0 && info.inference_variable_count == 0
                         }
                     };
                     if function.compiler_debug {
@@ -9396,12 +9432,7 @@ impl TypedModule {
         };
         let self_ident = get_ident!(self, "Self");
         let new_self_type_id = self.add_type_variable(
-            TypeVariable {
-                name: self_ident,
-                scope_id: specialized_ability_scope,
-                span,
-                is_inference_variable: false,
-            },
+            TypeParameter { name: self_ident, scope_id: specialized_ability_scope, span },
             vec![],
         );
         let _ = self
@@ -9505,6 +9536,11 @@ impl TypedModule {
         if is_debug {
             self.push_debug_level();
         }
+        let mut self_ = scopeguard::guard(self, |s| {
+            if is_debug {
+                s.pop_debug_level()
+            }
+        });
         let parsed_function_linkage = parsed_function.linkage;
         let parsed_function_name = parsed_function.name;
         let parsed_function_span = parsed_function.span;
@@ -9516,7 +9552,7 @@ impl TypedModule {
         let is_ability_impl = ability_info.as_ref().is_some_and(|info| info.impl_info.is_some());
         let ability_id = ability_info.as_ref().map(|info| info.ability_id);
         let impl_info = ability_info.as_ref().and_then(|info| info.impl_info.as_ref());
-        let ability_kind = ability_id.map(|id| &self.get_ability(id).kind);
+        let ability_kind = ability_id.map(|id| &self_.get_ability(id).kind);
         let impl_self_type = impl_info.map(|impl_info| impl_info.self_type_id);
         let ability_kind_is_specialized = ability_kind.is_some_and(|kind| kind.is_specialized());
         let skip_ast_mapping = ability_kind_is_specialized
@@ -9529,16 +9565,19 @@ impl TypedModule {
         let resolvable_by_name = !is_ability_impl && !ability_kind_is_specialized;
 
         let name = match impl_self_type {
-            Some(target_type) => self.ast.identifiers.intern(format!(
-                "{}_{}_{}",
-                self.name_of(self.get_ability(ability_id.unwrap()).name),
-                self.type_id_to_string(target_type),
-                self.ast.identifiers.get_name(parsed_function_name),
-            )),
+            Some(target_type) => {
+                let s = format!(
+                    "{}_{}_{}",
+                    self_.name_of(self_.get_ability(ability_id.unwrap()).name),
+                    self_.type_id_to_string(target_type),
+                    self_.name_of(parsed_function_name),
+                );
+                self_.ast.identifiers.intern(s)
+            }
             None => parsed_function.name,
         };
 
-        let fn_scope_id = self.scopes.add_child_scope(
+        let fn_scope_id = self_.scopes.add_child_scope(
             parent_scope_id,
             ScopeType::FunctionScope,
             None,
@@ -9550,9 +9589,9 @@ impl TypedModule {
 
         // Inject the 'Self' type parameter
         if is_ability_decl {
-            let self_type_id = self.get_ability(ability_id.unwrap()).self_type_id;
+            let self_type_id = self_.get_ability(ability_id.unwrap()).self_type_id;
             type_params.push(TypeParam {
-                name: get_ident!(self, "Self"),
+                name: get_ident!(self_, "Self"),
                 type_id: self_type_id,
                 span: parsed_function_span,
             })
@@ -9562,7 +9601,7 @@ impl TypedModule {
             for parsed_constraint in type_parameter.constraints.iter() {
                 let ability_sig = match parsed_constraint {
                     parse::ParsedTypeConstraintExpr::Ability(ability_expr) => {
-                        self.eval_ability_expr(ability_expr, false, fn_scope_id)?
+                        self_.eval_ability_expr(ability_expr, false, fn_scope_id)?
                     }
                 };
                 ability_constraints.push(ability_sig);
@@ -9571,22 +9610,21 @@ impl TypedModule {
                 if param.name == type_parameter.name {
                     let ability_id = match &param.constraint_expr {
                         parse::ParsedTypeConstraintExpr::Ability(ability_expr) => {
-                            self.eval_ability_expr(ability_expr, false, fn_scope_id)?
+                            self_.eval_ability_expr(ability_expr, false, fn_scope_id)?
                         }
                     };
                     ability_constraints.push(ability_id);
                 }
             }
-            let type_variable_id = self.add_type_variable(
-                TypeVariable {
+            let type_variable_id = self_.add_type_variable(
+                TypeParameter {
                     name: type_parameter.name,
                     scope_id: fn_scope_id,
                     span: type_parameter.span,
-                    is_inference_variable: false,
                 },
                 ability_constraints,
             );
-            let fn_scope = self.scopes.get_scope_mut(fn_scope_id);
+            let fn_scope = self_.scopes.get_scope_mut(fn_scope_id);
             let type_param = TypeParam {
                 name: type_parameter.name,
                 type_id: type_variable_id,
@@ -9608,21 +9646,21 @@ impl TypedModule {
         for (idx, fn_param) in
             parsed_function_context_params.iter().chain(parsed_function_params.iter()).enumerate()
         {
-            let type_id = self.eval_type_expr(fn_param.ty, fn_scope_id)?;
+            let type_id = self_.eval_type_expr(fn_param.ty, fn_scope_id)?;
 
             // First arg Self shenanigans
             if idx == 0 {
-                let name_is_self = self.ast.identifiers.get_name(fn_param.name) == "self";
+                let name_is_self = self_.ast.identifiers.get_name(fn_param.name) == "self";
 
                 // If the first argument is named self, check if it's a method of the companion type
                 let is_ability_fn = ability_id.is_some();
                 if name_is_self && !is_ability_fn {
                     if let Some(companion_type_id) = companion_type_id {
-                        if self.types.get_type_id_dereferenced(type_id) != companion_type_id {
+                        if self_.types.get_type_id_dereferenced(type_id) != companion_type_id {
                             match (
-                                self.types.get(companion_type_id),
-                                self.types.get_generic_instance_info(
-                                    self.types.get_type_id_dereferenced(type_id),
+                                self_.types.get(companion_type_id),
+                                self_.types.get_generic_instance_info(
+                                    self_.types.get_type_id_dereferenced(type_id),
                                 ),
                             ) {
                                 (Type::Generic(_g), Some(spec_info)) => {
@@ -9638,8 +9676,8 @@ impl TypedModule {
                                     return failf!(
                                         fn_param.span,
                                         "First parameter named 'self' must be of the companion type, expected {} got {}, {} vs {}",
-                                        self.type_id_to_string(companion_type_id),
-                                        self.type_id_to_string(type_id),
+                                        self_.type_id_to_string(companion_type_id),
+                                        self_.type_id_to_string(type_id),
                                         companion_type_id,
                                         type_id
                                     );
@@ -9665,7 +9703,7 @@ impl TypedModule {
             };
 
             let is_context = fn_param.modifiers.is_context();
-            let variable_id = self.variables.add_variable(variable);
+            let variable_id = self_.variables.add_variable(variable);
             param_types.push(FnParamType {
                 name: fn_param.name,
                 type_id,
@@ -9675,7 +9713,7 @@ impl TypedModule {
             });
             param_variables.push(variable_id);
             if is_context {
-                let inserted = self.scopes.add_context_variable(
+                let inserted = self_.scopes.add_context_variable(
                     fn_scope_id,
                     fn_param.name,
                     variable_id,
@@ -9685,17 +9723,17 @@ impl TypedModule {
                     return failf!(
                         fn_param.span,
                         "Duplicate context parameters for type {}",
-                        self.type_id_to_string(type_id)
+                        self_.type_id_to_string(type_id)
                     );
                 }
             } else {
-                self.scopes.add_variable(fn_scope_id, fn_param.name, variable_id)
+                self_.scopes.add_variable(fn_scope_id, fn_param.name, variable_id)
             }
         }
 
         let intrinsic_type = if parsed_function_linkage == Linkage::Intrinsic {
-            let mut namespace_chain = self.namespaces.name_chain(namespace_id);
-            let resolved = self
+            let mut namespace_chain = self_.namespaces.name_chain(namespace_id);
+            let resolved = self_
                 .resolve_intrinsic_function_type(
                     parsed_function_name,
                     namespace_chain.make_contiguous(),
@@ -9711,12 +9749,12 @@ impl TypedModule {
         } else {
             None
         };
-        let return_type = self.eval_type_expr(parsed_function.ret_type, fn_scope_id)?;
+        let return_type = self_.eval_type_expr(parsed_function.ret_type, fn_scope_id)?;
 
         // Typecheck 'main': It must take argc and argv of correct types, or nothing
         // And it must return an integer, or an Unwrap[Inner = i32]
-        let is_main_fn = namespace_id == self.get_root_namespace_id()
-            && parsed_function_name == get_ident!(self, "main");
+        let is_main_fn = namespace_id == self_.get_root_namespace_id()
+            && parsed_function_name == get_ident!(self_, "main");
         if is_main_fn {
             match param_types.len() {
                 0 => {}
@@ -9727,13 +9765,13 @@ impl TypedModule {
                         return failf!(
                             param_types[0].span,
                             "First parameter must be {}",
-                            self.type_id_to_string(U32_TYPE_ID)
+                            self_.type_id_to_string(U32_TYPE_ID)
                         );
                     } else if !values {
                         return failf!(
                             param_types[1].span,
                             "Second parameter must be {}",
-                            self.type_id_to_string(POINTER_TYPE_ID)
+                            self_.type_id_to_string(POINTER_TYPE_ID)
                         );
                     }
                 }
@@ -9749,14 +9787,14 @@ impl TypedModule {
                 I64_TYPE_ID => {}
                 I32_TYPE_ID => {}
                 _other => {
-                    let result_impl = self.expect_ability_implementation(
+                    let result_impl = self_.expect_ability_implementation(
                         return_type,
                         UNWRAP_ABILITY_ID,
                         parsed_function_span,
                     )?;
                     let ok_type =
-                        self.get_ability_impl(result_impl.full_impl_id).impl_arguments[0].type_id;
-                    if let Err(msg) = self.check_types(I32_TYPE_ID, ok_type, fn_scope_id) {
+                        self_.get_ability_impl(result_impl.full_impl_id).impl_arguments[0].type_id;
+                    if let Err(msg) = self_.check_types(I32_TYPE_ID, ok_type, fn_scope_id) {
                         return failf!(parsed_function_span, "Incorrect result type; {}", msg);
                     };
                 }
@@ -9785,7 +9823,7 @@ impl TypedModule {
             },
         };
 
-        let function_type_id = self.types.add_type(Type::Function(FunctionType {
+        let function_type_id = self_.types.add_type(Type::Function(FunctionType {
             params: param_types,
             return_type,
             defn_info: Some(TypeDefnInfo {
@@ -9796,9 +9834,9 @@ impl TypedModule {
             }),
         }));
 
-        let function_id = self.next_function_id();
+        let function_id = self_.next_function_id();
 
-        let actual_function_id = self.add_function(TypedFunction {
+        let actual_function_id = self_.add_function(TypedFunction {
             name,
             scope: fn_scope_id,
             param_variables,
@@ -9821,11 +9859,11 @@ impl TypedModule {
             //     "Adding function to scope since it should be the original resolvable copy: {}",
             //     self.name_of(name)
             // );
-            if !self.scopes.add_function(parent_scope_id, parsed_function_name, function_id) {
+            if !self_.scopes.add_function(parent_scope_id, parsed_function_name, function_id) {
                 return failf!(
                     parsed_function_span,
                     "Function name {} is taken",
-                    self.name_of(parsed_function_name)
+                    self_.name_of(parsed_function_name)
                 );
             }
         };
@@ -9834,16 +9872,15 @@ impl TypedModule {
         // to run it more than once, and don't want to fail
         if !skip_ast_mapping {
             let existed =
-                self.function_ast_mappings.insert(parsed_function_id, function_id).is_some();
+                self_.function_ast_mappings.insert(parsed_function_id, function_id).is_some();
             debug_assert!(!existed);
         }
 
-        self.scopes.set_scope_owner_id(fn_scope_id, ScopeOwnerId::Function(function_id));
+        self_.scopes.set_scope_owner_id(fn_scope_id, ScopeOwnerId::Function(function_id));
 
         if is_debug {
-            eprintln!("DEBUG\n{}", self.function_id_to_string(function_id, false));
-            eprintln!("FUNCTION SCOPE\n{}", self.scope_id_to_string(fn_scope_id));
-            self.pop_debug_level();
+            eprintln!("DEBUG\n{}", self_.function_id_to_string(function_id, false));
+            eprintln!("FUNCTION SCOPE\n{}", self_.scope_id_to_string(fn_scope_id));
         }
 
         Ok(function_id)
@@ -9947,11 +9984,10 @@ impl TypedModule {
         let mut ability_params: Vec<TypedAbilityParam> =
             Vec::with_capacity(parsed_ability.params.len() + 1);
         let self_type_id = self.add_type_variable(
-            TypeVariable {
+            TypeParameter {
                 name: self_ident_id,
                 scope_id: ability_scope_id,
                 span: parsed_ability.span,
-                is_inference_variable: false,
             },
             vec![],
         );
@@ -9968,11 +10004,10 @@ impl TypedModule {
                 .collect();
             let ability_impls = ability_impls?;
             let param_type_id = self.add_type_variable(
-                TypeVariable {
+                TypeParameter {
                     name: ability_param.name,
                     scope_id: ability_scope_id,
                     span: ability_param.span,
-                    is_inference_variable: false,
                 },
                 ability_impls,
             );
@@ -10111,11 +10146,10 @@ impl TypedModule {
         let mut type_params = Vec::with_capacity(parsed_ability_impl.generic_impl_params.len());
         for generic_impl_param in &parsed_ability_impl.generic_impl_params {
             let type_variable_id = self.add_type_variable(
-                TypeVariable {
+                TypeParameter {
                     name: generic_impl_param.name,
                     scope_id: impl_scope_id,
                     span: generic_impl_param.span,
-                    is_inference_variable: false,
                 },
                 // We create the variable with no constraints, then add them later, so that its
                 // constraints can reference itself
@@ -10302,10 +10336,10 @@ impl TypedModule {
             // We check that the signature of the provided impl function matches
             // the signature of the generic function with target_type substituted for Self
             let substituted_root_type = self.substitute_in_type(
-                None,
                 generic_type,
-                None,
                 &[TypeSubstitutionPair { from: ability_self_type, to: impl_self_type }],
+                None,
+                None,
             );
 
             if let Err(msg) = self.check_types(substituted_root_type, specialized, impl_scope_id) {
@@ -10853,7 +10887,7 @@ impl TypedModule {
     pub fn get_span_for_type_id(&self, type_id: TypeId) -> Option<SpanId> {
         let t = self.types.get(type_id);
         match t {
-            Type::TypeVariable(tv) => Some(tv.span),
+            Type::TypeParameter(tv) => Some(tv.span),
             t => t.ast_node().map(|parsed_id| self.ast.get_span_for_id(parsed_id)),
         }
     }
@@ -10869,7 +10903,7 @@ impl TypedModule {
         match self.types.get(type_id) {
             Type::Unit(_) => vec![PatternConstructor::Unit],
             Type::Char(_) => vec![PatternConstructor::Char],
-            Type::TypeVariable(_) => vec![PatternConstructor::TypeVariable],
+            Type::TypeParameter(_) => vec![PatternConstructor::TypeVariable],
             Type::Integer(_) => vec![PatternConstructor::Int],
             Type::Float(_) => vec![PatternConstructor::Float],
             Type::Bool(_) => {

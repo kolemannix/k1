@@ -125,11 +125,16 @@ pub struct ListType {
 }
 
 #[derive(Debug, Clone)]
-pub struct TypeVariable {
+pub struct TypeParameter {
     pub name: Identifier,
     pub scope_id: ScopeId,
     pub span: SpanId,
-    pub is_inference_variable: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct InferenceHoleType {
+    pub index: u32,
+    pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
@@ -355,7 +360,8 @@ pub enum Type {
     // Less physical types
     Generic(GenericType),
     #[allow(clippy::enum_variant_names)]
-    TypeVariable(TypeVariable),
+    TypeParameter(TypeParameter),
+    InferenceHole(InferenceHoleType),
     RecursiveReference(RecursiveReference),
 }
 
@@ -387,9 +393,10 @@ impl PartialEq for Type {
                 true
             }
             (Type::Reference(r1), Type::Reference(r2)) => r1.inner_type == r2.inner_type,
-            (Type::TypeVariable(t1), Type::TypeVariable(t2)) => {
+            (Type::TypeParameter(t1), Type::TypeParameter(t2)) => {
                 t1.name == t2.name && t1.scope_id == t2.scope_id
             }
+            (Type::InferenceHole(h1), Type::InferenceHole(h2)) => h1.index == h2.index,
             (Type::Enum(e1), Type::Enum(e2)) => {
                 if e1.type_defn_info.is_some() || e2.type_defn_info.is_some() {
                     return false;
@@ -426,7 +433,12 @@ impl PartialEq for Type {
             (Type::RecursiveReference(rr1), Type::RecursiveReference(rr2)) => {
                 rr1.root_type_id == rr2.root_type_id
             }
-            _ => false,
+            (t1, t2) => {
+                if t1.kind_name() == t2.kind_name() {
+                    panic!("Missing handling for kind in type_eq: {}", t1.kind_name())
+                };
+                false
+            }
         }
     }
 }
@@ -463,10 +475,14 @@ impl std::hash::Hash for Type {
                 "ref".hash(state);
                 r.inner_type.hash(state);
             }
-            Type::TypeVariable(tvar) => {
+            Type::TypeParameter(tvar) => {
                 "tvar".hash(state);
                 tvar.name.hash(state);
                 tvar.scope_id.hash(state);
+            }
+            Type::InferenceHole(hole) => {
+                "hole".hash(state);
+                hole.index.hash(state);
             }
             Type::Enum(e) => {
                 "enum".hash(state);
@@ -531,21 +547,22 @@ impl Type {
     pub fn kind_name(&self) -> &'static str {
         match self {
             Type::Unit(_) => "scalar",
-            Type::Char(_) => "scalar",
-            Type::Integer(_) => "scalar",
-            Type::Float(_) => "scalar",
-            Type::Bool(_) => "scalar",
+            Type::Char(_) => "char",
+            Type::Integer(_) => "integer",
+            Type::Float(_) => "float",
+            Type::Bool(_) => "bool",
             Type::Pointer(_) => "pointer",
             Type::Struct(_) => "struct",
             Type::Reference(_) => "reference",
-            Type::TypeVariable(_) => "tvar",
+            Type::TypeParameter(_) => "param",
+            Type::InferenceHole(_) => "hole",
             Type::Enum(_) => "enum",
             Type::EnumVariant(_) => "variant",
             Type::Never(_) => "never",
             Type::Generic(_) => "generic",
             Type::Function(_) => "function",
             Type::Closure(_) => "closure",
-            Type::ClosureObject(_) => "closure obj",
+            Type::ClosureObject(_) => "closureobj",
             Type::RecursiveReference(_) => "recurse",
         }
     }
@@ -568,7 +585,8 @@ impl Type {
             Type::Integer(_) => None,
             Type::Struct(t) => Some(t.ast_node),
             Type::Reference(_t) => None,
-            Type::TypeVariable(_t) => None,
+            Type::TypeParameter(_t) => None,
+            Type::InferenceHole(_) => None,
             Type::Enum(e) => Some(e.ast_node),
             Type::EnumVariant(_ev) => None,
             Type::Generic(gen) => Some(gen.type_defn_info.ast_id),
@@ -590,7 +608,8 @@ impl Type {
             Type::Integer(_) => None,
             Type::Struct(t) => t.type_defn_info.as_ref(),
             Type::Reference(_t) => None,
-            Type::TypeVariable(_t) => None,
+            Type::TypeParameter(_t) => None,
+            Type::InferenceHole(_) => None,
             Type::Enum(e) => e.type_defn_info.as_ref(),
             Type::EnumVariant(ev) => ev.type_defn_info.as_ref(),
             Type::Generic(gen) => Some(&gen.type_defn_info),
@@ -723,9 +742,9 @@ impl Type {
         }
     }
 
-    pub fn as_tvar(&self) -> Option<&TypeVariable> {
+    pub fn as_tvar(&self) -> Option<&TypeParameter> {
         match self {
-            Type::TypeVariable(tvar) => Some(tvar),
+            Type::TypeParameter(tvar) => Some(tvar),
             _ => None,
         }
     }
@@ -768,18 +787,18 @@ impl Type {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct TypeVariableInfo {
     pub inference_variable_count: u32,
-    pub type_variable_count: u32,
+    pub type_parameter_count: u32,
 }
 
 impl TypeVariableInfo {
     const EMPTY: TypeVariableInfo =
-        TypeVariableInfo { inference_variable_count: 0, type_variable_count: 0 };
+        TypeVariableInfo { inference_variable_count: 0, type_parameter_count: 0 };
 
     fn add(self, other: Self) -> Self {
         Self {
             inference_variable_count: self.inference_variable_count
                 + other.inference_variable_count,
-            type_variable_count: self.type_variable_count + other.type_variable_count,
+            type_parameter_count: self.type_parameter_count + other.type_parameter_count,
         }
     }
 }
@@ -872,16 +891,16 @@ impl Types {
         }
     }
 
-    pub fn get_type_variable(&self, type_id: TypeId) -> &TypeVariable {
-        if let Type::TypeVariable(tv) = self.get(type_id) {
+    pub fn get_type_variable(&self, type_id: TypeId) -> &TypeParameter {
+        if let Type::TypeParameter(tv) = self.get(type_id) {
             tv
         } else {
             panic!("Expected type variable on type {}", type_id)
         }
     }
 
-    pub fn get_type_variable_mut(&mut self, type_id: TypeId) -> &mut TypeVariable {
-        if let Type::TypeVariable(tv) = self.get_mut(type_id) {
+    pub fn get_type_variable_mut(&mut self, type_id: TypeId) -> &mut TypeParameter {
+        if let Type::TypeParameter(tv) = self.get_mut(type_id) {
             tv
         } else {
             panic!("Expected type variable on type {}", type_id)
@@ -908,7 +927,8 @@ impl Types {
             Type::Bool(_) => None,
             Type::Pointer(_) => None,
             Type::Reference(_) => None,
-            Type::TypeVariable(_) => None,
+            Type::TypeParameter(_) => None,
+            Type::InferenceHole(_) => None,
             Type::Never(_) => None,
             Type::Generic(_gen) => None,
             Type::Function(_) => None,
@@ -1048,20 +1068,13 @@ impl Types {
     ///       But types are not immutable so this could be a dangerous idea!
     pub fn count_type_variables(&self, type_id: TypeId) -> TypeVariableInfo {
         const EMPTY: TypeVariableInfo = TypeVariableInfo::EMPTY;
-        // nocommit: I don't think we can trust this; since it assumes no type variables
-        //           occur in the rhs type independently, which may not be true. Well, where
-        //           would they come from, maybe it is fine.
-        //if let Some(spec_info) = self.get_generic_instance_info(type_id) {
-        //    return spec_info
-        //        .param_values
-        //        .iter()
-        //        .fold(EMPTY, |t1, type_id| t1.add(self.count_type_variables(*type_id)));
-        //}
         match self.get_no_follow(type_id) {
-            Type::TypeVariable(tv) => TypeVariableInfo {
-                type_variable_count: 1,
-                inference_variable_count: if tv.is_inference_variable { 1 } else { 0 },
-            },
+            Type::TypeParameter(_tv) => {
+                TypeVariableInfo { type_parameter_count: 1, inference_variable_count: 0 }
+            }
+            Type::InferenceHole(_hole) => {
+                TypeVariableInfo { type_parameter_count: 0, inference_variable_count: 1 }
+            }
             Type::Unit(_) => EMPTY,
             Type::Char(_) => EMPTY,
             Type::Integer(_) => EMPTY,
