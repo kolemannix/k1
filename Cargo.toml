@@ -38,6 +38,7 @@ tracing-appender = { version = "0.2", optional = true }
 
 # raylib gui only deps
 raylib = { version = "5.0.1", optional = true}
+scopeguard = "1.2.0"
 
 [[bin]]
 name = "test_suite"

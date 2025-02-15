@@ -1054,8 +1054,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 }
                 .into())
             }
-            Type::TypeVariable(v) => {
+            Type::TypeParameter(v) => {
                 failf!(span, "codegen was asked to codegen a type variable {:?}", v)
+            }
+            Type::InferenceHole(h) => {
+                failf!(span, "codegen was asked to codegen a type inference hole {:?}", h)
             }
             Type::Reference(reference) => {
                 let inner_type = self.codegen_type_inner(reference.inner_type, depth + 1)?;
