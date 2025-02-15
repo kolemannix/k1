@@ -1,41 +1,7 @@
-ns libc {
-  extern(exit) fn exit(code: i32): never
-
-  extern(read) fn read(fileNo: i32, buffer: Pointer, count: u64, offset: u64): i64
-  extern(write) fn write(fileNo: i32, data: Pointer, count: u64, offset: u64): u64
-  extern(memcpy) fn memcpy(dst: Pointer, src: Pointer, count: u64): Pointer
-  extern(memset) fn memset(src: Pointer, value: u32, count: u64): Pointer
-  extern(memcmp) fn memcmp(s1: Pointer, s2: Pointer, size: u64): i32
-  extern(calloc) fn calloc(count: u64, size: u64): Pointer
-
-  extern(malloc) fn malloc(size: u64): Pointer
-  extern(free) fn free(ptr: Pointer): unit
-
-  extern(realloc) fn realloc(ptr: Pointer, size: u64): Pointer
-  extern(arc4random_uniform) fn arc4random_uniform(upperBound: u32): u32
-
-  extern(abort) fn abort(): never
-}
-
 fn assertEquals[T: Show and Equals](context locn: compiler/SourceLocation)(a: T, b: T): unit {
   if a != b {
     crash("ASSERT FAILED: \{a} != \{b}")
   }
-}
-
-fn assert(context locn: compiler/SourceLocation)(value: bool): unit {
-  if not value {
-    crash("ASSERT FAILED")
-  };
-}
-
-fn crash(context locn: compiler/SourceLocation)(msg: string): never {
-  let filename = locn.filename;
-  let line = locn.line;
-  sys/printBacktrace();
-  let s = "\{msg} at \{filename}:\{line}\n";
-  eprint(s);
-  libc/exit(1)
 }
 
 ns Pointer {

@@ -15,8 +15,8 @@ impl Display for TypedModule {
             let info = self.types.get_type_variable_info(id);
             write!(
                 f,
-                "   [ tvars: {}, inference: {} ]",
-                info.type_variable_count, info.inference_variable_count
+                "   [ tparams: {}, inference: {} ]",
+                info.type_parameter_count, info.inference_variable_count
             )?;
             f.write_str("\n")?;
         }
@@ -220,18 +220,23 @@ impl TypedModule {
                 }
                 Ok(())
             }
-            Type::TypeVariable(tv) => {
+            Type::TypeParameter(tv) => {
                 if expand {
                     let scope_name = self
                         .scopes
                         .make_scope_name(self.scopes.get_scope(tv.scope_id), &self.ast.identifiers);
                     writ.write_str(&scope_name)?;
                     writ.write_str(".")?;
-                    writ.write_str("$")?;
-                    writ.write_str(self.ast.identifiers.get_name(tv.name))?;
+                    writ.write_str("'")?;
+                    writ.write_str(self.name_of(tv.name))?;
                 } else {
-                    writ.write_str(self.ast.identifiers.get_name(tv.name))?;
+                    writ.write_str(self.name_of(tv.name))?;
                 }
+                Ok(())
+            }
+            Type::InferenceHole(hole) => {
+                writ.write_str("'")?;
+                write!(writ, "{}", hole.index)?;
                 Ok(())
             }
             Type::Reference(r) => {
