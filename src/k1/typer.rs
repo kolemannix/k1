@@ -133,6 +133,12 @@ enum MaybeTypedExpr {
 }
 
 #[derive(Debug, Clone)]
+enum TypeOrParsedExpr {
+    TypeId(TypeId),
+    ParsedExpr(ParsedExpressionId),
+}
+
+#[derive(Debug, Clone)]
 pub enum CompileTimeValue {
     Boolean(bool),
     Char(u8),
@@ -541,6 +547,16 @@ pub struct TypeParam {
 }
 
 impl NamedType for &TypeParam {
+    fn name(&self) -> Identifier {
+        self.name
+    }
+
+    fn type_id(&self) -> TypeId {
+        self.type_id
+    }
+}
+
+impl NamedType for TypeParam {
     fn name(&self) -> Identifier {
         self.name
     }
@@ -7510,6 +7526,9 @@ impl TypedModule {
             // could we re-use our inference code?
             let g_params = g.params.clone();
             let g_name = g.type_defn_info.name;
+
+            // self.inference_context.origin_stack.push(base_expr);
+
             let generic_payload = match generic_variant.payload {
                 Some(generic_variant_payload) => match payload_parsed_expr {
                     None => {
@@ -7552,17 +7571,19 @@ impl TypedModule {
                                     g_params
                                         .iter()
                                         .zip(spec_info.param_values.iter())
-                                        .map(|(g_param, type_id)| SimpleNamedType {
-                                            name: g_param.name,
-                                            type_id: *type_id,
+                                        .map(|(g_param, expected_specialized_type)| {
+                                            SimpleNamedType {
+                                                name: g_param.name,
+                                                type_id: *expected_specialized_type,
+                                            }
                                         })
                                         .collect()
                                 } else {
                                     return failf!(
-                                            span,
-                                            "Cannot infer a type for {}; expected mismatching generic type {}",
-                                            self.name_of(g_name), self.type_id_to_string(expected_type)
-                                        );
+                                        span,
+                                        "Cannot infer a type for {}; expected mismatching generic type {}",
+                                        self.name_of(g_name), self.type_id_to_string(expected_type)
+                                    );
                                 }
                             }
                             _ => {
@@ -7580,6 +7601,8 @@ impl TypedModule {
                         let mut solution_set = TypeSolutionSet {
                             solutions: g_params.iter().map(PendingTypeSolution::from).collect(),
                         };
+                        //let instantiation_set
+                        //let instantiated_payload = self.substitute_in_type(generic_variant_payload, instantiation_set, None, None);
                         if let TypeUnificationResult::NonMatching(msg) = self.solve_generic_params(
                             &mut solution_set,
                             passed_expr_type,
@@ -7937,6 +7960,131 @@ impl TypedModule {
         }
     }
 
+    fn infer_types(
+        &mut self,
+        type_params: &[impl NamedType],
+        args_and_params: &[(TypeOrParsedExpr, TypeId)],
+        origin_parsed_id: ParsedExpressionId,
+        scope_id: ScopeId,
+    ) -> TyperResult<Vec<SimpleNamedType>> {
+        let span = self.ast.expressions.get_span(origin_parsed_id);
+        //
+        // nocommit: Ensure this stack doesn't get corrupted, using a scope guard
+        self.inference_context.origin_stack.push(origin_parsed_id);
+
+        // Stores the mapping from type parameters to their type holes
+        let mut instantiation_set = Vec::with_capacity(type_params.len());
+
+        // Need
+        // - list of params to instantiate
+        // - a list of expected types zipped with MaybeTypedExprs to instantiate
+        // -
+
+        let inference_var_count = self.inference_context.vars.len();
+        for (idx, param) in type_params.iter().enumerate() {
+            let hole_index = idx + inference_var_count;
+            let tv = self
+                .types
+                .add_type(Type::InferenceHole(InferenceHoleType { index: hole_index as u32 }));
+            self.inference_context.vars.push(tv);
+            instantiation_set.push(TypeSubstitutionPair { from: param.type_id(), to: tv });
+        }
+        let mut instantiated_params = Vec::with_capacity(args_and_params.len());
+        for (_, param) in args_and_params.iter() {
+            let type_id = self.substitute_in_type(*param, &instantiation_set, None, None);
+            debug!(
+                "Instantiated type for inference. Was: {}, is: {}",
+                self.type_id_to_string(*param),
+                self.type_id_to_string(type_id)
+            );
+            instantiated_params.push(type_id)
+        }
+        // let instantiated_fn_type_id =
+        //     self.substitute_in_type(generic_function_type_id, &instantiation_set, None, None);
+        // let new_fn_ret_type =
+        //     self.types.get(instantiated_fn_type_id).as_function().unwrap().return_type;
+
+        //if let Some(call_expected_type) = ctx.expected_type_id {
+        //    self.unify_and_find_substitutions(call_expected_type, new_fn_ret_type, fn_call.span)?;
+        //    debug!(
+        //        "subst\n\t{}",
+        //        self.pretty_print_type_substitutions(&self.inference_context.constraints, "\n"),
+        //    );
+        //}
+
+        for (index, (expr, gen_param)) in args_and_params.iter().enumerate() {
+            let instantiated_param_type = instantiated_params[index];
+            let current_substitutions =
+                self.substitutions_if_consistent(&self.inference_context.constraints, span)?;
+
+            let s: Vec<_> = current_substitutions
+                .into_iter()
+                .map(|p| TypeSubstitutionPair { from: p.0, to: p.1 })
+                .collect();
+            let expected_type_so_far =
+                self.substitute_in_type(instantiated_param_type, &s, None, None);
+
+            let (argument_type, argument_span) = match expr {
+                TypeOrParsedExpr::TypeId(type_id) => (*type_id, span),
+                TypeOrParsedExpr::ParsedExpr(parsed_expr) => {
+                    let inference_context = EvalExprContext::from_scope(scope_id)
+                        .with_inference(true)
+                        .with_expected_type(Some(expected_type_so_far));
+                    let e = self.eval_expr(*parsed_expr, inference_context)?;
+                    (e.get_type(), e.get_span())
+                }
+            };
+            debug!(
+                "unify {} =:= {}",
+                self.type_id_to_string(argument_type),
+                self.type_id_to_string(expected_type_so_far),
+            );
+            if let TypeUnificationResult::NonMatching(msg) = self.unify_and_find_substitutions(
+                argument_type,
+                expected_type_so_far,
+                argument_span,
+            )? {
+                self.inference_context.origin_stack.pop();
+                return failf!(
+                    argument_span,
+                    "Passed value does not match expected type: expected {} but got {}. {msg}",
+                    self.type_id_to_string(expected_type_so_far),
+                    self.type_id_to_string(argument_type)
+                );
+            };
+            debug!(
+                "subst\n\t{}",
+                self.pretty_print_type_substitutions(&self.inference_context.constraints, "\n\t"),
+            );
+        }
+
+        // TODO: enrich error
+        let final_substitutions =
+            self.substitutions_if_consistent(&self.inference_context.constraints, span)?;
+
+        let mut solutions: Vec<SimpleNamedType> = Vec::with_capacity(instantiation_set.len());
+        for (param_to_hole, param) in instantiation_set.iter().zip(type_params.iter()) {
+            let corresponding_hole = param_to_hole.to;
+            let Some(solution) = final_substitutions.get(&corresponding_hole) else {
+                return failf!(span, "No idea what {} should be", self.name_of(param.name()));
+            };
+            solutions.push(SimpleNamedType { name: param.name(), type_id: *solution })
+        }
+        let id = self.inference_context.origin_stack.pop().unwrap();
+        debug_assert!(id == origin_parsed_id);
+        if self.inference_context.origin_stack.is_empty() {
+            eprintln!("Resetting inference buffer");
+            self.inference_context.constraints.clear();
+            self.inference_context.vars.clear();
+        } else {
+            eprintln!(
+                "Not resetting inference buffer: {}",
+                self.inference_context.origin_stack.len()
+            );
+        }
+        Ok(solutions)
+    }
+
     fn infer_and_constrain_call_type_args(
         &mut self,
         fn_call: &FnCall,
@@ -7944,11 +8092,11 @@ impl TypedModule {
         ctx: EvalExprContext,
     ) -> TyperResult<Vec<SimpleNamedType>> {
         let generic_function = self.get_function(generic_function_id);
-        let generic_function_type_id = generic_function.type_id;
         let generic_function_type = self.get_function_type(generic_function_id);
         debug_assert!(generic_function.is_generic());
         let generic_type_params = generic_function.type_params.clone();
-        let original_params = generic_function_type.params.clone();
+        let generic_function_params = generic_function_type.params.clone();
+        let generic_function_return_type = generic_function_type.return_type;
         let passed_type_args = &fn_call.type_args;
         let type_params = match passed_type_args.is_empty() {
             false => {
@@ -7971,141 +8119,169 @@ impl TypedModule {
             true => {
                 let args_and_params = self.align_call_arguments_with_parameters(
                     fn_call,
-                    &original_params,
+                    &generic_function_params,
                     None,
                     ctx.scope_id,
                     true,
                 )?;
 
-                // nocommmit: Ensure this stack doesn't get corrupted, using a scope guard
-                self.inference_context.origin_stack.push(fn_call.id);
-
-                let mut instantiation_set = Vec::with_capacity(generic_type_params.len());
-                let inference_var_count = self.inference_context.vars.len();
-                for (idx, param) in generic_type_params.iter().enumerate() {
-                    let hole_index = idx + inference_var_count;
-                    let tv = self.types.add_type(Type::InferenceHole(InferenceHoleType {
-                        index: hole_index as u32,
-                        span: param.span,
-                    }));
-                    // let _ = self.scopes.add_type(ctx.scope_id, param.name, tv);
-                    self.inference_context.vars.push(tv);
-                    instantiation_set.push(TypeSubstitutionPair { from: param.type_id, to: tv });
-                }
-                let instantiated_fn_type_id = self.substitute_in_type(
-                    generic_function_type_id,
-                    &instantiation_set,
-                    None,
-                    None,
-                );
-                let new_fn_ret_type =
-                    self.types.get(instantiated_fn_type_id).as_function().unwrap().return_type;
-                debug!(
-                    "Instantiated fn type of {} for inference. Was: {}, is: {}",
-                    self.name_of(fn_call.name.name),
-                    self.type_id_to_string(generic_function_type_id),
-                    self.type_id_to_string(instantiated_fn_type_id)
-                );
-
-                if let Some(call_expected_type) = ctx.expected_type_id {
-                    self.unify_and_find_substitutions(
-                        call_expected_type,
-                        new_fn_ret_type,
-                        fn_call.span,
-                    )?;
-                    debug!(
-                        "subst\n\t{}",
-                        self.pretty_print_type_substitutions(
-                            &self.inference_context.constraints,
-                            "\n"
-                        ),
-                    );
-                }
-
-                //let mut failed_exprs: Vec<TyperError> = Vec::new();
-                for (index, (expr, gen_param)) in args_and_params.into_iter().enumerate() {
-                    let param_type =
-                        self.types.get(instantiated_fn_type_id).as_function().unwrap().params
-                            [index]
-                            .type_id;
-                    let current_substitutions = self.substitutions_if_consistent(
-                        &self.inference_context.constraints,
-                        fn_call.span,
-                    )?;
-                    let s: Vec<_> = current_substitutions
-                        .into_iter()
-                        .map(|p| TypeSubstitutionPair { from: p.0, to: p.1 })
-                        .collect();
-                    let expected_type_so_far = self.substitute_in_type(param_type, &s, None, None);
-
-                    let expr = match expr {
-                        MaybeTypedExpr::Typed(typed) => Ok(typed),
-                        MaybeTypedExpr::Parsed(parsed_expr) => {
-                            let inference_context = ctx
-                                .with_inference(true)
-                                .with_expected_type(Some(expected_type_so_far));
-                            self.eval_expr(parsed_expr, inference_context)
-                        }
-                    }?;
-                    debug!(
-                        "unify '{}': {} =:= {}",
-                        self.name_of(gen_param.name),
-                        self.expr_to_string_with_type(&expr),
-                        self.type_id_to_string(expected_type_so_far),
-                    );
-                    if let TypeUnificationResult::NonMatching(msg) = self
-                        .unify_and_find_substitutions(
-                            expr.get_type(),
-                            expected_type_so_far,
-                            fn_call.span,
-                        )?
-                    {
-                        self.inference_context.origin_stack.pop();
-                        return failf!(
-                                    expr.get_span(),
-                                    "Passed value does not match expected type: expected {} but got {}. {msg}",
-                                    self.type_id_to_string(expected_type_so_far),
-                                    self.type_id_to_string(expr.get_type())
-                                );
+                let mut full_args_and_params = match ctx.expected_type_id {
+                    None => Vec::with_capacity(args_and_params.len()),
+                    Some(expected) => {
+                        let mut v = Vec::with_capacity(args_and_params.len() + 1);
+                        v.push((TypeOrParsedExpr::TypeId(expected), generic_function_return_type));
+                        v
+                    }
+                };
+                full_args_and_params.extend(args_and_params.iter().map(|(expr, param)| {
+                    let passed_type = match expr {
+                        MaybeTypedExpr::Parsed(expr_id) => TypeOrParsedExpr::ParsedExpr(*expr_id),
+                        MaybeTypedExpr::Typed(expr) => TypeOrParsedExpr::TypeId(expr.get_type()),
                     };
-                    debug!(
-                        "subst\n\t{}",
-                        self.pretty_print_type_substitutions(
-                            &self.inference_context.constraints,
-                            "\n\t"
-                        ),
-                    );
-                }
+                    (passed_type, param.type_id)
+                }));
 
-                // TODO: enrich error
-                let final_substitutions = self.substitutions_if_consistent(
-                    &self.inference_context.constraints,
-                    fn_call.span,
+                let solutions = self.infer_types(
+                    &generic_type_params,
+                    &full_args_and_params,
+                    fn_call.id,
+                    ctx.scope_id,
                 )?;
-
-                let mut solutions: Vec<SimpleNamedType> =
-                    Vec::with_capacity(instantiation_set.len());
-                for (param_to_hole, param) in
-                    instantiation_set.iter().zip(generic_type_params.iter())
-                {
-                    let corresponding_hole = param_to_hole.to;
-                    let Some(solution) = final_substitutions.get(&corresponding_hole) else {
-                        return failf!(
-                            fn_call.span,
-                            "No idea what {} should be",
-                            self.name_of(param.name)
-                        );
-                    };
-                    solutions.push(SimpleNamedType { name: param.name, type_id: *solution })
-                }
-                let id = self.inference_context.origin_stack.pop().unwrap();
-                debug_assert!(id == fn_call.id);
-                if self.inference_context.origin_stack.is_empty() {
-                    //eprintln!("Resetting inference buffer");
-                    self.inference_context.constraints.clear();
-                    self.inference_context.vars.clear();
-                }
                 solutions
+
+                // nocommit: Ensure this stack doesn't get corrupted, using a scope guard
+                //self.inference_context.origin_stack.push(fn_call.id);
+
+                // Stores the mapping from type parameters to their type holes
+                //let mut instantiation_set = Vec::with_capacity(generic_type_params.len());
+
+                //let inference_var_count = self.inference_context.vars.len();
+                //for (idx, param) in generic_type_params.iter().enumerate() {
+                //    let hole_index = idx + inference_var_count;
+                //    let tv = self.types.add_type(Type::InferenceHole(InferenceHoleType {
+                //        index: hole_index as u32,
+                //        span: param.span,
+                //    }));
+                //    // let _ = self.scopes.add_type(ctx.scope_id, param.name, tv);
+                //    self.inference_context.vars.push(tv);
+                //    instantiation_set.push(TypeSubstitutionPair { from: param.type_id, to: tv });
+                //}
+                //let instantiated_fn_type_id = self.substitute_in_type(
+                //    generic_function_type_id,
+                //    &instantiation_set,
+                //    None,
+                //    None,
+                //);
+                //let new_fn_ret_type =
+                //    self.types.get(instantiated_fn_type_id).as_function().unwrap().return_type;
+                //debug!(
+                //    "Instantiated fn type of {} for inference. Was: {}, is: {}",
+                //    self.name_of(fn_call.name.name),
+                //    self.type_id_to_string(generic_function_type_id),
+                //    self.type_id_to_string(instantiated_fn_type_id)
+                //);
+                //
+                //if let Some(call_expected_type) = ctx.expected_type_id {
+                //    self.unify_and_find_substitutions(
+                //        call_expected_type,
+                //        new_fn_ret_type,
+                //        fn_call.span,
+                //    )?;
+                //    debug!(
+                //        "subst\n\t{}",
+                //        self.pretty_print_type_substitutions(
+                //            &self.inference_context.constraints,
+                //            "\n"
+                //        ),
+                //    );
+                //}
+                //
+                ////let mut failed_exprs: Vec<TyperError> = Vec::new();
+                //for (index, (expr, gen_param)) in args_and_params.into_iter().enumerate() {
+                //    let instantiated_param_type =
+                //        self.types.get(instantiated_fn_type_id).as_function().unwrap().params
+                //            [index]
+                //            .type_id;
+                //    let current_substitutions = self.substitutions_if_consistent(
+                //        &self.inference_context.constraints,
+                //        fn_call.span,
+                //    )?;
+                //
+                //    let s: Vec<_> = current_substitutions
+                //        .into_iter()
+                //        .map(|p| TypeSubstitutionPair { from: p.0, to: p.1 })
+                //        .collect();
+                //    let expected_type_so_far =
+                //        self.substitute_in_type(instantiated_param_type, &s, None, None);
+                //
+                //    let expr = match expr {
+                //        MaybeTypedExpr::Typed(typed) => Ok(typed),
+                //        MaybeTypedExpr::Parsed(parsed_expr) => {
+                //            let inference_context = ctx
+                //                .with_inference(true)
+                //                .with_expected_type(Some(expected_type_so_far));
+                //            self.eval_expr(parsed_expr, inference_context)
+                //        }
+                //    }?;
+                //    debug!(
+                //        "unify '{}': {} =:= {}",
+                //        self.name_of(gen_param.name),
+                //        self.expr_to_string_with_type(&expr),
+                //        self.type_id_to_string(expected_type_so_far),
+                //    );
+                //    if let TypeUnificationResult::NonMatching(msg) = self
+                //        .unify_and_find_substitutions(
+                //            expr.get_type(),
+                //            expected_type_so_far,
+                //            fn_call.span,
+                //        )?
+                //    {
+                //        self.inference_context.origin_stack.pop();
+                //        return failf!(
+                //                    expr.get_span(),
+                //                    "Passed value does not match expected type: expected {} but got {}. {msg}",
+                //                    self.type_id_to_string(expected_type_so_far),
+                //                    self.type_id_to_string(expr.get_type())
+                //                );
+                //    };
+                //    debug!(
+                //        "subst\n\t{}",
+                //        self.pretty_print_type_substitutions(
+                //            &self.inference_context.constraints,
+                //            "\n\t"
+                //        ),
+                //    );
+                //}
+                //
+                //// TODO: enrich error
+                //let final_substitutions = self.substitutions_if_consistent(
+                //    &self.inference_context.constraints,
+                //    fn_call.span,
+                //)?;
+                //
+                //let mut solutions: Vec<SimpleNamedType> =
+                //    Vec::with_capacity(instantiation_set.len());
+                //for (param_to_hole, param) in
+                //    instantiation_set.iter().zip(generic_type_params.iter())
+                //{
+                //    let corresponding_hole = param_to_hole.to;
+                //    let Some(solution) = final_substitutions.get(&corresponding_hole) else {
+                //        return failf!(
+                //            fn_call.span,
+                //            "No idea what {} should be",
+                //            self.name_of(param.name)
+                //        );
+                //    };
+                //    solutions.push(SimpleNamedType { name: param.name, type_id: *solution })
+                //}
+                //let id = self.inference_context.origin_stack.pop().unwrap();
+                //debug_assert!(id == fn_call.id);
+                //if self.inference_context.origin_stack.is_empty() {
+                //    //eprintln!("Resetting inference buffer");
+                //    self.inference_context.constraints.clear();
+                //    self.inference_context.vars.clear();
+                //}
+                //solutions
                 //if !solution_set.all_solved() {
                 //    if let Some(call_expected_type) = ctx.expected_type_id {
                 //        debug!(
@@ -8307,7 +8483,8 @@ impl TypedModule {
             return Ok(TypeUnificationResult::NoHoles);
         }
 
-        // nocommit: This special case may be removable now
+        // This special case is removable, all tests pass, but I believe its currently
+        // a slight optimization, and would be more of one with more complex types
         if let (Some(passed_info), Some(arg_info)) = (
             self.types.get_generic_instance_info(passed_type),
             self.types.get_generic_instance_info(slot_type),
@@ -8862,7 +9039,6 @@ impl TypedModule {
             _ => match &function.kind {
                 TypedFunctionKind::AbilityDefn(_) => false,
                 _other => {
-                    // nocommit: Could I just count the type vars for both branches for simplicity?
                     let is_concrete = match &function.specialization_info {
                         None => function.type_params.is_empty(),
                         Some(_spec_info) => {

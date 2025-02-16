@@ -134,7 +134,6 @@ pub struct TypeParameter {
 #[derive(Debug, Clone)]
 pub struct InferenceHoleType {
     pub index: u32,
-    pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
