@@ -30,5 +30,7 @@ fn main(): int {
   let e = combine(Opt.Some(4), some(23));
   let e2: Opt[u32] = #debug combine(Opt.Some(4), some(23));
 
+  let x = Opt.Some(42);
+
   0
 }
