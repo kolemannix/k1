@@ -7498,7 +7498,6 @@ impl TypedModule {
             let Some(generic_variant) = inner_enum.variant_by_name(variant_name) else {
                 return Ok(None);
             };
-            // nocommit This is really calling a generic function that happens to be a constructor. could we re-use our inference code?
             let g_params = g.params.clone();
             let g_name = g.type_defn_info.name;
 
@@ -7987,11 +7986,8 @@ impl TypedModule {
                 .into_iter()
                 .map(|p| TypeSubstitutionPair { from: p.0, to: p.1 })
                 .collect();
-            let expected_type_so_far = if *allow_mismatch {
-                instantiated_param_type
-            } else {
-                self_.substitute_in_type(instantiated_param_type, &s, None, None)
-            };
+            let expected_type_so_far =
+                self_.substitute_in_type(instantiated_param_type, &s, None, None);
 
             let (argument_type, argument_span) = match expr {
                 TypeOrParsedExpr::TypeId(type_id) => (*type_id, span),
@@ -8314,14 +8310,16 @@ impl TypedModule {
         }
 
         match (self.types.get_no_follow(passed_type), self.types.get_no_follow(slot_type)) {
-            //(_actual_type, Type::TypeParameter(_tv)) => {
-            //    // nocommit: Fix for not instantiating Self?
-            //    self.add_substitution(
-            //        substitutions,
-            //        TypeSubstitutionPair { from: slot_type, to: passed_type },
-            //    );
-            //    Ok(TypeUnificationResult::Matching)
-            //}
+            (Type::InferenceHole(_actual_hole), _expected_type) => {
+                // Note: We may eventually need an 'occurs' check to prevent recursive
+                // substitutions; for now they don't seem to be occurring though, and it'll
+                // be obvious if they ever do
+                self.add_substitution(
+                    substitutions,
+                    TypeSubstitutionPair { from: passed_type, to: slot_type },
+                );
+                Ok(TypeUnificationResult::Matching)
+            }
             (_actual_type, Type::InferenceHole(_expected_hole)) => {
                 // Note: We may eventually need an 'occurs' check to prevent recursive
                 // substitutions; for now they don't seem to be occurring though, and it'll
