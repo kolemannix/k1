@@ -1,4 +1,5 @@
 fn combine[T](a: T, b: T): T { a }
+fn combine3[T](a: T, b: T, c: { one: T, two: T }): T { a }
 fn getOrElse[T](a: Opt[T], b: T): T { if a is .Some(a) a else b }
 fn some[U](value: U): Opt[U].Some { Opt.Some[U](value) }
 
@@ -30,7 +31,9 @@ fn main(): int {
   let e = combine(Opt.Some(4), some(23));
   let e2: Opt[u32] = #debug combine(Opt.Some(4), some(23));
 
-  let x = Opt.Some(42);
+  let* x = Opt.Some(42);
+
+  let f = combine3(x, libc/exit(1), { one: some(-1), two: some(3), });
 
   0
 }
