@@ -27,7 +27,8 @@ fn main(): int {
 
   occursCheckTest(42);
 
-  let e = combine(.Some(4), some(23));
+  let e = combine(Opt.Some(4), some(23));
+  let e2: Opt[u32] = #debug combine(Opt.Some(4), some(23));
 
   0
 }
