@@ -30,9 +30,9 @@ New tagline? "C with typeclasses and tagged unions"
   - [-] Make 'crash' work in no-std
   - [x] Make it pretty (de-coupled inference hole from type variable)
   - [x] Move enum constructor onto new inference infra
-  - [ ] Move ability resolution onto new inference infra
+  - [x] Move ability resolution onto new inference infra
+  - [ ] Try a 'get types' pass that powers inference and avoids the 2x full compile (of args to generics) that we do now
   - [ ] Make it fast
-- [ ] Try a 'get types' pass that powers inference and avoids the 2x full compile (of args to generics) that we do now
 - [ ] comptime #if needs to be a real node not a directive (can't parse if/else). More like `#const if` than `#if`
 - [ ] Fix closure types / get static dispatch for functions taking a closure directly
 - [ ] *Specializing functions on their provided closures to allow inlining and static dispatch*
