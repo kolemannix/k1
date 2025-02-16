@@ -2,7 +2,7 @@ fn combine[T](a: T, b: T): T { a }
 fn getOrElse[T](a: Opt[T], b: T): T { if a is .Some(a) a else b }
 fn some[U](value: U): Opt[U].Some { Opt.Some[U](value) }
 
-fn get[UU](value: Opt[UU]): UU { if value is .Some(u) u else crash("opt get") }
+fn get[UU](value: Opt[UU]): UU { if value is .Some(u) u else libc/exit(1) }
 fn identity[T](value: T): T { value }
 
 fn occursCheckTest[T](x: T): T {
@@ -26,6 +26,8 @@ fn main(): int {
   assert(testCompile(getOrElse(some(1000), -1)) is .Some(_));
 
   occursCheckTest(42);
+
+  let e = combine(.Some(4), some(23));
 
   0
 }

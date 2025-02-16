@@ -161,22 +161,22 @@ fn assert(context locn: compiler/SourceLocation)(value: bool): unit {
 }
 
 fn crash(context locn: compiler/SourceLocation)(msg: string): never {
-  // #if(K1_NO_STD) {
-  //   let s = "exiting (nostd)\n\0";
-  //   libc/write(
-  //     fileNo = 1, 
-  //     data = s.buffer.data as Pointer, 
-  //     count = s.buffer.len - 1, 
-  //     offset = 0
-  //   );
-  //   libc/exit(1)
-  // };
-  #if(not K1_NO_STD) {
-    let filename = locn.filename;
-    let line = locn.line;
-    sys/printBacktrace();
-    let s = "\{msg} at \{filename}:\{line}\n";
-    eprint(s);
+  #if(K1_NO_STD) {
+    let s = "exiting (nostd)\n\0";
+    libc/write(
+      fileNo = 1, 
+      data = s.buffer.data as Pointer, 
+      count = s.buffer.len - 1, 
+      offset = 0
+    );
     libc/exit(1)
-  }
+  };
+  // #if(not K1_NO_STD) {
+  //   let filename = locn.filename;
+  //   let line = locn.line;
+  //   sys/printBacktrace();
+  //   let s = "\{msg} at \{filename}:\{line}\n";
+  //   eprint(s);
+  //   libc/exit(1)
+  // }
 }
