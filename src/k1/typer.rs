@@ -587,6 +587,16 @@ impl NamedType for &SimpleNamedType {
     }
 }
 
+impl NamedType for SimpleNamedType {
+    fn name(&self) -> Identifier {
+        self.name
+    }
+
+    fn type_id(&self) -> TypeId {
+        self.type_id
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TypeSolutionSet {
     pub solutions: Vec<PendingTypeSolution>,
@@ -7278,88 +7288,59 @@ impl TypedModule {
         let ability_fn_params = ability_fn_signature.params.clone();
         let ability_params = self.get_ability(ability_id).parameters.clone();
         let ability_self_type_id = self.get_ability(ability_id).self_type_id;
-        //
-        // 1) Solve for 'self' and all ability params
+
         let passed_len = known_args.map(|ka| ka.1.len()).unwrap_or(fn_call.args.len());
         if passed_len != ability_fn_signature.params.len() {
             return failf!(call_span, "Mismatching arg count when trying to resolve ability call to {} (this probably doesn't handle context params properly)", self.name_of(fn_call.name.name));
         }
+
+        // First, we need to solve for 'Self' and all of the ability's other type parameters
+        // using the expressions and (context + return type) of the called function
+        //
         // Future TODO: Make sure we handle context params in ability functions correctly,
         // Probably by: skipping them if not passed explicitly, and utilizing them if passed explicitly
-        let mut solution_set = TypeSolutionSet {
-            solutions: ({
-                let mut v = Vec::with_capacity(ability_params.len() + 1);
-                v.push(PendingTypeSolution::unsolved(
-                    get_ident!(self, "Self"),
-                    ability_self_type_id,
-                ));
-                v.extend(
-                    ability_params
-                        .iter()
-                        .filter(|p| !p.is_impl_param)
-                        .map(|p| PendingTypeSolution::unsolved(p.name, p.type_variable_id)),
-                );
-                v
-            }),
+        let type_params = {
+            let mut type_params = Vec::with_capacity(ability_params.len() + 1);
+            type_params.push(SimpleNamedType {
+                name: get_ident!(self, "Self"),
+                type_id: ability_self_type_id,
+            });
+            type_params.extend(
+                ability_params
+                    .iter()
+                    .filter(|p| !p.is_impl_param)
+                    .map(|p| SimpleNamedType { name: p.name, type_id: p.type_variable_id }),
+            );
+            type_params
         };
-        let mut failed_exprs: Vec<TyperError> = Vec::new();
+
         let passed_args: &mut dyn Iterator<Item = MaybeTypedExpr> = match known_args {
             Some(ka) => &mut ka.1.clone().into_iter().map(MaybeTypedExpr::Typed),
             None => &mut fn_call.args.iter().map(|arg| MaybeTypedExpr::Parsed(arg.value)),
         };
-        for (arg, param) in passed_args.zip(ability_fn_params.iter()) {
-            let expr = match arg {
-                MaybeTypedExpr::Typed(expr) => Ok(expr),
-                MaybeTypedExpr::Parsed(parsed_expr) => self.eval_expr(
-                    parsed_expr,
-                    ctx.with_expected_type(Some(param.type_id)).with_inference(true),
-                ),
-            };
-            match expr {
-                Err(error) => failed_exprs.push(error),
-                Ok(expr) => {
-                    if let TypeUnificationResult::NonMatching(msg) = self.solve_generic_params(
-                        &mut solution_set,
-                        expr.get_type(),
-                        param.type_id,
-                        expr.get_span(),
-                    )? {
-                        return failf!(
-                            expr.get_span(),
-                            "Invalid argument {msg}: expected {} but got {}",
-                            self.type_id_to_string(param.type_id),
-                            self.type_id_to_string(expr.get_type())
-                        );
-                    };
-                }
-            }
-            // We break early since there's no point continuing to evaluate code
-            // once we've solved all params
-            if solution_set.all_solved() {
-                break;
-            }
+        let mut args_and_params = Vec::with_capacity(passed_len);
+        if let Some(expected_type) = ctx.expected_type_id {
+            args_and_params.push((
+                TypeOrParsedExpr::TypeId(expected_type),
+                ability_fn_return_type,
+                false,
+            ));
         }
-        if !solution_set.all_solved() {
-            if let Some(expected_type) = ctx.expected_type_id {
-                self.solve_generic_params(
-                    &mut solution_set,
-                    expected_type,
-                    ability_fn_return_type,
-                    call_span,
-                )?;
-            }
-        };
-        let Some(solved_params) = solution_set.get_solutions() else {
-            if !failed_exprs.is_empty() {
-                return Err(failed_exprs.into_iter().next().unwrap());
-            } else {
-                use std::fmt::Write;
-                let mut detail = String::new();
-                writeln!(&mut detail, "Failed to resolve ability call:").unwrap();
-                self.display_solution_set(&mut detail, &solution_set);
-                return failf!(call_span, "{}", detail);
-            }
-        };
+        for (arg, param) in passed_args.zip(ability_fn_params.iter()) {
+            let arg_and_param = match arg {
+                MaybeTypedExpr::Typed(expr) => {
+                    (TypeOrParsedExpr::TypeId(expr.get_type()), param.type_id, false)
+                }
+                MaybeTypedExpr::Parsed(parsed_expr) => {
+                    (TypeOrParsedExpr::ParsedExpr(parsed_expr), param.type_id, false)
+                }
+            };
+            args_and_params.push(arg_and_param);
+        }
+
+        let solved_params =
+            self.infer_types(&type_params, &args_and_params, fn_call.id, ctx.scope_id)?;
+
         let (solved_self, solved_rest) = solved_params.split_at(1);
         let solved_self = solved_self.first().unwrap();
 
@@ -7584,61 +7565,26 @@ impl TypedModule {
                         }
                     }
                     Some((generic_variant_payload, payload)) => {
-                        #[cfg(all())]
-                        {
-                            let mut args_and_params = Vec::with_capacity(2);
+                        let mut args_and_params = Vec::with_capacity(2);
 
-                            // There are only ever up to 2 'cases' to power inference
-                            // - The expected return type together with the type of the enum itself
-                            // - The passed payload together with the type of the payload itself
-                            if let Some(expected) = ctx.expected_type_id {
-                                args_and_params.push((
-                                    TypeOrParsedExpr::TypeId(expected),
-                                    g.inner,
-                                    true,
-                                ))
-                            };
+                        // There are only ever up to 2 'cases' to power inference
+                        // - The expected return type together with the type of the enum itself
+                        // - The passed payload together with the type of the payload itself
+                        if let Some(expected) = ctx.expected_type_id {
                             args_and_params.push((
-                                TypeOrParsedExpr::ParsedExpr(payload),
-                                generic_variant_payload,
-                                false,
-                            ));
-                            let solutions = self.infer_types(
-                                &g_params,
-                                &args_and_params,
-                                base_expr,
-                                ctx.scope_id,
-                            )?;
-                            solutions
-                        }
-
-                        #[cfg(any())]
-                        {
-                            let passed_expr_type = payload.get_type();
-
-                            let mut solution_set = TypeSolutionSet {
-                                solutions: g_params.iter().map(PendingTypeSolution::from).collect(),
-                            };
-                            if let TypeUnificationResult::NonMatching(msg) = self
-                                .solve_generic_params(
-                                    &mut solution_set,
-                                    passed_expr_type,
-                                    generic_variant_payload,
-                                    span,
-                                )?
-                            {
-                                return failf!(
-                                    payload.get_span(),
-                                    "Invalid enum payload: {msg}: expected {} but got {}",
-                                    self.type_id_to_string(generic_variant_payload),
-                                    self.type_id_to_string(passed_expr_type)
-                                );
-                            };
-                            let Some(solutions) = solution_set.get_solutions() else {
-                                return failf!(span, "Could not infer type for generic enum");
-                            };
-                            solutions
-                        }
+                                TypeOrParsedExpr::TypeId(expected),
+                                g.inner,
+                                true,
+                            ))
+                        };
+                        args_and_params.push((
+                            TypeOrParsedExpr::ParsedExpr(payload),
+                            generic_variant_payload,
+                            false,
+                        ));
+                        let solutions =
+                            self.infer_types(&g_params, &args_and_params, base_expr, ctx.scope_id)?;
+                        solutions
                     }
                 }
             } else {
@@ -8138,180 +8084,36 @@ impl TypedModule {
                     ctx.scope_id,
                     true,
                 )?;
-
-                #[cfg(all())]
-                {
-                    let mut full_args_and_params = match ctx.expected_type_id {
-                        None => Vec::with_capacity(args_and_params.len()),
-                        Some(expected) => {
-                            let mut v = Vec::with_capacity(args_and_params.len() + 1);
-                            v.push((
-                                TypeOrParsedExpr::TypeId(expected),
-                                generic_function_return_type,
-                                true,
-                            ));
-                            v
-                        }
+                let mut full_args_and_params = match ctx.expected_type_id {
+                    None => Vec::with_capacity(args_and_params.len()),
+                    Some(expected) => {
+                        let mut v = Vec::with_capacity(args_and_params.len() + 1);
+                        v.push((
+                            TypeOrParsedExpr::TypeId(expected),
+                            generic_function_return_type,
+                            true,
+                        ));
+                        v
+                    }
+                };
+                full_args_and_params.extend(args_and_params.iter().map(|(expr, param)| {
+                    let passed_type = match expr {
+                        MaybeTypedExpr::Parsed(expr_id) => TypeOrParsedExpr::ParsedExpr(*expr_id),
+                        MaybeTypedExpr::Typed(expr) => TypeOrParsedExpr::TypeId(expr.get_type()),
                     };
-                    full_args_and_params.extend(args_and_params.iter().map(|(expr, param)| {
-                        let passed_type = match expr {
-                            MaybeTypedExpr::Parsed(expr_id) => {
-                                TypeOrParsedExpr::ParsedExpr(*expr_id)
-                            }
-                            MaybeTypedExpr::Typed(expr) => {
-                                TypeOrParsedExpr::TypeId(expr.get_type())
-                            }
-                        };
-                        (passed_type, param.type_id, false)
-                    }));
+                    (passed_type, param.type_id, false)
+                }));
 
-                    // nocommit: in this example it looks like this expr gets compiled like
-                    // 4 times currently
-                    // assert(#debug some(2).unwrap() == 2);
-                    let solutions = self.infer_types(
-                        &generic_type_params,
-                        &full_args_and_params,
-                        fn_call.id,
-                        ctx.scope_id,
-                    )?;
-                    solutions
-                }
-
-                #[cfg(any())]
-                {
-                    self.inference_context.origin_stack.push(fn_call.id);
-
-                    // Stores the mapping from type parameters to their type holes
-                    let mut instantiation_set = Vec::with_capacity(generic_type_params.len());
-
-                    let inference_var_count = self.inference_context.vars.len();
-                    for (idx, param) in generic_type_params.iter().enumerate() {
-                        let hole_index = idx + inference_var_count;
-                        let tv = self.types.add_type(Type::InferenceHole(InferenceHoleType {
-                            index: hole_index as u32,
-                        }));
-                        // let _ = self.scopes.add_type(ctx.scope_id, param.name, tv);
-                        self.inference_context.vars.push(tv);
-                        instantiation_set
-                            .push(TypeSubstitutionPair { from: param.type_id, to: tv });
-                    }
-                    let instantiated_fn_type_id = self.substitute_in_type(
-                        generic_function_type_id,
-                        &instantiation_set,
-                        None,
-                        None,
-                    );
-                    let new_fn_ret_type =
-                        self.types.get(instantiated_fn_type_id).as_function().unwrap().return_type;
-                    debug!(
-                        "Instantiated fn type of {} for inference. Was: {}, is: {}",
-                        self.name_of(fn_call.name.name),
-                        self.type_id_to_string(generic_function_type_id),
-                        self.type_id_to_string(instantiated_fn_type_id)
-                    );
-
-                    if let Some(call_expected_type) = ctx.expected_type_id {
-                        self.unify_and_find_substitutions(
-                            call_expected_type,
-                            new_fn_ret_type,
-                            fn_call.span,
-                        )?;
-                        debug!(
-                            "subst\n\t{}",
-                            self.pretty_print_type_substitutions(
-                                &self.inference_context.constraints,
-                                "\n"
-                            ),
-                        );
-                    }
-
-                    //let mut failed_exprs: Vec<TyperError> = Vec::new();
-                    for (index, (expr, gen_param)) in args_and_params.into_iter().enumerate() {
-                        let instantiated_param_type =
-                            self.types.get(instantiated_fn_type_id).as_function().unwrap().params
-                                [index]
-                                .type_id;
-                        let current_substitutions = self.substitutions_if_consistent(
-                            &self.inference_context.constraints,
-                            fn_call.span,
-                        )?;
-
-                        let s: Vec<_> = current_substitutions
-                            .into_iter()
-                            .map(|p| TypeSubstitutionPair { from: p.0, to: p.1 })
-                            .collect();
-                        let expected_type_so_far =
-                            self.substitute_in_type(instantiated_param_type, &s, None, None);
-
-                        let expr = match expr {
-                            MaybeTypedExpr::Typed(typed) => Ok(typed),
-                            MaybeTypedExpr::Parsed(parsed_expr) => {
-                                let inference_context = ctx
-                                    .with_inference(true)
-                                    .with_expected_type(Some(expected_type_so_far));
-                                self.eval_expr(parsed_expr, inference_context)
-                            }
-                        }?;
-                        debug!(
-                            "unify '{}': {} =:= {}",
-                            self.name_of(gen_param.name),
-                            self.expr_to_string_with_type(&expr),
-                            self.type_id_to_string(expected_type_so_far),
-                        );
-                        if let TypeUnificationResult::NonMatching(msg) = self
-                            .unify_and_find_substitutions(
-                                expr.get_type(),
-                                expected_type_so_far,
-                                fn_call.span,
-                            )?
-                        {
-                            self.inference_context.origin_stack.pop();
-                            return failf!(
-                                    expr.get_span(),
-                                    "Passed value does not match expected type: expected {} but got {}. {msg}",
-                                    self.type_id_to_string(expected_type_so_far),
-                                    self.type_id_to_string(expr.get_type())
-                                );
-                        };
-                        debug!(
-                            "subst\n\t{}",
-                            self.pretty_print_type_substitutions(
-                                &self.inference_context.constraints,
-                                "\n\t"
-                            ),
-                        );
-                    }
-
-                    // TODO: enrich error
-                    let final_substitutions = self.substitutions_if_consistent(
-                        &self.inference_context.constraints,
-                        fn_call.span,
-                    )?;
-
-                    let mut solutions: Vec<SimpleNamedType> =
-                        Vec::with_capacity(instantiation_set.len());
-                    for (param_to_hole, param) in
-                        instantiation_set.iter().zip(generic_type_params.iter())
-                    {
-                        let corresponding_hole = param_to_hole.to;
-                        let Some(solution) = final_substitutions.get(&corresponding_hole) else {
-                            return failf!(
-                                fn_call.span,
-                                "No idea what {} should be",
-                                self.name_of(param.name)
-                            );
-                        };
-                        solutions.push(SimpleNamedType { name: param.name, type_id: *solution })
-                    }
-                    let id = self.inference_context.origin_stack.pop().unwrap();
-                    debug_assert!(id == fn_call.id);
-                    if self.inference_context.origin_stack.is_empty() {
-                        //eprintln!("Resetting inference buffer");
-                        self.inference_context.constraints.clear();
-                        self.inference_context.vars.clear();
-                    }
-                    solutions
-                }
+                // nocommit: in this example it looks like this expr gets compiled like
+                // 4 times currently
+                // assert(#debug some(2).unwrap() == 2);
+                let solutions = self.infer_types(
+                    &generic_type_params,
+                    &full_args_and_params,
+                    fn_call.id,
+                    ctx.scope_id,
+                )?;
+                solutions
             }
         };
 
