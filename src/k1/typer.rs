@@ -7591,20 +7591,22 @@ impl TypedModule {
                     Some((generic_variant_payload, payload)) => {
                         #[cfg(all())]
                         {
+                            let mut args_and_params = Vec::with_capacity(2);
+                            if let Some(expected) = ctx.expected_type_id {
+                                args_and_params.push((
+                                    TypeOrParsedExpr::TypeId(expected),
+                                    g.inner,
+                                    true,
+                                ))
+                            };
+                            args_and_params.push((
+                                TypeOrParsedExpr::ParsedExpr(payload),
+                                generic_variant_payload,
+                                false,
+                            ));
                             let solutions = self.infer_types(
                                 &g_params,
-                                &[
-                                    (
-                                        TypeOrParsedExpr::TypeId(ctx.expected_type_id.unwrap()),
-                                        g.inner,
-                                        true,
-                                    ),
-                                    (
-                                        TypeOrParsedExpr::ParsedExpr(payload),
-                                        generic_variant_payload,
-                                        false,
-                                    ),
-                                ],
+                                &args_and_params,
                                 base_expr,
                                 ctx.scope_id,
                             )?;
