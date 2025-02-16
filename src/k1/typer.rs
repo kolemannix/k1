@@ -2772,12 +2772,7 @@ impl TypedModule {
         // of each type param should be and call instantiate_generic_type
         //
         // This happens when specializing a type that contains an Opt[T], for example.
-        //
-        // Things don't seem to work without this special case, but I kinda think they should.
-        // I guess the problem is that we don't 'inherit' generic instance info
-        //
-        // Ok now doing that, and not wrongly setting generic instance info on the nested types,
-        // but stuff still doesn't compile. Should figure out why
+        // This lets us hit our cache as well
 
         if let Some(spec_info) = self.types.get_generic_instance_info(type_id) {
             // A,   B,    T
@@ -7592,6 +7587,10 @@ impl TypedModule {
                         #[cfg(all())]
                         {
                             let mut args_and_params = Vec::with_capacity(2);
+
+                            // There are only ever up to 2 'cases' to power inference
+                            // - The expected return type together with the type of the enum itself
+                            // - The passed payload together with the type of the payload itself
                             if let Some(expected) = ctx.expected_type_id {
                                 args_and_params.push((
                                     TypeOrParsedExpr::TypeId(expected),
@@ -7987,6 +7986,7 @@ impl TypedModule {
         origin_parsed_id: ParsedExpressionId,
         scope_id: ScopeId,
     ) -> TyperResult<Vec<SimpleNamedType>> {
+        debug!("INFER LEVEL {}", self.inference_context.origin_stack.len());
         let span = self.ast.expressions.get_span(origin_parsed_id);
 
         self.inference_context.origin_stack.push(origin_parsed_id);
@@ -8005,7 +8005,8 @@ impl TypedModule {
             }
         });
 
-        // Stores the mapping from type parameters to their type holes
+        // Stores the mapping from the function (or type's) type parameters to their
+        // corresponding instantiated type holes for this inference context
         let mut instantiation_set = Vec::with_capacity(type_params.len());
 
         let inference_var_count = self_.inference_context.vars.len();
@@ -8093,6 +8094,7 @@ impl TypedModule {
             };
             solutions.push(SimpleNamedType { name: param.name(), type_id: *solution })
         }
+        debug!("INFER DONE {}", self_.pretty_print_named_types(&solutions, ", "));
         Ok(solutions)
     }
 
@@ -8163,7 +8165,6 @@ impl TypedModule {
                         (passed_type, param.type_id, false)
                     }));
 
-                    eprintln!("INFER {}", self.name_of(fn_call.name.name));
                     // nocommit: in this example it looks like this expr gets compiled like
                     // 4 times currently
                     // assert(#debug some(2).unwrap() == 2);
@@ -8173,7 +8174,6 @@ impl TypedModule {
                         fn_call.id,
                         ctx.scope_id,
                     )?;
-                    eprintln!("INFER DONE {}", self.pretty_print_named_types(&solutions, ", "));
                     solutions
                 }
 

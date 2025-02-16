@@ -29,7 +29,7 @@ New tagline? "C with typeclasses and tagged unions"
   - [x] True inference variables, instantiate function types, unification and consistency checks, aka make it work
   - [-] Make 'crash' work in no-std
   - [x] Make it pretty (de-coupled inference hole from type variable)
-  - [ ] Move enum constructor onto new inference infra
+  - [x] Move enum constructor onto new inference infra
   - [ ] Move ability resolution onto new inference infra
   - [ ] Make it fast
 - [ ] Try a 'get types' pass that powers inference and avoids the 2x full compile (of args to generics) that we do now
