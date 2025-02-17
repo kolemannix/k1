@@ -266,6 +266,7 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
         ents
     };
 
+    // TODO: Do the file IO in parallel
     let mut parse_file = |path: &Path| {
         let content = fs::read_to_string(path)
             .unwrap_or_else(|_| panic!("Failed to open file to parse: {:?}", path));

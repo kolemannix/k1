@@ -304,6 +304,7 @@ pub struct FunctionType {
 #[derive(Debug, Clone)]
 pub struct RecursiveReference {
     pub parsed_id: ParsedTypeDefnId,
+    // nocommit: Use Option<TypeId> instead of PENDING constant once its on NonZeroU32
     pub root_type_id: TypeId,
 }
 
