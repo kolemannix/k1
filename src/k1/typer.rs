@@ -1855,6 +1855,7 @@ pub struct TypedModule {
     pub variables: Variables,
     pub types: Types,
     pub constants: Vec<Constant>,
+    pub exprs: (),
     pub scopes: Scopes,
     pub errors: Vec<TyperError>,
     pub namespaces: Namespaces,
@@ -1897,6 +1898,7 @@ impl TypedModule {
             variables: Variables::default(),
             types,
             constants: Vec::new(),
+            exprs: (),
             scopes,
             errors: Vec::new(),
             namespaces,
@@ -7974,9 +7976,6 @@ impl TypedModule {
             instantiated_params.push(type_id)
         }
 
-        // nocommit allow_mismatch is a hack that allows me to use this function and pass tests, it exploits
-        // the fact that we aren't using the same inference engine for ability calls and for
-        // regular calls
         for (index, (expr, _gen_param, allow_mismatch)) in args_and_params.iter().enumerate() {
             let instantiated_param_type = instantiated_params[index];
             let current_substitutions =
@@ -8009,6 +8008,9 @@ impl TypedModule {
                 expected_type_so_far,
                 argument_span,
             )? {
+                // allow_mismatch is used to avoid reporting a mismatch on the return type,
+                // before we're able to learn more about the rest of the inference. We get a better
+                // error message if we wait to report the mismatch until the end
                 if !allow_mismatch {
                     return failf!(
                         argument_span,
@@ -8142,8 +8144,30 @@ impl TypedModule {
     // For anything annotated we can skip evaluation!!!
     //
     // We can save the types in some tree or lookup table for the lowering pass
+    // I think we should hold off on this until we are interning expressions and blocks
     //fn get_type_of_expr(&mut self, expr: ParsedExpressionId, scope_id: ScopeId) -> Option<TypeId> {
-    //    None
+    //    match self.ast.expressions.get(expr) {
+    //        ParsedExpression::BinaryOp(binary_op) => todo!(),
+    //        ParsedExpression::UnaryOp(unary_op) => todo!(),
+    //        ParsedExpression::Literal(literal) => todo!(),
+    //        ParsedExpression::InterpolatedString(parsed_interpolated_string) => todo!(),
+    //        ParsedExpression::FnCall(fn_call) => todo!(),
+    //        ParsedExpression::Variable(variable) => todo!(),
+    //        ParsedExpression::FieldAccess(field_access) => todo!(),
+    //        ParsedExpression::Block(block) => todo!(),
+    //        ParsedExpression::If(if_expr) => todo!(),
+    //        ParsedExpression::While(parsed_while_expr) => todo!(),
+    //        ParsedExpression::Loop(parsed_loop_expr) => todo!(),
+    //        ParsedExpression::Struct(_) => todo!(),
+    //        ParsedExpression::ListLiteral(list_expr) => todo!(),
+    //        ParsedExpression::For(for_expr) => todo!(),
+    //        ParsedExpression::AnonEnumConstructor(anon_enum_constructor) => todo!(),
+    //        ParsedExpression::Is(parsed_is_expression) => todo!(),
+    //        ParsedExpression::Match(parsed_match_expression) => todo!(),
+    //        ParsedExpression::AsCast(parsed_as_cast) => todo!(),
+    //        ParsedExpression::Closure(parsed_closure) => todo!(),
+    //        ParsedExpression::Builtin(span_id) => todo!(),
+    //    }
     //}
 
     fn add_substitution(&self, set: &mut Vec<TypeSubstitutionPair>, pair: TypeSubstitutionPair) {
@@ -8902,7 +8926,7 @@ impl TypedModule {
                 };
                 let expected_type = match provided_type {
                     Some(provided_type) => {
-                        if val_def.is_referencing {
+                        if val_def.is_referencing() {
                             let Type::Reference(expected_reference_type) =
                                 self.types.get(provided_type)
                             else {
@@ -8928,28 +8952,28 @@ impl TypedModule {
                     }
                 };
 
-                let variable_type = if val_def.is_referencing {
+                let variable_type = if val_def.is_referencing() {
                     self.types.add_reference_type(actual_type)
                 } else {
                     actual_type
                 };
 
                 let variable_id = self.variables.add_variable(Variable {
-                    is_mutable: val_def.is_mutable,
+                    is_mutable: val_def.is_mutable(),
                     name: val_def.name,
                     type_id: variable_type,
                     owner_scope: ctx.scope_id,
-                    is_context: val_def.is_context,
+                    is_context: val_def.is_context(),
                     constant_id: None,
                 });
                 let val_def_stmt = TypedStmt::Let(Box::new(LetStmt {
                     variable_type,
                     variable_id,
                     initializer: value_expr,
-                    is_referencing: val_def.is_referencing,
+                    is_referencing: val_def.is_referencing(),
                     span: val_def.span,
                 }));
-                if val_def.is_context {
+                if val_def.is_context() {
                     self.scopes.add_context_variable(
                         ctx.scope_id,
                         val_def.name,

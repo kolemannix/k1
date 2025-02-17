@@ -1,0 +1,18 @@
+Your vision aligns with explicit, compiler-enforced resource management where cleanup is not left to the object’s destructor but is instead a program-level responsibility. Here’s a refined approach that combines defer with linear types, ownership tracking, and compiler-enforced "proof of cleanup":
+
+ability Resource[impl Context] {
+  fn destroy(self: Self, context: Context): unit
+}
+
+impl Resource[Context = unit] for File {
+  fn destroy(self: Self, _: Context): unit { fclose(self.fd) }
+}
+
+fn main(): int {
+  let f = files/open("config.json"); // scope.resources += expr id #1
+  files/open("config2.json"); // scope.resources +=  expr id #2. Closed immediately or must use error?
+
+  defer destroy(f, ());
+
+  0
+}
