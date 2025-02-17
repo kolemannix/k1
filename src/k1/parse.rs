@@ -1,10 +1,10 @@
-use std::collections::HashMap;
 use std::fmt::{Display, Formatter, Write};
-use std::num::NonZeroU32;
 
 use crate::compiler::CompilerConfig;
-use crate::lex::*;
+use crate::pool::Pool;
 use crate::typer::{BinaryOpKind, ErrorLevel, Linkage};
+use crate::{lex::*, pool};
+use fxhash::FxHashMap;
 use log::trace;
 use string_interner::backend::StringBackend;
 use string_interner::Symbol;
@@ -22,28 +22,29 @@ pub struct ParsedAbilityId(u32);
 pub struct ParsedAbilityImplId(u32);
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
 pub struct ParsedNamespaceId(u32);
-#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
-pub struct ParsedExpressionId(NonZeroU32);
+#[derive(PartialEq, Eq, Debug, Copy, Clone, Hash)]
+pub struct ParsedExpressionId(pool::Id);
 impl ParsedExpressionId {
-    pub const PENDING: ParsedExpressionId = ParsedExpressionId(NonZeroU32::MAX);
-}
-impl From<usize> for ParsedExpressionId {
-    fn from(value: usize) -> Self {
-        ParsedExpressionId(NonZeroU32::new(value as u32).expect("0 is not a valid expression id"))
-    }
+    pub const PENDING: ParsedExpressionId = ParsedExpressionId(pool::Id::PENDING);
 }
 impl Display for ParsedExpressionId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
     }
 }
-#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
-pub struct ParsedTypeExpressionId(u32);
-impl ParsedTypeExpressionId {
-    pub const fn zero() -> ParsedTypeExpressionId {
-        ParsedTypeExpressionId(0)
-    }
-}
+//#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
+//pub struct ParsedTypeExpressionId(NonZeroU32);
+//impl From<usize> for ParsedTypeExpressionId {
+//    fn from(value: usize) -> Self {
+//        ParsedTypeExpressionId(
+//            NonZeroU32::new(value as u32).expect("0 is not a valid type expression id"),
+//        )
+//    }
+//}
+
+#[derive(PartialEq, Eq, Debug, Copy, Clone, Hash)]
+pub struct ParsedTypeExpressionId(pool::Id);
+
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
 pub struct ParsedPatternId(u32);
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
@@ -67,7 +68,7 @@ pub type FileId = u32;
 #[cfg(test)]
 mod parse_test;
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
+#[derive(PartialEq, Eq, Debug, Copy, Clone, Hash)]
 pub enum ParsedId {
     Use(ParsedUseId),
     Function(ParsedFunctionId),
@@ -307,11 +308,49 @@ pub struct ValDef {
     pub name: Identifier,
     pub type_expr: Option<ParsedTypeExpressionId>,
     pub value: ParsedExpressionId,
-    // TODO: Move to a flags struct for ValDef
-    pub is_mutable: bool,
-    pub is_context: bool,
-    pub is_referencing: bool,
     pub span: SpanId,
+    flags: u8,
+}
+
+impl ValDef {
+    pub const FLAG_MUTABLE: u8 = 1;
+    pub const FLAG_CONTEXT: u8 = 2;
+    pub const FLAG_REFERENCING: u8 = 4;
+
+    pub fn make_flags(mutable: bool, context: bool, referencing: bool) -> u8 {
+        let mut flags = 0;
+        if mutable {
+            flags |= Self::FLAG_MUTABLE;
+        }
+        if context {
+            flags |= Self::FLAG_CONTEXT;
+        }
+        if referencing {
+            flags |= Self::FLAG_REFERENCING;
+        }
+        flags
+    }
+
+    pub fn set_mutable(&mut self) {
+        self.flags |= Self::FLAG_MUTABLE;
+    }
+    pub fn is_mutable(&self) -> bool {
+        self.flags & Self::FLAG_MUTABLE != 0
+    }
+
+    pub fn set_context(&mut self) {
+        self.flags |= Self::FLAG_CONTEXT;
+    }
+    pub fn is_context(&self) -> bool {
+        self.flags & Self::FLAG_CONTEXT != 0
+    }
+
+    pub fn set_referencing(&mut self) {
+        self.flags |= Self::FLAG_REFERENCING;
+    }
+    pub fn is_referencing(&self) -> bool {
+        self.flags & Self::FLAG_REFERENCING != 0
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1056,19 +1095,27 @@ pub struct ParsedNamespace {
     pub span: SpanId,
 }
 
-#[derive(Debug, Default, Clone)]
 pub struct ParsedExpressionPool {
-    expressions: Vec<ParsedExpression>,
-    type_hints: HashMap<ParsedExpressionId, ParsedTypeExpressionId>,
-    directives: HashMap<ParsedExpressionId, Vec<ParsedDirective>>,
+    // `expressions` and `type_hints` form a Struct-of-Arrays relationship
+    expressions: Pool<ParsedExpression>,
+    type_hints: Pool<Option<ParsedTypeExpressionId>>,
+    directives: FxHashMap<ParsedExpressionId, Vec<ParsedDirective>>,
 }
 impl ParsedExpressionPool {
-    pub fn add_type_hint(&mut self, id: ParsedExpressionId, ty: ParsedTypeExpressionId) {
-        self.type_hints.insert(id, ty);
+    pub fn new(capacity: usize) -> Self {
+        ParsedExpressionPool {
+            expressions: Pool::with_capacity("parsed_expr", capacity),
+            type_hints: Pool::with_capacity("parsed_expr_type_hint", capacity),
+            directives: FxHashMap::default(),
+        }
+    }
+
+    pub fn set_type_hint(&mut self, id: ParsedExpressionId, ty: ParsedTypeExpressionId) {
+        *self.type_hints.get_mut(id.0) = Some(ty)
     }
 
     pub fn get_type_hint(&self, id: ParsedExpressionId) -> Option<ParsedTypeExpressionId> {
-        self.type_hints.get(&id).copied()
+        *self.type_hints.get(id.0)
     }
 
     pub fn add_directives(&mut self, id: ParsedExpressionId, directives: Vec<ParsedDirective>) {
@@ -1080,17 +1127,17 @@ impl ParsedExpressionPool {
     }
 
     pub fn add_expression(&mut self, mut expression: ParsedExpression) -> ParsedExpressionId {
-        let id: ParsedExpressionId = (self.expressions.len() + 1).into();
+        let id: ParsedExpressionId = ParsedExpressionId(self.expressions.next_id());
         if let ParsedExpression::FnCall(call) = &mut expression {
             call.id = id;
         }
-        self.expressions.push(expression);
+        self.expressions.add(expression);
+        self.type_hints.add(None);
         id
     }
 
     pub fn get(&self, id: ParsedExpressionId) -> &ParsedExpression {
-        let index = id.0.get() - 1;
-        &self.expressions[index as usize]
+        self.expressions.get(id.0)
     }
 
     pub fn get_span(&self, id: ParsedExpressionId) -> SpanId {
@@ -1102,18 +1149,22 @@ impl ParsedExpressionPool {
     }
 }
 
-#[derive(Debug, Default, Clone)]
 pub struct ParsedTypeExpressionPool {
-    type_expressions: Vec<ParsedTypeExpression>,
+    type_expressions: Pool<ParsedTypeExpression>,
 }
 impl ParsedTypeExpressionPool {
+    fn new(capacity: usize) -> Self {
+        ParsedTypeExpressionPool {
+            type_expressions: Pool::with_capacity("parsed_type_expr", capacity),
+        }
+    }
+
     pub fn add(&mut self, expression: ParsedTypeExpression) -> ParsedTypeExpressionId {
-        let id = self.type_expressions.len();
-        self.type_expressions.push(expression);
-        ParsedTypeExpressionId(id as u32)
+        let id = self.type_expressions.add(expression);
+        ParsedTypeExpressionId(id)
     }
     pub fn get(&self, id: ParsedTypeExpressionId) -> &ParsedTypeExpression {
-        &self.type_expressions[id.0 as usize]
+        self.type_expressions.get(id.0)
     }
 }
 
@@ -1194,7 +1245,6 @@ impl Sources {
     }
 }
 
-#[derive(Debug, Clone)]
 pub struct ParsedModule {
     pub name: String,
     pub name_id: Identifier,
@@ -1232,8 +1282,8 @@ impl ParsedModule {
             ability_impls: Vec::new(),
             sources: Sources::default(),
             identifiers,
-            expressions: ParsedExpressionPool::default(),
-            type_expressions: ParsedTypeExpressionPool::default(),
+            expressions: ParsedExpressionPool::new(128),
+            type_expressions: ParsedTypeExpressionPool::new(8192),
             patterns: ParsedPatternPool::default(),
             uses: ParsedUsePool::default(),
             errors: Vec::new(),
@@ -2374,7 +2424,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         if self.peek().kind == K::Colon {
             self.advance();
             let type_hint = self.expect_type_expression()?;
-            self.module.expressions.add_type_hint(with_postfix, type_hint);
+            self.module.expressions.set_type_hint(with_postfix, type_hint);
         }
         Ok(Some(with_postfix))
     }
@@ -2821,9 +2871,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             name: self.intern_ident_token(name_token),
             type_expr: typ,
             value: initializer_expression,
-            is_mutable,
-            is_context,
-            is_referencing: is_reference,
+            flags: ValDef::make_flags(is_mutable, is_context, is_reference),
             span,
         }))
     }

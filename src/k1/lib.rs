@@ -2,6 +2,7 @@ pub mod codegen_llvm;
 pub mod compiler;
 pub mod lex;
 pub mod parse;
+mod pool;
 mod strings;
 pub mod typer;
 
