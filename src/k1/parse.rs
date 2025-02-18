@@ -1,9 +1,10 @@
 use std::fmt::{Display, Formatter, Write};
+use std::num::NonZeroU32;
 
 use crate::compiler::CompilerConfig;
+use crate::lex::*;
 use crate::pool::Pool;
 use crate::typer::{BinaryOpKind, ErrorLevel, Linkage};
-use crate::{lex::*, pool};
 use fxhash::FxHashMap;
 use log::trace;
 use string_interner::backend::StringBackend;
@@ -23,9 +24,20 @@ pub struct ParsedAbilityImplId(u32);
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
 pub struct ParsedNamespaceId(u32);
 #[derive(PartialEq, Eq, Debug, Copy, Clone, Hash)]
-pub struct ParsedExpressionId(pool::Id);
+pub struct ParsedExpressionId(NonZeroU32);
 impl ParsedExpressionId {
-    pub const PENDING: ParsedExpressionId = ParsedExpressionId(pool::Id::PENDING);
+    // nocommit: use Option here
+    pub const PENDING: ParsedExpressionId = ParsedExpressionId(NonZeroU32::MAX);
+}
+impl From<NonZeroU32> for ParsedExpressionId {
+    fn from(value: NonZeroU32) -> Self {
+        ParsedExpressionId(value)
+    }
+}
+impl Into<NonZeroU32> for ParsedExpressionId {
+    fn into(self) -> NonZeroU32 {
+        self.0
+    }
 }
 impl Display for ParsedExpressionId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -43,7 +55,17 @@ impl Display for ParsedExpressionId {
 //}
 
 #[derive(PartialEq, Eq, Debug, Copy, Clone, Hash)]
-pub struct ParsedTypeExpressionId(pool::Id);
+pub struct ParsedTypeExpressionId(NonZeroU32);
+impl From<NonZeroU32> for ParsedTypeExpressionId {
+    fn from(value: NonZeroU32) -> Self {
+        ParsedTypeExpressionId(value)
+    }
+}
+impl Into<NonZeroU32> for ParsedTypeExpressionId {
+    fn into(self) -> NonZeroU32 {
+        self.0
+    }
+}
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
 pub struct ParsedPatternId(u32);
@@ -1097,8 +1119,8 @@ pub struct ParsedNamespace {
 
 pub struct ParsedExpressionPool {
     // `expressions` and `type_hints` form a Struct-of-Arrays relationship
-    expressions: Pool<ParsedExpression>,
-    type_hints: Pool<Option<ParsedTypeExpressionId>>,
+    expressions: Pool<ParsedExpression, ParsedExpressionId>,
+    type_hints: Pool<Option<ParsedTypeExpressionId>, ParsedExpressionId>,
     directives: FxHashMap<ParsedExpressionId, Vec<ParsedDirective>>,
 }
 impl ParsedExpressionPool {
@@ -1111,11 +1133,11 @@ impl ParsedExpressionPool {
     }
 
     pub fn set_type_hint(&mut self, id: ParsedExpressionId, ty: ParsedTypeExpressionId) {
-        *self.type_hints.get_mut(id.0) = Some(ty)
+        *self.type_hints.get_mut(id) = Some(ty)
     }
 
     pub fn get_type_hint(&self, id: ParsedExpressionId) -> Option<ParsedTypeExpressionId> {
-        *self.type_hints.get(id.0)
+        *self.type_hints.get(id)
     }
 
     pub fn add_directives(&mut self, id: ParsedExpressionId, directives: Vec<ParsedDirective>) {
@@ -1127,7 +1149,7 @@ impl ParsedExpressionPool {
     }
 
     pub fn add_expression(&mut self, mut expression: ParsedExpression) -> ParsedExpressionId {
-        let id: ParsedExpressionId = ParsedExpressionId(self.expressions.next_id());
+        let id: ParsedExpressionId = self.expressions.next_id();
         if let ParsedExpression::FnCall(call) = &mut expression {
             call.id = id;
         }
@@ -1137,7 +1159,7 @@ impl ParsedExpressionPool {
     }
 
     pub fn get(&self, id: ParsedExpressionId) -> &ParsedExpression {
-        self.expressions.get(id.0)
+        self.expressions.get(id)
     }
 
     pub fn get_span(&self, id: ParsedExpressionId) -> SpanId {
@@ -1150,7 +1172,7 @@ impl ParsedExpressionPool {
 }
 
 pub struct ParsedTypeExpressionPool {
-    type_expressions: Pool<ParsedTypeExpression>,
+    type_expressions: Pool<ParsedTypeExpression, ParsedTypeExpressionId>,
 }
 impl ParsedTypeExpressionPool {
     fn new(capacity: usize) -> Self {
@@ -1160,11 +1182,10 @@ impl ParsedTypeExpressionPool {
     }
 
     pub fn add(&mut self, expression: ParsedTypeExpression) -> ParsedTypeExpressionId {
-        let id = self.type_expressions.add(expression);
-        ParsedTypeExpressionId(id)
+        self.type_expressions.add(expression)
     }
     pub fn get(&self, id: ParsedTypeExpressionId) -> &ParsedTypeExpression {
-        self.type_expressions.get(id.0)
+        self.type_expressions.get(id)
     }
 }
 

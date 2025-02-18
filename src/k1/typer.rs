@@ -8,6 +8,7 @@ use std::collections::{HashMap, VecDeque};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::io::stderr;
+use std::num::NonZeroU32;
 
 use ahash::HashMapExt;
 use anyhow::bail;
@@ -31,7 +32,8 @@ use crate::parse::{
 use crate::parse::{
     Block, FnCall, Identifier, Literal, ParsedExpression, ParsedModule, ParsedStmt,
 };
-use crate::{static_assert_size, strings};
+use crate::pool::Pool;
+use crate::{pool, static_assert_size, strings};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FunctionId(pub u32);
@@ -48,6 +50,18 @@ pub struct AbilityId(u32);
 pub struct AbilityImplId(u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ConstantId(u32);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TypedStmtId(NonZeroU32);
+impl From<NonZeroU32> for TypedStmtId {
+    fn from(value: NonZeroU32) -> Self {
+        TypedStmtId(value)
+    }
+}
+impl From<TypedStmtId> for NonZeroU32 {
+    fn from(val: TypedStmtId) -> Self {
+        val.0
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Linkage {
@@ -1856,6 +1870,7 @@ pub struct TypedModule {
     pub types: Types,
     pub constants: Vec<Constant>,
     pub exprs: (),
+    pub stmts: pool::Pool<TypedStmt, TypedStmtId>,
     pub scopes: Scopes,
     pub errors: Vec<TyperError>,
     pub namespaces: Namespaces,
@@ -1899,6 +1914,7 @@ impl TypedModule {
             types,
             constants: Vec::new(),
             exprs: (),
+            stmts: Pool::new("typed_stmts"),
             scopes,
             errors: Vec::new(),
             namespaces,
