@@ -93,8 +93,9 @@ pub struct TypeSubstitutionPair {
     to: TypeId,
 }
 
+#[derive(Default)]
 pub struct InferenceContext {
-    pub origin_stack: Vec<ParsedExpressionId>,
+    pub origin_stack: Vec<SpanId>,
     pub vars: Vec<TypeId>,
     pub constraints: Vec<TypeSubstitutionPair>,
 }
@@ -611,73 +612,10 @@ impl NamedType for SimpleNamedType {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct TypeSolutionSet {
-    pub solutions: Vec<PendingTypeSolution>,
-}
-
-impl<I, T> From<T> for TypeSolutionSet
-where
-    I: NamedType,
-    T: Iterator<Item = I>,
-{
-    fn from(value: T) -> Self {
-        TypeSolutionSet {
-            solutions: value
-                .map(|v| PendingTypeSolution::unsolved(v.name(), v.type_id()))
-                .collect(),
-        }
-    }
-}
-
-impl TypeSolutionSet {
-    pub fn all_solved(&self) -> bool {
-        self.solutions.iter().all(|s| s.solved_type_id.is_some())
-    }
-
-    pub fn get_solution_mut(&mut self, type_id: TypeId) -> Option<&mut PendingTypeSolution> {
-        self.solutions.iter_mut().find(|s| s.variable_type_id == type_id)
-    }
-
-    pub fn get_solutions(&self) -> Option<Vec<SimpleNamedType>> {
-        self.solutions
-            .iter()
-            .map(|s| s.solved_type_id.map(|type_id| SimpleNamedType { name: s.name, type_id }))
-            .collect()
-    }
-
-    pub fn get_unsolved(&self) -> Vec<SimpleNamedType> {
-        self.solutions
-            .iter()
-            .filter(|s| s.solved_type_id.is_none())
-            .map(|s| SimpleNamedType { name: s.name, type_id: s.variable_type_id })
-            .collect()
-    }
-}
-
 enum TypeUnificationResult {
     Matching,
     NoHoles,
     NonMatching(&'static str),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PendingTypeSolution {
-    pub name: Identifier,
-    pub variable_type_id: TypeId,
-    pub solved_type_id: Option<TypeId>,
-}
-
-impl PendingTypeSolution {
-    pub fn unsolved(name: Identifier, type_id: TypeId) -> Self {
-        PendingTypeSolution { name, variable_type_id: type_id, solved_type_id: None }
-    }
-}
-
-impl<T: NamedType> From<&T> for PendingTypeSolution {
-    fn from(value: &T) -> Self {
-        PendingTypeSolution::unsolved(value.name(), value.type_id())
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3728,133 +3666,152 @@ impl TypedModule {
         target_ability_id: AbilityId,
         span: SpanId,
     ) -> Option<AbilityImplHandle> {
-        let blanket_impl = self.get_ability_impl(blanket_impl_id);
+        let old_inference_context = std::mem::take(&mut self.inference_context);
+        let mut self_ = scopeguard::guard(self, |s| s.inference_context = old_inference_context);
+        let blanket_impl = self_.get_ability_impl(blanket_impl_id);
+        let blanket_impl_ability_id = blanket_impl.ability_id;
+        let blanket_impl_scope_id = blanket_impl.scope_id;
+        let blanket_impl_self_type_id = blanket_impl.self_type_id;
         if !blanket_impl.compile_errors.is_empty() {
             debug!("Blanket impl failed compile; skipping");
             return None;
         }
-        let target_ability = self.get_ability(target_ability_id);
+        let target_ability = self_.get_ability(target_ability_id);
         let target_ability_args = target_ability.kind.arguments();
         let AbilityImplKind::Blanket { parsed_id, .. } = blanket_impl.kind else {
             unreachable!("Expected a blanket impl")
         };
         let target_base = target_ability.parent_ability_id().unwrap_or(target_ability_id);
 
-        let blanket_ability = self.get_ability(blanket_impl.ability_id);
+        let blanket_ability = self_.get_ability(blanket_impl.ability_id);
         let blanket_base = blanket_ability.parent_ability_id().unwrap_or(blanket_impl.ability_id);
 
         if blanket_base != target_base {
-            debug!("Wrong blanket base {}", self.name_of(blanket_ability.name));
+            debug!("Wrong blanket base {}", self_.name_of(blanket_ability.name));
+            return None;
         }
 
         let blanket_arguments = blanket_ability.kind.arguments();
 
         debug!(
             "Trying blanket impl {} with blanket arguments {}, impl arguments {}",
-            self.name_of(blanket_ability.name),
-            self.pretty_print_named_types(blanket_arguments, ", "),
-            self.pretty_print_named_types(&blanket_impl.impl_arguments, ", "),
+            self_.name_of(blanket_ability.name),
+            self_.pretty_print_named_types(blanket_arguments, ", "),
+            self_.pretty_print_named_types(&blanket_impl.impl_arguments, ", "),
         );
 
         if blanket_arguments.len() != target_ability_args.len() {
             debug!(
                 "Wrong arg count {} vs {}",
-                self.pretty_print_named_types(blanket_arguments, ", "),
-                self.pretty_print_named_types(target_ability_args, ", ")
+                self_.pretty_print_named_types(blanket_arguments, ", "),
+                self_.pretty_print_named_types(target_ability_args, ", ")
             );
+            return None;
         }
 
-        let mut solution_set = TypeSolutionSet::from(blanket_impl.type_params.iter());
+        // Reborrows
+        let blanket_ability = self_.get_ability(blanket_impl_ability_id);
+        let blanket_arguments = blanket_ability.kind.arguments();
+
+        //let mut solution_set = TypeSolutionSet::from(blanket_impl.type_params.iter());
+        let mut args_and_params = Vec::with_capacity(blanket_arguments.len() + 1);
+        //
         // For each argument A to the blanket impl, solve for [Self, ...Params] using
+        args_and_params.push((
+            TypeOrParsedExpr::TypeId(self_type_id),
+            blanket_impl_self_type_id,
+            true,
+        ));
         for (arg_to_blanket, arg_to_target) in blanket_arguments.iter().zip(target_ability_args) {
-            debug!(
-                "Solving with slot: {} | passed: {}",
-                self.type_id_to_string(arg_to_target.type_id),
-                self.type_id_to_string(arg_to_blanket.type_id),
-            );
-            if let Err(solve_error) = self.solve_generic_params(
-                &mut solution_set,
-                arg_to_target.type_id,
+            args_and_params.push((
+                TypeOrParsedExpr::TypeId(arg_to_target.type_id),
                 arg_to_blanket.type_id,
-                span,
-            ) {
-                debug!("Bailing due to error; {solve_error}");
+                true,
+            ));
+            // debug!(
+            //     "Solving with slot: {} | passed: {}",
+            //     self.type_id_to_string(arg_to_target.type_id),
+            //     self.type_id_to_string(arg_to_blanket.type_id),
+            // );
+            // if let Err(solve_error) = self.solve_generic_params(
+            //     &mut solution_set,
+            //     arg_to_target.type_id,
+            //     arg_to_blanket.type_id,
+            //     span,
+            // ) {
+            //     debug!("Bailing due to error; {solve_error}");
+            //     return None;
+            // }
+        }
+        //if let Err(solve_error) = self.solve_generic_params(
+        //    &mut solution_set,
+        //    self_type_id,
+        //    blanket_impl.self_type_id,
+        //    span,
+        //) {
+        //    debug!("Bailing due to error; {solve_error}");
+        //    return None;
+        //};
+        let blanket_impl_type_params = &self_.get_ability_impl(blanket_impl_id).type_params.clone();
+        let root_scope_id = self_.scopes.get_root_scope_id();
+        let solutions =
+            self_.infer_types(blanket_impl_type_params, &args_and_params, span, root_scope_id);
+        let solutions = match solutions {
+            Err(e) => {
+                debug!("Could not solve all blanket impl params: {e}");
                 return None;
             }
-        }
-        if let Err(solve_error) = self.solve_generic_params(
-            &mut solution_set,
-            self_type_id,
-            blanket_impl.self_type_id,
-            span,
-        ) {
-            debug!("Bailing due to error; {solve_error}");
-            return None;
+            Ok(solutions) => solutions,
         };
-        match solution_set.get_solutions() {
-            None => {
-                debug!(
-                    "Could not solve all blanket impl params: {}",
-                    self.pretty_print_named_types(&solution_set.get_unsolved(), ", ")
-                );
-                None
-            }
-            Some(solutions) => {
-                // 'Specialize' the constraints:
-                // - For each constraint, run the expression with the binding for T from a child
-                //   scope of the blanket impl scope
-                // - Then check if the solution implements _that_ ability, by factoring
-                //   out the actual inner check from check_type_constraints
-                let constraint_checking_scope = self.scopes.add_sibling_scope(
-                    blanket_impl.scope_id,
-                    ScopeType::AbilityImpl,
-                    None,
-                    None,
-                );
-                let parsed_blanket_impl = self.ast.get_ability_impl(parsed_id);
-                for (parsed_param, solution) in
-                    parsed_blanket_impl.generic_impl_params.clone().iter().zip(solutions.iter())
-                {
-                    let _ = self.scopes.add_type(
-                        constraint_checking_scope,
-                        parsed_param.name,
-                        solution.type_id,
+        // 'Specialize' the constraints:
+        // - For each constraint, run the expression with the binding for T from a child
+        //   scope of the blanket impl scope
+        // - Then check if the solution implements _that_ ability, by factoring
+        //   out the actual inner check from check_type_constraints
+        let constraint_checking_scope = self_.scopes.add_sibling_scope(
+            blanket_impl_scope_id,
+            ScopeType::AbilityImpl,
+            None,
+            None,
+        );
+        let parsed_blanket_impl = self_.ast.get_ability_impl(parsed_id);
+        for (parsed_param, solution) in
+            parsed_blanket_impl.generic_impl_params.clone().iter().zip(solutions.iter())
+        {
+            let _ = self_.scopes.add_type(
+                constraint_checking_scope,
+                parsed_param.name,
+                solution.type_id,
+            );
+            for constraint in parsed_param.constraints.iter() {
+                let constraint_signature = match constraint {
+                    parse::ParsedTypeConstraintExpr::Ability(parsed_ability_expr) => self_
+                        .eval_ability_expr(parsed_ability_expr, false, constraint_checking_scope)
+                        .unwrap(),
+                };
+                if let Err(mut e) = self_.check_type_constraint(
+                    solution.type_id,
+                    constraint_signature,
+                    parsed_param.name,
+                    constraint_checking_scope,
+                    span,
+                ) {
+                    e.message = format!(
+                        "Blanket impl almost matched but a constraint was unsatisfied; {}",
+                        e.message
                     );
-                    for constraint in parsed_param.constraints.iter() {
-                        let constraint_signature = match constraint {
-                            parse::ParsedTypeConstraintExpr::Ability(parsed_ability_expr) => self
-                                .eval_ability_expr(
-                                    parsed_ability_expr,
-                                    false,
-                                    constraint_checking_scope,
-                                )
-                                .unwrap(),
-                        };
-                        if let Err(mut e) = self.check_type_constraint(
-                            solution.type_id,
-                            constraint_signature,
-                            parsed_param.name,
-                            constraint_checking_scope,
-                            span,
-                        ) {
-                            e.message = format!(
-                                "Blanket impl almost matched but a constraint was unsatisfied; {}",
-                                e.message
-                            );
-                            e.level = ErrorLevel::Info;
-                            self.write_error(&mut std::io::stderr(), &e).unwrap();
-                            return None;
-                        }
-                    }
+                    e.level = ErrorLevel::Info;
+                    self_.write_error(&mut std::io::stderr(), &e).unwrap();
+                    return None;
                 }
-
-                // 'Run' the blanket ability using 'solutions'
-                let impl_handle = self
-                    .instantiate_blanket_impl(self_type_id, blanket_impl_id, &solutions)
-                    .unwrap_or_else(|e| self.ice("Failed to instantiate blanket impl", Some(&e)));
-                Some(impl_handle)
             }
         }
+
+        // 'Run' the blanket ability using 'solutions'
+        let impl_handle = self_
+            .instantiate_blanket_impl(self_type_id, blanket_impl_id, &solutions)
+            .unwrap_or_else(|e| self_.ice("Failed to instantiate blanket impl", Some(&e)));
+        Some(impl_handle)
     }
 
     fn instantiate_blanket_impl(
@@ -7357,7 +7314,7 @@ impl TypedModule {
         }
 
         let solved_params =
-            self.infer_types(&type_params, &args_and_params, fn_call.id, ctx.scope_id)?;
+            self.infer_types(&type_params, &args_and_params, fn_call.span, ctx.scope_id)?;
 
         let (solved_self, solved_rest) = solved_params.split_at(1);
         let solved_self = solved_self.first().unwrap();
@@ -7600,7 +7557,7 @@ impl TypedModule {
                             false,
                         ));
                         let solutions =
-                            self.infer_types(&g_params, &args_and_params, base_expr, ctx.scope_id)?;
+                            self.infer_types(&g_params, &args_and_params, span, ctx.scope_id)?;
                         solutions
                     }
                 }
@@ -7946,16 +7903,15 @@ impl TypedModule {
         &mut self,
         type_params: &[impl NamedType],
         args_and_params: &[(TypeOrParsedExpr, TypeId, bool)],
-        origin_parsed_id: ParsedExpressionId,
+        span: SpanId,
         scope_id: ScopeId,
     ) -> TyperResult<Vec<SimpleNamedType>> {
         debug!("INFER LEVEL {}", self.inference_context.origin_stack.len());
-        let span = self.ast.expressions.get_span(origin_parsed_id);
 
-        self.inference_context.origin_stack.push(origin_parsed_id);
+        self.inference_context.origin_stack.push(span);
         let mut self_ = scopeguard::guard(self, |self_| {
             let id = self_.inference_context.origin_stack.pop().unwrap();
-            debug_assert!(id == origin_parsed_id);
+            debug_assert!(id == span);
             if self_.inference_context.origin_stack.is_empty() {
                 debug!("Resetting inference buffer");
                 self_.inference_context.constraints.clear();
@@ -8019,11 +7975,9 @@ impl TypedModule {
                 self_.type_id_to_string(argument_type),
                 self_.type_id_to_string(expected_type_so_far),
             );
-            if let TypeUnificationResult::NonMatching(msg) = self_.unify_and_find_substitutions(
-                argument_type,
-                expected_type_so_far,
-                argument_span,
-            )? {
+            if let TypeUnificationResult::NonMatching(msg) =
+                self_.unify_and_find_substitutions(argument_type, expected_type_so_far)
+            {
                 // allow_mismatch is used to avoid reporting a mismatch on the return type,
                 // before we're able to learn more about the rest of the inference. We get a better
                 // error message if we wait to report the mismatch until the end
@@ -8124,7 +8078,7 @@ impl TypedModule {
                 let solutions = self.infer_types(
                     &generic_type_params,
                     &full_args_and_params,
-                    fn_call.id,
+                    fn_call.span,
                     ctx.scope_id,
                 )?;
                 solutions
@@ -8273,18 +8227,16 @@ impl TypedModule {
         &mut self,
         passed_type: TypeId,
         slot_type: TypeId,
-        span: SpanId,
-    ) -> TyperResult<TypeUnificationResult> {
+    ) -> TypeUnificationResult {
         // eprintln!("unify_and_find_substitutions slot {}", self.type_id_to_string(slot_type));
         let mut inference_substitutions = std::mem::take(&mut self.inference_context.constraints);
         let result = self.unify_and_find_substitutions_rec(
             &mut inference_substitutions,
             passed_type,
             slot_type,
-            span,
-        )?;
+        );
         self.inference_context.constraints = inference_substitutions;
-        Ok(result)
+        result
     }
 
     fn unify_and_find_substitutions_rec(
@@ -8292,8 +8244,7 @@ impl TypedModule {
         substitutions: &mut Vec<TypeSubstitutionPair>,
         passed_type: TypeId,
         slot_type: TypeId,
-        span: SpanId,
-    ) -> TyperResult<TypeUnificationResult> {
+    ) -> TypeUnificationResult {
         // passed_type           slot_type          -> result
         //
         // int                    '0                 -> '0 := int
@@ -8317,7 +8268,7 @@ impl TypedModule {
                 "I should skip this because it has no type holes in it: {}",
                 self.type_id_to_string(slot_type)
             );
-            return Ok(TypeUnificationResult::NoHoles);
+            return TypeUnificationResult::NoHoles;
         }
 
         // This special case is removable, all tests pass, but I believe its currently
@@ -8336,17 +8287,12 @@ impl TypedModule {
                 for (passed_type, arg_slot) in
                     passed_info.param_values.iter().zip(arg_info.param_values.iter())
                 {
-                    self.unify_and_find_substitutions_rec(
-                        substitutions,
-                        *passed_type,
-                        *arg_slot,
-                        span,
-                    )?;
+                    self.unify_and_find_substitutions_rec(substitutions, *passed_type, *arg_slot);
                 }
             } else {
                 debug!("compared generic instances but they didn't match parent types");
             }
-            return Ok(TypeUnificationResult::Matching);
+            return TypeUnificationResult::Matching;
         }
 
         match (self.types.get_no_follow(passed_type), self.types.get_no_follow(slot_type)) {
@@ -8358,7 +8304,7 @@ impl TypedModule {
                     substitutions,
                     TypeSubstitutionPair { from: passed_type, to: slot_type },
                 );
-                Ok(TypeUnificationResult::Matching)
+                TypeUnificationResult::Matching
             }
             (_actual_type, Type::InferenceHole(_expected_hole)) => {
                 // Note: We may eventually need an 'occurs' check to prevent recursive
@@ -8368,14 +8314,13 @@ impl TypedModule {
                     substitutions,
                     TypeSubstitutionPair { from: slot_type, to: passed_type },
                 );
-                Ok(TypeUnificationResult::Matching)
+                TypeUnificationResult::Matching
             }
             (Type::Reference(passed_refer), Type::Reference(refer)) => self
                 .unify_and_find_substitutions_rec(
                     substitutions,
                     passed_refer.inner_type,
                     refer.inner_type,
-                    span,
                 ),
             (Type::Struct(passed_struct), Type::Struct(struc)) => {
                 // Struct example:
@@ -8389,21 +8334,20 @@ impl TypedModule {
                 let passed_fields = &passed_struct.fields;
                 let fields = &struc.fields;
                 if passed_fields.len() != fields.len() {
-                    return Ok(TypeUnificationResult::NonMatching("field count"));
+                    return TypeUnificationResult::NonMatching("field count");
                 }
                 for (idx, field) in fields.iter().enumerate() {
                     let passed_field = &passed_fields[idx];
                     if field.name != passed_field.name {
-                        return Ok(TypeUnificationResult::NonMatching("field names"));
+                        return TypeUnificationResult::NonMatching("field names");
                     }
                     self.unify_and_find_substitutions_rec(
                         substitutions,
                         passed_field.type_id,
                         field.type_id,
-                        span,
-                    )?;
+                    );
                 }
-                Ok(TypeUnificationResult::Matching)
+                TypeUnificationResult::Matching
             }
             (Type::Enum(passed_enum), Type::Enum(param_enum_type)) => {
                 // Enum example
@@ -8418,12 +8362,12 @@ impl TypedModule {
                 let passed_variants = &passed_enum.variants;
                 let variants = &param_enum_type.variants;
                 if passed_variants.len() != variants.len() {
-                    return Ok(TypeUnificationResult::NonMatching("variant count"));
+                    return TypeUnificationResult::NonMatching("variant count");
                 }
                 for (idx, variant) in variants.iter().enumerate() {
                     let passed_variant = &passed_variants[idx];
                     if variant.name != passed_variant.name {
-                        return Ok(TypeUnificationResult::NonMatching("variant names"));
+                        return TypeUnificationResult::NonMatching("variant names");
                     }
                     if let Some(passed_payload) = passed_variant.payload {
                         if let Some(param_payload) = variant.payload {
@@ -8431,22 +8375,20 @@ impl TypedModule {
                                 substitutions,
                                 passed_payload,
                                 param_payload,
-                                span,
-                            )?;
+                            );
                         } else {
-                            return Ok(TypeUnificationResult::NonMatching("payloads"));
+                            return TypeUnificationResult::NonMatching("payloads");
                         }
                     }
                 }
 
-                Ok(TypeUnificationResult::Matching)
+                TypeUnificationResult::Matching
             }
             (Type::EnumVariant(passed_enum_variant), Type::Enum(_param_enum_type_variant)) => self
                 .unify_and_find_substitutions_rec(
                     substitutions,
                     passed_enum_variant.enum_type_id,
                     slot_type,
-                    span,
                 ),
             (Type::Function(passed_fn), Type::Function(param_fn)) => {
                 if passed_fn.params.len() == param_fn.params.len() {
@@ -8460,259 +8402,33 @@ impl TypedModule {
                             substitutions,
                             passed_param.type_id,
                             param_param.type_id,
-                            span,
-                        )?;
+                        );
                     }
                     self.unify_and_find_substitutions_rec(
                         substitutions,
                         passed_fn.return_type,
                         param_fn.return_type,
-                        span,
                     )
                 } else {
-                    Ok(TypeUnificationResult::NonMatching(
+                    TypeUnificationResult::NonMatching(
                         "Functions take a different number of arguments",
-                    ))
-                }
-            }
-            (Type::Closure(passed_closure), Type::ClosureObject(param_closure)) => self
-                .unify_and_find_substitutions_rec(
-                    substitutions,
-                    passed_closure.function_type,
-                    param_closure.function_type,
-                    span,
-                ),
-            (Type::ClosureObject(passed_closure), Type::ClosureObject(param_closure)) => self
-                .unify_and_find_substitutions_rec(
-                    substitutions,
-                    passed_closure.function_type,
-                    param_closure.function_type,
-                    span,
-                ),
-            (_, _) if passed_type == slot_type => Ok(TypeUnificationResult::Matching),
-            _ => Ok(TypeUnificationResult::NonMatching("Unrelated types")),
-        }
-    }
-
-    fn solve_generic_params(
-        &self,
-        solved_params: &mut TypeSolutionSet,
-        passed_type: TypeId,
-        slot_type: TypeId,
-        span: SpanId,
-    ) -> TyperResult<TypeUnificationResult> {
-        // passed_expr              slot_type -> result
-        //
-        // int                    T                 -> T := int
-        // List[int]             List[T]          -> T := int
-        // Pair[int, string]      Pair[T, U]        -> T := int, U := string
-        // fn(int) -> int         Fn(T) -> T        -> T := int
-        // fn() -> List[string]  Fn() -> List[T]  -> T := string
-        //
-        // ???
-        // List[int]             F[int]          -> F := List
-        debug!(
-            "solve_generic_params passed {} in slot {}",
-            self.type_id_to_string(passed_type).blue(),
-            self.type_id_to_string(slot_type).blue()
-        );
-
-        if let (Some(passed_info), Some(arg_info)) = (
-            self.types.get_generic_instance_info(passed_type),
-            self.types.get_generic_instance_info(slot_type),
-        ) {
-            // expr: NewList[int] arg: NewList[T]
-            if passed_info.generic_parent == arg_info.generic_parent {
-                debug!(
-                    "comparing generic instances of {}",
-                    self.type_id_to_string(arg_info.generic_parent)
-                );
-                // We can directly 'solve' every appearance of a type param here
-                for (passed_type, arg_slot) in
-                    passed_info.param_values.iter().zip(arg_info.param_values.iter())
-                {
-                    self.solve_generic_params(solved_params, *passed_type, *arg_slot, span)?;
-                }
-            } else {
-                debug!("compared generic instances but they didn't match parent types");
-            }
-            return Ok(TypeUnificationResult::Matching);
-        }
-
-        match (self.types.get(passed_type), self.types.get(slot_type)) {
-            (_, Type::TypeParameter(_tv)) => {
-                // If the type param is used in the type of the argument, we can infer
-                // the type param from the type of the argument
-                match solved_params.get_solution_mut(slot_type) {
-                    None => {}
-                    Some(solution) => match solution.solved_type_id {
-                        Some(existing_solution) => {
-                            if existing_solution != passed_type {
-                                return failf!(
-                                     span,
-                                     "Conflicting type parameters for type param {} in call: {} and {}",
-                                     self.name_of(solution.name),
-                                     self.type_id_to_string(existing_solution),
-                                     self.type_id_to_string(passed_type)
-                                 );
-                            } else {
-                                debug!(
-                                    "We double-solved type param {} but that's ok because it matched",
-                                    self.name_of(solution.name)
-                                 )
-                            }
-                        }
-                        None => {
-                            debug!(
-                                "\tsolve_generic_params solved {} := {}",
-                                self.name_of(solution.name),
-                                self.type_id_to_string(passed_type)
-                            );
-                            solution.solved_type_id = Some(passed_type)
-                        }
-                    },
-                }
-                Ok(TypeUnificationResult::Matching)
-            }
-            (Type::Reference(passed_refer), Type::Reference(refer)) => self.solve_generic_params(
-                solved_params,
-                passed_refer.inner_type,
-                refer.inner_type,
-                span,
-            ),
-            (Type::Struct(passed_struct), Type::Struct(struc)) => {
-                // Struct example:
-                // type Pair<T, U> = { a: T, b: U }
-                // fn get_first<T, U>(p: Pair<T, U>): T { p.a }
-                // get_first({ a: 1, b: 2})
-                // passed_expr: Pair<int, int>, argument_type: Pair<T, U>
-                // passed expr: { a: int, b: int }, argument_type: { a: T, b: U }
-                //
-                // Structs must have all same field names in same order
-                let passed_fields = &passed_struct.fields;
-                let fields = &struc.fields;
-                if passed_fields.len() != fields.len() {
-                    return Ok(TypeUnificationResult::NonMatching("field count"));
-                }
-                for (idx, field) in fields.iter().enumerate() {
-                    let passed_field = &passed_fields[idx];
-                    if field.name != passed_field.name {
-                        return Ok(TypeUnificationResult::NonMatching("field names"));
-                    }
-                    self.solve_generic_params(
-                        solved_params,
-                        passed_field.type_id,
-                        field.type_id,
-                        span,
-                    )?;
-                }
-                Ok(TypeUnificationResult::Matching)
-            }
-            (Type::Enum(passed_enum), Type::Enum(param_enum_type)) => {
-                // Enum example
-                // type Result<T, E> = enum Ok(T) | Err(E)
-                // fn unwrap<T, E>(self: Result<T, E>): T {
-                //  (self as Result<T,E>.Ok).payload
-                // }
-                // unwrap(Result<int, string>.Ok(1))
-                // passed_expr: Result<int, string>, argument_type: Result<T, E>
-                // passed_expr: enum Ok(int), Err(string), argument_type: enum Ok(T), Err(E)
-                // Enum must have same variants with same tags, walk each variant and recurse on its payload
-                let passed_variants = &passed_enum.variants;
-                let variants = &param_enum_type.variants;
-                if passed_variants.len() != variants.len() {
-                    return Ok(TypeUnificationResult::NonMatching("variant count"));
-                }
-                for (idx, variant) in variants.iter().enumerate() {
-                    let passed_variant = &passed_variants[idx];
-                    if variant.name != passed_variant.name {
-                        return Ok(TypeUnificationResult::NonMatching("variant names"));
-                    }
-                    if let Some(passed_payload) = passed_variant.payload {
-                        if let Some(param_payload) = variant.payload {
-                            self.solve_generic_params(
-                                solved_params,
-                                passed_payload,
-                                param_payload,
-                                span,
-                            )?;
-                        } else {
-                            return Ok(TypeUnificationResult::NonMatching("payloads"));
-                        }
-                    }
-                }
-
-                Ok(TypeUnificationResult::Matching)
-            }
-            (Type::EnumVariant(passed_enum_variant), Type::Enum(_param_enum_type_variant)) => self
-                .solve_generic_params(
-                    solved_params,
-                    passed_enum_variant.enum_type_id,
-                    slot_type,
-                    span,
-                ),
-            (Type::Function(passed_fn), Type::Function(param_fn)) => {
-                if passed_fn.params.len() == param_fn.params.len() {
-                    for (passed_param, param_param) in
-                        passed_fn.params.iter().zip(param_fn.params.iter())
-                    {
-                        if passed_param.is_closure_env && param_param.is_closure_env {
-                            continue;
-                        }
-                        self.solve_generic_params(
-                            solved_params,
-                            passed_param.type_id,
-                            param_param.type_id,
-                            span,
-                        )?;
-                    }
-                    self.solve_generic_params(
-                        solved_params,
-                        passed_fn.return_type,
-                        param_fn.return_type,
-                        span,
                     )
-                } else {
-                    Ok(TypeUnificationResult::NonMatching("parameter count"))
                 }
             }
             (Type::Closure(passed_closure), Type::ClosureObject(param_closure)) => self
-                .solve_generic_params(
-                    solved_params,
+                .unify_and_find_substitutions_rec(
+                    substitutions,
                     passed_closure.function_type,
                     param_closure.function_type,
-                    span,
                 ),
             (Type::ClosureObject(passed_closure), Type::ClosureObject(param_closure)) => self
-                .solve_generic_params(
-                    solved_params,
+                .unify_and_find_substitutions_rec(
+                    substitutions,
                     passed_closure.function_type,
                     param_closure.function_type,
-                    span,
                 ),
-            (_, _) if passed_type == slot_type => Ok(TypeUnificationResult::Matching),
-            _ => Ok(TypeUnificationResult::NonMatching("Unrelated types")),
-        }
-    }
-
-    fn display_solution_set(&self, w: &mut impl std::fmt::Write, solution_set: &TypeSolutionSet) {
-        let mut first = true;
-        for solution in &solution_set.solutions {
-            write!(
-                w,
-                "{} := {}",
-                self.name_of(solution.name),
-                solution
-                    .solved_type_id
-                    .map(|t| self.type_id_to_string(t))
-                    .unwrap_or("?".to_string())
-            )
-            .unwrap();
-            if first {
-                first = false;
-            } else {
-                w.write_char('\n').unwrap();
-            };
+            (_, _) if passed_type == slot_type => TypeUnificationResult::Matching,
+            _ => TypeUnificationResult::NonMatching("Unrelated types"),
         }
     }
 
