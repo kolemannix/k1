@@ -1,7 +1,5 @@
 use std::num::NonZeroU32;
 
-use crate::static_assert_size;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Id(NonZeroU32);
 impl Id {
@@ -25,15 +23,7 @@ impl From<Id> for usize {
     }
 }
 
-#[derive(Clone, Copy)]
-pub struct PoolListHandle {
-    pub index: Id,
-    pub count: u32,
-}
-
-static_assert_size!(PoolListHandle, 8);
-
-pub struct Pool<T> {
+pub struct Pool<T, Index: Into<NonZeroU32> + From<NonZeroU32>> {
     // It would be a lot more powerful if each entry could point to its 'next', or if each entry
     // were an enum allowing redirects. The issue there is we can't really provide a slice, we can
     // only provide iterators, it's just a lot more to do, and there's overhead per lookup
@@ -43,26 +33,28 @@ pub struct Pool<T> {
     // type of pool
     vec: Vec<T>,
     name: &'static str,
+    _index: std::marker::PhantomData<Index>,
 }
 
-impl<T> Pool<T> {
-    pub fn with_capacity(name: &'static str, capacity: usize) -> Pool<T> {
-        Pool { name, vec: Vec::with_capacity(capacity) }
+impl<T, Index: Into<NonZeroU32> + From<NonZeroU32>> Pool<T, Index> {
+    pub fn with_capacity(name: &'static str, capacity: usize) -> Pool<T, Index> {
+        Pool { name, vec: Vec::with_capacity(capacity), _index: std::marker::PhantomData }
     }
 
-    pub fn new(name: &'static str) -> Pool<T> {
-        Pool { name, vec: Vec::new() }
+    pub fn new(name: &'static str) -> Pool<T, Index> {
+        Pool { name, vec: Vec::new(), _index: std::marker::PhantomData }
     }
 
-    pub fn next_id(&self) -> Id {
-        Id::from(self.vec.len())
+    pub fn next_id(&self) -> Index {
+        let index = NonZeroU32::new(self.vec.len() as u32 + 1).unwrap();
+        Index::from(index)
     }
 
     pub fn len(&self) -> usize {
         self.vec.len()
     }
 
-    pub fn add(&mut self, t: T) -> Id {
+    pub fn add(&mut self, t: T) -> Index {
         #[cfg(debug_assertions)]
         let cap = self.vec.capacity();
 
@@ -80,7 +72,7 @@ impl<T> Pool<T> {
         index
     }
 
-    pub fn add_list(&mut self, items: impl Iterator<Item = T>) -> PoolListHandle {
+    pub fn add_list(&mut self, items: impl Iterator<Item = T>) -> (Index, u32) {
         #[cfg(debug_assertions)]
         let cap = self.vec.capacity();
 
@@ -99,54 +91,61 @@ impl<T> Pool<T> {
             }
         }
 
-        PoolListHandle { index, count }
+        (index, count)
     }
 
-    pub fn get(&self, index: Id) -> &T {
-        let index: usize = index.into();
+    fn index_to_actual_index(index: Index) -> usize {
+        let nz32: NonZeroU32 = index.into();
+        nz32.get() as usize - 1
+    }
+
+    pub fn get(&self, index: Index) -> &T {
+        let index = Self::index_to_actual_index(index);
         &self.vec[index]
     }
 
-    pub fn get_mut(&mut self, index: Id) -> &mut T {
-        let index: usize = index.into();
+    pub fn get_mut(&mut self, index: Index) -> &mut T {
+        let index = Self::index_to_actual_index(index);
         &mut self.vec[index]
     }
 
-    pub fn get_list(&self, handle: PoolListHandle) -> &[T] {
-        let start: usize = handle.index.into();
-        let end = start + handle.count as usize;
-        &self.vec[start..end]
+    pub fn get_list(&self, index: Index, count: u32) -> &[T] {
+        let index = Self::index_to_actual_index(index);
+        let end = index + count as usize;
+        &self.vec[index..end]
     }
 
-    pub fn get_list_mut(&mut self, handle: PoolListHandle) -> &mut [T] {
-        let start: usize = handle.index.into();
-        let end = start + handle.count as usize;
-        &mut self.vec[start..end]
+    pub fn get_list_mut(&mut self, index: Index, count: u32) -> &mut [T] {
+        let index = Self::index_to_actual_index(index);
+        let end = index + count as usize;
+        &mut self.vec[index..end]
     }
 }
 
 #[cfg(test)]
 mod test {
+    use std::num::NonZeroU32;
+
     use super::Pool;
     #[test]
     fn single() {
-        let mut pool = Pool::new("single");
-        let handle = pool.add(42);
+        let mut pool: Pool<i32, NonZeroU32> = Pool::new("single");
+        let handle: NonZeroU32 = pool.add(42);
         assert_eq!(*pool.get(handle), 42);
     }
 
     #[test]
     fn list() {
-        let mut pool = Pool::new("list");
-        let handle = pool.add_list([1, 2, 3].iter().copied());
-        assert_eq!(pool.get_list(handle), &[1, 2, 3]);
+        let mut pool: Pool<i32, NonZeroU32> = Pool::new("list");
+        let (id, count) = pool.add_list([1, 2, 3].iter().copied());
+        assert_eq!(pool.get_list(id, count), &[1, 2, 3]);
     }
 
     #[test]
     fn mutate_list() {
-        let mut pool = Pool::new("mutate_list");
-        let handle = pool.add_list([1, 2, 3].iter().copied());
-        pool.get_list_mut(handle)[1] = 42;
-        assert_eq!(pool.get_list(handle), &[1, 42, 3]);
+        let mut pool: Pool<i32, NonZeroU32> = Pool::new("mutate_list");
+        let (id, count) = pool.add_list([1, 2, 3].iter().copied());
+        pool.get_list_mut(id, count)[1] = 42;
+        assert_eq!(pool.get_list(id, count), &[1, 42, 3]);
     }
 }
