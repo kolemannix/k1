@@ -454,24 +454,11 @@ pub struct TypedClosure {
 pub struct TypedBlock {
     pub expr_type: TypeId,
     pub scope_id: ScopeId,
-    pub statements: Vec<TypedStmt>,
+    pub statements: Vec<TypedStmtId>,
     pub span: SpanId,
 }
 
-impl TypedBlock {
-    fn push_stmt(&mut self, stmt: TypedStmt) {
-        self.expr_type = stmt.get_type();
-        self.statements.push(stmt);
-    }
-
-    fn push_expr(&mut self, expr: TypedExpr) {
-        self.push_stmt(TypedStmt::Expr(Box::new(expr)))
-    }
-
-    pub fn is_single_unit_block(&self) -> bool {
-        self.statements.len() == 1 && self.statements[0].is_unit_expr()
-    }
-}
+impl TypedBlock {}
 
 #[derive(Debug, Clone)]
 pub struct FnArgDefn {
@@ -909,9 +896,9 @@ pub struct TypedMatchArm {
     /// But, if we have multiple patterns here currently, it means this was an if statement with
     /// multiple patterns joined by 'and' operations
     pub patterns: SmallVec<[TypedPattern; 1]>,
-    pub setup_statements: Vec<TypedStmt>,
+    pub setup_statements: SmallVec<[TypedStmtId; 4]>,
     pub pattern_condition: TypedExpr,
-    pub pattern_bindings: Vec<TypedStmt>,
+    pub pattern_bindings: SmallVec<[TypedStmtId; 4]>,
     pub guard_condition: Option<TypedExpr>,
     pub consequent_expr: TypedExpr,
 }
@@ -1143,10 +1130,10 @@ pub struct LoopExpr {
 #[derive(Debug, Clone)]
 struct MatchingCondition {
     #[allow(unused)]
-    all_patterns: Vec<TypedPattern>,
+    all_patterns: SmallVec<[TypedPattern; 4]>,
     combined_condition: TypedExpr,
-    setup_statements: Vec<TypedStmt>,
-    binding_statements: Vec<TypedStmt>,
+    setup_statements: SmallVec<[TypedStmtId; 4]>,
+    binding_statements: SmallVec<[TypedStmtId; 4]>,
     #[allow(unused)]
     binding_eligible: bool,
 }
@@ -1154,7 +1141,7 @@ struct MatchingCondition {
 #[derive(Debug, Clone)]
 /// The last arm's condition is guaranteed to always evaluate to 'true'
 pub struct TypedMatchExpr {
-    pub initial_let_statements: Vec<TypedStmt>,
+    pub initial_let_statements: Vec<TypedStmtId>,
     pub result_type: TypeId,
     pub arms: Vec<TypedMatchArm>,
     pub span: SpanId,
@@ -1421,7 +1408,7 @@ pub type TyperResult<A> = Result<A, TyperError>;
 struct SynthedVariable {
     #[allow(unused)]
     pub variable_id: VariableId,
-    pub defn_stmt: TypedStmt,
+    pub defn_stmt: TypedStmtId,
     pub variable_expr: TypedExpr,
     #[allow(unused)]
     pub parsed_expr: ParsedExpressionId,
@@ -1468,7 +1455,7 @@ pub struct Namespaces {
 
 impl Namespaces {
     pub fn get(&self, id: NamespaceId) -> &Namespace {
-        &self.namespaces.get(id)
+        self.namespaces.get(id)
     }
 
     pub fn get_mut(&mut self, id: NamespaceId) -> &mut Namespace {
@@ -1835,6 +1822,9 @@ pub struct TypedModule {
     bump: bumpalo::Bump,
 }
 
+const KILOBYTE: usize = 1024 * 1024;
+const MEGABYTE: usize = KILOBYTE * 1024;
+
 impl TypedModule {
     pub fn new(parsed_module: ParsedModule) -> TypedModule {
         let types = Types {
@@ -1854,7 +1844,7 @@ impl TypedModule {
             types,
             constants: Vec::new(),
             exprs: (),
-            stmts: Pool::new("typed_stmts"),
+            stmts: Pool::with_capacity("typed_stmts", 4096),
             scopes,
             errors: Vec::new(),
             namespaces,
@@ -1874,7 +1864,7 @@ impl TypedModule {
                 vars: Vec::with_capacity(128),
                 constraints: Vec::with_capacity(128),
             },
-            bump: bumpalo::Bump::with_capacity(1024 * 1024 * 1024 * 8),
+            bump: bumpalo::Bump::with_capacity(8 * MEGABYTE),
         }
     }
 
@@ -1914,6 +1904,21 @@ impl TypedModule {
 
     pub fn get_main_function_id(&self) -> Option<FunctionId> {
         self.scopes.get_root_scope().find_function(get_ident!(self, "main"))
+    }
+
+    fn push_block_stmt_id(&self, block: &mut TypedBlock, stmt: TypedStmtId) {
+        block.expr_type = self.stmts.get(stmt).get_type();
+        block.statements.push(stmt);
+    }
+
+    fn push_block_stmt(&mut self, block: &mut TypedBlock, stmt: TypedStmt) {
+        block.expr_type = stmt.get_type();
+        let id = self.stmts.add(stmt);
+        block.statements.push(id);
+    }
+
+    fn push_block_expr(&mut self, block: &mut TypedBlock, expr: TypedExpr) {
+        self.push_block_stmt(block, TypedStmt::Expr(Box::new(expr)))
     }
 
     fn next_ability_id(&self) -> AbilityId {
@@ -3927,30 +3932,6 @@ impl TypedModule {
         &mut self.ability_impls[ability_impl_id.0 as usize]
     }
 
-    // If the expr is already a block, do nothing
-    // If it is not, make a new block with just this expression inside.
-    // Used main for if/else
-    #[allow(unused)]
-    fn coerce_expr_to_block(&mut self, expr: TypedExpr, scope: ScopeId) -> TypedBlock {
-        match expr {
-            TypedExpr::Block(b) => b,
-            expr => {
-                let expr_span = expr.get_span();
-                let statements = vec![TypedStmt::Expr(Box::new(expr))];
-                self.synth_block(statements, scope, expr_span)
-            }
-        }
-    }
-
-    #[allow(unused)]
-    fn coerce_block_to_unit_block(&mut self, block: &mut TypedBlock) {
-        if block.expr_type != UNIT_TYPE_ID {
-            let span = block.statements.last().map(|s| s.get_span()).unwrap_or(block.span);
-            let unit_literal = TypedExpr::Unit(span);
-            block.push_expr(unit_literal);
-        }
-    }
-
     fn eval_numeric_value(
         &self,
         parsed_text: &str,
@@ -4334,8 +4315,8 @@ impl TypedModule {
                         alternate,
                         span,
                     }));
-                    block.push_stmt(base_expr_var.defn_stmt);
-                    block.push_expr(if_expr);
+                    self.push_block_stmt_id(&mut block, base_expr_var.defn_stmt);
+                    self.push_block_expr(&mut block, if_expr);
                     Ok(TypedExpr::Block(block))
                 } else {
                     failf!(
@@ -4518,8 +4499,8 @@ impl TypedModule {
             span,
         }));
 
-        result_block.push_stmt(try_value_var.defn_stmt);
-        result_block.push_expr(if_expr);
+        self.push_block_stmt_id(&mut result_block, try_value_var.defn_stmt);
+        self.push_block_expr(&mut result_block, if_expr);
 
         Ok(TypedExpr::Block(result_block))
     }
@@ -4736,7 +4717,8 @@ impl TypedModule {
                 let parsed_elements = list_expr.elements.clone();
                 let element_count = parsed_elements.len();
 
-                let mut list_lit_block = self.synth_block(vec![], ctx.scope_id, span);
+                let mut list_lit_block =
+                    self.synth_block(Vec::with_capacity(2 + element_count), ctx.scope_id, span);
                 let list_lit_scope = list_lit_block.scope_id;
                 let mut element_type = None;
                 let elements: Vec<TypedExpr> = {
@@ -4806,12 +4788,12 @@ impl TypedModule {
                         vec![list_variable.variable_expr.clone(), element_value_expr],
                         list_lit_ctx,
                     )?));
-                    set_elements.push(push_element);
+                    set_elements.push(self.stmts.add(push_element));
                 }
-                list_lit_block.statements.push(list_variable.defn_stmt);
+                self.push_block_stmt_id(&mut list_lit_block, list_variable.defn_stmt);
                 list_lit_block.statements.extend(set_elements);
                 let dereference_list_literal = self.synth_dereference(list_variable.variable_expr);
-                list_lit_block.push_expr(dereference_list_literal);
+                self.push_block_expr(&mut list_lit_block, dereference_list_literal);
                 Ok(TypedExpr::Block(list_lit_block))
             }
             ParsedExpression::Struct(ast_struct) => {
@@ -5025,17 +5007,18 @@ impl TypedModule {
             return failf!(while_expr.span, "'while' body must be a block");
         };
         let condition_span = self.ast.expressions.get_span(while_expr.cond);
+
         let mut condition_block = self.synth_block(vec![], ctx.scope_id, condition_span);
+
         let MatchingCondition { combined_condition, setup_statements, binding_statements, .. } =
             self.eval_matching_condition(
                 while_expr.cond,
                 ctx.with_scope(condition_block.scope_id),
             )?;
 
-        for stmt in setup_statements {
-            condition_block.push_stmt(stmt)
-        }
-        condition_block.push_expr(combined_condition);
+        condition_block.statements = Vec::with_capacity(setup_statements.len() + 1);
+        condition_block.statements.extend_from_slice(&setup_statements);
+        self.push_block_expr(&mut condition_block, combined_condition);
         let body_block_scope_id = self.scopes.add_child_scope(
             condition_block.scope_id,
             ScopeType::WhileLoopBody,
@@ -5046,14 +5029,15 @@ impl TypedModule {
             .add_loop_info(body_block_scope_id, ScopeLoopInfo { break_type: Some(UNIT_TYPE_ID) });
         let mut body_block = TypedBlock {
             expr_type: UNIT_TYPE_ID,
-            statements: binding_statements,
+            statements: Vec::with_capacity(binding_statements.len() + 1),
             scope_id: body_block_scope_id,
             span: parsed_block.span,
         };
+        body_block.statements.extend(binding_statements.iter());
 
         let user_block =
             self.eval_block(&parsed_block, ctx.with_scope(body_block.scope_id), false)?;
-        body_block.push_expr(TypedExpr::Block(user_block));
+        self.push_block_expr(&mut body_block, TypedExpr::Block(user_block));
 
         let loop_type =
             if condition_block.expr_type == NEVER_TYPE_ID { NEVER_TYPE_ID } else { UNIT_TYPE_ID };
@@ -5122,7 +5106,7 @@ impl TypedModule {
             new_string_builder,
             block.scope_id,
         );
-        block.push_stmt(string_builder_var.defn_stmt);
+        self.push_block_stmt_id(&mut block, string_builder_var.defn_stmt);
         for part in is.parts.into_iter() {
             let string_expr = match part {
                 parse::InterpolatedStringPart::String(s) => TypedExpr::Str(s, span),
@@ -5141,7 +5125,7 @@ impl TypedModule {
                 vec![string_builder_var.variable_expr.clone(), string_expr],
                 block_ctx,
             )?;
-            block.push_expr(push_call);
+            self.push_block_expr(&mut block, push_call);
         }
         let build_call = self.synth_typed_function_call(
             qident!(self, span, ["StringBuilder"], "build"),
@@ -5149,23 +5133,34 @@ impl TypedModule {
             vec![string_builder_var.variable_expr],
             block_ctx,
         )?;
-        block.push_expr(build_call);
+        self.push_block_expr(&mut block, build_call);
         Ok(TypedExpr::Block(block))
     }
 
-    fn visit_inner_stmt_exprs_mut(stmt: &mut TypedStmt, action: &mut impl FnMut(&mut TypedExpr)) {
-        match stmt {
-            TypedStmt::Expr(e) => action(e),
-            TypedStmt::Let(val_def) => action(&mut val_def.initializer),
+    fn visit_inner_stmt_exprs_mut(
+        module: &mut TypedModule,
+        stmt_id: TypedStmtId,
+        action: &mut impl FnMut(&mut TypedModule, &mut TypedExpr),
+    ) {
+        // nocommit: Cloning every statement here isn't okay
+        let mut stmt = module.stmts.get(stmt_id).clone();
+        match &mut stmt {
+            TypedStmt::Expr(e) => action(module, e),
+            TypedStmt::Let(val_def) => action(module, &mut val_def.initializer),
             TypedStmt::Assignment(assgn) => {
-                action(&mut assgn.destination);
-                action(&mut assgn.value)
+                action(module, &mut assgn.destination);
+                action(module, &mut assgn.value)
             }
-        }
+        };
+        *module.stmts.get_mut(stmt_id) = stmt;
     }
 
     // Currently only used for fixup_capture_expr
-    fn visit_inner_exprs_mut(expr: &mut TypedExpr, mut action: impl FnMut(&mut TypedExpr)) {
+    fn visit_inner_exprs_mut(
+        module: &mut TypedModule,
+        expr: &mut TypedExpr,
+        mut action: impl FnMut(&mut TypedModule, &mut TypedExpr),
+    ) {
         // Try implementing a mutable iterator instead
         match expr {
             TypedExpr::Unit(_) => (),
@@ -5176,74 +5171,76 @@ impl TypedModule {
             TypedExpr::Str(_, _) => (),
             TypedExpr::Struct(s) => {
                 for f in s.fields.iter_mut() {
-                    action(&mut f.expr);
+                    action(module, &mut f.expr);
                 }
             }
             TypedExpr::Variable(_) => (),
             TypedExpr::StructFieldAccess(field_access) => {
-                action(&mut field_access.base);
+                action(module, &mut field_access.base);
             }
             TypedExpr::BinaryOp(binary_op) => {
-                action(&mut binary_op.lhs);
-                action(&mut binary_op.rhs);
+                action(module, &mut binary_op.lhs);
+                action(module, &mut binary_op.rhs);
             }
             TypedExpr::UnaryOp(unary_op) => {
-                action(&mut unary_op.expr);
+                action(module, &mut unary_op.expr);
             }
             TypedExpr::Block(block) => {
-                for stmt in block.statements.iter_mut() {
-                    TypedModule::visit_inner_stmt_exprs_mut(stmt, &mut action);
+                for stmt in block.statements.iter() {
+                    TypedModule::visit_inner_stmt_exprs_mut(module, *stmt, &mut action);
                 }
             }
             TypedExpr::Call(call) => {
                 match &mut call.callee {
-                    Callee::DynamicClosure(expr) => action(expr),
-                    Callee::DynamicFunction(expr) => action(expr),
+                    Callee::DynamicClosure(expr) => action(module, expr),
+                    Callee::DynamicFunction(expr) => action(module, expr),
                     _ => {}
                 };
                 for arg in call.args.iter_mut() {
-                    action(arg)
+                    action(module, arg)
                 }
             }
             TypedExpr::If(typed_if) => {
-                action(&mut typed_if.condition);
-                action(&mut typed_if.consequent);
-                action(&mut typed_if.alternate);
+                action(module, &mut typed_if.condition);
+                action(module, &mut typed_if.consequent);
+                action(module, &mut typed_if.alternate);
             }
             TypedExpr::WhileLoop(while_loop) => {
-                action(&mut while_loop.cond);
-                for stmt in while_loop.body.statements.iter_mut() {
-                    TypedModule::visit_inner_stmt_exprs_mut(stmt, &mut action);
+                action(module, &mut while_loop.cond);
+                for stmt in while_loop.body.statements.iter() {
+                    TypedModule::visit_inner_stmt_exprs_mut(module, *stmt, &mut action);
                 }
             }
             TypedExpr::Match(typed_match) => {
-                for let_stmt in &mut typed_match.initial_let_statements {
-                    TypedModule::visit_inner_stmt_exprs_mut(let_stmt, &mut action);
+                for let_stmt in &typed_match.initial_let_statements {
+                    TypedModule::visit_inner_stmt_exprs_mut(module, *let_stmt, &mut action);
                 }
                 for arm in typed_match.arms.iter_mut() {
-                    action(&mut arm.pattern_condition);
+                    action(module, &mut arm.pattern_condition);
                     if let Some(guard_condition) = &mut arm.guard_condition {
-                        action(guard_condition);
+                        action(module, guard_condition);
                     };
-                    for binding_stmt in &mut arm.pattern_bindings {
-                        TypedModule::visit_inner_stmt_exprs_mut(binding_stmt, &mut action);
+                    for binding_stmt in &arm.pattern_bindings {
+                        TypedModule::visit_inner_stmt_exprs_mut(module, *binding_stmt, &mut action);
                     }
-                    action(&mut arm.consequent_expr)
+                    action(module, &mut arm.consequent_expr)
                 }
             }
             TypedExpr::LoopExpr(loop_expr) => {
-                for stmt in loop_expr.body.statements.iter_mut() {
-                    TypedModule::visit_inner_stmt_exprs_mut(stmt, &mut action);
+                for stmt in loop_expr.body.statements.iter() {
+                    TypedModule::visit_inner_stmt_exprs_mut(module, *stmt, &mut action);
                 }
             }
             TypedExpr::EnumConstructor(_) => (),
-            TypedExpr::EnumIsVariant(enum_is_variant) => action(&mut enum_is_variant.target_expr),
-            TypedExpr::EnumGetPayload(enum_get_payload) => {
-                action(&mut enum_get_payload.target_expr)
+            TypedExpr::EnumIsVariant(enum_is_variant) => {
+                action(module, &mut enum_is_variant.target_expr)
             }
-            TypedExpr::Cast(cast) => action(&mut cast.base_expr),
-            TypedExpr::Return(ret) => action(&mut ret.value),
-            TypedExpr::Break(brk) => action(&mut brk.value),
+            TypedExpr::EnumGetPayload(enum_get_payload) => {
+                action(module, &mut enum_get_payload.target_expr)
+            }
+            TypedExpr::Cast(cast) => action(module, &mut cast.base_expr),
+            TypedExpr::Return(ret) => action(module, &mut ret.value),
+            TypedExpr::Break(brk) => action(module, &mut brk.value),
             TypedExpr::Closure(_) => (),
             TypedExpr::FunctionName(_) => (),
             TypedExpr::PendingCapture(_) => (),
@@ -5286,10 +5283,10 @@ impl TypedModule {
                         is_referencing: false,
                         span: pc.span,
                     });
-                    let _ = std::mem::replace(body, env_field_access);
+                    *body = env_field_access;
                 }
-                other => TypedModule::visit_inner_exprs_mut(other, |expr| {
-                    fixup_capture_expr(sself, expr, environment_param, env_struct_type)
+                other => TypedModule::visit_inner_exprs_mut(sself, other, |module, expr| {
+                    fixup_capture_expr(module, expr, environment_param, env_struct_type)
                 }),
             }
         }
@@ -5532,9 +5529,9 @@ impl TypedModule {
 
         let fallback_arm = TypedMatchArm {
             patterns: smallvec![TypedPattern::LiteralBool(true, match_expr_span)],
-            setup_statements: vec![],
+            setup_statements: smallvec![],
             pattern_condition: TypedExpr::Bool(true, match_expr_span),
-            pattern_bindings: vec![],
+            pattern_bindings: smallvec![],
             guard_condition: None,
             consequent_expr: self.synth_crash_call(
                 "Match Error".to_string(),
@@ -5638,8 +5635,8 @@ impl TypedModule {
             for pattern in arm_patterns.into_iter() {
                 let arm_scope_id =
                     self.scopes.add_child_scope(match_scope_id, ScopeType::MatchArm, None, None);
-                let mut setup_statements = vec![];
-                let mut binding_statements = vec![];
+                let mut setup_statements = smallvec![];
+                let mut binding_statements = smallvec![];
                 let condition = self.compile_pattern_in_scope(
                     &pattern,
                     TypedExpr::Variable(target_expr.clone()),
@@ -5745,8 +5742,8 @@ impl TypedModule {
         &mut self,
         pattern: &TypedPattern,
         target_expr: TypedExpr,
-        setup_statements: &mut Vec<TypedStmt>,
-        binding_statements: &mut Vec<TypedStmt>,
+        setup_statements: &mut SmallVec<[TypedStmtId; 4]>,
+        binding_statements: &mut SmallVec<[TypedStmtId; 4]>,
         is_immediately_inside_reference_pattern: bool,
         arm_scope_id: ScopeId,
     ) -> TyperResult<TypedExpr> {
@@ -6239,7 +6236,7 @@ impl TypedModule {
             None
         };
 
-        loop_block.push_stmt(next_variable.defn_stmt); // let next = iter.next();
+        self.push_block_stmt_id(&mut loop_block, next_variable.defn_stmt); // let next = iter.next();
 
         let user_block_variable = self.synth_variable_defn_simple(
             get_ident!(self, "block_expr_val"),
@@ -6260,7 +6257,7 @@ impl TypedModule {
                 ],
                 outer_for_expr_ctx,
             )?));
-            consequent_block.statements.push(element_assign);
+            self.push_block_stmt(&mut consequent_block, element_assign);
         }
 
         let next_is_some_call = self.synth_typed_function_call(
@@ -6269,23 +6266,23 @@ impl TypedModule {
             vec![next_variable.variable_expr],
             loop_scope_ctx,
         )?;
-        let break_block = self.synth_block(
-            vec![TypedStmt::Expr(Box::new(TypedExpr::Break(TypedBreak {
-                value: Box::new(TypedExpr::Unit(body_span)),
-                loop_scope: loop_scope_id,
-                loop_type: LoopType::Loop,
-                span: body_span,
-            })))],
-            loop_scope_id,
-            body_span,
-        );
-        loop_block.push_expr(TypedExpr::If(Box::new(TypedIf {
-            condition: next_is_some_call,
-            consequent: TypedExpr::Block(consequent_block),
-            alternate: TypedExpr::Block(break_block),
-            ty: UNIT_TYPE_ID,
+        let break_expr = self.stmts.add(TypedStmt::Expr(Box::new(TypedExpr::Break(TypedBreak {
+            value: Box::new(TypedExpr::Unit(body_span)),
+            loop_scope: loop_scope_id,
+            loop_type: LoopType::Loop,
             span: body_span,
-        })));
+        }))));
+        let break_block = self.synth_block(vec![break_expr], loop_scope_id, body_span);
+        self.push_block_expr(
+            &mut loop_block,
+            TypedExpr::If(Box::new(TypedIf {
+                condition: next_is_some_call,
+                consequent: TypedExpr::Block(consequent_block),
+                alternate: TypedExpr::Block(break_block),
+                ty: UNIT_TYPE_ID,
+                span: body_span,
+            })),
+        );
 
         // Append the index increment to the body block
         let index_increment_statement = TypedStmt::Assignment(Box::new(Assignment {
@@ -6303,7 +6300,7 @@ impl TypedModule {
             span: iterable_span,
             kind: AssignmentKind::Value,
         }));
-        loop_block.statements.push(index_increment_statement);
+        self.push_block_stmt(&mut loop_block, index_increment_statement);
 
         let loop_expr = TypedExpr::LoopExpr(LoopExpr {
             body: Box::new(loop_block),
@@ -6315,7 +6312,7 @@ impl TypedModule {
         for_expr_initial_statements.push(index_variable.defn_stmt);
         for_expr_initial_statements.push(iterator_variable.defn_stmt);
         if let Some(yielded_coll_variable) = &yielded_coll_variable {
-            for_expr_initial_statements.push(yielded_coll_variable.defn_stmt.clone());
+            for_expr_initial_statements.push(yielded_coll_variable.defn_stmt);
         }
         let mut for_expr_block = TypedBlock {
             expr_type: resulting_type,
@@ -6324,10 +6321,10 @@ impl TypedModule {
             span: for_expr.body_block.span,
         };
 
-        for_expr_block.push_expr(loop_expr);
+        self.push_block_expr(&mut for_expr_block, loop_expr);
         if let Some(yielded_coll_variable) = yielded_coll_variable {
             let yield_expr = self.synth_dereference(yielded_coll_variable.variable_expr);
-            for_expr_block.push_expr(yield_expr);
+            self.push_block_expr(&mut for_expr_block, yield_expr);
         }
 
         let final_expr = TypedExpr::Block(for_expr_block);
@@ -6428,9 +6425,9 @@ impl TypedModule {
         };
         let alt_arm = TypedMatchArm {
             patterns: smallvec![],
-            setup_statements: vec![],
+            setup_statements: smallvec![],
             pattern_condition: TypedExpr::Bool(true, alternate.get_span()),
-            pattern_bindings: vec![],
+            pattern_bindings: smallvec![],
             guard_condition: None,
             consequent_expr: alternate,
         };
@@ -6447,10 +6444,10 @@ impl TypedModule {
         condition: ParsedExpressionId,
         ctx: EvalExprContext,
     ) -> TyperResult<MatchingCondition> {
-        let mut conditions: Vec<TypedExpr> = Vec::new();
-        let mut setup_statements = vec![];
-        let mut binding_statements = vec![];
-        let mut all_patterns: Vec<TypedPattern> = vec![];
+        let mut conditions: SmallVec<[TypedExpr; 4]> = smallvec![];
+        let mut setup_statements: SmallVec<[_; 4]> = smallvec![];
+        let mut binding_statements: SmallVec<[_; 4]> = smallvec![];
+        let mut all_patterns: SmallVec<[TypedPattern; 4]> = smallvec![];
         let mut allow_bindings: bool = true;
         self.handle_matching_if_rec(
             condition,
@@ -6507,10 +6504,10 @@ impl TypedModule {
         &mut self,
         parsed_expr_id: ParsedExpressionId,
         allow_bindings: &mut bool,
-        all_patterns: &mut Vec<TypedPattern>,
-        conditions: &mut Vec<TypedExpr>,
-        setup_statements: &mut Vec<TypedStmt>,
-        binding_statements: &mut Vec<TypedStmt>,
+        all_patterns: &mut SmallVec<[TypedPattern; 4]>,
+        conditions: &mut SmallVec<[TypedExpr; 4]>,
+        setup_statements: &mut SmallVec<[TypedStmtId; 4]>,
+        binding_statements: &mut SmallVec<[TypedStmtId; 4]>,
         ctx: EvalExprContext,
     ) -> TyperResult<()> {
         debug!("hmirec {allow_bindings}: {}", self.ast.expr_id_to_string(parsed_expr_id));
@@ -6781,8 +6778,8 @@ impl TypedModule {
             ty: output_type,
             span,
         }));
-        coalesce_block.push_stmt(lhs_variable.defn_stmt);
-        coalesce_block.push_expr(if_else);
+        self.push_block_stmt_id(&mut coalesce_block, lhs_variable.defn_stmt);
+        self.push_block_expr(&mut coalesce_block, if_else);
         Ok(TypedExpr::Block(coalesce_block))
     }
 
@@ -6907,12 +6904,6 @@ impl TypedModule {
             span,
         });
         Ok(call_expr)
-    }
-
-    fn _make_unit_block(&mut self, scope_id: ScopeId, span: SpanId) -> TypedBlock {
-        let unit_expr = TypedExpr::Unit(span);
-        let b = self.synth_block(vec![TypedStmt::Expr(Box::new(unit_expr))], scope_id, span);
-        b
     }
 
     /// Can 'shortcircuit' with Left if the function call to resolve
@@ -8627,7 +8618,7 @@ impl TypedModule {
         &mut self,
         stmt: &ParsedStmt,
         ctx: EvalExprContext,
-    ) -> TyperResult<Option<TypedStmt>> {
+    ) -> TyperResult<Option<TypedStmtId>> {
         match stmt {
             ParsedStmt::Use(use_stmt) => {
                 let parsed_use = self.ast.uses.get_use(use_stmt.use_id);
@@ -8717,7 +8708,8 @@ impl TypedModule {
                 } else {
                     self.scopes.add_variable(ctx.scope_id, val_def.name, variable_id);
                 }
-                Ok(Some(val_def_stmt))
+                let stmt_id = self.stmts.add(val_def_stmt);
+                Ok(Some(stmt_id))
             }
             ParsedStmt::Assignment(assignment) => {
                 let ParsedExpression::Variable(_) = self.ast.expressions.get(assignment.lhs) else {
@@ -8732,12 +8724,13 @@ impl TypedModule {
                 if let Err(msg) = self.check_types(lhs.get_type(), rhs.get_type(), ctx.scope_id) {
                     return failf!(assignment.span, "Invalid type for assignment: {}", msg,);
                 }
-                Ok(Some(TypedStmt::Assignment(Box::new(Assignment {
+                let stmt_id = self.stmts.add(TypedStmt::Assignment(Box::new(Assignment {
                     destination: Box::new(lhs),
                     value: Box::new(rhs),
                     span: assignment.span,
                     kind: AssignmentKind::Value,
-                }))))
+                })));
+                Ok(Some(stmt_id))
             }
             ParsedStmt::SetRef(set_stmt) => {
                 let lhs = self.eval_expr(set_stmt.lhs, ctx.with_no_expected_type())?;
@@ -8754,16 +8747,18 @@ impl TypedModule {
                 if let Err(msg) = self.check_types(expected_rhs, rhs.get_type(), ctx.scope_id) {
                     return failf!(set_stmt.span, "Invalid type for assignment: {}", msg,);
                 }
-                Ok(Some(TypedStmt::Assignment(Box::new(Assignment {
+                let stmt_id = self.stmts.add(TypedStmt::Assignment(Box::new(Assignment {
                     destination: Box::new(lhs),
                     value: Box::new(rhs),
                     span: set_stmt.span,
                     kind: AssignmentKind::Reference,
-                }))))
+                })));
+                Ok(Some(stmt_id))
             }
             ParsedStmt::LoneExpression(expression) => {
                 let expr = self.eval_expr(*expression, ctx)?;
-                Ok(Some(TypedStmt::Expr(Box::new(expr))))
+                let stmt_id = self.stmts.add(TypedStmt::Expr(Box::new(expr)));
+                Ok(Some(stmt_id))
             }
         }
     }
@@ -8773,7 +8768,7 @@ impl TypedModule {
         ctx: EvalExprContext,
         needs_terminator: bool,
     ) -> TyperResult<TypedBlock> {
-        let mut statements = Vec::with_capacity(block.stmts.len());
+        let mut statements: Vec<TypedStmtId> = Vec::with_capacity(block.stmts.len());
         let mut last_expr_type: TypeId = UNIT_TYPE_ID;
         let mut last_stmt_is_divergent = false;
         for (index, stmt) in block.stmts.iter().enumerate() {
@@ -8786,25 +8781,26 @@ impl TypedModule {
             let is_last = index == block.stmts.len() - 1;
             let expected_type = if is_last { ctx.expected_type_id } else { None };
 
-            let Some(stmt) = self.eval_stmt(stmt, ctx.with_expected_type(expected_type))? else {
+            let Some(stmt_id) = self.eval_stmt(stmt, ctx.with_expected_type(expected_type))? else {
                 continue;
             };
+            let stmt = self.stmts.get(stmt_id);
             last_stmt_is_divergent = stmt.is_divergent();
             last_expr_type = stmt.get_type();
 
             if is_last && needs_terminator {
                 if last_stmt_is_divergent {
                     // No action needed; terminator exists
-                    statements.push(stmt);
+                    statements.push(stmt_id);
                 } else {
                     match stmt {
                         TypedStmt::Expr(expr) => {
                             // Return this expr
                             let return_stmt =
-                                TypedStmt::Expr(Box::new(TypedExpr::Return(TypedReturn {
-                                    span: expr.get_span(),
-                                    value: expr,
-                                })));
+                                self.stmts.add(TypedStmt::Expr(Box::new(TypedExpr::Return(
+                                    // nocommit: New expr clone
+                                    TypedReturn { span: expr.get_span(), value: expr.clone() },
+                                ))));
                             statements.push(return_stmt);
                         }
                         TypedStmt::Assignment(_) | TypedStmt::Let(_) => {
@@ -8813,13 +8809,14 @@ impl TypedModule {
                                     span: stmt.get_span(),
                                     value: Box::new(TypedExpr::Unit(stmt.get_span())),
                                 })));
-                            statements.push(stmt);
-                            statements.push(return_unit);
+                            let return_unit_id = self.stmts.add(return_unit);
+                            statements.push(stmt_id);
+                            statements.push(return_unit_id);
                         }
                     };
                 }
             } else {
-                statements.push(stmt);
+                statements.push(stmt_id);
             }
         }
 
@@ -10817,12 +10814,12 @@ impl TypedModule {
 
     fn synth_block(
         &mut self,
-        statements: Vec<TypedStmt>,
+        statements: Vec<TypedStmtId>,
         parent_scope: ScopeId,
         span: SpanId,
     ) -> TypedBlock {
         let expr_type = match statements.last() {
-            Some(stmt) => stmt.get_type(),
+            Some(stmt) => self.stmts.get(*stmt).get_type(),
             _ => UNIT_TYPE_ID,
         };
         let block_scope_id =
@@ -10893,13 +10890,13 @@ impl TypedModule {
         };
         let variable_id = self.variables.add_variable(variable);
         let variable_expr = TypedExpr::Variable(VariableExpr { type_id, variable_id, span });
-        let defn_stmt = TypedStmt::Let(Box::new(LetStmt {
+        let defn_stmt = self.stmts.add(TypedStmt::Let(Box::new(LetStmt {
             variable_id,
             variable_type: type_id,
             initializer,
             is_referencing,
             span,
-        }));
+        })));
         let parsed_expr =
             self.ast.expressions.add_expression(ParsedExpression::Variable(parse::Variable {
                 name: NamespacedIdentifier::naked(name, span),
