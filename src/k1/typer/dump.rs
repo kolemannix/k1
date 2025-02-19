@@ -21,8 +21,8 @@ impl Display for TypedModule {
             f.write_str("\n")?;
         }
         f.write_str("--- Namespaces ---\n")?;
-        for (id, namespace) in self.namespaces.iter() {
-            write!(f, "ns {:02} ", id.0)?;
+        for (index, namespace) in self.namespaces.iter().enumerate() {
+            write!(f, "ns {:02} ", index + 1)?;
             f.write_str(self.name_of(namespace.name))?;
             f.write_str("\n")?;
         }

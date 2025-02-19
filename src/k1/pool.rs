@@ -120,6 +120,10 @@ impl<T, Index: Into<NonZeroU32> + From<NonZeroU32>> Pool<T, Index> {
         let end = index + count as usize;
         &mut self.vec[index..end]
     }
+
+    pub fn iter(&self) -> std::slice::Iter<T> {
+        self.vec.iter()
+    }
 }
 
 #[cfg(test)]

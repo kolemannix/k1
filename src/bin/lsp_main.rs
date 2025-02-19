@@ -1,7 +1,7 @@
 use itertools::Itertools;
 use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::RwLock;
+use std::sync::{Mutex, RwLock};
 
 use k1::compiler::CompileModuleError;
 use k1::lex::SpanId;
@@ -60,7 +60,7 @@ enum CompiledModule {
 
 struct Backend {
     client: Client,
-    module: RwLock<CompiledModule>,
+    module: Mutex<CompiledModule>,
     workspace_uri: RwLock<Option<Url>>,
     compile_iteration: AtomicU32,
 }
@@ -69,14 +69,14 @@ impl Backend {
     fn new(client: Client) -> Backend {
         Backend {
             client,
-            module: RwLock::new(CompiledModule::Empty),
+            module: Mutex::new(CompiledModule::Empty),
             workspace_uri: RwLock::new(None),
             compile_iteration: AtomicU32::new(0),
         }
     }
 
     fn with_ast<T>(&self, f: impl Fn(&ParsedModule) -> T) -> Option<T> {
-        let m_lock = self.module.read().unwrap();
+        let m_lock = self.module.lock().unwrap();
         match &*m_lock {
             CompiledModule::Empty => None,
             CompiledModule::Parsed(pm) => Some(f(pm)),
@@ -107,7 +107,7 @@ impl Backend {
 
         let mut all_errors = parse_errors;
 
-        if let CompiledModule::Typed(module) = &*self.module.read().unwrap() {
+        if let CompiledModule::Typed(module) = &*self.module.lock().unwrap() {
             all_errors.extend(
                 module
                     .errors
@@ -141,7 +141,7 @@ impl Backend {
             }
         };
 
-        let mut module_lock = self.module.write().unwrap();
+        let mut module_lock = self.module.lock().unwrap();
         *module_lock = compiled_module;
         let prev_iteration = self.compile_iteration.fetch_add(1, Ordering::Relaxed);
         prev_iteration + 1
