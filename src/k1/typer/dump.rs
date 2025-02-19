@@ -433,13 +433,13 @@ impl TypedModule {
         indentation: usize,
     ) -> std::fmt::Result {
         if block.statements.len() == 1 {
-            if let TypedStmt::Expr(expr) = &block.statements[0] {
+            if let TypedStmt::Expr(expr) = self.stmts.get(block.statements[0]) {
                 return self.display_expr(expr, writ, indentation);
             }
         }
         writ.write_str("{\n")?;
         for (idx, stmt) in block.statements.iter().enumerate() {
-            self.display_stmt(stmt, writ, indentation + 1)?;
+            self.display_stmt(*stmt, writ, indentation + 1)?;
             if idx < block.statements.len() - 1 {
                 writ.write_str(";")?;
             }
@@ -452,12 +452,12 @@ impl TypedModule {
 
     fn display_stmt(
         &self,
-        stmt: &TypedStmt,
+        stmt: TypedStmtId,
         writ: &mut impl Write,
         indentation: usize,
     ) -> std::fmt::Result {
         writ.write_str(&"  ".repeat(indentation))?;
-        match stmt {
+        match self.stmts.get(stmt) {
             TypedStmt::Expr(expr) => self.display_expr(expr, writ, indentation),
             TypedStmt::Let(let_stmt) => {
                 if let_stmt.is_referencing {
@@ -572,13 +572,13 @@ impl TypedModule {
             TypedExpr::Match(typed_match) => {
                 writ.write_str("switch ")?;
                 for stmt in &typed_match.initial_let_statements {
-                    self.display_stmt(stmt, writ, indentation)?;
+                    self.display_stmt(*stmt, writ, indentation)?;
                     writ.write_str("; ")?;
                 }
                 writ.write_str(" {\n")?;
                 for (idx, case) in typed_match.arms.iter().enumerate() {
                     for (idx, setup_stmt) in case.setup_statements.iter().enumerate() {
-                        self.display_stmt(setup_stmt, writ, indentation + 1)?;
+                        self.display_stmt(*setup_stmt, writ, indentation + 1)?;
                         if idx != case.setup_statements.len() - 1 {
                             writ.write_str("\n")?;
                         }
@@ -596,7 +596,7 @@ impl TypedModule {
                     writ.write_str(")")?;
 
                     for (idx, stmt) in case.pattern_bindings.iter().enumerate() {
-                        self.display_stmt(stmt, writ, indentation + 1)?;
+                        self.display_stmt(*stmt, writ, indentation + 1)?;
                         if idx != case.pattern_bindings.len() - 1 {
                             writ.write_str("\n")?;
                         }

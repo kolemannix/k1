@@ -1535,7 +1535,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     fn codegen_match(&mut self, match_expr: &TypedMatchExpr) -> CodegenResult<LlvmValue<'ctx>> {
         for stmt in &match_expr.initial_let_statements {
-            if let instr @ LlvmValue::Void(_) = self.codegen_statement(stmt)? {
+            if let instr @ LlvmValue::Void(_) = self.codegen_statement(*stmt)? {
                 return Ok(instr);
             }
         }
@@ -1578,7 +1578,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             // I'm gonna do the bindings first, though the pattern_condition doesn't currently
             // depend on them, we'd like it to to fully de-duplicate the matching code
             for setup_stmt in &arm.setup_statements {
-                if let LlvmValue::Void(_instr) = self.codegen_statement(setup_stmt)? {
+                if let LlvmValue::Void(_instr) = self.codegen_statement(*setup_stmt)? {
                     // If one of the scrutinees is a bot type, this block is terminated so just
                     // continue to the next arm
                     continue 'arm;
@@ -1617,8 +1617,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             // Binding values must be visible to the guard block
             self.builder.position_at_end(guard_block.unwrap_or(*arm_cons_block));
             for binding_stmt in &arm.pattern_bindings {
-                let binding_stmt = binding_stmt.as_let().unwrap();
-                self.codegen_let(binding_stmt)?;
+                self.codegen_statement(*binding_stmt)?;
             }
 
             self.builder.position_at_end(*arm_cons_block);
@@ -2890,13 +2889,13 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 eprintln!("Aborting block after generating {}", never_instr);
                 break;
             }
-            last = self.codegen_statement(stmt)?;
+            last = self.codegen_statement(*stmt)?;
         }
         Ok(last)
     }
 
-    fn codegen_statement(&mut self, statement: &TypedStmt) -> CodegenResult<LlvmValue<'ctx>> {
-        match statement {
+    fn codegen_statement(&mut self, statement: TypedStmtId) -> CodegenResult<LlvmValue<'ctx>> {
+        match self.module.stmts.get(statement) {
             TypedStmt::Expr(expr) => self.codegen_expr(expr),
             TypedStmt::Let(let_stmt) => self.codegen_let(let_stmt),
             TypedStmt::Assignment(assignment) => {
