@@ -200,6 +200,9 @@ impl NamedType for GenericTypeParam {
     }
 }
 
+// nocommit: This isn't really even a type; a value can't have it
+//           It's just where I'm storing type constructors. We could
+//           make it a fallback lookup after scope.find_type, find_type_ctors()...
 #[derive(Debug, Clone)]
 pub struct GenericType {
     pub params: Vec<GenericTypeParam>,
@@ -335,6 +338,8 @@ pub struct LambdaObjectType {
     pub struct_representation: TypeId,
 }
 
+// nocommit 104 bytes. Goal: ?
+// nocommit just re-use the compilation result when we compile the 'receiver' argument
 #[derive(Debug, Clone)]
 pub enum Type {
     Unit(TypeDefnInfo),

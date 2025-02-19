@@ -12,6 +12,7 @@ use std::num::NonZeroU32;
 
 use ahash::HashMapExt;
 use anyhow::bail;
+use bumpalo::collections::Vec as BVec;
 use colored::Colorize;
 use either::Either;
 use fxhash::FxHashMap;
@@ -43,7 +44,19 @@ impl FunctionId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct VariableId(u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct NamespaceId(u32);
+pub struct NamespaceId(NonZeroU32);
+pub const ROOT_NAMESPACE_ID: NamespaceId = NamespaceId(NonZeroU32::new(1).unwrap());
+
+impl From<NonZeroU32> for NamespaceId {
+    fn from(value: NonZeroU32) -> Self {
+        NamespaceId(value)
+    }
+}
+impl From<NamespaceId> for NonZeroU32 {
+    fn from(val: NamespaceId) -> Self {
+        val.0
+    }
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AbilityId(u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1450,39 +1463,33 @@ pub struct Namespace {
 }
 
 pub struct Namespaces {
-    pub namespaces: Vec<Namespace>,
+    pub namespaces: Pool<Namespace, NamespaceId>,
 }
 
 impl Namespaces {
     pub fn get(&self, id: NamespaceId) -> &Namespace {
-        &self.namespaces[id.0 as usize]
+        &self.namespaces.get(id)
     }
 
     pub fn get_mut(&mut self, id: NamespaceId) -> &mut Namespace {
-        &mut self.namespaces[id.0 as usize]
+        self.namespaces.get_mut(id)
     }
 
     pub fn add(&mut self, namespace: Namespace) -> NamespaceId {
-        let id = NamespaceId(self.namespaces.len() as u32);
-        self.namespaces.push(namespace);
-        id
+        self.namespaces.add(namespace)
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (NamespaceId, &Namespace)> {
-        self.namespaces
-            .iter()
-            .enumerate()
-            .map(|(index, namespace)| (NamespaceId(index as u32), namespace))
+    pub fn iter(&self) -> std::slice::Iter<Namespace> {
+        self.namespaces.iter()
     }
 
     pub fn find_child_by_name(
         &self,
         parent_id: NamespaceId,
         name: Identifier,
-    ) -> Option<(NamespaceId, &Namespace)> {
-        self.iter().find(|(_id, ns)| {
-            ns.parent_id.is_some_and(|parent| parent == parent_id) && ns.name == name
-        })
+    ) -> Option<&Namespace> {
+        self.iter()
+            .find(|ns| ns.parent_id.is_some_and(|parent| parent == parent_id) && ns.name == name)
     }
 
     pub fn name_chain(&self, id: NamespaceId) -> VecDeque<Identifier> {
@@ -1502,13 +1509,6 @@ impl Namespaces {
 
     pub fn get_scope(&self, namespace_id: NamespaceId) -> ScopeId {
         self.get(namespace_id).scope_id
-    }
-
-    pub fn namespace_for_scope(&self, scope_id: ScopeId) -> Option<NamespaceId> {
-        self.namespaces
-            .iter()
-            .position(|namespace| namespace.scope_id == scope_id)
-            .map(|id| NamespaceId(id as u32))
     }
 }
 
@@ -1831,6 +1831,8 @@ pub struct TypedModule {
     pub debug_level_stack: Vec<log::LevelFilter>,
     pub functions_pending_body_specialization: Vec<FunctionId>,
     inference_context: InferenceContext,
+
+    bump: bumpalo::Bump,
 }
 
 impl TypedModule {
@@ -1845,7 +1847,7 @@ impl TypedModule {
         };
 
         let scopes = Scopes::make();
-        let namespaces = Namespaces { namespaces: Vec::new() };
+        let namespaces = Namespaces { namespaces: Pool::with_capacity("namespaces", 256) };
         TypedModule {
             functions: Vec::with_capacity(parsed_module.functions.len() * 4),
             variables: Variables::default(),
@@ -1868,10 +1870,11 @@ impl TypedModule {
             functions_pending_body_specialization: vec![],
             ast: parsed_module,
             inference_context: InferenceContext {
-                origin_stack: vec![],
+                origin_stack: Vec::with_capacity(64),
                 vars: Vec::with_capacity(128),
                 constraints: Vec::with_capacity(128),
             },
+            bump: bumpalo::Bump::with_capacity(1024 * 1024 * 1024 * 8),
         }
     }
 
@@ -1976,6 +1979,8 @@ impl TypedModule {
         );
         let mut type_params: Vec<GenericTypeParam> =
             Vec::with_capacity(parsed_type_defn.type_params.len());
+        // let mut type_params: BVec<GenericTypeParam> =
+        //     BVec::with_capacity_in(parsed_type_defn.type_params.len(), &self.bump);
         for type_param in parsed_type_defn.type_params.iter() {
             let type_variable_id = self.add_type_variable(
                 TypeParameter {
@@ -3543,7 +3548,7 @@ impl TypedModule {
                         impl_kind,
                         None,
                     )),
-                    self.get_root_namespace_id(),
+                    ROOT_NAMESPACE_ID,
                 );
                 specialized_function_id
             })
@@ -3888,7 +3893,7 @@ impl TypedModule {
                     kind,
                     Some(*blanket_fn_id),
                 )),
-                self.get_root_namespace_id(),
+                ROOT_NAMESPACE_ID,
             )?;
             // HEADS UP --------> Recently swapped these; this fixes an issue
             // where blanket bodies were running too early but may have broken things
@@ -7621,12 +7626,9 @@ impl TypedModule {
                         .types
                         .get_type_defn_info(context_param.type_id)
                         .is_some_and(|defn_info| {
-                            let (_, compiler_namespace) = self
+                            let compiler_namespace = self
                                 .namespaces
-                                .find_child_by_name(
-                                    self.get_root_namespace_id(),
-                                    get_ident!(self, "compiler"),
-                                )
+                                .find_child_by_name(ROOT_NAMESPACE_ID, get_ident!(self, "compiler"))
                                 .unwrap();
                             defn_info.name == get_ident!(self, "SourceLocation")
                                 && defn_info.scope == compiler_namespace.scope_id
@@ -9492,8 +9494,8 @@ impl TypedModule {
 
         // Typecheck 'main': It must take argc and argv of correct types, or nothing
         // And it must return an integer, or an Unwrap[Inner = i32]
-        let is_main_fn = namespace_id == self_.get_root_namespace_id()
-            && parsed_function_name == get_ident!(self_, "main");
+        let is_main_fn =
+            namespace_id == ROOT_NAMESPACE_ID && parsed_function_name == get_ident!(self_, "main");
         if is_main_fn {
             match param_types.len() {
                 0 => {}
@@ -9623,10 +9625,6 @@ impl TypedModule {
         }
 
         Ok(function_id)
-    }
-
-    fn get_root_namespace_id(&self) -> NamespaceId {
-        NamespaceId(0)
     }
 
     fn eval_function_body(&mut self, declaration_id: FunctionId) -> TyperResult<()> {
@@ -10065,7 +10063,7 @@ impl TypedModule {
                 )),
                 // fixme: Root namespace?! A: namespace is only used for companion type stuff, so
                 // this isn't doing any harm for now
-                self.get_root_namespace_id(),
+                ROOT_NAMESPACE_ID,
             )?;
 
             let specialized = self.get_function(function_impl).type_id;
@@ -10558,7 +10556,7 @@ impl TypedModule {
         }
 
         // Everything else declaration phase
-        let root_ns_id = NamespaceId(0);
+        let root_ns_id = NamespaceId(NonZeroU32::new(1).unwrap());
         eprintln!(">> Phase 4 declare rest of definitions (functions, constants, abilities)");
         for &parsed_definition_id in self.ast.get_root_namespace().definitions.clone().iter() {
             let result = self.eval_definition_declaration_phase(
