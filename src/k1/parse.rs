@@ -308,6 +308,7 @@ impl NamedTypeArg {
     }
 }
 
+// nocommit: 120 bytes!
 #[derive(Debug, Clone)]
 pub struct FnCall {
     pub name: NamespacedIdentifier,
