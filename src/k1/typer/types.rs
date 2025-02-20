@@ -326,7 +326,7 @@ pub struct LambdaType {
     // This kinda crosses the streams; its a value expression in a type, but
     // that's because a closure's environment is basically values baked into a function
     // Its almost like a comptime-known value, aka the type 5
-    pub environment_struct: TypedExpr,
+    pub environment_struct: TypedExprId,
     pub closure_object_type: TypeId,
 }
 
@@ -951,13 +951,14 @@ impl Types {
         &mut self,
         identifiers: &Identifiers,
         function_type_id: TypeId,
-        environment_struct: TypedExpr,
+        environment_struct: TypedExprId,
+        environment_type: TypeId,
         body_function_id: FunctionId,
         parsed_id: ParsedId,
     ) -> TypeId {
         let closure_type_id = self.add_type(Type::Closure(LambdaType {
             function_type: function_type_id,
-            env_type: environment_struct.get_type(),
+            env_type: environment_type,
             parsed_id,
             body_function_id,
             environment_struct,

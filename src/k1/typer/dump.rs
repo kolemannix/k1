@@ -434,7 +434,7 @@ impl TypedModule {
     ) -> std::fmt::Result {
         if block.statements.len() == 1 {
             if let TypedStmt::Expr(expr) = self.stmts.get(block.statements[0]) {
-                return self.display_expr(expr, writ, indentation);
+                return self.display_expr_id(expr, writ, indentation);
             }
         }
         writ.write_str("{\n")?;
@@ -458,7 +458,7 @@ impl TypedModule {
     ) -> std::fmt::Result {
         writ.write_str(&"  ".repeat(indentation))?;
         match self.stmts.get(stmt) {
-            TypedStmt::Expr(expr) => self.display_expr(expr, writ, indentation),
+            TypedStmt::Expr(expr) => self.display_expr_id(expr, writ, indentation),
             TypedStmt::Let(let_stmt) => {
                 if let_stmt.is_referencing {
                     writ.write_str("let* ")?;
@@ -467,40 +467,40 @@ impl TypedModule {
                 }
                 self.display_variable(self.variables.get(let_stmt.variable_id), writ)?;
                 writ.write_str(" = ")?;
-                self.display_expr(&let_stmt.initializer, writ, indentation)
+                self.display_expr_id(&let_stmt.initializer, writ, indentation)
             }
             TypedStmt::Assignment(assignment) => {
-                self.display_expr(&assignment.destination, writ, indentation)?;
+                self.display_expr_id(&assignment.destination, writ, indentation)?;
                 match assignment.kind {
                     AssignmentKind::Value => writ.write_str(" = ")?,
                     AssignmentKind::Reference => writ.write_str(" <- ")?,
                 }
-                self.display_expr(&assignment.value, writ, indentation)
+                self.display_expr_id(&assignment.value, writ, indentation)
             }
         }
     }
 
-    pub fn expr_to_string(&self, expr: &TypedExpr) -> String {
+    pub fn expr_to_string(&self, expr: TypedExprId) -> String {
         let mut s = String::new();
-        self.display_expr(expr, &mut s, 0).unwrap();
+        self.display_expr_id(expr, &mut s, 0).unwrap();
         s
     }
 
-    pub fn expr_to_string_with_type(&self, expr: &TypedExpr) -> String {
+    pub fn expr_to_string_with_type(&self, expr: TypedExprId) -> String {
         let mut s = String::new();
-        self.display_expr(expr, &mut s, 0).unwrap();
+        self.display_expr_id(expr, &mut s, 0).unwrap();
         s.push_str(": ");
-        self.display_type_id(expr.get_type(), false, &mut s).unwrap();
+        self.display_type_id(self.exprs.get(expr).get_type(), false, &mut s).unwrap();
         s
     }
 
-    pub fn display_expr(
+    pub fn display_expr_id(
         &self,
-        expr: &TypedExpr,
+        expr_id: TypedExprId,
         writ: &mut impl Write,
         indentation: usize,
     ) -> std::fmt::Result {
-        match expr {
+        match self.exprs.get(expr_id) {
             TypedExpr::Unit(_) => writ.write_str("()"),
             TypedExpr::Char(c, _) => write!(writ, "'{}'", c),
             TypedExpr::Integer(int) => write!(writ, "{}", int.value),
@@ -516,7 +516,7 @@ impl TypedModule {
                     writ.write_str(&"  ".repeat(indentation + 1))?;
                     writ.write_str(self.name_of(field.name))?;
                     writ.write_str(": ")?;
-                    self.display_expr(&field.expr, writ, indentation)?;
+                    self.display_expr_id(&field.expr, writ, indentation)?;
                 }
                 writ.write_str("\n")?;
                 writ.write_str(&"  ".repeat(indentation))?;
@@ -527,7 +527,7 @@ impl TypedModule {
                 writ.write_str(self.name_of(variable.name))
             }
             TypedExpr::StructFieldAccess(field_access) => {
-                self.display_expr(&field_access.base, writ, indentation)?;
+                self.display_expr_id(&field_access.base, writ, indentation)?;
                 writ.write_str(".")?;
                 writ.write_str(self.name_of(field_access.target_field))
             }
@@ -542,10 +542,10 @@ impl TypedModule {
                         writ.write_str(self.name_of(name))?;
                     }
                     Callee::DynamicFunction(callee_expr) => {
-                        self.display_expr(callee_expr, writ, indentation)?;
+                        self.display_expr_id(callee_expr, writ, indentation)?;
                     }
                     Callee::DynamicClosure(callee_expr) => {
-                        self.display_expr(callee_expr, writ, indentation)?;
+                        self.display_expr_id(callee_expr, writ, indentation)?;
                     }
                 };
                 writ.write_str("(")?;
@@ -553,19 +553,19 @@ impl TypedModule {
                     if idx > 0 {
                         writ.write_str(", ")?;
                     }
-                    self.display_expr(arg, writ, indentation)?;
+                    self.display_expr_id(arg, writ, indentation)?;
                 }
                 writ.write_str(")")
             }
             TypedExpr::Block(block) => self.display_block(block, writ, indentation),
             TypedExpr::If(if_expr) => {
                 writ.write_str("if ")?;
-                self.display_expr(&if_expr.condition, writ, indentation)?;
+                self.display_expr_id(&if_expr.condition, writ, indentation)?;
                 writ.write_str(" ")?;
-                self.display_expr(&if_expr.consequent, writ, indentation)?;
+                self.display_expr_id(&if_expr.consequent, writ, indentation)?;
                 if !if_expr.alternate.is_unit() {
                     writ.write_str(" else ")?;
-                    self.display_expr(&if_expr.alternate, writ, indentation)?;
+                    self.display_expr_id(&if_expr.alternate, writ, indentation)?;
                 }
                 Ok(())
             }
@@ -592,11 +592,11 @@ impl TypedModule {
                         }
                     }
                     writ.write_str("(")?;
-                    self.display_expr(&case.pattern_condition, writ, indentation)?;
+                    self.display_expr_id(&case.pattern_condition, writ, indentation)?;
                     writ.write_str(")")?;
 
                     for (idx, stmt) in case.pattern_bindings.iter().enumerate() {
-                        self.display_stmt(*stmt, writ, indentation + 1)?;
+                        self.display_stmt(stmt, writ, indentation + 1)?;
                         if idx != case.pattern_bindings.len() - 1 {
                             writ.write_str("\n")?;
                         }
@@ -604,10 +604,10 @@ impl TypedModule {
 
                     if let Some(guard_condition) = case.guard_condition.as_ref() {
                         writ.write_str(" if ")?;
-                        self.display_expr(guard_condition, writ, indentation)?;
+                        self.display_expr_id(guard_condition, writ, indentation)?;
                     }
                     writ.write_str(" -> ")?;
-                    self.display_expr(&case.consequent_expr, writ, indentation)?;
+                    self.display_expr_id(&case.consequent_expr, writ, indentation)?;
                     if idx < typed_match.arms.len() - 1 {
                         writ.write_str(",\n")?;
                     }
@@ -618,7 +618,7 @@ impl TypedModule {
             }
             TypedExpr::WhileLoop(while_loop) => {
                 writ.write_str("while ")?;
-                self.display_expr(&while_loop.cond, writ, indentation)?;
+                self.display_expr_id(&while_loop.cond, writ, indentation)?;
                 writ.write_str(" ")?;
                 self.display_block(&while_loop.body, writ, indentation)
             }
@@ -628,38 +628,38 @@ impl TypedModule {
             }
             TypedExpr::UnaryOp(unary_op) => match unary_op.kind {
                 UnaryOpKind::Dereference => {
-                    self.display_expr(&unary_op.expr, writ, indentation)?;
+                    self.display_expr_id(&unary_op.expr, writ, indentation)?;
                     writ.write_str(".*")
                 }
             },
             TypedExpr::BinaryOp(binary_op) => {
-                self.display_expr(&binary_op.lhs, writ, indentation)?;
+                self.display_expr_id(&binary_op.lhs, writ, indentation)?;
                 write!(writ, " {} ", binary_op.kind)?;
-                self.display_expr(&binary_op.rhs, writ, indentation)
+                self.display_expr_id(&binary_op.rhs, writ, indentation)
             }
             TypedExpr::EnumConstructor(enum_constr) => {
                 writ.write_str(".")?;
                 writ.write_str(self.name_of(enum_constr.variant_name))?;
                 if let Some(payload) = &enum_constr.payload {
                     writ.write_str("(")?;
-                    self.display_expr(payload, writ, indentation)?;
+                    self.display_expr_id(payload, writ, indentation)?;
                     writ.write_str(")")?;
                 }
                 Ok(())
             }
             TypedExpr::EnumIsVariant(is_variant_expr) => {
-                self.display_expr(&is_variant_expr.target_expr, writ, indentation)?;
+                self.display_expr_id(&is_variant_expr.target_expr, writ, indentation)?;
                 writ.write_str(".is[.")?;
                 self.write_ident(writ, is_variant_expr.variant_name)?;
                 writ.write_str("]()")
             }
             TypedExpr::Cast(cast) => {
-                self.display_expr(&cast.base_expr, writ, indentation)?;
+                self.display_expr_id(&cast.base_expr, writ, indentation)?;
                 write!(writ, " as({}) ", cast.cast_type)?;
                 self.display_type_id(cast.target_type_id, false, writ)
             }
             TypedExpr::EnumGetPayload(as_variant_expr) => {
-                self.display_expr(&as_variant_expr.target_expr, writ, indentation)?;
+                self.display_expr_id(&as_variant_expr.target_expr, writ, indentation)?;
                 writ.write_str(".payload[")?;
                 self.write_ident(writ, as_variant_expr.variant_name)?;
                 writ.write_char(']')?;
@@ -667,12 +667,12 @@ impl TypedModule {
             }
             TypedExpr::Return(ret) => {
                 writ.write_str("return(")?;
-                self.display_expr(&ret.value, writ, indentation)?;
+                self.display_expr_id(&ret.value, writ, indentation)?;
                 writ.write_char(')')
             }
             TypedExpr::Break(brk) => {
                 writ.write_str("break(")?;
-                self.display_expr(&brk.value, writ, indentation)?;
+                self.display_expr_id(&brk.value, writ, indentation)?;
                 writ.write_char(')')
             }
             TypedExpr::Closure(closure_expr) => {
