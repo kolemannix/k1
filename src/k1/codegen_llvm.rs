@@ -1465,7 +1465,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     }
 
     fn codegen_let(&mut self, let_stmt: &LetStmt) -> CodegenResult<LlvmValue<'ctx>> {
-        let value = self.codegen_expr(&let_stmt.initializer)?;
+        let value = self.codegen_expr(let_stmt.initializer)?;
 
         if let LlvmValue::Void(instr) = value {
             return Ok(LlvmValue::Void(instr));
@@ -1587,7 +1587,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             let next_arm = arm_blocks.get(index + 1);
             let next_arm_or_fail = next_arm.map(|p| p.0).unwrap_or(fail_block);
 
-            let guard_block = if let Some(guard_condition) = arm.guard_condition.as_ref() {
+            let guard_block = if let Some(guard_condition) = arm.guard_condition {
                 // Guard must be a boolean
                 let guard_block =
                     self.ctx.insert_basic_block_after(*arm_block, &format!("arm_guard_{index}"));
@@ -1603,7 +1603,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 None
             };
 
-            let pattern_condition = self.codegen_expr_basic_value(&arm.pattern_condition)?;
+            let pattern_condition = self.codegen_expr_basic_value(arm.pattern_condition)?;
             let pattern_condition_i1 =
                 self.bool_to_i1(pattern_condition.into_int_value(), "arm_pattern_i1");
             self.builder
@@ -1621,7 +1621,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
 
             self.builder.position_at_end(*arm_cons_block);
-            let LlvmValue::BasicValue(consequent) = self.codegen_expr(&arm.consequent_expr)? else {
+            let LlvmValue::BasicValue(consequent) = self.codegen_expr(arm.consequent_expr)? else {
                 // If the consequent crashes or returns early, this block is terminated so just
                 // continue to the next case
                 continue;
@@ -1654,7 +1654,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let merge_block = self.ctx.append_basic_block(current_fn, "if_merge");
 
         // Entry block
-        let condition = self.codegen_expr_basic_value(&ir_if.condition)?;
+        let condition = self.codegen_expr_basic_value(ir_if.condition)?;
         let condition_value = self.bool_to_i1(condition.into_int_value(), "cond_i1");
         self.builder
             .build_conditional_branch(condition_value, consequent_block, alternate_block)
@@ -1662,7 +1662,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
         // Consequent Block
         self.builder.position_at_end(consequent_block);
-        let consequent_block_value = self.codegen_expr(&ir_if.consequent)?;
+        let consequent_block_value = self.codegen_expr(ir_if.consequent)?;
         let consequent_incoming = match consequent_block_value.as_basic_value() {
             Either::Left(_) => None,
             Either::Right(value) => {
@@ -1674,7 +1674,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
         // Alternate Block
         self.builder.position_at_end(alternate_block);
-        let alternate_block_value = self.codegen_expr(&ir_if.alternate)?;
+        let alternate_block_value = self.codegen_expr(ir_if.alternate)?;
         let alternate_incoming = match alternate_block_value.as_basic_value() {
             Either::Left(_) => None,
             Either::Right(value) => {
@@ -1716,7 +1716,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     /// This is the most common case
     fn codegen_expr_basic_value(
         &mut self,
-        expr: &TypedExpr,
+        expr: TypedExprId,
     ) -> CodegenResult<BasicValueEnum<'ctx>> {
         Ok(self.codegen_expr(expr)?.expect_basic_value())
     }
@@ -1862,9 +1862,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         Ok(global_value.as_pointer_value().as_basic_value_enum())
     }
 
-    fn codegen_expr(&mut self, expr: &TypedExpr) -> CodegenResult<LlvmValue<'ctx>> {
-        self.set_debug_location(expr.get_span());
-        trace!("codegen expr\n{}", self.module.expr_to_string(expr));
+    fn codegen_expr(&mut self, expr_id: TypedExprId) -> CodegenResult<LlvmValue<'ctx>> {
+        let expr = self.module.exprs.get(expr_id);
+        let span = expr.get_span();
+        self.set_debug_location(span);
+        debug!("codegen expr\n{}", self.module.expr_to_string_with_type(expr_id));
         match expr {
             TypedExpr::Unit(_) => Ok(self.builtin_types.unit_value.as_basic_value_enum().into()),
             TypedExpr::Char(byte, _) => {
@@ -1905,9 +1907,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     Err(CodegenError {
                         message: format!(
                             "No pointer or global found for variable {}",
-                            self.module.expr_to_string(expr)
+                            self.module.expr_to_string(expr_id)
                         ),
-                        span: expr.get_span(),
+                        span,
                     })
                 }
             }
@@ -1917,7 +1919,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let struct_ptr =
                     self.builder.build_alloca(struct_llvm_type, "struct_literal").unwrap();
                 for (idx, field) in struc.fields.iter().enumerate() {
-                    let value = self.codegen_expr_basic_value(&field.expr)?;
+                    let value = self.codegen_expr_basic_value(field.expr)?;
                     let field_addr = self
                         .builder
                         .build_struct_gep(
@@ -1941,7 +1943,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let struct_llvm_type = self.codegen_type(field_access.struct_type)?.expect_struct();
                 let struct_physical_type = struct_llvm_type.struct_type;
                 // Codegen the field's memory location
-                let struc = self.codegen_expr_basic_value(&field_access.base)?;
+                let struc = self.codegen_expr_basic_value(field_access.base)?;
                 let struct_pointer = struc.into_pointer_value();
                 let field_pointer = self
                     .builder
@@ -1962,14 +1964,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             TypedExpr::LoopExpr(loop_expr) => self.codegen_loop_expr(loop_expr),
             TypedExpr::BinaryOp(bin_op) => self.codegen_binop(bin_op),
             TypedExpr::UnaryOp(unary_op) => {
-                let value = self.codegen_expr_basic_value(&unary_op.expr)?;
+                let value = self.codegen_expr_basic_value(unary_op.expr)?;
                 match unary_op.kind {
                     UnaryOpKind::Dereference => {
                         let value_ptr = value.into_pointer_value();
                         let pointee_ty = self.codegen_type(unary_op.type_id)?;
                         debug!(
                             "Dereference: type {} w/ llvm value {} as llvm type {}",
-                            self.module.type_id_to_string(unary_op.expr.get_type()),
+                            self.module.expr_to_string_with_type(unary_op.expr),
                             value_ptr,
                             pointee_ty.canonical_repr_type().print_to_string()
                         );
@@ -2017,7 +2019,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.builder.build_store(tag_pointer, enum_variant.tag_value).unwrap();
 
                 if let Some(payload) = &enum_constr.payload {
-                    let value = self.codegen_expr_basic_value(payload)?;
+                    let value = self.codegen_expr_basic_value(*payload)?;
                     let payload_pointer = self
                         .builder
                         .build_struct_gep(
@@ -2035,10 +2037,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             TypedExpr::EnumIsVariant(enum_is_variant) => {
                 let enum_value = self
-                    .codegen_expr_basic_value(&enum_is_variant.target_expr)?
+                    .codegen_expr_basic_value(enum_is_variant.target_expr)?
                     .into_pointer_value();
-                let enum_llvm =
-                    self.codegen_type(enum_is_variant.target_expr.get_type())?.expect_enum();
+                let target_expr_type_id =
+                    self.module.exprs.get(enum_is_variant.target_expr).get_type();
+                let enum_llvm = self.codegen_type(target_expr_type_id)?.expect_enum();
                 let variant = &enum_llvm.variants[enum_is_variant.variant_index as usize];
                 let is_variant_bool = self.codegen_enum_is_variant(
                     enum_value,
@@ -2048,12 +2051,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(is_variant_bool.as_basic_value_enum().into())
             }
             TypedExpr::EnumGetPayload(enum_get_payload) => {
-                let enum_type = self
-                    .module
-                    .types
-                    .get_type_id_dereferenced(enum_get_payload.target_expr.get_type());
+                let target_expr_type_id =
+                    self.module.exprs.get(enum_get_payload.target_expr).get_type();
+                let enum_type = self.module.types.get_type_id_dereferenced(target_expr_type_id);
                 let enum_type = self.codegen_type(enum_type)?.expect_enum();
-                let enum_value = self.codegen_expr_basic_value(&enum_get_payload.target_expr)?;
+                let enum_value = self.codegen_expr_basic_value(enum_get_payload.target_expr)?;
                 let variant_type = &enum_type.variants[enum_get_payload.variant_index as usize];
 
                 if enum_get_payload.is_referencing {
@@ -2076,7 +2078,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             TypedExpr::Cast(cast) => self.codegen_cast(cast),
             TypedExpr::Return(ret) => {
-                let return_value = self.codegen_expr_basic_value(&ret.value)?;
+                let return_value = self.codegen_expr_basic_value(ret.value)?;
                 let function = self.builder.get_insert_block().unwrap().get_parent().unwrap();
                 let function_id = self.llvm_function_to_k1.get(&function).unwrap();
                 let codegened_function = self.llvm_functions.get(function_id).unwrap();
@@ -2099,7 +2101,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             TypedExpr::Break(break_) => {
                 let loop_info = *self.loops.get(&break_.loop_scope).unwrap();
-                let break_value = self.codegen_expr_basic_value(&break_.value)?;
+                let break_value = self.codegen_expr_basic_value(break_.value)?;
                 if let Some(break_value_ptr) = loop_info.break_value_ptr {
                     self.builder.build_store(break_value_ptr, break_value).unwrap();
                 }
@@ -2112,7 +2114,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     self.module.types.get(closure_expr.closure_type).as_closure().unwrap();
                 let llvm_fn = self.codegen_function_or_get(closure_type.body_function_id)?;
                 let environment_ptr = self
-                    .codegen_expr_basic_value(&closure_type.environment_struct)?
+                    .codegen_expr_basic_value(closure_type.environment_struct)?
                     .into_pointer_value();
                 self.closure_environments.insert(closure_expr.closure_type, environment_ptr);
 
@@ -2173,11 +2175,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     fn codegen_cast(&mut self, cast: &TypedCast) -> CodegenResult<LlvmValue<'ctx>> {
         match cast.cast_type {
             CastType::KnownNoOp | CastType::Integer8ToChar => {
-                let value = self.codegen_expr_basic_value(&cast.base_expr)?;
+                let value = self.codegen_expr_basic_value(cast.base_expr)?;
                 Ok(value.into())
             }
             CastType::IntegerExtend | CastType::IntegerExtendFromChar => {
-                let value = self.codegen_expr_basic_value(&cast.base_expr)?;
+                let value = self.codegen_expr_basic_value(cast.base_expr)?;
                 let int_value = value.into_int_value();
                 let llvm_type = self.codegen_type(cast.target_type_id)?;
                 let integer_type = self.module.types.get(cast.target_type_id).expect_integer();
@@ -2201,7 +2203,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(value.as_basic_value_enum().into())
             }
             CastType::IntegerTruncate => {
-                let value = self.codegen_expr_basic_value(&cast.base_expr)?;
+                let value = self.codegen_expr_basic_value(cast.base_expr)?;
                 let int_value = value.into_int_value();
                 let int_type = self.codegen_type(cast.target_type_id)?;
                 let truncated_value = self
@@ -2215,7 +2217,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(truncated_value.as_basic_value_enum().into())
             }
             CastType::FloatExtend => {
-                let from_value = self.codegen_expr_basic_value(&cast.base_expr)?.into_float_value();
+                let from_value = self.codegen_expr_basic_value(cast.base_expr)?.into_float_value();
                 let float_dst_type =
                     self.codegen_type(cast.target_type_id)?.rich_value_type().into_float_type();
                 let extended_value =
@@ -2223,7 +2225,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(extended_value.as_basic_value_enum().into())
             }
             CastType::FloatTruncate => {
-                let from_value = self.codegen_expr_basic_value(&cast.base_expr)?.into_float_value();
+                let from_value = self.codegen_expr_basic_value(cast.base_expr)?.into_float_value();
                 let float_dst_type =
                     self.codegen_type(cast.target_type_id)?.rich_value_type().into_float_type();
                 let extended_value =
@@ -2231,7 +2233,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(extended_value.as_basic_value_enum().into())
             }
             CastType::FloatToInteger => {
-                let from_value = self.codegen_expr_basic_value(&cast.base_expr)?.into_float_value();
+                let from_value = self.codegen_expr_basic_value(cast.base_expr)?.into_float_value();
                 let int_dst_type = self.codegen_type(cast.target_type_id)?;
                 let int_dst_type_llvm = int_dst_type.rich_value_type().into_int_type();
                 let int_dest_k1_type = self.module.types.get(cast.target_type_id).expect_integer();
@@ -2247,9 +2249,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(casted_int_value.as_basic_value_enum().into())
             }
             CastType::IntegerToFloat => {
-                let from_value = self.codegen_expr_basic_value(&cast.base_expr)?.into_int_value();
-                let from_int_k1_type =
-                    self.module.types.get(cast.base_expr.get_type()).expect_integer();
+                let from_value = self.codegen_expr_basic_value(cast.base_expr)?.into_int_value();
+                let base_expr_type = self.module.exprs.get(cast.base_expr).get_type();
+                let from_int_k1_type = self.module.types.get(base_expr_type).expect_integer();
                 let float_dst_type = self.codegen_type(cast.target_type_id)?;
                 let float_dst_type_llvm = float_dst_type.rich_value_type().into_float_type();
                 let casted_float_value = if from_int_k1_type.is_signed() {
@@ -2267,19 +2269,18 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 // This is a complete no-op in the LLVM ir
                 // since llvm 'ptr' is untyped, and all we're doing
                 // here is adding a type to our pointer
-                let pointer = self.codegen_expr_basic_value(&cast.base_expr)?.into_pointer_value();
+                let pointer = self.codegen_expr_basic_value(cast.base_expr)?.into_pointer_value();
                 Ok(pointer.as_basic_value_enum().into())
             }
             CastType::ReferenceToPointer => {
                 // This is a complete no-op in the LLVM ir
                 // since llvm 'ptr' is untyped, and all we're doing
                 // here is removing the type from our pointer
-                let reference =
-                    self.codegen_expr_basic_value(&cast.base_expr)?.into_pointer_value();
+                let reference = self.codegen_expr_basic_value(cast.base_expr)?.into_pointer_value();
                 Ok(reference.as_basic_value_enum().into())
             }
             CastType::PointerToInteger => {
-                let ptr = self.codegen_expr_basic_value(&cast.base_expr)?.into_pointer_value();
+                let ptr = self.codegen_expr_basic_value(cast.base_expr)?.into_pointer_value();
                 let as_int = self
                     .builder
                     .build_ptr_to_int(ptr, self.builtin_types.ptr_sized_int, "ptrtoint_cast")
@@ -2287,7 +2288,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(as_int.as_basic_value_enum().into())
             }
             CastType::IntegerToPointer => {
-                let int = self.codegen_expr_basic_value(&cast.base_expr)?.into_int_value();
+                let int = self.codegen_expr_basic_value(cast.base_expr)?.into_int_value();
                 let as_ptr = self
                     .builder
                     .build_int_to_ptr(int, self.builtin_types.ptr, "inttoptr_cast")
@@ -2303,8 +2304,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         match self.module.types.get(bin_op.ty) {
             Type::Integer(integer_type) => {
                 let signed = integer_type.is_signed();
-                let lhs_value = self.codegen_expr_basic_value(&bin_op.lhs)?.into_int_value();
-                let rhs_value = self.codegen_expr_basic_value(&bin_op.rhs)?.into_int_value();
+                let lhs_value = self.codegen_expr_basic_value(bin_op.lhs)?.into_int_value();
+                let rhs_value = self.codegen_expr_basic_value(bin_op.rhs)?.into_int_value();
                 let op_res = match bin_op.kind {
                     BinaryOpKind::Add => self.builder.build_int_add(lhs_value, rhs_value, "add"),
                     BinaryOpKind::Subtract => {
@@ -2337,8 +2338,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(op_int_value.as_basic_value_enum().into())
             }
             Type::Float(_float_type) => {
-                let lhs_value = self.codegen_expr_basic_value(&bin_op.lhs)?.into_float_value();
-                let rhs_value = self.codegen_expr_basic_value(&bin_op.rhs)?.into_float_value();
+                let lhs_value = self.codegen_expr_basic_value(bin_op.lhs)?.into_float_value();
+                let rhs_value = self.codegen_expr_basic_value(bin_op.rhs)?.into_float_value();
                 let op_res = match bin_op.kind {
                     BinaryOpKind::Add => self
                         .builder
@@ -2375,7 +2376,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             Type::Bool(_) => match bin_op.kind {
                 BinaryOpKind::And | BinaryOpKind::Or => {
-                    let lhs = self.codegen_expr_basic_value(&bin_op.lhs)?.into_int_value();
+                    let lhs = self.codegen_expr_basic_value(bin_op.lhs)?.into_int_value();
                     let op = match bin_op.kind {
                         BinaryOpKind::And => {
                             let lhs_i1 = self.bool_to_i1(lhs, "lhs_for_cmp");
@@ -2385,7 +2386,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
                             // label: rhs_check; lhs was true
                             self.builder.position_at_end(short_circuit_branch.then_block);
-                            let rhs = self.codegen_expr_basic_value(&bin_op.rhs)?.into_int_value();
+                            let rhs = self.codegen_expr_basic_value(bin_op.rhs)?.into_int_value();
 
                             // Don't forget to grab the actual incoming block in case bin_op.rhs did branching!
                             let rhs_incoming = self.builder.get_insert_block().unwrap();
@@ -2411,12 +2412,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         }
                         BinaryOpKind::Or => {
                             let rhs_int =
-                                self.codegen_expr_basic_value(&bin_op.rhs)?.into_int_value();
+                                self.codegen_expr_basic_value(bin_op.rhs)?.into_int_value();
                             self.builder.build_or(lhs, rhs_int, "bool_or").unwrap()
                         }
                         BinaryOpKind::Equals => {
                             let rhs_int =
-                                self.codegen_expr_basic_value(&bin_op.rhs)?.into_int_value();
+                                self.codegen_expr_basic_value(bin_op.rhs)?.into_int_value();
                             self.builder
                                 .build_int_compare(IntPredicate::EQ, lhs, rhs_int, "bool_eq")
                                 .unwrap()
@@ -2426,12 +2427,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     Ok(op.as_basic_value_enum().into())
                 }
                 BinaryOpKind::Equals | BinaryOpKind::NotEquals => {
-                    match self.module.types.get(bin_op.lhs.get_type()) {
+                    match self.module.get_expr_type(bin_op.lhs) {
                         Type::Float(_) => {
                             let lhs_float =
-                                self.codegen_expr_basic_value(&bin_op.lhs)?.into_float_value();
+                                self.codegen_expr_basic_value(bin_op.lhs)?.into_float_value();
                             let rhs_float =
-                                self.codegen_expr_basic_value(&bin_op.rhs)?.into_float_value();
+                                self.codegen_expr_basic_value(bin_op.rhs)?.into_float_value();
                             let cmp_result = self
                                 .builder
                                 .build_float_compare(
@@ -2452,9 +2453,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         }
                         t if t.is_scalar_int_value() => {
                             let lhs_int =
-                                self.codegen_expr_basic_value(&bin_op.lhs)?.into_int_value();
+                                self.codegen_expr_basic_value(bin_op.lhs)?.into_int_value();
                             let rhs_int =
-                                self.codegen_expr_basic_value(&bin_op.rhs)?.into_int_value();
+                                self.codegen_expr_basic_value(bin_op.rhs)?.into_int_value();
                             let cmp_result = self
                                 .builder
                                 .build_int_compare(
@@ -2482,60 +2483,56 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 BinaryOpKind::Less
                 | BinaryOpKind::LessEqual
                 | BinaryOpKind::Greater
-                | BinaryOpKind::GreaterEqual => {
-                    match self.module.types.get(bin_op.lhs.get_type()) {
-                        Type::Integer(_) => {
-                            let lhs_int =
-                                self.codegen_expr_basic_value(&bin_op.lhs)?.into_int_value();
-                            let rhs_int =
-                                self.codegen_expr_basic_value(&bin_op.rhs)?.into_int_value();
-                            let pred = match bin_op.kind {
-                                BinaryOpKind::Less => IntPredicate::SLT,
-                                BinaryOpKind::LessEqual => IntPredicate::SLE,
-                                BinaryOpKind::Greater => IntPredicate::SGT,
-                                BinaryOpKind::GreaterEqual => IntPredicate::SGE,
-                                _ => unreachable!("unexpected binop kind"),
-                            };
-                            let i1_compare = self
-                                .builder
-                                .build_int_compare(
-                                    pred,
-                                    lhs_int,
-                                    rhs_int,
-                                    &format!("{}_i1", bin_op.kind),
-                                )
-                                .unwrap();
-                            Ok(self
-                                .i1_to_bool(i1_compare, &format!("{}_res", bin_op.kind))
-                                .as_basic_value_enum()
-                                .into())
-                        }
-                        Type::Float(_) => {
-                            let lhs_float =
-                                self.codegen_expr_basic_value(&bin_op.lhs)?.into_float_value();
-                            let rhs_float =
-                                self.codegen_expr_basic_value(&bin_op.rhs)?.into_float_value();
-                            let pred = match bin_op.kind {
-                                BinaryOpKind::Less => FloatPredicate::OLT,
-                                BinaryOpKind::LessEqual => FloatPredicate::OLE,
-                                BinaryOpKind::Greater => FloatPredicate::OGT,
-                                BinaryOpKind::GreaterEqual => FloatPredicate::OGE,
-                                _ => unreachable!("unexpected binop kind"),
-                            };
-                            let i1_compare = self
-                                .builder
-                                .build_float_compare(
-                                    pred,
-                                    lhs_float,
-                                    rhs_float,
-                                    &format!("f{}", bin_op.kind),
-                                )
-                                .unwrap();
-                            Ok(self.i1_to_bool(i1_compare, "").as_basic_value_enum().into())
-                        }
-                        _ => unreachable!("unexpected comparison operand; not float or int"),
+                | BinaryOpKind::GreaterEqual => match self.module.get_expr_type(bin_op.lhs) {
+                    Type::Integer(_) => {
+                        let lhs_int = self.codegen_expr_basic_value(bin_op.lhs)?.into_int_value();
+                        let rhs_int = self.codegen_expr_basic_value(bin_op.rhs)?.into_int_value();
+                        let pred = match bin_op.kind {
+                            BinaryOpKind::Less => IntPredicate::SLT,
+                            BinaryOpKind::LessEqual => IntPredicate::SLE,
+                            BinaryOpKind::Greater => IntPredicate::SGT,
+                            BinaryOpKind::GreaterEqual => IntPredicate::SGE,
+                            _ => unreachable!("unexpected binop kind"),
+                        };
+                        let i1_compare = self
+                            .builder
+                            .build_int_compare(
+                                pred,
+                                lhs_int,
+                                rhs_int,
+                                &format!("{}_i1", bin_op.kind),
+                            )
+                            .unwrap();
+                        Ok(self
+                            .i1_to_bool(i1_compare, &format!("{}_res", bin_op.kind))
+                            .as_basic_value_enum()
+                            .into())
                     }
-                }
+                    Type::Float(_) => {
+                        let lhs_float =
+                            self.codegen_expr_basic_value(bin_op.lhs)?.into_float_value();
+                        let rhs_float =
+                            self.codegen_expr_basic_value(bin_op.rhs)?.into_float_value();
+                        let pred = match bin_op.kind {
+                            BinaryOpKind::Less => FloatPredicate::OLT,
+                            BinaryOpKind::LessEqual => FloatPredicate::OLE,
+                            BinaryOpKind::Greater => FloatPredicate::OGT,
+                            BinaryOpKind::GreaterEqual => FloatPredicate::OGE,
+                            _ => unreachable!("unexpected binop kind"),
+                        };
+                        let i1_compare = self
+                            .builder
+                            .build_float_compare(
+                                pred,
+                                lhs_float,
+                                rhs_float,
+                                &format!("f{}", bin_op.kind),
+                            )
+                            .unwrap();
+                        Ok(self.i1_to_bool(i1_compare, "").as_basic_value_enum().into())
+                    }
+                    _ => unreachable!("unexpected comparison operand; not float or int"),
+                },
                 other => panic!("Unsupported binary operation {other:?} returning Bool"),
             },
             Type::Unit(_) => panic!("No unit-returning binary ops"),
@@ -2651,11 +2648,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let mut args: VecDeque<BasicMetadataValueEnum<'ctx>> =
             VecDeque::with_capacity(call.args.len() + 1);
         for arg_expr in call.args.iter() {
-            let basic_value = self.codegen_expr_basic_value(arg_expr)?;
+            let basic_value = self.codegen_expr_basic_value(*arg_expr)?;
             trace!(
-                "codegen function call arg: {}: {}",
-                self.module.expr_to_string(arg_expr),
-                self.module.type_id_to_string(arg_expr.get_type()),
+                "codegen function call arg: {}",
+                self.module.expr_to_string_with_type(*arg_expr),
             );
             args.push_back(basic_value.into())
         }
@@ -2691,7 +2687,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             Callee::DynamicFunction(function_reference_expr) => {
                 let function_ptr =
-                    self.codegen_expr_basic_value(function_reference_expr)?.into_pointer_value();
+                    self.codegen_expr_basic_value(*function_reference_expr)?.into_pointer_value();
 
                 self.set_debug_location(call.span);
                 self.builder
@@ -2706,7 +2702,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             Callee::DynamicClosure(callee_struct_expr) => {
                 let closure_object_type = self.builtin_types.dynamic_closure_object;
                 let callee_struct =
-                    self.codegen_expr_basic_value(callee_struct_expr)?.into_pointer_value();
+                    self.codegen_expr_basic_value(*callee_struct_expr)?.into_pointer_value();
 
                 self.set_debug_location(call.span);
                 let fn_ptr_gep = self
@@ -2805,14 +2801,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(size_value.as_basic_value_enum().into())
             }
             IntrinsicFunction::BoolNegate => {
-                let input_value = self.codegen_expr_basic_value(&call.args[0])?.into_int_value();
+                let input_value = self.codegen_expr_basic_value(call.args[0])?.into_int_value();
                 let truncated = self.bool_to_i1(input_value, "");
                 let negated = self.builder.build_not(truncated, "").unwrap();
                 let promoted = self.i1_to_bool(negated, "");
                 Ok(promoted.as_basic_value_enum().into())
             }
             IntrinsicFunction::BitNot => {
-                let input_value = self.codegen_expr_basic_value(&call.args[0])?.into_int_value();
+                let input_value = self.codegen_expr_basic_value(call.args[0])?.into_int_value();
                 let not_value = self.builder.build_not(input_value, "not").unwrap();
                 Ok(not_value.as_basic_value_enum().into())
             }
@@ -2824,8 +2820,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 // We only support signed 64 bit integers for now
                 let is_operand_signed = true;
                 let sign_extend = is_operand_signed;
-                let lhs = self.codegen_expr_basic_value(&call.args[0])?.into_int_value();
-                let rhs = self.codegen_expr_basic_value(&call.args[1])?.into_int_value();
+                let lhs = self.codegen_expr_basic_value(call.args[0])?.into_int_value();
+                let rhs = self.codegen_expr_basic_value(call.args[1])?.into_int_value();
                 let result = match intrinsic_type {
                     IntrinsicFunction::BitAnd => self.builder.build_and(lhs, rhs, "and"),
                     IntrinsicFunction::BitXor => self.builder.build_xor(lhs, rhs, "xor"),
@@ -2852,8 +2848,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 //  intern fn refAtIndex[T](self: Pointer, index: u64): T*
                 let pointee_ty_arg = call.type_args[0];
                 let elem_type = self.codegen_type(pointee_ty_arg.type_id)?;
-                let ptr = self.codegen_expr_basic_value(&call.args[0])?.into_pointer_value();
-                let index = self.codegen_expr_basic_value(&call.args[1])?.into_int_value();
+                let ptr = self.codegen_expr_basic_value(call.args[0])?.into_pointer_value();
+                let index = self.codegen_expr_basic_value(call.args[1])?.into_int_value();
                 let result_pointer = unsafe {
                     self.builder
                         .build_in_bounds_gep(
@@ -2896,17 +2892,16 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     fn codegen_statement(&mut self, statement: TypedStmtId) -> CodegenResult<LlvmValue<'ctx>> {
         match self.module.stmts.get(statement) {
-            TypedStmt::Expr(expr) => self.codegen_expr(expr),
+            TypedStmt::Expr(expr, _) => self.codegen_expr(*expr),
             TypedStmt::Let(let_stmt) => self.codegen_let(let_stmt),
             TypedStmt::Assignment(assignment) => {
-                let rhs = self.codegen_expr(&assignment.value)?;
+                let rhs = self.codegen_expr(assignment.value)?;
                 let LlvmValue::BasicValue(rhs) = rhs else {
                     return Ok(rhs);
                 };
-                let value_type = self.codegen_type(assignment.value.get_type())?;
                 let lhs_pointer = match assignment.kind {
                     AssignmentKind::Value => {
-                        match assignment.destination.deref() {
+                        match self.module.exprs.get(assignment.destination) {
                             // ASSIGNMENT! We're in lvalue land. We need to get the pointer to the
                             // destination, and be sure to call the correct variant of codegen_expr
                             TypedExpr::Variable(v) => {
@@ -2914,16 +2909,21 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                                     *self.variables.get(&v.variable_id).expect("Missing variable");
                                 destination_ptr.pointer_value
                             }
-                            e => {
-                                panic!("Invalid assignment lhs: {}", self.module.expr_to_string(e))
+                            _ => {
+                                panic!(
+                                    "Invalid assignment lhs: {}",
+                                    self.module.expr_to_string(assignment.destination)
+                                )
                             }
                         }
                     }
                     AssignmentKind::Reference => {
-                        self.codegen_expr_basic_value(&assignment.destination)?.into_pointer_value()
+                        self.codegen_expr_basic_value(assignment.destination)?.into_pointer_value()
                     }
                 };
 
+                let value_type =
+                    self.codegen_type(self.module.exprs.get(assignment.value).get_type())?;
                 self.store_k1_value(&value_type, lhs_pointer, rhs);
                 Ok(self.builtin_types.unit_value.as_basic_value_enum().into())
             }
@@ -2946,7 +2946,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         self.builder.build_unconditional_branch(loop_entry_block).unwrap();
 
         self.builder.position_at_end(loop_entry_block);
-        let cond = self.codegen_expr_basic_value(&while_loop.cond)?.into_int_value();
+        let cond = self.codegen_expr_basic_value(while_loop.cond)?.into_int_value();
         let cond_i1 = self.bool_to_i1(cond, "while_cond");
 
         self.builder.build_conditional_branch(cond_i1, loop_body_block, loop_end_block).unwrap();
@@ -3204,10 +3204,13 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 LlvmValue::Void(ret)
             }
             None => {
-                let function_block = function.body_block.as_ref().unwrap_or_else(|| {
+                let function_block = function.body_block.unwrap_or_else(|| {
                     panic!("Function has no block {}", self.get_ident_name(function.name))
                 });
-                self.codegen_block(function_block)?
+                let TypedExpr::Block(function_block) = self.module.exprs.get(function_block) else {
+                    panic!("Expected block")
+                };
+                self.codegen_block(&function_block)?
             }
         };
         if let Some(start_block) = maybe_starting_block {
