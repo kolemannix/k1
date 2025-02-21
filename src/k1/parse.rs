@@ -1304,7 +1304,7 @@ impl ParsedModule {
             ability_impls: Vec::new(),
             sources: Sources::default(),
             identifiers,
-            expressions: ParsedExpressionPool::new(128),
+            expressions: ParsedExpressionPool::new(4096),
             type_expressions: ParsedTypeExpressionPool::new(8192),
             patterns: ParsedPatternPool::default(),
             uses: ParsedUsePool::default(),
@@ -3036,6 +3036,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         F: Fn(&mut Parser<'toks, 'module>) -> ParseResult<T>,
     {
         trace!("eat_delimited delim='{}'", delim);
+        // nocommit: Allocating this vec registers in flamegraph
         let mut v = Vec::with_capacity(8);
 
         let start_span = self.peek().span;
