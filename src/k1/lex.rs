@@ -526,6 +526,7 @@ pub struct Lexer<'a, 'spans> {
     pub spans: &'spans mut Spans,
     pub line_index: u32,
     pub pos: u32,
+    tok_buf: String,
 }
 
 impl<'content, 'spans> Lexer<'content, 'spans> {
@@ -534,7 +535,14 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
         spans: &'spans mut Spans,
         file_id: FileId,
     ) -> Lexer<'content, 'spans> {
-        Lexer { file_id, content: input.chars(), spans, line_index: 0, pos: 0 }
+        Lexer {
+            file_id,
+            content: input.chars(),
+            spans,
+            line_index: 0,
+            pos: 0,
+            tok_buf: String::with_capacity(2048),
+        }
     }
 
     fn make_error(&mut self, message: String, start: u32, len: u32) -> LexError {
@@ -543,9 +551,11 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
     }
 
     pub fn run(&mut self) -> LexResult<Vec<Token>> {
-        let mut tokens = Vec::with_capacity(1024);
-        while let Some(tok) = self.eat_token()? {
+        let mut tokens = Vec::with_capacity(8192);
+        let mut tok_buf = String::with_capacity(1024);
+        while let Some(tok) = self.eat_token(&mut tok_buf)? {
             tokens.push(tok);
+            tok_buf.clear();
         }
         Ok(tokens)
     }
@@ -554,8 +564,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
         self.spans.add(Span { start, len, file_id: self.file_id })
     }
 
-    fn eat_token(&mut self) -> LexResult<Option<Token>> {
-        let mut tok_buf = String::new();
+    fn eat_token(&mut self, tok_buf: &mut String) -> LexResult<Option<Token>> {
         let mut is_line_comment = false;
         let mut line_comment_start = 0;
         let mut is_string = false;
@@ -581,7 +590,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
         trace!("lex starting new token with prev_skip=false");
         let token = loop {
             let (c, n) = self.peek_with_pos();
-            trace!("LEX line={} char={} '{}' buf={}", self.line_index, n, c, tok_buf);
+            trace!("LEX line={} char={} '{}' buf={}", self.line_index, n, c, &self.tok_buf);
             if is_line_comment {
                 if c == '\n' || c == EOF_CHAR {
                     let len = n - line_comment_start - 1;

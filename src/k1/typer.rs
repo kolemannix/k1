@@ -7944,6 +7944,7 @@ impl TypedModule {
         }
     }
 
+    // nocommit: Dropping memory registers here in flamegraph
     fn infer_types(
         &mut self,
         type_params: &[impl NamedType],
@@ -9005,8 +9006,10 @@ impl TypedModule {
                 if let Some(payload_arg) = payload {
                     let payload_value =
                         self.eval_expr(payload_arg, ctx.with_expected_type(Some(payload_type)))?;
-                    let payload_type = self.exprs.get(payload_value).get_type();
-                    if let Err(msg) = self.check_types(payload_type, payload_type, ctx.scope_id) {
+                    let payload_value_type = self.exprs.get(payload_value).get_type();
+                    if let Err(msg) =
+                        self.check_types(payload_type, payload_value_type, ctx.scope_id)
+                    {
                         return failf!(span, "Variant payload type mismatch: {}", msg);
                     }
                     Ok(Some(payload_value))
@@ -9367,6 +9370,7 @@ impl TypedModule {
 
         let name = match impl_self_type {
             Some(target_type) => {
+                // nocommit: nontrivial perf cost generating this name
                 let s = format!(
                     "{}_{}_{}",
                     self_.name_of(self_.get_ability(ability_id.unwrap()).name),

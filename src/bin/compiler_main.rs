@@ -22,10 +22,10 @@ fn main() -> anyhow::Result<()> {
     };
     let module_name = module.name();
     info!("done waiting on compile thread");
-    let llvm_ctx = inkwell::context::Context::create();
     if matches!(args.command, Command::Check { .. }) {
         std::process::exit(0)
     };
+    let llvm_ctx = inkwell::context::Context::create();
     match compiler::codegen_module(&args, &llvm_ctx, &module, out_dir, true) {
         Ok(_codegen) => {
             if matches!(args.command, Command::Build { .. }) {
