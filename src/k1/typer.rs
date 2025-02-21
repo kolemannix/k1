@@ -1161,6 +1161,7 @@ pub struct TypedMatchExpr {
     pub span: SpanId,
 }
 
+// nocommit: Size: 72 bytes
 #[derive(Debug, Clone)]
 pub enum TypedExpr {
     Unit(SpanId),
@@ -1810,8 +1811,8 @@ impl TypedModule {
             variables: Variables::default(),
             types,
             constants: Vec::new(),
-            exprs: Pool::with_capacity("typed_exprs", 4096),
-            stmts: Pool::with_capacity("typed_stmts", 4096),
+            exprs: Pool::with_capacity("typed_exprs", 16384),
+            stmts: Pool::with_capacity("typed_stmts", 8192),
             scopes,
             errors: Vec::new(),
             namespaces,
@@ -9338,6 +9339,7 @@ impl TypedModule {
     ) -> TyperResult<FunctionId> {
         let namespace = self.namespaces.get(namespace_id);
         let companion_type_id = namespace.companion_type_id;
+        // TODO(perf): clone of ParsedFunction
         let parsed_function = self.ast.get_function(parsed_function_id).clone();
         let debug_directive = parsed_function
             .directives
@@ -9667,16 +9669,14 @@ impl TypedModule {
         debug_assert!(actual_function_id == function_id);
 
         if resolvable_by_name {
-            // debug!(
-            //     "Adding function to scope since it should be the original resolvable copy: {}",
-            //     self.name_of(name)
-            // );
             if !self_.scopes.add_function(parent_scope_id, parsed_function_name, function_id) {
-                return failf!(
-                    parsed_function_span,
+                let signature_span = parsed_function.signature_span;
+                let error = errf!(
+                    signature_span,
                     "Function name {} is taken",
                     self_.name_of(parsed_function_name)
                 );
+                self_.push_error(error);
             }
         };
 

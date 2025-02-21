@@ -1,0 +1,20 @@
+ns ability_self_call;
+
+ability Foo {
+  fn a(self: Self): unit
+  fn b(self: Self): unit
+}
+
+impl Foo for string {
+  fn a(self: Self): unit {
+    self.b()
+  }
+  fn b(self: Self): unit {
+    ()
+  }
+}
+
+fn test(): unit {
+  "".a();
+  "".b();
+}

@@ -1,0 +1,16 @@
+ns context_generic;
+
+deftype MyBox[T] = { value: T }
+
+fn box[T](context foo: T)(value: T): MyBox[T] {
+  { value: value }
+}
+
+fn test(): unit {
+  let context b = true;
+  let context c = { b: true };
+  box(context 10)(10);
+  box[bool](true);
+  box(false);
+  box({ b: false });
+}

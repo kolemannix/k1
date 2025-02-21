@@ -1,0 +1,14 @@
+ns string_interp_test;
+
+impl Show for { name: string, weight: int } {
+  fn show(self: Self): string { 
+    let name = self.name;
+    let weight = self.weight;
+    "\{name}: \{weight}"
+  }
+}
+
+fn test(): unit {
+  let user = { name: "Bob", weight: 199 };
+  assert("Hello, '\{user}'!" == "Hello, 'Bob: 199'!");
+}

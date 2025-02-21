@@ -1,0 +1,74 @@
+ns assign;
+
+fn assignVar(): unit {
+  let mut count = 0;
+  count = 1;
+  assert(count == 1);
+  count = 2;
+  assert(count == 2);
+}
+
+fn assignVarRef(): unit {
+  let* count = 0;
+  count <- 1;
+  assert(count.* == 1);
+  count <- 2;
+  assert(count.* == 2);
+}
+
+fn complexReferences(): int {
+  let* structRef = { x: 42 };
+
+  let xValue: int = structRef.x*;
+  let xRef: int* = structRef.x*;
+
+  assert(xRef.* == xValue);
+  assert(structRef.*.x == structRef.x);
+
+  xRef <- -10;
+  
+  assert(xRef.* == -10);
+
+  structRef.x* <- 42;
+  assert(xRef.* == 42);
+
+  let* eitherRef: (either Yes(int), No)* = .Yes(3);
+
+  let yesValue: int = eitherRef.asYes().!.value;
+  let yesRef: typeOf(eitherRef).value.Yes* = eitherRef.asYes().!;
+
+  assert(yesRef.value == 3);
+  assert(yesRef.value*.* == 3);
+  assert(yesValue == 3);
+
+  eitherRef.asYes().!.value* <- -3;
+
+  assert(yesRef.value == -3);
+  assert(yesRef.value*.* == -3);
+  assert(eitherRef.asYes().!.value == -3);
+
+  // no restrictions on lhs except that it has to be a pointer,
+  // this in conjunction with let* will mean we have pointers for
+  // simple mutable ints, and should mean we can evaluate the lhs
+  // of assignments as a normal expression
+  // <any ptr> <- <expr>
+
+  let* innerStructRef = { x: 42 };
+  let structOptRef: { x: int }*? = .Some(innerStructRef);
+
+  if structOptRef is .Some(x) {
+    assert(x.x == 42);
+    x.x* <- 43;
+    assert(x.x == 43);
+  } else {
+    crash("None")
+  };
+
+  0
+}
+
+fn test(): unit {
+  assignVar();
+  assignVarRef();
+  complexReferences();
+}

@@ -1,8 +1,0 @@
-fn foo(): int {
-  return true;
-}
-fn main(): int {
-  let cond: bool = 1;
-  return 0;
-}
-// 2 ERRORS

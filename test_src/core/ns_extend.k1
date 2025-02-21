@@ -1,0 +1,21 @@
+ns ns_extend;
+
+ns foo {
+  deftype Baz = { b: int }
+  ns Baz {
+    fn get(self: Baz): int { self.b }
+  }
+}
+
+ns foo {
+  ns Baz {
+    fn get2(self: Baz): int { self.b }
+  }
+}
+
+
+fn test(): unit {
+  let baz = { b: 32 }: foo/Baz;
+  assert(foo/Baz/get(baz) + foo/Baz/get2(baz) == 64);
+  assert(baz.get() + baz.get2() == 64);
+}

@@ -1,0 +1,74 @@
+ns enum_basic;
+
+fn enumNoPayload(): unit {
+  let mut v: either Yes, No = .No;
+  if v is .No { () } else { crash("") };
+  v = .Yes;
+  if v is .Yes { () } else { crash("") };
+}
+
+deftype Maybe = either A, B(char), C(string)
+fn enumPayload(): unit {
+  let a: Maybe = .A;
+  let b: Maybe = .B('x');
+  let c: Maybe = .C("hello, enums");
+  if a is .A {
+    ()
+  } else crash("");
+  assert(a is .A);
+  assert(a.asA().hasValue());
+
+  if b is .B(x) {
+    assert(x == 'x');
+  } else crash("");
+  assert(b is .B(_));
+  assert(b.asB().!.value == 'x');
+
+  if c is .C("hello, enums") {
+    ()
+  } else crash("");
+  assert(c is .C(_));
+  assert(c.asC().!.value == "hello, enums");
+
+}
+
+deftype MyResult[T, E] = either Ok(T), Err(E)
+ns MyResult {
+  fn unwrap[T, E](self: MyResult[T, E]): T {
+    self.asOk().!.value
+  }
+  fn show[T: Show, E: Show](self: MyResult[T, E]): string { 
+    switch self {
+      .Ok(v) -> { "Ok: \{v}\n" },
+      .Err(e) -> { "Error: \{e}\n" }
+    }
+  }
+}
+
+fn genericEnum(): unit {
+    let x1: MyResult[int, string] = .Ok(-3);
+    let x2: MyResult[int, string] = .Err("Some error message");
+
+    let x1Ok = x1.asOk().!;
+
+    // This tests type inference for enums
+    assert(MyResult/unwrap(x1) == -3);
+    assert(x1.unwrap() == -3);
+    assert(x1Ok.unwrap() == -3);
+
+    // Shows that we can talk about the payload type
+    let b: MyResult[int, string].Ok.value = 42;
+
+    assert(x1.show() == "Ok: -3\n");
+    assert(x2.show() == "Error: Some error message\n");
+
+    assert(sizeOf[MyResult[int, string]]() == 24);
+    assert(sizeOfStride[MyResult[int, string]]() == 24);
+    assert(alignOf[MyResult[int, string]]() == 8);
+}
+
+fn test(): unit {
+  enumNoPayload();
+  enumPayload();
+  genericEnum();
+}

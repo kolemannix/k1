@@ -1,0 +1,11 @@
+ns bool_test;
+
+fn test(): unit {
+  let t = true;
+  let f = false;
+  assert(not (t and f));
+  assert(t or f);
+  assert(t and t);
+  assert(not (f and f));
+  assert(not (f or f));
+}

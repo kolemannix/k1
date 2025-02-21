@@ -1,0 +1,60 @@
+fn main(): int {
+  // Compiler Core coverage, ideally increasing complexity
+  // Low
+  arith/test();
+  bool_test/test();
+  char_test/test();
+  global_int/test();
+  assign/test();
+  try_test/test();
+  ability_fail/test();
+  ability_constraint/test();
+  ability_generic/test();
+  ability_self_call/test();
+  bits_test/test();
+  control_flow/test();
+  enum_basic/test();
+  fib/test();
+  float_test/test();
+  pipe/test();
+  function_pointer/test();
+  ns_collision/test();
+  enum_construction/test();
+  scopes/test();
+  while_test/test();
+  use_test/test();
+  type_order/test();
+
+  // Moderate
+  never_everywhere/test();
+  ns_extend/test();
+  optionals/test();
+  type_info/test();
+  all_out_of_order/test();
+  match_exhaust/main();
+  match_references/main();
+  generic_struct/test();
+  context_params/test();
+  context_generic/test();
+  inference/test();
+  is_patterns/test();
+  matching_if/test();
+  closures/test();
+  condcomp/test();
+
+  // Compilation
+  lexical_scope/test();
+
+  // Stdlib coverage
+  for_yield_test/test();
+  allocator_test/test();
+  buffer_test/test();
+  string_test/test();
+  list_test/test();
+  range_test/test();
+  string_interp_test/test();
+  json_test/test();
+  lib_compiler_test/test();
+
+  0
+}
