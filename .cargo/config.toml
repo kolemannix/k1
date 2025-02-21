@@ -1,2 +1,3 @@
-# [build]
-# rustflags = ["-Z", "threads=8"]
+[profile.profiling]
+inherits = "release"
+debug = true

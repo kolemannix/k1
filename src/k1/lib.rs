@@ -6,6 +6,9 @@ mod pool;
 mod strings;
 pub mod typer;
 
+pub const KILOBYTE: usize = 1024 * 1024;
+pub const MEGABYTE: usize = KILOBYTE * 1024;
+
 static_assert_size!(parse::ParsedStmt, 24); // Get down below 100 // We did it!
 static_assert_size!(parse::ParsedExpression, 120); // Get back down ideally below 50
 static_assert_size!(typer::TypedExpr, 72);

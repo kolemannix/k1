@@ -1,6 +1,7 @@
 use ahash::HashMapExt;
 use fxhash::FxHashMap;
 use log::{debug, trace};
+use smallvec::SmallVec;
 
 use std::{
     collections::{hash_map::Entry, HashMap, HashSet},
@@ -494,12 +495,14 @@ impl Scopes {
 
         for ns in ns_iter {
             let cur_scope = self.get_scope(cur_scope_id);
-            let namespace_id = cur_scope.find_namespace(*ns).ok_or(errf!(
-                span,
-                "Namespace not found: {} in scope: {:?}",
-                identifiers.get_name(*ns),
-                self.get_scope(cur_scope_id).name.map(|n| identifiers.get_name(n))
-            ))?;
+            let namespace_id = cur_scope.find_namespace(*ns).ok_or_else(|| {
+                errf!(
+                    span,
+                    "Namespace not found: {} in scope: {:?}",
+                    identifiers.get_name(*ns),
+                    self.get_scope(cur_scope_id).name.map(|n| identifiers.get_name(n))
+                )
+            })?;
             let namespace = namespaces.get(namespace_id);
             cur_scope_id = namespace.scope_id;
         }
@@ -709,7 +712,7 @@ pub struct Scope {
     pub pending_type_defns: FxHashMap<Identifier, ParsedTypeDefnId>,
     pub pending_ability_defns: FxHashMap<Identifier, ParsedAbilityId>,
     pub parent: Option<ScopeId>,
-    pub children: Vec<ScopeId>,
+    pub children: SmallVec<[ScopeId; 4]>,
     pub scope_type: ScopeType,
     pub owner_id: Option<ScopeOwnerId>,
     /// Name is just used for pretty-printing and debugging; scopes don't really have names
@@ -734,7 +737,7 @@ impl Scope {
             pending_type_defns: FxHashMap::new(),
             pending_ability_defns: FxHashMap::new(),
             parent: None,
-            children: Vec::new(),
+            children: SmallVec::new(),
             scope_type,
             owner_id,
             name,
