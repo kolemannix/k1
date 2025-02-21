@@ -1316,6 +1316,8 @@ pub struct AssignmentStmt {
 
 #[derive(Debug, Clone)]
 pub enum TypedStmt {
+    // nocommit: Think through whether type id belongs on here or not; make consistent with other
+    // variants
     Expr(TypedExprId, TypeId),
     Let(LetStmt),
     Assignment(AssignmentStmt),
@@ -1902,6 +1904,15 @@ impl TypedModule {
                     UNIT_TYPE_ID
                 }
             }
+        }
+    }
+
+    pub fn get_stmt_span(&self, stmt: TypedStmtId) -> SpanId {
+        match self.stmts.get(stmt) {
+            // nocommit 2 lookups for a span
+            TypedStmt::Expr(e, ty) => self.exprs.get(*e).get_span(),
+            TypedStmt::Let(val_def) => val_def.span,
+            TypedStmt::Assignment(assgn) => assgn.span,
         }
     }
 
@@ -4169,11 +4180,11 @@ impl TypedModule {
         }
     }
 
-    fn get_expr_type_id(&self, expr_id: TypedExprId) -> TypeId {
+    pub fn get_expr_type_id(&self, expr_id: TypedExprId) -> TypeId {
         self.exprs.get(expr_id).get_type()
     }
 
-    fn get_expr_type(&self, expr_id: TypedExprId) -> &Type {
+    pub fn get_expr_type(&self, expr_id: TypedExprId) -> &Type {
         self.types.get(self.exprs.get(expr_id).get_type())
     }
 
@@ -4781,13 +4792,14 @@ impl TypedModule {
                     }
                 };
                 let list_lit_ctx = ctx.with_scope(list_lit_scope).with_no_expected_type();
-                let list_new_fn_call = self.synth_typed_function_call(
+                let count_expr = self.exprs.add(TypedExpr::Integer(TypedIntegerExpr {
+                    value: TypedIntegerValue::U64(element_count as u64),
+                    span,
+                }));
+                let list_new_fn_call = self.synth_typed_function_call_from_ids(
                     qident!(self, span, ["List"], "withCapacity"),
-                    vec![element_type],
-                    vec![TypedExpr::Integer(TypedIntegerExpr {
-                        value: TypedIntegerValue::U64(element_count as u64),
-                        span,
-                    })],
+                    &[element_type],
+                    &[count_expr],
                     list_lit_ctx,
                 )?;
                 let list_variable = self.synth_variable_defn(
@@ -5117,13 +5129,14 @@ impl TypedModule {
         let block_scope = block.scope_id;
         let part_count = is.parts.len();
         let block_ctx = ctx.with_scope(block_scope).with_no_expected_type();
-        let new_string_builder = self.synth_typed_function_call(
+        let part_count_expr = self.exprs.add(TypedExpr::Integer(TypedIntegerExpr {
+            value: TypedIntegerValue::U64(part_count as u64),
+            span,
+        }));
+        let new_string_builder = self.synth_typed_function_call_from_ids(
             qident!(self, span, ["StringBuilder"], "withCapacity"),
-            vec![],
-            vec![TypedExpr::Integer(TypedIntegerExpr {
-                value: TypedIntegerValue::U64(part_count as u64),
-                span,
-            })],
+            &[],
+            &[part_count_expr],
             block_ctx,
         )?;
         let string_builder_var = self.synth_variable_defn_simple(
@@ -6253,7 +6266,7 @@ impl TypedModule {
                 outer_for_expr_ctx,
             )?;
             let size_hint_ret_type = self.exprs.get(size_hint_call).get_type();
-            let size_hint_lower_bound = TypedExpr::StructFieldAccess(FieldAccess {
+            let size_hint_lower_bound = self.exprs.add(TypedExpr::StructFieldAccess(FieldAccess {
                 struct_type: size_hint_ret_type,
                 base: size_hint_call,
                 target_field: get_ident!(self, "atLeast"),
@@ -6261,11 +6274,11 @@ impl TypedModule {
                 result_type: U64_TYPE_ID,
                 is_referencing: false,
                 span: iterable_span,
-            });
-            let synth_function_call = self.synth_typed_function_call(
+            }));
+            let synth_function_call = self.synth_typed_function_call_from_ids(
                 qident!(self, body_span, ["List"], "withCapacity"),
-                vec![body_block_result_type],
-                vec![size_hint_lower_bound],
+                &[body_block_result_type],
+                &[size_hint_lower_bound],
                 outer_for_expr_ctx,
             )?;
             Some(self.synth_variable_defn(
@@ -7442,16 +7455,16 @@ impl TypedModule {
             } else {
                 base_expr.clone()
             };
-            let condition = TypedExpr::EnumIsVariant(TypedEnumIsVariantExpr {
+            let condition = self.exprs.add(TypedExpr::EnumIsVariant(TypedEnumIsVariantExpr {
                 target_expr: base_expr_dereferenced,
                 variant_name,
                 variant_index,
                 span,
-            });
+            }));
             let (consequent, consequent_type_id) =
                 self.synth_optional_some(TypedExpr::Cast(TypedCast {
                     cast_type: CastType::KnownNoOp,
-                    base_expr: base_expr,
+                    base_expr,
                     target_type_id: resulting_type_id,
                     span,
                 }));
@@ -7781,20 +7794,14 @@ impl TypedModule {
                 self.get_function(*function_id).type_id
             }
             Callee::DynamicFunction(function_reference_expr) => {
-                let function_reference_type = self
-                    .types
-                    .get(function_reference_expr.get_type())
-                    .expect_reference()
-                    .inner_type;
+                let function_reference_type =
+                    self.get_expr_type(*function_reference_expr).expect_reference().inner_type;
                 function_reference_type
             }
-            Callee::DynamicClosure(dynamic) => match self.types.get(dynamic.get_type()) {
+            Callee::DynamicClosure(dynamic) => match self.get_expr_type(*dynamic) {
                 Type::ClosureObject(closure_object) => closure_object.function_type,
-                _ => {
-                    panic!(
-                        "Invalid dynamic function callee: {}",
-                        self.type_id_to_string(dynamic.get_type())
-                    )
+                t => {
+                    panic!("Invalid dynamic function callee: {}", self.type_to_string(t, false))
                 }
             },
         }
@@ -8768,45 +8775,49 @@ impl TypedModule {
                     );
                 };
                 let lhs = self.eval_variable(assignment.lhs, ctx.scope_id, true)?;
-                let rhs =
-                    self.eval_expr(assignment.rhs, ctx.with_expected_type(Some(lhs.get_type())))?;
-                if let Err(msg) = self.check_types(lhs.get_type(), rhs.get_type(), ctx.scope_id) {
+                let lhs_type = self.exprs.get(lhs).get_type();
+                let rhs = self.eval_expr(assignment.rhs, ctx.with_expected_type(Some(lhs_type)))?;
+                let rhs_type = self.exprs.get(rhs).get_type();
+                if let Err(msg) = self.check_types(lhs_type, rhs_type, ctx.scope_id) {
                     return failf!(assignment.span, "Invalid type for assignment: {}", msg,);
                 }
-                let stmt_id = self.stmts.add(TypedStmt::Assignment(Box::new(AssignmentStmt {
-                    destination: Box::new(lhs),
-                    value: Box::new(rhs),
+                let stmt_id = self.stmts.add(TypedStmt::Assignment(AssignmentStmt {
+                    destination: lhs,
+                    value: rhs,
                     span: assignment.span,
                     kind: AssignmentKind::Value,
-                })));
+                }));
                 Ok(Some(stmt_id))
             }
             ParsedStmt::SetRef(set_stmt) => {
                 let lhs = self.eval_expr(set_stmt.lhs, ctx.with_no_expected_type())?;
-                let Some(lhs_type) = self.types.get(lhs.get_type()).as_reference() else {
+                let lhs_type = self.exprs.get(lhs).get_type();
+                let Some(lhs_type) = self.types.get(lhs_type).as_reference() else {
                     return failf!(
                         self.ast.expressions.get_span(set_stmt.lhs),
                         "Expected a reference type; got {}",
-                        self.type_id_to_string(lhs.get_type())
+                        self.type_id_to_string(lhs_type)
                     );
                 };
                 let expected_rhs = lhs_type.inner_type;
                 let rhs =
                     self.eval_expr(set_stmt.rhs, ctx.with_expected_type(Some(expected_rhs)))?;
-                if let Err(msg) = self.check_types(expected_rhs, rhs.get_type(), ctx.scope_id) {
+                let rhs_type = self.exprs.get(rhs).get_type();
+                if let Err(msg) = self.check_types(expected_rhs, rhs_type, ctx.scope_id) {
                     return failf!(set_stmt.span, "Invalid type for assignment: {}", msg,);
                 }
-                let stmt_id = self.stmts.add(TypedStmt::Assignment(Box::new(AssignmentStmt {
-                    destination: Box::new(lhs),
-                    value: Box::new(rhs),
+                let stmt_id = self.stmts.add(TypedStmt::Assignment(AssignmentStmt {
+                    destination: lhs,
+                    value: rhs,
                     span: set_stmt.span,
                     kind: AssignmentKind::Reference,
-                })));
+                }));
                 Ok(Some(stmt_id))
             }
             ParsedStmt::LoneExpression(expression) => {
                 let expr = self.eval_expr(*expression, ctx)?;
-                let stmt_id = self.stmts.add(TypedStmt::Expr(Box::new(expr)));
+                let expr_type = self.exprs.get(expr).get_type();
+                let stmt_id = self.stmts.add(TypedStmt::Expr(expr, expr_type));
                 Ok(Some(stmt_id))
             }
         }
@@ -8834,8 +8845,9 @@ impl TypedModule {
                 continue;
             };
             let stmt = self.stmts.get(stmt_id);
-            last_stmt_is_divergent = stmt.is_divergent();
-            last_expr_type = stmt.get_type();
+            let stmt_span = self.get_stmt_span(stmt_id);
+            last_expr_type = self.get_stmt_type(stmt_id);
+            last_stmt_is_divergent = last_expr_type == NEVER_TYPE_ID;
 
             if is_last && needs_terminator {
                 if last_stmt_is_divergent {
@@ -8843,21 +8855,24 @@ impl TypedModule {
                     statements.push(stmt_id);
                 } else {
                     match stmt {
-                        TypedStmt::Expr(expr) => {
+                        TypedStmt::Expr(expr, _expr_type_id) => {
                             // Return this expr
+                            let expr_span = self.exprs.get(*expr).get_span();
+                            let return_expr = self.exprs.add(TypedExpr::Return(TypedReturn {
+                                span: expr_span,
+                                value: *expr,
+                            }));
                             let return_stmt =
-                                self.stmts.add(TypedStmt::Expr(Box::new(TypedExpr::Return(
-                                    // nocommit: New expr clone
-                                    TypedReturn { span: expr.get_span(), value: expr.clone() },
-                                ))));
+                                self.stmts.add(TypedStmt::Expr(return_expr, NEVER_TYPE_ID));
                             statements.push(return_stmt);
                         }
                         TypedStmt::Assignment(_) | TypedStmt::Let(_) => {
-                            let return_unit =
-                                TypedStmt::Expr(Box::new(TypedExpr::Return(TypedReturn {
-                                    span: stmt.get_span(),
-                                    value: Box::new(TypedExpr::Unit(stmt.get_span())),
-                                })));
+                            let unit = self.exprs.add(TypedExpr::Unit(stmt_span));
+                            let return_unit_expr = self.exprs.add(TypedExpr::Return(TypedReturn {
+                                span: stmt_span,
+                                value: unit,
+                            }));
+                            let return_unit = TypedStmt::Expr(return_unit_expr, NEVER_TYPE_ID);
                             let return_unit_id = self.stmts.add(return_unit);
                             statements.push(stmt_id);
                             statements.push(return_unit_id);
@@ -8990,12 +9005,11 @@ impl TypedModule {
                 if let Some(payload_arg) = payload {
                     let payload_value =
                         self.eval_expr(payload_arg, ctx.with_expected_type(Some(payload_type)))?;
-                    if let Err(msg) =
-                        self.check_types(payload_type, payload_value.get_type(), ctx.scope_id)
-                    {
+                    let payload_type = self.exprs.get(payload_value).get_type();
+                    if let Err(msg) = self.check_types(payload_type, payload_type, ctx.scope_id) {
                         return failf!(span, "Variant payload type mismatch: {}", msg);
                     }
-                    Ok(Some(Box::new(payload_value)))
+                    Ok(Some(payload_value))
                 } else {
                     failf!(
                         span,
@@ -9005,7 +9019,7 @@ impl TypedModule {
                 }
             }
         }?;
-        let never_payload = payload.as_ref().is_some_and(|p| p.get_type() == NEVER_TYPE_ID);
+        let never_payload = payload.is_some_and(|p| self.exprs.get(p).get_type() == NEVER_TYPE_ID);
         let output_type = if never_payload {
             NEVER_TYPE_ID
         } else {
@@ -9014,13 +9028,13 @@ impl TypedModule {
                 _ => enum_type,
             }
         };
-        Ok(TypedExpr::EnumConstructor(TypedEnumConstructor {
+        Ok(self.exprs.add(TypedExpr::EnumConstructor(TypedEnumConstructor {
             type_id: output_type,
             variant_name,
             variant_index,
             payload,
             span,
-        }))
+        })))
     }
 
     fn check_type_constraint(
@@ -9730,7 +9744,7 @@ impl TypedModule {
                         msg
                     );
                 } else {
-                    Some(block)
+                    Some(self.exprs.add(TypedExpr::Block(block)))
                 }
             }
         };
@@ -10902,18 +10916,20 @@ impl TypedModule {
     fn synth_variable_defn(
         &mut self,
         name: Identifier,
-        initializer: TypedExprId,
+        initializer_id: TypedExprId,
         no_mangle: bool,
         is_mutable: bool,
         is_referencing: bool,
         owner_scope: ScopeId,
     ) -> SynthedVariable {
-        let type_id = if is_referencing {
-            self.types.add_reference_type(initializer.get_type())
-        } else {
-            initializer.get_type()
-        };
+        let initializer = self.exprs.get(initializer_id);
+        let initializer_type = initializer.get_type();
         let span = initializer.get_span();
+        let type_id = if is_referencing {
+            self.types.add_reference_type(initializer_type)
+        } else {
+            initializer_type
+        };
         let new_ident = if no_mangle {
             name
         } else {
@@ -10933,14 +10949,15 @@ impl TypedModule {
             constant_id: None,
         };
         let variable_id = self.variables.add_variable(variable);
-        let variable_expr = TypedExpr::Variable(VariableExpr { type_id, variable_id, span });
-        let defn_stmt = self.stmts.add(TypedStmt::Let(Box::new(LetStmt {
+        let variable_expr =
+            self.exprs.add(TypedExpr::Variable(VariableExpr { type_id, variable_id, span }));
+        let defn_stmt = self.stmts.add(TypedStmt::Let(LetStmt {
             variable_id,
             variable_type: type_id,
-            initializer,
+            initializer: initializer_id,
             is_referencing,
             span,
-        })));
+        }));
         let parsed_expr =
             self.ast.expressions.add_expression(ParsedExpression::Variable(parse::Variable {
                 name: NamespacedIdentifier::naked(name, span),
@@ -10984,12 +11001,12 @@ impl TypedModule {
     fn synth_typed_function_call(
         &mut self,
         name: NamespacedIdentifier,
-        type_args: Vec<TypeId>,
+        type_args: &[TypeId],
         args: Vec<TypedExpr>,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
-        let args = args.into_iter().map(|arg| self.exprs.add(arg)).collect();
-        self.synth_typed_function_call_from_ids(name, type_args, args, ctx)
+        let args: Vec<_> = args.into_iter().map(|arg| self.exprs.add(arg)).collect();
+        self.synth_typed_function_call_from_ids(name, &type_args, &args, ctx)
     }
 
     // These are only used by the old coalescing accessor and should be removed when its rebuilt
@@ -11015,14 +11032,10 @@ impl TypedModule {
         lhs: TypedExprId,
         rhs: TypedExprId,
     ) -> TypedExprId {
-        let span = self.ast.spans.extend(lhs.get_span(), rhs.get_span());
-        TypedExpr::BinaryOp(BinaryOp {
-            kind,
-            ty: BOOL_TYPE_ID,
-            lhs: Box::new(lhs),
-            rhs: Box::new(rhs),
-            span,
-        })
+        let lhs_span = self.exprs.get(lhs).get_span();
+        let rhs_span = self.exprs.get(rhs).get_span();
+        let span = self.ast.spans.extend(lhs_span, rhs_span);
+        self.exprs.add(TypedExpr::BinaryOp(BinaryOp { kind, ty: BOOL_TYPE_ID, lhs, rhs, span }))
     }
 
     fn synth_parsed_bool_not(&mut self, base: ParsedExpressionId) -> ParsedExpressionId {
@@ -11063,35 +11076,40 @@ impl TypedModule {
         let mut fields: Vec<StructField> = Vec::with_capacity(struct_type.fields.len());
         for (index, field_expr) in field_exprs.into_iter().enumerate() {
             let field = &struct_type.fields[index];
-            if let Err(msg) = self.check_types(field.type_id, field_expr.get_type(), scope_id) {
-                panic!("synthed struct fields failed typechecking: {}", msg)
+            #[cfg(debug_assertions)]
+            {
+                let field_expr_type = self.exprs.get(field_expr).get_type();
+                if let Err(msg) = self.check_types(field.type_id, field_expr_type, scope_id) {
+                    panic!("synthed struct fields failed typechecking: {}", msg)
+                }
             }
             fields.push(StructField { name: field.name, expr: field_expr });
         }
-        TypedExpr::Struct(Struct { fields, type_id: struct_type_id, span })
+        self.exprs.add(TypedExpr::Struct(Struct { fields, type_id: struct_type_id, span }))
     }
 
-    fn synth_source_location(&self, span: SpanId) -> TypedExprId {
+    fn synth_source_location(&mut self, span: SpanId) -> TypedExprId {
         let the_span = self.ast.spans.get(span);
         let source = self.ast.sources.get_source(the_span.file_id);
         let line = source.get_line_for_span_start(the_span).unwrap();
-        TypedExpr::Struct(Struct {
+        let struct_expr = TypedExpr::Struct(Struct {
             fields: vec![
                 StructField {
                     name: get_ident!(self, "filename"),
-                    expr: TypedExpr::Str(source.filename.clone(), span),
+                    expr: self.exprs.add(TypedExpr::Str(source.filename.clone(), span)),
                 },
                 StructField {
                     name: get_ident!(self, "line"),
-                    expr: TypedExpr::Integer(TypedIntegerExpr {
+                    expr: self.exprs.add(TypedExpr::Integer(TypedIntegerExpr {
                         value: TypedIntegerValue::U64(line.line_number() as u64),
                         span,
-                    }),
+                    })),
                 },
             ],
             type_id: COMPILER_SOURCE_LOC_TYPE_ID,
             span,
-        })
+        });
+        self.exprs.add(struct_expr)
     }
 
     fn synth_crash_call(
@@ -11100,11 +11118,11 @@ impl TypedModule {
         span: SpanId,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
-        let message_expr = TypedExpr::Str(message, span);
-        self.synth_typed_function_call(
+        let message_expr = self.exprs.add(TypedExpr::Str(message, span));
+        self.synth_typed_function_call_from_ids(
             qident!(self, span, "crash"),
-            vec![],
-            vec![message_expr],
+            &[],
+            &[message_expr],
             ctx,
         )
     }
@@ -11114,12 +11132,8 @@ impl TypedModule {
         value: TypedExprId,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
-        self.synth_typed_function_call_from_ids(
-            qident!(self, value.get_span(), "discard"),
-            &[],
-            &[value],
-            ctx,
-        )
+        let span = self.exprs.get(value).get_span();
+        self.synth_typed_function_call_from_ids(qident!(self, span, "discard"), &[], &[value], ctx)
     }
 
     pub fn push_error(&mut self, e: TyperError) {
