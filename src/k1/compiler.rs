@@ -345,7 +345,7 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
     info!(
         "typing took {}ms (\n\t{} expressions,\n\t{} functions,\n\t{} types\n)",
         typing_elapsed.as_millis(),
-        typed_module.ast.expressions.count(),
+        typed_module.exprs.len(),
         typed_module.function_iter().count(),
         typed_module.types.type_count()
     );

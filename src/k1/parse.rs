@@ -1,3 +1,5 @@
+use bumpalo::collections::Vec as BVec;
+use bumpalo::Bump;
 use std::fmt::{Display, Formatter, Write};
 use std::num::NonZeroU32;
 
@@ -34,9 +36,9 @@ impl From<NonZeroU32> for ParsedExpressionId {
         ParsedExpressionId(value)
     }
 }
-impl Into<NonZeroU32> for ParsedExpressionId {
-    fn into(self) -> NonZeroU32 {
-        self.0
+impl From<ParsedExpressionId> for NonZeroU32 {
+    fn from(val: ParsedExpressionId) -> Self {
+        val.0
     }
 }
 impl Display for ParsedExpressionId {
@@ -44,15 +46,20 @@ impl Display for ParsedExpressionId {
         write!(f, "{}", self.0)
     }
 }
-//#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
-//pub struct ParsedTypeExpressionId(NonZeroU32);
-//impl From<usize> for ParsedTypeExpressionId {
-//    fn from(value: usize) -> Self {
-//        ParsedTypeExpressionId(
-//            NonZeroU32::new(value as u32).expect("0 is not a valid type expression id"),
-//        )
-//    }
-//}
+
+#[derive(PartialEq, Eq, Debug, Copy, Clone, Hash)]
+pub struct ParsedStmtId(NonZeroU32);
+impl From<NonZeroU32> for ParsedStmtId {
+    fn from(value: NonZeroU32) -> Self {
+        ParsedStmtId(value)
+    }
+}
+
+impl From<ParsedStmtId> for NonZeroU32 {
+    fn from(val: ParsedStmtId) -> Self {
+        val.0
+    }
+}
 
 #[derive(PartialEq, Eq, Debug, Copy, Clone, Hash)]
 pub struct ParsedTypeExpressionId(NonZeroU32);
@@ -816,7 +823,7 @@ pub enum ParsedStmt {
 
 #[derive(Debug, Clone)]
 pub struct Block {
-    pub stmts: Vec<ParsedStmt>,
+    pub stmts: Vec<ParsedStmtId>,
     pub span: SpanId,
 }
 
@@ -1267,6 +1274,9 @@ impl Sources {
     }
 }
 
+// FIXME: For the LSP to keep working w/ the bumpalo reference
+unsafe impl Send for ParsedModule {}
+
 pub struct ParsedModule {
     pub name: String,
     pub name_id: Identifier,
@@ -1280,17 +1290,22 @@ pub struct ParsedModule {
     pub ability_impls: Vec<ParsedAbilityImplementation>,
     pub sources: Sources,
     pub identifiers: Identifiers,
-    pub expressions: ParsedExpressionPool,
-    pub type_expressions: ParsedTypeExpressionPool,
+    pub exprs: ParsedExpressionPool,
+    pub type_exprs: ParsedTypeExpressionPool,
     pub patterns: ParsedPatternPool,
+    pub stmts: Pool<ParsedStmt, ParsedStmtId>,
     pub uses: ParsedUsePool,
     pub errors: Vec<ParseError>,
+
+    bump: &'static bumpalo::Bump,
 }
 
 impl ParsedModule {
     pub fn make(name: String, config: CompilerConfig) -> ParsedModule {
         let mut identifiers = Identifiers::default();
         let name_id = identifiers.intern(&name);
+        let bump: &'static mut Bump =
+            Box::leak(Box::new(bumpalo::Bump::with_capacity(1 * crate::MEGABYTE)));
         ParsedModule {
             name,
             name_id,
@@ -1304,11 +1319,13 @@ impl ParsedModule {
             ability_impls: Vec::new(),
             sources: Sources::default(),
             identifiers,
-            expressions: ParsedExpressionPool::new(4096),
-            type_expressions: ParsedTypeExpressionPool::new(8192),
+            exprs: ParsedExpressionPool::new(4096),
+            type_exprs: ParsedTypeExpressionPool::new(8192),
             patterns: ParsedPatternPool::default(),
+            stmts: Pool::with_capacity("parsed_stmts", 8192),
             uses: ParsedUsePool::default(),
             errors: Vec::new(),
+            bump,
         }
     }
 
@@ -1346,7 +1363,7 @@ impl ParsedModule {
 
     pub fn get_pattern_span(&self, id: ParsedPatternId) -> SpanId {
         match self.patterns.get_pattern(id) {
-            ParsedPattern::Literal(literal_id) => self.expressions.get(*literal_id).get_span(),
+            ParsedPattern::Literal(literal_id) => self.exprs.get(*literal_id).get_span(),
             ParsedPattern::Enum(enum_pattern) => enum_pattern.span,
             ParsedPattern::Variable(_var_pattern, span) => *span,
             ParsedPattern::Struct(struct_pattern) => struct_pattern.span,
@@ -1355,13 +1372,13 @@ impl ParsedModule {
         }
     }
 
-    pub fn get_stmt_span(&self, stmt: &ParsedStmt) -> SpanId {
-        match stmt {
+    pub fn get_stmt_span(&self, stmt: ParsedStmtId) -> SpanId {
+        match self.stmts.get(stmt) {
             ParsedStmt::Use(u) => u.span,
             ParsedStmt::ValDef(v) => v.span,
             ParsedStmt::Assignment(a) => a.span,
             ParsedStmt::SetRef(s) => s.span,
-            ParsedStmt::LoneExpression(expr_id) => self.expressions.get_span(*expr_id),
+            ParsedStmt::LoneExpression(expr_id) => self.exprs.get_span(*expr_id),
         }
     }
 
@@ -1420,11 +1437,11 @@ impl ParsedModule {
         &self,
         id: ParsedExpressionId,
     ) -> Option<ParsedTypeExpressionId> {
-        self.expressions.get_type_hint(id)
+        self.exprs.get_type_hint(id)
     }
 
     pub fn get_type_expression_span(&self, type_expression_id: ParsedTypeExpressionId) -> SpanId {
-        self.type_expressions.get(type_expression_id).get_span()
+        self.type_exprs.get(type_expression_id).get_span()
     }
 
     pub fn get_span_for_maybe_id(&self, parsed_id: Option<ParsedId>) -> SpanId {
@@ -1446,7 +1463,7 @@ impl ParsedModule {
             ParsedId::Ability(id) => self.get_ability(id).span,
             ParsedId::AbilityImpl(id) => self.get_ability_impl(id).span,
             ParsedId::TypeDefn(id) => self.get_type_defn(id).span,
-            ParsedId::Expression(id) => self.expressions.get_span(id),
+            ParsedId::Expression(id) => self.exprs.get_span(id),
             ParsedId::TypeExpression(id) => self.get_type_expression_span(id),
             ParsedId::Pattern(id) => self.get_pattern_span(id),
             ParsedId::Use(id) => self.uses.get_use(id).span,
@@ -1912,7 +1929,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     pub fn add_expression(&mut self, expression: ParsedExpression) -> ParsedExpressionId {
-        self.module.expressions.add_expression(expression)
+        self.module.exprs.add_expression(expression)
     }
 
     pub fn add_expression_with_directives(
@@ -1920,21 +1937,21 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         expression: ParsedExpression,
         directives: Vec<ParsedDirective>,
     ) -> ParsedExpressionId {
-        let id = self.module.expressions.add_expression(expression);
-        self.module.expressions.add_directives(id, directives);
+        let id = self.module.exprs.add_expression(expression);
+        self.module.exprs.add_directives(id, directives);
         id
     }
 
     pub fn get_expression(&self, id: ParsedExpressionId) -> &ParsedExpression {
-        self.module.expressions.get(id)
+        self.module.exprs.get(id)
     }
 
     pub fn get_expression_span(&self, id: ParsedExpressionId) -> SpanId {
-        self.module.expressions.get(id).get_span()
+        self.module.exprs.get(id).get_span()
     }
 
     pub fn get_type_expression_span(&self, id: ParsedTypeExpressionId) -> SpanId {
-        self.module.type_expressions.get(id).get_span()
+        self.module.type_exprs.get(id).get_span()
     }
 
     fn parse_literal(&mut self) -> ParseResult<Option<ParsedExpressionId>> {
@@ -2156,18 +2173,18 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                         member_name: ident,
                         span,
                     });
-                    let new_id = self.module.type_expressions.add(new);
+                    let new_id = self.module.type_exprs.add(new);
                     result = new_id;
                 } else if next.kind == K::QuestionMark {
                     // Optional Type
                     self.advance();
-                    result = self.module.type_expressions.add(ParsedTypeExpression::Optional(
+                    result = self.module.type_exprs.add(ParsedTypeExpression::Optional(
                         ParsedOptional { base: result, span: next.span },
                     ));
                 } else if next.kind == K::Asterisk {
                     // Reference Type
                     self.advance();
-                    result = self.module.type_expressions.add(ParsedTypeExpression::Reference(
+                    result = self.module.type_exprs.add(ParsedTypeExpression::Reference(
                         ParsedReference { base: result, span: next.span },
                     ));
                 } else {
@@ -2194,15 +2211,14 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             Ok(Some(expr))
         } else if first.kind == K::KeywordEither {
             let enumm = self.expect_enum_type_expression()?;
-            let type_expr_id = self.module.type_expressions.add(ParsedTypeExpression::Enum(enumm));
+            let type_expr_id = self.module.type_exprs.add(ParsedTypeExpression::Enum(enumm));
             Ok(Some(type_expr_id))
         } else if first.kind == K::BackSlash {
             let fun = self.expect_function_type()?;
             Ok(Some(fun))
         } else if first.kind == K::KeywordBuiltin {
             self.advance();
-            let builtin_id =
-                self.module.type_expressions.add(ParsedTypeExpression::Builtin(first.span));
+            let builtin_id = self.module.type_exprs.add(ParsedTypeExpression::Builtin(first.span));
             Ok(Some(builtin_id))
         } else if first.kind == K::Ident {
             let ident_chars = self.get_token_chars(first);
@@ -2214,7 +2230,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let span = self.extend_token_span(first, end);
                 Ok(Some(
                     self.module
-                        .type_expressions
+                        .type_exprs
                         .add(ParsedTypeExpression::TypeOf(ParsedTypeOf { target_expr, span })),
                 ))
             } else {
@@ -2225,7 +2241,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 // std::Map[int, int]
                 let (type_params, type_params_span) = self.parse_optional_type_args()?;
                 let span = self.extend_span_maybe(first.span, type_params_span);
-                Ok(Some(self.module.type_expressions.add(ParsedTypeExpression::TypeApplication(
+                Ok(Some(self.module.type_exprs.add(ParsedTypeExpression::TypeApplication(
                     TypeApplication { name: base_name, args: type_params, span },
                 ))))
             }
@@ -2238,7 +2254,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 })?;
             let span = self.extend_span(first.span, fields_span);
             let struc = StructType { fields, span };
-            Ok(Some(self.module.type_expressions.add(ParsedTypeExpression::Struct(struc))))
+            Ok(Some(self.module.type_exprs.add(ParsedTypeExpression::Struct(struc))))
         } else {
             Ok(None)
         }
@@ -2255,7 +2271,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let return_type = self.expect_type_expression()?;
         let span = self.extend_span(params_span, self.get_type_expression_span(return_type));
         let function_type = ParsedFunctionType { params, return_type, span };
-        Ok(self.module.type_expressions.add(ParsedTypeExpression::Function(function_type)))
+        Ok(self.module.type_exprs.add(ParsedTypeExpression::Function(function_type)))
     }
 
     fn expect_enum_type_expression(&mut self) -> ParseResult<ParsedEnumType> {
@@ -2289,13 +2305,13 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             };
             let span = match payload_expression {
                 None => tag.span,
-                Some(expr) => self.module.type_expressions.get(expr).get_span(),
+                Some(expr) => self.module.type_exprs.get(expr).get_span(),
             };
             variants.push(ParsedEnumVariant { tag_name, payload_expression, span });
             first = false;
         }
         let last_variant_span =
-            variants.last().ok_or(error_expected("At least one variant", keyword))?.span;
+            variants.last().ok_or_else(|| error_expected("At least one variant", keyword))?.span;
         let span = self.extend_span(keyword.span, last_variant_span);
         Ok(ParsedEnumType { variants, span })
     }
@@ -2446,7 +2462,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         if self.peek().kind == K::Colon {
             self.advance();
             let type_hint = self.expect_type_expression()?;
-            self.module.expressions.set_type_hint(with_postfix, type_hint);
+            self.module.exprs.set_type_hint(with_postfix, type_hint);
         }
         Ok(Some(with_postfix))
     }
@@ -2543,6 +2559,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn parse_optional_type_args(&mut self) -> ParseResult<(Vec<NamedTypeArg>, Option<SpanId>)> {
+        // TODO(perf): we spend a lot of time here in flamegraph
         let Some((type_expressions, type_args_span)) = self.eat_delimited_if_opener(
             "Type arguments",
             K::OpenBracket,
@@ -2797,7 +2814,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             }
         }?;
         if let Some(expression_id) = resulting_expression {
-            self.module.expressions.add_directives(expression_id, directives);
+            self.module.exprs.add_directives(expression_id, directives);
         }
         Ok(resulting_expression)
     }
@@ -2817,8 +2834,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     fn expect_closure(&mut self) -> ParseResult<ParsedExpressionId> {
         let start = self.expect_eat_token(K::BackSlash)?;
         let _start = self.expect_eat_token(K::OpenParen)?;
-        let (arguments, _args_span, closing_delimeter) = self.eat_delimited_ext(
+        let mut arguments: Vec<ClosureArgDefn> = Vec::with_capacity(8);
+        let (_args_span, closing_delimeter) = self.eat_delimited_ext(
             "Lambda args",
+            &mut arguments,
             K::Comma,
             &[K::RThinArrow, K::CloseParen],
             Parser::expect_closure_arg_defn,
@@ -2939,8 +2958,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let name_token = self.expect_eat_token(K::Ident)?;
         self.expect_eat_token(K::Colon)?;
         let typ = Parser::expect("type_expression", self.peek(), self.parse_type_expression())?;
-        let span =
-            self.extend_span(name_token.span, self.module.type_expressions.get(typ).get_span());
+        let span = self.extend_span(name_token.span, self.module.type_exprs.get(typ).get_span());
         let modifiers = FnArgDefModifiers::new(is_context);
         Ok(FnArgDef { name: self.intern_ident_token(name_token), ty: typ, span, modifiers })
     }
@@ -3020,24 +3038,24 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     where
         F: Fn(&mut Parser<'toks, 'module>) -> ParseResult<T>,
     {
-        let (results, span, _terminator) =
-            self.eat_delimited_ext(name, delim, terminators, parse)?;
-        Ok((results, span))
+        let mut destination = Vec::with_capacity(8);
+        let (span, _terminator) =
+            self.eat_delimited_ext(name, &mut destination, delim, terminators, parse)?;
+        Ok((destination, span))
     }
 
     fn eat_delimited_ext<T, F>(
         &mut self,
         name: &str,
+        destination: &mut Vec<T>,
         delim: TokenKind,
         terminators: &[TokenKind],
         parse: F,
-    ) -> ParseResult<(Vec<T>, SpanId, Token)>
+    ) -> ParseResult<(SpanId, Token)>
     where
         F: Fn(&mut Parser<'toks, 'module>) -> ParseResult<T>,
     {
         trace!("eat_delimited delim='{}'", delim);
-        // nocommit: Allocating this vec registers in flamegraph
-        let mut v = Vec::with_capacity(8);
 
         let start_span = self.peek().span;
 
@@ -3045,20 +3063,23 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             let terminator = self.peek();
             if terminators.contains(&terminator.kind) {
                 self.advance();
-                trace!("eat_delimited found terminator after {} results.", v.len());
+                trace!("eat_delimited found terminator after {} results.", destination.len());
                 let span = self.module.spans.extend(start_span, terminator.span);
-                break Ok((v, span, terminator));
+                break Ok((span, terminator));
             }
             match parse(self) {
                 Ok(parsed) => {
-                    v.push(parsed);
-                    trace!("eat_delimited got result {}", v.len());
+                    destination.push(parsed);
+                    trace!("eat_delimited got result {}", destination.len());
                     let terminator = self.peek();
                     if terminators.contains(&terminator.kind) {
                         self.advance();
-                        trace!("eat_delimited found terminator after {} results.", v.len());
+                        trace!(
+                            "eat_delimited found terminator after {} results.",
+                            destination.len()
+                        );
                         let span = self.module.spans.extend(start_span, terminator.span);
-                        break Ok((v, span, terminator));
+                        break Ok((span, terminator));
                     }
                     let found_delim = self.maybe_consume_next(delim);
                     if found_delim.is_none() {
@@ -3124,13 +3145,13 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(Some(ParsedWhileExpr { cond, body, span }))
     }
 
-    fn parse_statement(&mut self) -> ParseResult<Option<ParsedStmt>> {
+    fn parse_statement(&mut self) -> ParseResult<Option<ParsedStmtId>> {
         trace!("eat_statement {:?}", self.peek());
         if let Some(use_id) = self.parse_use()? {
             let span = self.module.uses.get_use(use_id).span;
-            Ok(Some(ParsedStmt::Use(UseStmt { span, use_id })))
+            Ok(Some(self.module.stmts.add(ParsedStmt::Use(UseStmt { span, use_id }))))
         } else if let Some(val_def) = self.parse_val_def()? {
-            Ok(Some(ParsedStmt::ValDef(val_def)))
+            Ok(Some(self.module.stmts.add(ParsedStmt::ValDef(val_def))))
         } else if let Some(expr) = self.parse_expression()? {
             let peeked = self.peek();
             // Assignment:
@@ -3138,12 +3159,12 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             // - Build assignment
             if peeked.kind == K::Equals {
                 let assgn = self.expect_assignment(expr)?;
-                Ok(Some(ParsedStmt::Assignment(assgn)))
+                Ok(Some(self.module.stmts.add(ParsedStmt::Assignment(assgn))))
             } else if peeked.kind == K::LThinArrow {
                 let set = self.expect_set_stmt(expr)?;
-                Ok(Some(ParsedStmt::SetRef(set)))
+                Ok(Some(self.module.stmts.add(ParsedStmt::SetRef(set))))
             } else {
-                Ok(Some(ParsedStmt::LoneExpression(expr)))
+                Ok(Some(self.module.stmts.add(ParsedStmt::LoneExpression(expr))))
             }
         } else {
             Ok(None)
@@ -3611,7 +3632,7 @@ impl ParsedModule {
         expr: ParsedExpressionId,
         f: &mut impl Write,
     ) -> std::fmt::Result {
-        match self.expressions.get(expr) {
+        match self.exprs.get(expr) {
             ParsedExpression::Builtin(_span) => f.write_str("builtin"),
             ParsedExpression::BinaryOp(op) => {
                 f.write_str("(")?;
@@ -3758,7 +3779,7 @@ impl ParsedModule {
         ty_expr_id: ParsedTypeExpressionId,
         f: &mut impl Write,
     ) -> std::fmt::Result {
-        match self.type_expressions.get(ty_expr_id) {
+        match self.type_exprs.get(ty_expr_id) {
             ParsedTypeExpression::Struct(struct_type) => {
                 f.write_str("{ ")?;
                 for field in struct_type.fields.iter() {
