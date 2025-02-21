@@ -1,14 +1,15 @@
-ns enum_method_match_never {
-  deftype E = either A(int), B
-  ns E {
-    fn valueIfA(self: E): int {
-      switch self {
-        .A(i) -> i,
-        .B -> crash("This is a B!"),
-      }
+ns enum_method_match_never; 
+
+deftype E = either A(int), B
+ns E {
+  fn valueIfA(self: E): int {
+    switch self {
+      .A(i) -> i,
+      .B -> crash("This is a B!"),
     }
   }
 }
+
 
 fn isVariant(): unit {
   let x: either A(int), B(int), C = .A(42);

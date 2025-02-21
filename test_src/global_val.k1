@@ -1,8 +1,0 @@
-let foo: int = 42;
-let bar: int = 31;
-
-fn main(): int {
-  assert(foo == 42);
-  assert(bar == 31);
-  0
-}

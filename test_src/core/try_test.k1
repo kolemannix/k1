@@ -1,0 +1,45 @@
+ns try_test;
+
+deftype alias Error = string
+
+deftype Foo = {
+  a: bool
+}
+
+fn canFailInt(): Result[int, Error] { .Ok(42) }
+fn canFailBool(): Result[bool, Error] { .Ok(false) }
+
+impl Try[T = int, E = Error] for Foo {
+  fn makeError(e: E): Self   { { a: false } }
+  fn makeOk(t: T): Self { { a: true  } }
+
+  fn isOk(self: Self): bool { self.a }
+  fn getOk(self: Self): T  { 3 }
+  fn getError(self: Self): E { "FooError" }
+}
+
+fn fails(b: bool): Result[bool, Error] {
+  let value: Result[int, Error] = .Err("woops");
+  let i = value.try;
+  .Ok(i % 2 == 0)
+}
+
+fn run(): Result[i32, Error] {
+  let result: int = canFailInt().try;
+  assert(result == 42);
+  let result: int = ({ a: true }: Foo).try;
+  assert(result == 3);
+
+  let c = \(b: bool -> Result[bool, Error]) {
+    let i = fails(true).try;
+    .Ok(not i)
+  };
+  let res = c(false);
+  assert(res is .Err("woops"));
+
+  .Ok(0)
+}
+
+fn test(): unit {
+  assert(run().isOk());
+}

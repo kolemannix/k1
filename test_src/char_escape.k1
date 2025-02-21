@@ -1,6 +1,0 @@
-fn main(): int {
-  let c = '\n';
-  assert(c as u8 == 10);
-  assert(c.toString().len() == 1);
-  0
-}

@@ -1,0 +1,9 @@
+ns lexical_scope;
+
+fn test(): unit {
+  let result = testCompile({
+    { let foo = 100 };
+    assert(foo == 100);
+  });
+  assert(result is .Some("Variable 'foo' is not defined"))
+}

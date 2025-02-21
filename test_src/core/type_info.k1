@@ -1,0 +1,24 @@
+ns type_info;
+
+fn doIt(foo: bool, bar: u32): u32 {
+  32
+}
+
+fn testSizeOf(): unit {
+  assert(sizeOf[string]() == 16);
+  assert(sizeOfStride[string]() == 16);
+  assert(alignOf[string]() == 8);
+  assert(sizeOf[{ x: u64, c: u8 }]() == 16);
+  assert(sizeOfStride[{ x: u64, c: u8 }]() == 16);
+}
+
+fn testFnTypeInfo(): unit {
+  assert(types/typeId[doIt.return]() == types/typeId[u32]());
+  assert(types/typeId[doIt.foo]() == types/typeId[bool]());
+  assert(types/typeId[doIt.bar]() == types/typeId[doIt.return]());
+}
+
+fn test(): unit {
+  testSizeOf();
+  testFnTypeInfo();
+}

@@ -1,0 +1,28 @@
+ns all_out_of_order;
+
+impl SayHello for Foo {
+  fn hello(self: Foo): MyString { 
+    { s: self.name  }
+  }
+}
+
+fn takesHelloer[T](t: T): MyString where T: SayHello {
+  t.hello()
+}
+
+ability SayHello {
+  fn hello(self: Self): MyString {
+    { s: "Hello" }
+  }
+}
+
+
+fn test(): unit {
+  let foo: Foo = { name: "Joe" };
+  foo.hello();
+  assert(takesHelloer(foo).s == "Joe");
+}
+
+deftype MyString = { s: string }
+
+deftype Foo = { name: string }

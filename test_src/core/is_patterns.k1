@@ -1,0 +1,63 @@
+ns is_patterns;
+
+fn test(): unit {
+  // Unit
+  let u = ();
+  assert(u is ());
+
+  let i = 42;
+  assert(not (i is 41));
+  assert(i is 42);
+
+  let s = "hello";
+  assert(s is "hello");
+  assert(not (s is "world"));
+
+  let c = 'x';
+  assert(c is 'x');
+  assert(not (c is 'f'));
+
+  let b = true;
+  assert(not (b is false));
+  assert(b is true);
+
+  let opt: int? = .Some(42);
+  assert(opt is .Some(_));
+  assert(not (opt is .None));
+
+  let foo = { x: 1, y: "asdf" };
+  // Wildcard pattern
+  if foo is _ {
+    assert(true);
+  };
+
+  // Variable pattern
+  if foo is f {
+    assert(f.x == 1 and f.y == "asdf");
+  };
+
+  // Else works
+  let mut else_ran = false;
+  if foo is { x: 200 } { () } else {
+    else_ran = true;
+  };
+  assert(else_ran);
+
+  // Record pattern, with integer pattern
+  // and nested variable pattern
+  if foo is { x: 1, y } {
+    assert(y == "asdf");
+  };
+
+  // Record pattern where inner has condition statements
+  let bar = { x: .Some(1): int? };
+  if bar is { x: .Some(x) } {
+    assert(x == 1);
+  };
+
+  // Optionals
+  let opt: { x: i64 }? = .Some({ x: 1 });
+  if opt is .Some({ x: 2 }) {
+    ()
+  } else assert(true);
+}
