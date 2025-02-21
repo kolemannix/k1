@@ -1,0 +1,16 @@
+ns ns_collision;
+
+ns baz {
+  ns bazi {
+    fn name(): string  { "baz/bazi" }
+  }
+}
+
+ns bazi {
+  fn name(): string { "bazi" }
+}
+
+fn test(): unit {
+  assert(baz/bazi/name() == "baz/bazi");
+  assert(bazi/name() == "bazi");
+}

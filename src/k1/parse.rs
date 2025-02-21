@@ -68,9 +68,9 @@ impl From<NonZeroU32> for ParsedTypeExpressionId {
         ParsedTypeExpressionId(value)
     }
 }
-impl Into<NonZeroU32> for ParsedTypeExpressionId {
-    fn into(self) -> NonZeroU32 {
-        self.0
+impl From<ParsedTypeExpressionId> for NonZeroU32 {
+    fn from(val: ParsedTypeExpressionId) -> Self {
+        val.0
     }
 }
 
@@ -1977,24 +1977,22 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 assert!(text.ends_with('\''));
                 let bytes = text.as_bytes();
                 if bytes[1] == b'\\' {
-                    assert_eq!(bytes.len(), 4);
+                    debug_assert_eq!(bytes.len(), 4);
                     let esc_char = bytes[2];
-                    let literal = match STRING_ESCAPED_CHARS
-                        .iter()
-                        .find(|c| c.sentinel == esc_char as char)
-                    {
-                        Some(c) => Ok(Literal::Char(c.output, first.span)),
-                        None => Err(error(
-                            format!(
-                                "Invalid escaped char following escape sequence: {}",
-                                char::from(esc_char)
-                            ),
-                            first,
-                        )),
-                    }?;
+                    let literal =
+                        match CHAR_ESCAPED_CHARS.iter().find(|c| c.sentinel == esc_char as char) {
+                            Some(c) => Ok(Literal::Char(c.output, first.span)),
+                            None => Err(error(
+                                format!(
+                                    "Invalid escaped char following escape sequence: {}",
+                                    char::from(esc_char)
+                                ),
+                                first,
+                            )),
+                        }?;
                     Ok(Some(self.add_expression(ParsedExpression::Literal(literal))))
                 } else {
-                    assert_eq!(bytes.len(), 3);
+                    debug_assert_eq!(bytes.len(), 3);
                     let byte = bytes[1];
                     Ok(Some(self.add_expression(ParsedExpression::Literal(Literal::Char(
                         byte, first.span,

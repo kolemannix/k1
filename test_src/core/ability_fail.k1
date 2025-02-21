@@ -1,0 +1,12 @@
+ns ability_fail;
+ability Num {
+  fn num(self: Self): i32
+}
+
+deftype Tool = either True, False, Iono
+
+fn test(): unit {
+  let p: Tool = .True;
+  let result = testCompile(p.num());
+  assert(result is .Some("Call to num with type Self = Tool does not work, since it does not implement ability Num"));
+}

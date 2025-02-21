@@ -1,0 +1,15 @@
+ns fib; 
+
+fn fib(n: int): int {
+  switch n {
+      0 -> 0,
+      1 -> 1,
+      _ -> fib(n - 1) + fib(n - 2)
+  }
+}
+
+fn test(): unit {
+  let result = fib(11);
+  assert(result == 89);
+  0
+}

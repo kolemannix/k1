@@ -1,0 +1,39 @@
+ns generic_struct;
+
+deftype Box[T] = { value: T }
+deftype Pair[T, U] = { t: T?, u: U? }
+ns Pair {
+  fn t[T, U](self: Pair[T, U]): T? {
+    self.t
+  }
+}
+
+fn unboxIt[T](b: Box[Box[Box[T]]]): T {
+  b.value.value.value
+}
+
+fn test(): unit {
+  let b: Box[int] = { value: 0 };
+  let c: Box[bool] = { value: true };
+  let c2: Box[bool] = { value: false };
+  let c3: Box[bool?] = { value: .Some(false) };
+  let c4: Box[bool*] = { value: new(false) };
+  assert(b.value == 0);
+  assert(c.value == true);
+  assert(c2.value == false);
+  assert(c3.value.! == false);
+  assert(c4.value.* == false);
+
+  let p: Pair[int, bool] = { t: some(0), u: some(true) };
+  assert(p.t.! == 0);
+  assert(p.u.! == true);
+  assert(p.t[int, bool]().! == 0);
+  assert(p.t().! == 0);
+
+  let nested: Box[Box[Box[int]]] = { value: { value: { value: 42 } } };
+  assert(unboxIt(nested) == 42);
+
+  b.value;
+
+  ()
+}

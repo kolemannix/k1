@@ -1,0 +1,36 @@
+ns scopes {
+  deftype Foo = { x: int }
+  deftype alias Alias = Foo
+  
+  ns Outer {
+    deftype Foo = { x: int }
+    ns Foo {
+      fn value(self: Foo): int { self.x + 3 }
+    }
+  }
+  
+  ns Foo {
+    fn value(self: Foo): int { self.x }
+  }
+  
+  
+  let x: int = 3;
+  fn scopeCollision(x: int): int {
+    let x: int = 42;
+    assert(x == 42);
+    0
+  }
+  
+  // Tests that the method gets assigned to the right Foo/value()
+  fn namespaceAlias(): unit {
+    let x: Alias = {x:1};
+    assert(x.value() == 1);
+  }
+
+  fn test(): unit {
+    scopes/scopeCollision(12);
+    scopes/namespaceAlias();
+  }
+
+}
+

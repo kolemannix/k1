@@ -1,0 +1,46 @@
+ns char_test;
+
+fn basic(): unit {
+  let c: char = '!';
+  assert(c == '!');
+  let s = c.toString();
+  print(s);
+  //println(s);
+  assert(s.len() == 1);
+  assert(s.get(0) == '!');
+
+  assert(s.appendChar('!') == "!!");
+}
+
+fn escape(): unit {
+
+  // EscapedChar { sentinel: 'n', output: b'\n' },
+  // EscapedChar { sentinel: '0', output: b'\0' },
+  // EscapedChar { sentinel: 't', output: b'\t' },
+  // EscapedChar { sentinel: 'r', output: b'\r' },
+  // EscapedChar { sentinel: '"', output: b'\"' },
+  // EscapedChar { sentinel: '\\', output: b'\\' },
+
+  let c = '\n';
+  assert(c as u8 == 10);
+
+  let c = '\0';
+  assert(c as u8 == 0);
+
+  let c = '\t';
+  assert(c as u8 == 9);
+
+  let c = '\r';
+  assert(c as u8 == 13);
+
+  let c = '\'';
+  assert(c as u8 == 39);
+
+  let c = '"';
+  assert(c as u8 == 34);
+
+  let c = '\\';
+  assert(c as u8 == 92);
+
+  ()
+}

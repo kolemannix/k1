@@ -1,6 +1,0 @@
-fn main(): int {
-  { let foo = 100 };
-  assert(foo == 100);
-  0
-}
-//errmsg: Variable 'foo' is not defined

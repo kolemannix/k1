@@ -489,6 +489,15 @@ pub const STRING_ESCAPED_CHARS: [EscapedChar; 6] = [
     EscapedChar { sentinel: '\\', output: b'\\' },
 ];
 
+pub const CHAR_ESCAPED_CHARS: [EscapedChar; 6] = [
+    EscapedChar { sentinel: 'n', output: b'\n' },
+    EscapedChar { sentinel: '0', output: b'\0' },
+    EscapedChar { sentinel: 't', output: b'\t' },
+    EscapedChar { sentinel: 'r', output: b'\r' },
+    EscapedChar { sentinel: '\'', output: b'\'' },
+    EscapedChar { sentinel: '\\', output: b'\\' },
+];
+
 const TOKEN_FLAG_IS_WHITESPACE_PRECEEDED: u64 = 0x01;
 #[allow(unused)]
 const TOKEN_FLAG_IS_WHITESPACE_FOLLOWED: u64 = 0x02;
@@ -620,7 +629,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                     continue;
                 } else if c == '"' {
                     self.advance();
-                    break Some(make_buffered_token(self, K::String, &tok_buf, n));
+                    break Some(make_buffered_token(self, K::String, tok_buf, n));
                 } else if c == '\n' {
                     let string_start_quote = n - tok_buf.len() as u32 - 1;
                     return Err(self.make_error(
@@ -641,7 +650,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
             }
             if c == EOF_CHAR {
                 if !tok_buf.is_empty() {
-                    break Some(make_keyword_or_ident(self, &tok_buf, n));
+                    break Some(make_keyword_or_ident(self, tok_buf, n));
                 } else {
                     break None;
                 }
@@ -664,23 +673,42 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                             // Fall through, continue the floating point number including a dot
                         } else {
                             // End the ident; we'll eat the dot next token w/ an empty buffer
-                            break Some(make_keyword_or_ident(self, &tok_buf, n));
+                            break Some(make_keyword_or_ident(self, tok_buf, n));
                         }
                     } else {
-                        break Some(make_keyword_or_ident(self, &tok_buf, n));
+                        break Some(make_keyword_or_ident(self, tok_buf, n));
                     }
                 } else if single_char_tok == K::SingleQuote {
-                    self.advance(); // eat opening '
-                    let mut len = 1;
-                    loop {
-                        let c = self.next();
-                        len += 1;
-                        if c == '\'' {
-                            break;
+                    // Eat opening '
+                    self.advance();
+                    let c = self.next();
+                    if c == '\\' {
+                        // Eat Escaped char
+                        self.advance();
+
+                        // Eat Closing '
+                        let q = self.next();
+                        if q != '\'' {
+                            return Err(errf!(
+                                self,
+                                n + 3,
+                                "Expected closing ' for char literal at {q}"
+                            ));
                         }
+                        break Some(make_token(self, TokenKind::Char, n, 4));
+                    } else {
+                        // Eat Closing ''
+                        let q = self.next();
+                        if q != '\'' {
+                            return Err(errf!(
+                                self,
+                                n + 2,
+                                "Expected closing ' for char literal at {q}"
+                            ));
+                        }
+                        // `n` is the index of the opening quote
+                        break Some(make_token(self, TokenKind::Char, n, 3));
                     }
-                    // `n` is the index of the opening quote
-                    break Some(make_token(self, TokenKind::Char, n, len));
                 // Handle all of our 2-char but-also-1-char-prefixed tokens!
                 } else if let Some(double_tok) =
                     TokenKind::from_start_and_char(single_char_tok, next)
@@ -704,7 +732,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                 }
             }
             if c.is_whitespace() && !tok_buf.is_empty() {
-                break Some(make_keyword_or_ident(self, &tok_buf, n));
+                break Some(make_keyword_or_ident(self, tok_buf, n));
             }
             if tok_buf.is_empty() && is_ident_or_num_start(c) {
                 // case: Start an ident
@@ -725,9 +753,9 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                 }
                 tok_buf.push(c);
             // We can possibly remove this check; it would be handled next loop
-            } else if let Some(tok) = TokenKind::token_from_str(&tok_buf) {
+            } else if let Some(tok) = TokenKind::token_from_str(tok_buf) {
                 // Do not eat c so the next eat_token call can see it.
-                break Some(make_buffered_token(self, tok, &tok_buf, n));
+                break Some(make_buffered_token(self, tok, tok_buf, n));
             }
             self.advance();
         };

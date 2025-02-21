@@ -1,0 +1,24 @@
+ns json_test;
+
+deftype Json = either
+  JsStr(string),
+  JsNumber(string),
+  JsBool(bool),
+  JsNull,
+  JsArray(List[Json]),
+  JsObject(List[{ key: string, value: Json }])
+
+fn test(): unit {
+  let obj: Json = .JsStr("hello");
+  let null: Json = .JsNull;
+  assert(obj is .JsStr("hello"));
+  assert(null is .JsNull);
+
+  let obj2: Json = .JsArray([.JsStr("hello"), .JsNumber("123")]);
+  assert(obj2.asJsArray().!.value.get(0) is .JsStr("hello"));
+  assert(obj2.asJsArray().!.value.get(1) is .JsNumber("123"));
+
+  // TODO: Causes stack overflow due to no indirection
+  // type Node = { value: string, child: Node? }
+  // let n: Node = { value: "hello", child: None };
+}

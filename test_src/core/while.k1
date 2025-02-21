@@ -1,0 +1,50 @@
+ns while_test;
+
+fn whileSimple(): unit {
+  let mut i: int = 10;
+  let mut iters = 0;
+  while i > -10 {
+    i = i - 1;
+    iters = iters + 1;
+  };
+  assert(iters == 20);
+}
+
+fn whileReturn(): int {
+  while true {
+    return(1)
+  };
+  0
+}
+
+fn whileNested(): int {
+  let result = while true {
+    while true {
+      return(10)
+    }
+  };
+  4
+}
+
+fn whileReturnClosure(): int {
+  while true {
+    let s = \(-> int) { return(5) };
+    return(s())
+  };
+  4
+}
+
+fn whileBreak(): int {
+  while true {
+    break();
+  };
+  4
+}
+
+fn test(): unit {
+  whileSimple();
+  assert(whileReturn() == 1);
+  assert(whileNested() == 10);
+  assert(whileReturnClosure() == 5);
+  assert(whileBreak() == 4);
+}

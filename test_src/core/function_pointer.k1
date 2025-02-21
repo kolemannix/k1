@@ -1,0 +1,8 @@
+ns function_pointer;
+
+fn staticAddOne(x: int): int { x + 1 }
+fn staticAddTwo(x: int): int { x + 2 }
+
+fn test(): unit {
+  assert(staticAddOne as Pointer != staticAddTwo as Pointer);
+}
