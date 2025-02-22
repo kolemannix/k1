@@ -1,3 +1,5 @@
+ns opaque_type_01;
+
 deftype UserId = { private inner: int }
 ns UserId {
   fn make(value: int): UserId {
@@ -10,8 +12,12 @@ ns UserId {
 
 }
 
-fn main(): int {
+fn test(): unit {
   let user_id: UserId = UserId/make(11);
   assert(user_id.toInt() == 11);
-  0
+
+  let errorResult = testCompile(user_id: int);
+  assert(errorResult is .Some(_));
+  let errorResult2 = testCompile(11: UserId);
+  assert(errorResult2 is .Some(_));
 }

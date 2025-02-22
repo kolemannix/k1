@@ -1,0 +1,8 @@
+ns enum_fail;
+ns inner;
+deftype E = either A(int) , B , C
+
+fn test(): unit {
+  let result = testCompile(.A(true): E);
+  assert(result is .Some("Variant payload type mismatch: Expected i64 but got bool"));
+}

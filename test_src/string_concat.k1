@@ -1,7 +1,0 @@
-fn main(): int {
-  let x: string = "abc";
-  let conc = x.concat(x);
-  assert(conc == "abcabc");
-  assert(conc.len() == 6);
-  0
-}

@@ -13,4 +13,5 @@ fn test(): unit {
   box[bool](true);
   box(false);
   box({ b: false });
+  ()
 }
