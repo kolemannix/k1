@@ -1,7 +1,9 @@
+ns struct_anon_nomethod;
+
 deftype PointNamed = { x: int, y: int }
 ns PointNamed {
   fn sum(self: PointNamed): int {
-      self.x + self.y
+    self.x + self.y
   }
 }
 
@@ -12,15 +14,18 @@ ns PointAlias {
   }
 }
 
-fn main(): int {
+fn test(): unit {
   // Should work because PointNamed is a proper type
   let p: PointNamed = { x: 0, y: 0 };
   p.sum();
 
   // Should not work because PointAlias is a type alias
   let p2: PointAlias = { x: 0, y: 0 };
-  p2.sum();
+  assert(
+    testCompile(p2.sum())
+    is
+    .Some("Method 'sum' does not exist on type: '{x: i64, y: i64}'")
+  );
 
-  0
+  ()
 }
-//errmsg: Method 'sum' does not exist on type: '{x: i64, y: i64}'

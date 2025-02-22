@@ -29,8 +29,8 @@ fn test(): unit {
   assert(hello == helloOpt.!);
 
   // Use a namespace
-  use _root/foo as fooAlias;
+  use use_test/foo as fooAlias;
   assert(fooAlias/getOne() == 1);
 
-  0
+  ()
 }

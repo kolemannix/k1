@@ -1,3 +1,5 @@
+ns ability_01;
+
 ability Num {
   fn num(self: Self): i32
 }
@@ -32,7 +34,7 @@ impl Codec for string {
 }
 
 
-fn main(): int {
+fn test(): unit {
 
   // Method-style call
   let three = 3: i32;
@@ -49,13 +51,6 @@ fn main(): int {
   let x: string = Codec/read(buf);
   assert(x == "hello");
   assert("asdf" == Codec/read("asdf".write()));
-
-  // Allow this syntax for 'selecting' an impl
-  // Codec for [string]/read(buf);
-  // Codec for [string]/aConst("sdf");
-
-
-  0
 }
 
 // This is below 'main' so that

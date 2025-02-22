@@ -44,3 +44,8 @@ fn escape(): unit {
 
   ()
 }
+
+fn test(): unit {
+  basic();
+  escape();
+}

@@ -1,4 +1,4 @@
-ns struct_test {
+ns struct_test;
 
 deftype Point = { x: int, y: int, z: int, isGood: bool }
 fn basicStruct(): int {
@@ -60,16 +60,9 @@ fn structNested(): unit {
   assert(area2 == 2500);
 }
 
-fn run(): unit {
+fn test(): unit {
   basicStruct();
   structArgMut();
   eqAnon();
   structNested();
-}
-
-}
-
-fn main(): int {
-  struct_test/run();
-  0
 }

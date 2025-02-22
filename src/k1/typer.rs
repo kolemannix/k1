@@ -4676,14 +4676,31 @@ impl TypedModule {
             let span = self_.ast.exprs.get_span(expr_id);
             return Ok(self_.exprs.add(TypedExpr::Unit(span)));
         }
+
+        let mut hinted_type = false;
         ctx.expected_type_id = match self_.ast.exprs.get_type_hint(expr_id) {
             Some(t) => {
                 let type_id = self_.eval_type_expr(t, ctx.scope_id)?;
+                hinted_type = true;
                 Some(type_id)
             }
             None => ctx.expected_type_id,
         };
         let base_result = self_.eval_expr_inner(expr_id, ctx)?;
+        if hinted_type {
+            if let Some(expected_type_id) = ctx.expected_type_id {
+                if let Err(msg) = self_.check_types(
+                    expected_type_id,
+                    self_.exprs.get(base_result).get_type(),
+                    ctx.scope_id,
+                ) {
+                    return failf!(
+                        self_.ast.exprs.get_span(expr_id),
+                        "Expression had incorrect type: {msg}"
+                    );
+                }
+            }
+        }
 
         // FIXME: We gotta get rid of this coerce step its involved in every bug
         //        We can do instead a principled subtyping relation where a subtype decision

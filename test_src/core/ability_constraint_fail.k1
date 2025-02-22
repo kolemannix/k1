@@ -1,0 +1,17 @@
+ns ability_constraint_fail;
+
+ability Num {
+  fn num(self: Self): i32
+}
+
+fn add[T](a: T, b: T): i32 where T: Num, T: Show {
+  println(a.show());
+  println("+");
+  println(b.show());
+  a.num() + b.num()
+}
+
+fn test(): unit {
+  let result = testCompile(add("asdf", "asdf"));
+  assert(result is .Some("Cannot invoke function 'add' with given types. Provided type for T is string which does not implement required ability Num"))
+}

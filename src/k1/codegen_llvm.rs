@@ -2648,7 +2648,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let mut args: VecDeque<BasicMetadataValueEnum<'ctx>> =
             VecDeque::with_capacity(call.args.len() + 1);
         for arg_expr in call.args.iter() {
-            let basic_value = self.codegen_expr_basic_value(*arg_expr)?;
+            let arg_value = self.codegen_expr(*arg_expr)?;
+            let LlvmValue::BasicValue(basic_value) = arg_value else { return Ok(arg_value) };
             trace!(
                 "codegen function call arg: {}",
                 self.module.expr_to_string_with_type(*arg_expr),

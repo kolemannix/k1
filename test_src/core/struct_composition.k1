@@ -1,3 +1,5 @@
+ns struct_composition;
+
 deftype Positioned = {
   x: int, y: int, width: int, height: int
 }
@@ -10,7 +12,7 @@ deftype User = {
 
 deftype UserView = _struct_remove[User, { password: string }]
 
-fn main(): int {
+fn test(): unit {
   let t: Text = { text: "Hello, Builder!", x: 0, y: 0, width: 0, height: 0 };
   assert(t is { text: "Hello, Builder!" });
   assert(t.x == 0);
@@ -21,6 +23,4 @@ fn main(): int {
   assert(sizeOf[Text]() == 48);
 
   assert(sizeOf[UserView]() == sizeOf[{ name: string }]());
-
-  0
 }
