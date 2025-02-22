@@ -63,6 +63,9 @@ impl TestExpectation {
 
 fn get_test_expectation(test_file: &Path) -> TestExpectation {
     let path = test_file.canonicalize().unwrap();
+    if path.is_dir() {
+        return TestExpectation::ExitCode { code: 0, message: None };
+    }
     let src = std::fs::read_to_string(path).expect("could not read source file for test {}");
 
     let last_line = src.lines().rev().find(|l| !l.is_empty()).expect("last line");
@@ -252,6 +255,7 @@ pub fn main() -> Result<()> {
         let dir_entry = dir_entry?;
         let metadata = dir_entry.metadata()?;
         let path = dir_entry.path();
+        eprintln!("{path:?}");
         if metadata.is_file() {
             let extension = path.extension().unwrap();
             if extension == "k1" {
@@ -265,6 +269,8 @@ pub fn main() -> Result<()> {
                     }
                 }
             }
+        } else if metadata.is_dir() {
+            all_tests.push(path.to_path_buf())
         }
     }
 

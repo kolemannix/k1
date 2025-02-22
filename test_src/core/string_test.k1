@@ -1,6 +1,24 @@
 ns string_test;
 
+fn escape(): unit {
+  let s = "\n\0\t\r\"\\";
+  let codes = for c in s yield { c as u8 };
+  assert(codes == [10, 0, 9, 13, 34, 92]);
+  assert(s.get(0) == '\n');
+  assert(s.get(1) == '\0');
+  assert(s.get(2) == '\t');
+  assert(s.get(3) == '\r');
+  assert(s.get(4) == '"');
+  assert(s.get(5) == '\\');
+}
+
 fn test(): unit {
+
+  let abc: string = "abc";
+  let conc = abc.concat(abc);
+  assert(conc == "abcabc");
+  assert(conc.len() == 6);
+
   assert("abc" != "123");
   assert("abc" != "abcc");
   assert("abc" == "abc");
@@ -22,9 +40,14 @@ fn test(): unit {
   assert("hello".indexOfString("e").! == 1);
   assert("hello".indexOfString("x") is .None);
 
+  assert("hello".indexOf('e') == 1);
+  assert("hello".indexOf('x') == -1);
+
   assert("123".toInt().! == 123);
   assert("-123".toInt().! == -123);
   assert(not "--".toInt().hasValue());
   assert(not "123a".toInt().hasValue());
   assert("12399999".toInt().! == 12399999);
+
+  escape();
 }

@@ -12,8 +12,9 @@ fn bothNever(b: bool): int {
   }
 }
 
-fn main(): unit {
+fn main(): int {
   assert(singleNever(true) == 0);
   bothNever(false);
+  0
 }
-//exitcode: 1 Uh oh! at if_else_never.k1:9
+//exitcode: 1 Uh oh! at if_else_never_crash.k1:9

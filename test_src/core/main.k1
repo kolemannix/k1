@@ -7,10 +7,13 @@ fn main(): int {
   global_int/test();
   assign/test();
   try_test/test();
+  pointer/test();
   ability_fail/test();
   ability_constraint/test();
   ability_generic/test();
   ability_self_call/test();
+  ability_constraint_fail/test();
+  ability_01/test();
   bits_test/test();
   control_flow/test();
   enum_basic/test();
@@ -24,27 +27,53 @@ fn main(): int {
   while_test/test();
   use_test/test();
   type_order/test();
+  opaque_type_01/test();
 
   // Moderate
   never_everywhere/test();
+  printIt(compiler/location().line);
   ns_extend/test();
+  printIt(compiler/location().line);
   optionals/test();
+  printIt(compiler/location().line);
   type_info/test();
+  printIt(compiler/location().line);
   all_out_of_order/test();
+  printIt(compiler/location().line);
   match_exhaust/main();
+  printIt(compiler/location().line);
   match_references/main();
+  printIt(compiler/location().line);
   generic_struct/test();
+  printIt(compiler/location().line);
   context_params/test();
+  printIt(compiler/location().line);
   context_generic/test();
+  printIt(compiler/location().line);
   inference/test();
+  printIt(compiler/location().line);
   is_patterns/test();
+  printIt(compiler/location().line);
+  struct_anon_nomethod/test();
+  printIt(compiler/location().line);
+  struct_test/test();
+  printIt(compiler/location().line);
+  enum_fail/inner/test();
+  printIt(compiler/location().line);
+  match_fails/test();
+  printIt(compiler/location().line);
   matching_if/test();
+  printIt(compiler/location().line);
   closures/test();
+  printIt(compiler/location().line);
   condcomp/test();
+  printIt(compiler/location().line);
+  struct_composition/test();
 
   // Compilation
   lexical_scope/test();
 
+  println("Stdlib coverage");
   // Stdlib coverage
   for_yield_test/test();
   allocator_test/test();
@@ -55,6 +84,8 @@ fn main(): int {
   string_interp_test/test();
   json_test/test();
   lib_compiler_test/test();
+
+  println("All tests passed!");
 
   0
 }

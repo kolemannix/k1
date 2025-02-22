@@ -1,6 +1,0 @@
-fn main(): int {
-  let hi = "hello, world";
-  assert(hi.indexOf('e') == 1);
-  assert(hi.indexOf('x') == -1);
-  0
-}

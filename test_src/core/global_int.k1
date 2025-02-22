@@ -6,5 +6,5 @@ let bar: int = 31;
 fn test(): unit {
   assert(foo == 42);
   assert(bar == 31);
-  0
+  ()
 }

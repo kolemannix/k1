@@ -63,7 +63,7 @@ fn test(): unit {
 
   // Test that we can't use bound variables in the pattern itself
   // We should prevent shadowing within the same match, seems like always a bad idea
-  let shadowFailure = testCompile(#debug {
+  let shadowFailure = testCompile({
     if mixed is .Some({ outer: o, inner: .Some({ value: o })}) {
       ()
     } else {

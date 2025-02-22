@@ -16,7 +16,7 @@ fn assignVarRef(): unit {
   assert(count.* == 2);
 }
 
-fn complexReferences(): int {
+fn complexReferences(): unit {
   let* structRef = { x: 42 };
 
   let xValue: int = structRef.x*;
@@ -64,7 +64,7 @@ fn complexReferences(): int {
     crash("None")
   };
 
-  0
+  ()
 }
 
 fn test(): unit {

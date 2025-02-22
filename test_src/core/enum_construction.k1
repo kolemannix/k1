@@ -12,11 +12,11 @@ fn test(): unit {
   let z1: State = State.Zilch;
   let z2: State.Zilch = State.Zilch: State.Zilch;
 
-  let s1 = _root/State.On(());
-  let s2 = _root/State.Off(());
+  let s1 = enum_construction/State.On(());
+  let s2 = enum_construction/State.Off(());
 
-  let s3: _root/State = _root/State.Off(());
-  let s4: _root/State.On = _root/State.On(());
+  let s3: enum_construction/State = enum_construction/State.Off(());
+  let s4: enum_construction/State.On = enum_construction/State.On(());
 
   let s5 = StateHard.On(.Some(42));
   let s6: StateHard = StateHard.On(.Some(42));
@@ -44,5 +44,5 @@ fn test(): unit {
 
   let bbb = Opt.None[int];
 
-  0
+  ()
 }

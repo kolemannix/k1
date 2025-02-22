@@ -1,0 +1,28 @@
+ns match_fails;
+
+deftype Foo = { x: int, y: bool? }
+fn useless(): unit {
+  let foo: Foo = { x: 1, y: .None };
+  let result = testCompile(switch foo {
+    { x, y: .Some(true) } -> x,
+    { x, y: .Some(false) } -> x,
+    { x, y: .Some(false) } -> x,
+    { x, y: .None } -> x + 2
+  });
+  assert(result is .Some("Useless pattern: { x: x, y: Some(false) }"));
+}
+
+deftype Blub = { x: int, y: bool? }
+fn unhandled(): unit {
+  let blub: Blub = { x: 1, y: .None };
+  let result = testCompile(switch blub {
+    { x, y: .Some(true) } -> x,
+    { x, y: .None } -> x + 2
+  });
+  assert(result is .Some("Unhandled pattern: { x: <int>, y: Some(false) }"));
+}
+
+fn test(): unit {
+  useless();
+  unhandled();
+}

@@ -50,5 +50,5 @@ fn test(): unit {
 
   // TODO: div by zero
   // pi / 0.0;
-  0
+  ()
 }
