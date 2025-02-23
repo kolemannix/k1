@@ -4125,8 +4125,8 @@ impl TypedModule {
                 }
             }
             Some((variable_id, variable_scope_id)) => {
-                let is_capture = if let Some(nearest_parent_closure_scope) =
-                    self.scopes.nearest_parent_closure(scope_id)
+                let parent_closure_scope_id = self.scopes.nearest_parent_closure(scope_id);
+                let is_capture = if let Some(nearest_parent_closure_scope) = parent_closure_scope_id
                 {
                     let variable_is_above_closure = self
                         .scopes
@@ -4135,12 +4135,7 @@ impl TypedModule {
 
                     let is_capture = variable_is_above_closure && !variable_is_global;
                     debug!("{}, is_capture={is_capture}", self.name_of(variable.name.name));
-                    if is_capture {
-                        self.scopes.add_capture(nearest_parent_closure_scope, variable_id);
-                        true
-                    } else {
-                        false
-                    }
+                    is_capture
                 } else {
                     false
                 };
@@ -4160,13 +4155,19 @@ impl TypedModule {
                             "Should not capture namespaced things, I think?"
                         );
                     }
-                    let expr = self.exprs.add(TypedExpr::PendingCapture(PendingCaptureExpr {
-                        captured_variable_id: variable_id,
-                        type_id: v.type_id,
-                        resolved_expr: None,
-                        span: variable_name_span,
-                    }));
-                    Ok(expr)
+                    let fixup_expr_id =
+                        self.exprs.add(TypedExpr::PendingCapture(PendingCaptureExpr {
+                            captured_variable_id: variable_id,
+                            type_id: v.type_id,
+                            resolved_expr: None,
+                            span: variable_name_span,
+                        }));
+                    self.scopes.add_capture(
+                        parent_closure_scope_id.unwrap(),
+                        variable_id,
+                        fixup_expr_id,
+                    );
+                    Ok(fixup_expr_id)
                 } else {
                     let expr = self.exprs.add(TypedExpr::Variable(VariableExpr {
                         type_id: v.type_id,
@@ -5317,52 +5318,62 @@ impl TypedModule {
         expr_id: ParsedExpressionId,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
+        fn fixup_capture_expr_new(
+            module: &mut TypedModule,
+            environment_param_variable_id: VariableId,
+            captured_variable_id: VariableId,
+            env_struct_type: TypeId,
+            span: SpanId,
+        ) -> TypedExpr {
+            let v = module.variables.get(captured_variable_id);
+            let variable_type = v.type_id;
+            let env_struct_reference_type = module.types.add_reference_type(env_struct_type);
+            // Note: Can't capture 2 variables of the same name in a closure. Might not
+            //       actually be a problem
+            let (_field_index, env_struct_field) =
+                module.types.get(env_struct_type).expect_struct().find_field(v.name).unwrap();
+            let field_name = env_struct_field.name;
+            let field_index = env_struct_field.index;
+            let env_variable_expr = module.exprs.add(TypedExpr::Variable(VariableExpr {
+                variable_id: environment_param_variable_id,
+                type_id: env_struct_reference_type,
+                span,
+            }));
+            let env_field_access = TypedExpr::StructFieldAccess(FieldAccess {
+                base: module.synth_dereference(env_variable_expr),
+                target_field: field_name,
+                target_field_index: field_index,
+                result_type: variable_type,
+                struct_type: env_struct_type,
+                is_referencing: false,
+                span,
+            });
+            env_field_access
+        }
         /// nocommit OHH. Now we could just 'remember' all the IDs of the fixup exprs and just iterate them
         /// and set the resolved id. Duh.
-        fn fixup_capture_expr(
-            module: &mut TypedModule,
-            body: TypedExprId,
-            environment_param: VariableId,
-            env_struct_type: TypeId,
-        ) {
-            match module.exprs.get(body) {
-                TypedExpr::PendingCapture(pc) => {
-                    let v = module.variables.get(pc.captured_variable_id);
-                    let variable_type = v.type_id;
-                    let span = pc.span;
-                    let env_struct_reference_type =
-                        module.types.add_reference_type(env_struct_type);
-                    // Note: Can't capture 2 variables of the same name in a closure. Might not
-                    //       actually be a problem
-                    let (_field_index, env_struct_field) = module
-                        .types
-                        .get(env_struct_type)
-                        .expect_struct()
-                        .find_field(v.name)
-                        .unwrap();
-                    let field_name = env_struct_field.name;
-                    let field_index = env_struct_field.index;
-                    let env_variable_expr = module.exprs.add(TypedExpr::Variable(VariableExpr {
-                        variable_id: environment_param,
-                        type_id: env_struct_reference_type,
-                        span: pc.span,
-                    }));
-                    let env_field_access = TypedExpr::StructFieldAccess(FieldAccess {
-                        base: module.synth_dereference(env_variable_expr),
-                        target_field: field_name,
-                        target_field_index: field_index,
-                        result_type: variable_type,
-                        struct_type: env_struct_type,
-                        is_referencing: false,
-                        span,
-                    });
-                    *module.exprs.get_mut(body) = env_field_access;
-                }
-                _other => TypedModule::visit_inner_exprs_mut(module, body, |module, expr| {
-                    fixup_capture_expr(module, expr, environment_param, env_struct_type)
-                }),
-            }
-        }
+        //fn fixup_capture_expr(
+        //    module: &mut TypedModule,
+        //    body: TypedExprId,
+        //    environment_param: VariableId,
+        //    env_struct_type: TypeId,
+        //) {
+        //    match module.exprs.get(body) {
+        //        TypedExpr::PendingCapture(pc) => {
+        //            let expr = fixup_capture_expr_new(
+        //                module,
+        //                environment_param,
+        //                pc.captured_variable_id,
+        //                env_struct_type,
+        //                pc.span,
+        //            );
+        //            *module.exprs.get_mut(body) = expr;
+        //        }
+        //        _other => TypedModule::visit_inner_exprs_mut(module, body, |module, expr| {
+        //            fixup_capture_expr(module, expr, environment_param, env_struct_type)
+        //        }),
+        //    }
+        //}
         let closure = self.ast.exprs.get(expr_id).expect_closure();
         let closure_scope_id =
             self.scopes.add_child_scope(ctx.scope_id, ScopeType::ClosureScope, None, None);
@@ -5380,7 +5391,14 @@ impl TypedModule {
         let expected_return_type = declared_expected_return_type
             .or(expected_function_type.as_ref().map(|f| f.return_type));
 
-        self.scopes.add_closure_info(closure_scope_id, ScopeClosureInfo { expected_return_type });
+        self.scopes.add_closure_info(
+            closure_scope_id,
+            ScopeClosureInfo {
+                expected_return_type,
+                captured_variables: smallvec![],
+                capture_exprs_for_fixup: smallvec![],
+            },
+        );
 
         for (index, arg) in closure_arguments.iter().enumerate() {
             let arg_type_id = match arg.ty {
@@ -5456,8 +5474,9 @@ impl TypedModule {
             _ => body.expr_type,
         };
 
-        let closure_captures = self.scopes.get_captures(closure_scope_id);
-        let env_fields = closure_captures
+        let closure_info = self.scopes.get_closure_info(closure_scope_id).unwrap();
+        let env_fields = closure_info
+            .captured_variables
             .iter()
             .enumerate()
             .map(|(index, captured_variable_id)| {
@@ -5470,7 +5489,8 @@ impl TypedModule {
                 }
             })
             .collect();
-        let env_field_exprs = closure_captures
+        let env_field_exprs = closure_info
+            .captured_variables
             .iter()
             .map(|captured_variable_id| {
                 let v = self.variables.get(*captured_variable_id);
@@ -5514,16 +5534,24 @@ impl TypedModule {
         param_variables.push_front(environment_param_variable_id);
 
         let environment_param_variable_id = param_variables[0];
-        let body = {
-            let body_expr_id = self.exprs.add(TypedExpr::Block(body));
-            fixup_capture_expr(
+        let body_expr_id = self.exprs.add(TypedExpr::Block(body));
+
+        let pending_fixups =
+            self.scopes.get_closure_info(closure_scope_id).unwrap().capture_exprs_for_fixup.clone();
+        
+        for pending_fixup in pending_fixups {
+            let TypedExpr::PendingCapture(pc) = self.exprs.get(pending_fixup) else {
+                unreachable!()
+            };
+            let field_access_expr = fixup_capture_expr_new(
                 self,
-                body_expr_id,
                 environment_param_variable_id,
+                pc.captured_variable_id,
                 environment_struct_type,
+                pc.span,
             );
-            body_expr_id
-        };
+            *self.exprs.get_mut(pending_fixup) = field_access_expr;
+        }
 
         let function_type = self.types.add_type(Type::Function(FunctionType {
             params: typed_params.into(),
@@ -5550,7 +5578,7 @@ impl TypedModule {
             scope: closure_scope_id,
             param_variables: param_variables.into(),
             type_params: vec![],
-            body_block: Some(body),
+            body_block: Some(body_expr_id),
             intrinsic_type: None,
             linkage: Linkage::Standard,
             child_specializations: vec![],
