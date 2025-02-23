@@ -1,7 +1,7 @@
 use ahash::HashMapExt;
 use fxhash::FxHashMap;
 use log::{debug, trace};
-use smallvec::SmallVec;
+use smallvec::{smallvec, SmallVec};
 
 use std::{
     collections::{hash_map::Entry, HashMap, HashSet},
@@ -14,7 +14,7 @@ use crate::{
     parse::{Identifiers, NamespacedIdentifier, ParsedAbilityId, ParsedTypeDefnId},
     typer::{
         make_error, AbilityId, FunctionId, Identifier, LoopType, NamespaceId, Namespaces, TypeId,
-        TyperResult, VariableId,
+        TypedExprId, TyperResult, VariableId,
     },
 };
 
@@ -90,6 +90,8 @@ impl Display for ScopeType {
 
 pub struct ScopeClosureInfo {
     pub expected_return_type: Option<TypeId>,
+    pub capture_exprs_for_fixup: SmallVec<[TypedExprId; 8]>,
+    pub captured_variables: SmallVec<[VariableId; 8]>,
 }
 
 pub struct ScopeLoopInfo {
@@ -98,19 +100,13 @@ pub struct ScopeLoopInfo {
 
 pub struct Scopes {
     scopes: Vec<Scope>,
-    captures: HashMap<ScopeId, Vec<VariableId>>,
     closure_info: HashMap<ScopeId, ScopeClosureInfo>,
     loop_info: HashMap<ScopeId, ScopeLoopInfo>,
 }
 
 impl Scopes {
     pub fn make() -> Self {
-        Scopes {
-            scopes: Vec::new(),
-            captures: HashMap::new(),
-            closure_info: HashMap::new(),
-            loop_info: HashMap::new(),
-        }
+        Scopes { scopes: Vec::new(), closure_info: HashMap::new(), loop_info: HashMap::new() }
     }
 
     pub fn add_root_scope(&mut self, name: Option<Identifier>) -> ScopeId {
@@ -628,21 +624,26 @@ impl Scopes {
         }
     }
 
-    pub fn add_capture(&mut self, scope_id: ScopeId, variable_id: VariableId) {
-        match self.captures.entry(scope_id) {
-            Entry::Occupied(mut captures) => {
-                if !captures.get().contains(&variable_id) {
-                    captures.get_mut().push(variable_id)
+    pub fn add_capture(
+        &mut self,
+        scope_id: ScopeId,
+        variable_id: VariableId,
+        fixup_expr_id: TypedExprId,
+    ) {
+        match self.closure_info.entry(scope_id) {
+            Entry::Occupied(mut closure_info) => {
+                let info = closure_info.get_mut();
+                if !info.captured_variables.contains(&variable_id) {
+                    info.captured_variables.push(variable_id);
                 };
+                // Even if we mention the captured variable multiple times,
+                // every occurrence needs to be patched later
+                info.capture_exprs_for_fixup.push(fixup_expr_id)
             }
-            Entry::Vacant(entry) => {
-                entry.insert(vec![variable_id]);
+            Entry::Vacant(_entry) => {
+                unreachable!("All closure scopes should have info by block eval")
             }
         }
-    }
-
-    pub fn get_captures(&self, scope_id: ScopeId) -> &[VariableId] {
-        self.captures.get(&scope_id).map(|v| v.as_slice()).unwrap_or(&[])
     }
 
     pub fn add_closure_info(&mut self, closure_scope_id: ScopeId, info: ScopeClosureInfo) {
