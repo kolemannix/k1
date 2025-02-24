@@ -282,7 +282,7 @@ impl Identifiers {
 
 impl Default for Identifiers {
     fn default() -> Self {
-        let intern_pool = string_interner::StringInterner::default();
+        let intern_pool = string_interner::StringInterner::with_capacity(65536);
         let mut this = Identifiers { intern_pool };
         for builtin_ident in Identifiers::BUILTIN_IDENTS.iter() {
             this.intern(builtin_ident);
@@ -1639,9 +1639,9 @@ pub struct Source {
 
 impl Source {
     pub fn make(file_id: FileId, directory: String, filename: String, content: String) -> Source {
-        let mut lines = Vec::new();
+        let mut lines = Vec::with_capacity(128);
         let mut iter = content.chars().enumerate().peekable();
-        let mut buf: String = String::new();
+        let mut buf: String = String::with_capacity(content.len());
         // We compute lines ourselves because we need to know the start offset of each line
         // in chars
         while let Some((c_index, c)) = iter.next() {
