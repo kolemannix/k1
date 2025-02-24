@@ -17,6 +17,11 @@ fn main() -> anyhow::Result<()> {
     let out_dir = ".k1-out";
     std::fs::create_dir_all(out_dir)?;
 
+    // let mut i = 0;
+    // while i < 1000 {
+    //     compiler::compile_module(&args);
+    //     i += 1;
+    // }
     let Ok(module) = compiler::compile_module(&args) else {
         std::process::exit(1);
     };

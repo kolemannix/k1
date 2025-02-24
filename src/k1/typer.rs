@@ -113,6 +113,8 @@ pub const ITERABLE_ABILITY_ID: AbilityId = AbilityId(7);
 
 pub const CLOSURE_ENV_PARAM_NAME: &str = "__clos_env";
 
+pub const FUNC_PARAM_OPT_COUNT: usize = 6;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TypeSubstitutionPair {
     from: TypeId,
@@ -124,6 +126,8 @@ pub struct InferenceContext {
     pub origin_stack: Vec<SpanId>,
     pub vars: Vec<TypeId>,
     pub constraints: Vec<TypeSubstitutionPair>,
+    pub substitutions: FxHashMap<TypeId, TypeId>,
+    pub substitutions_vec: Vec<TypeSubstitutionPair>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -548,7 +552,7 @@ pub struct TypedFunction {
     pub name: Identifier,
     pub scope: ScopeId,
     pub param_variables: Vec<VariableId>,
-    pub type_params: Vec<TypeParam>,
+    pub type_params: SmallVec<[TypeParam; 6]>,
     pub body_block: Option<TypedExprId>,
     pub intrinsic_type: Option<IntrinsicFunction>,
     pub linkage: Linkage,
@@ -826,7 +830,7 @@ pub struct Call {
     /// type_args remain unerased for some intrinsics where we want codegen to see the types.
     /// Specifically sizeOf[T], there's no actual value to specialize on, kinda of a hack would be
     /// better to specialize anyway and inline? idk
-    pub type_args: Vec<SimpleNamedType>,
+    pub type_args: SmallVec<[SimpleNamedType; 6]>,
     pub return_type: TypeId,
     pub span: SpanId,
 }
@@ -1161,7 +1165,7 @@ pub struct TypedMatchExpr {
     pub span: SpanId,
 }
 
-// nocommit: Size: 72 bytes
+// nocommit: Size: 112 bytes
 #[derive(Debug, Clone)]
 pub enum TypedExpr {
     Unit(SpanId),
@@ -1317,8 +1321,6 @@ pub struct AssignmentStmt {
 
 #[derive(Debug, Clone)]
 pub enum TypedStmt {
-    // nocommit: Think through whether type id belongs on here or not; make consistent with other
-    // variants
     Expr(TypedExprId, TypeId),
     Let(LetStmt),
     Assignment(AssignmentStmt),
@@ -1831,6 +1833,8 @@ impl TypedModule {
                 origin_stack: Vec::with_capacity(64),
                 vars: Vec::with_capacity(128),
                 constraints: Vec::with_capacity(128),
+                substitutions: FxHashMap::with_capacity(256),
+                substitutions_vec: Vec::with_capacity(256),
             },
             bump: bumpalo::Bump::with_capacity(8 * crate::MEGABYTE),
         }
@@ -1907,7 +1911,7 @@ impl TypedModule {
 
     pub fn get_stmt_span(&self, stmt: TypedStmtId) -> SpanId {
         match self.stmts.get(stmt) {
-            // nocommit 2 lookups for a span
+            // Ugh 2 lookups for a span
             TypedStmt::Expr(e, _ty) => self.exprs.get(*e).get_span(),
             TypedStmt::Let(val_def) => val_def.span,
             TypedStmt::Assignment(assgn) => assgn.span,
@@ -3774,10 +3778,10 @@ impl TypedModule {
         //    debug!("Bailing due to error; {solve_error}");
         //    return None;
         //};
-        let blanket_impl_type_params = &self_.get_ability_impl(blanket_impl_id).type_params.clone();
+        let blanket_impl_type_params = self_.get_ability_impl(blanket_impl_id).type_params.clone();
         let root_scope_id = self_.scopes.get_root_scope_id();
         let solutions =
-            self_.infer_types(blanket_impl_type_params, &args_and_params, span, root_scope_id);
+            self_.infer_types(&blanket_impl_type_params, &args_and_params, span, root_scope_id);
         let solutions = match solutions {
             Err(e) => {
                 debug!("Could not solve all blanket impl params: {e}");
@@ -3785,6 +3789,7 @@ impl TypedModule {
             }
             Ok(solutions) => solutions,
         };
+
         // 'Specialize' the constraints:
         // - For each constraint, run the expression with the binding for T from a child
         //   scope of the blanket impl scope
@@ -4510,7 +4515,7 @@ impl TypedModule {
         let make_error_call = self.exprs.add(TypedExpr::Call(Call {
             callee: Callee::StaticFunction(block_make_error_fn),
             args: vec![get_error_call],
-            type_args: vec![],
+            type_args: smallvec![],
             return_type: block_error_type,
             span,
         }));
@@ -5193,6 +5198,7 @@ impl TypedModule {
         Ok(self.exprs.add(TypedExpr::Block(block)))
     }
 
+    #[cfg(any())]
     fn visit_inner_stmt_exprs_mut(
         module: &mut TypedModule,
         stmt_id: TypedStmtId,
@@ -5211,7 +5217,7 @@ impl TypedModule {
     }
 
     // Currently only used for fixup_capture_expr
-    // nocommit: Clones everything; very sad; how to fix
+    #[cfg(any())]
     fn visit_inner_exprs_mut(
         module: &mut TypedModule,
         expr: TypedExprId,
@@ -5226,7 +5232,6 @@ impl TypedModule {
             TypedExpr::Float(_) => (),
             TypedExpr::Str(_, _) => (),
             TypedExpr::Struct(s) => {
-                // nocommit; struct.fields can be a slice ptr not a vec
                 for f in s.fields.clone().iter() {
                     action(module, f.expr);
                 }
@@ -5276,7 +5281,6 @@ impl TypedModule {
                 }
             }
             TypedExpr::Match(typed_match) => {
-                // nocommit: temporary
                 let typed_match = typed_match.clone();
                 for let_stmt in &typed_match.initial_let_statements {
                     TypedModule::visit_inner_stmt_exprs_mut(module, *let_stmt, &mut action);
@@ -5350,30 +5354,6 @@ impl TypedModule {
             });
             env_field_access
         }
-        /// nocommit OHH. Now we could just 'remember' all the IDs of the fixup exprs and just iterate them
-        /// and set the resolved id. Duh.
-        //fn fixup_capture_expr(
-        //    module: &mut TypedModule,
-        //    body: TypedExprId,
-        //    environment_param: VariableId,
-        //    env_struct_type: TypeId,
-        //) {
-        //    match module.exprs.get(body) {
-        //        TypedExpr::PendingCapture(pc) => {
-        //            let expr = fixup_capture_expr_new(
-        //                module,
-        //                environment_param,
-        //                pc.captured_variable_id,
-        //                env_struct_type,
-        //                pc.span,
-        //            );
-        //            *module.exprs.get_mut(body) = expr;
-        //        }
-        //        _other => TypedModule::visit_inner_exprs_mut(module, body, |module, expr| {
-        //            fixup_capture_expr(module, expr, environment_param, env_struct_type)
-        //        }),
-        //    }
-        //}
         let closure = self.ast.exprs.get(expr_id).expect_closure();
         let closure_scope_id =
             self.scopes.add_child_scope(ctx.scope_id, ScopeType::ClosureScope, None, None);
@@ -5538,7 +5518,7 @@ impl TypedModule {
 
         let pending_fixups =
             self.scopes.get_closure_info(closure_scope_id).unwrap().capture_exprs_for_fixup.clone();
-        
+
         for pending_fixup in pending_fixups {
             let TypedExpr::PendingCapture(pc) = self.exprs.get(pending_fixup) else {
                 unreachable!()
@@ -5577,7 +5557,7 @@ impl TypedModule {
             name,
             scope: closure_scope_id,
             param_variables: param_variables.into(),
-            type_params: vec![],
+            type_params: smallvec![],
             body_block: Some(body_expr_id),
             intrinsic_type: None,
             linkage: Linkage::Standard,
@@ -6999,7 +6979,7 @@ impl TypedModule {
         let call_expr = self.exprs.add(TypedExpr::Call(Call {
             callee: Callee::make_static(equals_implementation_function_id),
             args: vec![lhs, rhs],
-            type_args: Vec::new(),
+            type_args: smallvec![],
             return_type: BOOL_TYPE_ID,
             span,
         }));
@@ -7369,8 +7349,8 @@ impl TypedModule {
         //
         // Future TODO: Make sure we handle context params in ability functions correctly,
         // Probably by: skipping them if not passed explicitly, and utilizing them if passed explicitly
-        let type_params = {
-            let mut type_params = Vec::with_capacity(ability_params.len() + 1);
+        let type_params: SmallVec<[SimpleNamedType; 6]> = {
+            let mut type_params = SmallVec::with_capacity(ability_params.len() + 1);
             type_params.push(SimpleNamedType {
                 name: get_ident!(self, "Self"),
                 type_id: ability_self_type_id,
@@ -7595,7 +7575,9 @@ impl TypedModule {
                 },
             };
 
-            let solved_or_passed_type_params: Vec<SimpleNamedType> = if type_args.is_empty() {
+            let solved_or_passed_type_params: SmallVec<[SimpleNamedType; 6]> = if type_args
+                .is_empty()
+            {
                 match payload_if_needed {
                     None => {
                         match ctx
@@ -7656,7 +7638,7 @@ impl TypedModule {
                     }
                 }
             } else {
-                let mut passed_params = Vec::with_capacity(g_params.len());
+                let mut passed_params = SmallVec::with_capacity(g_params.len());
                 for (generic_param, passed_type_expr) in
                     g_params.clone().iter().zip(type_args.iter())
                 {
@@ -7690,26 +7672,26 @@ impl TypedModule {
         pre_evaled_params: Option<&[TypedExprId]>,
         calling_scope: ScopeId,
         tolerate_missing_context_args: bool,
-    ) -> TyperResult<Vec<(MaybeTypedExpr, &'params FnParamType)>> {
+    ) -> TyperResult<(
+        SmallVec<[MaybeTypedExpr; FUNC_PARAM_OPT_COUNT]>,
+        SmallVec<[&'params FnParamType; FUNC_PARAM_OPT_COUNT]>,
+    )> {
         let fn_name = fn_call.name.name;
         let span = fn_call.span;
         let explicit_context_args = !fn_call.explicit_context_args.is_empty();
         let named = fn_call.args.first().is_some_and(|arg| arg.name.is_some());
-        let mut final_args: Vec<(MaybeTypedExpr, &FnParamType)> = Vec::new();
+        let mut final_args: SmallVec<[MaybeTypedExpr; FUNC_PARAM_OPT_COUNT]> = SmallVec::new();
+        let mut final_params: SmallVec<[&FnParamType; FUNC_PARAM_OPT_COUNT]> = SmallVec::new();
         if !explicit_context_args {
             for context_param in params.iter().filter(|p| p.is_context) {
                 if let Some(found_id) =
                     self.scopes.find_context_variable_by_type(calling_scope, context_param.type_id)
                 {
                     let found = self.variables.get(found_id);
-                    final_args.push((
-                        MaybeTypedExpr::Typed(self.exprs.add(TypedExpr::Variable(VariableExpr {
-                            variable_id: found_id,
-                            type_id: found.type_id,
-                            span,
-                        }))),
-                        context_param,
-                    ));
+                    final_args.push(MaybeTypedExpr::Typed(self.exprs.add(TypedExpr::Variable(
+                        VariableExpr { variable_id: found_id, type_id: found.type_id, span },
+                    ))));
+                    final_params.push(context_param);
                 } else {
                     let is_source_loc = self
                         .types
@@ -7724,7 +7706,8 @@ impl TypedModule {
                         });
                     if is_source_loc {
                         let expr = self.synth_source_location(span);
-                        final_args.push((MaybeTypedExpr::Typed(expr), context_param));
+                        final_args.push(MaybeTypedExpr::Typed(expr));
+                        final_params.push(context_param);
                     } else if !tolerate_missing_context_args {
                         return failf!(
                             span,
@@ -7772,7 +7755,8 @@ impl TypedModule {
 
         if let Some(pre_evaled_params) = pre_evaled_params {
             for (expr, param) in pre_evaled_params.iter().zip(expected_literal_params) {
-                final_args.push((MaybeTypedExpr::Typed(*expr), param))
+                final_args.push(MaybeTypedExpr::Typed(*expr));
+                final_params.push(param)
             }
         } else {
             for (param_index, fn_param) in expected_literal_params.enumerate() {
@@ -7786,12 +7770,11 @@ impl TypedModule {
                             self.name_of(fn_param.name)
                         );
                     };
-                    if let Some(dupe) = final_args
-                        .iter()
-                        .find(|(_arg, param)| param.name == name_match.name.unwrap())
+                    if let Some(dupe) =
+                        final_params.iter().find(|param| param.name == name_match.name.unwrap())
                     {
                         let span = self.ast.exprs.get_span(name_match.value);
-                        return failf!(span, "Duplicate named argument: {}", dupe.1.name);
+                        return failf!(span, "Duplicate named argument: {}", dupe.name);
                     };
                     Some(name_match)
                 } else {
@@ -7805,29 +7788,42 @@ impl TypedModule {
                         self.name_of(fn_param.name).red()
                     );
                 };
-                final_args.push((MaybeTypedExpr::Parsed(param.value), fn_param));
+                final_args.push(MaybeTypedExpr::Parsed(param.value));
+                final_params.push(fn_param);
             }
         }
-        Ok(final_args)
+        Ok((final_args, final_params))
+    }
+
+    fn check_call_argument(
+        &self,
+        _call_name: Identifier,
+        param: &FnParamType,
+        arg: TypedExprId,
+        calling_scope: ScopeId,
+    ) -> TyperResult<()> {
+        if let Err(e) =
+            self.check_types(param.type_id, self.exprs.get(arg).get_type(), calling_scope)
+        {
+            return failf!(
+                self.exprs.get(arg).get_span(),
+                "Invalid type for parameter {}: {}",
+                self.name_of(param.name),
+                e
+            );
+        };
+        Ok(())
     }
 
     fn check_call_arguments(
-        &mut self,
+        &self,
         _call_name: Identifier,
-        aligned_args: &[(TypedExprId, &FnParamType)],
+        aligned_params: &[FnParamType],
+        aligned_args: &[TypedExprId],
         calling_scope: ScopeId,
     ) -> TyperResult<()> {
-        for (expr, param) in aligned_args.iter() {
-            if let Err(e) =
-                self.check_types(param.type_id, self.exprs.get(*expr).get_type(), calling_scope)
-            {
-                return failf!(
-                    self.exprs.get(*expr).get_span(),
-                    "Invalid type for parameter {}: {}",
-                    self.name_of(param.name),
-                    e
-                );
-            };
+        for (param, expr) in aligned_params.iter().zip(aligned_args.iter()) {
+            self.check_call_argument(_call_name, param, *expr, calling_scope)?;
         }
         Ok(())
     }
@@ -7877,28 +7873,25 @@ impl TypedModule {
                     self.types.get(self.get_callee_function_type(&callee)).as_function().unwrap();
                 let original_function_return_type = original_function_type.return_type;
                 let params = &original_function_type.params.clone();
-                let aligned_args = self.align_call_arguments_with_parameters(
+                let (aligned_args, aligned_params) = self.align_call_arguments_with_parameters(
                     fn_call,
                     params,
-                    known_args.map(|ka| ka.1),
+                    known_args.map(|(_known_types, known_args)| known_args),
                     ctx.scope_id,
                     false,
                 )?;
-                // Easy mode: just evaluate them
-                // nocommit This is a mess can be so much simpler now to call check_call_arguments
-                let mut typed_args = Vec::with_capacity(aligned_args.len());
                 let mut typechecked_args = Vec::with_capacity(aligned_args.len());
-                for (maybe_typed_expr, fn_arg_type) in aligned_args.into_iter() {
-                    let expr = match maybe_typed_expr {
+                for (maybe_typed_expr, param) in aligned_args.iter().zip(aligned_params.iter()) {
+                    let expr = match *maybe_typed_expr {
                         MaybeTypedExpr::Typed(typed) => typed,
-                        MaybeTypedExpr::Parsed(parsed) => self
-                            .eval_expr(parsed, ctx.with_expected_type(Some(fn_arg_type.type_id)))?,
+                        MaybeTypedExpr::Parsed(parsed) => {
+                            self.eval_expr(parsed, ctx.with_expected_type(Some(param.type_id)))?
+                        }
                     };
-                    typed_args.push((expr, fn_arg_type));
+                    self.check_call_argument(fn_call.name.name, param, expr, ctx.scope_id)?;
                     typechecked_args.push(expr);
                 }
-                self.check_call_arguments(fn_call.name.name, &typed_args, ctx.scope_id)?;
-                (callee, typechecked_args, Vec::new(), original_function_return_type)
+                (callee, typechecked_args, smallvec![], original_function_return_type)
             }
             true => {
                 let original_function = original_function.unwrap();
@@ -7925,27 +7918,25 @@ impl TypedModule {
                 let specialized_fn_type = &self.get_function_type(function_id);
                 let specialized_params = specialized_fn_type.params.clone();
                 let specialized_return_type = specialized_fn_type.return_type;
-                let aligned_args = self.align_call_arguments_with_parameters(
+                let (aligned_args, aligned_params) = self.align_call_arguments_with_parameters(
                     fn_call,
                     &specialized_params,
-                    known_args.map(|ka| ka.1),
+                    known_args.map(|(_known_types, known_args)| known_args),
                     ctx.scope_id,
                     false,
                 )?;
                 //
-                // nocommit This is a mess can be so much simpler now to call check_call_arguments
-                let mut typed_args = Vec::with_capacity(aligned_args.len());
                 let mut typechecked_args = Vec::with_capacity(aligned_args.len());
-                for (maybe_typed_expr, fn_arg_type) in aligned_args.into_iter() {
-                    let expr = match maybe_typed_expr {
+                for (maybe_typed_expr, param) in aligned_args.iter().zip(aligned_params.iter()) {
+                    let expr = match *maybe_typed_expr {
                         MaybeTypedExpr::Typed(typed) => typed,
-                        MaybeTypedExpr::Parsed(parsed) => self
-                            .eval_expr(parsed, ctx.with_expected_type(Some(fn_arg_type.type_id)))?,
+                        MaybeTypedExpr::Parsed(parsed) => {
+                            self.eval_expr(parsed, ctx.with_expected_type(Some(param.type_id)))?
+                        }
                     };
-                    typed_args.push((expr, fn_arg_type));
+                    self.check_call_argument(fn_call.name.name, param, expr, ctx.scope_id)?;
                     typechecked_args.push(expr);
                 }
-                self.check_call_arguments(fn_call.name.name, &typed_args, ctx.scope_id)?;
 
                 (
                     Callee::make_static(function_id),
@@ -7988,14 +7979,13 @@ impl TypedModule {
         }
     }
 
-    // nocommit: Dropping memory registers here in flamegraph
     fn infer_types(
         &mut self,
-        type_params: &[impl NamedType],
-        args_and_params: &[(TypeOrParsedExpr, TypeId, bool)],
+        unsolved_type_params: &[impl NamedType],
+        inference_pairs: &[(TypeOrParsedExpr, TypeId, bool)],
         span: SpanId,
         scope_id: ScopeId,
-    ) -> TyperResult<Vec<SimpleNamedType>> {
+    ) -> TyperResult<SmallVec<[SimpleNamedType; 6]>> {
         debug!("INFER LEVEL {}", self.inference_context.origin_stack.len());
 
         self.inference_context.origin_stack.push(span);
@@ -8006,6 +7996,8 @@ impl TypedModule {
                 debug!("Resetting inference buffer");
                 self_.inference_context.constraints.clear();
                 self_.inference_context.vars.clear();
+                self_.inference_context.substitutions.clear();
+                self_.inference_context.substitutions_vec.clear();
             } else {
                 debug!(
                     "Not resetting inference buffer: {}",
@@ -8016,10 +8008,13 @@ impl TypedModule {
 
         // Stores the mapping from the function (or type's) type parameters to their
         // corresponding instantiated type holes for this inference context
-        let mut instantiation_set = Vec::with_capacity(type_params.len());
+        let mut instantiation_set: SmallVec<[TypeSubstitutionPair; 6]> =
+            SmallVec::with_capacity(unsolved_type_params.len());
+        let mut solutions: SmallVec<[SimpleNamedType; 6]> =
+            SmallVec::with_capacity(unsolved_type_params.len());
 
         let inference_var_count = self_.inference_context.vars.len();
-        for (idx, param) in type_params.iter().enumerate() {
+        for (idx, param) in unsolved_type_params.iter().enumerate() {
             let hole_index = idx + inference_var_count;
             let tv = self_
                 .types
@@ -8027,28 +8022,21 @@ impl TypedModule {
             self_.inference_context.vars.push(tv);
             instantiation_set.push(TypeSubstitutionPair { from: param.type_id(), to: tv });
         }
-        let mut instantiated_params = Vec::with_capacity(args_and_params.len());
-        for (_, param, _) in args_and_params.iter() {
-            let type_id = self_.substitute_in_type(*param, &instantiation_set, None, None);
+
+        for (expr, gen_param, allow_mismatch) in inference_pairs.iter() {
+            let instantiated_param_type =
+                self_.substitute_in_type(*gen_param, &instantiation_set, None, None);
             debug!(
                 "Instantiated type for inference. Was: {}, is: {}",
-                self_.type_id_to_string(*param),
-                self_.type_id_to_string(type_id)
+                self_.type_id_to_string(*gen_param),
+                self_.type_id_to_string(instantiated_param_type)
             );
-            instantiated_params.push(type_id)
-        }
+            self_.calculate_inference_substitutions(span)?;
 
-        for (index, (expr, _gen_param, allow_mismatch)) in args_and_params.iter().enumerate() {
-            let instantiated_param_type = instantiated_params[index];
-            let current_substitutions =
-                self_.substitutions_if_consistent(&self_.inference_context.constraints, span)?;
-
-            let s: Vec<_> = current_substitutions
-                .into_iter()
-                .map(|p| TypeSubstitutionPair { from: p.0, to: p.1 })
-                .collect();
+            let s = std::mem::take(&mut self_.inference_context.substitutions_vec);
             let expected_type_so_far =
                 self_.substitute_in_type(instantiated_param_type, &s, None, None);
+            self_.inference_context.substitutions_vec = s;
 
             let (argument_type, argument_span) = match expr {
                 TypeOrParsedExpr::TypeId(type_id) => (*type_id, span),
@@ -8088,16 +8076,15 @@ impl TypedModule {
         }
 
         // TODO: enrich error
-        let final_substitutions =
-            self_.substitutions_if_consistent(&self_.inference_context.constraints, span)?;
+        self_.calculate_inference_substitutions(span)?;
+        let final_substitutions = &self_.inference_context.substitutions;
 
-        let mut solutions: Vec<SimpleNamedType> = Vec::with_capacity(instantiation_set.len());
-        for (param_to_hole, param) in instantiation_set.iter().zip(type_params.iter()) {
+        for (param_to_hole, param) in instantiation_set.iter().zip(unsolved_type_params.iter()) {
             let corresponding_hole = param_to_hole.to;
             let Some(solution) = final_substitutions.get(&corresponding_hole) else {
                 return failf!(span, "No idea what {} should be", self_.name_of(param.name()));
             };
-            solutions.push(SimpleNamedType { name: param.name(), type_id: *solution })
+            solutions.push(SimpleNamedType { name: param.name(), type_id: *solution });
         }
         debug!("INFER DONE {}", self_.pretty_print_named_types(&solutions, ", "));
         Ok(solutions)
@@ -8108,7 +8095,7 @@ impl TypedModule {
         fn_call: &FnCall,
         generic_function_id: FunctionId,
         ctx: EvalExprContext,
-    ) -> TyperResult<Vec<SimpleNamedType>> {
+    ) -> TyperResult<SmallVec<[SimpleNamedType; 6]>> {
         let generic_function = self.get_function(generic_function_id);
         let generic_function_type = self.get_function_type(generic_function_id);
         debug_assert!(generic_function.is_generic());
@@ -8117,7 +8104,7 @@ impl TypedModule {
         let generic_function_params = generic_function_type.params.clone();
         let generic_function_return_type = generic_function_type.return_type;
         let passed_type_args = &fn_call.type_args;
-        let type_params = match passed_type_args.is_empty() {
+        let solved_type_params = match passed_type_args.is_empty() {
             false => {
                 if passed_type_args.len() != generic_type_params.len() {
                     return failf!(
@@ -8127,26 +8114,25 @@ impl TypedModule {
                         passed_type_args.len()
                     );
                 }
-                let mut evaled_params = Vec::with_capacity(passed_type_args.len());
-                for (idx, type_arg) in passed_type_args.iter().enumerate() {
-                    let param = &generic_type_params[idx];
-                    let type_id = self.eval_type_expr(type_arg.type_expr, ctx.scope_id)?;
-                    evaled_params.push(SimpleNamedType { name: param.name, type_id });
+                let mut evaled_params = SmallVec::with_capacity(passed_type_args.len());
+                for (type_arg, param) in passed_type_args.iter().zip(generic_type_params.iter()) {
+                    let passed_type = self.eval_type_expr(type_arg.type_expr, ctx.scope_id)?;
+                    evaled_params.push(SimpleNamedType { name: param.name, type_id: passed_type });
                 }
                 evaled_params
             }
             true => {
-                let args_and_params = self.align_call_arguments_with_parameters(
+                let (args, params) = self.align_call_arguments_with_parameters(
                     fn_call,
                     &generic_function_params,
                     None,
                     ctx.scope_id,
                     true,
                 )?;
-                let mut full_args_and_params = match ctx.expected_type_id {
-                    None => Vec::with_capacity(args_and_params.len()),
+                let mut inference_pairs: SmallVec<[_; 6]> = match ctx.expected_type_id {
+                    None => SmallVec::with_capacity(args.len()),
                     Some(expected) => {
-                        let mut v = Vec::with_capacity(args_and_params.len() + 1);
+                        let mut v = SmallVec::with_capacity(args.len() + 1);
                         v.push((
                             TypeOrParsedExpr::TypeId(expected),
                             generic_function_return_type,
@@ -8155,7 +8141,7 @@ impl TypedModule {
                         v
                     }
                 };
-                full_args_and_params.extend(args_and_params.iter().map(|(expr, param)| {
+                inference_pairs.extend(args.iter().zip(params.iter()).map(|(expr, param)| {
                     let passed_type = match expr {
                         MaybeTypedExpr::Parsed(expr_id) => TypeOrParsedExpr::ParsedExpr(*expr_id),
                         MaybeTypedExpr::Typed(expr) => {
@@ -8165,12 +8151,9 @@ impl TypedModule {
                     (passed_type, param.type_id, false)
                 }));
 
-                // nocommit: in this example it looks like this expr gets compiled like
-                // 4 times currently
-                // assert(#debug some(2).unwrap() == 2);
                 let solutions = self.infer_types(
                     &generic_type_params,
-                    &full_args_and_params,
+                    &inference_pairs,
                     fn_call.span,
                     ctx.scope_id,
                 )?;
@@ -8178,12 +8161,12 @@ impl TypedModule {
             }
         };
 
-        // Enforce ability constraints, or other constraints in the future?
-        for (type_param, type_arg) in generic_type_params.iter().zip(type_params.iter()) {
+        // Enforce ability constraints
+        for (solution, type_param) in solved_type_params.iter().zip(generic_type_params.iter()) {
             self.check_type_constraints(
                 type_param.name,
                 type_param.type_id,
-                type_arg.type_id,
+                solution.type_id,
                 ctx.scope_id,
                 fn_call.span,
             )
@@ -8196,7 +8179,7 @@ impl TypedModule {
                 )
             })?;
         }
-        Ok(type_params)
+        Ok(solved_type_params)
     }
 
     // nocommit
@@ -8256,16 +8239,19 @@ impl TypedModule {
         debug!("Got set {}", self.pretty_print_type_substitutions(set, ", "));
     }
 
-    fn substitutions_if_consistent(
-        &self,
-        substitutions: &[TypeSubstitutionPair],
-        span: SpanId,
-    ) -> TyperResult<FxHashMap<TypeId, TypeId>> {
-        debug!("Is set consistent: {}", self.pretty_print_type_substitutions(substitutions, ", "));
-        let mut final_pairs = FxHashMap::new();
-        for subst in substitutions {
-            // Validity first
-            // This maybe unnecessary since we are passing in our 'current guess'
+    fn calculate_inference_substitutions(&mut self, span: SpanId) -> TyperResult<()> {
+        let mut ctx = std::mem::take(&mut self.inference_context);
+        debug!(
+            "calculate_inference_substitutions {}",
+            self.pretty_print_type_substitutions(&ctx.constraints, ", ")
+        );
+        ctx.substitutions.clear();
+        ctx.substitutions_vec.clear();
+
+        let final_pairs = &mut ctx.substitutions;
+        for subst in &ctx.constraints {
+            // 1. Validity
+            // This may be unnecessary since we are passing in our 'current guess'
             // as the expected type once we have one, so we'll just get a failure when
             // evaluating that node rather than an inconsistent substitution
 
@@ -8286,22 +8272,27 @@ impl TypedModule {
             //    },
             //}
 
-            // Consistency
+            // 2. Consistency
             match final_pairs.entry(subst.from) {
                 std::collections::hash_map::Entry::Vacant(e) => {
+                    ctx.substitutions_vec.push(*subst);
                     e.insert(subst.to);
                 }
                 std::collections::hash_map::Entry::Occupied(occ) => {
                     let dest = occ.get();
                     if *dest != subst.to {
-                        // TODO: We could include attribution spans on substitutions
-                        return failf!(
+                        // TODO: We should include attribution spans on substitutions so that we
+                        // can report to the user _why_ we expect such and such a value to be of
+                        // a certain type
+                        let e = failf!(
                             span,
                             "Type {} needs to be {} but also needs to be {}",
                             self.type_id_to_string(subst.from),
                             self.type_id_to_string(subst.to),
                             self.type_id_to_string(*dest),
                         );
+                        self.inference_context = ctx;
+                        return e;
                     }
                 }
             }
@@ -8313,7 +8304,8 @@ impl TypedModule {
                 self.type_id_to_string(*p.1)
             );
         }
-        Ok(final_pairs)
+        self.inference_context = ctx;
+        Ok(())
     }
 
     fn unify_and_find_substitutions(
@@ -8624,7 +8616,7 @@ impl TypedModule {
             name: specialized_name,
             scope: spec_fn_scope,
             param_variables,
-            type_params: vec![],
+            type_params: smallvec![],
             body_block: None,
             intrinsic_type: generic_function.intrinsic_type,
             linkage: generic_function.linkage,
@@ -9424,13 +9416,16 @@ impl TypedModule {
 
         let name = match impl_self_type {
             Some(target_type) => {
-                // nocommit: nontrivial perf cost generating this name
-                let s = format!(
+                use std::fmt::Write;
+                let mut s = String::with_capacity(256);
+                write!(
+                    &mut s,
                     "{}_{}_{}",
                     self_.name_of(self_.get_ability(ability_id.unwrap()).name),
                     self_.type_id_to_string(target_type),
                     self_.name_of(parsed_function_name),
-                );
+                )
+                .unwrap();
                 self_.ast.identifiers.intern(s)
             }
             None => parsed_function.name,
@@ -9444,7 +9439,8 @@ impl TypedModule {
         );
 
         // Instantiate type arguments.
-        let mut type_params: Vec<TypeParam> = Vec::with_capacity(parsed_function_type_params.len());
+        let mut type_params: SmallVec<[TypeParam; 6]> =
+            SmallVec::with_capacity(parsed_function_type_params.len());
 
         // Inject the 'Self' type parameter
         if is_ability_decl {
