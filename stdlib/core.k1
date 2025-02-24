@@ -89,7 +89,6 @@ ns sys {
     
     // Remove trailing newline if present
     if bytesRead > 0 and buffer.get(length) == ('\n' as u8) {
-      // nocommit buffer.set(length, 0);
       buffer.set(length, 0);
       buffer.len* <- length;
     };

@@ -924,14 +924,14 @@ impl TypedModule {
         s
     }
 
-    pub fn pretty_print_named_types(&self, types: &[SimpleNamedType], sep: &str) -> String {
+    pub fn pretty_print_named_types(&self, types: &[impl NamedType], sep: &str) -> String {
         let mut s = String::new();
         let mut first = true;
         for nt in types {
             if !first {
                 s.push_str(sep)
             }
-            write!(s, "{} := {}", self.name_of(nt.name), self.type_id_to_string(nt.type_id))
+            write!(s, "{} := {}", self.name_of(nt.name()), self.type_id_to_string(nt.type_id()))
                 .unwrap();
             first = false;
         }
