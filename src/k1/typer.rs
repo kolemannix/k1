@@ -1166,6 +1166,7 @@ pub struct TypedMatchExpr {
 }
 
 // nocommit: Size: 112 bytes
+static_assert_size!(TypedExpr, 112);
 #[derive(Debug, Clone)]
 pub enum TypedExpr {
     Unit(SpanId),
@@ -1319,6 +1320,7 @@ pub struct AssignmentStmt {
     pub kind: AssignmentKind,
 }
 
+static_assert_size!(TypedStmt, 20);
 #[derive(Debug, Clone)]
 pub enum TypedStmt {
     Expr(TypedExprId, TypeId),
@@ -1813,7 +1815,7 @@ impl TypedModule {
             variables: Variables::default(),
             types,
             constants: Vec::new(),
-            exprs: Pool::with_capacity("typed_exprs", 16384),
+            exprs: Pool::with_capacity("typed_exprs", 32768),
             stmts: Pool::with_capacity("typed_stmts", 8192),
             scopes,
             errors: Vec::new(),

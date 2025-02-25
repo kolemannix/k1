@@ -2,7 +2,6 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::ops::Deref;
 use std::path::Path;
 
 use ahash::HashMapExt;
@@ -482,9 +481,9 @@ pub struct CodegenedFunction<'ctx> {
     pub instruction_count: usize,
 }
 
-pub struct Codegen<'ctx, 'module> {
+pub struct Codegen<'ctx, 'module, 'bump> {
     ctx: &'ctx Context,
-    pub module: &'module TypedModule,
+    pub module: &'module TypedModule<'bump>,
     llvm_module: LlvmModule<'ctx>,
     llvm_machine: TargetMachine,
     builder: Builder<'ctx>,
@@ -556,11 +555,11 @@ fn i8_array_from_str<'ctx>(ctx: &'ctx Context, value: &str) -> ArrayValue<'ctx> 
     ctx.const_string(bytes, false)
 }
 
-impl<'ctx, 'module> Codegen<'ctx, 'module> {
+impl<'ctx, 'module, 'bump> Codegen<'ctx, 'module, 'bump> {
     fn init_debug(
         ctx: &'ctx Context,
         llvm_module: &LlvmModule<'ctx>,
-        module: &TypedModule,
+        module: &TypedModule<'bump>,
         optimize: bool,
         debug: bool,
     ) -> DebugContext<'ctx> {
@@ -643,10 +642,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     pub fn create(
         ctx: &'ctx Context,
-        module: &'module TypedModule,
+        module: &'module TypedModule<'bump>,
         debug: bool,
         optimize: bool,
-    ) -> Codegen<'ctx, 'module> {
+    ) -> Self {
         let builder = ctx.create_builder();
         let char_type = ctx.i8_type();
         let mut llvm_module = ctx.create_module(&module.ast.name);
@@ -1587,22 +1586,15 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             let next_arm = arm_blocks.get(index + 1);
             let next_arm_or_fail = next_arm.map(|p| p.0).unwrap_or(fail_block);
 
-            let guard_block = if let Some(guard_condition) = arm.guard_condition {
-                // Guard must be a boolean
+            let guard_block = if let Some(_guard_condition) = arm.guard_condition {
                 let guard_block =
                     self.ctx.insert_basic_block_after(*arm_block, &format!("arm_guard_{index}"));
-                self.builder.position_at_end(guard_block);
-                let guard_value = self.codegen_expr_basic_value(guard_condition)?;
-                let condition_value = self.bool_to_i1(guard_value.into_int_value(), "arm_guard_i1");
-                self.builder
-                    .build_conditional_branch(condition_value, *arm_cons_block, next_arm_or_fail)
-                    .unwrap();
-                self.builder.position_at_end(*arm_block);
                 Some(guard_block)
             } else {
                 None
             };
 
+            self.builder.position_at_end(*arm_block);
             let pattern_condition = self.codegen_expr_basic_value(arm.pattern_condition)?;
             let pattern_condition_i1 =
                 self.bool_to_i1(pattern_condition.into_int_value(), "arm_pattern_i1");
@@ -1618,6 +1610,18 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             self.builder.position_at_end(guard_block.unwrap_or(*arm_cons_block));
             for binding_stmt in &arm.pattern_bindings {
                 self.codegen_statement(*binding_stmt)?;
+            }
+
+            if let Some(_guard_block) = guard_block {
+                // Guard must be a boolean
+                let guard_block =
+                    self.ctx.insert_basic_block_after(*arm_block, &format!("arm_guard_{index}"));
+                self.builder.position_at_end(guard_block);
+                let guard_value = self.codegen_expr_basic_value(arm.guard_condition.unwrap())?;
+                let condition_value = self.bool_to_i1(guard_value.into_int_value(), "arm_guard_i1");
+                self.builder
+                    .build_conditional_branch(condition_value, *arm_cons_block, next_arm_or_fail)
+                    .unwrap();
             }
 
             self.builder.position_at_end(*arm_cons_block);
