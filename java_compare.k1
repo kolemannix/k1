@@ -1,0 +1,34 @@
+ns List {
+  fn filter[T](self: List[T], f: \T -> bool): List[T] {
+    let* keep = List/empty[T]();
+    for i in self do { if f(i) keep.push(i) };
+    keep
+  }
+}
+
+fn main(): int {
+  let people = [
+    { name: "Alice", age: 30 },
+    { name: "Bob", age: 25 },
+    { name: "Charlie", age: 40 },
+    { name: "David", age: 18 },
+  ];
+
+  let processedPeople = for person in people.filter(\(p: Person) p.name == "Bob") yield {
+    { name: person.name, age: person.age }
+  };
+  for person in processedPeople do {
+    println(personInfo(person))
+  };
+  0
+}
+
+deftype alias Person = { name: string, age: int }
+
+fn personInfo(person: Person): string {
+  switch person {
+    { name, age } if age < 20 -> "\{name} is a teenager",
+    { name, age } if age < 40 -> "\{name} is an adult",
+    { name, age } -> "\{name} is middle-aged",
+  }
+}
