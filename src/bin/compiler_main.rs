@@ -2,6 +2,10 @@ use clap::Parser;
 use k1::compiler;
 use k1::compiler::{Args, Command};
 use log::info;
+use mimalloc::MiMalloc;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 fn main() -> anyhow::Result<()> {
     let l = Box::leak(Box::new(
