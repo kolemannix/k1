@@ -2693,14 +2693,17 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     self.codegen_expr_basic_value(*function_reference_expr)?.into_pointer_value();
 
                 self.set_debug_location(call.span);
-                self.builder
+
+                let call_site_value = self
+                    .builder
                     .build_indirect_call(
                         llvm_function_type.llvm_function_type,
                         function_ptr,
                         args.make_contiguous(),
                         "",
                     )
-                    .unwrap()
+                    .unwrap();
+                call_site_value
             }
             Callee::DynamicClosure(callee_struct_expr) => {
                 let closure_object_type = self.builtin_types.dynamic_closure_object;
@@ -2723,7 +2726,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     .into_pointer_value();
                 let env_ptr_gep = self
                     .builder
-                    .build_struct_gep(closure_object_type, callee_struct, 0, "env_ptr_gep")
+                    .build_struct_gep(closure_object_type, callee_struct, 1, "env_ptr_gep")
                     .unwrap();
                 let env_ptr = self
                     .builder
@@ -2744,6 +2747,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     )
                     .unwrap()
             }
+        };
+
+        if llvm_function_type.is_sret {
+            let sret_attribute = self.ctx.create_type_attribute(
+                Attribute::get_named_enum_kind_id("sret"),
+                llvm_function_type.return_type.rich_value_type().as_any_type_enum(),
+            );
+            callsite_value.add_attribute(AttributeLoc::Param(0), sret_attribute)
         };
         match callsite_value.try_as_basic_value() {
             either::Either::Left(value) => Ok(LlvmValue::BasicValue(value)),
