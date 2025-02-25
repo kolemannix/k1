@@ -25,14 +25,14 @@ New tagline? "C with typeclasses and tagged unions"
     - [x] Match to get reference to enum payload
   - [x] ASSERT FAILED: true != true at core.k1:23
 - [ ] Write a function to typecheck TypedExprs, so we can typecheck synthesized code in debug builds!
-- [ ] Real type inference
+- [x] Real type inference
   - [x] True inference variables, instantiate function types, unification and consistency checks, aka make it work
   - [-] Make 'crash' work in no-std
   - [x] Make it pretty (de-coupled inference hole from type variable)
   - [x] Move enum constructor onto new inference infra
   - [x] Move ability resolution onto new inference infra
   - [x] Make it fast (Added better 'pool' to prepare for avoiding lots of allocations)
-  - [ ] Try a 'get types' pass that powers inference and avoids the 2x full compile (of args to generics) that we do now
+- [ ] Try a 'get types' pass that powers inference and avoids the 2x full compile (of args to generics) that we do now
 - [ ] comptime #if needs to be a real node not a directive (can't parse if/else). More like `#const if` than `#if`
 - [ ] Fix closure types / get static dispatch for functions taking a closure directly
 - [ ] *Specializing functions on their provided closures to allow inlining and static dispatch*
