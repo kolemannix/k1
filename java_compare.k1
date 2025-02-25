@@ -4,31 +4,41 @@ ns List {
     for i in self do { if f(i) keep.push(i) };
     keep
   }
-}
-
-fn main(): int {
-  let people = [
-    { name: "Alice", age: 30 },
-    { name: "Bob", age: 25 },
-    { name: "Charlie", age: 40 },
-    { name: "David", age: 18 },
-  ];
-
-  let processedPeople = for person in people.filter(\(p: Person) p.name == "Bob") yield {
-    { name: person.name, age: person.age }
-  };
-  for person in processedPeople do {
-    println(personInfo(person))
-  };
-  0
+  // fn map[T, U](self: List[T], f: \T -> U): List[U] {
+  //   for self yield { f(it) }
+  // }
+  fn map[T, U](self: List[T], f: \T -> U): List[U] {
+    let* us = List/withCapacity[U](self.len);
+    for i in self do { us.push[U](f(i)) };
+    us.*
+  }
 }
 
 deftype alias Person = { name: string, age: int }
+fn main(): int {
+  let ints = [1];
+  let ints2 = ints.map(\(i: int) i + 1);
+  let people = [
+    { name: "Alice", age: 30 },
+  ];
+  //let processedPeople = people.filter(\(p: Person) p.name == "Bob").map(\(p: Person) "a");
+  // I think something simple; returning structs isn't working in closures, or passing them in.
+  // Probably just using the wrong type; it works for primitives.
+  let processedPeople = people.map(\(p: Person) p.name);
 
-fn personInfo(person: Person): string {
-  switch person {
-    { name, age } if age < 20 -> "\{name} is a teenager",
-    { name, age } if age < 40 -> "\{name} is an adult",
-    { name, age } -> "\{name} is middle-aged",
+  for p in processedPeople do {
+    println(p)
+  };
+
+  println("Hello, silly example!");
+
+  0
+}
+
+fn personInfo(p: Person): string {
+  switch p {
+    { name, age } if age < 20 -> "\{name} is a teenager.",
+    { name, age } if age < 40 -> "\{name} is an adult.",
+    { name, age } -> "\{name} is older",
   }
 }

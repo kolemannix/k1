@@ -481,9 +481,9 @@ pub struct CodegenedFunction<'ctx> {
     pub instruction_count: usize,
 }
 
-pub struct Codegen<'ctx, 'module, 'bump> {
+pub struct Codegen<'ctx, 'module> {
     ctx: &'ctx Context,
-    pub module: &'module TypedModule<'bump>,
+    pub module: &'module TypedModule,
     llvm_module: LlvmModule<'ctx>,
     llvm_machine: TargetMachine,
     builder: Builder<'ctx>,
@@ -555,11 +555,11 @@ fn i8_array_from_str<'ctx>(ctx: &'ctx Context, value: &str) -> ArrayValue<'ctx> 
     ctx.const_string(bytes, false)
 }
 
-impl<'ctx, 'module, 'bump> Codegen<'ctx, 'module, 'bump> {
+impl<'ctx, 'module> Codegen<'ctx, 'module> {
     fn init_debug(
         ctx: &'ctx Context,
         llvm_module: &LlvmModule<'ctx>,
-        module: &TypedModule<'bump>,
+        module: &TypedModule,
         optimize: bool,
         debug: bool,
     ) -> DebugContext<'ctx> {
@@ -642,7 +642,7 @@ impl<'ctx, 'module, 'bump> Codegen<'ctx, 'module, 'bump> {
 
     pub fn create(
         ctx: &'ctx Context,
-        module: &'module TypedModule<'bump>,
+        module: &'module TypedModule,
         debug: bool,
         optimize: bool,
     ) -> Self {
@@ -1612,10 +1612,8 @@ impl<'ctx, 'module, 'bump> Codegen<'ctx, 'module, 'bump> {
                 self.codegen_statement(*binding_stmt)?;
             }
 
-            if let Some(_guard_block) = guard_block {
+            if let Some(guard_block) = guard_block {
                 // Guard must be a boolean
-                let guard_block =
-                    self.ctx.insert_basic_block_after(*arm_block, &format!("arm_guard_{index}"));
                 self.builder.position_at_end(guard_block);
                 let guard_value = self.codegen_expr_basic_value(arm.guard_condition.unwrap())?;
                 let condition_value = self.bool_to_i1(guard_value.into_int_value(), "arm_guard_i1");
