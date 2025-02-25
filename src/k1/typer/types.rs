@@ -12,13 +12,23 @@ use crate::parse::{ParsedId, ParsedTypeDefnId};
 use crate::typer::*;
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
-pub struct TypeId(u32);
+pub struct TypeId(NonZeroU32);
+impl From<NonZeroU32> for TypeId {
+    fn from(value: NonZeroU32) -> Self {
+        Self(value)
+    }
+}
+impl From<TypeId> for NonZeroU32 {
+    fn from(val: TypeId) -> Self {
+        val.0
+    }
+}
 
 impl TypeId {
-    pub const PENDING: TypeId = TypeId(u32::MAX);
+    pub const PENDING: TypeId = TypeId(NonZeroU32::MAX);
 
     pub fn to_u64(&self) -> u64 {
-        self.0 as u64
+        self.0.get() as u64
     }
 }
 
@@ -93,31 +103,31 @@ impl StructType {
     }
 }
 
-pub const U8_TYPE_ID: TypeId = TypeId(0);
-pub const U16_TYPE_ID: TypeId = TypeId(1);
-pub const U32_TYPE_ID: TypeId = TypeId(2);
-pub const U64_TYPE_ID: TypeId = TypeId(3);
-pub const I8_TYPE_ID: TypeId = TypeId(4);
-pub const I16_TYPE_ID: TypeId = TypeId(5);
-pub const I32_TYPE_ID: TypeId = TypeId(6);
-pub const I64_TYPE_ID: TypeId = TypeId(7);
+pub const U8_TYPE_ID: TypeId = TypeId(NonZeroU32::new(1).unwrap());
+pub const U16_TYPE_ID: TypeId = TypeId(NonZeroU32::new(2).unwrap());
+pub const U32_TYPE_ID: TypeId = TypeId(NonZeroU32::new(3).unwrap());
+pub const U64_TYPE_ID: TypeId = TypeId(NonZeroU32::new(4).unwrap());
+pub const I8_TYPE_ID: TypeId = TypeId(NonZeroU32::new(5).unwrap());
+pub const I16_TYPE_ID: TypeId = TypeId(NonZeroU32::new(6).unwrap());
+pub const I32_TYPE_ID: TypeId = TypeId(NonZeroU32::new(7).unwrap());
+pub const I64_TYPE_ID: TypeId = TypeId(NonZeroU32::new(8).unwrap());
 
-pub const UNIT_TYPE_ID: TypeId = TypeId(8);
-pub const CHAR_TYPE_ID: TypeId = TypeId(9);
-pub const BOOL_TYPE_ID: TypeId = TypeId(10);
-pub const NEVER_TYPE_ID: TypeId = TypeId(11);
-pub const POINTER_TYPE_ID: TypeId = TypeId(12);
-pub const F32_TYPE_ID: TypeId = TypeId(13);
-pub const F64_TYPE_ID: TypeId = TypeId(14);
+pub const UNIT_TYPE_ID: TypeId = TypeId(NonZeroU32::new(9).unwrap());
+pub const CHAR_TYPE_ID: TypeId = TypeId(NonZeroU32::new(10).unwrap());
+pub const BOOL_TYPE_ID: TypeId = TypeId(NonZeroU32::new(11).unwrap());
+pub const NEVER_TYPE_ID: TypeId = TypeId(NonZeroU32::new(12).unwrap());
+pub const POINTER_TYPE_ID: TypeId = TypeId(NonZeroU32::new(13).unwrap());
+pub const F32_TYPE_ID: TypeId = TypeId(NonZeroU32::new(14).unwrap());
+pub const F64_TYPE_ID: TypeId = TypeId(NonZeroU32::new(15).unwrap());
 
 pub const BUFFER_DATA_FIELD_NAME: &str = "data";
-pub const BUFFER_TYPE_ID: TypeId = TypeId(18);
+pub const BUFFER_TYPE_ID: TypeId = TypeId(NonZeroU32::new(19).unwrap());
 
-pub const LIST_TYPE_ID: TypeId = TypeId(23);
-pub const STRING_TYPE_ID: TypeId = TypeId(26);
-pub const OPTIONAL_TYPE_ID: TypeId = TypeId(31);
-pub const COMPILER_SOURCE_LOC_TYPE_ID: TypeId = TypeId(32);
-pub const ORDERING_TYPE_ID: TypeId = TypeId(36);
+pub const LIST_TYPE_ID: TypeId = TypeId(NonZeroU32::new(24).unwrap());
+pub const STRING_TYPE_ID: TypeId = TypeId(NonZeroU32::new(27).unwrap());
+pub const OPTIONAL_TYPE_ID: TypeId = TypeId(NonZeroU32::new(32).unwrap());
+pub const COMPILER_SOURCE_LOC_TYPE_ID: TypeId = TypeId(NonZeroU32::new(33).unwrap());
+pub const ORDERING_TYPE_ID: TypeId = TypeId(NonZeroU32::new(37).unwrap());
 
 #[derive(Debug, Clone)]
 pub struct ListType {
@@ -339,7 +349,7 @@ pub struct LambdaObjectType {
 }
 
 // nocommit 104 bytes. Goal: ?
-// nocommit just re-use the compilation result when we compile the 'receiver' argument
+static_assert_size!(Type, 96);
 #[derive(Debug, Clone)]
 pub enum Type {
     Unit(TypeDefnInfo),
@@ -829,15 +839,15 @@ impl Types {
             }
         }
 
-        let type_id = match typ {
+        match typ {
             Type::Enum(mut e) => {
                 // Enums and variants are self-referential
                 // so we handle them specially
                 let next_type_id = self.next_type_id();
-                let enum_type_id = TypeId(next_type_id.0 + e.variants.len() as u32);
+                let enum_type_id = TypeId(next_type_id.0.saturating_add(e.variants.len() as u32));
 
                 for v in e.variants.iter_mut() {
-                    let variant_id = TypeId(next_type_id.0 + v.index);
+                    let variant_id = TypeId(next_type_id.0.saturating_add(v.index));
                     v.my_type_id = variant_id;
                     v.enum_type_id = enum_type_id;
                     let variant = Type::EnumVariant(v.clone());
@@ -866,13 +876,12 @@ impl Types {
                 self.type_variable_counts.insert(type_id, variable_counts);
                 type_id
             }
-        };
-
-        type_id
+        }
     }
 
     pub fn next_type_id(&self) -> TypeId {
-        TypeId(self.types.len() as u32)
+        // Safety: If you add one to a u32 it'll never be zero
+        unsafe { TypeId(NonZeroU32::new_unchecked(self.types.len() as u32 + 1)) }
     }
 
     pub fn add_reference_type(&mut self, inner_type: TypeId) -> TypeId {
@@ -885,7 +894,7 @@ impl Types {
 
     #[inline]
     pub fn get_no_follow(&self, type_id: TypeId) -> &Type {
-        &self.types[type_id.0 as usize]
+        &self.types[type_id.0.get() as usize - 1]
     }
 
     #[inline]
@@ -1013,11 +1022,14 @@ impl Types {
     }
 
     pub fn get_mut(&mut self, type_id: TypeId) -> &mut Type {
-        &mut self.types[type_id.0 as usize]
+        &mut self.types[type_id.0.get() as usize - 1]
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (TypeId, &Type)> {
-        self.types.iter().enumerate().map(|(i, t)| (TypeId(i as u32), t))
+        self.types
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (TypeId(NonZeroU32::new(i as u32 + 1).unwrap()), t))
     }
 
     pub fn get_type_id_dereferenced(&self, type_id: TypeId) -> TypeId {

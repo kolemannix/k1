@@ -7,7 +7,7 @@ impl Id {
 }
 impl From<usize> for Id {
     fn from(i: usize) -> Id {
-        Id(NonZeroU32::new(i as u32 + 1).unwrap())
+        Id(crate::nzu32_increment(i as u32))
     }
 }
 
@@ -46,7 +46,7 @@ impl<T, Index: Into<NonZeroU32> + From<NonZeroU32>> Pool<T, Index> {
     }
 
     pub fn next_id(&self) -> Index {
-        let index = NonZeroU32::new(self.vec.len() as u32 + 1).unwrap();
+        let index = crate::nzu32_increment(self.vec.len() as u32);
         Index::from(index)
     }
 
