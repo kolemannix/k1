@@ -4,9 +4,9 @@ use std::fmt::{Display, Formatter, Write};
 use std::num::NonZeroU32;
 
 use crate::compiler::CompilerConfig;
-use crate::lex::*;
 use crate::pool::Pool;
 use crate::typer::{BinaryOpKind, ErrorLevel, Linkage};
+use crate::{lex::*, static_assert_size};
 use fxhash::FxHashMap;
 use log::trace;
 use string_interner::backend::StringBackend;
@@ -549,6 +549,7 @@ pub struct ParsedInterpolatedString {
     pub span: SpanId,
 }
 
+static_assert_size!(ParsedExpression, 120); // Get back down ideally below 50
 #[derive(Debug, Clone)]
 pub enum ParsedExpression {
     /// ```md
@@ -820,6 +821,7 @@ pub enum ParsedStmt {
     SetRef(SetStmt),                    // x <- 42
     LoneExpression(ParsedExpressionId), // println("asdfasdf")
 }
+static_assert_size!(ParsedStmt, 24);
 
 #[derive(Debug, Clone)]
 pub struct Block {
@@ -1319,7 +1321,7 @@ impl ParsedModule {
             ability_impls: Vec::new(),
             sources: Sources::default(),
             identifiers,
-            exprs: ParsedExpressionPool::new(4096),
+            exprs: ParsedExpressionPool::new(16384),
             type_exprs: ParsedTypeExpressionPool::new(8192),
             patterns: ParsedPatternPool::default(),
             stmts: Pool::with_capacity("parsed_stmts", 8192),
