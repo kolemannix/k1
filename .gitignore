@@ -8,3 +8,4 @@ zig-out
 .scala-build
 k1_lsp.log*
 .aider*
+.DS_Store
