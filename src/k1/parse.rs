@@ -1,5 +1,3 @@
-use bumpalo::collections::Vec as BVec;
-use bumpalo::Bump;
 use std::fmt::{Display, Formatter, Write};
 use std::num::NonZeroU32;
 
@@ -1276,9 +1274,6 @@ impl Sources {
     }
 }
 
-// FIXME: For the LSP to keep working w/ the bumpalo reference
-unsafe impl Send for ParsedModule {}
-
 pub struct ParsedModule {
     pub name: String,
     pub name_id: Identifier,
@@ -1298,16 +1293,12 @@ pub struct ParsedModule {
     pub stmts: Pool<ParsedStmt, ParsedStmtId>,
     pub uses: ParsedUsePool,
     pub errors: Vec<ParseError>,
-
-    bump: &'static bumpalo::Bump,
 }
 
 impl ParsedModule {
     pub fn make(name: String, config: CompilerConfig) -> ParsedModule {
         let mut identifiers = Identifiers::default();
         let name_id = identifiers.intern(&name);
-        let bump: &'static mut Bump =
-            Box::leak(Box::new(bumpalo::Bump::with_capacity(1 * crate::MEGABYTE)));
         ParsedModule {
             name,
             name_id,
@@ -1327,7 +1318,6 @@ impl ParsedModule {
             stmts: Pool::with_capacity("parsed_stmts", 8192),
             uses: ParsedUsePool::default(),
             errors: Vec::new(),
-            bump,
         }
     }
 

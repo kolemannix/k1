@@ -195,12 +195,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf4b9d6a944f767f8e5e0db018570623c85f3d925ac718db4e06d0187adb21c1"
 
 [[package]]
-name = "bumpalo"
-version = "3.17.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1628fb46dfa0b37568d12e5edd512553eccf6a22a78e8bde00bb4aed84d5bdbf"
-
-[[package]]
 name = "byteorder"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -841,7 +835,6 @@ version = "0.1.0"
 dependencies = [
  "ahash 0.8.11",
  "anyhow",
- "bumpalo",
  "clap",
  "colored",
  "either",
@@ -851,6 +844,7 @@ dependencies = [
  "itertools 0.13.0",
  "llvm-sys",
  "log",
+ "mimalloc",
  "raylib",
  "scopeguard",
  "smallvec",
@@ -890,6 +884,16 @@ checksum = "0c2a198fb6b0eada2a8df47933734e6d35d350665a33a3593d7164fa52c75c19"
 dependencies = [
  "cfg-if 1.0.0",
  "windows-targets 0.52.5",
+]
+
+[[package]]
+name = "libmimalloc-sys"
+version = "0.1.39"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23aa6811d3bd4deb8a84dde645f943476d13b248d818edcf8ce0b2f37f036b44"
+dependencies = [
+ "cc",
+ "libc",
 ]
 
 [[package]]
@@ -967,6 +971,15 @@ name = "memchr"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2dffe52ecf27772e601905b7522cb4ef790d2cc203488bbd0e2fe85fcb74566d"
+
+[[package]]
+name = "mimalloc"
+version = "0.1.43"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "68914350ae34959d83f732418d51e2427a794055d0b9529f48259ac07af65633"
+dependencies = [
+ "libmimalloc-sys",
+]
 
 [[package]]
 name = "minimal-lexical"

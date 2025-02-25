@@ -12,7 +12,6 @@ use std::num::NonZeroU32;
 
 use ahash::HashMapExt;
 use anyhow::bail;
-use bumpalo::collections::Vec as BVec;
 use colored::Colorize;
 use either::Either;
 use fxhash::FxHashMap;
@@ -1793,8 +1792,6 @@ pub struct TypedModule {
     pub debug_level_stack: Vec<log::LevelFilter>,
     pub functions_pending_body_specialization: Vec<FunctionId>,
     inference_context: InferenceContext,
-
-    bump: bumpalo::Bump,
 }
 
 impl TypedModule {
@@ -1838,7 +1835,6 @@ impl TypedModule {
                 substitutions: FxHashMap::with_capacity(256),
                 substitutions_vec: Vec::with_capacity(256),
             },
-            bump: bumpalo::Bump::with_capacity(8 * crate::MEGABYTE),
         }
     }
 
