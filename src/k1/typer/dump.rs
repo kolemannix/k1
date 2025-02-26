@@ -221,16 +221,25 @@ impl TypedModule {
                 Ok(())
             }
             Type::TypeParameter(tv) => {
-                if expand {
-                    let scope_name = self
-                        .scopes
-                        .make_scope_name(self.scopes.get_scope(tv.scope_id), &self.ast.identifiers);
-                    writ.write_str(&scope_name)?;
-                    writ.write_str(".")?;
-                    writ.write_str("'")?;
-                    writ.write_str(self.name_of(tv.name))?;
-                } else {
-                    writ.write_str(self.name_of(tv.name))?;
+                match tv.function_type {
+                    None => {
+                        if expand {
+                            let scope_name = self.scopes.make_scope_name(
+                                self.scopes.get_scope(tv.scope_id),
+                                &self.ast.identifiers,
+                            );
+                            writ.write_str(&scope_name)?;
+                            writ.write_str(".")?;
+                            writ.write_str("'")?;
+                            writ.write_str(self.name_of(tv.name))?;
+                        } else {
+                            writ.write_str(self.name_of(tv.name))?;
+                        }
+                    }
+                    Some(function_type) => {
+                        writ.write_str("some ")?;
+                        self.display_type_id(function_type, expand, writ)?;
+                    }
                 }
                 Ok(())
             }
@@ -323,15 +332,15 @@ impl TypedModule {
                 writ.write_str(") -> ")?;
                 self.display_type_id(fun.return_type, expand, writ)
             }
-            Type::Closure(clos) => {
-                write!(writ, "closure(")?;
-                self.display_type_id(clos.function_type, expand, writ)?;
+            Type::Lambda(lam) => {
+                write!(writ, "lambda(")?;
+                self.display_type_id(lam.function_type, expand, writ)?;
                 writ.write_str(")")?;
                 Ok(())
             }
-            Type::ClosureObject(closure_object) => {
-                writ.write_str("closure_object(")?;
-                self.display_type_id(closure_object.function_type, expand, writ)?;
+            Type::LambdaObject(lambda_object) => {
+                writ.write_str("lambda_object(")?;
+                self.display_type_id(lambda_object.function_type, expand, writ)?;
                 writ.write_str(")")?;
                 Ok(())
             }
@@ -339,7 +348,7 @@ impl TypedModule {
                 if rr.is_pending() {
                     writ.write_str("<pending recursive ref>")
                 } else {
-                    let info = self.types.get_type_defn_info(rr.root_type_id).unwrap();
+                    let info = self.types.get_type_defn_info(rr.root_type_id.unwrap()).unwrap();
                     writ.write_str(self.name_of(info.name))?;
                     Ok(())
                 }
@@ -538,23 +547,28 @@ impl TypedModule {
             TypedExpr::StructFieldAccess(field_access) => {
                 self.display_expr_id(field_access.base, writ, indentation)?;
                 writ.write_str(".")?;
-                writ.write_str(self.name_of(field_access.target_field))
+                self.write_ident(writ, field_access.target_field)?;
+                Ok(())
             }
             TypedExpr::Call(fn_call) => {
                 match &fn_call.callee {
-                    Callee::StaticClosure { function_id, .. } => {
+                    Callee::StaticLambda { function_id, .. } => {
                         let name = self.get_function(*function_id).name;
-                        writ.write_str(self.name_of(name))?;
+                        self.write_ident(writ, name)?;
                     }
                     Callee::StaticFunction(function_id) => {
                         let name = self.get_function(*function_id).name;
-                        writ.write_str(self.name_of(name))?;
+                        self.write_ident(writ, name)?;
                     }
                     Callee::DynamicFunction(callee_expr) => {
                         self.display_expr_id(*callee_expr, writ, indentation)?;
                     }
-                    Callee::DynamicClosure(callee_expr) => {
+                    Callee::DynamicLambda(callee_expr) => {
                         self.display_expr_id(*callee_expr, writ, indentation)?;
+                    }
+                    Callee::Abstract { variable_id, .. } => {
+                        let variable = self.variables.get(*variable_id);
+                        self.write_ident(writ, variable.name)?;
                     }
                 };
                 writ.write_str("(")?;
@@ -682,19 +696,19 @@ impl TypedModule {
                 self.display_expr_id(brk.value, writ, indentation)?;
                 writ.write_char(')')
             }
-            TypedExpr::Closure(closure_expr) => {
+            TypedExpr::Lambda(lambda_expr) => {
                 writ.write_char('\\')?;
-                let closure_type = self.types.get(closure_expr.closure_type).as_closure().unwrap();
-                let fn_type = self.types.get(closure_type.function_type).as_function().unwrap();
+                let lambda_type = self.types.get(lambda_expr.lambda_type).as_lambda().unwrap();
+                let fn_type = self.types.get(lambda_type.function_type).as_function().unwrap();
                 for arg in fn_type.params.iter() {
                     writ.write_str(self.name_of(arg.name))?;
                     writ.write_str(": ")?;
                     self.display_type_id(arg.type_id, false, writ)?;
                 }
                 writ.write_str(" -> ")?;
-                let closure_body =
-                    self.get_function(closure_type.body_function_id).body_block.as_ref().unwrap();
-                self.display_expr_id(*closure_body, writ, indentation)?;
+                let lambda_body =
+                    self.get_function(lambda_type.body_function_id).body_block.as_ref().unwrap();
+                self.display_expr_id(*lambda_body, writ, indentation)?;
                 Ok(())
             }
             TypedExpr::FunctionName(fn_name_expr) => {

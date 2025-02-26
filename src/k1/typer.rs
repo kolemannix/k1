@@ -26,8 +26,8 @@ use crate::parse::{
     self, ForExpr, ForExprType, Identifiers, IfExpr, NamedTypeArg, NamespacedIdentifier,
     NumericWidth, ParsedAbilityId, ParsedAbilityImplId, ParsedConstantId, ParsedDirective,
     ParsedExpressionId, ParsedFunctionId, ParsedId, ParsedLoopExpr, ParsedNamespaceId,
-    ParsedPattern, ParsedPatternId, ParsedStmtId, ParsedTypeDefnId, ParsedTypeExpression,
-    ParsedTypeExpressionId, ParsedUnaryOpKind, ParsedUseId, ParsedWhileExpr, Sources,
+    ParsedPattern, ParsedPatternId, ParsedStmtId, ParsedTypeDefnId, ParsedTypeExpr,
+    ParsedTypeExprId, ParsedUnaryOpKind, ParsedUseId, ParsedWhileExpr, Sources,
 };
 use crate::parse::{
     Block, FnCall, Identifier, Literal, ParsedExpression, ParsedModule, ParsedStmt,
@@ -110,7 +110,7 @@ pub const TRY_ABILITY_ID: AbilityId = AbilityId(5);
 pub const ITERATOR_ABILITY_ID: AbilityId = AbilityId(6);
 pub const ITERABLE_ABILITY_ID: AbilityId = AbilityId(7);
 
-pub const CLOSURE_ENV_PARAM_NAME: &str = "__clos_env";
+pub const LAMBDA_ENV_PARAM_NAME: &str = "__lambda_env";
 
 pub const FUNC_PARAM_OPT_COUNT: usize = 6;
 
@@ -297,9 +297,16 @@ impl From<&TypedAbilityParam> for SimpleNamedType {
 }
 
 #[derive(Debug, Clone)]
+/// An ability signature encompasses an ability's entire 'type' story:
+/// - Base type, generic type params, and impl-provided type params
+/// Example: Add[Rhs = Int]
+///                    ^ impl argument
+///              ^ ability argument
+///          ^
+///          Ability Id
 pub struct TypedAbilitySignature {
     ability_id: AbilityId,
-    impl_arguments: Vec<SimpleNamedType>,
+    impl_arguments: SmallVec<[SimpleNamedType; 4]>,
 }
 
 #[derive(Debug, Clone)]
@@ -458,7 +465,7 @@ impl TypedPattern {
 }
 
 #[derive(Debug, Clone)]
-pub struct TypedClosure {
+pub struct TypedLambda {
     pub scope: ScopeId,
     pub environment_struct_reference_type: TypeId,
     pub parsed_expression_id: ParsedExpressionId,
@@ -484,7 +491,7 @@ pub struct FnArgDefn {
     pub position: u32,
     pub type_id: TypeId,
     pub is_context: bool,
-    pub is_closure_env: bool,
+    pub is_lambda_env: bool,
     pub span: SpanId,
 }
 
@@ -494,7 +501,7 @@ impl FnArgDefn {
             name: self.name,
             type_id: self.type_id,
             is_context: self.is_context,
-            is_closure_env: self.is_closure_env,
+            is_lambda_env: self.is_lambda_env,
             span: self.span,
         }
     }
@@ -520,7 +527,7 @@ pub struct SpecializationInfo {
 #[derive(Debug, Clone, Copy)]
 pub enum TypedFunctionKind {
     Standard,
-    Closure,
+    Lambda,
     AbilityDefn(AbilityId),
     AbilityImpl(AbilityId, TypeId),
     AbilityImplDerivedBlanket(FunctionId, AbilityId, TypeId),
@@ -529,7 +536,7 @@ impl TypedFunctionKind {
     pub fn blanket_parent_function_id(&self) -> Option<FunctionId> {
         match self {
             TypedFunctionKind::Standard => None,
-            TypedFunctionKind::Closure => None,
+            TypedFunctionKind::Lambda => None,
             TypedFunctionKind::AbilityDefn(_) => None,
             TypedFunctionKind::AbilityImpl(_, _) => None,
             TypedFunctionKind::AbilityImplDerivedBlanket(function_id, _, _) => Some(*function_id),
@@ -538,7 +545,7 @@ impl TypedFunctionKind {
     pub fn ability_id(&self) -> Option<AbilityId> {
         match self {
             TypedFunctionKind::Standard => None,
-            TypedFunctionKind::Closure => None,
+            TypedFunctionKind::Lambda => None,
             TypedFunctionKind::AbilityDefn(ability_id) => Some(*ability_id),
             TypedFunctionKind::AbilityImpl(ability_id, _) => Some(*ability_id),
             TypedFunctionKind::AbilityImplDerivedBlanket(_, ability_id, _) => Some(*ability_id),
@@ -798,14 +805,19 @@ pub struct UnaryOp {
 #[derive(Debug, Clone)]
 pub enum Callee {
     StaticFunction(FunctionId),
-    StaticClosure {
+    StaticLambda {
         function_id: FunctionId,
-        closure_type_id: TypeId,
+        lambda_type_id: TypeId,
     },
-    /// Must contain a ClosureObject
-    DynamicClosure(TypedExprId),
+    /// Must contain a LambdaObject
+    DynamicLambda(TypedExprId),
     /// Must contain a Function reference
     DynamicFunction(TypedExprId),
+    /// Used by function type parameters
+    Abstract {
+        variable_id: VariableId,
+        function_type: TypeId,
+    },
 }
 
 impl Callee {
@@ -815,9 +827,10 @@ impl Callee {
     pub fn maybe_function_id(&self) -> Option<FunctionId> {
         match self {
             Callee::StaticFunction(function_id) => Some(*function_id),
-            Callee::StaticClosure { function_id, .. } => Some(*function_id),
-            Callee::DynamicClosure(_) => None,
+            Callee::StaticLambda { function_id, .. } => Some(*function_id),
+            Callee::DynamicLambda(_) => None,
             Callee::DynamicFunction(_) => None,
+            Callee::Abstract { .. } => None,
         }
     }
 }
@@ -1109,8 +1122,8 @@ pub struct TypedBreak {
 }
 
 #[derive(Debug, Clone)]
-pub struct ClosureExpr {
-    pub closure_type: TypeId,
+pub struct LambdaExpr {
+    pub lambda_type: TypeId,
     pub span: SpanId,
 }
 
@@ -1194,23 +1207,23 @@ pub enum TypedExpr {
     /// Explicit returns are syntactically like function calls, but are their own instruction type
     /// return(<expr>)
     /// It has the expression type of 'never', but is bound by the return type of the nearest
-    /// enclosing function or closure
+    /// enclosing function or lambda
     Return(TypedReturn),
     /// Breaks are syntactically like function calls, but are their own instruction type
     /// break(<expr>)
     /// It has the expression type of 'never', but influences the return type of the enclosing loop
     Break(TypedBreak),
-    /// Creating a closure results in a Closure expr.
+    /// Creating a lambda results in a Lambda expr.
     /// - A function is created
     /// - An environment capture expr is created
     /// - An expression is returned that is really just a pointer to the unique Closure it points
     ///   to; this can either be called directly or turned into a dynamic function object if needed
-    Closure(ClosureExpr),
+    Lambda(LambdaExpr),
     /// Referring to a function by name, if there are no variables in scope with the same name
     /// results in taking a function pointer
     FunctionName(FunctionReferenceExpr),
     /// These get re-written into struct access expressions once we know all captures and have
-    /// generated the closure's capture struct
+    /// generated the lambda's capture struct
     PendingCapture(PendingCaptureExpr),
 }
 
@@ -1246,7 +1259,7 @@ impl TypedExpr {
             TypedExpr::Cast(c) => c.target_type_id,
             TypedExpr::Return(_ret) => NEVER_TYPE_ID,
             TypedExpr::Break(_break) => NEVER_TYPE_ID,
-            TypedExpr::Closure(closure) => closure.closure_type,
+            TypedExpr::Lambda(lambda) => lambda.lambda_type,
             TypedExpr::FunctionName(f) => f.type_id,
             TypedExpr::PendingCapture(pc) => pc.type_id,
         }
@@ -1277,7 +1290,7 @@ impl TypedExpr {
             TypedExpr::Cast(c) => c.span,
             TypedExpr::Return(ret) => ret.span,
             TypedExpr::Break(brk) => brk.span,
-            TypedExpr::Closure(closure) => closure.span,
+            TypedExpr::Lambda(lambda) => lambda.span,
             TypedExpr::FunctionName(f) => f.span,
             TypedExpr::PendingCapture(pc) => pc.span,
         }
@@ -1634,7 +1647,7 @@ pub struct TypedAbilityImpl {
     /// The values for the types that the implementation is responsible for providing.
     /// Yes, they are already baked into the functions but I need them explicitly in order
     /// to do constraint checking
-    pub impl_arguments: Vec<SimpleNamedType>,
+    pub impl_arguments: SmallVec<[SimpleNamedType; 4]>,
     /// Invariant: These functions are ordered how they are defined in the ability, NOT how they appear in
     /// the impl code
     pub functions: Vec<FunctionId>,
@@ -1797,7 +1810,7 @@ pub struct TypedModule {
 impl TypedModule {
     pub fn new(parsed_module: ParsedModule) -> TypedModule {
         let types = Types {
-            types: Vec::new(),
+            types: Vec::with_capacity(8192),
             existing_types_mapping: FxHashMap::new(),
             type_defn_mapping: FxHashMap::new(),
             type_variable_counts: FxHashMap::new(),
@@ -2003,8 +2016,9 @@ impl TypedModule {
                     name: type_param.name,
                     scope_id: defn_scope_id,
                     span: type_param.span,
+                    function_type: None,
                 },
-                vec![],
+                smallvec![],
             );
             type_params.push(GenericTypeParam {
                 name: type_param.name,
@@ -2039,7 +2053,7 @@ impl TypedModule {
         // If this was a recursive definition, do a replacement
         if let Some(placeholder_id) = self.types.placeholder_mapping.get(&parsed_type_defn_id) {
             self.types.get_mut(*placeholder_id).as_recursive_reference().root_type_id =
-                resulting_type_id;
+                Some(resulting_type_id);
         }
 
         let type_id = if has_type_params {
@@ -2099,7 +2113,7 @@ impl TypedModule {
 
     fn eval_type_expr(
         &mut self,
-        type_expr_id: ParsedTypeExpressionId,
+        type_expr_id: ParsedTypeExprId,
         scope_id: ScopeId,
     ) -> TyperResult<TypeId> {
         self.eval_type_expr_defn(type_expr_id, scope_id, EvalTypeExprContext::EMPTY.clone())
@@ -2107,7 +2121,7 @@ impl TypedModule {
 
     fn eval_type_expr_defn(
         &mut self,
-        type_expr_id: ParsedTypeExpressionId,
+        type_expr_id: ParsedTypeExprId,
         scope_id: ScopeId,
         // The context is mostly for when we are evaluating a type expression that is part of a type
         // definition. It talks about self_name for recursive definitions, and the definition info
@@ -2115,7 +2129,7 @@ impl TypedModule {
         context: EvalTypeExprContext,
     ) -> TyperResult<TypeId> {
         let base = match self.ast.type_exprs.get(type_expr_id) {
-            ParsedTypeExpression::Builtin(span) => {
+            ParsedTypeExpr::Builtin(span) => {
                 let defn_info =
                     context.inner_type_defn_info.expect("required defn info for builtin");
                 let name = defn_info.name;
@@ -2204,7 +2218,7 @@ impl TypedModule {
                     _ => failf!(*span, "Unknown builtin type '{}'", name),
                 }
             }
-            ParsedTypeExpression::Struct(struct_defn) => {
+            ParsedTypeExpr::Struct(struct_defn) => {
                 let struct_defn = struct_defn.clone();
                 let mut fields: Vec<StructTypeField> = Vec::new();
                 for (index, ast_field) in struct_defn.fields.iter().enumerate() {
@@ -2240,7 +2254,7 @@ impl TypedModule {
                 let type_id = self.types.add_type(Type::Struct(struct_defn));
                 Ok(type_id)
             }
-            ParsedTypeExpression::TypeApplication(_ty_app) => {
+            ParsedTypeExpr::TypeApplication(_ty_app) => {
                 let type_op_result =
                     self.detect_and_eval_type_operator(type_expr_id, scope_id, context.clone())?;
                 match type_op_result {
@@ -2248,20 +2262,20 @@ impl TypedModule {
                     Some(type_op_result) => Ok(type_op_result),
                 }
             }
-            ParsedTypeExpression::Optional(opt) => {
+            ParsedTypeExpr::Optional(opt) => {
                 let inner_ty =
                     self.eval_type_expr_defn(opt.base, scope_id, context.no_attach_defn_info())?;
                 let optional_type = self.instantiate_generic_type(OPTIONAL_TYPE_ID, vec![inner_ty]);
                 Ok(optional_type)
             }
-            ParsedTypeExpression::Reference(r) => {
+            ParsedTypeExpr::Reference(r) => {
                 let inner_ty =
                     self.eval_type_expr_defn(r.base, scope_id, context.no_attach_defn_info())?;
                 let reference_type = Type::Reference(ReferenceType { inner_type: inner_ty });
                 let type_id = self.types.add_type(reference_type);
                 Ok(type_id)
             }
-            ParsedTypeExpression::Enum(e) => {
+            ParsedTypeExpr::Enum(e) => {
                 let e = e.clone();
                 let mut variants = Vec::with_capacity(e.variants.len());
                 for (index, v) in e.variants.iter().enumerate() {
@@ -2308,7 +2322,7 @@ impl TypedModule {
                 let enum_type_id = self.types.add_type(enum_type);
                 Ok(enum_type_id)
             }
-            ParsedTypeExpression::DotMemberAccess(dot_acc) => {
+            ParsedTypeExpr::DotMemberAccess(dot_acc) => {
                 let dot_acc = dot_acc.clone();
                 let base_type = self.eval_type_expr_defn(
                     dot_acc.base,
@@ -2408,9 +2422,9 @@ impl TypedModule {
                 }
             }
             // When a function type is written explicitly, it is interpreted as
-            // a function object type, which is always a closure, which is a
+            // a function object type, which is always a lambda, which is a
             // 2 member struct with a function pointer and an environment pointer
-            ParsedTypeExpression::Function(fun_type) => {
+            ParsedTypeExpr::Function(fun_type) => {
                 let fun_type = fun_type.clone();
                 let mut params: Vec<FnParamType> = Vec::with_capacity(fun_type.params.len());
                 let empty_struct_id = self.types.add_type(Type::Struct(StructType {
@@ -2422,9 +2436,9 @@ impl TypedModule {
                 let empty_struct_reference_id = self.types.add_reference_type(empty_struct_id);
                 params.push(FnParamType {
                     type_id: empty_struct_reference_id,
-                    name: get_ident!(self, CLOSURE_ENV_PARAM_NAME),
+                    name: get_ident!(self, LAMBDA_ENV_PARAM_NAME),
                     is_context: false,
-                    is_closure_env: true,
+                    is_lambda_env: true,
                     span: fun_type.span,
                 });
                 for (index, param) in fun_type.params.iter().enumerate() {
@@ -2435,7 +2449,7 @@ impl TypedModule {
                         type_id,
                         name,
                         is_context: false,
-                        is_closure_env: false,
+                        is_lambda_env: false,
                         span,
                     });
                 }
@@ -2445,19 +2459,26 @@ impl TypedModule {
                     return_type,
                     defn_info: None,
                 }));
-
-                let closure_object_type = self.types.add_closure_object(
-                    &self.ast.identifiers,
-                    function_type_id,
-                    type_expr_id.into(),
-                );
-                Ok(closure_object_type)
+                Ok(function_type_id)
             }
-            ParsedTypeExpression::TypeOf(tof) => {
+            ParsedTypeExpr::TypeOf(tof) => {
                 let expr =
                     self.eval_expr(tof.target_expr, EvalExprContext::from_scope(scope_id))?;
                 let ty = self.exprs.get(expr);
                 Ok(ty.get_type())
+            }
+            ParsedTypeExpr::SomeQuant(quant) => {
+                let span = quant.span;
+                let inner = self.eval_type_expr(quant.inner, scope_id)?;
+                let Type::Function(_function_type) = self.types.get(inner) else {
+                    return failf!(span, "Expected a function type following 'some'");
+                };
+                let name = self.ast.identifiers.intern(format!("some_fn_{}", inner));
+                let function_type_variable = self.add_type_variable(
+                    TypeParameter { name, scope_id, span, function_type: Some(inner) },
+                    smallvec![],
+                );
+                Ok(function_type_variable)
             }
         }?;
         Ok(base)
@@ -2466,16 +2487,37 @@ impl TypedModule {
     /// Temporary home for our type operators until I decide on syntax
     fn detect_and_eval_type_operator(
         &mut self,
-        ty_app_id: ParsedTypeExpressionId,
+        ty_app_id: ParsedTypeExprId,
         scope_id: ScopeId,
         context: EvalTypeExprContext,
     ) -> TyperResult<Option<TypeId>> {
-        let ParsedTypeExpression::TypeApplication(ty_app) = self.ast.type_exprs.get(ty_app_id)
-        else {
+        let ParsedTypeExpr::TypeApplication(ty_app) = self.ast.type_exprs.get(ty_app_id) else {
             panic_at_disco!("Expected TypeApplication")
         };
+        if !ty_app.name.namespaces.is_empty() {
+            return Ok(None);
+        }
         let ty_app = ty_app.clone();
         match self.name_of(ty_app.name.name) {
+            "dyn" => {
+                if ty_app.args.len() != 2 {
+                    return failf!(ty_app.span, "Expected 1 type parameter for dyn");
+                }
+                let inner = self.eval_type_expr_defn(
+                    ty_app.args[0].type_expr,
+                    scope_id,
+                    context.no_attach_defn_info(),
+                )?;
+                if self.types.get(inner).as_function().is_none() {
+                    return failf!(
+                        ty_app.span,
+                        "Expected function type, or eventually, ability name, for dyn"
+                    );
+                }
+                let lambda_object_type =
+                    self.types.add_lambda_object(&self.ast.identifiers, inner, ty_app_id.into());
+                Ok(Some(lambda_object_type))
+            }
             "_struct_combine" => {
                 if ty_app.args.len() != 2 {
                     return failf!(ty_app.span, "Expected 2 type parameters for _struct_combine");
@@ -2577,12 +2619,11 @@ impl TypedModule {
 
     fn eval_type_application(
         &mut self,
-        ty_app_id: ParsedTypeExpressionId,
+        ty_app_id: ParsedTypeExprId,
         scope_id: ScopeId,
         context: EvalTypeExprContext,
     ) -> TyperResult<TypeId> {
-        let ParsedTypeExpression::TypeApplication(ty_app) = self.ast.type_exprs.get(ty_app_id)
-        else {
+        let ParsedTypeExpr::TypeApplication(ty_app) = self.ast.type_exprs.get(ty_app_id) else {
             panic_at_disco!("Expected TypeApplication")
         };
 
@@ -2644,7 +2685,7 @@ impl TypedModule {
                                         let type_id = self.types.add_type(
                                             Type::RecursiveReference(RecursiveReference {
                                                 parsed_id: type_defn_id,
-                                                root_type_id: TypeId::PENDING,
+                                                root_type_id: None,
                                             }),
                                         );
                                         self.types
@@ -2731,7 +2772,7 @@ impl TypedModule {
                         .unwrap()
                         .param_values;
                     debug!(
-                        "instantiated\n{} with params\n{}\ngot expanded type: {}",
+                        "instantiated {} with params {} got expanded type: {}",
                         self.name_of(gen.type_defn_info.name),
                         self.pretty_print_types(inst_info, ", "),
                         self.type_id_to_string_ext(specialized_type, true)
@@ -2752,6 +2793,9 @@ impl TypedModule {
         generic_parent_to_attach: Option<TypeId>,
         defn_info_to_attach: Option<TypeDefnInfo>,
     ) -> TypeId {
+        // nocommit: Optimize the case where all the pairs are type variables or inference holes,
+        // and the target type has none, it's a no-op!
+
         let force_new = defn_info_to_attach.is_some();
         // If this type is already a generic instance of something, just
         // re-specialize it on the right inputs. So find out what the new value
@@ -2863,7 +2907,34 @@ impl TypedModule {
                     type_id
                 }
             }
-            Type::TypeParameter(_) => type_id,
+            Type::TypeParameter(type_param) => {
+                // nocommit: This seems like it wants to be a new type of type. We probably pull it
+                // out like we did for inference hole
+                debug!("substitute in type_param {:?}", type_param.function_type);
+                match type_param.function_type {
+                    None => type_id,
+                    Some(function_type_id) => {
+                        let new_fn_type = self.substitute_in_type(
+                            function_type_id,
+                            substitution_pairs,
+                            None,
+                            None,
+                        );
+                        debug!("substituted function {}", self.type_id_to_string(new_fn_type));
+                        if new_fn_type != function_type_id {
+                            let type_param = self.types.get(type_id).as_type_parameter().unwrap();
+                            self.types.add_type(Type::TypeParameter(TypeParameter {
+                                name: type_param.name,
+                                scope_id: type_param.scope_id,
+                                span: type_param.span,
+                                function_type: Some(new_fn_type),
+                            }))
+                        } else {
+                            type_id
+                        }
+                    }
+                }
+            }
             Type::InferenceHole(_) => type_id,
             Type::Unit(_)
             | Type::Char(_)
@@ -2904,16 +2975,16 @@ impl TypedModule {
                     type_id
                 }
             }
-            Type::Closure(_) => {
-                unreachable!("substitute_in_type is not expected to be called on a Closure")
+            Type::Lambda(_) => {
+                unreachable!("substitute_in_type is not expected to be called on a Lambda")
             }
-            Type::ClosureObject(co) => {
-                let co_fn_type = co.function_type;
-                let co_parsed_id = co.parsed_id;
+            Type::LambdaObject(lam_obj) => {
+                let co_fn_type = lam_obj.function_type;
+                let co_parsed_id = lam_obj.parsed_id;
                 let new_fn_type =
-                    self.substitute_in_type(co.function_type, substitution_pairs, None, None);
+                    self.substitute_in_type(lam_obj.function_type, substitution_pairs, None, None);
                 if new_fn_type != co_fn_type || force_new {
-                    self.types.add_closure_object(&self.ast.identifiers, new_fn_type, co_parsed_id)
+                    self.types.add_lambda_object(&self.ast.identifiers, new_fn_type, co_parsed_id)
                 } else {
                     type_id
                 }
@@ -2929,7 +3000,7 @@ impl TypedModule {
 
     fn eval_const_type_expr(
         &mut self,
-        parsed_type_expr: ParsedTypeExpressionId,
+        parsed_type_expr: ParsedTypeExprId,
         scope_id: ScopeId,
     ) -> TyperResult<TypeId> {
         let ty = self.eval_type_expr(parsed_type_expr, scope_id)?;
@@ -3325,16 +3396,17 @@ impl TypedModule {
                     ))
                 }
             }
-            (Type::ClosureObject(closure_object), Type::Closure(closure_type)) => {
-                self.check_types(closure_object.function_type, closure_type.function_type, scope_id)
-            }
-            (Type::ClosureObject(exp_closure_object), Type::ClosureObject(act_closure_object)) => {
-                self.check_types(
-                    exp_closure_object.function_type,
-                    act_closure_object.function_type,
+            (Type::LambdaObject(lambda_object), Type::Lambda(lambda_type)) => Err(format!(
+                "expected lambda object but got lambda; need to call toDyn() for now. {} vs {}",
+                self.type_id_to_string(expected),
+                self.type_id_to_string(actual),
+            )),
+            (Type::LambdaObject(exp_lambda_object), Type::LambdaObject(act_lambda_object)) => self
+                .check_types(
+                    exp_lambda_object.function_type,
+                    act_lambda_object.function_type,
                     scope_id,
-                )
-            }
+                ),
             (Type::Function(f1), Type::Function(f2)) => {
                 if f1.params.len() != f2.params.len() {
                     return Err(format!(
@@ -3594,7 +3666,7 @@ impl TypedModule {
     fn add_type_variable(
         &mut self,
         value: TypeParameter,
-        ability_impls: Vec<TypedAbilitySignature>,
+        ability_impls: SmallVec<[TypedAbilitySignature; 4]>,
     ) -> TypeId {
         let span = value.span;
         let constrained_impl_scope =
@@ -3881,7 +3953,8 @@ impl TypedModule {
         let concrete_ability_id =
             self.specialize_ability(generic_parent, substituted_ability_args, blanket_impl.span)?;
 
-        let mut substituted_impl_arguments = Vec::with_capacity(blanket_impl.impl_arguments.len());
+        let mut substituted_impl_arguments =
+            SmallVec::with_capacity(blanket_impl.impl_arguments.len());
         for blanket_impl_arg in &blanket_impl.impl_arguments {
             // Substitute T, U, V, in for each
             let substituted_type =
@@ -4128,15 +4201,14 @@ impl TypedModule {
                 }
             }
             Some((variable_id, variable_scope_id)) => {
-                let parent_closure_scope_id = self.scopes.nearest_parent_closure(scope_id);
-                let is_capture = if let Some(nearest_parent_closure_scope) = parent_closure_scope_id
-                {
-                    let variable_is_above_closure = self
+                let parent_lambda_scope_id = self.scopes.nearest_parent_lambda(scope_id);
+                let is_capture = if let Some(nearest_parent_lambda_scope) = parent_lambda_scope_id {
+                    let variable_is_above_lambda = self
                         .scopes
-                        .scope_has_ancestor(nearest_parent_closure_scope, variable_scope_id);
+                        .scope_has_ancestor(nearest_parent_lambda_scope, variable_scope_id);
                     let variable_is_global = self.variables.get(variable_id).constant_id.is_some();
 
-                    let is_capture = variable_is_above_closure && !variable_is_global;
+                    let is_capture = variable_is_above_lambda && !variable_is_global;
                     debug!("{}, is_capture={is_capture}", self.name_of(variable.name.name));
                     is_capture
                 } else {
@@ -4166,7 +4238,7 @@ impl TypedModule {
                             span: variable_name_span,
                         }));
                     self.scopes.add_capture(
-                        parent_closure_scope_id.unwrap(),
+                        parent_lambda_scope_id.unwrap(),
                         variable_id,
                         fixup_expr_id,
                     );
@@ -4450,7 +4522,7 @@ impl TypedModule {
                     TRY_ABILITY_ID,
                     span,
                 ).map_err(|mut e| {
-                        e.message = format!("`.try` can only be used from a function or closure that returns a type implementing `Try`. {}", e.message);
+                        e.message = format!("`.try` can only be used from a function or lambda that returns a type implementing `Try`. {}", e.message);
                         e
                     })?;
         let try_value_original_expr = self.eval_expr(operand, ctx.with_no_expected_type())?;
@@ -5043,7 +5115,7 @@ impl TypedModule {
                 self.eval_match_expr(expr_id, ctx, partial_match, allow_bindings)
             }
             ParsedExpression::AsCast(_cast) => self.eval_cast(expr_id, ctx),
-            ParsedExpression::Closure(_closure) => self.eval_closure(expr_id, ctx),
+            ParsedExpression::Lambda(_lambda) => self.eval_lambda(expr_id, ctx),
             ParsedExpression::InterpolatedString(_is) => {
                 let res = self.eval_interpolated_string(expr_id, ctx)?;
                 Ok(res)
@@ -5255,7 +5327,7 @@ impl TypedModule {
             TypedExpr::Call(call) => {
                 let args = call.args.clone();
                 match call.callee {
-                    Callee::DynamicClosure(expr) => action(module, expr),
+                    Callee::DynamicLambda(expr) => action(module, expr),
                     Callee::DynamicFunction(expr) => action(module, expr),
                     _ => {}
                 };
@@ -5309,13 +5381,13 @@ impl TypedModule {
             TypedExpr::Cast(cast) => action(module, cast.base_expr),
             TypedExpr::Return(ret) => action(module, ret.value),
             TypedExpr::Break(brk) => action(module, brk.value),
-            TypedExpr::Closure(_) => (),
+            TypedExpr::Lambda(_) => (),
             TypedExpr::FunctionName(_) => (),
             TypedExpr::PendingCapture(_) => (),
         }
     }
 
-    fn eval_closure(
+    fn eval_lambda(
         &mut self,
         expr_id: ParsedExpressionId,
         ctx: EvalExprContext,
@@ -5330,7 +5402,7 @@ impl TypedModule {
             let v = module.variables.get(captured_variable_id);
             let variable_type = v.type_id;
             let env_struct_reference_type = module.types.add_reference_type(env_struct_type);
-            // Note: Can't capture 2 variables of the same name in a closure. Might not
+            // Note: Can't capture 2 variables of the same name in a lambda. Might not
             //       actually be a problem
             let (_field_index, env_struct_field) =
                 module.types.get(env_struct_type).expect_struct().find_field(v.name).unwrap();
@@ -5352,33 +5424,33 @@ impl TypedModule {
             });
             env_field_access
         }
-        let closure = self.ast.exprs.get(expr_id).expect_closure();
-        let closure_scope_id =
-            self.scopes.add_child_scope(ctx.scope_id, ScopeType::ClosureScope, None, None);
-        let closure_arguments = closure.arguments.clone();
-        let closure_body = closure.body;
-        let span = closure.span;
-        let body_span = self.ast.exprs.get_span(closure.body);
-        let mut typed_params = VecDeque::with_capacity(closure_arguments.len() + 1);
+        let lambda = self.ast.exprs.get(expr_id).expect_lambda();
+        let lambda_scope_id =
+            self.scopes.add_child_scope(ctx.scope_id, ScopeType::LambdaScope, None, None);
+        let lambda_arguments = lambda.arguments.clone();
+        let lambda_body = lambda.body;
+        let span = lambda.span;
+        let body_span = self.ast.exprs.get_span(lambda.body);
+        let mut typed_params = VecDeque::with_capacity(lambda_arguments.len() + 1);
         let expected_function_type =
             ctx.expected_type_id.and_then(|et| self.types.get(et).as_function()).cloned();
-        let declared_expected_return_type = match closure.return_type {
+        let declared_expected_return_type = match lambda.return_type {
             None => None,
             Some(return_type_expr) => Some(self.eval_type_expr(return_type_expr, ctx.scope_id)?),
         };
         let expected_return_type = declared_expected_return_type
             .or(expected_function_type.as_ref().map(|f| f.return_type));
 
-        self.scopes.add_closure_info(
-            closure_scope_id,
-            ScopeClosureInfo {
+        self.scopes.add_lambda_info(
+            lambda_scope_id,
+            ScopeLambdaInfo {
                 expected_return_type,
                 captured_variables: smallvec![],
                 capture_exprs_for_fixup: smallvec![],
             },
         );
 
-        for (index, arg) in closure_arguments.iter().enumerate() {
+        for (index, arg) in lambda_arguments.iter().enumerate() {
             let arg_type_id = match arg.ty {
                 Some(type_expr) => self.eval_type_expr(type_expr, ctx.scope_id)?,
                 None => {
@@ -5399,44 +5471,41 @@ impl TypedModule {
                 name: arg.binding,
                 type_id: arg_type_id,
                 is_context: false,
-                is_closure_env: false,
+                is_lambda_env: false,
                 span: arg.span,
             });
         }
 
         let mut param_variables = VecDeque::with_capacity(typed_params.len());
-        let closure_scope = self.scopes.get_scope_mut(closure_scope_id);
+        let lambda_scope = self.scopes.get_scope_mut(lambda_scope_id);
         for typed_arg in typed_params.iter() {
             let name = typed_arg.name;
             let variable_id = self.variables.add_variable(Variable {
                 name,
                 type_id: typed_arg.type_id,
                 is_mutable: false,
-                owner_scope: closure_scope_id,
+                owner_scope: lambda_scope_id,
                 is_context: false,
                 constant_id: None,
             });
-            closure_scope.add_variable(name, variable_id);
+            lambda_scope.add_variable(name, variable_id);
             param_variables.push_back(variable_id)
         }
 
         // Coerce parsed expr to block, call eval_block with needs_terminator = true
-        let ast_body_block = match self.ast.exprs.get(closure_body) {
+        let ast_body_block = match self.ast.exprs.get(lambda_body) {
             ParsedExpression::Block(b) => b.clone(),
             other_expr => {
                 let block = parse::Block {
                     span: other_expr.get_span(),
-                    stmts: vec![self
-                        .ast
-                        .stmts
-                        .add(parse::ParsedStmt::LoneExpression(closure_body))],
+                    stmts: vec![self.ast.stmts.add(parse::ParsedStmt::LoneExpression(lambda_body))],
                 };
                 block
             }
         };
         let body = self.eval_block(
             &ast_body_block,
-            ctx.with_scope(closure_scope_id).with_expected_type(expected_return_type),
+            ctx.with_scope(lambda_scope_id).with_expected_type(expected_return_type),
             true,
         )?;
         if let Some(expected_return_type) = expected_return_type {
@@ -5452,8 +5521,8 @@ impl TypedModule {
             _ => body.expr_type,
         };
 
-        let closure_info = self.scopes.get_closure_info(closure_scope_id).unwrap();
-        let env_fields = closure_info
+        let lambda_info = self.scopes.get_lambda_info(lambda_scope_id);
+        let env_fields = lambda_info
             .captured_variables
             .iter()
             .enumerate()
@@ -5467,7 +5536,7 @@ impl TypedModule {
                 }
             })
             .collect();
-        let env_field_exprs = closure_info
+        let env_field_exprs = lambda_info
             .captured_variables
             .iter()
             .map(|captured_variable_id| {
@@ -5494,17 +5563,17 @@ impl TypedModule {
         let environment_struct_reference_type =
             self.types.add_reference_type(environment_struct_type);
         let environment_param = FnParamType {
-            name: get_ident!(self, CLOSURE_ENV_PARAM_NAME),
+            name: get_ident!(self, LAMBDA_ENV_PARAM_NAME),
             type_id: environment_struct_reference_type,
             is_context: false,
-            is_closure_env: true,
+            is_lambda_env: true,
             span: body_span,
         };
         let environment_param_variable_id = self.variables.add_variable(Variable {
             name: environment_param.name,
             type_id: environment_struct_reference_type,
             is_mutable: false,
-            owner_scope: closure_scope_id,
+            owner_scope: lambda_scope_id,
             is_context: false,
             constant_id: None,
         });
@@ -5515,7 +5584,7 @@ impl TypedModule {
         let body_expr_id = self.exprs.add(TypedExpr::Block(body));
 
         let pending_fixups =
-            self.scopes.get_closure_info(closure_scope_id).unwrap().capture_exprs_for_fixup.clone();
+            self.scopes.get_lambda_info(lambda_scope_id).capture_exprs_for_fixup.clone();
 
         for pending_fixup in pending_fixups {
             let TypedExpr::PendingCapture(pc) = self.exprs.get(pending_fixup) else {
@@ -5540,20 +5609,20 @@ impl TypedModule {
             .get_function(
                 self.scopes
                     .nearest_parent_function(ctx.scope_id)
-                    .expect("Closure to be inside a function"),
+                    .expect("lambda to be inside a function"),
             )
             .name;
         let name = self.ast.identifiers.intern(format!(
-            "{}_{{closure}}_{}",
+            "{}_{{lambda}}_{}",
             self.name_of(encl_fn_name),
-            closure_scope_id,
+            lambda_scope_id,
         ));
         let name_string = self.make_qualified_name(ctx.scope_id, name, "__", true);
         let name = self.ast.identifiers.intern(name_string);
 
         let body_function_id = self.add_function(TypedFunction {
             name,
-            scope: closure_scope_id,
+            scope: lambda_scope_id,
             param_variables: param_variables.into(),
             type_params: smallvec![],
             body_block: Some(body_expr_id),
@@ -5564,10 +5633,10 @@ impl TypedModule {
             parsed_id: expr_id.into(),
             type_id: function_type,
             compiler_debug: false,
-            kind: TypedFunctionKind::Closure,
+            kind: TypedFunctionKind::Lambda,
             is_concrete: false,
         });
-        let closure_type_id = self.types.add_closure(
+        let lambda_type_id = self.types.add_lambda(
             &self.ast.identifiers,
             function_type,
             environment_struct,
@@ -5575,7 +5644,7 @@ impl TypedModule {
             body_function_id,
             expr_id.into(),
         );
-        Ok(self.exprs.add(TypedExpr::Closure(ClosureExpr { closure_type: closure_type_id, span })))
+        Ok(self.exprs.add(TypedExpr::Lambda(LambdaExpr { lambda_type: lambda_type_id, span })))
     }
 
     fn eval_match_expr(
@@ -7047,7 +7116,7 @@ impl TypedModule {
                     }
                 } else {
                     // Function lookup failed, now we deal with lower priority 'callable' things
-                    // Such as closure objects or function pointers
+                    // Such as lambda objects or function pointers
                     let fn_not_found = || {
                         failf!(
                             call_span,
@@ -7063,20 +7132,26 @@ impl TypedModule {
                     {
                         let function_variable = self.variables.get(variable_id);
                         match self.types.get(function_variable.type_id) {
-                            Type::Closure(closure_type) => {
-                                Ok(Either::Right(Callee::StaticClosure {
-                                    function_id: closure_type.body_function_id,
-                                    closure_type_id: function_variable.type_id,
-                                }))
-                            }
-                            Type::ClosureObject(_closure_object) => {
-                                Ok(Either::Right(Callee::DynamicClosure(self.exprs.add(
+                            Type::Lambda(lambda_type) => Ok(Either::Right(Callee::StaticLambda {
+                                function_id: lambda_type.body_function_id,
+                                lambda_type_id: function_variable.type_id,
+                            })),
+                            Type::LambdaObject(_lambda_object) => {
+                                Ok(Either::Right(Callee::DynamicLambda(self.exprs.add(
                                     TypedExpr::Variable(VariableExpr {
                                         variable_id,
                                         type_id: function_variable.type_id,
                                         span: fn_call.name.span,
                                     }),
                                 ))))
+                            }
+                            Type::TypeParameter(tp) => {
+                                if let Some(function_type) = tp.function_type {
+                                    let callee = Callee::Abstract { function_type, variable_id };
+                                    Ok(Either::Right(callee))
+                                } else {
+                                    fn_not_found()
+                                }
                             }
                             Type::Reference(function_reference) => {
                                 if self
@@ -7107,9 +7182,9 @@ impl TypedModule {
     }
 
     fn get_expected_return_type(&self, scope_id: ScopeId, span: SpanId) -> TyperResult<TypeId> {
-        if let Some(enclosing_closure) = self.scopes.nearest_parent_closure(scope_id) {
+        if let Some(enclosing_lambda) = self.scopes.nearest_parent_lambda(scope_id) {
             let Some(expected_return_type) =
-                self.scopes.get_closure_info(enclosing_closure).unwrap().expected_return_type
+                self.scopes.get_lambda_info(enclosing_lambda).expected_return_type
             else {
                 return failf!(span, "Closure must have explicit return type, or known return type from context, to use early returns.");
             };
@@ -7720,9 +7795,9 @@ impl TypedModule {
             }
         }
 
-        let is_closure =
-            params.first().is_some_and(|p| p.name == get_ident!(self, CLOSURE_ENV_PARAM_NAME));
-        let params = if is_closure { &params[1..] } else { params };
+        let is_lambda =
+            params.first().is_some_and(|p| p.name == get_ident!(self, LAMBDA_ENV_PARAM_NAME));
+        let params = if is_lambda { &params[1..] } else { params };
         let explicit_param_count = params.iter().filter(|p| !p.is_context).count();
         let total_expected =
             if explicit_context_args { params.len() } else { explicit_param_count };
@@ -7828,7 +7903,7 @@ impl TypedModule {
 
     pub fn get_callee_function_type(&self, callee: &Callee) -> TypeId {
         match callee {
-            Callee::StaticFunction(function_id) | Callee::StaticClosure { function_id, .. } => {
+            Callee::StaticFunction(function_id) | Callee::StaticLambda { function_id, .. } => {
                 self.get_function(*function_id).type_id
             }
             Callee::DynamicFunction(function_reference_expr) => {
@@ -7836,12 +7911,13 @@ impl TypedModule {
                     self.get_expr_type(*function_reference_expr).expect_reference().inner_type;
                 function_reference_type
             }
-            Callee::DynamicClosure(dynamic) => match self.get_expr_type(*dynamic) {
-                Type::ClosureObject(closure_object) => closure_object.function_type,
+            Callee::DynamicLambda(dynamic) => match self.get_expr_type(*dynamic) {
+                Type::LambdaObject(lambda_object) => lambda_object.function_type,
                 t => {
                     panic!("Invalid dynamic function callee: {}", self.type_to_string(t, false))
                 }
             },
+            Callee::Abstract { function_type, .. } => *function_type,
         }
     }
 
@@ -8014,18 +8090,34 @@ impl TypedModule {
         let inference_var_count = self_.inference_context.vars.len();
         for (idx, param) in unsolved_type_params.iter().enumerate() {
             let hole_index = idx + inference_var_count;
-            let tv = self_
+
+            // nocommit note to self
+            // Do not add a hole here for function type parameters, because they aren't really type
+            // parameters, treat them just like params that _use_ the real type params. Example:
+            // fn map[T, U, <FN>](a: List[T], f: some \T -> U): List[U]
+            // Use what's passed for f to constrain T and U, we only have to solve for T and U; f
+            // isn't really a "type" parameter because the function shape is already known
+            // it's just a generic type to reflect that the function needs to know it to be
+            // concrete
+            // Maybe move it out of type params to some other place so its not a special case?
+            if let Some(type_param) = self_.types.get(param.type_id()).as_type_parameter() {
+                if type_param.is_function() {
+                    continue;
+                }
+            }
+            let type_hole = self_
                 .types
                 .add_type(Type::InferenceHole(InferenceHoleType { index: hole_index as u32 }));
-            self_.inference_context.vars.push(tv);
-            instantiation_set.push(TypeSubstitutionPair { from: param.type_id(), to: tv });
+            self_.inference_context.vars.push(type_hole);
+            instantiation_set.push(TypeSubstitutionPair { from: param.type_id(), to: type_hole });
         }
 
         for (expr, gen_param, allow_mismatch) in inference_pairs.iter() {
             let instantiated_param_type =
                 self_.substitute_in_type(*gen_param, &instantiation_set, None, None);
             debug!(
-                "Instantiated type for inference. Was: {}, is: {}",
+                "Instantiated type for inference with set: {}. Was: {}, is: {}",
+                self_.pretty_print_type_substitutions(&instantiation_set, ", "),
                 self_.type_id_to_string(*gen_param),
                 self_.type_id_to_string(instantiated_param_type)
             );
@@ -8080,7 +8172,12 @@ impl TypedModule {
         for (param_to_hole, param) in instantiation_set.iter().zip(unsolved_type_params.iter()) {
             let corresponding_hole = param_to_hole.to;
             let Some(solution) = final_substitutions.get(&corresponding_hole) else {
-                return failf!(span, "No idea what {} should be", self_.name_of(param.name()));
+                return failf!(
+                    span,
+                    "Could not find a type for {}. What I know: {}",
+                    self_.name_of(param.name()),
+                    self_.pretty_print_named_types(&solutions, ", ")
+                );
             };
             solutions.push(SimpleNamedType { name: param.name(), type_id: *solution });
         }
@@ -8098,7 +8195,6 @@ impl TypedModule {
         let generic_function_type = self.get_function_type(generic_function_id);
         debug_assert!(generic_function.is_generic());
         let generic_type_params = generic_function.type_params.clone();
-        let generic_function_type_id = generic_function.type_id;
         let generic_function_params = generic_function_type.params.clone();
         let generic_function_return_type = generic_function_type.return_type;
         let passed_type_args = &fn_call.type_args;
@@ -8149,12 +8245,16 @@ impl TypedModule {
                     (passed_type, param.type_id, false)
                 }));
 
-                let solutions = self.infer_types(
-                    &generic_type_params,
-                    &inference_pairs,
-                    fn_call.span,
-                    ctx.scope_id,
-                )?;
+                let solutions = self
+                    .infer_types(&generic_type_params, &inference_pairs, fn_call.span, ctx.scope_id)
+                    .map_err(|e| {
+                        errf!(
+                            e.span,
+                            "Failed to solve for type parameters in call to {}. Detail:\n{}",
+                            self.name_of(fn_call.name.name),
+                            e.message
+                        )
+                    })?;
                 solutions
             }
         };
@@ -8209,7 +8309,7 @@ impl TypedModule {
     //        ParsedExpression::Is(parsed_is_expression) => todo!(),
     //        ParsedExpression::Match(parsed_match_expression) => todo!(),
     //        ParsedExpression::AsCast(parsed_as_cast) => todo!(),
-    //        ParsedExpression::Closure(parsed_closure) => todo!(),
+    //        ParsedExpression::lambda(parsed_lambda) => todo!(),
     //        ParsedExpression::Builtin(span_id) => todo!(),
     //    }
     //}
@@ -8240,7 +8340,7 @@ impl TypedModule {
     fn calculate_inference_substitutions(&mut self, span: SpanId) -> TyperResult<()> {
         let mut ctx = std::mem::take(&mut self.inference_context);
         debug!(
-            "calculate_inference_substitutions {}",
+            "calculate_inference_substitutions. constraints: [{}]",
             self.pretty_print_type_substitutions(&ctx.constraints, ", ")
         );
         ctx.substitutions.clear();
@@ -8473,12 +8573,41 @@ impl TypedModule {
                     passed_enum_variant.enum_type_id,
                     slot_type,
                 ),
+            (passed, Type::TypeParameter(slot_type_param))
+                if slot_type_param.function_type.is_some() =>
+            {
+                // What can we pass when we expect a function type parameter?
+                // A function reference, a lambda itself, and a lambda object, I should think
+                let passed_function_type = match passed {
+                    Type::Reference(r) => {
+                        if self.types.get(r.inner_type).as_function().is_some() {
+                            Some(r.inner_type)
+                        } else {
+                            None
+                        }
+                    }
+                    Type::Lambda(lam) => Some(lam.function_type),
+                    Type::LambdaObject(lambda_object) => Some(lambda_object.function_type),
+                    _ => None,
+                };
+                if let Some(passed_function_type) = passed_function_type {
+                    self.unify_and_find_substitutions_rec(
+                        substitutions,
+                        passed_function_type,
+                        slot_type_param.function_type.unwrap(),
+                    )
+                } else {
+                    TypeUnificationResult::NonMatching(
+                        "Expected a function type parameter; passed unrelated",
+                    )
+                }
+            }
             (Type::Function(passed_fn), Type::Function(param_fn)) => {
                 if passed_fn.params.len() == param_fn.params.len() {
                     for (passed_param, param_param) in
                         passed_fn.params.iter().zip(param_fn.params.iter())
                     {
-                        if passed_param.is_closure_env && param_param.is_closure_env {
+                        if passed_param.is_lambda_env && param_param.is_lambda_env {
                             continue;
                         }
                         self.unify_and_find_substitutions_rec(
@@ -8498,17 +8627,17 @@ impl TypedModule {
                     )
                 }
             }
-            (Type::Closure(passed_closure), Type::ClosureObject(param_closure)) => self
+            (Type::Lambda(passed_lambda), Type::LambdaObject(param_lambda)) => self
                 .unify_and_find_substitutions_rec(
                     substitutions,
-                    passed_closure.function_type,
-                    param_closure.function_type,
+                    passed_lambda.function_type,
+                    param_lambda.function_type,
                 ),
-            (Type::ClosureObject(passed_closure), Type::ClosureObject(param_closure)) => self
+            (Type::LambdaObject(passed_lambda), Type::LambdaObject(param_lambda)) => self
                 .unify_and_find_substitutions_rec(
                     substitutions,
-                    passed_closure.function_type,
-                    param_closure.function_type,
+                    passed_lambda.function_type,
+                    param_lambda.function_type,
                 ),
             (_, _) if passed_type == slot_type => TypeUnificationResult::Matching,
             _ => TypeUnificationResult::NonMatching("Unrelated types"),
@@ -9157,7 +9286,7 @@ impl TypedModule {
         span: SpanId,
         scope_id: ScopeId,
         skip_impl_check: bool,
-    ) -> TyperResult<(Vec<SimpleNamedType>, Vec<SimpleNamedType>)> {
+    ) -> TyperResult<(Vec<SimpleNamedType>, SmallVec<[SimpleNamedType; 4]>)> {
         let ability = self.get_ability(ability_id);
         let ability_parameters = ability.parameters.clone();
 
@@ -9170,7 +9299,7 @@ impl TypedModule {
         }
 
         let mut ability_arguments = Vec::with_capacity(arguments.len());
-        let mut impl_arguments = Vec::with_capacity(arguments.len());
+        let mut impl_arguments = SmallVec::with_capacity(arguments.len());
         for param in
             ability_parameters.iter().filter(|p| !skip_impl_check || p.is_ability_side_param())
         {
@@ -9279,8 +9408,13 @@ impl TypedModule {
         };
         let self_ident = get_ident!(self, "Self");
         let new_self_type_id = self.add_type_variable(
-            TypeParameter { name: self_ident, scope_id: specialized_ability_scope, span },
-            vec![],
+            TypeParameter {
+                name: self_ident,
+                scope_id: specialized_ability_scope,
+                span,
+                function_type: None,
+            },
+            smallvec![],
         );
         let _ = self
             .scopes
@@ -9333,7 +9467,7 @@ impl TypedModule {
         ability_expr: &parse::ParsedAbilityExpr,
         scope_id: ScopeId,
         skip_impl_check: bool,
-    ) -> TyperResult<(AbilityId, Vec<SimpleNamedType>, Vec<SimpleNamedType>)> {
+    ) -> TyperResult<(AbilityId, Vec<SimpleNamedType>, SmallVec<[SimpleNamedType; 4]>)> {
         let ability_id = self.find_ability_or_declare(&ability_expr.name, scope_id)?;
 
         let mut arguments = Vec::with_capacity(ability_expr.arguments.len());
@@ -9392,9 +9526,9 @@ impl TypedModule {
         let parsed_function_linkage = parsed_function.linkage;
         let parsed_function_name = parsed_function.name;
         let parsed_function_span = parsed_function.span;
-        let parsed_function_params = parsed_function.params.clone();
-        let parsed_function_context_params = parsed_function.context_params.clone();
-        let parsed_function_type_params = parsed_function.type_params.clone();
+        let parsed_function_params = &parsed_function.params;
+        let parsed_function_context_params = &parsed_function.context_params;
+        let parsed_function_type_params = &parsed_function.type_params;
 
         let is_ability_decl = ability_info.as_ref().is_some_and(|info| info.impl_info.is_none());
         let is_ability_impl = ability_info.as_ref().is_some_and(|info| info.impl_info.is_some());
@@ -9450,7 +9584,7 @@ impl TypedModule {
             })
         }
         for type_parameter in parsed_function_type_params.iter() {
-            let mut ability_constraints = Vec::new();
+            let mut ability_constraints = SmallVec::new();
             for parsed_constraint in type_parameter.constraints.iter() {
                 let ability_sig = match parsed_constraint {
                     parse::ParsedTypeConstraintExpr::Ability(ability_expr) => {
@@ -9474,6 +9608,7 @@ impl TypedModule {
                     name: type_parameter.name,
                     scope_id: fn_scope_id,
                     span: type_parameter.span,
+                    function_type: None,
                 },
                 ability_constraints,
             );
@@ -9500,6 +9635,16 @@ impl TypedModule {
             parsed_function_context_params.iter().chain(parsed_function_params.iter()).enumerate()
         {
             let type_id = self_.eval_type_expr(fn_param.ty, fn_scope_id)?;
+
+            // If its a some ... function type parameter, inject the type parameter into the
+            // function
+            if let Type::TypeParameter(tp) = self_.types.get(type_id) {
+                if let Some(_function_type) = tp.function_type {
+                    type_params.push(TypeParam { name: tp.name, type_id, span: tp.span });
+                    // There's actually no way to refer to these types by name,
+                    // so we don't need to add a name to the scope
+                }
+            }
 
             // First arg Self shenanigans
             if idx == 0 {
@@ -9561,7 +9706,7 @@ impl TypedModule {
                 name: fn_param.name,
                 type_id,
                 is_context,
-                is_closure_env: false,
+                is_lambda_env: false,
                 span: fn_param.span,
             });
             param_variables.push(variable_id);
@@ -9835,12 +9980,13 @@ impl TypedModule {
                 name: self_ident_id,
                 scope_id: ability_scope_id,
                 span: parsed_ability.span,
+                function_type: None,
             },
-            vec![],
+            smallvec![],
         );
         let _ = self.scopes.get_scope_mut(ability_scope_id).add_type(self_ident_id, self_type_id);
         for ability_param in parsed_ability.params.clone().iter() {
-            let ability_impls: TyperResult<Vec<TypedAbilitySignature>> = ability_param
+            let ability_impls: TyperResult<SmallVec<[TypedAbilitySignature; 4]>> = ability_param
                 .constraints
                 .iter()
                 .map(|constraint| match constraint {
@@ -9855,6 +10001,7 @@ impl TypedModule {
                     name: ability_param.name,
                     scope_id: ability_scope_id,
                     span: ability_param.span,
+                    function_type: None,
                 },
                 ability_impls,
             );
@@ -9997,10 +10144,13 @@ impl TypedModule {
                     name: generic_impl_param.name,
                     scope_id: impl_scope_id,
                     span: generic_impl_param.span,
+                    function_type: None,
                 },
                 // We create the variable with no constraints, then add them later, so that its
                 // constraints can reference itself
-                vec![],
+                // Example: impl[T] Add[Rhs = T where T: Num]
+                // The constraints need T to exist
+                smallvec![],
             );
             if !self
                 .scopes
@@ -10086,7 +10236,8 @@ impl TypedModule {
             }
         }
 
-        let mut impl_arguments: Vec<SimpleNamedType> = Vec::with_capacity(ability.parameters.len());
+        let mut impl_arguments: SmallVec<[SimpleNamedType; 4]> =
+            SmallVec::with_capacity(ability.parameters.len());
         for impl_param in ability.parameters.iter().filter(|p| p.is_impl_param) {
             let Some(matching_arg) =
                 ability_expr.arguments.iter().find(|arg| arg.name == impl_param.name)
@@ -11020,7 +11171,7 @@ impl TypedModule {
     fn synth_parsed_function_call(
         &mut self,
         name: NamespacedIdentifier,
-        type_args: Vec<ParsedTypeExpressionId>,
+        type_args: Vec<ParsedTypeExprId>,
         args: Vec<ParsedExpressionId>,
     ) -> ParsedExpressionId {
         let span = name.span;
@@ -11059,11 +11210,11 @@ impl TypedModule {
     }
 
     #[allow(unused)]
-    fn synth_type_of_expr(&mut self, expr: ParsedExpressionId) -> ParsedTypeExpressionId {
+    fn synth_type_of_expr(&mut self, expr: ParsedExpressionId) -> ParsedTypeExprId {
         let span = self.ast.exprs.get_span(expr);
         self.ast
             .type_exprs
-            .add(ParsedTypeExpression::TypeOf(parse::ParsedTypeOf { target_expr: expr, span }))
+            .add(ParsedTypeExpr::TypeOf(parse::ParsedTypeOf { target_expr: expr, span }))
     }
 
     fn synth_binary_bool_op(
