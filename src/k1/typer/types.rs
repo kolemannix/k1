@@ -417,7 +417,8 @@ impl PartialEq for Type {
             (Type::TypeParameter(t1), Type::TypeParameter(t2)) => {
                 t1.name == t2.name
                     && t1.scope_id == t2.scope_id
-                    && t1.function_type == t2.function_type
+                    && t1.function_type == t2.function_type // Yet another place where it should
+                                                            // have been its own type
             }
             (Type::InferenceHole(h1), Type::InferenceHole(h2)) => h1.index == h2.index,
             (Type::Enum(e1), Type::Enum(e2)) => {
