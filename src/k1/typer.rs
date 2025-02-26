@@ -3407,6 +3407,11 @@ impl TypedModule {
                     act_lambda_object.function_type,
                     scope_id,
                 ),
+            (Type::TypeParameter(expected_abstract_function), act)
+                if expected_abstract_function.is_function() =>
+            {
+                todo!()
+            }
             (Type::Function(f1), Type::Function(f2)) => {
                 if f1.params.len() != f2.params.len() {
                     return Err(format!(

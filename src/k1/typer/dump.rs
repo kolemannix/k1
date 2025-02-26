@@ -333,7 +333,7 @@ impl TypedModule {
                 self.display_type_id(fun.return_type, expand, writ)
             }
             Type::Lambda(lam) => {
-                write!(writ, "lambda(")?;
+                write!(writ, "lambda#{}(", lam.function_type)?;
                 self.display_type_id(lam.function_type, expand, writ)?;
                 writ.write_str(")")?;
                 Ok(())
