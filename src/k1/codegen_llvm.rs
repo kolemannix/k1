@@ -282,7 +282,7 @@ struct LlvmStructType<'ctx> {
 
 // Can this just be 'struct'? :()
 #[derive(Debug, Clone)]
-struct LlvmClosureType<'ctx> {
+struct LlvmLambdaType<'ctx> {
     type_id: TypeId,
     struct_type: StructType<'ctx>,
     di_type: DIType<'ctx>,
@@ -294,7 +294,7 @@ enum K1LlvmType<'ctx> {
     Value(LlvmValueType<'ctx>),
     EnumType(LlvmEnumType<'ctx>),
     StructType(LlvmStructType<'ctx>),
-    Closure(LlvmClosureType<'ctx>),
+    Lambda(LlvmLambdaType<'ctx>),
     Reference(LlvmReferenceType<'ctx>),
     Void(LlvmVoidType<'ctx>),
 }
@@ -329,9 +329,9 @@ impl<'ctx> From<LlvmReferenceType<'ctx>> for K1LlvmType<'ctx> {
     }
 }
 
-impl<'ctx> From<LlvmClosureType<'ctx>> for K1LlvmType<'ctx> {
-    fn from(value: LlvmClosureType<'ctx>) -> Self {
-        K1LlvmType::Closure(value)
+impl<'ctx> From<LlvmLambdaType<'ctx>> for K1LlvmType<'ctx> {
+    fn from(value: LlvmLambdaType<'ctx>) -> Self {
+        K1LlvmType::Lambda(value)
     }
 }
 
@@ -344,7 +344,7 @@ impl<'ctx> K1LlvmType<'ctx> {
             K1LlvmType::StructType(s) => s.size,
             K1LlvmType::Reference(_p) => SizeInfo::POINTER,
             K1LlvmType::Void(_) => SizeInfo::ZERO,
-            K1LlvmType::Closure(c) => c.size,
+            K1LlvmType::Lambda(c) => c.size,
         }
     }
 
@@ -355,7 +355,7 @@ impl<'ctx> K1LlvmType<'ctx> {
             K1LlvmType::StructType(_) => true,
             K1LlvmType::Reference(_) => false,
             K1LlvmType::Void(_) => false,
-            K1LlvmType::Closure(_) => true,
+            K1LlvmType::Lambda(_) => true,
         }
     }
 
@@ -400,7 +400,7 @@ impl<'ctx> K1LlvmType<'ctx> {
             K1LlvmType::EnumType(e) => e.type_id,
             K1LlvmType::StructType(s) => s.type_id,
             K1LlvmType::Void(_) => NEVER_TYPE_ID,
-            K1LlvmType::Closure(c) => c.type_id,
+            K1LlvmType::Lambda(c) => c.type_id,
         }
     }
 
@@ -417,7 +417,7 @@ impl<'ctx> K1LlvmType<'ctx> {
                 s.struct_type.get_context().ptr_type(AddressSpace::default()).as_basic_type_enum()
             }
             K1LlvmType::Void(_) => panic!("No canonical repr type on Void / never"),
-            K1LlvmType::Closure(c) => {
+            K1LlvmType::Lambda(c) => {
                 c.struct_type.get_context().ptr_type(AddressSpace::default()).as_basic_type_enum()
             }
         }
@@ -430,7 +430,7 @@ impl<'ctx> K1LlvmType<'ctx> {
             K1LlvmType::EnumType(e) => e.base_struct_type.as_basic_type_enum(),
             K1LlvmType::StructType(s) => s.struct_type.as_basic_type_enum(),
             K1LlvmType::Void(_) => panic!("No rich value type on Void / never"),
-            K1LlvmType::Closure(c) => c.struct_type.as_basic_type_enum(),
+            K1LlvmType::Lambda(c) => c.struct_type.as_basic_type_enum(),
         }
     }
 
@@ -441,7 +441,7 @@ impl<'ctx> K1LlvmType<'ctx> {
             K1LlvmType::EnumType(e) => e.di_type,
             K1LlvmType::StructType(s) => s.di_type,
             K1LlvmType::Void(v) => v.di_type,
-            K1LlvmType::Closure(c) => c.di_type,
+            K1LlvmType::Lambda(c) => c.di_type,
         }
     }
 
@@ -465,7 +465,7 @@ struct BuiltinTypes<'ctx> {
     char: IntType<'ctx>,
     ptr: PointerType<'ctx>,
     ptr_sized_int: IntType<'ctx>,
-    dynamic_closure_object: StructType<'ctx>,
+    dynamic_lambda_object: StructType<'ctx>,
 }
 
 #[derive(Clone, Copy)]
@@ -492,7 +492,7 @@ pub struct Codegen<'ctx, 'module> {
     llvm_types: RefCell<FxHashMap<TypeId, K1LlvmType<'ctx>>>,
     variables: FxHashMap<VariableId, VariablePointer<'ctx>>,
     globals: FxHashMap<VariableId, GlobalValue<'ctx>>,
-    closure_environments: FxHashMap<TypeId, PointerValue<'ctx>>,
+    lambda_environments: FxHashMap<TypeId, PointerValue<'ctx>>,
     loops: FxHashMap<ScopeId, LoopInfo<'ctx>>,
     builtin_types: BuiltinTypes<'ctx>,
     debug: DebugContext<'ctx>,
@@ -677,7 +677,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             // since pointers do not actually have types
             ptr,
             ptr_sized_int: ctx.ptr_sized_int_type(&target_data, None),
-            dynamic_closure_object: ctx
+            dynamic_lambda_object: ctx
                 .struct_type(&[ptr.as_basic_type_enum(), ptr.as_basic_type_enum()], false),
         };
 
@@ -689,7 +689,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             builder,
             variables: FxHashMap::new(),
             globals: FxHashMap::new(),
-            closure_environments: FxHashMap::new(),
+            lambda_environments: FxHashMap::new(),
             loops: FxHashMap::new(),
             llvm_functions: FxHashMap::new(),
             llvm_function_to_k1: FxHashMap::new(),
@@ -1320,7 +1320,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     // If this is not a recursive call, we already built this type
                     // and should 'follow the redirect' so that calling code
                     // gets the actual type
-                    self.codegen_type(rr.root_type_id)
+                    self.codegen_type(rr.root_type_id.unwrap())
                 } else {
                     // If this is a recursive call (depth > 0), we are in the process of
                     // building the type, and should return a placeholder for the 'recursive
@@ -1330,7 +1330,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     let defn_info = self
                         .module
                         .types
-                        .get_type_defn_info(rr.root_type_id)
+                        .get_type_defn_info(rr.root_type_id.unwrap())
                         .expect("recursive type must have defn info");
 
                     let name = self.codegen_type_name(type_id, Some(defn_info));
@@ -1367,27 +1367,27 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         .as_type(),
                 }))
             }
-            Type::Closure(closure_type) => {
-                let closure_object_type = self
+            Type::Lambda(lambda_type) => {
+                let lambda_object_type = self
                     .module
                     .types
-                    .get(closure_type.closure_object_type)
-                    .as_closure_object()
+                    .get(lambda_type.lambda_object_type)
+                    .as_lambda_object()
                     .unwrap();
                 let struct_type =
-                    self.codegen_type(closure_object_type.struct_representation)?.expect_struct();
+                    self.codegen_type(lambda_object_type.struct_representation)?.expect_struct();
 
-                Ok(K1LlvmType::Closure(LlvmClosureType {
+                Ok(K1LlvmType::Lambda(LlvmLambdaType {
                     type_id,
                     struct_type: struct_type.struct_type,
                     di_type: struct_type.di_type,
                     size: struct_type.size,
                 }))
             }
-            Type::ClosureObject(closure_object_type) => {
+            Type::LambdaObject(lambda_object_type) => {
                 let struct_type =
-                    self.codegen_type(closure_object_type.struct_representation)?.expect_struct();
-                Ok(K1LlvmType::Closure(LlvmClosureType {
+                    self.codegen_type(lambda_object_type.struct_representation)?.expect_struct();
+                Ok(K1LlvmType::Lambda(LlvmLambdaType {
                     type_id,
                     struct_type: struct_type.struct_type,
                     di_type: struct_type.di_type,
@@ -2111,18 +2111,18 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     self.builder.build_unconditional_branch(loop_info.end_block).unwrap();
                 Ok(LlvmValue::Void(branch_inst))
             }
-            TypedExpr::Closure(closure_expr) => {
-                let closure_type =
-                    self.module.types.get(closure_expr.closure_type).as_closure().unwrap();
-                let llvm_fn = self.codegen_function_or_get(closure_type.body_function_id)?;
+            TypedExpr::Lambda(lambda_expr) => {
+                let lambda_type =
+                    self.module.types.get(lambda_expr.lambda_type).as_lambda().unwrap();
+                let llvm_fn = self.codegen_function_or_get(lambda_type.body_function_id)?;
                 let environment_ptr = self
-                    .codegen_expr_basic_value(closure_type.environment_struct)?
+                    .codegen_expr_basic_value(lambda_type.environment_struct)?
                     .into_pointer_value();
-                self.closure_environments.insert(closure_expr.closure_type, environment_ptr);
+                self.lambda_environments.insert(lambda_expr.lambda_type, environment_ptr);
 
-                // The struct type for a closure's physical representation
+                // The struct type for a lambda's physical representation
                 // What I could do is distinguish between static and dynamic here
-                // I would introduce a new LlvmType representing closure values
+                // I would introduce a new LlvmType representing lambda values
                 // that would be an enum, w/ statically known vs dynamic.
                 // For static you'd have a FunctionValue and environment
                 // For dynamic you'd have both the fn ptr and the env ptr
@@ -2130,29 +2130,24 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 // As long as we don't actually make the call dynamically, it shouldn't matter
                 // too much though
 
-                let closure_object_type = self
+                let lambda_object_type = self
                     .module
                     .types
-                    .get(closure_type.closure_object_type)
-                    .as_closure_object()
+                    .get(lambda_type.lambda_object_type)
+                    .as_lambda_object()
                     .unwrap();
-                let closure_struct_type =
-                    self.codegen_type(closure_object_type.struct_representation)?.expect_struct();
+                let lambda_struct_type =
+                    self.codegen_type(lambda_object_type.struct_representation)?.expect_struct();
 
-                let closure_ptr =
-                    self.builder.build_alloca(closure_struct_type.struct_type, "closure").unwrap();
+                let lambda_ptr =
+                    self.builder.build_alloca(lambda_struct_type.struct_type, "lambda").unwrap();
                 let fn_ptr = self
                     .builder
-                    .build_struct_gep(closure_struct_type.struct_type, closure_ptr, 0, "closure_fn")
+                    .build_struct_gep(lambda_struct_type.struct_type, lambda_ptr, 0, "lambda_fn")
                     .unwrap();
                 let env_ptr = self
                     .builder
-                    .build_struct_gep(
-                        closure_struct_type.struct_type,
-                        closure_ptr,
-                        1,
-                        "closure_env",
-                    )
+                    .build_struct_gep(lambda_struct_type.struct_type, lambda_ptr, 1, "lambda_env")
                     .unwrap();
 
                 self.builder
@@ -2160,7 +2155,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     .unwrap();
                 self.builder.build_store(env_ptr, environment_ptr).unwrap();
 
-                Ok(closure_ptr.as_basic_value_enum().into())
+                Ok(lambda_ptr.as_basic_value_enum().into())
             }
             TypedExpr::FunctionName(fn_name_expr) => {
                 let function_value = self.codegen_function_or_get(fn_name_expr.function_id)?;
@@ -2678,10 +2673,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.set_debug_location(call.span);
                 self.builder.build_call(function_value, args.make_contiguous(), "").unwrap()
             }
-            Callee::StaticClosure { function_id, closure_type_id } => {
-                let closure_env_ptr =
-                    self.closure_environments.get(closure_type_id).unwrap().as_basic_value_enum();
-                args.insert(env_arg_index, closure_env_ptr.into());
+            Callee::StaticLambda { function_id, lambda_type_id } => {
+                let lambda_env_ptr =
+                    self.lambda_environments.get(lambda_type_id).unwrap().as_basic_value_enum();
+                args.insert(env_arg_index, lambda_env_ptr.into());
 
                 let function_value = self.codegen_function_or_get(*function_id)?;
 
@@ -2705,20 +2700,20 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     .unwrap();
                 call_site_value
             }
-            Callee::DynamicClosure(callee_struct_expr) => {
-                let closure_object_type = self.builtin_types.dynamic_closure_object;
+            Callee::DynamicLambda(callee_struct_expr) => {
+                let lambda_object_type = self.builtin_types.dynamic_lambda_object;
                 let callee_struct =
                     self.codegen_expr_basic_value(*callee_struct_expr)?.into_pointer_value();
 
                 self.set_debug_location(call.span);
                 let fn_ptr_gep = self
                     .builder
-                    .build_struct_gep(closure_object_type, callee_struct, 0, "fn_ptr_gep")
+                    .build_struct_gep(lambda_object_type, callee_struct, 0, "fn_ptr_gep")
                     .unwrap();
                 let fn_ptr = self
                     .builder
                     .build_load(
-                        closure_object_type.get_field_type_at_index(0).unwrap(),
+                        lambda_object_type.get_field_type_at_index(0).unwrap(),
                         fn_ptr_gep,
                         "fn_ptr",
                     )
@@ -2726,12 +2721,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     .into_pointer_value();
                 let env_ptr_gep = self
                     .builder
-                    .build_struct_gep(closure_object_type, callee_struct, 1, "env_ptr_gep")
+                    .build_struct_gep(lambda_object_type, callee_struct, 1, "env_ptr_gep")
                     .unwrap();
                 let env_ptr = self
                     .builder
                     .build_load(
-                        closure_object_type.get_field_type_at_index(1).unwrap(),
+                        lambda_object_type.get_field_type_at_index(1).unwrap(),
                         env_ptr_gep,
                         "env_ptr",
                     )
@@ -2746,6 +2741,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         "",
                     )
                     .unwrap()
+            }
+            Callee::Abstract { .. } => {
+                return failf!(
+                    call.span,
+                    "Internal Compiler Error: cannot codegen an Abstract callee"
+                )
             }
         };
 
@@ -3162,7 +3163,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     name: self.module.ast.identifiers.get("ret").unwrap(),
                     type_id: function_type.return_type,
                     is_context: false,
-                    is_closure_env: false,
+                    is_lambda_env: false,
                     span: self.module.ast.get_span_for_id(function.parsed_id),
                 }
             } else {
@@ -3224,7 +3225,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let TypedExpr::Block(function_block) = self.module.exprs.get(function_block) else {
                     panic!("Expected block")
                 };
-                self.codegen_block(&function_block)?
+                self.codegen_block(function_block)?
             }
         };
         if let Some(start_block) = maybe_starting_block {
