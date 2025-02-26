@@ -26,7 +26,6 @@ pub struct ParsedNamespaceId(u32);
 #[derive(PartialEq, Eq, Debug, Copy, Clone, Hash)]
 pub struct ParsedExpressionId(NonZeroU32);
 impl ParsedExpressionId {
-    // nocommit: use Option here
     pub const PENDING: ParsedExpressionId = ParsedExpressionId(NonZeroU32::MAX);
 }
 impl From<NonZeroU32> for ParsedExpressionId {
@@ -60,14 +59,14 @@ impl From<ParsedStmtId> for NonZeroU32 {
 }
 
 #[derive(PartialEq, Eq, Debug, Copy, Clone, Hash)]
-pub struct ParsedTypeExpressionId(NonZeroU32);
-impl From<NonZeroU32> for ParsedTypeExpressionId {
+pub struct ParsedTypeExprId(NonZeroU32);
+impl From<NonZeroU32> for ParsedTypeExprId {
     fn from(value: NonZeroU32) -> Self {
-        ParsedTypeExpressionId(value)
+        ParsedTypeExprId(value)
     }
 }
-impl From<ParsedTypeExpressionId> for NonZeroU32 {
-    fn from(val: ParsedTypeExpressionId) -> Self {
+impl From<ParsedTypeExprId> for NonZeroU32 {
+    fn from(val: ParsedTypeExprId) -> Self {
         val.0
     }
 }
@@ -105,7 +104,7 @@ pub enum ParsedId {
     AbilityImpl(ParsedAbilityImplId),
     Constant(ParsedConstantId),
     Expression(ParsedExpressionId),
-    TypeExpression(ParsedTypeExpressionId),
+    TypeExpression(ParsedTypeExprId),
     Pattern(ParsedPatternId),
 }
 
@@ -125,8 +124,8 @@ impl ParsedId {
     }
 }
 
-impl From<ParsedTypeExpressionId> for ParsedId {
-    fn from(id: ParsedTypeExpressionId) -> Self {
+impl From<ParsedTypeExprId> for ParsedId {
+    fn from(id: ParsedTypeExprId) -> Self {
         ParsedId::TypeExpression(id)
     }
 }
@@ -304,11 +303,11 @@ impl FnCallArg {
 #[derive(Debug, Clone)]
 pub struct NamedTypeArg {
     pub name: Option<Identifier>,
-    pub type_expr: ParsedTypeExpressionId,
+    pub type_expr: ParsedTypeExprId,
 }
 
 impl NamedTypeArg {
-    pub fn unnamed(type_expr: ParsedTypeExpressionId) -> NamedTypeArg {
+    pub fn unnamed(type_expr: ParsedTypeExprId) -> NamedTypeArg {
         NamedTypeArg { type_expr, name: None }
     }
 }
@@ -334,7 +333,7 @@ impl FnCall {
 #[derive(Debug, Clone)]
 pub struct ValDef {
     pub name: Identifier,
-    pub type_expr: Option<ParsedTypeExpressionId>,
+    pub type_expr: Option<ParsedTypeExprId>,
     pub value: ParsedExpressionId,
     pub span: SpanId,
     flags: u8,
@@ -515,21 +514,21 @@ pub struct ParsedMatchExpression {
 #[derive(Debug, Clone)]
 pub struct ParsedAsCast {
     pub base_expr: ParsedExpressionId,
-    pub dest_type: ParsedTypeExpressionId,
+    pub dest_type: ParsedTypeExprId,
     pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
-pub struct ClosureArgDefn {
+pub struct LambdaArgDefn {
     pub binding: Identifier,
-    pub ty: Option<ParsedTypeExpressionId>,
+    pub ty: Option<ParsedTypeExprId>,
     pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
-pub struct ParsedClosure {
-    pub arguments: Vec<ClosureArgDefn>,
-    pub return_type: Option<ParsedTypeExpressionId>,
+pub struct ParsedLambda {
+    pub arguments: Vec<LambdaArgDefn>,
+    pub return_type: Option<ParsedTypeExprId>,
     pub body: ParsedExpressionId,
     pub span: SpanId,
 }
@@ -626,7 +625,7 @@ pub enum ParsedExpression {
     /// x as u64, y as .Color
     /// ```
     AsCast(ParsedAsCast),
-    Closure(ParsedClosure),
+    Lambda(ParsedLambda),
     Builtin(SpanId),
 }
 
@@ -661,7 +660,7 @@ impl ParsedExpression {
             Self::Is(is_expr) => is_expr.span,
             Self::Match(match_expr) => match_expr.span,
             Self::AsCast(as_cast) => as_cast.span,
-            Self::Closure(closure) => closure.span,
+            Self::Lambda(lambda) => lambda.span,
             Self::Builtin(span) => *span,
         }
     }
@@ -688,10 +687,10 @@ impl ParsedExpression {
         }
     }
 
-    pub fn expect_closure(&self) -> &ParsedClosure {
+    pub fn expect_lambda(&self) -> &ParsedLambda {
         match self {
-            ParsedExpression::Closure(c) => c,
-            _ => panic!("expected closure"),
+            ParsedExpression::Lambda(c) => c,
+            _ => panic!("expected lambda"),
         }
     }
 }
@@ -830,7 +829,7 @@ pub struct Block {
 #[derive(Debug, Clone)]
 pub struct StructTypeField {
     pub name: Identifier,
-    pub ty: ParsedTypeExpressionId,
+    pub ty: ParsedTypeExprId,
     pub private: bool,
 }
 
@@ -849,20 +848,20 @@ pub struct TypeApplication {
 
 #[derive(Debug, Clone)]
 pub struct ParsedOptional {
-    pub base: ParsedTypeExpressionId,
+    pub base: ParsedTypeExprId,
     pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
 pub struct ParsedReference {
-    pub base: ParsedTypeExpressionId,
+    pub base: ParsedTypeExprId,
     pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
 pub struct ParsedEnumVariant {
     pub tag_name: Identifier,
-    pub payload_expression: Option<ParsedTypeExpressionId>,
+    pub payload_expression: Option<ParsedTypeExprId>,
     pub span: SpanId,
 }
 
@@ -874,7 +873,7 @@ pub struct ParsedEnumType {
 
 #[derive(Debug, Clone)]
 pub struct ParsedDotMemberAccess {
-    pub base: ParsedTypeExpressionId,
+    pub base: ParsedTypeExprId,
     pub member_name: Identifier,
     pub span: SpanId,
 }
@@ -914,8 +913,8 @@ pub struct ParsedNumericType {
 
 #[derive(Debug, Clone)]
 pub struct ParsedFunctionType {
-    pub params: Vec<ParsedTypeExpressionId>,
-    pub return_type: ParsedTypeExpressionId,
+    pub params: Vec<ParsedTypeExprId>,
+    pub return_type: ParsedTypeExprId,
     pub span: SpanId,
 }
 
@@ -926,7 +925,13 @@ pub struct ParsedTypeOf {
 }
 
 #[derive(Debug, Clone)]
-pub enum ParsedTypeExpression {
+pub struct SomeQuantifier {
+    pub inner: ParsedTypeExprId,
+    pub span: SpanId,
+}
+
+#[derive(Debug, Clone)]
+pub enum ParsedTypeExpr {
     Builtin(SpanId),
     Struct(StructType),
     TypeApplication(TypeApplication),
@@ -936,21 +941,23 @@ pub enum ParsedTypeExpression {
     DotMemberAccess(ParsedDotMemberAccess),
     Function(ParsedFunctionType),
     TypeOf(ParsedTypeOf),
+    SomeQuant(SomeQuantifier),
 }
 
-impl ParsedTypeExpression {
+impl ParsedTypeExpr {
     #[inline]
     pub fn get_span(&self) -> SpanId {
         match self {
-            ParsedTypeExpression::Builtin(span) => *span,
-            ParsedTypeExpression::Struct(struc) => struc.span,
-            ParsedTypeExpression::TypeApplication(app) => app.span,
-            ParsedTypeExpression::Optional(opt) => opt.span,
-            ParsedTypeExpression::Reference(r) => r.span,
-            ParsedTypeExpression::Enum(e) => e.span,
-            ParsedTypeExpression::DotMemberAccess(a) => a.span,
-            ParsedTypeExpression::Function(f) => f.span,
-            ParsedTypeExpression::TypeOf(tof) => tof.span,
+            ParsedTypeExpr::Builtin(span) => *span,
+            ParsedTypeExpr::Struct(struc) => struc.span,
+            ParsedTypeExpr::TypeApplication(app) => app.span,
+            ParsedTypeExpr::Optional(opt) => opt.span,
+            ParsedTypeExpr::Reference(r) => r.span,
+            ParsedTypeExpr::Enum(e) => e.span,
+            ParsedTypeExpr::DotMemberAccess(a) => a.span,
+            ParsedTypeExpr::Function(f) => f.span,
+            ParsedTypeExpr::TypeOf(tof) => tof.span,
+            ParsedTypeExpr::SomeQuant(q) => q.span,
         }
     }
 }
@@ -988,7 +995,7 @@ pub struct ParsedFunction {
     pub type_params: Vec<ParsedTypeParam>,
     pub params: Vec<FnArgDef>,
     pub context_params: Vec<FnArgDef>,
-    pub ret_type: ParsedTypeExpressionId,
+    pub ret_type: ParsedTypeExprId,
     pub block: Option<Block>,
     pub signature_span: SpanId,
     pub span: SpanId,
@@ -1001,7 +1008,7 @@ pub struct ParsedFunction {
 #[derive(Debug, Clone)]
 pub struct FnArgDef {
     pub name: Identifier,
-    pub ty: ParsedTypeExpressionId,
+    pub ty: ParsedTypeExprId,
     pub span: SpanId,
     pub modifiers: FnArgDefModifiers,
 }
@@ -1029,7 +1036,7 @@ impl FnArgDefModifiers {
 #[derive(Debug, Clone)]
 pub struct ParsedConstant {
     pub name: Identifier,
-    pub ty: ParsedTypeExpressionId,
+    pub ty: ParsedTypeExprId,
     pub value_expr: ParsedExpressionId,
     pub span: SpanId,
     pub id: ParsedConstantId,
@@ -1069,7 +1076,7 @@ impl ParsedTypeDefnFlags {
 #[derive(Debug, Clone)]
 pub struct ParsedTypeDefn {
     pub name: Identifier,
-    pub value_expr: ParsedTypeExpressionId,
+    pub value_expr: ParsedTypeExprId,
     pub type_params: Vec<ParsedTypeParam>,
     pub span: SpanId,
     pub id: ParsedTypeDefnId,
@@ -1103,7 +1110,7 @@ pub struct ParsedAbilityExpr {
 #[derive(Debug, Clone)]
 pub struct AbilityTypeArgument {
     pub name: Identifier,
-    pub value: ParsedTypeExpressionId,
+    pub value: ParsedTypeExprId,
     pub span: SpanId,
 }
 
@@ -1111,7 +1118,7 @@ pub struct AbilityTypeArgument {
 pub struct ParsedAbilityImplementation {
     pub ability_expr: ParsedAbilityExpr,
     pub generic_impl_params: Vec<ParsedTypeParam>,
-    pub self_type: ParsedTypeExpressionId,
+    pub self_type: ParsedTypeExprId,
     pub functions: Vec<ParsedFunctionId>,
     pub id: ParsedAbilityImplId,
     pub span: SpanId,
@@ -1128,7 +1135,7 @@ pub struct ParsedNamespace {
 pub struct ParsedExpressionPool {
     // `expressions` and `type_hints` form a Struct-of-Arrays relationship
     expressions: Pool<ParsedExpression, ParsedExpressionId>,
-    type_hints: Pool<Option<ParsedTypeExpressionId>, ParsedExpressionId>,
+    type_hints: Pool<Option<ParsedTypeExprId>, ParsedExpressionId>,
     directives: FxHashMap<ParsedExpressionId, Vec<ParsedDirective>>,
 }
 impl ParsedExpressionPool {
@@ -1140,11 +1147,11 @@ impl ParsedExpressionPool {
         }
     }
 
-    pub fn set_type_hint(&mut self, id: ParsedExpressionId, ty: ParsedTypeExpressionId) {
+    pub fn set_type_hint(&mut self, id: ParsedExpressionId, ty: ParsedTypeExprId) {
         *self.type_hints.get_mut(id) = Some(ty)
     }
 
-    pub fn get_type_hint(&self, id: ParsedExpressionId) -> Option<ParsedTypeExpressionId> {
+    pub fn get_type_hint(&self, id: ParsedExpressionId) -> Option<ParsedTypeExprId> {
         *self.type_hints.get(id)
     }
 
@@ -1180,7 +1187,7 @@ impl ParsedExpressionPool {
 }
 
 pub struct ParsedTypeExpressionPool {
-    type_expressions: Pool<ParsedTypeExpression, ParsedTypeExpressionId>,
+    type_expressions: Pool<ParsedTypeExpr, ParsedTypeExprId>,
 }
 impl ParsedTypeExpressionPool {
     fn new(capacity: usize) -> Self {
@@ -1189,10 +1196,10 @@ impl ParsedTypeExpressionPool {
         }
     }
 
-    pub fn add(&mut self, expression: ParsedTypeExpression) -> ParsedTypeExpressionId {
+    pub fn add(&mut self, expression: ParsedTypeExpr) -> ParsedTypeExprId {
         self.type_expressions.add(expression)
     }
-    pub fn get(&self, id: ParsedTypeExpressionId) -> &ParsedTypeExpression {
+    pub fn get(&self, id: ParsedTypeExprId) -> &ParsedTypeExpr {
         self.type_expressions.get(id)
     }
 }
@@ -1425,14 +1432,11 @@ impl ParsedModule {
         &self.namespaces[0]
     }
 
-    pub fn get_expression_type_hint(
-        &self,
-        id: ParsedExpressionId,
-    ) -> Option<ParsedTypeExpressionId> {
+    pub fn get_expression_type_hint(&self, id: ParsedExpressionId) -> Option<ParsedTypeExprId> {
         self.exprs.get_type_hint(id)
     }
 
-    pub fn get_type_expression_span(&self, type_expression_id: ParsedTypeExpressionId) -> SpanId {
+    pub fn get_type_expression_span(&self, type_expression_id: ParsedTypeExprId) -> SpanId {
         self.type_exprs.get(type_expression_id).get_span()
     }
 
@@ -1942,7 +1946,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         self.module.exprs.get(id).get_span()
     }
 
-    pub fn get_type_expression_span(&self, id: ParsedTypeExpressionId) -> SpanId {
+    pub fn get_type_expression_span(&self, id: ParsedTypeExprId) -> SpanId {
         self.module.type_exprs.get(id).get_span()
     }
 
@@ -2139,11 +2143,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(Some(StructTypeField { name: ident_id, ty: typ_expr, private }))
     }
 
-    fn expect_type_expression(&mut self) -> ParseResult<ParsedTypeExpressionId> {
+    fn expect_type_expression(&mut self) -> ParseResult<ParsedTypeExprId> {
         Parser::expect("type_expression", self.peek(), self.parse_type_expression())
     }
 
-    fn parse_type_expression(&mut self) -> ParseResult<Option<ParsedTypeExpressionId>> {
+    fn parse_type_expression(&mut self) -> ParseResult<Option<ParsedTypeExprId>> {
         let Some(mut result) = self.parse_base_type_expression()? else {
             return Ok(None);
         };
@@ -2158,7 +2162,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                         self.module.get_type_expression_span(result),
                         ident_token.span,
                     );
-                    let new = ParsedTypeExpression::DotMemberAccess(ParsedDotMemberAccess {
+                    let new = ParsedTypeExpr::DotMemberAccess(ParsedDotMemberAccess {
                         base: result,
                         member_name: ident,
                         span,
@@ -2168,15 +2172,18 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 } else if next.kind == K::QuestionMark {
                     // Optional Type
                     self.advance();
-                    result = self.module.type_exprs.add(ParsedTypeExpression::Optional(
-                        ParsedOptional { base: result, span: next.span },
-                    ));
+                    result = self.module.type_exprs.add(ParsedTypeExpr::Optional(ParsedOptional {
+                        base: result,
+                        span: next.span,
+                    }));
                 } else if next.kind == K::Asterisk {
                     // Reference Type
                     self.advance();
-                    result = self.module.type_exprs.add(ParsedTypeExpression::Reference(
-                        ParsedReference { base: result, span: next.span },
-                    ));
+                    result =
+                        self.module.type_exprs.add(ParsedTypeExpr::Reference(ParsedReference {
+                            base: result,
+                            span: next.span,
+                        }));
                 } else {
                     panic!("unhandled postfix type operator {:?}", next.kind);
                 }
@@ -2191,7 +2198,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Parser::tok_chars(&self.module.spans, self.source(), token)
     }
 
-    fn parse_base_type_expression(&mut self) -> ParseResult<Option<ParsedTypeExpressionId>> {
+    fn parse_base_type_expression(&mut self) -> ParseResult<Option<ParsedTypeExprId>> {
         let first = self.peek();
         if first.kind == K::OpenParen {
             self.advance();
@@ -2201,14 +2208,14 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             Ok(Some(expr))
         } else if first.kind == K::KeywordEither {
             let enumm = self.expect_enum_type_expression()?;
-            let type_expr_id = self.module.type_exprs.add(ParsedTypeExpression::Enum(enumm));
+            let type_expr_id = self.module.type_exprs.add(ParsedTypeExpr::Enum(enumm));
             Ok(Some(type_expr_id))
         } else if first.kind == K::BackSlash {
             let fun = self.expect_function_type()?;
             Ok(Some(fun))
         } else if first.kind == K::KeywordBuiltin {
             self.advance();
-            let builtin_id = self.module.type_exprs.add(ParsedTypeExpression::Builtin(first.span));
+            let builtin_id = self.module.type_exprs.add(ParsedTypeExpr::Builtin(first.span));
             Ok(Some(builtin_id))
         } else if first.kind == K::Ident {
             let ident_chars = self.get_token_chars(first);
@@ -2218,11 +2225,16 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let target_expr = self.expect_expression()?;
                 let end = self.expect_eat_token(K::CloseParen)?;
                 let span = self.extend_token_span(first, end);
-                Ok(Some(
-                    self.module
-                        .type_exprs
-                        .add(ParsedTypeExpression::TypeOf(ParsedTypeOf { target_expr, span })),
-                ))
+                let type_of = ParsedTypeExpr::TypeOf(ParsedTypeOf { target_expr, span });
+                Ok(Some(self.module.type_exprs.add(type_of)))
+            } else if ident_chars == "some" {
+                // nocommit: Disallow the type name 'some'
+                self.advance();
+                let inner_expr = self.expect_type_expression()?;
+                let span = self.extend_to_here(first.span);
+                let quantifier =
+                    ParsedTypeExpr::SomeQuant(SomeQuantifier { inner: inner_expr, span });
+                Ok(Some(self.module.type_exprs.add(quantifier)))
             } else {
                 let base_name = self.expect_namespaced_ident()?;
                 // parameterized, namespaced type. Examples:
@@ -2231,7 +2243,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 // std::Map[int, int]
                 let (type_params, type_params_span) = self.parse_optional_type_args()?;
                 let span = self.extend_span_maybe(first.span, type_params_span);
-                Ok(Some(self.module.type_exprs.add(ParsedTypeExpression::TypeApplication(
+                Ok(Some(self.module.type_exprs.add(ParsedTypeExpr::TypeApplication(
                     TypeApplication { name: base_name, args: type_params, span },
                 ))))
             }
@@ -2244,13 +2256,13 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 })?;
             let span = self.extend_span(first.span, fields_span);
             let struc = StructType { fields, span };
-            Ok(Some(self.module.type_exprs.add(ParsedTypeExpression::Struct(struc))))
+            Ok(Some(self.module.type_exprs.add(ParsedTypeExpr::Struct(struc))))
         } else {
             Ok(None)
         }
     }
 
-    fn expect_function_type(&mut self) -> ParseResult<ParsedTypeExpressionId> {
+    fn expect_function_type(&mut self) -> ParseResult<ParsedTypeExprId> {
         let (params, params_span) = self.eat_delimited_expect_opener(
             "Function parameters",
             K::BackSlash,
@@ -2261,7 +2273,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let return_type = self.expect_type_expression()?;
         let span = self.extend_span(params_span, self.get_type_expression_span(return_type));
         let function_type = ParsedFunctionType { params, return_type, span };
-        Ok(self.module.type_exprs.add(ParsedTypeExpression::Function(function_type)))
+        Ok(self.module.type_exprs.add(ParsedTypeExpr::Function(function_type)))
     }
 
     fn expect_enum_type_expression(&mut self) -> ParseResult<ParsedEnumType> {
@@ -2615,7 +2627,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 Ok(Some(expr))
             }
         } else if first.kind == K::BackSlash {
-            Ok(Some(self.expect_closure()?))
+            Ok(Some(self.expect_lambda()?))
         } else if first.kind == K::KeywordWhile {
             let while_result = Parser::expect("while loop", first, self.parse_while_loop())?;
             Ok(Some(self.add_expression(ParsedExpression::While(while_result))))
@@ -2809,7 +2821,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(resulting_expression)
     }
 
-    fn expect_closure_arg_defn(&mut self) -> ParseResult<ClosureArgDefn> {
+    fn expect_lambda_arg_defn(&mut self) -> ParseResult<LambdaArgDefn> {
         let name = self.expect_eat_token(K::Ident)?;
         let binding = self.intern_ident_token(name);
         let ty = if self.peek().kind == K::Colon {
@@ -2818,19 +2830,19 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         } else {
             None
         };
-        Ok(ClosureArgDefn { ty, binding, span: name.span })
+        Ok(LambdaArgDefn { ty, binding, span: name.span })
     }
 
-    fn expect_closure(&mut self) -> ParseResult<ParsedExpressionId> {
+    fn expect_lambda(&mut self) -> ParseResult<ParsedExpressionId> {
         let start = self.expect_eat_token(K::BackSlash)?;
         let _start = self.expect_eat_token(K::OpenParen)?;
-        let mut arguments: Vec<ClosureArgDefn> = Vec::with_capacity(8);
+        let mut arguments: Vec<LambdaArgDefn> = Vec::with_capacity(8);
         let (_args_span, closing_delimeter) = self.eat_delimited_ext(
             "Lambda args",
             &mut arguments,
             K::Comma,
             &[K::RThinArrow, K::CloseParen],
-            Parser::expect_closure_arg_defn,
+            Parser::expect_lambda_arg_defn,
         )?;
         let return_type = if closing_delimeter.kind == K::RThinArrow {
             let return_type_expr = self.expect_type_expression()?;
@@ -2842,8 +2854,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
         let body = self.expect_expression()?;
         let span = self.extend_span(start.span, self.get_expression_span(body));
-        let closure = ParsedClosure { arguments, return_type, body, span };
-        Ok(self.add_expression(ParsedExpression::Closure(closure)))
+        let lambda = ParsedLambda { arguments, return_type, body, span };
+        Ok(self.add_expression(ParsedExpression::Lambda(lambda)))
     }
 
     fn expect_fn_call_args(&mut self) -> ParseResult<(Vec<FnCallArg>, Vec<FnCallArg>, SpanId)> {
@@ -3728,23 +3740,23 @@ impl ParsedModule {
             ParsedExpression::AsCast(cast) => {
                 self.display_expr_id(cast.base_expr, f)?;
                 f.write_str(" as ")?;
-                self.display_type_expression_id(cast.dest_type, f)
+                self.display_type_expr_id(cast.dest_type, f)
             }
-            ParsedExpression::Closure(closure) => {
+            ParsedExpression::Lambda(lambda) => {
                 f.write_char('\\')?;
-                for (index, arg) in closure.arguments.iter().enumerate() {
+                for (index, arg) in lambda.arguments.iter().enumerate() {
                     f.write_str(self.identifiers.get_name(arg.binding))?;
                     if let Some(ty) = arg.ty {
                         f.write_str(": ")?;
-                        self.display_type_expression_id(ty, f)?;
+                        self.display_type_expr_id(ty, f)?;
                     }
-                    let last = index == closure.arguments.len() - 1;
+                    let last = index == lambda.arguments.len() - 1;
                     if !last {
                         f.write_str(", ")?;
                     }
                 }
                 f.write_str(" -> ")?;
-                self.display_expr_id(closure.body, f)?;
+                self.display_expr_id(lambda.body, f)?;
                 Ok(())
             }
         }
@@ -3758,83 +3770,88 @@ impl ParsedModule {
         f.write_str("<pattern expr todo>")
     }
 
-    pub fn type_expression_to_string(&self, type_expr_id: ParsedTypeExpressionId) -> String {
+    pub fn type_expr_to_string(&self, type_expr_id: ParsedTypeExprId) -> String {
         let mut buffer = String::new();
-        self.display_type_expression_id(type_expr_id, &mut buffer).unwrap();
+        self.display_type_expr_id(type_expr_id, &mut buffer).unwrap();
         buffer
     }
 
-    pub fn display_type_expression_id(
+    pub fn display_type_expr_id(
         &self,
-        ty_expr_id: ParsedTypeExpressionId,
+        ty_expr_id: ParsedTypeExprId,
         f: &mut impl Write,
     ) -> std::fmt::Result {
         match self.type_exprs.get(ty_expr_id) {
-            ParsedTypeExpression::Struct(struct_type) => {
+            ParsedTypeExpr::Struct(struct_type) => {
                 f.write_str("{ ")?;
                 for field in struct_type.fields.iter() {
                     f.write_str(self.identifiers.get_name(field.name))?;
                     f.write_str(": ")?;
-                    self.display_type_expression_id(ty_expr_id, f)?;
+                    self.display_type_expr_id(ty_expr_id, f)?;
                     f.write_str(", ")?;
                 }
                 f.write_str(" }")
             }
-            ParsedTypeExpression::TypeApplication(tapp) => {
+            ParsedTypeExpr::TypeApplication(tapp) => {
                 display_namespaced_identifier(f, &self.identifiers, &tapp.name, "::")?;
                 if !tapp.args.is_empty() {
                     f.write_str("[")?;
                     for tparam in tapp.args.iter() {
-                        self.display_type_expression_id(tparam.type_expr, f)?;
+                        self.display_type_expr_id(tparam.type_expr, f)?;
                         f.write_str(", ")?;
                     }
                     f.write_str("]")?;
                 }
                 Ok(())
             }
-            ParsedTypeExpression::Optional(opt) => {
-                self.display_type_expression_id(opt.base, f)?;
+            ParsedTypeExpr::Optional(opt) => {
+                self.display_type_expr_id(opt.base, f)?;
                 f.write_str("?")
             }
-            ParsedTypeExpression::Reference(refer) => {
-                self.display_type_expression_id(refer.base, f)?;
+            ParsedTypeExpr::Reference(refer) => {
+                self.display_type_expr_id(refer.base, f)?;
                 f.write_str("*")
             }
-            ParsedTypeExpression::Enum(e) => {
+            ParsedTypeExpr::Enum(e) => {
                 f.write_str("enum ")?;
                 for variant in &e.variants {
                     f.write_str(self.identifiers.get_name(variant.tag_name))?;
                     if let Some(payload) = &variant.payload_expression {
                         f.write_str("(")?;
-                        self.display_type_expression_id(*payload, f)?;
+                        self.display_type_expr_id(*payload, f)?;
                         f.write_str(")")?;
                     }
                 }
                 Ok(())
             }
-            ParsedTypeExpression::DotMemberAccess(acc) => {
-                self.display_type_expression_id(acc.base, f)?;
+            ParsedTypeExpr::DotMemberAccess(acc) => {
+                self.display_type_expr_id(acc.base, f)?;
                 f.write_char('.')?;
                 f.write_str(self.identifiers.get_name(acc.member_name))
             }
-            ParsedTypeExpression::Builtin(_builtin) => f.write_str("builtin"),
-            ParsedTypeExpression::Function(fun) => {
+            ParsedTypeExpr::Builtin(_builtin) => f.write_str("builtin"),
+            ParsedTypeExpr::Function(fun) => {
                 f.write_char('\\')?;
                 for (index, t) in fun.params.iter().enumerate() {
-                    self.display_type_expression_id(*t, f)?;
+                    self.display_type_expr_id(*t, f)?;
                     let last = index == fun.params.len() - 1;
                     if !last {
                         f.write_str(", ")?;
                     }
                 }
                 f.write_str(" -> ")?;
-                self.display_type_expression_id(fun.return_type, f)?;
+                self.display_type_expr_id(fun.return_type, f)?;
                 Ok(())
             }
-            ParsedTypeExpression::TypeOf(tof) => {
+            ParsedTypeExpr::TypeOf(tof) => {
                 f.write_str("typeOf(")?;
                 self.display_expr_id(tof.target_expr, f)?;
                 f.write_str(")")?;
+                Ok(())
+            }
+            ParsedTypeExpr::SomeQuant(quant) => {
+                f.write_str("some ")?;
+                self.display_type_expr_id(quant.inner, f)?;
                 Ok(())
             }
         }
@@ -3916,7 +3933,7 @@ impl Identifiers {
         "optelse_lhs",
         "list_literal",
         "SourceLocation",
-        "__clos_env",
+        "__lambda_env",
         "fn_ptr",
         "env_ptr",
         "&",

@@ -26,7 +26,7 @@ fn test_single_expr(input: &str) -> Result<(ParsedModule, ParsedExpression), Par
     test_single_expr_with_id(input).map(|(m, e, _)| (m, e))
 }
 
-fn test_single_type_expr(input: &str) -> Result<(ParsedModule, ParsedTypeExpression), ParseError> {
+fn test_single_type_expr(input: &str) -> Result<(ParsedModule, ParsedTypeExpr), ParseError> {
     let mut module = make_test_module();
     let mut parser = set_up(input, &mut module);
     let type_expr_id = parser.expect_type_expression()?;
@@ -162,25 +162,24 @@ fn dot_accessor() -> ParseResult<()> {
 #[test]
 fn type_parameter_single() -> ParseResult<()> {
     let (mut _module, type_expr) = test_single_type_expr("List[unit]")?;
-    assert!(matches!(type_expr, ParsedTypeExpression::TypeApplication(_)));
+    assert!(matches!(type_expr, ParsedTypeExpr::TypeApplication(_)));
     Ok(())
 }
 
 #[test]
 fn type_parameter_multi() -> ParseResult<()> {
     let (module, type_expr) = test_single_type_expr("Map[bool, List[bool]]")?;
-    let ParsedTypeExpression::TypeApplication(app) = type_expr else {
+    let ParsedTypeExpr::TypeApplication(app) = type_expr else {
         panic!("Expected type application")
     };
     assert_eq!(app.args.len(), 2);
-    let ParsedTypeExpression::TypeApplication(inner_app) =
-        module.type_exprs.get(app.args[1].type_expr)
+    let ParsedTypeExpr::TypeApplication(inner_app) = module.type_exprs.get(app.args[1].type_expr)
     else {
         panic!("Expected second param to be a type application");
     };
     assert!(matches!(
         module.type_exprs.get(inner_app.args[0].type_expr),
-        ParsedTypeExpression::TypeApplication(_)
+        ParsedTypeExpr::TypeApplication(_)
     ));
     Ok(())
 }
@@ -268,7 +267,7 @@ fn generic_method_call_lhs_expr() -> Result<(), ParseError> {
     assert_eq!(fn_call.name.name, parser.identifiers.intern("getFn"));
     assert_eq!(call.name.name, parser.identifiers.intern("baz"));
     let type_arg = parser.type_exprs.get(call.type_args[0].type_expr);
-    assert!(matches!(type_arg, ParsedTypeExpression::TypeApplication(_)));
+    assert!(matches!(type_arg, ParsedTypeExpr::TypeApplication(_)));
     assert!(matches!(parser.exprs.get(call.args[1].value), ParsedExpression::Literal(_)));
     Ok(())
 }
@@ -314,7 +313,7 @@ fn type_hint() -> ParseResult<()> {
     let input = "None: u64?";
     let (module, _expr, expr_id) = test_single_expr_with_id(input)?;
     let type_hint = module.get_expression_type_hint(expr_id).unwrap();
-    assert_eq!(module.type_expression_to_string(type_hint), "u64?");
+    assert_eq!(module.type_expr_to_string(type_hint), "u64?");
     Ok(())
 }
 
@@ -323,7 +322,7 @@ fn type_hint_binop() -> ParseResult<()> {
     let input = "(3.!: int + 4: List[bool]): int";
     let (module, _expr, expr_id) = test_single_expr_with_id(input)?;
     let type_hint = module.get_expression_type_hint(expr_id).unwrap();
-    assert_eq!(module.type_expression_to_string(type_hint), "int");
+    assert_eq!(module.type_expr_to_string(type_hint), "int");
     Ok(())
 }
 
@@ -333,7 +332,7 @@ fn tag_literals() -> ParseResult<()> {
     let (module, _expr, expr_id) = test_single_expr_with_id(input)?;
     let type_hint = module.get_expression_type_hint(expr_id).unwrap();
     assert_eq!(&module.expr_id_to_string(expr_id), ".Foo");
-    assert_eq!(module.type_expression_to_string(type_hint), "A.Foo");
+    assert_eq!(module.type_expr_to_string(type_hint), "A.Foo");
     Ok(())
 }
 

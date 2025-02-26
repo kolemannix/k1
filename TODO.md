@@ -33,6 +33,7 @@ New tagline? "C with typeclasses and tagged unions"
   - [x] Move ability resolution onto new inference infra
   - [x] Make it fast (Added better 'pool' to prepare for avoiding lots of allocations)
 - [ ] Try a 'get types' pass that powers inference and avoids the 2x full compile (of args to generics) that we do now
+- [ ] Compile switches with no patterns or other stuff do a different Expr type corresponding to LLVM switch
 - [ ] comptime #if needs to be a real node not a directive (can't parse if/else). More like `#const if` than `#if`
 - [ ] Fix closure types / get static dispatch for functions taking a closure directly
 - [ ] *Specializing functions on their provided closures to allow inlining and static dispatch*

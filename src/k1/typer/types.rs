@@ -74,12 +74,6 @@ impl std::hash::Hash for TypeDefnInfo {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct ClosureStructTypes {
-    pub fn_type_id: TypeId,
-    pub env_type_id: TypeId,
-}
-
 #[derive(Debug, Clone)]
 pub struct StructType {
     pub fields: Vec<StructTypeField>,
@@ -139,6 +133,14 @@ pub struct TypeParameter {
     pub name: Identifier,
     pub scope_id: ScopeId,
     pub span: SpanId,
+    /// If this type parameter represents a function, this is the type of the function
+    pub function_type: Option<TypeId>,
+}
+
+impl TypeParameter {
+    pub fn is_function(&self) -> bool {
+        self.function_type.is_some()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -303,7 +305,7 @@ pub struct FnParamType {
     pub name: Identifier,
     pub type_id: TypeId,
     pub is_context: bool,
-    pub is_closure_env: bool,
+    pub is_lambda_env: bool,
     pub span: SpanId,
 }
 
@@ -317,13 +319,12 @@ pub struct FunctionType {
 #[derive(Debug, Clone)]
 pub struct RecursiveReference {
     pub parsed_id: ParsedTypeDefnId,
-    // nocommit: Use Option<TypeId> instead of PENDING constant once its on NonZeroU32
-    pub root_type_id: TypeId,
+    pub root_type_id: Option<TypeId>,
 }
 
 impl RecursiveReference {
     pub fn is_pending(&self) -> bool {
-        self.root_type_id == TypeId::PENDING
+        self.root_type_id.is_none()
     }
 }
 
@@ -334,13 +335,12 @@ pub struct LambdaType {
     pub parsed_id: ParsedId,
     pub body_function_id: FunctionId,
     // This kinda crosses the streams; its a value expression in a type, but
-    // that's because a closure's environment is basically values baked into a function
+    // that's because a lambda's environment is basically values baked into a function
     // Its almost like a comptime-known value, aka the type 5
     pub environment_struct: TypedExprId,
-    pub closure_object_type: TypeId,
+    pub lambda_object_type: TypeId,
 }
 
-/// I'd love for this to just become 'Dynamic' type
 #[derive(Debug, Clone)]
 pub struct LambdaObjectType {
     pub function_type: TypeId,
@@ -348,7 +348,10 @@ pub struct LambdaObjectType {
     pub struct_representation: TypeId,
 }
 
-// nocommit 104 bytes. Goal: ?
+// To shrink this, we'd move TypeDefnInfo off, convert some Vecs to Boxed slices or just index
+// handles, but I'm tired of doing perf stuff like that; it'd be a big chore to handle everywhere
+// we look TypeDefnInfo differently. That said, the longer you wait to move things like that the
+// harder it gets...
 static_assert_size!(Type, 96);
 #[derive(Debug, Clone)]
 pub enum Type {
@@ -364,15 +367,18 @@ pub enum Type {
     Struct(StructType),
     Reference(ReferenceType),
     Enum(TypedEnum),
+
     /// Enum variants are proper types of their own, for lots
     /// of reasons that make programming nice. Unlike in Rust :()
     EnumVariant(TypedEnumVariant),
+
     /// The 'bottom', uninhabited type; used to indicate exits of the program
     Never(TypeDefnInfo),
     Function(FunctionType),
-    Closure(LambdaType),
-    ClosureObject(LambdaObjectType),
-    // Less physical types
+    Lambda(LambdaType),
+    LambdaObject(LambdaObjectType),
+
+    // Not-so-physical types
     Generic(GenericType),
     #[allow(clippy::enum_variant_names)]
     TypeParameter(TypeParameter),
@@ -409,7 +415,9 @@ impl PartialEq for Type {
             }
             (Type::Reference(r1), Type::Reference(r2)) => r1.inner_type == r2.inner_type,
             (Type::TypeParameter(t1), Type::TypeParameter(t2)) => {
-                t1.name == t2.name && t1.scope_id == t2.scope_id
+                t1.name == t2.name
+                    && t1.scope_id == t2.scope_id
+                    && t1.function_type == t2.function_type
             }
             (Type::InferenceHole(h1), Type::InferenceHole(h2)) => h1.index == h2.index,
             (Type::Enum(e1), Type::Enum(e2)) => {
@@ -443,8 +451,8 @@ impl PartialEq for Type {
                 };
                 false
             }
-            (Type::Closure(_c1), Type::Closure(_c2)) => false,
-            (Type::ClosureObject(_co1), Type::ClosureObject(_co2)) => false,
+            (Type::Lambda(_c1), Type::Lambda(_c2)) => false,
+            (Type::LambdaObject(_co1), Type::LambdaObject(_co2)) => false,
             (Type::RecursiveReference(rr1), Type::RecursiveReference(rr2)) => {
                 rr1.root_type_id == rr2.root_type_id
             }
@@ -528,12 +536,12 @@ impl std::hash::Hash for Type {
                 for param in &fun.params {
                     param.name.hash(state);
                     param.is_context.hash(state);
-                    param.is_closure_env.hash(state);
+                    param.is_lambda_env.hash(state);
                     param.type_id.hash(state);
                 }
             }
-            Type::Closure(c) => {
-                "closure".hash(state);
+            Type::Lambda(c) => {
+                "lambda".hash(state);
                 c.parsed_id.hash(state);
                 c.function_type.hash(state)
             }
@@ -545,8 +553,8 @@ impl std::hash::Hash for Type {
                 "ptr".hash(state);
             }
             Type::Never(_) => "never".hash(state),
-            Type::ClosureObject(co) => {
-                "closure_object".hash(state);
+            Type::LambdaObject(co) => {
+                "lambda_object".hash(state);
                 co.function_type.hash(state);
                 co.struct_representation.hash(state);
             }
@@ -576,8 +584,8 @@ impl Type {
             Type::Never(_) => "never",
             Type::Generic(_) => "generic",
             Type::Function(_) => "function",
-            Type::Closure(_) => "closure",
-            Type::ClosureObject(_) => "closureobj",
+            Type::Lambda(_) => "lambda",
+            Type::LambdaObject(_) => "lambdaobj",
             Type::RecursiveReference(_) => "recurse",
         }
     }
@@ -606,8 +614,8 @@ impl Type {
             Type::EnumVariant(_ev) => None,
             Type::Generic(gen) => Some(gen.type_defn_info.ast_id),
             Type::Function(_fun) => None,
-            Type::Closure(clos) => Some(clos.parsed_id),
-            Type::ClosureObject(clos_obj) => Some(clos_obj.parsed_id),
+            Type::Lambda(clos) => Some(clos.parsed_id),
+            Type::LambdaObject(clos_obj) => Some(clos_obj.parsed_id),
             Type::RecursiveReference(r) => Some(ParsedId::TypeDefn(r.parsed_id)),
         }
     }
@@ -629,8 +637,8 @@ impl Type {
             Type::EnumVariant(ev) => ev.type_defn_info.as_ref(),
             Type::Generic(gen) => Some(&gen.type_defn_info),
             Type::Function(_fun) => None,
-            Type::Closure(_clos) => None,
-            Type::ClosureObject(_clos_obj) => None,
+            Type::Lambda(_clos) => None,
+            Type::LambdaObject(_clos_obj) => None,
             Type::RecursiveReference(_r) => None,
         }
     }
@@ -785,15 +793,22 @@ impl Type {
         }
     }
 
-    pub fn as_closure(&self) -> Option<&LambdaType> {
+    pub fn as_lambda(&self) -> Option<&LambdaType> {
         match self {
-            Type::Closure(c) => Some(c),
+            Type::Lambda(c) => Some(c),
             _ => None,
         }
     }
-    pub fn as_closure_object(&self) -> Option<&LambdaObjectType> {
+    pub fn as_lambda_object(&self) -> Option<&LambdaObjectType> {
         match self {
-            Type::ClosureObject(co) => Some(co),
+            Type::LambdaObject(co) => Some(co),
+            _ => None,
+        }
+    }
+
+    pub fn as_type_parameter(&self) -> Option<&TypeParameter> {
+        match self {
+            Type::TypeParameter(t) => Some(t),
             _ => None,
         }
     }
@@ -900,7 +915,10 @@ impl Types {
     #[inline]
     pub fn get(&self, type_id: TypeId) -> &Type {
         match self.get_no_follow(type_id) {
-            Type::RecursiveReference(rr) => self.get(rr.root_type_id),
+            Type::RecursiveReference(rr) => match rr.root_type_id {
+                None => panic!("Tried to follow a pending recursive reference; {:?}", rr),
+                Some(t) => self.get(t),
+            },
             t => t,
         }
     }
@@ -946,8 +964,8 @@ impl Types {
             Type::Never(_) => None,
             Type::Generic(_gen) => None,
             Type::Function(_) => None,
-            Type::Closure(_) => None,
-            Type::ClosureObject(_) => None,
+            Type::Lambda(_) => None,
+            Type::LambdaObject(_) => None,
             Type::RecursiveReference(_) => None,
         }
     }
@@ -956,7 +974,7 @@ impl Types {
         self.get(type_id).defn_info()
     }
 
-    pub fn add_closure(
+    pub fn add_lambda(
         &mut self,
         identifiers: &Identifiers,
         function_type_id: TypeId,
@@ -965,22 +983,22 @@ impl Types {
         body_function_id: FunctionId,
         parsed_id: ParsedId,
     ) -> TypeId {
-        let closure_type_id = self.add_type(Type::Closure(LambdaType {
+        let lambda_type_id = self.add_type(Type::Lambda(LambdaType {
             function_type: function_type_id,
             env_type: environment_type,
             parsed_id,
             body_function_id,
             environment_struct,
-            closure_object_type: TypeId::PENDING,
+            lambda_object_type: TypeId::PENDING,
         }));
-        let closure_object_type = self.add_closure_object(identifiers, function_type_id, parsed_id);
-        if let Type::Closure(c) = self.get_mut(closure_type_id) {
-            c.closure_object_type = closure_object_type;
+        let lambda_object_type = self.add_lambda_object(identifiers, function_type_id, parsed_id);
+        if let Type::Lambda(c) = self.get_mut(lambda_type_id) {
+            c.lambda_object_type = lambda_object_type;
         }
-        closure_type_id
+        lambda_type_id
     }
 
-    pub fn add_closure_object(
+    pub fn add_lambda_object(
         &mut self,
         identifiers: &Identifiers,
         function_type_id: TypeId,
@@ -1014,7 +1032,7 @@ impl Types {
             generic_instance_info: None,
             ast_node: parsed_id,
         }));
-        self.add_type(Type::ClosureObject(LambdaObjectType {
+        self.add_type(Type::LambdaObject(LambdaObjectType {
             function_type: function_type_id,
             parsed_id,
             struct_representation,
@@ -1087,9 +1105,15 @@ impl Types {
     pub fn count_type_variables(&self, type_id: TypeId) -> TypeVariableInfo {
         const EMPTY: TypeVariableInfo = TypeVariableInfo::EMPTY;
         match self.get_no_follow(type_id) {
-            Type::TypeParameter(_tv) => {
-                TypeVariableInfo { type_parameter_count: 1, inference_variable_count: 0 }
-            }
+            Type::TypeParameter(tv) => match tv.function_type {
+                None => TypeVariableInfo { type_parameter_count: 1, inference_variable_count: 0 },
+                Some(function_type) => {
+                    let base_info =
+                        TypeVariableInfo { type_parameter_count: 1, inference_variable_count: 0 };
+                    let fn_info = self.count_type_variables(function_type);
+                    base_info.add(fn_info)
+                }
+            },
             Type::InferenceHole(_hole) => {
                 TypeVariableInfo { type_parameter_count: 0, inference_variable_count: 1 }
             }
@@ -1135,11 +1159,11 @@ impl Types {
                 result = result.add(self.count_type_variables(fun.return_type));
                 result
             }
-            Type::Closure(closure) => self
-                .count_type_variables(closure.function_type)
-                .add(self.count_type_variables(closure.env_type)),
-            // But a closure object is generic if its function is generic
-            Type::ClosureObject(co) => self.count_type_variables(co.function_type),
+            Type::Lambda(lambda) => self
+                .count_type_variables(lambda.function_type)
+                .add(self.count_type_variables(lambda.env_type)),
+            // But a lambda object is generic if its function is generic
+            Type::LambdaObject(co) => self.count_type_variables(co.function_type),
             Type::RecursiveReference(_rr) => EMPTY,
         }
     }

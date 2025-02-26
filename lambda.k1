@@ -1,0 +1,46 @@
+fn staticAddOne(x: int): int { x + 1 }
+
+//fn map[T, U](a: List[T], f: some \T -> U): List[U] {
+//  let* us = List/withCapacity[U](a.len);
+//  for i in a do { us.push[U](f(i)) };
+//  us.*
+//}
+
+// the type of f in this context is still 'some \T -> \U', the 
+// only thing you can do with it is call it. It has no physical repr
+// since its a generic. Once we specialize, it'll have a physical repr
+
+// If I pass in a function reference, f is a function reference
+// If I pass in a lambda object, f is a lambda object
+// If I pass in a lambda _proper_, f is a <whatever lambda's are on the stack already>
+// -> "LambdaExpr" (lambda_type)
+// -> Physical repr: All I need is the function id
+// -> No physical repr.
+// -> What if I put it in a struct or something?
+//        It gets lifted into a LambdaObject
+
+// 'some' is a new non-physical type
+// 'dyn[]' is a new physical type for what already happens
+
+// fn runAll(tasks: List[dyn[\unit -> unit]]): unit { for task in tasks do { task() } }
+// TODO: parse [ \() -> unit ] not [ \-> unit ]
+fn runAll(tasks: List[\-> unit]): unit { for task in tasks do { task() } }
+
+fn main(): int {
+
+  let t1 = \() println("Task 1 completed");
+  let t2 = \() println("Task 2 completed");
+
+  runAll([t1, t2]); // expected: any thunk, got: <closure ty>. Coerce using 'make obj from closure'
+  runAll([t1.toDyn(), t2.toDyn()]); // Explicitly calling toDyn() on a lambda or type implementing an ability gives you a dyn[t]
+
+  myShowable.toDyn[Show]();
+
+  assert(result == [2, 4, 6, 8]);
+
+  // let result = [1,2,3,5,6,7,8]
+  // | map(\(x: int) x + 1)
+  // | filter(\(x: int) x % 2 == 0);
+
+  0
+}

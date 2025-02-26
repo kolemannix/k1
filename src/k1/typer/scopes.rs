@@ -30,7 +30,7 @@ impl Display for ScopeId {
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum ScopeType {
     FunctionScope,
-    ClosureScope,
+    LambdaScope,
     LexicalBlock,
     Namespace,
     WhileLoopBody,
@@ -48,7 +48,7 @@ impl ScopeType {
     pub fn short_name(&self) -> &'static str {
         match self {
             ScopeType::FunctionScope => "fn",
-            ScopeType::ClosureScope => "clos",
+            ScopeType::LambdaScope => "clos",
             ScopeType::LexicalBlock => "block",
             ScopeType::Namespace => "ns",
             ScopeType::WhileLoopBody => "while",
@@ -66,7 +66,7 @@ impl ScopeType {
     pub fn loop_type(&self) -> Option<LoopType> {
         match self {
             ScopeType::FunctionScope => None,
-            ScopeType::ClosureScope => None,
+            ScopeType::LambdaScope => None,
             ScopeType::LexicalBlock => None,
             ScopeType::Namespace => None,
             ScopeType::WhileLoopBody => Some(LoopType::While),
@@ -88,7 +88,7 @@ impl Display for ScopeType {
     }
 }
 
-pub struct ScopeClosureInfo {
+pub struct ScopeLambdaInfo {
     pub expected_return_type: Option<TypeId>,
     pub capture_exprs_for_fixup: SmallVec<[TypedExprId; 8]>,
     pub captured_variables: SmallVec<[VariableId; 8]>,
@@ -100,13 +100,13 @@ pub struct ScopeLoopInfo {
 
 pub struct Scopes {
     scopes: Vec<Scope>,
-    closure_info: HashMap<ScopeId, ScopeClosureInfo>,
+    lambda_info: HashMap<ScopeId, ScopeLambdaInfo>,
     loop_info: HashMap<ScopeId, ScopeLoopInfo>,
 }
 
 impl Scopes {
     pub fn make() -> Self {
-        Scopes { scopes: Vec::new(), closure_info: HashMap::new(), loop_info: HashMap::new() }
+        Scopes { scopes: Vec::new(), lambda_info: HashMap::new(), loop_info: HashMap::new() }
     }
 
     pub fn add_root_scope(&mut self, name: Option<Identifier>) -> ScopeId {
@@ -426,12 +426,12 @@ impl Scopes {
         }
     }
 
-    pub fn nearest_parent_closure(&self, scope_id: ScopeId) -> Option<ScopeId> {
+    pub fn nearest_parent_lambda(&self, scope_id: ScopeId) -> Option<ScopeId> {
         let scope = self.get_scope(scope_id);
         match scope.scope_type {
-            ScopeType::ClosureScope => Some(scope_id),
+            ScopeType::LambdaScope => Some(scope_id),
             _ => match scope.parent {
-                Some(parent) => self.nearest_parent_closure(parent),
+                Some(parent) => self.nearest_parent_lambda(parent),
                 None => None,
             },
         }
@@ -630,9 +630,9 @@ impl Scopes {
         variable_id: VariableId,
         fixup_expr_id: TypedExprId,
     ) {
-        match self.closure_info.entry(scope_id) {
-            Entry::Occupied(mut closure_info) => {
-                let info = closure_info.get_mut();
+        match self.lambda_info.entry(scope_id) {
+            Entry::Occupied(mut lambda_info) => {
+                let info = lambda_info.get_mut();
                 if !info.captured_variables.contains(&variable_id) {
                     info.captured_variables.push(variable_id);
                 };
@@ -641,17 +641,17 @@ impl Scopes {
                 info.capture_exprs_for_fixup.push(fixup_expr_id)
             }
             Entry::Vacant(_entry) => {
-                unreachable!("All closure scopes should have info by block eval")
+                unreachable!("All lambda scopes should have info by block eval")
             }
         }
     }
 
-    pub fn add_closure_info(&mut self, closure_scope_id: ScopeId, info: ScopeClosureInfo) {
-        self.closure_info.insert(closure_scope_id, info);
+    pub fn add_lambda_info(&mut self, lambda_scope_id: ScopeId, info: ScopeLambdaInfo) {
+        self.lambda_info.insert(lambda_scope_id, info);
     }
 
-    pub fn get_closure_info(&self, closure_scope_id: ScopeId) -> Option<&ScopeClosureInfo> {
-        self.closure_info.get(&closure_scope_id)
+    pub fn get_lambda_info(&self, lambda_scope_id: ScopeId) -> &ScopeLambdaInfo {
+        self.lambda_info.get(&lambda_scope_id).unwrap()
     }
 
     pub fn add_loop_info(&mut self, loop_scope_id: ScopeId, info: ScopeLoopInfo) {
@@ -669,7 +669,7 @@ pub enum ScopeOwnerId {
     Ability(AbilityId),
     Function(FunctionId),
     Namespace(NamespaceId),
-    Closure(TypeId),
+    Lambda(TypeId),
 }
 impl ScopeOwnerId {
     pub fn expect_ability(&self) -> AbilityId {
