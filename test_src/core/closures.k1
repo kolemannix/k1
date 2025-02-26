@@ -6,6 +6,12 @@ fn map[T, U](a: List[T], f: some \T -> U): List[U] {
   us.*
 }
 
+// fn flatMap[T, U](a: List[T], f: some \T -> List[U]): List[U] {
+//   let* us = List/withCapacity[U](a.len);
+//   for i in a do { us.push[U](f(i)) };
+//   us.*
+// }
+
 // Todo: this performs dynamic dispatch, always
 // We could instead specialize the function on the closure type
 // and get static dispatch
