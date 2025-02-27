@@ -311,9 +311,23 @@ pub struct FnParamType {
 
 #[derive(Debug, Clone)]
 pub struct FunctionType {
-    pub params: Vec<FnParamType>,
+    pub physical_params: Vec<FnParamType>,
     pub return_type: TypeId,
     pub defn_info: Option<TypeDefnInfo>,
+}
+
+impl FunctionType {
+    pub fn logical_params(&self) -> &[FnParamType] {
+        if self.physical_params.is_empty() {
+            &[]
+        } else {
+            if self.physical_params[0].is_lambda_env {
+                &self.physical_params[1..]
+            } else {
+                &self.physical_params[..]
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -443,11 +457,13 @@ impl PartialEq for Type {
             // We never really want to de-dupe this type as its inherently unique
             (Type::Generic(_g1), Type::Generic(_g2)) => false,
             (Type::Function(f1), Type::Function(f2)) => {
-                if f1.return_type == f2.return_type && f1.params.len() == f2.params.len() {
+                if f1.return_type == f2.return_type
+                    && f1.physical_params.len() == f2.physical_params.len()
+                {
                     return f1
-                        .params
+                        .physical_params
                         .iter()
-                        .zip(f2.params.iter())
+                        .zip(f2.physical_params.iter())
                         .all(|(p1, p2)| p1.type_id == p2.type_id);
                 };
                 false
@@ -534,7 +550,7 @@ impl std::hash::Hash for Type {
             Type::Function(fun) => {
                 "fun".hash(state);
                 fun.return_type.hash(state);
-                for param in &fun.params {
+                for param in &fun.physical_params {
                     param.name.hash(state);
                     param.is_context.hash(state);
                     param.is_lambda_env.hash(state);
@@ -1154,7 +1170,7 @@ impl Types {
             Type::Generic(_gen) => EMPTY,
             Type::Function(fun) => {
                 let mut result = EMPTY;
-                for param in fun.params.iter() {
+                for param in fun.physical_params.iter() {
                     result = result.add(self.count_type_variables(param.type_id))
                 }
                 result = result.add(self.count_type_variables(fun.return_type));
