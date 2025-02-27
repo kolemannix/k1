@@ -1417,8 +1417,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let return_type = self.codegen_type(function_type.return_type)?;
         let is_sret = return_type.is_aggregate();
         let mut param_types: Vec<K1LlvmType<'ctx>> =
-            Vec::with_capacity(function_type.params.len() + 1);
-        for p in function_type.params.iter() {
+            Vec::with_capacity(function_type.physical_params.len() + 1);
+        for p in function_type.physical_params.iter() {
             let param_type = self.codegen_type(p.type_id)?;
             param_types.push(param_type)
         }
@@ -3071,9 +3071,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
         let maybe_starting_block = self.builder.get_insert_block();
 
-        let mut param_types: Vec<K1LlvmType<'ctx>> = Vec::with_capacity(function_type.params.len());
+        let mut param_types: Vec<K1LlvmType<'ctx>> = Vec::with_capacity(function_type.physical_params.len());
         let mut param_metadata_types: Vec<BasicMetadataTypeEnum<'ctx>> =
-            Vec::with_capacity(function_type.params.len());
+            Vec::with_capacity(function_type.physical_params.len());
 
         let llvm_function_type = self.make_llvm_function_type(function_type_id)?;
         let is_sret = llvm_function_type.is_sret;
@@ -3089,7 +3089,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             None
         };
 
-        for param in function_type.params.iter() {
+        for param in function_type.physical_params.iter() {
             let res = self.codegen_type(param.type_id)?;
             param_metadata_types.push(BasicMetadataTypeEnum::from(res.canonical_repr_type()));
             param_types.push(res);
@@ -3167,7 +3167,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     span: self.module.ast.get_span_for_id(function.parsed_id),
                 }
             } else {
-                &function_type.params[i - sret_offset]
+                &function_type.physical_params[i - sret_offset]
             };
             let ty = self.codegen_type(typed_param.type_id)?;
             let param_name = self.module.ast.identifiers.get_name(typed_param.name);

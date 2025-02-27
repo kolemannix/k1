@@ -238,9 +238,14 @@ impl Scopes {
         }
     }
 
-    pub fn add_variable(&mut self, scope_id: ScopeId, ident: Identifier, variable_id: VariableId) {
+    pub fn add_variable(
+        &mut self,
+        scope_id: ScopeId,
+        ident: Identifier,
+        variable_id: VariableId,
+    ) -> bool {
         let scope = self.get_scope_mut(scope_id);
-        scope.add_variable(ident, variable_id);
+        scope.add_variable(ident, variable_id)
     }
 
     pub fn add_context_variable(
@@ -746,12 +751,12 @@ impl Scope {
         }
     }
 
-    pub fn add_variable(&mut self, ident: Identifier, value: VariableId) {
+    pub fn add_variable(&mut self, ident: Identifier, value: VariableId) -> bool {
         // This accomplishes shadowing by overwriting the name in the scope.
         // I think this is ok because the variable itself (by variable id)
         // is not lost, in case we wanted to do some analysis.
         // Still, might need to mark it shadowed explicitly?
-        self.variables.insert(ident, value);
+        self.variables.insert(ident, value).is_none()
     }
 
     #[must_use]
