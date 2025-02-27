@@ -2044,11 +2044,8 @@ impl TypedModule {
         };
 
         // The big evaluation!
-        let resulting_type_id = self.eval_type_expr_defn(
-            parsed_type_defn.value_expr,
-            defn_scope_id,
-            type_eval_context,
-        )?;
+        let resulting_type_id =
+            self.eval_type_expr_ext(parsed_type_defn.value_expr, defn_scope_id, type_eval_context)?;
 
         // If this was a recursive definition, do a replacement
         if let Some(placeholder_id) = self.types.placeholder_mapping.get(&parsed_type_defn_id) {
@@ -2116,10 +2113,10 @@ impl TypedModule {
         type_expr_id: ParsedTypeExprId,
         scope_id: ScopeId,
     ) -> TyperResult<TypeId> {
-        self.eval_type_expr_defn(type_expr_id, scope_id, EvalTypeExprContext::EMPTY.clone())
+        self.eval_type_expr_ext(type_expr_id, scope_id, EvalTypeExprContext::EMPTY.clone())
     }
 
-    fn eval_type_expr_defn(
+    fn eval_type_expr_ext(
         &mut self,
         type_expr_id: ParsedTypeExprId,
         scope_id: ScopeId,
@@ -2222,7 +2219,7 @@ impl TypedModule {
                 let struct_defn = struct_defn.clone();
                 let mut fields: Vec<StructTypeField> = Vec::new();
                 for (index, ast_field) in struct_defn.fields.iter().enumerate() {
-                    let ty = self.eval_type_expr_defn(
+                    let ty = self.eval_type_expr_ext(
                         ast_field.ty,
                         scope_id,
                         context.no_attach_defn_info(),
@@ -2264,13 +2261,13 @@ impl TypedModule {
             }
             ParsedTypeExpr::Optional(opt) => {
                 let inner_ty =
-                    self.eval_type_expr_defn(opt.base, scope_id, context.no_attach_defn_info())?;
+                    self.eval_type_expr_ext(opt.base, scope_id, context.no_attach_defn_info())?;
                 let optional_type = self.instantiate_generic_type(OPTIONAL_TYPE_ID, vec![inner_ty]);
                 Ok(optional_type)
             }
             ParsedTypeExpr::Reference(r) => {
                 let inner_ty =
-                    self.eval_type_expr_defn(r.base, scope_id, context.no_attach_defn_info())?;
+                    self.eval_type_expr_ext(r.base, scope_id, context.no_attach_defn_info())?;
                 let reference_type = Type::Reference(ReferenceType { inner_type: inner_ty });
                 let type_id = self.types.add_type(reference_type);
                 Ok(type_id)
@@ -2282,7 +2279,7 @@ impl TypedModule {
                     let payload_type_id = match &v.payload_expression {
                         None => None,
                         Some(payload_type_expr) => {
-                            let type_id = self.eval_type_expr_defn(
+                            let type_id = self.eval_type_expr_ext(
                                 *payload_type_expr,
                                 scope_id,
                                 context.no_attach_defn_info(),
@@ -2324,11 +2321,8 @@ impl TypedModule {
             }
             ParsedTypeExpr::DotMemberAccess(dot_acc) => {
                 let dot_acc = dot_acc.clone();
-                let base_type = self.eval_type_expr_defn(
-                    dot_acc.base,
-                    scope_id,
-                    context.no_attach_defn_info(),
-                )?;
+                let base_type =
+                    self.eval_type_expr_ext(dot_acc.base, scope_id, context.no_attach_defn_info())?;
                 if let Some(spec_info) = self.types.get_generic_instance_info(base_type) {
                     let generic = self.types.get(spec_info.generic_parent).expect_generic();
                     let type_params = &generic.params;
@@ -2427,20 +2421,22 @@ impl TypedModule {
             ParsedTypeExpr::Function(fun_type) => {
                 let fun_type = fun_type.clone();
                 let mut params: Vec<FnParamType> = Vec::with_capacity(fun_type.params.len());
-                let empty_struct_id = self.types.add_type(Type::Struct(StructType {
-                    type_defn_info: None,
-                    fields: vec![],
-                    ast_node: type_expr_id.into(),
-                    generic_instance_info: None,
-                }));
-                let empty_struct_reference_id = self.types.add_reference_type(empty_struct_id);
-                params.push(FnParamType {
-                    type_id: empty_struct_reference_id,
-                    name: get_ident!(self, LAMBDA_ENV_PARAM_NAME),
-                    is_context: false,
-                    is_lambda_env: true,
-                    span: fun_type.span,
-                });
+
+                //let empty_struct_id = self.types.add_type(Type::Struct(StructType {
+                //    type_defn_info: None,
+                //    fields: vec![],
+                //    ast_node: type_expr_id.into(),
+                //    generic_instance_info: None,
+                //}));
+                // let empty_struct_reference_id = self.types.add_reference_type(empty_struct_id);
+                // params.push(FnParamType {
+                //     type_id: empty_struct_reference_id,
+                //     name: get_ident!(self, LAMBDA_ENV_PARAM_NAME),
+                //     is_context: false,
+                //     is_lambda_env: true,
+                //     span: fun_type.span,
+                // });
+
                 for (index, param) in fun_type.params.iter().enumerate() {
                     let type_id = self.eval_type_expr(*param, scope_id)?;
                     let span = self.ast.get_type_expression_span(*param);
@@ -2503,7 +2499,7 @@ impl TypedModule {
                 if ty_app.args.len() != 2 {
                     return failf!(ty_app.span, "Expected 1 type parameter for dyn");
                 }
-                let inner = self.eval_type_expr_defn(
+                let inner = self.eval_type_expr_ext(
                     ty_app.args[0].type_expr,
                     scope_id,
                     context.no_attach_defn_info(),
@@ -2522,12 +2518,12 @@ impl TypedModule {
                 if ty_app.args.len() != 2 {
                     return failf!(ty_app.span, "Expected 2 type parameters for _struct_combine");
                 }
-                let arg1 = self.eval_type_expr_defn(
+                let arg1 = self.eval_type_expr_ext(
                     ty_app.args[0].type_expr,
                     scope_id,
                     context.no_attach_defn_info(),
                 )?;
-                let arg2 = self.eval_type_expr_defn(
+                let arg2 = self.eval_type_expr_ext(
                     ty_app.args[1].type_expr,
                     scope_id,
                     context.no_attach_defn_info(),
@@ -2578,12 +2574,12 @@ impl TypedModule {
                 if ty_app.args.len() != 2 {
                     return failf!(ty_app.span, "Expected 2 type parameters for _struct_remove");
                 }
-                let arg1 = self.eval_type_expr_defn(
+                let arg1 = self.eval_type_expr_ext(
                     ty_app.args[0].type_expr,
                     scope_id,
                     context.no_attach_defn_info(),
                 )?;
-                let arg2 = self.eval_type_expr_defn(
+                let arg2 = self.eval_type_expr_ext(
                     ty_app.args[1].type_expr,
                     scope_id,
                     context.no_attach_defn_info(),
@@ -2648,7 +2644,7 @@ impl TypedModule {
                     }
                     let mut type_arguments: Vec<TypeId> = Vec::with_capacity(ty_app.args.len());
                     for parsed_param in ty_app.args.clone().iter() {
-                        let param_type_id = self.eval_type_expr_defn(
+                        let param_type_id = self.eval_type_expr_ext(
                             parsed_param.type_expr,
                             scope_id,
                             context.no_attach_defn_info(),
@@ -3396,7 +3392,7 @@ impl TypedModule {
                     ))
                 }
             }
-            (Type::LambdaObject(lambda_object), Type::Lambda(lambda_type)) => Err(format!(
+            (Type::LambdaObject(_lambda_object), Type::Lambda(_lambda_type)) => Err(format!(
                 "expected lambda object but got lambda; need to call toDyn() for now. {} vs {}",
                 self.type_id_to_string(expected),
                 self.type_id_to_string(actual),
@@ -3410,7 +3406,17 @@ impl TypedModule {
             (Type::TypeParameter(expected_abstract_function), act)
                 if expected_abstract_function.is_function() =>
             {
-                todo!()
+                let expected_function_type = expected_abstract_function.function_type.unwrap();
+                let actual_function_type = self.extract_function_type_from_functionlike(act);
+                if let Some(actual_function_type) = actual_function_type {
+                    self.check_types(expected_function_type, actual_function_type, scope_id)
+                } else {
+                    Err(format!(
+                        "Expected some function-like with type: {} but got {}",
+                        self.type_id_to_string(expected_function_type),
+                        self.type_id_to_string(actual),
+                    ))
+                }
             }
             (Type::Function(f1), Type::Function(f2)) => {
                 if f1.params.len() != f2.params.len() {
@@ -5437,8 +5443,33 @@ impl TypedModule {
         let span = lambda.span;
         let body_span = self.ast.exprs.get_span(lambda.body);
         let mut typed_params = VecDeque::with_capacity(lambda_arguments.len() + 1);
-        let expected_function_type =
-            ctx.expected_type_id.and_then(|et| self.types.get(et).as_function()).cloned();
+        if let Some(t) = ctx.expected_type_id {
+            debug!(
+                "lambda: expected type is {} {}",
+                self.types.get(t).kind_name(),
+                self.type_id_to_string(t)
+            );
+        }
+
+        // nocommit: clean this up; formalize and centralized what counts as a 'function-like'
+        // In this case, we're looking at 'hinted' or 'expected' types. So these have to be types
+        // that you can write, or express, so that throws out Lambda, since you can't 'expect'
+        // a unique lambda. Lambda object is fine, as in I expect dyn[\T -> T], and a some quant
+        // function is fine. Function reference is interesting. I don't think a closure can be
+        // 'lifted' to a function reference because it may capture things, they get called
+        // differently. You can only go the other way (function to closure that captures nothing)
+        // Then there's the actual FunctionType, which you can never actually have a value of, so
+        // will probably never be the hinted type
+        let expected_function_type = ctx
+            .expected_type_id
+            .and_then(|et| match self.types.get(et) {
+                Type::TypeParameter(tp) if tp.is_function() => {
+                    Some(self.types.get(tp.function_type.unwrap()))
+                }
+                Type::LambdaObject(lam_obj) => Some(self.types.get(lam_obj.function_type)),
+                _ => None,
+            })
+            .map(|ft| ft.as_function().unwrap().clone());
         let declared_expected_return_type = match lambda.return_type {
             None => None,
             Some(return_type_expr) => Some(self.eval_type_expr(return_type_expr, ctx.scope_id)?),
@@ -8581,21 +8612,9 @@ impl TypedModule {
             (passed, Type::TypeParameter(slot_type_param))
                 if slot_type_param.function_type.is_some() =>
             {
-                // What can we pass when we expect a function type parameter?
-                // A function reference, a lambda itself, and a lambda object, I should think
-                let passed_function_type = match passed {
-                    Type::Reference(r) => {
-                        if self.types.get(r.inner_type).as_function().is_some() {
-                            Some(r.inner_type)
-                        } else {
-                            None
-                        }
-                    }
-                    Type::Lambda(lam) => Some(lam.function_type),
-                    Type::LambdaObject(lambda_object) => Some(lambda_object.function_type),
-                    _ => None,
-                };
-                if let Some(passed_function_type) = passed_function_type {
+                if let Some(passed_function_type) =
+                    self.extract_function_type_from_functionlike(passed)
+                {
                     self.unify_and_find_substitutions_rec(
                         substitutions,
                         passed_function_type,
@@ -8646,6 +8665,25 @@ impl TypedModule {
                 ),
             (_, _) if passed_type == slot_type => TypeUnificationResult::Matching,
             _ => TypeUnificationResult::NonMatching("Unrelated types"),
+        }
+    }
+
+    fn extract_function_type_from_functionlike(&self, typ: &Type) -> Option<TypeId> {
+        // What can we pass when we expect a function type parameter?
+        // A Function reference: fn_name.pointer()
+        // A lambda: \x -> x + 1
+        // A lambda-object: dyn[A -> B]
+        match typ {
+            Type::Reference(r) => {
+                if self.types.get(r.inner_type).as_function().is_some() {
+                    Some(r.inner_type)
+                } else {
+                    None
+                }
+            }
+            Type::Lambda(lam) => Some(lam.function_type),
+            Type::LambdaObject(lambda_object) => Some(lambda_object.function_type),
+            _ => None,
         }
     }
 
