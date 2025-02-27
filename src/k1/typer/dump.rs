@@ -320,11 +320,14 @@ impl TypedModule {
                 Ok(())
             }
             Type::Function(fun) => {
-                writ.write_str("fn")?;
+                writ.write_str("\\")?;
                 writ.write_str("(")?;
-                for (idx, param) in fun.params.iter().enumerate() {
+                for (idx, param) in fun.physical_params.iter().enumerate() {
+                    if param.is_lambda_env {
+                        writ.write_str("(env)")?;
+                    }
                     self.display_type_id(param.type_id, expand, writ)?;
-                    let last = idx == fun.params.len() - 1;
+                    let last = idx == fun.physical_params.len() - 1;
                     if !last {
                         writ.write_str(", ")?;
                     }
@@ -407,7 +410,7 @@ impl TypedModule {
         }
         w.write_char('(')?;
         let function_type = self.types.get(function.type_id).as_function().unwrap();
-        for (idx, param) in function_type.params.iter().enumerate() {
+        for (idx, param) in function_type.physical_params.iter().enumerate() {
             if idx > 0 {
                 w.write_str(", ")?;
             }
@@ -700,7 +703,10 @@ impl TypedModule {
                 writ.write_char('\\')?;
                 let lambda_type = self.types.get(lambda_expr.lambda_type).as_lambda().unwrap();
                 let fn_type = self.types.get(lambda_type.function_type).as_function().unwrap();
-                for arg in fn_type.params.iter() {
+                writ.write_str("env=[")?;
+                self.display_type_id(lambda_type.env_type, false, writ);
+                writ.write_str("]")?;
+                for arg in fn_type.logical_params() {
                     writ.write_str(self.name_of(arg.name))?;
                     writ.write_str(": ")?;
                     self.display_type_id(arg.type_id, false, writ)?;

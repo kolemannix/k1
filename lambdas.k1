@@ -55,8 +55,8 @@ fn closureReturn(): unit {
   assert(nullary() == 4);
 }
 
-fn lam(i: int, f: some \int -> int): int {
-  f(i)
+fn lam(i: int, f: some \int -> int, g: some \int -> int): int {
+  f(i) + g(i)
 }
 
 fn test(): unit {
@@ -68,7 +68,7 @@ fn test(): unit {
   // assertEquals(addOne2(2), 3);
   // assertEquals(addOne3(3), 4);
 
-  #debug lam(5, \(x) x + 1);
+  #debug lam(5, \(x) x + 1, \(x) x + 2);
 
   // let result = #debug ([1,2,3,5,6,7,8] | map(\(x: int) x + 1)) | filter(\(x: int) x % 2 == 0);
   // assert(result == [2, 4, 6, 8]);
@@ -76,6 +76,7 @@ fn test(): unit {
   // captures();
   // captureMut();
   // closureReturn();
+  ()
 }
 
 }
