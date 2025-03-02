@@ -4997,7 +4997,9 @@ impl TypedModule {
                     field_values.push(StructField { name: ast_field.name, expr });
                 }
 
-                // this loses ability impls!!! because its not the same type. Ugh!
+                // Be very careful to keep all the provenance info for the struct, in the case
+                // we expect a certain struct type but provide a literal. Otherwise it will have
+                // the correct shape, but things like methods and ability calls won't work
                 let struct_type = StructType {
                     fields: field_defns,
                     type_defn_info: expected_struct
@@ -5007,38 +5009,6 @@ impl TypedModule {
                         .and_then(|es| es.1.generic_instance_info.clone()),
                 };
                 let output_struct_type_id = self.types.add_type(Type::Struct(struct_type));
-                //let struct_type_id = match expected_struct {
-                //    None => {
-                //        let anon_struct_type_id = self.types.add_type(Type::Struct(struct_type));
-                //        Ok(anon_struct_type_id)
-                //    }
-                //    Some((expected_type_id, expected_struct)) => {
-                //        match self.typecheck_struct(&expected_struct, &struct_type, ctx.scope_id) {
-                //            Ok(_) => {
-                //                // nocommit hack, non-permanent fix: If a named struct was expected, we still want to use it
-                //                // but we need to substitute our own types in, in case they are
-                //                // inference vars for example '0, we can't just 'chameleon' return
-                //                // what's expected.
-                //                //
-                //                // In general, returning expected type instead of actual is bad. If
-                //                // we need to preserve 'nominal' typing from the hint, we should do
-                //                // an explicit check. "Is a named struct expected? Ok, attach the
-                //                // defn info to what we return." Actually, that's genius.
-                //                struct_type.defn_info = expected_struct.type_defn_info;
-                //                if is_expected_named {
-                //                    Ok(self.types.add_type(Type::Struct(struct_type)))
-                //                } else {
-                //                    Ok(expected_type_id)
-                //                }
-                //            }
-                //            Err(_s) => {
-                //                let anon_struct_type_id =
-                //                    self.types.add_type(Type::Struct(struct_type));
-                //                Ok(anon_struct_type_id)
-                //            }
-                //        }
-                //    }
-                //}?;
                 let typed_struct = Struct {
                     fields: field_values,
                     span: ast_struct.span,
@@ -7503,14 +7473,7 @@ impl TypedModule {
         else {
             return method_not_found();
         };
-        // nocommit Why is this lookup necessary, is this getting the _concrete_ ability id, since the
-        // lookup is going to be on the generic? I don't think so; and we have an ability id 4 lines up!
         let ability_id = ability_function_ref.ability_id;
-        //let Some(ability_id) =
-        //    self.get_function(ability_function_ref.function_id).kind.ability_id()
-        //else {
-        //    return method_not_found();
-        //};
         let ability_impl_fn_id = self.resolve_ability_call(
             ability_function_ref.function_id,
             ability_function_index,
@@ -7969,18 +7932,12 @@ impl TypedModule {
                     ))));
                     final_params.push(context_param);
                 } else {
-                    let is_source_loc = self
-                        .types
-                        .get_type_defn_info(context_param.type_id)
-                        .is_some_and(|defn_info| {
-                            let compiler_namespace = self
-                                .namespaces
-                                .find_child_by_name(ROOT_NAMESPACE_ID, get_ident!(self, "compiler"))
-                                .unwrap();
-                            defn_info.name == get_ident!(self, "SourceLocation")
-                                && defn_info.scope == compiler_namespace.scope_id
-                        });
+                    let is_source_loc = context_param.type_id == COMPILER_SOURCE_LOC_TYPE_ID;
                     if is_source_loc {
+                        eprintln!(
+                            "source loc is missing in scope {}",
+                            self.scope_id_to_string(calling_scope)
+                        );
                         let expr = self.synth_source_location(span);
                         final_args.push(MaybeTypedExpr::Typed(expr));
                         final_params.push(context_param);
@@ -8136,17 +8093,17 @@ impl TypedModule {
         let original_function_type = self.types.get(callee_function_type_id).as_function().unwrap();
         let original_function_return_type = original_function_type.return_type;
         let params = &original_function_type.logical_params().to_vec();
-        let (aligned_original_args, aligned_original_params) = self
-            .align_call_arguments_with_parameters(
-                fn_call,
-                params,
-                known_args.map(|(_known_types, known_args)| known_args),
-                ctx.scope_id,
-                true,
-            )?;
 
         let (callee, typechecked_arguments, type_args, return_type) = match is_generic {
             false => {
+                let (aligned_original_args, aligned_original_params) = self
+                    .align_call_arguments_with_parameters(
+                        fn_call,
+                        params,
+                        known_args.map(|(_known_types, known_args)| known_args),
+                        ctx.scope_id,
+                        false,
+                    )?;
                 let mut typechecked_args = Vec::with_capacity(aligned_original_args.len());
                 for (maybe_typed_expr, param) in
                     aligned_original_args.iter().zip(aligned_original_params.iter())
@@ -8163,6 +8120,14 @@ impl TypedModule {
                 (callee, typechecked_args, smallvec![], original_function_return_type)
             }
             true => {
+                let (aligned_original_args, aligned_original_params) = self
+                    .align_call_arguments_with_parameters(
+                        fn_call,
+                        params,
+                        known_args.map(|(_known_types, known_args)| known_args),
+                        ctx.scope_id,
+                        true,
+                    )?;
                 // If a function is generic, we have a function id. Lambdas and function pointer
                 // calls can't take type arguments
                 let original_function_id = maybe_original_function_id.unwrap();
@@ -8607,7 +8572,7 @@ impl TypedModule {
         Ok(function_type_args)
     }
 
-    // nocommit
+    // tl;dr: we need a type resolution phase and an actual lowering phase
     // One major issue I'm seeing is that we're going to specialize functions on types like '?1'
     // and '?2' all over the place. Is this necessary during inference, or can we finally do
     // a different sort of pass just focused on learning and inferring types. We still have
@@ -9068,6 +9033,14 @@ impl TypedModule {
                     is_context: specialized_param_type.is_context,
                     constant_id: None,
                 });
+                if specialized_param_type.is_context {
+                    self.scopes.add_context_variable(
+                        spec_fn_scope,
+                        name,
+                        variable_id,
+                        specialized_param_type.type_id,
+                    );
+                }
                 self.scopes.add_variable(spec_fn_scope, name, variable_id);
                 variable_id
             })
@@ -10055,16 +10028,16 @@ impl TypedModule {
                 };
             }
 
+            let is_context = fn_param.modifiers.is_context();
             let variable = Variable {
                 name: fn_param.name,
                 type_id,
                 is_mutable: false,
                 owner_scope: fn_scope_id,
-                is_context: fn_param.modifiers.is_context(),
+                is_context,
                 constant_id: None,
             };
 
-            let is_context = fn_param.modifiers.is_context();
             let variable_id = self_.variables.add_variable(variable);
             param_types.push(FnParamType {
                 name: fn_param.name,
