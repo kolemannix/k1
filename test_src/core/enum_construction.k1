@@ -40,7 +40,7 @@ fn test(): unit {
   let i: Opt[i32].None = Opt.None[i32];
   let i: Opt[i32].None = Opt.None;
 
-  let x = Contrived.Stuff({ a: 42, b: "hello"});
+  let x = #debug Contrived.Stuff({ a: 42, b: "hello"});
 
   let bbb = Opt.None[int];
 

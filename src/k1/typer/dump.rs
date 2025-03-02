@@ -320,7 +320,7 @@ impl TypedModule {
                 Ok(())
             }
             Type::Function(fun) => {
-                writ.write_str("\\")?;
+                writ.write_str("fn")?;
                 writ.write_str("(")?;
                 for (idx, param) in fun.physical_params.iter().enumerate() {
                     if param.is_lambda_env {
@@ -336,7 +336,7 @@ impl TypedModule {
                 self.display_type_id(fun.return_type, expand, writ)
             }
             Type::Lambda(lam) => {
-                write!(writ, "lambda#{}(", lam.function_type)?;
+                write!(writ, "lambda#{}(", lam.parsed_id)?;
                 self.display_type_id(lam.function_type, expand, writ)?;
                 writ.write_str(")")?;
                 Ok(())
@@ -704,7 +704,7 @@ impl TypedModule {
                 let lambda_type = self.types.get(lambda_expr.lambda_type).as_lambda().unwrap();
                 let fn_type = self.types.get(lambda_type.function_type).as_function().unwrap();
                 writ.write_str("env=[")?;
-                self.display_type_id(lambda_type.env_type, false, writ);
+                self.display_type_id(lambda_type.env_type, false, writ).unwrap();
                 writ.write_str("]")?;
                 for arg in fn_type.logical_params() {
                     writ.write_str(self.name_of(arg.name))?;
@@ -717,9 +717,10 @@ impl TypedModule {
                 self.display_expr_id(*lambda_body, writ, indentation)?;
                 Ok(())
             }
-            TypedExpr::FunctionName(fn_name_expr) => {
-                let fun = self.get_function(fn_name_expr.function_id);
-                writ.write_str(self.name_of(fun.name))
+            TypedExpr::FunctionToLambdaObject(fn2lam) => {
+                let fun = self.get_function(fn2lam.function_id);
+                writ.write_str(self.name_of(fun.name))?;
+                writ.write_str(".toDyn()")
             }
             TypedExpr::PendingCapture(pending_capture) => {
                 writ.write_str("capture(")?;

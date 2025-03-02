@@ -80,7 +80,6 @@ pub struct StructType {
     /// Populated for non-anonymous (named) structs
     pub type_defn_info: Option<TypeDefnInfo>,
     pub generic_instance_info: Option<GenericInstanceInfo>,
-    pub ast_node: ParsedId,
 }
 
 impl StructType {
@@ -362,6 +361,12 @@ pub struct LambdaObjectType {
     pub struct_representation: TypeId,
 }
 
+#[derive(Debug, Clone)]
+pub struct FunctionValue {
+    pub function_id: FunctionId,
+    pub function_type: TypeId,
+}
+
 // To shrink this, we'd move TypeDefnInfo off, convert some Vecs to Boxed slices or just index
 // handles, but I'm tired of doing perf stuff like that; it'd be a big chore to handle everywhere
 // we look TypeDefnInfo differently. That said, the longer you wait to move things like that the
@@ -468,7 +473,11 @@ impl PartialEq for Type {
                 };
                 false
             }
-            (Type::Lambda(_c1), Type::Lambda(_c2)) => false,
+            (Type::Lambda(c1), Type::Lambda(c2)) => {
+                // The function type is key here so that we _dont_ equate 'inference artifact' lambdas
+                // with real ones: '0 -> '1 vs int -> bool
+                c1.function_type == c2.function_type && c1.parsed_id == c2.parsed_id
+            }
             (Type::LambdaObject(_co1), Type::LambdaObject(_co2)) => false,
             (Type::RecursiveReference(rr1), Type::RecursiveReference(rr2)) => {
                 rr1.root_type_id == rr2.root_type_id
@@ -519,6 +528,7 @@ impl std::hash::Hash for Type {
                 "tvar".hash(state);
                 tvar.name.hash(state);
                 tvar.scope_id.hash(state);
+                tvar.function_type.hash(state);
             }
             Type::InferenceHole(hole) => {
                 "hole".hash(state);
@@ -623,7 +633,7 @@ impl Type {
             | Type::Never(defn_info) => Some(defn_info.ast_id),
             Type::Float(ft) => Some(ft.defn_info.ast_id),
             Type::Integer(_) => None,
-            Type::Struct(t) => Some(t.ast_node),
+            Type::Struct(t) => None,
             Type::Reference(_t) => None,
             Type::TypeParameter(_t) => None,
             Type::InferenceHole(_) => None,
@@ -1015,6 +1025,14 @@ impl Types {
         lambda_type_id
     }
 
+    pub fn add_empty_struct(&mut self) -> TypeId {
+        self.add_type(Type::Struct(StructType {
+            fields: vec![],
+            type_defn_info: None,
+            generic_instance_info: None,
+        }))
+    }
+
     pub fn add_lambda_object(
         &mut self,
         identifiers: &Identifiers,
@@ -1022,12 +1040,7 @@ impl Types {
         parsed_id: ParsedId,
     ) -> TypeId {
         let fn_ptr_type = self.add_reference_type(function_type_id);
-        let env_type = self.add_type(Type::Struct(StructType {
-            fields: vec![],
-            type_defn_info: None,
-            generic_instance_info: None,
-            ast_node: parsed_id,
-        }));
+        let env_type = self.add_empty_struct();
         let env_ptr_type = self.add_reference_type(env_type);
         let fields = vec![
             StructTypeField {
@@ -1047,7 +1060,6 @@ impl Types {
             fields,
             type_defn_info: None,
             generic_instance_info: None,
-            ast_node: parsed_id,
         }));
         self.add_type(Type::LambdaObject(LambdaObjectType {
             function_type: function_type_id,
