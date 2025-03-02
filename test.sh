@@ -5,7 +5,7 @@ set -x
 set -e
 export RUST_BACKTRACE=1
 cargo test
-cargo run --bin test_suite -- $1
+cargo run --features=llvm-sys/prefer-dynamic --bin test_suite -- $1
 
 ./run.sh dogfood/refchess
 

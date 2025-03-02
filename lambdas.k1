@@ -63,11 +63,11 @@ fn closureReturn(): unit {
   assert(nullary() == 4);
 }
 
-fn lam1(i: int, f: some \int -> int): int {
+fn someFnParam1(i: int, f: some \int -> int): int {
   f(i)
 }
 
-fn lam2(i: int, f: some \int -> int, g: some \int -> int): int {
+fn someFnParam2(i: int, f: some \int -> int, g: some \int -> int): int {
   f(i) + g(i)
 }
 
@@ -75,25 +75,28 @@ fn lam2(i: int, f: some \int -> int, g: some \int -> int): int {
 
 fn test(): unit {
 
-  let lam1Result = lam1(5, staticAddOne);
-  assertEquals(lam1Result, 6);
+  let lam1ResultPtr = someFnParam1(5, staticAddOne.toRef());
+  assertEquals(lam1ResultPtr, 6);
+
+  let lam1ResultDyn = someFnParam1(5, staticAddOne.toDyn());
+  assertEquals(lam1ResultDyn, 6);
 
   let* c1 = { x: 3 };
   let c2 = 2;
 
-  let withClosures = lam2(5, \(x) x + 1 + c1.x, \(x) x + 2 + c2);
+  let withClosures = someFnParam2(5, \(x) x + 1 + c1.x, \(x) x + 2 + c2);
   assertEquals(withClosures, (5 + 1 + 3) + (5 + 2 + 2));
 
-  let staticAddOneVar = staticAddOne;
-  let staticResult = lam2(5, staticAddOne, staticAddOneVar);
+  let staticAddOneVar = staticAddOne.toRef();
+  let staticResult = someFnParam2(5, staticAddOne.toRef(), staticAddOneVar);
   assertEquals(staticResult, 6 + 6);
 
   let result = ([1,2,3,5,6,7,8] | map(\(x: int) x + 1)) | filter(\(x: int) x % 2 == 0);
   assert(result == [2, 4, 6, 8]);
 
-  // captures();
-  // captureMut();
-  // closureReturn();
+  captures();
+  captureMut();
+  closureReturn();
   ()
 }
 
