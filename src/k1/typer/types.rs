@@ -211,9 +211,6 @@ impl NamedType for GenericTypeParam {
     }
 }
 
-// nocommit: This isn't really even a type; a value can't have it
-//           It's just where I'm storing type constructors. We could
-//           make it a fallback lookup after scope.find_type, find_type_ctors()...
 #[derive(Debug, Clone)]
 pub struct GenericType {
     pub params: Vec<GenericTypeParam>,
@@ -417,8 +414,16 @@ impl PartialEq for Type {
             (Type::Bool(_), Type::Bool(_)) => true,
             (Type::Pointer(_), Type::Pointer(_)) => true,
             (Type::Struct(s1), Type::Struct(s2)) => {
-                if s1.is_named() || s2.is_named() {
-                    return false;
+                if s1.is_named() {
+                    if s2.is_named() {
+                        let s1_info = s1.type_defn_info.as_ref().unwrap();
+                        let s2_info = s2.type_defn_info.as_ref().unwrap();
+                        if s1_info.ast_id != s2_info.ast_id {
+                            return false;
+                        }
+                    } else {
+                        return false;
+                    }
                 }
                 if s1.fields.len() != s2.fields.len() {
                     return false;

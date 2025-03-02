@@ -13,5 +13,5 @@ fn add[T](a: T, b: T): i32 where T: Num, T: Show {
 
 fn test(): unit {
   let result = testCompile(add("asdf", "asdf"));
-  assert(result is .Some("Cannot invoke function 'add' with given types. Provided type for T is string which does not implement required ability Num"))
+  assert(result is .Some("Provided type for T is string which does not implement required ability Num. Therefore, cannot call function 'add' with given types: T := string"))
 }

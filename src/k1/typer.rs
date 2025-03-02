@@ -1176,6 +1176,13 @@ pub struct FunctionToLambdaObjectExpr {
 }
 
 #[derive(Debug, Clone)]
+pub struct FunctionReferenceExpr {
+    pub function_id: FunctionId,
+    pub function_reference_type: TypeId,
+    pub span: SpanId,
+}
+
+#[derive(Debug, Clone)]
 pub struct PendingCaptureExpr {
     pub captured_variable_id: VariableId,
     pub type_id: TypeId,
@@ -1218,7 +1225,7 @@ pub struct TypedMatchExpr {
     pub span: SpanId,
 }
 
-// nocommit: Size: 112 bytes
+// TODO(perf): TypedExpr is very big
 static_assert_size!(TypedExpr, 128);
 #[derive(Debug, Clone)]
 pub enum TypedExpr {
@@ -1261,6 +1268,7 @@ pub enum TypedExpr {
     ///   to; this can either be called directly or turned into a dynamic function object if needed
     Lambda(LambdaExpr),
     /// Calling .toDyn() on a function by name
+    FunctionReference(FunctionReferenceExpr),
     FunctionToLambdaObject(FunctionToLambdaObjectExpr),
     /// These get re-written into struct access expressions once we know all captures and have
     /// generated the lambda's capture struct
@@ -1300,6 +1308,7 @@ impl TypedExpr {
             TypedExpr::Return(_ret) => NEVER_TYPE_ID,
             TypedExpr::Break(_break) => NEVER_TYPE_ID,
             TypedExpr::Lambda(lambda) => lambda.lambda_type,
+            TypedExpr::FunctionReference(f) => f.function_reference_type,
             TypedExpr::FunctionToLambdaObject(f) => f.lambda_object_type_id,
             TypedExpr::PendingCapture(pc) => pc.type_id,
         }
@@ -1331,6 +1340,7 @@ impl TypedExpr {
             TypedExpr::Return(ret) => ret.span,
             TypedExpr::Break(brk) => brk.span,
             TypedExpr::Lambda(lambda) => lambda.span,
+            TypedExpr::FunctionReference(f) => f.span,
             TypedExpr::FunctionToLambdaObject(f) => f.span,
             TypedExpr::PendingCapture(pc) => pc.span,
         }
@@ -3385,7 +3395,7 @@ impl TypedModule {
         }
 
         match (self.types.get(expected), self.types.get(actual)) {
-            (Type::InferenceHole(_hole), any) => Ok(()),
+            (Type::InferenceHole(_hole), _any) => Ok(()),
             (Type::Struct(r1), Type::Struct(r2)) => self.typecheck_struct(r1, r2, scope_id),
             (Type::Reference(o1), Type::Reference(o2)) => {
                 self.check_types(o1.inner_type, o2.inner_type, scope_id)
@@ -3462,14 +3472,6 @@ impl TypedModule {
                     ))
                 } else {
                     for (p1, p2) in f1.logical_params().iter().zip(f2.logical_params().iter()) {
-                        //nocommit: I commented this out because I think its wrong
-                        // If the types of the context params differ, the functions aren't
-                        // interchangeable? It may be better to say "if the actual requires fewer
-                        // context params than the expected, that is ok"?
-                        // Lambdas can't even take context params right now
-                        //if p1.is_context && p2.is_context {
-                        //    continue;
-                        //}
                         if let Err(msg) = self.check_types(p1.type_id, p2.type_id, scope_id) {
                             return Err(format!(
                                 "Incorrect type for parameter '{}': {}",
@@ -4216,95 +4218,11 @@ impl TypedModule {
         )?;
         match variable_id {
             None => {
-                // function lookup
-                let function_id = self.scopes.find_function_namespaced(
-                    scope_id,
-                    &variable.name,
-                    &self.namespaces,
-                    &self.ast.identifiers,
-                )?;
-                match function_id {
-                    Some(function_id) => {
-                        // Function cannot be generic to take it by value
-                        // nocommit: This will not be what happens on function name value taking;
-                        // you'll have to say functionName.toDyn()
-                        // and for the `as Pointer` case that we broke, it will be
-                        // functionName.toPointer
-                        let variable_span = variable.name.span;
-                        let function = self.get_function(function_id);
-                        if function.is_generic() {
-                            return failf!(
-                                variable.name.span,
-                                "Cannot take a generic function by value; eventually one could pass type arguments here but not today"
-                            );
-                        }
-                        let dyn_function_id = if let Some(dyn_fn_id) = function.dyn_fn_id {
-                            dyn_fn_id
-                        } else {
-                            let function_signature_span = self
-                                .ast
-                                .get_function(function.parsed_id.as_function_id().unwrap())
-                                .signature_span;
-                            let mut new_function = function.clone();
-                            let empty_env_struct_type = self.types.add_empty_struct();
-                            let empty_env_struct_ref =
-                                self.types.add_reference_type(empty_env_struct_type);
-                            let name = get_ident!(self, "__lambda_env");
-                            let empty_env_variable = self.variables.add_variable(Variable {
-                                name,
-                                type_id: empty_env_struct_ref,
-                                is_mutable: false,
-                                // Wrong scope, and its not actually added, but we know its not used
-                                owner_scope: new_function.scope,
-                                is_context: false,
-                                constant_id: None,
-                            });
-                            new_function.param_variables.insert(0, empty_env_variable);
-                            let mut function_type =
-                                self.types.get(new_function.type_id).as_function().unwrap().clone();
-                            function_type.physical_params.insert(
-                                0,
-                                FnParamType {
-                                    name,
-                                    type_id: empty_env_struct_ref,
-                                    is_context: false,
-                                    is_lambda_env: true,
-                                    span: function_signature_span,
-                                },
-                            );
-                            let new_function_type =
-                                self.types.add_type(Type::Function(function_type));
-                            new_function.type_id = new_function_type;
-                            let old_name = self.name_of(new_function.name);
-                            new_function.name =
-                                self.ast.identifiers.intern(format!("{}__dyn", old_name));
-                            let new_function_id = self.add_function(new_function);
-                            self.get_function_mut(function_id).dyn_fn_id = Some(new_function_id);
-                            new_function_id
-                        };
-                        let dyn_function = self.get_function(dyn_function_id);
-                        let lambda_object_type_id = self.types.add_lambda_object(
-                            &self.ast.identifiers,
-                            dyn_function.type_id,
-                            dyn_function.parsed_id,
-                        );
-                        let id = self.exprs.add(TypedExpr::FunctionToLambdaObject(
-                            FunctionToLambdaObjectExpr {
-                                function_id: dyn_function_id,
-                                span: variable_span,
-                                lambda_object_type_id,
-                            },
-                        ));
-                        Ok(id)
-                    }
-                    None => {
-                        failf!(
-                            variable.name.span,
-                            "Variable '{}' is not defined",
-                            self.ast.identifiers.get_name(variable.name.name),
-                        )
-                    }
-                }
+                failf!(
+                    variable.name.span,
+                    "Variable '{}' is not defined",
+                    self.ast.identifiers.get_name(variable.name.name),
+                )
             }
             Some((variable_id, variable_scope_id)) => {
                 let parent_lambda_scope_id = self.scopes.nearest_parent_lambda(scope_id);
@@ -7471,8 +7389,10 @@ impl TypedModule {
     ) -> TyperResult<Either<TypedExprId, Callee>> {
         debug_assert!(fn_call.name.namespaces.is_empty());
         let fn_name = fn_call.name.name;
+        let call_span = fn_call.span;
         let second_arg = fn_call.args.get(1).cloned();
 
+        // Special cases of this syntax that aren't really method calls
         if let Some(base_arg) = fn_call.args.first() {
             let type_args = fn_call.type_args.clone();
             if let Some(enum_constr) = self.handle_enum_constructor(
@@ -7484,6 +7404,47 @@ impl TypedModule {
                 fn_call.span,
             )? {
                 return Ok(Either::Left(enum_constr));
+            }
+
+            // TODO(perf): Remember the IDs of these special idents instead of comparing strings
+            match self.name_of(fn_name) {
+                "toRef" | "toDyn" => {
+                    // TODO: this isn't algebraically sound since you can _only_ use toRef and toDyn
+                    //       if you literally name the function on the lhs of the dot; you can't store
+                    //       it in a variable, because the function name on its own isn't a valid
+                    //       expression. So it's not the most satisfying, but it works for now. Easy to
+                    //       clean up by making function expressions a thing of their own, typed
+                    //       uniquely as the function's type, but having no physical representation;
+                    //       (consider it an abstract type)
+                    if let ParsedExpression::Variable(v) = self.ast.exprs.get(base_arg.value) {
+                        let function_name = &v.name;
+                        let function_id = self.scopes.find_function_namespaced(
+                            ctx.scope_id,
+                            function_name,
+                            &self.namespaces,
+                            &self.ast.identifiers,
+                        )?;
+                        if let Some(function_id) = function_id {
+                            let function = self.get_function(function_id);
+                            if function.is_generic() {
+                                return failf!(
+                                    call_span,
+                                    "Cannot do toDyn or toRef with a generic function"
+                                );
+                            }
+                            return match self.name_of(fn_name) {
+                                "toDyn" => self
+                                    .function_to_lambda_object(function_id, call_span)
+                                    .map(Either::Left),
+                                "toRef" => self
+                                    .function_to_reference(function_id, call_span)
+                                    .map(Either::Left),
+                                _ => self.ice_with_span("unreachable", call_span),
+                            };
+                        }
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -7498,8 +7459,6 @@ impl TypedModule {
         if let Some(enum_as_result) = self.handle_enum_as(base_expr, fn_call)? {
             return Ok(Either::Left(enum_as_result));
         }
-
-        let call_span = fn_call.span;
 
         let base_expr_type = self.exprs.get(base_expr).get_type();
         let base_for_method_derefed = self.types.get_type_id_dereferenced(base_expr_type);
@@ -7561,6 +7520,80 @@ impl TypedModule {
             ctx,
         )?;
         Ok(Either::Right(Callee::make_static(ability_impl_fn_id)))
+    }
+
+    pub fn function_to_reference(
+        &mut self,
+        function_id: FunctionId,
+        call_span: SpanId,
+    ) -> TyperResult<TypedExprId> {
+        let function = self.get_function(function_id);
+        let function_reference_type = self.types.add_reference_type(function.type_id);
+        Ok(self.exprs.add(TypedExpr::FunctionReference(FunctionReferenceExpr {
+            function_id,
+            function_reference_type,
+            span: call_span,
+        })))
+    }
+
+    pub fn function_to_lambda_object(
+        &mut self,
+        function_id: FunctionId,
+        call_span: SpanId,
+    ) -> TyperResult<TypedExprId> {
+        let function = self.get_function(function_id);
+        let dyn_function_id = if let Some(dyn_fn_id) = function.dyn_fn_id {
+            dyn_fn_id
+        } else {
+            let function_signature_span =
+                self.ast.get_function(function.parsed_id.as_function_id().unwrap()).signature_span;
+            let mut new_function = function.clone();
+            let empty_env_struct_type = self.types.add_empty_struct();
+            let empty_env_struct_ref = self.types.add_reference_type(empty_env_struct_type);
+            let name = get_ident!(self, "__lambda_env");
+            let empty_env_variable = self.variables.add_variable(Variable {
+                name,
+                type_id: empty_env_struct_ref,
+                is_mutable: false,
+                // Wrong scope, and its not actually added, but we know its not used
+                owner_scope: new_function.scope,
+                is_context: false,
+                constant_id: None,
+            });
+            new_function.param_variables.insert(0, empty_env_variable);
+            let mut function_type =
+                self.types.get(new_function.type_id).as_function().unwrap().clone();
+            function_type.physical_params.insert(
+                0,
+                FnParamType {
+                    name,
+                    type_id: empty_env_struct_ref,
+                    is_context: false,
+                    is_lambda_env: true,
+                    span: function_signature_span,
+                },
+            );
+            let new_function_type = self.types.add_type(Type::Function(function_type));
+            new_function.type_id = new_function_type;
+            let old_name = self.name_of(new_function.name);
+            new_function.name = self.ast.identifiers.intern(format!("{}__dyn", old_name));
+            let new_function_id = self.add_function(new_function);
+            self.get_function_mut(function_id).dyn_fn_id = Some(new_function_id);
+            new_function_id
+        };
+        let dyn_function = self.get_function(dyn_function_id);
+        let lambda_object_type_id = self.types.add_lambda_object(
+            &self.ast.identifiers,
+            dyn_function.type_id,
+            dyn_function.parsed_id,
+        );
+        let function_to_lam_obj_id =
+            self.exprs.add(TypedExpr::FunctionToLambdaObject(FunctionToLambdaObjectExpr {
+                function_id: dyn_function_id,
+                span: call_span,
+                lambda_object_type_id,
+            }));
+        Ok(function_to_lam_obj_id)
     }
 
     fn resolve_ability_call(
@@ -7872,11 +7905,9 @@ impl TypedModule {
                             generic_variant_payload,
                             false,
                         ));
-                        self.push_debug_level();
                         let solutions =
                             self.infer_types(&g_params, &args_and_params, span, ctx.scope_id);
                         if let Err(e) = solutions {
-                            self.pop_debug_level();
                             return Err(e);
                         }
                         solutions.unwrap()
@@ -8178,7 +8209,7 @@ impl TypedModule {
                     ctx.scope_id,
                     false,
                 )?;
-                //
+
                 let mut typechecked_args = Vec::with_capacity(aligned_args.len());
                 for (maybe_typed_expr, param) in aligned_args.iter().zip(aligned_params.iter()) {
                     let expr = match *maybe_typed_expr {
@@ -8415,9 +8446,9 @@ impl TypedModule {
                     .map_err(|e| {
                         errf!(
                             e.span,
-                            "Problematic call to {}. Detail:\n\t{}",
+                            "{}.\n\tWhile checking call to {}",
+                            e.message,
                             self.name_of(fn_call.name.name),
-                            e.message
                         )
                     })?;
                 solutions
@@ -8436,9 +8467,10 @@ impl TypedModule {
             .map_err(|e| {
                 errf!(
                     e.span,
-                    "Cannot invoke function '{}' with given types. {}",
+                    "{}. Therefore, cannot call function '{}' with given types: {}",
+                    e.message,
                     self.name_of(fn_call.name.name),
-                    e.message
+                    self.pretty_print_named_types(&solved_type_params, ", ")
                 )
             })?;
         }
@@ -8464,6 +8496,7 @@ impl TypedModule {
         // This method is risk-free in terms of 'leaking' inference types out
         let mut function_type_args: SmallVec<[SimpleNamedType; 8]> = SmallVec::new();
         let original_function = self.get_function(original_function_id);
+        let original_function_type = original_function.type_id;
         if !original_function.function_params.is_empty() {
             for function_type_param in original_function.function_params.clone().iter() {
                 //let original_function_type =
@@ -8538,13 +8571,19 @@ impl TypedModule {
                         lambda
                     }
                     PhysicalPassedFunction::FunctionReference => {
-                        let substituted_param_type = self.substitute_in_type(
-                            function_type_param.type_id,
+                        let ftp = self
+                            .types
+                            .get(function_type_param.type_id)
+                            .as_type_parameter()
+                            .unwrap();
+                        let original_param_function_type = ftp.function_type.unwrap();
+                        let substituted_function_type = self.substitute_in_type(
+                            original_param_function_type,
                             &subst_pairs,
                             None,
                             None,
                         );
-                        self.types.add_reference_type(substituted_param_type)
+                        self.types.add_reference_type(substituted_function_type)
                     }
                     PhysicalPassedFunction::LambdaObject(lambda_object_type) => {
                         // Replace the function type
@@ -8942,7 +8981,6 @@ impl TypedModule {
         generic_function_id: FunctionId,
     ) -> TyperResult<FunctionId> {
         let generic_function = self.get_function(generic_function_id);
-        let generic_function_type_id = generic_function.type_id;
         let generic_function_param_variables = generic_function.param_variables.clone();
         let generic_function_scope = generic_function.scope;
 
@@ -11706,6 +11744,11 @@ impl TypedModule {
 
     pub fn write_location(&self, w: &mut impl std::io::Write, span: SpanId) -> std::io::Result<()> {
         parse::write_error_location(w, &self.ast.spans, &self.ast.sources, span, ErrorLevel::Error)
+    }
+
+    pub fn ice_with_span(&self, msg: impl AsRef<str>, span: SpanId) -> ! {
+        self.write_location(&mut std::io::stderr(), span).unwrap();
+        panic!("Internal Compiler Error: {}", msg.as_ref())
     }
 
     pub fn ice(&self, msg: impl AsRef<str>, error: Option<&TyperError>) -> ! {

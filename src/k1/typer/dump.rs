@@ -717,6 +717,11 @@ impl TypedModule {
                 self.display_expr_id(*lambda_body, writ, indentation)?;
                 Ok(())
             }
+            TypedExpr::FunctionReference(fr) => {
+                let fun = self.get_function(fr.function_id);
+                writ.write_str(self.name_of(fun.name))?;
+                writ.write_str(".toRef()")
+            }
             TypedExpr::FunctionToLambdaObject(fn2lam) => {
                 let fun = self.get_function(fn2lam.function_id);
                 writ.write_str(self.name_of(fun.name))?;
