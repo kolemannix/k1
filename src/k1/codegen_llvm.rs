@@ -2133,6 +2133,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
                 Ok(environment_struct_value.as_basic_value_enum().into())
             }
+            TypedExpr::FunctionReference(function_reference_expr) => {
+                let function_value =
+                    self.codegen_function_or_get(function_reference_expr.function_id)?;
+                let function_ptr =
+                    function_value.as_global_value().as_pointer_value().as_basic_value_enum();
+                self.set_debug_location(function_reference_expr.span);
+                Ok(function_ptr.as_basic_value_enum().into())
+            }
             TypedExpr::FunctionToLambdaObject(fn_to_lam_obj) => {
                 let function_value = self.codegen_function_or_get(fn_to_lam_obj.function_id)?;
                 self.set_debug_location(fn_to_lam_obj.span);

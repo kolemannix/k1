@@ -335,7 +335,8 @@ impl NamedTypeArg {
     }
 }
 
-// nocommit: 120 bytes!
+// TOOD(perf): FnCall is huge
+static_assert_size!(FnCall, 120);
 #[derive(Debug, Clone)]
 pub struct FnCall {
     pub name: NamespacedIdentifier,
@@ -2252,6 +2253,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 Ok(Some(self.module.type_exprs.add(type_of)))
             } else if ident_chars == "some" {
                 // nocommit: Disallow the type name 'some'
+                // nocommit: Disallow 'some' type exprs in other places
                 self.advance();
                 let inner_expr = self.expect_type_expression()?;
                 let span = self.extend_to_here(first.span);
@@ -3933,7 +3935,7 @@ pub fn test_parse_module(source: Source) -> ParseResult<ParsedModule> {
 }
 
 impl Identifiers {
-    pub const BUILTIN_IDENTS: [&'static str; 34] = [
+    pub const BUILTIN_IDENTS: [&'static str; 36] = [
         "main",
         "self",
         "it",
@@ -3968,5 +3970,7 @@ impl Identifiers {
         "try_value",
         "if_target",
         "crash",
+        "toRef",
+        "toDyn",
     ];
 }

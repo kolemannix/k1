@@ -1,5 +1,5 @@
 FROM ubuntu
 RUN apt update
-RUN apt install -y vim llvm-18 libunwind-18-dev
+RUN apt install -y vim llvm-18 libunwind-18-dev clang
 ENV K1_LIB_DIR=/root/k1/stdlib
 RUN mkdir -p /root/k1
