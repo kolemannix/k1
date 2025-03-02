@@ -1,6 +1,8 @@
 fn assertEquals[T: Show and Equals](context locn: compiler/SourceLocation)(a: T, b: T): unit {
   if a != b {
-    crash("ASSERT FAILED: \{a} != \{b}")
+    // nocommit: Fix having to pass this, context value should override the builtin
+    //           generator
+    crash(context locn)("ASSERT FAILED: \{a} != \{b}")
   }
 }
 

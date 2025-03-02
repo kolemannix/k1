@@ -282,7 +282,7 @@ struct LlvmStructType<'ctx> {
 
 // Can this just be 'struct'? :()
 #[derive(Debug, Clone)]
-struct LlvmLambdaType<'ctx> {
+struct LlvmLambdaObjectType<'ctx> {
     type_id: TypeId,
     struct_type: StructType<'ctx>,
     di_type: DIType<'ctx>,
@@ -294,7 +294,7 @@ enum K1LlvmType<'ctx> {
     Value(LlvmValueType<'ctx>),
     EnumType(LlvmEnumType<'ctx>),
     StructType(LlvmStructType<'ctx>),
-    Lambda(LlvmLambdaType<'ctx>),
+    LambdaObject(LlvmLambdaObjectType<'ctx>),
     Reference(LlvmReferenceType<'ctx>),
     Void(LlvmVoidType<'ctx>),
 }
@@ -329,9 +329,9 @@ impl<'ctx> From<LlvmReferenceType<'ctx>> for K1LlvmType<'ctx> {
     }
 }
 
-impl<'ctx> From<LlvmLambdaType<'ctx>> for K1LlvmType<'ctx> {
-    fn from(value: LlvmLambdaType<'ctx>) -> Self {
-        K1LlvmType::Lambda(value)
+impl<'ctx> From<LlvmLambdaObjectType<'ctx>> for K1LlvmType<'ctx> {
+    fn from(value: LlvmLambdaObjectType<'ctx>) -> Self {
+        K1LlvmType::LambdaObject(value)
     }
 }
 
@@ -344,7 +344,7 @@ impl<'ctx> K1LlvmType<'ctx> {
             K1LlvmType::StructType(s) => s.size,
             K1LlvmType::Reference(_p) => SizeInfo::POINTER,
             K1LlvmType::Void(_) => SizeInfo::ZERO,
-            K1LlvmType::Lambda(c) => c.size,
+            K1LlvmType::LambdaObject(c) => c.size,
         }
     }
 
@@ -355,7 +355,7 @@ impl<'ctx> K1LlvmType<'ctx> {
             K1LlvmType::StructType(_) => true,
             K1LlvmType::Reference(_) => false,
             K1LlvmType::Void(_) => false,
-            K1LlvmType::Lambda(_) => true,
+            K1LlvmType::LambdaObject(_) => true,
         }
     }
 
@@ -381,6 +381,13 @@ impl<'ctx> K1LlvmType<'ctx> {
         }
     }
 
+    fn expect_lambda_object(self) -> LlvmLambdaObjectType<'ctx> {
+        match self {
+            K1LlvmType::LambdaObject(lam_obj) => lam_obj,
+            _ => panic!("expected struct on {self:?}"),
+        }
+    }
+
     fn fn_type(
         &self,
         args: &[BasicMetadataTypeEnum<'ctx>],
@@ -400,7 +407,7 @@ impl<'ctx> K1LlvmType<'ctx> {
             K1LlvmType::EnumType(e) => e.type_id,
             K1LlvmType::StructType(s) => s.type_id,
             K1LlvmType::Void(_) => NEVER_TYPE_ID,
-            K1LlvmType::Lambda(c) => c.type_id,
+            K1LlvmType::LambdaObject(c) => c.type_id,
         }
     }
 
@@ -417,7 +424,7 @@ impl<'ctx> K1LlvmType<'ctx> {
                 s.struct_type.get_context().ptr_type(AddressSpace::default()).as_basic_type_enum()
             }
             K1LlvmType::Void(_) => panic!("No canonical repr type on Void / never"),
-            K1LlvmType::Lambda(c) => {
+            K1LlvmType::LambdaObject(c) => {
                 c.struct_type.get_context().ptr_type(AddressSpace::default()).as_basic_type_enum()
             }
         }
@@ -430,7 +437,7 @@ impl<'ctx> K1LlvmType<'ctx> {
             K1LlvmType::EnumType(e) => e.base_struct_type.as_basic_type_enum(),
             K1LlvmType::StructType(s) => s.struct_type.as_basic_type_enum(),
             K1LlvmType::Void(_) => panic!("No rich value type on Void / never"),
-            K1LlvmType::Lambda(c) => c.struct_type.as_basic_type_enum(),
+            K1LlvmType::LambdaObject(c) => c.struct_type.as_basic_type_enum(),
         }
     }
 
@@ -441,7 +448,7 @@ impl<'ctx> K1LlvmType<'ctx> {
             K1LlvmType::EnumType(e) => e.di_type,
             K1LlvmType::StructType(s) => s.di_type,
             K1LlvmType::Void(v) => v.di_type,
-            K1LlvmType::Lambda(c) => c.di_type,
+            K1LlvmType::LambdaObject(c) => c.di_type,
         }
     }
 
@@ -492,7 +499,7 @@ pub struct Codegen<'ctx, 'module> {
     llvm_types: RefCell<FxHashMap<TypeId, K1LlvmType<'ctx>>>,
     variables: FxHashMap<VariableId, VariablePointer<'ctx>>,
     globals: FxHashMap<VariableId, GlobalValue<'ctx>>,
-    lambda_environments: FxHashMap<TypeId, PointerValue<'ctx>>,
+    //lambda_environments: FxHashMap<TypeId, PointerValue<'ctx>>,
     loops: FxHashMap<ScopeId, LoopInfo<'ctx>>,
     builtin_types: BuiltinTypes<'ctx>,
     debug: DebugContext<'ctx>,
@@ -689,7 +696,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             builder,
             variables: FxHashMap::new(),
             globals: FxHashMap::new(),
-            lambda_environments: FxHashMap::new(),
+            //lambda_environments: FxHashMap::new(),
             loops: FxHashMap::new(),
             llvm_functions: FxHashMap::new(),
             llvm_function_to_k1: FxHashMap::new(),
@@ -1376,8 +1383,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     .unwrap();
                 let struct_type =
                     self.codegen_type(lambda_object_type.struct_representation)?.expect_struct();
+                // nocommit: Represent physically as just the struct, different from LambdaObject for static dispatch
 
-                Ok(K1LlvmType::Lambda(LlvmLambdaType {
+                Ok(K1LlvmType::LambdaObject(LlvmLambdaObjectType {
                     type_id,
                     struct_type: struct_type.struct_type,
                     di_type: struct_type.di_type,
@@ -1387,7 +1395,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             Type::LambdaObject(lambda_object_type) => {
                 let struct_type =
                     self.codegen_type(lambda_object_type.struct_representation)?.expect_struct();
-                Ok(K1LlvmType::Lambda(LlvmLambdaType {
+                Ok(K1LlvmType::LambdaObject(LlvmLambdaObjectType {
                     type_id,
                     struct_type: struct_type.struct_type,
                     di_type: struct_type.di_type,
@@ -2112,56 +2120,58 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(LlvmValue::Void(branch_inst))
             }
             TypedExpr::Lambda(lambda_expr) => {
+                eprintln!("codegen lambda {:?}", lambda_expr);
                 let lambda_type =
                     self.module.types.get(lambda_expr.lambda_type).as_lambda().unwrap();
                 let llvm_fn = self.codegen_function_or_get(lambda_type.body_function_id)?;
-                let environment_ptr = self
+                let environment_struct_value = self
                     .codegen_expr_basic_value(lambda_type.environment_struct)?
                     .into_pointer_value();
-                self.lambda_environments.insert(lambda_expr.lambda_type, environment_ptr);
 
-                // The struct type for a lambda's physical representation
-                // What I could do is distinguish between static and dynamic here
-                // I would introduce a new LlvmType representing lambda values
-                // that would be an enum, w/ statically known vs dynamic.
-                // For static you'd have a FunctionValue and environment
-                // For dynamic you'd have both the fn ptr and the env ptr
-                //
-                // As long as we don't actually make the call dynamically, it shouldn't matter
-                // too much though
+                // This won't be available from another function... we have to pass it around
+                //self.lambda_environments.insert(lambda_expr.lambda_type, environment_ptr);
 
-                let lambda_object_type = self
-                    .module
-                    .types
-                    .get(lambda_type.lambda_object_type)
-                    .as_lambda_object()
-                    .unwrap();
-                let lambda_struct_type =
-                    self.codegen_type(lambda_object_type.struct_representation)?.expect_struct();
-
-                let lambda_ptr =
-                    self.builder.build_alloca(lambda_struct_type.struct_type, "lambda").unwrap();
-                let fn_ptr = self
-                    .builder
-                    .build_struct_gep(lambda_struct_type.struct_type, lambda_ptr, 0, "lambda_fn")
-                    .unwrap();
-                let env_ptr = self
-                    .builder
-                    .build_struct_gep(lambda_struct_type.struct_type, lambda_ptr, 1, "lambda_env")
-                    .unwrap();
-
-                self.builder
-                    .build_store(fn_ptr, llvm_fn.as_global_value().as_pointer_value())
-                    .unwrap();
-                self.builder.build_store(env_ptr, environment_ptr).unwrap();
-
-                Ok(lambda_ptr.as_basic_value_enum().into())
+                Ok(environment_struct_value.as_basic_value_enum().into())
             }
-            TypedExpr::FunctionName(fn_name_expr) => {
-                let function_value = self.codegen_function_or_get(fn_name_expr.function_id)?;
+            TypedExpr::FunctionToLambdaObject(fn_to_lam_obj) => {
+                let function_value = self.codegen_function_or_get(fn_to_lam_obj.function_id)?;
+                self.set_debug_location(fn_to_lam_obj.span);
                 let function_ptr =
                     function_value.as_global_value().as_pointer_value().as_basic_value_enum();
-                Ok(function_ptr.into())
+                let lam_obj_struct_type =
+                    self.codegen_type(fn_to_lam_obj.lambda_object_type_id)?.expect_lambda_object();
+
+                // rich_value_type() equivalent
+                let lambda_object_ptr =
+                    self.builder.build_alloca(lam_obj_struct_type.struct_type, "fn2obj").unwrap();
+
+                let obj_function_ptr_ptr = self
+                    .builder
+                    .build_struct_gep(
+                        lam_obj_struct_type.struct_type,
+                        lambda_object_ptr,
+                        0,
+                        "fn_ptr",
+                    )
+                    .unwrap();
+                self.builder.build_store(obj_function_ptr_ptr, function_ptr).unwrap();
+
+                let obj_env_ptr_ptr = self
+                    .builder
+                    .build_struct_gep(
+                        lam_obj_struct_type.struct_type,
+                        lambda_object_ptr,
+                        1,
+                        "nop_env",
+                    )
+                    .unwrap();
+                self.builder
+                    .build_store(obj_env_ptr_ptr, self.builtin_types.ptr.const_null())
+                    .unwrap();
+
+                // This is a STRUCT, in K1 terms, not a struct reference, it's just that the physical
+                // representation type for aggregates _is_ ptr in our codegen
+                Ok(LlvmValue::BasicValue(lambda_object_ptr.as_basic_value_enum()))
             }
             e @ TypedExpr::PendingCapture(_) => {
                 panic!("Unsupported expression: {e:?}")
@@ -2673,9 +2683,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.set_debug_location(call.span);
                 self.builder.build_call(function_value, args.make_contiguous(), "").unwrap()
             }
-            Callee::StaticLambda { function_id, lambda_type_id } => {
-                let lambda_env_ptr =
-                    self.lambda_environments.get(lambda_type_id).unwrap().as_basic_value_enum();
+            Callee::StaticLambda { function_id, environment_ptr, .. } => {
+                let lambda_env_variable = self.variables.get(environment_ptr).unwrap();
+                // We know this is always a pointer to the environment, and since we aren't loading
+                // the environment, we just use the ptr as-is
+                let lambda_env_ptr = lambda_env_variable.pointer_value;
+                // self.lambda_environments.get(lambda_type_id).unwrap().as_basic_value_enum();
                 args.insert(env_arg_index, lambda_env_ptr.into());
 
                 let function_value = self.codegen_function_or_get(*function_id)?;
@@ -3071,7 +3084,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
         let maybe_starting_block = self.builder.get_insert_block();
 
-        let mut param_types: Vec<K1LlvmType<'ctx>> = Vec::with_capacity(function_type.physical_params.len());
+        let mut param_types: Vec<K1LlvmType<'ctx>> =
+            Vec::with_capacity(function_type.physical_params.len());
         let mut param_metadata_types: Vec<BasicMetadataTypeEnum<'ctx>> =
             Vec::with_capacity(function_type.physical_params.len());
 
@@ -3312,11 +3326,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     fn set_up_machine(module: &mut LlvmModule) -> TargetMachine {
         // Target::initialize_aarch64(&InitializationConfig::default());
         Target::initialize_native(&InitializationConfig::default()).unwrap();
-        // let triple_str = TargetMachine::get_default_triple();
-        // I use this explicit triple to avoid an annoying warning log. This will obviously
-        // have to change to support other triples
-        let triple_str = &format!("arm64-apple-macosx{}", MAC_SDK_VERSION);
-        let triple = TargetTriple::create(triple_str);
+        // I use this explicit triple to avoid an annoying warning log on mac.
+        // let triple_str = &format!("arm64-apple-macosx{}", MAC_SDK_VERSION);
+        // let triple = TargetTriple::create(triple_str);
+
+        let triple = TargetMachine::get_default_triple();
         let target = Target::from_triple(&triple).unwrap();
         let machine = target
             .create_target_machine(
@@ -3331,7 +3345,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
         let data_layout = &machine.get_target_data().get_data_layout();
         info!(
-            "Initializing to 'native' target using triple {triple_str}. Layout: {}",
+            "Initializing to 'native' target using triple {}. Layout: {}",
+            target.get_name().to_string_lossy(),
             data_layout.as_str().to_string_lossy()
         );
         module.set_data_layout(data_layout);
@@ -3397,6 +3412,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     }
 
     pub fn interpret_module(&self) -> anyhow::Result<u64> {
+        panic!("disabled");
         let engine = self.llvm_module.create_jit_execution_engine(OptimizationLevel::None).unwrap();
         let base_lib_module = self
             .ctx

@@ -175,8 +175,7 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
                         }
                     }
                 } else {
-                    let mut run_cmd =
-                        std::process::Command::new(format!("{}/{}.out", out_dir, name));
+                    let mut run_cmd = std::process::Command::new(format!("{}/{}", out_dir, name));
                     let run_result = run_cmd.output();
                     match run_result {
                         Err(e) => {

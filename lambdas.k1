@@ -6,6 +6,14 @@ fn map[T, U](a: List[T], f: some \T -> U): List[U] {
   us.*
 }
 
+//fn map(a: List[int], f: (int -> int)*); List[int]
+//fn map(a: List[int], f: dyn[int -> int]): List[int]
+//fn map(a: List[int], f: unique[int -> int]): List[int]
+//-> Codegened to:
+//fn map(a: List[int], f: { env struct }*): List[int]
+
+
+
 // fn flatMap[T, U](a: List[T], f: some \T -> List[U]): List[U] {
 //   let* us = List/withCapacity[U](a.len);
 //   for i in a do { us.push[U](f(i)) };
@@ -55,23 +63,33 @@ fn closureReturn(): unit {
   assert(nullary() == 4);
 }
 
-fn lam(i: int, f: some \int -> int, g: some \int -> int): int {
+fn lam1(i: int, f: some \int -> int): int {
+  f(i)
+}
+
+fn lam2(i: int, f: some \int -> int, g: some \int -> int): int {
   f(i) + g(i)
 }
 
+// fn genLam[T](t: T, f: )
+
 fn test(): unit {
-  // let addOne = \(x: int) x + 1;
-  // let addOne2 = addOne;
-  // let addOne3 = \(i: int) staticAddOne(i);
 
-  // assertEquals(addOne(1), 2);
-  // assertEquals(addOne2(2), 3);
-  // assertEquals(addOne3(3), 4);
+  let lam1Result = lam1(5, staticAddOne);
+  assertEquals(lam1Result, 6);
 
-  #debug lam(5, \(x) x + 1, \(x) x + 2);
+  let* c1 = { x: 3 };
+  let c2 = 2;
 
-  // let result = #debug ([1,2,3,5,6,7,8] | map(\(x: int) x + 1)) | filter(\(x: int) x % 2 == 0);
-  // assert(result == [2, 4, 6, 8]);
+  let withClosures = lam2(5, \(x) x + 1 + c1.x, \(x) x + 2 + c2);
+  assertEquals(withClosures, (5 + 1 + 3) + (5 + 2 + 2));
+
+  let staticAddOneVar = staticAddOne;
+  let staticResult = lam2(5, staticAddOne, staticAddOneVar);
+  assertEquals(staticResult, 6 + 6);
+
+  let result = ([1,2,3,5,6,7,8] | map(\(x: int) x + 1)) | filter(\(x: int) x % 2 == 0);
+  assert(result == [2, 4, 6, 8]);
 
   // captures();
   // captureMut();

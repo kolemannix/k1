@@ -1,0 +1,25 @@
+ARG CROSS_BASE_IMAGE=missing-base-image
+FROM $CROSS_BASE_IMAGE
+
+# print out the base image
+RUN echo $CROSS_BASE_IMAGE
+
+RUN apt-get update
+RUN apt-get install -y libllvm-18-ocaml-dev \
+libllvm18                                   \
+llvm-18                                     \
+llvm-18-dev                                 \
+llvm-18-doc                                 \
+llvm-18-examples                            \
+llvm-18-runtime                             \
+libpolly-18-dev \
+libzstd-dev \ 
+libz-dev
+
+# ARG CACHE_BUST=1
+RUN echo $CROSS_BASE_IMAGE
+
+RUN ls /usr/bin/llvm*
+RUN ls /usr/bin/llvm-config*
+RUN ln -s /usr/bin/llvm-config-18 /usr/bin/llvm-config
+RUN which llvm-config
