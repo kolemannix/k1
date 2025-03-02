@@ -365,7 +365,7 @@ pub fn write_executable(debug: bool, out_dir: &Path, module_name: &Path) -> Resu
     let llvm_lib_base = llvm_base.join("lib");
     let ll_name = out_dir.join(module_name.with_extension("ll"));
     let ll_file = ll_name.to_str().unwrap();
-    let out_name = out_dir.join(module_name.with_extension("out"));
+    let out_name = out_dir.join(module_name);
     let out_file = out_name.to_str().unwrap();
     // Note: Could we do this a lot more efficiently by just feeding the in-memory LLVM IR to libclang or whatever the library version is called.
     build_cmd.args([
@@ -455,7 +455,7 @@ pub fn codegen_module<'ctx, 'module>(
 
 // Eventually, we want to return output and exit code to the application
 pub fn run_compiled_program(out_dir: &str, module_name: &str) {
-    let mut run_cmd = std::process::Command::new(format!("{}/{}.out", out_dir, module_name));
+    let mut run_cmd = std::process::Command::new(format!("{}/{}", out_dir, module_name));
     log::debug!("Run Command: {:?}", run_cmd);
     let run_status = run_cmd.status().unwrap();
 

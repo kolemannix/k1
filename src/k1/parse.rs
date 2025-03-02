@@ -71,6 +71,12 @@ impl From<ParsedTypeExprId> for NonZeroU32 {
     }
 }
 
+impl Display for ParsedTypeExprId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
 pub struct ParsedPatternId(u32);
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
@@ -106,6 +112,23 @@ pub enum ParsedId {
     Expression(ParsedExpressionId),
     TypeExpression(ParsedTypeExprId),
     Pattern(ParsedPatternId),
+}
+
+impl Display for ParsedId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ParsedId::Use(id) => write!(f, "use#{}", id.0),
+            ParsedId::Function(id) => write!(f, "fn#{}", id.0),
+            ParsedId::TypeDefn(id) => write!(f, "type#{}", id.0),
+            ParsedId::Namespace(id) => write!(f, "ns#{}", id.0),
+            ParsedId::Ability(id) => write!(f, "ability#{}", id.0),
+            ParsedId::AbilityImpl(id) => write!(f, "ability_impl#{}", id.0),
+            ParsedId::Constant(id) => write!(f, "const#{}", id.0),
+            ParsedId::Expression(id) => write!(f, "expr#{}", id.0),
+            ParsedId::TypeExpression(id) => write!(f, "type_expr#{}", id.0),
+            ParsedId::Pattern(id) => write!(f, "pattern#{}", id.0),
+        }
+    }
 }
 
 impl ParsedId {

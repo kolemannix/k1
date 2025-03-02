@@ -6,4 +6,4 @@ set -e
 FILENAME=${@: -1}
 filename=$(basename $FILENAME .k1)
 export RUST_BACKTRACE=1
-RUST_LOG=debug cargo run -- --debug --no-llvm-opt build $@; lldb .k1-out/$filename.out
+RUST_LOG=debug cargo run --features=llvm-sys/prefer-dynamic -- --debug --no-llvm-opt build $@; lldb .k1-out/$filename

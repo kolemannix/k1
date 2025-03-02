@@ -98,6 +98,7 @@ pub enum Linkage {
 #[derive(Debug, Clone)]
 pub struct TypedAbilityFunctionRef {
     pub function_name: Identifier,
+    pub ability_id: AbilityId,
     pub function_id: FunctionId,
 }
 
@@ -299,11 +300,11 @@ impl From<&TypedAbilityParam> for SimpleNamedType {
 #[derive(Debug, Clone)]
 /// An ability signature encompasses an ability's entire 'type' story:
 /// - Base type, generic type params, and impl-provided type params
-/// Example: Add[Rhs = Int]
-///                    ^ impl argument
-///              ^ ability argument
-///          ^
-///          Ability Id
+///   Example: Add[Rhs = Int]
+///                      ^ impl argument
+///                ^ ability argument
+///            ^
+///            Ability Id
 pub struct TypedAbilitySignature {
     ability_id: AbilityId,
     impl_arguments: SmallVec<[SimpleNamedType; 4]>,
@@ -520,6 +521,7 @@ pub struct SpecializationParams {
 pub struct SpecializationInfo {
     pub parent_function: FunctionId,
     pub type_arguments: Vec<SimpleNamedType>,
+    pub function_type_arguments: Vec<SimpleNamedType>,
     pub specialized_function_id: FunctionId,
     pub specialized_function_type: TypeId,
 }
@@ -570,6 +572,8 @@ pub struct TypedFunction {
     pub compiler_debug: bool,
     pub kind: TypedFunctionKind,
     pub is_concrete: bool,
+    /// If we've generated a 'dyn' copy of this function, we store its id
+    pub dyn_fn_id: Option<FunctionId>,
 }
 
 impl TypedFunction {
@@ -643,6 +647,9 @@ pub trait NamedType {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// TODO(perf): We could certainly do a pass where we remove the name from tons and tons of places;
+// this would cut size in half which is meaningful considering how many Vecs of these we have; and
+// would like to use smallvec
 pub struct SimpleNamedType {
     pub name: Identifier,
     pub type_id: TypeId,
@@ -840,6 +847,7 @@ pub enum Callee {
     StaticFunction(FunctionId),
     StaticLambda {
         function_id: FunctionId,
+        environment_ptr: VariableId,
         lambda_type_id: TypeId,
     },
     /// Must contain a LambdaObject
@@ -1161,10 +1169,10 @@ pub struct LambdaExpr {
 }
 
 #[derive(Debug, Clone)]
-pub struct FunctionReferenceExpr {
+pub struct FunctionToLambdaObjectExpr {
     pub function_id: FunctionId,
     pub span: SpanId,
-    pub type_id: TypeId,
+    pub lambda_object_type_id: TypeId,
 }
 
 #[derive(Debug, Clone)]
@@ -1252,9 +1260,8 @@ pub enum TypedExpr {
     /// - An expression is returned that is really just a pointer to the unique Closure it points
     ///   to; this can either be called directly or turned into a dynamic function object if needed
     Lambda(LambdaExpr),
-    /// Referring to a function by name, if there are no variables in scope with the same name
-    /// results in taking a function pointer
-    FunctionName(FunctionReferenceExpr),
+    /// Calling .toDyn() on a function by name
+    FunctionToLambdaObject(FunctionToLambdaObjectExpr),
     /// These get re-written into struct access expressions once we know all captures and have
     /// generated the lambda's capture struct
     PendingCapture(PendingCaptureExpr),
@@ -1293,7 +1300,7 @@ impl TypedExpr {
             TypedExpr::Return(_ret) => NEVER_TYPE_ID,
             TypedExpr::Break(_break) => NEVER_TYPE_ID,
             TypedExpr::Lambda(lambda) => lambda.lambda_type,
-            TypedExpr::FunctionName(f) => f.type_id,
+            TypedExpr::FunctionToLambdaObject(f) => f.lambda_object_type_id,
             TypedExpr::PendingCapture(pc) => pc.type_id,
         }
     }
@@ -1324,7 +1331,7 @@ impl TypedExpr {
             TypedExpr::Return(ret) => ret.span,
             TypedExpr::Break(brk) => brk.span,
             TypedExpr::Lambda(lambda) => lambda.span,
-            TypedExpr::FunctionName(f) => f.span,
+            TypedExpr::FunctionToLambdaObject(f) => f.span,
             TypedExpr::PendingCapture(pc) => pc.span,
         }
     }
@@ -2044,7 +2051,7 @@ impl TypedModule {
         // let mut type_params: BVec<GenericTypeParam> =
         //     BVec::with_capacity_in(parsed_type_defn.type_params.len(), &self.bump);
         for type_param in parsed_type_defn.type_params.iter() {
-            let type_variable_id = self.add_type_variable(
+            let type_variable_id = self.add_type_parameter(
                 TypeParameter {
                     name: type_param.name,
                     scope_id: defn_scope_id,
@@ -2279,7 +2286,6 @@ impl TypedModule {
                     fields,
                     type_defn_info: context.attached_type_defn_info(),
                     generic_instance_info: None,
-                    ast_node: type_expr_id.into(),
                 };
                 let type_id = self.types.add_type(Type::Struct(struct_defn));
                 Ok(type_id)
@@ -2450,27 +2456,9 @@ impl TypedModule {
                     }
                 }
             }
-            // When a function type is written explicitly, it is interpreted as
-            // a function object type, which is always a lambda, which is a
-            // 2 member struct with a function pointer and an environment pointer
             ParsedTypeExpr::Function(fun_type) => {
                 let fun_type = fun_type.clone();
                 let mut params: Vec<FnParamType> = Vec::with_capacity(fun_type.params.len());
-
-                //let empty_struct_id = self.types.add_type(Type::Struct(StructType {
-                //    type_defn_info: None,
-                //    fields: vec![],
-                //    ast_node: type_expr_id.into(),
-                //    generic_instance_info: None,
-                //}));
-                // let empty_struct_reference_id = self.types.add_reference_type(empty_struct_id);
-                // params.push(FnParamType {
-                //     type_id: empty_struct_reference_id,
-                //     name: get_ident!(self, LAMBDA_ENV_PARAM_NAME),
-                //     is_context: false,
-                //     is_lambda_env: true,
-                //     span: fun_type.span,
-                // });
 
                 for (index, param) in fun_type.params.iter().enumerate() {
                     let type_id = self.eval_type_expr(*param, scope_id)?;
@@ -2504,8 +2492,8 @@ impl TypedModule {
                 let Type::Function(_function_type) = self.types.get(inner) else {
                     return failf!(span, "Expected a function type following 'some'");
                 };
-                let name = self.ast.identifiers.intern(format!("some_fn_{}", inner));
-                let function_type_variable = self.add_type_variable(
+                let name = self.ast.identifiers.intern(format!("some_fn_{}", type_expr_id));
+                let function_type_variable = self.add_type_parameter(
                     TypeParameter { name, scope_id, span, function_type: Some(inner) },
                     smallvec![],
                 );
@@ -2598,7 +2586,6 @@ impl TypedModule {
                     fields: combined_fields,
                     type_defn_info: context.attached_type_defn_info(),
                     generic_instance_info: None,
-                    ast_node: ParsedId::TypeExpression(ty_app_id),
                 });
                 let type_id = self.types.add_type(new_struct);
                 eprintln!("Combined struct: {}", self.type_id_to_string(type_id));
@@ -2636,7 +2623,6 @@ impl TypedModule {
                     fields: new_fields,
                     type_defn_info: context.attached_type_defn_info(),
                     generic_instance_info: None,
-                    ast_node: ParsedId::TypeExpression(ty_app_id),
                 };
                 for (i, field) in new_struct.fields.iter_mut().enumerate() {
                     field.index = i as u32;
@@ -2860,7 +2846,6 @@ impl TypedModule {
             Type::Struct(struc) => {
                 let mut new_fields = struc.fields.clone();
                 let mut any_change = false;
-                let struc_ast_node = struc.ast_node;
                 let original_defn_info = struc.type_defn_info.clone();
                 let original_instance_info = struc.generic_instance_info.clone();
                 for field in new_fields.iter_mut() {
@@ -2882,7 +2867,6 @@ impl TypedModule {
                         fields: new_fields,
                         type_defn_info: defn_info_to_attach.or(original_defn_info),
                         generic_instance_info,
-                        ast_node: struc_ast_node,
                     };
                     self.types.add_type(Type::Struct(specialized_struct))
                 } else {
@@ -3010,12 +2994,11 @@ impl TypedModule {
                 unreachable!("substitute_in_type is not expected to be called on a Lambda")
             }
             Type::LambdaObject(lam_obj) => {
-                let co_fn_type = lam_obj.function_type;
-                let co_parsed_id = lam_obj.parsed_id;
-                let new_fn_type =
-                    self.substitute_in_type(lam_obj.function_type, substitution_pairs, None, None);
-                if new_fn_type != co_fn_type || force_new {
-                    self.types.add_lambda_object(&self.ast.identifiers, new_fn_type, co_parsed_id)
+                let fn_type = lam_obj.function_type;
+                let parsed_id = lam_obj.parsed_id;
+                let new_fn_type = self.substitute_in_type(fn_type, substitution_pairs, None, None);
+                if new_fn_type != fn_type || force_new {
+                    self.types.add_lambda_object(&self.ast.identifiers, new_fn_type, parsed_id)
                 } else {
                     type_id
                 }
@@ -3402,7 +3385,7 @@ impl TypedModule {
         }
 
         match (self.types.get(expected), self.types.get(actual)) {
-            //(Type::InferenceHole(_hole), any) => Ok(()),
+            (Type::InferenceHole(_hole), any) => Ok(()),
             (Type::Struct(r1), Type::Struct(r2)) => self.typecheck_struct(r1, r2, scope_id),
             (Type::Reference(o1), Type::Reference(o2)) => {
                 self.check_types(o1.inner_type, o2.inner_type, scope_id)
@@ -3425,6 +3408,15 @@ impl TypedModule {
                         self.type_id_to_string(expected),
                         self.name_of(actual_variant.name)
                     ))
+                }
+            }
+            (Type::Lambda(expected_lambda), Type::Lambda(actual_lambda)) => {
+                if expected_lambda.parsed_id == actual_lambda.parsed_id
+                    && expected_lambda.function_type == actual_lambda.function_type
+                {
+                    Ok(())
+                } else {
+                    Err("Expected a unique lambda, but got a different one. This probably shouldn't happen".to_string())
                 }
             }
             (Type::LambdaObject(_lambda_object), Type::Lambda(_lambda_type)) => Err(format!(
@@ -3714,7 +3706,7 @@ impl TypedModule {
         });
     }
 
-    fn add_type_variable(
+    fn add_type_parameter(
         &mut self,
         value: TypeParameter,
         ability_impls: SmallVec<[TypedAbilitySignature; 4]>,
@@ -4233,13 +4225,76 @@ impl TypedModule {
                 )?;
                 match function_id {
                     Some(function_id) => {
-                        let id = self.exprs.add(TypedExpr::FunctionName(FunctionReferenceExpr {
-                            function_id,
-                            span: variable.name.span,
-                            type_id: self
-                                .types
-                                .add_reference_type(self.get_function(function_id).type_id),
-                        }));
+                        // Function cannot be generic to take it by value
+                        // nocommit: This will not be what happens on function name value taking;
+                        // you'll have to say functionName.toDyn()
+                        // and for the `as Pointer` case that we broke, it will be
+                        // functionName.toPointer
+                        let variable_span = variable.name.span;
+                        let function = self.get_function(function_id);
+                        if function.is_generic() {
+                            return failf!(
+                                variable.name.span,
+                                "Cannot take a generic function by value; eventually one could pass type arguments here but not today"
+                            );
+                        }
+                        let dyn_function_id = if let Some(dyn_fn_id) = function.dyn_fn_id {
+                            dyn_fn_id
+                        } else {
+                            let function_signature_span = self
+                                .ast
+                                .get_function(function.parsed_id.as_function_id().unwrap())
+                                .signature_span;
+                            let mut new_function = function.clone();
+                            let empty_env_struct_type = self.types.add_empty_struct();
+                            let empty_env_struct_ref =
+                                self.types.add_reference_type(empty_env_struct_type);
+                            let name = get_ident!(self, "__lambda_env");
+                            let empty_env_variable = self.variables.add_variable(Variable {
+                                name,
+                                type_id: empty_env_struct_ref,
+                                is_mutable: false,
+                                // Wrong scope, and its not actually added, but we know its not used
+                                owner_scope: new_function.scope,
+                                is_context: false,
+                                constant_id: None,
+                            });
+                            new_function.param_variables.insert(0, empty_env_variable);
+                            let mut function_type =
+                                self.types.get(new_function.type_id).as_function().unwrap().clone();
+                            function_type.physical_params.insert(
+                                0,
+                                FnParamType {
+                                    name,
+                                    type_id: empty_env_struct_ref,
+                                    is_context: false,
+                                    is_lambda_env: true,
+                                    span: function_signature_span,
+                                },
+                            );
+                            let new_function_type =
+                                self.types.add_type(Type::Function(function_type));
+                            new_function.type_id = new_function_type;
+                            let old_name = self.name_of(new_function.name);
+                            new_function.name =
+                                self.ast.identifiers.intern(format!("{}__dyn", old_name));
+                            let new_function_id = self.add_function(new_function);
+                            self.get_function_mut(function_id).dyn_fn_id = Some(new_function_id);
+                            new_function_id
+                        };
+                        let dyn_function = self.get_function(dyn_function_id);
+                        let lambda_object_type_id = self.types.add_lambda_object(
+                            &self.ast.identifiers,
+                            dyn_function.type_id,
+                            dyn_function.parsed_id,
+                        );
+                        let id = self.exprs.add(TypedExpr::FunctionToLambdaObject(
+                            FunctionToLambdaObjectExpr {
+                                function_id: dyn_function_id,
+                                span: variable_span,
+                                lambda_object_type_id,
+                            },
+                        ));
                         Ok(id)
                     }
                     None => {
@@ -4717,19 +4772,23 @@ impl TypedModule {
         scope_id: ScopeId,
         _parsed_id: ParsedId,
     ) -> CoerceResult {
-        if self
-            .types
-            .get(self.get_type_id_resolved(expected_type_id, scope_id))
-            .as_reference()
-            .is_none()
-        {
-            // We only do this if the expected type is not a reference at all. Meaning,
-            // if your expected type is T*, and you pass a T**, you need to de-reference that yourself.
-            // This rule won't help you or do anything for nested references
+        // If we don't expect a reference
+        let expected = self.types.get(self.get_type_id_resolved(expected_type_id, scope_id));
+        if expected.as_reference().is_none() {
+            // And we don't expect a function-like type parameter
+            if let Type::TypeParameter(tp) = expected {
+                if tp.function_type.is_some() {
+                    return CoerceResult::Fail(expression);
+                }
+            }
 
-            // Note: We could also introduce a 'check_kinds' which only cares about the _shape_ of the type!
+            // But you pass a reference
             if let Some(reference) = self.get_expr_type(expression).as_reference() {
                 let span = self.exprs.get(expression).get_span();
+
+                // We only do this if the expected type is not a reference at all. Meaning,
+                // if your expected type is T*, and you pass a T**, you need to de-reference that yourself.
+                // This rule won't help you or do anything for nested references
                 return CoerceResult::Coerced(
                     "deref",
                     self.exprs.add(TypedExpr::UnaryOp(UnaryOp {
@@ -5019,30 +5078,54 @@ impl TypedModule {
                     });
                     field_values.push(StructField { name: ast_field.name, expr });
                 }
+
+                // this loses ability impls!!! because its not the same type. Ugh!
                 let struct_type = StructType {
                     fields: field_defns,
-                    type_defn_info: None,
-                    generic_instance_info: None,
-                    ast_node: expr_id.into(),
+                    type_defn_info: expected_struct
+                        .as_ref()
+                        .and_then(|es| es.1.type_defn_info.clone()),
+                    generic_instance_info: expected_struct
+                        .and_then(|es| es.1.generic_instance_info.clone()),
                 };
-                let struct_type_id = match expected_struct {
-                    None => {
-                        let anon_struct_type_id = self.types.add_type(Type::Struct(struct_type));
-                        Ok(anon_struct_type_id)
-                    }
-                    Some((expected_type_id, expected_struct)) => {
-                        match self.typecheck_struct(&expected_struct, &struct_type, ctx.scope_id) {
-                            Ok(_) => Ok(expected_type_id),
-                            Err(_s) => {
-                                let anon_struct_type_id =
-                                    self.types.add_type(Type::Struct(struct_type));
-                                Ok(anon_struct_type_id)
-                            }
-                        }
-                    }
-                }?;
-                let typed_struct =
-                    Struct { fields: field_values, span: ast_struct.span, type_id: struct_type_id };
+                let output_struct_type_id = self.types.add_type(Type::Struct(struct_type));
+                //let struct_type_id = match expected_struct {
+                //    None => {
+                //        let anon_struct_type_id = self.types.add_type(Type::Struct(struct_type));
+                //        Ok(anon_struct_type_id)
+                //    }
+                //    Some((expected_type_id, expected_struct)) => {
+                //        match self.typecheck_struct(&expected_struct, &struct_type, ctx.scope_id) {
+                //            Ok(_) => {
+                //                // nocommit hack, non-permanent fix: If a named struct was expected, we still want to use it
+                //                // but we need to substitute our own types in, in case they are
+                //                // inference vars for example '0, we can't just 'chameleon' return
+                //                // what's expected.
+                //                //
+                //                // In general, returning expected type instead of actual is bad. If
+                //                // we need to preserve 'nominal' typing from the hint, we should do
+                //                // an explicit check. "Is a named struct expected? Ok, attach the
+                //                // defn info to what we return." Actually, that's genius.
+                //                struct_type.defn_info = expected_struct.type_defn_info;
+                //                if is_expected_named {
+                //                    Ok(self.types.add_type(Type::Struct(struct_type)))
+                //                } else {
+                //                    Ok(expected_type_id)
+                //                }
+                //            }
+                //            Err(_s) => {
+                //                let anon_struct_type_id =
+                //                    self.types.add_type(Type::Struct(struct_type));
+                //                Ok(anon_struct_type_id)
+                //            }
+                //        }
+                //    }
+                //}?;
+                let typed_struct = Struct {
+                    fields: field_values,
+                    span: ast_struct.span,
+                    type_id: output_struct_type_id,
+                };
                 let expr = TypedExpr::Struct(typed_struct);
                 Ok(self.exprs.add(expr))
             }
@@ -5485,21 +5568,12 @@ impl TypedModule {
         let mut typed_params = VecDeque::with_capacity(lambda_arguments.len() + 1);
         if let Some(t) = ctx.expected_type_id {
             debug!(
-                "lambda: expected type is {} {}",
+                "lambda expected type is {} {}",
                 self.types.get(t).kind_name(),
                 self.type_id_to_string(t)
             );
         }
 
-        // nocommit: clean this up; formalize and centralized what counts as a 'function-like'
-        // In this case, we're looking at 'hinted' or 'expected' types. So these have to be types
-        // that you can write, or express, so that throws out Lambda, since you can't 'expect'
-        // a unique lambda. Lambda object is fine, as in I expect dyn[\T -> T], and a some quant
-        // function is fine. Function reference is interesting. I don't think a closure can be
-        // 'lifted' to a function reference because it may capture things, they get called
-        // differently. You can only go the other way (function to closure that captures nothing)
-        // Then there's the actual FunctionType, which you can never actually have a value of, so
-        // will probably never be the hinted type
         let expected_function_type = ctx
             .expected_type_id
             .and_then(|et| match self.types.get(et) {
@@ -5507,6 +5581,7 @@ impl TypedModule {
                     Some(self.types.get(tp.function_type.unwrap()))
                 }
                 Type::LambdaObject(lam_obj) => Some(self.types.get(lam_obj.function_type)),
+                Type::Lambda(lam) => Some(self.types.get(lam.function_type)),
                 _ => None,
             })
             .map(|ft| ft.as_function().unwrap().clone());
@@ -5629,7 +5704,6 @@ impl TypedModule {
             fields: env_fields,
             type_defn_info: None,
             generic_instance_info: None,
-            ast_node: expr_id.into(),
         }));
         let environment_struct = self.synth_struct_expr(
             environment_struct_type,
@@ -5713,6 +5787,7 @@ impl TypedModule {
             compiler_debug: false,
             kind: TypedFunctionKind::Lambda,
             is_concrete: false,
+            dyn_fn_id: None,
         });
         let lambda_type_id = self.types.add_lambda(
             &self.ast.identifiers,
@@ -7212,6 +7287,10 @@ impl TypedModule {
                         match self.types.get(function_variable.type_id) {
                             Type::Lambda(lambda_type) => Ok(Either::Right(Callee::StaticLambda {
                                 function_id: lambda_type.body_function_id,
+                                // Does this need to be 'load environment struct'?
+                                // There's really only one pointer to the environment
+                                // It needs to live on the lambda's type in addition to
+                                environment_ptr: variable_id,
                                 lambda_type_id: function_variable.type_id,
                             })),
                             Type::LambdaObject(_lambda_object) => {
@@ -7452,17 +7531,27 @@ impl TypedModule {
                 .map(|a| self.name_of(self.get_ability(*a).name))
                 .collect::<Vec<_>>()
         );
+
+        // FIXME: ability call resolution is pretty expensive, to scan all in-scope abilities before we try regular
+        // functions. I think we should try functions first. Even if we do so, it may be worth
+        // maintaining an index of function names -> ability, then if we hit, just ensure its in scope.
+        //
+        // Real functions should also take priority logically,
+        // more concrete thing > more abstract thing
         let Some((ability_function_index, ability_function_ref)) = abilities_in_scope
             .iter()
             .find_map(|ability_id| self.get_ability(*ability_id).find_function_by_name(fn_name))
         else {
             return method_not_found();
         };
-        let Some(ability_id) =
-            self.get_function(ability_function_ref.function_id).kind.ability_id()
-        else {
-            return method_not_found();
-        };
+        // nocommit Why is this lookup necessary, is this getting the _concrete_ ability id, since the
+        // lookup is going to be on the generic? I don't think so; and we have an ability id 4 lines up!
+        let ability_id = ability_function_ref.ability_id;
+        //let Some(ability_id) =
+        //    self.get_function(ability_function_ref.function_id).kind.ability_id()
+        //else {
+        //    return method_not_found();
+        //};
         let ability_impl_fn_id = self.resolve_ability_call(
             ability_function_ref.function_id,
             ability_function_index,
@@ -7783,9 +7872,14 @@ impl TypedModule {
                             generic_variant_payload,
                             false,
                         ));
+                        self.push_debug_level();
                         let solutions =
-                            self.infer_types(&g_params, &args_and_params, span, ctx.scope_id)?;
-                        solutions
+                            self.infer_types(&g_params, &args_and_params, span, ctx.scope_id);
+                        if let Err(e) = solutions {
+                            self.pop_debug_level();
+                            return Err(e);
+                        }
+                        solutions.unwrap()
                     }
                 }
             } else {
@@ -7966,19 +8060,6 @@ impl TypedModule {
         Ok(())
     }
 
-    fn check_call_arguments(
-        &self,
-        _call_name: Identifier,
-        aligned_params: &[FnParamType],
-        aligned_args: &[TypedExprId],
-        calling_scope: ScopeId,
-    ) -> TyperResult<()> {
-        for (param, expr) in aligned_params.iter().zip(aligned_args.iter()) {
-            self.check_call_argument(_call_name, param, *expr, calling_scope)?;
-        }
-        Ok(())
-    }
-
     pub fn get_callee_function_type(&self, callee: &Callee) -> TypeId {
         match callee {
             Callee::StaticFunction(function_id) | Callee::StaticLambda { function_id, .. } => {
@@ -8016,24 +8097,29 @@ impl TypedModule {
         };
 
         // Now that we have resolved to a function id, we need to specialize it if generic
-        let original_function = callee.maybe_function_id().map(|f| self.get_function(f));
-        let is_generic = original_function.is_some_and(|f| f.is_generic());
+        let maybe_original_function_id = callee.maybe_function_id();
+        let maybe_original_function = maybe_original_function_id.map(|f| self.get_function(f));
+        let callee_function_type_id = self.get_callee_function_type(&callee);
+        let is_generic = maybe_original_function.is_some_and(|f| f.is_generic());
+
+        let original_function_type = self.types.get(callee_function_type_id).as_function().unwrap();
+        let original_function_return_type = original_function_type.return_type;
+        let params = &original_function_type.logical_params().to_vec();
+        let (aligned_original_args, aligned_original_params) = self
+            .align_call_arguments_with_parameters(
+                fn_call,
+                params,
+                known_args.map(|(_known_types, known_args)| known_args),
+                ctx.scope_id,
+                true,
+            )?;
 
         let (callee, typechecked_arguments, type_args, return_type) = match is_generic {
             false => {
-                let original_function_type =
-                    self.types.get(self.get_callee_function_type(&callee)).as_function().unwrap();
-                let original_function_return_type = original_function_type.return_type;
-                let params = &original_function_type.logical_params().to_vec();
-                let (aligned_args, aligned_params) = self.align_call_arguments_with_parameters(
-                    fn_call,
-                    params,
-                    known_args.map(|(_known_types, known_args)| known_args),
-                    ctx.scope_id,
-                    false,
-                )?;
-                let mut typechecked_args = Vec::with_capacity(aligned_args.len());
-                for (maybe_typed_expr, param) in aligned_args.iter().zip(aligned_params.iter()) {
+                let mut typechecked_args = Vec::with_capacity(aligned_original_args.len());
+                for (maybe_typed_expr, param) in
+                    aligned_original_args.iter().zip(aligned_original_params.iter())
+                {
                     let expr = match *maybe_typed_expr {
                         MaybeTypedExpr::Typed(typed) => typed,
                         MaybeTypedExpr::Parsed(parsed) => {
@@ -8046,56 +8132,41 @@ impl TypedModule {
                 (callee, typechecked_args, smallvec![], original_function_return_type)
             }
             true => {
-                let original_function = original_function.unwrap();
+                // If a function is generic, we have a function id. Lambdas and function pointer
+                // calls can't take type arguments
+                let original_function_id = maybe_original_function_id.unwrap();
+                let original_function = self.get_function(original_function_id);
                 let function_id = callee.maybe_function_id().unwrap();
                 let type_params = &original_function.type_params;
 
                 // We infer the type arguments, or just use them if the user has supplied them
                 let type_args = match &known_args {
-                    Some((ta, _va)) => {
+                    Some((type_args, _va)) => {
                         // Need the ident
-                        ta.iter()
-                            .enumerate()
-                            .map(|(idx, type_id)| SimpleNamedType {
-                                name: type_params[idx].name,
-                                type_id: *type_id,
+                        type_args
+                            .iter()
+                            .zip(type_params.iter())
+                            .map(|(type_arg, type_param)| SimpleNamedType {
+                                name: type_param.name,
+                                type_id: *type_arg,
                             })
                             .collect()
                     }
                     None => self.infer_and_constrain_call_type_args(fn_call, function_id, ctx)?,
                 };
 
-                
-        let mut fn_type_args: SmallVec<[SimpleNamedType; 8]> = SmallVec::new();
-
-         // Ok here's what we need for function params. We need to know just the _kind_ of function that
-         // was passed: ref, lambda, or lambda obj, and we need to specialize the function shape on
-         // the other type params, as in: some (T -> T) -> some (int -> int), THEN just create
-         // a type using the _kind_ we need:
-         // fn ref: some (int -> int) -> (int -> int)*
-         // lambda: some (int -> int) -> unique(\int -> int) (is this the zero-sized param? Oh, its physically just passing the environment!)
-         // lambda obj: some (int -> int) -> dyn[\int -> int] (passing environment AND fn ptr)
-         //
-         // This method is risk-free in terms of 'leaking' inference types out
-         if !original_function.function_params.is_empty() {
-
-         }
-            for function_type_param in generic_function.function_params.iter() {
-                let fn_type = self.types.get(generic_function_type_id).as_function().unwrap();
-                let actual_param = typechecked_args[function_type_param.value_param_index];
-                eprintln!(
-                    "The param for ftp {} is {}",
-                    self.name_of(function_type_param.name),
-                    self.name_of(actual_param.name)
-                );
-                let passed_type = 
-                // What if we use substitution?
-                fn_type_args.push(SimpleNamedType {
-                    name: function_type_param.name,
-                    type_id: passed_type
-                });
-            };
-                let function_id = self.specialize_function_signature(&type_args, &function_type_args, function_id)?;
+                let function_type_args = self.determine_function_type_args_for_call(
+                    original_function_id,
+                    &type_args,
+                    aligned_original_args,
+                    aligned_original_params,
+                    ctx,
+                )?;
+                let function_id = self.specialize_function_signature(
+                    &type_args,
+                    &function_type_args,
+                    function_id,
+                )?;
 
                 let specialized_fn_type = self.get_function_type(function_id);
                 let specialized_params = specialized_fn_type.physical_params.clone();
@@ -8344,7 +8415,7 @@ impl TypedModule {
                     .map_err(|e| {
                         errf!(
                             e.span,
-                            "Failed to solve for type parameters in call to {}. Detail:\n{}",
+                            "Problematic call to {}. Detail:\n\t{}",
                             self.name_of(fn_call.name.name),
                             e.message
                         )
@@ -8372,6 +8443,129 @@ impl TypedModule {
             })?;
         }
         Ok(solved_type_params)
+    }
+
+    fn determine_function_type_args_for_call(
+        &mut self,
+        original_function_id: FunctionId,
+        type_args: &[SimpleNamedType],
+        aligned_original_args: SmallVec<[MaybeTypedExpr; FUNC_PARAM_OPT_COUNT]>,
+        aligned_original_params: SmallVec<[&FnParamType; FUNC_PARAM_OPT_COUNT]>,
+        ctx: EvalExprContext,
+    ) -> TyperResult<SmallVec<[SimpleNamedType; 8]>> {
+        // Ok here's what we need for function params. We need to know just the _kind_ of function that
+        // was passed: ref, lambda, or lambda obj, and we need to specialize the function shape on
+        // the other type params, as in: some (T -> T) -> some (int -> int), THEN just create
+        // a type using the _kind_ we need:
+        // fn ref: some (int -> int) -> (int -> int)*
+        // lambda: some (int -> int) -> unique(\int -> int) (is this the zero-sized param? Oh, its physically just passing the environment!)
+        // lambda obj: some (int -> int) -> dyn[\int -> int] (passing environment AND fn ptr)
+        //
+        // This method is risk-free in terms of 'leaking' inference types out
+        let mut function_type_args: SmallVec<[SimpleNamedType; 8]> = SmallVec::new();
+        let original_function = self.get_function(original_function_id);
+        if !original_function.function_params.is_empty() {
+            for function_type_param in original_function.function_params.clone().iter() {
+                //let original_function_type =
+                //    self.types.get(callee_function_type_id).as_function().unwrap();
+
+                let corresponding_value_param =
+                    &aligned_original_params[function_type_param.value_param_index as usize];
+                let corresponding_arg =
+                    &aligned_original_args[function_type_param.value_param_index as usize];
+                eprintln!(
+                    "The param for function_type_param {} {} is {} and passed: {:?}",
+                    function_type_param.type_id,
+                    self.name_of(function_type_param.name),
+                    self.name_of(corresponding_value_param.name),
+                    corresponding_arg
+                );
+
+                enum PhysicalPassedFunction {
+                    Lambda(TypeId),
+                    FunctionReference,
+                    LambdaObject(TypeId),
+                }
+                let subst_pairs: Vec<_> = type_args
+                    .iter()
+                    .map(|nt| TypeSubstitutionPair {
+                        from: corresponding_value_param.type_id,
+                        to: nt.type_id,
+                    })
+                    .collect();
+                let physical_passed_function = match corresponding_arg {
+                    MaybeTypedExpr::Typed(_) => {
+                        unreachable!("Synthesizing calls with function type params is unsupported")
+                    }
+                    MaybeTypedExpr::Parsed(p) => match self.ast.exprs.get(*p) {
+                        ParsedExpression::Lambda(_lam) => {
+                            let substituted_param_type = self.substitute_in_type(
+                                function_type_param.type_id,
+                                &subst_pairs,
+                                None,
+                                None,
+                            );
+                            debug!(
+                                "substitute type for ftp closure inference: {}",
+                                self.type_id_to_string(substituted_param_type)
+                            );
+                            let the_lambda = self.eval_expr(
+                                *p,
+                                ctx.with_expected_type(Some(substituted_param_type)),
+                            )?;
+                            let lambda_type = self.exprs.get(the_lambda).get_type();
+                            PhysicalPassedFunction::Lambda(lambda_type)
+                        }
+                        _other => {
+                            let t = self.eval_expr(*p, ctx.with_no_expected_type())?;
+                            let type_id = self.exprs.get(t).get_type();
+                            match self.types.get(type_id) {
+                                Type::Lambda(_) => PhysicalPassedFunction::Lambda(type_id),
+                                Type::LambdaObject(_) => {
+                                    PhysicalPassedFunction::LambdaObject(type_id)
+                                }
+                                Type::Reference(_) => PhysicalPassedFunction::FunctionReference,
+                                _ => {
+                                    unreachable!("Unsupported type for abstract function parameter")
+                                }
+                            }
+                        }
+                    },
+                };
+                let final_parameter_type = match physical_passed_function {
+                    PhysicalPassedFunction::Lambda(lambda) => {
+                        // Can use as-is
+                        lambda
+                    }
+                    PhysicalPassedFunction::FunctionReference => {
+                        let substituted_param_type = self.substitute_in_type(
+                            function_type_param.type_id,
+                            &subst_pairs,
+                            None,
+                            None,
+                        );
+                        self.types.add_reference_type(substituted_param_type)
+                    }
+                    PhysicalPassedFunction::LambdaObject(lambda_object_type) => {
+                        // Replace the function type
+                        let substituted_lambda_object_type =
+                            self.substitute_in_type(lambda_object_type, &subst_pairs, None, None);
+                        substituted_lambda_object_type
+                    }
+                };
+                function_type_args.push(SimpleNamedType {
+                    name: function_type_param.name,
+                    type_id: final_parameter_type,
+                });
+            }
+        }
+        if !function_type_args.is_empty() {
+            eprintln!(
+                "We're passing function_type_args! {}",
+                self.pretty_print_named_types(&function_type_args, ", ")
+            );
+        }
+        Ok(function_type_args)
     }
 
     // nocommit
@@ -8541,10 +8735,7 @@ impl TypedModule {
         );
         let counts = self.types.type_variable_counts.get(&slot_type).unwrap();
         if counts.inference_variable_count == 0 {
-            debug!(
-                "I should skip this because it has no type holes in it: {}",
-                self.type_id_to_string(slot_type)
-            );
+            debug!("no type holes: {}", self.type_id_to_string(slot_type));
             return TypeUnificationResult::NoHoles;
         }
 
@@ -8756,16 +8947,17 @@ impl TypedModule {
         let generic_function_scope = generic_function.scope;
 
         for existing_specialization in &generic_function.child_specializations {
-            if existing_specialization.type_arguments == type_arguments {
+            if existing_specialization.type_arguments == type_arguments
+                && existing_specialization.function_type_arguments == function_type_arguments
+            {
                 debug!(
-                    "Found existing specialization for function {} with types: {}",
+                    "Found existing specialization for function {} with types: {}, functions: {}",
                     self.name_of(generic_function.name),
-                    existing_specialization
-                        .type_arguments
-                        .iter()
-                        .map(|named_type| self.type_id_to_string(named_type.type_id))
-                        .collect::<Vec<_>>()
-                        .join("_")
+                    self.pretty_print_named_types(&existing_specialization.type_arguments, ", "),
+                    self.pretty_print_named_types(
+                        &existing_specialization.function_type_arguments,
+                        ", "
+                    ),
                 );
                 return Ok(existing_specialization.specialized_function_id);
             }
@@ -8783,40 +8975,26 @@ impl TypedModule {
         };
 
         let generic_function_type_id = generic_function.type_id;
-        let mut subst_pairs: SmallVec<[TypeSubstitutionPair; 16]> = SmallVec::with_capacity(generic_function.function_params.len() + generic_function.type_params.len());
-        if generic_function.function_params.len() != 0 {
-            // For each function parameter, find out what was passed, and basically just say that's
-            // what we take! If you passed a function ptr, then we take a function ptr of that
-            // type. The types have already been checked; we know the functions are of the right
-            // type; we just have to apply the specialization. Maybe with some debug assertions!
-            for function_type_param in generic_function.function_params.iter() {
-                let fn_type = self.types.get(generic_function_type_id).as_function().unwrap();
-                let actual_param = fn_type
-                    .logical_params()
-                    .get(function_type_param.value_param_index as usize)
-                    .unwrap();
-                eprintln!(
-                    "The param for ftp {} is {}",
-                    self.name_of(function_type_param.name),
-                    self.name_of(actual_param.name)
-                );
-                let passed_type = ;
-                // What if we use substitution?
-                subst_pairs.push(TypeSubstitutionPair {
-                    from: function_type_param.type_id,
-                    to: passed_type
-                })
-            }
+        let mut subst_pairs: SmallVec<[TypeSubstitutionPair; 16]> = SmallVec::with_capacity(
+            generic_function.function_params.len() + generic_function.type_params.len(),
+        );
+
+        for (function_type_param, function_type_arg) in
+            generic_function.function_params.iter().zip(function_type_arguments.iter())
+        {
+            // What if we use substitution?
+            subst_pairs.push(TypeSubstitutionPair {
+                from: function_type_param.type_id,
+                to: function_type_arg.type_id,
+            })
         }
         // Transform the signature of the generic function by substituting
-        subst_pairs.extend(generic_function
-            .type_params
-            .iter()
-            .zip(type_arguments)
-            .map(|(gen_param, type_arg)| TypeSubstitutionPair {
+        subst_pairs.extend(generic_function.type_params.iter().zip(type_arguments).map(
+            |(gen_param, type_arg)| TypeSubstitutionPair {
                 from: gen_param.type_id,
                 to: type_arg.type_id,
-            }));
+            },
+        ));
         let specialized_function_type_id =
             self.substitute_in_type(generic_function_type_id, &subst_pairs, None, None);
         debug!(
@@ -8859,6 +9037,7 @@ impl TypedModule {
         let specialization_info = SpecializationInfo {
             parent_function: generic_function_id,
             type_arguments: Vec::from(type_arguments),
+            function_type_arguments: Vec::from(function_type_arguments),
             specialized_function_id: FunctionId::PENDING,
             specialized_function_type: specialized_function_type_id,
         };
@@ -8886,6 +9065,7 @@ impl TypedModule {
             compiler_debug: generic_function.compiler_debug,
             kind: generic_function.kind,
             is_concrete: false,
+            dyn_fn_id: None,
         };
         let specialized_function_id = self.add_function(specialized_function);
         let is_concrete = self.get_function(specialized_function_id).is_concrete;
@@ -9543,7 +9723,7 @@ impl TypedModule {
             arguments,
         };
         let self_ident = get_ident!(self, "Self");
-        let new_self_type_id = self.add_type_variable(
+        let new_self_type_id = self.add_type_parameter(
             TypeParameter {
                 name: self_ident,
                 scope_id: specialized_ability_scope,
@@ -9578,7 +9758,11 @@ impl TypedModule {
                 ability_namespace_id,
             )?;
             let function_name = self.get_function(function_id).name;
-            specialized_functions.push(TypedAbilityFunctionRef { function_id, function_name });
+            specialized_functions.push(TypedAbilityFunctionRef {
+                function_id,
+                ability_id: specialized_ability_id,
+                function_name,
+            });
         }
 
         self.get_ability_mut(specialized_ability_id).functions = specialized_functions;
@@ -9740,7 +9924,7 @@ impl TypedModule {
                     ability_constraints.push(ability_id);
                 }
             }
-            let type_variable_id = self_.add_type_variable(
+            let type_variable_id = self_.add_type_parameter(
                 TypeParameter {
                     name: type_parameter.name,
                     scope_id: fn_scope_id,
@@ -9995,6 +10179,7 @@ impl TypedModule {
             compiler_debug: is_debug,
             type_id: function_type_id,
             is_concrete: false,
+            dyn_fn_id: None,
         });
         debug_assert!(actual_function_id == function_id);
 
@@ -10121,7 +10306,7 @@ impl TypedModule {
         let self_ident_id = get_ident!(self, "Self");
         let mut ability_params: Vec<TypedAbilityParam> =
             Vec::with_capacity(parsed_ability.params.len() + 1);
-        let self_type_id = self.add_type_variable(
+        let self_type_id = self.add_type_parameter(
             TypeParameter {
                 name: self_ident_id,
                 scope_id: ability_scope_id,
@@ -10142,7 +10327,7 @@ impl TypedModule {
                 })
                 .collect();
             let ability_impls = ability_impls?;
-            let param_type_id = self.add_type_variable(
+            let param_type_id = self.add_type_parameter(
                 TypeParameter {
                     name: ability_param.name,
                     scope_id: ability_scope_id,
@@ -10229,7 +10414,11 @@ impl TypedModule {
                 namespace_id,
             )?;
             let function_name = self.get_function(function_id).name;
-            typed_functions.push(TypedAbilityFunctionRef { function_name, function_id });
+            typed_functions.push(TypedAbilityFunctionRef {
+                function_name,
+                ability_id,
+                function_id,
+            });
         }
         self.abilities[ability_id.0 as usize].functions = typed_functions;
         Ok(ability_id)
@@ -10285,7 +10474,7 @@ impl TypedModule {
 
         let mut type_params = Vec::with_capacity(parsed_ability_impl.generic_impl_params.len());
         for generic_impl_param in &parsed_ability_impl.generic_impl_params {
-            let type_variable_id = self.add_type_variable(
+            let type_variable_id = self.add_type_parameter(
                 TypeParameter {
                     name: generic_impl_param.name,
                     scope_id: impl_scope_id,
