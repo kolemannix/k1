@@ -6,12 +6,40 @@ fn box[T](context foo: T)(value: T): MyBox[T] {
   { value: value }
 }
 
-fn test(): unit {
+fn testBox(): unit {
   let context b = true;
   let context c = { b: true };
   box(context 10)(10);
   box[bool](true);
   box(false);
   box({ b: false });
+  ()
+}
+
+fn contextC[T: Equals](context t: T, name: string)(value: T): unit {
+  assert(name == "Joe");
+  assert(t == value);
+}
+
+fn contextB[T: Equals](context t: T, name: string)(value: T): unit {
+  assert(t == value);
+  contextC(value)
+}
+
+fn contextA[T: Equals](context t: T, name: string)(value: T): unit {
+  assert(t == value);
+  contextB(value)
+}
+
+fn testGenericPassing(): unit {
+  let context i = 3;
+  let context name: string = "Joe";
+  contextA(3);
+  ()
+}
+
+fn test(): unit {
+  testBox();
+  testGenericPassing();
   ()
 }
