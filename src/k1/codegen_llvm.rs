@@ -499,7 +499,7 @@ pub struct Codegen<'ctx, 'module> {
     llvm_types: RefCell<FxHashMap<TypeId, K1LlvmType<'ctx>>>,
     variables: FxHashMap<VariableId, VariablePointer<'ctx>>,
     globals: FxHashMap<VariableId, GlobalValue<'ctx>>,
-    //lambda_environments: FxHashMap<TypeId, PointerValue<'ctx>>,
+    lambda_functions: FxHashMap<TypeId, FunctionValue<'ctx>>,
     loops: FxHashMap<ScopeId, LoopInfo<'ctx>>,
     builtin_types: BuiltinTypes<'ctx>,
     debug: DebugContext<'ctx>,
@@ -696,7 +696,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             builder,
             variables: FxHashMap::new(),
             globals: FxHashMap::new(),
-            //lambda_environments: FxHashMap::new(),
+            lambda_functions: FxHashMap::new(),
             loops: FxHashMap::new(),
             llvm_functions: FxHashMap::new(),
             llvm_function_to_k1: FxHashMap::new(),
@@ -717,7 +717,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         offset_bytes * 8
     }
 
-    fn set_debug_location(&self, span: SpanId) -> DILocation<'ctx> {
+    fn set_debug_location_from_span(&self, span: SpanId) -> DILocation<'ctx> {
         let span = self.module.ast.spans.get(span);
         let line = self.module.ast.sources.get_line_for_span_start(span).expect("No line for span");
         let column = span.start - line.start_char;
@@ -730,6 +730,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         );
         self.builder.set_current_debug_location(locn);
         locn
+    }
+
+    fn set_debug_location(&self, locn: DILocation<'ctx>) {
+        self.builder.set_current_debug_location(locn)
+    }
+
+    fn get_debug_location(&self) -> DILocation<'ctx> {
+        self.builder.get_current_debug_location().unwrap()
     }
 
     fn get_ident_name(&self, id: Identifier) -> &str {
@@ -1875,7 +1883,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     fn codegen_expr(&mut self, expr_id: TypedExprId) -> CodegenResult<LlvmValue<'ctx>> {
         let expr = self.module.exprs.get(expr_id);
         let span = expr.get_span();
-        self.set_debug_location(span);
+        self.set_debug_location_from_span(span);
         debug!("codegen expr\n{}", self.module.expr_to_string_with_type(expr_id));
         match expr {
             TypedExpr::Unit(_) => Ok(self.builtin_types.unit_value.as_basic_value_enum().into()),
@@ -2128,8 +2136,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     .codegen_expr_basic_value(lambda_type.environment_struct)?
                     .into_pointer_value();
 
-                // This won't be available from another function... we have to pass it around
-                //self.lambda_environments.insert(lambda_expr.lambda_type, environment_ptr);
+                self.lambda_functions.insert(lambda_expr.lambda_type, llvm_fn);
 
                 Ok(environment_struct_value.as_basic_value_enum().into())
             }
@@ -2138,12 +2145,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     self.codegen_function_or_get(function_reference_expr.function_id)?;
                 let function_ptr =
                     function_value.as_global_value().as_pointer_value().as_basic_value_enum();
-                self.set_debug_location(function_reference_expr.span);
+                self.set_debug_location_from_span(function_reference_expr.span);
                 Ok(function_ptr.as_basic_value_enum().into())
             }
             TypedExpr::FunctionToLambdaObject(fn_to_lam_obj) => {
                 let function_value = self.codegen_function_or_get(fn_to_lam_obj.function_id)?;
-                self.set_debug_location(fn_to_lam_obj.span);
+                self.set_debug_location_from_span(fn_to_lam_obj.span);
                 let function_ptr =
                     function_value.as_global_value().as_pointer_value().as_basic_value_enum();
                 let lam_obj_struct_type =
@@ -2309,6 +2316,34 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     .build_int_to_ptr(int, self.builtin_types.ptr, "inttoptr_cast")
                     .unwrap();
                 Ok(as_ptr.as_basic_value_enum().into())
+            }
+            CastType::LambdaToLambdaObject => {
+                // nocommit: This will need to change once we make non-dyn lambdas represented
+                // without the extra pointer
+                let lambda_env_value = self.codegen_expr_basic_value(cast.base_expr)?;
+                let env_pointer =
+                    self.builder.build_alloca(lambda_env_value.get_type(), "env_ptr").unwrap();
+                self.builder.build_store(env_pointer, lambda_env_value).unwrap();
+
+                let fn_value = self
+                    .lambda_functions
+                    .get(&self.module.get_expr_type_id(cast.base_expr))
+                    .unwrap();
+                let fn_ptr = fn_value.as_global_value().as_pointer_value();
+
+                let lam_obj = self.builtin_types.dynamic_lambda_object.get_undef();
+                let lam_obj = self.builder.build_insert_value(lam_obj, fn_ptr, 0, "").unwrap();
+                let lam_obj =
+                    self.builder.build_insert_value(lam_obj, lambda_env_value, 1, "").unwrap();
+
+                // Aggregates have to be pointers because that's just how we represent them
+                let lam_obj_ptr = self
+                    .builder
+                    .build_alloca(self.builtin_types.dynamic_lambda_object, "lam_obj_ptr")
+                    .unwrap();
+                self.builder.build_store(lam_obj_ptr, lam_obj).unwrap();
+
+                Ok(lam_obj_ptr.as_basic_value_enum().into())
             }
         }
     }
@@ -2688,7 +2723,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             Callee::StaticFunction(function_id) => {
                 let function_value = self.codegen_function_or_get(*function_id)?;
 
-                self.set_debug_location(call.span);
+                self.set_debug_location_from_span(call.span);
                 self.builder.build_call(function_value, args.make_contiguous(), "").unwrap()
             }
             Callee::StaticLambda { function_id, environment_ptr, .. } => {
@@ -2701,14 +2736,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
                 let function_value = self.codegen_function_or_get(*function_id)?;
 
-                self.set_debug_location(call.span);
+                self.set_debug_location_from_span(call.span);
                 self.builder.build_call(function_value, args.make_contiguous(), "").unwrap()
             }
             Callee::DynamicFunction(function_reference_expr) => {
                 let function_ptr =
                     self.codegen_expr_basic_value(*function_reference_expr)?.into_pointer_value();
 
-                self.set_debug_location(call.span);
+                self.set_debug_location_from_span(call.span);
 
                 let call_site_value = self
                     .builder
@@ -2726,7 +2761,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let callee_struct =
                     self.codegen_expr_basic_value(*callee_struct_expr)?.into_pointer_value();
 
-                self.set_debug_location(call.span);
+                self.set_debug_location_from_span(call.span);
                 let fn_ptr_gep = self
                     .builder
                     .build_struct_gep(lambda_object_type, callee_struct, 0, "fn_ptr_gep")
@@ -2754,6 +2789,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     .unwrap();
                 args.insert(env_arg_index, env_ptr.into());
 
+                eprintln!(
+                    "The k1 fn type on the lambda object {}",
+                    self.module.type_id_to_string(function_type)
+                );
+                eprintln!("Calling indirect with type {}", llvm_function_type.llvm_function_type);
                 self.builder
                     .build_indirect_call(
                         llvm_function_type.llvm_function_type,
@@ -2915,7 +2955,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     fn codegen_block(&mut self, block: &TypedBlock) -> CodegenResult<LlvmValue<'ctx>> {
         let unit_value = self.builtin_types.unit_value.as_basic_value_enum().into();
         let mut last: LlvmValue<'ctx> = unit_value;
-        self.set_debug_location(block.span);
+        self.set_debug_location_from_span(block.span);
         for stmt in &block.statements {
             if let LlvmValue::Void(never_instr) = last {
                 eprintln!("Aborting block after generating {}", never_instr);
@@ -3077,6 +3117,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             return Ok(function.function_value);
         }
         debug!("\ncodegen function\n{}", self.module.function_id_to_string(function_id, true));
+        let previous_debug_location = self.get_debug_location();
 
         let function = self.module.get_function(function_id);
         let function_type_id = function.type_id;
@@ -3200,7 +3241,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.module.type_id_to_string(typed_param.type_id)
             );
             param.set_name(&format!("{param_name}_arg"));
-            self.set_debug_location(typed_param.span);
+            self.set_debug_location_from_span(typed_param.span);
             let pointer = self.builder.build_alloca(ty.rich_value_type(), param_name).unwrap();
             let arg_debug_type = self.get_debug_type(typed_param.type_id)?;
             let di_local_variable = self.debug.debug_builder.create_parameter_variable(
@@ -3218,7 +3259,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 pointer,
                 Some(di_local_variable),
                 None,
-                self.set_debug_location(typed_param.span),
+                self.set_debug_location_from_span(typed_param.span),
                 store_instr,
             );
             let variable_id = function.param_variables[i - sret_offset];
@@ -3255,6 +3296,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         }
         self.debug.pop_scope();
         function_value.set_subprogram(di_subprogram);
+
+        self.set_debug_location(previous_debug_location);
 
         Ok(function_value)
     }
