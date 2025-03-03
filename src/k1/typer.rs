@@ -1098,6 +1098,7 @@ pub enum CastType {
     FloatTruncate,
     FloatToInteger,
     IntegerToFloat,
+    LambdaToLambdaObject,
 }
 
 impl CastType {
@@ -1116,6 +1117,7 @@ impl CastType {
             CastType::FloatTruncate => false,
             CastType::FloatToInteger => false,
             CastType::IntegerToFloat => false,
+            CastType::LambdaToLambdaObject => false,
         }
     }
 }
@@ -1136,6 +1138,7 @@ impl Display for CastType {
             CastType::FloatTruncate => write!(f, "ftrunc"),
             CastType::FloatToInteger => write!(f, "ftoint"),
             CastType::IntegerToFloat => write!(f, "inttof"),
+            CastType::LambdaToLambdaObject => write!(f, "lam2dyn"),
         }
     }
 }
@@ -2547,6 +2550,7 @@ impl TypedModule {
                         "Expected function type, or eventually, ability name, for dyn"
                     );
                 }
+                todo!("Add an env param to this function type; we have code that does this for the other dyn; DRY it up maybe.");
                 let lambda_object_type =
                     self.types.add_lambda_object(&self.ast.identifiers, inner, ty_app_id.into());
                 Ok(Some(lambda_object_type))
@@ -4722,6 +4726,23 @@ impl TypedModule {
                 );
             }
         };
+
+        // If we expect a lambda object and you pass a lambda
+        if let Type::LambdaObject(lam_obj_type) = self.types.get(expected_type_id) {
+            if let Type::Lambda(lambda_type) = self.get_expr_type(expression) {
+                let span = self.exprs.get(expression).get_span();
+                return CoerceResult::Coerced(
+                    "lambda2dyn",
+                    self.exprs.add(TypedExpr::Cast(TypedCast {
+                        cast_type: CastType::LambdaToLambdaObject,
+                        base_expr: expression,
+                        target_type_id: lambda_type.lambda_object_type,
+                        span,
+                    })),
+                );
+            }
+        }
+
         CoerceResult::Fail(expression)
     }
 
