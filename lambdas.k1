@@ -30,6 +30,7 @@ fn filter[T](a: List[T], f: some \T -> bool): List[T] {
 }
 
 fn staticAddOne(x: int): int { x + 1 }
+fn staticAddTwo(x: int): int { x + 2 }
 
 fn captures(): unit {
   let closedOver: int = 3;
@@ -71,9 +72,25 @@ fn someFnParam2(i: int, f: some \int -> int, g: some \int -> int): int {
   f(i) + g(i)
 }
 
-// fn genLam[T](t: T, f: )
+fn someFnParamGen[T](t: T, f: some \T -> T, g: some \T -> T?): T? {
+  t | f | g
+}
+
+// TODO: fix that syntax allow \() -> unit
+// TODO: there's no way to go from lambda -> lambda object aka dyn[lambda] currently
+fn runThings(thunks: List[dyn[\-> unit]]): unit {
+  for thunk in thunks do { thunk() }
+}
 
 fn test(): unit {
+
+  assert(staticAddOne.toRef() as Pointer == staticAddOne.toRef() as Pointer);
+
+  assert(staticAddOne.toRef() as Pointer != staticAddTwo.toRef() as Pointer);
+
+  let staticAddOneVar = staticAddOne.toRef();
+  let staticResult = someFnParam2(5, staticAddOne.toRef(), staticAddOneVar);
+  assertEquals(staticResult, 6 + 6);
 
   let lam1ResultPtr = someFnParam1(5, staticAddOne.toRef());
   assertEquals(lam1ResultPtr, 6);
@@ -87,12 +104,20 @@ fn test(): unit {
   let withClosures = someFnParam2(5, \(x) x + 1 + c1.x, \(x) x + 2 + c2);
   assertEquals(withClosures, (5 + 1 + 3) + (5 + 2 + 2));
 
-  let staticAddOneVar = staticAddOne.toRef();
-  let staticResult = someFnParam2(5, staticAddOne.toRef(), staticAddOneVar);
-  assertEquals(staticResult, 6 + 6);
+  let withGenerics = someFnParamGen(true, \(b) not b, \(b) some(b));
+  assert(withGenerics == some(false));
 
   let result = ([1,2,3,5,6,7,8] | map(\(x: int) x + 1)) | filter(\(x: int) x % 2 == 0);
   assert(result == [2, 4, 6, 8]);
+
+  let* counter = 0;
+  let thunks: List[dyn[\ -> unit]] = [
+    \() { counter <- counter.* + 1 },
+    \() { counter <- counter.* + 1 },
+    \() { counter <- counter.* + 1 },
+  ];
+
+  runThings(thunks);
 
   captures();
   captureMut();

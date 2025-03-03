@@ -9,7 +9,10 @@ static GLOBAL: MiMalloc = MiMalloc;
 
 fn main() -> anyhow::Result<()> {
     let l = Box::leak(Box::new(
-        env_logger::Builder::new().filter_level(log::LevelFilter::Debug).build(),
+        env_logger::Builder::new()
+            .format_timestamp(None)
+            .filter_level(log::LevelFilter::Debug)
+            .build(),
     ));
     log::set_logger(l).unwrap();
     log::set_max_level(log::LevelFilter::Info);
