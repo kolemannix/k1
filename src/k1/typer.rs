@@ -2025,6 +2025,10 @@ impl TypedModule {
         scope_id: ScopeId,
     ) -> TyperResult<TypeId> {
         let parsed_type_defn = self.ast.get_type_defn(parsed_type_defn_id).clone();
+        // TODO: ident lookup
+        if self.name_of(parsed_type_defn.name) == "some" {
+            return failf!(parsed_type_defn.span, "'some' is not a valid type name");
+        }
         let existing_defn = self.types.find_type_defn_mapping(parsed_type_defn_id);
         if let Some(existing_defn) = existing_defn {
             return Ok(existing_defn);
@@ -2529,7 +2533,7 @@ impl TypedModule {
         let ty_app = ty_app.clone();
         match self.name_of(ty_app.name.name) {
             "dyn" => {
-                if ty_app.args.len() != 2 {
+                if ty_app.args.len() != 1 {
                     return failf!(ty_app.span, "Expected 1 type parameter for dyn");
                 }
                 let inner = self.eval_type_expr_ext(
@@ -4848,9 +4852,9 @@ impl TypedModule {
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
         debug!(
-            "{}\neval_expr_inner: {}: hint {}",
+            "eval_expr_inner: {} (hint {})",
             self.ast.get_span_content(self.ast.exprs.get_span(expr_id)),
-            &self.ast.expr_id_to_string(expr_id),
+            //&self.ast.expr_id_to_string(expr_id),
             self.type_id_option_to_string(ctx.expected_type_id),
         );
         let expr = self.ast.exprs.get(expr_id);
@@ -7923,21 +7927,21 @@ impl TypedModule {
         let mut final_params: SmallVec<[&FnParamType; FUNC_PARAM_OPT_COUNT]> = SmallVec::new();
         if !explicit_context_args {
             for context_param in params.iter().filter(|p| p.is_context) {
-                if let Some(found_id) =
-                    self.scopes.find_context_variable_by_type(calling_scope, context_param.type_id)
-                {
-                    let found = self.variables.get(found_id);
+                let matching_context_variable =
+                    self.scopes.find_context_variable_by_type(calling_scope, context_param.type_id);
+                if let Some(matching_context_variable) = matching_context_variable {
+                    let found = self.variables.get(matching_context_variable);
                     final_args.push(MaybeTypedExpr::Typed(self.exprs.add(TypedExpr::Variable(
-                        VariableExpr { variable_id: found_id, type_id: found.type_id, span },
+                        VariableExpr {
+                            variable_id: matching_context_variable,
+                            type_id: found.type_id,
+                            span,
+                        },
                     ))));
                     final_params.push(context_param);
                 } else {
                     let is_source_loc = context_param.type_id == COMPILER_SOURCE_LOC_TYPE_ID;
                     if is_source_loc {
-                        eprintln!(
-                            "source loc is missing in scope {}",
-                            self.scope_id_to_string(calling_scope)
-                        );
                         let expr = self.synth_source_location(span);
                         final_args.push(MaybeTypedExpr::Typed(expr));
                         final_params.push(context_param);
@@ -7949,6 +7953,10 @@ impl TypedModule {
                             self.type_id_to_string(context_param.type_id)
                         );
                     } else {
+                        debug!(
+                            "Tolerating a missing context argument of type {}",
+                            self.type_id_to_string(context_param.type_id)
+                        );
                         continue;
                     }
                 };
@@ -8461,7 +8469,12 @@ impl TypedModule {
         // This method is risk-free in terms of 'leaking' inference types out
         let mut function_type_args: SmallVec<[SimpleNamedType; 8]> = SmallVec::new();
         let original_function = self.get_function(original_function_id);
-        let original_function_type = original_function.type_id;
+        let subst_pairs: SmallVec<[_; 8]> = original_function
+            .type_params
+            .iter()
+            .zip(type_args.iter())
+            .map(|(param, arg)| TypeSubstitutionPair { from: param.type_id, to: arg.type_id })
+            .collect();
         if !original_function.function_params.is_empty() {
             for function_type_param in original_function.function_params.clone().iter() {
                 //let original_function_type =
@@ -8484,13 +8497,6 @@ impl TypedModule {
                     FunctionReference,
                     LambdaObject(TypeId),
                 }
-                let subst_pairs: Vec<_> = type_args
-                    .iter()
-                    .map(|nt| TypeSubstitutionPair {
-                        from: corresponding_value_param.type_id,
-                        to: nt.type_id,
-                    })
-                    .collect();
                 let physical_passed_function = match corresponding_arg {
                     MaybeTypedExpr::Typed(_) => {
                         unreachable!("Synthesizing calls with function type params is unsupported")
@@ -8504,7 +8510,9 @@ impl TypedModule {
                                 None,
                             );
                             debug!(
-                                "substitute type for ftp closure inference: {}",
+                                "substituted type for ftp closure inference {}: {} -> {}",
+                                self.pretty_print_type_substitutions(&subst_pairs, ", "),
+                                self.type_id_to_string(function_type_param.type_id),
                                 self.type_id_to_string(substituted_param_type)
                             );
                             let the_lambda = self.eval_expr(
