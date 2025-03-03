@@ -1,0 +1,8 @@
+fn simpleDyn(thunk: dyn[\-> unit]): unit {
+  thunk()
+}
+
+fn main(): int {
+  simpleDyn(\() sys/exit(22));
+  0
+}
