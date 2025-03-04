@@ -7,6 +7,7 @@ use crate::typer::{BinaryOpKind, ErrorLevel, Linkage};
 use crate::{lex::*, static_assert_size};
 use fxhash::FxHashMap;
 use log::trace;
+use smallvec::{smallvec, SmallVec};
 use string_interner::backend::StringBackend;
 use string_interner::Symbol;
 use TokenKind as K;
@@ -937,7 +938,7 @@ pub struct ParsedNumericType {
 
 #[derive(Debug, Clone)]
 pub struct ParsedFunctionType {
-    pub params: Vec<ParsedTypeExprId>,
+    pub params: SmallVec<[ParsedTypeExprId; 8]>,
     pub return_type: ParsedTypeExprId,
     pub span: SpanId,
 }
@@ -2252,8 +2253,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let type_of = ParsedTypeExpr::TypeOf(ParsedTypeOf { target_expr, span });
                 Ok(Some(self.module.type_exprs.add(type_of)))
             } else if ident_chars == "some" {
-                // nocommit: Disallow the type name 'some'
-                // nocommit: Disallow 'some' type exprs in other places
                 self.advance();
                 let inner_expr = self.expect_type_expression()?;
                 let span = self.extend_to_here(first.span);
@@ -2288,15 +2287,32 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn expect_function_type(&mut self) -> ParseResult<ParsedTypeExprId> {
-        let (params, params_span) = self.eat_delimited_expect_opener(
-            "Function parameters",
-            K::BackSlash,
-            K::Comma,
-            &[K::RThinArrow],
-            Parser::expect_type_expression,
-        )?;
+        let start = self.expect_eat_token(K::BackSlash)?;
+        let mut params: SmallVec<[ParsedTypeExprId; 8]> = smallvec![];
+        let open_paren = self.maybe_consume_next(K::OpenParen).is_some();
+        let loop_end_kind = if open_paren { K::CloseParen } else { K::RThinArrow };
+        let no_params = open_paren && self.peek().kind == K::CloseParen;
+        if no_params {
+            self.advance();
+        } else {
+            loop {
+                let expr = self.expect_type_expression()?;
+                params.push(expr);
+                if self.peek().kind == loop_end_kind {
+                    self.advance();
+                    break;
+                } else {
+                    // If not terminated, expect a separator
+                    self.expect_eat_token(K::Comma)?;
+                }
+            }
+        }
+        if open_paren {
+            self.expect_eat_token(K::RThinArrow)?;
+        }
+
         let return_type = self.expect_type_expression()?;
-        let span = self.extend_span(params_span, self.get_type_expression_span(return_type));
+        let span = self.extend_span(start.span, self.get_type_expression_span(return_type));
         let function_type = ParsedFunctionType { params, return_type, span };
         Ok(self.module.type_exprs.add(ParsedTypeExpr::Function(function_type)))
     }

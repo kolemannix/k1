@@ -1,4 +1,4 @@
-fn simpleDyn(thunk: dyn[\-> unit]): unit {
+fn simpleDyn(thunk: dyn[\()-> unit]): unit {
   thunk()
 }
 

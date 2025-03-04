@@ -221,26 +221,23 @@ impl TypedModule {
                 Ok(())
             }
             Type::TypeParameter(tv) => {
-                match tv.function_type {
-                    None => {
-                        if expand {
-                            let scope_name = self.scopes.make_scope_name(
-                                self.scopes.get_scope(tv.scope_id),
-                                &self.ast.identifiers,
-                            );
-                            writ.write_str(&scope_name)?;
-                            writ.write_str(".")?;
-                            writ.write_str("'")?;
-                            writ.write_str(self.name_of(tv.name))?;
-                        } else {
-                            writ.write_str(self.name_of(tv.name))?;
-                        }
-                    }
-                    Some(function_type) => {
-                        writ.write_str("some ")?;
-                        self.display_type_id(function_type, expand, writ)?;
-                    }
+                if expand {
+                    let scope_name = self
+                        .scopes
+                        .make_scope_name(self.scopes.get_scope(tv.scope_id), &self.ast.identifiers);
+                    writ.write_str(&scope_name)?;
+                    writ.write_str(".")?;
+                    writ.write_str("'")?;
+                    writ.write_str(self.name_of(tv.name))?;
+                } else {
+                    writ.write_str(self.name_of(tv.name))?;
                 }
+                Ok(())
+            }
+            Type::FunctionTypeParameter(ftp) => {
+                self.write_ident(writ, ftp.name)?;
+                writ.write_str(": some ")?;
+                self.display_type_id(ftp.function_type, expand, writ)?;
                 Ok(())
             }
             Type::InferenceHole(hole) => {
