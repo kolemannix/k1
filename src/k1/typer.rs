@@ -1779,6 +1779,8 @@ struct EvalTypeExprContext {
     /// If this is a type definition, this is the type definition info
     /// that should be attached to the type, if `should_attach_defn_info` is true
     pub inner_type_defn_info: Option<TypeDefnInfo>,
+    /// We allow the construct `some <type expr>` only in this position
+    is_direct_function_parameter: bool,
 }
 
 impl EvalTypeExprContext {
@@ -1796,8 +1798,11 @@ impl EvalTypeExprContext {
         copy
     }
 
-    pub const EMPTY: Self =
-        EvalTypeExprContext { should_attach_defn_info: false, inner_type_defn_info: None };
+    pub const EMPTY: Self = EvalTypeExprContext {
+        should_attach_defn_info: false,
+        inner_type_defn_info: None,
+        is_direct_function_parameter: false,
+    };
 }
 
 // Not using this yet but probably need to be
@@ -2073,7 +2078,6 @@ impl TypedModule {
                     name: type_param.name,
                     scope_id: defn_scope_id,
                     span: type_param.span,
-                    function_type: None,
                 },
                 smallvec![],
             );
@@ -2098,6 +2102,7 @@ impl TypedModule {
         let type_eval_context = EvalTypeExprContext {
             should_attach_defn_info,
             inner_type_defn_info: Some(type_defn_info.clone()),
+            is_direct_function_parameter: false,
         };
 
         // The big evaluation!
@@ -2504,16 +2509,25 @@ impl TypedModule {
                 Ok(ty.get_type())
             }
             ParsedTypeExpr::SomeQuant(quant) => {
+                if !context.is_direct_function_parameter {
+                    return failf!(
+                        quant.span,
+                        "some quantifier is only allowed in function parameters"
+                    );
+                }
                 let span = quant.span;
                 let inner = self.eval_type_expr(quant.inner, scope_id)?;
                 let Type::Function(_function_type) = self.types.get(inner) else {
                     return failf!(span, "Expected a function type following 'some'");
                 };
                 let name = self.ast.identifiers.intern(format!("some_fn_{}", type_expr_id));
-                let function_type_variable = self.add_type_parameter(
-                    TypeParameter { name, scope_id, span, function_type: Some(inner) },
-                    smallvec![],
-                );
+                let function_type_variable =
+                    self.add_function_type_parameter(FunctionTypeParameter {
+                        name,
+                        scope_id,
+                        span,
+                        function_type: inner,
+                    });
                 Ok(function_type_variable)
             }
         }?;
@@ -2539,20 +2553,25 @@ impl TypedModule {
                 if ty_app.args.len() != 1 {
                     return failf!(ty_app.span, "Expected 1 type parameter for dyn");
                 }
+                let fn_type_expr_id = ty_app.args[0].type_expr;
                 let inner = self.eval_type_expr_ext(
-                    ty_app.args[0].type_expr,
+                    fn_type_expr_id,
                     scope_id,
                     context.no_attach_defn_info(),
                 )?;
+                let inner_span = self.ast.get_type_expression_span(fn_type_expr_id);
                 if self.types.get(inner).as_function().is_none() {
                     return failf!(
                         ty_app.span,
                         "Expected function type, or eventually, ability name, for dyn"
                     );
                 }
-                todo!("Add an env param to this function type; we have code that does this for the other dyn; DRY it up maybe.");
-                let lambda_object_type =
-                    self.types.add_lambda_object(&self.ast.identifiers, inner, ty_app_id.into());
+                let new_function_type = self.add_lambda_env_to_function_type(inner, inner_span);
+                let lambda_object_type = self.types.add_lambda_object(
+                    &self.ast.identifiers,
+                    new_function_type,
+                    ty_app_id.into(),
+                );
                 Ok(Some(lambda_object_type))
             }
             "_struct_combine" => {
@@ -2793,7 +2812,7 @@ impl TypedModule {
                     .collect();
                 let inner = gen.inner;
 
-                let specialized_type = self.substitute_in_type(
+                let specialized_type = self.substitute_in_type_ext(
                     inner,
                     &substitution_pairs,
                     Some(generic_type),
@@ -2825,11 +2844,33 @@ impl TypedModule {
         &mut self,
         type_id: TypeId,
         substitution_pairs: &[TypeSubstitutionPair],
+    ) -> TypeId {
+        self.substitute_in_type_ext(type_id, substitution_pairs, None, None)
+    }
+
+    fn substitute_in_type_ext(
+        &mut self,
+        type_id: TypeId,
+        substitution_pairs: &[TypeSubstitutionPair],
         generic_parent_to_attach: Option<TypeId>,
         defn_info_to_attach: Option<TypeDefnInfo>,
     ) -> TypeId {
-        // nocommit: Optimize the case where all the pairs are type variables or inference holes,
-        // and the target type has none, it's a no-op!
+        let all_holes = substitution_pairs.iter().all(|p| {
+            self.types.type_variable_counts.get(&p.from).unwrap().inference_variable_count > 0
+        });
+        let no_holes =
+            self.types.type_variable_counts.get(&type_id).unwrap().inference_variable_count == 0;
+        // Optimization: if every 'from' type is an inference hole, and the type
+        // contains no inference holes, which we compute on creation, its a no-op
+        // This prevents useless deep type traversals
+        if all_holes && no_holes {
+            debug!(
+                "detected substitution noop for {} {}",
+                self.pretty_print_type_substitutions(substitution_pairs, ", "),
+                self.type_id_to_string(type_id)
+            );
+            return type_id;
+        }
 
         let force_new = defn_info_to_attach.is_some();
         // If this type is already a generic instance of something, just
@@ -2849,7 +2890,7 @@ impl TypedModule {
                 .clone()
                 .iter()
                 .map(|prev_type_id| {
-                    self.substitute_in_type(*prev_type_id, substitution_pairs, None, None)
+                    self.substitute_in_type_ext(*prev_type_id, substitution_pairs, None, None)
                 })
                 .collect();
             return self.instantiate_generic_type(generic_parent, new_parameter_values);
@@ -2861,6 +2902,13 @@ impl TypedModule {
         }
 
         match self.types.get(type_id) {
+            Type::InferenceHole(_) => type_id,
+            Type::Unit(_)
+            | Type::Char(_)
+            | Type::Integer(_)
+            | Type::Float(_)
+            | Type::Bool(_)
+            | Type::Pointer(_) => type_id,
             Type::Struct(struc) => {
                 let mut new_fields = struc.fields.clone();
                 let mut any_change = false;
@@ -2868,7 +2916,7 @@ impl TypedModule {
                 let original_instance_info = struc.generic_instance_info.clone();
                 for field in new_fields.iter_mut() {
                     let new_field_type_id =
-                        self.substitute_in_type(field.type_id, substitution_pairs, None, None);
+                        self.substitute_in_type_ext(field.type_id, substitution_pairs, None, None);
                     if new_field_type_id != field.type_id {
                         any_change = true;
                     }
@@ -2900,7 +2948,7 @@ impl TypedModule {
                 let original_explicit_tag_type = e.explicit_tag_type;
                 for variant in new_variants.iter_mut() {
                     let new_payload_id = variant.payload.map(|payload_type_id| {
-                        self.substitute_in_type(payload_type_id, substitution_pairs, None, None)
+                        self.substitute_in_type_ext(payload_type_id, substitution_pairs, None, None)
                     });
                     if force_new || new_payload_id != variant.payload {
                         any_changed = true;
@@ -2932,7 +2980,8 @@ impl TypedModule {
             }
             Type::Reference(reference) => {
                 let ref_inner = reference.inner_type;
-                let new_inner = self.substitute_in_type(ref_inner, substitution_pairs, None, None);
+                let new_inner =
+                    self.substitute_in_type_ext(ref_inner, substitution_pairs, None, None);
                 if force_new || new_inner != ref_inner {
                     let specialized_reference = ReferenceType { inner_type: new_inner };
                     self.types.add_type(Type::Reference(specialized_reference))
@@ -2940,41 +2989,23 @@ impl TypedModule {
                     type_id
                 }
             }
-            Type::TypeParameter(type_param) => {
-                // nocommit: This seems like it wants to be a new type of type. We probably pull it
-                // out like we did for inference hole
-                debug!("substitute in type_param {:?}", type_param.function_type);
-                match type_param.function_type {
-                    None => type_id,
-                    Some(function_type_id) => {
-                        let new_fn_type = self.substitute_in_type(
-                            function_type_id,
-                            substitution_pairs,
-                            None,
-                            None,
-                        );
-                        debug!("substituted function {}", self.type_id_to_string(new_fn_type));
-                        if new_fn_type != function_type_id {
-                            let type_param = self.types.get(type_id).as_type_parameter().unwrap();
-                            self.types.add_type(Type::TypeParameter(TypeParameter {
-                                name: type_param.name,
-                                scope_id: type_param.scope_id,
-                                span: type_param.span,
-                                function_type: Some(new_fn_type),
-                            }))
-                        } else {
-                            type_id
-                        }
-                    }
+            Type::TypeParameter(_type_param) => type_id,
+            Type::FunctionTypeParameter(ftp) => {
+                let function_type_id = ftp.function_type;
+                let new_fn_type =
+                    self.substitute_in_type_ext(function_type_id, substitution_pairs, None, None);
+                if new_fn_type != function_type_id {
+                    let type_param = self.types.get(type_id).as_function_type_parameter().unwrap();
+                    self.types.add_type(Type::FunctionTypeParameter(FunctionTypeParameter {
+                        name: type_param.name,
+                        scope_id: type_param.scope_id,
+                        span: type_param.span,
+                        function_type: new_fn_type,
+                    }))
+                } else {
+                    type_id
                 }
             }
-            Type::InferenceHole(_) => type_id,
-            Type::Unit(_)
-            | Type::Char(_)
-            | Type::Integer(_)
-            | Type::Float(_)
-            | Type::Bool(_)
-            | Type::Pointer(_) => type_id,
             Type::EnumVariant(_) => {
                 unreachable!("substitute_in_type is not expected to be called on an EnumVariant")
             }
@@ -2984,15 +3015,19 @@ impl TypedModule {
             Type::Function(fun_type) => {
                 let mut new_fun_type = fun_type.clone();
                 let mut any_new = false;
-                let new_return_type =
-                    self.substitute_in_type(fun_type.return_type, substitution_pairs, None, None);
+                let new_return_type = self.substitute_in_type_ext(
+                    fun_type.return_type,
+                    substitution_pairs,
+                    None,
+                    None,
+                );
                 if new_return_type != new_fun_type.return_type {
                     any_new = true
                 };
                 new_fun_type.return_type = new_return_type;
                 for param in new_fun_type.physical_params.iter_mut() {
                     let new_param_type =
-                        self.substitute_in_type(param.type_id, substitution_pairs, None, None);
+                        self.substitute_in_type_ext(param.type_id, substitution_pairs, None, None);
                     if new_param_type != param.type_id {
                         any_new = true;
                     }
@@ -3014,7 +3049,8 @@ impl TypedModule {
             Type::LambdaObject(lam_obj) => {
                 let fn_type = lam_obj.function_type;
                 let parsed_id = lam_obj.parsed_id;
-                let new_fn_type = self.substitute_in_type(fn_type, substitution_pairs, None, None);
+                let new_fn_type =
+                    self.substitute_in_type_ext(fn_type, substitution_pairs, None, None);
                 if new_fn_type != fn_type || force_new {
                     self.types.add_lambda_object(&self.ast.identifiers, new_fn_type, parsed_id)
                 } else {
@@ -3448,10 +3484,8 @@ impl TypedModule {
                     act_lambda_object.function_type,
                     scope_id,
                 ),
-            (Type::TypeParameter(expected_abstract_function), act)
-                if expected_abstract_function.is_function() =>
-            {
-                let expected_function_type = expected_abstract_function.function_type.unwrap();
+            (Type::FunctionTypeParameter(expected_abstract_function), act) => {
+                let expected_function_type = expected_abstract_function.function_type;
                 let actual_function_type = self.extract_function_type_from_functionlike(act);
                 if let Some(actual_function_type) = actual_function_type {
                     self.check_types(expected_function_type, actual_function_type, scope_id)
@@ -3731,6 +3765,11 @@ impl TypedModule {
         type_id
     }
 
+    fn add_function_type_parameter(&mut self, value: FunctionTypeParameter) -> TypeId {
+        let type_id = self.types.add_type(Type::FunctionTypeParameter(value));
+        type_id
+    }
+
     // Hard to avoid returning a Vec here without returning an impl Iterator which I don't wanna
     // mess with
     pub fn get_constrained_ability_impls_for_type(
@@ -3996,7 +4035,7 @@ impl TypedModule {
         let mut substituted_ability_args = Vec::with_capacity(blanket_ability_args.len());
         for blanket_arg in blanket_ability_args {
             // Substitute T, U, V, in for each
-            let substituted_type = self.substitute_in_type(blanket_arg.type_id, &pairs, None, None);
+            let substituted_type = self.substitute_in_type(blanket_arg.type_id, &pairs);
             let nt = SimpleNamedType { name: blanket_arg.name, type_id: substituted_type };
             substituted_ability_args.push(nt);
             if !self.scopes.add_type(new_impl_scope, blanket_arg.name, substituted_type) {
@@ -4010,8 +4049,7 @@ impl TypedModule {
             SmallVec::with_capacity(blanket_impl.impl_arguments.len());
         for blanket_impl_arg in &blanket_impl.impl_arguments {
             // Substitute T, U, V, in for each
-            let substituted_type =
-                self.substitute_in_type(blanket_impl_arg.type_id, &pairs, None, None);
+            let substituted_type = self.substitute_in_type(blanket_impl_arg.type_id, &pairs);
             let nt = SimpleNamedType { name: blanket_impl_arg.name, type_id: substituted_type };
             substituted_impl_arguments.push(nt);
             if !self.scopes.add_type(new_impl_scope, blanket_impl_arg.name, substituted_type) {
@@ -4702,10 +4740,8 @@ impl TypedModule {
         let expected = self.types.get(self.get_type_id_resolved(expected_type_id, scope_id));
         if expected.as_reference().is_none() {
             // And we don't expect a function-like type parameter
-            if let Type::TypeParameter(tp) = expected {
-                if tp.function_type.is_some() {
-                    return CoerceResult::Fail(expression);
-                }
+            if let Type::FunctionTypeParameter(_tp) = expected {
+                return CoerceResult::Fail(expression);
             }
 
             // But you pass a reference
@@ -4728,7 +4764,7 @@ impl TypedModule {
         };
 
         // If we expect a lambda object and you pass a lambda
-        if let Type::LambdaObject(lam_obj_type) = self.types.get(expected_type_id) {
+        if let Type::LambdaObject(_lam_obj_type) = self.types.get(expected_type_id) {
             if let Type::Lambda(lambda_type) = self.get_expr_type(expression) {
                 let span = self.exprs.get(expression).get_span();
                 return CoerceResult::Coerced(
@@ -5490,9 +5526,7 @@ impl TypedModule {
         let expected_function_type = ctx
             .expected_type_id
             .and_then(|et| match self.types.get(et) {
-                Type::TypeParameter(tp) if tp.is_function() => {
-                    Some(self.types.get(tp.function_type.unwrap()))
-                }
+                Type::FunctionTypeParameter(ftp) => Some(self.types.get(ftp.function_type)),
                 Type::LambdaObject(lam_obj) => Some(self.types.get(lam_obj.function_type)),
                 Type::Lambda(lam) => Some(self.types.get(lam.function_type)),
                 _ => None,
@@ -7215,13 +7249,12 @@ impl TypedModule {
                                     }),
                                 ))))
                             }
-                            Type::TypeParameter(tp) => {
-                                if let Some(function_type) = tp.function_type {
-                                    let callee = Callee::Abstract { function_type, variable_id };
-                                    Ok(Either::Right(callee))
-                                } else {
-                                    fn_not_found()
-                                }
+                            Type::FunctionTypeParameter(ftp) => {
+                                let callee = Callee::Abstract {
+                                    function_type: ftp.function_type,
+                                    variable_id,
+                                };
+                                Ok(Either::Right(callee))
                             }
                             Type::Reference(function_reference) => {
                                 if self
@@ -7549,19 +7582,8 @@ impl TypedModule {
                 constant_id: None,
             });
             new_function.param_variables.insert(0, empty_env_variable);
-            let mut function_type =
-                self.types.get(new_function.type_id).as_function().unwrap().clone();
-            function_type.physical_params.insert(
-                0,
-                FnParamType {
-                    name,
-                    type_id: empty_env_struct_ref,
-                    is_context: false,
-                    is_lambda_env: true,
-                    span: function_signature_span,
-                },
-            );
-            let new_function_type = self.types.add_type(Type::Function(function_type));
+            let new_function_type =
+                self.add_lambda_env_to_function_type(new_function.type_id, function_signature_span);
             new_function.type_id = new_function_type;
             let old_name = self.name_of(new_function.name);
             new_function.name = self.ast.identifiers.intern(format!("{}__dyn", old_name));
@@ -7582,6 +7604,28 @@ impl TypedModule {
                 lambda_object_type_id,
             }));
         Ok(function_to_lam_obj_id)
+    }
+
+    fn add_lambda_env_to_function_type(
+        &mut self,
+        function_type_id: TypeId,
+        span: SpanId,
+    ) -> TypeId {
+        let mut function_type = self.types.get(function_type_id).as_function().unwrap().clone();
+        let empty_env_struct_type = self.types.add_empty_struct();
+        let empty_env_struct_ref = self.types.add_reference_type(empty_env_struct_type);
+        let name = get_ident!(self, "__lambda_env");
+        function_type.physical_params.insert(
+            0,
+            FnParamType {
+                name,
+                type_id: empty_env_struct_ref,
+                is_context: false,
+                is_lambda_env: true,
+                span,
+            },
+        );
+        self.types.add_type(Type::Function(function_type))
     }
 
     fn resolve_ability_call(
@@ -8303,8 +8347,7 @@ impl TypedModule {
         }
 
         for (expr, gen_param, allow_mismatch) in inference_pairs.iter() {
-            let instantiated_param_type =
-                self_.substitute_in_type(*gen_param, &instantiation_set, None, None);
+            let instantiated_param_type = self_.substitute_in_type(*gen_param, &instantiation_set);
             debug!(
                 "Instantiated type for inference with set: {}. Was: {}, is: {}",
                 self_.pretty_print_type_substitutions(&instantiation_set, ", "),
@@ -8314,8 +8357,7 @@ impl TypedModule {
             self_.calculate_inference_substitutions(span)?;
 
             let s = std::mem::take(&mut self_.inference_context.substitutions_vec);
-            let expected_type_so_far =
-                self_.substitute_in_type(instantiated_param_type, &s, None, None);
+            let expected_type_so_far = self_.substitute_in_type(instantiated_param_type, &s);
             self_.inference_context.substitutions_vec = s;
 
             let (argument_type, argument_span) = match expr {
@@ -8524,17 +8566,12 @@ impl TypedModule {
                     }
                     MaybeTypedExpr::Parsed(p) => match self.ast.exprs.get(*p) {
                         ParsedExpression::Lambda(_lam) => {
-                            let substituted_param_type = self.substitute_in_type(
+                            debug!("substituting type for ftp closure inference",);
+                            let substituted_param_type = self.substitute_in_type_ext(
                                 function_type_param.type_id,
                                 &subst_pairs,
                                 None,
                                 None,
-                            );
-                            debug!(
-                                "substituted type for ftp closure inference {}: {} -> {}",
-                                self.pretty_print_type_substitutions(&subst_pairs, ", "),
-                                self.type_id_to_string(function_type_param.type_id),
-                                self.type_id_to_string(substituted_param_type)
                             );
                             let the_lambda = self.eval_expr(
                                 *p,
@@ -8568,21 +8605,17 @@ impl TypedModule {
                         let ftp = self
                             .types
                             .get(function_type_param.type_id)
-                            .as_type_parameter()
+                            .as_function_type_parameter()
                             .unwrap();
-                        let original_param_function_type = ftp.function_type.unwrap();
-                        let substituted_function_type = self.substitute_in_type(
-                            original_param_function_type,
-                            &subst_pairs,
-                            None,
-                            None,
-                        );
+                        let original_param_function_type = ftp.function_type;
+                        let substituted_function_type =
+                            self.substitute_in_type(original_param_function_type, &subst_pairs);
                         self.types.add_reference_type(substituted_function_type)
                     }
                     PhysicalPassedFunction::LambdaObject(lambda_object_type) => {
                         // Replace the function type
                         let substituted_lambda_object_type =
-                            self.substitute_in_type(lambda_object_type, &subst_pairs, None, None);
+                            self.substitute_in_type(lambda_object_type, &subst_pairs);
                         substituted_lambda_object_type
                     }
                 };
@@ -8891,16 +8924,14 @@ impl TypedModule {
                     passed_enum_variant.enum_type_id,
                     slot_type,
                 ),
-            (passed, Type::TypeParameter(slot_type_param))
-                if slot_type_param.function_type.is_some() =>
-            {
+            (passed, Type::FunctionTypeParameter(slot_function_type_param)) => {
                 if let Some(passed_function_type) =
                     self.extract_function_type_from_functionlike(passed)
                 {
                     self.unify_and_find_substitutions_rec(
                         substitutions,
                         passed_function_type,
-                        slot_type_param.function_type.unwrap(),
+                        slot_function_type_param.function_type,
                     )
                 } else {
                     TypeUnificationResult::NonMatching(
@@ -9028,7 +9059,7 @@ impl TypedModule {
             },
         ));
         let specialized_function_type_id =
-            self.substitute_in_type(generic_function_type_id, &subst_pairs, None, None);
+            self.substitute_in_type(generic_function_type_id, &subst_pairs);
         debug!(
             "specialized function type: {}",
             self.type_id_to_string(specialized_function_type_id)
@@ -9764,12 +9795,7 @@ impl TypedModule {
         };
         let self_ident = get_ident!(self, "Self");
         let new_self_type_id = self.add_type_parameter(
-            TypeParameter {
-                name: self_ident,
-                scope_id: specialized_ability_scope,
-                span,
-                function_type: None,
-            },
+            TypeParameter { name: self_ident, scope_id: specialized_ability_scope, span },
             smallvec![],
         );
         let _ = self
@@ -9969,7 +9995,6 @@ impl TypedModule {
                     name: type_parameter.name,
                     scope_id: fn_scope_id,
                     span: type_parameter.span,
-                    function_type: None,
                 },
                 ability_constraints,
             );
@@ -9995,21 +10020,27 @@ impl TypedModule {
         for (idx, fn_param) in
             parsed_function_context_params.iter().chain(parsed_function_params.iter()).enumerate()
         {
-            let type_id = self_.eval_type_expr(fn_param.ty, fn_scope_id)?;
+            let type_id = self_.eval_type_expr_ext(
+                fn_param.ty,
+                fn_scope_id,
+                EvalTypeExprContext {
+                    should_attach_defn_info: false,
+                    inner_type_defn_info: None,
+                    is_direct_function_parameter: true,
+                },
+            )?;
 
             // If its a some ... function type parameter, inject the type parameter into the
             // function
-            if let Type::TypeParameter(tp) = self_.types.get(type_id) {
-                if let Some(_function_type) = tp.function_type {
-                    function_params.push(FunctionTypeParam {
-                        name: tp.name,
-                        type_id,
-                        value_param_index: idx as u32,
-                        span: tp.span,
-                    });
-                    // There's actually no way to refer to these types by name,
-                    // so we don't need to add a name to the scope
-                }
+            if let Type::FunctionTypeParameter(ftp) = self_.types.get(type_id) {
+                function_params.push(FunctionTypeParam {
+                    name: ftp.name,
+                    type_id,
+                    value_param_index: idx as u32,
+                    span: ftp.span,
+                });
+                // There's actually no way to refer to these types by name,
+                // so we don't need to add a name to the scope
             }
 
             // First arg Self shenanigans
@@ -10351,7 +10382,6 @@ impl TypedModule {
                 name: self_ident_id,
                 scope_id: ability_scope_id,
                 span: parsed_ability.span,
-                function_type: None,
             },
             smallvec![],
         );
@@ -10372,7 +10402,6 @@ impl TypedModule {
                     name: ability_param.name,
                     scope_id: ability_scope_id,
                     span: ability_param.span,
-                    function_type: None,
                 },
                 ability_impls,
             );
@@ -10519,7 +10548,6 @@ impl TypedModule {
                     name: generic_impl_param.name,
                     scope_id: impl_scope_id,
                     span: generic_impl_param.span,
-                    function_type: None,
                 },
                 // We create the variable with no constraints, then add them later, so that its
                 // constraints can reference itself
@@ -10711,8 +10739,6 @@ impl TypedModule {
             let substituted_root_type = self.substitute_in_type(
                 generic_type,
                 &[TypeSubstitutionPair { from: ability_self_type, to: impl_self_type }],
-                None,
-                None,
             );
 
             if let Err(msg) = self.check_types(substituted_root_type, specialized, impl_scope_id) {

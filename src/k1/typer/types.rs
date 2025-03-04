@@ -132,14 +132,14 @@ pub struct TypeParameter {
     pub name: Identifier,
     pub scope_id: ScopeId,
     pub span: SpanId,
-    /// If this type parameter represents a function, this is the type of the function
-    pub function_type: Option<TypeId>,
 }
 
-impl TypeParameter {
-    pub fn is_function(&self) -> bool {
-        self.function_type.is_some()
-    }
+#[derive(Debug, Clone)]
+pub struct FunctionTypeParameter {
+    pub name: Identifier,
+    pub scope_id: ScopeId,
+    pub span: SpanId,
+    pub function_type: TypeId,
 }
 
 #[derive(Debug, Clone)]
@@ -398,6 +398,7 @@ pub enum Type {
     Generic(GenericType),
     #[allow(clippy::enum_variant_names)]
     TypeParameter(TypeParameter),
+    FunctionTypeParameter(FunctionTypeParameter),
     InferenceHole(InferenceHoleType),
     RecursiveReference(RecursiveReference),
 }
@@ -439,10 +440,12 @@ impl PartialEq for Type {
             }
             (Type::Reference(r1), Type::Reference(r2)) => r1.inner_type == r2.inner_type,
             (Type::TypeParameter(t1), Type::TypeParameter(t2)) => {
-                t1.name == t2.name
-                    && t1.scope_id == t2.scope_id
-                    && t1.function_type == t2.function_type // Yet another place where it should
-                                                            // have been its own type
+                t1.name == t2.name && t1.scope_id == t2.scope_id
+            }
+            (Type::FunctionTypeParameter(ftp1), Type::FunctionTypeParameter(ftp2)) => {
+                ftp1.name == ftp2.name
+                    && ftp1.scope_id == ftp2.scope_id
+                    && ftp1.function_type == ftp2.function_type
             }
             (Type::InferenceHole(h1), Type::InferenceHole(h2)) => h1.index == h2.index,
             (Type::Enum(e1), Type::Enum(e2)) => {
@@ -529,11 +532,16 @@ impl std::hash::Hash for Type {
                 "ref".hash(state);
                 r.inner_type.hash(state);
             }
-            Type::TypeParameter(tvar) => {
+            Type::TypeParameter(t_param) => {
                 "tvar".hash(state);
-                tvar.name.hash(state);
-                tvar.scope_id.hash(state);
-                tvar.function_type.hash(state);
+                t_param.name.hash(state);
+                t_param.scope_id.hash(state);
+            }
+            Type::FunctionTypeParameter(ftp) => {
+                "ftp".hash(state);
+                ftp.name.hash(state);
+                ftp.scope_id.hash(state);
+                ftp.function_type.hash(state);
             }
             Type::InferenceHole(hole) => {
                 "hole".hash(state);
@@ -610,6 +618,7 @@ impl Type {
             Type::Struct(_) => "struct",
             Type::Reference(_) => "reference",
             Type::TypeParameter(_) => "param",
+            Type::FunctionTypeParameter(_) => "ftp",
             Type::InferenceHole(_) => "hole",
             Type::Enum(_) => "enum",
             Type::EnumVariant(_) => "variant",
@@ -638,9 +647,10 @@ impl Type {
             | Type::Never(defn_info) => Some(defn_info.ast_id),
             Type::Float(ft) => Some(ft.defn_info.ast_id),
             Type::Integer(_) => None,
-            Type::Struct(t) => None,
+            Type::Struct(_t) => None,
             Type::Reference(_t) => None,
             Type::TypeParameter(_t) => None,
+            Type::FunctionTypeParameter(_ftp) => None,
             Type::InferenceHole(_) => None,
             Type::Enum(e) => Some(e.ast_node),
             Type::EnumVariant(_ev) => None,
@@ -664,6 +674,7 @@ impl Type {
             Type::Struct(t) => t.type_defn_info.as_ref(),
             Type::Reference(_t) => None,
             Type::TypeParameter(_t) => None,
+            Type::FunctionTypeParameter(_ftp) => None,
             Type::InferenceHole(_) => None,
             Type::Enum(e) => e.type_defn_info.as_ref(),
             Type::EnumVariant(ev) => ev.type_defn_info.as_ref(),
@@ -844,6 +855,13 @@ impl Type {
             _ => None,
         }
     }
+
+    pub fn as_function_type_parameter(&self) -> Option<&FunctionTypeParameter> {
+        match self {
+            Type::FunctionTypeParameter(ftp) => Some(ftp),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -992,6 +1010,7 @@ impl Types {
             Type::Pointer(_) => None,
             Type::Reference(_) => None,
             Type::TypeParameter(_) => None,
+            Type::FunctionTypeParameter(_) => None,
             Type::InferenceHole(_) => None,
             Type::Never(_) => None,
             Type::Generic(_gen) => None,
@@ -1139,15 +1158,15 @@ impl Types {
     pub fn count_type_variables(&self, type_id: TypeId) -> TypeVariableInfo {
         const EMPTY: TypeVariableInfo = TypeVariableInfo::EMPTY;
         match self.get_no_follow(type_id) {
-            Type::TypeParameter(tv) => match tv.function_type {
-                None => TypeVariableInfo { type_parameter_count: 1, inference_variable_count: 0 },
-                Some(function_type) => {
-                    let base_info =
-                        TypeVariableInfo { type_parameter_count: 1, inference_variable_count: 0 };
-                    let fn_info = self.count_type_variables(function_type);
-                    base_info.add(fn_info)
-                }
-            },
+            Type::TypeParameter(_tp) => {
+                TypeVariableInfo { type_parameter_count: 1, inference_variable_count: 0 }
+            }
+            Type::FunctionTypeParameter(ftp) => {
+                let base_info =
+                    TypeVariableInfo { type_parameter_count: 1, inference_variable_count: 0 };
+                let fn_info = self.count_type_variables(ftp.function_type);
+                base_info.add(fn_info)
+            }
             Type::InferenceHole(_hole) => {
                 TypeVariableInfo { type_parameter_count: 0, inference_variable_count: 1 }
             }

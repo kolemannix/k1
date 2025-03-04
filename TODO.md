@@ -24,7 +24,8 @@ New tagline? "C with typeclasses and tagged unions"
     - [x] Match to get reference to each struct field, for example, use * for a dereferencing match
     - [x] Match to get reference to enum payload
   - [x] ASSERT FAILED: true != true at core.k1:23
-- [ ] Write a function to typecheck TypedExprs, so we can typecheck synthesized code in debug builds!
+- [ ] Write a 'validateTypedModule' procedure.
+- [ ] Separate out typechecking and lowering phase.
 - [x] Real type inference
   - [x] True inference variables, instantiate function types, unification and consistency checks, aka make it work
   - [-] Make 'crash' work in no-std
@@ -32,11 +33,11 @@ New tagline? "C with typeclasses and tagged unions"
   - [x] Move enum constructor onto new inference infra
   - [x] Move ability resolution onto new inference infra
   - [x] Make it fast (Added better 'pool' to prepare for avoiding lots of allocations)
-- [ ] Try a 'get types' pass that powers inference and avoids the 2x full compile (of args to generics) that we do now
-- [ ] Compile switches with no patterns or other stuff do a different Expr type corresponding to LLVM switch
+- [x] Fix closure types / get static dispatch for functions taking a closure directly
+- [x] *Specializing functions on their provided closures to allow inlining and static dispatch*
+- [ ] Explicit coercion sites like Rust seems like a great idea? https://doc.rust-lang.org/reference/type-coercions.html#r-coerce.site.let
+- [ ] Compile switches with no patterns or guards to a different Expr type corresponding to LLVM switch
 - [ ] comptime #if needs to be a real node not a directive (can't parse if/else). More like `#const if` than `#if`
-- [ ] Fix closure types / get static dispatch for functions taking a closure directly
-- [ ] *Specializing functions on their provided closures to allow inlining and static dispatch*
 - [ ] Implicit conversions based on a special ability that integrates with type inference (like Mojo's ImplicitlyIntable, etc)
 - [ ] Private functions? Private anything? So hard to call, such a philosophical question about hiding, safety, skill-floor vs skill-ceiling
 - [x] string interp at end puts unnecessary empty string part: `putString(__sb_1001, "");`
