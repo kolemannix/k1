@@ -1,30 +1,32 @@
-fn unique(arr: Array<char>): bool {
-  let seen = []: Array<char>;
+fn unique(arr: Buffer[char]): bool {
+  let seen: List[char] = [];
   let mut ret = true;
   for c in arr do {
-      for s in seen do {
-          if c == s {
-              ret = false;
-          }
-      };
-      seen.push(c);
+    for s in seen do {
+      if c == s {
+          ret = false;
+      }
+    };
+    seen.push(c);
   };
   ret
 }
 
-fn main(): int {
+fn solve(): int {
   let input = "bvwbjplbgvbhsrlpgdmjqwftvncz";
   let mut i = 0;
-  let mut done = false;
   for input do {
-      if not done {
-        let i = itIndex;
-        let sub = [input[i], input[i + 1], input[i + 2], input[i + 3]];
-        if unique(sub) {
-          printInt(i + 4);
-          done = true
-        };
-     }
+    let i = itIndex;
+    let sub = input.substring(i, i + 4);
+    if unique(sub.innerBuffer()) {
+      // nocommit: inference propagation for 'return()'
+      return((i + 4) as int);
+    };
   };
+  0
+}
+
+fn main(): int {
+  solve();
   0
 }

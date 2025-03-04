@@ -1068,8 +1068,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 }
                 .into())
             }
-            Type::TypeParameter(v) => {
-                failf!(span, "codegen was asked to codegen a type variable {:?}", v)
+            Type::TypeParameter(tp) => {
+                failf!(span, "codegen was asked to codegen a type parameter {:?}", tp)
+            }
+            Type::FunctionTypeParameter(ftp) => {
+                failf!(span, "codegen was asked to codegen a function type parameter {:?}", ftp)
             }
             Type::InferenceHole(h) => {
                 failf!(span, "codegen was asked to codegen a type inference hole {:?}", h)
@@ -1383,22 +1386,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 }))
             }
             Type::Lambda(lambda_type) => {
-                let lambda_object_type = self
-                    .module
-                    .types
-                    .get(lambda_type.lambda_object_type)
-                    .as_lambda_object()
-                    .unwrap();
-                let struct_type =
-                    self.codegen_type(lambda_object_type.struct_representation)?.expect_struct();
-                // nocommit: Represent physically as just the struct, different from LambdaObject for static dispatch
-
-                Ok(K1LlvmType::LambdaObject(LlvmLambdaObjectType {
-                    type_id,
-                    struct_type: struct_type.struct_type,
-                    di_type: struct_type.di_type,
-                    size: struct_type.size,
-                }))
+                let struct_type = self.codegen_type(lambda_type.env_type)?.expect_struct();
+                Ok(K1LlvmType::StructType(struct_type))
             }
             Type::LambdaObject(lambda_object_type) => {
                 let struct_type =
@@ -2318,8 +2307,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(as_ptr.as_basic_value_enum().into())
             }
             CastType::LambdaToLambdaObject => {
-                // nocommit: This will need to change once we make non-dyn lambdas represented
-                // without the extra pointer
+                // Produces just the lambda's environment as a value. We don't need the function
+                // pointer because we know it from the type still
                 let lambda_env_value = self.codegen_expr_basic_value(cast.base_expr)?;
                 let env_pointer =
                     self.builder.build_alloca(lambda_env_value.get_type(), "env_ptr").unwrap();

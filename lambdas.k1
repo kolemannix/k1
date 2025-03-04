@@ -53,7 +53,7 @@ fn closureReturn(): unit {
   assert(nullary() == 4);
 }
 
-fn simpleDyn(thunk: dyn[\-> unit]): unit {
+fn simpleDyn(thunk: dyn[\()-> unit]): unit {
   thunk()
 }
 
@@ -71,19 +71,20 @@ fn someFnParamGen[T](t: T, f: some \T -> T, g: some \T -> T?): T? {
 
 // TODO: fix that syntax allow \() -> unit
 // TODO: there's no way to go from lambda -> lambda object aka dyn[lambda] currently
-fn runThings(thunks: List[dyn[\-> unit]]): unit {
+fn runThings(thunks: List[dyn[\()-> unit]]): unit {
   for thunk in thunks do { thunk() }
 }
 
 fn thunksTest(): unit {
   let* counter = 0;
-  let thunks: List[dyn[\ -> unit]] = [
+  let thunks: List[dyn[\() -> unit]] = [
     \() { counter <- counter.* + 1 },
     \() { counter <- counter.* + 1 },
     \() { counter <- counter.* + 1 },
   ];
 
   runThings(thunks);
+  println("counter is \{counter}");
 }
 
 fn test(): unit {
@@ -116,7 +117,7 @@ fn test(): unit {
 
   simpleDyn(\() println("Thunk!"));
 
-  // thunksTest();
+  thunksTest();
 
   captures();
   captureMut();
