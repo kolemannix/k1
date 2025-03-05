@@ -167,6 +167,15 @@ ns Buffer {
     list.sort();
     list.*.toBuffer()
   }
+
+  fn toCharBuffer(self: Buffer[byte]): Buffer[char] {
+    Buffer/fromRawParts[char](self.len, self.dataPointer());
+  }
+
+  fn toByteBuffer(self: Buffer[char]): Buffer[byte] {
+    Buffer/fromRawParts[byte](self.len, self.dataPointer());
+  }
+
 }
 
 impl Equals for Buffer[u8] {
