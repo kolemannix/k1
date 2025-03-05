@@ -1,23 +1,5 @@
 ns lambdas {
 
-fn map[T, U](a: List[T], f: some \T -> U): List[U] {
-  let* us = List/withCapacity[U](a.len);
-  for i in a do { us.push[U](f(i)) };
-  us.*
-}
-
-// fn flatMap[T, U](a: List[T], f: some \T -> List[U]): List[U] {
-//   let* us = List/withCapacity[U](a.len);
-//   for i in a do { us.push[U](f(i)) };
-//   us.*
-// }
-
-fn filter[T](a: List[T], f: some \T -> bool): List[T] {
-  let* keep = List/empty[T]();
-  for i in a do { if f(i) keep.push(i) };
-  keep
-}
-
 fn staticAddOne(x: int): int { x + 1 }
 fn staticAddTwo(x: int): int { x + 2 }
 
@@ -69,8 +51,6 @@ fn someFnParamGen[T](t: T, f: some \T -> T, g: some \T -> T?): T? {
   t | f | g
 }
 
-// TODO: fix that syntax allow \() -> unit
-// TODO: there's no way to go from lambda -> lambda object aka dyn[lambda] currently
 fn runThings(thunks: List[dyn[\()-> unit]]): unit {
   for thunk in thunks do { thunk() }
 }
@@ -112,7 +92,10 @@ fn test(): unit {
   let withGenerics = someFnParamGen(true, \(b) not b, \(b) some(b));
   assert(withGenerics == some(false));
 
-  let result = ([1,2,3,5,6,7,8] | map(\(x: int) x + 1)) | filter(\(x: int) x % 2 == 0);
+  use List/filter; use List/map;
+  let result = [1,2,3,5,6,7,8]
+    | map(\(x) x + 1)
+    | filter(\(x) x % 2 == 0);
   assert(result == [2, 4, 6, 8]);
 
   simpleDyn(\() println("Thunk!"));
@@ -125,9 +108,4 @@ fn test(): unit {
   ()
 }
 
-}
-
-fn main(): int {
-  lambdas/test();
-  0
 }
