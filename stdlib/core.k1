@@ -178,9 +178,6 @@ impl Show for i64 {
       buf.push('-');
     };
 
-    // I know I know I know I know
-    // Since we know its bytes we could do simd stuff or even just 64 bits at a time
-    // Which I guess is technically 'simd' too
     // Why did inference break here??
     let rev = buf.*.reversed();
     string/wrapList(rev)

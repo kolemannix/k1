@@ -64,7 +64,7 @@ fn main(): int {
   printIt(compiler/location().line);
   matching_if/test();
   printIt(compiler/location().line);
-  closures/test();
+  lambdas/test();
   printIt(compiler/location().line);
   condcomp/test();
   printIt(compiler/location().line);
