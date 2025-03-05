@@ -9,20 +9,19 @@ ns string {
     self.buffer.get(index)
   }
 
-  fn toBytes(self: string): Buffer[byte] {
-    let copied: Buffer[char] = self.toBuffer();
-    let sneakyCasted: Buffer[byte] = Buffer/fromRawParts[byte](copied.len, copied.dataPointer());
-    sneakyCasted
-  }
-
   fn innerBuffer(self: string): Buffer[char] { self.buffer }
 
-  fn toBuffer(self: string): Buffer[char] {
-    self.buffer.cloned()
+  fn innerBufferBytes(self: string): Buffer[byte] {
+    self.innerBuffer().toByteBuffer()
   }
 
-  fn toList(self: string): List[char] {
-    List/wrapBuffer(self.toBuffer())
+  fn clone(self: string): string {
+    let newBuffer = self.buffer.cloned();
+    wrapBuffer(newBuffer)
+  }
+
+  fn cloneToList(self: string): List[char] {
+    List/wrapBuffer(self.clone().buffer)
   }
 
   fn wrapList(list: List[char]): string {
@@ -34,8 +33,7 @@ ns string {
   }
 
   fn wrapBytes(buffer: Buffer[byte]): string {
-    let sneakyCasted: Buffer[char] = Buffer/fromRawParts[char](buffer.len, buffer.dataPointer());
-    { buffer: sneakyCasted }
+    { buffer: buffer.toCharBuffer() }
   }
 
   fn fromBytes(buffer: Buffer[byte]): string {
