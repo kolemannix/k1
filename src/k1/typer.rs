@@ -7938,11 +7938,8 @@ impl TypedModule {
                             false,
                         ));
                         let solutions =
-                            self.infer_types(&g_params, &args_and_params, span, ctx.scope_id);
-                        if let Err(e) = solutions {
-                            return Err(e);
-                        }
-                        solutions.unwrap()
+                            self.infer_types(&g_params, &args_and_params, span, ctx.scope_id)?;
+                        solutions
                     }
                 }
             } else {

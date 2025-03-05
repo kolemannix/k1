@@ -1,8 +1,8 @@
 fn unique(arr: Buffer[char]): bool {
-  let seen: List[char] = [];
+  let* seen: List[char]* = [];
   let mut ret = true;
   for c in arr do {
-    for s in seen do {
+    for s in seen.* do {
       if c == s {
           ret = false;
       }
@@ -14,12 +14,10 @@ fn unique(arr: Buffer[char]): bool {
 
 fn solve(): int {
   let input = "bvwbjplbgvbhsrlpgdmjqwftvncz";
-  let mut i = 0;
   for input do {
     let i = itIndex;
     let sub = input.substring(i, i + 4);
     if unique(sub.innerBuffer()) {
-      // nocommit: inference propagation for 'return()'
       return((i + 4) as int);
     };
   };
@@ -27,6 +25,7 @@ fn solve(): int {
 }
 
 fn main(): int {
-  solve();
+  let a = solve();
+  println("Answer is \{a}");
   0
 }

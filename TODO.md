@@ -25,7 +25,6 @@ New tagline? "C with typeclasses and tagged unions"
     - [x] Match to get reference to enum payload
   - [x] ASSERT FAILED: true != true at core.k1:23
 - [ ] Write a 'validateTypedModule' procedure.
-- [ ] Separate out typechecking and lowering phase.
 - [x] Real type inference
   - [x] True inference variables, instantiate function types, unification and consistency checks, aka make it work
   - [-] Make 'crash' work in no-std
@@ -36,6 +35,7 @@ New tagline? "C with typeclasses and tagged unions"
 - [x] Fix closure types / get static dispatch for functions taking a closure directly
 - [x] *Specializing functions on their provided closures to allow inlining and static dispatch*
 - [ ] Explicit coercion sites like Rust seems like a great idea? https://doc.rust-lang.org/reference/type-coercions.html#r-coerce.site.let
+- [ ] Optimize capture-free lambdas to work like function pointers instead
 - [ ] Compile switches with no patterns or guards to a different Expr type corresponding to LLVM switch
 - [ ] comptime #if needs to be a real node not a directive (can't parse if/else). More like `#const if` than `#if`
 - [ ] Implicit conversions based on a special ability that integrates with type inference (like Mojo's ImplicitlyIntable, etc)
@@ -61,7 +61,7 @@ New tagline? "C with typeclasses and tagged unions"
 - [x] Context location params are not being propagated
 - [x] Test and fix named arguments
 - [x] 'never' needs to work in every expression position (got close enough, might add more if one comes up)
-- [ ] accumulate test errors and support inline test comment assertions when a line should produce a compiler error.
+- [x] accumulate test errors and support inline test comment assertions when a line should produce a compiler error.
       - Probably one test for failing compilation and one passing one for each major language area
 - [ ] b"" strings that are of type Buffer[u8]
 - [ ] Introduce Warnings
@@ -72,17 +72,14 @@ New tagline? "C with typeclasses and tagged unions"
 - [x] Add simple int range in stdlib
       `sealed abstract class Range(let start: Int, let end: Int, let step: Int)`
 - [ ] Make demo readme / site
-- [ ] #include C equivalent? 
 - [ ] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`
 - [ ] Define clear 'platform layer' (crash, alloc/free, other?). Then we could do an LLVM interp platform and a rust interpreter platform
 - [x] Fix enum codegen, read Inko llvm backend (its inkwell + rust and does ABI compatible stuff https://yorickpeterse.com/articles/the-mess-that-is-handling-structure-arguments-and-returns-in-llvm/)
 - [ ] Runtime type info story, typeOf, typeInfo, and 'any' type
 - [x] Conditional compile directive
-- [ ] Support boolean operators in compile time expressions
+- [x] Support boolean operators in compile time expressions
 - [ ] Support arithmetic operators in compile time expressions
-cc <comptime cond> := ctimebexpr | cconst
-cconst := ident
-ctimebexpr := <cc> and <cc> | <cc> or <cc> | not <cc>
+- [ ] Separate out typechecking and lowering phase.
 - [ ] Mark types as trivially copyable or not
 ^ 'Buffer' would be NOT copyable so that you don't accidentally alias the data ptr
 - [ ] Ability constraints on generics

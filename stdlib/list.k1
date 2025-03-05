@@ -221,6 +221,25 @@ ns List {
     };
     b.build()
   }
+
+  fn map[T, U](self: List[T], f: some \T -> U): List[U] {
+    let* us = List/withCapacity[U](self.len);
+    for i in self do { us.push[U](f(i)) };
+    us.*
+  }
+  
+  fn flatMap[T, U](self: List[T], f: some \T -> List[U]): List[U] {
+    let* us = List/empty[U]();
+    for i in self do { us.concat[U](f(i)) };
+    us.*
+  }
+  
+  fn filter[T](self: List[T], f: some \T -> bool): List[T] {
+    let* keep = List/empty[T]();
+    for i in self do { if f(i) keep.push(i) };
+    keep
+  }
+
 }
 
 impl Equals for List[u8] {
