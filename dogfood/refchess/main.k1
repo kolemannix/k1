@@ -39,21 +39,6 @@ deftype GameState = {
   turn: Color
 }
 
-impl TextWriter for List[char] {
-  fn writeChar(self: Self*, value: char): unit {
-    self.push(value);
-  }
-  fn writeString(self: Self*, value: string): unit {
-    self.writeBuffer(value.toBuffer())
-  }
-  fn writeBuffer(self: Self*, value: Buffer[char]): unit {
-    self.reserve(self.len + value.len);
-    // TODO memcpy value's data into our buffer
-    //(self.innerBuffer().concat(value))
-    crash("unimplemented")
-  }
-}
-
 fn valueAtSquare(b: Bitboard, index: u64): u64 {
   let shifted = Bitwise/shiftRight(b, index);
   let masked = Bitwise/bitAnd(shifted, 1: u64);
@@ -81,7 +66,7 @@ fn printBitboard(b: Bitboard): unit {
   println(string/wrapList(l))
 }
 
-fn writeBitboard[W: TextWriter](writer: W*, b: Bitboard): unit {
+fn writeBitboard[W: Writer](writer: W*, b: Bitboard): unit {
   // Scanlines by rank backwards so it reads naturally
   let mut rank = 7;
   while rank >= 0 {

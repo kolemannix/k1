@@ -46,6 +46,18 @@ let K1_TEST: bool = builtin;
 let K1_OS: string = builtin; // Possible values: 'linux', 'macos', 'wasm'
 let K1_NO_STD: bool = builtin;
 
+
+/////////////////////////////////
+// Some internally implemented things
+
+intern fn sizeOf[T](): u64
+intern fn sizeOfStride[T](): u64
+intern fn alignOf[T](): u64
+
+ns compiler {
+  intern fn location(): SourceLocation
+}
+
 ////////////////////////////////
 // Builtin Abilities
 
@@ -54,24 +66,31 @@ ability Equals {
   fn equals(self: Self, other: Self): bool
 }
 
-// Show must have ability id 1
+// TODO(dogfood): use writer ability for string interpolation
+ability Writer {
+  fn writeChar(self: Self*, value: char): unit
+  fn writeByte(self: Self*, value: u8): unit
+  fn writeString(self: Self*, value: string): unit
+  fn writeBytes(self: Self*, buffer: Buffer[byte]): unit
+}
+
+ability WriteText {
+  fn writeText[W: Writer](self: Self, w: W*): unit
+}
+
+// Show must have ability id 4
+// TODO: Show and Writer and friends do not belong in builtin long term
 ability Show {
-  // TODO: make this use an allocator. How does it get passed conveniently?
+  // Will use the thread-local temporary allocator
   fn show(self: Self): string
 }
 
-// TODO: a harness main that sets up the allocator
-// fn main(): i32 {
-//   let allocator = Allocator/initDefault();
-//   
-// }
-
-intern fn sizeOf[T](): u64
-intern fn sizeOfStride[T](): u64
-intern fn alignOf[T](): u64
-
-ns compiler {
-  intern fn location(): SourceLocation
+impl[T: WriteText] Show for T {
+  fn show(self: Self): string { 
+    let* buf = List/withCapacity[char](8);
+    self.writeText(buf);
+    string/wrapList(buf)
+  }
 }
 
 ability Bitwise {
@@ -115,11 +134,6 @@ ability Iterable[impl Item, impl I: Iterator[Item = Item]] {
   fn iterator(self: Self): I
 }
 
-// inline fn unwrap_or[U, V: Unwrap[Inner = U]](v: V, backup: int): U {
-//   if v.hasValue() v.unwrap() else backup
-// }
-
-
 ns bool {
   intern fn negated(self: bool): bool
 }
@@ -134,7 +148,7 @@ impl Equals for bool {
 
 fn discard[T](t: T): unit { () }
 
-// TODO: Need to decide when/how we expect libc to be there and when we don't
+// TODO: #if(K1_LIBC?) ?
 ns libc {
   extern(exit) fn exit(code: i32): never
 

@@ -34,6 +34,10 @@ New tagline? "C with typeclasses and tagged unions"
   - [x] Make it fast (Added better 'pool' to prepare for avoiding lots of allocations)
 - [x] Fix closure types / get static dispatch for functions taking a closure directly
 - [x] *Specializing functions on their provided closures to allow inlining and static dispatch*
+
+- [ ] ThreadLocal temp allocator to power Show/Print
+- [ ] Global pointers 
+
 - [ ] Explicit coercion sites like Rust seems like a great idea? https://doc.rust-lang.org/reference/type-coercions.html#r-coerce.site.let
 - [ ] Optimize capture-free lambdas to work like function pointers instead
 - [ ] Compile switches with no patterns or guards to a different Expr type corresponding to LLVM switch

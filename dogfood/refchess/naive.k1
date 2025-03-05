@@ -63,7 +63,6 @@ impl Show for Square {
     let rank = self.rank + 1;
     "\{file}\{rank}"
   }
-
 }
 
 

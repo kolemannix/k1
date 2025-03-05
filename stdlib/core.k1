@@ -150,13 +150,6 @@ ns char {
   }
 }
 
-// TODO(dogfood): writer Ability
-ability TextWriter {
-  fn writeChar(self: Self*, value: char): unit
-  fn writeString(self: Self*, value: string): unit
-  fn writeBuffer(self: Self*, buffer: Buffer[char]): unit
-}
-
 impl Show for bool { fn show(self: bool): string { if self "true" else "false" } }
 impl Show for char { fn show(self: char): string { self.toString() } }
 
@@ -208,7 +201,7 @@ ns u8 {
   }
 }
 
-fn formatUInt[W: TextWriter](context w: W*)(value: u64, base: u64): unit {
+fn formatUInt[W: Writer](context w: W*)(value: u64, base: u64): unit {
   if value == 0 { w.writeChar('0'); return(()) }
   else if value < (base * 2) {
     let first: u64 = (value / base) * base;
@@ -230,7 +223,7 @@ fn formatUInt[W: TextWriter](context w: W*)(value: u64, base: u64): unit {
 
     digits.reverse();
 
-    w.writeBuffer(digits.toBuffer());
+    w.writeBytes(digits.toBuffer().toByteBuffer());
 
     ()
   }

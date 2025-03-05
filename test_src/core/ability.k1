@@ -26,7 +26,7 @@ ability Codec {
 impl Codec for string {
   fn aConst(): u8 { 10 }
   fn write(self: string): Buffer[u8] {
-    self.toBytes()
+    self.clone().innerBufferBytes()
   }
   fn read(buffer: Buffer[u8]): string {
     string/fromBytes(buffer)

@@ -103,13 +103,15 @@ pub struct TypedAbilityFunctionRef {
 }
 
 pub const EQUALS_ABILITY_ID: AbilityId = AbilityId(0);
-pub const SHOW_ABILITY_ID: AbilityId = AbilityId(1);
-pub const BITWISE_ABILITY_ID: AbilityId = AbilityId(2);
-pub const COMPARABLE_ABILITY_ID: AbilityId = AbilityId(3);
-pub const UNWRAP_ABILITY_ID: AbilityId = AbilityId(4);
-pub const TRY_ABILITY_ID: AbilityId = AbilityId(5);
-pub const ITERATOR_ABILITY_ID: AbilityId = AbilityId(6);
-pub const ITERABLE_ABILITY_ID: AbilityId = AbilityId(7);
+pub const WRITER_ABILITY_ID: AbilityId = AbilityId(1);
+pub const WRITE_TEXT_ABILITY_ID: AbilityId = AbilityId(2);
+pub const SHOW_ABILITY_ID: AbilityId = AbilityId(3);
+pub const BITWISE_ABILITY_ID: AbilityId = AbilityId(4);
+pub const COMPARABLE_ABILITY_ID: AbilityId = AbilityId(5);
+pub const UNWRAP_ABILITY_ID: AbilityId = AbilityId(6);
+pub const TRY_ABILITY_ID: AbilityId = AbilityId(7);
+pub const ITERATOR_ABILITY_ID: AbilityId = AbilityId(8);
+pub const ITERABLE_ABILITY_ID: AbilityId = AbilityId(9);
 
 pub const LAMBDA_ENV_PARAM_NAME: &str = "__lambda_env";
 
