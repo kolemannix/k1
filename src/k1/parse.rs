@@ -17,7 +17,21 @@ pub struct ParsedTypeDefnId(u32);
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
 pub struct ParsedFunctionId(u32);
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
-pub struct ParsedConstantId(u32);
+pub struct ParsedGlobalId(NonZeroU32);
+impl ParsedGlobalId {
+    const PENDING: ParsedGlobalId = ParsedGlobalId(NonZeroU32::MAX);
+}
+impl From<NonZeroU32> for ParsedGlobalId {
+    fn from(value: NonZeroU32) -> Self {
+        ParsedGlobalId(value)
+    }
+}
+impl From<ParsedGlobalId> for NonZeroU32 {
+    fn from(val: ParsedGlobalId) -> Self {
+        val.0
+    }
+}
+
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
 pub struct ParsedAbilityId(u32);
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
@@ -109,7 +123,7 @@ pub enum ParsedId {
     Namespace(ParsedNamespaceId),
     Ability(ParsedAbilityId),
     AbilityImpl(ParsedAbilityImplId),
-    Constant(ParsedConstantId),
+    Constant(ParsedGlobalId),
     Expression(ParsedExpressionId),
     TypeExpression(ParsedTypeExprId),
     Pattern(ParsedPatternId),
@@ -609,7 +623,7 @@ pub enum ParsedExpression {
     /// ```md
     /// if <cond: expr> <cons: expr> else <alt: expr>
     /// ```
-    If(IfExpr),
+    If(ParsedIfExpr),
     /// ```md
     /// while <cond: expr> <body: expr>
     /// ```
@@ -794,11 +808,12 @@ pub struct SetStmt {
 }
 
 #[derive(Debug, Clone)]
-pub struct IfExpr {
+pub struct ParsedIfExpr {
     pub cond: ParsedExpressionId,
     pub cons: ParsedExpressionId,
     pub alt: Option<ParsedExpressionId>,
     pub span: SpanId,
+    pub is_condition_compile_time: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1059,12 +1074,13 @@ impl FnArgDefModifiers {
 }
 
 #[derive(Debug, Clone)]
-pub struct ParsedConstant {
+pub struct ParsedGlobal {
     pub name: Identifier,
     pub ty: ParsedTypeExprId,
     pub value_expr: ParsedExpressionId,
     pub span: SpanId,
-    pub id: ParsedConstantId,
+    pub id: ParsedGlobalId,
+    pub is_constant: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1312,7 +1328,7 @@ pub struct ParsedModule {
     pub config: CompilerConfig,
     pub spans: Spans,
     pub functions: Vec<ParsedFunction>,
-    pub constants: Vec<ParsedConstant>,
+    pub globals: Pool<ParsedGlobal, ParsedGlobalId>,
     pub type_defns: Vec<ParsedTypeDefn>,
     pub namespaces: Vec<ParsedNamespace>,
     pub abilities: Vec<ParsedAbility>,
@@ -1337,7 +1353,7 @@ impl ParsedModule {
             config,
             spans: Spans::new(),
             functions: Vec::new(),
-            constants: Vec::new(),
+            globals: Pool::with_capacity("parsed_globals", 4096),
             type_defns: Vec::new(),
             namespaces: Vec::new(),
             abilities: Vec::new(),
@@ -1406,14 +1422,15 @@ impl ParsedModule {
         }
     }
 
-    pub fn get_constant(&self, id: ParsedConstantId) -> &ParsedConstant {
-        &self.constants[id.0 as usize]
+    pub fn get_global(&self, id: ParsedGlobalId) -> &ParsedGlobal {
+        self.globals.get(id)
     }
 
-    pub fn add_constant(&mut self, mut constant: ParsedConstant) -> ParsedConstantId {
-        let id = ParsedConstantId(self.constants.len() as u32);
-        constant.id = id;
-        self.constants.push(constant);
+    pub fn add_global(&mut self, mut global: ParsedGlobal) -> ParsedGlobalId {
+        let id = self.globals.next_id();
+        global.id = id;
+        let id2 = self.globals.add(global);
+        debug_assert!(id == id2);
         id
     }
 
@@ -1480,7 +1497,7 @@ impl ParsedModule {
         match parsed_id {
             ParsedId::Function(id) => self.get_function(id).span,
             ParsedId::Namespace(id) => self.get_namespace(id).span,
-            ParsedId::Constant(id) => self.get_constant(id).span,
+            ParsedId::Constant(id) => self.get_global(id).span,
             ParsedId::Ability(id) => self.get_ability(id).span,
             ParsedId::AbilityImpl(id) => self.get_ability_impl(id).span,
             ParsedId::TypeDefn(id) => self.get_type_defn(id).span,
@@ -1489,6 +1506,10 @@ impl ParsedModule {
             ParsedId::Pattern(id) => self.get_pattern_span(id),
             ParsedId::Use(id) => self.uses.get_use(id).span,
         }
+    }
+
+    pub fn get_expr_span(&self, cond: ParsedExpressionId) -> SpanId {
+        self.exprs.get_span(cond)
     }
 }
 
@@ -2650,7 +2671,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     /// "Base" in "base expression" simply means ignoring postfix and
     /// binary operations, in terms of recursion or induction, its an atom,
-    /// or a 'base case'
+    /// or a 'base case'; it doesn't have any real meaning at the language level
     fn parse_base_expression(&mut self) -> ParseResult<Option<ParsedExpressionId>> {
         let directives = self.parse_directives()?;
         let (first, second, third) = self.tokens.peek_three();
@@ -2848,6 +2869,14 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             Ok(Some(
                 self.add_expression(ParsedExpression::ListLiteral(ListExpr { elements, span })),
             ))
+        } else if first.kind == K::Hash {
+            self.advance();
+            if self.peek().kind != K::KeywordIf {
+                return Err(error_expected("if following #", self.peek()));
+            }
+            let mut if_expr = Parser::expect("If Expression", first, self.parse_if_expr())?;
+            if_expr.is_condition_compile_time = true;
+            Ok(Some(self.add_expression(ParsedExpression::If(if_expr))))
         } else {
             // More expression types
             if directives.is_empty() {
@@ -2960,11 +2989,12 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         }))
     }
 
-    fn parse_const(&mut self) -> ParseResult<Option<ParsedConstantId>> {
+    fn parse_toplevel_let(&mut self) -> ParseResult<Option<ParsedGlobalId>> {
         trace!("parse_const");
         let Some(keyword_let_token) = self.maybe_consume_next(K::KeywordLet) else {
             return Ok(None);
         };
+        let is_constant = self.maybe_consume_next(K::KeywordConst).is_some();
         let name_token = self.expect_eat_token(K::Ident)?;
         let _colon = self.expect_eat_token(K::Colon);
         let typ = Parser::expect("type_expression", self.peek(), self.parse_type_expression())?;
@@ -2972,12 +3002,13 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let value_expr = Parser::expect("expression", self.peek(), self.parse_expression())?;
         let span = self.extend_span(keyword_let_token.span, self.get_expression_span(value_expr));
         let name = self.intern_ident_token(name_token);
-        let constant_id = self.module.add_constant(ParsedConstant {
+        let constant_id = self.module.add_global(ParsedGlobal {
             name,
             ty: typ,
             value_expr,
             span,
-            id: ParsedConstantId(0),
+            id: ParsedGlobalId::PENDING,
+            is_constant,
         });
         Ok(Some(constant_id))
     }
@@ -3150,7 +3181,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         }
     }
 
-    fn parse_if_expr(&mut self) -> ParseResult<Option<IfExpr>> {
+    fn parse_if_expr(&mut self) -> ParseResult<Option<ParsedIfExpr>> {
         let Some(if_keyword) = self.maybe_consume_next(TokenKind::KeywordIf) else {
             return Ok(None);
         };
@@ -3171,7 +3202,13 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             .map(|a| self.get_expression_span(*a))
             .unwrap_or(self.get_expression_span(consequent_expr));
         let span = self.extend_span(if_keyword.span, end_span);
-        let if_expr = IfExpr { cond: condition_expr, cons: consequent_expr, alt, span };
+        let if_expr = ParsedIfExpr {
+            cond: condition_expr,
+            cons: consequent_expr,
+            alt,
+            span,
+            is_condition_compile_time: false,
+        };
         Ok(Some(if_expr))
     }
 
@@ -3252,15 +3289,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(ParsedTypeParam { name, span, constraints })
     }
 
-    /// Directives look like this: #<directive kind: ident>(<directive arg>, ...)
+    /// Directives look like this: @<directive kind: ident>(<directive arg>, ...)
     fn parse_directives(&mut self) -> ParseResult<Vec<ParsedDirective>> {
         let mut directives: Vec<ParsedDirective> = vec![];
-        while let Some(_hash) = self.maybe_consume_next(K::Hash) {
-            let directive = if let Some(keyword_if) = self.maybe_consume_next(K::KeywordIf) {
-                let condition = self.expect_expression()?;
-                let span = self.extend_span(keyword_if.span, self.get_expression_span(condition));
-                ParsedDirective::ConditionalCompile { condition, span }
-            } else {
+        while let Some(_at) = self.maybe_consume_next(K::At) {
+            let directive = {
                 let kind_token = self.expect_eat_token(K::Ident)?;
                 match self.token_chars(kind_token) {
                     "debug" => ParsedDirective::CompilerDebug { span: kind_token.span },
@@ -3611,7 +3644,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             Ok(Some(ParsedId::Use(use_id)))
         } else if let Some(ns) = self.parse_namespace()? {
             Ok(Some(ParsedId::Namespace(ns)))
-        } else if let Some(constant_id) = self.parse_const()? {
+        } else if let Some(constant_id) = self.parse_toplevel_let()? {
             self.expect_eat_token(K::Semicolon)?;
             Ok(Some(ParsedId::Constant(constant_id)))
         } else if let Some(function_id) = self.parse_function()? {

@@ -524,7 +524,7 @@ impl TypedModule {
             TypedExpr::Integer(int) => write!(writ, "{}", int.value),
             TypedExpr::Float(float) => write!(writ, "{}", float.value),
             TypedExpr::Bool(b, _) => write!(writ, "{}", b),
-            TypedExpr::Str(s, _) => write!(writ, "\"{}\"", s),
+            TypedExpr::String(s, _) => write!(writ, "\"{}\"", s),
             TypedExpr::Struct(struc) => {
                 writ.write_str("{\n")?;
                 for (idx, field) in struc.fields.iter().enumerate() {
