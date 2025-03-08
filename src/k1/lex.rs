@@ -164,6 +164,7 @@ pub enum TokenKind {
     KeywordWhere,
     KeywordContext,
     KeywordUse,
+    KeywordConst,
 
     Slash,
     LineComment,
@@ -192,6 +193,7 @@ pub enum TokenKind {
     Percent,
     BackSlash,
     Hash,
+    At,
 
     DoubleQuote,
     SingleQuote,
@@ -252,6 +254,7 @@ impl TokenKind {
             K::KeywordWhere => Some("where"),
             K::KeywordContext => Some("context"),
             K::KeywordUse => Some("use"),
+            K::KeywordConst => Some("const"),
 
             K::Slash => Some("/"),
             K::LineComment => Some("//"),
@@ -279,6 +282,7 @@ impl TokenKind {
             K::Percent => Some("%"),
             K::BackSlash => Some("\\"),
             K::Hash => Some("#"),
+            K::At => Some("@"),
 
             K::Plus => Some("+"),
             K::Minus => Some("-"),
@@ -326,10 +330,12 @@ impl TokenKind {
             '%' => Some(K::Percent),
             '\\' => Some(K::BackSlash),
             '#' => Some(K::Hash),
+            '@' => Some(K::At),
             _ => None,
         }
     }
-    pub fn from_start_and_char(start: TokenKind, c: char) -> Option<TokenKind> {
+
+    pub fn compound_from_start_and_char(start: TokenKind, c: char) -> Option<TokenKind> {
         match (start, c) {
             (TokenKind::Equals, '=') => Some(K::EqualsEquals),
             (TokenKind::Bang, '=') => Some(K::BangEquals),
@@ -375,6 +381,7 @@ impl TokenKind {
             "where" => Some(K::KeywordWhere),
             "context" => Some(K::KeywordContext),
             "use" => Some(K::KeywordUse),
+            "const" => Some(K::KeywordConst),
             "==" => Some(K::EqualsEquals),
             "!=" => Some(K::BangEquals),
             "<=" => Some(K::LessThanEqual),
@@ -412,6 +419,7 @@ impl TokenKind {
             K::KeywordWhere => true,
             K::KeywordContext => true,
             K::KeywordUse => true,
+            K::KeywordConst => true,
             _ => false,
         }
     }
@@ -711,7 +719,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                     }
                 // Handle all of our 2-char but-also-1-char-prefixed tokens!
                 } else if let Some(double_tok) =
-                    TokenKind::from_start_and_char(single_char_tok, next)
+                    TokenKind::compound_from_start_and_char(single_char_tok, next)
                 {
                     match double_tok {
                         K::LineComment => {

@@ -1888,7 +1888,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             TypedExpr::Float(float) => {
                 Ok(self.codegen_compile_time_value(&CompileTimeValue::Float(float.value)).into())
             }
-            TypedExpr::Str(string_value, _) => {
+            TypedExpr::String(string_value, _) => {
                 Ok(self.codegen_string_literal(string_value)?.into())
             }
             TypedExpr::Variable(ir_var) => {
@@ -3452,7 +3452,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     }
 
     pub fn interpret_module(&self) -> anyhow::Result<u64> {
-        panic!("disabled");
         let engine = self.llvm_module.create_jit_execution_engine(OptimizationLevel::None).unwrap();
         let base_lib_module = self
             .ctx

@@ -1,13 +1,17 @@
 ns condcomp;
 
-fn test(): unit {
+@debug fn test(): unit {
   println("K1_TEST is \{K1_TEST}");
   println("K1_OS is \{K1_OS}");
 
   assert(K1_OS == "macos");
   assert(K1_TEST == false);
 
-  #if(K1_TEST) { println("Testing is on") };
+  #if K1_TEST {
+    println("its a test") 
+  } else {
+    println("hello at runtime; not a test")
+  };
 
-  #if(false) { crash("will not get compiled") };
+  #if (false) { crash("will not get compiled") };
 }
