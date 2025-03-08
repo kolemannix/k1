@@ -42,13 +42,16 @@ deftype alias byte = u8
 
 /////////////////////////////////
 // Compile-time builtin constants
-let K1_TEST: bool = builtin;
-let K1_OS: string = builtin; // Possible values: 'linux', 'macos', 'wasm'
-let K1_NO_STD: bool = builtin;
+let const K1_TEST: bool = builtin;
+let const K1_OS: string = builtin; // Possible values: 'linux', 'macos', 'wasm'
+let const K1_NO_STD: bool = builtin;
+
+// TODO: make threadlocal, make trait object. For now, global ptr
+//let ALLOCATOR: Pointer = 0 as Pointer;
 
 
 /////////////////////////////////
-// Some internally implemented things
+// Core sizing intrinsics
 
 intern fn sizeOf[T](): u64
 intern fn sizeOfStride[T](): u64
@@ -83,14 +86,6 @@ ability WriteText {
 ability Show {
   // Will use the thread-local temporary allocator
   fn show(self: Self): string
-}
-
-impl[T: WriteText] Show for T {
-  fn show(self: Self): string { 
-    let* buf = List/withCapacity[char](8);
-    self.writeText(buf);
-    string/wrapList(buf)
-  }
 }
 
 ability Bitwise {
@@ -174,18 +169,17 @@ fn assert(context locn: compiler/SourceLocation)(value: bool): unit {
   };
 }
 
-fn crash(context locn: compiler/SourceLocation)(msg: string): never {
-  //#if(K1_NO_STD) {
-  //  let s = "exiting (nostd)\n\0";
-  //  libc/write(
-  //    fileNo = 1, 
-  //    data = s.buffer.data as Pointer, 
-  //    count = s.buffer.len - 1, 
-  //    offset = 0
-  //  );
-  //  libc/exit(1)
-  //};
-  #if(not K1_NO_STD) {
+@debug fn crash(context locn: compiler/SourceLocation)(msg: string): never {
+  #if K1_NO_STD {
+    let s = "exiting (nostd)\n\0";
+    libc/write(
+      fileNo = 1, 
+      data = s.buffer.data as Pointer, 
+      count = s.buffer.len - 1, 
+      offset = 0
+    );
+    libc/exit(1)
+  } else {
     let filename = locn.filename;
     let line = locn.line;
     sys/printBacktrace();

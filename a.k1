@@ -1,8 +1,18 @@
-fn simpleDyn(thunk: dyn[\()-> unit]): unit {
-  thunk()
-}
-
 fn main(): int {
-  simpleDyn(\() sys/exit(22));
-  0
+  println("K1_TEST is \{K1_TEST}");
+  println("K1_OS is \{K1_OS}");
+
+  assert(K1_OS == "macos");
+  assert(K1_TEST == false);
+
+  // This would just print it at compile-time
+  // #do if (K1_TEST) { println("Its a test build!") };
+
+  #if K1_OS == "macos" {
+    println("its a mac!"); 1
+  } else {
+    println("hello at runtime; not a mac"); 0
+  };
+
+  crash("asdf");
 }

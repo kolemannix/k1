@@ -101,8 +101,8 @@ ns sys {
 
 ns files {
   ns unix {
-    let SEEK_END: i32 = 2;
-    let SEEK_SET: i32 = 0;
+    let const SEEK_END: i32 = 2;
+    let const SEEK_SET: i32 = 0;
     extern(fopen)  fn fopen(pathCString: Pointer, modeCString: Pointer): Pointer
     extern(fseek)  fn fseek(fileDesc: Pointer, offset: u64, whence: i32): i32
     extern(fread)  fn fread(buffer: Pointer, size: u64, num: u64, stream: Pointer): u64
@@ -149,6 +149,15 @@ ns char {
     }
   }
 }
+
+impl[T: WriteText] Show for T {
+  fn show(self: Self): string { 
+    let* buf = List/withCapacity[char](8);
+    self.writeText(buf);
+    string/wrapList(buf)
+  }
+}
+
 
 impl Show for bool { fn show(self: bool): string { if self "true" else "false" } }
 impl Show for char { fn show(self: char): string { self.toString() } }

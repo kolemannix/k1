@@ -23,11 +23,11 @@ use types::*;
 
 use crate::lex::{SpanId, Spans, TokenKind};
 use crate::parse::{
-    self, ForExpr, ForExprType, Identifiers, IfExpr, NamedTypeArg, NamespacedIdentifier,
-    NumericWidth, ParsedAbilityId, ParsedAbilityImplId, ParsedConstantId, ParsedDirective,
-    ParsedExpressionId, ParsedFunctionId, ParsedId, ParsedLoopExpr, ParsedNamespaceId,
-    ParsedPattern, ParsedPatternId, ParsedStmtId, ParsedTypeDefnId, ParsedTypeExpr,
-    ParsedTypeExprId, ParsedUnaryOpKind, ParsedUseId, ParsedWhileExpr, Sources,
+    self, ForExpr, ForExprType, Identifiers, NamedTypeArg, NamespacedIdentifier, NumericWidth,
+    ParsedAbilityId, ParsedAbilityImplId, ParsedDirective, ParsedExpressionId, ParsedFunctionId,
+    ParsedGlobalId, ParsedId, ParsedIfExpr, ParsedLoopExpr, ParsedNamespaceId, ParsedPattern,
+    ParsedPatternId, ParsedStmtId, ParsedTypeDefnId, ParsedTypeExpr, ParsedTypeExprId,
+    ParsedUnaryOpKind, ParsedUseId, ParsedWhileExpr, Sources,
 };
 use crate::parse::{
     Block, FnCall, Identifier, Literal, ParsedExpression, ParsedModule, ParsedStmt,
@@ -194,6 +194,28 @@ pub enum CompileTimeValue {
     String(Box<str>),
 }
 static_assert_size!(CompileTimeValue, 24);
+
+impl CompileTimeValue {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            CompileTimeValue::Boolean(_) => "bool",
+            CompileTimeValue::Char(_) => "char",
+            CompileTimeValue::Integer(i) => i.kind_str(),
+            CompileTimeValue::Float(_) => "float",
+            CompileTimeValue::String(_) => "string",
+        }
+    }
+
+    pub fn get_type(&self) -> TypeId {
+        match self {
+            CompileTimeValue::Boolean(_) => BOOL_TYPE_ID,
+            CompileTimeValue::Char(_) => CHAR_TYPE_ID,
+            CompileTimeValue::Integer(typed_integer_value) => typed_integer_value.get_type(),
+            CompileTimeValue::Float(typed_float_value) => typed_float_value.get_type(),
+            CompileTimeValue::String(_) => STRING_TYPE_ID,
+        }
+    }
+}
 
 /// Used for analyzing pattern matching
 #[derive(Debug, Clone)]
@@ -988,6 +1010,19 @@ pub enum TypedIntegerValue {
 }
 
 impl TypedIntegerValue {
+    pub fn kind_str(&self) -> &'static str {
+        match self {
+            TypedIntegerValue::U8(_) => "u8",
+            TypedIntegerValue::U16(_) => "u16",
+            TypedIntegerValue::U32(_) => "u32",
+            TypedIntegerValue::U64(_) => "u64",
+            TypedIntegerValue::I8(_) => "i8",
+            TypedIntegerValue::I16(_) => "i16",
+            TypedIntegerValue::I32(_) => "i32",
+            TypedIntegerValue::I64(_) => "i64",
+        }
+    }
+
     pub fn get_type(&self) -> TypeId {
         match self {
             TypedIntegerValue::U8(_) => U8_TYPE_ID,
@@ -1239,7 +1274,7 @@ pub enum TypedExpr {
     Bool(bool, SpanId),
     Integer(TypedIntegerExpr),
     Float(TypedFloatExpr),
-    Str(String, SpanId),
+    String(String, SpanId),
     Struct(Struct),
     StructFieldAccess(FieldAccess),
     Variable(VariableExpr),
@@ -1291,7 +1326,7 @@ impl TypedExpr {
         match self {
             TypedExpr::Unit(_) => UNIT_TYPE_ID,
             TypedExpr::Char(_, _) => CHAR_TYPE_ID,
-            TypedExpr::Str(_, _) => STRING_TYPE_ID,
+            TypedExpr::String(_, _) => STRING_TYPE_ID,
             TypedExpr::Integer(integer) => integer.get_type(),
             TypedExpr::Float(float) => float.get_type(),
             TypedExpr::Bool(_, _) => BOOL_TYPE_ID,
@@ -1326,7 +1361,7 @@ impl TypedExpr {
             TypedExpr::Bool(_, span) => *span,
             TypedExpr::Integer(int) => int.span,
             TypedExpr::Float(float) => float.span,
-            TypedExpr::Str(_, span) => *span,
+            TypedExpr::String(_, span) => *span,
             TypedExpr::Struct(struc) => struc.span,
             TypedExpr::Variable(var) => var.span,
             TypedExpr::StructFieldAccess(field_access) => field_access.span,
@@ -3554,6 +3589,9 @@ impl TypedModule {
             }
             ParsedExpression::Literal(Literal::Bool(b, _span)) => Ok(CompileTimeValue::Boolean(*b)),
             ParsedExpression::Literal(Literal::Char(c, _span)) => Ok(CompileTimeValue::Char(*c)),
+            ParsedExpression::Literal(Literal::String(s, _span)) => {
+                Ok(CompileTimeValue::String(s.clone().into_boxed_str()))
+            }
             ParsedExpression::Builtin(span) => {
                 if scope_id != self.scopes.get_root_scope_id() {
                     return failf!(
@@ -3610,6 +3648,40 @@ impl TypedModule {
                     Ok(CompileTimeValue::Boolean(!b))
                 }
             },
+            ParsedExpression::BinaryOp(bin_op) => match bin_op.op_kind {
+                BinaryOpKind::Add => unimplemented!(),
+                BinaryOpKind::Subtract => unimplemented!(),
+                BinaryOpKind::Multiply => unimplemented!(),
+                BinaryOpKind::Divide => unimplemented!(),
+                BinaryOpKind::Rem => unimplemented!(),
+                BinaryOpKind::Less => unimplemented!(),
+                BinaryOpKind::LessEqual => unimplemented!(),
+                BinaryOpKind::Greater => unimplemented!(),
+                BinaryOpKind::GreaterEqual => unimplemented!(),
+                BinaryOpKind::And => unimplemented!(),
+                BinaryOpKind::Or => unimplemented!(),
+                BinaryOpKind::Equals => {
+                    let bin_op = bin_op.clone();
+                    let lhs = self.eval_const_expr(bin_op.lhs, None, eval_ctx.scope_id, None)?;
+                    let rhs = self.eval_const_expr(bin_op.rhs, None, eval_ctx.scope_id, None)?;
+                    match (&lhs, &rhs) {
+                        (CompileTimeValue::String(s1), CompileTimeValue::String(s2)) => {
+                            Ok(CompileTimeValue::Boolean(*s1 == *s2))
+                        }
+                        _ => {
+                            failf!(
+                                bin_op.span,
+                                "const equality over {} and {} is unimplemented",
+                                lhs.kind(),
+                                rhs.kind()
+                            )
+                        }
+                    }
+                }
+                BinaryOpKind::NotEquals => unimplemented!(),
+                BinaryOpKind::OptionalElse => unimplemented!(),
+                BinaryOpKind::Pipe => unimplemented!(),
+            },
             _other => {
                 failf!(
                     self.ast.exprs.get_span(expr),
@@ -3619,14 +3691,14 @@ impl TypedModule {
         }
     }
 
-    fn eval_constant(
+    fn eval_global(
         &mut self,
-        parsed_constant_id: ParsedConstantId,
+        parsed_constant_id: ParsedGlobalId,
         scope_id: ScopeId,
     ) -> TyperResult<VariableId> {
-        let parsed_constant = self.ast.get_constant(parsed_constant_id);
+        let parsed_constant = self.ast.get_global(parsed_constant_id);
         let type_id = self.eval_const_type_expr(parsed_constant.ty, scope_id)?;
-        let parsed_constant = self.ast.get_constant(parsed_constant_id);
+        let parsed_constant = self.ast.get_global(parsed_constant_id);
         let constant_name = parsed_constant.name;
         let constant_span = parsed_constant.span;
         let parsed_expr_id = parsed_constant.value_expr;
@@ -5108,7 +5180,7 @@ impl TypedModule {
                 Ok(self.exprs.add(expr))
             }
             ParsedExpression::Literal(Literal::String(s, span)) => {
-                let expr = TypedExpr::Str(s.clone(), *span);
+                let expr = TypedExpr::String(s.clone(), *span);
                 Ok(self.exprs.add(expr))
             }
             ParsedExpression::Variable(_variable) => {
@@ -5303,174 +5375,186 @@ impl TypedModule {
         };
         let is = is.clone();
 
-        let mut block = self.synth_block(ctx.scope_id, span);
-        let block_scope = block.scope_id;
         let part_count = is.parts.len();
-        let block_ctx = ctx.with_scope(block_scope).with_no_expected_type();
-        let part_count_expr = self.exprs.add(TypedExpr::Integer(TypedIntegerExpr {
-            value: TypedIntegerValue::U64(part_count as u64),
-            span,
-        }));
-        let new_string_builder = self.synth_typed_function_call(
-            qident!(self, span, ["StringBuilder"], "withCapacity"),
-            &[],
-            &[part_count_expr],
-            block_ctx,
-        )?;
-        let string_builder_var = self.synth_variable_defn_simple(
-            get_ident!(self, "sb"),
-            new_string_builder,
-            block.scope_id,
-        );
-        self.push_block_stmt_id(&mut block, string_builder_var.defn_stmt);
-        for part in is.parts.into_iter() {
-            let string_expr = match part {
-                parse::InterpolatedStringPart::String(s) => self.exprs.add(TypedExpr::Str(s, span)),
-                parse::InterpolatedStringPart::Identifier(ident) => {
-                    let variable_expr_id =
-                        self.ast.exprs.add_expression(ParsedExpression::Variable(
-                            parse::Variable { name: NamespacedIdentifier::naked(ident, span) },
-                        ));
-                    self.synth_show_ident_call(variable_expr_id, block_ctx)?
-                }
+        if part_count == 1 {
+            // nocommit better way to take first
+            let parse::InterpolatedStringPart::String(s) = is.parts.into_iter().next().unwrap()
+            else {
+                self.ice_with_span("String had only one part that was not a string", span)
             };
-            debug_assert!(self.exprs.get(string_expr).get_type() == STRING_TYPE_ID);
-            let push_call = self.synth_typed_function_call(
-                qident!(self, span, ["StringBuilder"], "putString"),
+            let s = self.exprs.add(TypedExpr::String(s, span));
+            Ok(s)
+        } else {
+            let mut block = self.synth_block(ctx.scope_id, span);
+            let block_scope = block.scope_id;
+            let block_ctx = ctx.with_scope(block_scope).with_no_expected_type();
+            let part_count_expr = self.exprs.add(TypedExpr::Integer(TypedIntegerExpr {
+                value: TypedIntegerValue::U64(part_count as u64),
+                span,
+            }));
+            if self.ast.config.no_std {
+                return failf!(span, "Interpolated strings are not supported in no_std mode");
+            }
+            let new_string_builder = self.synth_typed_function_call(
+                qident!(self, span, ["StringBuilder"], "withCapacity"),
                 &[],
-                &[string_builder_var.variable_expr, string_expr],
+                &[part_count_expr],
                 block_ctx,
             )?;
-            self.add_expr_id_to_block(&mut block, push_call);
-        }
-        let build_call = self.synth_typed_function_call(
-            qident!(self, span, ["StringBuilder"], "build"),
-            &[],
-            &[string_builder_var.variable_expr],
-            block_ctx,
-        )?;
-        self.add_expr_id_to_block(&mut block, build_call);
-        Ok(self.exprs.add(TypedExpr::Block(block)))
-    }
-
-    #[cfg(any())]
-    fn visit_inner_stmt_exprs_mut(
-        module: &mut TypedModule,
-        stmt_id: TypedStmtId,
-        action: &mut impl FnMut(&mut TypedModule, TypedExprId),
-    ) {
-        let stmt = module.stmts.get(stmt_id);
-        match stmt {
-            TypedStmt::Expr(e, _) => action(module, *e),
-            TypedStmt::Let(val_def) => action(module, val_def.initializer),
-            TypedStmt::Assignment(assgn) => {
-                let value = assgn.value;
-                action(module, assgn.destination);
-                action(module, value)
-            }
-        };
-    }
-
-    // Currently only used for fixup_capture_expr
-    #[cfg(any())]
-    fn visit_inner_exprs_mut(
-        module: &mut TypedModule,
-        expr: TypedExprId,
-        mut action: impl FnMut(&mut TypedModule, TypedExprId),
-    ) {
-        // Try implementing a mutable iterator instead
-        match module.exprs.get(expr) {
-            TypedExpr::Unit(_) => (),
-            TypedExpr::Char(_, _) => (),
-            TypedExpr::Bool(_, _) => (),
-            TypedExpr::Integer(_) => (),
-            TypedExpr::Float(_) => (),
-            TypedExpr::Str(_, _) => (),
-            TypedExpr::Struct(s) => {
-                for f in s.fields.clone().iter() {
-                    action(module, f.expr);
-                }
-            }
-            TypedExpr::Variable(_) => (),
-            TypedExpr::StructFieldAccess(field_access) => {
-                action(module, field_access.base);
-            }
-            TypedExpr::BinaryOp(binary_op) => {
-                let lhs = binary_op.lhs;
-                let rhs = binary_op.rhs;
-                action(module, lhs);
-                action(module, rhs);
-            }
-            TypedExpr::UnaryOp(unary_op) => {
-                action(module, unary_op.expr);
-            }
-            TypedExpr::Block(block) => {
-                for stmt in block.statements.clone().iter() {
-                    TypedModule::visit_inner_stmt_exprs_mut(module, *stmt, &mut action);
-                }
-            }
-            TypedExpr::Call(call) => {
-                let args = call.args.clone();
-                match call.callee {
-                    Callee::DynamicLambda(expr) => action(module, expr),
-                    Callee::DynamicFunction(expr) => action(module, expr),
-                    _ => {}
-                };
-                for arg in args.clone().iter() {
-                    action(module, *arg)
-                }
-            }
-            TypedExpr::If(typed_if) => {
-                let condition = typed_if.condition;
-                let consequent = typed_if.consequent;
-                let alternate = typed_if.alternate;
-                action(module, condition);
-                action(module, consequent);
-                action(module, alternate);
-            }
-            TypedExpr::WhileLoop(while_loop) => {
-                let stmts = while_loop.body.statements.clone();
-                action(module, while_loop.cond);
-                for stmt in stmts.iter() {
-                    TypedModule::visit_inner_stmt_exprs_mut(module, *stmt, &mut action);
-                }
-            }
-            TypedExpr::Match(typed_match) => {
-                let typed_match = typed_match.clone();
-                for let_stmt in &typed_match.initial_let_statements {
-                    TypedModule::visit_inner_stmt_exprs_mut(module, *let_stmt, &mut action);
-                }
-                for arm in typed_match.arms.iter() {
-                    action(module, arm.pattern_condition);
-                    if let Some(guard_condition) = arm.guard_condition {
-                        action(module, guard_condition);
-                    };
-                    for binding_stmt in &arm.pattern_bindings {
-                        TypedModule::visit_inner_stmt_exprs_mut(module, *binding_stmt, &mut action);
+            let string_builder_var = self.synth_variable_defn_simple(
+                get_ident!(self, "sb"),
+                new_string_builder,
+                block.scope_id,
+            );
+            self.push_block_stmt_id(&mut block, string_builder_var.defn_stmt);
+            for part in is.parts.into_iter() {
+                let string_expr = match part {
+                    parse::InterpolatedStringPart::String(s) => {
+                        self.exprs.add(TypedExpr::String(s, span))
                     }
-                    action(module, arm.consequent_expr)
-                }
+                    parse::InterpolatedStringPart::Identifier(ident) => {
+                        let variable_expr_id =
+                            self.ast.exprs.add_expression(ParsedExpression::Variable(
+                                parse::Variable { name: NamespacedIdentifier::naked(ident, span) },
+                            ));
+                        self.synth_show_ident_call(variable_expr_id, block_ctx)?
+                    }
+                };
+                debug_assert!(self.exprs.get(string_expr).get_type() == STRING_TYPE_ID);
+                let push_call = self.synth_typed_function_call(
+                    qident!(self, span, ["StringBuilder"], "putString"),
+                    &[],
+                    &[string_builder_var.variable_expr, string_expr],
+                    block_ctx,
+                )?;
+                self.add_expr_id_to_block(&mut block, push_call);
             }
-            TypedExpr::LoopExpr(loop_expr) => {
-                for stmt in loop_expr.body.statements.clone().iter() {
-                    TypedModule::visit_inner_stmt_exprs_mut(module, *stmt, &mut action);
-                }
-            }
-            TypedExpr::EnumConstructor(_) => (),
-            TypedExpr::EnumIsVariant(enum_is_variant) => {
-                action(module, enum_is_variant.target_expr)
-            }
-            TypedExpr::EnumGetPayload(enum_get_payload) => {
-                action(module, enum_get_payload.target_expr)
-            }
-            TypedExpr::Cast(cast) => action(module, cast.base_expr),
-            TypedExpr::Return(ret) => action(module, ret.value),
-            TypedExpr::Break(brk) => action(module, brk.value),
-            TypedExpr::Lambda(_) => (),
-            TypedExpr::FunctionName(_) => (),
-            TypedExpr::PendingCapture(_) => (),
+            let build_call = self.synth_typed_function_call(
+                qident!(self, span, ["StringBuilder"], "build"),
+                &[],
+                &[string_builder_var.variable_expr],
+                block_ctx,
+            )?;
+            self.add_expr_id_to_block(&mut block, build_call);
+            Ok(self.exprs.add(TypedExpr::Block(block)))
         }
     }
+
+    //fn visit_inner_stmt_exprs_mut(
+    //    module: &mut TypedModule,
+    //    stmt_id: TypedStmtId,
+    //    action: &mut impl FnMut(&mut TypedModule, TypedExprId),
+    //) {
+    //    let stmt = module.stmts.get(stmt_id);
+    //    match stmt {
+    //        TypedStmt::Expr(e, _) => action(module, *e),
+    //        TypedStmt::Let(val_def) => action(module, val_def.initializer),
+    //        TypedStmt::Assignment(assgn) => {
+    //            let value = assgn.value;
+    //            action(module, assgn.destination);
+    //            action(module, value)
+    //        }
+    //    };
+    //}
+
+    //fn visit_inner_exprs_mut(
+    //    module: &mut TypedModule,
+    //    expr: TypedExprId,
+    //    mut action: impl FnMut(&mut TypedModule, TypedExprId),
+    //) {
+    //    // Try implementing a mutable iterator instead
+    //    match module.exprs.get(expr) {
+    //        TypedExpr::Unit(_) => (),
+    //        TypedExpr::Char(_, _) => (),
+    //        TypedExpr::Bool(_, _) => (),
+    //        TypedExpr::Integer(_) => (),
+    //        TypedExpr::Float(_) => (),
+    //        TypedExpr::Str(_, _) => (),
+    //        TypedExpr::Struct(s) => {
+    //            for f in s.fields.clone().iter() {
+    //                action(module, f.expr);
+    //            }
+    //        }
+    //        TypedExpr::Variable(_) => (),
+    //        TypedExpr::StructFieldAccess(field_access) => {
+    //            action(module, field_access.base);
+    //        }
+    //        TypedExpr::BinaryOp(binary_op) => {
+    //            let lhs = binary_op.lhs;
+    //            let rhs = binary_op.rhs;
+    //            action(module, lhs);
+    //            action(module, rhs);
+    //        }
+    //        TypedExpr::UnaryOp(unary_op) => {
+    //            action(module, unary_op.expr);
+    //        }
+    //        TypedExpr::Block(block) => {
+    //            for stmt in block.statements.clone().iter() {
+    //                TypedModule::visit_inner_stmt_exprs_mut(module, *stmt, &mut action);
+    //            }
+    //        }
+    //        TypedExpr::Call(call) => {
+    //            let args = call.args.clone();
+    //            match call.callee {
+    //                Callee::DynamicLambda(expr) => action(module, expr),
+    //                Callee::DynamicFunction(expr) => action(module, expr),
+    //                _ => {}
+    //            };
+    //            for arg in args.clone().iter() {
+    //                action(module, *arg)
+    //            }
+    //        }
+    //        TypedExpr::If(typed_if) => {
+    //            let condition = typed_if.condition;
+    //            let consequent = typed_if.consequent;
+    //            let alternate = typed_if.alternate;
+    //            action(module, condition);
+    //            action(module, consequent);
+    //            action(module, alternate);
+    //        }
+    //        TypedExpr::WhileLoop(while_loop) => {
+    //            let stmts = while_loop.body.statements.clone();
+    //            action(module, while_loop.cond);
+    //            for stmt in stmts.iter() {
+    //                TypedModule::visit_inner_stmt_exprs_mut(module, *stmt, &mut action);
+    //            }
+    //        }
+    //        TypedExpr::Match(typed_match) => {
+    //            let typed_match = typed_match.clone();
+    //            for let_stmt in &typed_match.initial_let_statements {
+    //                TypedModule::visit_inner_stmt_exprs_mut(module, *let_stmt, &mut action);
+    //            }
+    //            for arm in typed_match.arms.iter() {
+    //                action(module, arm.pattern_condition);
+    //                if let Some(guard_condition) = arm.guard_condition {
+    //                    action(module, guard_condition);
+    //                };
+    //                for binding_stmt in &arm.pattern_bindings {
+    //                    TypedModule::visit_inner_stmt_exprs_mut(module, *binding_stmt, &mut action);
+    //                }
+    //                action(module, arm.consequent_expr)
+    //            }
+    //        }
+    //        TypedExpr::LoopExpr(loop_expr) => {
+    //            for stmt in loop_expr.body.statements.clone().iter() {
+    //                TypedModule::visit_inner_stmt_exprs_mut(module, *stmt, &mut action);
+    //            }
+    //        }
+    //        TypedExpr::EnumConstructor(_) => (),
+    //        TypedExpr::EnumIsVariant(enum_is_variant) => {
+    //            action(module, enum_is_variant.target_expr)
+    //        }
+    //        TypedExpr::EnumGetPayload(enum_get_payload) => {
+    //            action(module, enum_get_payload.target_expr)
+    //        }
+    //        TypedExpr::Cast(cast) => action(module, cast.base_expr),
+    //        TypedExpr::Return(ret) => action(module, ret.value),
+    //        TypedExpr::Break(brk) => action(module, brk.value),
+    //        TypedExpr::Lambda(_) => (),
+    //        TypedExpr::FunctionName(_) => (),
+    //        TypedExpr::PendingCapture(_) => (),
+    //    }
+    //}
 
     fn eval_lambda(
         &mut self,
@@ -6203,7 +6287,7 @@ impl TypedModule {
                     }
                     TypedPattern::LiteralString(string_value, span) => {
                         let string_expr =
-                            self.exprs.add(TypedExpr::Str(string_value.clone(), *span));
+                            self.exprs.add(TypedExpr::String(string_value.clone(), *span));
                         let condition = self.synth_equals_call(target_expr, string_expr, *span)?;
                         Ok(condition)
                     }
@@ -6616,10 +6700,40 @@ impl TypedModule {
         })
     }
 
+    fn eval_comptime_if_expr(
+        &mut self,
+        if_expr: &ParsedIfExpr,
+        ctx: EvalExprContext,
+    ) -> TyperResult<TypedExprId> {
+        let condition_value =
+            self.eval_const_expr(if_expr.cond, Some(BOOL_TYPE_ID), ctx.scope_id, None)?;
+        let CompileTimeValue::Boolean(condition_bool) = condition_value else {
+            let cond_span = self.ast.get_expr_span(if_expr.cond);
+            return failf!(cond_span, "Condition is not a boolean");
+        };
+        let expr = if condition_bool {
+            self.eval_expr(if_expr.cons, ctx)?
+        } else {
+            if let Some(alt) = if_expr.alt {
+                self.eval_expr(alt, ctx)?
+            } else {
+                self.exprs.add(TypedExpr::Unit(if_expr.span))
+            }
+        };
+        Ok(expr)
+    }
+
     // "if" in k1 can do pattern matching, on multiple targets, chained with arbitrary boolean
     // expressions, so this is not a simple one.
     // if x is .Some(v) and y is .Some("bar") and foo == 3
-    fn eval_if_expr(&mut self, if_expr: &IfExpr, ctx: EvalExprContext) -> TyperResult<TypedExprId> {
+    fn eval_if_expr(
+        &mut self,
+        if_expr: &ParsedIfExpr,
+        ctx: EvalExprContext,
+    ) -> TyperResult<TypedExprId> {
+        if if_expr.is_condition_compile_time {
+            return self.eval_comptime_if_expr(if_expr, ctx);
+        }
         let match_scope_id =
             self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, None, None);
 
@@ -7400,7 +7514,8 @@ impl TypedModule {
                 let result = self.eval_expr(arg.value, ctx.with_no_expected_type());
                 let expr = match result {
                     Err(typer_error) => {
-                        self.synth_optional_some(TypedExpr::Str(typer_error.message, call_span)).0
+                        self.synth_optional_some(TypedExpr::String(typer_error.message, call_span))
+                            .0
                     }
                     Ok(_expr) => self.synth_optional_none(STRING_TYPE_ID, call_span),
                 };
@@ -10977,7 +11092,7 @@ impl TypedModule {
                 Ok(())
             }
             ParsedId::Constant(constant_id) => {
-                let _variable_id: VariableId = self.eval_constant(constant_id, scope_id)?;
+                let _variable_id: VariableId = self.eval_global(constant_id, scope_id)?;
                 Ok(())
             }
             ParsedId::Function(parsed_function_id) => {
@@ -11687,7 +11802,7 @@ impl TypedModule {
             fields: vec![
                 StructField {
                     name: get_ident!(self, "filename"),
-                    expr: self.exprs.add(TypedExpr::Str(source.filename.clone(), span)),
+                    expr: self.exprs.add(TypedExpr::String(source.filename.clone(), span)),
                 },
                 StructField {
                     name: get_ident!(self, "line"),
@@ -11709,7 +11824,7 @@ impl TypedModule {
         span: SpanId,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
-        let message_expr = self.exprs.add(TypedExpr::Str(message, span));
+        let message_expr = self.exprs.add(TypedExpr::String(message, span));
         self.synth_typed_function_call(qident!(self, span, "crash"), &[], &[message_expr], ctx)
     }
 
