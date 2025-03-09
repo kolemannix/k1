@@ -115,7 +115,7 @@ pub const ITERABLE_ABILITY_ID: AbilityId = AbilityId(9);
 
 pub const LAMBDA_ENV_PARAM_NAME: &str = "__lambda_env";
 
-pub const FUNC_PARAM_OPT_COUNT: usize = 8;
+pub const FUNC_PARAM_IDEAL_COUNT: usize = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TypeSubstitutionPair {
@@ -332,6 +332,26 @@ impl From<&TypedAbilityParam> for SimpleNamedType {
 pub struct TypedAbilitySignature {
     ability_id: AbilityId,
     impl_arguments: SmallVec<[SimpleNamedType; 4]>,
+}
+
+struct ArgsAndParams<'params> {
+    args: SmallVec<[MaybeTypedExpr; FUNC_PARAM_IDEAL_COUNT]>,
+    params: SmallVec<[&'params FnParamType; FUNC_PARAM_IDEAL_COUNT]>,
+}
+
+impl ArgsAndParams<'_> {
+    fn iter(&self) -> impl Iterator<Item = (&MaybeTypedExpr, &&FnParamType)> {
+        self.args.iter().zip(self.params.iter())
+    }
+
+    fn get(&self, index: usize) -> (&MaybeTypedExpr, &&FnParamType) {
+        (&self.args[index], &self.params[index])
+    }
+
+    fn len(&self) -> usize {
+        debug_assert!(self.args.len() == self.params.len());
+        self.args.len()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -903,11 +923,11 @@ impl Callee {
 #[derive(Debug, Clone)]
 pub struct Call {
     pub callee: Callee,
-    pub args: Vec<TypedExprId>,
+    pub args: SmallVec<[TypedExprId; FUNC_PARAM_IDEAL_COUNT]>,
     /// type_args remain unerased for some intrinsics where we want codegen to see the types.
     /// Specifically sizeOf[T], there's no actual value to specialize on, kinda of a hack would be
     /// better to specialize anyway and inline? idk
-    pub type_args: SmallVec<[SimpleNamedType; 8]>,
+    pub type_args: SmallVec<[SimpleNamedType; FUNC_PARAM_IDEAL_COUNT]>,
     pub return_type: TypeId,
     pub span: SpanId,
 }
@@ -1266,7 +1286,7 @@ pub struct TypedMatchExpr {
 }
 
 // TODO(perf): TypedExpr is very big
-static_assert_size!(TypedExpr, 128);
+static_assert_size!(TypedExpr, 152);
 #[derive(Debug, Clone)]
 pub enum TypedExpr {
     Unit(SpanId),
@@ -3103,22 +3123,23 @@ impl TypedModule {
         }
     }
 
-    fn eval_const_type_expr(
+    fn eval_type_expr_for_global(
         &mut self,
         parsed_type_expr: ParsedTypeExprId,
         scope_id: ScopeId,
     ) -> TyperResult<TypeId> {
-        let ty = self.eval_type_expr(parsed_type_expr, scope_id)?;
-        match self.types.get(ty) {
-            Type::Unit(_) => Ok(ty),
-            Type::Char(_) => Ok(ty),
-            Type::Bool(_) => Ok(ty),
-            Type::Pointer(_) => Ok(ty),
-            Type::Integer(_) => Ok(ty),
-            _t if ty == STRING_TYPE_ID => Ok(ty),
-            _ => failf!(
+        let type_id = self.eval_type_expr(parsed_type_expr, scope_id)?;
+        match self.types.get(type_id) {
+            Type::Unit(_) => Ok(type_id),
+            Type::Char(_) => Ok(type_id),
+            Type::Bool(_) => Ok(type_id),
+            Type::Pointer(_) => Ok(type_id),
+            Type::Integer(_) => Ok(type_id),
+            _t if type_id == STRING_TYPE_ID => Ok(type_id),
+            _t => failf!(
                 self.ast.get_type_expression_span(parsed_type_expr),
-                "Only scalar types allowed in constants",
+                "Type not allowed in global: {}",
+                self.type_id_to_string(type_id),
             ),
         }
     }
@@ -3697,7 +3718,7 @@ impl TypedModule {
         scope_id: ScopeId,
     ) -> TyperResult<VariableId> {
         let parsed_constant = self.ast.get_global(parsed_constant_id);
-        let type_id = self.eval_const_type_expr(parsed_constant.ty, scope_id)?;
+        let type_id = self.eval_type_expr_for_global(parsed_constant.ty, scope_id)?;
         let parsed_constant = self.ast.get_global(parsed_constant_id);
         let constant_name = parsed_constant.name;
         let constant_span = parsed_constant.span;
@@ -4728,7 +4749,7 @@ impl TypedModule {
         )?;
         let make_error_call = self.exprs.add(TypedExpr::Call(Call {
             callee: Callee::StaticFunction(block_make_error_fn),
-            args: vec![get_error_call],
+            args: smallvec![get_error_call],
             type_args: smallvec![],
             return_type: block_error_type,
             span,
@@ -5370,21 +5391,23 @@ impl TypedModule {
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
         let span = self.ast.exprs.get_span(expr_id);
-        let ParsedExpression::InterpolatedString(is) = self.ast.exprs.get(expr_id) else {
+        let ParsedExpression::InterpolatedString(interpolated_string) = self.ast.exprs.get(expr_id)
+        else {
             panic!()
         };
-        let is = is.clone();
 
-        let part_count = is.parts.len();
+        let part_count = interpolated_string.parts.len();
         if part_count == 1 {
             // nocommit better way to take first
-            let parse::InterpolatedStringPart::String(s) = is.parts.into_iter().next().unwrap()
+            let parse::InterpolatedStringPart::String(s) =
+                interpolated_string.parts.first().unwrap().clone()
             else {
                 self.ice_with_span("String had only one part that was not a string", span)
             };
             let s = self.exprs.add(TypedExpr::String(s, span));
             Ok(s)
         } else {
+            let interpolated_string = interpolated_string.clone();
             let mut block = self.synth_block(ctx.scope_id, span);
             let block_scope = block.scope_id;
             let block_ctx = ctx.with_scope(block_scope).with_no_expected_type();
@@ -5407,7 +5430,7 @@ impl TypedModule {
                 block.scope_id,
             );
             self.push_block_stmt_id(&mut block, string_builder_var.defn_stmt);
-            for part in is.parts.into_iter() {
+            for part in interpolated_string.parts.into_iter() {
                 let string_expr = match part {
                     parse::InterpolatedStringPart::String(s) => {
                         self.exprs.add(TypedExpr::String(s, span))
@@ -7261,7 +7284,7 @@ impl TypedModule {
         let equals_implementation_function_id = implementation.function_at_index(equals_index);
         let call_expr = self.exprs.add(TypedExpr::Call(Call {
             callee: Callee::make_static(equals_implementation_function_id),
-            args: vec![lhs, rhs],
+            args: smallvec![lhs, rhs],
             type_args: smallvec![],
             return_type: BOOL_TYPE_ID,
             span,
@@ -8094,16 +8117,13 @@ impl TypedModule {
         pre_evaled_params: Option<&[TypedExprId]>,
         calling_scope: ScopeId,
         tolerate_missing_context_args: bool,
-    ) -> TyperResult<(
-        SmallVec<[MaybeTypedExpr; FUNC_PARAM_OPT_COUNT]>,
-        SmallVec<[&'params FnParamType; FUNC_PARAM_OPT_COUNT]>,
-    )> {
+    ) -> TyperResult<ArgsAndParams<'params>> {
         let fn_name = fn_call.name.name;
         let span = fn_call.span;
         let explicit_context_args = !fn_call.explicit_context_args.is_empty();
         let named = fn_call.args.first().is_some_and(|arg| arg.name.is_some());
-        let mut final_args: SmallVec<[MaybeTypedExpr; FUNC_PARAM_OPT_COUNT]> = SmallVec::new();
-        let mut final_params: SmallVec<[&FnParamType; FUNC_PARAM_OPT_COUNT]> = SmallVec::new();
+        let mut final_args: SmallVec<[MaybeTypedExpr; FUNC_PARAM_IDEAL_COUNT]> = SmallVec::new();
+        let mut final_params: SmallVec<[&FnParamType; FUNC_PARAM_IDEAL_COUNT]> = SmallVec::new();
         if !explicit_context_args {
             for context_param in params.iter().filter(|p| p.is_context) {
                 let matching_context_variable =
@@ -8212,7 +8232,7 @@ impl TypedModule {
                 final_params.push(fn_param);
             }
         }
-        Ok((final_args, final_params))
+        Ok(ArgsAndParams { args: final_args, params: final_params })
     }
 
     fn check_call_argument(
@@ -8283,18 +8303,15 @@ impl TypedModule {
 
         let (callee, typechecked_arguments, type_args, return_type) = match is_generic {
             false => {
-                let (aligned_original_args, aligned_original_params) = self
-                    .align_call_arguments_with_parameters(
-                        fn_call,
-                        params,
-                        known_args.map(|(_known_types, known_args)| known_args),
-                        ctx.scope_id,
-                        false,
-                    )?;
-                let mut typechecked_args = Vec::with_capacity(aligned_original_args.len());
-                for (maybe_typed_expr, param) in
-                    aligned_original_args.iter().zip(aligned_original_params.iter())
-                {
+                let args_and_params = self.align_call_arguments_with_parameters(
+                    fn_call,
+                    params,
+                    known_args.map(|(_known_types, known_args)| known_args),
+                    ctx.scope_id,
+                    false,
+                )?;
+                let mut typechecked_args = SmallVec::with_capacity(args_and_params.len());
+                for (maybe_typed_expr, param) in args_and_params.iter() {
                     let expr = match *maybe_typed_expr {
                         MaybeTypedExpr::Typed(typed) => typed,
                         MaybeTypedExpr::Parsed(parsed) => {
@@ -8307,14 +8324,13 @@ impl TypedModule {
                 (callee, typechecked_args, smallvec![], original_function_return_type)
             }
             true => {
-                let (aligned_original_args, aligned_original_params) = self
-                    .align_call_arguments_with_parameters(
-                        fn_call,
-                        params,
-                        known_args.map(|(_known_types, known_args)| known_args),
-                        ctx.scope_id,
-                        true,
-                    )?;
+                let original_args_and_params = self.align_call_arguments_with_parameters(
+                    fn_call,
+                    params,
+                    known_args.map(|(_known_types, known_args)| known_args),
+                    ctx.scope_id,
+                    true,
+                )?;
                 // If a function is generic, we have a function id. Lambdas and function pointer
                 // calls can't take type arguments
                 let original_function_id = maybe_original_function_id.unwrap();
@@ -8341,8 +8357,7 @@ impl TypedModule {
                 let function_type_args = self.determine_function_type_args_for_call(
                     original_function_id,
                     &type_args,
-                    aligned_original_args,
-                    aligned_original_params,
+                    &original_args_and_params,
                     ctx,
                 )?;
                 let function_id = self.specialize_function_signature(
@@ -8354,7 +8369,7 @@ impl TypedModule {
                 let specialized_fn_type = self.get_function_type(function_id);
                 let specialized_params = specialized_fn_type.physical_params.clone();
                 let specialized_return_type = specialized_fn_type.return_type;
-                let (aligned_args, aligned_params) = self.align_call_arguments_with_parameters(
+                let args_and_params = self.align_call_arguments_with_parameters(
                     fn_call,
                     &specialized_params,
                     known_args.map(|(_known_types, known_args)| known_args),
@@ -8362,8 +8377,8 @@ impl TypedModule {
                     false,
                 )?;
 
-                let mut typechecked_args = Vec::with_capacity(aligned_args.len());
-                for (maybe_typed_expr, param) in aligned_args.iter().zip(aligned_params.iter()) {
+                let mut typechecked_args = SmallVec::with_capacity(args_and_params.len());
+                for (maybe_typed_expr, param) in args_and_params.iter() {
                     let expr = match *maybe_typed_expr {
                         MaybeTypedExpr::Typed(typed) => typed,
                         MaybeTypedExpr::Parsed(parsed) => {
@@ -8562,7 +8577,7 @@ impl TypedModule {
                 evaled_params
             }
             true => {
-                let (args, params) = self.align_call_arguments_with_parameters(
+                let args_and_params = self.align_call_arguments_with_parameters(
                     fn_call,
                     &generic_function_params,
                     None,
@@ -8570,9 +8585,9 @@ impl TypedModule {
                     true,
                 )?;
                 let mut inference_pairs: SmallVec<[_; 8]> = match ctx.expected_type_id {
-                    None => SmallVec::with_capacity(args.len()),
+                    None => SmallVec::with_capacity(args_and_params.len()),
                     Some(expected) => {
-                        let mut v = SmallVec::with_capacity(args.len() + 1);
+                        let mut v = SmallVec::with_capacity(args_and_params.len() + 1);
                         v.push((
                             TypeOrParsedExpr::TypeId(expected),
                             generic_function_return_type,
@@ -8581,7 +8596,7 @@ impl TypedModule {
                         v
                     }
                 };
-                inference_pairs.extend(args.iter().zip(params.iter()).map(|(expr, param)| {
+                inference_pairs.extend(args_and_params.iter().map(|(expr, param)| {
                     let passed_type = match expr {
                         MaybeTypedExpr::Parsed(expr_id) => TypeOrParsedExpr::ParsedExpr(*expr_id),
                         MaybeTypedExpr::Typed(expr) => {
@@ -8631,8 +8646,7 @@ impl TypedModule {
         &mut self,
         original_function_id: FunctionId,
         type_args: &[SimpleNamedType],
-        aligned_original_args: SmallVec<[MaybeTypedExpr; FUNC_PARAM_OPT_COUNT]>,
-        aligned_original_params: SmallVec<[&FnParamType; FUNC_PARAM_OPT_COUNT]>,
+        args_and_params: &ArgsAndParams,
         ctx: EvalExprContext,
     ) -> TyperResult<SmallVec<[SimpleNamedType; 8]>> {
         // Ok here's what we need for function params. We need to know just the _kind_ of function that
@@ -8654,13 +8668,8 @@ impl TypedModule {
             .collect();
         if !original_function.function_params.is_empty() {
             for function_type_param in original_function.function_params.clone().iter() {
-                //let original_function_type =
-                //    self.types.get(callee_function_type_id).as_function().unwrap();
-
-                let corresponding_value_param =
-                    &aligned_original_params[function_type_param.value_param_index as usize];
-                let corresponding_arg =
-                    &aligned_original_args[function_type_param.value_param_index as usize];
+                let (corresponding_arg, corresponding_value_param) =
+                    args_and_params.get(function_type_param.value_param_index as usize);
                 eprintln!(
                     "The param for function_type_param {} {} is {} and passed: {:?}",
                     function_type_param.type_id,

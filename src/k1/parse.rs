@@ -1042,6 +1042,7 @@ pub struct ParsedFunction {
     pub linkage: Linkage,
     pub directives: Vec<ParsedDirective>,
     pub additional_where_constraints: Vec<ParsedTypeConstraint>,
+    pub condition: Option<ParsedExpressionId>,
     pub id: ParsedFunctionId,
 }
 
@@ -1787,6 +1788,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     fn expect_parse_pattern(&mut self) -> ParseResult<ParsedPatternId> {
         let mut pattern_id: ParsedPatternId = self.expect_pattern_base()?;
         // Loop for postfix operations
+        #[allow(clippy::while_let_loop)] // Since we'll add more stuff later
         loop {
             if let Some(asterisk) = self.maybe_consume_next(K::Asterisk) {
                 let inner_span = self.module.get_pattern_span(pattern_id);
@@ -3308,13 +3310,15 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     fn parse_function(&mut self) -> ParseResult<Option<ParsedFunctionId>> {
         trace!("parse_function");
         let directives = self.parse_directives()?;
-        let initial_pos = self.cursor_position();
-        let is_intrinsic = if self.peek().kind == K::KeywordIntern {
-            self.advance();
-            true
+        let condition = if self.maybe_consume_next(K::Hash).is_some() {
+            self.expect_eat_token(K::KeywordIf)?;
+            let condition_expr = self.expect_expression()?;
+            Some(condition_expr)
         } else {
-            false
+            None
         };
+        let initial_pos = self.cursor_position();
+        let is_intrinsic = self.maybe_consume_next(K::KeywordIntern).is_some();
         let linkage = if is_intrinsic {
             Linkage::Intrinsic
         } else if self.peek().kind == K::KeywordExtern {
@@ -3386,6 +3390,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             linkage,
             directives,
             additional_where_constraints: additional_type_constraints,
+            condition,
             id: ParsedFunctionId(u32::MAX),
         });
         Ok(Some(function_id))

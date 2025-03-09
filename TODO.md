@@ -27,13 +27,14 @@ New tagline? "C with typeclasses and tagged unions"
 - [ ] Write a 'validateTypedModule' procedure.
 - [x] Real type inference
   - [x] True inference variables, instantiate function types, unification and consistency checks, aka make it work
-  - [-] Make 'crash' work in no-std
+  - [x] Make 'crash' work in no-std
   - [x] Make it pretty (de-coupled inference hole from type variable)
   - [x] Move enum constructor onto new inference infra
   - [x] Move ability resolution onto new inference infra
   - [x] Make it fast (Added better 'pool' to prepare for avoiding lots of allocations)
 - [x] Fix closure types / get static dispatch for functions taking a closure directly
 - [x] *Specializing functions on their provided closures to allow inlining and static dispatch*
+- [ ] let ... else, or 'guard', or 'ensure' let e is .StringLit(s) else {}
 
 - [ ] No global malloc
   - [ ] Global pointers, to enable
