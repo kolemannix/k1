@@ -1,17 +1,23 @@
 ns condcomp;
 
-@debug fn test(): unit {
+let const MY_VALUE: bool = true;
+let const MY_VALUE_NEG: bool = not MY_VALUE;
+
+fn test(): unit {
   println("K1_TEST is \{K1_TEST}");
   println("K1_OS is \{K1_OS}");
 
   assert(K1_OS == "macos");
   assert(K1_TEST == false);
 
-  #if K1_TEST {
-    println("its a test") 
+  #if MY_VALUE_NEG {
+    crash("does not happen")
   } else {
-    println("hello at runtime; not a test")
+    println("hello from MY_VALUE_NEG=\{MY_VALUE_NEG}")
   };
 
-  #if (false) { crash("will not get compiled") };
+  let comptimeCheck = #if false "foo" else "bar";
+  assert(comptimeCheck == "bar");
+
+  ()
 }

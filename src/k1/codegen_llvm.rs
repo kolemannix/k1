@@ -19,7 +19,7 @@ use inkwell::debug_info::{
 use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::module::{Linkage as LlvmLinkage, Module as LlvmModule};
 use inkwell::passes::PassBuilderOptions;
-use inkwell::targets::{InitializationConfig, Target, TargetData, TargetMachine, TargetTriple};
+use inkwell::targets::{InitializationConfig, Target, TargetData, TargetMachine};
 use inkwell::types::{
     AnyType, AnyTypeEnum, BasicMetadataTypeEnum, BasicType, BasicTypeEnum,
     FunctionType as LlvmFunctionType, IntType, PointerType, StructType, VoidType,
@@ -31,7 +31,6 @@ use inkwell::values::{
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel};
 use log::{debug, info, trace};
 
-use crate::compiler::MAC_SDK_VERSION;
 use crate::lex::SpanId;
 use crate::parse::{FileId, Identifier, NumericWidth};
 use crate::typer::scopes::ScopeId;
