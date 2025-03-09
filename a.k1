@@ -5,9 +5,6 @@ fn main(): int {
   assert(K1_OS == "macos");
   assert(K1_TEST == false);
 
-  // This would just print it at compile-time
-  // #do if (K1_TEST) { println("Its a test build!") };
-
   #if K1_OS == "macos" {
     println("its a mac!"); 1
   } else {
