@@ -37,6 +37,13 @@ New tagline? "C with typeclasses and tagged unions"
 - [ ] let ... else, or 'guard', or 'ensure' let e is .StringLit(s) else {}
 
 - [ ] No global malloc
+  - [ ] comptime enhancement to support this global initializer: `let* a: Arena* = NULL as Arena*;`
+        Field notes: This is terrible, it requires that we put pointer as well as null references into
+        our compile-time VM, which requires like actual memory layout because of these abstractions
+        I was thinking it could be a little higher-level, though we'd have to internally implement
+        refAtIndex, which is just GEP, and casts in order to get List, so... yeah instead we're going to
+        have the global be a Pointer, just initialized to 0, which is the only comptime ptr allowed
+        and just cast it in 'real' k1
   - [ ] Global pointers, to enable
   - [ ] The problem with passing an allocator around is all code becomes generic, or casts a pointer.
   - [ ] ThreadLocal values, to enable

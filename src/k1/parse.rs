@@ -370,7 +370,7 @@ impl FnCall {
 }
 
 #[derive(Debug, Clone)]
-pub struct ValDef {
+pub struct ParsedLet {
     pub name: Identifier,
     pub type_expr: Option<ParsedTypeExprId>,
     pub value: ParsedExpressionId,
@@ -378,7 +378,7 @@ pub struct ValDef {
     flags: u8,
 }
 
-impl ValDef {
+impl ParsedLet {
     pub const FLAG_MUTABLE: u8 = 1;
     pub const FLAG_CONTEXT: u8 = 2;
     pub const FLAG_REFERENCING: u8 = 4;
@@ -853,7 +853,7 @@ pub struct UseStmt {
 #[derive(Debug, Clone)]
 pub enum ParsedStmt {
     Use(UseStmt),                       // use core/list/new as foo
-    ValDef(ValDef),                     // let x = 42
+    Let(ParsedLet),                     // let x = 42
     Assignment(Assignment),             // x = 42
     SetRef(SetStmt),                    // x <- 42
     LoneExpression(ParsedExpressionId), // println("asdfasdf")
@@ -1081,7 +1081,8 @@ pub struct ParsedGlobal {
     pub value_expr: ParsedExpressionId,
     pub span: SpanId,
     pub id: ParsedGlobalId,
-    pub is_constant: bool,
+    pub is_comptime: bool,
+    pub is_referencing: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1416,7 +1417,7 @@ impl ParsedModule {
     pub fn get_stmt_span(&self, stmt: ParsedStmtId) -> SpanId {
         match self.stmts.get(stmt) {
             ParsedStmt::Use(u) => u.span,
-            ParsedStmt::ValDef(v) => v.span,
+            ParsedStmt::Let(v) => v.span,
             ParsedStmt::Assignment(a) => a.span,
             ParsedStmt::SetRef(s) => s.span,
             ParsedStmt::LoneExpression(expr_id) => self.exprs.get_span(*expr_id),
@@ -1523,6 +1524,13 @@ pub enum ParseError {
 }
 
 impl ParseError {
+    pub fn message(&self) -> &str {
+        match self {
+            ParseError::Lex(lex_error) => &lex_error.message,
+            ParseError::Parse { message, .. } => message,
+        }
+    }
+
     pub fn span(&self) -> SpanId {
         match self {
             ParseError::Lex(lex_error) => lex_error.span,
@@ -2889,6 +2897,12 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         }?;
         if let Some(expression_id) = resulting_expression {
             self.module.exprs.add_directives(expression_id, directives);
+
+            if self.peek().kind == K::Colon {
+                self.advance();
+                let type_hint = self.expect_type_expression()?;
+                self.module.exprs.set_type_hint(expression_id, type_hint);
+            }
         }
         Ok(resulting_expression)
     }
@@ -2957,7 +2971,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok((context_args, args, span))
     }
 
-    fn parse_val_def(&mut self) -> ParseResult<Option<ValDef>> {
+    fn parse_let(&mut self) -> ParseResult<Option<ParsedLet>> {
         trace!("parse_val_def");
 
         let eaten_keyword = match self.peek() {
@@ -2982,21 +2996,22 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             Parser::expect("expression", self.peek(), self.parse_expression())?;
         let span =
             self.extend_span(eaten_keyword.span, self.get_expression_span(initializer_expression));
-        Ok(Some(ValDef {
+        Ok(Some(ParsedLet {
             name: self.intern_ident_token(name_token),
             type_expr: typ,
             value: initializer_expression,
-            flags: ValDef::make_flags(is_mutable, is_context, is_reference),
+            flags: ParsedLet::make_flags(is_mutable, is_context, is_reference),
             span,
         }))
     }
 
-    fn parse_toplevel_let(&mut self) -> ParseResult<Option<ParsedGlobalId>> {
-        trace!("parse_const");
+    fn parse_global(&mut self) -> ParseResult<Option<ParsedGlobalId>> {
+        trace!("parse_global");
         let Some(keyword_let_token) = self.maybe_consume_next(K::KeywordLet) else {
             return Ok(None);
         };
-        let is_constant = self.maybe_consume_next(K::KeywordConst).is_some();
+        let is_referencing = self.maybe_consume_next_no_whitespace(K::Asterisk).is_some();
+        let is_comptime = self.maybe_consume_next(K::KeywordConst).is_some();
         let name_token = self.expect_eat_token(K::Ident)?;
         let _colon = self.expect_eat_token(K::Colon);
         let typ = Parser::expect("type_expression", self.peek(), self.parse_type_expression())?;
@@ -3010,7 +3025,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             value_expr,
             span,
             id: ParsedGlobalId::PENDING,
-            is_constant,
+            is_comptime,
+            is_referencing,
         });
         Ok(Some(constant_id))
     }
@@ -3227,13 +3243,13 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(Some(ParsedWhileExpr { cond, body, span }))
     }
 
-    fn parse_statement(&mut self) -> ParseResult<Option<ParsedStmtId>> {
+    pub fn parse_statement(&mut self) -> ParseResult<Option<ParsedStmtId>> {
         trace!("eat_statement {:?}", self.peek());
         if let Some(use_id) = self.parse_use()? {
             let span = self.module.uses.get_use(use_id).span;
             Ok(Some(self.module.stmts.add(ParsedStmt::Use(UseStmt { span, use_id }))))
-        } else if let Some(val_def) = self.parse_val_def()? {
-            Ok(Some(self.module.stmts.add(ParsedStmt::ValDef(val_def))))
+        } else if let Some(let_stmt) = self.parse_let()? {
+            Ok(Some(self.module.stmts.add(ParsedStmt::Let(let_stmt))))
         } else if let Some(expr) = self.parse_expression()? {
             let peeked = self.peek();
             // Assignment:
@@ -3644,14 +3660,14 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(Some(parsed_use_id))
     }
 
-    fn parse_definition(&mut self) -> ParseResult<Option<ParsedId>> {
+    pub fn parse_definition(&mut self) -> ParseResult<Option<ParsedId>> {
         if let Some(use_id) = self.parse_use()? {
             Ok(Some(ParsedId::Use(use_id)))
         } else if let Some(ns) = self.parse_namespace()? {
             Ok(Some(ParsedId::Namespace(ns)))
-        } else if let Some(constant_id) = self.parse_toplevel_let()? {
+        } else if let Some(global_id) = self.parse_global()? {
             self.expect_eat_token(K::Semicolon)?;
-            Ok(Some(ParsedId::Constant(constant_id)))
+            Ok(Some(ParsedId::Constant(global_id)))
         } else if let Some(function_id) = self.parse_function()? {
             Ok(Some(ParsedId::Function(function_id)))
         } else if let Some(type_defn_id) = self.parse_type_defn()? {
@@ -3934,6 +3950,30 @@ impl ParsedModule {
                 Ok(())
             }
         }
+    }
+
+    pub fn display_stmt_id(&self, w: &mut impl Write, stmt_id: ParsedStmtId) -> std::fmt::Result {
+        match self.stmts.get(stmt_id) {
+            ParsedStmt::Use(use_stmt) => {
+                write!(w, "use ")?;
+                todo!()
+            }
+            ParsedStmt::Let(let_stmt) => {
+                write!(w, "let ")?;
+                todo!()
+            }
+            ParsedStmt::Assignment(assignment) => todo!(),
+            ParsedStmt::SetRef(set_stmt) => todo!(),
+            ParsedStmt::LoneExpression(parsed_expression_id) => {
+                self.display_expr_id(*parsed_expression_id, w)
+            }
+        }
+    }
+
+    pub fn stmt_id_to_string(&self, stmt_id: ParsedStmtId) -> String {
+        let mut buffer = String::new();
+        self.display_stmt_id(&mut buffer, stmt_id).unwrap();
+        buffer
     }
 }
 

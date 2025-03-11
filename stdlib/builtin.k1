@@ -40,27 +40,6 @@ deftype alias int = i64
 deftype alias uint = u64
 deftype alias byte = u8
 
-/////////////////////////////////
-// Compile-time builtin constants
-let const K1_TEST: bool = builtin;
-let const K1_OS: string = builtin; // Possible values: 'linux', 'macos', 'wasm'
-let const K1_NO_STD: bool = builtin;
-
-// TODO: make threadlocal, make trait object. For now, global ptr
-//let ALLOCATOR: Pointer = 0 as Pointer;
-
-
-/////////////////////////////////
-// Core sizing intrinsics
-
-intern fn sizeOf[T](): u64
-intern fn sizeOfStride[T](): u64
-intern fn alignOf[T](): u64
-
-ns compiler {
-  intern fn location(): SourceLocation
-}
-
 ////////////////////////////////
 // Builtin Abilities
 
@@ -129,6 +108,29 @@ ability Iterable[impl Item, impl I: Iterator[Item = Item]] {
   fn iterator(self: Self): I
 }
 
+
+/////////////////////////////////
+// Compile-time builtin constants
+let const K1_TEST: bool = builtin;
+let const K1_OS: string = builtin; // Possible values: 'linux', 'macos', 'wasm'
+let const K1_NO_STD: bool = builtin;
+let const K1_MACOS: bool = K1_OS == "macos";
+
+// TODO: make threadlocal, make trait object. For now, global ptr
+//let ALLOCATOR: Pointer = 0 as Pointer;
+
+
+/////////////////////////////////
+// Core sizing intrinsics
+
+intern fn sizeOf[T](): u64
+intern fn sizeOfStride[T](): u64
+intern fn alignOf[T](): u64
+
+ns compiler {
+  intern fn location(): SourceLocation
+}
+
 ns bool {
   intern fn negated(self: bool): bool
 }
@@ -158,7 +160,6 @@ ns libc {
   extern(free) fn free(ptr: Pointer): unit
 
   extern(realloc) fn realloc(ptr: Pointer, size: u64): Pointer
-  extern(arc4random_uniform) fn arc4random_uniform(upperBound: u32): u32
 
   extern(abort) fn abort(): never
 }
@@ -169,7 +170,7 @@ fn assert(context locn: compiler/SourceLocation)(value: bool): unit {
   };
 }
 
-@debug fn crash(context locn: compiler/SourceLocation)(msg: string): never {
+fn crash(context locn: compiler/SourceLocation)(msg: string): never {
   #if K1_NO_STD {
     let s = "exiting (nostd)\n\0";
     libc/write(

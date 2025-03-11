@@ -251,7 +251,7 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
     let target = args
         .target
         .or(detect_host_target())
-        .unwrap_or_else(|| panic!("Unsupported host; provide your target explicitly"));
+        .unwrap_or_else(|| panic!("Unsupported host platform; provide your target explicitly"));
     let config =
         CompilerConfig { is_test_build: args.command.is_test(), no_std: args.no_std, target };
     let mut parsed_module = ParsedModule::make(module_name.to_string(), config);
@@ -273,12 +273,10 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
         let name = path.file_name().unwrap();
         info!("Parsing {}", name.to_string_lossy());
         let file_id = parsed_module.sources.next_file_id();
-        let source = Source::make(
-            file_id,
-            path.canonicalize().unwrap().parent().unwrap().to_str().unwrap().to_string(),
-            name.to_str().unwrap().to_string(),
-            content,
-        );
+        let directory_string =
+            path.canonicalize().unwrap().parent().unwrap().to_str().unwrap().to_string();
+        let source =
+            Source::make(file_id, directory_string, name.to_str().unwrap().to_string(), content);
         let token_vec = match lex_text(&mut parsed_module, source) {
             Ok(token_vec) => token_vec,
             Err(e) => {
