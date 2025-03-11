@@ -35,6 +35,28 @@ use crate::parse::{
 use crate::pool::Pool;
 use crate::{pool, static_assert_size, strings};
 
+macro_rules! nz_u32_id {
+    ($name: ident) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        pub struct $name(NonZeroU32);
+        impl From<NonZeroU32> for $name {
+            fn from(value: NonZeroU32) -> Self {
+                $name(value)
+            }
+        }
+        impl From<$name> for NonZeroU32 {
+            fn from(val: $name) -> Self {
+                val.0
+            }
+        }
+        impl Display for $name {
+            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+                self.0.fmt(f)
+            }
+        }
+    };
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FunctionId(pub u32);
 impl FunctionId {
@@ -42,51 +64,20 @@ impl FunctionId {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct VariableId(u32);
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct NamespaceId(NonZeroU32);
+
+nz_u32_id!(NamespaceId);
+
 pub const ROOT_NAMESPACE_ID: NamespaceId = NamespaceId(NonZeroU32::new(1).unwrap());
 
-impl From<NonZeroU32> for NamespaceId {
-    fn from(value: NonZeroU32) -> Self {
-        NamespaceId(value)
-    }
-}
-impl From<NamespaceId> for NonZeroU32 {
-    fn from(val: NamespaceId) -> Self {
-        val.0
-    }
-}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AbilityId(u32);
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct AbilityImplId(u32);
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ConstantId(u32);
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct TypedStmtId(NonZeroU32);
-impl From<NonZeroU32> for TypedStmtId {
-    fn from(value: NonZeroU32) -> Self {
-        TypedStmtId(value)
-    }
-}
-impl From<TypedStmtId> for NonZeroU32 {
-    fn from(val: TypedStmtId) -> Self {
-        val.0
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct TypedExprId(NonZeroU32);
-impl From<NonZeroU32> for TypedExprId {
-    fn from(value: NonZeroU32) -> Self {
-        TypedExprId(value)
-    }
-}
-impl From<TypedExprId> for NonZeroU32 {
-    fn from(val: TypedExprId) -> Self {
-        val.0
-    }
-}
+pub struct AbilityImplId(u32);
+
+nz_u32_id!(TypedGlobalId);
+nz_u32_id!(TypedStmtId);
+nz_u32_id!(TypedExprId);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Linkage {
@@ -137,13 +128,29 @@ pub struct EvalExprContext {
     scope_id: ScopeId,
     expected_type_id: Option<TypeId>,
     is_inference: bool,
+    // nocommit: Run comptime exprs before bodies but after all other phases, treat it
+    // like 'body' code SINCE it'll end up using the user's types, and even impls!
+    is_comptime: bool,
+    global_defn_name: Option<Identifier>,
 }
 impl EvalExprContext {
+    fn make(scope_id: ScopeId) -> EvalExprContext {
+        EvalExprContext {
+            scope_id,
+            expected_type_id: None,
+            is_inference: false,
+            is_comptime: false,
+            global_defn_name: None,
+        }
+    }
+
     pub fn with_expected_type(&self, expected_element_type: Option<TypeId>) -> EvalExprContext {
         EvalExprContext {
             scope_id: self.scope_id,
             expected_type_id: expected_element_type,
             is_inference: self.is_inference,
+            is_comptime: false,
+            global_defn_name: None,
         }
     }
 
@@ -152,11 +159,9 @@ impl EvalExprContext {
             scope_id: self.scope_id,
             expected_type_id: None,
             is_inference: self.is_inference,
+            is_comptime: false,
+            global_defn_name: None,
         }
-    }
-
-    fn from_scope(scope_id: ScopeId) -> EvalExprContext {
-        EvalExprContext { scope_id, expected_type_id: None, is_inference: false }
     }
 
     fn with_inference(&self, is_inference: bool) -> EvalExprContext {
@@ -165,6 +170,10 @@ impl EvalExprContext {
 
     fn with_scope(&self, scope_id: ScopeId) -> EvalExprContext {
         EvalExprContext { scope_id, ..*self }
+    }
+
+    fn with_comptime(&self, arg: bool) -> EvalExprContext {
+        EvalExprContext { is_comptime: arg, ..*self }
     }
 }
 
@@ -187,32 +196,38 @@ enum TypeOrParsedExpr {
 
 #[derive(Debug, Clone)]
 pub enum CompileTimeValue {
+    Unit,
     Boolean(bool),
     Char(u8),
     Integer(TypedIntegerValue),
     Float(TypedFloatValue),
     String(Box<str>),
+    Pointer(u64),
 }
 static_assert_size!(CompileTimeValue, 24);
 
 impl CompileTimeValue {
     pub fn kind(&self) -> &'static str {
         match self {
+            CompileTimeValue::Unit => "unit",
             CompileTimeValue::Boolean(_) => "bool",
             CompileTimeValue::Char(_) => "char",
             CompileTimeValue::Integer(i) => i.kind_str(),
             CompileTimeValue::Float(_) => "float",
             CompileTimeValue::String(_) => "string",
+            CompileTimeValue::Pointer(_) => "pointer",
         }
     }
 
     pub fn get_type(&self) -> TypeId {
         match self {
+            CompileTimeValue::Unit => UNIT_TYPE_ID,
             CompileTimeValue::Boolean(_) => BOOL_TYPE_ID,
             CompileTimeValue::Char(_) => CHAR_TYPE_ID,
             CompileTimeValue::Integer(typed_integer_value) => typed_integer_value.get_type(),
             CompileTimeValue::Float(typed_float_value) => typed_float_value.get_type(),
             CompileTimeValue::String(_) => STRING_TYPE_ID,
+            CompileTimeValue::Pointer(_) => POINTER_TYPE_ID,
         }
     }
 }
@@ -1518,16 +1533,18 @@ pub struct Variable {
     pub is_mutable: bool,
     pub owner_scope: ScopeId,
     pub is_context: bool,
-    pub constant_id: Option<ConstantId>,
+    pub global_id: Option<TypedGlobalId>,
 }
 
 #[derive(Debug)]
-pub struct Constant {
+pub struct TypedGlobal {
     pub variable_id: VariableId,
     pub parsed_expr: ParsedExpressionId,
-    pub value: CompileTimeValue,
+    pub initial_value: CompileTimeValue,
     pub ty: TypeId,
     pub span: SpanId,
+    pub is_comptime: bool,
+    pub is_referencing: bool,
 }
 
 #[derive(Debug)]
@@ -1895,7 +1912,7 @@ pub struct TypedModule {
     functions: Vec<TypedFunction>,
     pub variables: Variables,
     pub types: Types,
-    pub constants: Vec<Constant>,
+    pub globals: Pool<TypedGlobal, TypedGlobalId>,
     pub exprs: pool::Pool<TypedExpr, TypedExprId>,
     pub stmts: pool::Pool<TypedStmt, TypedStmtId>,
     pub scopes: Scopes,
@@ -1939,7 +1956,7 @@ impl TypedModule {
             functions: Vec::with_capacity(parsed_module.functions.len() * 4),
             variables: Variables::default(),
             types,
-            constants: Vec::new(),
+            globals: Pool::with_capacity("typed_globals", 4096),
             exprs: Pool::with_capacity("typed_exprs", 32768),
             stmts: Pool::with_capacity("typed_stmts", 8192),
             scopes,
@@ -2560,8 +2577,7 @@ impl TypedModule {
                 Ok(function_type_id)
             }
             ParsedTypeExpr::TypeOf(tof) => {
-                let expr =
-                    self.eval_expr(tof.target_expr, EvalExprContext::from_scope(scope_id))?;
+                let expr = self.eval_expr(tof.target_expr, EvalExprContext::make(scope_id))?;
                 let ty = self.exprs.get(expr);
                 Ok(ty.get_type())
             }
@@ -3123,27 +3139,6 @@ impl TypedModule {
         }
     }
 
-    fn eval_type_expr_for_global(
-        &mut self,
-        parsed_type_expr: ParsedTypeExprId,
-        scope_id: ScopeId,
-    ) -> TyperResult<TypeId> {
-        let type_id = self.eval_type_expr(parsed_type_expr, scope_id)?;
-        match self.types.get(type_id) {
-            Type::Unit(_) => Ok(type_id),
-            Type::Char(_) => Ok(type_id),
-            Type::Bool(_) => Ok(type_id),
-            Type::Pointer(_) => Ok(type_id),
-            Type::Integer(_) => Ok(type_id),
-            _t if type_id == STRING_TYPE_ID => Ok(type_id),
-            _t => failf!(
-                self.ast.get_type_expression_span(parsed_type_expr),
-                "Type not allowed in global: {}",
-                self.type_id_to_string(type_id),
-            ),
-        }
-    }
-
     fn compile_pattern(
         &self,
         pat_expr: ParsedPatternId,
@@ -3176,7 +3171,7 @@ impl TypedModule {
                         match self.eval_numeric_value(
                             &num_lit.text,
                             num_lit.span,
-                            EvalExprContext::from_scope(scope_id)
+                            EvalExprContext::make(scope_id)
                                 .with_expected_type(Some(target_type_id)),
                         )? {
                             TypedExpr::Integer(value) => match self.types.get(target_type_id) {
@@ -3592,99 +3587,40 @@ impl TypedModule {
         }
     }
 
-    fn eval_const_expr(
+    fn eval_expr_comptime(
         &mut self,
-        expr: ParsedExpressionId,
-        expected_type_id: Option<TypeId>,
+        expr_id: TypedExprId,
         scope_id: ScopeId,
-        constant_name: Option<Identifier>,
     ) -> TyperResult<CompileTimeValue> {
-        let eval_ctx = EvalExprContext::from_scope(scope_id).with_expected_type(expected_type_id);
-        match self.ast.exprs.get(expr) {
-            ParsedExpression::Literal(Literal::Numeric(integer)) => {
-                match self.eval_numeric_value(&integer.text, integer.span, eval_ctx)? {
-                    TypedExpr::Float(f) => Ok(CompileTimeValue::Float(f.value)),
-                    TypedExpr::Integer(i) => Ok(CompileTimeValue::Integer(i.value)),
-                    _ => unreachable!(),
-                }
+        match self.exprs.get(expr_id) {
+            TypedExpr::Unit(_span_id) => Ok(CompileTimeValue::Unit),
+            TypedExpr::Char(byte, _span_id) => Ok(CompileTimeValue::Char(*byte)),
+            TypedExpr::Bool(b, _span_id) => Ok(CompileTimeValue::Boolean(*b)),
+            TypedExpr::Integer(typed_integer_expr) => {
+                Ok(CompileTimeValue::Integer(typed_integer_expr.value))
             }
-            ParsedExpression::Literal(Literal::Bool(b, _span)) => Ok(CompileTimeValue::Boolean(*b)),
-            ParsedExpression::Literal(Literal::Char(c, _span)) => Ok(CompileTimeValue::Char(*c)),
-            ParsedExpression::Literal(Literal::String(s, _span)) => {
+            TypedExpr::Float(typed_float_expr) => {
+                Ok(CompileTimeValue::Float(typed_float_expr.value))
+            }
+            TypedExpr::String(s, _span_id) => {
                 Ok(CompileTimeValue::String(s.clone().into_boxed_str()))
             }
-            ParsedExpression::Builtin(span) => {
-                if scope_id != self.scopes.get_root_scope_id() {
-                    return failf!(
-                        *span,
-                        "All the known builtins constants live in the root scope"
-                    );
-                }
-                match constant_name.map(|n| self.name_of(n)) {
-                    None => {
-                        failf!(*span, "builtin can only be used as a top-level expression")
-                    }
-                    Some("K1_TEST") => {
-                        let is_test_build = self.ast.config.is_test_build;
-                        Ok(CompileTimeValue::Boolean(is_test_build))
-                    }
-                    Some("K1_OS") => {
-                        // TODO: Ideally this is an enum! But we don't support comptime enums yet
-                        let os_str = self.ast.config.target.target_os().to_str();
-                        Ok(CompileTimeValue::String(os_str.to_owned().into_boxed_str()))
-                    }
-                    Some("K1_NO_STD") => Ok(CompileTimeValue::Boolean(self.ast.config.no_std)),
-                    Some(s) => failf!(*span, "Unknown builtin name: {s}"),
-                }
-            }
-            ParsedExpression::Variable(variable) => {
-                let Some((v, _)) = self.scopes.find_variable_namespaced(
-                    scope_id,
-                    &variable.name,
-                    &self.namespaces,
-                    &self.ast.identifiers,
-                )?
-                else {
-                    return failf!(variable.name.span, "not found fixme");
+            TypedExpr::Variable(v) => {
+                let typed_variable = self.variables.get(v.variable_id);
+                let Some(global_id) = typed_variable.global_id else {
+                    return failf!(v.span, "only global comptime variables are supported");
                 };
-                let typed_variable = self.variables.get(v);
-                let Some(constant_id) = typed_variable.constant_id else {
-                    return failf!(variable.name.span, "var is not constant");
-                };
-                let constant = &self.constants[constant_id.0 as usize];
-                Ok(constant.value.clone())
-            }
-            ParsedExpression::UnaryOp(op) => match op.op_kind {
-                ParsedUnaryOpKind::BooleanNegation => {
-                    let op_expr = op.expr;
-                    let inner =
-                        self.eval_const_expr(op_expr, Some(BOOL_TYPE_ID), eval_ctx.scope_id, None)?;
-                    let CompileTimeValue::Boolean(b) = &inner else {
-                        return failf!(
-                            self.ast.exprs.get_span(op_expr),
-                            "Expected constant boolean, got {:?}",
-                            inner
-                        );
-                    };
-                    Ok(CompileTimeValue::Boolean(!b))
+                let global = self.globals.get(global_id);
+                if !global.is_comptime {
+                    return failf!(v.span, "only comptime variables are supported");
                 }
-            },
-            ParsedExpression::BinaryOp(bin_op) => match bin_op.op_kind {
-                BinaryOpKind::Add => unimplemented!(),
-                BinaryOpKind::Subtract => unimplemented!(),
-                BinaryOpKind::Multiply => unimplemented!(),
-                BinaryOpKind::Divide => unimplemented!(),
-                BinaryOpKind::Rem => unimplemented!(),
-                BinaryOpKind::Less => unimplemented!(),
-                BinaryOpKind::LessEqual => unimplemented!(),
-                BinaryOpKind::Greater => unimplemented!(),
-                BinaryOpKind::GreaterEqual => unimplemented!(),
-                BinaryOpKind::And => unimplemented!(),
-                BinaryOpKind::Or => unimplemented!(),
+                Ok(global.initial_value.clone())
+            }
+            TypedExpr::BinaryOp(bin_op) => match bin_op.kind {
                 BinaryOpKind::Equals => {
                     let bin_op = bin_op.clone();
-                    let lhs = self.eval_const_expr(bin_op.lhs, None, eval_ctx.scope_id, None)?;
-                    let rhs = self.eval_const_expr(bin_op.rhs, None, eval_ctx.scope_id, None)?;
+                    let lhs = self.eval_expr_comptime(bin_op.lhs, scope_id)?;
+                    let rhs = self.eval_expr_comptime(bin_op.rhs, scope_id)?;
                     match (&lhs, &rhs) {
                         (CompileTimeValue::String(s1), CompileTimeValue::String(s2)) => {
                             Ok(CompileTimeValue::Boolean(*s1 == *s2))
@@ -3699,49 +3635,168 @@ impl TypedModule {
                         }
                     }
                 }
-                BinaryOpKind::NotEquals => unimplemented!(),
-                BinaryOpKind::OptionalElse => unimplemented!(),
-                BinaryOpKind::Pipe => unimplemented!(),
+                BinaryOpKind::NotEquals => {
+                    unreachable!("Do we even product NotEquals exprs? Or desugar")
+                }
+                _ => failf!(
+                    bin_op.span,
+                    "Unsupported comptime binary op: {}",
+                    self.expr_to_string(expr_id)
+                ),
             },
-            _other => {
-                failf!(
-                    self.ast.exprs.get_span(expr),
-                    "Unsupported expression in 'constant' context",
-                )
+            TypedExpr::Cast(typed_cast) => match typed_cast.cast_type {
+                CastType::IntegerExtend => {
+                    let span = typed_cast.span;
+                    let CompileTimeValue::Integer(_i) =
+                        self.eval_expr_comptime(typed_cast.base_expr, scope_id)?
+                    else {
+                        self.ice_with_span("malformed integer cast", span)
+                    };
+                    let target_int_type = todo!();
+                    //match i {
+                    //    TypedIntegerValue::U8(_) => todo!(),
+                    //    TypedIntegerValue::U16(_) => todo!(),
+                    //    TypedIntegerValue::U32(_) => todo!(),
+                    //    TypedIntegerValue::U64(_) => todo!(),
+                    //    TypedIntegerValue::I8(_) => todo!(),
+                    //    TypedIntegerValue::I16(_) => todo!(),
+                    //    TypedIntegerValue::I32(_) => todo!(),
+                    //    TypedIntegerValue::I64(_) => todo!(),
+                    //}
+                }
+                CastType::IntegerTruncate => todo!(),
+                CastType::Integer8ToChar => todo!(),
+                CastType::IntegerExtendFromChar => todo!(),
+                CastType::IntegerToFloat => todo!(),
+                CastType::IntegerToPointer => {
+                    let span = typed_cast.span;
+                    let CompileTimeValue::Integer(TypedIntegerValue::U64(u)) =
+                        self.eval_expr_comptime(typed_cast.base_expr, scope_id)?
+                    else {
+                        self.ice_with_span("malformed integer cast", span)
+                    };
+                    Ok(CompileTimeValue::Pointer(u))
+                }
+                CastType::KnownNoOp => todo!(),
+                CastType::PointerToReference => {
+                    todo!("We might need this one soon, but we dont have References in ComptimeValue yet")
+                }
+                CastType::ReferenceToPointer => todo!(),
+                CastType::PointerToInteger => todo!(),
+                CastType::FloatExtend => todo!(),
+                CastType::FloatTruncate => todo!(),
+                CastType::FloatToInteger => todo!(),
+                CastType::LambdaToLambdaObject => todo!(),
+            },
+            TypedExpr::Call(call) => {
+                // Get callee, assert static
+                // Check if intrinsic, if so, implement at least 'negated'
+                let span = call.span;
+                let Some(callee_id) = call.callee.maybe_function_id() else {
+                    return failf!(span, "Only reguhler functions can be called at comptime");
+                };
+                let function = self.get_function(callee_id);
+                match function.intrinsic_type {
+                    Some(IntrinsicFunction::BoolNegate) => {
+                        let CompileTimeValue::Boolean(arg) =
+                            self.eval_expr_comptime(call.args[0], scope_id)?
+                        else {
+                            self.ice_with_span("malformed bool negate", span)
+                        };
+                        let negated = !arg;
+                        Ok(CompileTimeValue::Boolean(negated))
+                    }
+                    Some(i) => {
+                        failf!(span, "Unimplemented comptime intrinsic: {:?}", i)
+                    }
+                    None => {
+                        failf!(span, "comptime function calls are not implemented yet")
+                    }
+                }
+            }
+            e => {
+                failf!(e.get_span(), "Unsupported comptime expr: {}", self.expr_to_string(expr_id))
             }
         }
     }
 
+    fn eval_comptime_parsed_expr(
+        &mut self,
+        expr: ParsedExpressionId,
+        expected_type_id: Option<TypeId>,
+        scope_id: ScopeId,
+        global_name: Option<Identifier>,
+    ) -> TyperResult<CompileTimeValue> {
+        let eval_ctx = EvalExprContext {
+            scope_id,
+            expected_type_id,
+            is_inference: false,
+            is_comptime: true,
+            global_defn_name: global_name,
+        };
+        let expr_result = self.eval_expr(expr, eval_ctx)?;
+        self.eval_expr_comptime(expr_result, scope_id)
+    }
+
     fn eval_global(
         &mut self,
-        parsed_constant_id: ParsedGlobalId,
+        parsed_global_id: ParsedGlobalId,
         scope_id: ScopeId,
     ) -> TyperResult<VariableId> {
-        let parsed_constant = self.ast.get_global(parsed_constant_id);
-        let type_id = self.eval_type_expr_for_global(parsed_constant.ty, scope_id)?;
-        let parsed_constant = self.ast.get_global(parsed_constant_id);
-        let constant_name = parsed_constant.name;
-        let constant_span = parsed_constant.span;
-        let parsed_expr_id = parsed_constant.value_expr;
-        let expr =
-            self.eval_const_expr(parsed_expr_id, Some(type_id), scope_id, Some(constant_name))?;
-        let constant_id = ConstantId(self.constants.len() as u32);
+        let parsed_global = self.ast.get_global(parsed_global_id).clone();
+        let type_id = self.eval_type_expr(parsed_global.ty, scope_id)?;
+
+        let is_referencing = parsed_global.is_referencing;
+        let type_to_check = if is_referencing {
+            let Type::Reference(r) = self.types.get(type_id) else {
+                return failf!(parsed_global.span, "Global references must have a reference type");
+            };
+            r.inner_type
+        } else {
+            type_id
+        };
+        let global_name = parsed_global.name;
+        let global_span = parsed_global.span;
+        let value_expr_id = parsed_global.value_expr;
+        let is_comptime = parsed_global.is_comptime;
+
+        // Even if its const, the RHS has to be a const-supported expr
+        let expr = self.eval_comptime_parsed_expr(
+            value_expr_id,
+            Some(type_id),
+            scope_id,
+            Some(global_name),
+        )?;
+
+        if let Err(msg) = self.check_types(type_to_check, expr.get_type(), scope_id) {
+            return failf!(
+                global_span,
+                "Type mismatch for global {}: {}",
+                self.name_of(global_name),
+                msg
+            );
+        }
+
+        let global_id = self.globals.next_id();
         let variable_id = self.variables.add_variable(Variable {
-            name: constant_name,
+            name: global_name,
             type_id,
             is_mutable: false,
             owner_scope: scope_id,
             is_context: false,
-            constant_id: Some(constant_id),
+            global_id: Some(global_id),
         });
-        self.constants.push(Constant {
+        let actual_global_id = self.globals.add(TypedGlobal {
             variable_id,
-            value: expr,
-            parsed_expr: parsed_expr_id,
+            initial_value: expr,
+            parsed_expr: value_expr_id,
             ty: type_id,
-            span: constant_span,
+            span: global_span,
+            is_referencing,
+            is_comptime,
         });
-        self.scopes.add_variable(scope_id, constant_name, variable_id);
+        debug_assert_eq!(actual_global_id, global_id);
+        self.scopes.add_variable(scope_id, global_name, variable_id);
         Ok(variable_id)
     }
 
@@ -3824,6 +3879,7 @@ impl TypedModule {
                     ROOT_NAMESPACE_ID,
                 );
                 specialized_function_id
+                    .map(|o| o.expect("an ability function cannot be conditionally compiled"))
             })
             .collect::<TyperResult<Vec<_>>>();
         let functions = functions.unwrap_or_else(|err| {
@@ -4163,21 +4219,20 @@ impl TypedModule {
         for blanket_fn_id in &blanket_impl.functions {
             let blanket_fn = self.get_function(*blanket_fn_id);
             let parsed_fn = blanket_fn.parsed_id.as_function_id().unwrap();
-            let specialized_function_id = self.eval_function_declaration(
-                parsed_fn,
-                new_impl_scope,
-                Some(FunctionAbilityContextInfo::ability_impl(
-                    concrete_ability_id,
-                    self_type_id,
-                    kind,
-                    Some(*blanket_fn_id),
-                )),
-                ROOT_NAMESPACE_ID,
-            )?;
-            // HEADS UP --------> Recently swapped these; this fixes an issue
-            // where blanket bodies were running too early but may have broken things
+            let specialized_function_id = self
+                .eval_function_declaration(
+                    parsed_fn,
+                    new_impl_scope,
+                    Some(FunctionAbilityContextInfo::ability_impl(
+                        concrete_ability_id,
+                        self_type_id,
+                        kind,
+                        Some(*blanket_fn_id),
+                    )),
+                    ROOT_NAMESPACE_ID,
+                )?
+                .unwrap();
             self.functions_pending_body_specialization.push(specialized_function_id);
-            // self.eval_function_body(specialized_function_id)?;
             specialized_function_ids.push(specialized_function_id);
         }
 
@@ -4371,7 +4426,7 @@ impl TypedModule {
                     let variable_is_above_lambda = self
                         .scopes
                         .scope_has_ancestor(nearest_parent_lambda_scope, variable_scope_id);
-                    let variable_is_global = self.variables.get(variable_id).constant_id.is_some();
+                    let variable_is_global = self.variables.get(variable_id).global_id.is_some();
 
                     let is_capture = variable_is_above_lambda && !variable_is_global;
                     debug!("{}, is_capture={is_capture}", self.name_of(variable.name.name));
@@ -4918,8 +4973,12 @@ impl TypedModule {
         let should_compile = match conditional_compile_expr {
             None => true,
             Some(condition) => {
-                let typed_condition =
-                    self_.eval_const_expr(condition, Some(BOOL_TYPE_ID), ctx.scope_id, None)?;
+                let typed_condition = self_.eval_comptime_parsed_expr(
+                    condition,
+                    Some(BOOL_TYPE_ID),
+                    ctx.scope_id,
+                    None,
+                )?;
                 match typed_condition {
                     CompileTimeValue::Boolean(b) => b,
                     _ => {
@@ -5299,7 +5358,34 @@ impl TypedModule {
                 Ok(res)
             }
             ParsedExpression::Builtin(span) => {
-                failf!(*span, "builtins are all currently constant")
+                if !ctx.is_comptime {
+                    return failf!(*span, "All the builtins should currently be comptime");
+                }
+                let Some(defn_name) = ctx.global_defn_name else {
+                    return failf!(*span, "builtin can only be used as a top-level expression");
+                };
+                if ctx.scope_id != self.scopes.get_root_scope_id() {
+                    return failf!(
+                        *span,
+                        "All the known builtins constants live in the root scope"
+                    );
+                }
+                match self.name_of(defn_name) {
+                    "K1_TEST" => {
+                        let is_test_build = self.ast.config.is_test_build;
+                        Ok(self.exprs.add(TypedExpr::Bool(is_test_build, *span)))
+                    }
+                    "K1_OS" => {
+                        // TODO: Ideally this is an enum! But we don't support comptime enums yet
+                        let os_str = self.ast.config.target.target_os().to_str();
+                        Ok(self.exprs.add(TypedExpr::String(os_str.to_owned(), *span)))
+                    }
+                    "K1_NO_STD" => {
+                        let no_std = self.ast.config.no_std;
+                        Ok(self.exprs.add(TypedExpr::Bool(no_std, *span)))
+                    }
+                    s => failf!(*span, "Unknown builtin name: {s}"),
+                }
             }
         }
     }
@@ -5694,7 +5780,7 @@ impl TypedModule {
                 is_mutable: false,
                 owner_scope: lambda_scope_id,
                 is_context: false,
-                constant_id: None,
+                global_id: None,
             });
             lambda_scope.add_variable(name, variable_id);
             param_variables.push_back(variable_id)
@@ -5782,7 +5868,7 @@ impl TypedModule {
             is_mutable: false,
             owner_scope: lambda_scope_id,
             is_context: false,
-            constant_id: None,
+            global_id: None,
         });
         typed_params.push_front(environment_param);
         param_variables.push_front(environment_param_variable_id);
@@ -6729,7 +6815,7 @@ impl TypedModule {
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
         let condition_value =
-            self.eval_const_expr(if_expr.cond, Some(BOOL_TYPE_ID), ctx.scope_id, None)?;
+            self.eval_comptime_parsed_expr(if_expr.cond, Some(BOOL_TYPE_ID), ctx.scope_id, None)?;
         let CompileTimeValue::Boolean(condition_bool) = condition_value else {
             let cond_span = self.ast.get_expr_span(if_expr.cond);
             return failf!(cond_span, "Condition is not a boolean");
@@ -6994,6 +7080,29 @@ impl TypedModule {
         let ParsedExpression::BinaryOp(binary_op) = self.ast.exprs.get(binary_op_id).clone() else {
             unreachable!()
         };
+
+        // TODO(comptime): Just a hack to get string equality working until we have a full-fledged
+        //                 interpreter going for comptime, which would just actually call the
+        //                 equals impl
+        if ctx.is_comptime {
+            if binary_op.op_kind == BinaryOpKind::Equals {
+                let lhs = self.eval_expr(binary_op.lhs, ctx.with_no_expected_type())?;
+                let lhs_type = self.exprs.get(lhs).get_type();
+                let rhs = self.eval_expr(binary_op.lhs, ctx.with_expected_type(Some(lhs_type)))?;
+                let rhs_type = self.exprs.get(rhs).get_type();
+                if let Err(msg) = self.check_types(lhs_type, rhs_type, ctx.scope_id) {
+                    return failf!(binary_op.span, "comptime equals type mismatch: {msg}");
+                }
+                return Ok(self.exprs.add(TypedExpr::BinaryOp(BinaryOp {
+                    kind: BinaryOpKind::Equals,
+                    ty: BOOL_TYPE_ID,
+                    lhs,
+                    rhs,
+                    span: binary_op.span,
+                })));
+            }
+        }
+
         // Special cases: Equality, OptionalElse, and Pipe
         match binary_op.op_kind {
             BinaryOpKind::Pipe => {
@@ -7003,7 +7112,7 @@ impl TypedModule {
                 let lhs = self.eval_expr(binary_op.lhs, ctx.with_no_expected_type())?;
                 let lhs_type = self.exprs.get(lhs).get_type();
                 if !is_scalar_for_equals(lhs_type) {
-                    return self.eval_equality_expr(binary_op_id, ctx.with_no_expected_type());
+                    return self.eval_equality_expr(binary_op_id, lhs, ctx.with_no_expected_type());
                 }
             }
             BinaryOpKind::OptionalElse => {
@@ -7177,15 +7286,16 @@ impl TypedModule {
     fn eval_equality_expr(
         &mut self,
         binary_op_id: ParsedExpressionId,
+        lhs: TypedExprId,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
         let ParsedExpression::BinaryOp(binary_op) = self.ast.exprs.get(binary_op_id).clone() else {
             unreachable!()
         };
 
-        let lhs = self.eval_expr(binary_op.lhs, ctx.with_no_expected_type())?;
         let lhs_type = self.exprs.get(lhs).get_type();
         let equality_result = match self.types.get(lhs_type) {
+            // nocommit: Is this special-case necessary? These type params should implement Equals
             Type::TypeParameter(_type_var) => {
                 let rhs = self.eval_expr(binary_op.rhs, ctx.with_expected_type(Some(lhs_type)))?;
                 let equals = self.synth_equals_binop(lhs, rhs, binary_op.span);
@@ -7719,7 +7829,7 @@ impl TypedModule {
                 // Wrong scope, and its not actually added, but we know its not used
                 owner_scope: new_function.scope,
                 is_context: false,
-                constant_id: None,
+                global_id: None,
             });
             new_function.param_variables.insert(0, empty_env_variable);
             let new_function_type =
@@ -8492,7 +8602,7 @@ impl TypedModule {
             let (argument_type, argument_span) = match expr {
                 TypeOrParsedExpr::TypeId(type_id) => (*type_id, span),
                 TypeOrParsedExpr::ParsedExpr(parsed_expr) => {
-                    let inference_context = EvalExprContext::from_scope(scope_id)
+                    let inference_context = EvalExprContext::make(scope_id)
                         .with_inference(true)
                         .with_expected_type(Some(expected_type_so_far));
                     let expr_id = self_.eval_expr(*parsed_expr, inference_context)?;
@@ -9214,7 +9324,7 @@ impl TypedModule {
                     is_mutable: false,
                     owner_scope: spec_fn_scope,
                     is_context: specialized_param_type.is_context,
-                    constant_id: None,
+                    global_id: None,
                 });
                 if specialized_param_type.is_context {
                     self.scopes.add_context_variable(
@@ -9305,7 +9415,7 @@ impl TypedModule {
             .clone();
         let block = self.eval_block(
             &block_ast,
-            EvalExprContext::from_scope(specialized_function.scope)
+            EvalExprContext::make(specialized_function.scope)
                 .with_expected_type(Some(specialized_return_type)),
             true,
         )?;
@@ -9374,21 +9484,21 @@ impl TypedModule {
                 );
                 Ok(None)
             }
-            ParsedStmt::ValDef(val_def) => {
-                static_assert_size!(parse::ValDef, 20);
-                let val_def = val_def.clone();
-                let provided_type = match val_def.type_expr.as_ref() {
+            ParsedStmt::Let(parsed_let) => {
+                static_assert_size!(parse::ParsedLet, 20);
+                let parsed_let = parsed_let.clone();
+                let provided_type = match parsed_let.type_expr.as_ref() {
                     None => None,
                     Some(&type_expr) => Some(self.eval_type_expr(type_expr, ctx.scope_id)?),
                 };
                 let expected_type = match provided_type {
                     Some(provided_type) => {
-                        if val_def.is_referencing() {
+                        if parsed_let.is_referencing() {
                             let Type::Reference(expected_reference_type) =
                                 self.types.get(provided_type)
                             else {
                                 return failf!(
-                                    val_def.span,
+                                    parsed_let.span,
                                     "Expected type must be a reference type when using let*"
                                 );
                             };
@@ -9400,45 +9510,45 @@ impl TypedModule {
                     None => None,
                 };
                 let value_expr =
-                    self.eval_expr(val_def.value, ctx.with_expected_type(expected_type))?;
+                    self.eval_expr(parsed_let.value, ctx.with_expected_type(expected_type))?;
                 let actual_type = self.exprs.get(value_expr).get_type();
 
                 if let Some(expected_type) = expected_type {
                     if let Err(msg) = self.check_types(expected_type, actual_type, ctx.scope_id) {
-                        return failf!(val_def.span, "Local variable type mismatch: {}", msg,);
+                        return failf!(parsed_let.span, "Local variable type mismatch: {}", msg,);
                     }
                 };
 
-                let variable_type = if val_def.is_referencing() {
+                let variable_type = if parsed_let.is_referencing() {
                     self.types.add_reference_type(actual_type)
                 } else {
                     actual_type
                 };
 
                 let variable_id = self.variables.add_variable(Variable {
-                    is_mutable: val_def.is_mutable(),
-                    name: val_def.name,
+                    is_mutable: parsed_let.is_mutable(),
+                    name: parsed_let.name,
                     type_id: variable_type,
                     owner_scope: ctx.scope_id,
-                    is_context: val_def.is_context(),
-                    constant_id: None,
+                    is_context: parsed_let.is_context(),
+                    global_id: None,
                 });
                 let val_def_stmt = TypedStmt::Let(LetStmt {
                     variable_type,
                     variable_id,
                     initializer: value_expr,
-                    is_referencing: val_def.is_referencing(),
-                    span: val_def.span,
+                    is_referencing: parsed_let.is_referencing(),
+                    span: parsed_let.span,
                 });
-                if val_def.is_context() {
+                if parsed_let.is_context() {
                     self.scopes.add_context_variable(
                         ctx.scope_id,
-                        val_def.name,
+                        parsed_let.name,
                         variable_id,
                         variable_type,
                     );
                 } else {
-                    self.scopes.add_variable(ctx.scope_id, val_def.name, variable_id);
+                    self.scopes.add_variable(ctx.scope_id, parsed_let.name, variable_id);
                 }
                 let stmt_id = self.stmts.add(val_def_stmt);
                 Ok(Some(stmt_id))
@@ -9940,12 +10050,15 @@ impl TypedModule {
         let parsed_ability = self.ast.get_ability(ability_ast_id);
         let mut specialized_functions = Vec::with_capacity(parsed_ability.functions.len());
         for parsed_fn in parsed_ability.functions.clone().iter() {
-            let function_id = self.eval_function_declaration(
+            let Some(function_id) = self.eval_function_declaration(
                 *parsed_fn,
                 specialized_ability_scope,
                 Some(FunctionAbilityContextInfo::ability_id_only(specialized_ability_id)),
                 ability_namespace_id,
-            )?;
+            )?
+            else {
+                continue;
+            };
             let function_name = self.get_function(function_id).name;
             specialized_functions.push(TypedAbilityFunctionRef {
                 function_id,
@@ -10014,11 +10127,25 @@ impl TypedModule {
         parent_scope_id: ScopeId,
         ability_info: Option<FunctionAbilityContextInfo>,
         namespace_id: NamespaceId,
-    ) -> TyperResult<FunctionId> {
+    ) -> TyperResult<Option<FunctionId>> {
         let namespace = self.namespaces.get(namespace_id);
         let companion_type_id = namespace.companion_type_id;
         // TODO(perf): clone of ParsedFunction
         let parsed_function = self.ast.get_function(parsed_function_id).clone();
+        if let Some(condition_expr) = parsed_function.condition {
+            let CompileTimeValue::Boolean(condition_value) = self.eval_comptime_parsed_expr(
+                condition_expr,
+                Some(BOOL_TYPE_ID),
+                parent_scope_id,
+                None,
+            )?
+            else {
+                return failf!(parsed_function.span, "Condition must be a constant boolean");
+            };
+            if !condition_value {
+                return Ok(None);
+            }
+        }
         let debug_directive = parsed_function
             .directives
             .iter()
@@ -10218,7 +10345,7 @@ impl TypedModule {
                 is_mutable: false,
                 owner_scope: fn_scope_id,
                 is_context,
-                constant_id: None,
+                global_id: None,
             };
 
             let variable_id = self_.variables.add_variable(variable);
@@ -10404,7 +10531,7 @@ impl TypedModule {
             eprintln!("FUNCTION SCOPE\n{}", self_.scope_id_to_string(fn_scope_id));
         }
 
-        Ok(function_id)
+        Ok(Some(function_id))
     }
 
     fn eval_function_body(&mut self, declaration_id: FunctionId) -> TyperResult<()> {
@@ -10446,7 +10573,7 @@ impl TypedModule {
                 let block_ast = block_ast.clone();
                 let block = self.eval_block(
                     &block_ast,
-                    EvalExprContext::from_scope(fn_scope_id).with_expected_type(Some(return_type)),
+                    EvalExprContext::make(fn_scope_id).with_expected_type(Some(return_type)),
                     true,
                 )?;
                 debug!(
@@ -10599,12 +10726,16 @@ impl TypedModule {
         let mut typed_functions: Vec<TypedAbilityFunctionRef> =
             Vec::with_capacity(parsed_ability.functions.len());
         for parsed_function_id in parsed_ability.functions.iter() {
-            let function_id = self.eval_function_declaration(
+            let Some(function_id) = self.eval_function_declaration(
                 *parsed_function_id,
                 ability_scope_id,
                 Some(FunctionAbilityContextInfo::ability_id_only(ability_id)),
                 namespace_id,
-            )?;
+            )?
+            else {
+                // TODO: Possibly, disable conditional compilation of ability functions.
+                continue;
+            };
             let function_name = self.get_function(function_id).name;
             typed_functions.push(TypedAbilityFunctionRef {
                 function_name,
@@ -10839,19 +10970,21 @@ impl TypedModule {
                 };
             }
 
-            let function_impl = self.eval_function_declaration(
-                parsed_impl_function_id,
-                impl_scope_id,
-                Some(FunctionAbilityContextInfo::ability_impl(
-                    ability_id,
-                    impl_self_type,
-                    kind,
-                    None,
-                )),
-                // fixme: Root namespace?! A: namespace is only used for companion type stuff, so
-                // this isn't doing any harm for now
-                ROOT_NAMESPACE_ID,
-            )?;
+            let function_impl = self
+                .eval_function_declaration(
+                    parsed_impl_function_id,
+                    impl_scope_id,
+                    Some(FunctionAbilityContextInfo::ability_impl(
+                        ability_id,
+                        impl_self_type,
+                        kind,
+                        None,
+                    )),
+                    // fixme: Root namespace?! A: namespace is only used for companion type stuff, so
+                    // this isn't doing any harm for now
+                    ROOT_NAMESPACE_ID,
+                )?
+                .expect("an ability impl cannot be conditionally compiled");
 
             let specialized = self.get_function(function_impl).type_id;
 
@@ -11672,7 +11805,7 @@ impl TypedModule {
             owner_scope,
             type_id,
             is_context: false,
-            constant_id: None,
+            global_id: None,
         };
         let variable_id = self.variables.add_variable(variable);
         let variable_expr =
