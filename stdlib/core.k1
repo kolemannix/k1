@@ -5,7 +5,7 @@ fn assertEquals[T: Show and Equals](context locn: compiler/SourceLocation)(a: T,
 }
 
 ns Pointer {
-  fn null(): Pointer { 0 as u64 as Pointer }
+  fn null(): Pointer { 0:u64 as Pointer }
 
   fn isNull(self: Pointer): bool {
     self as u64 == 0
@@ -41,7 +41,7 @@ fn printIt[T: Show](value: T): unit  {
 }
 
 fn print(s: string): unit {
-  libc/write(1, s.buffer.data as Pointer, s.len(), 0);
+  libc/write(fileNo = 1, data = s.buffer.data as Pointer, count = s.len(), offset = 0);
   ()
 }
 fn println(s: string): unit {
@@ -49,7 +49,7 @@ fn println(s: string): unit {
 }
 
 fn eprint(s: string): unit {
-  libc/write(2, s.buffer.data as Pointer, s.len(), 0);
+  libc/write(fileNo = 2, data = s.buffer.data as Pointer, count = s.len(), offset = 0);
   ()
 }
 fn eprintln(s: string): unit {

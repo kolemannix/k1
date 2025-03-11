@@ -60,6 +60,10 @@ name = "gui"
 path = "src/bin/gui_main.rs"
 required-features = ["raylib"]
 
+[[bin]]
+name = "repl"
+path = "src/bin/repl_main.rs"
+
 # [profile.dev]
 # debug = 0
 # strip = "debuginfo"

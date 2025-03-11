@@ -1746,7 +1746,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         llvm_type: &K1LlvmType<'ctx>,
         source: PointerValue<'ctx>,
         name: &str,
-        make_copy: bool,
+        _make_copy: bool,
     ) -> BasicValueEnum<'ctx> {
         if llvm_type.is_aggregate() {
             // No-op; we want to interact with these types as pointers
@@ -1754,16 +1754,18 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 "smart loading noop on type {}",
                 self.module.type_id_to_string(llvm_type.type_id())
             );
-            if make_copy {
-                self.alloca_copy_entire_value(
-                    source,
-                    llvm_type.rich_value_type(),
-                    &format!("{name}_copy"),
-                )
-                .as_basic_value_enum()
-            } else {
-                source.as_basic_value_enum()
-            }
+            //if make_copy {
+            //    self._alloca_copy_entire_value(
+            //        source,
+            //        llvm_type.rich_value_type(),
+            //        &format!("{name}_copy"),
+            //    )
+            //    .as_basic_value_enum()
+            //} else {
+            //    source.as_basic_value_enum()
+            //}
+            //
+            source.as_basic_value_enum()
         } else {
             // Scalars must be truly loaded
             self.builder.build_load(llvm_type.rich_value_type(), source, name).unwrap()
@@ -1784,7 +1786,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         }
     }
 
-    fn alloca_copy_entire_value(
+    fn _alloca_copy_entire_value(
         &self,
         src: PointerValue<'ctx>,
         ty: BasicTypeEnum<'ctx>,
@@ -1817,6 +1819,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         compile_time_value: &CompileTimeValue,
     ) -> BasicValueEnum<'ctx> {
         let result = match compile_time_value {
+            CompileTimeValue::Unit => self.builtin_types.unit_value.as_basic_value_enum(),
             CompileTimeValue::Boolean(b) => match b {
                 true => self.builtin_types.true_value.as_basic_value_enum(),
                 false => self.builtin_types.false_value.as_basic_value_enum(),
@@ -1827,6 +1830,13 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             CompileTimeValue::Integer(int_value) => self.codegen_integer_value(*int_value).unwrap(),
             CompileTimeValue::Float(float_value) => self.codegen_float_value(*float_value).unwrap(),
             CompileTimeValue::String(boxed_str) => self.codegen_string_literal(boxed_str).unwrap(),
+            CompileTimeValue::Pointer(ptr) => {
+                if *ptr == 0 {
+                    self.ctx.ptr_type(AddressSpace::default()).const_null().as_basic_value_enum()
+                } else {
+                    panic!("comptime Pointer (raw address) that was not zero; I have no idea what to do with that. Maybe we enhance that type such that 'NULL' is not zero but a part of the type")
+                }
+            }
         };
         result
     }
@@ -1875,18 +1885,20 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         debug!("codegen expr\n{}", self.module.expr_to_string_with_type(expr_id));
         match expr {
             TypedExpr::Unit(_) => Ok(self.builtin_types.unit_value.as_basic_value_enum().into()),
-            TypedExpr::Char(byte, _) => {
-                Ok(self.codegen_compile_time_value(&CompileTimeValue::Char(*byte)).into())
-            }
-            TypedExpr::Bool(b, _) => {
-                Ok(self.codegen_compile_time_value(&CompileTimeValue::Boolean(*b)).into())
-            }
-            TypedExpr::Integer(integer) => Ok(self
-                .codegen_compile_time_value(&CompileTimeValue::Integer(integer.value))
+            TypedExpr::Char(byte, _) => Ok(self
+                .builtin_types
+                .char
+                .const_int(*byte as u64, false)
+                .as_basic_value_enum()
                 .into()),
-            TypedExpr::Float(float) => {
-                Ok(self.codegen_compile_time_value(&CompileTimeValue::Float(float.value)).into())
+            TypedExpr::Bool(b, _) => match b {
+                true => Ok(self.builtin_types.true_value.as_basic_value_enum().into()),
+                false => Ok(self.builtin_types.false_value.as_basic_value_enum().into()),
+            },
+            TypedExpr::Integer(integer) => {
+                Ok(self.codegen_integer_value(integer.value).unwrap().into())
             }
+            TypedExpr::Float(float) => Ok(self.codegen_float_value(float.value).unwrap().into()),
             TypedExpr::String(string_value, _) => {
                 Ok(self.codegen_string_literal(string_value)?.into())
             }
@@ -1907,8 +1919,28 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     );
                     Ok(result_value.into())
                 } else if let Some(global) = self.globals.get(&ir_var.variable_id) {
-                    let value = global.get_initializer().unwrap();
-                    Ok(value.into())
+                    let llvm_type = self.codegen_type(ir_var.type_id)?;
+                    eprintln!(
+                        "Loading a global of type {}",
+                        self.module.type_id_to_string(ir_var.type_id)
+                    );
+                    if let K1LlvmType::Reference(_r) = llvm_type {
+                        Ok(global.as_pointer_value().as_basic_value_enum().into())
+                    } else {
+                        // Unlike with our own variables (though we should probably change this!)
+                        // the global is always a pointer whether the type
+                        // is int* or int. So we have to do something different
+                        // (besides just a smart load) based on that.
+                        // If its an int*, we don't want to load at all.
+                        //
+                        // We could do this for our referencing `let`s too.
+                        // Avoid the extra alloca and treat it different on interpretation.
+                        // This would mean I think changing what load_k1_value does for references.
+                        // It would no-op, whereas today it loads
+                        let value =
+                            self.load_k1_value(&llvm_type, global.as_pointer_value(), "", false);
+                        Ok(value.into())
+                    }
                 } else {
                     Err(CodegenError {
                         message: format!(
@@ -2648,33 +2680,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         payload_ptr
     }
 
-    //fn get_enum_payload(
-    //    &self,
-    //    envelope_type: StructType<'ctx>,
-    //    variant_type: StructType<'ctx>,
-    //    enum_value: StructValue<'ctx>,
-    //) -> BasicValueEnum<'ctx> {
-    //    // We have to use a pointer to the enum value to extract the payload
-    //    // in the type of the variant; its like a reinterpret cast
-    //
-    //    let ptr = self.builder.build_alloca(envelope_type, "enum_ptr_for_payload");
-    //    self.builder.build_store(ptr, enum_value);
-    //
-    //    // Cannot cast aggregate types :'(
-    //    // let casted_ptr = self
-    //    //     .builder
-    //    //     .build_bitcast(ptr, variant_type.ptr_type(AddressSpace::default()), "variant_cast")
-    //    //     .into_pointer_value();
-    //    let payload_ptr =
-    //        self.builder.build_struct_gep(variant_type, ptr, 1, "get_payload_ptr").unwrap();
-    //    let payload_value = self.builder.build_load(
-    //        variant_type.get_field_type_at_index(1).unwrap(),
-    //        payload_ptr,
-    //        "get_payload",
-    //    );
-    //    payload_value
-    //}
-
     fn codegen_function_call(&mut self, call: &Call) -> CodegenResult<LlvmValue<'ctx>> {
         let typed_function = call.callee.maybe_function_id().map(|f| self.module.get_function(f));
         if let Some(intrinsic_type) = typed_function.and_then(|f| f.intrinsic_type) {
@@ -3330,19 +3335,23 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     pub fn codegen_module(&mut self) -> CodegenResult<()> {
         let start = std::time::Instant::now();
-        for constant in &self.module.constants {
-            let llvm_value = self.codegen_compile_time_value(&constant.value);
-            let variable = self.module.variables.get(constant.variable_id);
+        for global in self.module.globals.iter() {
+            let initialized_basic_value = self.codegen_compile_time_value(&global.initial_value);
+            let variable = self.module.variables.get(global.variable_id);
             let name =
                 self.module.make_qualified_name(variable.owner_scope, variable.name, "__", false);
             let llvm_global = self.llvm_module.add_global(
-                llvm_value.get_type(),
+                initialized_basic_value.get_type(),
                 Some(AddressSpace::default()),
                 &name,
             );
-            llvm_global.set_constant(true);
-            llvm_global.set_initializer(&llvm_value);
-            self.globals.insert(constant.variable_id, llvm_global);
+            if global.is_comptime {
+                llvm_global.set_constant(true);
+            } else {
+                llvm_global.set_constant(false);
+            }
+            llvm_global.set_initializer(&initialized_basic_value);
+            self.globals.insert(global.variable_id, llvm_global);
         }
         // TODO: Codegen the exported functions as well as the called ones
         // for (id, function) in self.module.function_iter() {

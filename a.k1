@@ -1,15 +1,40 @@
-fn main(): int {
-  println("K1_TEST is \{K1_TEST}");
-  println("K1_OS is \{K1_OS}");
+let globalInt: int = 0;
+let* globalIntRef: int* = 10;
+let const comptimeInt: int = 2;
 
-  assert(K1_OS == "macos");
-  assert(K1_TEST == false);
+let const NULL: Pointer = (0:u64) as Pointer;
 
-  #if K1_OS == "macos" {
-    println("its a mac!"); 1
-  } else {
-    println("hello at runtime; not a mac"); 0
+// Optionally we could do some sort of init expression that we run
+// at the start of main for you!
+let _tmpArenaStorage: Pointer = NULL;
+
+fn getArena() -> Arena* {
+  _tmpArenaStorage as Arena*
+}
+
+fn initArena(arena: Arena): unit {
+  // TODO: better null check of a reference
+  if _arenaStorage == NULL {
+    crash("Arena already initialized")
   };
+  (_arenaStorage as Arena*) <- arena;
+}
 
-  crash("asdf");
+fn main(): int {
+   println("globalInt is \{globalInt}");
+
+   println("comptimeInt is \{comptimeInt}");
+
+   while globalIntRef.* > comptimeInt {
+     println("globalIntRef is \{globalIntRef}");
+     globalIntRef <- globalIntRef.* - 1;
+   };
+
+   initArena(Arena/new(id = "temp", initialMb = 1));
+   
+   let myHeapInt: int* = getArena().push(423);
+
+   assert(myHeapInt.* == 423);
+
+  0
 }

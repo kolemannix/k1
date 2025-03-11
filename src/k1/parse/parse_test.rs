@@ -80,7 +80,7 @@ fn infix() -> Result<(), ParseError> {
     let mut module = make_test_module();
     let mut parser = set_up("let x = a + b * doStuff(1, 2)", &mut module);
     let result = parser.parse_statement()?.unwrap();
-    if let ParsedStmt::ValDef(ValDef { value: expr_id, .. }) = module.stmts.get(result) {
+    if let ParsedStmt::Let(ParsedLet { value: expr_id, .. }) = module.stmts.get(result) {
         let ParsedExpression::BinaryOp(op) = module.exprs.get(*expr_id) else { panic!() };
         assert_eq!(op.op_kind, BinaryOpKind::Add);
         assert!(matches!(*module.exprs.get(op.lhs), ParsedExpression::Variable(_)));
@@ -341,8 +341,8 @@ fn unclosed_ability_impl() -> ParseResult<()> {
     let input = r#"impl Equals for List[int] {
   fn equals(self: List[int], other: List[int]): bool { self.buffer == other.buffer }
 
-impl Show for bool {
-  fn show(self: bool): string { if self "true" else "false" }
+impl Print for bool {
+  fn print(self: bool): string { if self "true" else "false" }
 }
   "#;
     let mut module = make_test_module();
