@@ -41,7 +41,7 @@ fn main(): int {
    };
    assert(globalIntRef.* == 2);
 
-   initTmpArena(Arena/new(id = "temp", initialMb = 10));
+   initTmpArena(Arena/new(id = "temp", initialMb = 100));
  
    let mut i = 0;
 
@@ -58,6 +58,7 @@ fn main(): int {
      //libc/free(p as Pointer);
      //a.push(123);
      // a.pushRaw(16, 8);
+     let x = { a: 1, b: 2 };
      a.push(x);
      i = i + 1;
    };
