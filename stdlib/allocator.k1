@@ -5,8 +5,8 @@ deftype Arena = {
   maxAddr: u64
 }
 ns Arena {
-  let mb: u64 = 0x100000;
-  let gb: u64 = 0x40000000;
+  let const mb: u64 = 0x100000;
+  let const gb: u64 = 0x40000000;
 
   fn regionSizeBytes(self: Arena): u64 {
     self.maxAddr - (self.basePtr as u64)
@@ -17,7 +17,7 @@ ns Arena {
     let mask = alignBytes - 1;
     let sum = baseAddress + mask;
     let aligned = Bitwise/bitAnd(sum, Bitwise/bitNot(mask));
-    if aligned != baseAddress {
+    #if k1/DEBUG if aligned != baseAddress {
       println("Aligned \{baseAddress} to \{aligned}!")
     };
     aligned
@@ -25,7 +25,7 @@ ns Arena {
 
   fn new(id: string, initialMb: u64): Arena {
     let capacity = initialMb * mb;
-    let basePtr = libc/calloc(capacity, 1);
+    let basePtr = libc/calloc(count = capacity, size = 1);
     if basePtr.isNull() crash("calloc for Arena failed");
     {
       id: id,
@@ -40,7 +40,7 @@ ns Arena {
     let newEnd = dataStart + size;
     if newEnd > self.maxAddr {
       let id = self.id;
-      crash("Heap \{id} is out of space to allocate \{size} bytes")
+      crash("Heap \{id} is out of space to allocate \{size} bytes.")
     };
 
     self.curAddr* <- newEnd;
@@ -53,18 +53,6 @@ ns Arena {
     let ref: T* = dataStart as T*;
     ref <- t;
     ref
-  }
-
-  fn pushBytes(self: Arena*, count: u64): Pointer {
-    let dataStart = self.curAddr;
-    let newEnd = self.curAddr + count;
-    if newEnd > self.maxAddr {
-      let id = self.id;
-      crash("Heap \{id} is out of space to allocate a T")
-    };
-
-    self.curAddr* <- newEnd;
-    dataStart as Pointer
   }
 
   fn freeAll(self: Arena*): unit {

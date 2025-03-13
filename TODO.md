@@ -36,18 +36,23 @@ New tagline? "C with typeclasses and tagged unions"
 - [x] *Specializing functions on their provided closures to allow inlining and static dispatch*
 - [ ] let ... else, or 'guard', or 'ensure' let e is .StringLit(s) else {}
 
-- [ ] No global malloc
-  - [ ] comptime enhancement to support this global initializer: `let* a: Arena* = NULL as Arena*;`
-        Field notes: This is terrible, it requires that we put pointer as well as null references into
-        our compile-time VM, which requires like actual memory layout because of these abstractions
-        I was thinking it could be a little higher-level, though we'd have to internally implement
-        refAtIndex, which is just GEP, and casts in order to get List, so... yeah instead we're going to
-        have the global be a Pointer, just initialized to 0, which is the only comptime ptr allowed
-        and just cast it in 'real' k1
-  - [ ] Global pointers, to enable
-  - [ ] The problem with passing an allocator around is all code becomes generic, or casts a pointer.
+- [ ] Allocator system
+  - [x] comptime enhancement to support this global initializer: `let* a: Arena* = { .. };`
+  - [x] Global pointers, to enable
+  - [x] The problem with passing an allocator around is all code becomes generic, or casts a pointer.
+  - [x] Comptime structs!
   - [ ] ThreadLocal values, to enable
-  - [ ] temp allocator to power Show/Print, g
+  - [ ] temp allocator to power Show/Print and List and string by default
+        Who initializes it? I don't love putting stuff in main.
+        But otherwise the user has to do it.
+        How low-level do we want to be? #if k1/RUNTIME
+  - [ ] alloca in loops fix
+  - [ ] [[unlikely]] annotations
+- [ ] Proper comptime
+  - [ ] Run comptime exprs before bodies but after all other phases, treat it
+        like 'body' code SINCE it'll end up using the user's types, and even impls!
+  - [ ] 
+
 
 - [ ] Explicit coercion sites like Rust seems like a great idea? https://doc.rust-lang.org/reference/type-coercions.html#r-coerce.site.let
 - [ ] Optimize capture-free lambdas to work like function pointers instead

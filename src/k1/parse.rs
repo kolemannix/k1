@@ -4012,6 +4012,7 @@ pub fn test_parse_module(source: Source) -> ParseResult<ParsedModule> {
             is_test_build: false,
             no_std: true,
             target: crate::compiler::detect_host_target().unwrap(),
+            debug: true,
         },
     );
 

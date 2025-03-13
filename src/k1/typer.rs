@@ -128,8 +128,6 @@ pub struct EvalExprContext {
     scope_id: ScopeId,
     expected_type_id: Option<TypeId>,
     is_inference: bool,
-    // nocommit: Run comptime exprs before bodies but after all other phases, treat it
-    // like 'body' code SINCE it'll end up using the user's types, and even impls!
     is_comptime: bool,
     global_defn_name: Option<Identifier>,
 }
@@ -195,39 +193,82 @@ enum TypeOrParsedExpr {
 }
 
 #[derive(Debug, Clone)]
-pub enum CompileTimeValue {
-    Unit,
-    Boolean(bool),
-    Char(u8),
-    Integer(TypedIntegerValue),
-    Float(TypedFloatValue),
-    String(Box<str>),
-    Pointer(u64),
+pub struct CompileTimeStruct {
+    pub type_id: TypeId,
+    pub fields: Vec<CompileTimeValue>,
+    pub span: SpanId,
 }
-static_assert_size!(CompileTimeValue, 24);
+
+static_assert_size!(CompileTimeValue, 32);
+#[derive(Debug, Clone)]
+pub enum CompileTimeValue {
+    Unit(SpanId),
+    Boolean(bool, SpanId),
+    Char(u8, SpanId),
+    Integer(TypedIntegerValue, SpanId),
+    Float(TypedFloatValue, SpanId),
+    String(Box<str>, SpanId),
+    Pointer(u64, SpanId),
+    Struct(CompileTimeStruct),
+}
 
 impl CompileTimeValue {
     pub fn kind(&self) -> &'static str {
         match self {
-            CompileTimeValue::Unit => "unit",
-            CompileTimeValue::Boolean(_) => "bool",
-            CompileTimeValue::Char(_) => "char",
-            CompileTimeValue::Integer(i) => i.kind_str(),
-            CompileTimeValue::Float(_) => "float",
-            CompileTimeValue::String(_) => "string",
-            CompileTimeValue::Pointer(_) => "pointer",
+            CompileTimeValue::Unit(_) => "unit",
+            CompileTimeValue::Boolean(_, _) => "bool",
+            CompileTimeValue::Char(_, _) => "char",
+            CompileTimeValue::Integer(i, _) => i.kind_str(),
+            CompileTimeValue::Float(_, _) => "float",
+            CompileTimeValue::String(_, _) => "string",
+            CompileTimeValue::Pointer(_, _) => "pointer",
+            CompileTimeValue::Struct(_) => "struct",
         }
     }
 
     pub fn get_type(&self) -> TypeId {
         match self {
-            CompileTimeValue::Unit => UNIT_TYPE_ID,
-            CompileTimeValue::Boolean(_) => BOOL_TYPE_ID,
-            CompileTimeValue::Char(_) => CHAR_TYPE_ID,
-            CompileTimeValue::Integer(typed_integer_value) => typed_integer_value.get_type(),
-            CompileTimeValue::Float(typed_float_value) => typed_float_value.get_type(),
-            CompileTimeValue::String(_) => STRING_TYPE_ID,
-            CompileTimeValue::Pointer(_) => POINTER_TYPE_ID,
+            CompileTimeValue::Unit(_) => UNIT_TYPE_ID,
+            CompileTimeValue::Boolean(_, _) => BOOL_TYPE_ID,
+            CompileTimeValue::Char(_, _) => CHAR_TYPE_ID,
+            CompileTimeValue::Integer(typed_integer_value, _) => typed_integer_value.get_type(),
+            CompileTimeValue::Float(typed_float_value, _) => typed_float_value.get_type(),
+            CompileTimeValue::String(_, _) => STRING_TYPE_ID,
+            CompileTimeValue::Pointer(_, _) => POINTER_TYPE_ID,
+            CompileTimeValue::Struct(s) => s.type_id,
+        }
+    }
+
+    pub fn get_span(&self) -> SpanId {
+        match self {
+            CompileTimeValue::Unit(span) => *span,
+            CompileTimeValue::Boolean(_, span) => *span,
+            CompileTimeValue::Char(_, span) => *span,
+            CompileTimeValue::Integer(_, span) => *span,
+            CompileTimeValue::Float(_, span) => *span,
+            CompileTimeValue::String(_, span) => *span,
+            CompileTimeValue::Pointer(_, span) => *span,
+            CompileTimeValue::Struct(s) => s.span,
+        }
+    }
+
+    pub fn set_span(&mut self, span: SpanId) {
+        match self {
+            CompileTimeValue::Unit(s) => *s = span,
+            CompileTimeValue::Boolean(_, s) => *s = span,
+            CompileTimeValue::Char(_, s) => *s = span,
+            CompileTimeValue::Integer(_, s) => *s = span,
+            CompileTimeValue::Float(_, s) => *s = span,
+            CompileTimeValue::String(_, s) => *s = span,
+            CompileTimeValue::Pointer(_, s) => *s = span,
+            CompileTimeValue::Struct(s) => s.span = span,
+        }
+    }
+
+    pub fn as_boolean(&self) -> Option<bool> {
+        match self {
+            CompileTimeValue::Boolean(b, _) => Some(*b),
+            _ => None,
         }
     }
 }
@@ -3593,17 +3634,17 @@ impl TypedModule {
         scope_id: ScopeId,
     ) -> TyperResult<CompileTimeValue> {
         match self.exprs.get(expr_id) {
-            TypedExpr::Unit(_span_id) => Ok(CompileTimeValue::Unit),
-            TypedExpr::Char(byte, _span_id) => Ok(CompileTimeValue::Char(*byte)),
-            TypedExpr::Bool(b, _span_id) => Ok(CompileTimeValue::Boolean(*b)),
+            TypedExpr::Unit(span) => Ok(CompileTimeValue::Unit(*span)),
+            TypedExpr::Char(byte, span) => Ok(CompileTimeValue::Char(*byte, *span)),
+            TypedExpr::Bool(b, span) => Ok(CompileTimeValue::Boolean(*b, *span)),
             TypedExpr::Integer(typed_integer_expr) => {
-                Ok(CompileTimeValue::Integer(typed_integer_expr.value))
+                Ok(CompileTimeValue::Integer(typed_integer_expr.value, typed_integer_expr.span))
             }
             TypedExpr::Float(typed_float_expr) => {
-                Ok(CompileTimeValue::Float(typed_float_expr.value))
+                Ok(CompileTimeValue::Float(typed_float_expr.value, typed_float_expr.span))
             }
-            TypedExpr::String(s, _span_id) => {
-                Ok(CompileTimeValue::String(s.clone().into_boxed_str()))
+            TypedExpr::String(s, span) => {
+                Ok(CompileTimeValue::String(s.clone().into_boxed_str(), *span))
             }
             TypedExpr::Variable(v) => {
                 let typed_variable = self.variables.get(v.variable_id);
@@ -3614,7 +3655,9 @@ impl TypedModule {
                 if !global.is_comptime {
                     return failf!(v.span, "only comptime variables are supported");
                 }
-                Ok(global.initial_value.clone())
+                let mut value = global.initial_value.clone();
+                value.set_span(v.span);
+                Ok(value)
             }
             TypedExpr::BinaryOp(bin_op) => match bin_op.kind {
                 BinaryOpKind::Equals => {
@@ -3622,8 +3665,8 @@ impl TypedModule {
                     let lhs = self.eval_expr_comptime(bin_op.lhs, scope_id)?;
                     let rhs = self.eval_expr_comptime(bin_op.rhs, scope_id)?;
                     match (&lhs, &rhs) {
-                        (CompileTimeValue::String(s1), CompileTimeValue::String(s2)) => {
-                            Ok(CompileTimeValue::Boolean(*s1 == *s2))
+                        (CompileTimeValue::String(s1, _), CompileTimeValue::String(s2, _)) => {
+                            Ok(CompileTimeValue::Boolean(*s1 == *s2, bin_op.span))
                         }
                         _ => {
                             failf!(
@@ -3644,15 +3687,25 @@ impl TypedModule {
                     self.expr_to_string(expr_id)
                 ),
             },
+            TypedExpr::Struct(struct_expr) => {
+                let span = struct_expr.span;
+                let mut values = Vec::with_capacity(struct_expr.fields.len());
+                let type_id = struct_expr.type_id;
+                for field in &struct_expr.fields.clone() {
+                    let value = self.eval_expr_comptime(field.expr, scope_id)?;
+                    values.push(value);
+                }
+                Ok(CompileTimeValue::Struct(CompileTimeStruct { type_id, fields: values, span }))
+            }
             TypedExpr::Cast(typed_cast) => match typed_cast.cast_type {
                 CastType::IntegerExtend => {
                     let span = typed_cast.span;
-                    let CompileTimeValue::Integer(_i) =
+                    let CompileTimeValue::Integer(_i, _span) =
                         self.eval_expr_comptime(typed_cast.base_expr, scope_id)?
                     else {
                         self.ice_with_span("malformed integer cast", span)
                     };
-                    let target_int_type = todo!();
+                    let _target_int_type = todo!();
                     //match i {
                     //    TypedIntegerValue::U8(_) => todo!(),
                     //    TypedIntegerValue::U16(_) => todo!(),
@@ -3670,12 +3723,12 @@ impl TypedModule {
                 CastType::IntegerToFloat => todo!(),
                 CastType::IntegerToPointer => {
                     let span = typed_cast.span;
-                    let CompileTimeValue::Integer(TypedIntegerValue::U64(u)) =
+                    let CompileTimeValue::Integer(TypedIntegerValue::U64(u), _) =
                         self.eval_expr_comptime(typed_cast.base_expr, scope_id)?
                     else {
                         self.ice_with_span("malformed integer cast", span)
                     };
-                    Ok(CompileTimeValue::Pointer(u))
+                    Ok(CompileTimeValue::Pointer(u, span))
                 }
                 CastType::KnownNoOp => todo!(),
                 CastType::PointerToReference => {
@@ -3698,13 +3751,13 @@ impl TypedModule {
                 let function = self.get_function(callee_id);
                 match function.intrinsic_type {
                     Some(IntrinsicFunction::BoolNegate) => {
-                        let CompileTimeValue::Boolean(arg) =
-                            self.eval_expr_comptime(call.args[0], scope_id)?
+                        let Some(arg) =
+                            self.eval_expr_comptime(call.args[0], scope_id)?.as_boolean()
                         else {
                             self.ice_with_span("malformed bool negate", span)
                         };
                         let negated = !arg;
-                        Ok(CompileTimeValue::Boolean(negated))
+                        Ok(CompileTimeValue::Boolean(negated, span))
                     }
                     Some(i) => {
                         failf!(span, "Unimplemented comptime intrinsic: {:?}", i)
@@ -4973,21 +5026,16 @@ impl TypedModule {
         let should_compile = match conditional_compile_expr {
             None => true,
             Some(condition) => {
-                let typed_condition = self_.eval_comptime_parsed_expr(
-                    condition,
-                    Some(BOOL_TYPE_ID),
-                    ctx.scope_id,
-                    None,
-                )?;
-                match typed_condition {
-                    CompileTimeValue::Boolean(b) => b,
-                    _ => {
-                        return failf!(
+                let typed_condition = self_
+                    .eval_comptime_parsed_expr(condition, Some(BOOL_TYPE_ID), ctx.scope_id, None)?
+                    .as_boolean()
+                    .ok_or_else(|| {
+                        errf!(
                             self_.ast.exprs.get_span(condition),
                             "Condition must be a compile-time-known boolean"
                         )
-                    }
-                }
+                    })?;
+                typed_condition
             }
         };
         if !should_compile {
@@ -5364,25 +5412,26 @@ impl TypedModule {
                 let Some(defn_name) = ctx.global_defn_name else {
                     return failf!(*span, "builtin can only be used as a top-level expression");
                 };
-                if ctx.scope_id != self.scopes.get_root_scope_id() {
-                    return failf!(
-                        *span,
-                        "All the known builtins constants live in the root scope"
-                    );
+                if ctx.scope_id != self.get_k1_scope_id() {
+                    return failf!(*span, "All the known builtins constants live in the k1 scope");
                 }
                 match self.name_of(defn_name) {
-                    "K1_TEST" => {
+                    "TEST" => {
                         let is_test_build = self.ast.config.is_test_build;
                         Ok(self.exprs.add(TypedExpr::Bool(is_test_build, *span)))
                     }
-                    "K1_OS" => {
+                    "OS" => {
                         // TODO: Ideally this is an enum! But we don't support comptime enums yet
                         let os_str = self.ast.config.target.target_os().to_str();
                         Ok(self.exprs.add(TypedExpr::String(os_str.to_owned(), *span)))
                     }
-                    "K1_NO_STD" => {
+                    "NO_STD" => {
                         let no_std = self.ast.config.no_std;
                         Ok(self.exprs.add(TypedExpr::Bool(no_std, *span)))
+                    }
+                    "DEBUG" => {
+                        let debug = self.ast.config.debug;
+                        Ok(self.exprs.add(TypedExpr::Bool(debug, *span)))
                     }
                     s => failf!(*span, "Unknown builtin name: {s}"),
                 }
@@ -6816,7 +6865,7 @@ impl TypedModule {
     ) -> TyperResult<TypedExprId> {
         let condition_value =
             self.eval_comptime_parsed_expr(if_expr.cond, Some(BOOL_TYPE_ID), ctx.scope_id, None)?;
-        let CompileTimeValue::Boolean(condition_bool) = condition_value else {
+        let CompileTimeValue::Boolean(condition_bool, _) = condition_value else {
             let cond_span = self.ast.get_expr_span(if_expr.cond);
             return failf!(cond_span, "Condition is not a boolean");
         };
@@ -9230,6 +9279,16 @@ impl TypedModule {
         }
     }
 
+    pub fn get_k1_scope_id(&self) -> ScopeId {
+        *self
+            .scopes
+            .get_scope(self.scopes.get_root_scope_id())
+            .children
+            .iter()
+            .find(|child| self.scopes.get_scope(**child).name == Some(get_ident!(self, "k1")))
+            .unwrap()
+    }
+
     fn specialize_function_signature(
         &mut self,
         // Must 'zip' up with each type param
@@ -10133,7 +10192,7 @@ impl TypedModule {
         // TODO(perf): clone of ParsedFunction
         let parsed_function = self.ast.get_function(parsed_function_id).clone();
         if let Some(condition_expr) = parsed_function.condition {
-            let CompileTimeValue::Boolean(condition_value) = self.eval_comptime_parsed_expr(
+            let CompileTimeValue::Boolean(condition_value, _) = self.eval_comptime_parsed_expr(
                 condition_expr,
                 Some(BOOL_TYPE_ID),
                 parent_scope_id,
