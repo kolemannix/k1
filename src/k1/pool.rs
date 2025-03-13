@@ -94,35 +94,45 @@ impl<T, Index: Into<NonZeroU32> + From<NonZeroU32>> Pool<T, Index> {
         (index, count)
     }
 
-    fn index_to_actual_index(index: Index) -> usize {
+    fn id_to_actual_index(index: Index) -> usize {
         let nz32: NonZeroU32 = index.into();
         nz32.get() as usize - 1
     }
 
+    fn physical_index_to_id(index: usize) -> Index {
+        // Safety: Incrementing by 1
+        let index_inc = unsafe { NonZeroU32::new_unchecked(index as u32 + 1) };
+        Index::from(index_inc)
+    }
+
     pub fn get(&self, index: Index) -> &T {
-        let index = Self::index_to_actual_index(index);
+        let index = Self::id_to_actual_index(index);
         &self.vec[index]
     }
 
     pub fn get_mut(&mut self, index: Index) -> &mut T {
-        let index = Self::index_to_actual_index(index);
+        let index = Self::id_to_actual_index(index);
         &mut self.vec[index]
     }
 
     pub fn get_list(&self, index: Index, count: u32) -> &[T] {
-        let index = Self::index_to_actual_index(index);
+        let index = Self::id_to_actual_index(index);
         let end = index + count as usize;
         &self.vec[index..end]
     }
 
     pub fn get_list_mut(&mut self, index: Index, count: u32) -> &mut [T] {
-        let index = Self::index_to_actual_index(index);
+        let index = Self::id_to_actual_index(index);
         let end = index + count as usize;
         &mut self.vec[index..end]
     }
 
     pub fn iter(&self) -> std::slice::Iter<T> {
         self.vec.iter()
+    }
+
+    pub fn iter_ids(&self) -> impl Iterator<Item = Index> {
+        (0..self.vec.len()).map(|i| Self::physical_index_to_id(i))
     }
 }
 
