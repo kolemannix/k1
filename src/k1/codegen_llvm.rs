@@ -484,6 +484,7 @@ pub struct CodegenedFunction<'ctx> {
     pub function_type: K1LlvmFunctionType<'ctx>,
     pub function_value: FunctionValue<'ctx>,
     pub sret_pointer: Option<PointerValue<'ctx>>,
+    pub last_alloca_instr: Option<InstructionValue<'ctx>>,
     pub instruction_count: usize,
 }
 
@@ -496,7 +497,8 @@ pub struct Codegen<'ctx, 'module> {
     pub llvm_functions: FxHashMap<FunctionId, CodegenedFunction<'ctx>>,
     pub llvm_function_to_k1: FxHashMap<FunctionValue<'ctx>, FunctionId>,
     llvm_types: RefCell<FxHashMap<TypeId, K1LlvmType<'ctx>>>,
-    variables: FxHashMap<VariableId, VariablePointer<'ctx>>,
+    variable_to_value: FxHashMap<VariableId, VariableValue<'ctx>>,
+    // nocommit: Possible remove globals map now?
     globals: FxHashMap<VariableId, GlobalValue<'ctx>>,
     lambda_functions: FxHashMap<TypeId, FunctionValue<'ctx>>,
     loops: FxHashMap<ScopeId, LoopInfo<'ctx>>,
@@ -543,11 +545,9 @@ impl<'ctx> DebugContext<'ctx> {
 }
 
 #[derive(Copy, Clone, Debug)]
-struct VariablePointer<'ctx> {
-    #[allow(unused)]
-    pointee_type_id: TypeId,
-    pointee_llvm_type: BasicTypeEnum<'ctx>,
-    pointer_value: PointerValue<'ctx>,
+enum VariableValue<'ctx> {
+    Indirect { pointer_value: PointerValue<'ctx> },
+    Direct { value: BasicValueEnum<'ctx> },
 }
 
 #[derive(Debug)]
@@ -693,7 +693,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             llvm_module,
             llvm_machine: machine,
             builder,
-            variables: FxHashMap::new(),
+            variable_to_value: FxHashMap::new(),
             globals: FxHashMap::new(),
             lambda_functions: FxHashMap::new(),
             loops: FxHashMap::new(),
@@ -1477,53 +1477,15 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
         let variable_type = self.codegen_type(let_stmt.variable_type)?;
         let variable = self.module.variables.get(let_stmt.variable_id);
-        // nocommit: Store this
-        let the_block = self.builder.get_insert_block().unwrap();
-        let entry_block = the_block.get_parent().unwrap().get_first_basic_block().unwrap();
-        let last_alloca =
-            entry_block.get_instructions().find(|i| i.get_opcode() == InstructionOpcode::Alloca);
-        let variable_ptr = match last_alloca {
-            None => {
-                match entry_block.get_first_instruction() {
-                    Some(instr) => {
-                        self.builder.position_at(entry_block, &instr);
-                    }
-                    None => {
-                        self.builder.position_at_end(entry_block);
-                    }
-                }
-                let a = self
-                    .builder
-                    .build_alloca(
-                        variable_type.rich_value_type(),
-                        self.get_ident_name(variable.name),
-                    )
-                    .unwrap();
-                self.builder.position_at_end(the_block);
-                a
-            }
-            Some(last_alloca) => {
-                self.builder.position_at(entry_block, &last_alloca);
-                let a = self
-                    .builder
-                    .build_alloca(
-                        variable_type.rich_value_type(),
-                        self.get_ident_name(variable.name),
-                    )
-                    .unwrap();
-                self.builder.position_at_end(the_block);
-                a
-            }
-        };
+        let name = self.get_ident_name(variable.name).to_string();
 
-        //let variable_ptr = self
-        //    .builder
-        //    .build_alloca(variable_type.rich_value_type(), self.get_ident_name(variable.name))
-        //    .to_err(let_stmt.span)?;
+        let variable_ptr = self.build_alloca(variable_type.rich_value_type(), &name);
+
         let store_instr = if let_stmt.is_referencing {
             // If this is a let*, then we put the rhs behind another alloca so that we end up
             // with a pointer to the value
-            let Type::Reference(reference_type) = self.module.types.get(variable.type_id) else {
+            let Type::Reference(reference_type) = self.module.types.get(variable_type.type_id())
+            else {
                 panic!("Expected reference for referencing let");
             };
             let reference_inner_llvm_type = self.codegen_type(reference_type.inner_type)?;
@@ -1545,33 +1507,34 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         trace!(
             "codegen_let referencing={} {}: pointee_ty: {variable_type:?}",
             let_stmt.is_referencing,
-            self.get_ident_name(variable.name)
+            name
         );
 
-        if !self.module.name_of(variable.name).starts_with("__") {
-            self.debug.debug_builder.insert_declare_before_instruction(
-                variable_ptr,
-                Some(self.debug.debug_builder.create_auto_variable(
-                    self.debug.current_scope(),
-                    self.get_ident_name(variable.name),
-                    self.debug.current_file(),
-                    self.get_line_number(let_stmt.span),
-                    variable_type.debug_type(),
-                    true,
-                    0,
-                    WORD_SIZE_BITS as u32,
-                )),
-                None,
-                self.builder.get_current_debug_location().unwrap(),
-                store_instr,
-            );
-        }
-        let pointer = VariablePointer {
-            pointer_value: variable_ptr,
-            pointee_type_id: let_stmt.variable_type,
-            pointee_llvm_type: variable_type.canonical_repr_type(),
-        };
-        self.variables.insert(let_stmt.variable_id, pointer);
+        // Disable to hide compiler-internal variables!
+        // It depends if we are debugging the user program or debugging the compiler
+
+        // if !self.module.name_of(variable.name).starts_with("__") {
+        self.debug.debug_builder.insert_declare_before_instruction(
+            variable_ptr,
+            Some(self.debug.debug_builder.create_auto_variable(
+                self.debug.current_scope(),
+                &name,
+                self.debug.current_file(),
+                self.get_line_number(let_stmt.span),
+                variable_type.debug_type(),
+                true,
+                0,
+                WORD_SIZE_BITS as u32,
+            )),
+            None,
+            self.builder.get_current_debug_location().unwrap(),
+            store_instr,
+        );
+        // }
+        // TODO: some 'lets' don't need to be pointers; if they are not re-assignable
+        // then the value representation is fine
+        let pointer = VariableValue::Indirect { pointer_value: variable_ptr };
+        self.variable_to_value.insert(let_stmt.variable_id, pointer);
         Ok(self.builtin_types.unit_value.as_basic_value_enum().into())
     }
 
@@ -1853,6 +1816,20 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             .unwrap()
     }
 
+    fn load_variable_value(
+        &self,
+        k1_llvm_type: &K1LlvmType<'ctx>,
+        variable_value: VariableValue<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        match variable_value {
+            VariableValue::Indirect { pointer_value } => {
+                // nocommit: Remove name
+                self.load_k1_value(k1_llvm_type, pointer_value, "loaded_ind_variable", false)
+            }
+            VariableValue::Direct { value } => value,
+        }
+    }
+
     fn codegen_compile_time_value(
         &self,
         compile_time_value: &CompileTimeValue,
@@ -1929,6 +1906,20 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         Ok(global_str_value)
     }
 
+    fn get_insert_function(&self) -> &CodegenedFunction<'ctx> {
+        let function = self.builder.get_insert_block().unwrap().get_parent().unwrap();
+        let function_id = self.llvm_function_to_k1.get(&function).unwrap();
+        let codegened_function = self.llvm_functions.get(function_id).unwrap();
+        codegened_function
+    }
+
+    fn get_insert_function_mut(&mut self) -> &mut CodegenedFunction<'ctx> {
+        let function = self.builder.get_insert_block().unwrap().get_parent().unwrap();
+        let function_id = self.llvm_function_to_k1.get(&function).unwrap();
+        let codegened_function = self.llvm_functions.get_mut(function_id).unwrap();
+        codegened_function
+    }
+
     fn codegen_expr(&mut self, expr_id: TypedExprId) -> CodegenResult<LlvmValue<'ctx>> {
         let expr = self.module.exprs.get(expr_id);
         let span = expr.get_span();
@@ -1957,34 +1948,30 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(string_ptr.as_basic_value_enum().into())
             }
             TypedExpr::Variable(ir_var) => {
-                if let Some(global) = self.globals.get(&ir_var.variable_id) {
-                    let llvm_type = self.codegen_type(ir_var.type_id)?;
-                    eprintln!(
-                        "Loading a global of type {}",
-                        self.module.type_id_to_string(ir_var.type_id)
-                    );
-                    if let K1LlvmType::Reference(_r) = llvm_type {
-                        Ok(global.as_pointer_value().as_basic_value_enum().into())
-                    } else {
-                        let value =
-                            self.load_k1_value(&llvm_type, global.as_pointer_value(), "", false);
-                        Ok(value.into())
-                    }
-                } else if let Some(pointer) = self.variables.get(&ir_var.variable_id) {
+                // nocommit: Eliminate separate case for globals; direct vs indirect mode
+                // should be enough to support what we need
+                //if let Some(global) = self.globals.get(&ir_var.variable_id) {
+                //    let llvm_type = self.codegen_type(ir_var.type_id)?;
+                //    eprintln!(
+                //        "Loading a global of type {}",
+                //        self.module.type_id_to_string(ir_var.type_id)
+                //    );
+                //    if let K1LlvmType::Reference(_r) = llvm_type {
+                //        Ok(global.as_pointer_value().as_basic_value_enum().into())
+                //    } else {
+                //        let value =
+                //            self.load_k1_value(&llvm_type, global.as_pointer_value(), "", false);
+                //        Ok(value.into())
+                //    }
+                //}
+                if let Some(variable_value) = self.variable_to_value.get(&ir_var.variable_id) {
                     let llvm_type = self.codegen_type(ir_var.type_id)?;
                     debug!(
                         "codegen variable {} got pointee type {:?}",
                         self.module.type_id_to_string(ir_var.type_id),
-                        pointer.pointee_llvm_type
+                        &llvm_type
                     );
-                    let var_name = self.module.variables.get(ir_var.variable_id).name;
-                    let result_value = self.load_k1_value(
-                        &llvm_type,
-                        pointer.pointer_value,
-                        &format!("{}_loaded", self.module.name_of(var_name)),
-                        false,
-                    );
-                    Ok(result_value.into())
+                    Ok(self.load_variable_value(&llvm_type, *variable_value).into())
                 } else {
                     Err(CodegenError {
                         message: format!(
@@ -2161,9 +2148,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             TypedExpr::Cast(cast) => self.codegen_cast(cast),
             TypedExpr::Return(ret) => {
                 let return_value = self.codegen_expr_basic_value(ret.value)?;
-                let function = self.builder.get_insert_block().unwrap().get_parent().unwrap();
-                let function_id = self.llvm_function_to_k1.get(&function).unwrap();
-                let codegened_function = self.llvm_functions.get(function_id).unwrap();
+                let codegened_function = self.get_insert_function();
                 match codegened_function.sret_pointer {
                     None => {
                         // Normal return
@@ -2724,6 +2709,35 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         payload_ptr
     }
 
+    /// Inserts an alloca in the entry block of the function
+    fn build_alloca<T: BasicType<'ctx>>(&mut self, ty: T, name: &str) -> PointerValue<'ctx> {
+        let original_block = self.builder.get_insert_block().unwrap();
+        let f = self.get_insert_function();
+        let function_entry_block = f.function_value.get_first_basic_block().unwrap();
+
+        // Position the builder
+        match f.last_alloca_instr {
+            None => match function_entry_block.get_first_instruction() {
+                Some(instr) => {
+                    self.builder.position_at(function_entry_block, &instr);
+                }
+                None => {
+                    self.builder.position_at_end(function_entry_block);
+                }
+            },
+            Some(last_alloca) => {
+                self.builder.position_at(function_entry_block, &last_alloca);
+            }
+        };
+
+        let alloca = self.builder.build_alloca(ty, name).unwrap();
+        self.get_insert_function_mut().last_alloca_instr = Some(alloca.as_instruction().unwrap());
+
+        // Restore the builder's position
+        self.builder.position_at_end(original_block);
+        alloca
+    }
+
     fn codegen_function_call(&mut self, call: &Call) -> CodegenResult<LlvmValue<'ctx>> {
         let typed_function = call.callee.maybe_function_id().map(|f| self.module.get_function(f));
         if let Some(intrinsic_type) = typed_function.and_then(|f| f.intrinsic_type) {
@@ -2764,11 +2778,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.builder.build_call(function_value, args.make_contiguous(), "").unwrap()
             }
             Callee::StaticLambda { function_id, environment_ptr, .. } => {
-                let lambda_env_variable = self.variables.get(environment_ptr).unwrap();
-                // We know this is always a pointer to the environment, and since we aren't loading
-                // the environment, we just use the ptr as-is
-                let lambda_env_ptr = lambda_env_variable.pointer_value;
-                // self.lambda_environments.get(lambda_type_id).unwrap().as_basic_value_enum();
+                let lambda_env_variable = self.variable_to_value.get(environment_ptr).unwrap();
+
+                let env_ptr_type =
+                    self.codegen_type(self.module.variables.get(*environment_ptr).type_id)?;
+                let lambda_env_ptr = self.load_variable_value(&env_ptr_type, *lambda_env_variable);
+
                 args.insert(env_arg_index, lambda_env_ptr.into());
 
                 let function_value = self.codegen_function_or_get(*function_id)?;
@@ -3015,16 +3030,24 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let lhs_pointer = match assignment.kind {
                     AssignmentKind::Value => {
                         match self.module.exprs.get(assignment.destination) {
-                            // ASSIGNMENT! We're in lvalue land. We need to get the pointer to the
-                            // destination, and be sure to call the correct variant of codegen_expr
+                            // Value assignment is weird. We require an indirect
+                            // variable, since it must be 'mut' for this to typecheck.
                             TypedExpr::Variable(v) => {
-                                let destination_ptr =
-                                    *self.variables.get(&v.variable_id).expect("Missing variable");
-                                destination_ptr.pointer_value
+                                let VariableValue::Indirect { pointer_value, .. } = *self
+                                    .variable_to_value
+                                    .get(&v.variable_id)
+                                    .expect("Missing variable")
+                                else {
+                                    return failf!(
+                                        v.span,
+                                        "ICE: Expect an indirect variable for value assignment"
+                                    );
+                                };
+                                pointer_value
                             }
                             _ => {
                                 panic!(
-                                    "Invalid assignment lhs: {}",
+                                    "Invalid value assignment lhs: {}",
                                     self.module.expr_to_string(assignment.destination)
                                 )
                             }
@@ -3234,6 +3257,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 function_type: llvm_function_type,
                 function_value,
                 sret_pointer: None,
+                last_alloca_instr: None,
                 instruction_count: 0,
             },
         );
@@ -3258,6 +3282,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 param.set_name("sret_ptr");
                 continue;
             }
+            let variable_id = function.param_variables[i - sret_offset];
             let typed_param = if is_sret_param {
                 &FnParamType {
                     name: self.module.ast.identifiers.get("ret").unwrap(),
@@ -3277,36 +3302,36 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 ty.rich_value_type(),
                 self.module.type_id_to_string(typed_param.type_id)
             );
-            param.set_name(&format!("{param_name}_arg"));
-            self.set_debug_location_from_span(typed_param.span);
-            let pointer = self.builder.build_alloca(ty.rich_value_type(), param_name).unwrap();
-            let arg_debug_type = self.get_debug_type(typed_param.type_id)?;
-            let di_local_variable = self.debug.debug_builder.create_parameter_variable(
-                self.debug.current_scope(),
-                param_name,
-                i as u32,
-                self.debug.current_file(),
-                function_line_number,
-                arg_debug_type,
-                true,
-                0,
-            );
-            let store_instr = self.store_k1_value(&ty, pointer, param);
-            self.debug.debug_builder.insert_declare_before_instruction(
-                pointer,
-                Some(di_local_variable),
-                None,
-                self.set_debug_location_from_span(typed_param.span),
-                store_instr,
-            );
-            let variable_id = function.param_variables[i - sret_offset];
-            self.variables.insert(
+            param.set_name(param_name);
+            //self.set_debug_location_from_span(typed_param.span);
+            //let pointer = self.builder.build_alloca(ty.rich_value_type(), param_name).unwrap();
+            //let arg_debug_type = self.get_debug_type(typed_param.type_id)?;
+            //let di_local_variable = self.debug.debug_builder.create_parameter_variable(
+            //    self.debug.current_scope(),
+            //    param_name,
+            //    i as u32,
+            //    self.debug.current_file(),
+            //    function_line_number,
+            //    arg_debug_type,
+            //    true,
+            //    0,
+            //);
+            //let store_instr = self.store_k1_value(&ty, pointer, param);
+            //self.debug.debug_builder.insert_declare_before_instruction(
+            //    pointer,
+            //    Some(di_local_variable),
+            //    None,
+            //    self.set_debug_location_from_span(typed_param.span),
+            //    store_instr,
+            //);
+            self.variable_to_value.insert(
                 variable_id,
-                VariablePointer {
-                    pointer_value: pointer,
-                    pointee_type_id: typed_param.type_id,
-                    pointee_llvm_type: ty.canonical_repr_type(),
-                },
+                VariableValue::Direct { value: param },
+                //VariableValue::Indirect {
+                //    pointer_value: pointer,
+                //    pointee_type_id: typed_param.type_id,
+                //    pointee_llvm_type: ty.canonical_repr_type(),
+                //},
             );
         }
         let _terminator_instr = match function.intrinsic_type {
@@ -3377,21 +3402,39 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         Ok(llvm_value.as_basic_value_enum())
     }
 
+    fn codegen_global(&mut self, global_id: TypedGlobalId) -> CodegenResult<()> {
+        let global = self.module.globals.get(global_id);
+        let initialized_basic_value = self.codegen_compile_time_value(&global.initial_value)?;
+        let variable = self.module.variables.get(global.variable_id);
+        let name =
+            self.module.make_qualified_name(variable.owner_scope, variable.name, "__", false);
+        let llvm_global = self.llvm_module.add_global(
+            initialized_basic_value.get_type(),
+            Some(AddressSpace::default()),
+            &name,
+        );
+        llvm_global.set_constant(global.is_comptime);
+        llvm_global.set_initializer(&initialized_basic_value);
+        let is_reference_type = self.module.types.get(global.ty).as_reference().is_some();
+        let variable_value = if is_reference_type {
+            // Direct; global is a ptr, which is the correct type
+            // This will not be 'loaded' by load_variable_value
+            VariableValue::Direct { value: llvm_global.as_basic_value_enum() }
+        } else {
+            // Indirect; global is a ptr to the value of correct type
+            // This will be 'loaded' by load_variable_value
+            VariableValue::Indirect { pointer_value: llvm_global.as_pointer_value() }
+        };
+        self.variable_to_value.insert(global.variable_id, variable_value);
+        self.globals.insert(global.variable_id, llvm_global);
+        Ok(())
+    }
+
     pub fn codegen_module(&mut self) -> CodegenResult<()> {
         let start = std::time::Instant::now();
-        for global in self.module.globals.iter() {
-            let initialized_basic_value = self.codegen_compile_time_value(&global.initial_value)?;
-            let variable = self.module.variables.get(global.variable_id);
-            let name =
-                self.module.make_qualified_name(variable.owner_scope, variable.name, "__", false);
-            let llvm_global = self.llvm_module.add_global(
-                initialized_basic_value.get_type(),
-                Some(AddressSpace::default()),
-                &name,
-            );
-            llvm_global.set_constant(global.is_comptime);
-            llvm_global.set_initializer(&initialized_basic_value);
-            self.globals.insert(global.variable_id, llvm_global);
+        let global_ids: Vec<TypedGlobalId> = self.module.globals.iter_ids().collect();
+        for global_id in &global_ids {
+            self.codegen_global(*global_id)?;
         }
         // TODO: Codegen the exported functions as well as the called ones
         // for (id, function) in self.module.function_iter() {
