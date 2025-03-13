@@ -5,7 +5,7 @@ fn assertEquals[T: Show and Equals](context locn: compiler/SourceLocation)(a: T,
 }
 
 ns Pointer {
-  fn null(): Pointer { 0:u64 as Pointer }
+  let const NULL: Pointer = 0:u64 as Pointer;
 
   fn isNull(self: Pointer): bool {
     self as u64 == 0
@@ -32,8 +32,6 @@ fn new[T](value: T): T* {
 }
 
 fn identity[T](value: T): T { value }
-
-fn ignore[T](value: T): unit { () }
 
 fn printIt[T: Show](value: T): unit  {
   let s = value.show();
@@ -67,12 +65,12 @@ ns sys {
     libc/exit(code)
   }
 
-  #if K1_MACOS extern(arc4random_uniform) fn arc4random_uniform(upperBound: u32): u32
+  #if k1/OS_MACOS extern(arc4random_uniform) fn arc4random_uniform(upperBound: u32): u32
 
   fn random(upperBound: u32): u32 {
-    #if K1_OS == "macos" arc4random_uniform(upperBound)
-    else if K1_OS == "linux" crash("linux 'random' unimpl")
-    else if K1_OS == "wasm" crash("wasm 'random' unimpl")
+    #if k1/OS == "macos" arc4random_uniform(upperBound)
+    else if k1/OS == "linux" crash("linux 'random' unimpl")
+    else if k1/OS == "wasm" crash("wasm 'random' unimpl")
     else crash("unreachable os")
   }
 
@@ -125,7 +123,7 @@ ns files {
     let file = files/unix/fopen(filenameCString, "r".toCString());
     files/unix/fseek(file, 0, unix/SEEK_END);
     let fileSizeBytes = files/unix/ftell(file);
-    let buf = alloc.tempArena().pushBytes(fileSizeBytes);
+    let buf = alloc.tempArena().pushRaw(size = fileSizeBytes, align = 1);
   
     files/unix/fseek(file, 0, unix/SEEK_SET);
     files/unix/fread(buf, fileSizeBytes, 1, file);

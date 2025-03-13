@@ -22,7 +22,7 @@ ns Buffer {
 
   fn _allocate[T](count: u64): Buffer[T] {
     let ptr = if count == 0 {
-      Pointer/null()
+      Pointer/NULL
     } else {
       let sizeBytes = bufferLenBytes[T](count);
       libc/malloc(sizeBytes)

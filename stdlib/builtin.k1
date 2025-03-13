@@ -111,10 +111,14 @@ ability Iterable[impl Item, impl I: Iterator[Item = Item]] {
 
 /////////////////////////////////
 // Compile-time builtin constants
-let const K1_TEST: bool = builtin;
-let const K1_OS: string = builtin; // Possible values: 'linux', 'macos', 'wasm'
-let const K1_NO_STD: bool = builtin;
-let const K1_MACOS: bool = K1_OS == "macos";
+ns k1 {
+  let const TEST: bool = builtin;
+  let const NO_STD: bool = builtin;
+  let const DEBUG: bool = builtin;
+
+  let const OS: string = builtin; // Possible values: 'linux', 'macos', 'wasm'
+  let const OS_MACOS: bool = OS == "macos";
+}
 
 // TODO: make threadlocal, make trait object. For now, global ptr
 //let ALLOCATOR: Pointer = 0 as Pointer;
@@ -165,13 +169,16 @@ ns libc {
 }
 
 fn assert(context locn: compiler/SourceLocation)(value: bool): unit {
-  if not value {
-    crash("ASSERT FAILED")
-  };
+  if not value { crash("ASSERT FAILED") };
+}
+
+fn assertdbg(context locn: compiler/SourceLocation)(value: bool): unit {
+  #if k1/DEBUG 
+    if not value { crash("ASSERT FAILED") };
 }
 
 fn crash(context locn: compiler/SourceLocation)(msg: string): never {
-  #if K1_NO_STD {
+  #if k1/NO_STD {
     let s = "exiting (nostd)\n\0";
     libc/write(
       fileNo = 1, 

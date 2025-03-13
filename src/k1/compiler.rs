@@ -201,6 +201,7 @@ pub struct CompilerConfig {
     pub is_test_build: bool,
     pub no_std: bool,
     pub target: Target,
+    pub debug: bool,
 }
 
 /// Type size assertion. The first argument is a type and the second argument is its expected size.
@@ -252,8 +253,12 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
         .target
         .or(detect_host_target())
         .unwrap_or_else(|| panic!("Unsupported host platform; provide your target explicitly"));
-    let config =
-        CompilerConfig { is_test_build: args.command.is_test(), no_std: args.no_std, target };
+    let config = CompilerConfig {
+        is_test_build: args.command.is_test(),
+        no_std: args.no_std,
+        target,
+        debug: args.debug,
+    };
     let mut parsed_module = ParsedModule::make(module_name.to_string(), config);
 
     let dir_entries = {

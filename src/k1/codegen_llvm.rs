@@ -26,7 +26,7 @@ use inkwell::types::{
 };
 use inkwell::values::{
     ArrayValue, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue,
-    InstructionValue, IntValue, PointerValue,
+    InstructionValue, IntValue, PointerValue, StructValue,
 };
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel};
 use log::{debug, info, trace};
@@ -1817,31 +1817,47 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     fn codegen_compile_time_value(
         &self,
         compile_time_value: &CompileTimeValue,
-    ) -> BasicValueEnum<'ctx> {
+    ) -> CodegenResult<BasicValueEnum<'ctx>> {
         let result = match compile_time_value {
-            CompileTimeValue::Unit => self.builtin_types.unit_value.as_basic_value_enum(),
-            CompileTimeValue::Boolean(b) => match b {
+            CompileTimeValue::Unit(_) => self.builtin_types.unit_value.as_basic_value_enum(),
+            CompileTimeValue::Boolean(b, _) => match b {
                 true => self.builtin_types.true_value.as_basic_value_enum(),
                 false => self.builtin_types.false_value.as_basic_value_enum(),
             },
-            CompileTimeValue::Char(byte) => {
+            CompileTimeValue::Char(byte, _) => {
                 self.builtin_types.char.const_int(*byte as u64, false).as_basic_value_enum()
             }
-            CompileTimeValue::Integer(int_value) => self.codegen_integer_value(*int_value).unwrap(),
-            CompileTimeValue::Float(float_value) => self.codegen_float_value(*float_value).unwrap(),
-            CompileTimeValue::String(boxed_str) => self.codegen_string_literal(boxed_str).unwrap(),
-            CompileTimeValue::Pointer(ptr) => {
-                if *ptr == 0 {
-                    self.ctx.ptr_type(AddressSpace::default()).const_null().as_basic_value_enum()
-                } else {
-                    panic!("comptime Pointer (raw address) that was not zero; I have no idea what to do with that. Maybe we enhance that type such that 'NULL' is not zero but a part of the type")
+            CompileTimeValue::Integer(int_value, _) => {
+                self.codegen_integer_value(*int_value).unwrap()
+            }
+            CompileTimeValue::Float(float_value, _) => {
+                self.codegen_float_value(*float_value).unwrap()
+            }
+            CompileTimeValue::String(boxed_str, _) => {
+                let string_struct = self.codegen_string_struct(boxed_str).unwrap();
+                string_struct.as_basic_value_enum()
+            }
+            CompileTimeValue::Pointer(ptr, span) => {
+                if *ptr != 0 {
+                    return failf!(*span, "comptime Pointer (raw address) that was not zero; I have no idea what to do with that. Maybe we enhance that type such that 'NULL' is not zero but a part of the type");
                 }
+                self.ctx.ptr_type(AddressSpace::default()).const_null().as_basic_value_enum()
+            }
+            CompileTimeValue::Struct(s) => {
+                let llvm_type = self.codegen_type(s.type_id)?.expect_struct();
+                let mut fields_basic_values = Vec::with_capacity(s.fields.len());
+                for field in s.fields.iter() {
+                    let value = self.codegen_compile_time_value(field)?;
+                    fields_basic_values.push(value);
+                }
+                let struct_value = llvm_type.struct_type.const_named_struct(&fields_basic_values);
+                struct_value.as_basic_value_enum()
             }
         };
-        result
+        Ok(result)
     }
 
-    fn codegen_string_literal(&self, string_value: &str) -> CodegenResult<BasicValueEnum<'ctx>> {
+    fn codegen_string_struct(&self, string_value: &str) -> CodegenResult<StructValue<'ctx>> {
         // Get a hold of the type for 'string' (its just a struct that we expect to exist!)
         let string_type = self.codegen_type(STRING_TYPE_ID)?;
         let string_wrapper_struct = string_type.rich_value_type().into_struct_type();
@@ -1862,20 +1878,16 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             None,
             "str_data",
         );
-        global_str_data.set_initializer(&i8_array_from_str(self.ctx, string_value));
-        global_str_data.set_constant(true);
-        let global_str_value = string_wrapper_struct
-            .const_named_struct(&[char_buffer_struct
-                .const_named_struct(&[
-                    self.builtin_types.int.const_int(string_value.len() as u64, true).into(),
-                    global_str_data.as_pointer_value().into(),
-                ])
-                .as_basic_value_enum()])
-            .as_basic_value_enum();
-        let global_value = self.llvm_module.add_global(string_wrapper_struct, None, "str");
-        global_value.set_constant(true);
-        global_value.set_initializer(&global_str_value);
-        Ok(global_value.as_pointer_value().as_basic_value_enum())
+        let str_data_array = i8_array_from_str(self.ctx, string_value);
+        global_str_data.set_initializer(&str_data_array);
+
+        let global_str_value = string_wrapper_struct.const_named_struct(&[char_buffer_struct
+            .const_named_struct(&[
+                self.builtin_types.int.const_int(string_value.len() as u64, true).into(),
+                global_str_data.as_pointer_value().into(),
+            ])
+            .as_basic_value_enum()]);
+        Ok(global_str_value)
     }
 
     fn codegen_expr(&mut self, expr_id: TypedExprId) -> CodegenResult<LlvmValue<'ctx>> {
@@ -1900,10 +1912,26 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             TypedExpr::Float(float) => Ok(self.codegen_float_value(float.value).unwrap().into()),
             TypedExpr::String(string_value, _) => {
-                Ok(self.codegen_string_literal(string_value)?.into())
+                let string_struct = self.codegen_string_struct(string_value)?;
+                let string_ptr = self.builder.build_alloca(string_struct.get_type(), "").unwrap();
+                self.builder.build_store(string_ptr, string_struct).unwrap();
+                Ok(string_ptr.as_basic_value_enum().into())
             }
             TypedExpr::Variable(ir_var) => {
-                if let Some(pointer) = self.variables.get(&ir_var.variable_id) {
+                if let Some(global) = self.globals.get(&ir_var.variable_id) {
+                    let llvm_type = self.codegen_type(ir_var.type_id)?;
+                    eprintln!(
+                        "Loading a global of type {}",
+                        self.module.type_id_to_string(ir_var.type_id)
+                    );
+                    if let K1LlvmType::Reference(_r) = llvm_type {
+                        Ok(global.as_pointer_value().as_basic_value_enum().into())
+                    } else {
+                        let value =
+                            self.load_k1_value(&llvm_type, global.as_pointer_value(), "", false);
+                        Ok(value.into())
+                    }
+                } else if let Some(pointer) = self.variables.get(&ir_var.variable_id) {
                     let llvm_type = self.codegen_type(ir_var.type_id)?;
                     debug!(
                         "codegen variable {} got pointee type {:?}",
@@ -1918,29 +1946,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         false,
                     );
                     Ok(result_value.into())
-                } else if let Some(global) = self.globals.get(&ir_var.variable_id) {
-                    let llvm_type = self.codegen_type(ir_var.type_id)?;
-                    eprintln!(
-                        "Loading a global of type {}",
-                        self.module.type_id_to_string(ir_var.type_id)
-                    );
-                    if let K1LlvmType::Reference(_r) = llvm_type {
-                        Ok(global.as_pointer_value().as_basic_value_enum().into())
-                    } else {
-                        // Unlike with our own variables (though we should probably change this!)
-                        // the global is always a pointer whether the type
-                        // is int* or int. So we have to do something different
-                        // (besides just a smart load) based on that.
-                        // If its an int*, we don't want to load at all.
-                        //
-                        // We could do this for our referencing `let`s too.
-                        // Avoid the extra alloca and treat it different on interpretation.
-                        // This would mean I think changing what load_k1_value does for references.
-                        // It would no-op, whereas today it loads
-                        let value =
-                            self.load_k1_value(&llvm_type, global.as_pointer_value(), "", false);
-                        Ok(value.into())
-                    }
                 } else {
                     Err(CodegenError {
                         message: format!(
@@ -3336,7 +3341,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     pub fn codegen_module(&mut self) -> CodegenResult<()> {
         let start = std::time::Instant::now();
         for global in self.module.globals.iter() {
-            let initialized_basic_value = self.codegen_compile_time_value(&global.initial_value);
+            let initialized_basic_value = self.codegen_compile_time_value(&global.initial_value)?;
             let variable = self.module.variables.get(global.variable_id);
             let name =
                 self.module.make_qualified_name(variable.owner_scope, variable.name, "__", false);
@@ -3345,11 +3350,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Some(AddressSpace::default()),
                 &name,
             );
-            if global.is_comptime {
-                llvm_global.set_constant(true);
-            } else {
-                llvm_global.set_constant(false);
-            }
+            llvm_global.set_constant(global.is_comptime);
             llvm_global.set_initializer(&initialized_basic_value);
             self.globals.insert(global.variable_id, llvm_global);
         }

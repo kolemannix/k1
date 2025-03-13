@@ -1,0 +1,66 @@
+let globalInt: int = 0;
+let* globalIntRef: int* = 10;
+let const comptimeInt: int = 2;
+
+// Optionally we could do some sort of init expression that we run
+// at the start of main for you!
+let* _tmpArenaStorage: Arena* = { 
+  id: "uninit", basePtr: NULL, curAddr: 0, maxAddr: 0
+};
+
+fn tmpAllocator(): Arena* {
+  _tmpArenaStorage
+}
+
+fn initTmpArena(arena: Arena): unit {
+  // TODO: better null check of a reference
+  if not _tmpArenaStorage.basePtr.isNull() {
+    crash("Arena already initialized")
+  };
+  _tmpArenaStorage <- arena;
+}
+
+// Sketch of possible core mem API
+//ns mem {
+//  fn newTemp[T](t: T): T*
+//  fn new[T](t: T): T*
+//  fn free[T](t: T): unit
+//}
+//fn k1_init(): unit {
+//   initArena(Arena/new(id = "temp", initialMb = 1));
+//}
+
+fn main(): int {
+   //#if k1/RUNTIME k1_init();
+
+   assert(globalInt == 0);
+   assert(comptimeInt == 2);
+
+   while globalIntRef.* > comptimeInt {
+     globalIntRef <- globalIntRef.* - 1;
+   };
+   assert(globalIntRef.* == 2);
+
+   initArena(Arena/new(id = "temp", initialMb = 1));
+ 
+   let mut i = 0;
+
+   // Why is the arena slower than malloc!! :'(
+   let a = tmpAllocator();
+
+   // Struct in a loop causes it too!
+   // Not an arena problem thanks god
+   let x = { a: 1, b: 2 };
+   while i < 1000000 {
+     // let p = libc/calloc(1, 8) as int*;
+     // let p = libc/malloc(8) as int*;
+     // p <- 423;
+     //libc/free(p as Pointer);
+     //a.push(123);
+     // a.pushRaw(16, 8);
+     a.push(x);
+     i = i + 1;
+   };
+
+  0
+}

@@ -4,11 +4,8 @@ let const MY_VALUE: bool = true;
 let const MY_VALUE_NEG: bool = not MY_VALUE;
 
 fn test(): unit {
-  println("K1_TEST is \{K1_TEST}");
-  println("K1_OS is \{K1_OS}");
-
-  assert(K1_OS == "macos");
-  assert(K1_TEST == false);
+  assert(k1/OS == "macos");
+  assert(k1/TEST == false);
 
   #if MY_VALUE_NEG {
     crash("does not happen")

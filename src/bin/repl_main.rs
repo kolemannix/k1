@@ -26,6 +26,7 @@ fn main() -> anyhow::Result<ExitCode> {
             no_std: false,
             target: k1::compiler::detect_host_target()
                 .unwrap_or(k1::compiler::Target::LinuxIntel64),
+            debug: true,
         },
     );
     let name = "repl.k1";
@@ -34,7 +35,7 @@ fn main() -> anyhow::Result<ExitCode> {
 
     let mut line = String::with_capacity(1024);
     loop {
-        let len = std::io::stdin().read_line(&mut line).unwrap();
+        let _len = std::io::stdin().read_line(&mut line).unwrap();
         let lex_result = k1::parse::lex_text(
             &mut parsed_module,
             Source::make(
@@ -59,7 +60,7 @@ fn main() -> anyhow::Result<ExitCode> {
         let mut parser = k1::parse::Parser::make(&tokens, file_id, &mut parsed_module);
         match parser.parse_statement() {
             Ok(None) => match parser.parse_definition() {
-                Ok(Some(defn)) => eprintln!("thanks for your definition"),
+                Ok(Some(_defn)) => eprintln!("thanks for your definition"),
                 Ok(None) => eprintln!("neither a statement nor a definition but not an error hmm"),
                 Err(e) => {
                     k1::parse::print_error(&parsed_module, &e);
