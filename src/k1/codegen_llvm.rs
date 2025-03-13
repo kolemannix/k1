@@ -1493,10 +1493,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 debug_assert!(value.is_pointer_value());
                 self.builder.build_store(variable_ptr, value).unwrap()
             } else {
-                let value_ptr = self
-                    .builder
-                    .build_alloca(reference_inner_llvm_type.rich_value_type(), "")
-                    .unwrap();
+                // We need 2 allocas here because we need to store
+                // an address in an alloca, and the address needs to be
+                // a stack address.
+                let value_ptr = self.build_alloca(reference_inner_llvm_type.rich_value_type(), "");
                 self.builder.build_store(value_ptr, value).unwrap();
                 self.builder.build_store(variable_ptr, value_ptr).unwrap()
             }
@@ -1789,12 +1789,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     }
 
     fn _alloca_copy_entire_value(
-        &self,
+        &mut self,
         src: PointerValue<'ctx>,
         ty: BasicTypeEnum<'ctx>,
         name: &str,
     ) -> PointerValue<'ctx> {
-        let dst = self.builder.build_alloca(ty, name).unwrap();
+        let dst = self.build_alloca(ty, name);
         self.memcpy_entire_value(dst, src, ty);
         dst
     }
@@ -1943,27 +1943,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             TypedExpr::Float(float) => Ok(self.codegen_float_value(float.value).unwrap().into()),
             TypedExpr::String(string_value, _) => {
                 let string_struct = self.codegen_string_struct(string_value)?;
-                let string_ptr = self.builder.build_alloca(string_struct.get_type(), "").unwrap();
+                let string_ptr = self.build_alloca(string_struct.get_type(), "");
                 self.builder.build_store(string_ptr, string_struct).unwrap();
                 Ok(string_ptr.as_basic_value_enum().into())
             }
             TypedExpr::Variable(ir_var) => {
-                // nocommit: Eliminate separate case for globals; direct vs indirect mode
-                // should be enough to support what we need
-                //if let Some(global) = self.globals.get(&ir_var.variable_id) {
-                //    let llvm_type = self.codegen_type(ir_var.type_id)?;
-                //    eprintln!(
-                //        "Loading a global of type {}",
-                //        self.module.type_id_to_string(ir_var.type_id)
-                //    );
-                //    if let K1LlvmType::Reference(_r) = llvm_type {
-                //        Ok(global.as_pointer_value().as_basic_value_enum().into())
-                //    } else {
-                //        let value =
-                //            self.load_k1_value(&llvm_type, global.as_pointer_value(), "", false);
-                //        Ok(value.into())
-                //    }
-                //}
                 if let Some(variable_value) = self.variable_to_value.get(&ir_var.variable_id) {
                     let llvm_type = self.codegen_type(ir_var.type_id)?;
                     debug!(
@@ -1985,8 +1969,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             TypedExpr::Struct(struc) => {
                 let struct_k1_llvm_type = self.codegen_type(struc.type_id)?.expect_struct();
                 let struct_llvm_type = struct_k1_llvm_type.struct_type;
-                let struct_ptr =
-                    self.builder.build_alloca(struct_llvm_type, "struct_literal").unwrap();
+                let struct_ptr = self.build_alloca(struct_llvm_type, "struct_literal");
                 for (idx, field) in struc.fields.iter().enumerate() {
                     let value = self.codegen_expr_basic_value(field.expr)?;
                     let field_addr = self
@@ -2070,10 +2053,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
                 let enum_variant = &enum_type.variants[enum_constr.variant_index as usize];
 
-                let enum_ptr = self
-                    .builder
-                    .build_alloca(enum_variant.envelope_type, "enum_constr")
-                    .to_err(enum_constr.span)?;
+                let enum_ptr = self.build_alloca(enum_variant.envelope_type, "enum_constr");
 
                 // Store the tag_value in the first slot
                 let tag_pointer = self
@@ -2177,7 +2157,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(LlvmValue::Void(branch_inst))
             }
             TypedExpr::Lambda(lambda_expr) => {
-                eprintln!("codegen lambda {:?}", lambda_expr);
+                debug!("codegen lambda {:?}", lambda_expr);
                 let lambda_type =
                     self.module.types.get(lambda_expr.lambda_type).as_lambda().unwrap();
                 let llvm_fn = self.codegen_function_or_get(lambda_type.body_function_id)?;
@@ -2205,9 +2185,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let lam_obj_struct_type =
                     self.codegen_type(fn_to_lam_obj.lambda_object_type_id)?.expect_lambda_object();
 
-                // rich_value_type() equivalent
+                // lam_obj_struct_type.struct_type is equivalent to rich_value_type()
                 let lambda_object_ptr =
-                    self.builder.build_alloca(lam_obj_struct_type.struct_type, "fn2obj").unwrap();
+                    self.build_alloca(lam_obj_struct_type.struct_type, "fn2obj");
 
                 let obj_function_ptr_ptr = self
                     .builder
@@ -2370,8 +2350,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 // Produces just the lambda's environment as a value. We don't need the function
                 // pointer because we know it from the type still
                 let lambda_env_value = self.codegen_expr_basic_value(cast.base_expr)?;
-                let env_pointer =
-                    self.builder.build_alloca(lambda_env_value.get_type(), "env_ptr").unwrap();
+                let env_pointer = self.build_alloca(lambda_env_value.get_type(), "env_ptr");
                 self.builder.build_store(env_pointer, lambda_env_value).unwrap();
 
                 let fn_value = self
@@ -2386,10 +2365,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     self.builder.build_insert_value(lam_obj, lambda_env_value, 1, "").unwrap();
 
                 // Aggregates have to be pointers because that's just how we represent them
-                let lam_obj_ptr = self
-                    .builder
-                    .build_alloca(self.builtin_types.dynamic_lambda_object, "lam_obj_ptr")
-                    .unwrap();
+                let lam_obj_ptr =
+                    self.build_alloca(self.builtin_types.dynamic_lambda_object, "lam_obj_ptr");
                 self.builder.build_store(lam_obj_ptr, lam_obj).unwrap();
 
                 Ok(lam_obj_ptr.as_basic_value_enum().into())
@@ -2760,10 +2737,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let function_type = self.module.get_callee_function_type(&call.callee);
         let llvm_function_type = self.make_llvm_function_type(function_type)?;
         let sret_alloca = if llvm_function_type.is_sret {
-            let sret_alloca = self
-                .builder
-                .build_alloca(llvm_function_type.return_type.rich_value_type(), "call_sret")
-                .unwrap();
+            let sret_alloca =
+                self.build_alloca(llvm_function_type.return_type.rich_value_type(), "call_sret");
             args.push_front(sret_alloca.into());
             Some(sret_alloca)
         } else {
@@ -2841,11 +2816,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     .unwrap();
                 args.insert(env_arg_index, env_ptr.into());
 
-                eprintln!(
+                debug!(
                     "The k1 fn type on the lambda object {}",
                     self.module.type_id_to_string(function_type)
                 );
-                eprintln!("Calling indirect with type {}", llvm_function_type.llvm_function_type);
+                debug!("Calling indirect with type {}", llvm_function_type.llvm_function_type);
                 self.builder
                     .build_indirect_call(
                         llvm_function_type.llvm_function_type,
@@ -3108,9 +3083,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let loop_end_block = self.ctx.append_basic_block(current_fn, "loop_end");
 
         let break_type = self.codegen_type(loop_expr.break_type)?;
-        // Optimization: skip if unit type
-        let break_value_ptr =
-            self.builder.build_alloca(break_type.rich_value_type(), "break").unwrap();
+        // TODO llvm ir Optimization: skip alloca if break is unit type
+        let break_value_ptr = self.build_alloca(break_type.rich_value_type(), "break");
         self.loops.insert(
             loop_expr.body.scope_id,
             LoopInfo { break_value_ptr: Some(break_value_ptr), end_block: loop_end_block },
