@@ -8,6 +8,7 @@ fn make_test_module() -> ParsedModule {
             is_test_build: false,
             no_std: true,
             target: detect_host_target().unwrap(),
+            debug: true,
         },
     )
 }
