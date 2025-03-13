@@ -26,7 +26,7 @@ use inkwell::types::{
 };
 use inkwell::values::{
     ArrayValue, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue,
-    InstructionValue, IntValue, PointerValue, StructValue,
+    InstructionOpcode, InstructionValue, IntValue, PointerValue, StructValue,
 };
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel};
 use log::{debug, info, trace};
@@ -1477,10 +1477,49 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
         let variable_type = self.codegen_type(let_stmt.variable_type)?;
         let variable = self.module.variables.get(let_stmt.variable_id);
-        let variable_ptr = self
-            .builder
-            .build_alloca(variable_type.rich_value_type(), self.get_ident_name(variable.name))
-            .to_err(let_stmt.span)?;
+        // nocommit: Store this
+        let the_block = self.builder.get_insert_block().unwrap();
+        let entry_block = the_block.get_parent().unwrap().get_first_basic_block().unwrap();
+        let last_alloca =
+            entry_block.get_instructions().find(|i| i.get_opcode() == InstructionOpcode::Alloca);
+        let variable_ptr = match last_alloca {
+            None => {
+                match entry_block.get_first_instruction() {
+                    Some(instr) => {
+                        self.builder.position_at(entry_block, &instr);
+                    }
+                    None => {
+                        self.builder.position_at_end(entry_block);
+                    }
+                }
+                let a = self
+                    .builder
+                    .build_alloca(
+                        variable_type.rich_value_type(),
+                        self.get_ident_name(variable.name),
+                    )
+                    .unwrap();
+                self.builder.position_at_end(the_block);
+                a
+            }
+            Some(last_alloca) => {
+                self.builder.position_at(entry_block, &last_alloca);
+                let a = self
+                    .builder
+                    .build_alloca(
+                        variable_type.rich_value_type(),
+                        self.get_ident_name(variable.name),
+                    )
+                    .unwrap();
+                self.builder.position_at_end(the_block);
+                a
+            }
+        };
+
+        //let variable_ptr = self
+        //    .builder
+        //    .build_alloca(variable_type.rich_value_type(), self.get_ident_name(variable.name))
+        //    .to_err(let_stmt.span)?;
         let store_instr = if let_stmt.is_referencing {
             // If this is a let*, then we put the rhs behind another alloca so that we end up
             // with a pointer to the value

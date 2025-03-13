@@ -4929,6 +4929,7 @@ impl TypedModule {
 
     // Used for
     // - de-referencing,
+    // - lambda to lambda object conversion
     // Probably unsound. I'd like to remove and re-introduce coercion as part of subtyping.
     // However, not sure if we should do it for references, because I'd like to move that to an
     // ability so that we can have different types of references written in userspace
