@@ -5,7 +5,7 @@ let const comptimeInt: int = 2;
 // Optionally we could do some sort of init expression that we run
 // at the start of main for you!
 let* _tmpArenaStorage: Arena* = { 
-  id: "uninit", basePtr: NULL, curAddr: 0, maxAddr: 0
+  id: "uninit", basePtr: Pointer/NULL, curAddr: 0, maxAddr: 0
 };
 
 fn tmpAllocator(): Arena* {
@@ -41,7 +41,7 @@ fn main(): int {
    };
    assert(globalIntRef.* == 2);
 
-   initArena(Arena/new(id = "temp", initialMb = 1));
+   initTmpArena(Arena/new(id = "temp", initialMb = 10));
  
    let mut i = 0;
 
