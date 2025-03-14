@@ -2746,6 +2746,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         };
         let env_arg_index = if llvm_function_type.is_sret { 1 } else { 0 };
         let callsite_value = match &call.callee {
+            Callee::StaticAbstract { .. } => self
+                .module
+                .ice_with_span("Cannot codegen a call to an abstract function", call.span),
             Callee::StaticFunction(function_id) => {
                 let function_value = self.codegen_function_or_get(*function_id)?;
 
@@ -2830,7 +2833,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     )
                     .unwrap()
             }
-            Callee::Abstract { .. } => {
+            Callee::DynamicAbstract { .. } => {
                 return failf!(
                     call.span,
                     "Internal Compiler Error: cannot codegen an Abstract callee"

@@ -874,6 +874,10 @@ impl TypeVariableInfo {
     const EMPTY: TypeVariableInfo =
         TypeVariableInfo { inference_variable_count: 0, type_parameter_count: 0 };
 
+    pub fn is_abstract(&self) -> bool {
+        self.inference_variable_count > 0 || self.type_parameter_count > 0
+    }
+
     fn add(self, other: Self) -> Self {
         Self {
             inference_variable_count: self.inference_variable_count
