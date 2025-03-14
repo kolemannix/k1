@@ -49,6 +49,11 @@ ns Buffer {
     newBuffer
   }
 
+  fn cloned[T](self: Buffer[T]): Buffer[T] {
+    let clone = self._enlargedClone(newCount = self.len);
+    clone
+  }
+
   fn lenBytes[T](self: Buffer[T]): u64 { bufferLenBytes[T](self.len) }
 
   fn empty[T](): Buffer[T] {
@@ -65,7 +70,6 @@ ns Buffer {
     buf
   }
 
-
   fn slice[T](self: Buffer[T], start: u64, end: u64): Buffer[T] {
     if end < start or self.len == 0 {
       return(empty[T]())
@@ -73,7 +77,7 @@ ns Buffer {
     if start >= self.len or start < 0 {
       crash("slice start index out of bounds: \{start}")
     };
-    let end = if end >  self.len self.len else end;
+    let end = if end > self.len self.len else end;
     let newLen = end - start;
     let newBase = self.getRef(start);
     { len: newLen, data: newBase }
@@ -97,13 +101,6 @@ ns Buffer {
   fn get[T](self: Buffer[T], index: u64): T {
     let tRef = self.getRef(index);
     tRef.*
-  }
-
-  fn cloned[T](self: Buffer[T]): Buffer[T] {
-    let numBytes = self.lenBytes();
-    let newBase = libc/malloc(numBytes);
-    libc/memcpy(dst = newBase, src = self.dataPointer(), count = numBytes);
-    { len: self.len, data: newBase as T* }
   }
 
   fn isEmpty[T](self: Buffer[T]): bool {
