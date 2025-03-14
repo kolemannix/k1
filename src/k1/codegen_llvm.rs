@@ -498,8 +498,6 @@ pub struct Codegen<'ctx, 'module> {
     pub llvm_function_to_k1: FxHashMap<FunctionValue<'ctx>, FunctionId>,
     llvm_types: RefCell<FxHashMap<TypeId, K1LlvmType<'ctx>>>,
     variable_to_value: FxHashMap<VariableId, VariableValue<'ctx>>,
-    // nocommit: Possible remove globals map now?
-    globals: FxHashMap<VariableId, GlobalValue<'ctx>>,
     lambda_functions: FxHashMap<TypeId, FunctionValue<'ctx>>,
     loops: FxHashMap<ScopeId, LoopInfo<'ctx>>,
     builtin_types: BuiltinTypes<'ctx>,
@@ -694,7 +692,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             llvm_machine: machine,
             builder,
             variable_to_value: FxHashMap::new(),
-            globals: FxHashMap::new(),
             lambda_functions: FxHashMap::new(),
             loops: FxHashMap::new(),
             llvm_functions: FxHashMap::new(),
@@ -3403,7 +3400,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             VariableValue::Indirect { pointer_value: llvm_global.as_pointer_value() }
         };
         self.variable_to_value.insert(global.variable_id, variable_value);
-        self.globals.insert(global.variable_id, llvm_global);
         Ok(())
     }
 
