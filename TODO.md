@@ -35,6 +35,7 @@ New tagline? "C with typeclasses and tagged unions"
 - [x] Fix closure types / get static dispatch for functions taking a closure directly
 - [x] *Specializing functions on their provided closures to allow inlining and static dispatch*
 - [ ] let ... else, or 'guard', or 'ensure' let e is .StringLit(s) else {}
+- [x] Run in Linux x86-64
 
 - [ ] Allocator system
   - [x] comptime enhancement to support this global initializer: `let* a: Arena* = { .. };`
@@ -46,22 +47,28 @@ New tagline? "C with typeclasses and tagged unions"
         Who initializes it? I don't love putting stuff in main.
         But otherwise the user has to do it.
         How low-level do we want to be? #if k1/RUNTIME
-  - [ ] alloca in loops fix
-  - [ ] [[unlikely]] annotations
-- [ ] Proper comptime
+  - [x] alloca in loops fix
+  - [ ] Parameterize stdlib over the current allocator ()
+- [ ] Proper basic comptime
+  - [x] literals
+  - [x] if/else
   - [ ] Run comptime exprs before bodies but after all other phases, treat it
         like 'body' code SINCE it'll end up using the user's types, and even impls!
-  - [ ] 
+  - [ ] Struct construction
+  - [ ] Struct field access
+  - [ ] Enum construction
+- [ ] Macro system built on comptime, both string #insert and parsed code #insert like Jai
+- [ ] @unlikely annotations
 
 
 - [ ] Explicit coercion sites like Rust seems like a great idea? https://doc.rust-lang.org/reference/type-coercions.html#r-coerce.site.let
-- [ ] Optimize capture-free lambdas to work like function pointers instead
-- [ ] Compile switches with no patterns or guards to a different Expr type corresponding to LLVM switch
-- [ ] comptime #if needs to be a real node not a directive (can't parse if/else). More like `#const if` than `#if`
-- [ ] Implicit conversions based on a special ability that integrates with type inference (like Mojo's ImplicitlyIntable, etc)
+- [ ] Optimize lambdas that don't capture to become function pointers instead
+- [ ] Compile switches with no patterns or guards to LLVM switch
+- [x] comptime #if needs to be a real node not a directive (can't parse if/else). More like `#const if` than `#if`
+- [ ] Implicit conversions based on a special ability that integrates with type inference? (like Mojo's ImplicitlyIntable, etc)
 - [ ] Private functions? Private anything? So hard to call, such a philosophical question about hiding, safety, skill-floor vs skill-ceiling
 - [x] string interp at end puts unnecessary empty string part: `putString(__sb_1001, "");`
-- [ ] Library vs Binary, linker options, when do we 'link', in IR or as object files, ...
+- [ ] Library vs Binary, clang passthrough options, when do we 'link', in IR or as object files, ...
 - [ ] `inline` functions (like Scala3's)
 - [ ] Add fixed length array types: `Array[<type expr> x <int literal>]`
 - [ ] Bug: Are parameter names part of a function type
@@ -69,7 +76,6 @@ New tagline? "C with typeclasses and tagged unions"
       https://llvm.org/docs/NewPassManager.html#just-tell-me-how-to-run-the-default-optimization-pipeline-with-the-new-pass-manager
 - [ ] More explicit companion ns via injecting `for` keyword `ns (for) type {`
 - [x] Stacktraces on crash (using libunwind and a little C program to call it: `rt/unwind.c`)
-- [ ] Rename ability. 'behavior' / 'provide'
 - [ ] Operator 'overloading' story. I think the story is just abilities. The question is do we move the syntax to the source: 
       ability Equals { syntax(2, "==") fn }
       This means that these would affect the parser. We'd have to add a new pass to find all the syntax definitions
