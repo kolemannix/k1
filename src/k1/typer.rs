@@ -833,6 +833,28 @@ pub enum BinaryOpKind {
     Pipe,
 }
 
+impl BinaryOpKind {
+    pub fn kind_str(&self) -> &'static str {
+        match self {
+            BinaryOpKind::Add => "add",
+            BinaryOpKind::Subtract => "sub",
+            BinaryOpKind::Multiply => "mul",
+            BinaryOpKind::Divide => "div",
+            BinaryOpKind::Rem => "rem",
+            BinaryOpKind::Less => "lt",
+            BinaryOpKind::LessEqual => "le",
+            BinaryOpKind::Greater => "gt",
+            BinaryOpKind::GreaterEqual => "ge",
+            BinaryOpKind::And => "and",
+            BinaryOpKind::Or => "or",
+            BinaryOpKind::Equals => "eq",
+            BinaryOpKind::NotEquals => "neq",
+            BinaryOpKind::OptionalElse => "else",
+            BinaryOpKind::Pipe => "pipe",
+        }
+    }
+}
+
 impl Display for BinaryOpKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         use std::fmt::Write;
