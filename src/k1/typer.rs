@@ -170,7 +170,7 @@ impl EvalExprContext {
         EvalExprContext { scope_id, ..*self }
     }
 
-    fn with_comptime(&self, arg: bool) -> EvalExprContext {
+    fn _with_comptime(&self, arg: bool) -> EvalExprContext {
         EvalExprContext { is_comptime: arg, ..*self }
     }
 }
@@ -678,7 +678,9 @@ pub struct TypedFunction {
 
 impl TypedFunction {
     fn is_generic(&self) -> bool {
-        !self.type_params.is_empty() || !self.function_params.is_empty()
+        matches!(self.kind, TypedFunctionKind::AbilityDefn(_))
+            || !self.type_params.is_empty()
+            || !self.function_params.is_empty()
     }
 }
 
@@ -950,12 +952,19 @@ pub enum Callee {
         environment_ptr: VariableId,
         lambda_type_id: TypeId,
     },
+    /// When we're doing generic code that is never going to physically need to exist
+    /// it's far cheaper and simpler to just say "Abstract call of this function type" than
+    /// to specialize a copy of a function over a bunch of type params
+    StaticAbstract {
+        generic_function_id: FunctionId,
+        function_type: TypeId,
+    },
     /// Must contain a LambdaObject
     DynamicLambda(TypedExprId),
     /// Must contain a Function reference
     DynamicFunction(TypedExprId),
     /// Used by function type parameters
-    Abstract {
+    DynamicAbstract {
         variable_id: VariableId,
         function_type: TypeId,
     },
@@ -969,9 +978,10 @@ impl Callee {
         match self {
             Callee::StaticFunction(function_id) => Some(*function_id),
             Callee::StaticLambda { function_id, .. } => Some(*function_id),
+            Callee::StaticAbstract { .. } => None,
             Callee::DynamicLambda(_) => None,
             Callee::DynamicFunction(_) => None,
-            Callee::Abstract { .. } => None,
+            Callee::DynamicAbstract { .. } => None,
         }
     }
 }
@@ -3867,6 +3877,12 @@ impl TypedModule {
                 .push(specialization_info.clone());
         }
         let is_concrete = self.is_function_concrete(&function);
+        if function.compiler_debug {
+            eprintln!(
+                "is_function_concrete={is_concrete} for {}",
+                self.function_to_string(&function, false)
+            );
+        }
         function.is_concrete = is_concrete;
         self.functions.push(function);
         id
@@ -7549,7 +7565,7 @@ impl TypedModule {
                                 ))))
                             }
                             Type::FunctionTypeParameter(ftp) => {
-                                let callee = Callee::Abstract {
+                                let callee = Callee::DynamicAbstract {
                                     function_type: ftp.function_type,
                                     variable_id,
                                 };
@@ -8420,6 +8436,7 @@ impl TypedModule {
             Callee::StaticFunction(function_id) | Callee::StaticLambda { function_id, .. } => {
                 self.get_function(*function_id).type_id
             }
+            Callee::StaticAbstract { function_type, .. } => *function_type,
             Callee::DynamicFunction(function_reference_expr) => {
                 let function_reference_type =
                     self.get_expr_type(*function_reference_expr).expect_reference().inner_type;
@@ -8431,7 +8448,7 @@ impl TypedModule {
                     panic!("Invalid dynamic function callee: {}", self.type_to_string(t, false))
                 }
             },
-            Callee::Abstract { function_type, .. } => *function_type,
+            Callee::DynamicAbstract { function_type, .. } => *function_type,
         }
     }
 
@@ -8461,7 +8478,7 @@ impl TypedModule {
         let original_function_return_type = original_function_type.return_type;
         let params = &original_function_type.logical_params().to_vec();
 
-        let (callee, typechecked_arguments, type_args, return_type) = match is_generic {
+        let (callee, typechecked_arguments, type_args) = match is_generic {
             false => {
                 let args_and_params = self.align_call_arguments_with_parameters(
                     fn_call,
@@ -8481,7 +8498,7 @@ impl TypedModule {
                     self.check_call_argument(fn_call.name.name, param, expr, ctx.scope_id)?;
                     typechecked_args.push(expr);
                 }
-                (callee, typechecked_args, smallvec![], original_function_return_type)
+                (callee, typechecked_args, smallvec![])
             }
             true => {
                 let original_args_and_params = self.align_call_arguments_with_parameters(
@@ -8520,41 +8537,54 @@ impl TypedModule {
                     &original_args_and_params,
                     ctx,
                 )?;
-                let function_id = self.specialize_function_signature(
+
+                let specialized_function_type = self.substitute_in_function_signature(
                     &type_args,
                     &function_type_args,
                     function_id,
-                )?;
+                );
+                let is_abstract =
+                    self.types.get_type_variable_info(specialized_function_type).is_abstract();
+                if is_abstract {
+                    (
+                        Callee::StaticAbstract {
+                            function_type: specialized_function_type,
+                            generic_function_id: original_function_id,
+                        },
+                        smallvec![],
+                        smallvec![],
+                    )
+                } else {
+                    let function_id = self.specialize_function_signature(
+                        &type_args,
+                        &function_type_args,
+                        function_id,
+                    )?;
 
-                let specialized_fn_type = self.get_function_type(function_id);
-                let specialized_params = specialized_fn_type.physical_params.clone();
-                let specialized_return_type = specialized_fn_type.return_type;
-                let args_and_params = self.align_call_arguments_with_parameters(
-                    fn_call,
-                    &specialized_params,
-                    known_args.map(|(_known_types, known_args)| known_args),
-                    ctx.scope_id,
-                    false,
-                )?;
+                    let specialized_fn_type = self.get_function_type(function_id);
+                    let specialized_params = specialized_fn_type.physical_params.clone();
+                    let args_and_params = self.align_call_arguments_with_parameters(
+                        fn_call,
+                        &specialized_params,
+                        known_args.map(|(_known_types, known_args)| known_args),
+                        ctx.scope_id,
+                        false,
+                    )?;
 
-                let mut typechecked_args = SmallVec::with_capacity(args_and_params.len());
-                for (maybe_typed_expr, param) in args_and_params.iter() {
-                    let expr = match *maybe_typed_expr {
-                        MaybeTypedExpr::Typed(typed) => typed,
-                        MaybeTypedExpr::Parsed(parsed) => {
-                            self.eval_expr(parsed, ctx.with_expected_type(Some(param.type_id)))?
-                        }
-                    };
-                    self.check_call_argument(fn_call.name.name, param, expr, ctx.scope_id)?;
-                    typechecked_args.push(expr);
+                    let mut typechecked_args = SmallVec::with_capacity(args_and_params.len());
+                    for (maybe_typed_expr, param) in args_and_params.iter() {
+                        let expr = match *maybe_typed_expr {
+                            MaybeTypedExpr::Typed(typed) => typed,
+                            MaybeTypedExpr::Parsed(parsed) => {
+                                self.eval_expr(parsed, ctx.with_expected_type(Some(param.type_id)))?
+                            }
+                        };
+                        self.check_call_argument(fn_call.name.name, param, expr, ctx.scope_id)?;
+                        typechecked_args.push(expr);
+                    }
+
+                    (Callee::make_static(function_id), typechecked_args, type_args)
                 }
-
-                (
-                    Callee::make_static(function_id),
-                    typechecked_args,
-                    type_args,
-                    specialized_return_type,
-                )
             }
         };
 
@@ -8564,7 +8594,11 @@ impl TypedModule {
         {
             NEVER_TYPE_ID
         } else {
-            return_type
+            self.types
+                .get(self.get_callee_function_type(&callee))
+                .as_function()
+                .unwrap()
+                .return_type
         };
 
         let call = Call {
@@ -8575,6 +8609,7 @@ impl TypedModule {
             span,
         };
 
+        // nocommit: Why is this intrinsic special? Why is this here?
         if let Some(intrinsic_type) =
             call.callee.maybe_function_id().and_then(|id| self.get_function(id).intrinsic_type)
         {
@@ -9290,6 +9325,45 @@ impl TypedModule {
             .unwrap()
     }
 
+    fn substitute_in_function_signature(
+        &mut self,
+        // Must 'zip' up with each type param
+        type_arguments: &[SimpleNamedType],
+        // Must 'zip' up with each function type param
+        function_type_arguments: &[SimpleNamedType],
+        generic_function_id: FunctionId,
+    ) -> TypeId {
+        let generic_function = self.get_function(generic_function_id);
+        let generic_function_type_id = generic_function.type_id;
+        let mut subst_pairs: SmallVec<[TypeSubstitutionPair; 8]> = SmallVec::with_capacity(
+            generic_function.function_params.len() + generic_function.type_params.len(),
+        );
+
+        for (function_type_param, function_type_arg) in
+            generic_function.function_params.iter().zip(function_type_arguments.iter())
+        {
+            // What if we use substitution?
+            subst_pairs.push(TypeSubstitutionPair {
+                from: function_type_param.type_id,
+                to: function_type_arg.type_id,
+            })
+        }
+        // Transform the signature of the generic function by substituting
+        subst_pairs.extend(generic_function.type_params.iter().zip(type_arguments).map(
+            |(gen_param, type_arg)| TypeSubstitutionPair {
+                from: gen_param.type_id,
+                to: type_arg.type_id,
+            },
+        ));
+        let specialized_function_type_id =
+            self.substitute_in_type(generic_function_type_id, &subst_pairs);
+        debug!(
+            "specialized function type: {}",
+            self.type_id_to_string(specialized_function_type_id)
+        );
+        specialized_function_type_id
+    }
+
     fn specialize_function_signature(
         &mut self,
         // Must 'zip' up with each type param
@@ -9331,7 +9405,7 @@ impl TypedModule {
         };
 
         let generic_function_type_id = generic_function.type_id;
-        let mut subst_pairs: SmallVec<[TypeSubstitutionPair; 16]> = SmallVec::with_capacity(
+        let mut subst_pairs: SmallVec<[TypeSubstitutionPair; 8]> = SmallVec::with_capacity(
             generic_function.function_params.len() + generic_function.type_params.len(),
         );
 
@@ -9486,32 +9560,18 @@ impl TypedModule {
     }
 
     pub fn is_function_concrete(&self, function: &TypedFunction) -> bool {
-        match function.intrinsic_type {
-            Some(intrinsic) if intrinsic.is_inlined() => false,
-            _ => match &function.kind {
-                TypedFunctionKind::AbilityDefn(_) => false,
-                _other => {
-                    let is_concrete = if function.is_generic() {
-                        false
-                    } else {
-                        match &function.specialization_info {
-                            None => false,
-                            Some(_spec_info) => {
-                                let info = self.types.get_type_variable_info(function.type_id);
-                                info.type_parameter_count == 0 && info.inference_variable_count == 0
-                            }
-                        }
-                    };
-                    if function.compiler_debug {
-                        eprintln!(
-                            "is_function_concrete={is_concrete} for {}",
-                            self.function_to_string(function, false)
-                        );
-                    }
-                    is_concrete
-                }
-            },
+        if let Some(intrinsic) = function.intrinsic_type {
+            if intrinsic.is_inlined() {
+                return false;
+            }
         }
+        if function.is_generic() {
+            return false;
+        }
+        let info = self.types.get_type_variable_info(function.type_id);
+        let has_no_abstract_types_in_signature =
+            info.type_parameter_count == 0 && info.inference_variable_count == 0;
+        has_no_abstract_types_in_signature
     }
 
     fn eval_stmt(

@@ -560,13 +560,17 @@ impl TypedModule {
                         let name = self.get_function(*function_id).name;
                         self.write_ident(writ, name)?;
                     }
+                    Callee::StaticAbstract { generic_function_id, .. } => {
+                        let name = self.get_function(*generic_function_id).name;
+                        self.write_ident(writ, name)?;
+                    }
                     Callee::DynamicFunction(callee_expr) => {
                         self.display_expr_id(*callee_expr, writ, indentation)?;
                     }
                     Callee::DynamicLambda(callee_expr) => {
                         self.display_expr_id(*callee_expr, writ, indentation)?;
                     }
-                    Callee::Abstract { variable_id, .. } => {
+                    Callee::DynamicAbstract { variable_id, .. } => {
                         let variable = self.variables.get(*variable_id);
                         self.write_ident(writ, variable.name)?;
                     }
