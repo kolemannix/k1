@@ -1,0 +1,36 @@
+let const K1_RT: bool = not k1/NO_STD;
+#if K1_RT ns rt {
+  // Optionally we could do some sort of init expression that we run
+  // at the start of main for you!
+  let* tempArena: Arena* = { 
+    id: "uninit", basePtr: Pointer/NULL, curAddr: 0, maxAddr: 0
+  };
+  
+  fn initTempArena(maxMb: uint): unit {
+    if not tempArena.basePtr.isNull() {
+      crash("Arena already initialized")
+    };
+    tempArena <- Arena/new(id = "temp", initialMb = maxMb);
+  }
+
+  fn init(): unit {
+    println("welcome to k1");
+    initTempArena(1000)
+  }
+
+}
+
+// Sketch of possible core mem API
+//ns mem {
+//  fn newTemp[T](t: T): T*
+//  fn new[T](t: T): T*
+//  fn free[T](t: T): unit
+//}
+//fn k1_init(): unit {
+//   initArena(Arena/new(id = "temp", initialMb = 1));
+//}
+
+fn main(): int {
+   #if K1_RT rt/init();
+   0
+}
