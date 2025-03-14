@@ -3661,6 +3661,16 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     pub fn parse_definition(&mut self) -> ParseResult<Option<ParsedId>> {
+        let condition = if self.maybe_consume_next(K::Hash).is_some() {
+            if self.maybe_consume_next(K::KeywordIf).is_some() {
+                let condition_expr = self.expect_expression()?;
+                Some(condition_expr)
+            } else {
+                return Err(error_expected("#if", self.peek()));
+            }
+        } else {
+            None
+        };
         if let Some(use_id) = self.parse_use()? {
             Ok(Some(ParsedId::Use(use_id)))
         } else if let Some(ns) = self.parse_namespace()? {
@@ -3677,7 +3687,14 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         } else if let Some(ability_impl_id) = self.parse_ability_impl()? {
             Ok(Some(ParsedId::AbilityImpl(ability_impl_id)))
         } else {
-            Ok(None)
+            if condition.is_some() {
+                return Err(error_expected(
+                    "Some definition following condition directive #if",
+                    self.peek(),
+                ));
+            } else {
+                Ok(None)
+            }
         }
     }
 

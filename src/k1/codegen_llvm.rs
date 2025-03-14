@@ -3495,10 +3495,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         // module_pass_manager.run_on(&self.llvm_module);
 
         info!("codegen phase 'optimize' took {}ms", start.elapsed().as_millis());
-        for (_, function) in self.llvm_functions.iter_mut() {
-            let new_count = Codegen::count_function_instructions(function.function_value);
-            function.instruction_count = new_count;
-        }
+        //for (_, function) in self.llvm_functions.iter_mut() {
+        //    let new_count = Codegen::count_function_instructions(function.function_value);
+        //    function.instruction_count = new_count;
+        //}
 
         Ok(())
     }

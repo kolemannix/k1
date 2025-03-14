@@ -120,10 +120,6 @@ ns k1 {
   let const OS_MACOS: bool = OS == "macos";
 }
 
-// TODO: make threadlocal, make trait object. For now, global ptr
-//let ALLOCATOR: Pointer = 0 as Pointer;
-
-
 /////////////////////////////////
 // Core sizing intrinsics
 
