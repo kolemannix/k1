@@ -126,7 +126,7 @@ ns string {
     self.substring(0, other.len()) == other
   }
 
-  fn toCString(self: string): Pointer {
+  fn toCString(context alloc: mem/AllocMode)(self: string): Pointer {
     self.appendChar('\0').buffer.dataPointer()
   }
 

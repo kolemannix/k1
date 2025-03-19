@@ -117,13 +117,13 @@ ns files {
     extern(ftell)  fn ftell(fileDesc: Pointer): u64
   }
 
-  fn readToString(context alloc: Allocator)(path: string): string {
+  fn readToString(context alloc: mem/AllocMode)(path: string): string {
     let filenameCString = path.toCString();
   
     let file = files/unix/fopen(filenameCString, "r".toCString());
     files/unix/fseek(file, 0, unix/SEEK_END);
     let fileSizeBytes = files/unix/ftell(file);
-    let buf = alloc.tempArena().pushRaw(size = fileSizeBytes, align = 1);
+    let buf = mem/allocIn(alloc, size = fileSizeBytes, align = 1);
   
     files/unix/fseek(file, 0, unix/SEEK_SET);
     files/unix/fread(buf, fileSizeBytes, 1, file);

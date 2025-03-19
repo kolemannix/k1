@@ -118,8 +118,9 @@ impl<T> BuilderResultExt for Result<T, BuilderError> {
     }
 }
 
-// TODO: cache these by type id?
+// TODO(perf): cache llvm function types by type id
 pub struct K1LlvmFunctionType<'ctx> {
+    type_id: TypeId,
     llvm_function_type: LlvmFunctionType<'ctx>,
     param_types: Vec<K1LlvmType<'ctx>>,
     return_type: K1LlvmType<'ctx>,
@@ -528,17 +529,20 @@ impl<'ctx> DebugContext<'ctx> {
             .as_type()
     }
 
-    fn push_scope(&mut self, scope: DIScope<'ctx>, file: DIFile<'ctx>) {
-        self.debug_stack.push(DebugStackEntry { scope, file });
+    fn push_scope(&mut self, span: SpanId, scope: DIScope<'ctx>, file: DIFile<'ctx>) {
+        self.debug_stack.push(DebugStackEntry { span, scope, file });
     }
     fn pop_scope(&mut self) {
         self.debug_stack.pop();
     }
+    fn current_entry(&self) -> &DebugStackEntry<'ctx> {
+        self.debug_stack.last().unwrap()
+    }
     fn current_scope(&self) -> DIScope<'ctx> {
-        self.debug_stack.last().unwrap().scope
+        self.current_entry().scope
     }
     fn current_file(&self) -> DIFile<'ctx> {
-        self.debug_stack.last().unwrap().file
+        self.current_entry().file
     }
 }
 
@@ -550,6 +554,7 @@ enum VariableValue<'ctx> {
 
 #[derive(Debug)]
 struct DebugStackEntry<'ctx> {
+    span: SpanId,
     scope: DIScope<'ctx>,
     file: DIFile<'ctx>,
 }
@@ -639,8 +644,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             scopes: FxHashMap::new(),
             strip_debug: !debug,
         };
-        // May need to restore this
-        debug.push_scope(compile_unit.as_debug_info_scope(), compile_unit.get_file());
+        debug.push_scope(SpanId::NONE, compile_unit.as_debug_info_scope(), compile_unit.get_file());
         debug
     }
 
@@ -924,8 +928,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         .as_type(),
                 })
             };
-        debug!("codegen for type {}", self.module.type_id_to_string(type_id));
+        debug!("codegen for type {} depth {depth}", self.module.type_id_to_string(type_id));
         let mut no_cache = false;
+        // Might be better to switch to the debug context span, rather than the type's span
         let span = self.module.get_span_for_type_id(type_id).unwrap_or(SpanId::NONE);
         let codegened_type = match self.module.types.get_no_follow(type_id) {
             Type::Unit(_) => Ok(make_value_integer_type(
@@ -1031,7 +1036,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     let debug_type = if buffer_instance.is_some()
                         && field.name
                             == self.module.ast.identifiers.get(BUFFER_DATA_FIELD_NAME).unwrap()
-                        && field.type_id == POINTER_TYPE_ID
                     {
                         let buffer_instance = buffer_instance.unwrap();
                         let buffer_type_argument = buffer_instance.param_values[0];
@@ -1065,7 +1069,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 .into())
             }
             Type::TypeParameter(tp) => {
-                failf!(span, "codegen was asked to codegen a type parameter {:?}", tp)
+                failf!(
+                    self.debug.current_entry().span,
+                    "codegen was asked to codegen a type parameter {:?}",
+                    tp
+                )
             }
             Type::FunctionTypeParameter(ftp) => {
                 failf!(span, "codegen was asked to codegen a function type parameter {:?}", ftp)
@@ -1074,6 +1082,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 failf!(span, "codegen was asked to codegen a type inference hole {:?}", h)
             }
             Type::Reference(reference) => {
+                eprintln!(
+                    "the reference.inner_type: {}",
+                    self.module.type_id_to_string(reference.inner_type)
+                );
                 let inner_type = self.codegen_type_inner(reference.inner_type, depth + 1)?;
                 let inner_debug_type = inner_type.debug_type();
                 Ok(LlvmReferenceType {
@@ -1441,7 +1453,13 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             return_type.fn_type(&actual_params, false)
         };
 
-        Ok(K1LlvmFunctionType { llvm_function_type: fn_type, param_types, return_type, is_sret })
+        Ok(K1LlvmFunctionType {
+            type_id: function_type_id,
+            llvm_function_type: fn_type,
+            param_types,
+            return_type,
+            is_sret,
+        })
     }
 
     fn get_di_type_name(di_type: DIType<'ctx>) -> String {
@@ -1820,8 +1838,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     ) -> BasicValueEnum<'ctx> {
         match variable_value {
             VariableValue::Indirect { pointer_value } => {
-                // nocommit: Remove name
-                self.load_k1_value(k1_llvm_type, pointer_value, "loaded_ind_variable", false)
+                self.load_k1_value(k1_llvm_type, pointer_value, "", false)
             }
             VariableValue::Direct { value } => value,
         }
@@ -1829,9 +1846,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     fn codegen_compile_time_value(
         &self,
-        compile_time_value: &CompileTimeValue,
+        comptime_value_id: CompileTimeValueId,
     ) -> CodegenResult<BasicValueEnum<'ctx>> {
-        let result = match compile_time_value {
+        let result = match self.module.comptime_values.get(comptime_value_id) {
             CompileTimeValue::Unit(_) => self.builtin_types.unit_value.as_basic_value_enum(),
             CompileTimeValue::Boolean(b, _) => match b {
                 true => self.builtin_types.true_value.as_basic_value_enum(),
@@ -1857,14 +1874,55 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.ctx.ptr_type(AddressSpace::default()).const_null().as_basic_value_enum()
             }
             CompileTimeValue::Struct(s) => {
-                let llvm_type = self.codegen_type(s.type_id)?.expect_struct();
+                // let llvm_type = self.codegen_type(s.type_id)?.expect_struct();
+                let mut type_fields = Vec::with_capacity(s.fields.len());
                 let mut fields_basic_values = Vec::with_capacity(s.fields.len());
+                // We actually have to specialize the LLVM struct type here because it won't allow
+                // an Opt[i64] type with a Some[i64] value
+                //
+                // Just means that when we load the value into 'runtime' code, we may have to cast
+                // it back to the struct type. Since we treat it as a ptr it should actually work
+                // perfectly
                 for field in s.fields.iter() {
-                    let value = self.codegen_compile_time_value(field)?;
+                    let value = self.codegen_compile_time_value(*field)?;
+                    type_fields.push(value.get_type());
                     fields_basic_values.push(value);
                 }
-                let struct_value = llvm_type.struct_type.const_named_struct(&fields_basic_values);
+                let specialized_type = self.ctx.struct_type(&type_fields, false);
+                let struct_value = specialized_type.const_named_struct(&fields_basic_values);
+                eprintln!(
+                    "comptime struct for {} type {} is {}",
+                    self.module.type_id_to_string(s.type_id),
+                    specialized_type,
+                    struct_value
+                );
                 struct_value.as_basic_value_enum()
+            }
+            CompileTimeValue::Enum(e) => {
+                let llvm_type = self.codegen_type(e.type_id)?.expect_enum();
+                let variant = &llvm_type.variants[e.variant_index as usize];
+                let physical_struct = variant.variant_struct_type;
+                eprintln!("variant has payload {}", variant.payload_type.is_some());
+                eprintln!("variant physical count {}", physical_struct.count_fields());
+                let enum_value = match e.payload {
+                    None => physical_struct
+                        .const_named_struct(&[variant.tag_value.as_basic_value_enum()]),
+                    Some(payload_comptime_value_id) => {
+                        let payload_value =
+                            self.codegen_compile_time_value(payload_comptime_value_id)?;
+                        physical_struct.const_named_struct(&[
+                            variant.tag_value.as_basic_value_enum(),
+                            payload_value,
+                        ])
+                    }
+                };
+                eprintln!(
+                    "comptime enum struct for {} type {} is {}",
+                    self.module.type_id_to_string(e.type_id),
+                    physical_struct,
+                    enum_value
+                );
+                enum_value.as_basic_value_enum()
             }
         };
         Ok(result)
@@ -1920,6 +1978,25 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     fn codegen_expr(&mut self, expr_id: TypedExprId) -> CodegenResult<LlvmValue<'ctx>> {
         let expr = self.module.exprs.get(expr_id);
         let span = expr.get_span();
+
+        // TODO: push debug log level for debugged exprs in codegen as well
+        // #[cfg(debug_assertions)]
+        // {
+        //     let directives = self.module.ast.exprs.get_directives(expr_id);
+        //     let debug_directive = directives
+        //         .iter()
+        //         .find(|p| matches!(p, parse::ParsedDirective::CompilerDebug { .. }));
+        //     let is_debug = debug_directive.is_some();
+        //     if is_debug {
+        //         self.push_debug_level();
+        //     }
+        // }
+        // let mut self_ = scopeguard::guard(self, |s| {
+        //     if is_debug {
+        //         s.pop_debug_level()
+        //     }
+        // });
+
         self.set_debug_location_from_span(span);
         debug!("codegen expr\n{}", self.module.expr_to_string_with_type(expr_id));
         match expr {
@@ -1964,6 +2041,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 }
             }
             TypedExpr::Struct(struc) => {
+                debug!("codegen struct {}", self.module.expr_to_string_with_type(expr_id));
                 let struct_k1_llvm_type = self.codegen_type(struc.type_id)?.expect_struct();
                 let struct_llvm_type = struct_k1_llvm_type.struct_type;
                 let struct_ptr = self.build_alloca(struct_llvm_type, "struct_literal");
@@ -3241,7 +3319,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             return Ok(function_value);
         }
 
-        self.debug.push_scope(di_subprogram.as_debug_info_scope(), di_file);
+        self.debug.push_scope(function_span, di_subprogram.as_debug_info_scope(), di_file);
 
         let entry_block = self.ctx.append_basic_block(function_value, "entry");
         self.builder.position_at_end(entry_block);
@@ -3378,7 +3456,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     fn codegen_global(&mut self, global_id: TypedGlobalId) -> CodegenResult<()> {
         let global = self.module.globals.get(global_id);
-        let initialized_basic_value = self.codegen_compile_time_value(&global.initial_value)?;
+        let initialized_basic_value = self.codegen_compile_time_value(global.initial_value)?;
         let variable = self.module.variables.get(global.variable_id);
         let name =
             self.module.make_qualified_name(variable.owner_scope, variable.name, "__", false);

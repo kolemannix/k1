@@ -311,7 +311,8 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
         "types.k1",
         "string_builder.k1",
         "bitwise.k1",
-        "allocator.k1",
+        "mem.k1",
+        "arena.k1",
         "range.k1",
     ];
 

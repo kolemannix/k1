@@ -1,12 +1,13 @@
 # k1 Programming Language
 
-`k1` is like C with typeclasses, ADTs, pattern matching, and a powerful generic typesystem.
+`k1` is like C with typeclasses, ADTs, capturing lambdas, pattern matching, and a powerful generic typesystem.
 
 `k1` is what resulted from me wanting to write similar code to what I write in Scala but have it compile and run 100x faster.
 
 Core ideas
 - The compiler should be uncompromisingly fast
 - The generated code should be as optimal as possible
+- Compile-time reflection should enable powerful metaprogramming
 
 ** Disclaimer: k1 is a hobby project intended for learning and exploration, not for use (yet). **
 

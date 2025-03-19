@@ -101,7 +101,7 @@ impl<T, Index: Into<NonZeroU32> + From<NonZeroU32>> Pool<T, Index> {
 
     fn physical_index_to_id(index: usize) -> Index {
         // Safety: Incrementing by 1
-        let index_inc = unsafe { NonZeroU32::new_unchecked(index as u32 + 1) };
+        let index_inc = crate::nzu32_increment(index as u32);
         Index::from(index_inc)
     }
 

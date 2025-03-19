@@ -126,7 +126,7 @@ impl Backend {
             write_llvm: false,
             no_llvm_opt: false,
             dump_module: false,
-            debug: false,
+            debug: true,
             llvm_counts: false,
             target: None,
             command: k1::compiler::Command::Check {

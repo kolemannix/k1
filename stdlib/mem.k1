@@ -1,0 +1,182 @@
+// Summary of our approach
+ns mem {
+
+  // These definitions exist as a compile-time parameterization point
+  // It lets us customize the system allocator by doing conditional
+  // compilation inside, rather than having code directly call the
+  // linked libc 'malloc', for example
+  // #if MEM_DEBUG use a tracking_allocator, for example
+  fn systemMalloc(size: u64, align: u64): Pointer {
+    // #if NO_LIBC mmap() or something!
+    let p = libc/malloc(size);
+    if p.isNull() { crash("systemMalloc failed") };
+    p
+  }
+  fn systemZeroAlloc(size: u64, align: u64): Pointer {
+    let p = libc/calloc(count = 1, size = size);
+    if p.isNull() { crash("systemZeroAlloc failed") };
+    p
+  }
+  fn systemRealloc(ptr: Pointer, size: u64, align: u64): Pointer {
+    let p = libc/realloc(ptr, size);
+    if p.isNull() { crash("systemRealloc failed") };
+    p
+  }
+  fn systemFree(ptr: Pointer): unit {
+    libc/free(ptr);
+    ()
+  }
+
+  // For now here's all I can do until I have dyn traits
+  deftype Allocator = {
+    malloc:  (\(u64, u64) -> Pointer)*,
+    zalloc:  (\(u64, u64) -> Pointer)*,
+    realloc: (\(Pointer, u64, u64) -> Pointer)*,
+    free:    (\(Pointer) -> unit)*,
+  }
+  
+  deftype AllocMode = { 
+    kind: (either 
+      Current, 
+      SystemHeap, 
+      CustomHeap(Allocator*), 
+      TempBump, 
+      Bump(Arena*),
+      Gc
+    )
+  }
+
+  ns AllocMode {
+
+    let const SYSTEM_HEAP: AllocMode = { kind: .SystemHeap };
+    let const CURRENT: AllocMode = { kind: .Current };
+    let const TEMP: AllocMode = { kind: .TempBump };
+
+    // nocommit: 'is' does not support multiple patterns!
+    fn supportsRealloc(self: AllocMode): bool { switch self.kind {
+      .Current -> crash("unreachable"),
+      .SystemHeap -> true,
+      .CustomHeap(_) -> true,
+      .TempBump -> false,
+      .Bump(_) -> false,
+      .Gc -> false
+    } }
+
+    fn requiresFree(self: AllocMode): bool { switch self.kind {
+      .Current -> crash("unreachable"),
+      .SystemHeap -> true,
+      .CustomHeap(_) -> true,
+      .TempBump -> false,
+      .Bump(_) -> false,
+      .Gc -> false
+    } }
+
+    fn kindName(self: AllocMode): string { switch self.kind {
+      .Current -> "current",
+      .SystemHeap -> "system",
+      .CustomHeap(_) -> "custom",
+      .TempBump -> "temp_bump",
+      .Bump(_) -> "custom_bump",
+      .Gc -> "gc"
+    } }
+  }
+  
+  fn resolveMode(mode: AllocMode): AllocMode {
+    switch mode.kind {
+      .Current -> {
+        let mode = mem/defaultAllocMode();
+        if mode.kind is .Current { crash("currentAllocMode.kind is Current; this will never resolve") };
+        mode
+      },
+      _ -> mode,
+    }
+  }
+  
+  // FIXME: Runtime branching.
+  // We need more language enhancements to make this all
+  // compile-time branching
+  fn allocIn(mode: AllocMode, size: u64, align: u64): Pointer {
+    let mode = resolveMode(mode);
+    switch mode.kind {
+      .Current -> { crash("unreachable") },
+      .SystemHeap -> mem/systemZeroAlloc(size, align),
+      .CustomHeap(alloc) -> { 
+        let zalloc = alloc.*.zalloc;
+        zalloc(size, align)
+      },
+      .Bump(bump) -> {
+        bump.pushRaw(size, align)
+      },
+      .TempBump -> {
+        mem/getTempArena().pushRaw(size, align)
+      },
+      .Gc -> {
+        crash("Gc is unimplemented; plan to support w/ bdwgc")
+      }
+    }
+  }
+
+  fn newIn[T](mode: AllocMode, t: T): T* {
+    // Unclear whether we need sizeOfStride; main thing
+    // I'm thinking about is C ABI compat, if we want that,
+    // which I think I do, we should always allocate the stride size
+    let ptr = allocIn(mode, sizeOfStride[T](), alignOf[T]());
+    let ref = ptr as T*;
+    ref <- t;
+    ref
+  }
+
+  fn reallocIn(mode: AllocMode, oldPtr: Pointer, newSize: u64, align: u64): Pointer {
+    let mode = resolveMode(mode);
+    switch mode.kind {
+      .Current -> { crash("unreachable") },
+      .SystemHeap -> mem/systemRealloc(oldPtr, newSize, align),
+      .CustomHeap(alloc) -> { 
+        let realloc = alloc.*.realloc;
+        realloc(oldPtr, newSize, align)
+      },
+      .Bump(bump) -> {
+        crash("UnsupportedOperation: realloc")
+      },
+      .TempBump -> {
+        crash("UnsupportedOperation: realloc")
+      },
+      .Gc -> {
+        crash("UnsupportedOperation: realloc")
+      }
+    }
+  }
+
+  let* _k1_tempArena: Arena* = { 
+    basePtr: Pointer/NULL, curAddr: 0, maxAddr: 0
+  };
+
+  let* _k1_currentAllocMode: mem/AllocMode* = AllocMode/SYSTEM_HEAP;
+
+  // Eventually, we want 'push'/'pop' for allocMode
+  fn setDefaultAllocMode(mode: mem/AllocMode): unit {
+    _k1_currentAllocMode <- mode
+  }
+  fn defaultAllocMode(): mem/AllocMode {
+    _k1_currentAllocMode.*
+  }
+  
+  // Initialize on first get() is perfect
+  fn initTempArena(maxMb: uint): unit {
+    if not _k1_tempArena.basePtr.isNull() {
+      crash("Arena already initialized")
+    };
+    _k1_tempArena <- Arena/new(initialMb = maxMb);
+  }
+  
+  // TODO: Figure out when temp aliasing occurs, and avoid that
+  // ideally without requiring people to pass an array in
+  fn getTempArena(): Arena* {
+    if _k1_tempArena.basePtr.isNull() {
+      // TODO: Make it growable internally;
+      initTempArena(maxMb = 10)
+    };
+    _k1_tempArena
+  }
+
+}

@@ -9,7 +9,9 @@ cargo build --features=llvm-sys/prefer-dynamic --bin compiler
 cargo test
 
 
+export MallocScribble=1
 target/debug/test_suite $1
+unset MallocScribble
 
 export RUST_LOG=info
 target/debug/compiler --write-llvm check dogfood/refchess

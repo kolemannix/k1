@@ -1,5 +1,0 @@
-fn main(): int {
-  let s = K1_OS;
-  printIt(s);
-  0
-}

@@ -2,7 +2,7 @@ let globalInt: int = 0;
 let* globalIntRef: int* = 10;
 let const comptimeInt: int = 2;
 
-fn main(): int {
+fn _main(): int {
    //#if k1/RUNTIME k1_init();
 
    assert(globalInt == 0);
@@ -16,7 +16,7 @@ fn main(): int {
    let mut i = 0;
 
    // Why is the arena slower than malloc!! :'(
-   let a = Arena/new(id = "temp", initialMb = 100);
+   let* a = Arena/new(id = "temp", initialMb = 100);
 
    // Struct in a loop causes it too!
    // Not an arena problem thanks god

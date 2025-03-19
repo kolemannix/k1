@@ -1,6 +1,13 @@
 // A growable, ordered collection of elements.
 // Backed by an efficient, contiguously allocated buffer
+//
+// List stores a copy of its allocator, because it is intended
+// to be a convenient and easy workhorse for most use cases
 ns List {
+
+  // TODO: List will store its allocator,
+  // UnmanagedList will accept one at call sites
+  let const ALLOC_MODE: mem/AllocMode = { kind: .Current };
 
   ///////////////////////////
   // Construction functions
@@ -21,9 +28,8 @@ ns List {
 
   fn reserve[T](self: List[T]*, count: u64): unit {
     if self.cap() >= count { return(()) };
-    
-    let newBuffer = self.buffer._enlargedClone[T](count);
-    self.buffer* <- newBuffer;
+    self.buffer*._growTo[T](context ALLOC_MODE)(count);
+    assertdbg(self.buffer.len == count);
   }
 
   fn single[T](value: T): List[T] {
@@ -154,11 +160,15 @@ ns List {
     self.appendBuffer(other.toBuffer())
   }
 
-  fn appendBuffer[T](self: List[T]*, other: Buffer[T]): unit {
+  fn appendBufferIn[T](context mode: mem/AllocMode)(self: List[T]*, other: Buffer[T]): unit {
     self.reserve(self.len + other.len);
     for e in other do {
       self.push(e)
     }
+  }
+
+  fn appendBuffer[T](self: List[T]*, other: Buffer[T]): unit {
+    self.appendBufferIn(context mem/AllocMode/CURRENT)(other)
   }
 
   fn swap[T](self: List[T]*, indexA: u64, indexB: u64): unit {

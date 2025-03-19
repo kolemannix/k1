@@ -1,5 +1,5 @@
+// TODO: Move to <header> . <mem block> model vs separate struct
 deftype Arena = {
-  id: string,
   basePtr: Pointer,
   curAddr: u64,
   maxAddr: u64
@@ -23,12 +23,16 @@ ns Arena {
     aligned
   }
 
-  fn new(id: string, initialMb: u64): Arena {
+  fn new(initialMb: u64): Arena {
     let capacity = initialMb * mb;
-    let basePtr = libc/calloc(count = capacity, size = 1);
+    // We zero the memory because we don't make arenas that often
+    // so it's worth it
+    let basePtr = mem/systemZeroAlloc(
+      size = capacity, 
+      align = 8
+    );
     if basePtr.isNull() crash("calloc for Arena failed");
     {
-      id: id,
       basePtr: basePtr,
       curAddr: basePtr as u64,
       maxAddr: basePtr as u64 + capacity
@@ -39,8 +43,7 @@ ns Arena {
     let dataStart = alignTo(self.curAddr, align);
     let newEnd = dataStart + size;
     if newEnd > self.maxAddr {
-      let id = self.id;
-      crash("Heap \{id} is out of space to allocate \{size} bytes.")
+      crash("Arena is out of space to allocate \{size} bytes.")
     };
 
     self.curAddr* <- newEnd;
@@ -56,29 +59,9 @@ ns Arena {
   }
 
   fn freeAll(self: Arena*): unit {
-    let id = self.id;
     let size = self.regionSizeBytes();
-    println("[arena \{id}] Freeing \{size}");
+    println("[arena] Freeing \{size}");
     libc/memset(self.basePtr, 0 as u32, size);
     self.curAddr* <- (self.basePtr as u64);
   }
-}
-deftype ObjectPool = {}
-
-deftype Allocator = {
-  arenas: List[Arena],
-  pools: List[ObjectPool],
-}
-
-ns Allocator {
-  fn initDefault(): Allocator {
-    let temp_arena = Arena/new(id = "temp", initialMb = 10);
-    {
-      arenas: [temp_arena],
-      pools: []
-    }: Allocator
-  }
-
-  fn tempArena(self: Allocator): Arena* { self.arenas.getRef(0) }
-
 }
