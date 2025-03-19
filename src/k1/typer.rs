@@ -195,9 +195,20 @@ enum TypeOrParsedExpr {
 #[derive(Debug, Clone)]
 pub struct CompileTimeStruct {
     pub type_id: TypeId,
-    pub fields: Vec<CompileTimeValue>,
+    pub fields: Vec<CompileTimeValueId>,
     pub span: SpanId,
 }
+
+#[derive(Debug, Clone)]
+pub struct CompileTimeEnum {
+    pub type_id: TypeId,
+    pub variant_name: Identifier,
+    pub variant_index: u32,
+    pub payload: Option<CompileTimeValueId>,
+    pub span: SpanId,
+}
+
+nz_u32_id!(CompileTimeValueId);
 
 static_assert_size!(CompileTimeValue, 32);
 #[derive(Debug, Clone)]
@@ -210,6 +221,7 @@ pub enum CompileTimeValue {
     String(Box<str>, SpanId),
     Pointer(u64, SpanId),
     Struct(CompileTimeStruct),
+    Enum(CompileTimeEnum),
 }
 
 impl CompileTimeValue {
@@ -223,6 +235,7 @@ impl CompileTimeValue {
             CompileTimeValue::String(_, _) => "string",
             CompileTimeValue::Pointer(_, _) => "pointer",
             CompileTimeValue::Struct(_) => "struct",
+            CompileTimeValue::Enum(_) => "enum",
         }
     }
 
@@ -236,6 +249,7 @@ impl CompileTimeValue {
             CompileTimeValue::String(_, _) => STRING_TYPE_ID,
             CompileTimeValue::Pointer(_, _) => POINTER_TYPE_ID,
             CompileTimeValue::Struct(s) => s.type_id,
+            CompileTimeValue::Enum(e) => e.type_id,
         }
     }
 
@@ -249,6 +263,7 @@ impl CompileTimeValue {
             CompileTimeValue::String(_, span) => *span,
             CompileTimeValue::Pointer(_, span) => *span,
             CompileTimeValue::Struct(s) => s.span,
+            CompileTimeValue::Enum(e) => e.span,
         }
     }
 
@@ -262,6 +277,7 @@ impl CompileTimeValue {
             CompileTimeValue::String(_, s) => *s = span,
             CompileTimeValue::Pointer(_, s) => *s = span,
             CompileTimeValue::Struct(s) => s.span = span,
+            CompileTimeValue::Enum(e) => e.span = span,
         }
     }
 
@@ -287,10 +303,12 @@ pub enum PatternConstructor {
     String,
     Int,
     Float,
+    Pointer,
     /// This one is also kinda a nothing burger, and can only be matched by Wildcards and Bindings; it's here for
     /// the sake of being explicit; we could collapse all these into a 'Anything' constructor but the fact I can't
     /// think of a good name means we shouldn't, probably
     TypeVariable,
+    FunctionReference,
     Reference(Box<PatternConstructor>),
     Struct {
         fields: Vec<(Identifier, PatternConstructor)>,
@@ -1613,7 +1631,7 @@ pub struct Variable {
 pub struct TypedGlobal {
     pub variable_id: VariableId,
     pub parsed_expr: ParsedExpressionId,
-    pub initial_value: CompileTimeValue,
+    pub initial_value: CompileTimeValueId,
     pub ty: TypeId,
     pub span: SpanId,
     pub is_comptime: bool,
@@ -1988,6 +2006,7 @@ pub struct TypedModule {
     pub globals: Pool<TypedGlobal, TypedGlobalId>,
     pub exprs: pool::Pool<TypedExpr, TypedExprId>,
     pub stmts: pool::Pool<TypedStmt, TypedStmtId>,
+    pub comptime_values: Pool<CompileTimeValue, CompileTimeValueId>,
     pub scopes: Scopes,
     pub errors: Vec<TyperError>,
     pub namespaces: Namespaces,
@@ -2032,6 +2051,7 @@ impl TypedModule {
             globals: Pool::with_capacity("typed_globals", 4096),
             exprs: Pool::with_capacity("typed_exprs", 32768),
             stmts: Pool::with_capacity("typed_stmts", 8192),
+            comptime_values: Pool::with_capacity("compile_time_values", 8192),
             scopes,
             errors: Vec::new(),
             namespaces,
@@ -3664,20 +3684,24 @@ impl TypedModule {
         &mut self,
         expr_id: TypedExprId,
         scope_id: ScopeId,
-    ) -> TyperResult<CompileTimeValue> {
+    ) -> TyperResult<CompileTimeValueId> {
         match self.exprs.get(expr_id) {
-            TypedExpr::Unit(span) => Ok(CompileTimeValue::Unit(*span)),
-            TypedExpr::Char(byte, span) => Ok(CompileTimeValue::Char(*byte, *span)),
-            TypedExpr::Bool(b, span) => Ok(CompileTimeValue::Boolean(*b, *span)),
-            TypedExpr::Integer(typed_integer_expr) => {
-                Ok(CompileTimeValue::Integer(typed_integer_expr.value, typed_integer_expr.span))
+            TypedExpr::Unit(span) => Ok(self.comptime_values.add(CompileTimeValue::Unit(*span))),
+            TypedExpr::Char(byte, span) => {
+                Ok(self.comptime_values.add(CompileTimeValue::Char(*byte, *span)))
             }
-            TypedExpr::Float(typed_float_expr) => {
-                Ok(CompileTimeValue::Float(typed_float_expr.value, typed_float_expr.span))
+            TypedExpr::Bool(b, span) => {
+                Ok(self.comptime_values.add(CompileTimeValue::Boolean(*b, *span)))
             }
-            TypedExpr::String(s, span) => {
-                Ok(CompileTimeValue::String(s.clone().into_boxed_str(), *span))
-            }
+            TypedExpr::Integer(typed_integer_expr) => Ok(self
+                .comptime_values
+                .add(CompileTimeValue::Integer(typed_integer_expr.value, typed_integer_expr.span))),
+            TypedExpr::Float(typed_float_expr) => Ok(self
+                .comptime_values
+                .add(CompileTimeValue::Float(typed_float_expr.value, typed_float_expr.span))),
+            TypedExpr::String(s, span) => Ok(self
+                .comptime_values
+                .add(CompileTimeValue::String(s.clone().into_boxed_str(), *span))),
             TypedExpr::Variable(v) => {
                 let typed_variable = self.variables.get(v.variable_id);
                 let Some(global_id) = typed_variable.global_id else {
@@ -3687,20 +3711,21 @@ impl TypedModule {
                 if !global.is_comptime {
                     return failf!(v.span, "only comptime variables are supported");
                 }
-                let mut value = global.initial_value.clone();
+                let mut value = self.comptime_values.get(global.initial_value).clone();
                 value.set_span(v.span);
-                Ok(value)
+                Ok(self.comptime_values.add(value))
             }
             TypedExpr::BinaryOp(bin_op) => match bin_op.kind {
                 BinaryOpKind::Equals => {
                     let bin_op = bin_op.clone();
                     let lhs = self.eval_expr_comptime(bin_op.lhs, scope_id)?;
                     let rhs = self.eval_expr_comptime(bin_op.rhs, scope_id)?;
-                    match (&lhs, &rhs) {
+                    match (self.comptime_values.get(lhs), self.comptime_values.get(rhs)) {
                         (CompileTimeValue::String(s1, _), CompileTimeValue::String(s2, _)) => {
-                            Ok(CompileTimeValue::Boolean(*s1 == *s2, bin_op.span))
+                            let b = CompileTimeValue::Boolean(*s1 == *s2, bin_op.span);
+                            Ok(self.comptime_values.add(b))
                         }
-                        _ => {
+                        (lhs, rhs) => {
                             failf!(
                                 bin_op.span,
                                 "const equality over {} and {} is unimplemented",
@@ -3727,52 +3752,78 @@ impl TypedModule {
                     let value = self.eval_expr_comptime(field.expr, scope_id)?;
                     values.push(value);
                 }
-                Ok(CompileTimeValue::Struct(CompileTimeStruct { type_id, fields: values, span }))
+                Ok(self.comptime_values.add(CompileTimeValue::Struct(CompileTimeStruct {
+                    type_id,
+                    fields: values,
+                    span,
+                })))
             }
-            TypedExpr::Cast(typed_cast) => match typed_cast.cast_type {
-                CastType::IntegerExtend => {
-                    let span = typed_cast.span;
-                    let CompileTimeValue::Integer(_i, _span) =
-                        self.eval_expr_comptime(typed_cast.base_expr, scope_id)?
-                    else {
-                        self.ice_with_span("malformed integer cast", span)
-                    };
-                    let _target_int_type = todo!();
-                    //match i {
-                    //    TypedIntegerValue::U8(_) => todo!(),
-                    //    TypedIntegerValue::U16(_) => todo!(),
-                    //    TypedIntegerValue::U32(_) => todo!(),
-                    //    TypedIntegerValue::U64(_) => todo!(),
-                    //    TypedIntegerValue::I8(_) => todo!(),
-                    //    TypedIntegerValue::I16(_) => todo!(),
-                    //    TypedIntegerValue::I32(_) => todo!(),
-                    //    TypedIntegerValue::I64(_) => todo!(),
-                    //}
+            TypedExpr::EnumConstructor(e) => {
+                let mut value = CompileTimeEnum {
+                    type_id: e.type_id,
+                    variant_name: e.variant_name,
+                    variant_index: e.variant_index,
+                    payload: None,
+                    span: e.span,
+                };
+                let payload = match e.payload {
+                    None => None,
+                    Some(payload) => {
+                        let id = self.eval_expr_comptime(payload, scope_id)?;
+                        Some(id)
+                    }
+                };
+                value.payload = payload;
+                Ok(self.comptime_values.add(CompileTimeValue::Enum(value)))
+            }
+            TypedExpr::Cast(typed_cast) => {
+                let typed_cast = typed_cast.clone();
+                let base_expr = self.eval_expr_comptime(typed_cast.base_expr, scope_id)?;
+                match typed_cast.cast_type {
+                    CastType::IntegerExtend => {
+                        let span = typed_cast.span;
+                        let CompileTimeValue::Integer(_i, _span) =
+                            self.comptime_values.get(base_expr)
+                        else {
+                            self.ice_with_span("malformed integer cast", span)
+                        };
+                        let _target_int_type = todo!();
+                        //match i {
+                        //    TypedIntegerValue::U8(_) => todo!(),
+                        //    TypedIntegerValue::U16(_) => todo!(),
+                        //    TypedIntegerValue::U32(_) => todo!(),
+                        //    TypedIntegerValue::U64(_) => todo!(),
+                        //    TypedIntegerValue::I8(_) => todo!(),
+                        //    TypedIntegerValue::I16(_) => todo!(),
+                        //    TypedIntegerValue::I32(_) => todo!(),
+                        //    TypedIntegerValue::I64(_) => todo!(),
+                        //}
+                    }
+                    CastType::IntegerTruncate => todo!(),
+                    CastType::Integer8ToChar => todo!(),
+                    CastType::IntegerExtendFromChar => todo!(),
+                    CastType::IntegerToFloat => todo!(),
+                    CastType::IntegerToPointer => {
+                        let span = typed_cast.span;
+                        let CompileTimeValue::Integer(TypedIntegerValue::U64(u), _) =
+                            self.comptime_values.get(base_expr)
+                        else {
+                            self.ice_with_span("malformed integer cast", span)
+                        };
+                        Ok(self.comptime_values.add(CompileTimeValue::Pointer(*u, span)))
+                    }
+                    CastType::KnownNoOp => todo!(),
+                    CastType::PointerToReference => {
+                        todo!("We might need this one soon, but we dont have References in ComptimeValue yet")
+                    }
+                    CastType::ReferenceToPointer => todo!(),
+                    CastType::PointerToInteger => todo!(),
+                    CastType::FloatExtend => todo!(),
+                    CastType::FloatTruncate => todo!(),
+                    CastType::FloatToInteger => todo!(),
+                    CastType::LambdaToLambdaObject => todo!(),
                 }
-                CastType::IntegerTruncate => todo!(),
-                CastType::Integer8ToChar => todo!(),
-                CastType::IntegerExtendFromChar => todo!(),
-                CastType::IntegerToFloat => todo!(),
-                CastType::IntegerToPointer => {
-                    let span = typed_cast.span;
-                    let CompileTimeValue::Integer(TypedIntegerValue::U64(u), _) =
-                        self.eval_expr_comptime(typed_cast.base_expr, scope_id)?
-                    else {
-                        self.ice_with_span("malformed integer cast", span)
-                    };
-                    Ok(CompileTimeValue::Pointer(u, span))
-                }
-                CastType::KnownNoOp => todo!(),
-                CastType::PointerToReference => {
-                    todo!("We might need this one soon, but we dont have References in ComptimeValue yet")
-                }
-                CastType::ReferenceToPointer => todo!(),
-                CastType::PointerToInteger => todo!(),
-                CastType::FloatExtend => todo!(),
-                CastType::FloatTruncate => todo!(),
-                CastType::FloatToInteger => todo!(),
-                CastType::LambdaToLambdaObject => todo!(),
-            },
+            }
             TypedExpr::Call(call) => {
                 // Get callee, assert static
                 // Check if intrinsic, if so, implement at least 'negated'
@@ -3783,13 +3834,13 @@ impl TypedModule {
                 let function = self.get_function(callee_id);
                 match function.intrinsic_type {
                     Some(IntrinsicFunction::BoolNegate) => {
-                        let Some(arg) =
-                            self.eval_expr_comptime(call.args[0], scope_id)?.as_boolean()
-                        else {
+                        let arg = call.args[0];
+                        let arg = self.eval_expr_comptime(arg, scope_id)?;
+                        let Some(arg) = self.comptime_values.get(arg).as_boolean() else {
                             self.ice_with_span("malformed bool negate", span)
                         };
                         let negated = !arg;
-                        Ok(CompileTimeValue::Boolean(negated, span))
+                        Ok(self.comptime_values.add(CompileTimeValue::Boolean(negated, span)))
                     }
                     Some(i) => {
                         failf!(span, "Unimplemented comptime intrinsic: {:?}", i)
@@ -3811,7 +3862,7 @@ impl TypedModule {
         expected_type_id: Option<TypeId>,
         scope_id: ScopeId,
         global_name: Option<Identifier>,
-    ) -> TyperResult<CompileTimeValue> {
+    ) -> TyperResult<CompileTimeValueId> {
         let eval_ctx = EvalExprContext {
             scope_id,
             expected_type_id,
@@ -3853,7 +3904,9 @@ impl TypedModule {
             Some(global_name),
         )?;
 
-        if let Err(msg) = self.check_types(type_to_check, expr.get_type(), scope_id) {
+        if let Err(msg) =
+            self.check_types(type_to_check, self.comptime_values.get(expr).get_type(), scope_id)
+        {
             return failf!(
                 global_span,
                 "Type mismatch for global {}: {}",
@@ -5065,10 +5118,14 @@ impl TypedModule {
         let should_compile = match conditional_compile_expr {
             None => true,
             Some(condition) => {
-                let typed_condition = self_
-                    .eval_comptime_parsed_expr(condition, Some(BOOL_TYPE_ID), ctx.scope_id, None)?
-                    .as_boolean()
-                    .ok_or_else(|| {
+                let comptime_value = self_.eval_comptime_parsed_expr(
+                    condition,
+                    Some(BOOL_TYPE_ID),
+                    ctx.scope_id,
+                    None,
+                )?;
+                let typed_condition =
+                    self_.comptime_values.get(comptime_value).as_boolean().ok_or_else(|| {
                         errf!(
                             self_.ast.exprs.get_span(condition),
                             "Condition must be a compile-time-known boolean"
@@ -5306,6 +5363,9 @@ impl TypedModule {
                     fields: field_defns,
                     type_defn_info: expected_struct
                         .as_ref()
+                        // nocommit Fix named struct literals by treating them
+                        // as a separate case altogether! Check expected type, branch.
+                        // THIS IS THE BUG! WRONG INSTANCE INFO
                         .and_then(|es| es.1.type_defn_info.clone()),
                     generic_instance_info: expected_struct
                         .and_then(|es| es.1.generic_instance_info.clone()),
@@ -5572,7 +5632,6 @@ impl TypedModule {
 
         let part_count = interpolated_string.parts.len();
         if part_count == 1 {
-            // nocommit better way to take first
             let parse::InterpolatedStringPart::String(s) =
                 interpolated_string.parts.first().unwrap().clone()
             else {
@@ -6904,11 +6963,13 @@ impl TypedModule {
     ) -> TyperResult<TypedExprId> {
         let condition_value =
             self.eval_comptime_parsed_expr(if_expr.cond, Some(BOOL_TYPE_ID), ctx.scope_id, None)?;
-        let CompileTimeValue::Boolean(condition_bool, _) = condition_value else {
+        let CompileTimeValue::Boolean(condition_bool, _) =
+            self.comptime_values.get(condition_value)
+        else {
             let cond_span = self.ast.get_expr_span(if_expr.cond);
             return failf!(cond_span, "Condition is not a boolean");
         };
-        let expr = if condition_bool {
+        let expr = if *condition_bool {
             self.eval_expr(if_expr.cons, ctx)?
         } else {
             if let Some(alt) = if_expr.alt {
@@ -7381,32 +7442,23 @@ impl TypedModule {
             unreachable!()
         };
 
-        let lhs_type = self.exprs.get(lhs).get_type();
-        let equality_result = match self.types.get(lhs_type) {
-            // nocommit: Is this special-case necessary? These type params should implement Equals
-            Type::TypeParameter(_type_var) => {
-                let rhs = self.eval_expr(binary_op.rhs, ctx.with_expected_type(Some(lhs_type)))?;
-                let equals = self.synth_equals_binop(lhs, rhs, binary_op.span);
-                Ok(equals)
-            }
-            other_lhs_type => {
-                if other_lhs_type.is_scalar_int_value() {
-                    panic!("Scalar ints shouldnt be passed to eval_equality_expr")
-                }
-                let rhs = self.eval_expr(binary_op.rhs, ctx.with_expected_type(Some(lhs_type)))?;
-                let rhs_type = self.exprs.get(rhs).get_type();
-                if rhs_type != lhs_type {
-                    failf!(
-                        binary_op.span,
-                        "Right hand side type '{}' did not match {}",
-                        self.type_id_to_string(rhs_type),
-                        self.type_id_to_string(lhs_type)
-                    )
-                } else {
-                    let call_expr = self.synth_equals_call(lhs, rhs, binary_op.span)?;
-                    Ok(call_expr)
-                }
-            }
+        let lhs_type_id = self.exprs.get(lhs).get_type();
+        let lhs_type = self.types.get(lhs_type_id);
+        if lhs_type.is_scalar_int_value() {
+            panic!("Scalar ints shouldnt be passed to eval_equality_expr")
+        }
+        let rhs = self.eval_expr(binary_op.rhs, ctx.with_expected_type(Some(lhs_type_id)))?;
+        let rhs_type = self.exprs.get(rhs).get_type();
+        let equality_result = if rhs_type != lhs_type_id {
+            failf!(
+                binary_op.span,
+                "Right hand side type '{}' did not match {}",
+                self.type_id_to_string(rhs_type),
+                self.type_id_to_string(lhs_type_id)
+            )
+        } else {
+            let call_expr = self.synth_equals_call(lhs, rhs, binary_op.span)?;
+            Ok(call_expr)
         }?;
         let final_result = match binary_op.op_kind {
             BinaryOpKind::Equals => equality_result,
@@ -7568,6 +7620,11 @@ impl TypedModule {
                         self.scopes.find_variable(ctx.scope_id, fn_call.name.name)
                     {
                         let function_variable = self.variables.get(variable_id);
+                        debug!(
+                            "Variable {} has type {}",
+                            self.name_of(fn_call.name.name),
+                            self.type_id_to_string(function_variable.type_id)
+                        );
                         match self.types.get(function_variable.type_id) {
                             Type::Lambda(lambda_type) => Ok(Either::Right(Callee::StaticLambda {
                                 function_id: lambda_type.body_function_id,
@@ -8631,7 +8688,8 @@ impl TypedModule {
             span,
         };
 
-        // nocommit: Why is this intrinsic special? Why is this here?
+        // Intrinsics that are handled by the typechecking phase are implemented here.
+        // Currently only CompilerSourceLocation.
         if let Some(intrinsic_type) =
             call.callee.maybe_function_id().and_then(|id| self.get_function(id).intrinsic_type)
         {
@@ -8692,6 +8750,8 @@ impl TypedModule {
             instantiation_set.push(TypeSubstitutionPair { from: param.type_id(), to: type_hole });
         }
 
+        // Used for the error message, mainly
+        let mut argument_types: SmallVec<[TypeId; 8]> = smallvec![];
         for (expr, gen_param, allow_mismatch) in inference_pairs.iter() {
             let instantiated_param_type = self_.substitute_in_type(*gen_param, &instantiation_set);
             debug!(
@@ -8717,6 +8777,7 @@ impl TypedModule {
                     (expr.get_type(), expr.get_span())
                 }
             };
+            argument_types.push(argument_type);
             debug!(
                 "unify {} =:= {}",
                 self_.type_id_to_string(argument_type),
@@ -8743,21 +8804,41 @@ impl TypedModule {
             );
         }
 
-        // TODO: enrich error
+        // TODO: enrich this error, probably do the same thing we're doing below for unsolved
         self_.calculate_inference_substitutions(span)?;
         let final_substitutions = &self_.inference_context.substitutions;
 
+        let mut unsolved_params: Vec<&dyn NamedType> = vec![];
         for (param_to_hole, param) in instantiation_set.iter().zip(unsolved_type_params.iter()) {
             let corresponding_hole = param_to_hole.to;
-            let Some(solution) = final_substitutions.get(&corresponding_hole) else {
-                return failf!(
-                    span,
-                    "Could not find a type for {}. What I know: {}",
-                    self_.name_of(param.name()),
-                    self_.pretty_print_named_types(&solutions, ", ")
-                );
+            if let Some(solution) = final_substitutions.get(&corresponding_hole) {
+                solutions.push(SimpleNamedType { name: param.name(), type_id: *solution });
+            } else {
+                unsolved_params.push(param);
             };
-            solutions.push(SimpleNamedType { name: param.name(), type_id: *solution });
+        }
+        if !unsolved_params.is_empty() {
+            return failf!(
+                span,
+                "Could not solve for {} given arguments:\n{}",
+                unsolved_params
+                    .iter()
+                    .map(|p| self_.name_of(p.name()))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                argument_types
+                    .iter()
+                    .zip(inference_pairs.iter())
+                    .map(|(passed_type, pair)| {
+                        format!(
+                            "{}: {}",
+                            self_.type_id_to_string(*passed_type),
+                            self_.type_id_to_string(pair.1),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
         }
         debug!("INFER DONE {}", self_.pretty_print_named_types(&solutions, ", "));
         Ok(solutions)
@@ -8828,9 +8909,9 @@ impl TypedModule {
                     .map_err(|e| {
                         errf!(
                             e.span,
-                            "{}.\n\tWhile checking call to {}",
+                            "Invalid call to {}.\n\t{}",
+                            self.function_to_string(self.get_function(generic_function_id), false),
                             e.message,
-                            self.name_of(fn_call.name.name),
                         )
                     })?;
                 solutions
@@ -9639,8 +9720,11 @@ impl TypedModule {
                             let Type::Reference(expected_reference_type) =
                                 self.types.get(provided_type)
                             else {
+                                let expected_type_span = self
+                                    .ast
+                                    .get_type_expression_span(parsed_let.type_expr.unwrap());
                                 return failf!(
-                                    parsed_let.span,
+                                    expected_type_span,
                                     "Expected type must be a reference type when using let*"
                                 );
                             };
@@ -10275,12 +10359,14 @@ impl TypedModule {
         // TODO(perf): clone of ParsedFunction
         let parsed_function = self.ast.get_function(parsed_function_id).clone();
         if let Some(condition_expr) = parsed_function.condition {
-            let CompileTimeValue::Boolean(condition_value, _) = self.eval_comptime_parsed_expr(
+            let condition_value = self.eval_comptime_parsed_expr(
                 condition_expr,
                 Some(BOOL_TYPE_ID),
                 parent_scope_id,
                 None,
-            )?
+            )?;
+            let CompileTimeValue::Boolean(condition_value, _) =
+                self.comptime_values.get(condition_value)
             else {
                 return failf!(parsed_function.span, "Condition must be a constant boolean");
             };
@@ -11706,12 +11792,21 @@ impl TypedModule {
             Type::Bool(_) => {
                 vec![PatternConstructor::BoolFalse, PatternConstructor::BoolTrue]
             }
+            Type::Pointer(_) => vec![PatternConstructor::Pointer], // Just an opaque atom
             Type::Reference(refer) => {
-                let inner = self.generate_constructors_for_type(refer.inner_type, _span_id);
-                inner
-                    .into_iter()
-                    .map(|pointee_pattern| PatternConstructor::Reference(Box::new(pointee_pattern)))
-                    .collect()
+                match self.types.get(refer.inner_type).as_function() {
+                    Some(_) => vec![PatternConstructor::FunctionReference], // Function Reference, opaque atom
+                    None => {
+                        // Follow the pointer
+                        let inner = self.generate_constructors_for_type(refer.inner_type, _span_id);
+                        inner
+                            .into_iter()
+                            .map(|pointee_pattern| {
+                                PatternConstructor::Reference(Box::new(pointee_pattern))
+                            })
+                            .collect()
+                    }
+                }
             }
             Type::Enum(enum_type) => enum_type
                 .variants
@@ -11733,6 +11828,8 @@ impl TypedModule {
             Type::Struct(struc) => {
                 debug_assert!(type_id != STRING_TYPE_ID);
                 let mut all_field_ctors: Vec<Vec<(Identifier, PatternConstructor)>> = vec![];
+                // TODO(perf): Tons of allocations here and probably worth a reusable buffer
+                //             Its all those expensive 'drop' calls that don't get us anything!
                 for field in struc.fields.iter() {
                     let field_ctors_iter = self
                         .generate_constructors_for_type(field.type_id, _span_id)
@@ -11742,14 +11839,37 @@ impl TypedModule {
                     all_field_ctors.push(field_ctors_iter)
                 }
                 // Generate cross product of all field combinations
-                let mut result = vec![PatternConstructor::Struct { fields: Vec::new() }];
+                // Example:
+                // { x: bool, y: bool }
+                // all_field_ctors: [[(x, false), (x, true)], [(y, false), (y, true)]]
+                // result: [{}]
+                // field_ctors: x
+                // for ctor in result: {}
+                // field_ctor: (x, false)
+                // field_ctor: (x, true)
+                // { x: false }, { x: true }
+                // field_ctors: y
+                // for ctor in result: [{ x: false }, { x: true }]
+                //   field_ctor: (y, false)
+                //   field_ctor: (y, true)
+                // augment { x: false } -> { x: false, y: false}, { x: false, y: true }
+                // augment { x: true } -> { x: true, y: false}, { x: true, y: true }
+                //
                 // For each individual field's constructors, we iterate over all previously accumulated results
                 // Pushing this field's constructors onto each previous results' field vec
+
+                // FIXME: Re-write this to be more sensible; assigning to result from new_result
+                // every time just feels bad, its a triply nested 'for', idk, does not feel optimal
+                let mut result = vec![PatternConstructor::Struct {
+                    fields: Vec::with_capacity(struc.fields.len()),
+                }];
                 for field_ctors in all_field_ctors.into_iter() {
                     let mut new_result = Vec::new();
-                    for ctor in result {
+                    for full_struct_ctor in result.iter_mut() {
                         for (field_name, field_ctor) in &field_ctors {
-                            if let PatternConstructor::Struct { mut fields } = ctor.clone() {
+                            if let PatternConstructor::Struct { mut fields } =
+                                full_struct_ctor.clone()
+                            {
                                 fields.push((*field_name, field_ctor.clone()));
                                 new_result.push(PatternConstructor::Struct { fields });
                             }
@@ -11759,8 +11879,15 @@ impl TypedModule {
                 }
                 result
             }
+            Type::Function(_f) => {
+                debug!("function is probably unmatchable");
+                vec![]
+            }
             _ => {
-                eprintln!("unhandled match type {}", self.type_id_to_string(type_id));
+                eprintln!(
+                    "unhandled type in generate_constructors_for_type {}",
+                    self.type_id_to_string(type_id)
+                );
                 vec![]
             }
         }

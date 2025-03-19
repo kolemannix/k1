@@ -28,6 +28,7 @@ fn main(): int {
   use_test/test();
   type_order/test();
   opaque_type_01/test();
+  test_comptime/test();
 
   // Moderate
   never_everywhere/test();

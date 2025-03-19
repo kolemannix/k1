@@ -49,7 +49,14 @@ New tagline? "C with typeclasses and tagged unions"
         How low-level do we want to be? #if k1/RUNTIME
   - [x] alloca in loops fix
   - [ ] Parameterize stdlib over the current allocator ()
+
+- [ ] zackoverflow.dev "I really enjoy writing Zig code. I love it’s clean syntax, comptime, packed structs and arbitrary bit-width integers, the Allocator API, and useful data-oriented design abstractions in the standard library."
+      What would it take to check those boxes in K1 with a faster compiler? Why is Zig's compiler slow if they're so ruthlessly
+      data-oriented? Architecture and fundamental language complexity? Would k1 be any faster for 850K lines? Signs point to yes,
+      but no idea
+
 - [ ] Proper basic comptime
+  - [ ] Rename to 'static'
   - [x] literals
   - [x] if/else
   - [ ] Run comptime exprs before bodies but after all other phases, treat it
@@ -57,6 +64,8 @@ New tagline? "C with typeclasses and tagged unions"
   - [ ] Struct construction
   - [ ] Struct field access
   - [ ] Enum construction
+- [ ] Fix non-referencing match on `struct*`: just do the deref for the user
+- [ ] Fix referencing match not 'eliminating' patterns on `struct*` giving unhandled pattern `.CustomHeap({ zalloc }*) -> {`
 - [ ] Macro system built on comptime, both string #insert and parsed code #insert like Jai
 - [ ] @unlikely annotations
 

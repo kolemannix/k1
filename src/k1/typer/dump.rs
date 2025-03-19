@@ -758,7 +758,9 @@ impl TypedModule {
             PatternConstructor::String => writ.write_str("\"<string>\""),
             PatternConstructor::Int => writ.write_str("<int>"),
             PatternConstructor::Float => writ.write_str("<float>"),
+            PatternConstructor::Pointer => writ.write_str("<ptr>"),
             PatternConstructor::TypeVariable => writ.write_str("<tvar>"),
+            PatternConstructor::FunctionReference => writ.write_str("fn*"),
             PatternConstructor::Reference(inner) => {
                 writ.write_str("*")?;
                 self.display_pattern_ctor(inner, writ)

@@ -8,7 +8,7 @@
 // its fully populated
 ns Buffer {
 
-  fn bufferLenBytes[T](count: u64): u64 { count * sizeOfStride[T]() }
+  fn bufferSizeBytes[T](count: u64): u64 { count * sizeOfStride[T]() }
 
   fn dataPointer[T](self: Buffer[T]): Pointer { self.data as Pointer }
 
@@ -20,15 +20,45 @@ ns Buffer {
     { len: len, data }
   }
 
-  fn _allocate[T](count: u64): Buffer[T] {
+  fn _allocateIn[T](context alloc: mem/AllocMode)(count: u64): Buffer[T] {
     let ptr = if count == 0 {
       Pointer/NULL
     } else {
-      let sizeBytes = bufferLenBytes[T](count);
-      libc/malloc(sizeBytes)
+      let sizeBytes = bufferSizeBytes[T](count);
+      mem/allocIn(alloc, sizeBytes, alignOf[T]())
     };
     let data = ptr as T*;
     { len: count, data }
+  }
+
+  fn _allocate[T](count: u64): Buffer[T] {
+    _allocateIn[T](context mem/AllocMode/CURRENT)(count)
+  }
+
+  fn _growTo[T](context alloc: mem/AllocMode)(self: Buffer[T]*, newCount: u64): unit {
+    if mem/resolveMode(alloc).supportsRealloc() {
+      let newSize = bufferSizeBytes[T](newCount);
+      let newPtr = mem/reallocIn(context alloc)(self.dataPointer(), newSize, alignOf[T]());
+      self <- { len: newCount, data: newPtr as T* }
+    } else {
+      let newBuffer = _allocate[T](newCount);
+      _copyFrom[T](self, newBuffer, self.len);
+      self <- newBuffer
+    }
+  }
+
+  fn _enlargedCloneIn[T](context alloc: mem/AllocMode)(self: Buffer[T], newCount: u64): Buffer[T] {
+    let newBuffer = _allocateIn[T](newCount);
+    _copyFrom[T](self, newBuffer, self.len);
+    newBuffer
+  }
+
+  fn _enlargedClone[T](self: Buffer[T], newCount: u64): Buffer[T] {
+    _enlargedCloneIn[T](context mem/AllocMode/CURRENT)(self, newCount)
+  }
+
+  fn empty[T](): Buffer[T] {
+    { len: 0, data: Pointer/NULL as T* }
   }
 
   fn _copyFrom[T](source: Buffer[T], dest: Buffer[T], count: u64): unit {
@@ -38,15 +68,9 @@ ns Buffer {
     if count > dest.len {
       crash("Buffer copy dest index out of bounds: \{count}")
     };
-    let numBytes = bufferLenBytes[T](count);
+    let numBytes = bufferSizeBytes[T](count);
     libc/memcpy(dst = dest.dataPointer(), src = source.dataPointer(), count = numBytes);
     ()
-  }
-
-  fn _enlargedClone[T](self: Buffer[T], newCount: u64): Buffer[T] {
-    let newBuffer = _allocate[T](newCount);
-    _copyFrom[T](self, newBuffer, self.len);
-    newBuffer
   }
 
   fn cloned[T](self: Buffer[T]): Buffer[T] {
@@ -54,20 +78,25 @@ ns Buffer {
     clone
   }
 
-  fn lenBytes[T](self: Buffer[T]): u64 { bufferLenBytes[T](self.len) }
-
-  fn empty[T](): Buffer[T] {
-    _allocate[T](0)
+  fn clonedIn[T](context mode: mem/AllocMode)(self: Buffer[T]): Buffer[T] {
+    let clone = self._enlargedCloneIn(newCount = self.len);
+    clone
   }
 
-  fn filled[T](size: u64, value: T): Buffer[T] {
-    let buf: Buffer[T] = _allocate[T](size);
+  fn sizeBytes[T](self: Buffer[T]): u64 { bufferSizeBytes[T](self.len) }
+
+  fn filledIn[T](context mode: mem/AllocMode)(size: u64, value: T): Buffer[T] {
+    let buf: Buffer[T] = _allocateIn[T](size);
     let mut i = 0: u64;
     while i < size {
       buf.set(i, value);
       i = i + 1;
     };
     buf
+  }
+
+  fn filled[T](size: u64, value: T): Buffer[T] {
+    Buffer/filledIn[T](context mem/AllocMode/CURRENT)(size, value)
   }
 
   fn slice[T](self: Buffer[T], start: u64, end: u64): Buffer[T] {
@@ -173,29 +202,29 @@ ns Buffer {
     Buffer/fromRawParts[byte](self.len, self.dataPointer());
   }
 
+  fn equalsBits[T](self: Buffer[T], other: Buffer[T]): bool {
+    if self.len != other.len false else {
+      libc/memcmp(self.dataPointer(), other.dataPointer(), self.sizeBytes()) == 0
+    }
+  }
+
 }
 
 impl Equals for Buffer[u8] {
   fn equals(self: Buffer[u8], other: Buffer[u8]): bool {
-    if self.len != other.len false else {
-      libc/memcmp(self.dataPointer(), other.dataPointer(), self.lenBytes()) == 0
-    }
+    self.equalsBits(other)
   }
 }
 
 impl Equals for Buffer[char] {
   fn equals(self: Buffer[char], other: Buffer[char]): bool {
-    if self.len != other.len false else {
-      libc/memcmp(self.dataPointer(), other.dataPointer(), self.lenBytes()) == 0
-    }
+    self.equalsBits(other)
   }
 }
 
 impl Equals for Buffer[int] {
   fn equals(self: Buffer[int], other: Buffer[int]): bool {
-    if self.len != other.len false else {
-      libc/memcmp(self.dataPointer(), other.dataPointer(), self.lenBytes()) == 0
-    }
+    self.equalsBits(other)
   }
 }
 

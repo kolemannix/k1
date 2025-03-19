@@ -1,36 +1,76 @@
-let const K1_RT: bool = not k1/NO_STD;
-#if K1_RT ns rt {
-  // Optionally we could do some sort of init expression that we run
-  // at the start of main for you!
-  let* tempArena: Arena* = { 
-    id: "uninit", basePtr: Pointer/NULL, curAddr: 0, maxAddr: 0
-  };
-  
-  fn initTempArena(maxMb: uint): unit {
-    if not tempArena.basePtr.isNull() {
-      crash("Arena already initialized")
-    };
-    tempArena <- Arena/new(id = "temp", initialMb = maxMb);
-  }
+// mr4th's scratch pool code
+// scratch pool
+// threadvar Arena *m__scratch_pool[MEM_SCRATCH_POOL_COUNT] = {0};
+// 
+// link_function ArenaTemp
+// arena_get_scratch(Arena **conflict_array, U32 count){
+//   ProfBeginFunc();
+//   
+//   // init on first time
+//   if (m__scratch_pool[0] == 0){
+//     Arena **scratch_slot = m__scratch_pool;
+//     for (U64 i = 0;
+//          i < MEM_SCRATCH_POOL_COUNT;
+//          i += 1, scratch_slot += 1){
+//       *scratch_slot = arena_alloc();
+//     }
+//   }
+//   
+//   // get non-conflicting arena
+//   ArenaTemp result = {0};
+//   Arena **scratch_slot = m__scratch_pool;
+//   for (U64 i = 0;
+//        i < MEM_SCRATCH_POOL_COUNT;
+//        i += 1, scratch_slot += 1){
+//     B32 is_non_conflict = 1;
+//     Arena **conflict_ptr = conflict_array;
+//     for (U32 j = 0; j < count; j += 1, conflict_ptr += 1){
+//       if (*scratch_slot == *conflict_ptr){
+//         is_non_conflict = 0;
+//         break;
+//       }
+//     }
+//     if (is_non_conflict){
+//       result = arena_begin_temp(*scratch_slot);
+//       break;
+//     }
+//   }
+//   
+//   ProfEndFunc();
+//   return(result);
+// }
+
+let const K1_RT: bool = true;
+#if K1_RT
+ns rt {
 
   fn init(): unit {
-    println("welcome to k1");
-    initTempArena(1000)
+    println("welcome to k1; runtime is enabled; i made you a temp arena");
   }
 
 }
 
-// Sketch of possible core mem API
-//ns mem {
-//  fn newTemp[T](t: T): T*
-//  fn new[T](t: T): T*
-//  fn free[T](t: T): unit
-//}
-//fn k1_init(): unit {
-//   initArena(Arena/new(id = "temp", initialMb = 1));
-//}
-
 fn main(): int {
    #if K1_RT rt/init();
+   // Compiler Setting to inject a context value equal to the global constant rt/ALLOC_MODE_SYSTEM_DEFAULT
+   // to opt out of worrying about allocation for that program. If enabled, how do we prevent users from accidentally using it?
+   // Also to consider, push/pop and scopes
+
+   let debug = k1/DEBUG;
+
+   mem/allocIn(mem/AllocMode/TEMP, 8, 8);
+   println("debug? \{debug}");
+   {
+     let context alloc: mem/AllocMode = mem/AllocMode/SYSTEM_HEAP;
+     let b = Buffer/filled[int](size = 5, value = 42);
+     for i in b do {
+       println("\{i}");
+     };
+     let b2 = Buffer/filled[int](size = 5, value = 49);
+     for i in b2 do {
+       println("\{i}");
+     };
+   };
+
    0
 }
