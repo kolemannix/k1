@@ -52,13 +52,10 @@ ns mem {
     let const CURRENT: AllocMode = { kind: .Current };
     let const TEMP: AllocMode = { kind: .TempBump };
 
-    // nocommit: 'is' does not support multiple patterns!
     fn supportsRealloc(self: AllocMode): bool { switch self.kind {
       .Current -> crash("unreachable"),
-      .SystemHeap -> true,
-      .CustomHeap(_) -> true,
-      .TempBump -> false,
-      .Bump(_) -> false,
+      .SystemHeap or .CustomHeap(_) -> true,
+      .TempBump or .Bump(_) -> false,
       .Gc -> false
     } }
 
