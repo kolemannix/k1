@@ -150,6 +150,11 @@ impl TypedModule {
         self.type_id_to_string_ext(type_id, false)
     }
 
+    pub fn type_kind_to_string(&self, type_id: TypeId) -> &'static str {
+        let ty = self.types.get_no_follow(type_id);
+        ty.kind_name()
+    }
+
     pub fn type_id_to_string_ext(&self, type_id: TypeId, expand: bool) -> String {
         let ty = self.types.get_no_follow(type_id);
         self.type_to_string(ty, expand)
@@ -168,9 +173,9 @@ impl TypedModule {
         expand: bool,
     ) -> std::fmt::Result {
         writ.write_str("[")?;
-        for (index, t) in spec_info.param_values.iter().enumerate() {
+        for (index, t) in spec_info.type_args.iter().enumerate() {
             self.display_type_id(*t, expand, writ)?;
-            let last = index == spec_info.param_values.len() - 1;
+            let last = index == spec_info.type_args.len() - 1;
             if !last {
                 writ.write_str(", ")?;
             }
@@ -924,7 +929,7 @@ impl TypedModule {
             if !first {
                 s.push_str(sep)
             }
-            write!(s, "{}", self.type_id_to_string(*type_id)).unwrap();
+            write!(s, "{}", self.type_id_to_string_ext(*type_id, true)).unwrap();
             first = false;
         }
         s

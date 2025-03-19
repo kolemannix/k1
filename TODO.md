@@ -34,10 +34,11 @@ New tagline? "C with typeclasses and tagged unions"
   - [x] Make it fast (Added better 'pool' to prepare for avoiding lots of allocations)
 - [x] Fix closure types / get static dispatch for functions taking a closure directly
 - [x] *Specializing functions on their provided closures to allow inlining and static dispatch*
-- [ ] let ... else, or 'guard', or 'ensure' let e is .StringLit(s) else {}
 - [x] Run in Linux x86-64
+- [ ] let ... else, or 'guard', or 'ensure' let e is .StringLit(s) else {}
+- [ ] Support explicit type args in AnonEnumConstructor syntax 
 
-- [ ] Allocator system
+- [x] Runtime-branching Allocator system (v2 is comptime branching)
   - [x] comptime enhancement to support this global initializer: `let* a: Arena* = { .. };`
   - [x] Global pointers, to enable
   - [x] The problem with passing an allocator around is all code becomes generic, or casts a pointer.
@@ -48,7 +49,7 @@ New tagline? "C with typeclasses and tagged unions"
         But otherwise the user has to do it.
         How low-level do we want to be? #if k1/RUNTIME
   - [x] alloca in loops fix
-  - [ ] Parameterize stdlib over the current allocator ()
+  - [x] Parameterize stdlib over the current allocator ()
 
 - [ ] zackoverflow.dev "I really enjoy writing Zig code. I love it’s clean syntax, comptime, packed structs and arbitrary bit-width integers, the Allocator API, and useful data-oriented design abstractions in the standard library."
       What would it take to check those boxes in K1 with a faster compiler? Why is Zig's compiler slow if they're so ruthlessly

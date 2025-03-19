@@ -49,7 +49,7 @@ pub struct StructTypeField {
 #[derive(Debug, Clone)]
 pub struct GenericInstanceInfo {
     pub generic_parent: TypeId,
-    pub param_values: Vec<TypeId>,
+    pub type_args: Vec<TypeId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -202,10 +202,12 @@ pub struct GenericTypeParam {
     pub span: SpanId,
 }
 
-impl NamedType for GenericTypeParam {
+impl HasName for GenericTypeParam {
     fn name(&self) -> Identifier {
         self.name
     }
+}
+impl HasTypeId for GenericTypeParam {
     fn type_id(&self) -> TypeId {
         self.type_id
     }
@@ -690,7 +692,7 @@ impl Type {
         if let Type::Struct(s) = self {
             s.generic_instance_info.as_ref().and_then(|spec_info| {
                 if spec_info.generic_parent == LIST_TYPE_ID {
-                    Some(ListType { element_type: spec_info.param_values[0] })
+                    Some(ListType { element_type: spec_info.type_args[0] })
                 } else {
                     None
                 }
@@ -718,7 +720,7 @@ impl Type {
         if let Type::Enum(e) = self {
             e.generic_instance_info.as_ref().and_then(|spec_info| {
                 if spec_info.generic_parent == OPTIONAL_TYPE_ID {
-                    Some(OptionalType { inner_type: spec_info.param_values[0] })
+                    Some(OptionalType { inner_type: spec_info.type_args[0] })
                 } else {
                     None
                 }
@@ -954,10 +956,10 @@ impl Types {
     }
 
     pub fn add_reference_type(&mut self, inner_type: TypeId) -> TypeId {
-        self.add_type(Type::Reference(ReferenceType { inner_type }))
+        self.add(Type::Reference(ReferenceType { inner_type }))
     }
 
-    pub fn add_type(&mut self, typ: Type) -> TypeId {
+    pub fn add(&mut self, typ: Type) -> TypeId {
         self.add_type_ext(typ, true)
     }
 
@@ -1038,7 +1040,7 @@ impl Types {
         body_function_id: FunctionId,
         parsed_id: ParsedId,
     ) -> TypeId {
-        let lambda_type_id = self.add_type(Type::Lambda(LambdaType {
+        let lambda_type_id = self.add(Type::Lambda(LambdaType {
             function_type: function_type_id,
             env_type: environment_type,
             parsed_id,
@@ -1054,7 +1056,7 @@ impl Types {
     }
 
     pub fn add_empty_struct(&mut self) -> TypeId {
-        self.add_type(Type::Struct(StructType {
+        self.add(Type::Struct(StructType {
             fields: vec![],
             type_defn_info: None,
             generic_instance_info: None,
@@ -1084,12 +1086,12 @@ impl Types {
                 private: false,
             },
         ];
-        let struct_representation = self.add_type(Type::Struct(StructType {
+        let struct_representation = self.add(Type::Struct(StructType {
             fields,
             type_defn_info: None,
             generic_instance_info: None,
         }));
-        self.add_type(Type::LambdaObject(LambdaObjectType {
+        self.add(Type::LambdaObject(LambdaObjectType {
             function_type: function_type_id,
             parsed_id,
             struct_representation,

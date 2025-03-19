@@ -488,7 +488,7 @@ pub struct StructValueField {
 #[derive(Debug, Clone)]
 /// Example:
 /// { foo: 1, bar: false }
-///   ^................^ fields
+/// ^....................^ fields
 pub struct ParsedStruct {
     pub fields: Vec<StructValueField>,
     pub span: SpanId,
