@@ -12,6 +12,8 @@ fn unboxIt[T](b: Box[Box[Box[T]]]): T {
   b.value.value.value
 }
 
+fn takesPolyPair[C, D](x: Pair[C, D]): unit { () }
+
 fn test(): unit {
   let b: Box[int] = { value: 0 };
   let c: Box[bool] = { value: true };
@@ -32,6 +34,10 @@ fn test(): unit {
 
   let nested: Box[Box[Box[int]]] = { value: { value: { value: 42 } } };
   assert(unboxIt(nested) == 42);
+
+  takesPolyPair({ t: some(42), u: Opt.Some(true) });
+  takesPolyPair({ t: some(42), u: .Some(true) });
+  takesPolyPair({ t: some(42), u: some(true) });
 
   b.value;
 
