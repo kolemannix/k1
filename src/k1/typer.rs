@@ -3899,7 +3899,7 @@ impl TypedModule {
         // Even if its const, the RHS has to be a const-supported expr
         let expr = self.eval_comptime_parsed_expr(
             value_expr_id,
-            Some(type_id),
+            Some(type_to_check),
             scope_id,
             Some(global_name),
         )?;
@@ -5310,74 +5310,15 @@ impl TypedModule {
                 Ok(self.exprs.add(TypedExpr::Block(list_lit_block)))
             }
             ParsedExpression::Struct(ast_struct) => {
-                let mut field_values = Vec::new();
-                let mut field_defns = Vec::new();
-                let ast_struct = ast_struct.clone();
-                let expected_struct = if let Some(expected_type) = ctx.expected_type_id {
-                    match self.types.get(expected_type) {
-                        Type::Struct(struc) => Some((expected_type, struc.clone())),
-                        Type::Reference(refer) => match self.types.get(refer.inner_type) {
-                            Type::Struct(struc) => Some((refer.inner_type, struc.clone())),
-                            _other_reference => None,
-                        },
-                        other_ty => match other_ty.as_optional() {
-                            Some(opt) => match self.types.get(opt.inner_type) {
-                                Type::Struct(struc) => Some((opt.inner_type, struc.clone())),
-                                _other_optional => None,
-                            },
-                            None => None,
-                        },
+                if let Some(expected_type) = ctx.expected_type_id {
+                    if let Type::Struct(s) = self.types.get(expected_type) {
+                        self.eval_expected_struct(expr_id, ctx)
+                    } else {
+                        self.eval_anonymous_struct(expr_id, ctx)
                     }
                 } else {
-                    None
-                };
-                for (index, ast_field) in ast_struct.fields.iter().enumerate() {
-                    let expected_field = expected_struct
-                        .as_ref()
-                        .and_then(|(_, rec)| rec.find_field(ast_field.name));
-                    let expected_type_id = expected_field.map(|(_, f)| f.type_id);
-                    let parsed_expr = match ast_field.expr.as_ref() {
-                        None => self.ast.exprs.add_expression(ParsedExpression::Variable(
-                            parse::Variable {
-                                name: NamespacedIdentifier::naked(ast_field.name, ast_field.span),
-                            },
-                        )),
-                        Some(expr) => *expr,
-                    };
-                    let expr =
-                        self.eval_expr(parsed_expr, ctx.with_expected_type(expected_type_id))?;
-                    let expr_type = self.exprs.get(expr).get_type();
-                    field_defns.push(StructTypeField {
-                        name: ast_field.name,
-                        type_id: expr_type,
-                        index: index as u32,
-                        private: false,
-                    });
-                    field_values.push(StructField { name: ast_field.name, expr });
+                    self.eval_anonymous_struct(expr_id, ctx)
                 }
-
-                // Be very careful to keep all the provenance info for the struct, in the case
-                // we expect a certain struct type but provide a literal. Otherwise it will have
-                // the correct shape, but things like methods and ability calls won't work
-                let struct_type = StructType {
-                    fields: field_defns,
-                    type_defn_info: expected_struct
-                        .as_ref()
-                        // nocommit Fix named struct literals by treating them
-                        // as a separate case altogether! Check expected type, branch.
-                        // THIS IS THE BUG! WRONG INSTANCE INFO
-                        .and_then(|es| es.1.type_defn_info.clone()),
-                    generic_instance_info: expected_struct
-                        .and_then(|es| es.1.generic_instance_info.clone()),
-                };
-                let output_struct_type_id = self.types.add_type(Type::Struct(struct_type));
-                let typed_struct = Struct {
-                    fields: field_values,
-                    span: ast_struct.span,
-                    type_id: output_struct_type_id,
-                };
-                let expr = TypedExpr::Struct(typed_struct);
-                Ok(self.exprs.add(expr))
             }
             ParsedExpression::If(if_expr) => self.eval_if_expr(&if_expr.clone(), ctx),
             ParsedExpression::While(while_expr) => self.eval_while_loop(&while_expr.clone(), ctx),
@@ -5536,6 +5477,119 @@ impl TypedModule {
                 }
             }
         }
+    }
+
+    fn eval_anonymous_struct(
+        &mut self,
+        expr_id: ParsedExpressionId,
+        ctx: EvalExprContext,
+    ) -> TyperResult<TypedExprId> {
+        let mut field_values = Vec::new();
+        let mut field_defns = Vec::new();
+        let ParsedExpression::Struct(parsed_struct) = self.ast.exprs.get(expr_id) else {
+            self.ice_with_span("expected struct", self.ast.get_expr_span(expr_id))
+        };
+        let ast_struct = parsed_struct.clone();
+        for (index, ast_field) in ast_struct.fields.iter().enumerate() {
+            let parsed_expr = match ast_field.expr.as_ref() {
+                None => {
+                    self.ast.exprs.add_expression(ParsedExpression::Variable(parse::Variable {
+                        name: NamespacedIdentifier::naked(ast_field.name, ast_field.span),
+                    }))
+                }
+                Some(expr) => *expr,
+            };
+            let expr = self.eval_expr(parsed_expr, ctx.with_expected_type(None))?;
+            let expr_type = self.exprs.get(expr).get_type();
+            field_defns.push(StructTypeField {
+                name: ast_field.name,
+                type_id: expr_type,
+                index: index as u32,
+                private: false,
+            });
+            field_values.push(StructField { name: ast_field.name, expr });
+        }
+
+        let struct_type =
+            StructType { fields: field_defns, type_defn_info: None, generic_instance_info: None };
+        let struct_type_id = self.types.add_type(Type::Struct(struct_type));
+        let typed_struct =
+            Struct { fields: field_values, span: ast_struct.span, type_id: struct_type_id };
+        Ok(self.exprs.add(TypedExpr::Struct(typed_struct)))
+    }
+
+    fn eval_expected_struct(
+        &mut self,
+        expr_id: ParsedExpressionId,
+        ctx: EvalExprContext,
+    ) -> TyperResult<TypedExprId> {
+        let mut field_values = Vec::new();
+        let mut field_defns = Vec::new();
+        let ParsedExpression::Struct(parsed_struct) = self.ast.exprs.get(expr_id) else {
+            self.ice_with_span("expected struct", self.ast.get_expr_span(expr_id))
+        };
+        let Type::Struct(expected_struct) = self.types.get(ctx.expected_type_id.unwrap()) else {
+            self.ice_with_span("expected an expected struct type", self.ast.get_expr_span(expr_id))
+        };
+        let expected_struct = expected_struct.clone();
+        if expected_struct.generic_instance_info.is_some() {
+            return failf!(
+                self.ast.get_expr_span(expr_id),
+                "TODO Instantiate the generic struct {} properly given hint {}",
+                self.type_id_to_string_ext(
+                    expected_struct.generic_instance_info.unwrap().generic_parent,
+                    true
+                ),
+                self.type_id_to_string_ext(ctx.expected_type_id.unwrap(), true)
+            );
+        }
+        let ast_struct = parsed_struct.clone();
+        for (index, ast_field) in ast_struct.fields.iter().enumerate() {
+            let Some(expected_field) = expected_struct.find_field(ast_field.name) else {
+                return failf!(ast_field.span, "nocommit unknown field error");
+            };
+            let expected_type_id = expected_field.1.type_id;
+            let parsed_expr = match ast_field.expr.as_ref() {
+                None => {
+                    self.ast.exprs.add_expression(ParsedExpression::Variable(parse::Variable {
+                        name: NamespacedIdentifier::naked(ast_field.name, ast_field.span),
+                    }))
+                }
+                Some(expr) => *expr,
+            };
+            let expr =
+                self.eval_expr(parsed_expr, ctx.with_expected_type(Some(expected_type_id)))?;
+            let expr_type = self.exprs.get(expr).get_type();
+            if let Err(msg) = self.check_types(expected_type_id, expr_type, ctx.scope_id) {
+                return failf!(
+                    ast_field.span,
+                    "Field {} has incorrect type: {msg}",
+                    self.name_of(ast_field.name)
+                );
+            }
+            field_defns.push(StructTypeField {
+                name: ast_field.name,
+                type_id: expr_type,
+                index: index as u32,
+                private: false,
+            });
+            field_values.push(StructField { name: ast_field.name, expr });
+        }
+
+        // Be very careful to keep all the provenance info for the struct, in the case
+        // we expect a certain struct type but provide a literal. Otherwise it will have
+        // the correct shape, but things like methods and ability calls won't work
+        let struct_type = StructType {
+            fields: field_defns,
+            type_defn_info: expected_struct.type_defn_info.clone(),
+            // nocommit Instantiate the generic instance info properly
+            generic_instance_info: expected_struct.generic_instance_info.clone(),
+        };
+        let output_struct_type_id = self.types.add_type(Type::Struct(struct_type));
+        let typed_struct =
+            Struct { fields: field_values, span: ast_struct.span, type_id: output_struct_type_id };
+        let expr = TypedExpr::Struct(typed_struct);
+        Ok(self.exprs.add(expr))
     }
 
     fn eval_while_loop(
@@ -7132,6 +7186,16 @@ impl TypedModule {
         })
     }
 
+    /// Handles chains of booleans and pattern statements (IsExprs).
+    /// Does so by compiling the patterns (or boolean conditions) contained
+    /// in them into `conditions`, `setup_statements`, and `binding_statements`.
+    ///
+    /// Stores all patterns seen for later analysis (conflicting bindings)
+    /// Reports whether bindings are allowed based on the following rule:
+    /// At the top-level of the 'if', if there are any 'or's, we cannot allow patterns, because it
+    /// makes no sense:
+    /// if a is .Some(aa) or b is .Some(aa) -> which one?
+    /// if a is .Some(aa) or b is .Some(bb) -> which one?
     fn handle_matching_if_rec(
         &mut self,
         parsed_expr_id: ParsedExpressionId,

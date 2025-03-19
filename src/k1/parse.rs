@@ -489,7 +489,7 @@ pub struct StructValueField {
 /// Example:
 /// { foo: 1, bar: false }
 ///   ^................^ fields
-pub struct Struct {
+pub struct ParsedStruct {
     pub fields: Vec<StructValueField>,
     pub span: SpanId,
 }
@@ -538,7 +538,7 @@ pub struct ParsedIsExpression {
 
 #[derive(Debug, Clone)]
 pub struct ParsedMatchCase {
-    pub patterns: smallvec::SmallVec<[ParsedPatternId; 1]>,
+    pub patterns: smallvec::SmallVec<[ParsedPatternId; 2]>,
     pub guard_condition_expr: Option<ParsedExpressionId>,
     pub expression: ParsedExpressionId,
 }
@@ -635,7 +635,7 @@ pub enum ParsedExpression {
     /// ```md
     /// { x: <expr>, y: <expr> }
     /// ```
-    Struct(Struct),
+    Struct(ParsedStruct),
     /// ```md
     /// [<expr>, <expr>, <expr>]
     /// ```
@@ -2416,7 +2416,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(StructValueField { name: self.intern_ident_token(name), expr, span })
     }
 
-    fn parse_struct_value(&mut self) -> ParseResult<Option<Struct>> {
+    fn parse_struct_value(&mut self) -> ParseResult<Option<ParsedStruct>> {
         let (first, second, third) = self.peek_three();
         let is_empty_struct = first.kind == K::OpenBrace && second.kind == K::CloseBrace;
         let is_non_empty_struct = first.kind == K::OpenBrace
@@ -2430,9 +2430,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
         self.advance();
 
-        let (fields, span) =
+        let (fields, fields_span) =
             self.eat_delimited("Struct", K::Comma, &[K::CloseBrace], Parser::expect_struct_field)?;
-        Ok(Some(Struct { fields, span }))
+        let span = self.extend_span(first.span, fields_span);
+        Ok(Some(ParsedStruct { fields, span }))
     }
 
     fn parse_expression_with_postfix_ops(&mut self) -> ParseResult<Option<ParsedExpressionId>> {
@@ -2457,8 +2458,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let pattern = self.expect_parse_pattern()?;
 
                 let original_span = self.get_expression_span(result);
-                let pattern_span = self.module.get_pattern_span(pattern);
-                let span = self.extend_span(original_span, pattern_span);
+                let span = self.extend_to_here(original_span);
                 let is_expression_id =
                     self.add_expression(ParsedExpression::Is(ParsedIsExpression {
                         target_expression: result,
