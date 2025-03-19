@@ -1038,7 +1038,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             == self.module.ast.identifiers.get(BUFFER_DATA_FIELD_NAME).unwrap()
                     {
                         let buffer_instance = buffer_instance.unwrap();
-                        let buffer_type_argument = buffer_instance.param_values[0];
+                        let buffer_type_argument = buffer_instance.type_args[0];
                         let element_type =
                             self.codegen_type_inner(buffer_type_argument, depth + 1)?;
                         let array_ptr_di_type = self.make_pointer_type(element_type.debug_type());
@@ -1082,10 +1082,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 failf!(span, "codegen was asked to codegen a type inference hole {:?}", h)
             }
             Type::Reference(reference) => {
-                eprintln!(
-                    "the reference.inner_type: {}",
-                    self.module.type_id_to_string(reference.inner_type)
-                );
                 let inner_type = self.codegen_type_inner(reference.inner_type, depth + 1)?;
                 let inner_debug_type = inner_type.debug_type();
                 Ok(LlvmReferenceType {
@@ -1902,8 +1898,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let llvm_type = self.codegen_type(e.type_id)?.expect_enum();
                 let variant = &llvm_type.variants[e.variant_index as usize];
                 let physical_struct = variant.variant_struct_type;
-                eprintln!("variant has payload {}", variant.payload_type.is_some());
-                eprintln!("variant physical count {}", physical_struct.count_fields());
                 let enum_value = match e.payload {
                     None => physical_struct
                         .const_named_struct(&[variant.tag_value.as_basic_value_enum()]),
@@ -1916,12 +1910,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         ])
                     }
                 };
-                eprintln!(
-                    "comptime enum struct for {} type {} is {}",
-                    self.module.type_id_to_string(e.type_id),
-                    physical_struct,
-                    enum_value
-                );
                 enum_value.as_basic_value_enum()
             }
         };
