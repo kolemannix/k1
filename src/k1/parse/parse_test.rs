@@ -37,7 +37,7 @@ fn test_single_type_expr(input: &str) -> Result<(ParsedModule, ParsedTypeExpr), 
 
 fn test_single_expr_with_id(
     input: &str,
-) -> Result<(ParsedModule, ParsedExpression, ParsedExpressionId), ParseError> {
+) -> Result<(ParsedModule, ParsedExpression, ParsedExprId), ParseError> {
     let mut module = make_test_module();
     let mut parser = set_up(input, &mut module);
     let expr_id = parser.expect_expression()?;

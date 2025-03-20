@@ -165,6 +165,7 @@ pub enum TokenKind {
     KeywordContext,
     KeywordUse,
     KeywordConst,
+    KeywordGuard,
 
     Slash,
     LineComment,
@@ -255,6 +256,7 @@ impl TokenKind {
             K::KeywordContext => Some("context"),
             K::KeywordUse => Some("use"),
             K::KeywordConst => Some("const"),
+            K::KeywordGuard => Some("guard"),
 
             K::Slash => Some("/"),
             K::LineComment => Some("//"),
@@ -382,6 +384,7 @@ impl TokenKind {
             "context" => Some(K::KeywordContext),
             "use" => Some(K::KeywordUse),
             "const" => Some(K::KeywordConst),
+            "guard" => Some(K::KeywordGuard),
             "==" => Some(K::EqualsEquals),
             "!=" => Some(K::BangEquals),
             "<=" => Some(K::LessThanEqual),
@@ -420,6 +423,7 @@ impl TokenKind {
             K::KeywordContext => true,
             K::KeywordUse => true,
             K::KeywordConst => true,
+            K::KeywordGuard => true,
             _ => false,
         }
     }
