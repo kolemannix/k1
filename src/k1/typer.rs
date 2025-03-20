@@ -24,7 +24,7 @@ use types::*;
 use crate::lex::{SpanId, Spans, TokenKind};
 use crate::parse::{
     self, ForExpr, ForExprType, Identifiers, NamedTypeArg, NamespacedIdentifier, NumericWidth,
-    ParsedAbilityId, ParsedAbilityImplId, ParsedDirective, ParsedExpressionId, ParsedFunctionId,
+    ParsedAbilityId, ParsedAbilityImplId, ParsedDirective, ParsedExprId, ParsedFunctionId,
     ParsedGlobalId, ParsedId, ParsedIfExpr, ParsedLoopExpr, ParsedNamespaceId, ParsedPattern,
     ParsedPatternId, ParsedStmtId, ParsedTypeDefnId, ParsedTypeExpr, ParsedTypeExprId,
     ParsedUnaryOpKind, ParsedUseId, ParsedWhileExpr, Sources, StructValueField,
@@ -182,14 +182,14 @@ enum CoerceResult {
 
 #[derive(Debug, Clone)]
 enum MaybeTypedExpr {
-    Parsed(ParsedExpressionId),
+    Parsed(ParsedExprId),
     Typed(TypedExprId),
 }
 
 #[derive(Debug, Clone)]
 enum TypeOrParsedExpr {
     Type(TypeId),
-    Parsed(ParsedExpressionId),
+    Parsed(ParsedExprId),
 }
 
 #[derive(Debug, Clone)]
@@ -588,7 +588,7 @@ impl TypedPattern {
 pub struct TypedLambda {
     pub scope: ScopeId,
     pub environment_struct_reference_type: TypeId,
-    pub parsed_expression_id: ParsedExpressionId,
+    pub parsed_expression_id: ParsedExprId,
     pub captures: Vec<VariableId>,
     pub span: SpanId,
 }
@@ -1612,7 +1612,7 @@ struct SynthedVariable {
     pub defn_stmt: TypedStmtId,
     pub variable_expr: TypedExprId,
     #[allow(unused)]
-    pub parsed_expr: ParsedExpressionId,
+    pub parsed_expr: ParsedExprId,
 }
 
 #[derive(Debug)]
@@ -1628,7 +1628,7 @@ pub struct Variable {
 #[derive(Debug)]
 pub struct TypedGlobal {
     pub variable_id: VariableId,
-    pub parsed_expr: ParsedExpressionId,
+    pub parsed_expr: ParsedExprId,
     pub initial_value: CompileTimeValueId,
     pub ty: TypeId,
     pub span: SpanId,
@@ -3851,7 +3851,7 @@ impl TypedModule {
 
     fn eval_comptime_parsed_expr(
         &mut self,
-        expr: ParsedExpressionId,
+        expr: ParsedExprId,
         expected_type_id: Option<TypeId>,
         scope_id: ScopeId,
         global_name: Option<Identifier>,
@@ -4535,7 +4535,7 @@ impl TypedModule {
 
     fn eval_variable(
         &mut self,
-        variable_expr_id: ParsedExpressionId,
+        variable_expr_id: ParsedExprId,
         scope_id: ScopeId,
         is_assignment_lhs: bool,
     ) -> TyperResult<TypedExprId> {
@@ -4868,7 +4868,7 @@ impl TypedModule {
 
     fn eval_try_operator(
         &mut self,
-        operand: ParsedExpressionId,
+        operand: ParsedExprId,
         ctx: EvalExprContext,
         span: SpanId,
     ) -> TyperResult<TypedExprId> {
@@ -4964,7 +4964,7 @@ impl TypedModule {
 
     fn eval_unwrap_operator(
         &mut self,
-        operand: ParsedExpressionId,
+        operand: ParsedExprId,
         ctx: EvalExprContext,
         span: SpanId,
     ) -> TyperResult<TypedExprId> {
@@ -4982,7 +4982,7 @@ impl TypedModule {
 
     fn eval_dereference(
         &mut self,
-        operand: ParsedExpressionId,
+        operand: ParsedExprId,
         ctx: EvalExprContext,
         span: SpanId,
     ) -> TyperResult<TypedExprId> {
@@ -5089,7 +5089,7 @@ impl TypedModule {
 
     fn eval_expr(
         &mut self,
-        expr_id: ParsedExpressionId,
+        expr_id: ParsedExprId,
         mut ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
         let directives = self.ast.exprs.get_directives(expr_id);
@@ -5196,7 +5196,7 @@ impl TypedModule {
 
     fn eval_expr_inner(
         &mut self,
-        expr_id: ParsedExpressionId,
+        expr_id: ParsedExprId,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
         debug!(
@@ -5481,7 +5481,7 @@ impl TypedModule {
 
     fn eval_anonymous_struct(
         &mut self,
-        expr_id: ParsedExpressionId,
+        expr_id: ParsedExprId,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
         let mut field_values = Vec::new();
@@ -5520,7 +5520,7 @@ impl TypedModule {
 
     fn eval_expected_struct(
         &mut self,
-        expr_id: ParsedExpressionId,
+        expr_id: ParsedExprId,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
         let ParsedExpression::Struct(parsed_struct) = self.ast.exprs.get(expr_id) else {
@@ -5539,7 +5539,7 @@ impl TypedModule {
 
         // Try to use just stack space for this scratch data structure
         let mut passed_fields_aligned: SmallVec<
-            [(ParsedExpressionId, &StructValueField, &StructTypeField); 8],
+            [(ParsedExprId, &StructValueField, &StructTypeField); 8],
         > = SmallVec::with_capacity(field_count);
 
         let struct_span = ast_struct.span;
@@ -5759,7 +5759,7 @@ impl TypedModule {
 
     fn eval_interpolated_string(
         &mut self,
-        expr_id: ParsedExpressionId,
+        expr_id: ParsedExprId,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
         let span = self.ast.exprs.get_span(expr_id);
@@ -5952,7 +5952,7 @@ impl TypedModule {
 
     fn eval_lambda(
         &mut self,
-        expr_id: ParsedExpressionId,
+        expr_id: ParsedExprId,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
         fn fixup_capture_expr_new(
@@ -6229,7 +6229,7 @@ impl TypedModule {
 
     fn eval_match_expr(
         &mut self,
-        match_expr_id: ParsedExpressionId,
+        match_expr_id: ParsedExprId,
         ctx: EvalExprContext,
         partial: bool,
         allow_bindings: bool,
@@ -6695,7 +6695,7 @@ impl TypedModule {
 
     fn eval_cast(
         &mut self,
-        expr_id: ParsedExpressionId,
+        expr_id: ParsedExprId,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
         let cast = self.ast.exprs.get(expr_id).expect_cast();
@@ -7211,7 +7211,7 @@ impl TypedModule {
 
     fn eval_matching_condition(
         &mut self,
-        condition: ParsedExpressionId,
+        condition: ParsedExprId,
         ctx: EvalExprContext,
     ) -> TyperResult<MatchingCondition> {
         let mut conditions: SmallVec<[TypedExprId; 4]> = smallvec![];
@@ -7282,7 +7282,7 @@ impl TypedModule {
     /// if a is .Some(aa) or b is .Some(bb) -> which one?
     fn handle_matching_if_rec(
         &mut self,
-        parsed_expr_id: ParsedExpressionId,
+        parsed_expr_id: ParsedExprId,
         allow_bindings: &mut bool,
         all_patterns: &mut SmallVec<[TypedPattern; 4]>,
         conditions: &mut SmallVec<[TypedExprId; 4]>,
@@ -7362,7 +7362,7 @@ impl TypedModule {
 
     fn eval_binary_op(
         &mut self,
-        binary_op_id: ParsedExpressionId,
+        binary_op_id: ParsedExprId,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
         fn is_scalar_for_equals(type_id: TypeId) -> bool {
@@ -7524,8 +7524,8 @@ impl TypedModule {
 
     fn eval_optional_else(
         &mut self,
-        lhs: ParsedExpressionId,
-        rhs: ParsedExpressionId,
+        lhs: ParsedExprId,
+        rhs: ParsedExprId,
         ctx: EvalExprContext,
         span: SpanId,
     ) -> TyperResult<TypedExprId> {
@@ -7582,7 +7582,7 @@ impl TypedModule {
 
     fn eval_equality_expr(
         &mut self,
-        binary_op_id: ParsedExpressionId,
+        binary_op_id: ParsedExprId,
         lhs: TypedExprId,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
@@ -7623,8 +7623,8 @@ impl TypedModule {
 
     fn eval_pipe_expr(
         &mut self,
-        lhs: ParsedExpressionId,
-        rhs: ParsedExpressionId,
+        lhs: ParsedExprId,
+        rhs: ParsedExprId,
         ctx: EvalExprContext,
         span: SpanId,
     ) -> TyperResult<TypedExprId> {
@@ -7638,7 +7638,7 @@ impl TypedModule {
                     explicit_context_args: vec![],
                     span,
                     is_method: false,
-                    id: ParsedExpressionId::PENDING,
+                    id: ParsedExprId::PENDING,
                 }
             }
             ParsedExpression::FnCall(fn_call) => {
@@ -7652,7 +7652,7 @@ impl TypedModule {
                     explicit_context_args: vec![],
                     span,
                     is_method: false,
-                    id: ParsedExpressionId::PENDING,
+                    id: ParsedExprId::PENDING,
                 }
             }
             _ => {
@@ -7845,7 +7845,7 @@ impl TypedModule {
 
     fn eval_return(
         &mut self,
-        parsed_expr: ParsedExpressionId,
+        parsed_expr: ParsedExprId,
         ctx: EvalExprContext,
         span: SpanId,
     ) -> TyperResult<TypedExprId> {
@@ -8356,9 +8356,9 @@ impl TypedModule {
 
     fn handle_enum_constructor(
         &mut self,
-        base_expr: Option<ParsedExpressionId>,
+        base_expr: Option<ParsedExprId>,
         variant_name: Identifier,
-        payload_parsed_expr: Option<ParsedExpressionId>,
+        payload_parsed_expr: Option<ParsedExprId>,
         type_args: &[NamedTypeArg],
         ctx: EvalExprContext,
         span: SpanId,
@@ -10225,7 +10225,7 @@ impl TypedModule {
         &mut self,
         concrete_enum_type: TypeId,
         variant_name: Identifier,
-        payload: Option<ParsedExpressionId>,
+        payload: Option<ParsedExprId>,
         ctx: EvalExprContext,
         span: SpanId,
     ) -> TyperResult<TypedExprId> {
@@ -12342,8 +12342,8 @@ impl TypedModule {
         &mut self,
         name: NamespacedIdentifier,
         type_args: Vec<ParsedTypeExprId>,
-        args: Vec<ParsedExpressionId>,
-    ) -> ParsedExpressionId {
+        args: Vec<ParsedExprId>,
+    ) -> ParsedExprId {
         let span = name.span;
         let type_args = type_args.iter().map(|id| NamedTypeArg::unnamed(*id)).collect();
         let args = args.iter().map(|id| parse::FnCallArg::unnamed(*id)).collect();
@@ -12354,7 +12354,7 @@ impl TypedModule {
             explicit_context_args: vec![],
             span,
             is_method: false,
-            id: ParsedExpressionId::PENDING,
+            id: ParsedExprId::PENDING,
         }))
     }
 
@@ -12380,7 +12380,7 @@ impl TypedModule {
     }
 
     #[allow(unused)]
-    fn synth_type_of_expr(&mut self, expr: ParsedExpressionId) -> ParsedTypeExprId {
+    fn synth_type_of_expr(&mut self, expr: ParsedExprId) -> ParsedTypeExprId {
         let span = self.ast.exprs.get_span(expr);
         self.ast
             .type_exprs
@@ -12399,7 +12399,7 @@ impl TypedModule {
         self.exprs.add(TypedExpr::BinaryOp(BinaryOp { kind, ty: BOOL_TYPE_ID, lhs, rhs, span }))
     }
 
-    fn synth_parsed_bool_not(&mut self, base: ParsedExpressionId) -> ParsedExpressionId {
+    fn synth_parsed_bool_not(&mut self, base: ParsedExprId) -> ParsedExprId {
         let span = self.ast.exprs.get_span(base);
         self.synth_parsed_function_call(
             qident!(self, span, ["bool"], "negated"),
@@ -12410,7 +12410,7 @@ impl TypedModule {
 
     fn synth_show_ident_call(
         &mut self,
-        caller: ParsedExpressionId,
+        caller: ParsedExprId,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
         let span = self.ast.exprs.get_span(caller);
