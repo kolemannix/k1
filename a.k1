@@ -1,0 +1,19 @@
+fn main(): int {
+  let foo = some(42);
+  guard foo is .Some(x) else {
+    println("not crashing");
+    // crash("uh oh");
+  };
+
+  guard x == 42 else crash("math");
+
+  // Require pattern comes first, if there is one?
+  guard foo is .Some(x) and live else {
+    println("not crashing");
+    // crash("uh oh");
+  };
+
+  assertEquals(x, 42);
+
+  0
+}
