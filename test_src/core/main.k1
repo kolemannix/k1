@@ -43,7 +43,7 @@ fn main(): int {
   printIt(compiler/location().line);
   match_exhaust/main();
   printIt(compiler/location().line);
-  match_references/main();
+  match_references/test();
   printIt(compiler/location().line);
   generic_struct/test();
   printIt(compiler/location().line);

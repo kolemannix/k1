@@ -28,8 +28,9 @@ impl Display for TypedModule {
         }
         if !skip_variables {
             f.write_str("--- Variables ---\n")?;
-            for (id, variable) in self.variables.iter() {
-                write!(f, "var {:02} ", id.0)?;
+            for variable_id in self.variables.iter_ids() {
+                write!(f, "var {:02} ", variable_id)?;
+                let variable = self.variables.get(variable_id);
                 self.display_variable(variable, f)?;
                 f.write_str("\n")?;
             }
@@ -607,35 +608,8 @@ impl TypedModule {
                 }
                 writ.write_str(" {\n")?;
                 for (idx, case) in typed_match.arms.iter().enumerate() {
-                    for (idx, setup_stmt) in case.setup_statements.iter().enumerate() {
-                        self.display_stmt(*setup_stmt, writ, indentation + 1)?;
-                        if idx != case.setup_statements.len() - 1 {
-                            writ.write_str("\n")?;
-                        }
-                    }
+                    self.display_matching_condition(writ, &case.condition, indentation)?;
 
-                    writ.write_str(&"  ".repeat(indentation + 1))?;
-                    for (idx, pattern) in case.patterns.iter().enumerate() {
-                        self.display_pattern(pattern, writ)?;
-                        if idx != case.patterns.len() - 1 {
-                            writ.write_str(" and ")?;
-                        }
-                    }
-                    writ.write_str("(")?;
-                    self.display_expr_id(case.pattern_condition, writ, indentation)?;
-                    writ.write_str(")")?;
-
-                    for (idx, stmt) in case.pattern_bindings.iter().enumerate() {
-                        self.display_stmt(*stmt, writ, indentation + 1)?;
-                        if idx != case.pattern_bindings.len() - 1 {
-                            writ.write_str("\n")?;
-                        }
-                    }
-
-                    if let Some(guard_condition) = case.guard_condition.as_ref() {
-                        writ.write_str(" if ")?;
-                        self.display_expr_id(*guard_condition, writ, indentation)?;
-                    }
                     writ.write_str(" -> ")?;
                     self.display_expr_id(case.consequent_expr, writ, indentation)?;
                     if idx < typed_match.arms.len() - 1 {
@@ -648,7 +622,7 @@ impl TypedModule {
             }
             TypedExpr::WhileLoop(while_loop) => {
                 writ.write_str("while ")?;
-                self.display_expr_id(while_loop.cond, writ, indentation)?;
+                self.display_matching_condition(writ, &while_loop.condition_block, indentation)?;
                 writ.write_str(" ")?;
                 self.display_block(&while_loop.body, writ, indentation)
             }
@@ -741,6 +715,41 @@ impl TypedModule {
                 Ok(())
             }
         }
+    }
+
+    fn display_matching_condition(
+        &self,
+        w: &mut impl Write,
+        cond: &MatchingCondition,
+        indentation: usize,
+    ) -> std::fmt::Result {
+        w.write_str(&"  ".repeat(indentation + 1))?;
+        for (idx, pattern) in cond.patterns.iter().enumerate() {
+            self.display_pattern(pattern, w)?;
+            if idx != cond.patterns.len() - 1 {
+                w.write_str(" and ")?;
+            }
+        }
+
+        if cond.instrs.is_empty() {
+            w.write_str("{}")?;
+            return Ok(());
+        }
+        w.write_str("{\n")?;
+        for instr in &cond.instrs {
+            match instr {
+                MatchingConditionInstr::Binding { let_stmt, .. } => {
+                    self.display_stmt(*let_stmt, w, indentation + 1)?;
+                }
+                MatchingConditionInstr::Cond { value } => {
+                    w.write_str("cond(")?;
+                    self.display_expr_id(*value, w, indentation + 1)?;
+                    w.write_str(") else goto next")?;
+                }
+            }
+        }
+        w.write_str("}")?;
+        Ok(())
     }
 
     pub fn function_id_to_string(&self, function_id: FunctionId, display_block: bool) -> String {

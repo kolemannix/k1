@@ -25,8 +25,8 @@ use inkwell::types::{
     FunctionType as LlvmFunctionType, IntType, PointerType, StructType, VoidType,
 };
 use inkwell::values::{
-    ArrayValue, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue,
-    InstructionOpcode, InstructionValue, IntValue, PointerValue, StructValue,
+    ArrayValue, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue,
+    InstructionValue, IntValue, PointerValue, StructValue,
 };
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel};
 use log::{debug, info, trace};
@@ -120,6 +120,7 @@ impl<T> BuilderResultExt for Result<T, BuilderError> {
 
 // TODO(perf): cache llvm function types by type id
 pub struct K1LlvmFunctionType<'ctx> {
+    #[allow(unused)]
     type_id: TypeId,
     llvm_function_type: LlvmFunctionType<'ctx>,
     param_types: Vec<K1LlvmType<'ctx>>,
@@ -834,10 +835,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 )
                 .as_type(),
         }
-    }
-
-    fn get_debug_type(&self, type_id: TypeId) -> CodegenResult<DIType<'ctx>> {
-        Ok(self.codegen_type(type_id)?.debug_type())
     }
 
     #[allow(unused)]
@@ -1590,60 +1587,17 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         'arm: for ((index, arm), (arm_block, arm_cons_block)) in
             match_expr.arms.iter().enumerate().zip(arm_blocks.iter())
         {
-            self.builder.position_at_end(*arm_block);
-            // I'm gonna do the bindings first, though the pattern_condition doesn't currently
-            // depend on them, we'd like it to to fully de-duplicate the matching code
-            for setup_stmt in &arm.setup_statements {
-                if let LlvmValue::Void(_instr) = self.codegen_statement(*setup_stmt)? {
-                    // If one of the scrutinees is a bot type, this block is terminated so just
-                    // continue to the next arm
-                    continue 'arm;
-                }
-            }
             let next_arm = arm_blocks.get(index + 1);
             let next_arm_or_fail = next_arm.map(|p| p.0).unwrap_or(fail_block);
 
-            let guard_block = if let Some(_guard_condition) = arm.guard_condition {
-                let guard_block =
-                    self.ctx.insert_basic_block_after(*arm_block, &format!("arm_guard_{index}"));
-                Some(guard_block)
-            } else {
-                None
-            };
-
             self.builder.position_at_end(*arm_block);
-            let pattern_condition = self.codegen_expr_basic_value(arm.pattern_condition)?;
-            let pattern_condition_i1 =
-                self.bool_to_i1(pattern_condition.into_int_value(), "arm_pattern_i1");
-            self.builder
-                .build_conditional_branch(
-                    pattern_condition_i1,
-                    guard_block.unwrap_or(*arm_cons_block),
-                    next_arm_or_fail,
-                )
-                .unwrap();
-
-            // Binding values must be visible to the guard block
-            self.builder.position_at_end(guard_block.unwrap_or(*arm_cons_block));
-            for binding_stmt in &arm.pattern_bindings {
-                self.codegen_statement(*binding_stmt)?;
-            }
-
-            if let Some(guard_block) = guard_block {
-                // Guard must be a boolean
-                self.builder.position_at_end(guard_block);
-                let guard_value = self.codegen_expr_basic_value(arm.guard_condition.unwrap())?;
-                let condition_value = self.bool_to_i1(guard_value.into_int_value(), "arm_guard_i1");
-                self.builder
-                    .build_conditional_branch(condition_value, *arm_cons_block, next_arm_or_fail)
-                    .unwrap();
-            }
+            self.codegen_matching_condition(&arm.condition, *arm_cons_block, next_arm_or_fail)?;
 
             self.builder.position_at_end(*arm_cons_block);
             let LlvmValue::BasicValue(consequent) = self.codegen_expr(arm.consequent_expr)? else {
                 // If the consequent crashes or returns early, this block is terminated so just
-                // continue to the next case
-                continue;
+                // continue to the next arm
+                continue 'arm;
             };
 
             // Running the consequent could have landed us in a different basic block, so the
@@ -3107,6 +3061,37 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         }
     }
 
+    fn codegen_matching_condition(
+        &mut self,
+        condition: &MatchingCondition,
+        cons_block: BasicBlock<'ctx>,
+        else_block: BasicBlock<'ctx>,
+    ) -> CodegenResult<()> {
+        for stmt in &condition.instrs {
+            match stmt {
+                MatchingConditionInstr::Binding { let_stmt, .. } => {
+                    self.codegen_statement(*let_stmt)?;
+                }
+                MatchingConditionInstr::Cond { value } => {
+                    let condition = self.codegen_expr(*value)?;
+                    let LlvmValue::BasicValue(bool_value) = condition else {
+                        return Ok(());
+                    };
+                    let i1 = self.bool_to_i1(bool_value.into_int_value(), "");
+
+                    let continue_block = self.append_basic_block("");
+                    self.builder.build_conditional_branch(i1, continue_block, else_block).unwrap();
+
+                    self.builder.position_at_end(continue_block);
+                }
+            }
+        }
+
+        // If no conditions fail, we can go to the consequent of this matching condition
+        self.builder.build_unconditional_branch(cons_block).unwrap();
+        Ok(())
+    }
+
     fn codegen_while_expr(&mut self, while_loop: &WhileLoop) -> CodegenResult<LlvmValue<'ctx>> {
         let start_block = self.builder.get_insert_block().unwrap();
         let current_fn = start_block.get_parent().unwrap();
@@ -3119,14 +3104,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             LoopInfo { break_value_ptr: None, end_block: loop_end_block },
         );
 
-        // Go to the loop
         self.builder.build_unconditional_branch(loop_entry_block).unwrap();
 
         self.builder.position_at_end(loop_entry_block);
-        let cond = self.codegen_expr_basic_value(while_loop.cond)?.into_int_value();
-        let cond_i1 = self.bool_to_i1(cond, "while_cond");
-
-        self.builder.build_conditional_branch(cond_i1, loop_body_block, loop_end_block).unwrap();
+        self.codegen_matching_condition(
+            &while_loop.condition_block,
+            loop_body_block,
+            loop_end_block,
+        )?;
 
         self.builder.position_at_end(loop_body_block);
         let body_value = self.codegen_block(&while_loop.body)?;
@@ -3144,7 +3129,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     fn codegen_loop_expr(&mut self, loop_expr: &LoopExpr) -> CodegenResult<LlvmValue<'ctx>> {
         let start_block = self.builder.get_insert_block().unwrap();
         let current_fn = start_block.get_parent().unwrap();
-        // let loop_entry_block = self.ctx.append_basic_block(current_fn, "loop_entry");
         let loop_body_block = self.ctx.append_basic_block(current_fn, "loop_body");
         let loop_end_block = self.ctx.append_basic_block(current_fn, "loop_end");
 
@@ -3223,13 +3207,13 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let function_type_id = function.type_id;
         let function_type = self.module.types.get(function.type_id).as_function().unwrap();
 
-        let function_line_number = self
-            .module
-            .ast
-            .get_lines_for_span_id(self.module.ast.get_span_for_id(function.parsed_id))
-            .expect("line for span")
-            .1
-            .line_number();
+        //let function_line_number = self
+        //    .module
+        //    .ast
+        //    .get_lines_for_span_id(self.module.ast.get_span_for_id(function.parsed_id))
+        //    .expect("line for span")
+        //    .1
+        //    .line_number();
 
         let maybe_starting_block = self.builder.get_insert_block();
 
@@ -3404,7 +3388,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         Ok(function_value)
     }
 
-    fn count_function_instructions(function_value: FunctionValue<'ctx>) -> usize {
+    fn _count_function_instructions(function_value: FunctionValue<'ctx>) -> usize {
         let mut count = 0;
         // eprintln!("counting function {:?}", function_value.get_name().to_str());
         let mut cur_blk: Option<BasicBlock<'ctx>> = function_value.get_first_basic_block();
