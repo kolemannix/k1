@@ -457,11 +457,11 @@ pub struct UnaryOp {
 }
 
 #[derive(Debug, Clone)]
-pub struct Variable {
+pub struct ParsedVariable {
     pub name: NamespacedIdentifier,
 }
 
-impl Display for Variable {
+impl Display for ParsedVariable {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_fmt(format_args!("var#{}", self.name.name))
     }
@@ -611,7 +611,7 @@ pub enum ParsedExpression {
     /// ```md
     /// x
     /// ```
-    Variable(Variable),
+    Variable(ParsedVariable),
     /// ```md
     /// x.b, Opt.None[i32] (overloaded to handle enum constrs)
     /// ```
@@ -851,17 +851,17 @@ pub struct UseStmt {
 }
 
 #[derive(Debug, Clone)]
-pub struct ParsedGuard {
-    condition_expr: ParsedExprId,
-    else_body: ParsedExprId,
-    span: SpanId,
+pub struct ParsedRequire {
+    pub condition_expr: ParsedExprId,
+    pub else_body: ParsedExprId,
+    pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
 pub enum ParsedStmt {
     Use(UseStmt),                 // use core/list/new as foo
     Let(ParsedLet),               // let x = 42
-    Guard(ParsedGuard),           // guard x is .Some(foo) else crash()
+    Require(ParsedRequire),       // require x is .Some(foo) else crash()
     Assignment(Assignment),       // x = 42
     SetRef(SetStmt),              // x <- 42
     LoneExpression(ParsedExprId), // println("asdfasdf")
@@ -1426,7 +1426,7 @@ impl ParsedModule {
         match self.stmts.get(stmt) {
             ParsedStmt::Use(u) => u.span,
             ParsedStmt::Let(v) => v.span,
-            ParsedStmt::Guard(g) => g.span,
+            ParsedStmt::Require(g) => g.span,
             ParsedStmt::Assignment(a) => a.span,
             ParsedStmt::SetRef(s) => s.span,
             ParsedStmt::LoneExpression(expr_id) => self.exprs.get_span(*expr_id),
@@ -2855,7 +2855,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 }))))
             } else {
                 // The last thing it can be is a simple variable reference expression
-                Ok(Some(self.add_expression(ParsedExpression::Variable(Variable {
+                Ok(Some(self.add_expression(ParsedExpression::Variable(ParsedVariable {
                     name: namespaced_ident,
                 }))))
             }
@@ -3013,8 +3013,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         }))
     }
 
-    fn parse_guard(&mut self) -> ParseResult<Option<ParsedGuard>> {
-        let Some(keyword_guard_token) = self.maybe_consume_next(K::KeywordGuard) else {
+    fn parse_require(&mut self) -> ParseResult<Option<ParsedRequire>> {
+        let Some(keyword_require_token) = self.maybe_consume_next(K::KeywordRequire) else {
             return Ok(None);
         };
 
@@ -3023,8 +3023,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
         let else_body = self.expect_expression()?;
 
-        let span = self.extend_to_here(keyword_guard_token.span);
-        Ok(Some(ParsedGuard { condition_expr, else_body, span }))
+        let span = self.extend_to_here(keyword_require_token.span);
+        Ok(Some(ParsedRequire { condition_expr, else_body, span }))
     }
 
     fn parse_global(&mut self) -> ParseResult<Option<ParsedGlobalId>> {
@@ -3272,8 +3272,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             Ok(Some(self.module.stmts.add(ParsedStmt::Use(UseStmt { span, use_id }))))
         } else if let Some(let_stmt) = self.parse_let()? {
             Ok(Some(self.module.stmts.add(ParsedStmt::Let(let_stmt))))
-        } else if let Some(guard_stmt) = self.parse_guard()? {
-            Ok(Some(self.module.stmts.add(ParsedStmt::Guard(guard_stmt))))
+        } else if let Some(require_stmt) = self.parse_require()? {
+            Ok(Some(self.module.stmts.add(ParsedStmt::Require(require_stmt))))
         } else if let Some(expr) = self.parse_expression()? {
             let peeked = self.peek();
             // Assignment:
@@ -3999,11 +3999,11 @@ impl ParsedModule {
                 write!(w, "let ")?;
                 todo!()
             }
-            ParsedStmt::Guard(guard_stmt) => {
-                write!(w, "guard ")?;
-                self.display_expr_id(guard_stmt.condition_expr, w)?;
+            ParsedStmt::Require(require_stmt) => {
+                write!(w, "require ")?;
+                self.display_expr_id(require_stmt.condition_expr, w)?;
                 write!(w, " else ")?;
-                self.display_expr_id(guard_stmt.else_body, w)?;
+                self.display_expr_id(require_stmt.else_body, w)?;
                 Ok(())
             }
             ParsedStmt::Assignment(assignment) => todo!(),

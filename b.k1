@@ -1,0 +1,26 @@
+fn m1(v: { x: int, y: int }): unit {
+  if v is { x: xx, y: yy } and xx == 1 {
+    println("xx was 1!")
+  } else {
+    println("xx was not 1!")
+  }
+}
+
+fn main(): int {
+  let myOpt = some(42);
+  if myOpt is .Some(x) and x == 42 {
+    println("x was 42!")
+  };
+
+  m1({ x: 1, y: 2 });
+
+  switch { x: 1, y: 2 } {
+    { x: 11 } -> println("x was 11"),
+    { x: xx, y: yy } if xx == 1 and yy == 2 -> println("xx was 1 and yy was 2"),
+    _ -> crash("unhandled")
+  };
+
+  //require { x : 1 } is { x } and x == 1
+
+  0
+}

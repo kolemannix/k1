@@ -21,9 +21,15 @@ fn test(): unit {
   assert(not (b is false));
   assert(b is true);
 
+  // Float pattern
+  let f = 3.14;
+  assert(f is 3.14);
+  assert(not (f is 2.71));
+
   let opt: int? = .Some(42);
   assert(opt is .Some(_));
   assert(not (opt is .None));
+
 
   let foo = { x: 1, y: "asdf" };
   // Wildcard pattern
