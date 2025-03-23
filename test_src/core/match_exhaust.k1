@@ -64,5 +64,10 @@ fn main(): int {
   assert(failedWithBaz(.Failure({ reason: "baz" })));
   assert(not failedWithBaz(.No));
 
+  switch some(42) {
+    .Some(x) if x == 42 -> (),
+    _ -> assert(false),
+  };
+
   0
 }

@@ -62,8 +62,8 @@ pub struct FunctionId(pub u32);
 impl FunctionId {
     pub const PENDING: FunctionId = FunctionId(u32::MAX);
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct VariableId(u32);
+
+nz_u32_id!(VariableId);
 
 nz_u32_id!(NamespaceId);
 
@@ -517,14 +517,14 @@ pub enum TypedPattern {
 }
 
 impl TypedPattern {
-    pub fn all_bindings(&self) -> Vec<VariablePattern> {
-        let mut v: Vec<VariablePattern> = vec![];
-        // This sorts by the Identifier id, not the name itself, but that's absolutely fine
+    pub fn all_bindings(&self) -> SmallVec<[VariablePattern; 8]> {
+        let mut v = smallvec![];
         self.all_bindings_rec(&mut v);
+        // This sorts by the Identifier id, not the name itself, but that's absolutely fine
         v.sort_by_key(|vp| vp.name);
         v
     }
-    fn all_bindings_rec(&self, bindings: &mut Vec<VariablePattern>) {
+    fn all_bindings_rec(&self, bindings: &mut SmallVec<[VariablePattern; 8]>) {
         match self {
             TypedPattern::LiteralUnit(_) => (),
             TypedPattern::LiteralChar(_, _) => (),
@@ -1057,6 +1057,8 @@ pub struct ListLiteral {
 }
 
 #[derive(Debug, Clone)]
+// nocommit: TypedIf is only used by synthesized code now; we should
+// synthesize the more general TypedMatchExpr construct instead
 pub struct TypedIf {
     pub condition: TypedExprId,
     pub consequent: TypedExprId,
@@ -1105,19 +1107,7 @@ pub struct TypedEnumIsVariantExpr {
 
 #[derive(Debug, Clone)]
 pub struct TypedMatchArm {
-    /// Multiple patterns does _not_ mean the user provided multiple patterns in a switch,
-    /// that case currently gets compiled to N arms, where N is the number of alternate patterns
-    /// Though that's something I could now consider changing, the trick would be to generate
-    /// a single set of variables for all the bindings that each point to the unique variables from each
-    /// pattern. We already check for exact number and name, so this is possible
-    ///
-    /// But, if we have multiple patterns here currently, it means this was an if statement with
-    /// multiple patterns joined by 'and' operations
-    pub patterns: SmallVec<[TypedPattern; 1]>,
-    pub setup_statements: SmallVec<[TypedStmtId; 4]>,
-    pub pattern_condition: TypedExprId,
-    pub pattern_bindings: SmallVec<[TypedStmtId; 4]>,
-    pub guard_condition: Option<TypedExprId>,
+    pub condition: MatchingCondition,
     pub consequent_expr: TypedExprId,
 }
 
@@ -1355,8 +1345,28 @@ pub struct PendingCaptureExpr {
 }
 
 #[derive(Debug, Clone)]
+pub struct MatchingCondition {
+    /// Multiple patterns does _not_ mean the user provided multiple patterns in a switch,
+    /// that case currently gets compiled to N arms, where N is the number of alternate patterns
+    /// Though that's something I could now consider changing, the trick would be to generate
+    /// a single set of variables for all the bindings that each point to the unique variables from each
+    /// pattern. We already check for exact number and name, so this is possible
+    pub patterns: SmallVec<[TypedPattern; 1]>,
+    pub instrs: Vec<MatchingConditionInstr>,
+    #[allow(unused)]
+    pub binding_eligible: bool,
+    pub diverges: bool,
+}
+
+#[derive(Debug, Clone)]
+pub enum MatchingConditionInstr {
+    Binding { let_stmt: TypedStmtId, variable_id: VariableId },
+    Cond { value: TypedExprId },
+}
+
+#[derive(Debug, Clone)]
 pub struct WhileLoop {
-    pub cond: TypedExprId,
+    pub condition_block: MatchingCondition,
     pub body: Box<TypedBlock>,
     pub type_id: TypeId,
     pub span: SpanId,
@@ -1367,17 +1377,6 @@ pub struct LoopExpr {
     pub body: Box<TypedBlock>,
     pub break_type: TypeId,
     pub span: SpanId,
-}
-
-#[derive(Debug, Clone)]
-struct MatchingCondition {
-    #[allow(unused)]
-    all_patterns: SmallVec<[TypedPattern; 4]>,
-    combined_condition: TypedExprId,
-    setup_statements: SmallVec<[TypedStmtId; 4]>,
-    binding_statements: SmallVec<[TypedStmtId; 4]>,
-    #[allow(unused)]
-    binding_eligible: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1544,6 +1543,14 @@ pub struct AssignmentStmt {
     pub value: TypedExprId,
     pub span: SpanId,
     pub kind: AssignmentKind,
+}
+
+pub struct TypedGuardStmt {
+    // pub patterns: SmallVec<[TypedPattern; 1]>,
+    pub setup_statements: SmallVec<[TypedStmtId; 4]>,
+    pub pattern_condition: TypedExprId,
+    pub pattern_bindings: SmallVec<[TypedStmtId; 4]>,
+    pub else_terminating_expr: TypedExprId,
 }
 
 static_assert_size!(TypedStmt, 20);
@@ -1915,27 +1922,6 @@ impl FunctionAbilityContextInfo {
     }
 }
 
-#[derive(Default, Debug)]
-pub struct Variables {
-    variables: Vec<Variable>,
-}
-
-impl Variables {
-    fn add_variable(&mut self, typ: Variable) -> VariableId {
-        let index = self.variables.len();
-        self.variables.push(typ);
-        VariableId(index as u32)
-    }
-
-    pub fn get(&self, variable_id: VariableId) -> &Variable {
-        &self.variables[variable_id.0 as usize]
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = (VariableId, &Variable)> {
-        self.variables.iter().enumerate().map(|(i, v)| (VariableId(i as u32), v))
-    }
-}
-
 #[derive(Debug, Clone)]
 struct EvalTypeExprContext {
     should_attach_defn_info: bool,
@@ -1999,7 +1985,7 @@ pub struct AbilityImplHandle {
 pub struct TypedModule {
     pub ast: ParsedModule,
     functions: Vec<TypedFunction>,
-    pub variables: Variables,
+    pub variables: Pool<Variable, VariableId>,
     pub types: Types,
     pub globals: Pool<TypedGlobal, TypedGlobalId>,
     pub exprs: pool::Pool<TypedExpr, TypedExprId>,
@@ -2044,7 +2030,7 @@ impl TypedModule {
         let namespaces = Namespaces { namespaces: Pool::with_capacity("namespaces", 256) };
         TypedModule {
             functions: Vec::with_capacity(parsed_module.functions.len() * 4),
-            variables: Variables::default(),
+            variables: Pool::with_capacity("typed_variables", 8192),
             types,
             globals: Pool::with_capacity("typed_globals", 4096),
             exprs: Pool::with_capacity("typed_exprs", 32768),
@@ -3909,7 +3895,7 @@ impl TypedModule {
         }
 
         let global_id = self.globals.next_id();
-        let variable_id = self.variables.add_variable(Variable {
+        let variable_id = self.variables.add(Variable {
             name: global_name,
             type_id,
             is_mutable: false,
@@ -5372,8 +5358,7 @@ impl TypedModule {
                         anon_enum.span,
                     )
                 })?;
-                let enum_type_id = {
-                    match self.types.get(expected_type) {
+                match self.types.get(expected_type) {
                         Type::Enum(_e) => Ok(expected_type),
                         Type::EnumVariant(ev) => Ok(ev.enum_type_id),
                         _ => failf!(
@@ -5382,7 +5367,6 @@ impl TypedModule {
                             self.type_kind_to_string(expected_type),
                             self.type_id_to_string(expected_type)
                         ),
-                    }
                 }?;
                 let enum_ctx = ctx.with_expected_type(Some(expected_type));
 
@@ -5492,11 +5476,11 @@ impl TypedModule {
         let ast_struct = parsed_struct.clone();
         for (index, ast_field) in ast_struct.fields.iter().enumerate() {
             let parsed_expr = match ast_field.expr.as_ref() {
-                None => {
-                    self.ast.exprs.add_expression(ParsedExpression::Variable(parse::Variable {
+                None => self.ast.exprs.add_expression(ParsedExpression::Variable(
+                    parse::ParsedVariable {
                         name: NamespacedIdentifier::naked(ast_field.name, ast_field.span),
-                    }))
-                }
+                    },
+                )),
                 Some(expr) => *expr,
             };
             let expr = self.eval_expr(parsed_expr, ctx.with_expected_type(None))?;
@@ -5554,11 +5538,11 @@ impl TypedModule {
                 );
             };
             let parsed_expr = match passed_field.expr.as_ref() {
-                None => {
-                    self.ast.exprs.add_expression(ParsedExpression::Variable(parse::Variable {
+                None => self.ast.exprs.add_expression(ParsedExpression::Variable(
+                    parse::ParsedVariable {
                         name: NamespacedIdentifier::naked(passed_field.name, passed_field.span),
-                    }))
-                }
+                    },
+                )),
                 Some(expr) => *expr,
             };
             passed_fields_aligned.push((parsed_expr, passed_field, expected_field))
@@ -5664,11 +5648,6 @@ impl TypedModule {
             generic_instance_info: output_instance_info,
         };
         let output_struct_type_id = self.types.add(Type::Struct(output_struct));
-        // Expected: Pair['1, '2]({ a: '1, b: '2})
-        // Returning value: { a: int, b: bool } typechecks fine
-        // Generic Instance info should be: go look at Pair and run unify on:
-        // { a: A, b: B } <=> { a: int, b: bool }
-        // To get to [int, bool] for the params
 
         let typed_struct =
             Struct { fields: field_values, span: ast_struct.span, type_id: output_struct_type_id };
@@ -5685,45 +5664,32 @@ impl TypedModule {
         else {
             return failf!(while_expr.span, "'while' body must be a block");
         };
-        let condition_span = self.ast.exprs.get_span(while_expr.cond);
 
-        let mut condition_block = self.synth_block(ctx.scope_id, condition_span);
+        let condition_block_scope_id =
+            self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, None, None);
 
-        let MatchingCondition { combined_condition, setup_statements, binding_statements, .. } =
-            self.eval_matching_condition(
-                while_expr.cond,
-                ctx.with_scope(condition_block.scope_id),
-            )?;
+        let condition = self
+            .eval_matching_condition(while_expr.cond, ctx.with_scope(condition_block_scope_id))?;
 
-        condition_block.statements = Vec::with_capacity(setup_statements.len() + 1);
-        condition_block.statements.extend_from_slice(&setup_statements);
-        self.add_expr_id_to_block(&mut condition_block, combined_condition);
         let body_block_scope_id = self.scopes.add_child_scope(
-            condition_block.scope_id,
+            condition_block_scope_id,
             ScopeType::WhileLoopBody,
             None,
             None,
         );
         self.scopes
             .add_loop_info(body_block_scope_id, ScopeLoopInfo { break_type: Some(UNIT_TYPE_ID) });
-        let mut body_block = TypedBlock {
-            expr_type: UNIT_TYPE_ID,
-            statements: Vec::with_capacity(binding_statements.len() + 1),
-            scope_id: body_block_scope_id,
-            span: parsed_block.span,
-        };
-        body_block.statements.extend(binding_statements.iter());
 
-        let user_block =
-            self.eval_block(&parsed_block, ctx.with_scope(body_block.scope_id), false)?;
-        self.add_expr_to_block(&mut body_block, TypedExpr::Block(user_block));
+        let body_block =
+            self.eval_block(&parsed_block, ctx.with_scope(body_block_scope_id), false)?;
 
-        let loop_type =
-            if condition_block.expr_type == NEVER_TYPE_ID { NEVER_TYPE_ID } else { UNIT_TYPE_ID };
+        // nocommit: If loop has no breaks, can we type is as never?
+        //           Loop Info should be able to track this, if we report every
+        //           break
+        let loop_type = if condition.diverges { NEVER_TYPE_ID } else { UNIT_TYPE_ID };
 
-        let condition_block_id = self.exprs.add(TypedExpr::Block(condition_block));
         Ok(self.exprs.add(TypedExpr::WhileLoop(WhileLoop {
-            cond: condition_block_id,
+            condition_block: condition,
             body: Box::new(body_block),
             type_id: loop_type,
             span: while_expr.span,
@@ -5807,10 +5773,11 @@ impl TypedModule {
                         self.exprs.add(TypedExpr::String(s, span))
                     }
                     parse::InterpolatedStringPart::Identifier(ident) => {
-                        let variable_expr_id =
-                            self.ast.exprs.add_expression(ParsedExpression::Variable(
-                                parse::Variable { name: NamespacedIdentifier::naked(ident, span) },
-                            ));
+                        let variable_expr_id = self.ast.exprs.add_expression(
+                            ParsedExpression::Variable(parse::ParsedVariable {
+                                name: NamespacedIdentifier::naked(ident, span),
+                            }),
+                        );
                         self.synth_show_ident_call(variable_expr_id, block_ctx)?
                     }
                 };
@@ -6059,7 +6026,7 @@ impl TypedModule {
         let lambda_scope = self.scopes.get_scope_mut(lambda_scope_id);
         for typed_arg in typed_params.iter() {
             let name = typed_arg.name;
-            let variable_id = self.variables.add_variable(Variable {
+            let variable_id = self.variables.add(Variable {
                 name,
                 type_id: typed_arg.type_id,
                 is_mutable: false,
@@ -6147,7 +6114,7 @@ impl TypedModule {
             is_lambda_env: true,
             span: body_span,
         };
-        let environment_param_variable_id = self.variables.add_variable(Variable {
+        let environment_param_variable_id = self.variables.add(Variable {
             name: environment_param.name,
             type_id: environment_struct_reference_type,
             is_mutable: false,
@@ -6259,11 +6226,12 @@ impl TypedModule {
         )?;
 
         let fallback_arm = TypedMatchArm {
-            patterns: smallvec![TypedPattern::LiteralBool(true, match_expr_span)],
-            setup_statements: smallvec![],
-            pattern_condition: self.exprs.add(TypedExpr::Bool(true, match_expr_span)),
-            pattern_bindings: smallvec![],
-            guard_condition: None,
+            condition: MatchingCondition {
+                patterns: smallvec![],
+                instrs: vec![],
+                binding_eligible: true,
+                diverges: false,
+            },
             consequent_expr: self.synth_crash_call(
                 "Match Error".to_string(),
                 match_expr_span,
@@ -6316,7 +6284,7 @@ impl TypedModule {
             let arm_expr_span = self.ast.exprs.get_span(parsed_case.expression);
             let mut arm_patterns = Vec::with_capacity(parsed_case.patterns.len());
             let multi_pattern = parsed_case.patterns.len() > 1;
-            let mut expected_bindings: Option<Vec<VariablePattern>> = None;
+            let mut expected_bindings: Option<SmallVec<[VariablePattern; 8]>> = None;
             for pattern_id in parsed_case.patterns.iter() {
                 let pattern = self.compile_pattern(
                     *pattern_id,
@@ -6360,7 +6328,7 @@ impl TypedModule {
                 }
             }
 
-            // Note: We compile the arm expression (and clone the guard condition) as many times as there are patterns, since each
+            // Note: We compile the arm expression and the guard condition as many times as there are patterns, since each
             // one has its own scope. To get around this we'd have to create only one compiled arm even for
             // multi-pattern binding arms, and have the condition be a boolean OR of the various
             // arms, and somehow compile in the right variables defns based on which one passed.
@@ -6369,27 +6337,32 @@ impl TypedModule {
             for pattern in arm_patterns.into_iter() {
                 let arm_scope_id =
                     self.scopes.add_child_scope(match_scope_id, ScopeType::MatchArm, None, None);
-                let mut setup_statements = smallvec![];
-                let mut binding_statements = smallvec![];
-                let condition = self.compile_pattern_in_scope(
+                //let mut setup_statements = smallvec![];
+                //let mut binding_statements = smallvec![];
+                let mut instrs = vec![];
+                self.compile_pattern_in_scope_new(
                     &pattern,
                     target_expr,
-                    &mut setup_statements,
-                    &mut binding_statements,
+                    &mut instrs,
+                    //&mut setup_statements,
+                    //&mut binding_statements,
                     false,
                     arm_scope_id,
                 )?;
 
-                let guard_condition = match parsed_case.guard_condition_expr {
-                    None => None,
-                    Some(guard_condition_expr_id) => Some(self.eval_expr(
-                        guard_condition_expr_id,
-                        ctx.with_scope(arm_scope_id).with_expected_type(Some(BOOL_TYPE_ID)),
-                    )?),
+                match parsed_case.guard_condition_expr {
+                    None => {}
+                    Some(guard_condition_expr_id) => {
+                        let guard_condition_expr = self.eval_expr(
+                            guard_condition_expr_id,
+                            ctx.with_scope(arm_scope_id).with_expected_type(Some(BOOL_TYPE_ID)),
+                        )?;
+                        instrs.push(MatchingConditionInstr::Cond { value: guard_condition_expr });
+                    }
                 };
 
-                // Once we've evaluated the arm pattern, we can eval the consequent expression inside of it,
-                // since the bindings are now in scope inside arm_block
+                // Once we've evaluated the conditions, we can eval the consequent expression inside of it,
+                // since the bindings are now available
                 let consequent_expr = self.eval_expr(
                     parsed_case.expression,
                     ctx.with_scope(arm_scope_id).with_expected_type(expected_arm_type_id),
@@ -6413,12 +6386,16 @@ impl TypedModule {
                 if consequent_expr_type != NEVER_TYPE_ID {
                     expected_arm_type_id = Some(consequent_expr_type);
                 }
+
+                let condition_diverges = self.matching_condition_diverges(&instrs);
+
                 typed_arms.push(TypedMatchArm {
-                    patterns: smallvec![pattern],
-                    setup_statements,
-                    pattern_condition: condition,
-                    pattern_bindings: binding_statements,
-                    guard_condition,
+                    condition: MatchingCondition {
+                        patterns: smallvec![pattern],
+                        instrs,
+                        binding_eligible: true,
+                        diverges: condition_diverges,
+                    },
                     consequent_expr,
                 });
             }
@@ -6452,7 +6429,7 @@ impl TypedModule {
             if let Some(useless_index) = pattern_kill_counts.iter().position(|p| *p == 0) {
                 // patterns[0]: For actual match expressions, which this is, we'll always have
                 // exactly 1 pattern per arm
-                let pattern = &typed_arms[useless_index].patterns[0];
+                let pattern = &typed_arms[useless_index].condition.patterns[0];
                 if !pattern.has_innumerable_literal() {
                     return failf!(
                         pattern.span_id(),
@@ -6684,6 +6661,247 @@ impl TypedModule {
                             self.exprs.add(TypedExpr::String(string_value.clone(), *span));
                         let condition = self.synth_equals_call(target_expr, string_expr, *span)?;
                         Ok(condition)
+                    }
+                    other_pat => {
+                        unreachable!("should only be literal patterns from here: {other_pat:?}")
+                    }
+                }
+            }
+        }
+    }
+
+    /// Accumulates a list of 'BindingOrCond' while 'compiling' a pattern match.
+    /// Basically, every part of a pattern match boils down to either
+    /// - A boolean condition to be evaluated
+    /// - A new variable binding
+    fn compile_pattern_in_scope_new(
+        &mut self,
+        pattern: &TypedPattern,
+        target_expr: TypedExprId,
+        instrs: &mut Vec<MatchingConditionInstr>,
+        is_immediately_inside_reference_pattern: bool,
+        arm_scope_id: ScopeId,
+    ) -> TyperResult<()> {
+        let target_expr_type = self.exprs.get(target_expr).get_type();
+        match pattern {
+            TypedPattern::Struct(struct_pattern) => {
+                //let mut boolean_exprs: Vec<TypedExprId> =
+                //    Vec::with_capacity(struct_pattern.fields.len());
+                for pattern_field in struct_pattern.fields.iter() {
+                    let struct_type = self.types.get_type_id_dereferenced(target_expr_type);
+                    let is_referencing = is_immediately_inside_reference_pattern;
+                    let result_type = if is_referencing {
+                        self.types.add_reference_type(pattern_field.field_type_id)
+                    } else {
+                        pattern_field.field_type_id
+                    };
+                    let get_struct_field =
+                        self.exprs.add(TypedExpr::StructFieldAccess(FieldAccess {
+                            base: target_expr,
+                            target_field: pattern_field.name,
+                            target_field_index: pattern_field.field_index,
+                            result_type,
+                            struct_type,
+                            is_referencing,
+                            span: struct_pattern.span,
+                        }));
+                    let var_name = self
+                        .ast
+                        .identifiers
+                        .intern(format!("field_{}", self.name_of(pattern_field.name)));
+                    let struct_field_variable =
+                        self.synth_variable_defn_simple(var_name, get_struct_field, arm_scope_id);
+                    instrs.push(MatchingConditionInstr::Binding {
+                        let_stmt: struct_field_variable.defn_stmt,
+                        variable_id: struct_field_variable.variable_id,
+                    });
+                    self.compile_pattern_in_scope_new(
+                        &pattern_field.pattern,
+                        struct_field_variable.variable_expr,
+                        instrs,
+                        is_referencing,
+                        arm_scope_id,
+                    )?;
+                    //boolean_exprs.push(condition);
+                }
+                //let final_condition = boolean_exprs
+                //    .into_iter()
+                //    .reduce(|a, b| self.synth_binary_bool_op(BinaryOpKind::And, a, b))
+                //    .unwrap();
+                Ok(())
+            }
+            TypedPattern::Enum(enum_pattern) => {
+                let is_referencing = is_immediately_inside_reference_pattern;
+                let is_variant_target =
+                    if is_referencing { self.synth_dereference(target_expr) } else { target_expr };
+                let is_variant_condition =
+                    self.exprs.add(TypedExpr::EnumIsVariant(TypedEnumIsVariantExpr {
+                        target_expr: is_variant_target,
+                        variant_name: enum_pattern.variant_tag_name,
+                        variant_index: enum_pattern.variant_index,
+                        span: enum_pattern.span,
+                    }));
+                instrs.push(MatchingConditionInstr::Cond { value: is_variant_condition });
+
+                if let Some(payload_pattern) = enum_pattern.payload.as_ref() {
+                    let enum_type = self.types.get(enum_pattern.enum_type_id).expect_enum();
+                    let variant = enum_type.variant_by_index(enum_pattern.variant_index).unwrap();
+                    let variant_name = variant.name;
+                    let variant_index = variant.index;
+                    let Some(payload_type_id) = variant.payload else {
+                        return failf!(
+                            enum_pattern.span,
+                            "Impossible pattern: variant does not have payload",
+                        );
+                    };
+                    let result_type_id = if is_referencing {
+                        self.types.add_reference_type(payload_type_id)
+                    } else {
+                        payload_type_id
+                    };
+                    let get_payload_expr =
+                        self.exprs.add(TypedExpr::EnumGetPayload(GetEnumPayload {
+                            target_expr,
+                            result_type_id,
+                            variant_name,
+                            variant_index,
+                            is_referencing,
+                            span: enum_pattern.span,
+                        }));
+                    let var_name = self
+                        .ast
+                        .identifiers
+                        .intern(format!("payload_{}", self.name_of(variant_name)));
+                    let payload_variable =
+                        self.synth_variable_defn_simple(var_name, get_payload_expr, arm_scope_id);
+                    instrs.push(MatchingConditionInstr::Binding {
+                        let_stmt: payload_variable.defn_stmt,
+                        variable_id: payload_variable.variable_id,
+                    });
+                    //setup_statements.push(payload_variable.defn_stmt);
+                    self.compile_pattern_in_scope_new(
+                        payload_pattern,
+                        payload_variable.variable_expr,
+                        instrs,
+                        is_referencing,
+                        arm_scope_id,
+                    )?;
+                };
+                //let final_condition = match inner_condition.map(|expr_id| self.exprs.get(expr_id)) {
+                //    None => is_variant_condition,
+                //    Some(TypedExpr::Bool(true, _)) => is_variant_condition,
+                //    Some(_inner_condition) => self.exprs.add(TypedExpr::BinaryOp(BinaryOp {
+                //        kind: BinaryOpKind::And,
+                //        ty: BOOL_TYPE_ID,
+                //        lhs: is_variant_condition,
+                //        rhs: inner_condition.unwrap(),
+                //        span: enum_pattern.span,
+                //    })),
+                //};
+                Ok(())
+            }
+            TypedPattern::Variable(variable_pattern) => {
+                let variable_ident = variable_pattern.name;
+                let binding_variable =
+                    self.synth_variable_defn_visible(variable_ident, target_expr, arm_scope_id);
+                //binding_statements.push(binding_variable.defn_stmt);
+                instrs.push(MatchingConditionInstr::Binding {
+                    let_stmt: binding_variable.defn_stmt,
+                    variable_id: binding_variable.variable_id,
+                });
+                // Don't even need a condition?!?! would just be if false goto next???
+                //Ok(self.exprs.add(TypedExpr::Bool(true, variable_pattern.span)))
+                Ok(())
+            }
+            TypedPattern::Wildcard(_span) => Ok(()),
+            TypedPattern::Reference(reference_pattern) => {
+                let target_expr = if is_immediately_inside_reference_pattern {
+                    self.synth_dereference(target_expr)
+                } else {
+                    target_expr
+                };
+                self.compile_pattern_in_scope_new(
+                    &reference_pattern.inner_pattern,
+                    target_expr,
+                    instrs,
+                    true,
+                    arm_scope_id,
+                )?;
+                Ok(())
+            }
+            pat => {
+                match pat {
+                    TypedPattern::LiteralUnit(_) => true,
+                    TypedPattern::LiteralChar(_, _) => true,
+                    TypedPattern::LiteralInteger(_, _) => true,
+                    TypedPattern::LiteralFloat(_, _) => true,
+                    TypedPattern::LiteralBool(_, _) => true,
+                    TypedPattern::LiteralString(_, _) => true,
+                    _ => unreachable!("all non-literals should be handled by now"),
+                };
+                let target_expr = if is_immediately_inside_reference_pattern {
+                    // Literal patterns don't do anything special for references; they just need to
+                    // function on the de-rereferenced target. Whereas structs, enums, even
+                    // reference patterns do different and unique things when matching on
+                    // references
+                    self.synth_dereference(target_expr)
+                } else {
+                    target_expr
+                };
+                match pat {
+                    TypedPattern::LiteralUnit(_span) => Ok(()),
+                    TypedPattern::LiteralChar(byte, span) => {
+                        let char_expr = self.exprs.add(TypedExpr::Char(*byte, *span));
+                        let equals_pattern_char =
+                            self.synth_equals_binop(target_expr, char_expr, *span);
+                        instrs.push(MatchingConditionInstr::Cond { value: equals_pattern_char });
+                        Ok(())
+                    }
+                    TypedPattern::LiteralInteger(int_value, span) => {
+                        let equals_pattern_int = BinaryOp {
+                            kind: BinaryOpKind::Equals,
+                            ty: BOOL_TYPE_ID,
+                            lhs: target_expr,
+                            rhs: self.exprs.add(TypedExpr::Integer(TypedIntegerExpr {
+                                value: *int_value,
+                                span: *span,
+                            })),
+                            span: *span,
+                        };
+                        let equals_pattern_int =
+                            self.exprs.add(TypedExpr::BinaryOp(equals_pattern_int));
+                        instrs.push(MatchingConditionInstr::Cond { value: equals_pattern_int });
+                        Ok(())
+                    }
+                    TypedPattern::LiteralFloat(float_value, span) => {
+                        let equals_pattern_char = BinaryOp {
+                            kind: BinaryOpKind::Equals,
+                            ty: BOOL_TYPE_ID,
+                            lhs: target_expr,
+                            rhs: self.exprs.add(TypedExpr::Float(TypedFloatExpr {
+                                value: *float_value,
+                                span: *span,
+                            })),
+                            span: *span,
+                        };
+                        let equals_pattern_char =
+                            self.exprs.add(TypedExpr::BinaryOp(equals_pattern_char));
+                        instrs.push(MatchingConditionInstr::Cond { value: equals_pattern_char });
+                        Ok(())
+                    }
+                    TypedPattern::LiteralBool(bool_value, span) => {
+                        let bool_expr = self.exprs.add(TypedExpr::Bool(*bool_value, *span));
+                        let equals_pattern_bool =
+                            self.synth_equals_binop(target_expr, bool_expr, *span);
+                        instrs.push(MatchingConditionInstr::Cond { value: equals_pattern_bool });
+                        Ok(())
+                    }
+                    TypedPattern::LiteralString(string_value, span) => {
+                        let string_expr =
+                            self.exprs.add(TypedExpr::String(string_value.clone(), *span));
+                        let condition = self.synth_equals_call(target_expr, string_expr, *span)?;
+                        instrs.push(MatchingConditionInstr::Cond { value: condition });
+                        Ok(())
                     }
                     other_pat => {
                         unreachable!("should only be literal patterns from here: {other_pat:?}")
@@ -7133,11 +7351,10 @@ impl TypedModule {
         let match_scope_id =
             self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, None, None);
 
-        let MatchingCondition { combined_condition, setup_statements, binding_statements, .. } =
-            self.eval_matching_condition(
-                if_expr.cond,
-                ctx.with_scope(match_scope_id).with_no_expected_type(),
-            )?;
+        let condition = self.eval_matching_condition(
+            if_expr.cond,
+            ctx.with_scope(match_scope_id).with_no_expected_type(),
+        )?;
 
         let consequent = self.eval_expr(if_expr.cons, ctx.with_scope(match_scope_id))?;
         let consequent_type = self.exprs.get(consequent).get_type();
@@ -7147,7 +7364,7 @@ impl TypedModule {
         // if without else:
         // If there is no alternate, we coerce the consequent to return Unit, so both
         // branches have a matching type, making codegen simpler
-        // However, if the consequent is a never type, we don't need to do this, in
+        // However, if the consequent is a never type (does not return), we don't need to do this, in
         // fact we can't because then we'd have an expression following a never expression
         let consequent = if if_expr.alt.is_none() && !cons_never && consequent_type != UNIT_TYPE_ID
         {
@@ -7185,20 +7402,14 @@ impl TypedModule {
             }
         };
 
-        let cons_arm = TypedMatchArm {
-            patterns: smallvec![],
-            setup_statements,
-            pattern_condition: combined_condition,
-            pattern_bindings: binding_statements,
-            guard_condition: None,
-            consequent_expr: consequent,
-        };
+        let cons_arm = TypedMatchArm { condition, consequent_expr: consequent };
         let alt_arm = TypedMatchArm {
-            patterns: smallvec![],
-            setup_statements: smallvec![],
-            pattern_condition: self.exprs.add(TypedExpr::Bool(true, alternate_span)),
-            pattern_bindings: smallvec![],
-            guard_condition: None,
+            condition: MatchingCondition {
+                patterns: smallvec![],
+                instrs: vec![],
+                binding_eligible: true,
+                diverges: false,
+            },
             consequent_expr: alternate,
         };
         Ok(self.exprs.add(TypedExpr::Match(TypedMatchExpr {
@@ -7214,23 +7425,18 @@ impl TypedModule {
         condition: ParsedExprId,
         ctx: EvalExprContext,
     ) -> TyperResult<MatchingCondition> {
-        let mut conditions: SmallVec<[TypedExprId; 4]> = smallvec![];
-        let mut setup_statements: SmallVec<[_; 4]> = smallvec![];
-        let mut binding_statements: SmallVec<[_; 4]> = smallvec![];
-        let mut all_patterns: SmallVec<[TypedPattern; 4]> = smallvec![];
+        let mut all_patterns: SmallVec<[TypedPattern; 1]> = smallvec![];
         let mut allow_bindings: bool = true;
-        self.handle_matching_if_rec(
+        let mut instrs: Vec<MatchingConditionInstr> = Vec::new();
+        self.handle_matching_condition_rec(
             condition,
             &mut allow_bindings,
             &mut all_patterns,
-            &mut conditions,
-            &mut setup_statements,
-            &mut binding_statements,
+            &mut instrs,
             ctx,
         )?;
 
-        // TODO: allocations
-        let mut all_bindings = Vec::new();
+        let mut all_bindings: SmallVec<[VariablePattern; 8]> = SmallVec::new();
         for pattern in all_patterns.iter() {
             pattern.all_bindings_rec(&mut all_bindings);
         }
@@ -7257,17 +7463,32 @@ impl TypedModule {
             }
         }
 
-        let patterns_combined_with_and = conditions
-            .into_iter()
-            .reduce(|a, b| self.synth_binary_bool_op(BinaryOpKind::And, a, b))
-            .unwrap();
+        let diverges = self.matching_condition_diverges(&instrs);
+
         Ok(MatchingCondition {
-            all_patterns,
-            combined_condition: patterns_combined_with_and,
-            setup_statements,
-            binding_statements,
+            patterns: all_patterns,
+            instrs,
             binding_eligible: allow_bindings,
+            diverges,
         })
+    }
+
+    fn matching_condition_diverges(&self, instrs: &[MatchingConditionInstr]) -> bool {
+        for instr in instrs {
+            match instr {
+                MatchingConditionInstr::Binding { let_stmt, .. } => {
+                    if self.get_stmt_type(*let_stmt) == NEVER_TYPE_ID {
+                        return true;
+                    }
+                }
+                MatchingConditionInstr::Cond { value } => {
+                    if self.exprs.get(*value).get_type() == NEVER_TYPE_ID {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     /// Handles chains of booleans and pattern statements (IsExprs).
@@ -7280,14 +7501,12 @@ impl TypedModule {
     /// makes no sense:
     /// if a is .Some(aa) or b is .Some(aa) -> which one?
     /// if a is .Some(aa) or b is .Some(bb) -> which one?
-    fn handle_matching_if_rec(
+    fn handle_matching_condition_rec(
         &mut self,
         parsed_expr_id: ParsedExprId,
         allow_bindings: &mut bool,
-        all_patterns: &mut SmallVec<[TypedPattern; 4]>,
-        conditions: &mut SmallVec<[TypedExprId; 4]>,
-        setup_statements: &mut SmallVec<[TypedStmtId; 4]>,
-        binding_statements: &mut SmallVec<[TypedStmtId; 4]>,
+        all_patterns: &mut SmallVec<[TypedPattern; 1]>,
+        instrs: &mut Vec<MatchingConditionInstr>,
         ctx: EvalExprContext,
     ) -> TyperResult<()> {
         debug!("hmirec {allow_bindings}: {}", self.ast.expr_id_to_string(parsed_expr_id));
@@ -7304,40 +7523,35 @@ impl TypedModule {
                 );
                 let pattern =
                     self.compile_pattern(pattern, target_type, ctx.scope_id, *allow_bindings)?;
-                setup_statements.push(target_var.defn_stmt);
-                let condition = self.compile_pattern_in_scope(
+                instrs.push(MatchingConditionInstr::Binding {
+                    let_stmt: target_var.defn_stmt,
+                    variable_id: target_var.variable_id,
+                });
+                self.compile_pattern_in_scope_new(
                     &pattern,
                     target_var.variable_expr,
-                    setup_statements,
-                    binding_statements,
+                    instrs,
                     false,
                     ctx.scope_id,
                 )?;
                 all_patterns.push(pattern);
 
-                conditions.push(condition);
                 Ok(())
             }
             ParsedExpression::BinaryOp(binary_op) if binary_op.op_kind == BinaryOpKind::And => {
                 let rhs = binary_op.rhs;
-                self.handle_matching_if_rec(
+                // It's important that the lhs comes first
+                // because expressions to the right can see bindings from
+                // expressions on the left, and the order of execution, and
+                // short-circuiting, is guaranteed
+                self.handle_matching_condition_rec(
                     binary_op.lhs,
                     allow_bindings,
                     all_patterns,
-                    conditions,
-                    setup_statements,
-                    binding_statements,
+                    instrs,
                     ctx,
                 )?;
-                self.handle_matching_if_rec(
-                    rhs,
-                    allow_bindings,
-                    all_patterns,
-                    conditions,
-                    setup_statements,
-                    binding_statements,
-                    ctx,
-                )?;
+                self.handle_matching_condition_rec(rhs, allow_bindings, all_patterns, instrs, ctx)?;
                 Ok(())
             }
             other => {
@@ -7354,7 +7568,7 @@ impl TypedModule {
                 if let Err(msg) = self.check_types(BOOL_TYPE_ID, condition_type, ctx.scope_id) {
                     return failf!(span, "Expected boolean condition: {msg}");
                 };
-                conditions.push(condition);
+                instrs.push(MatchingConditionInstr::Cond { value: condition });
                 Ok(())
             }
         }
@@ -8115,7 +8329,7 @@ impl TypedModule {
             let empty_env_struct_type = self.types.add_empty_struct();
             let empty_env_struct_ref = self.types.add_reference_type(empty_env_struct_type);
             let name = get_ident!(self, "__lambda_env");
-            let empty_env_variable = self.variables.add_variable(Variable {
+            let empty_env_variable = self.variables.add(Variable {
                 name,
                 type_id: empty_env_struct_ref,
                 is_mutable: false,
@@ -9784,7 +9998,7 @@ impl TypedModule {
             .zip(generic_function_param_variables.iter())
             .map(|(specialized_param_type, generic_param)| {
                 let name = self.variables.get(*generic_param).name;
-                let variable_id = self.variables.add_variable(Variable {
+                let variable_id = self.variables.add(Variable {
                     type_id: specialized_param_type.type_id,
                     name,
                     is_mutable: false,
@@ -9980,7 +10194,7 @@ impl TypedModule {
                     actual_type
                 };
 
-                let variable_id = self.variables.add_variable(Variable {
+                let variable_id = self.variables.add(Variable {
                     is_mutable: parsed_let.is_mutable(),
                     name: parsed_let.name,
                     type_id: variable_type,
@@ -10007,6 +10221,19 @@ impl TypedModule {
                 }
                 let stmt_id = self.stmts.add(val_def_stmt);
                 Ok(Some(stmt_id))
+            }
+            ParsedStmt::Require(require) => {
+                static_assert_size!(parse::ParsedRequire, 12);
+                let require = require.clone();
+                let matching_cond = self.eval_matching_condition(require.condition_expr, ctx)?;
+
+                // Make the binding variables unavailable in the bailout scope
+                let else_scope =
+                    self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, None, None);
+
+                let else_body = self.eval_expr(require.else_body, ctx.with_scope(else_scope))?;
+
+                todo!("require")
             }
             ParsedStmt::Assignment(assignment) => {
                 static_assert_size!(parse::Assignment, 12);
@@ -10098,6 +10325,8 @@ impl TypedModule {
             last_expr_type = self.get_stmt_type(stmt_id);
             last_stmt_is_divergent = last_expr_type == NEVER_TYPE_ID;
 
+            // Ensure termination because this is a 'real' control flow block
+            // Not just a lexical block the user made. For example, a function body.
             if is_last && needs_terminator {
                 if last_stmt_is_divergent {
                     // No action needed; terminator exists
@@ -10820,7 +11049,7 @@ impl TypedModule {
                 global_id: None,
             };
 
-            let variable_id = self_.variables.add_variable(variable);
+            let variable_id = self_.variables.add(variable);
             param_types.push(FnParamType {
                 name: fn_param.name,
                 type_id,
@@ -12304,12 +12533,9 @@ impl TypedModule {
         let new_ident = if no_mangle {
             name
         } else {
-            // TODO(perf): this registers on flamegraph
-            let new_ident_name = format!(
-                "__{}_{}",
-                self.ast.identifiers.get_name(name),
-                self.variables.variables.len()
-            );
+            // TODO(perf): this registers on flamegraph. Re-use a buffer for it
+            let new_ident_name =
+                format!("__{}_{}", self.ast.identifiers.get_name(name), self.variables.len());
             self.ast.identifiers.intern(new_ident_name)
         };
         let variable = Variable {
@@ -12320,7 +12546,7 @@ impl TypedModule {
             is_context: false,
             global_id: None,
         };
-        let variable_id = self.variables.add_variable(variable);
+        let variable_id = self.variables.add(variable);
         let variable_expr =
             self.exprs.add(TypedExpr::Variable(VariableExpr { type_id, variable_id, span }));
         let defn_stmt = self.stmts.add(TypedStmt::Let(LetStmt {
@@ -12331,7 +12557,7 @@ impl TypedModule {
             span,
         }));
         let parsed_expr =
-            self.ast.exprs.add_expression(ParsedExpression::Variable(parse::Variable {
+            self.ast.exprs.add_expression(ParsedExpression::Variable(parse::ParsedVariable {
                 name: NamespacedIdentifier::naked(name, span),
             }));
         self.scopes.add_variable(owner_scope, new_ident, variable_id);
