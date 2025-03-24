@@ -591,15 +591,6 @@ impl TypedModule {
                 writ.write_str(")")
             }
             TypedExpr::Block(block) => self.display_block(block, writ, indentation),
-            TypedExpr::If(if_expr) => {
-                writ.write_str("if ")?;
-                self.display_expr_id(if_expr.condition, writ, indentation)?;
-                writ.write_str(" ")?;
-                self.display_expr_id(if_expr.consequent, writ, indentation)?;
-                writ.write_str(" else ")?;
-                self.display_expr_id(if_expr.alternate, writ, indentation)?;
-                Ok(())
-            }
             TypedExpr::Match(typed_match) => {
                 writ.write_str("switch ")?;
                 for stmt in &typed_match.initial_let_statements {
