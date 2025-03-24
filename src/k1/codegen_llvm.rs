@@ -1618,73 +1618,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         }
     }
 
-    fn codegen_if_else(&mut self, ir_if: &TypedIf) -> CodegenResult<LlvmValue<'ctx>> {
-        let typ = self.codegen_type(ir_if.ty)?;
-        let start_block = self.builder.get_insert_block().unwrap();
-        let current_fn = start_block.get_parent().unwrap();
-        let consequent_block = self.ctx.append_basic_block(current_fn, "if_cons");
-        let alternate_block = self.ctx.append_basic_block(current_fn, "if_alt");
-        let merge_block = self.ctx.append_basic_block(current_fn, "if_merge");
-
-        // Entry block
-        let condition = self.codegen_expr_basic_value(ir_if.condition)?;
-        let condition_value = self.bool_to_i1(condition.into_int_value(), "cond_i1");
-        self.builder
-            .build_conditional_branch(condition_value, consequent_block, alternate_block)
-            .unwrap();
-
-        // Consequent Block
-        self.builder.position_at_end(consequent_block);
-        let consequent_block_value = self.codegen_expr(ir_if.consequent)?;
-        let consequent_incoming = match consequent_block_value.as_basic_value() {
-            Either::Left(_) => None,
-            Either::Right(value) => {
-                let consequent_final_block = self.builder.get_insert_block().unwrap();
-                self.builder.build_unconditional_branch(merge_block).unwrap();
-                Some((consequent_final_block, value))
-            }
-        };
-
-        // Alternate Block
-        self.builder.position_at_end(alternate_block);
-        let alternate_block_value = self.codegen_expr(ir_if.alternate)?;
-        let alternate_incoming = match alternate_block_value.as_basic_value() {
-            Either::Left(_) => None,
-            Either::Right(value) => {
-                let alternate_final_block = self.builder.get_insert_block().unwrap();
-                self.builder.build_unconditional_branch(merge_block).unwrap();
-                Some((alternate_final_block, value))
-            }
-        };
-
-        // Merge block
-        self.builder.position_at_end(merge_block);
-
-        if ir_if.ty == NEVER_TYPE_ID {
-            // Both branches are divergent
-            let unreachable = self.builder.build_unreachable().unwrap();
-            Ok(LlvmValue::Void(unreachable))
-        } else {
-            let phi_value = self.builder.build_phi(typ.canonical_repr_type(), "if_phi").unwrap();
-            if let Some((cons_inc_block, cons_value)) = consequent_incoming {
-                phi_value.add_incoming(&[(&cons_value, cons_inc_block)]);
-            };
-            if let Some((alt_inc_block, alt_value)) = alternate_incoming {
-                phi_value.add_incoming(&[(&alt_value, alt_inc_block)]);
-            };
-            debug!(
-                "{:?} PHI COUNT {}",
-                self.builder.get_insert_block().unwrap().get_parent().unwrap().get_name(),
-                phi_value.count_incoming()
-            );
-            if phi_value.count_incoming() == 0 {
-                panic!("No incoming blocks even though type is not never")
-            } else {
-                Ok(LlvmValue::BasicValue(phi_value.as_basic_value()))
-            }
-        }
-    }
-
     /// We expect this expr to produce a value, rather than exiting the program or otherwise crashing
     /// This is the most common case
     fn codegen_expr_basic_value(
@@ -2027,7 +1960,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     Ok(field_value.into())
                 }
             }
-            TypedExpr::If(if_expr) => self.codegen_if_else(if_expr),
             TypedExpr::Match(match_expr) => self.codegen_match(match_expr),
             TypedExpr::WhileLoop(while_expr) => self.codegen_while_expr(while_expr),
             TypedExpr::LoopExpr(loop_expr) => self.codegen_loop_expr(loop_expr),

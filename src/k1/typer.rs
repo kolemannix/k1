@@ -1057,17 +1057,6 @@ pub struct ListLiteral {
 }
 
 #[derive(Debug, Clone)]
-// nocommit: TypedIf is only used by synthesized code now; we should
-// synthesize the more general TypedMatchExpr construct instead
-pub struct TypedIf {
-    pub condition: TypedExprId,
-    pub consequent: TypedExprId,
-    pub alternate: TypedExprId,
-    pub ty: TypeId,
-    pub span: SpanId,
-}
-
-#[derive(Debug, Clone)]
 pub struct FieldAccess {
     pub base: TypedExprId,
     pub target_field: Identifier,
@@ -1405,7 +1394,6 @@ pub enum TypedExpr {
     BinaryOp(BinaryOp),
     Block(TypedBlock),
     Call(Call),
-    If(TypedIf),
     /// In the past, we lowered match to an if/else chain. This proves not quite powerful enough
     /// of a representation to do everything we want
     Match(TypedMatchExpr),
@@ -1460,7 +1448,6 @@ impl TypedExpr {
             TypedExpr::UnaryOp(unary_op) => unary_op.type_id,
             TypedExpr::Block(b) => b.expr_type,
             TypedExpr::Call(call) => call.return_type,
-            TypedExpr::If(typed_if) => typed_if.ty,
             TypedExpr::Match(match_) => match_.result_type,
             TypedExpr::WhileLoop(while_loop) => while_loop.type_id,
             TypedExpr::LoopExpr(loop_expr) => loop_expr.break_type,
@@ -1492,7 +1479,6 @@ impl TypedExpr {
             TypedExpr::UnaryOp(unary_op) => unary_op.span,
             TypedExpr::Block(b) => b.span,
             TypedExpr::Call(call) => call.span,
-            TypedExpr::If(typed_if) => typed_if.span,
             TypedExpr::Match(match_) => match_.span,
             TypedExpr::WhileLoop(while_loop) => while_loop.span,
             TypedExpr::LoopExpr(loop_expr) => loop_expr.span,
@@ -4751,15 +4737,16 @@ impl TypedModule {
                             struct_type: opt.inner_type,
                         }));
                     let alternate = self.synth_optional_none(field_type, span);
-                    let if_expr = TypedExpr::If(TypedIf {
-                        condition: has_value,
-                        ty: consequent_type_id,
+                    let if_expr = self.synth_if_else(
+                        smallvec![],
+                        consequent_type_id,
+                        has_value,
                         consequent,
                         alternate,
                         span,
-                    });
+                    );
                     self.push_block_stmt_id(&mut block, base_expr_var.defn_stmt);
-                    self.add_expr_to_block(&mut block, if_expr);
+                    self.add_expr_id_to_block(&mut block, if_expr);
                     Ok(self.exprs.add(TypedExpr::Block(block)))
                 } else {
                     failf!(
@@ -4934,13 +4921,14 @@ impl TypedModule {
         }));
         let return_error_expr =
             self.exprs.add(TypedExpr::Return(TypedReturn { value: make_error_call, span }));
-        let if_expr = self.exprs.add(TypedExpr::If(TypedIf {
-            condition: is_ok_call,
-            consequent: get_ok_call,
-            alternate: return_error_expr,
-            ty: value_success_type,
+        let if_expr = self.synth_if_else(
+            smallvec![],
+            value_success_type,
+            is_ok_call,
+            get_ok_call,
+            return_error_expr,
             span,
-        }));
+        );
 
         self.push_block_stmt_id(&mut result_block, try_value_var.defn_stmt);
         self.add_expr_id_to_block(&mut result_block, if_expr);
@@ -7225,16 +7213,15 @@ impl TypedModule {
         self.push_block_stmt_id(&mut break_block, break_expr);
         let consequent_block_id = self.exprs.add(TypedExpr::Block(consequent_block));
         let break_block_id = self.exprs.add(TypedExpr::Block(break_block));
-        self.add_expr_to_block(
-            &mut loop_block,
-            TypedExpr::If(TypedIf {
-                condition: next_is_some_call,
-                consequent: consequent_block_id,
-                alternate: break_block_id,
-                ty: UNIT_TYPE_ID,
-                span: body_span,
-            }),
+        let if_next_loop_else_break_expr = self.synth_if_else(
+            smallvec![],
+            UNIT_TYPE_ID,
+            next_is_some_call,
+            consequent_block_id,
+            break_block_id,
+            body_span,
         );
+        self.add_expr_id_to_block(&mut loop_block, if_next_loop_else_break_expr);
 
         // Append the index increment to the body block
         let one_expr = self.exprs.add(TypedExpr::Integer(TypedIntegerExpr {
@@ -7402,6 +7389,7 @@ impl TypedModule {
             }
         };
 
+        // nocommit: synth if/else?
         let cons_arm = TypedMatchArm { condition, consequent_expr: consequent };
         let alt_arm = TypedMatchArm {
             condition: MatchingCondition {
@@ -7782,13 +7770,8 @@ impl TypedModule {
             coalesce_ctx,
         )?;
 
-        let if_else = self.exprs.add(TypedExpr::If(TypedIf {
-            condition: lhs_has_value,
-            consequent: lhs_get_expr,
-            alternate: rhs,
-            ty: output_type,
-            span,
-        }));
+        let if_else =
+            self.synth_if_else(smallvec![], output_type, lhs_has_value, lhs_get_expr, rhs, span);
         self.push_block_stmt_id(&mut coalesce_block, lhs_variable.defn_stmt);
         self.add_expr_id_to_block(&mut coalesce_block, if_else);
         Ok(self.exprs.add(TypedExpr::Block(coalesce_block)))
@@ -8556,13 +8539,14 @@ impl TypedModule {
                 }));
             let alternate = self.synth_optional_none(resulting_type_id, span);
 
-            Ok(Some(self.exprs.add(TypedExpr::If(TypedIf {
-                ty: consequent_type_id,
+            Ok(Some(self.synth_if_else(
+                smallvec![],
+                consequent_type_id,
                 condition,
                 consequent,
                 alternate,
                 span,
-            }))))
+            )))
         } else {
             Ok(None)
         }
@@ -12415,6 +12399,42 @@ impl TypedModule {
     /******************************
      ** Synthesis of Typed nodes **
      *****************************/
+
+    fn synth_if_else(
+        &mut self,
+        patterns: SmallVec<[TypedPattern; 1]>,
+        result_type: TypeId,
+        condition: TypedExprId,
+        consequent: TypedExprId,
+        alternate: TypedExprId,
+        span: SpanId,
+    ) -> TypedExprId {
+        let condition_diverges = self.exprs.get(condition).get_type() == NEVER_TYPE_ID;
+        let cons_arm = TypedMatchArm {
+            condition: MatchingCondition {
+                patterns,
+                instrs: vec![MatchingConditionInstr::Cond { value: condition }],
+                binding_eligible: true,
+                diverges: condition_diverges,
+            },
+            consequent_expr: consequent,
+        };
+        let alt_arm = TypedMatchArm {
+            condition: MatchingCondition {
+                patterns: smallvec![],
+                instrs: vec![],
+                binding_eligible: true,
+                diverges: false,
+            },
+            consequent_expr: alternate,
+        };
+        self.exprs.add(TypedExpr::Match(TypedMatchExpr {
+            initial_let_statements: vec![],
+            result_type,
+            arms: vec![cons_arm, alt_arm],
+            span,
+        }))
+    }
 
     fn synth_optional_type(&mut self, inner_type: TypeId) -> TypeId {
         self.instantiate_generic_type(OPTIONAL_TYPE_ID, vec![inner_type])
