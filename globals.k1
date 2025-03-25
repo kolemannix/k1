@@ -1,6 +1,6 @@
 let globalInt: int = 0;
 let* globalIntRef: int* = 10;
-let const comptimeInt: int = 2;
+let static comptimeInt: int = 2;
 
 fn _main(): int {
    //#if k1/RUNTIME k1_init();

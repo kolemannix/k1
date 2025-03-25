@@ -40,7 +40,7 @@
 //   return(result);
 // }
 
-let const K1_RT: bool = true;
+let static K1_RT: bool = true;
 #if K1_RT
 ns rt {
 

@@ -112,12 +112,12 @@ ability Iterable[impl Item, impl I: Iterator[Item = Item]] {
 /////////////////////////////////
 // Compile-time builtin constants
 ns k1 {
-  let const TEST: bool = builtin;
-  let const NO_STD: bool = builtin;
-  let const DEBUG: bool = builtin;
+  let static TEST: bool = builtin;
+  let static NO_STD: bool = builtin;
+  let static DEBUG: bool = builtin;
 
-  let const OS: string = builtin; // Possible values: 'linux', 'macos', 'wasm'
-  let const OS_MACOS: bool = OS == "macos";
+  let static OS: string = builtin; // Possible values: 'linux', 'macos', 'wasm'
+  let static OS_MACOS: bool = OS == "macos";
 }
 
 /////////////////////////////////

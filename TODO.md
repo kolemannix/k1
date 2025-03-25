@@ -60,10 +60,11 @@ New tagline? "C with typeclasses and tagged unions"
   - [ ] Rename to 'static'
   - [x] literals
   - [x] if/else
+  - [ ] Arith
   - [ ] Run comptime exprs before bodies but after all other phases, treat it
         like 'body' code SINCE it'll end up using the user's types, and even impls!
-  - [ ] Struct construction
-  - [ ] Struct field access
+  - [x] Struct construction
+  - [x] Struct field access
   - [ ] Enum construction
 - [ ] Fix non-referencing match on `struct*`: just do the deref for the user
 - [ ] Fix referencing match not 'eliminating' patterns on `struct*` giving unhandled pattern `.CustomHeap({ zalloc }*) -> {`
@@ -109,12 +110,12 @@ New tagline? "C with typeclasses and tagged unions"
       `sealed abstract class Range(let start: Int, let end: Int, let step: Int)`
 - [ ] Make demo readme / site
 - [ ] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`
-- [ ] Define clear 'platform layer' (crash, alloc/free, other?). Then we could do an LLVM interp platform and a rust interpreter platform
+- [ ] Define clear 'platform layer' (crash, assert, mem, other?).
+      Then we could do an LLVM interp platform and a rust interpreter platform
 - [x] Fix enum codegen, read Inko llvm backend (its inkwell + rust and does ABI compatible stuff https://yorickpeterse.com/articles/the-mess-that-is-handling-structure-arguments-and-returns-in-llvm/)
 - [ ] Runtime type info story, typeOf, typeInfo, and 'any' type
 - [x] Conditional compile directive
 - [x] Support boolean operators in compile time expressions
-- [ ] Support arithmetic operators in compile time expressions
 - [ ] Separate out typechecking and lowering phase.
 - [ ] Mark types as trivially copyable or not
 ^ 'Buffer' would be NOT copyable so that you don't accidentally alias the data ptr
