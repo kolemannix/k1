@@ -1,4 +1,3 @@
-// Summary of our approach
 ns mem {
 
   // These definitions exist as a compile-time parameterization point
@@ -48,9 +47,9 @@ ns mem {
 
   ns AllocMode {
 
-    let const SYSTEM_HEAP: AllocMode = { kind: .SystemHeap };
-    let const CURRENT: AllocMode = { kind: .Current };
-    let const TEMP: AllocMode = { kind: .TempBump };
+    let static SYSTEM_HEAP: AllocMode = { kind: .SystemHeap };
+    let static CURRENT: AllocMode = { kind: .Current };
+    let static TEMP: AllocMode = { kind: .TempBump };
 
     fn supportsRealloc(self: AllocMode): bool { switch self.kind {
       .Current -> crash("unreachable"),

@@ -164,7 +164,7 @@ pub enum TokenKind {
     KeywordWhere,
     KeywordContext,
     KeywordUse,
-    KeywordConst,
+    KeywordStatic,
     KeywordRequire,
 
     Slash,
@@ -255,7 +255,7 @@ impl TokenKind {
             K::KeywordWhere => Some("where"),
             K::KeywordContext => Some("context"),
             K::KeywordUse => Some("use"),
-            K::KeywordConst => Some("const"),
+            K::KeywordStatic => Some("static"),
             K::KeywordRequire => Some("require"),
 
             K::Slash => Some("/"),
@@ -383,7 +383,7 @@ impl TokenKind {
             "where" => Some(K::KeywordWhere),
             "context" => Some(K::KeywordContext),
             "use" => Some(K::KeywordUse),
-            "const" => Some(K::KeywordConst),
+            "static" => Some(K::KeywordStatic),
             "require" => Some(K::KeywordRequire),
             "==" => Some(K::EqualsEquals),
             "!=" => Some(K::BangEquals),
@@ -422,7 +422,7 @@ impl TokenKind {
             K::KeywordWhere => true,
             K::KeywordContext => true,
             K::KeywordUse => true,
-            K::KeywordConst => true,
+            K::KeywordStatic => true,
             K::KeywordRequire => true,
             _ => false,
         }

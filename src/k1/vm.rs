@@ -1,10 +1,30 @@
-use crate::typer::{FunctionId, TypedExpr, TypedExprId, TypedModule, TyperResult};
+use crate::{
+    failf,
+    parse::Identifier,
+    typer::{
+        make_fail_span, types::TypeId, FunctionId, TypedExpr, TypedExprId, TypedFloatValue,
+        TypedIntegerValue, TypedModule, TypedStmtId, TyperResult,
+    },
+};
 
-pub struct Vm {
+pub struct Vm {}
 
+//static_assert_size!(Value, 32);
+#[derive(Debug, Clone)]
+pub enum Value {
+    Unit,
+    Boolean(bool),
+    Char(u8),
+    Integer(TypedIntegerValue),
+    Float(TypedFloatValue),
+    String(Box<str>),
+    Pointer(u64),
+    Buffer { type_id: TypeId, data: Vec<Value> },
+    Struct { type_id: TypeId, fields: Vec<Value> },
+    Enum { type_id: TypeId, variant: Identifier },
 }
 
-pub fn execute_expr(m: &mut TypedModule, expr: TypedExprId) -> TyperResult<()> {
+pub fn execute_expr(vm: &mut Vm, m: &mut TypedModule, expr: TypedExprId) -> TyperResult<()> {
     match m.exprs.get(expr) {
         TypedExpr::Unit(span_id) => todo!(),
         TypedExpr::Char(_, span_id) => todo!(),
@@ -35,9 +55,37 @@ pub fn execute_expr(m: &mut TypedModule, expr: TypedExprId) -> TyperResult<()> {
     }
 }
 
-pub fn execute_function(m: &mut TypedModule, function_id: FunctionId) -> TyperResult<()> {
+pub fn execute_function(
+    vm: &mut Vm,
+    m: &mut TypedModule,
+    function_id: FunctionId,
+) -> TyperResult<()> {
     let function = m.get_function(function_id);
-    let Some(body) = function.body_block else {
-        return failf!()
+    let function_span = m.ast.get_span_for_id(function.parsed_id);
+    let Some(body_id) = function.body_block else {
+        return failf!(function_span, "Cannot execute function: no body");
+    };
+    let TypedExpr::Block(body) = m.exprs.get(body_id) else {
+        return failf!(function_span, "Cannot execute function: body is not a block");
+    };
+    // TODO(clone): Cloning just because of the borrow
+    //              Maybe EcoVec since its cheaper to copy is the way
+    let stmts = body.statements.clone();
+    for stmt_id in &stmts {
+        execute_stmt(vm, m, *stmt_id)?;
+    }
+
+    todo!()
+}
+
+pub fn execute_stmt(vm: &mut Vm, m: &mut TypedModule, stmt_id: TypedStmtId) -> TyperResult<()> {
+    match m.stmts.get(stmt_id) {
+        crate::typer::TypedStmt::Expr(typed_expr_id, type_id) => {
+            let e = execute_expr(vm, m, *typed_expr_id)?;
+            Ok(())
+        }
+        crate::typer::TypedStmt::Let(let_stmt) => todo!(),
+        crate::typer::TypedStmt::Assignment(assignment_stmt) => todo!(),
+        crate::typer::TypedStmt::Require(typed_require_stmt) => todo!(),
     }
 }

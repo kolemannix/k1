@@ -1779,7 +1779,7 @@ macro_rules! format_ident {
         {
             use std::fmt::Write;
             let mut s = std::mem::take(&mut $self.buffers.name_builder);
-            s.write_fmt(format_args!($($format_args),*));
+            s.write_fmt(format_args!($($format_args),*)).unwrap();
             let ident = $self.ast.idents.intern(&s);
             s.clear();
             $self.buffers.name_builder = s;
@@ -3713,11 +3713,15 @@ impl TypedModule {
             TypedExpr::Variable(v) => {
                 let typed_variable = self.variables.get(v.variable_id);
                 let Some(global_id) = typed_variable.global_id else {
-                    return failf!(v.span, "only global comptime variables are supported");
+                    return failf!(v.span, "Comptime only supports global variables for now");
                 };
                 let global = self.globals.get(global_id);
                 if !global.is_comptime {
-                    return failf!(v.span, "only comptime variables are supported");
+                    return failf!(
+                        v.span,
+                        "Variable cannot be evaluated at compile time: {}",
+                        self.name_of(typed_variable.name)
+                    );
                 }
                 let mut value = self.comptime_values.get(global.initial_value).clone();
                 value.set_span(v.span);

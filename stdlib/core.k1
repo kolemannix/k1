@@ -5,7 +5,7 @@ fn assertEquals[T: Show and Equals](context locn: compiler/SourceLocation)(a: T,
 }
 
 ns Pointer {
-  let const NULL: Pointer = 0:u64 as Pointer;
+  let static NULL: Pointer = 0:u64 as Pointer;
 
   fn isNull(self: Pointer): bool {
     self as u64 == 0
@@ -108,8 +108,8 @@ ns sys {
 
 ns files {
   ns unix {
-    let const SEEK_END: i32 = 2;
-    let const SEEK_SET: i32 = 0;
+    let static SEEK_END: i32 = 2;
+    let static SEEK_SET: i32 = 0;
     extern(fopen)  fn fopen(pathCString: Pointer, modeCString: Pointer): Pointer
     extern(fseek)  fn fseek(fileDesc: Pointer, offset: u64, whence: i32): i32
     extern(fread)  fn fread(buffer: Pointer, size: u64, num: u64, stream: Pointer): u64
