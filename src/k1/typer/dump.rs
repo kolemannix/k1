@@ -69,10 +69,10 @@ impl TypedModule {
     }
 
     pub fn display_scope(&self, scope: &Scope, writ: &mut impl Write) -> std::fmt::Result {
-        let scope_name = self.scopes.make_scope_name(scope, &self.ast.identifiers);
+        let scope_name = self.scopes.make_scope_name(scope, &self.ast.idents);
         let parent = scope
             .parent
-            .map(|p| self.scopes.make_scope_name(self.scopes.get_scope(p), &self.ast.identifiers));
+            .map(|p| self.scopes.make_scope_name(self.scopes.get_scope(p), &self.ast.idents));
         writeln!(
             writ,
             "{} {} (parent: {})",
@@ -84,10 +84,15 @@ impl TypedModule {
         if !scope.variables.is_empty() {
             writ.write_str("\tVARS\n")?;
         }
-        for (id, variable_id) in scope.variables.iter() {
-            let variable = self.variables.get(*variable_id);
+        for (id, variable_in_scope) in scope.variables.iter() {
             write!(writ, "\t{} -> ", self.name_of(*id))?;
-            self.display_variable(variable, writ)?;
+            match variable_in_scope {
+                VariableInScope::Masked => writ.write_str("masked")?,
+                VariableInScope::Defined(variable_id) => {
+                    let variable = self.variables.get(*variable_id);
+                    self.display_variable(variable, writ)?;
+                }
+            }
             writ.write_str("\n")?;
         }
         if !scope.functions.is_empty() {
@@ -230,7 +235,7 @@ impl TypedModule {
                 if expand {
                     let scope_name = self
                         .scopes
-                        .make_scope_name(self.scopes.get_scope(tv.scope_id), &self.ast.identifiers);
+                        .make_scope_name(self.scopes.get_scope(tv.scope_id), &self.ast.idents);
                     writ.write_str(&scope_name)?;
                     writ.write_str(".")?;
                     writ.write_str("'")?;
@@ -269,7 +274,7 @@ impl TypedModule {
                 if !is_named || expand {
                     writ.write_str("enum ")?;
                     for (idx, v) in e.variants.iter().enumerate() {
-                        writ.write_str(self.ast.identifiers.get_name(v.name))?;
+                        writ.write_str(self.ast.idents.get_name(v.name))?;
                         if let Some(payload) = &v.payload {
                             writ.write_str("(")?;
                             self.display_type_id(*payload, expand, writ)?;
@@ -295,7 +300,7 @@ impl TypedModule {
                     }
                     writ.write_str(".")?;
                 }
-                writ.write_str(self.ast.identifiers.get_name(ev.name))?;
+                writ.write_str(self.ast.idents.get_name(ev.name))?;
                 if let Some(payload) = &ev.payload {
                     writ.write_str("(")?;
                     self.display_type_id(*payload, expand, writ)?;
@@ -373,7 +378,7 @@ impl TypedModule {
             if index > 0 {
                 writ.write_str(", ")?;
             }
-            writ.write_str(self.ast.identifiers.get_name(field.name))?;
+            writ.write_str(self.ast.idents.get_name(field.name))?;
             writ.write_str(": ")?;
             self.display_type_id(field.type_id, expand, writ)?;
         }
@@ -465,6 +470,12 @@ impl TypedModule {
         self.display_type_id(block.expr_type, false, writ)
     }
 
+    pub fn stmt_to_string(&self, stmt: TypedStmtId) -> String {
+        let mut s = String::with_capacity(256);
+        self.display_stmt(stmt, &mut s, 0).unwrap();
+        s
+    }
+
     fn display_stmt(
         &self,
         stmt: TypedStmtId,
@@ -491,6 +502,13 @@ impl TypedModule {
                     AssignmentKind::Reference => writ.write_str(" <- ")?,
                 }
                 self.display_expr_id(assignment.value, writ, indentation)
+            }
+            TypedStmt::Require(require_stmt) => {
+                writ.write_str("require: ")?;
+                self.display_matching_condition(writ, &require_stmt.condition, indentation)?;
+                writ.write_str(" else ")?;
+                self.display_expr_id(require_stmt.else_body, writ, indentation)?;
+                Ok(())
             }
         }
     }
@@ -714,13 +732,13 @@ impl TypedModule {
         cond: &MatchingCondition,
         indentation: usize,
     ) -> std::fmt::Result {
-        w.write_str(&"  ".repeat(indentation + 1))?;
         for (idx, pattern) in cond.patterns.iter().enumerate() {
             self.display_pattern(pattern, w)?;
             if idx != cond.patterns.len() - 1 {
                 w.write_str(" and ")?;
             }
         }
+        w.write_str("\n")?;
 
         if cond.instrs.is_empty() {
             w.write_str("{}")?;
@@ -733,11 +751,13 @@ impl TypedModule {
                     self.display_stmt(*let_stmt, w, indentation + 1)?;
                 }
                 MatchingConditionInstr::Cond { value } => {
+                    w.write_str(&"  ".repeat(indentation + 1))?;
                     w.write_str("cond(")?;
                     self.display_expr_id(*value, w, indentation + 1)?;
                     w.write_str(") else goto next")?;
                 }
             }
+            w.write_str("\n")?;
         }
         w.write_str("}")?;
         Ok(())

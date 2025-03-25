@@ -1,0 +1,11 @@
+fn main(): int {
+
+  require { x: 1 } is { x } and x == 1 and x == 1 and true is _ else {
+    println("crash");
+    crash("and burn")
+  };
+
+  assert(x == 1);
+
+  0
+}
