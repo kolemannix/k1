@@ -35,16 +35,15 @@ New tagline? "C with typeclasses and tagged unions"
 - [x] Fix closure types / get static dispatch for functions taking a closure directly
 - [x] *Specializing functions on their provided closures to allow inlining and static dispatch*
 - [x] Run in Linux x86-64
-- [ ] let ... else, or 'guard', or 'ensure' let e is .StringLit(s) else {}
+- [x] let ... else, or 'guard', or 'ensure' let e is .StringLit(s) else {}
 - [ ] Support explicit type args in AnonEnumConstructor syntax 
-
 - [x] Runtime-branching Allocator system (v2 is comptime branching)
   - [x] comptime enhancement to support this global initializer: `let* a: Arena* = { .. };`
   - [x] Global pointers, to enable
   - [x] The problem with passing an allocator around is all code becomes generic, or casts a pointer.
   - [x] Comptime structs!
   - [ ] ThreadLocal values, to enable
-  - [ ] temp allocator to power Show/Print and List and string by default
+  - [x] temp allocator to power Show/Print and List and string by default
         Who initializes it? I don't love putting stuff in main.
         But otherwise the user has to do it.
         How low-level do we want to be? #if k1/RUNTIME
@@ -62,11 +61,14 @@ New tagline? "C with typeclasses and tagged unions"
   - [x] if/else
   - [ ] Run comptime exprs before bodies but after all other phases, treat it
         like 'body' code SINCE it'll end up using the user's types, and even impls!
-  - [ ] Struct construction
-  - [ ] Struct field access
+  - [x] Struct construction
+  - [x] Struct field access
   - [ ] Enum construction
-- [ ] Fix non-referencing match on `struct*`: just do the deref for the user
-- [ ] Fix referencing match not 'eliminating' patterns on `struct*` giving unhandled pattern `.CustomHeap({ zalloc }*) -> {`
+- [ ] Real comptime VM
+  - [ ] Do all of our own layout calculation; assert perfect match in codegen
+  - [ ] Target vs Host syscalls: just assume we have the basics? Enshrine the basics somewhere
+  - [ ] Reset globals when done compiling (Jai's solution)
+- [x] Fix referencing match not 'eliminating' patterns on `struct*` giving unhandled pattern `.CustomHeap({ zalloc }*) -> {`
 - [ ] Macro system built on comptime, both string #insert and parsed code #insert like Jai
 - [ ] @unlikely annotations
 
