@@ -296,11 +296,63 @@ impl NamespacedIdentifier {
     }
 }
 
+pub struct BuiltinIdentifiers {
+    pub main: Identifier,
+    pub self_: Identifier,
+    pub self_cap: Identifier,
+    pub it: Identifier,
+    pub unit: Identifier,
+    pub char: Identifier,
+    pub string: Identifier,
+    pub length: Identifier,
+    pub has_value: Identifier,
+    pub get: Identifier,
+    pub not: Identifier,
+    pub iter: Identifier,
+    pub iteree: Identifier,
+    pub it_index: Identifier,
+    pub as_: Identifier,
+    pub list_lit: Identifier,
+    pub with_capacity: Identifier,
+    pub yielded_coll: Identifier,
+    pub iteree_length: Identifier,
+    pub block_expr_val: Identifier,
+    pub optelse_lhs: Identifier,
+    pub list_literal: Identifier,
+    pub source_location_typename: Identifier,
+    pub lambda_env_var_name: Identifier,
+    pub fn_ptr: Identifier,
+    pub env_ptr: Identifier,
+    pub amp: Identifier,
+    pub asterisk: Identifier,
+    pub bang: Identifier,
+    pub sb: Identifier,
+    pub payload: Identifier,
+    pub try_: Identifier,
+    pub try_value: Identifier,
+    pub if_target: Identifier,
+    pub crash: Identifier,
+    pub to_ref: Identifier,
+    pub to_dyn: Identifier,
+    pub filename: Identifier,
+    pub line: Identifier,
+    pub equals: Identifier,
+    pub param_0: Identifier,
+    pub param_1: Identifier,
+    pub param_2: Identifier,
+    pub param_3: Identifier,
+    pub param_4: Identifier,
+    pub param_5: Identifier,
+    pub param_6: Identifier,
+    pub param_7: Identifier,
+    pub param_8: Identifier,
+}
+
 // We use the default StringInterner, which uses a contiguous string as its backend
 // and u32 symbols
-#[derive(Debug, Clone)]
 pub struct Identifiers {
     intern_pool: string_interner::StringInterner<StringBackend>,
+    pub builtins: BuiltinIdentifiers,
 }
 impl Identifiers {
     pub fn intern(&mut self, s: impl AsRef<str>) -> Identifier {
@@ -317,12 +369,112 @@ impl Identifiers {
 
 impl Default for Identifiers {
     fn default() -> Self {
-        let intern_pool = string_interner::StringInterner::with_capacity(65536);
-        let mut this = Identifiers { intern_pool };
-        for builtin_ident in Identifiers::BUILTIN_IDENTS.iter() {
-            this.intern(builtin_ident);
+        let mut pool = string_interner::StringInterner::with_capacity(65536);
+
+        let main = Identifier(pool.get_or_intern_static("main"));
+        let self_ = Identifier(pool.get_or_intern_static("self"));
+        let self_cap = Identifier(pool.get_or_intern_static("Self"));
+        let it = Identifier(pool.get_or_intern_static("it"));
+        let unit = Identifier(pool.get_or_intern_static("unit"));
+        let char = Identifier(pool.get_or_intern_static("char"));
+        let string = Identifier(pool.get_or_intern_static("string"));
+        let length = Identifier(pool.get_or_intern_static("length"));
+        let has_value = Identifier(pool.get_or_intern_static("hasValue"));
+        let get = Identifier(pool.get_or_intern_static("get"));
+        let not = Identifier(pool.get_or_intern_static("not"));
+        let iter = Identifier(pool.get_or_intern_static("iter"));
+        let iteree = Identifier(pool.get_or_intern_static("iteree"));
+        let it_index = Identifier(pool.get_or_intern_static("itIndex"));
+        let as_ = Identifier(pool.get_or_intern_static("as"));
+        let list_lit = Identifier(pool.get_or_intern_static("list_lit"));
+        let with_capacity = Identifier(pool.get_or_intern_static("withCapacity"));
+        let yielded_coll = Identifier(pool.get_or_intern_static("yieldedColl"));
+        let iteree_length = Identifier(pool.get_or_intern_static("iteree_length"));
+        let block_expr_val = Identifier(pool.get_or_intern_static("block_expr_val"));
+        let optelse_lhs = Identifier(pool.get_or_intern_static("optelse_lhs"));
+        let list_literal = Identifier(pool.get_or_intern_static("list_literal"));
+        let source_location_typename = Identifier(pool.get_or_intern_static("SourceLocation"));
+        let lambda_env_var_name = Identifier(pool.get_or_intern_static("__lambda_env"));
+        let fn_ptr = Identifier(pool.get_or_intern_static("fn_ptr"));
+        let env_ptr = Identifier(pool.get_or_intern_static("env_ptr"));
+        let amp = Identifier(pool.get_or_intern_static("&"));
+        let ast = Identifier(pool.get_or_intern_static("*"));
+        let bang = Identifier(pool.get_or_intern_static("!"));
+        let sb = Identifier(pool.get_or_intern_static("sb"));
+        let payload = Identifier(pool.get_or_intern_static("payload"));
+        let try_ = Identifier(pool.get_or_intern_static("try"));
+        let try_value = Identifier(pool.get_or_intern_static("try_value"));
+        let if_target = Identifier(pool.get_or_intern_static("if_target"));
+        let crash = Identifier(pool.get_or_intern_static("crash"));
+        let to_ref = Identifier(pool.get_or_intern_static("toRef"));
+        let to_dyn = Identifier(pool.get_or_intern_static("toDyn"));
+        let filename = Identifier(pool.get_or_intern_static("filename"));
+        let line = Identifier(pool.get_or_intern_static("line"));
+        let equals = Identifier(pool.get_or_intern_static("equals"));
+        let param_0 = Identifier(pool.get_or_intern_static("param_0"));
+        let param_1 = Identifier(pool.get_or_intern_static("param_1"));
+        let param_2 = Identifier(pool.get_or_intern_static("param_2"));
+        let param_3 = Identifier(pool.get_or_intern_static("param_3"));
+        let param_4 = Identifier(pool.get_or_intern_static("param_4"));
+        let param_5 = Identifier(pool.get_or_intern_static("param_5"));
+        let param_6 = Identifier(pool.get_or_intern_static("param_6"));
+        let param_7 = Identifier(pool.get_or_intern_static("param_7"));
+        let param_8 = Identifier(pool.get_or_intern_static("param_8"));
+
+        Self {
+            intern_pool: pool,
+            builtins: BuiltinIdentifiers {
+                main,
+                self_,
+                self_cap,
+                it,
+                unit,
+                char,
+                string,
+                length,
+                has_value,
+                get,
+                not,
+                iter,
+                iteree,
+                it_index,
+                as_,
+                list_lit,
+                with_capacity,
+                yielded_coll,
+                iteree_length,
+                block_expr_val,
+                optelse_lhs,
+                list_literal,
+                source_location_typename,
+                lambda_env_var_name,
+                fn_ptr,
+                env_ptr,
+                amp,
+                asterisk: ast,
+                bang,
+                sb,
+                payload,
+                try_,
+                try_value,
+                if_target,
+                crash,
+                to_ref,
+                to_dyn,
+                filename,
+                line,
+                equals,
+                param_0,
+                param_1,
+                param_2,
+                param_3,
+                param_4,
+                param_5,
+                param_6,
+                param_7,
+                param_8,
+            },
         }
-        this
     }
 }
 
@@ -1344,7 +1496,7 @@ pub struct ParsedModule {
     pub abilities: Vec<ParsedAbility>,
     pub ability_impls: Vec<ParsedAbilityImplementation>,
     pub sources: Sources,
-    pub identifiers: Identifiers,
+    pub idents: Identifiers,
     pub exprs: ParsedExpressionPool,
     pub type_exprs: ParsedTypeExpressionPool,
     pub patterns: ParsedPatternPool,
@@ -1355,8 +1507,8 @@ pub struct ParsedModule {
 
 impl ParsedModule {
     pub fn make(name: String, config: CompilerConfig) -> ParsedModule {
-        let mut identifiers = Identifiers::default();
-        let name_id = identifiers.intern(&name);
+        let mut idents = Identifiers::default();
+        let name_id = idents.intern(&name);
         ParsedModule {
             name,
             name_id,
@@ -1369,7 +1521,7 @@ impl ParsedModule {
             abilities: Vec::new(),
             ability_impls: Vec::new(),
             sources: Sources::default(),
-            identifiers,
+            idents,
             exprs: ParsedExpressionPool::new(16384),
             type_exprs: ParsedTypeExpressionPool::new(8192),
             patterns: ParsedPatternPool::default(),
@@ -1878,7 +2030,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             // Variable
             let ident_token = self.expect_eat_token(K::Ident)?;
             let ident = self.intern_ident_token(ident_token);
-            if self.module.identifiers.get_name(ident) == "_" {
+            if self.module.idents.get_name(ident) == "_" {
                 let pattern_id =
                     self.module.patterns.add_pattern(ParsedPattern::Wildcard(ident_token.span));
                 Ok(pattern_id)
@@ -1986,7 +2138,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             self.module.sources.get_source(self.file_id),
             token,
         );
-        self.module.identifiers.intern(tok_chars)
+        self.module.idents.intern(tok_chars)
     }
 
     pub fn add_expression(&mut self, expression: ParsedExpression) -> ParsedExprId {
@@ -2084,7 +2236,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                                 ident_str.push(c)
                             } else if c == '}' {
                                 let buf = std::mem::take(ident_str);
-                                let ident = self.module.identifiers.intern(buf);
+                                let ident = self.module.idents.intern(buf);
                                 parts.push(InterpolatedStringPart::Identifier(ident));
                                 mode = Mode::Base;
                             } else {
@@ -3462,7 +3614,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         if lower && !tok_chars.chars().next().unwrap().is_lowercase() {
             return Err(error("This name must be capitalized", token));
         }
-        Ok((token, self.module.identifiers.intern(tok_chars)))
+        Ok((token, self.module.idents.intern(tok_chars)))
     }
 
     fn expect_ident_upper(&mut self) -> ParseResult<(Token, Identifier)> {
@@ -3724,7 +3876,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     pub fn parse_module(&mut self) {
         let root_namespace_id = if self.module.namespaces.is_empty() {
-            let name = self.module.identifiers.intern("_root");
+            let name = self.module.idents.intern("_root");
             self.module.add_namespace(ParsedNamespace {
                 name,
                 definitions: Vec::new(),
@@ -3787,7 +3939,7 @@ impl ParsedModule {
                         InterpolatedStringPart::String(s) => f.write_str(s)?,
                         InterpolatedStringPart::Identifier(ident) => {
                             f.write_char('{')?;
-                            f.write_str(self.identifiers.get_name(*ident))?;
+                            f.write_str(self.idents.get_name(*ident))?;
                             f.write_char('{')?;
                         }
                     }
@@ -3796,19 +3948,19 @@ impl ParsedModule {
                 Ok(())
             }
             ParsedExpression::FnCall(call) => {
-                f.write_str(self.identifiers.get_name(call.name.name))?;
+                f.write_str(self.idents.get_name(call.name.name))?;
                 f.write_str("(...)")?;
                 Ok(())
             }
             ParsedExpression::Variable(var) => {
                 f.write_str("var#")?;
-                f.write_str(self.identifiers.get_name(var.name.name))?;
+                f.write_str(self.idents.get_name(var.name.name))?;
                 Ok(())
             }
             ParsedExpression::FieldAccess(acc) => {
                 self.display_expr_id(acc.base, f)?;
                 f.write_str(".")?;
-                f.write_str(self.identifiers.get_name(acc.field_name))?;
+                f.write_str(self.idents.get_name(acc.field_name))?;
                 Ok(())
             }
             ParsedExpression::Block(block) => f.write_fmt(format_args!("{:?}", block)),
@@ -3831,7 +3983,7 @@ impl ParsedModule {
             ParsedExpression::For(for_expr) => f.write_fmt(format_args!("{:?}", for_expr)),
             ParsedExpression::AnonEnumConstructor(anon_enum) => {
                 f.write_char('.')?;
-                f.write_str(self.identifiers.get_name(anon_enum.variant_name))?;
+                f.write_str(self.idents.get_name(anon_enum.variant_name))?;
                 if let Some(payload) = anon_enum.payload.as_ref() {
                     f.write_str("(")?;
                     self.display_expr_id(*payload, f)?;
@@ -3877,7 +4029,7 @@ impl ParsedModule {
             ParsedExpression::Lambda(lambda) => {
                 f.write_char('\\')?;
                 for (index, arg) in lambda.arguments.iter().enumerate() {
-                    f.write_str(self.identifiers.get_name(arg.binding))?;
+                    f.write_str(self.idents.get_name(arg.binding))?;
                     if let Some(ty) = arg.ty {
                         f.write_str(": ")?;
                         self.display_type_expr_id(ty, f)?;
@@ -3917,7 +4069,7 @@ impl ParsedModule {
             ParsedTypeExpr::Struct(struct_type) => {
                 f.write_str("{ ")?;
                 for field in struct_type.fields.iter() {
-                    f.write_str(self.identifiers.get_name(field.name))?;
+                    f.write_str(self.idents.get_name(field.name))?;
                     f.write_str(": ")?;
                     self.display_type_expr_id(ty_expr_id, f)?;
                     f.write_str(", ")?;
@@ -3925,7 +4077,7 @@ impl ParsedModule {
                 f.write_str(" }")
             }
             ParsedTypeExpr::TypeApplication(tapp) => {
-                display_namespaced_identifier(f, &self.identifiers, &tapp.name, "::")?;
+                display_namespaced_identifier(f, &self.idents, &tapp.name, "::")?;
                 if !tapp.args.is_empty() {
                     f.write_str("[")?;
                     for tparam in tapp.args.iter() {
@@ -3947,7 +4099,7 @@ impl ParsedModule {
             ParsedTypeExpr::Enum(e) => {
                 f.write_str("enum ")?;
                 for variant in &e.variants {
-                    f.write_str(self.identifiers.get_name(variant.tag_name))?;
+                    f.write_str(self.idents.get_name(variant.tag_name))?;
                     if let Some(payload) = &variant.payload_expression {
                         f.write_str("(")?;
                         self.display_type_expr_id(*payload, f)?;
@@ -3959,7 +4111,7 @@ impl ParsedModule {
             ParsedTypeExpr::DotMemberAccess(acc) => {
                 self.display_type_expr_id(acc.base, f)?;
                 f.write_char('.')?;
-                f.write_str(self.identifiers.get_name(acc.member_name))
+                f.write_str(self.idents.get_name(acc.member_name))
             }
             ParsedTypeExpr::Builtin(_builtin) => f.write_str("builtin"),
             ParsedTypeExpr::Function(fun) => {
@@ -4071,45 +4223,4 @@ pub fn test_parse_module(source: Source) -> ParseResult<ParsedModule> {
     } else {
         Ok(module)
     }
-}
-
-impl Identifiers {
-    pub const BUILTIN_IDENTS: [&'static str; 36] = [
-        "main",
-        "self",
-        "it",
-        "unit",
-        "char",
-        "string",
-        "length",
-        "hasValue",
-        "get",
-        "not",
-        "iter",
-        "iteree",
-        "it_index",
-        "as",
-        "list_lit",
-        "withCapacity",
-        "yieldedColl",
-        "iteree_length",
-        "block_expr_val",
-        "optelse_lhs",
-        "list_literal",
-        "SourceLocation",
-        "__lambda_env",
-        "fn_ptr",
-        "env_ptr",
-        "&",
-        "*",
-        "!",
-        "sb",
-        "payload",
-        "try",
-        "try_value",
-        "if_target",
-        "crash",
-        "toRef",
-        "toDyn",
-    ];
 }

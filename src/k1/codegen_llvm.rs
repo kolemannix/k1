@@ -742,7 +742,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     }
 
     fn get_ident_name(&self, id: Identifier) -> &str {
-        self.module.ast.identifiers.get_name(id)
+        self.module.ast.idents.get_name(id)
     }
 
     fn get_line_number(&self, span: SpanId) -> u32 {
@@ -1031,8 +1031,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 for field in &struc.fields {
                     let field_llvm_type = self.codegen_type_inner(field.type_id, depth + 1)?;
                     let debug_type = if buffer_instance.is_some()
-                        && field.name
-                            == self.module.ast.identifiers.get(BUFFER_DATA_FIELD_NAME).unwrap()
+                        && field.name == self.module.ast.idents.get(BUFFER_DATA_FIELD_NAME).unwrap()
                     {
                         let buffer_instance = buffer_instance.unwrap();
                         let buffer_type_argument = buffer_instance.type_args[0];
@@ -1044,7 +1043,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         field_llvm_type.debug_type()
                     };
                     field_di_types.push(StructDebugMember {
-                        name: self.module.ast.identifiers.get_name(field.name),
+                        name: self.module.ast.idents.get_name(field.name),
                         di_type: debug_type,
                     });
                     field_basic_types.push(field_llvm_type.rich_value_type());
@@ -1939,7 +1938,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             TypedExpr::StructFieldAccess(field_access) => {
                 let name = &format!(
                     "struc.{}",
-                    self.module.ast.identifiers.get_name(field_access.target_field)
+                    self.module.ast.idents.get_name(field_access.target_field)
                 );
                 let field_index = field_access.target_field_index;
                 let struct_llvm_type = self.codegen_type(field_access.struct_type)?.expect_struct();
@@ -2990,6 +2989,22 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.store_k1_value(&value_type, lhs_pointer, rhs);
                 Ok(self.builtin_types.unit_value.as_basic_value_enum().into())
             }
+            TypedStmt::Require(require_stmt) => {
+                let require_continue_block = self.append_basic_block("");
+                let require_else_block = self.append_basic_block("require_else");
+                self.codegen_matching_condition(
+                    &require_stmt.condition,
+                    require_continue_block,
+                    require_else_block,
+                )?;
+                self.builder.position_at_end(require_else_block);
+
+                self.codegen_expr(require_stmt.else_body)?;
+
+                self.builder.position_at_end(require_continue_block);
+
+                Ok(self.builtin_types.unit_value.as_basic_value_enum().into())
+            }
         }
     }
 
@@ -3241,7 +3256,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             let variable_id = function.param_variables[i - sret_offset];
             let typed_param = if is_sret_param {
                 &FnParamType {
-                    name: self.module.ast.identifiers.get("ret").unwrap(),
+                    name: self.module.ast.idents.get("ret").unwrap(),
                     type_id: function_type.return_type,
                     is_context: false,
                     is_lambda_env: false,
@@ -3251,7 +3266,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 &function_type.physical_params[i - sret_offset]
             };
             let ty = self.codegen_type(typed_param.type_id)?;
-            let param_name = self.module.ast.identifiers.get_name(typed_param.name);
+            let param_name = self.module.ast.idents.get_name(typed_param.name);
             trace!(
                 "Got LLVM type for variable {}: {} (from {})",
                 param_name,

@@ -60,7 +60,7 @@ fn basic_fn() -> Result<(), ParseError> {
         Source::make(0, "test_src".to_string(), "test_case.k1".to_string(), src.to_string());
     let mut module = test_parse_module(source)?;
     let fndef = module.functions.first().unwrap();
-    assert_eq!(fndef.name, module.identifiers.intern("basic"));
+    assert_eq!(fndef.name, module.idents.intern("basic"));
     Ok(())
 }
 
@@ -124,7 +124,7 @@ fn fn_args_literal() -> Result<(), ParseError> {
     let (module, result) = test_single_expr(input)?;
     if let ParsedExpression::FnCall(fn_call) = result {
         let args = &fn_call.args;
-        let idents = &module.identifiers;
+        let idents = &module.idents;
         assert_eq!(idents.get_name(fn_call.name.name), "f");
         assert_eq!(idents.get_name(args[0].name.unwrap()), "myarg");
         assert!(ParsedExpression::is_literal(module.exprs.get(args[0].value)));
@@ -152,11 +152,11 @@ fn dot_accessor() -> ParseResult<()> {
     let input = "a.b.c";
     let (module, result) = test_single_expr(input)?;
     let ParsedExpression::FieldAccess(access_op) = result else { panic!() };
-    assert_eq!(module.identifiers.get_name(access_op.field_name), "c");
+    assert_eq!(module.idents.get_name(access_op.field_name), "c");
     let ParsedExpression::FieldAccess(acc2) = module.exprs.get(access_op.base) else { panic!() };
-    assert_eq!(module.identifiers.get_name(acc2.field_name), "b");
+    assert_eq!(module.idents.get_name(acc2.field_name), "b");
     let ParsedExpression::Variable(v) = module.exprs.get(acc2.base) else { panic!() };
-    assert_eq!(module.identifiers.get_name(v.name.name), "a");
+    assert_eq!(module.idents.get_name(v.name.name), "a");
     Ok(())
 }
 
@@ -265,8 +265,8 @@ fn generic_method_call_lhs_expr() -> Result<(), ParseError> {
     let ParsedExpression::FnCall(fn_call) = parser.exprs.get(call.args[0].value).clone() else {
         panic!()
     };
-    assert_eq!(fn_call.name.name, parser.identifiers.intern("getFn"));
-    assert_eq!(call.name.name, parser.identifiers.intern("baz"));
+    assert_eq!(fn_call.name.name, parser.idents.intern("getFn"));
+    assert_eq!(call.name.name, parser.idents.intern("baz"));
     let type_arg = parser.type_exprs.get(call.type_args[0].type_expr);
     assert!(matches!(type_arg, ParsedTypeExpr::TypeApplication(_)));
     assert!(matches!(parser.exprs.get(call.args[1].value), ParsedExpression::Literal(_)));
@@ -289,9 +289,9 @@ fn namespaced_fncall() -> ParseResult<()> {
         dbg!(result);
         panic!("not fncall")
     };
-    assert_eq!(fn_call.name.namespaces[0], parser.identifiers.intern("foo"));
-    assert_eq!(fn_call.name.namespaces[1], parser.identifiers.intern("bar"));
-    assert_eq!(fn_call.name.name, parser.identifiers.intern("baz"));
+    assert_eq!(fn_call.name.namespaces[0], parser.idents.intern("foo"));
+    assert_eq!(fn_call.name.namespaces[1], parser.idents.intern("bar"));
+    assert_eq!(fn_call.name.name, parser.idents.intern("baz"));
     assert!(fn_call.args.is_empty());
     Ok(())
 }
@@ -303,9 +303,9 @@ fn namespaced_val() -> ParseResult<()> {
         dbg!(result);
         panic!("not variable")
     };
-    assert_eq!(variable.name.namespaces[0], parser.identifiers.intern("foo"));
-    assert_eq!(variable.name.namespaces[1], parser.identifiers.intern("bar"));
-    assert_eq!(variable.name.name, parser.identifiers.intern("baz"));
+    assert_eq!(variable.name.namespaces[0], parser.idents.intern("foo"));
+    assert_eq!(variable.name.namespaces[1], parser.idents.intern("bar"));
+    assert_eq!(variable.name.name, parser.idents.intern("baz"));
     Ok(())
 }
 
