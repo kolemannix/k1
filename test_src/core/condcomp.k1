@@ -1,7 +1,7 @@
 ns condcomp;
 
-let const MY_VALUE: bool = true;
-let const MY_VALUE_NEG: bool = not MY_VALUE;
+let static MY_VALUE: bool = true;
+let static MY_VALUE_NEG: bool = not MY_VALUE;
 
 fn test(): unit {
   assert(k1/OS == "macos");

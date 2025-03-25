@@ -129,6 +129,12 @@ fn test(): unit {
     assert(f == false)
   } else assert(false);
 
+  require { x: 1 } is { x } and x == 1 and x == 1 and true is _ else {
+    crash("and burn")
+  };
+  assert(x == 1);
+
+
   ()
 
 }

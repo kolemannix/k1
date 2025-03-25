@@ -3185,7 +3185,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             return Ok(None);
         };
         let is_referencing = self.maybe_consume_next_no_whitespace(K::Asterisk).is_some();
-        let is_comptime = self.maybe_consume_next(K::KeywordConst).is_some();
+        let is_comptime = self.maybe_consume_next(K::KeywordStatic).is_some();
         let name_token = self.expect_eat_token(K::Ident)?;
         let _colon = self.expect_eat_token(K::Colon);
         let typ = Parser::expect("type_expression", self.peek(), self.parse_type_expression())?;
