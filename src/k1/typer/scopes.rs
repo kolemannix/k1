@@ -1,7 +1,7 @@
 use ahash::HashMapExt;
 use fxhash::FxHashMap;
 use log::{debug, trace};
-use smallvec::{smallvec, SmallVec};
+use smallvec::SmallVec;
 
 use std::{
     collections::{hash_map::Entry, HashMap, HashSet},
@@ -203,7 +203,8 @@ impl Scopes {
             )?;
             match self.get_scope(scope_to_search).find_variable(name.name) {
                 None => Ok(None),
-                Some(v) => Ok(Some((v, scope_to_search))),
+                Some(VariableInScope::Defined(id)) => Ok(Some((id, scope_to_search))),
+                Some(VariableInScope::Masked) => Ok(None),
             }
         }
     }
@@ -229,12 +230,13 @@ impl Scopes {
         ident: Identifier,
     ) -> Option<(VariableId, ScopeId)> {
         let scope = self.get_scope(scope_id);
-        if let Some(v) = scope.find_variable(ident) {
-            return Some((v, scope_id));
-        }
-        match scope.parent {
-            Some(parent) => self.find_variable(parent, ident),
-            None => None,
+        match scope.find_variable(ident) {
+            Some(VariableInScope::Defined(id)) => Some((id, scope_id)),
+            Some(VariableInScope::Masked) => None,
+            None => match scope.parent {
+                Some(parent) => self.find_variable(parent, ident),
+                None => None,
+            },
         }
     }
 
@@ -567,7 +569,9 @@ impl Scopes {
                 source_scope: scope_id_to_search,
                 id: UseableSymbolId::Type(type_id),
             }))
-        } else if let Some(variable_id) = scope_to_search.find_variable(name.name) {
+        } else if let Some(variable_id) =
+            scope_to_search.find_variable(name.name).and_then(|vis| vis.variable_id())
+        {
             Ok(Some(UseableSymbol {
                 source_scope: scope_id_to_search,
                 id: UseableSymbolId::Constant(variable_id),
@@ -707,9 +711,23 @@ pub enum UseableSymbolId {
     Namespace(NamespaceId),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
+pub enum VariableInScope {
+    Masked,
+    Defined(VariableId),
+}
+
+impl VariableInScope {
+    pub fn variable_id(&self) -> Option<VariableId> {
+        match self {
+            VariableInScope::Masked => None,
+            VariableInScope::Defined(v) => Some(*v),
+        }
+    }
+}
+
 pub struct Scope {
-    pub variables: FxHashMap<Identifier, VariableId>,
+    pub variables: FxHashMap<Identifier, VariableInScope>,
     pub context_variables_by_type: FxHashMap<TypeId, VariableId>,
     pub functions: FxHashMap<Identifier, FunctionId>,
     pub namespaces: FxHashMap<Identifier, NamespaceId>,
@@ -756,7 +774,11 @@ impl Scope {
         // I think this is ok because the variable itself (by variable id)
         // is not lost, in case we wanted to do some analysis.
         // Still, might need to mark it shadowed explicitly?
-        self.variables.insert(ident, value).is_none()
+        self.variables.insert(ident, VariableInScope::Defined(value)).is_none()
+    }
+
+    pub fn mask_variable(&mut self, ident: Identifier) {
+        self.variables.insert(ident, VariableInScope::Masked);
     }
 
     #[must_use]
@@ -772,15 +794,18 @@ impl Scope {
             // I think this is ok because the variable itself (by variable id)
             // is not lost, in case we wanted to do some analysis.
             // Still, might need to mark it shadowed explicitly?
-            self.variables.insert(ident, value);
+            self.variables.insert(ident, VariableInScope::Defined(value));
             true
         } else {
             false
         }
     }
 
-    pub fn find_variable(&self, ident: Identifier) -> Option<VariableId> {
-        self.variables.get(&ident).copied()
+    pub fn find_variable(&self, ident: Identifier) -> Option<VariableInScope> {
+        match self.variables.get(&ident) {
+            Some(vis) => Some(*vis),
+            None => None,
+        }
     }
 
     pub fn find_context_variable_by_type(&self, type_id: TypeId) -> Option<VariableId> {

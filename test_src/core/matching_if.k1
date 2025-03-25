@@ -1,5 +1,45 @@
 ns matching_if;
 
+deftype alias ABC = either A, B, C
+
+impl Show for ABC {
+  fn show(self: ABC): string {
+    switch self {
+      .A -> "A",
+      .B -> "B",
+      .C -> "C"
+    }
+  }
+}
+
+impl Equals for ABC {
+  fn equals(self: ABC, other: ABC): bool {
+    switch { fst: self, snd: other } {
+      { fst: .A, snd: .A } -> true,
+      { fst: .B, snd: .B } -> true,
+      { fst: .C, snd: .C } -> true,
+      _ -> false
+    }
+  }
+}
+
+fn bindingIfStruct(v: { x: int, y: int }): ABC {
+  if v is { x: xx, y: yy } and xx == 1 {
+    .A
+  } else {
+    .B
+  }
+}
+
+fn switchStruct(v: { x: int, y: int }): ABC {
+  switch v {
+    { x: 11 } -> .A,
+    { x: xx, y: yy } if xx == 1 or yy == 2 -> .B,
+    _ -> .C
+  }
+}
+
+
 fn test(): unit {
   // "Matching if" expressions
   // You can match on as many things as you like, as long as the whole chain is connected by 'ands' and your "is" expressions live at the top-level
@@ -71,5 +111,24 @@ fn test(): unit {
     }
   });
   assert(shadowFailure.isSome());
+
+  let myOpt = some(42);
+  let yourOpt = some(false);
+  if myOpt is .Some(x) and x == 42 {
+    ()
+  } else assert(false);
+
+  assertEquals(bindingIfStruct({ x: 1, y: 2 }), .A);
+  assertEquals(bindingIfStruct({ x: 2, y: 2 }), .B);
+
+  assertEquals(switchStruct({ x: 11, y: 0 }), .A);
+  assertEquals(switchStruct({ x: 1, y: 3 }), .B);
+  assertEquals(switchStruct({ x: 0, y: 2 }), .B);
+
+  if myOpt is .Some(42) and yourOpt is .Some(f) and 3 == 3 and not false {
+    assert(f == false)
+  } else assert(false);
+
+  ()
 
 }

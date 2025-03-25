@@ -1333,6 +1333,7 @@ pub struct PendingCaptureExpr {
     pub span: SpanId,
 }
 
+// TOOD(perf): Intern 'patterns'
 #[derive(Debug, Clone)]
 pub struct MatchingCondition {
     /// Multiple patterns does _not_ mean the user provided multiple patterns in a switch,
@@ -1531,20 +1532,20 @@ pub struct AssignmentStmt {
     pub kind: AssignmentKind,
 }
 
-pub struct TypedGuardStmt {
-    // pub patterns: SmallVec<[TypedPattern; 1]>,
-    pub setup_statements: SmallVec<[TypedStmtId; 4]>,
-    pub pattern_condition: TypedExprId,
-    pub pattern_bindings: SmallVec<[TypedStmtId; 4]>,
-    pub else_terminating_expr: TypedExprId,
+#[derive(Debug, Clone)]
+pub struct TypedRequireStmt {
+    pub condition: Box<MatchingCondition>,
+    pub else_body: TypedExprId,
+    pub span: SpanId,
 }
 
-static_assert_size!(TypedStmt, 20);
+static_assert_size!(TypedStmt, 24);
 #[derive(Debug, Clone)]
 pub enum TypedStmt {
     Expr(TypedExprId, TypeId),
     Let(LetStmt),
     Assignment(AssignmentStmt),
+    Require(TypedRequireStmt),
 }
 
 impl TypedStmt {
@@ -1616,6 +1617,7 @@ pub struct Variable {
     pub owner_scope: ScopeId,
     pub is_context: bool,
     pub global_id: Option<TypedGlobalId>,
+    pub user_hidden: bool,
 }
 
 #[derive(Debug)]
@@ -1771,11 +1773,26 @@ macro_rules! failf {
     };
 }
 
+#[macro_export]
+macro_rules! format_ident {
+    ($self: ident, $($format_args:expr),* $(,)?) => {
+        {
+            use std::fmt::Write;
+            let mut s = std::mem::take(&mut $self.buffers.name_builder);
+            s.write_fmt(format_args!($($format_args),*));
+            let ident = $self.ast.idents.intern(&s);
+            s.clear();
+            $self.buffers.name_builder = s;
+            ident
+        }
+    }
+}
+
 macro_rules! get_ident {
     ($self:ident, $name:expr) => {
         $self
             .ast
-            .identifiers
+            .idents
             .get($name)
             .unwrap_or_else(|| panic!("Missing identifier '{}' in pool", $name))
     };
@@ -1968,6 +1985,10 @@ pub struct AbilityImplHandle {
     full_impl_id: AbilityImplId,
 }
 
+pub struct TypedModuleBuffers {
+    name_builder: String,
+}
+
 pub struct TypedModule {
     pub ast: ParsedModule,
     functions: Vec<TypedFunction>,
@@ -1999,6 +2020,7 @@ pub struct TypedModule {
     pub debug_level_stack: Vec<log::LevelFilter>,
     pub functions_pending_body_specialization: Vec<FunctionId>,
     inference_context: InferenceContext,
+    buffers: TypedModuleBuffers,
 }
 
 impl TypedModule {
@@ -2043,6 +2065,7 @@ impl TypedModule {
                 substitutions: FxHashMap::with_capacity(256),
                 substitutions_vec: Vec::with_capacity(256),
             },
+            buffers: TypedModuleBuffers { name_builder: String::with_capacity(4096) },
         }
     }
 
@@ -2068,11 +2091,11 @@ impl TypedModule {
     }
 
     pub fn name_of(&self, id: Identifier) -> &str {
-        self.ast.identifiers.get_name(id)
+        self.ast.idents.get_name(id)
     }
 
     pub fn get_identifier(&self, name: &str) -> Option<Identifier> {
-        self.ast.identifiers.get(name)
+        self.ast.idents.get(name)
     }
 
     pub fn get_namespace_scope(&self, namespace_id: NamespaceId) -> &Scope {
@@ -2081,7 +2104,7 @@ impl TypedModule {
     }
 
     pub fn get_main_function_id(&self) -> Option<FunctionId> {
-        self.scopes.get_root_scope().find_function(get_ident!(self, "main"))
+        self.scopes.get_root_scope().find_function(self.ast.idents.builtins.main)
     }
 
     fn push_block_stmt_id(&self, block: &mut TypedBlock, stmt: TypedStmtId) {
@@ -2112,6 +2135,13 @@ impl TypedModule {
                     UNIT_TYPE_ID
                 }
             }
+            TypedStmt::Require(req) => {
+                if req.condition.diverges {
+                    NEVER_TYPE_ID
+                } else {
+                    UNIT_TYPE_ID
+                }
+            }
         }
     }
 
@@ -2121,6 +2151,7 @@ impl TypedModule {
             TypedStmt::Expr(e, _ty) => self.exprs.get(*e).get_span(),
             TypedStmt::Let(val_def) => val_def.span,
             TypedStmt::Assignment(assgn) => assgn.span,
+            TypedStmt::Require(req) => req.span,
         }
     }
 
@@ -2546,7 +2577,7 @@ impl TypedModule {
                         Ok(variant_type)
                     }
                     Type::EnumVariant(ev) => {
-                        if self.ast.identifiers.get_name(dot_acc.member_name) != "value" {
+                        if self.ast.idents.get_name(dot_acc.member_name) != "value" {
                             failf!(
                                 dot_acc.span,
                                 "Invalid member access on EnumVariant type; try '.value'",
@@ -2571,7 +2602,7 @@ impl TypedModule {
                     }
                     // You can do dot access on References to get out their 'value' types
                     Type::Reference(r) => {
-                        if self.ast.identifiers.get_name(dot_acc.member_name) != "value" {
+                        if self.ast.idents.get_name(dot_acc.member_name) != "value" {
                             return make_fail_ast_id(
                                 &self.ast,
                                 "Invalid member access on Optional type; try '.value'",
@@ -2581,7 +2612,7 @@ impl TypedModule {
                         Ok(r.inner_type)
                     }
                     Type::Function(fun) => {
-                        let member_name = self.ast.identifiers.get_name(dot_acc.member_name);
+                        let member_name = self.ast.idents.get_name(dot_acc.member_name);
                         match member_name {
                             "return" => Ok(fun.return_type),
                             _other => {
@@ -2620,7 +2651,19 @@ impl TypedModule {
                 for (index, param) in fun_type.params.iter().enumerate() {
                     let type_id = self.eval_type_expr(*param, scope_id)?;
                     let span = self.ast.get_type_expression_span(*param);
-                    let name = self.ast.identifiers.intern(format!("param_{}", index));
+
+                    let name = match index {
+                        0 => self.ast.idents.builtins.param_0,
+                        1 => self.ast.idents.builtins.param_1,
+                        2 => self.ast.idents.builtins.param_2,
+                        3 => self.ast.idents.builtins.param_3,
+                        4 => self.ast.idents.builtins.param_4,
+                        5 => self.ast.idents.builtins.param_5,
+                        6 => self.ast.idents.builtins.param_6,
+                        7 => self.ast.idents.builtins.param_7,
+                        8 => self.ast.idents.builtins.param_8,
+                        i => format_ident!(self, "param_{}", i),
+                    };
                     params.push(FnParamType {
                         type_id,
                         name,
@@ -2654,7 +2697,7 @@ impl TypedModule {
                 let Type::Function(_function_type) = self.types.get(inner) else {
                     return failf!(span, "Expected a function type following 'some'");
                 };
-                let name = self.ast.identifiers.intern(format!("some_fn_{}", type_expr_id));
+                let name = self.ast.idents.intern(format!("some_fn_{}", type_expr_id));
                 let function_type_variable =
                     self.add_function_type_parameter(FunctionTypeParameter {
                         name,
@@ -2702,7 +2745,7 @@ impl TypedModule {
                 }
                 let new_function_type = self.add_lambda_env_to_function_type(inner, inner_span);
                 let lambda_object_type = self.types.add_lambda_object(
-                    &self.ast.identifiers,
+                    &self.ast.idents,
                     new_function_type,
                     ty_app_id.into(),
                 );
@@ -2821,7 +2864,7 @@ impl TypedModule {
             scope_id,
             ty_app_name,
             &self.namespaces,
-            &self.ast.identifiers,
+            &self.ast.idents,
         )? {
             Some((type_id, _)) => {
                 if let Type::Generic(g) = self.types.get(type_id) {
@@ -2853,7 +2896,7 @@ impl TypedModule {
                     scope_id,
                     ty_app_name,
                     &self.namespaces,
-                    &self.ast.identifiers,
+                    &self.ast.idents,
                 )? {
                     Some(function_id) => Ok(self.get_function(function_id).type_id),
                     None => {
@@ -3183,7 +3226,7 @@ impl TypedModule {
                 let new_fn_type =
                     self.substitute_in_type_ext(fn_type, substitution_pairs, None, None);
                 if new_fn_type != fn_type || force_new {
-                    self.types.add_lambda_object(&self.ast.identifiers, new_fn_type, parsed_id)
+                    self.types.add_lambda_object(&self.ast.idents, new_fn_type, parsed_id)
                 } else {
                     type_id
                 }
@@ -3752,7 +3795,7 @@ impl TypedModule {
                         else {
                             self.ice_with_span("malformed integer cast", span)
                         };
-                        let _target_int_type = todo!();
+                        todo!()
                         //match i {
                         //    TypedIntegerValue::U8(_) => todo!(),
                         //    TypedIntegerValue::U16(_) => todo!(),
@@ -3888,6 +3931,7 @@ impl TypedModule {
             owner_scope: scope_id,
             is_context: false,
             global_id: Some(global_id),
+            user_hidden: false,
         });
         let actual_global_id = self.globals.add(TypedGlobal {
             variable_id,
@@ -3960,7 +4004,7 @@ impl TypedModule {
         let ability = self.get_ability(implemented_ability.ability_id);
         let ability_args = ability.kind.arguments().to_vec();
         // Add Self
-        let _ = self.scopes.add_type(scope_id, get_ident!(self, "Self"), type_variable_id);
+        let _ = self.scopes.add_type(scope_id, self.ast.idents.builtins.self_cap, type_variable_id);
         // Add ability params
         for ability_arg in ability_args.iter() {
             let _ = self.scopes.add_type(scope_id, ability_arg.name, ability_arg.type_id);
@@ -4317,7 +4361,8 @@ impl TypedModule {
             };
         }
 
-        let _ = self.scopes.add_type(new_impl_scope, get_ident!(self, "Self"), self_type_id);
+        let _ =
+            self.scopes.add_type(new_impl_scope, self.ast.idents.builtins.self_cap, self_type_id);
 
         let mut specialized_function_ids = Vec::new();
         let kind = AbilityImplKind::DerivedFromBlanket { blanket_impl_id };
@@ -4519,14 +4564,14 @@ impl TypedModule {
             scope_id,
             &variable.name,
             &self.namespaces,
-            &self.ast.identifiers,
+            &self.ast.idents,
         )?;
         match variable_id {
             None => {
                 failf!(
                     variable.name.span,
                     "Variable '{}' is not defined",
-                    self.ast.identifiers.get_name(variable.name.name),
+                    self.ast.idents.get_name(variable.name.name),
                 )
             }
             Some((variable_id, variable_scope_id)) => {
@@ -4549,7 +4594,7 @@ impl TypedModule {
                     return failf!(
                         variable_name_span,
                         "Cannot assign to immutable variable {}",
-                        self.ast.identifiers.get_name(v.name)
+                        self.ast.idents.get_name(v.name)
                     );
                 }
                 if is_capture {
@@ -4613,12 +4658,12 @@ impl TypedModule {
         }
 
         // Bailout case: .* dereference operation
-        if field_access.field_name == get_ident!(self, "*") {
+        if field_access.field_name == self.ast.idents.builtins.asterisk {
             return self.eval_dereference(field_access.base, ctx, span);
         }
 
         // Bailout case: .! unwrap operation
-        if field_access.field_name == get_ident!(self, "!") {
+        if field_access.field_name == self.ast.idents.builtins.bang {
             if field_access.is_coalescing {
                 return failf!(field_access.span, "Cannot use ?. with unwrap operator");
             }
@@ -4631,7 +4676,7 @@ impl TypedModule {
             return self.eval_unwrap_operator(field_access.base, ctx, field_access.span);
         }
 
-        if field_access.field_name == get_ident!(self, "try") {
+        if field_access.field_name == self.ast.idents.builtins.try_ {
             if field_access.is_coalescing {
                 return failf!(field_access.span, "Cannot use ?. with try operator");
             }
@@ -4714,7 +4759,7 @@ impl TypedModule {
                             errf!(
                                 span,
                                 "Field {} not found on struct {}",
-                                self.ast.identifiers.get_name(field_access.field_name),
+                                self.ast.idents.get_name(field_access.field_name),
                                 self.type_to_string(st, false)
                             )
                         })?;
@@ -4752,7 +4797,7 @@ impl TypedModule {
                     failf!(
                         span,
                         "Field {} does not exist",
-                        self.ast.identifiers.get_name(field_access.field_name)
+                        self.ast.idents.get_name(field_access.field_name)
                     )
                 }
             }
@@ -4765,7 +4810,7 @@ impl TypedModule {
                         errf!(
                             span,
                             "Field {} not found on struct {}",
-                            self.ast.identifiers.get_name(field_access.field_name),
+                            self.ast.idents.get_name(field_access.field_name),
                             self.type_to_string(st, false)
                         )
                     })?;
@@ -4797,18 +4842,18 @@ impl TypedModule {
                 })))
             }
             Type::EnumVariant(ev) => {
-                if self.ast.identifiers.get_name(field_access.field_name) != "value" {
+                if self.ast.idents.get_name(field_access.field_name) != "value" {
                     return failf!(
                         span,
                         "Field {} does not exist; try .value",
-                        self.ast.identifiers.get_name(field_access.field_name)
+                        self.ast.idents.get_name(field_access.field_name)
                     );
                 }
                 let Some(payload_type_id) = ev.payload else {
                     return failf!(
                         span,
                         "Variant {} has no payload value",
-                        self.ast.identifiers.get_name(ev.name)
+                        self.ast.idents.get_name(ev.name)
                     );
                 };
                 if is_assignment_lhs && !is_reference {
@@ -4833,7 +4878,7 @@ impl TypedModule {
             _ => failf!(
                 span,
                 "Field {} does not exist on type {}",
-                self.ast.identifiers.get_name(field_access.field_name),
+                self.ast.idents.get_name(field_access.field_name),
                 self.type_id_to_string(original_base_expr_type)
             ),
         }
@@ -5276,9 +5321,9 @@ impl TypedModule {
                 self.add_expr_id_to_block(&mut list_lit_block, dereference_list_literal);
                 Ok(self.exprs.add(TypedExpr::Block(list_lit_block)))
             }
-            ParsedExpression::Struct(ast_struct) => {
+            ParsedExpression::Struct(_ast_struct) => {
                 if let Some(expected_type) = ctx.expected_type_id {
-                    if let Type::Struct(s) = self.types.get(expected_type) {
+                    if let Type::Struct(_s) = self.types.get(expected_type) {
                         self.eval_expected_struct(expr_id, ctx)
                     } else {
                         self.eval_anonymous_struct(expr_id, ctx)
@@ -5671,9 +5716,11 @@ impl TypedModule {
         let body_block =
             self.eval_block(&parsed_block, ctx.with_scope(body_block_scope_id), false)?;
 
-        // nocommit: If loop has no breaks, can we type is as never?
-        //           Loop Info should be able to track this, if we report every
-        //           break
+        // TODO: Detect divergent loops:
+        // if loop has no breaks or returns, can we type is as never?
+        //
+        // Loop Info should be able to track this, if we report every
+        // break and return
         let loop_type = if condition.diverges { NEVER_TYPE_ID } else { UNIT_TYPE_ID };
 
         Ok(self.exprs.add(TypedExpr::WhileLoop(WhileLoop {
@@ -6021,6 +6068,7 @@ impl TypedModule {
                 owner_scope: lambda_scope_id,
                 is_context: false,
                 global_id: None,
+                user_hidden: false,
             });
             lambda_scope.add_variable(name, variable_id);
             param_variables.push_back(variable_id)
@@ -6109,6 +6157,7 @@ impl TypedModule {
             owner_scope: lambda_scope_id,
             is_context: false,
             global_id: None,
+            user_hidden: false,
         });
         typed_params.push_front(environment_param);
         param_variables.push_front(environment_param_variable_id);
@@ -6145,13 +6194,13 @@ impl TypedModule {
                     .expect("lambda to be inside a function"),
             )
             .name;
-        let name = self.ast.identifiers.intern(format!(
+        let name = self.ast.idents.intern(format!(
             "{}_{{lambda}}_{}",
             self.name_of(encl_fn_name),
             lambda_scope_id,
         ));
         let name_string = self.make_qualified_name(ctx.scope_id, name, "__", true);
-        let name = self.ast.identifiers.intern(name_string);
+        let name = self.ast.idents.intern(name_string);
 
         let body_function_id = self.add_function(TypedFunction {
             name,
@@ -6172,7 +6221,7 @@ impl TypedModule {
             dyn_fn_id: None,
         });
         let lambda_type_id = self.types.add_lambda(
-            &self.ast.identifiers,
+            &self.ast.idents,
             function_type,
             environment_struct,
             environment_struct_type,
@@ -6199,7 +6248,7 @@ impl TypedModule {
             self.eval_expr(match_parsed_expr.match_subject, ctx.with_no_expected_type())?;
 
         // Mangled; not a user-facing binding
-        let match_subject_ident = self.ast.identifiers.intern("match_subject");
+        let match_subject_ident = self.ast.idents.intern("match_subject");
         let match_subject_variable =
             self.synth_variable_defn_simple(match_subject_ident, subject_expr, ctx.scope_id);
 
@@ -6431,233 +6480,6 @@ impl TypedModule {
         Ok(typed_arms)
     }
 
-    /// For each match case we output
-    /// 1) a series of statements to bind variables that are used by the condition and by the
-    ///    consequent code, if the condition and guard pass
-    /// 2) An expr of type boolean, this is the result of the Pattern, compiled into a boolean
-    ///    expression
-    /// 3) We push statements into `binding_statements` which will get run before our pattern and
-    ///    guard and consequent run
-    fn compile_pattern_in_scope(
-        &mut self,
-        pattern: &TypedPattern,
-        target_expr: TypedExprId,
-        setup_statements: &mut SmallVec<[TypedStmtId; 4]>,
-        binding_statements: &mut SmallVec<[TypedStmtId; 4]>,
-        is_immediately_inside_reference_pattern: bool,
-        arm_scope_id: ScopeId,
-    ) -> TyperResult<TypedExprId> {
-        let target_expr_type = self.exprs.get(target_expr).get_type();
-        match pattern {
-            TypedPattern::Struct(struct_pattern) => {
-                let mut boolean_exprs: Vec<TypedExprId> =
-                    Vec::with_capacity(struct_pattern.fields.len());
-                for pattern_field in struct_pattern.fields.iter() {
-                    let struct_type = self.types.get_type_id_dereferenced(target_expr_type);
-                    let is_referencing = is_immediately_inside_reference_pattern;
-                    let result_type = if is_referencing {
-                        self.types.add_reference_type(pattern_field.field_type_id)
-                    } else {
-                        pattern_field.field_type_id
-                    };
-                    let get_struct_field =
-                        self.exprs.add(TypedExpr::StructFieldAccess(FieldAccess {
-                            base: target_expr,
-                            target_field: pattern_field.name,
-                            target_field_index: pattern_field.field_index,
-                            result_type,
-                            struct_type,
-                            is_referencing,
-                            span: struct_pattern.span,
-                        }));
-                    let var_name = self
-                        .ast
-                        .identifiers
-                        .intern(format!("field_{}", self.name_of(pattern_field.name)));
-                    let struct_field_variable =
-                        self.synth_variable_defn_simple(var_name, get_struct_field, arm_scope_id);
-                    setup_statements.push(struct_field_variable.defn_stmt);
-                    let condition = self.compile_pattern_in_scope(
-                        &pattern_field.pattern,
-                        struct_field_variable.variable_expr,
-                        setup_statements,
-                        binding_statements,
-                        is_referencing,
-                        arm_scope_id,
-                    )?;
-                    boolean_exprs.push(condition);
-                }
-                let final_condition = boolean_exprs
-                    .into_iter()
-                    .reduce(|a, b| self.synth_binary_bool_op(BinaryOpKind::And, a, b))
-                    .unwrap();
-                Ok(final_condition)
-            }
-            TypedPattern::Enum(enum_pattern) => {
-                let is_referencing = is_immediately_inside_reference_pattern;
-                let is_variant_target =
-                    if is_referencing { self.synth_dereference(target_expr) } else { target_expr };
-                let is_variant_condition =
-                    self.exprs.add(TypedExpr::EnumIsVariant(TypedEnumIsVariantExpr {
-                        target_expr: is_variant_target,
-                        variant_name: enum_pattern.variant_tag_name,
-                        variant_index: enum_pattern.variant_index,
-                        span: enum_pattern.span,
-                    }));
-                let inner_condition = if let Some(payload_pattern) = enum_pattern.payload.as_ref() {
-                    let enum_type = self.types.get(enum_pattern.enum_type_id).expect_enum();
-                    let variant = enum_type.variant_by_index(enum_pattern.variant_index).unwrap();
-                    let variant_name = variant.name;
-                    let variant_index = variant.index;
-                    let Some(payload_type_id) = variant.payload else {
-                        return failf!(
-                            enum_pattern.span,
-                            "Impossible pattern: variant does not have payload",
-                        );
-                    };
-                    let result_type_id = if is_referencing {
-                        self.types.add_reference_type(payload_type_id)
-                    } else {
-                        payload_type_id
-                    };
-                    let get_payload_expr =
-                        self.exprs.add(TypedExpr::EnumGetPayload(GetEnumPayload {
-                            target_expr,
-                            result_type_id,
-                            variant_name,
-                            variant_index,
-                            is_referencing,
-                            span: enum_pattern.span,
-                        }));
-                    let var_name = self
-                        .ast
-                        .identifiers
-                        .intern(format!("payload_{}", self.name_of(variant_name)));
-                    let payload_variable =
-                        self.synth_variable_defn_simple(var_name, get_payload_expr, arm_scope_id);
-                    setup_statements.push(payload_variable.defn_stmt);
-                    let condition = self.compile_pattern_in_scope(
-                        payload_pattern,
-                        payload_variable.variable_expr,
-                        setup_statements,
-                        binding_statements,
-                        is_referencing,
-                        arm_scope_id,
-                    )?;
-                    Some(condition)
-                } else {
-                    None
-                };
-                let final_condition = match inner_condition.map(|expr_id| self.exprs.get(expr_id)) {
-                    None => is_variant_condition,
-                    Some(TypedExpr::Bool(true, _)) => is_variant_condition,
-                    Some(_inner_condition) => self.exprs.add(TypedExpr::BinaryOp(BinaryOp {
-                        kind: BinaryOpKind::And,
-                        ty: BOOL_TYPE_ID,
-                        lhs: is_variant_condition,
-                        rhs: inner_condition.unwrap(),
-                        span: enum_pattern.span,
-                    })),
-                };
-                Ok(final_condition)
-            }
-            TypedPattern::Variable(variable_pattern) => {
-                let variable_ident = variable_pattern.name;
-                let binding_variable =
-                    self.synth_variable_defn_visible(variable_ident, target_expr, arm_scope_id);
-                binding_statements.push(binding_variable.defn_stmt);
-                Ok(self.exprs.add(TypedExpr::Bool(true, variable_pattern.span)))
-            }
-            TypedPattern::Wildcard(span) => Ok(self.exprs.add(TypedExpr::Bool(true, *span))),
-            TypedPattern::Reference(reference_pattern) => {
-                let target_expr = if is_immediately_inside_reference_pattern {
-                    self.synth_dereference(target_expr)
-                } else {
-                    target_expr
-                };
-                let inner_condition = self.compile_pattern_in_scope(
-                    &reference_pattern.inner_pattern,
-                    target_expr,
-                    setup_statements,
-                    binding_statements,
-                    true,
-                    arm_scope_id,
-                )?;
-                Ok(inner_condition)
-            }
-            pat => {
-                match pat {
-                    TypedPattern::LiteralUnit(_) => true,
-                    TypedPattern::LiteralChar(_, _) => true,
-                    TypedPattern::LiteralInteger(_, _) => true,
-                    TypedPattern::LiteralFloat(_, _) => true,
-                    TypedPattern::LiteralBool(_, _) => true,
-                    TypedPattern::LiteralString(_, _) => true,
-                    _ => unreachable!("all non-literals should be handled by now"),
-                };
-                let target_expr = if is_immediately_inside_reference_pattern {
-                    // Literal patterns don't do anything special for references; they just need to
-                    // function on the de-rereferenced target. Whereas structs, enums, even
-                    // reference patterns do different and unique things when matching on
-                    // references
-                    self.synth_dereference(target_expr)
-                } else {
-                    target_expr
-                };
-                match pat {
-                    TypedPattern::LiteralUnit(span) => {
-                        Ok(self.exprs.add(TypedExpr::Bool(true, *span)))
-                    }
-                    TypedPattern::LiteralChar(byte, span) => {
-                        let char_expr = self.exprs.add(TypedExpr::Char(*byte, *span));
-                        let bin_op = self.synth_equals_binop(target_expr, char_expr, *span);
-                        Ok(bin_op)
-                    }
-                    TypedPattern::LiteralInteger(int_value, span) => {
-                        let bin_op = BinaryOp {
-                            kind: BinaryOpKind::Equals,
-                            ty: BOOL_TYPE_ID,
-                            lhs: target_expr,
-                            rhs: self.exprs.add(TypedExpr::Integer(TypedIntegerExpr {
-                                value: *int_value,
-                                span: *span,
-                            })),
-                            span: *span,
-                        };
-                        Ok(self.exprs.add(TypedExpr::BinaryOp(bin_op)))
-                    }
-                    TypedPattern::LiteralFloat(float_value, span) => {
-                        let bin_op = BinaryOp {
-                            kind: BinaryOpKind::Equals,
-                            ty: BOOL_TYPE_ID,
-                            lhs: target_expr,
-                            rhs: self.exprs.add(TypedExpr::Float(TypedFloatExpr {
-                                value: *float_value,
-                                span: *span,
-                            })),
-                            span: *span,
-                        };
-                        Ok(self.exprs.add(TypedExpr::BinaryOp(bin_op)))
-                    }
-                    TypedPattern::LiteralBool(bool_value, span) => {
-                        let bool_expr = self.exprs.add(TypedExpr::Bool(*bool_value, *span));
-                        let bin_op = self.synth_equals_binop(target_expr, bool_expr, *span);
-                        Ok(bin_op)
-                    }
-                    TypedPattern::LiteralString(string_value, span) => {
-                        let string_expr =
-                            self.exprs.add(TypedExpr::String(string_value.clone(), *span));
-                        let condition = self.synth_equals_call(target_expr, string_expr, *span)?;
-                        Ok(condition)
-                    }
-                    other_pat => {
-                        unreachable!("should only be literal patterns from here: {other_pat:?}")
-                    }
-                }
-            }
-        }
-    }
-
     /// Accumulates a list of 'BindingOrCond' while 'compiling' a pattern match.
     /// Basically, every part of a pattern match boils down to either
     /// - A boolean condition to be evaluated
@@ -6695,7 +6517,7 @@ impl TypedModule {
                         }));
                     let var_name = self
                         .ast
-                        .identifiers
+                        .idents
                         .intern(format!("field_{}", self.name_of(pattern_field.name)));
                     let struct_field_variable =
                         self.synth_variable_defn_simple(var_name, get_struct_field, arm_scope_id);
@@ -6756,10 +6578,8 @@ impl TypedModule {
                             is_referencing,
                             span: enum_pattern.span,
                         }));
-                    let var_name = self
-                        .ast
-                        .identifiers
-                        .intern(format!("payload_{}", self.name_of(variant_name)));
+                    let var_name =
+                        self.ast.idents.intern(format!("payload_{}", self.name_of(variant_name)));
                     let payload_variable =
                         self.synth_variable_defn_simple(var_name, get_payload_expr, arm_scope_id);
                     instrs.push(MatchingConditionInstr::Binding {
@@ -7021,7 +6841,7 @@ impl TypedModule {
         for_expr: &ForExpr,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
-        let binding_ident = for_expr.binding.unwrap_or(get_ident!(self, "it"));
+        let binding_ident = for_expr.binding.unwrap_or(self.ast.idents.builtins.it);
         let iterable_expr = self.eval_expr(for_expr.iterable_expr, ctx.with_no_expected_type())?;
         let iterable_type = self.exprs.get(iterable_expr).get_type();
         let iterable_span = self.exprs.get(iterable_expr).get_span();
@@ -7068,7 +6888,7 @@ impl TypedModule {
             span: for_expr.body_block.span,
         }));
         let index_variable = self.synth_variable_defn(
-            get_ident!(self, "itIndex"),
+            self.ast.idents.builtins.it_index,
             zero_expr,
             true,
             true,
@@ -7086,7 +6906,7 @@ impl TypedModule {
             )?
         };
         let iterator_variable = self.synth_variable_defn(
-            get_ident!(self, "iter"),
+            self.ast.idents.builtins.iter,
             iterator_initializer,
             false,
             false,
@@ -7389,7 +7209,6 @@ impl TypedModule {
             }
         };
 
-        // nocommit: synth if/else?
         let cons_arm = TypedMatchArm { condition, consequent_expr: consequent };
         let alt_arm = TypedMatchArm {
             condition: MatchingCondition {
@@ -7476,7 +7295,7 @@ impl TypedModule {
                 }
             }
         }
-        return false;
+        false
     }
 
     /// Handles chains of booleans and pattern statements (IsExprs).
@@ -7505,7 +7324,7 @@ impl TypedModule {
                 let target = self.eval_expr(target_expr, ctx)?;
                 let target_type = self.exprs.get(target).get_type();
                 let target_var = self.synth_variable_defn_simple(
-                    get_ident!(self, "if_target"),
+                    self.ast.idents.builtins.if_target,
                     target,
                     ctx.scope_id,
                 );
@@ -7875,7 +7694,8 @@ impl TypedModule {
             self.expect_ability_implementation(lhs_type, EQUALS_ABILITY_ID, span)?;
         let implementation = self.get_ability_impl(implementation.full_impl_id);
         let ability = self.get_ability(EQUALS_ABILITY_ID);
-        let equals_index = ability.find_function_by_name(get_ident!(self, "equals")).unwrap().0;
+        let equals_index =
+            ability.find_function_by_name(self.ast.idents.builtins.equals).unwrap().0;
         let equals_implementation_function_id = implementation.function_at_index(equals_index);
         let call_expr = self.exprs.add(TypedExpr::Call(Call {
             callee: Callee::make_static(equals_implementation_function_id),
@@ -7926,7 +7746,7 @@ impl TypedModule {
                     ctx.scope_id,
                     &fn_call.name,
                     &self.namespaces,
-                    &self.ast.identifiers,
+                    &self.ast.idents,
                 )? {
                     if let Some(function_ability_id) =
                         self.get_function(function_id).kind.ability_id()
@@ -8190,7 +8010,7 @@ impl TypedModule {
                             ctx.scope_id,
                             function_name,
                             &self.namespaces,
-                            &self.ast.identifiers,
+                            &self.ast.idents,
                         )?;
                         if let Some(function_id) = function_id {
                             let function = self.get_function(function_id);
@@ -8320,20 +8140,21 @@ impl TypedModule {
                 owner_scope: new_function.scope,
                 is_context: false,
                 global_id: None,
+                user_hidden: false,
             });
             new_function.param_variables.insert(0, empty_env_variable);
             let new_function_type =
                 self.add_lambda_env_to_function_type(new_function.type_id, function_signature_span);
             new_function.type_id = new_function_type;
             let old_name = self.name_of(new_function.name);
-            new_function.name = self.ast.identifiers.intern(format!("{}__dyn", old_name));
+            new_function.name = self.ast.idents.intern(format!("{}__dyn", old_name));
             let new_function_id = self.add_function(new_function);
             self.get_function_mut(function_id).dyn_fn_id = Some(new_function_id);
             new_function_id
         };
         let dyn_function = self.get_function(dyn_function_id);
         let lambda_object_type_id = self.types.add_lambda_object(
-            &self.ast.identifiers,
+            &self.ast.idents,
             dyn_function.type_id,
             dyn_function.parsed_id,
         );
@@ -8397,7 +8218,7 @@ impl TypedModule {
         let type_params: SmallVec<[SimpleNamedType; 8]> = {
             let mut type_params = SmallVec::with_capacity(ability_params.len() + 1);
             type_params.push(SimpleNamedType {
-                name: get_ident!(self, "Self"),
+                name: self.ast.idents.builtins.self_cap,
                 type_id: ability_self_type_id,
             });
             type_params.extend(
@@ -8570,7 +8391,7 @@ impl TypedModule {
                     ctx.scope_id,
                     &v.name,
                     &self.namespaces,
-                    &self.ast.identifiers,
+                    &self.ast.idents,
                 )?
                 else {
                     return Ok(None);
@@ -8934,7 +8755,6 @@ impl TypedModule {
         let is_generic = maybe_original_function.is_some_and(|f| f.is_generic());
 
         let original_function_type = self.types.get(callee_function_type_id).as_function().unwrap();
-        let original_function_return_type = original_function_type.return_type;
         let params = &original_function_type.logical_params().to_vec();
 
         let (callee, typechecked_arguments, type_args) = match is_generic {
@@ -9964,7 +9784,7 @@ impl TypedModule {
         let specialized_function_type =
             self.types.get(specialized_function_type_id).as_function().unwrap();
 
-        let specialized_name = self.ast.identifiers.intern(&specialized_name_string);
+        let specialized_name = self.ast.idents.intern(&specialized_name_string);
         let spec_fn_scope = self.scopes.add_sibling_scope(
             generic_function_scope,
             ScopeType::FunctionScope,
@@ -9989,6 +9809,7 @@ impl TypedModule {
                     owner_scope: spec_fn_scope,
                     is_context: specialized_param_type.is_context,
                     global_id: None,
+                    user_hidden: false,
                 });
                 if specialized_param_type.is_context {
                     self.scopes.add_context_variable(
@@ -10118,7 +9939,7 @@ impl TypedModule {
                     ctx.scope_id,
                     &parsed_use.target,
                     &self.namespaces,
-                    &self.ast.identifiers,
+                    &self.ast.idents,
                 )?
                 else {
                     return failf!(
@@ -10185,6 +10006,7 @@ impl TypedModule {
                     owner_scope: ctx.scope_id,
                     is_context: parsed_let.is_context(),
                     global_id: None,
+                    user_hidden: false,
                 });
                 let val_def_stmt = TypedStmt::Let(LetStmt {
                     variable_type,
@@ -10209,15 +10031,38 @@ impl TypedModule {
             ParsedStmt::Require(require) => {
                 static_assert_size!(parse::ParsedRequire, 12);
                 let require = require.clone();
-                let matching_cond = self.eval_matching_condition(require.condition_expr, ctx)?;
+                let condition = self.eval_matching_condition(require.condition_expr, ctx)?;
 
-                // Make the binding variables unavailable in the bailout scope
                 let else_scope =
                     self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, None, None);
 
-                let else_body = self.eval_expr(require.else_body, ctx.with_scope(else_scope))?;
+                // Make the binding variables unavailable in the else scope
+                for instr in &condition.instrs {
+                    if let MatchingConditionInstr::Binding { let_stmt, variable_id: _variable_id } =
+                        instr
+                    {
+                        let stmt = self.stmts.get(*let_stmt).as_let().unwrap();
+                        let variable = self.variables.get(stmt.variable_id);
 
-                todo!("require")
+                        if !variable.user_hidden {
+                            let else_scope = self.scopes.get_scope_mut(else_scope);
+                            else_scope.mask_variable(variable.name);
+                        }
+                    }
+                }
+
+                let else_body = self.eval_expr(require.else_body, ctx.with_scope(else_scope))?;
+                if self.exprs.get(else_body).get_type() != NEVER_TYPE_ID {
+                    let else_span = self.exprs.get(else_body).get_span();
+                    return failf!(else_span, "else branch must diverge; try returning or exiting");
+                }
+
+                let id = self.stmts.add(TypedStmt::Require(TypedRequireStmt {
+                    condition: Box::new(condition),
+                    else_body,
+                    span: require.span,
+                }));
+                Ok(Some(id))
             }
             ParsedStmt::Assignment(assignment) => {
                 static_assert_size!(parse::Assignment, 12);
@@ -10328,7 +10173,7 @@ impl TypedModule {
                                 self.stmts.add(TypedStmt::Expr(return_expr, NEVER_TYPE_ID));
                             statements.push(return_stmt);
                         }
-                        TypedStmt::Assignment(_) | TypedStmt::Let(_) => {
+                        TypedStmt::Assignment(_) | TypedStmt::Let(_) | TypedStmt::Require(_) => {
                             let unit = self.exprs.add(TypedExpr::Unit(stmt_span));
                             let return_unit_expr = self.exprs.add(TypedExpr::Return(TypedReturn {
                                 span: stmt_span,
@@ -10361,7 +10206,7 @@ impl TypedModule {
         namespace_chain: &[Identifier],
         ability_impl_info: Option<(AbilityId, TypeId)>,
     ) -> Result<IntrinsicFunction, String> {
-        let fn_name_str = self.ast.identifiers.get_name(fn_name);
+        let fn_name_str = self.ast.idents.get_name(fn_name);
         let second = namespace_chain.get(1).map(|id| self.name_of(*id));
         let result = if let Some((ability_id, ability_impl_type_id)) = ability_impl_info {
             match (ability_id, self.types.get(ability_impl_type_id)) {
@@ -10675,7 +10520,7 @@ impl TypedModule {
                     write!(&mut s, "_").unwrap();
                 }
             }
-            self.ast.identifiers.intern(s)
+            self.ast.idents.intern(s)
         };
 
         let specialized_ability_scope = self.scopes.add_sibling_scope(
@@ -10709,7 +10554,7 @@ impl TypedModule {
             specialized_child: specialized_ability_id,
             arguments,
         };
-        let self_ident = get_ident!(self, "Self");
+        let self_ident = self.ast.idents.builtins.self_cap;
         let new_self_type_id = self.add_type_parameter(
             TypeParameter { name: self_ident, scope_id: specialized_ability_scope, span },
             smallvec![],
@@ -10879,7 +10724,7 @@ impl TypedModule {
                     self_.name_of(parsed_function_name),
                 )
                 .unwrap();
-                self_.ast.identifiers.intern(s)
+                self_.ast.idents.intern(s)
             }
             None => parsed_function.name,
         };
@@ -10900,7 +10745,7 @@ impl TypedModule {
         if is_ability_decl {
             let self_type_id = self_.get_ability(ability_id.unwrap()).self_type_id;
             type_params.push(TypeParam {
-                name: get_ident!(self_, "Self"),
+                name: self_.ast.idents.builtins.self_cap,
                 type_id: self_type_id,
                 span: parsed_function_span,
             })
@@ -10980,7 +10825,7 @@ impl TypedModule {
 
             // First arg Self shenanigans
             if idx == 0 {
-                let name_is_self = self_.ast.identifiers.get_name(fn_param.name) == "self";
+                let name_is_self = self_.ast.idents.get_name(fn_param.name) == "self";
 
                 // If the first argument is named self, check if it's a method of the companion type
                 let is_ability_fn = ability_id.is_some();
@@ -11031,6 +10876,7 @@ impl TypedModule {
                 owner_scope: fn_scope_id,
                 is_context,
                 global_id: None,
+                user_hidden: false,
             };
 
             let variable_id = self_.variables.add(variable);
@@ -11086,8 +10932,8 @@ impl TypedModule {
 
         // Typecheck 'main': It must take argc and argv of correct types, or nothing
         // And it must return an integer, or an Unwrap[Inner = i32]
-        let is_main_fn =
-            namespace_id == ROOT_NAMESPACE_ID && parsed_function_name == get_ident!(self_, "main");
+        let is_main_fn = namespace_id == ROOT_NAMESPACE_ID
+            && parsed_function_name == self_.ast.idents.builtins.main;
         if is_main_fn {
             match param_types.len() {
                 0 => {}
@@ -11309,7 +11155,7 @@ impl TypedModule {
             Some(parsed_ability.name),
         );
 
-        let self_ident_id = get_ident!(self, "Self");
+        let self_ident_id = self.ast.idents.builtins.self_cap;
         let mut ability_params: Vec<TypedAbilityParam> =
             Vec::with_capacity(parsed_ability.params.len() + 1);
         let self_type_id = self.add_type_parameter(
@@ -11441,7 +11287,7 @@ impl TypedModule {
             scope_id,
             ability_name,
             &self.namespaces,
-            &self.ast.identifiers,
+            &self.ast.idents,
         )?;
         found_ability_id.map(Ok).unwrap_or({
             match self.scopes.find_pending_ability(scope_id, ability_name.name) {
@@ -11553,18 +11399,19 @@ impl TypedModule {
         let ability = self.get_ability(ability_id).clone();
         let ability_name = ability.name;
         let ability_self_type = ability.self_type_id;
-        let impl_scope_name = self.ast.identifiers.intern(format!(
+        let impl_scope_name = format_ident!(
+            self,
             "{}_impl_{}",
             self.name_of(ability_name),
             self.type_id_to_string(impl_self_type)
-        ));
+        );
         self.scopes.get_scope_mut(impl_scope_id).name = Some(impl_scope_name);
         // Bind 'Self' = target_type
         // Discarded because we just made this scope
         let _ = self
             .scopes
             .get_scope_mut(impl_scope_id)
-            .add_type(get_ident!(self, "Self"), impl_self_type);
+            .add_type(self.ast.idents.builtins.self_cap, impl_self_type);
 
         // We also need to bind any ability parameters that this
         // ability is already specialized on; they aren't in our fresh scope
@@ -11687,8 +11534,8 @@ impl TypedModule {
                 return failf!(
                     impl_function_span,
                     "Invalid implementation of {} in ability {}: {msg}",
-                    self.ast.identifiers.get_name(ability_function_ref.function_name),
-                    self.ast.identifiers.get_name(ability_name)
+                    self.ast.idents.get_name(ability_function_ref.function_name),
+                    self.ast.idents.get_name(ability_name)
                 );
             }
             typed_functions.push(function_impl);
@@ -11795,7 +11642,7 @@ impl TypedModule {
                 scope_id,
                 &parsed_use.target,
                 &self.namespaces,
-                &self.ast.identifiers,
+                &self.ast.idents,
             )? {
                 self.scopes.add_use_binding(
                     scope_id,
@@ -12555,8 +12402,8 @@ impl TypedModule {
         } else {
             // TODO(perf): this registers on flamegraph. Re-use a buffer for it
             let new_ident_name =
-                format!("__{}_{}", self.ast.identifiers.get_name(name), self.variables.len());
-            self.ast.identifiers.intern(new_ident_name)
+                format!("__{}_{}", self.ast.idents.get_name(name), self.variables.len());
+            self.ast.idents.intern(new_ident_name)
         };
         let variable = Variable {
             name: new_ident,
@@ -12565,6 +12412,7 @@ impl TypedModule {
             type_id,
             is_context: false,
             global_id: None,
+            user_hidden: !no_mangle,
         };
         let variable_id = self.variables.add(variable);
         let variable_expr =
@@ -12633,6 +12481,7 @@ impl TypedModule {
             .add(ParsedTypeExpr::TypeOf(parse::ParsedTypeOf { target_expr: expr, span }))
     }
 
+    #[allow(unused)]
     fn synth_binary_bool_op(
         &mut self,
         kind: BinaryOpKind,
@@ -12702,11 +12551,11 @@ impl TypedModule {
         let struct_expr = TypedExpr::Struct(Struct {
             fields: vec![
                 StructField {
-                    name: get_ident!(self, "filename"),
+                    name: self.ast.idents.builtins.filename,
                     expr: self.exprs.add(TypedExpr::String(source.filename.clone(), span)),
                 },
                 StructField {
-                    name: get_ident!(self, "line"),
+                    name: self.ast.idents.builtins.line,
                     expr: self.exprs.add(TypedExpr::Integer(TypedIntegerExpr {
                         value: TypedIntegerValue::U64(line.line_number() as u64),
                         span,
