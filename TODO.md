@@ -35,8 +35,10 @@ New tagline? "C with typeclasses and tagged unions"
 - [x] Fix closure types / get static dispatch for functions taking a closure directly
 - [x] *Specializing functions on their provided closures to allow inlining and static dispatch*
 - [x] Run in Linux x86-64
-- [ ] let ... else, or 'guard', or 'ensure' let e is .StringLit(s) else {}
+- [x] `require` statements with matching and binding
 - [ ] Support explicit type args in AnonEnumConstructor syntax 
+- [ ] Unit syntax of '()' makes no sense when we don't have tuples. What about `{}`
+- [ ] Adopt `ecow`'s EcoVec
 
 - [x] Runtime-branching Allocator system (v2 is comptime branching)
   - [x] comptime enhancement to support this global initializer: `let* a: Arena* = { .. };`

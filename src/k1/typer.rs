@@ -33,7 +33,11 @@ use crate::parse::{
     Block, FnCall, Identifier, Literal, ParsedExpression, ParsedModule, ParsedStmt,
 };
 use crate::pool::Pool;
+use crate::vm;
 use crate::{pool, static_assert_size, strings};
+
+#[cfg(test)]
+mod layout_test;
 
 macro_rules! nz_u32_id {
     ($name: ident) => {
@@ -128,7 +132,7 @@ pub struct EvalExprContext {
     scope_id: ScopeId,
     expected_type_id: Option<TypeId>,
     is_inference: bool,
-    is_comptime: bool,
+    is_static: bool,
     global_defn_name: Option<Identifier>,
 }
 impl EvalExprContext {
@@ -137,7 +141,7 @@ impl EvalExprContext {
             scope_id,
             expected_type_id: None,
             is_inference: false,
-            is_comptime: false,
+            is_static: false,
             global_defn_name: None,
         }
     }
@@ -147,7 +151,7 @@ impl EvalExprContext {
             scope_id: self.scope_id,
             expected_type_id: expected_element_type,
             is_inference: self.is_inference,
-            is_comptime: false,
+            is_static: false,
             global_defn_name: None,
         }
     }
@@ -157,7 +161,7 @@ impl EvalExprContext {
             scope_id: self.scope_id,
             expected_type_id: None,
             is_inference: self.is_inference,
-            is_comptime: false,
+            is_static: false,
             global_defn_name: None,
         }
     }
@@ -170,8 +174,8 @@ impl EvalExprContext {
         EvalExprContext { scope_id, ..*self }
     }
 
-    fn _with_comptime(&self, arg: bool) -> EvalExprContext {
-        EvalExprContext { is_comptime: arg, ..*self }
+    fn with_static(&self, arg: bool) -> EvalExprContext {
+        EvalExprContext { is_static: arg, ..*self }
     }
 }
 
@@ -286,6 +290,40 @@ impl CompileTimeValue {
             CompileTimeValue::Boolean(b, _) => Some(*b),
             _ => None,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Layout {
+    pub size_bits: u32,
+    /// Stride represents the space between the start of 2 successive elements, it bumps to the
+    /// next aligned slot. This must be used by builtin Buffer functionality in order to be correct
+    pub stride_bits: u32,
+    pub align_bits: u32,
+}
+
+impl Layout {
+    pub fn from_scalar_bits(bits: u32) -> Layout {
+        Layout { size_bits: bits, stride_bits: bits, align_bits: bits }
+    }
+    pub const ZERO: Layout = Layout { size_bits: 0, stride_bits: 0, align_bits: 8 };
+
+    // Returns: the start, or offset, of the new field
+    pub fn append_to_aggregate(&mut self, layout: Layout) -> u32 {
+        debug_assert_ne!(layout.align_bits, 0);
+        let offset = self.size_bits;
+        let new_field_start = offset.next_multiple_of(layout.align_bits);
+        let padding = new_field_start - offset;
+        if padding != 0 {
+            eprintln!("Padding: {padding}");
+        }
+        let new_end_unaligned = new_field_start + layout.size_bits;
+        let new_align = std::cmp::max(self.align_bits, layout.align_bits);
+        let new_end_aligned = new_end_unaligned.next_multiple_of(new_align);
+        self.size_bits = new_end_unaligned;
+        self.stride_bits = new_end_aligned;
+        self.align_bits = new_align;
+        new_field_start
     }
 }
 
@@ -508,7 +546,7 @@ pub enum TypedPattern {
     LiteralInteger(TypedIntegerValue, SpanId),
     LiteralFloat(TypedFloatValue, SpanId),
     LiteralBool(bool, SpanId),
-    LiteralString(String, SpanId),
+    LiteralString(Box<str>, SpanId),
     Variable(VariablePattern),
     Enum(TypedEnumPattern),
     Struct(TypedStructPattern),
@@ -1387,7 +1425,7 @@ pub enum TypedExpr {
     Bool(bool, SpanId),
     Integer(TypedIntegerExpr),
     Float(TypedFloatExpr),
-    String(String, SpanId),
+    String(Box<str>, SpanId),
     Struct(Struct),
     StructFieldAccess(FieldAccess),
     Variable(VariableExpr),
@@ -1425,6 +1463,7 @@ pub enum TypedExpr {
     /// These get re-written into struct access expressions once we know all captures and have
     /// generated the lambda's capture struct
     PendingCapture(PendingCaptureExpr),
+    StaticValue(CompileTimeValueId, TypeId, SpanId),
 }
 
 impl From<VariableExpr> for TypedExpr {
@@ -1462,6 +1501,7 @@ impl TypedExpr {
             TypedExpr::FunctionReference(f) => f.function_reference_type,
             TypedExpr::FunctionToLambdaObject(f) => f.lambda_object_type_id,
             TypedExpr::PendingCapture(pc) => pc.type_id,
+            TypedExpr::StaticValue(_, type_id, _) => *type_id,
         }
     }
 
@@ -1493,6 +1533,7 @@ impl TypedExpr {
             TypedExpr::FunctionReference(f) => f.span,
             TypedExpr::FunctionToLambdaObject(f) => f.span,
             TypedExpr::PendingCapture(pc) => pc.span,
+            TypedExpr::StaticValue(_, _, span) => *span,
         }
     }
 
@@ -2032,6 +2073,7 @@ impl TypedModule {
             type_variable_counts: FxHashMap::new(),
             ability_mapping: FxHashMap::new(),
             placeholder_mapping: FxHashMap::new(),
+            config: TypesConfig { ptr_size_bits: parsed_module.config.target.word_size().bits() },
         };
 
         let scopes = Scopes::make();
@@ -2069,14 +2111,14 @@ impl TypedModule {
         }
     }
 
-    fn push_debug_level(&mut self) {
+    pub fn push_debug_level(&mut self) {
         let level = log::LevelFilter::Debug;
         self.debug_level_stack.push(level);
         log::set_max_level(level);
         debug!("push max_level is now {}", log::max_level())
     }
 
-    fn pop_debug_level(&mut self) {
+    pub fn pop_debug_level(&mut self) {
         self.debug_level_stack.pop();
         log::set_max_level(*self.debug_level_stack.last().unwrap());
         debug!("pop max_level is now {}", log::max_level())
@@ -2446,6 +2488,7 @@ impl TypedModule {
             ParsedTypeExpr::Struct(struct_defn) => {
                 let struct_defn = struct_defn.clone();
                 let mut fields: Vec<StructTypeField> = Vec::new();
+                let mut layout = Layout::ZERO;
                 for (index, ast_field) in struct_defn.fields.iter().enumerate() {
                     let ty = self.eval_type_expr_ext(
                         ast_field.ty,
@@ -2463,11 +2506,17 @@ impl TypedModule {
                     //         );
                     //     }
                     // }
+                    let field_layout = self.type_layout(ty);
+                    let offset = match field_layout {
+                        Some(field) => layout.append_to_aggregate(field),
+                        None => layout.size_bits,
+                    };
                     fields.push(StructTypeField {
                         name: ast_field.name,
                         type_id: ty,
                         index: index as u32,
                         private: ast_field.private,
+                        offset_bits: offset,
                     })
                 }
                 let struct_defn = StructType {
@@ -2711,6 +2760,107 @@ impl TypedModule {
         Ok(base)
     }
 
+    pub fn word_size_bits(&self) -> u32 {
+        self.ast.config.target.word_size().bits()
+    }
+
+    pub fn type_layout(&self, type_id: TypeId) -> Option<Layout> {
+        match self.types.get(type_id) {
+            Type::Unit(_) => Some(Layout::from_scalar_bits(8)),
+            Type::Char(_) => Some(Layout::from_scalar_bits(8)),
+            Type::Integer(integer_type) => {
+                Some(Layout::from_scalar_bits(integer_type.width().bit_width()))
+            }
+            Type::Float(float_type) => Some(Layout::from_scalar_bits(float_type.size.bit_width())),
+            Type::Bool(_) => Some(Layout::from_scalar_bits(8)),
+            Type::Pointer(_) => Some(Layout::from_scalar_bits(self.word_size_bits())),
+            Type::Struct(struct_type) => {
+                let mut layout = Layout::ZERO;
+                for field in &struct_type.fields {
+                    layout.append_to_aggregate(
+                        self.type_layout(field.type_id).expect("Expected struct field to be sized"),
+                    );
+                }
+                Some(layout)
+            }
+            Type::Reference(_reference_type) => {
+                Some(Layout::from_scalar_bits(self.word_size_bits()))
+            }
+            Type::Enum(typed_enum) => {
+                let payload_layouts: Vec<Layout> = typed_enum
+                    .variants
+                    .iter()
+                    .map(|v| v.payload.and_then(|p| self.type_layout(p)).unwrap_or(Layout::ZERO))
+                    .collect();
+                let payload_max_alignment =
+                    payload_layouts.iter().map(|l| l.align_bits).max().unwrap_or(0);
+                let word_size_int_type_id = match self.ast.config.target.word_size() {
+                    crate::compiler::WordSize::W32 => U32_TYPE_ID,
+                    crate::compiler::WordSize::W64 => U64_TYPE_ID,
+                };
+                let tag_int_type_id = match typed_enum.explicit_tag_type {
+                    Some(explicit_tag_type) => explicit_tag_type,
+                    None => {
+                        match payload_max_alignment {
+                            0 => U8_TYPE_ID, // No payloads case
+                            8 => U8_TYPE_ID,
+                            16 => U16_TYPE_ID,
+                            32 => U32_TYPE_ID,
+                            // If the payload(s) require to be aligned on a 64-bit or larger
+                            // boundary, there's no point in using a tag type smaller than the word
+                            // size
+                            64 => word_size_int_type_id,
+                            _ => word_size_int_type_id,
+                        }
+                    }
+                };
+                // Enum sizing and layout rules:
+                // - Alignment of the enum is the max(alignment) of the variants
+                // - Size of the enum is the size of the largest variant, not necessarily the same
+                //   variant, plus alignment end padding
+                let tag_layout = self.type_layout(tag_int_type_id).unwrap();
+                let mut max_variant_align = 0;
+                let mut max_variant_size = 0;
+                for (_variant, payload_layout) in typed_enum.variants.iter().zip(payload_layouts) {
+                    let struct_repr = {
+                        let mut l = Layout::ZERO;
+                        l.append_to_aggregate(tag_layout);
+                        l.append_to_aggregate(payload_layout);
+                        l
+                    };
+                    if struct_repr.align_bits > max_variant_align {
+                        max_variant_align = struct_repr.align_bits
+                    };
+                    if struct_repr.stride_bits > max_variant_size {
+                        max_variant_size = struct_repr.stride_bits
+                    };
+                }
+                let enum_size = Layout {
+                    size_bits: max_variant_size,
+                    stride_bits: max_variant_size,
+                    align_bits: max_variant_align,
+                };
+                Some(enum_size)
+            }
+            Type::EnumVariant(variant) => self.type_layout(variant.enum_type_id),
+            Type::Never(type_defn_info) => Some(Layout::ZERO),
+            Type::Function(function_type) => None,
+            Type::Lambda(lambda_type) => self.type_layout(lambda_type.env_type),
+            Type::LambdaObject(lambda_object_type) => {
+                self.type_layout(lambda_object_type.struct_representation)
+            }
+            Type::Generic(generic_type) => unreachable!("size of generic"),
+            Type::TypeParameter(type_parameter) => unreachable!("size of type parameter"),
+            Type::FunctionTypeParameter(function_type_parameter) => {
+                unreachable!("size of function type parameter")
+            }
+            Type::InferenceHole(inference_hole_type) => unreachable!("size of inference hole"),
+            Type::RecursiveReference(recursive_reference) => {
+                unreachable!("size of recursive reference")
+            }
+        }
+    }
+
     /// Temporary home for our type operators until I decide on syntax
     fn detect_and_eval_type_operator(
         &mut self,
@@ -2749,6 +2899,7 @@ impl TypedModule {
                     new_function_type,
                     ty_app_id.into(),
                 );
+
                 Ok(Some(lambda_object_type))
             }
             "_struct_combine" => {
@@ -3707,9 +3858,9 @@ impl TypedModule {
             TypedExpr::Float(typed_float_expr) => Ok(self
                 .comptime_values
                 .add(CompileTimeValue::Float(typed_float_expr.value, typed_float_expr.span))),
-            TypedExpr::String(s, span) => Ok(self
-                .comptime_values
-                .add(CompileTimeValue::String(s.clone().into_boxed_str(), *span))),
+            TypedExpr::String(s, span) => {
+                Ok(self.comptime_values.add(CompileTimeValue::String(s.clone(), *span)))
+            }
             TypedExpr::Variable(v) => {
                 let typed_variable = self.variables.get(v.variable_id);
                 let Some(global_id) = typed_variable.global_id else {
@@ -3879,7 +4030,7 @@ impl TypedModule {
             scope_id,
             expected_type_id,
             is_inference: false,
-            is_comptime: true,
+            is_static: true,
             global_defn_name: global_name,
         };
         let expr_result = self.eval_expr(expr, eval_ctx)?;
@@ -5078,12 +5229,17 @@ impl TypedModule {
         if let Type::LambdaObject(_lam_obj_type) = self.types.get(expected_type_id) {
             if let Type::Lambda(lambda_type) = self.get_expr_type(expression) {
                 let span = self.exprs.get(expression).get_span();
+                let lambda_object_type = self.types.add_lambda_object(
+                    &self.ast.idents,
+                    lambda_type.function_type,
+                    lambda_type.parsed_id,
+                );
                 return CoerceResult::Coerced(
                     "lambda2dyn",
                     self.exprs.add(TypedExpr::Cast(TypedCast {
                         cast_type: CastType::LambdaToLambdaObject,
                         base_expr: expression,
-                        target_type_id: lambda_type.lambda_object_type,
+                        target_type_id: lambda_object_type,
                         span,
                     })),
                 );
@@ -5467,7 +5623,7 @@ impl TypedModule {
                 Ok(res)
             }
             ParsedExpression::Builtin(span) => {
-                if !ctx.is_comptime {
+                if !ctx.is_static {
                     return failf!(*span, "All the builtins should currently be comptime");
                 }
                 let Some(defn_name) = ctx.global_defn_name else {
@@ -5484,7 +5640,7 @@ impl TypedModule {
                     "OS" => {
                         // TODO: Ideally this is an enum! But we don't support comptime enums yet
                         let os_str = self.ast.config.target.target_os().to_str();
-                        Ok(self.exprs.add(TypedExpr::String(os_str.to_owned(), *span)))
+                        Ok(self.exprs.add(TypedExpr::String(Box::from(os_str), *span)))
                     }
                     "NO_STD" => {
                         let no_std = self.ast.config.no_std;
@@ -5497,7 +5653,108 @@ impl TypedModule {
                     s => failf!(*span, "Unknown builtin name: {s}"),
                 }
             }
+            ParsedExpression::Static(stat) => {
+                let span = stat.span;
+                let expr = self.eval_expr(stat.base_expr, ctx.with_static(true))?;
+                let type_id = self.exprs.get(expr).get_type();
+                let value = vm::execute_single_expr(self, expr)?;
+                if cfg!(debug_assertions) {
+                    if type_id != value.get_type() {
+                        return failf!(
+                            span,
+                            "MISMATCH: {} vs {}",
+                            self.type_id_to_string(type_id),
+                            self.type_id_to_string(value.get_type())
+                        );
+                    }
+                }
+                let comptime_value_id = self.vm_value_to_static_value(&value, span);
+                eprintln!("value: {}", self.static_value_to_string(comptime_value_id));
+                let e = self.exprs.add(TypedExpr::StaticValue(comptime_value_id, type_id, span));
+                Ok(e)
+            }
         }
+    }
+
+    /// nocommit This entire transformation is a temporary shim; it shouldn't be needed in the final
+    /// picture; I just want to sketch out the actual evaluation without re-writing everything else
+    /// all at once
+    ///
+    /// Actually not, this is needed, because not all values that run through the interpreter
+    /// are valid as final static values; for example, raw pointers won't fly
+    fn vm_value_to_static_value(
+        &mut self,
+        vm_value: &vm::Value,
+        span: SpanId,
+    ) -> CompileTimeValueId {
+        eprintln!("vm_to_static: {:?}", vm_value);
+        let v = match vm_value {
+            vm::Value::Unit => CompileTimeValue::Unit(span),
+            vm::Value::Bool(b) => CompileTimeValue::Boolean(*b, span),
+            vm::Value::Char(c) => CompileTimeValue::Char(*c, span),
+            vm::Value::Integer(typed_integer_value) => {
+                CompileTimeValue::Integer(*typed_integer_value, span)
+            }
+            vm::Value::Float(typed_float_value) => {
+                CompileTimeValue::Float(*typed_float_value, span)
+            }
+            vm::Value::Pointer { value } => {
+                if *value == 0 {
+                    CompileTimeValue::Pointer(0, span)
+                } else {
+                    self.ice_with_span(
+                       "the address won't be valid come runtime, and I don't know what it points to. Can do NULL aka 0 only",
+                       span,
+                   )
+                }
+            }
+            vm::Value::Reference { type_id, ptr } => {
+                // Now this, I can do. Load the value and bake it into the binary
+                // This is just a de-reference
+                // Needs to become a global.
+                // Rely on the VM's code to load it, then make a K1 'global' to hold it?
+                let loaded_value = vm::load_value(&self, *type_id, *ptr, span);
+                todo!("Introduce CompileTimeValue::Reference");
+            }
+            vm::Value::Struct { type_id, fields } => {
+                let mut field_value_ids = Vec::with_capacity(fields.len());
+                let type_id = *type_id;
+                if type_id == STRING_TYPE_ID {
+                    let vm::Value::Struct { fields, .. } = &fields[0] else {
+                        self.ice_with_span("Malformed compile-time 'string'", span)
+                    };
+                    let vm::Value::Integer(TypedIntegerValue::U64(len)) = fields[0] else {
+                        self.ice_with_span("Malformed compile-time 'string'", span)
+                    };
+                    let vm::Value::Reference { ptr, .. } = fields[1] else {
+                        self.ice_with_span("Malformed compile-time 'string'", span)
+                    };
+                    unsafe {
+                        let slice = std::slice::from_raw_parts(ptr as *const u8, len as usize);
+                        // Attempt to convert the byte slice to a &str, returning None if invalid UTF-8
+                        dbg!(slice);
+                        let the_str = std::str::from_utf8(slice).unwrap();
+                        let box_str = Box::from(the_str);
+                        CompileTimeValue::String(box_str, span)
+                    }
+                } else if let Some(buffer) = self.types.get(type_id).as_buffer_instance() {
+                    let elem_type = buffer.type_args[0];
+                    todo!("VM reify a non-string buffer of {}", self.type_id_to_string(elem_type));
+                } else {
+                    for field_value in fields.iter() {
+                        let ctv = self.vm_value_to_static_value(field_value, span);
+                        field_value_ids.push(ctv)
+                    }
+                    CompileTimeValue::Struct(CompileTimeStruct {
+                        type_id,
+                        fields: field_value_ids,
+                        span,
+                    })
+                }
+            }
+            vm::Value::Enum { type_id, variant } => todo!(),
+        };
+        self.comptime_values.add(v)
     }
 
     fn eval_anonymous_struct(
@@ -5511,6 +5768,7 @@ impl TypedModule {
             self.ice_with_span("expected struct", self.ast.get_expr_span(expr_id))
         };
         let ast_struct = parsed_struct.clone();
+        let mut layout = Layout::ZERO;
         for (index, ast_field) in ast_struct.fields.iter().enumerate() {
             let parsed_expr = match ast_field.expr.as_ref() {
                 None => self.ast.exprs.add_expression(ParsedExpression::Variable(
@@ -5522,11 +5780,17 @@ impl TypedModule {
             };
             let expr = self.eval_expr(parsed_expr, ctx.with_expected_type(None))?;
             let expr_type = self.exprs.get(expr).get_type();
+            let field_layout = self.type_layout(expr_type);
+            let offset = match field_layout {
+                Some(field) => layout.append_to_aggregate(field),
+                None => layout.size_bits,
+            };
             field_defns.push(StructTypeField {
                 name: ast_field.name,
                 type_id: expr_type,
                 index: index as u32,
                 private: false,
+                offset_bits: offset,
             });
             field_values.push(StructField { name: ast_field.name, expr });
         }
@@ -6108,17 +6372,23 @@ impl TypedModule {
         };
 
         let lambda_info = self.scopes.get_lambda_info(lambda_scope_id);
+        let mut layout = Layout::ZERO;
         let env_fields = lambda_info
             .captured_variables
             .iter()
             .enumerate()
             .map(|(index, captured_variable_id)| {
                 let v = self.variables.get(*captured_variable_id);
+                let offset = match self.type_layout(v.type_id) {
+                    Some(l) => layout.append_to_aggregate(l),
+                    None => layout.size_bits,
+                };
                 StructTypeField {
                     type_id: v.type_id,
                     name: v.name,
                     index: index as u32,
                     private: false,
+                    offset_bits: offset,
                 }
             })
             .collect();
@@ -6225,7 +6495,6 @@ impl TypedModule {
             dyn_fn_id: None,
         });
         let lambda_type_id = self.types.add_lambda(
-            &self.ast.idents,
             function_type,
             environment_struct,
             environment_struct_type,
@@ -6274,7 +6543,7 @@ impl TypedModule {
                 diverges: false,
             },
             consequent_expr: self.synth_crash_call(
-                "Match Error".to_string(),
+                Box::from("Match Error"),
                 match_expr_span,
                 ctx.with_no_expected_type(),
             )?,
@@ -7406,11 +7675,11 @@ impl TypedModule {
         // TODO(comptime): Just a hack to get string equality working until we have a full-fledged
         //                 interpreter going for comptime, which would just actually call the
         //                 equals impl
-        if ctx.is_comptime {
+        if ctx.is_static {
             if binary_op.op_kind == BinaryOpKind::Equals {
                 let lhs = self.eval_expr(binary_op.lhs, ctx.with_no_expected_type())?;
                 let lhs_type = self.exprs.get(lhs).get_type();
-                let rhs = self.eval_expr(binary_op.lhs, ctx.with_expected_type(Some(lhs_type)))?;
+                let rhs = self.eval_expr(binary_op.rhs, ctx.with_expected_type(Some(lhs_type)))?;
                 let rhs_type = self.exprs.get(rhs).get_type();
                 if let Err(msg) = self.check_types(lhs_type, rhs_type, ctx.scope_id) {
                     return failf!(binary_op.span, "comptime equals type mismatch: {msg}");
@@ -7961,8 +8230,11 @@ impl TypedModule {
                 let result = self.eval_expr(arg.value, ctx.with_no_expected_type());
                 let expr = match result {
                     Err(typer_error) => {
-                        self.synth_optional_some(TypedExpr::String(typer_error.message, call_span))
-                            .0
+                        self.synth_optional_some(TypedExpr::String(
+                            typer_error.message.into_boxed_str(),
+                            call_span,
+                        ))
+                        .0
                     }
                     Ok(_expr) => self.synth_optional_none(STRING_TYPE_ID, call_span),
                 };
@@ -12522,7 +12794,7 @@ impl TypedModule {
         self.eval_function_call(&call, None, ctx)
     }
 
-    fn synth_struct_expr(
+    pub fn synth_struct_expr(
         &mut self,
         struct_type_id: TypeId,
         field_exprs: Vec<TypedExprId>,
@@ -12530,9 +12802,7 @@ impl TypedModule {
         span: SpanId,
     ) -> TypedExprId {
         let struct_type = self.types.get(struct_type_id).expect_struct();
-        if struct_type.fields.len() != field_exprs.len() {
-            panic!("Mismatching field count: {} / {}", struct_type.fields.len(), field_exprs.len());
-        }
+        debug_assert_eq!(struct_type.fields.len(), field_exprs.len());
         let mut fields: Vec<StructField> = Vec::with_capacity(struct_type.fields.len());
         for (index, field_expr) in field_exprs.into_iter().enumerate() {
             let field = &struct_type.fields[index];
@@ -12556,7 +12826,9 @@ impl TypedModule {
             fields: vec![
                 StructField {
                     name: self.ast.idents.builtins.filename,
-                    expr: self.exprs.add(TypedExpr::String(source.filename.clone(), span)),
+                    expr: self
+                        .exprs
+                        .add(TypedExpr::String(source.filename.clone().into_boxed_str(), span)),
                 },
                 StructField {
                     name: self.ast.idents.builtins.line,
@@ -12574,7 +12846,7 @@ impl TypedModule {
 
     fn synth_crash_call(
         &mut self,
-        message: String,
+        message: Box<str>,
         span: SpanId,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {

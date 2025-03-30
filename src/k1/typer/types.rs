@@ -44,6 +44,7 @@ pub struct StructTypeField {
     pub type_id: TypeId,
     pub index: u32,
     pub private: bool,
+    pub offset_bits: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -350,7 +351,6 @@ pub struct LambdaType {
     // that's because a lambda's environment is basically values baked into a function
     // Its almost like a comptime-known value, aka the type 5
     pub environment_struct: TypedExprId,
-    pub lambda_object_type: TypeId,
 }
 
 #[derive(Debug, Clone)]
@@ -889,7 +889,10 @@ impl TypeVariableInfo {
     }
 }
 
-#[derive(Debug)]
+pub struct TypesConfig {
+    pub ptr_size_bits: u32,
+}
+
 pub struct Types {
     pub types: Vec<Type>,
     /// We use this to efficiently check if we already have seen a type,
@@ -900,6 +903,7 @@ pub struct Types {
     pub type_variable_counts: FxHashMap<TypeId, TypeVariableInfo>,
     pub ability_mapping: FxHashMap<ParsedAbilityId, AbilityId>,
     pub placeholder_mapping: FxHashMap<ParsedTypeDefnId, TypeId>,
+    pub config: TypesConfig,
 }
 
 impl Types {
@@ -1033,7 +1037,6 @@ impl Types {
 
     pub fn add_lambda(
         &mut self,
-        identifiers: &Identifiers,
         function_type_id: TypeId,
         environment_struct: TypedExprId,
         environment_type: TypeId,
@@ -1046,12 +1049,7 @@ impl Types {
             parsed_id,
             body_function_id,
             environment_struct,
-            lambda_object_type: TypeId::PENDING,
         }));
-        let lambda_object_type = self.add_lambda_object(identifiers, function_type_id, parsed_id);
-        if let Type::Lambda(c) = self.get_mut(lambda_type_id) {
-            c.lambda_object_type = lambda_object_type;
-        }
         lambda_type_id
     }
 
@@ -1078,12 +1076,14 @@ impl Types {
                 type_id: fn_ptr_type,
                 index: 0,
                 private: false,
+                offset_bits: 0,
             },
             StructTypeField {
                 name: identifiers.get("env_ptr").unwrap(),
                 type_id: env_ptr_type,
                 index: 1,
                 private: false,
+                offset_bits: self.config.ptr_size_bits,
             },
         ];
         let struct_representation = self.add(Type::Struct(StructType {
