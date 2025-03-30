@@ -60,6 +60,15 @@ pub enum WordSize {
     W64,
 }
 
+impl WordSize {
+    pub fn bits(&self) -> u32 {
+        match self {
+            WordSize::W32 => 32,
+            WordSize::W64 => 64,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Arch {
     Intel,

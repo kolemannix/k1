@@ -1,0 +1,43 @@
+fn main(): int {
+
+  // String creation (special case)
+  #static "Hello, Static";
+
+  // Struct creation
+  let point = #static {
+    ({ x: 1, y: 2 })
+  };
+  assert(point.x == 1);
+  assert(point.y == 2);
+
+  // Scalars
+  assert(#static true);
+  assert(not (#static false));
+  assert(not (#static true == false));
+  assert(#static () == ());
+  assert(#static 'a' == 'a');
+  assert(not #static 'A' == 'a');
+  assert(not #static 123 == -123);
+  assert(not #static 123.0 == 3.14);
+
+  // Variable assign
+  let goodbye: string = #static {
+    let mut msg = "Hello, World";
+    msg = "Goodbye, World!";
+    msg
+  };
+  println(goodbye);
+
+  let letAssign = #static {
+    let mut i = 22;
+    i = 10;
+    i
+  };
+  assertEquals(letAssign, 10);
+
+  #static {
+    let b: u8* = new(10);
+  };
+
+  0
+}

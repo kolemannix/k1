@@ -221,7 +221,7 @@ pub enum Literal {
     Char(u8, SpanId),
     Numeric(ParsedNumericLiteral),
     Bool(bool, SpanId),
-    String(String, SpanId),
+    String(Box<str>, SpanId),
 }
 
 impl Display for Literal {
@@ -727,13 +727,19 @@ pub struct ParsedLambda {
 #[derive(Debug, Clone)]
 pub enum InterpolatedStringPart {
     // TODO: Put spans on each string part
-    String(String),
+    String(Box<str>),
     Identifier(Identifier),
 }
 
 #[derive(Debug, Clone)]
 pub struct ParsedInterpolatedString {
     pub parts: Vec<InterpolatedStringPart>,
+    pub span: SpanId,
+}
+
+#[derive(Debug, Clone)]
+pub struct ParsedStaticExpr {
+    pub base_expr: ParsedExprId,
     pub span: SpanId,
 }
 
@@ -818,6 +824,7 @@ pub enum ParsedExpression {
     AsCast(ParsedAsCast),
     Lambda(ParsedLambda),
     Builtin(SpanId),
+    Static(ParsedStaticExpr),
 }
 
 impl ParsedExpression {
@@ -853,6 +860,7 @@ impl ParsedExpression {
             Self::AsCast(as_cast) => as_cast.span,
             Self::Lambda(lambda) => lambda.span,
             Self::Builtin(span) => *span,
+            Self::Static(s) => s.span,
         }
     }
 
@@ -2253,7 +2261,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                                 };
                                 if next == '{' {
                                     let b = std::mem::take(&mut buf);
-                                    parts.push(InterpolatedStringPart::String(b));
+                                    parts.push(InterpolatedStringPart::String(b.into_boxed_str()));
                                     mode = Mode::InterpIdent(String::with_capacity(16));
                                 } else if let Some(c) =
                                     STRING_ESCAPED_CHARS.iter().find(|c| c.sentinel == next)
@@ -2274,7 +2282,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 match mode {
                     Mode::Base => {
                         if !buf.is_empty() {
-                            parts.push(InterpolatedStringPart::String(buf))
+                            parts.push(InterpolatedStringPart::String(buf.into_boxed_str()))
                         }
                     }
                     Mode::InterpIdent(s) => {
@@ -3041,12 +3049,24 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             ))
         } else if first.kind == K::Hash {
             self.advance();
-            if self.peek().kind != K::KeywordIf {
-                return Err(error_expected("if following #", self.peek()));
+
+            match self.peek().kind {
+                K::KeywordStatic => {
+                    self.advance();
+                    let base_expr = self.expect_expression()?;
+                    let span = self.get_expression_span(base_expr);
+                    Ok(Some(self.add_expression(ParsedExpression::Static(ParsedStaticExpr {
+                        base_expr,
+                        span,
+                    }))))
+                }
+                K::KeywordIf => {
+                    let mut if_expr = Parser::expect("If Expression", first, self.parse_if_expr())?;
+                    if_expr.is_condition_compile_time = true;
+                    Ok(Some(self.add_expression(ParsedExpression::If(if_expr))))
+                }
+                _ => Err(error_expected("static, or if, following #", self.peek())),
             }
-            let mut if_expr = Parser::expect("If Expression", first, self.parse_if_expr())?;
-            if_expr.is_condition_compile_time = true;
-            Ok(Some(self.add_expression(ParsedExpression::If(if_expr))))
         } else {
             // More expression types
             if directives.is_empty() {
@@ -3917,130 +3937,135 @@ impl ParsedModule {
         buffer
     }
 
-    pub fn display_expr_id(&self, expr: ParsedExprId, f: &mut impl Write) -> std::fmt::Result {
+    pub fn display_expr_id(&self, expr: ParsedExprId, w: &mut impl Write) -> std::fmt::Result {
         match self.exprs.get(expr) {
-            ParsedExpression::Builtin(_span) => f.write_str("builtin"),
+            ParsedExpression::Builtin(_span) => w.write_str("builtin"),
             ParsedExpression::BinaryOp(op) => {
-                f.write_str("(")?;
-                self.display_expr_id(op.lhs, f)?;
-                write!(f, " {} ", op.op_kind)?;
-                self.display_expr_id(op.rhs, f)?;
-                f.write_str(")")
+                w.write_str("(")?;
+                self.display_expr_id(op.lhs, w)?;
+                write!(w, " {} ", op.op_kind)?;
+                self.display_expr_id(op.rhs, w)?;
+                w.write_str(")")
             }
             ParsedExpression::UnaryOp(op) => {
-                write!(f, "{}", op.op_kind)?;
-                self.display_expr_id(op.expr, f)
+                write!(w, "{}", op.op_kind)?;
+                self.display_expr_id(op.expr, w)
             }
-            ParsedExpression::Literal(lit) => f.write_fmt(format_args!("{}", lit)),
+            ParsedExpression::Literal(lit) => w.write_fmt(format_args!("{}", lit)),
             ParsedExpression::InterpolatedString(is) => {
-                f.write_char('"')?;
+                w.write_char('"')?;
                 for part in &is.parts {
                     match part {
-                        InterpolatedStringPart::String(s) => f.write_str(s)?,
+                        InterpolatedStringPart::String(s) => w.write_str(s)?,
                         InterpolatedStringPart::Identifier(ident) => {
-                            f.write_char('{')?;
-                            f.write_str(self.idents.get_name(*ident))?;
-                            f.write_char('{')?;
+                            w.write_char('{')?;
+                            w.write_str(self.idents.get_name(*ident))?;
+                            w.write_char('{')?;
                         }
                     }
                 }
-                f.write_char('"')?;
+                w.write_char('"')?;
                 Ok(())
             }
             ParsedExpression::FnCall(call) => {
-                f.write_str(self.idents.get_name(call.name.name))?;
-                f.write_str("(...)")?;
+                w.write_str(self.idents.get_name(call.name.name))?;
+                w.write_str("(...)")?;
                 Ok(())
             }
             ParsedExpression::Variable(var) => {
-                f.write_str("var#")?;
-                f.write_str(self.idents.get_name(var.name.name))?;
+                w.write_str("var#")?;
+                w.write_str(self.idents.get_name(var.name.name))?;
                 Ok(())
             }
             ParsedExpression::FieldAccess(acc) => {
-                self.display_expr_id(acc.base, f)?;
-                f.write_str(".")?;
-                f.write_str(self.idents.get_name(acc.field_name))?;
+                self.display_expr_id(acc.base, w)?;
+                w.write_str(".")?;
+                w.write_str(self.idents.get_name(acc.field_name))?;
                 Ok(())
             }
-            ParsedExpression::Block(block) => f.write_fmt(format_args!("{:?}", block)),
-            ParsedExpression::If(if_expr) => f.write_fmt(format_args!("{:?}", if_expr)),
+            ParsedExpression::Block(block) => w.write_fmt(format_args!("{:?}", block)),
+            ParsedExpression::If(if_expr) => w.write_fmt(format_args!("{:?}", if_expr)),
             ParsedExpression::While(while_expr) => {
-                f.write_str("while ")?;
-                self.display_expr_id(while_expr.cond, f)?;
-                self.display_expr_id(while_expr.body, f)?;
+                w.write_str("while ")?;
+                self.display_expr_id(while_expr.cond, w)?;
+                self.display_expr_id(while_expr.body, w)?;
                 Ok(())
             }
             ParsedExpression::Loop(loop_expr) => {
-                f.write_str("loop ")?;
-                write!(f, "{:?}", loop_expr.body)?;
+                w.write_str("loop ")?;
+                write!(w, "{:?}", loop_expr.body)?;
                 Ok(())
             }
-            ParsedExpression::Struct(struc) => f.write_fmt(format_args!("{:?}", struc)),
+            ParsedExpression::Struct(struc) => w.write_fmt(format_args!("{:?}", struc)),
             ParsedExpression::ListLiteral(list_expr) => {
-                f.write_fmt(format_args!("{:?}", list_expr))
+                w.write_fmt(format_args!("{:?}", list_expr))
             }
-            ParsedExpression::For(for_expr) => f.write_fmt(format_args!("{:?}", for_expr)),
+            ParsedExpression::For(for_expr) => w.write_fmt(format_args!("{:?}", for_expr)),
             ParsedExpression::AnonEnumConstructor(anon_enum) => {
-                f.write_char('.')?;
-                f.write_str(self.idents.get_name(anon_enum.variant_name))?;
+                w.write_char('.')?;
+                w.write_str(self.idents.get_name(anon_enum.variant_name))?;
                 if let Some(payload) = anon_enum.payload.as_ref() {
-                    f.write_str("(")?;
-                    self.display_expr_id(*payload, f)?;
-                    f.write_str(")")?;
+                    w.write_str("(")?;
+                    self.display_expr_id(*payload, w)?;
+                    w.write_str(")")?;
                 }
                 Ok(())
             }
             ParsedExpression::Is(is_expr) => {
-                self.display_expr_id(is_expr.target_expression, f)?;
-                f.write_str(" is ")?;
-                self.display_pattern_expression_id(is_expr.pattern, f)
+                self.display_expr_id(is_expr.target_expression, w)?;
+                w.write_str(" is ")?;
+                self.display_pattern_expression_id(is_expr.pattern, w)
             }
             ParsedExpression::Match(match_expr) => {
-                f.write_str("switch ")?;
-                self.display_expr_id(match_expr.match_subject, f)?;
-                f.write_str(" {")?;
+                w.write_str("switch ")?;
+                self.display_expr_id(match_expr.match_subject, w)?;
+                w.write_str(" {")?;
                 for ParsedMatchCase { patterns, guard_condition_expr, expression } in
                     match_expr.cases.iter()
                 {
-                    f.write_str("")?;
+                    w.write_str("")?;
                     for (pattern_index, pattern_id) in patterns.iter().enumerate() {
-                        self.display_pattern_expression_id(*pattern_id, f)?;
+                        self.display_pattern_expression_id(*pattern_id, w)?;
                         let is_last = pattern_index == patterns.len() - 1;
                         if !is_last {
-                            f.write_str(" or ")?;
+                            w.write_str(" or ")?;
                         }
                     }
                     if let Some(guard_condition_expr) = guard_condition_expr {
-                        f.write_str(" if ")?;
-                        self.display_expr_id(*guard_condition_expr, f)?;
+                        w.write_str(" if ")?;
+                        self.display_expr_id(*guard_condition_expr, w)?;
                     }
-                    f.write_str(" -> ")?;
-                    self.display_expr_id(*expression, f)?;
-                    f.write_str(",\n")?;
+                    w.write_str(" -> ")?;
+                    self.display_expr_id(*expression, w)?;
+                    w.write_str(",\n")?;
                 }
-                f.write_str(" }")
+                w.write_str(" }")
             }
             ParsedExpression::AsCast(cast) => {
-                self.display_expr_id(cast.base_expr, f)?;
-                f.write_str(" as ")?;
-                self.display_type_expr_id(cast.dest_type, f)
+                self.display_expr_id(cast.base_expr, w)?;
+                w.write_str(" as ")?;
+                self.display_type_expr_id(cast.dest_type, w)
             }
             ParsedExpression::Lambda(lambda) => {
-                f.write_char('\\')?;
+                w.write_char('\\')?;
                 for (index, arg) in lambda.arguments.iter().enumerate() {
-                    f.write_str(self.idents.get_name(arg.binding))?;
+                    w.write_str(self.idents.get_name(arg.binding))?;
                     if let Some(ty) = arg.ty {
-                        f.write_str(": ")?;
-                        self.display_type_expr_id(ty, f)?;
+                        w.write_str(": ")?;
+                        self.display_type_expr_id(ty, w)?;
                     }
                     let last = index == lambda.arguments.len() - 1;
                     if !last {
-                        f.write_str(", ")?;
+                        w.write_str(", ")?;
                     }
                 }
-                f.write_str(" -> ")?;
-                self.display_expr_id(lambda.body, f)?;
+                w.write_str(" -> ")?;
+                self.display_expr_id(lambda.body, w)?;
+                Ok(())
+            }
+            ParsedExpression::Static(stat) => {
+                w.write_str("#static ")?;
+                self.display_expr_id(stat.base_expr, w)?;
                 Ok(())
             }
         }

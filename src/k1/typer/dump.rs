@@ -723,6 +723,58 @@ impl TypedModule {
                 writ.write_str(")")?;
                 Ok(())
             }
+            TypedExpr::StaticValue(id, _, _) => {
+                writ.write_str("#static ")?;
+                self.display_static_value(writ, *id)?;
+                Ok(())
+            }
+        }
+    }
+
+    pub fn static_value_to_string(&self, id: CompileTimeValueId) -> String {
+        let mut s = String::with_capacity(256);
+        self.display_static_value(&mut s, id).unwrap();
+        s
+    }
+
+    pub fn display_static_value(
+        &self,
+        w: &mut impl Write,
+        id: CompileTimeValueId,
+    ) -> std::fmt::Result {
+        match self.comptime_values.get(id) {
+            CompileTimeValue::Unit(_) => w.write_str("()"),
+            CompileTimeValue::Boolean(b, _) => write!(w, "{}", *b),
+            CompileTimeValue::Char(c, _) => write!(w, "{}", *c),
+            CompileTimeValue::Integer(typed_integer_value, _) => {
+                write!(w, "{}", typed_integer_value)
+            }
+            CompileTimeValue::Float(typed_float_value, _) => {
+                write!(w, "{}", typed_float_value)
+            }
+            CompileTimeValue::String(s, _) => {
+                write!(w, "\"{}\"", s)
+            }
+            CompileTimeValue::Pointer(p, _) => {
+                write!(w, "Pointer({})", p)
+            }
+            CompileTimeValue::Struct(compile_time_struct) => {
+                w.write_str("{ ")?;
+                let fields =
+                    self.types.get(compile_time_struct.type_id).expect_struct().fields.clone();
+                for (idx, (field_value_id, field_type)) in
+                    compile_time_struct.fields.iter().zip(fields.iter()).enumerate()
+                {
+                    if idx > 0 {
+                        w.write_str(", ")?;
+                    }
+                    self.write_ident(w, field_type.name)?;
+                    w.write_str(": ")?;
+                    self.display_static_value(w, *field_value_id)?;
+                }
+                w.write_str(" }")
+            }
+            CompileTimeValue::Enum(compile_time_enum) => todo!(),
         }
     }
 
