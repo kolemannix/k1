@@ -1217,8 +1217,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 // - Alignment of the enum is the max(alignment) of the variants
                 // - Size of the enum is the size of the largest variant, not necessarily the same
                 //   variant, plus alignment end padding
-                // - In order to get to a type that has this alignment and size, we copy clang and
-                //   'devise' a struct that will do it for us. This struct is simply 2 fields:
+                // - In order to get to an actual LLVM type that has this alignment and size, we copy clang,
+                //   and 'devise' a struct that will do it for us. This struct is simply 2 fields:
                 //   - First, the strictestly-aligned variant. This sets the alignment of our
                 //     struct
                 //   - Second, padding bytes such that we're at least as large as the largest
@@ -1368,6 +1368,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let function_type = self.make_llvm_function_type(type_id)?;
                 let pointee_type = function_type.llvm_function_type;
                 let placeholder_pointee = self.codegen_type(I8_TYPE_ID)?.debug_type();
+                // nocommit: Should really not have a size; function is not a physical type
                 Ok(K1LlvmType::Reference(LlvmReferenceType {
                     type_id,
                     pointer_type: self.builtin_types.ptr,
@@ -1406,11 +1407,19 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         if !no_cache {
             self.llvm_types.borrow_mut().insert(type_id, codegened_type.clone());
         }
-        // eprintln!(
-        //     "Size of '{}': {:?}",
-        //     self.module.type_id_to_string(type_id),
-        //     codegened_type.size_info()
-        // );
+        let size_info = codegened_type.size_info();
+        if let Some(k1_size) = self.module.type_layout(type_id) {
+            if size_info.size_bits != k1_size.stride_bits {
+                eprintln!("Size of '{}'", self.module.type_id_to_string(type_id));
+                eprintln!("DIFFERENT SIZES {} {}", size_info.size_bits, k1_size.stride_bits)
+            }
+            if size_info.abi_align_bits != k1_size.align_bits {
+                eprintln!("Size of '{}'", self.module.type_id_to_string(type_id));
+                eprintln!("DIFFERENT ALIGN {} {}", size_info.abi_align_bits, k1_size.align_bits)
+            }
+        } else {
+            eprintln!("No k1 size but yes llvm size: {}", self.module.type_id_to_string(type_id))
+        }
         Ok(codegened_type)
     }
 
@@ -2164,6 +2173,24 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 // This is a STRUCT, in K1 terms, not a struct reference, it's just that the physical
                 // representation type for aggregates _is_ ptr in our codegen
                 Ok(LlvmValue::BasicValue(lambda_object_ptr.as_basic_value_enum()))
+            }
+            TypedExpr::StaticValue(value_id, type_id, _) => {
+                let static_value = self.codegen_compile_time_value(*value_id)?;
+                // If its an aggregate, we need a ptr to it instead!
+                let llvm_type = self.codegen_type(*type_id)?;
+                let basic_value_canonical = if llvm_type.is_aggregate() {
+                    let ptr = self.build_alloca(llvm_type.rich_value_type(), "static_agg");
+                    // We do _not_ use store_k1_value since that one assumes that Structs are
+                    // already in their canonical representation (as pointers). But since these are
+                    // static structs, we actually should have a StructValue, and we want to do
+                    // a simple 'store'
+                    self.builder.build_store(ptr, static_value).unwrap();
+                    ptr.as_basic_value_enum()
+                } else {
+                    static_value
+                };
+
+                Ok(basic_value_canonical.into())
             }
             e @ TypedExpr::PendingCapture(_) => {
                 panic!("Unsupported expression: {e:?}")
