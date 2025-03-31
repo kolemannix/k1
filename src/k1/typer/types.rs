@@ -895,6 +895,7 @@ pub struct TypesConfig {
 
 pub struct Types {
     pub types: Vec<Type>,
+    pub layouts: Pool<Option<Layout>, TypeId>,
     /// We use this to efficiently check if we already have seen a type,
     /// and retrieve its ID if so. We used to iterate the pool but it
     /// got slow
@@ -914,7 +915,7 @@ impl Types {
             }
         }
 
-        match typ {
+        let t = match typ {
             Type::Enum(mut e) => {
                 // Enums and variants are self-referential
                 // so we handle them specially
@@ -932,11 +933,18 @@ impl Types {
                     self.type_variable_counts.insert(variant_id, variant_variable_counts);
                 }
 
+                let variant_count = e.variants.len();
                 let e = Type::Enum(e);
                 self.types.push(e.clone());
                 self.existing_types_mapping.insert(e, enum_type_id);
                 let variable_counts = self.count_type_variables(enum_type_id);
                 self.type_variable_counts.insert(enum_type_id, variable_counts);
+
+                let layout = self.compute_type_layout(enum_type_id);
+                for _ in 0..variant_count {
+                    self.layouts.add(layout);
+                }
+
                 enum_type_id
             }
             Type::EnumVariant(_ev) => {
@@ -949,9 +957,17 @@ impl Types {
 
                 let variable_counts = self.count_type_variables(type_id);
                 self.type_variable_counts.insert(type_id, variable_counts);
+
+                let layout = self.compute_type_layout(type_id);
+                self.layouts.add(layout);
+
                 type_id
             }
-        }
+        };
+        debug_assert_eq!(self.layouts.len(), self.types.len());
+        debug_assert_eq!(self.type_variable_counts.len(), self.types.len());
+
+        t
     }
 
     pub fn next_type_id(&self) -> TypeId {
@@ -1225,5 +1241,114 @@ impl Types {
             Type::LambdaObject(co) => self.count_type_variables(co.function_type),
             Type::RecursiveReference(_rr) => EMPTY,
         }
+    }
+
+    pub fn word_size_bits(&self) -> u32 {
+        self.config.ptr_size_bits
+    }
+
+    pub fn compute_type_layout(&self, type_id: TypeId) -> Option<Layout> {
+        match self.get(type_id) {
+            Type::Unit(_) => Some(Layout::from_scalar_bits(8)),
+            Type::Char(_) => Some(Layout::from_scalar_bits(8)),
+            Type::Integer(integer_type) => {
+                Some(Layout::from_scalar_bits(integer_type.width().bit_width()))
+            }
+            Type::Float(float_type) => Some(Layout::from_scalar_bits(float_type.size.bit_width())),
+            Type::Bool(_) => Some(Layout::from_scalar_bits(8)),
+            Type::Pointer(_) => Some(Layout::from_scalar_bits(self.word_size_bits())),
+            Type::Struct(struct_type) => {
+                let mut layout = Layout::ZERO;
+                for field in &struct_type.fields {
+                    layout.append_to_aggregate(
+                        self.compute_type_layout(field.type_id)
+                            .expect("Expected struct field to be sized"),
+                    );
+                }
+                Some(layout)
+            }
+            Type::Reference(_reference_type) => {
+                Some(Layout::from_scalar_bits(self.word_size_bits()))
+            }
+            Type::Enum(typed_enum) => {
+                let payload_layouts: Vec<Layout> = typed_enum
+                    .variants
+                    .iter()
+                    .map(|v| {
+                        v.payload.and_then(|p| self.compute_type_layout(p)).unwrap_or(Layout::ZERO)
+                    })
+                    .collect();
+                let payload_max_alignment =
+                    payload_layouts.iter().map(|l| l.align_bits).max().unwrap_or(0);
+                let word_size_int_type_id = match self.word_size_bits() {
+                    32 => U32_TYPE_ID,
+                    64 => U64_TYPE_ID,
+                    _ => unreachable!(),
+                };
+                let tag_int_type_id = match typed_enum.explicit_tag_type {
+                    Some(explicit_tag_type) => explicit_tag_type,
+                    None => {
+                        match payload_max_alignment {
+                            0 => U8_TYPE_ID, // No payloads case
+                            8 => U8_TYPE_ID,
+                            16 => U16_TYPE_ID,
+                            32 => U32_TYPE_ID,
+                            // If the payload(s) require to be aligned on a 64-bit or larger
+                            // boundary, there's no point in using a tag type smaller than the word
+                            // size
+                            64 => word_size_int_type_id,
+                            _ => word_size_int_type_id,
+                        }
+                    }
+                };
+                // Enum sizing and layout rules:
+                // - Alignment of the enum is the max(alignment) of the variants
+                // - Size of the enum is the size of the largest variant, not necessarily the same
+                //   variant, plus alignment end padding
+                let tag_layout = self.compute_type_layout(tag_int_type_id).unwrap();
+                let mut max_variant_align = 0;
+                let mut max_variant_size = 0;
+                for (_variant, payload_layout) in typed_enum.variants.iter().zip(payload_layouts) {
+                    let struct_repr = {
+                        let mut l = Layout::ZERO;
+                        l.append_to_aggregate(tag_layout);
+                        l.append_to_aggregate(payload_layout);
+                        l
+                    };
+                    if struct_repr.align_bits > max_variant_align {
+                        max_variant_align = struct_repr.align_bits
+                    };
+                    if struct_repr.stride_bits > max_variant_size {
+                        max_variant_size = struct_repr.stride_bits
+                    };
+                }
+                let enum_size = Layout {
+                    size_bits: max_variant_size,
+                    stride_bits: max_variant_size,
+                    align_bits: max_variant_align,
+                };
+                Some(enum_size)
+            }
+            Type::EnumVariant(variant) => self.compute_type_layout(variant.enum_type_id),
+            Type::Never(_) => Some(Layout::ZERO),
+            Type::Function(_) => None,
+            Type::Lambda(lambda_type) => self.compute_type_layout(lambda_type.env_type),
+            Type::LambdaObject(lambda_object_type) => {
+                self.compute_type_layout(lambda_object_type.struct_representation)
+            }
+            Type::Generic(_) => unreachable!("size of generic"),
+            Type::TypeParameter(_) => unreachable!("size of type parameter"),
+            Type::FunctionTypeParameter(_) => {
+                unreachable!("size of function type parameter")
+            }
+            Type::InferenceHole(_) => unreachable!("size of inference hole"),
+            Type::RecursiveReference(_) => {
+                unreachable!("size of recursive reference")
+            }
+        }
+    }
+
+    pub fn get_layout(&self, type_id: TypeId) -> Option<Layout> {
+        *self.layouts.get(type_id)
     }
 }

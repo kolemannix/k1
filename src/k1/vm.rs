@@ -7,17 +7,22 @@ use log::debug;
 use crate::{
     errf, failf,
     lex::SpanId,
+    nz_u32_id,
     parse::{Identifier, NumericWidth},
+    pool,
     typer::{
         self, make_error, make_fail_span,
         types::{
-            IntegerType, Type, TypeId, BOOL_TYPE_ID, CHAR_TYPE_ID, POINTER_TYPE_ID, STRING_TYPE_ID,
-            UNIT_TYPE_ID,
+            IntegerType, StructType, Type, TypeId, Types, BOOL_TYPE_ID, CHAR_TYPE_ID,
+            POINTER_TYPE_ID, STRING_TYPE_ID, UNIT_TYPE_ID,
         },
         BinaryOpKind, CastType, FunctionId, TypedExpr, TypedExprId, TypedFloatValue,
         TypedIntegerValue, TypedModule, TypedStmtId, TyperResult, VariableId,
     },
 };
+
+#[cfg(test)]
+mod vm_test;
 
 pub struct Vm {
     call_stack: VecDeque<StackFrame>,
@@ -32,16 +37,43 @@ impl Vm {
     }
 }
 
+nz_u32_id!(FrameIndex);
+
 struct StackFrame {
-    // Naive hashmap as our entire Vm-state FOR NOW; due to this I think
-    // it shouldn't even be called Vm but rather Interp; but we'll see what happens
-    pub locals: FxHashMap<VariableId, Value>,
+    pub buffer: Vec<u8>,
     debug_name: String,
 }
 
 impl Drop for StackFrame {
     fn drop(&mut self) {
         eprintln!("DROP StackFrame {}", self.debug_name)
+    }
+}
+
+impl StackFrame {
+    pub fn make(name: String) -> Self {
+        // TODO(vm): Log resizes
+        Self { buffer: Vec::with_capacity(8192), debug_name: name }
+    }
+    pub fn push_struct_values(&mut self, types: &Types, type_id: TypeId, members: &[Value]) {
+        let mut last_field_end = 0;
+        let struct_type = types.get(type_id).expect_struct();
+        for (value, field_type) in members.iter().zip(struct_type.fields.iter()) {
+            let padding = field_type.offset_bits - last_field_end;
+            eprintln!("Preceeding padding: {padding}");
+            let field_size = types.get_layout(field_type.type_id);
+            self.push_padding_bits(padding);
+            self.push_value(value);
+            last_field_end = field_type.offset_bits
+        }
+        let struct_layout = types.get_layout(type_id).unwrap();
+        let end_padding = struct_layout.stride_bits;
+    }
+    pub fn push_value(&mut self, value: &Value) {}
+    pub fn push_padding_bits(&mut self, padding_bits: u32) {
+        let padding_bytes = padding_bits / 8;
+        // TODO(vm): Use unsafe to make this a simple edit of .length
+        self.buffer.extend_from_slice(&vec![0u8; padding_bytes as usize]);
     }
 }
 
@@ -67,18 +99,20 @@ impl Drop for ReferenceValue {
     }
 }
 
-//static_assert_size!(Value, 32);
+crate::static_assert_size!(Value, 24);
 #[derive(Debug, Clone)]
 pub enum Value {
+    // 'Immediate' values
     Unit,
     Bool(bool),
     Char(u8),
     Integer(TypedIntegerValue),
     Float(TypedFloatValue),
     Pointer { value: usize },
+    // 'By address' values
     Reference { type_id: TypeId, ptr: *const () },
-    Struct { type_id: TypeId, fields: Vec<Value> },
-    Enum { type_id: TypeId, variant: Identifier },
+    Struct { type_id: TypeId, ptr: *const () },
+    Enum { type_id: TypeId, ptr: *const () },
 }
 
 impl Value {
@@ -95,8 +129,8 @@ impl Value {
             Value::Float(typed_float_value) => typed_float_value.get_type(),
             Value::Pointer { value } => POINTER_TYPE_ID,
             Value::Reference { type_id, .. } => *type_id,
-            Value::Struct { type_id, fields } => *type_id,
-            Value::Enum { type_id, variant } => *type_id,
+            Value::Struct { type_id, .. } => *type_id,
+            Value::Enum { type_id, .. } => *type_id,
         }
     }
 
@@ -117,8 +151,8 @@ impl Value {
 
 pub fn execute_single_expr(m: &mut TypedModule, expr: TypedExprId) -> TyperResult<Value> {
     let mut vm = Vm::make();
-    vm.call_stack
-        .push_back(StackFrame { locals: FxHashMap::new(), debug_name: format!("expr_{}", expr) });
+    let initial_frame = StackFrame { buffer: Vec::new(), debug_name: format!("expr_{}", expr) };
+    vm.call_stack.push_back(initial_frame);
     let v = execute_expr(&mut vm, m, expr)?;
     Ok(v)
 }
@@ -146,6 +180,11 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedModule, expr: TypedExprId) -> TyperRes
 
             let data: Value =
                 Value::Reference { type_id: CHAR_TYPE_ID, ptr: base_ptr as *const () };
+            let frame = vm.current_frame_mut();
+            let char_buffer_addr = frame.push_struct(&[len, char_buffer]);
+            let addr = frame
+                .push_struct(&[Value::Struct { type_id: STRING_TYPE_ID, ptr: char_buffer_addr }]);
+            frame.push_reference();
             let char_buffer =
                 Value::Struct { type_id: char_buffer_type_id, fields: vec![len, data] };
             let string_struct =
@@ -475,4 +514,8 @@ pub fn load_value(
         Type::InferenceHole(inference_hole_type) => unreachable!("Not a value type"),
         Type::RecursiveReference(recursive_reference) => unreachable!("Not a value type"),
     }
+}
+
+pub fn load_struct_field(struct_type: TypeId, ptr: *const (), field_index: usize) -> &Value {
+    todo!()
 }

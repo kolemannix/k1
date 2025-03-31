@@ -1408,7 +1408,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             self.llvm_types.borrow_mut().insert(type_id, codegened_type.clone());
         }
         let size_info = codegened_type.size_info();
-        if let Some(k1_size) = self.module.type_layout(type_id) {
+        if let Some(k1_size) = self.module.types.layouts.get(type_id) {
             if size_info.size_bits != k1_size.stride_bits {
                 eprintln!("Size of '{}'", self.module.type_id_to_string(type_id));
                 eprintln!("DIFFERENT SIZES {} {}", size_info.size_bits, k1_size.stride_bits)
