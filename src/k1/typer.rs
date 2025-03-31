@@ -39,22 +39,23 @@ use crate::{pool, static_assert_size, strings};
 #[cfg(test)]
 mod layout_test;
 
+#[macro_export]
 macro_rules! nz_u32_id {
     ($name: ident) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-        pub struct $name(NonZeroU32);
-        impl From<NonZeroU32> for $name {
-            fn from(value: NonZeroU32) -> Self {
+        pub struct $name(std::num::NonZeroU32);
+        impl From<std::num::NonZeroU32> for $name {
+            fn from(value: std::num::NonZeroU32) -> Self {
                 $name(value)
             }
         }
-        impl From<$name> for NonZeroU32 {
+        impl From<$name> for std::num::NonZeroU32 {
             fn from(val: $name) -> Self {
                 val.0
             }
         }
-        impl Display for $name {
-            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 self.0.fmt(f)
             }
         }
@@ -2068,6 +2069,7 @@ impl TypedModule {
     pub fn new(parsed_module: ParsedModule) -> TypedModule {
         let types = Types {
             types: Vec::with_capacity(8192),
+            layouts: Pool::with_capacity("type_layouts", 8192),
             existing_types_mapping: FxHashMap::new(),
             type_defn_mapping: FxHashMap::new(),
             type_variable_counts: FxHashMap::new(),
@@ -2506,9 +2508,9 @@ impl TypedModule {
                     //         );
                     //     }
                     // }
-                    let field_layout = self.type_layout(ty);
+                    let field_layout = self.types.layouts.get(ty);
                     let offset = match field_layout {
-                        Some(field) => layout.append_to_aggregate(field),
+                        Some(field_layout) => layout.append_to_aggregate(*field_layout),
                         None => layout.size_bits,
                     };
                     fields.push(StructTypeField {
@@ -2762,103 +2764,6 @@ impl TypedModule {
 
     pub fn word_size_bits(&self) -> u32 {
         self.ast.config.target.word_size().bits()
-    }
-
-    pub fn type_layout(&self, type_id: TypeId) -> Option<Layout> {
-        match self.types.get(type_id) {
-            Type::Unit(_) => Some(Layout::from_scalar_bits(8)),
-            Type::Char(_) => Some(Layout::from_scalar_bits(8)),
-            Type::Integer(integer_type) => {
-                Some(Layout::from_scalar_bits(integer_type.width().bit_width()))
-            }
-            Type::Float(float_type) => Some(Layout::from_scalar_bits(float_type.size.bit_width())),
-            Type::Bool(_) => Some(Layout::from_scalar_bits(8)),
-            Type::Pointer(_) => Some(Layout::from_scalar_bits(self.word_size_bits())),
-            Type::Struct(struct_type) => {
-                let mut layout = Layout::ZERO;
-                for field in &struct_type.fields {
-                    layout.append_to_aggregate(
-                        self.type_layout(field.type_id).expect("Expected struct field to be sized"),
-                    );
-                }
-                Some(layout)
-            }
-            Type::Reference(_reference_type) => {
-                Some(Layout::from_scalar_bits(self.word_size_bits()))
-            }
-            Type::Enum(typed_enum) => {
-                let payload_layouts: Vec<Layout> = typed_enum
-                    .variants
-                    .iter()
-                    .map(|v| v.payload.and_then(|p| self.type_layout(p)).unwrap_or(Layout::ZERO))
-                    .collect();
-                let payload_max_alignment =
-                    payload_layouts.iter().map(|l| l.align_bits).max().unwrap_or(0);
-                let word_size_int_type_id = match self.ast.config.target.word_size() {
-                    crate::compiler::WordSize::W32 => U32_TYPE_ID,
-                    crate::compiler::WordSize::W64 => U64_TYPE_ID,
-                };
-                let tag_int_type_id = match typed_enum.explicit_tag_type {
-                    Some(explicit_tag_type) => explicit_tag_type,
-                    None => {
-                        match payload_max_alignment {
-                            0 => U8_TYPE_ID, // No payloads case
-                            8 => U8_TYPE_ID,
-                            16 => U16_TYPE_ID,
-                            32 => U32_TYPE_ID,
-                            // If the payload(s) require to be aligned on a 64-bit or larger
-                            // boundary, there's no point in using a tag type smaller than the word
-                            // size
-                            64 => word_size_int_type_id,
-                            _ => word_size_int_type_id,
-                        }
-                    }
-                };
-                // Enum sizing and layout rules:
-                // - Alignment of the enum is the max(alignment) of the variants
-                // - Size of the enum is the size of the largest variant, not necessarily the same
-                //   variant, plus alignment end padding
-                let tag_layout = self.type_layout(tag_int_type_id).unwrap();
-                let mut max_variant_align = 0;
-                let mut max_variant_size = 0;
-                for (_variant, payload_layout) in typed_enum.variants.iter().zip(payload_layouts) {
-                    let struct_repr = {
-                        let mut l = Layout::ZERO;
-                        l.append_to_aggregate(tag_layout);
-                        l.append_to_aggregate(payload_layout);
-                        l
-                    };
-                    if struct_repr.align_bits > max_variant_align {
-                        max_variant_align = struct_repr.align_bits
-                    };
-                    if struct_repr.stride_bits > max_variant_size {
-                        max_variant_size = struct_repr.stride_bits
-                    };
-                }
-                let enum_size = Layout {
-                    size_bits: max_variant_size,
-                    stride_bits: max_variant_size,
-                    align_bits: max_variant_align,
-                };
-                Some(enum_size)
-            }
-            Type::EnumVariant(variant) => self.type_layout(variant.enum_type_id),
-            Type::Never(type_defn_info) => Some(Layout::ZERO),
-            Type::Function(function_type) => None,
-            Type::Lambda(lambda_type) => self.type_layout(lambda_type.env_type),
-            Type::LambdaObject(lambda_object_type) => {
-                self.type_layout(lambda_object_type.struct_representation)
-            }
-            Type::Generic(generic_type) => unreachable!("size of generic"),
-            Type::TypeParameter(type_parameter) => unreachable!("size of type parameter"),
-            Type::FunctionTypeParameter(function_type_parameter) => {
-                unreachable!("size of function type parameter")
-            }
-            Type::InferenceHole(inference_hole_type) => unreachable!("size of inference hole"),
-            Type::RecursiveReference(recursive_reference) => {
-                unreachable!("size of recursive reference")
-            }
-        }
     }
 
     /// Temporary home for our type operators until I decide on syntax
@@ -5713,25 +5618,29 @@ impl TypedModule {
                 // This is just a de-reference
                 // Needs to become a global.
                 // Rely on the VM's code to load it, then make a K1 'global' to hold it?
-                let loaded_value = vm::load_value(&self, *type_id, *ptr, span);
+                let loaded_value = vm::load_value(&self, *type_id, *ptr, span)?;
                 todo!("Introduce CompileTimeValue::Reference");
             }
-            vm::Value::Struct { type_id, fields } => {
-                let mut field_value_ids = Vec::with_capacity(fields.len());
+            vm::Value::Struct { type_id, ptr } => {
                 let type_id = *type_id;
                 if type_id == STRING_TYPE_ID {
-                    let vm::Value::Struct { fields, .. } = &fields[0] else {
+                    let struct_value = vm::load_struct_field(STRING_TYPE_ID, *ptr, 0);
+                    let char_buffer_type_id = todo!();
+                    let vm::Value::Struct { ptr: char_buffer_ptr, .. } = struct_value else {
                         self.ice_with_span("Malformed compile-time 'string'", span)
                     };
-                    let vm::Value::Integer(TypedIntegerValue::U64(len)) = fields[0] else {
+                    let vm::Value::Integer(TypedIntegerValue::U64(len)) =
+                        vm::load_struct_field(char_buffer_type_id, *char_buffer_ptr, 2)
+                    else {
                         self.ice_with_span("Malformed compile-time 'string'", span)
                     };
-                    let vm::Value::Reference { ptr, .. } = fields[1] else {
+                    let vm::Value::Reference { ptr, .. } =
+                        vm::load_struct_field(char_buffer_type_id, *char_buffer_ptr, 1)
+                    else {
                         self.ice_with_span("Malformed compile-time 'string'", span)
                     };
                     unsafe {
-                        let slice = std::slice::from_raw_parts(ptr as *const u8, len as usize);
-                        // Attempt to convert the byte slice to a &str, returning None if invalid UTF-8
+                        let slice = std::slice::from_raw_parts(*ptr as *const u8, *len as usize);
                         dbg!(slice);
                         let the_str = std::str::from_utf8(slice).unwrap();
                         let box_str = Box::from(the_str);
@@ -5741,7 +5650,11 @@ impl TypedModule {
                     let elem_type = buffer.type_args[0];
                     todo!("VM reify a non-string buffer of {}", self.type_id_to_string(elem_type));
                 } else {
-                    for field_value in fields.iter() {
+                    let struct_type = self.types.get(type_id).expect_struct();
+                    let mut field_value_ids = Vec::with_capacity(struct_type.fields.len());
+                    let struct_fields = struct_type.fields.clone();
+                    for field_value in struct_fields.iter() {
+                        let field_value = vm::load_struct_field(type_id, *ptr, 0);
                         let ctv = self.vm_value_to_static_value(field_value, span);
                         field_value_ids.push(ctv)
                     }
@@ -5752,7 +5665,7 @@ impl TypedModule {
                     })
                 }
             }
-            vm::Value::Enum { type_id, variant } => todo!(),
+            vm::Value::Enum { type_id, ptr } => todo!(),
         };
         self.comptime_values.add(v)
     }
@@ -5768,7 +5681,7 @@ impl TypedModule {
             self.ice_with_span("expected struct", self.ast.get_expr_span(expr_id))
         };
         let ast_struct = parsed_struct.clone();
-        let mut layout = Layout::ZERO;
+        let mut struct_layout = Layout::ZERO;
         for (index, ast_field) in ast_struct.fields.iter().enumerate() {
             let parsed_expr = match ast_field.expr.as_ref() {
                 None => self.ast.exprs.add_expression(ParsedExpression::Variable(
@@ -5780,10 +5693,10 @@ impl TypedModule {
             };
             let expr = self.eval_expr(parsed_expr, ctx.with_expected_type(None))?;
             let expr_type = self.exprs.get(expr).get_type();
-            let field_layout = self.type_layout(expr_type);
+            let field_layout = self.types.layouts.get(expr_type);
             let offset = match field_layout {
-                Some(field) => layout.append_to_aggregate(field),
-                None => layout.size_bits,
+                Some(field_layout) => struct_layout.append_to_aggregate(*field_layout),
+                None => struct_layout.size_bits,
             };
             field_defns.push(StructTypeField {
                 name: ast_field.name,
@@ -6379,8 +6292,8 @@ impl TypedModule {
             .enumerate()
             .map(|(index, captured_variable_id)| {
                 let v = self.variables.get(*captured_variable_id);
-                let offset = match self.type_layout(v.type_id) {
-                    Some(l) => layout.append_to_aggregate(l),
+                let offset = match self.types.layouts.get(v.type_id) {
+                    Some(l) => layout.append_to_aggregate(*l),
                     None => layout.size_bits,
                 };
                 StructTypeField {
