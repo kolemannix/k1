@@ -34,10 +34,33 @@ fn main(): int {
     i
   };
   assertEquals(letAssign, 10);
-
-  #static {
-    let b: u8* = new(10);
+  
+  let padded = #static {
+    let padded = { a: 1: u8, b: 2: u8, c: 3: u8, d: 4: u64, e: 5 };
+    padded
   };
+  assertEquals(padded.a, 1);
+  assertEquals(padded.b, 2);
+  assertEquals(padded.c, 3);
+  assertEquals(padded.d, 4);
+  assertEquals(padded.e, 5);
+
+  let letRef = #static {
+    let* i = 10;
+    assertEquals(i.*, 10);
+    i <- 20;
+    i.*
+  };
+
+  let sSwitch = #static switch letRef {
+    _ -> (),
+  };
+
+  assertEquals(letRef, 20);
+
+  // #static {
+  //   let b: u8* = new(10);
+  // };
 
   0
 }

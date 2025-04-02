@@ -11,7 +11,7 @@ impl Display for TypedModule {
         f.write_str("--- TYPES ---\n")?;
         for (id, ty) in self.types.iter() {
             write!(f, "type {:02} {:10} ", id, ty.kind_name())?;
-            self.display_type(ty, false, f)?;
+            self.display_type_ext(id, false, f)?;
             let info = self.types.get_type_variable_info(id);
             write!(
                 f,
@@ -143,8 +143,7 @@ impl TypedModule {
         expand: bool,
         writ: &mut impl Write,
     ) -> std::fmt::Result {
-        let ty = self.types.get_no_follow(ty);
-        self.display_type(ty, expand, writ)
+        self.display_type_ext(ty, expand, writ)
     }
 
     // Silly function but so commonly needed its worth the call-site ergonomics
@@ -162,13 +161,8 @@ impl TypedModule {
     }
 
     pub fn type_id_to_string_ext(&self, type_id: TypeId, expand: bool) -> String {
-        let ty = self.types.get_no_follow(type_id);
-        self.type_to_string(ty, expand)
-    }
-
-    pub fn type_to_string(&self, ty: &Type, expand: bool) -> String {
-        let mut s = String::new();
-        self.display_type(ty, expand, &mut s).unwrap();
+        let mut s = String::with_capacity(1028);
+        self.display_type_ext(type_id, expand, &mut s);
         s
     }
 
@@ -190,10 +184,16 @@ impl TypedModule {
         Ok(())
     }
 
-    fn display_type(&self, ty: &Type, expand: bool, writ: &mut impl Write) -> std::fmt::Result {
-        match ty {
-            Type::Unit(_) => writ.write_str("unit"),
-            Type::Char(_) => writ.write_str("char"),
+    fn display_type_ext(
+        &self,
+        ty: TypeId,
+        expand: bool,
+        writ: &mut impl Write,
+    ) -> std::fmt::Result {
+        let defn_info = self.types.get_defn_info(ty);
+        match self.types.get_no_follow(ty) {
+            Type::Unit => writ.write_str("unit"),
+            Type::Char => writ.write_str("char"),
             Type::Integer(int_type) => {
                 match int_type {
                     IntegerType::U8 => writ.write_str("u8")?,
@@ -213,10 +213,10 @@ impl TypedModule {
                 NumericWidth::B32 => write!(writ, "f32"),
                 NumericWidth::B64 => write!(writ, "f64"),
             },
-            Type::Bool(_) => writ.write_str("bool"),
-            Type::Pointer(_) => writ.write_str("Pointer"),
+            Type::Bool => writ.write_str("bool"),
+            Type::Pointer => writ.write_str("Pointer"),
             Type::Struct(struc) => {
-                if let Some(defn_info) = struc.type_defn_info.as_ref() {
+                if let Some(defn_info) = defn_info {
                     writ.write_str(self.name_of(defn_info.name))?;
                     if let Some(spec_info) = struc.generic_instance_info.as_ref() {
                         self.display_instance_info(writ, spec_info, expand)?;
@@ -261,7 +261,7 @@ impl TypedModule {
                 writ.write_char('*')
             }
             Type::Enum(e) => {
-                if let Some(defn_info) = e.type_defn_info.as_ref() {
+                if let Some(defn_info) = defn_info {
                     writ.write_str(self.name_of(defn_info.name))?;
                     if let Some(spec_info) = e.generic_instance_info.as_ref() {
                         self.display_instance_info(writ, spec_info, expand)?;
@@ -270,7 +270,7 @@ impl TypedModule {
                         writ.write_str("(")?;
                     }
                 }
-                let is_named = e.type_defn_info.is_some();
+                let is_named = defn_info.is_some();
                 if !is_named || expand {
                     writ.write_str("enum ")?;
                     for (idx, v) in e.variants.iter().enumerate() {
@@ -293,7 +293,7 @@ impl TypedModule {
             }
             Type::EnumVariant(ev) => {
                 let e = self.types.get(ev.enum_type_id).expect_enum();
-                if let Some(defn_info) = e.type_defn_info.as_ref() {
+                if let Some(defn_info) = defn_info {
                     writ.write_str(self.name_of(defn_info.name))?;
                     if let Some(spec_info) = e.generic_instance_info.as_ref() {
                         self.display_instance_info(writ, spec_info, expand)?;
@@ -308,9 +308,10 @@ impl TypedModule {
                 }
                 Ok(())
             }
-            Type::Never(_) => writ.write_str("never"),
+            Type::Never => writ.write_str("never"),
             Type::Generic(gen) => {
-                writ.write_str(self.name_of(gen.type_defn_info.name))?;
+                let defn_info = defn_info.unwrap();
+                writ.write_str(self.name_of(defn_info.name))?;
                 writ.write_str("[")?;
                 for (idx, param) in gen.params.iter().enumerate() {
                     writ.write_str(self.name_of(param.name))?;
@@ -359,7 +360,7 @@ impl TypedModule {
                 if rr.is_pending() {
                     writ.write_str("<pending recursive ref>")
                 } else {
-                    let info = self.types.get_type_defn_info(rr.root_type_id.unwrap()).unwrap();
+                    let info = self.types.get_defn_info(rr.root_type_id.unwrap()).unwrap();
                     writ.write_str(self.name_of(info.name))?;
                     Ok(())
                 }

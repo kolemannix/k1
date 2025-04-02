@@ -113,6 +113,8 @@ pub const LAMBDA_ENV_PARAM_NAME: &str = "__lambda_env";
 
 pub const FUNC_PARAM_IDEAL_COUNT: usize = 8;
 
+pub const UNIT_BYTE_VALUE: u8 = 0;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TypeSubstitutionPair {
     from: TypeId,
@@ -294,7 +296,7 @@ impl CompileTimeValue {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Layout {
     pub size_bits: u32,
     /// Stride represents the space between the start of 2 successive elements, it bumps to the
@@ -325,6 +327,14 @@ impl Layout {
         self.stride_bits = new_end_aligned;
         self.align_bits = new_align;
         new_field_start
+    }
+
+    pub fn align_bytes(&self) -> usize {
+        self.align_bits as usize / 8
+    }
+
+    pub fn size_bytes(&self) -> usize {
+        self.size_bits as usize / 8
     }
 }
 
@@ -1166,16 +1176,7 @@ impl TypedIntegerValue {
     }
 
     pub fn get_type(&self) -> TypeId {
-        match self {
-            TypedIntegerValue::U8(_) => U8_TYPE_ID,
-            TypedIntegerValue::U16(_) => U16_TYPE_ID,
-            TypedIntegerValue::U32(_) => U32_TYPE_ID,
-            TypedIntegerValue::U64(_) => U64_TYPE_ID,
-            TypedIntegerValue::I8(_) => I8_TYPE_ID,
-            TypedIntegerValue::I16(_) => I16_TYPE_ID,
-            TypedIntegerValue::I32(_) => I32_TYPE_ID,
-            TypedIntegerValue::I64(_) => I64_TYPE_ID,
-        }
+        self.get_integer_type().type_id()
     }
 
     pub fn as_u64(&self) -> u64 {
@@ -1188,6 +1189,19 @@ impl TypedIntegerValue {
             TypedIntegerValue::I16(v) => *v as u64,
             TypedIntegerValue::I32(v) => *v as u64,
             TypedIntegerValue::I64(v) => *v as u64,
+        }
+    }
+
+    pub fn get_integer_type(&self) -> IntegerType {
+        match self {
+            TypedIntegerValue::U8(_) => IntegerType::U8,
+            TypedIntegerValue::U16(_) => IntegerType::U16,
+            TypedIntegerValue::U32(_) => IntegerType::U32,
+            TypedIntegerValue::U64(_) => IntegerType::U64,
+            TypedIntegerValue::I8(_) => IntegerType::I8,
+            TypedIntegerValue::I16(_) => IntegerType::I16,
+            TypedIntegerValue::I32(_) => IntegerType::I32,
+            TypedIntegerValue::I64(_) => IntegerType::I64,
         }
     }
 }
@@ -1230,6 +1244,13 @@ impl TypedFloatValue {
         match self {
             TypedFloatValue::F32(_) => F32_TYPE_ID,
             TypedFloatValue::F64(_) => F64_TYPE_ID,
+        }
+    }
+
+    pub fn get_width(&self) -> NumericWidth {
+        match self {
+            TypedFloatValue::F32(_) => NumericWidth::B32,
+            TypedFloatValue::F64(_) => NumericWidth::B64,
         }
     }
 
@@ -2070,6 +2091,7 @@ impl TypedModule {
         let types = Types {
             types: Vec::with_capacity(8192),
             layouts: Pool::with_capacity("type_layouts", 8192),
+            defn_infos: Pool::with_capacity("type_defn_infos", 8192),
             existing_types_mapping: FxHashMap::new(),
             type_defn_mapping: FxHashMap::new(),
             type_variable_counts: FxHashMap::new(),
@@ -2132,6 +2154,13 @@ impl TypedModule {
 
     pub fn name(&self) -> &str {
         &self.ast.name
+    }
+
+    pub fn name_of_type(&self, type_id: TypeId) -> &str {
+        match self.types.get_defn_info(type_id) {
+            None => self.types.get(type_id).kind_name(),
+            Some(info) => self.name_of(info.name),
+        }
     }
 
     pub fn name_of(&self, id: Identifier) -> &str {
@@ -2331,14 +2360,13 @@ impl TypedModule {
             let gen = GenericType {
                 params: type_params,
                 inner: resulting_type_id,
-                type_defn_info,
                 specializations: HashMap::new(),
             };
-            Ok(self.types.add(Type::Generic(gen)))
+            Ok(self.types.add(Type::Generic(gen), Some(type_defn_info)))
         } else if parsed_type_defn.flags.is_alias() {
             // Transparent alias
             match self.types.get(resulting_type_id) {
-                Type::Never(_) => {
+                Type::Never => {
                     failf!(parsed_type_defn.span, "Why would you alias 'never'")
                 }
                 _ => Ok(resulting_type_id),
@@ -2346,11 +2374,11 @@ impl TypedModule {
         } else {
             // 'New type' territory; must be a named struct/enum OR a builtin
             match self.types.get(resulting_type_id) {
-                Type::Unit(_)
-                | Type::Char(_)
-                | Type::Bool(_)
-                | Type::Never(_)
-                | Type::Pointer(_)
+                Type::Unit
+                | Type::Char
+                | Type::Bool
+                | Type::Never
+                | Type::Pointer
                 | Type::Integer(_)
                 | Type::Float(_) => Ok(resulting_type_id),
                 Type::Struct(_s) => Ok(resulting_type_id),
@@ -2404,83 +2432,84 @@ impl TypedModule {
                 let defn_info =
                     context.inner_type_defn_info.expect("required defn info for builtin");
                 let name = defn_info.name;
+                let defn_info = Some(defn_info);
                 match self.name_of(name) {
                     "unit" => {
-                        let id = self.types.add(Type::Unit(defn_info));
+                        let id = self.types.add(Type::Unit, defn_info);
                         assert!(id == UNIT_TYPE_ID);
                         Ok(id)
                     }
                     "char" => {
-                        let id = self.types.add(Type::Char(defn_info));
+                        let id = self.types.add(Type::Char, defn_info);
                         assert!(id == CHAR_TYPE_ID);
                         Ok(id)
                     }
                     "bool" => {
-                        let id = self.types.add(Type::Bool(defn_info));
+                        let id = self.types.add(Type::Bool, defn_info);
                         assert!(id == BOOL_TYPE_ID);
                         Ok(id)
                     }
                     "never" => {
-                        let id = self.types.add(Type::Never(defn_info));
+                        let id = self.types.add(Type::Never, defn_info);
                         assert!(id == NEVER_TYPE_ID);
                         Ok(id)
                     }
                     "Pointer" => {
-                        let id = self.types.add(Type::Pointer(defn_info));
+                        let id = self.types.add(Type::Pointer, defn_info);
                         assert!(id == POINTER_TYPE_ID);
                         Ok(id)
                     }
                     "f32" => {
                         let id = self
                             .types
-                            .add(Type::Float(FloatType { size: NumericWidth::B32, defn_info }));
+                            .add(Type::Float(FloatType { size: NumericWidth::B32 }), defn_info);
                         assert!(id == F32_TYPE_ID);
                         Ok(id)
                     }
                     "f64" => {
                         let id = self
                             .types
-                            .add(Type::Float(FloatType { size: NumericWidth::B64, defn_info }));
+                            .add(Type::Float(FloatType { size: NumericWidth::B64 }), defn_info);
                         assert!(id == F64_TYPE_ID);
                         Ok(id)
                     }
                     "u8" => {
-                        let id = self.types.add(Type::Integer(IntegerType::U8));
+                        let id = self.types.add(Type::Integer(IntegerType::U8), defn_info);
                         assert!(id == U8_TYPE_ID);
                         Ok(id)
                     }
                     "u16" => {
-                        let id = self.types.add(Type::Integer(IntegerType::U16));
+                        let id = self.types.add(Type::Integer(IntegerType::U16), defn_info);
                         assert!(id == U16_TYPE_ID);
                         Ok(id)
                     }
                     "u32" => {
-                        let id = self.types.add(Type::Integer(IntegerType::U32));
+                        let id = self.types.add(Type::Integer(IntegerType::U32), defn_info);
                         assert!(id == U32_TYPE_ID);
                         Ok(id)
                     }
                     "u64" => {
-                        let id = self.types.add(Type::Integer(IntegerType::U64));
+                        let id = self.types.add(Type::Integer(IntegerType::U64), defn_info);
                         assert!(id == U64_TYPE_ID);
                         Ok(id)
                     }
                     "i8" => {
-                        let id = self.types.add(Type::Integer(IntegerType::I8));
+                        let id = self.types.add(Type::Integer(IntegerType::I8), defn_info);
                         assert!(id == I8_TYPE_ID);
                         Ok(id)
                     }
                     "i16" => {
-                        let id = self.types.add(Type::Integer(IntegerType::I16));
+                        let id = self.types.add(Type::Integer(IntegerType::I16), defn_info);
                         assert!(id == I16_TYPE_ID);
                         Ok(id)
                     }
                     "i32" => {
-                        let id = self.types.add(Type::Integer(IntegerType::I32));
+                        let id = self.types.add(Type::Integer(IntegerType::I32), defn_info);
                         assert!(id == I32_TYPE_ID);
                         Ok(id)
                     }
                     "i64" => {
-                        let id = self.types.add(Type::Integer(IntegerType::I64));
+                        let id = self.types.add(Type::Integer(IntegerType::I64), defn_info);
                         assert!(id == I64_TYPE_ID);
                         Ok(id)
                     }
@@ -2521,12 +2550,9 @@ impl TypedModule {
                         offset_bits: offset,
                     })
                 }
-                let struct_defn = StructType {
-                    fields,
-                    type_defn_info: context.attached_type_defn_info(),
-                    generic_instance_info: None,
-                };
-                let type_id = self.types.add(Type::Struct(struct_defn));
+                let struct_defn = StructType { fields, generic_instance_info: None };
+                let type_id =
+                    self.types.add(Type::Struct(struct_defn), context.attached_type_defn_info());
                 Ok(type_id)
             }
             ParsedTypeExpr::TypeApplication(_ty_app) => {
@@ -2547,7 +2573,7 @@ impl TypedModule {
                 let inner_ty =
                     self.eval_type_expr_ext(r.base, scope_id, context.no_attach_defn_info())?;
                 let reference_type = Type::Reference(ReferenceType { inner_type: inner_ty });
-                let type_id = self.types.add(reference_type);
+                let type_id = self.types.add_anon(reference_type);
                 Ok(type_id)
             }
             ParsedTypeExpr::Enum(e) => {
@@ -2589,12 +2615,11 @@ impl TypedModule {
                 }
                 let enum_type = Type::Enum(TypedEnum {
                     variants,
-                    type_defn_info: context.attached_type_defn_info(),
                     generic_instance_info: None,
                     ast_node: type_expr_id.into(),
                     explicit_tag_type: None,
                 });
-                let enum_type_id = self.types.add(enum_type);
+                let enum_type_id = self.types.add(enum_type, context.attached_type_defn_info());
                 Ok(enum_type_id)
             }
             ParsedTypeExpr::DotMemberAccess(dot_acc) => {
@@ -2724,10 +2749,9 @@ impl TypedModule {
                     });
                 }
                 let return_type = self.eval_type_expr(fun_type.return_type, scope_id)?;
-                let function_type_id = self.types.add(Type::Function(FunctionType {
+                let function_type_id = self.types.add_anon(Type::Function(FunctionType {
                     physical_params: params,
                     return_type,
-                    defn_info: None,
                 }));
                 Ok(function_type_id)
             }
@@ -2854,10 +2878,9 @@ impl TypedModule {
 
                 let new_struct = Type::Struct(StructType {
                     fields: combined_fields,
-                    type_defn_info: context.attached_type_defn_info(),
                     generic_instance_info: None,
                 });
-                let type_id = self.types.add(new_struct);
+                let type_id = self.types.add(new_struct, context.attached_type_defn_info());
                 eprintln!("Combined struct: {}", self.type_id_to_string(type_id));
 
                 Ok(Some(type_id))
@@ -2889,15 +2912,12 @@ impl TypedModule {
                     .ok_or_else(|| errf!(ty_app.span, "Expected struct"))?;
                 let mut new_fields = struct1.fields.clone();
                 new_fields.retain(|f| !struct2.fields.iter().any(|sf| sf.name == f.name));
-                let mut new_struct = StructType {
-                    fields: new_fields,
-                    type_defn_info: context.attached_type_defn_info(),
-                    generic_instance_info: None,
-                };
+                let mut new_struct = StructType { fields: new_fields, generic_instance_info: None };
                 for (i, field) in new_struct.fields.iter_mut().enumerate() {
                     field.index = i as u32;
                 }
-                let type_id = self.types.add(Type::Struct(new_struct));
+                let type_id =
+                    self.types.add(Type::Struct(new_struct), context.attached_type_defn_info());
                 Ok(Some(type_id))
             }
             _ => Ok(None),
@@ -2969,12 +2989,12 @@ impl TypedModule {
                                             "Inserting recursive reference for {}",
                                             self.name_of(name)
                                         );
-                                        let type_id = self.types.add(Type::RecursiveReference(
-                                            RecursiveReference {
+                                        let type_id = self.types.add_anon(
+                                            Type::RecursiveReference(RecursiveReference {
                                                 parsed_id: type_defn_id,
                                                 root_type_id: None,
-                                            },
-                                        ));
+                                            }),
+                                        );
                                         self.types
                                             .placeholder_mapping
                                             .insert(type_defn_id, type_id);
@@ -3020,7 +3040,7 @@ impl TypedModule {
                 debug!(
                     "Using cached generic instance {} for {} args {:?}",
                     self.type_id_to_string(*existing),
-                    self.name_of(gen.type_defn_info.name),
+                    self.name_of_type(generic_type),
                     type_arguments
                         .clone()
                         .iter()
@@ -3031,7 +3051,7 @@ impl TypedModule {
             }
             None => {
                 debug_assert!(gen.params.len() == type_arguments.len());
-                let type_defn_info = gen.type_defn_info.clone();
+                let type_defn_info = self.types.get_defn_info(generic_type).unwrap();
                 // Note: This is where we'd check constraints on the pairs:
                 // that each passed params meets the constraints of the generic param
                 let substitution_pairs: Vec<TypeSubstitutionPair> = gen
@@ -3052,12 +3072,11 @@ impl TypedModule {
                     Some(type_defn_info),
                 );
                 if log::log_enabled!(log::Level::Debug) {
-                    let gen = self.types.get(generic_type).expect_generic();
                     let inst_info =
                         &self.types.get_generic_instance_info(specialized_type).unwrap().type_args;
                     debug!(
                         "instantiated {} with params {} got expanded type: {}",
-                        self.name_of(gen.type_defn_info.name),
+                        self.name_of(type_defn_info.name),
                         self.pretty_print_types(inst_info, ", "),
                         self.type_id_to_string_ext(specialized_type, true)
                     );
@@ -3133,16 +3152,16 @@ impl TypedModule {
 
         match self.types.get(type_id) {
             Type::InferenceHole(_) => type_id,
-            Type::Unit(_)
-            | Type::Char(_)
+            Type::Unit
+            | Type::Char
             | Type::Integer(_)
             | Type::Float(_)
-            | Type::Bool(_)
-            | Type::Pointer(_) => type_id,
+            | Type::Bool
+            | Type::Pointer => type_id,
             Type::Struct(struc) => {
                 let mut new_fields = struc.fields.clone();
                 let mut any_change = false;
-                let original_defn_info = struc.type_defn_info.clone();
+                let original_defn_info = self.types.get_defn_info(type_id);
                 let original_instance_info = struc.generic_instance_info.clone();
                 for field in new_fields.iter_mut() {
                     let new_field_type_id =
@@ -3159,12 +3178,12 @@ impl TypedModule {
                             type_args: substitution_pairs.iter().map(|p| p.to).collect(),
                         })
                         .or(original_instance_info);
-                    let specialized_struct = StructType {
-                        fields: new_fields,
-                        type_defn_info: defn_info_to_attach.or(original_defn_info),
-                        generic_instance_info,
-                    };
-                    self.types.add(Type::Struct(specialized_struct))
+                    let specialized_struct =
+                        StructType { fields: new_fields, generic_instance_info };
+                    self.types.add(
+                        Type::Struct(specialized_struct),
+                        defn_info_to_attach.or(original_defn_info),
+                    )
                 } else {
                     type_id
                 }
@@ -3173,7 +3192,7 @@ impl TypedModule {
                 let mut new_variants = e.variants.clone();
                 let mut any_changed = false;
                 let original_ast_node = e.ast_node;
-                let original_defn_info = e.type_defn_info.clone();
+                let original_defn_info = self.types.get_defn_info(type_id);
                 let original_instance_info = e.generic_instance_info.clone();
                 let original_explicit_tag_type = e.explicit_tag_type;
                 for variant in new_variants.iter_mut() {
@@ -3199,10 +3218,11 @@ impl TypedModule {
                         variants: new_variants,
                         ast_node: original_ast_node,
                         generic_instance_info,
-                        type_defn_info: defn_info_to_attach.or(original_defn_info),
                         explicit_tag_type: original_explicit_tag_type,
                     };
-                    let new_enum_id = self.types.add(Type::Enum(new_enum));
+                    let new_enum_id = self
+                        .types
+                        .add(Type::Enum(new_enum), defn_info_to_attach.or(original_defn_info));
                     new_enum_id
                 } else {
                     type_id
@@ -3214,7 +3234,7 @@ impl TypedModule {
                     self.substitute_in_type_ext(ref_inner, substitution_pairs, None, None);
                 if force_new || new_inner != ref_inner {
                     let specialized_reference = ReferenceType { inner_type: new_inner };
-                    self.types.add(Type::Reference(specialized_reference))
+                    self.types.add_anon(Type::Reference(specialized_reference))
                 } else {
                     type_id
                 }
@@ -3226,7 +3246,7 @@ impl TypedModule {
                     self.substitute_in_type_ext(function_type_id, substitution_pairs, None, None);
                 if new_fn_type != function_type_id {
                     let type_param = self.types.get(type_id).as_function_type_parameter().unwrap();
-                    self.types.add(Type::FunctionTypeParameter(FunctionTypeParameter {
+                    self.types.add_anon(Type::FunctionTypeParameter(FunctionTypeParameter {
                         name: type_param.name,
                         scope_id: type_param.scope_id,
                         span: type_param.span,
@@ -3264,10 +3284,13 @@ impl TypedModule {
                     param.type_id = new_param_type;
                 }
                 if force_new || any_new {
-                    if defn_info_to_attach.as_ref().is_some() {
-                        new_fun_type.defn_info = defn_info_to_attach;
-                    }
-                    let new_function_type_id = self.types.add(Type::Function(new_fun_type));
+                    // nocommit: If tests don't pass, we need to fall back to the original defn
+                    // info
+                    //if defn_info_to_attach.as_ref().is_some() {
+                    //    new_fun_type.defn_info = defn_info_to_attach;
+                    //}
+                    let new_function_type_id =
+                        self.types.add(Type::Function(new_fun_type), defn_info_to_attach);
                     new_function_type_id
                 } else {
                     type_id
@@ -3287,7 +3310,7 @@ impl TypedModule {
                     type_id
                 }
             }
-            Type::Never(_) => {
+            Type::Never => {
                 unreachable!("substitute_in_type is not expected to be called on never")
             }
             Type::RecursiveReference(_) => unreachable!(
@@ -3309,7 +3332,7 @@ impl TypedModule {
             ParsedPattern::Literal(literal_expr_id) => {
                 match self.ast.exprs.get(*literal_expr_id).expect_literal() {
                     Literal::Unit(span) => match self.types.get(target_type_id) {
-                        Type::Unit(_) => Ok(TypedPattern::LiteralUnit(*span)),
+                        Type::Unit => Ok(TypedPattern::LiteralUnit(*span)),
                         _ => failf!(
                             self.ast.get_pattern_span(pat_expr),
                             "unrelated pattern type unit will never match {}",
@@ -3317,7 +3340,7 @@ impl TypedModule {
                         ),
                     },
                     Literal::Char(c, span) => match self.types.get(target_type_id) {
-                        Type::Char(_) => Ok(TypedPattern::LiteralChar(*c, *span)),
+                        Type::Char => Ok(TypedPattern::LiteralChar(*c, *span)),
                         _ => failf!(
                             self.ast.get_pattern_span(pat_expr),
                             "unrelated pattern type char will never match {}",
@@ -3357,7 +3380,7 @@ impl TypedModule {
                         }
                     }
                     Literal::Bool(b, span) => match self.types.get(target_type_id) {
-                        Type::Bool(_) => Ok(TypedPattern::LiteralBool(*b, *span)),
+                        Type::Bool => Ok(TypedPattern::LiteralBool(*b, *span)),
                         _ => failf!(
                             self.ast.get_pattern_span(pat_expr),
                             "bool literal pattern will never match {}",
@@ -3610,13 +3633,7 @@ impl TypedModule {
                         "Comparing params {} and {} inside {}",
                         self.type_id_to_string(*exp_param),
                         self.type_id_to_string(*act_param),
-                        self.name_of(
-                            self.types
-                                .get(spec1.generic_parent)
-                                .expect_generic()
-                                .type_defn_info
-                                .name
-                        )
+                        self.name_of(self.types.get_defn_info(spec1.generic_parent).unwrap().name)
                     );
                     if let Err(msg) = self.check_types(*exp_param, *act_param, scope_id) {
                         let generic = self.types.get(spec1.generic_parent).expect_generic();
@@ -3735,7 +3752,7 @@ impl TypedModule {
                     Ok(())
                 }
             }
-            (_expected, Type::Never(_)) => Ok(()),
+            (_expected, Type::Never) => Ok(()),
             (_exp, _act) => Err(format!(
                 "Expected {} but got {}",
                 self.type_id_to_string_ext(expected, false),
@@ -4122,7 +4139,7 @@ impl TypedModule {
         let span = value.span;
         let constrained_impl_scope =
             self.scopes.add_child_scope(value.scope_id, ScopeType::AbilityImpl, None, None);
-        let type_id = self.types.add(Type::TypeParameter(value));
+        let type_id = self.types.add_anon(Type::TypeParameter(value));
         for ability_sig in ability_impls.into_iter() {
             self.add_constrained_ability_impl(type_id, ability_sig, constrained_impl_scope, span);
         }
@@ -4130,7 +4147,7 @@ impl TypedModule {
     }
 
     fn add_function_type_parameter(&mut self, value: FunctionTypeParameter) -> TypeId {
-        let type_id = self.types.add(Type::FunctionTypeParameter(value));
+        let type_id = self.types.add_anon(Type::FunctionTypeParameter(value));
         type_id
     }
 
@@ -4807,7 +4824,7 @@ impl TypedModule {
                         ctx.with_scope(block_scope).with_no_expected_type(),
                     )?;
 
-                    let st @ Type::Struct(struct_type) = self.types.get(opt.inner_type) else {
+                    let Type::Struct(struct_type) = self.types.get(opt.inner_type) else {
                         return failf!(
                             span,
                             "?. must be used on optional structs, got {}",
@@ -4820,7 +4837,7 @@ impl TypedModule {
                                 span,
                                 "Field {} not found on struct {}",
                                 self.ast.idents.get_name(field_access.field_name),
-                                self.type_to_string(st, false)
+                                self.type_id_to_string(opt.inner_type)
                             )
                         })?;
                     let field_type = target_field.type_id;
@@ -4871,12 +4888,11 @@ impl TypedModule {
                             span,
                             "Field {} not found on struct {}",
                             self.ast.idents.get_name(field_access.field_name),
-                            self.type_to_string(st, false)
+                            self.type_id_to_string(base_type)
                         )
                     })?;
                 if target_field.private {
-                    let companion_namespace =
-                        struct_type.type_defn_info.as_ref().and_then(|d| d.companion_namespace);
+                    let companion_namespace = self.types.get_companion_namespace(base_type);
 
                     if !self.is_inside_companion_scope(companion_namespace, ctx.scope_id) {
                         return failf!(
@@ -5560,35 +5576,59 @@ impl TypedModule {
             }
             ParsedExpression::Static(stat) => {
                 let span = stat.span;
-                let expr = self.eval_expr(stat.base_expr, ctx.with_static(true))?;
+                let base_expr = stat.base_expr;
+                eprintln!(
+                    "fps before static: {}",
+                    self.functions_pending_body_specialization.len()
+                );
+                // nocommit: For now, we ensure that any functions called by this static block
+                //           have bodies. This is inefficient to do here, and it may be better to
+                //           create a work queue and re-visit these exprs instead.
+                //           Ah, but the type of the expr produced here can depend on its code, no
+                //           it can't, and its always producing a single expr, so you could swap
+                //           out the value at that ID later.
+                //           But, what about static code insertion blocks?
+                //           Those affect subsequent code and must happen before
+                //           it's evaluated.
+
+                self.specialize_pending_function_bodies(&mut std::io::stderr()).unwrap();
+                let expr = self.eval_expr(base_expr, ctx.with_static(true))?;
+                eprintln!("fps after static: {}", self.functions_pending_body_specialization.len());
                 let type_id = self.exprs.get(expr).get_type();
-                let value = vm::execute_single_expr(self, expr)?;
+                let (mut vm, value) = vm::execute_single_expr(self, expr)?;
                 if cfg!(debug_assertions) {
                     if type_id != value.get_type() {
                         return failf!(
                             span,
-                            "MISMATCH: {} vs {}",
+                            "static value type mismatch: {} vs {}",
                             self.type_id_to_string(type_id),
                             self.type_id_to_string(value.get_type())
                         );
                     }
                 }
-                let comptime_value_id = self.vm_value_to_static_value(&value, span);
-                eprintln!("value: {}", self.static_value_to_string(comptime_value_id));
+                eprintln!("{}", vm.dump(self));
+                let comptime_value_id = self.vm_value_to_static_value(&mut vm, &value, span);
+                eprintln!("static value: {}", self.static_value_to_string(comptime_value_id));
                 let e = self.exprs.add(TypedExpr::StaticValue(comptime_value_id, type_id, span));
                 Ok(e)
             }
         }
     }
 
-    /// nocommit This entire transformation is a temporary shim; it shouldn't be needed in the final
-    /// picture; I just want to sketch out the actual evaluation without re-writing everything else
-    /// all at once
+    /// VM values contain a lot of pointers to the VM's stack and heap
+    /// (which is currently just the host's heap)
+    /// We need to convert these into 'constants' so that we can embed
+    /// them in a binary, for example LLVM. This function does that
+    /// by recursively 'loading' all the values out of the VM value.
     ///
-    /// Actually not, this is needed, because not all values that run through the interpreter
-    /// are valid as final static values; for example, raw pointers won't fly
+    /// Obviously not all types are supported; only things you can reasonably
+    /// embed in a binary; raw pointers for example are out.
+    ///
+    /// For complex types (not a char array) like a big slice of structs, I think we may just have to use
+    /// some sort of 'embed binary data' feature of the backend
     fn vm_value_to_static_value(
         &mut self,
+        vm: &mut vm::Vm,
         vm_value: &vm::Value,
         span: SpanId,
     ) -> CompileTimeValueId {
@@ -5603,7 +5643,7 @@ impl TypedModule {
             vm::Value::Float(typed_float_value) => {
                 CompileTimeValue::Float(*typed_float_value, span)
             }
-            vm::Value::Pointer { value } => {
+            vm::Value::Pointer(value) => {
                 if *value == 0 {
                     CompileTimeValue::Pointer(0, span)
                 } else {
@@ -5618,29 +5658,43 @@ impl TypedModule {
                 // This is just a de-reference
                 // Needs to become a global.
                 // Rely on the VM's code to load it, then make a K1 'global' to hold it?
-                let loaded_value = vm::load_value(&self, *type_id, *ptr, span)?;
+                let loaded_value = vm::load_value(vm, self, *type_id, *ptr, span).unwrap();
                 todo!("Introduce CompileTimeValue::Reference");
             }
             vm::Value::Struct { type_id, ptr } => {
                 let type_id = *type_id;
                 if type_id == STRING_TYPE_ID {
-                    let struct_value = vm::load_struct_field(STRING_TYPE_ID, *ptr, 0);
-                    let char_buffer_type_id = todo!();
+                    let struct_value =
+                        vm::load_struct_field(vm, self, STRING_TYPE_ID, *ptr, 0, span).unwrap();
+                    let char_buffer_type_id =
+                        self.types.get(STRING_TYPE_ID).expect_struct().fields[0].type_id;
                     let vm::Value::Struct { ptr: char_buffer_ptr, .. } = struct_value else {
                         self.ice_with_span("Malformed compile-time 'string'", span)
                     };
-                    let vm::Value::Integer(TypedIntegerValue::U64(len)) =
-                        vm::load_struct_field(char_buffer_type_id, *char_buffer_ptr, 2)
-                    else {
+                    let vm::Value::Integer(TypedIntegerValue::U64(len)) = vm::load_struct_field(
+                        vm,
+                        self,
+                        char_buffer_type_id,
+                        char_buffer_ptr,
+                        0,
+                        span,
+                    )
+                    .unwrap() else {
                         self.ice_with_span("Malformed compile-time 'string'", span)
                     };
-                    let vm::Value::Reference { ptr, .. } =
-                        vm::load_struct_field(char_buffer_type_id, *char_buffer_ptr, 1)
-                    else {
+                    let vm::Value::Reference { ptr, .. } = vm::load_struct_field(
+                        vm,
+                        self,
+                        char_buffer_type_id,
+                        char_buffer_ptr,
+                        1,
+                        span,
+                    )
+                    .unwrap() else {
                         self.ice_with_span("Malformed compile-time 'string'", span)
                     };
                     unsafe {
-                        let slice = std::slice::from_raw_parts(*ptr as *const u8, *len as usize);
+                        let slice = std::slice::from_raw_parts(ptr as *const u8, len as usize);
                         dbg!(slice);
                         let the_str = std::str::from_utf8(slice).unwrap();
                         let box_str = Box::from(the_str);
@@ -5653,9 +5707,10 @@ impl TypedModule {
                     let struct_type = self.types.get(type_id).expect_struct();
                     let mut field_value_ids = Vec::with_capacity(struct_type.fields.len());
                     let struct_fields = struct_type.fields.clone();
-                    for field_value in struct_fields.iter() {
-                        let field_value = vm::load_struct_field(type_id, *ptr, 0);
-                        let ctv = self.vm_value_to_static_value(field_value, span);
+                    for (index, _) in struct_fields.iter().enumerate() {
+                        let field_value =
+                            vm::load_struct_field(vm, self, type_id, *ptr, index, span).unwrap();
+                        let ctv = self.vm_value_to_static_value(vm, &field_value, span);
                         field_value_ids.push(ctv)
                     }
                     CompileTimeValue::Struct(CompileTimeStruct {
@@ -5665,7 +5720,7 @@ impl TypedModule {
                     })
                 }
             }
-            vm::Value::Enum { type_id, ptr } => todo!(),
+            vm::Value::Enum { .. } => todo!(),
         };
         self.comptime_values.add(v)
     }
@@ -5708,9 +5763,8 @@ impl TypedModule {
             field_values.push(StructField { name: ast_field.name, expr });
         }
 
-        let struct_type =
-            StructType { fields: field_defns, type_defn_info: None, generic_instance_info: None };
-        let struct_type_id = self.types.add(Type::Struct(struct_type));
+        let struct_type = StructType { fields: field_defns, generic_instance_info: None };
+        let struct_type_id = self.types.add_anon(Type::Struct(struct_type));
         let typed_struct =
             Struct { fields: field_values, span: ast_struct.span, type_id: struct_type_id };
         Ok(self.exprs.add(TypedExpr::Struct(typed_struct)))
@@ -5731,6 +5785,7 @@ impl TypedModule {
         };
         let expected_struct_id = original_expected_struct_id;
         let expected_struct = self.types.get(expected_struct_id).expect_struct().clone();
+        let expected_struct_defn_info = self.types.get_defn_info(expected_struct_id);
         let field_count = expected_struct.fields.len();
 
         let ast_struct = parsed_struct.clone();
@@ -5856,12 +5911,10 @@ impl TypedModule {
                 }
             }
         };
-        let output_struct = StructType {
-            fields: field_types,
-            type_defn_info: expected_struct.type_defn_info,
-            generic_instance_info: output_instance_info,
-        };
-        let output_struct_type_id = self.types.add(Type::Struct(output_struct));
+        let output_struct =
+            StructType { fields: field_types, generic_instance_info: output_instance_info };
+        let output_struct_type_id =
+            self.types.add(Type::Struct(output_struct), expected_struct_defn_info);
 
         let typed_struct =
             Struct { fields: field_values, span: ast_struct.span, type_id: output_struct_type_id };
@@ -6317,11 +6370,9 @@ impl TypedModule {
                 }))
             })
             .collect();
-        let environment_struct_type = self.types.add(Type::Struct(StructType {
-            fields: env_fields,
-            type_defn_info: None,
-            generic_instance_info: None,
-        }));
+        let environment_struct_type = self
+            .types
+            .add_anon(Type::Struct(StructType { fields: env_fields, generic_instance_info: None }));
         let environment_struct = self.synth_struct_expr(
             environment_struct_type,
             env_field_exprs,
@@ -6369,10 +6420,9 @@ impl TypedModule {
             *self.exprs.get_mut(pending_fixup) = field_access_expr;
         }
 
-        let function_type = self.types.add(Type::Function(FunctionType {
+        let function_type = self.types.add_anon(Type::Function(FunctionType {
             physical_params: typed_params.into(),
             return_type,
-            defn_info: None,
         }));
         let encl_fn_name = self
             .get_function(
@@ -6928,7 +6978,7 @@ impl TypedModule {
                     };
                     Ok((cast_type, target_type))
                 }
-                Type::Char(_) => {
+                Type::Char => {
                     if from_integer_type.width() == NumericWidth::B8 {
                         Ok((CastType::Integer8ToChar, target_type))
                     } else {
@@ -6939,7 +6989,7 @@ impl TypedModule {
                         )
                     }
                 }
-                Type::Pointer(_) => {
+                Type::Pointer => {
                     if *from_integer_type == IntegerType::U64 {
                         Ok((CastType::IntegerToPointer, target_type))
                     } else {
@@ -6980,7 +7030,7 @@ impl TypedModule {
                     self.type_id_to_string(target_type).blue()
                 ),
             },
-            Type::Char(_) => match self.types.get(target_type) {
+            Type::Char => match self.types.get(target_type) {
                 Type::Integer(_to_integer_type) => {
                     Ok((CastType::IntegerExtendFromChar, target_type))
                 }
@@ -6991,14 +7041,14 @@ impl TypedModule {
                 ),
             },
             Type::Reference(_refer) => match self.types.get(target_type) {
-                Type::Pointer(_) => Ok((CastType::ReferenceToPointer, POINTER_TYPE_ID)),
+                Type::Pointer => Ok((CastType::ReferenceToPointer, POINTER_TYPE_ID)),
                 _ => failf!(
                     cast.span,
                     "Cannot cast reference to '{}'",
                     self.type_id_to_string(target_type).blue()
                 ),
             },
-            Type::Pointer(_) => match self.types.get(target_type) {
+            Type::Pointer => match self.types.get(target_type) {
                 Type::Reference(_refer) => Ok((CastType::PointerToReference, target_type)),
                 Type::Integer(IntegerType::U64) => Ok((CastType::PointerToInteger, target_type)),
                 _ => failf!(
@@ -7640,7 +7690,7 @@ impl TypedModule {
         let kind = binary_op.op_kind;
         let lhs_type = self.exprs.get(lhs).get_type();
         let result_type = match self.types.get(lhs_type) {
-            Type::Never(_) => Ok(NEVER_TYPE_ID),
+            Type::Never => Ok(NEVER_TYPE_ID),
             Type::Float(_) | Type::Integer(_) => match kind {
                 BinaryOpKind::Add => Ok(lhs_type),
                 BinaryOpKind::Subtract => Ok(lhs_type),
@@ -7657,7 +7707,7 @@ impl TypedModule {
                 BinaryOpKind::NotEquals => Ok(BOOL_TYPE_ID),
                 BinaryOpKind::OptionalElse | BinaryOpKind::Pipe => unreachable!(),
             },
-            Type::Bool(_) => match kind {
+            Type::Bool => match kind {
                 BinaryOpKind::Add
                 | BinaryOpKind::Subtract
                 | BinaryOpKind::Multiply
@@ -7675,7 +7725,7 @@ impl TypedModule {
                 BinaryOpKind::NotEquals => Ok(BOOL_TYPE_ID),
                 BinaryOpKind::OptionalElse | BinaryOpKind::Pipe => unreachable!(),
             },
-            Type::Char(_) => match kind {
+            Type::Char => match kind {
                 BinaryOpKind::Add
                 | BinaryOpKind::Subtract
                 | BinaryOpKind::Multiply
@@ -7691,7 +7741,7 @@ impl TypedModule {
                 BinaryOpKind::NotEquals => Ok(BOOL_TYPE_ID),
                 BinaryOpKind::OptionalElse | BinaryOpKind::Pipe => unreachable!(),
             },
-            Type::Unit(_) => match kind {
+            Type::Unit => match kind {
                 BinaryOpKind::Equals => Ok(BOOL_TYPE_ID),
                 BinaryOpKind::NotEquals => Ok(BOOL_TYPE_ID),
                 _ => failf!(binary_op.span, "Invalid operation on unit: {}", kind),
@@ -7701,7 +7751,7 @@ impl TypedModule {
                     binary_op.span,
                     "Invalid left-hand side of binary operation {}: {}",
                     kind,
-                    self.type_to_string(other, false)
+                    self.type_id_to_string(lhs_type)
                 )
             }
         }?;
@@ -8239,10 +8289,8 @@ impl TypedModule {
 
         let base_expr_type = self.exprs.get(base_expr).get_type();
         let base_for_method_derefed = self.types.get_type_id_dereferenced(base_expr_type);
-        if let Some(companion_ns) = self
-            .types
-            .get_type_defn_info(base_for_method_derefed)
-            .and_then(|d| d.companion_namespace)
+        if let Some(companion_ns) =
+            self.types.get_defn_info(base_for_method_derefed).and_then(|d| d.companion_namespace)
         {
             let companion_scope = self.get_namespace_scope(companion_ns);
             if let Some(method_id) = companion_scope.find_function(fn_name) {
@@ -8375,7 +8423,8 @@ impl TypedModule {
                 span,
             },
         );
-        self.types.add(Type::Function(function_type))
+        let defn_info = self.types.get_defn_info(function_type_id);
+        self.types.add(Type::Function(function_type), defn_info)
     }
 
     fn resolve_ability_call(
@@ -8642,7 +8691,6 @@ impl TypedModule {
                 return Ok(None);
             };
             let g_params = g.params.clone();
-            let g_name = g.type_defn_info.name;
 
             let payload_if_needed = match generic_variant.payload {
                 Some(generic_payload_type_id) => match payload_parsed_expr {
@@ -8695,7 +8743,7 @@ impl TypedModule {
                                     return failf!(
                                         span,
                                         "Cannot infer a type for {}; expected mismatching generic type {}",
-                                        self.name_of(g_name), self.type_id_to_string(expected_type)
+                                        self.name_of_type(base_type_id), self.type_id_to_string(expected_type)
                                     );
                                 }
                             }
@@ -8703,7 +8751,7 @@ impl TypedModule {
                                 return failf!(
                                     span,
                                     "Cannot infer a type for {}",
-                                    self.name_of(g_name)
+                                    self.name_of_type(base_type_id)
                                 )
                             }
                         }
@@ -8914,7 +8962,10 @@ impl TypedModule {
             Callee::DynamicLambda(dynamic) => match self.get_expr_type(*dynamic) {
                 Type::LambdaObject(lambda_object) => lambda_object.function_type,
                 t => {
-                    panic!("Invalid dynamic function callee: {}", self.type_to_string(t, false))
+                    panic!(
+                        "Invalid dynamic function callee: {}",
+                        self.type_id_to_string(self.exprs.get(*dynamic).get_type())
+                    )
                 }
             },
             Callee::DynamicAbstract { function_type, .. } => *function_type,
@@ -9138,7 +9189,7 @@ impl TypedModule {
 
             let type_hole = self_
                 .types
-                .add(Type::InferenceHole(InferenceHoleType { index: hole_index as u32 }));
+                .add_anon(Type::InferenceHole(InferenceHoleType { index: hole_index as u32 }));
             self_.inference_context.vars.push(type_hole);
             instantiation_set.push(TypeSubstitutionPair { from: param.type_id(), to: type_hole });
         }
@@ -11191,16 +11242,15 @@ impl TypedModule {
             },
         };
 
-        let function_type_id = self_.types.add(Type::Function(FunctionType {
-            physical_params: param_types,
-            return_type,
-            defn_info: Some(TypeDefnInfo {
+        let function_type_id = self_.types.add(
+            Type::Function(FunctionType { physical_params: param_types, return_type }),
+            Some(TypeDefnInfo {
                 name,
                 scope: parent_scope_id,
                 companion_namespace: None,
                 ast_id: parsed_function_id.into(),
             }),
-        }));
+        );
 
         let function_id = self_.next_function_id();
 
@@ -12137,9 +12187,10 @@ impl TypedModule {
         // Eventually we need a better way of doing this
         {
             let buffer_generic = self.types.get(BUFFER_TYPE_ID).expect_generic();
+            let info = self.types.get_defn_info(BUFFER_TYPE_ID).unwrap();
             let buffer_struct = self.types.get(buffer_generic.inner).expect_struct();
-            debug_assert!(buffer_generic.type_defn_info.scope == self.scopes.get_root_scope_id());
-            debug_assert!(buffer_generic.type_defn_info.name == get_ident!(self, "Buffer"));
+            debug_assert!(info.scope == self.scopes.get_root_scope_id());
+            debug_assert!(info.name == get_ident!(self, "Buffer"));
             debug_assert!(buffer_struct.fields.len() == 2);
             debug_assert!(
                 buffer_struct.fields.iter().map(|f| self.name_of(f.name)).collect::<Vec<_>>()
@@ -12151,9 +12202,10 @@ impl TypedModule {
         // Eventually we need a better way of doing this
         {
             let list_generic = self.types.get(LIST_TYPE_ID).expect_generic();
+            let info = self.types.get_defn_info(LIST_TYPE_ID).unwrap();
             let list_struct = self.types.get(list_generic.inner).expect_struct();
-            debug_assert!(list_generic.type_defn_info.scope == self.scopes.get_root_scope_id());
-            debug_assert!(list_generic.type_defn_info.name == get_ident!(self, "List"));
+            debug_assert!(info.scope == self.scopes.get_root_scope_id());
+            debug_assert!(info.name == get_ident!(self, "List"));
             debug_assert!(
                 list_struct.fields.iter().map(|f| self.name_of(f.name)).collect::<Vec<_>>()
                     == vec!["len", "buffer"]
@@ -12164,13 +12216,9 @@ impl TypedModule {
         // Eventually we need a better way of doing this
         {
             let string_struct = self.types.get(STRING_TYPE_ID).expect_struct();
-            debug_assert!(
-                string_struct.type_defn_info.as_ref().unwrap().scope
-                    == self.scopes.get_root_scope_id()
-            );
-            debug_assert!(
-                string_struct.type_defn_info.as_ref().unwrap().name == get_ident!(self, "string")
-            );
+            let info = self.types.get_defn_info(STRING_TYPE_ID).unwrap();
+            debug_assert!(info.scope == self.scopes.get_root_scope_id());
+            debug_assert!(info.name == get_ident!(self, "string"));
             debug_assert!(string_struct.fields.len() == 1);
         }
 
@@ -12178,9 +12226,10 @@ impl TypedModule {
         // Eventually we need a better way of doing this
         {
             let optional_generic = self.types.get(OPTIONAL_TYPE_ID).expect_generic();
+            let info = self.types.get_defn_info(OPTIONAL_TYPE_ID).unwrap();
             let inner = self.types.get(optional_generic.inner);
-            debug_assert!(optional_generic.type_defn_info.scope == self.scopes.get_root_scope_id());
-            debug_assert!(optional_generic.type_defn_info.name == get_ident!(self, "Opt"));
+            debug_assert!(info.scope == self.scopes.get_root_scope_id());
+            debug_assert!(info.name == get_ident!(self, "Opt"));
             debug_assert!(inner.as_enum().unwrap().variants.len() == 2);
         }
         //
@@ -12188,10 +12237,9 @@ impl TypedModule {
         // Eventually we need a better way of doing this
         {
             let ordering_enum = self.types.get(ORDERING_TYPE_ID).expect_enum();
+            let info = self.types.get_defn_info(ORDERING_TYPE_ID).unwrap();
             debug_assert!(ordering_enum.variants.len() == 3);
-            debug_assert!(
-                ordering_enum.type_defn_info.as_ref().unwrap().name == get_ident!(self, "Ordering")
-            );
+            debug_assert!(info.name == get_ident!(self, "Ordering"));
         }
 
         // Everything else declaration phase
@@ -12243,15 +12291,7 @@ impl TypedModule {
 
         eprintln!(">> Phase 6 specialize function bodies");
         while !self.functions_pending_body_specialization.is_empty() {
-            let clone = self.functions_pending_body_specialization.clone();
-            self.functions_pending_body_specialization.clear();
-            for function_id in &clone {
-                let result = self.specialize_function_body(*function_id);
-                if let Err(e) = result {
-                    self.write_error(&mut err_writer, &e)?;
-                    self.errors.push(e);
-                }
-            }
+            self.specialize_pending_function_bodies(&mut err_writer)?;
         }
         if !self.errors.is_empty() {
             bail!("{} failed specialize with {} errors", self.name(), self.errors.len())
@@ -12260,11 +12300,33 @@ impl TypedModule {
         Ok(())
     }
 
+    fn specialize_pending_function_bodies(
+        &mut self,
+        err_writer: &mut impl std::io::Write,
+    ) -> anyhow::Result<()> {
+        if self.functions_pending_body_specialization.is_empty() {
+            return Ok(());
+        }
+
+        let clone = self.functions_pending_body_specialization.clone();
+        self.functions_pending_body_specialization.clear();
+        for function_id in &clone {
+            let result = self.specialize_function_body(*function_id);
+            if let Err(e) = result {
+                self.write_error(err_writer, &e)?;
+                self.errors.push(e);
+            }
+        }
+        Ok(())
+    }
+
     pub fn get_span_for_type_id(&self, type_id: TypeId) -> Option<SpanId> {
-        let t = self.types.get(type_id);
-        match t {
+        match self.types.get(type_id) {
             Type::TypeParameter(tv) => Some(tv.span),
-            t => t.ast_node().map(|parsed_id| self.ast.get_span_for_id(parsed_id)),
+            _ => self
+                .types
+                .get_ast_node(type_id)
+                .map(|parsed_id| self.ast.get_span_for_id(parsed_id)),
         }
     }
 
@@ -12277,15 +12339,15 @@ impl TypedModule {
             return vec![PatternConstructor::String];
         }
         match self.types.get(type_id) {
-            Type::Unit(_) => vec![PatternConstructor::Unit],
-            Type::Char(_) => vec![PatternConstructor::Char],
+            Type::Unit => vec![PatternConstructor::Unit],
+            Type::Char => vec![PatternConstructor::Char],
             Type::TypeParameter(_) => vec![PatternConstructor::TypeVariable],
             Type::Integer(_) => vec![PatternConstructor::Int],
             Type::Float(_) => vec![PatternConstructor::Float],
-            Type::Bool(_) => {
+            Type::Bool => {
                 vec![PatternConstructor::BoolFalse, PatternConstructor::BoolTrue]
             }
-            Type::Pointer(_) => vec![PatternConstructor::Pointer], // Just an opaque atom
+            Type::Pointer => vec![PatternConstructor::Pointer], // Just an opaque atom
             Type::Reference(refer) => {
                 match self.types.get(refer.inner_type).as_function() {
                     Some(_) => vec![PatternConstructor::FunctionReference], // Function Reference, opaque atom

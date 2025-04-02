@@ -13,6 +13,7 @@ ns Arena {
   }
 
   // Aligns 'base' to the next available value that is aligned with `align`
+  // TODO(optimize): alignTo: Learn from Rust's 'align_offset' impl
   fn alignTo(baseAddress: u64, alignBytes: u64): u64 {
     let mask = alignBytes - 1;
     let sum = baseAddress + mask;
