@@ -1110,6 +1110,15 @@ impl NumericWidth {
             NumericWidth::B64 => 64,
         }
     }
+
+    pub fn byte_width(&self) -> usize {
+        match self {
+            NumericWidth::B8 => 1,
+            NumericWidth::B16 => 2,
+            NumericWidth::B32 => 4,
+            NumericWidth::B64 => 8,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

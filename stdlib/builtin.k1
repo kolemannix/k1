@@ -143,6 +143,18 @@ impl Equals for bool {
   }
 }
 
+impl Equals for u8 {
+  fn equals(self: u8, other: u8): bool { self == other }
+}
+impl Equals for u64 {
+  fn equals(self: u64, other: u64): bool { self == other }
+}
+
+impl Equals for i64 {
+  fn equals(self: i64, other: i64): bool { self == other }
+}
+
+
 fn discard[T](t: T): unit { () }
 
 // TODO: #if(K1_LIBC?) ?
