@@ -9,7 +9,7 @@ use crate::typer::scopes::*;
 use crate::parse::Identifier;
 use crate::parse::{ParsedId, ParsedTypeDefnId};
 
-use crate::typer::*;
+use crate::{impl_copy_if_small, typer::*};
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
 pub struct TypeId(NonZeroU32);
@@ -67,6 +67,7 @@ pub struct TypeDefnInfo {
     pub companion_namespace: Option<NamespaceId>,
     pub ast_id: ParsedId,
 }
+impl_copy_if_small!(20, TypeDefnInfo);
 
 impl std::hash::Hash for TypeDefnInfo {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -78,20 +79,10 @@ impl std::hash::Hash for TypeDefnInfo {
 #[derive(Debug, Clone)]
 pub struct StructType {
     pub fields: Vec<StructTypeField>,
-    /// Populated for non-anonymous (named) structs
-    pub type_defn_info: Option<TypeDefnInfo>,
     pub generic_instance_info: Option<GenericInstanceInfo>,
 }
 
 impl StructType {
-    pub fn is_named(&self) -> bool {
-        self.type_defn_info.is_some()
-    }
-
-    pub fn is_anonymous(&self) -> bool {
-        self.type_defn_info.is_none()
-    }
-
     pub fn find_field(&self, field_name: Identifier) -> Option<(usize, &StructTypeField)> {
         self.fields.iter().enumerate().find(|(_, field)| field.name == field_name)
     }
@@ -172,8 +163,6 @@ pub struct TypedEnumVariant {
 #[derive(Debug, Clone)]
 pub struct TypedEnum {
     pub variants: Vec<TypedEnumVariant>,
-    /// Populated for non-anonymous (named) enums
-    pub type_defn_info: Option<TypeDefnInfo>,
     /// Populated for specialized copies of generic enums, contains provenance info
     pub generic_instance_info: Option<GenericInstanceInfo>,
     pub ast_node: ParsedId,
@@ -215,18 +204,14 @@ impl HasTypeId for GenericTypeParam {
 }
 
 #[derive(Debug, Clone)]
+// TODO(perf): get specializations HashMap off of GenericType
 pub struct GenericType {
     pub params: Vec<GenericTypeParam>,
     pub inner: TypeId,
-    pub type_defn_info: TypeDefnInfo,
     pub specializations: HashMap<Vec<TypeId>, TypeId>,
 }
 
-impl GenericType {
-    pub fn name(&self) -> Identifier {
-        self.type_defn_info.name
-    }
-}
+impl GenericType {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntegerType {
@@ -243,7 +228,6 @@ pub enum IntegerType {
 #[derive(Debug, Clone)]
 pub struct FloatType {
     pub size: NumericWidth,
-    pub defn_info: TypeDefnInfo,
 }
 
 impl Display for IntegerType {
@@ -312,7 +296,6 @@ pub struct FnParamType {
 pub struct FunctionType {
     pub physical_params: Vec<FnParamType>,
     pub return_type: TypeId,
-    pub defn_info: Option<TypeDefnInfo>,
 }
 
 impl FunctionType {
@@ -366,22 +349,21 @@ pub struct FunctionValue {
     pub function_type: TypeId,
 }
 
-// To shrink this, we'd move TypeDefnInfo off, convert some Vecs to Boxed slices or just index
-// handles, but I'm tired of doing perf stuff like that; it'd be a big chore to handle everywhere
-// we look TypeDefnInfo differently. That said, the longer you wait to move things like that the
-// harder it gets...
-static_assert_size!(Type, 96);
+// To shrink this, we'd
+// [ ] move TypeDefnInfo off,
+// [ ] convert Vecs to EcoVecs, or slice handles when we can
+static_assert_size!(Type, 80);
 #[derive(Debug, Clone)]
 pub enum Type {
-    Unit(TypeDefnInfo),
-    Char(TypeDefnInfo),
+    Unit,
+    Char,
     Integer(IntegerType),
     Float(FloatType),
-    Bool(TypeDefnInfo),
+    Bool,
     /// Our Pointer is a raw untyped pointer; we mostly have this type for expressing intent
     /// and because it allows us to treat it as a ptr in LLVM which
     /// allows for pointer-reasoning based optimizations
-    Pointer(TypeDefnInfo),
+    Pointer,
     Struct(StructType),
     Reference(ReferenceType),
     Enum(TypedEnum),
@@ -391,7 +373,7 @@ pub enum Type {
     EnumVariant(TypedEnumVariant),
 
     /// The 'bottom', uninhabited type; used to indicate exits of the program
-    Never(TypeDefnInfo),
+    Never,
     Function(FunctionType),
     Lambda(LambdaType),
     LambdaObject(LambdaObjectType),
@@ -405,22 +387,35 @@ pub enum Type {
     RecursiveReference(RecursiveReference),
 }
 
-impl Eq for Type {}
+pub struct TypeWithDefnInfo {
+    typ: Type,
+    defn_info: Option<TypeDefnInfo>,
+}
 
-impl PartialEq for Type {
-    fn eq(&self, other: &Type) -> bool {
-        match (self, other) {
-            (Type::Unit(_), Type::Unit(_)) => true,
-            (Type::Char(_), Type::Char(_)) => true,
+impl std::hash::Hash for TypeWithDefnInfo {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        if let Some(defn_info) = &self.defn_info {
+            defn_info.hash(state);
+        } else {
+            self.typ.hash(state);
+        }
+    }
+}
+
+impl Eq for TypeWithDefnInfo {}
+
+impl PartialEq for TypeWithDefnInfo {
+    fn eq(&self, other: &TypeWithDefnInfo) -> bool {
+        match (&self.typ, &other.typ) {
+            (Type::Unit, Type::Unit) => true,
+            (Type::Char, Type::Char) => true,
             (Type::Integer(int1), Type::Integer(int2)) => int1 == int2,
             (Type::Float(f1), Type::Float(f2)) => f1.size == f2.size,
-            (Type::Bool(_), Type::Bool(_)) => true,
-            (Type::Pointer(_), Type::Pointer(_)) => true,
+            (Type::Bool, Type::Bool) => true,
+            (Type::Pointer, Type::Pointer) => true,
             (Type::Struct(s1), Type::Struct(s2)) => {
-                if s1.is_named() {
-                    if s2.is_named() {
-                        let s1_info = s1.type_defn_info.as_ref().unwrap();
-                        let s2_info = s2.type_defn_info.as_ref().unwrap();
+                if let Some(s1_info) = self.defn_info {
+                    if let Some(s2_info) = other.defn_info {
                         if s1_info.ast_id != s2_info.ast_id {
                             return false;
                         }
@@ -451,7 +446,7 @@ impl PartialEq for Type {
             }
             (Type::InferenceHole(h1), Type::InferenceHole(h2)) => h1.index == h2.index,
             (Type::Enum(e1), Type::Enum(e2)) => {
-                if e1.type_defn_info.is_some() || e2.type_defn_info.is_some() {
+                if self.defn_info.is_some() || other.defn_info.is_some() {
                     return false;
                 }
                 if e1.variants.len() != e2.variants.len() {
@@ -468,7 +463,7 @@ impl PartialEq for Type {
             }
             // We never really want to de-dupe this type as its inherently unique
             (Type::EnumVariant(_ev1), Type::EnumVariant(_ev2)) => false,
-            (Type::Never(_), Type::Never(_)) => true,
+            (Type::Never, Type::Never) => true,
             // We never really want to de-dupe this type as its inherently unique
             (Type::Generic(_g1), Type::Generic(_g2)) => false,
             (Type::Function(f1), Type::Function(f2)) => {
@@ -505,8 +500,8 @@ impl PartialEq for Type {
 impl std::hash::Hash for Type {
     fn hash<H: Hasher>(&self, state: &mut H) {
         match self {
-            Type::Unit(_) => "unit".hash(state),
-            Type::Char(_) => "char".hash(state),
+            Type::Unit => "unit".hash(state),
+            Type::Char => "char".hash(state),
             Type::Integer(int1) => match int1 {
                 IntegerType::U8 => "u8".hash(state),
                 IntegerType::U16 => "u16".hash(state),
@@ -517,17 +512,13 @@ impl std::hash::Hash for Type {
                 IntegerType::I32 => "i32".hash(state),
                 IntegerType::I64 => "i64".hash(state),
             },
-            Type::Bool(_) => "bool".hash(state),
+            Type::Bool => "bool".hash(state),
             Type::Struct(s) => {
                 "struct".hash(state);
-                if let Some(type_defn_info) = &s.type_defn_info {
-                    type_defn_info.hash(state);
-                } else {
-                    s.fields.len().hash(state);
-                    for f in &s.fields {
-                        f.name.hash(state);
-                        f.type_id.hash(state);
-                    }
+                s.fields.len().hash(state);
+                for f in &s.fields {
+                    f.name.hash(state);
+                    f.type_id.hash(state);
                 }
             }
             Type::Reference(r) => {
@@ -551,14 +542,10 @@ impl std::hash::Hash for Type {
             }
             Type::Enum(e) => {
                 "enum".hash(state);
-                if let Some(type_defn_info) = &e.type_defn_info {
-                    type_defn_info.hash(state);
-                } else {
-                    e.variants.len().hash(state);
-                    for v in e.variants.iter() {
-                        v.name.hash(state);
-                        v.payload.hash(state);
-                    }
+                e.variants.len().hash(state);
+                for v in e.variants.iter() {
+                    v.name.hash(state);
+                    v.payload.hash(state);
                 }
             }
             // We never really want to de-dupe this type as its inherently unique
@@ -570,7 +557,11 @@ impl std::hash::Hash for Type {
             }
             Type::Generic(gen) => {
                 "gen".hash(state);
-                gen.type_defn_info.hash(state);
+                gen.inner.hash(state);
+                for p in &gen.params {
+                    p.name.hash(state);
+                    p.type_id.hash(state);
+                }
             }
             Type::Function(fun) => {
                 "fun".hash(state);
@@ -591,10 +582,10 @@ impl std::hash::Hash for Type {
                 "float".hash(state);
                 ft.size.bit_width().hash(state);
             }
-            Type::Pointer(_) => {
+            Type::Pointer => {
                 "ptr".hash(state);
             }
-            Type::Never(_) => "never".hash(state),
+            Type::Never => "never".hash(state),
             Type::LambdaObject(co) => {
                 "lambda_object".hash(state);
                 co.function_type.hash(state);
@@ -611,12 +602,12 @@ impl std::hash::Hash for Type {
 impl Type {
     pub fn kind_name(&self) -> &'static str {
         match self {
-            Type::Unit(_) => "scalar",
-            Type::Char(_) => "char",
+            Type::Unit => "scalar",
+            Type::Char => "char",
             Type::Integer(_) => "integer",
             Type::Float(_) => "float",
-            Type::Bool(_) => "bool",
-            Type::Pointer(_) => "pointer",
+            Type::Bool => "bool",
+            Type::Pointer => "pointer",
             Type::Struct(_) => "struct",
             Type::Reference(_) => "reference",
             Type::TypeParameter(_) => "param",
@@ -624,7 +615,7 @@ impl Type {
             Type::InferenceHole(_) => "hole",
             Type::Enum(_) => "enum",
             Type::EnumVariant(_) => "variant",
-            Type::Never(_) => "never",
+            Type::Never => "never",
             Type::Generic(_) => "generic",
             Type::Function(_) => "function",
             Type::Lambda(_) => "lambda",
@@ -636,56 +627,9 @@ impl Type {
     // Note: This is kind of a codegen concern that doesn't belong in this layer,
     //       but it has some implications for typechecking, and I'm not super worried
     //       about platform independence in the middle-end right now
+    // Should Pointer be here?
     pub fn is_scalar_int_value(&self) -> bool {
-        matches!(self, Type::Unit(_) | Type::Char(_) | Type::Integer(_) | Type::Bool(_))
-    }
-
-    pub fn ast_node(&self) -> Option<ParsedId> {
-        match self {
-            Type::Unit(defn_info)
-            | Type::Char(defn_info)
-            | Type::Bool(defn_info)
-            | Type::Pointer(defn_info)
-            | Type::Never(defn_info) => Some(defn_info.ast_id),
-            Type::Float(ft) => Some(ft.defn_info.ast_id),
-            Type::Integer(_) => None,
-            Type::Struct(_t) => None,
-            Type::Reference(_t) => None,
-            Type::TypeParameter(_t) => None,
-            Type::FunctionTypeParameter(_ftp) => None,
-            Type::InferenceHole(_) => None,
-            Type::Enum(e) => Some(e.ast_node),
-            Type::EnumVariant(_ev) => None,
-            Type::Generic(gen) => Some(gen.type_defn_info.ast_id),
-            Type::Function(_fun) => None,
-            Type::Lambda(clos) => Some(clos.parsed_id),
-            Type::LambdaObject(clos_obj) => Some(clos_obj.parsed_id),
-            Type::RecursiveReference(r) => Some(ParsedId::TypeDefn(r.parsed_id)),
-        }
-    }
-
-    pub fn defn_info(&self) -> Option<&TypeDefnInfo> {
-        match self {
-            Type::Unit(defn_info)
-            | Type::Char(defn_info)
-            | Type::Bool(defn_info)
-            | Type::Pointer(defn_info)
-            | Type::Never(defn_info) => Some(defn_info),
-            Type::Float(ft) => Some(&ft.defn_info),
-            Type::Integer(_) => None,
-            Type::Struct(t) => t.type_defn_info.as_ref(),
-            Type::Reference(_t) => None,
-            Type::TypeParameter(_t) => None,
-            Type::FunctionTypeParameter(_ftp) => None,
-            Type::InferenceHole(_) => None,
-            Type::Enum(e) => e.type_defn_info.as_ref(),
-            Type::EnumVariant(ev) => ev.type_defn_info.as_ref(),
-            Type::Generic(gen) => Some(&gen.type_defn_info),
-            Type::Function(_fun) => None,
-            Type::Lambda(_clos) => None,
-            Type::LambdaObject(_clos_obj) => None,
-            Type::RecursiveReference(_r) => None,
-        }
+        matches!(self, Type::Unit | Type::Char | Type::Integer(_) | Type::Bool)
     }
 
     pub fn as_list_instance(&self) -> Option<ListType> {
@@ -896,24 +840,33 @@ pub struct TypesConfig {
 pub struct Types {
     pub types: Vec<Type>,
     pub layouts: Pool<Option<Layout>, TypeId>,
+    pub defn_infos: Pool<Option<TypeDefnInfo>, TypeId>,
+    // TODO(perf): Convert type_variable_counts to Pool
+    pub type_variable_counts: FxHashMap<TypeId, TypeVariableInfo>,
     /// We use this to efficiently check if we already have seen a type,
     /// and retrieve its ID if so. We used to iterate the pool but it
     /// got slow
-    pub existing_types_mapping: FxHashMap<Type, TypeId>,
+    pub existing_types_mapping: FxHashMap<TypeWithDefnInfo, TypeId>,
     pub type_defn_mapping: FxHashMap<ParsedTypeDefnId, TypeId>,
-    pub type_variable_counts: FxHashMap<TypeId, TypeVariableInfo>,
     pub ability_mapping: FxHashMap<ParsedAbilityId, AbilityId>,
     pub placeholder_mapping: FxHashMap<ParsedTypeDefnId, TypeId>,
     pub config: TypesConfig,
 }
 
 impl Types {
-    pub fn add_type_ext(&mut self, typ: Type, dedupe: bool) -> TypeId {
+    pub fn add_type_ext(
+        &mut self,
+        typ: Type,
+        defn_info: Option<TypeDefnInfo>,
+        dedupe: bool,
+    ) -> TypeId {
+        let type_with_info = TypeWithDefnInfo { typ, defn_info };
         if dedupe {
-            if let Some(&existing_type_id) = self.existing_types_mapping.get(&typ) {
+            if let Some(&existing_type_id) = self.existing_types_mapping.get(&type_with_info) {
                 return existing_type_id;
             }
         }
+        let typ = type_with_info.typ;
 
         let t = match typ {
             Type::Enum(mut e) => {
@@ -928,22 +881,27 @@ impl Types {
                     v.enum_type_id = enum_type_id;
                     let variant = Type::EnumVariant(v.clone());
                     self.types.push(variant.clone());
-                    self.existing_types_mapping.insert(variant, variant_id);
+                    self.existing_types_mapping
+                        .insert(TypeWithDefnInfo { typ: variant, defn_info }, variant_id);
                     let variant_variable_counts = self.count_type_variables(variant_id);
                     self.type_variable_counts.insert(variant_id, variant_variable_counts);
+                    self.defn_infos.add(defn_info);
                 }
 
                 let variant_count = e.variants.len();
                 let e = Type::Enum(e);
                 self.types.push(e.clone());
-                self.existing_types_mapping.insert(e, enum_type_id);
+                self.existing_types_mapping
+                    .insert(TypeWithDefnInfo { typ: e, defn_info }, enum_type_id);
                 let variable_counts = self.count_type_variables(enum_type_id);
                 self.type_variable_counts.insert(enum_type_id, variable_counts);
+                self.defn_infos.add(defn_info);
 
                 let layout = self.compute_type_layout(enum_type_id);
                 for _ in 0..variant_count {
                     self.layouts.add(layout);
                 }
+                self.layouts.add(layout);
 
                 enum_type_id
             }
@@ -953,13 +911,15 @@ impl Types {
             _ => {
                 let type_id = self.next_type_id();
                 self.types.push(typ.clone());
-                self.existing_types_mapping.insert(typ, type_id);
+                self.existing_types_mapping.insert(TypeWithDefnInfo { typ, defn_info }, type_id);
 
                 let variable_counts = self.count_type_variables(type_id);
                 self.type_variable_counts.insert(type_id, variable_counts);
 
                 let layout = self.compute_type_layout(type_id);
                 self.layouts.add(layout);
+
+                self.defn_infos.add(defn_info);
 
                 type_id
             }
@@ -976,11 +936,15 @@ impl Types {
     }
 
     pub fn add_reference_type(&mut self, inner_type: TypeId) -> TypeId {
-        self.add(Type::Reference(ReferenceType { inner_type }))
+        self.add_anon(Type::Reference(ReferenceType { inner_type }))
     }
 
-    pub fn add(&mut self, typ: Type) -> TypeId {
-        self.add_type_ext(typ, true)
+    pub fn add(&mut self, typ: Type, defn_info: Option<TypeDefnInfo>) -> TypeId {
+        self.add_type_ext(typ, defn_info, true)
+    }
+
+    pub fn add_anon(&mut self, typ: Type) -> TypeId {
+        self.add_type_ext(typ, None, true)
     }
 
     #[inline]
@@ -1028,17 +992,17 @@ impl Types {
             Type::Enum(e) => e.generic_instance_info.as_ref(),
             Type::EnumVariant(ev) => self.get_generic_instance_info(ev.enum_type_id),
             Type::Struct(s) => s.generic_instance_info.as_ref(),
-            Type::Unit(_) => None,
-            Type::Char(_) => None,
+            Type::Unit => None,
+            Type::Char => None,
             Type::Integer(_) => None,
             Type::Float(_) => None,
-            Type::Bool(_) => None,
-            Type::Pointer(_) => None,
+            Type::Bool => None,
+            Type::Pointer => None,
             Type::Reference(_) => None,
             Type::TypeParameter(_) => None,
             Type::FunctionTypeParameter(_) => None,
             Type::InferenceHole(_) => None,
-            Type::Never(_) => None,
+            Type::Never => None,
             Type::Generic(_gen) => None,
             Type::Function(_) => None,
             Type::Lambda(_) => None,
@@ -1047,8 +1011,12 @@ impl Types {
         }
     }
 
-    pub fn get_type_defn_info(&self, type_id: TypeId) -> Option<&TypeDefnInfo> {
-        self.get(type_id).defn_info()
+    pub fn get_defn_info(&self, type_id: TypeId) -> Option<TypeDefnInfo> {
+        *self.defn_infos.get(type_id)
+    }
+
+    pub fn get_companion_namespace(&self, type_id: TypeId) -> Option<NamespaceId> {
+        self.get_defn_info(type_id).and_then(|info| info.companion_namespace)
     }
 
     pub fn add_lambda(
@@ -1059,7 +1027,7 @@ impl Types {
         body_function_id: FunctionId,
         parsed_id: ParsedId,
     ) -> TypeId {
-        let lambda_type_id = self.add(Type::Lambda(LambdaType {
+        let lambda_type_id = self.add_anon(Type::Lambda(LambdaType {
             function_type: function_type_id,
             env_type: environment_type,
             parsed_id,
@@ -1070,11 +1038,7 @@ impl Types {
     }
 
     pub fn add_empty_struct(&mut self) -> TypeId {
-        self.add(Type::Struct(StructType {
-            fields: vec![],
-            type_defn_info: None,
-            generic_instance_info: None,
-        }))
+        self.add_anon(Type::Struct(StructType { fields: vec![], generic_instance_info: None }))
     }
 
     pub fn add_lambda_object(
@@ -1102,12 +1066,9 @@ impl Types {
                 offset_bits: self.config.ptr_size_bits,
             },
         ];
-        let struct_representation = self.add(Type::Struct(StructType {
-            fields,
-            type_defn_info: None,
-            generic_instance_info: None,
-        }));
-        self.add(Type::LambdaObject(LambdaObjectType {
+        let struct_representation =
+            self.add_anon(Type::Struct(StructType { fields, generic_instance_info: None }));
+        self.add_anon(Type::LambdaObject(LambdaObjectType {
             function_type: function_type_id,
             parsed_id,
             struct_representation,
@@ -1192,12 +1153,12 @@ impl Types {
             Type::InferenceHole(_hole) => {
                 TypeVariableInfo { type_parameter_count: 0, inference_variable_count: 1 }
             }
-            Type::Unit(_) => EMPTY,
-            Type::Char(_) => EMPTY,
+            Type::Unit => EMPTY,
+            Type::Char => EMPTY,
             Type::Integer(_) => EMPTY,
             Type::Float(_) => EMPTY,
-            Type::Bool(_) => EMPTY,
-            Type::Pointer(_) => EMPTY,
+            Type::Bool => EMPTY,
+            Type::Pointer => EMPTY,
             Type::Struct(struc) => {
                 let mut result = EMPTY;
                 for field in struc.fields.iter() {
@@ -1222,7 +1183,7 @@ impl Types {
                     EMPTY
                 }
             }
-            Type::Never(_) => EMPTY,
+            Type::Never => EMPTY,
             // The real answer here would be, all the type variables on the RHS that aren't one of
             // the params. In other words, all FREE type variables
             Type::Generic(_gen) => EMPTY,
@@ -1248,22 +1209,21 @@ impl Types {
     }
 
     pub fn compute_type_layout(&self, type_id: TypeId) -> Option<Layout> {
-        match self.get(type_id) {
-            Type::Unit(_) => Some(Layout::from_scalar_bits(8)),
-            Type::Char(_) => Some(Layout::from_scalar_bits(8)),
+        match self.get_no_follow(type_id) {
+            Type::Unit => Some(Layout::from_scalar_bits(8)),
+            Type::Char => Some(Layout::from_scalar_bits(8)),
             Type::Integer(integer_type) => {
                 Some(Layout::from_scalar_bits(integer_type.width().bit_width()))
             }
             Type::Float(float_type) => Some(Layout::from_scalar_bits(float_type.size.bit_width())),
-            Type::Bool(_) => Some(Layout::from_scalar_bits(8)),
-            Type::Pointer(_) => Some(Layout::from_scalar_bits(self.word_size_bits())),
+            Type::Bool => Some(Layout::from_scalar_bits(8)),
+            Type::Pointer => Some(Layout::from_scalar_bits(self.word_size_bits())),
             Type::Struct(struct_type) => {
                 let mut layout = Layout::ZERO;
                 for field in &struct_type.fields {
-                    layout.append_to_aggregate(
-                        self.compute_type_layout(field.type_id)
-                            .expect("Expected struct field to be sized"),
-                    );
+                    if let Some(field_layout) = self.compute_type_layout(field.type_id) {
+                        layout.append_to_aggregate(field_layout);
+                    }
                 }
                 Some(layout)
             }
@@ -1330,25 +1290,31 @@ impl Types {
                 Some(enum_size)
             }
             Type::EnumVariant(variant) => self.compute_type_layout(variant.enum_type_id),
-            Type::Never(_) => Some(Layout::ZERO),
+            Type::Never => Some(Layout::ZERO),
             Type::Function(_) => None,
             Type::Lambda(lambda_type) => self.compute_type_layout(lambda_type.env_type),
             Type::LambdaObject(lambda_object_type) => {
                 self.compute_type_layout(lambda_object_type.struct_representation)
             }
-            Type::Generic(_) => unreachable!("size of generic"),
-            Type::TypeParameter(_) => unreachable!("size of type parameter"),
-            Type::FunctionTypeParameter(_) => {
-                unreachable!("size of function type parameter")
-            }
-            Type::InferenceHole(_) => unreachable!("size of inference hole"),
-            Type::RecursiveReference(_) => {
-                unreachable!("size of recursive reference")
-            }
+            Type::Generic(_) => None,
+            Type::TypeParameter(_) => None,
+            Type::FunctionTypeParameter(_) => None,
+            Type::InferenceHole(_) => None,
+            Type::RecursiveReference(_) => None,
         }
     }
 
     pub fn get_layout(&self, type_id: TypeId) -> Option<Layout> {
         *self.layouts.get(type_id)
+    }
+
+    pub fn get_ast_node(&self, type_id: TypeId) -> Option<ParsedId> {
+        match self.get_no_follow(type_id) {
+            Type::Enum(e) => Some(e.ast_node),
+            Type::Lambda(clos) => Some(clos.parsed_id),
+            Type::LambdaObject(clos_obj) => Some(clos_obj.parsed_id),
+            Type::RecursiveReference(r) => Some(ParsedId::TypeDefn(r.parsed_id)),
+            _ => self.defn_infos.get(type_id).map(|info| info.ast_id),
+        }
     }
 }

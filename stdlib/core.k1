@@ -294,14 +294,6 @@ impl Show for i8 {
   }
 }
 
-impl Equals for i64 {
-  fn equals(self: i64, other: i64): bool {
-    // Because the types of self and other are i64, the compiler will not
-    // use the ability but rather do the intrinsic thing
-    self == other
-  }
-}
-
 impl[S, F] Try[T = S, E = F] for Result[S, F] {
   fn makeError(e: E): Self   { .Err(e) }
   fn makeOk(t: T): Self { .Ok(t) }

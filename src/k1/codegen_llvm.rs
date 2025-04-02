@@ -674,7 +674,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let builtin_types = BuiltinTypes {
             int: ctx.i64_type(),
             unit: ctx.i8_type(),
-            unit_value: ctx.i8_type().const_int(0, false),
+            unit_value: ctx.i8_type().const_int(crate::typer::UNIT_BYTE_VALUE as u64, false),
             // If we switch bools to i8, we need to cast to i1 for branches
             // If we keep i1, we need to do more alignment / padding work
             boolean: ctx.i8_type(),
@@ -755,7 +755,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         &self,
         w: &mut impl std::io::Write,
         type_id: TypeId,
-        defn_info: Option<&TypeDefnInfo>,
+        defn_info: Option<TypeDefnInfo>,
     ) {
         // FIXME: We need to revisit the entire story around names in codegen
         let name = self.module.type_id_to_string(type_id);
@@ -765,7 +765,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         };
     }
 
-    fn codegen_type_name(&self, type_id: TypeId, defn_info: Option<&TypeDefnInfo>) -> String {
+    fn codegen_type_name(&self, type_id: TypeId, defn_info: Option<TypeDefnInfo>) -> String {
         let mut s = Vec::with_capacity(64);
         self.write_type_name(&mut s, type_id, defn_info);
         String::from_utf8(s).unwrap()
@@ -930,13 +930,13 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         // Might be better to switch to the debug context span, rather than the type's span
         let span = self.module.get_span_for_type_id(type_id).unwrap_or(SpanId::NONE);
         let codegened_type = match self.module.types.get_no_follow(type_id) {
-            Type::Unit(_) => Ok(make_value_integer_type(
+            Type::Unit => Ok(make_value_integer_type(
                 "unit",
                 UNIT_TYPE_ID,
                 self.builtin_types.unit,
                 dw_ate_boolean,
             )),
-            Type::Char(_) => Ok(make_value_integer_type(
+            Type::Char => Ok(make_value_integer_type(
                 "char",
                 CHAR_TYPE_ID,
                 self.builtin_types.char,
@@ -983,7 +983,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     NumericWidth::B64 => self.ctx.f64_type(),
                 };
                 let size = SizeInfo::scalar_value(float_type.size.bit_width());
-                let float_name = self.module.type_to_string(ft, false);
+                let float_name = self.module.type_id_to_string(type_id);
                 Ok(LlvmValueType {
                     type_id,
                     basic_type: llvm_type.as_basic_type_enum(),
@@ -997,7 +997,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 }
                 .into())
             }
-            Type::Bool(_) => Ok(LlvmValueType {
+            Type::Bool => Ok(LlvmValueType {
                 type_id: BOOL_TYPE_ID,
                 basic_type: self.builtin_types.boolean.as_basic_type_enum(),
                 size: self.size_info(&self.builtin_types.boolean),
@@ -1014,7 +1014,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     .as_type(),
             }
             .into()),
-            Type::Pointer(_) => {
+            Type::Pointer => {
                 // We don't know what it points to, so we just say 'bytes' for the best debugger
                 // experience
                 let placeholder_pointee = self.codegen_type(U8_TYPE_ID)?.debug_type();
@@ -1027,7 +1027,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let mut field_types = Vec::with_capacity(field_count);
                 let mut field_basic_types = Vec::with_capacity(field_count);
                 let mut field_di_types: Vec<StructDebugMember> = Vec::with_capacity(field_count);
-                let name = self.codegen_type_name(type_id, struc.type_defn_info.as_ref());
+                let name =
+                    self.codegen_type_name(type_id, self.module.types.get_defn_info(type_id));
                 for field in &struc.fields {
                     let field_llvm_type = self.codegen_type_inner(field.type_id, depth + 1)?;
                     let debug_type = if buffer_instance.is_some()
@@ -1093,9 +1094,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             Type::Enum(enum_type) => {
                 // self.print_layout_info();
 
-                let enum_name = enum_type
-                    .type_defn_info
-                    .as_ref()
+                let enum_name = self
+                    .module
+                    .types
+                    .get_defn_info(type_id)
                     .map(|info| self.codegen_type_name(type_id, Some(info)))
                     .unwrap_or(type_id.to_string());
                 let mut variant_structs = Vec::with_capacity(enum_type.variants.len());
@@ -1321,7 +1323,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let parent_enum = self.codegen_type(ev.enum_type_id)?.expect_enum();
                 Ok(parent_enum.into())
             }
-            Type::Never(_) => {
+            Type::Never => {
                 // From DWARF standard:
                 // "Debugging information entries for C void functions
                 // should not have an attribute for the return"
@@ -1348,7 +1350,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     let defn_info = self
                         .module
                         .types
-                        .get_type_defn_info(rr.root_type_id.unwrap())
+                        .get_defn_info(rr.root_type_id.unwrap())
                         .expect("recursive type must have defn info");
 
                     let name = self.codegen_type_name(type_id, Some(defn_info));
@@ -2425,7 +2427,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 };
                 Ok(op_res.as_basic_value_enum().into())
             }
-            Type::Bool(_) => match bin_op.kind {
+            Type::Bool => match bin_op.kind {
                 BinaryOpKind::And | BinaryOpKind::Or => {
                     let lhs = self.codegen_expr_basic_value(bin_op.lhs)?.into_int_value();
                     let op = match bin_op.kind {
@@ -2527,7 +2529,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         }
                         t => unreachable!(
                             "unreachable Equals/NotEquals call on type: {}",
-                            self.module.type_to_string(t, false)
+                            self.module.expr_to_string_with_type(bin_op.lhs)
                         ),
                     }
                 }
@@ -2586,8 +2588,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 },
                 other => panic!("Unsupported binary operation {other:?} returning Bool"),
             },
-            Type::Unit(_) => panic!("No unit-returning binary ops"),
-            Type::Char(_) => panic!("No char-returning binary ops"),
+            Type::Unit => panic!("No unit-returning binary ops"),
+            Type::Char => panic!("No char-returning binary ops"),
             _other => unreachable!("codegen for binary ops on other types"),
         }
     }
