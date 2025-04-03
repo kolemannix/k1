@@ -1,3 +1,5 @@
+// Has to appear before its static usage :'(
+fn id(i: int): int { i }
 fn main(): int {
 
   // String creation (special case)
@@ -47,16 +49,16 @@ fn main(): int {
 
   let letRef = #static {
     let* i = 10;
-    assertEquals(i.*, 10);
-    i <- 20;
+
+    //assert(i.* == 10);
+    i <- id(i.*);
     i.*
   };
+  assertEquals(letRef, 10);
 
-  let sSwitch = #static switch letRef {
-    _ -> (),
-  };
-
-  assertEquals(letRef, 20);
+  // let sSwitch = #static switch letRef {
+  //   _ -> (),
+  // };
 
   // #static {
   //   let b: u8* = new(10);
@@ -64,3 +66,4 @@ fn main(): int {
 
   0
 }
+

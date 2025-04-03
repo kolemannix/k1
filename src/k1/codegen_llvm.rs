@@ -37,6 +37,7 @@ use crate::typer::scopes::ScopeId;
 use crate::typer::types::*;
 use crate::typer::{Linkage as TyperLinkage, *};
 
+// TODO: Migrate off WORD_SIZE_BITS; Use the module's config
 const WORD_SIZE_BITS: u64 = 64;
 
 #[derive(Debug)]
@@ -975,7 +976,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             Type::Integer(IntegerType::I64) => {
                 Ok(make_value_integer_type("i64", I64_TYPE_ID, self.ctx.i64_type(), dw_ate_signed))
             }
-            ft @ Type::Float(float_type) => {
+            Type::Float(float_type) => {
                 let llvm_type = match float_type.size {
                     NumericWidth::B8 => unreachable!("f8 is not a thing"),
                     NumericWidth::B16 => self.ctx.f16_type(),
@@ -1079,17 +1080,34 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 failf!(span, "codegen was asked to codegen a type inference hole {:?}", h)
             }
             Type::Reference(reference) => {
-                let inner_type = self.codegen_type_inner(reference.inner_type, depth + 1)?;
-                let inner_debug_type = inner_type.debug_type();
-                Ok(LlvmReferenceType {
-                    type_id,
-                    pointer_type: self.builtin_types.ptr,
-                    pointee_type: inner_type.rich_value_type().as_any_type_enum(),
-                    di_type: self
-                        .debug
-                        .create_pointer_type(&format!("reference_{}", type_id), inner_debug_type),
+                if let Type::Function(_function_type) = self.module.types.get(reference.inner_type)
+                {
+                    let placeholder_pointee = self.codegen_type(I8_TYPE_ID)?.debug_type();
+                    // TODO: Dwarf info for function pointers
+                    Ok(LlvmReferenceType {
+                        type_id,
+                        pointer_type: self.builtin_types.ptr,
+                        pointee_type: self.builtin_types.ptr.as_any_type_enum(),
+                        di_type: self.debug.create_pointer_type(
+                            &format!("fn_ptr_{}", type_id),
+                            placeholder_pointee,
+                        ),
+                    }
+                    .into())
+                } else {
+                    let inner_type = self.codegen_type_inner(reference.inner_type, depth + 1)?;
+                    let inner_debug_type = inner_type.debug_type();
+                    Ok(LlvmReferenceType {
+                        type_id,
+                        pointer_type: self.builtin_types.ptr,
+                        pointee_type: inner_type.rich_value_type().as_any_type_enum(),
+                        di_type: self.debug.create_pointer_type(
+                            &format!("reference_{}", type_id),
+                            inner_debug_type,
+                        ),
+                    }
+                    .into())
                 }
-                .into())
             }
             Type::Enum(enum_type) => {
                 // self.print_layout_info();
@@ -1366,28 +1384,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     }))
                 }
             }
-            Type::Function(_function_type) => {
-                let function_type = self.make_llvm_function_type(type_id)?;
-                let pointee_type = function_type.llvm_function_type;
-                let placeholder_pointee = self.codegen_type(I8_TYPE_ID)?.debug_type();
-                // nocommit: Should really not have a size; function is not a physical type
-                Ok(K1LlvmType::Reference(LlvmReferenceType {
-                    type_id,
-                    pointer_type: self.builtin_types.ptr,
-                    pointee_type: pointee_type.as_any_type_enum(),
-                    di_type: self
-                        .debug
-                        .debug_builder
-                        .create_pointer_type(
-                            "function_ptr",
-                            placeholder_pointee,
-                            self.builtin_types.ptr_sized_int.get_bit_width() as u64,
-                            self.builtin_types.ptr_sized_int.get_bit_width(),
-                            AddressSpace::default(),
-                        )
-                        .as_type(),
-                }))
-            }
             Type::Lambda(lambda_type) => {
                 let struct_type = self.codegen_type(lambda_type.env_type)?.expect_struct();
                 Ok(K1LlvmType::StructType(struct_type))
@@ -1401,6 +1397,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     di_type: struct_type.di_type,
                     size: struct_type.size,
                 }))
+            }
+            Type::Function(_function_type) => {
+                panic!("Cannot codegen a naked Function type")
             }
             Type::Generic(_) => {
                 panic!("Cannot codegen a Generic; something went wrong in typecheck")
@@ -2527,7 +2526,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                                 .as_basic_value_enum()
                                 .into())
                         }
-                        t => unreachable!(
+                        _ => unreachable!(
                             "unreachable Equals/NotEquals call on type: {}",
                             self.module.expr_to_string_with_type(bin_op.lhs)
                         ),

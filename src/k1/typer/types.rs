@@ -854,6 +854,43 @@ pub struct Types {
 }
 
 impl Types {
+    pub fn empty() -> Types {
+        Types {
+            types: Vec::new(),
+            layouts: Pool::new("layouts"),
+            defn_infos: Pool::new("defn_infos"),
+            type_variable_counts: FxHashMap::default(),
+            existing_types_mapping: FxHashMap::default(),
+            type_defn_mapping: FxHashMap::default(),
+            ability_mapping: FxHashMap::default(),
+            placeholder_mapping: FxHashMap::default(),
+            config: TypesConfig { ptr_size_bits: 64 },
+        }
+    }
+
+    #[cfg(test)]
+    pub fn with_builtin_types() -> Types {
+        let mut this = Types::empty();
+        this.add_anon(Type::Integer(IntegerType::U8));
+        this.add_anon(Type::Integer(IntegerType::U16));
+        this.add_anon(Type::Integer(IntegerType::U32));
+        this.add_anon(Type::Integer(IntegerType::U64));
+        this.add_anon(Type::Integer(IntegerType::I8));
+        this.add_anon(Type::Integer(IntegerType::I16));
+        this.add_anon(Type::Integer(IntegerType::I32));
+        this.add_anon(Type::Integer(IntegerType::I64));
+
+        this.add_anon(Type::Unit);
+        this.add_anon(Type::Char);
+        this.add_anon(Type::Bool);
+        this.add_anon(Type::Never);
+        this.add_anon(Type::Pointer);
+        this.add_anon(Type::Float(FloatType { size: NumericWidth::B32 }));
+        this.add_anon(Type::Float(FloatType { size: NumericWidth::B64 }));
+
+        this
+    }
+
     pub fn add_type_ext(
         &mut self,
         typ: Type,
