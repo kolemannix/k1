@@ -3284,13 +3284,10 @@ impl TypedModule {
                     param.type_id = new_param_type;
                 }
                 if force_new || any_new {
-                    // nocommit: If tests don't pass, we need to fall back to the original defn
-                    // info
-                    //if defn_info_to_attach.as_ref().is_some() {
-                    //    new_fun_type.defn_info = defn_info_to_attach;
-                    //}
-                    let new_function_type_id =
-                        self.types.add(Type::Function(new_fun_type), defn_info_to_attach);
+                    let original_info = self.types.get_defn_info(type_id);
+                    let new_function_type_id = self
+                        .types
+                        .add(Type::Function(new_fun_type), defn_info_to_attach.or(original_info));
                     new_function_type_id
                 } else {
                     type_id
@@ -4878,7 +4875,7 @@ impl TypedModule {
                     )
                 }
             }
-            st @ Type::Struct(struct_type) => {
+            Type::Struct(struct_type) => {
                 if is_assignment_lhs && !is_reference {
                     return failf!(span, "Struct must be a reference to be assignable");
                 }
@@ -5581,16 +5578,10 @@ impl TypedModule {
                     "fps before static: {}",
                     self.functions_pending_body_specialization.len()
                 );
-                // nocommit: For now, we ensure that any functions called by this static block
-                //           have bodies. This is inefficient to do here, and it may be better to
-                //           create a work queue and re-visit these exprs instead.
-                //           Ah, but the type of the expr produced here can depend on its code, no
-                //           it can't, and its always producing a single expr, so you could swap
-                //           out the value at that ID later.
-                //           But, what about static code insertion blocks?
-                //           Those affect subsequent code and must happen before
-                //           it's evaluated.
 
+                // For now, we ensure that any functions called by this static block
+                // have bodies. This is a strange workaround, and it may be better to
+                // create a work queue and re-visit these exprs instead.
                 self.specialize_pending_function_bodies(&mut std::io::stderr()).unwrap();
                 let expr = self.eval_expr(base_expr, ctx.with_static(true))?;
                 eprintln!("fps after static: {}", self.functions_pending_body_specialization.len());
@@ -7746,7 +7737,7 @@ impl TypedModule {
                 BinaryOpKind::NotEquals => Ok(BOOL_TYPE_ID),
                 _ => failf!(binary_op.span, "Invalid operation on unit: {}", kind),
             },
-            other => {
+            _ => {
                 failf!(
                     binary_op.span,
                     "Invalid left-hand side of binary operation {}: {}",
@@ -8961,7 +8952,7 @@ impl TypedModule {
             }
             Callee::DynamicLambda(dynamic) => match self.get_expr_type(*dynamic) {
                 Type::LambdaObject(lambda_object) => lambda_object.function_type,
-                t => {
+                _ => {
                     panic!(
                         "Invalid dynamic function callee: {}",
                         self.type_id_to_string(self.exprs.get(*dynamic).get_type())
