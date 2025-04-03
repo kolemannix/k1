@@ -63,7 +63,6 @@ pub enum LoopType {
 pub struct TypeDefnInfo {
     pub name: Identifier,
     pub scope: ScopeId,
-    // If there's a corresponding namespace for this type defn, this is it
     pub companion_namespace: Option<NamespaceId>,
     pub ast_id: ParsedId,
 }

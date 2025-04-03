@@ -45,6 +45,7 @@ tracing-appender = { version = "0.2", optional = true }
 
 # raylib gui only deps
 raylib = { version = "5.0.1", optional = true}
+ecow = "0.2.3"
 
 [[bin]]
 name = "test_suite"

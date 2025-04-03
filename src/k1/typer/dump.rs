@@ -732,34 +732,30 @@ impl TypedModule {
         }
     }
 
-    pub fn static_value_to_string(&self, id: CompileTimeValueId) -> String {
+    pub fn static_value_to_string(&self, id: StaticValueId) -> String {
         let mut s = String::with_capacity(256);
         self.display_static_value(&mut s, id).unwrap();
         s
     }
 
-    pub fn display_static_value(
-        &self,
-        w: &mut impl Write,
-        id: CompileTimeValueId,
-    ) -> std::fmt::Result {
-        match self.comptime_values.get(id) {
-            CompileTimeValue::Unit(_) => w.write_str("()"),
-            CompileTimeValue::Boolean(b, _) => write!(w, "{}", *b),
-            CompileTimeValue::Char(c, _) => write!(w, "{}", *c),
-            CompileTimeValue::Integer(typed_integer_value, _) => {
+    pub fn display_static_value(&self, w: &mut impl Write, id: StaticValueId) -> std::fmt::Result {
+        match self.static_values.get(id) {
+            StaticValue::Unit(_) => w.write_str("()"),
+            StaticValue::Boolean(b, _) => write!(w, "{}", *b),
+            StaticValue::Char(c, _) => write!(w, "{}", *c),
+            StaticValue::Integer(typed_integer_value, _) => {
                 write!(w, "{}", typed_integer_value)
             }
-            CompileTimeValue::Float(typed_float_value, _) => {
+            StaticValue::Float(typed_float_value, _) => {
                 write!(w, "{}", typed_float_value)
             }
-            CompileTimeValue::String(s, _) => {
+            StaticValue::String(s, _) => {
                 write!(w, "\"{}\"", s)
             }
-            CompileTimeValue::Pointer(p, _) => {
+            StaticValue::Pointer(p, _) => {
                 write!(w, "Pointer({})", p)
             }
-            CompileTimeValue::Struct(compile_time_struct) => {
+            StaticValue::Struct(compile_time_struct) => {
                 w.write_str("{ ")?;
                 let fields =
                     self.types.get(compile_time_struct.type_id).expect_struct().fields.clone();
@@ -775,7 +771,7 @@ impl TypedModule {
                 }
                 w.write_str(" }")
             }
-            CompileTimeValue::Enum(compile_time_enum) => todo!(),
+            StaticValue::Enum(compile_time_enum) => todo!(),
         }
     }
 
