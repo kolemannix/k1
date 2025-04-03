@@ -386,6 +386,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "ecow"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e42fc0a93992b20c58b99e59d61eaf1635a25bfbe49e4275c34ba0aee98119ba"
+
+[[package]]
 name = "either"
 version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -837,6 +843,7 @@ dependencies = [
  "anyhow",
  "clap",
  "colored",
+ "ecow",
  "either",
  "env_logger",
  "fxhash",

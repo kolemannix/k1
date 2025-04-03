@@ -16,8 +16,9 @@ use crate::{
             IntegerType, Type, TypeId, Types, BOOL_TYPE_ID, CHAR_TYPE_ID, POINTER_TYPE_ID,
             STRING_TYPE_ID, UNIT_TYPE_ID,
         },
-        BinaryOpKind, Call, CastType, FunctionId, Layout, TypedExpr, TypedExprId, TypedFloatValue,
-        TypedIntegerValue, TypedModule, TypedStmtId, TyperResult, VariableId,
+        BinaryOpKind, Call, CastType, FunctionId, Layout, StaticValue, TypedExpr, TypedExprId,
+        TypedFloatValue, TypedGlobalId, TypedIntegerValue, TypedModule, TypedStmtId, TyperResult,
+        VariableId,
     },
 };
 
@@ -25,6 +26,14 @@ use crate::{
 mod vm_test;
 
 pub struct Vm {
+    /// Code may update globals; so we store this VM run's 'copy' of that global's
+    /// value here; these are (currently) reset on each invocation of #static code
+    ///
+    /// One example from k1 is code that sets the global, thread-local, default allocator
+    ///
+    /// If we need to preserve them for the entire compilation, we may need to re-use
+    /// the same VM, currently we create one per static execution
+    globals: FxHashMap<TypedGlobalId, Value>,
     call_stack: VecDeque<StackFrame>,
 }
 
@@ -32,7 +41,7 @@ impl Vm {
     pub fn make() -> Self {
         // TODO(vm): Re-use this memory, we really want zero-allocation VM invocations for very
         //           simple expressions
-        Self { call_stack: VecDeque::with_capacity(8) }
+        Self { globals: FxHashMap::new(), call_stack: VecDeque::with_capacity(8) }
     }
 
     fn push_new_frame(&mut self, name: String) -> &mut StackFrame {
@@ -41,12 +50,15 @@ impl Vm {
     }
 
     fn push_frame(&mut self, frame: StackFrame) -> &mut StackFrame {
+        debug!("Pushing frame {} [depth={}]", frame.debug_name, self.call_stack.len() + 1);
         self.call_stack.push_back(frame);
         self.call_stack.back_mut().unwrap()
     }
 
     fn pop_frame(&mut self) -> StackFrame {
-        self.call_stack.pop_back().unwrap()
+        let f = self.call_stack.pop_back().unwrap();
+        debug!("Popped frame {} [depth={}]", f.debug_name, self.call_stack.len());
+        f
     }
 
     fn current_frame(&self) -> &StackFrame {
@@ -217,15 +229,33 @@ fn execute_expr(vm: &mut Vm, m: &TypedModule, expr: TypedExprId) -> TyperResult<
         }
         TypedExpr::Variable(variable_expr) => {
             let v_id = variable_expr.variable_id;
-            let frame = vm.call_stack.back().unwrap();
-            let Some(v) = frame.locals.get(&v_id) else {
-                return failf!(
-                    variable_expr.span,
-                    "Variable missing in vm: {}",
-                    m.name_of(m.variables.get(v_id).name)
-                );
-            };
-            Ok(*v)
+            let variable = m.variables.get(v_id);
+            if let Some(global_id) = variable.global_id {
+                // Handle global
+                // Case 1: It's in the VM because someone mutated it
+                // Case 2: Grab it from the module
+                match vm.globals.get(&global_id) {
+                    Some(global_value) => Ok(*global_value),
+                    None => {
+                        let initial = m.globals.get(global_id).initial_value;
+                        // CompileTimeValueId to VmValue
+                        let vm_value =
+                            static_value_to_vm_value(vm, m, m.static_values.get(initial))?;
+                        Ok(vm_value)
+                    }
+                }
+            } else {
+                let frame = vm.current_frame();
+                let Some(v) = frame.locals.get(&v_id) else {
+                    eprintln!("{}", vm.dump(m));
+                    return failf!(
+                        variable_expr.span,
+                        "Variable missing in vm: {}",
+                        m.name_of(m.variables.get(v_id).name)
+                    );
+                };
+                Ok(*v)
+            }
         }
         TypedExpr::UnaryOp(unary_op) => {
             let span = unary_op.span;
@@ -236,7 +266,7 @@ fn execute_expr(vm: &mut Vm, m: &TypedModule, expr: TypedExprId) -> TyperResult<
                     let Value::Reference { ptr, .. } = execute_expr(vm, m, ref_expr)? else {
                         m.ice_with_span("malformed dereference", span)
                     };
-                    load_value(vm, &m, target_type, ptr, span)
+                    load_value(vm, m, target_type, ptr, span)
                 }
             }
         }
@@ -359,6 +389,30 @@ fn execute_expr(vm: &mut Vm, m: &TypedModule, expr: TypedExprId) -> TyperResult<
     result
 }
 
+pub fn static_value_to_vm_value(
+    vm: &mut Vm,
+    m: &TypedModule,
+    static_value: &StaticValue,
+) -> TyperResult<Value> {
+    match static_value {
+        StaticValue::Unit(_) => Ok(Value::Unit),
+        StaticValue::Boolean(bv, _) => Ok(Value::Bool(*bv)),
+        StaticValue::Char(cb, _) => Ok(Value::Char(*cb)),
+        StaticValue::Integer(iv, _) => Ok(Value::Integer(*iv)),
+        StaticValue::Float(fv, _) => Ok(Value::Float(*fv)),
+        StaticValue::String(_box_str, _) => {
+            todo!("static str to vm value")
+        }
+        StaticValue::Pointer(value, _) => Ok(Value::Pointer(*value as usize)),
+        StaticValue::Struct(_compile_time_struct) => {
+            failf!(static_value.get_span(), "TODO: static struct to vm value")
+        }
+        StaticValue::Enum(_compile_time_enum) => {
+            todo!("static enum to vm value")
+        }
+    }
+}
+
 pub fn execute_block(vm: &mut Vm, m: &TypedModule, block_expr: TypedExprId) -> TyperResult<Value> {
     let mut last_value = Value::UNIT;
     let TypedExpr::Block(typed_block) = m.exprs.get(block_expr) else { unreachable!() };
@@ -476,28 +530,29 @@ fn execute_call(vm: &mut Vm, m: &TypedModule, call: &Call) -> TyperResult<Value>
     }
 
     // Push the callee frame for body execution
-    vm.call_stack.push_back(callee_frame);
+    vm.push_frame(callee_frame);
 
     let result_value = execute_expr(vm, m, body_block_expr)?;
     // result_value lives in the stack frame we're about to nuke
     // It just to be copied onto the current stack frame...
-    let callee_frame = vm.pop_frame();
-    let caller_frame = vm.current_frame_mut();
     // TODO: Handle 'never'
 
     // If immediate, just 'Copy' the rust value; otherwise memcpy the data to the new stack
-    match result_value.ptr_if_not_immediate() {
-        None => Ok(result_value),
+    let updated_value = match result_value.ptr_if_not_immediate() {
+        None => result_value,
         Some(ptr) => {
+            let caller_frame = vm.current_frame_mut();
             let stored_result = caller_frame.push_value(&m.types, result_value);
             let updated_value = match result_value {
                 Value::Struct { type_id, ptr } => Value::Struct { type_id, ptr: stored_result },
                 Value::Enum { type_id, ptr } => Value::Enum { type_id, ptr: stored_result },
                 _ => unreachable!(),
             };
-            Ok(updated_value)
+            updated_value
         }
-    }
+    };
+    vm.pop_frame();
+    Ok(updated_value)
 }
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
@@ -743,7 +798,6 @@ impl StackFrame {
         self.cursor as *mut u8
     }
 
-    // nocommit: Revisit uses of push_slice
     pub fn push_slice(&mut self, slice: &[u8]) -> *const u8 {
         let slice_stack_ptr = self.cursor_mut();
         let slice_len = slice.len();
@@ -767,12 +821,6 @@ impl StackFrame {
         }
     }
 
-    /// This should be the only place that we 'form' a struct.
-    /// nocommit: Alternatively to the current approach, we could just compute the base of each
-    /// field and store it; there's no point in pushing padding!
-    ///
-    /// It might be good to parameterize this over the buffer type
-    /// in case we ever need to build a struct in the heap or the Interp memory for export
     pub fn push_struct_values(
         &mut self,
         types: &Types,

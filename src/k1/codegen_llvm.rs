@@ -1738,34 +1738,30 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     fn codegen_compile_time_value(
         &self,
-        comptime_value_id: CompileTimeValueId,
+        comptime_value_id: StaticValueId,
     ) -> CodegenResult<BasicValueEnum<'ctx>> {
-        let result = match self.module.comptime_values.get(comptime_value_id) {
-            CompileTimeValue::Unit(_) => self.builtin_types.unit_value.as_basic_value_enum(),
-            CompileTimeValue::Boolean(b, _) => match b {
+        let result = match self.module.static_values.get(comptime_value_id) {
+            StaticValue::Unit(_) => self.builtin_types.unit_value.as_basic_value_enum(),
+            StaticValue::Boolean(b, _) => match b {
                 true => self.builtin_types.true_value.as_basic_value_enum(),
                 false => self.builtin_types.false_value.as_basic_value_enum(),
             },
-            CompileTimeValue::Char(byte, _) => {
+            StaticValue::Char(byte, _) => {
                 self.builtin_types.char.const_int(*byte as u64, false).as_basic_value_enum()
             }
-            CompileTimeValue::Integer(int_value, _) => {
-                self.codegen_integer_value(*int_value).unwrap()
-            }
-            CompileTimeValue::Float(float_value, _) => {
-                self.codegen_float_value(*float_value).unwrap()
-            }
-            CompileTimeValue::String(boxed_str, _) => {
+            StaticValue::Integer(int_value, _) => self.codegen_integer_value(*int_value).unwrap(),
+            StaticValue::Float(float_value, _) => self.codegen_float_value(*float_value).unwrap(),
+            StaticValue::String(boxed_str, _) => {
                 let string_struct = self.codegen_string_struct(boxed_str).unwrap();
                 string_struct.as_basic_value_enum()
             }
-            CompileTimeValue::Pointer(ptr, span) => {
+            StaticValue::Pointer(ptr, span) => {
                 if *ptr != 0 {
                     return failf!(*span, "comptime Pointer (raw address) that was not zero; I have no idea what to do with that. Maybe we enhance that type such that 'NULL' is not zero but a part of the type");
                 }
                 self.ctx.ptr_type(AddressSpace::default()).const_null().as_basic_value_enum()
             }
-            CompileTimeValue::Struct(s) => {
+            StaticValue::Struct(s) => {
                 // let llvm_type = self.codegen_type(s.type_id)?.expect_struct();
                 let mut type_fields = Vec::with_capacity(s.fields.len());
                 let mut fields_basic_values = Vec::with_capacity(s.fields.len());
@@ -1790,7 +1786,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 );
                 struct_value.as_basic_value_enum()
             }
-            CompileTimeValue::Enum(e) => {
+            StaticValue::Enum(e) => {
                 let llvm_type = self.codegen_type(e.type_id)?.expect_enum();
                 let variant = &llvm_type.variants[e.variant_index as usize];
                 let physical_struct = variant.variant_struct_type;
