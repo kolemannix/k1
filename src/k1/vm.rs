@@ -1,7 +1,4 @@
-use std::{
-    collections::VecDeque,
-    ptr::{slice_from_raw_parts, slice_from_raw_parts_mut},
-};
+use std::collections::VecDeque;
 
 use ahash::HashMapExt;
 use fxhash::FxHashMap;
@@ -9,16 +6,15 @@ use log::debug;
 use smallvec::SmallVec;
 
 use crate::{
-    errf, failf,
+    failf,
     lex::SpanId,
     nz_u32_id,
-    parse::{Identifier, NumericWidth},
-    pool,
+    parse::NumericWidth,
     typer::{
-        self, make_error, make_fail_span,
+        self, make_fail_span,
         types::{
-            IntegerType, StructType, StructTypeField, Type, TypeId, Types, BOOL_TYPE_ID,
-            CHAR_TYPE_ID, POINTER_TYPE_ID, STRING_TYPE_ID, UNIT_TYPE_ID,
+            IntegerType, Type, TypeId, Types, BOOL_TYPE_ID, CHAR_TYPE_ID, POINTER_TYPE_ID,
+            STRING_TYPE_ID, UNIT_TYPE_ID,
         },
         BinaryOpKind, Call, CastType, FunctionId, Layout, TypedExpr, TypedExprId, TypedFloatValue,
         TypedIntegerValue, TypedModule, TypedStmtId, TyperResult, VariableId,
@@ -39,8 +35,12 @@ impl Vm {
         Self { call_stack: VecDeque::with_capacity(8) }
     }
 
-    fn push_frame(&mut self, name: String) -> &mut StackFrame {
+    fn push_new_frame(&mut self, name: String) -> &mut StackFrame {
         let frame = StackFrame::make(name);
+        self.push_frame(frame)
+    }
+
+    fn push_frame(&mut self, frame: StackFrame) -> &mut StackFrame {
         self.call_stack.push_back(frame);
         self.call_stack.back_mut().unwrap()
     }
@@ -52,6 +52,7 @@ impl Vm {
     fn current_frame(&self) -> &StackFrame {
         self.call_stack.back().unwrap()
     }
+
     fn current_frame_mut(&mut self) -> &mut StackFrame {
         self.call_stack.back_mut().unwrap()
     }
@@ -91,10 +92,10 @@ pub enum Value {
     Pointer(usize),
     // Reference is immediate since copying, loading or storing one only
     // entails a load or store of its pointer
-    Reference { type_id: TypeId, ptr: *const [u8] },
+    Reference { type_id: TypeId, ptr: *const u8 },
     // 'By address' values
-    Struct { type_id: TypeId, ptr: *const [u8] },
-    Enum { type_id: TypeId, ptr: *const [u8] },
+    Struct { type_id: TypeId, ptr: *const u8 },
+    Enum { type_id: TypeId, ptr: *const u8 },
 }
 
 impl Value {
@@ -116,7 +117,7 @@ impl Value {
         }
     }
 
-    pub fn ptr_if_not_immediate(&self) -> Option<*const [u8]> {
+    pub fn ptr_if_not_immediate(&self) -> Option<*const u8> {
         match self {
             Value::Struct { ptr, .. } => Some(*ptr),
             Value::Enum { ptr, .. } => Some(*ptr),
@@ -155,7 +156,7 @@ impl Value {
 
 pub fn execute_single_expr(m: &mut TypedModule, expr: TypedExprId) -> TyperResult<(Vm, Value)> {
     let mut vm = Vm::make();
-    vm.push_frame(format!("single_expr_{}", expr));
+    vm.push_new_frame(format!("single_expr_{}", expr));
     let v = execute_expr(&mut vm, m, expr)?;
     Ok((vm, v))
 }
@@ -182,7 +183,7 @@ fn execute_expr(vm: &mut Vm, m: &TypedModule, expr: TypedExprId) -> TyperResult<
 
             // Just point right at the TypedExpr's string; this is OK
             // since we should never mutate TypedExprs
-            let base_ptr: *const [u8] = slice_from_raw_parts(s.as_ptr(), s.len());
+            let base_ptr: *const u8 = s.as_ptr();
             let char_data: Value = Value::Reference { type_id: CHAR_TYPE_ID, ptr: base_ptr };
 
             let frame = vm.current_frame_mut();
@@ -224,10 +225,7 @@ fn execute_expr(vm: &mut Vm, m: &TypedModule, expr: TypedExprId) -> TyperResult<
                     m.name_of(m.variables.get(v_id).name)
                 );
             };
-            // nocommit: How do we deal with this cloning of values from our Hashmap
-            // Only bad clone here is the struct fields Vec
-            // We can convert Struct to be a ptr too, then Value is basically just a tiny handle?
-            Ok(v.clone())
+            Ok(*v)
         }
         TypedExpr::UnaryOp(unary_op) => {
             let span = unary_op.span;
@@ -274,7 +272,7 @@ fn execute_expr(vm: &mut Vm, m: &TypedModule, expr: TypedExprId) -> TyperResult<
             }
         },
         TypedExpr::Block(typed_block) => execute_block(vm, m, expr),
-        TypedExpr::Call(call) => execute_fn_call(vm, m, call),
+        TypedExpr::Call(call) => execute_call(vm, m, call),
         TypedExpr::Match(match_expr) => {
             todo!("vm match")
         }
@@ -322,13 +320,9 @@ fn execute_expr(vm: &mut Vm, m: &TypedModule, expr: TypedExprId) -> TyperResult<
                     let Value::Pointer(value) = base_value else {
                         m.ice_with_span("malformed pointer-to-reference cast", span)
                     };
-                    let pointee_layout = m
-                        .types
-                        .get_layout(m.types.get_type_id_dereferenced(typed_cast.target_type_id))
-                        .unwrap();
                     Ok(Value::Reference {
                         type_id: typed_cast.target_type_id,
-                        ptr: slice_from_raw_parts(value as *const u8, pointee_layout.size_bytes()),
+                        ptr: value as *const u8,
                     })
                 }
                 CastType::ReferenceToPointer => {
@@ -398,7 +392,7 @@ pub fn execute_stmt(vm: &mut Vm, m: &TypedModule, stmt_id: TypedStmtId) -> Typer
                     value_type
                 );
                 let stack_ptr = vm.current_frame_mut().push_ptr_uninit();
-                store_value(&m.types, value_type, stack_ptr, v);
+                store_value(&m.types, stack_ptr, v);
                 Value::Reference { type_id: reference_type, ptr: stack_ptr }
             } else {
                 debug_assert_eq!(let_stmt.variable_type, v.get_type());
@@ -431,7 +425,7 @@ pub fn execute_stmt(vm: &mut Vm, m: &TypedModule, stmt_id: TypedStmtId) -> Typer
                             None,
                         )
                     };
-                    store_value(&m.types, type_id, ptr.cast_mut(), v);
+                    store_value(&m.types, ptr.cast_mut(), v);
                     Ok(Value::UNIT)
                 }
             }
@@ -442,7 +436,7 @@ pub fn execute_stmt(vm: &mut Vm, m: &TypedModule, stmt_id: TypedStmtId) -> Typer
     }
 }
 
-fn execute_fn_call(vm: &mut Vm, m: &TypedModule, call: &Call) -> TyperResult<Value> {
+fn execute_call(vm: &mut Vm, m: &TypedModule, call: &Call) -> TyperResult<Value> {
     let span = call.span;
     let function_id = match call.callee {
         typer::Callee::StaticFunction(function_id) => function_id,
@@ -462,12 +456,28 @@ fn execute_fn_call(vm: &mut Vm, m: &TypedModule, call: &Call) -> TyperResult<Val
             m.ice_with_span("Abstract call attempt in VM", span)
         }
     };
+
     let function = m.get_function(function_id);
-    vm.push_frame(m.name_of(function.name).to_string());
+
     let Some(body_block_expr) = function.body_block else {
         eprintln!("{}", m.function_id_to_string(function_id, true));
         return failf!(span, "Cannot execute function: no body");
     };
+
+    let mut callee_frame = StackFrame::make(m.name_of(function.name).to_string());
+
+    // Arguments!
+    for (param, arg) in function.param_variables.iter().zip(call.args.iter()) {
+        // Execute this in _caller_ frame so the data outlives the callee
+        let value = execute_expr(vm, m, *arg)?;
+
+        // But bind the variables in the _callee_ frame
+        callee_frame.locals.insert(*param, value);
+    }
+
+    // Push the callee frame for body execution
+    vm.call_stack.push_back(callee_frame);
+
     let result_value = execute_expr(vm, m, body_block_expr)?;
     // result_value lives in the stack frame we're about to nuke
     // It just to be copied onto the current stack frame...
@@ -490,31 +500,25 @@ fn execute_fn_call(vm: &mut Vm, m: &TypedModule, call: &Call) -> TyperResult<Val
     }
 }
 
-pub fn store_value(types: &Types, type_id: TypeId, dst: *mut [u8], value: Value) -> usize {
-    // nocommit: I think this is really all StackFrame is doing in push_value...
-    // Steps to DRY: 1. Call this from push_value with dst = cursor
-    //               2  Make this return bytes written
-    //               3. Bump cursor by bytes_written
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub fn store_value(types: &Types, dst: *mut u8, value: Value) -> usize {
     unsafe {
         match value {
             Value::Unit => {
-                let dst = dst as *mut u8;
                 dst.write(typer::UNIT_BYTE_VALUE);
                 size_of::<u8>()
             }
             Value::Bool(b) => {
-                let dst = dst as *mut u8;
                 dst.write(b as u8);
                 size_of::<u8>()
             }
             Value::Char(b) => {
-                let dst = dst as *mut u8;
-                dst.write(b as u8);
+                dst.write(b);
                 size_of::<u8>()
             }
             Value::Integer(value) => match value {
                 TypedIntegerValue::U8(v) => {
-                    (dst as *mut u8).write(v);
+                    dst.write(v);
                     size_of::<u8>()
                 }
                 TypedIntegerValue::I8(v) => {
@@ -559,7 +563,6 @@ pub fn store_value(types: &Types, type_id: TypeId, dst: *mut [u8], value: Value)
                 }
             },
             Value::Pointer(value) => {
-                debug_assert_eq!(dst.len(), size_of_val(&value));
                 (dst as *mut usize).write(value);
                 size_of::<usize>()
             }
@@ -569,11 +572,9 @@ pub fn store_value(types: &Types, type_id: TypeId, dst: *mut [u8], value: Value)
             }
             Value::Struct { type_id, ptr } => {
                 let struct_layout = types.get_layout(type_id).unwrap();
-                debug_assert_eq!(dst.len(), struct_layout.size_bytes());
-                debug_assert_eq!(dst.len(), ptr.len());
-                let count = dst.len();
+                let count = struct_layout.size_bytes();
                 // Equivalent of memmove; safer than memcpy
-                (dst as *mut u8).copy_from(ptr.cast(), count);
+                dst.copy_from(ptr.cast(), count);
                 count
             }
             Value::Enum { .. } => todo!(),
@@ -586,7 +587,7 @@ pub fn load_value(
     vm: &mut Vm,
     m: &TypedModule,
     type_id: TypeId,
-    ptr: *const [u8],
+    ptr: *const u8,
     span: SpanId,
 ) -> TyperResult<Value> {
     let Some(layout) = m.types.get_layout(type_id) else {
@@ -596,20 +597,20 @@ pub fn load_value(
     match m.types.get(type_id) {
         Type::Unit => Ok(Value::UNIT),
         Type::Char => {
-            let byte = unsafe { *(ptr as *const u8) };
+            let byte = unsafe { ptr.read() };
             Ok(Value::Char(byte))
         }
         Type::Integer(integer_type) => {
             let int_value = unsafe {
                 match integer_type {
-                    IntegerType::U8 => TypedIntegerValue::U8(*(ptr as *const u8)),
-                    IntegerType::U16 => TypedIntegerValue::U16(*(ptr as *const u16)),
-                    IntegerType::U32 => TypedIntegerValue::U32(*(ptr as *const u32)),
-                    IntegerType::U64 => TypedIntegerValue::U64(*(ptr as *const u64)),
-                    IntegerType::I8 => TypedIntegerValue::I8(*(ptr as *const i8)),
-                    IntegerType::I16 => TypedIntegerValue::I16(*(ptr as *const i16)),
-                    IntegerType::I32 => TypedIntegerValue::I32(*(ptr as *const i32)),
-                    IntegerType::I64 => TypedIntegerValue::I64(*(ptr as *const i64)),
+                    IntegerType::U8 => TypedIntegerValue::U8(ptr.read()),
+                    IntegerType::U16 => TypedIntegerValue::U16((ptr as *const u16).read()),
+                    IntegerType::U32 => TypedIntegerValue::U32((ptr as *const u32).read()),
+                    IntegerType::U64 => TypedIntegerValue::U64((ptr as *const u64).read()),
+                    IntegerType::I8 => TypedIntegerValue::I8((ptr as *const i8).read()),
+                    IntegerType::I16 => TypedIntegerValue::I16((ptr as *const i16).read()),
+                    IntegerType::I32 => TypedIntegerValue::I32((ptr as *const i32).read()),
+                    IntegerType::I64 => TypedIntegerValue::I64((ptr as *const i64).read()),
                 }
             };
             Ok(Value::Integer(int_value))
@@ -617,8 +618,8 @@ pub fn load_value(
         Type::Float(float_type) => {
             let float_value = unsafe {
                 match float_type.size {
-                    NumericWidth::B32 => TypedFloatValue::F32(*(ptr as *const f32)),
-                    NumericWidth::B64 => TypedFloatValue::F64(*(ptr as *const f64)),
+                    NumericWidth::B32 => TypedFloatValue::F32((ptr as *const f32).read()),
+                    NumericWidth::B64 => TypedFloatValue::F64((ptr as *const f64).read()),
                     _ => unreachable!(),
                 }
             };
@@ -626,24 +627,20 @@ pub fn load_value(
         }
         Type::Bool => {
             debug_assert_eq!(layout.size_bits, 8);
-            let byte = unsafe { *(ptr as *const u8) };
+            let byte = unsafe { *ptr };
             Ok(Value::Bool(byte != 0))
         }
         Type::Pointer => {
             debug_assert_eq!(layout.size_bytes(), size_of::<usize>());
-            debug_assert_eq!(ptr.len(), size_of::<usize>());
             let value = unsafe { *(ptr as *const usize) };
             Ok(Value::Pointer(value))
         }
         Type::Reference(reference_type) => {
             debug_assert_eq!(layout.size_bytes(), size_of::<usize>());
-            debug_assert_eq!(ptr.len(), size_of::<usize>());
+
             // We're loading a reference, which means we are loading a usize
-            // that points to something with layout `layout`
-            let len = layout.size_bytes();
-            let value: *const () = unsafe { *(ptr as *const *const ()) };
-            // We materialize a len value using the type system
-            let loaded_ptr = slice_from_raw_parts(value as *const u8, len);
+            let value: usize = unsafe { (ptr as *const usize).read() };
+            let loaded_ptr = value as *const u8;
             Ok(Value::Reference { type_id: reference_type.inner_type, ptr: loaded_ptr })
         }
         Type::Struct(_struct_type) => {
@@ -652,18 +649,47 @@ pub fn load_value(
             let frame_ptr = frame.push_raw_copy_layout(layout, ptr);
             Ok(Value::Struct { type_id, ptr: frame_ptr })
         }
-        Type::Enum(typed_enum) => todo!(),
-        Type::EnumVariant(typed_enum_variant) => todo!(),
+        Type::Enum(_) => todo!(),
+        Type::EnumVariant(_) => todo!(),
         Type::Never => unreachable!("Not a value type"),
-        Type::Function(function_type) => unreachable!("Not a value type"),
-        Type::Lambda(lambda_type) => todo!("just a struct load of the env"),
-        Type::LambdaObject(lambda_object_type) => todo!("struct of the lambda obj"),
-        Type::Generic(generic_type) => unreachable!("Not a value type"),
-        Type::TypeParameter(type_parameter) => unreachable!("Not a value type"),
-        Type::FunctionTypeParameter(function_type_parameter) => unreachable!("Not a value type"),
-        Type::InferenceHole(inference_hole_type) => unreachable!("Not a value type"),
-        Type::RecursiveReference(recursive_reference) => unreachable!("Not a value type"),
+        Type::Function(_) => unreachable!("Not a value type"),
+        Type::Lambda(_) => todo!("just a struct load of the env"),
+        Type::LambdaObject(_) => todo!("struct of the lambda obj"),
+        Type::Generic(_) => unreachable!("Not a value type"),
+        Type::TypeParameter(_) => unreachable!("Not a value type"),
+        Type::FunctionTypeParameter(_) => unreachable!("Not a value type"),
+        Type::InferenceHole(_) => unreachable!("Not a value type"),
+        Type::RecursiveReference(_) => unreachable!("Not a value type"),
     }
+}
+
+fn aligned_to(ptr: *const u8, align_bytes: usize) -> *const u8 {
+    let bytes_needed = ptr.align_offset(align_bytes);
+    unsafe { ptr.byte_add(bytes_needed) }
+}
+
+fn aligned_to_mut(ptr: *mut u8, align_bytes: usize) -> *mut u8 {
+    let bytes_needed = ptr.align_offset(align_bytes);
+    unsafe { ptr.byte_add(bytes_needed) }
+}
+
+fn build_struct(
+    dst: *mut u8,
+    types: &Types,
+    struct_type_id: TypeId,
+    members: &[Value],
+) -> (*const u8, Layout) {
+    let struct_fields = &types.get(struct_type_id).expect_struct().fields;
+    let struct_layout = types.get_layout(struct_type_id).unwrap();
+
+    let start_dst = aligned_to_mut(dst, struct_layout.align_bytes());
+
+    for (value, field_type) in members.iter().zip(struct_fields.iter()) {
+        // Go to offset
+        let field_dst = unsafe { start_dst.byte_add(field_type.offset_bits as usize / 8) };
+        store_value(types, field_dst, *value);
+    }
+    (start_dst.cast_const(), struct_layout)
 }
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
@@ -671,20 +697,14 @@ pub fn load_struct_field(
     vm: &mut Vm,
     m: &TypedModule,
     struct_type: TypeId,
-    struct_ptr: *const [u8],
+    struct_ptr: *const u8,
     field_index: usize,
     span: SpanId,
 ) -> TyperResult<Value> {
     let struct_type = m.types.get(struct_type).expect_struct();
     let field = &struct_type.fields[field_index];
-    let field_layout = m.types.get_layout(field.type_id).unwrap();
-    let field_ptr = unsafe {
-        slice_from_raw_parts(
-            (struct_ptr as *const u8).byte_add(field.offset_bits as usize / 8),
-            field_layout.size_bytes(),
-        )
-    };
 
+    let field_ptr = unsafe { struct_ptr.byte_add(field.offset_bits as usize / 8) };
     let value = load_value(vm, m, field.type_id, field_ptr, span)?;
     Ok(value)
 }
@@ -723,11 +743,13 @@ impl StackFrame {
         self.cursor as *mut u8
     }
 
-    pub fn push_slice(&mut self, slice: &[u8]) -> *const [u8] {
-        let slice_stack_ptr = std::ptr::slice_from_raw_parts_mut(self.cursor_mut(), slice.len());
+    // nocommit: Revisit uses of push_slice
+    pub fn push_slice(&mut self, slice: &[u8]) -> *const u8 {
+        let slice_stack_ptr = self.cursor_mut();
         let slice_len = slice.len();
+
         unsafe {
-            let dst_slice = std::slice::from_raw_parts_mut(slice_stack_ptr as *mut u8, slice_len);
+            let dst_slice = std::slice::from_raw_parts_mut(slice_stack_ptr, slice_len);
             // Copy bytes using memcpy:
             dst_slice.copy_from_slice(slice);
         }
@@ -745,15 +767,6 @@ impl StackFrame {
         }
     }
 
-    /// Push `padding_bytes` of zero bytes into the frame buffer
-    pub fn push_padding_bytes(&mut self, padding_bytes: usize) {
-        eprintln!("Pushing padding: {}bytes", padding_bytes);
-        if padding_bytes == 0 {
-            return;
-        };
-        self.push_slice(&vec![0u8; padding_bytes]);
-    }
-
     /// This should be the only place that we 'form' a struct.
     /// nocommit: Alternatively to the current approach, we could just compute the base of each
     /// field and store it; there's no point in pushing padding!
@@ -765,41 +778,24 @@ impl StackFrame {
         types: &Types,
         struct_type_id: TypeId,
         members: &[Value],
-    ) -> *const [u8] {
-        let struct_fields = &types.get(struct_type_id).expect_struct().fields;
-        let struct_layout = types.get_layout(struct_type_id).unwrap();
-
-        let mut last_field_end: usize = 0;
-        self.align_to_bytes(struct_layout.align_bytes());
-
-        let start_offset_bytes = self.cursor as usize;
-        let base_ptr = slice_from_raw_parts(self.cursor, struct_layout.size_bytes());
-        for (value, field_type) in members.iter().zip(struct_fields.iter()) {
-            let padding = (field_type.offset_bits as usize / 8) - last_field_end;
-            eprintln!("Preceeding padding: {padding}");
-            self.push_padding_bytes(padding);
-            self.push_value_no_align(types, *value);
-            last_field_end = (self.cursor as usize) - start_offset_bytes
-        }
-        base_ptr
+    ) -> *const u8 {
+        let (struct_base, struct_layout) =
+            build_struct(self.cursor_mut(), types, struct_type_id, members);
+        self.advance_cursor(struct_layout.size_bytes());
+        struct_base
     }
 
-    pub fn push_value(&mut self, types: &Types, value: Value) -> *const [u8] {
+    pub fn push_value(&mut self, types: &Types, value: Value) -> *const u8 {
         let layout = types.get_layout(value.get_type()).unwrap();
         self.align_to_bytes(layout.align_bytes());
         self.push_value_no_align(types, value)
     }
 
     // We may not want to align, in case we're pushing this value as part of a packed struct.
-    pub fn push_value_no_align(&mut self, types: &Types, value: Value) -> *const [u8] {
+    pub fn push_value_no_align(&mut self, types: &Types, value: Value) -> *const u8 {
         let dst = self.cursor_mut();
 
-        // This fat pointer construction is redundant and silly
-        let layout = types.get_layout(value.get_type()).unwrap();
-        let dst: *mut [u8] = slice_from_raw_parts_mut(dst, layout.size_bytes());
-
-        let written = store_value(types, value.get_type(), dst, value);
-        debug_assert_eq!(written, layout.size_bytes());
+        let written = store_value(types, dst, value);
         self.advance_cursor(written);
         dst.cast_const()
     }
@@ -808,38 +804,21 @@ impl StackFrame {
         self.cursor = unsafe { self.cursor.byte_add(count) };
     }
 
-    pub fn push_byte(&mut self, u: u8) -> *const [u8] {
-        let r = self.cursor as *mut u8;
+    pub fn push_n<T: Copy>(&mut self, value: T) -> *const u8 {
+        let c = self.cursor;
         unsafe {
-            *r = u;
-            self.cursor = self.cursor.byte_add(1);
+            (self.cursor_mut() as *mut T).write(value);
+            self.advance_cursor(size_of::<T>());
+            c
         }
-        slice_from_raw_parts(r.cast_const(), 1)
     }
 
-    pub fn push_ptr_uninit(&mut self) -> *mut [u8] {
+    pub fn push_usize(&mut self, value: usize) -> *const u8 {
+        self.push_n(value)
+    }
+
+    pub fn push_ptr_uninit(&mut self) -> *mut u8 {
         self.push_usize(0).cast_mut()
-    }
-
-    pub fn push_usize(&mut self, value: usize) -> *const [u8] {
-        match size_of::<usize>() {
-            4 => self.push_integer(TypedIntegerValue::U32(value as u32)),
-            8 => self.push_integer(TypedIntegerValue::U64(value as u64)),
-            x => unreachable!("usize is {x}"),
-        }
-    }
-
-    pub fn push_integer(&mut self, value: TypedIntegerValue) -> *const [u8] {
-        match value {
-            TypedIntegerValue::U8(v) => self.push_byte(v),
-            TypedIntegerValue::I8(v) => self.push_byte(v as u8),
-            TypedIntegerValue::U16(v) => self.push_slice(&v.to_le_bytes()),
-            TypedIntegerValue::I16(v) => self.push_slice(&v.to_le_bytes()),
-            TypedIntegerValue::U32(v) => self.push_slice(&v.to_le_bytes()),
-            TypedIntegerValue::I32(v) => self.push_slice(&v.to_le_bytes()),
-            TypedIntegerValue::U64(v) => self.push_slice(&v.to_le_bytes()),
-            TypedIntegerValue::I64(v) => self.push_slice(&v.to_le_bytes()),
-        }
     }
 
     /// Push a raw copy of `size_bytes` from `src_ptr` into the frame buffer.
@@ -848,19 +827,16 @@ impl StackFrame {
         &mut self,
         size_bytes: usize,
         align_bytes: usize,
-        src_ptr: *const [u8],
-    ) -> *const [u8] {
-        debug_assert_eq!(src_ptr.len(), size_bytes);
+        src_ptr: *const u8,
+    ) -> *const u8 {
         self.align_to_bytes(align_bytes);
-        let src = src_ptr as *const u8;
-
         unsafe {
-            let src_slice = std::slice::from_raw_parts(src, size_bytes);
+            let src_slice = std::slice::from_raw_parts(src_ptr, size_bytes);
             self.push_slice(src_slice)
         }
     }
 
-    fn push_raw_copy_layout(&mut self, layout: Layout, src_ptr: *const [u8]) -> *const [u8] {
+    fn push_raw_copy_layout(&mut self, layout: Layout, src_ptr: *const u8) -> *const u8 {
         self.push_raw_copy(layout.size_bytes(), layout.align_bytes(), src_ptr)
     }
 
