@@ -5,6 +5,7 @@ use crate::compiler::CompilerConfig;
 use crate::pool::Pool;
 use crate::typer::{BinaryOpKind, ErrorLevel, Linkage};
 use crate::{lex::*, static_assert_size};
+use ecow::EcoVec;
 use fxhash::FxHashMap;
 use log::trace;
 use smallvec::{smallvec, SmallVec};
@@ -286,13 +287,13 @@ impl Display for Identifier {
 
 #[derive(Debug, Clone)]
 pub struct NamespacedIdentifier {
-    pub namespaces: Vec<Identifier>,
+    pub namespaces: EcoVec<Identifier>,
     pub name: Identifier,
     pub span: SpanId,
 }
 impl NamespacedIdentifier {
     pub fn naked(name: Identifier, span: SpanId) -> NamespacedIdentifier {
-        NamespacedIdentifier { namespaces: Vec::new(), name, span }
+        NamespacedIdentifier { namespaces: EcoVec::new(), name, span }
     }
 }
 
@@ -502,10 +503,10 @@ impl NamedTypeArg {
     }
 }
 
-// TOOD(perf): FnCall is huge
-static_assert_size!(FnCall, 120);
+// TOOD(perf): ParsedCall is huge
+static_assert_size!(ParsedCall, 112);
 #[derive(Debug, Clone)]
-pub struct FnCall {
+pub struct ParsedCall {
     pub name: NamespacedIdentifier,
     pub type_args: Vec<NamedTypeArg>,
     pub args: Vec<FnCallArg>,
@@ -515,7 +516,7 @@ pub struct FnCall {
     pub id: ParsedExprId,
 }
 
-impl FnCall {
+impl ParsedCall {
     pub fn arg_by_name(&self, name: Identifier) -> Option<(usize, &FnCallArg)> {
         self.args.iter().enumerate().find(|(_, arg)| arg.name.is_some_and(|n| n == name))
     }
@@ -658,7 +659,7 @@ pub struct IndexOperation {
 #[derive(Debug, Clone)]
 pub struct MethodCall {
     pub base: ParsedExprId,
-    pub call: Box<FnCall>,
+    pub call: Box<ParsedCall>,
     pub span: SpanId,
 }
 
@@ -743,7 +744,8 @@ pub struct ParsedStaticExpr {
     pub span: SpanId,
 }
 
-static_assert_size!(ParsedExpression, 120); // Get back down ideally below 50
+// TODO(perf): ParsedExpression is huge
+static_assert_size!(ParsedExpression, 112);
 #[derive(Debug, Clone)]
 pub enum ParsedExpression {
     /// ```md
@@ -765,7 +767,7 @@ pub enum ParsedExpression {
     /// ```md
     /// square(1, 2)
     /// ```
-    FnCall(FnCall),
+    FnCall(ParsedCall),
     /// ```md
     /// x
     /// ```
@@ -879,7 +881,7 @@ impl ParsedExpression {
         }
     }
 
-    pub fn expect_fn_call(&self) -> &FnCall {
+    pub fn expect_call(&self) -> &ParsedCall {
         match self {
             ParsedExpression::FnCall(call) => call,
             _ => panic!("expected fn call"),
@@ -2675,7 +2677,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     let name = self.intern_ident_token(target);
                     let mut all_args = vec![FnCallArg { name: None, value: self_arg }];
                     all_args.extend(args);
-                    Some(self.add_expression(ParsedExpression::FnCall(FnCall {
+                    Some(self.add_expression(ParsedExpression::FnCall(ParsedCall {
                         name: NamespacedIdentifier::naked(name, target.span),
                         type_args,
                         args: all_args,
@@ -2830,7 +2832,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn expect_namespaced_ident(&mut self) -> ParseResult<NamespacedIdentifier> {
         let (first, second) = self.tokens.peek_two();
-        let mut namespaces = Vec::new();
+        let mut namespaces = EcoVec::new();
         if second.kind == K::Slash && !second.is_whitespace_preceeded() {
             // Namespaced expression; foo/
             // Loop until we don't see a /
@@ -3013,7 +3015,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let (type_args, _type_args_span) = self.parse_optional_type_args()?;
                 let (context_args, args, args_span) = self.expect_fn_call_args()?;
                 let span = self.extend_span(namespaced_ident.span, args_span);
-                Ok(Some(self.add_expression(ParsedExpression::FnCall(FnCall {
+                Ok(Some(self.add_expression(ParsedExpression::FnCall(ParsedCall {
                     name: namespaced_ident,
                     type_args,
                     args,
