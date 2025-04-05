@@ -2702,15 +2702,23 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let next = self.peek();
                 // a.b[int](...)
                 if next.kind == K::OpenParen {
-                    let (args, args_span) = self.expect_fn_call_args()?;
+                    let (mut args, args_span) = self.expect_fn_call_args()?;
                     let self_arg = result;
                     let span = self.extend_span(self.get_expression_span(self_arg), args_span);
                     let name = self.intern_ident_token(target);
-                    let args_iter =
-                        [ParsedCallArg { name: None, value: self_arg, is_explicit_context: false }]
-                            .into_iter()
-                            .chain(args.into_iter());
-                    let args_handle = self.module.p_call_args.add_list(args_iter);
+
+                    //let args_iter =
+                    //    [ParsedCallArg { name: None, value: self_arg, is_explicit_context: false }]
+                    //        .into_iter()
+                    //        .chain(args);
+
+                    let index_of_first_explicit_arg =
+                        args.iter().position(|a| !a.is_explicit_context).unwrap_or(args.len());
+                    args.insert(
+                        index_of_first_explicit_arg,
+                        ParsedCallArg { name: None, value: self_arg, is_explicit_context: false },
+                    );
+                    let args_handle = self.module.p_call_args.add_list(args.into_iter());
 
                     Some(self.add_expression(ParsedExpression::FnCall(ParsedCall {
                         name: NamespacedIdentifier::naked(name, target.span),
