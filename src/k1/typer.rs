@@ -24,18 +24,19 @@ use types::*;
 
 use crate::lex::{SpanId, Spans, TokenKind};
 use crate::parse::{
-    self, ForExpr, ForExprType, Identifiers, NamedTypeArg, NamespacedIdentifier, NumericWidth,
-    ParsedAbilityId, ParsedAbilityImplId, ParsedDirective, ParsedExprId, ParsedFunctionId,
-    ParsedGlobalId, ParsedId, ParsedIfExpr, ParsedLoopExpr, ParsedNamespaceId, ParsedPattern,
-    ParsedPatternId, ParsedStmtId, ParsedTypeDefnId, ParsedTypeExpr, ParsedTypeExprId,
-    ParsedUnaryOpKind, ParsedUseId, ParsedWhileExpr, Sources, StructValueField,
+    self, ForExpr, ForExprType, Identifiers, NamedTypeArg, NamedTypeArgId, NamespacedIdentifier,
+    NumericWidth, ParsedAbilityId, ParsedAbilityImplId, ParsedCallArg, ParsedDirective,
+    ParsedExprId, ParsedFunctionId, ParsedGlobalId, ParsedId, ParsedIfExpr, ParsedLoopExpr,
+    ParsedNamespaceId, ParsedPattern, ParsedPatternId, ParsedStmtId, ParsedTypeDefnId,
+    ParsedTypeExpr, ParsedTypeExprId, ParsedUnaryOpKind, ParsedUseId, ParsedWhileExpr, Sources,
+    StructValueField,
 };
 use crate::parse::{
     Block, Identifier, Literal, ParsedCall, ParsedExpression, ParsedModule, ParsedStmt,
 };
-use crate::pool::Pool;
-use crate::vm;
+use crate::pool::{Pool, SliceHandle};
 use crate::{pool, static_assert_size, strings};
+use crate::{vm, SV8};
 
 #[cfg(test)]
 mod layout_test;
@@ -2004,7 +2005,7 @@ struct EvalTypeExprContext {
 impl EvalTypeExprContext {
     pub fn attached_type_defn_info(&self) -> Option<TypeDefnInfo> {
         if self.should_attach_defn_info {
-            self.inner_type_defn_info.clone()
+            self.inner_type_defn_info
         } else {
             None
         }
@@ -2345,7 +2346,7 @@ impl TypedModule {
 
         let type_eval_context = EvalTypeExprContext {
             should_attach_defn_info,
-            inner_type_defn_info: Some(type_defn_info.clone()),
+            inner_type_defn_info: Some(type_defn_info),
             is_direct_function_parameter: false,
         };
 
@@ -2612,7 +2613,7 @@ impl TypedModule {
                         name: v.tag_name,
                         index: index as u32,
                         payload: payload_type_id,
-                        type_defn_info: context.attached_type_defn_info().clone(),
+                        type_defn_info: context.attached_type_defn_info(),
                     };
                     variants.push(variant);
                 }
@@ -2812,7 +2813,7 @@ impl TypedModule {
                 if ty_app.args.len() != 1 {
                     return failf!(ty_app.span, "Expected 1 type parameter for dyn");
                 }
-                let fn_type_expr_id = ty_app.args[0].type_expr;
+                let fn_type_expr_id = self.ast.p_type_args.get_list_elem(ty_app.args, 0).type_expr;
                 let inner = self.eval_type_expr_ext(
                     fn_type_expr_id,
                     scope_id,
@@ -2838,16 +2839,13 @@ impl TypedModule {
                 if ty_app.args.len() != 2 {
                     return failf!(ty_app.span, "Expected 2 type parameters for _struct_combine");
                 }
-                let arg1 = self.eval_type_expr_ext(
-                    ty_app.args[0].type_expr,
-                    scope_id,
-                    context.no_attach_defn_info(),
-                )?;
-                let arg2 = self.eval_type_expr_ext(
-                    ty_app.args[1].type_expr,
-                    scope_id,
-                    context.no_attach_defn_info(),
-                )?;
+                let args = self.ast.p_type_args.get_list(ty_app.args);
+                let arg1_expr = args[0].type_expr;
+                let arg2_expr = args[1].type_expr;
+                let arg1 =
+                    self.eval_type_expr_ext(arg1_expr, scope_id, context.no_attach_defn_info())?;
+                let arg2 =
+                    self.eval_type_expr_ext(arg2_expr, scope_id, context.no_attach_defn_info())?;
 
                 let struct1 = self
                     .types
@@ -2892,16 +2890,13 @@ impl TypedModule {
                 if ty_app.args.len() != 2 {
                     return failf!(ty_app.span, "Expected 2 type parameters for _struct_remove");
                 }
-                let arg1 = self.eval_type_expr_ext(
-                    ty_app.args[0].type_expr,
-                    scope_id,
-                    context.no_attach_defn_info(),
-                )?;
-                let arg2 = self.eval_type_expr_ext(
-                    ty_app.args[1].type_expr,
-                    scope_id,
-                    context.no_attach_defn_info(),
-                )?;
+                let args = self.ast.p_type_args.get_list(ty_app.args);
+                let arg1_expr = args[0].type_expr;
+                let arg2_expr = args[1].type_expr;
+                let arg1 =
+                    self.eval_type_expr_ext(arg1_expr, scope_id, context.no_attach_defn_info())?;
+                let arg2 =
+                    self.eval_type_expr_ext(arg2_expr, scope_id, context.no_attach_defn_info())?;
 
                 let struct1 = self
                     .types
@@ -2957,7 +2952,9 @@ impl TypedModule {
                         );
                     }
                     let mut type_arguments: Vec<TypeId> = Vec::with_capacity(ty_app.args.len());
-                    for parsed_param in ty_app.args.clone().iter() {
+                    for parsed_param in
+                        self.ast.p_type_args.get_list_to_smallvec_copy::<4>(ty_app.args)
+                    {
                         let param_type_id = self.eval_type_expr_ext(
                             parsed_param.type_expr,
                             scope_id,
@@ -3206,7 +3203,7 @@ impl TypedModule {
                         any_changed = true;
                         variant.payload = new_payload_id;
                         if let Some(defn_info_to_attach) = defn_info_to_attach.as_ref() {
-                            variant.type_defn_info = Some(defn_info_to_attach.clone());
+                            variant.type_defn_info = Some(*defn_info_to_attach);
                         };
                     }
                 }
@@ -3764,7 +3761,7 @@ impl TypedModule {
     fn eval_expr_comptime(
         &mut self,
         expr_id: TypedExprId,
-        scope_id: ScopeId,
+        _scope_id: ScopeId,
     ) -> TyperResult<StaticValueId> {
         match self.exprs.get(expr_id) {
             TypedExpr::Unit(span) => Ok(self.static_values.add(StaticValue::Unit(*span))),
@@ -3801,8 +3798,8 @@ impl TypedModule {
             TypedExpr::BinaryOp(bin_op) => match bin_op.kind {
                 BinaryOpKind::Equals => {
                     let bin_op = bin_op.clone();
-                    let lhs = self.eval_expr_comptime(bin_op.lhs, scope_id)?;
-                    let rhs = self.eval_expr_comptime(bin_op.rhs, scope_id)?;
+                    let lhs = self.eval_expr_comptime(bin_op.lhs, _scope_id)?;
+                    let rhs = self.eval_expr_comptime(bin_op.rhs, _scope_id)?;
                     match (self.static_values.get(lhs), self.static_values.get(rhs)) {
                         (StaticValue::String(s1, _), StaticValue::String(s2, _)) => {
                             let b = StaticValue::Boolean(*s1 == *s2, bin_op.span);
@@ -3832,7 +3829,7 @@ impl TypedModule {
                 let mut values = Vec::with_capacity(struct_expr.fields.len());
                 let type_id = struct_expr.type_id;
                 for field in &struct_expr.fields.clone() {
-                    let value = self.eval_expr_comptime(field.expr, scope_id)?;
+                    let value = self.eval_expr_comptime(field.expr, _scope_id)?;
                     values.push(value);
                 }
                 Ok(self.static_values.add(StaticValue::Struct(CompileTimeStruct {
@@ -3852,7 +3849,7 @@ impl TypedModule {
                 let payload = match e.payload {
                     None => None,
                     Some(payload) => {
-                        let id = self.eval_expr_comptime(payload, scope_id)?;
+                        let id = self.eval_expr_comptime(payload, _scope_id)?;
                         Some(id)
                     }
                 };
@@ -3861,7 +3858,7 @@ impl TypedModule {
             }
             TypedExpr::Cast(typed_cast) => {
                 let typed_cast = typed_cast.clone();
-                let base_expr = self.eval_expr_comptime(typed_cast.base_expr, scope_id)?;
+                let base_expr = self.eval_expr_comptime(typed_cast.base_expr, _scope_id)?;
                 match typed_cast.cast_type {
                     CastType::IntegerExtend => {
                         let span = typed_cast.span;
@@ -3917,7 +3914,7 @@ impl TypedModule {
                 match function.intrinsic_type {
                     Some(IntrinsicFunction::BoolNegate) => {
                         let arg = call.args[0];
-                        let arg = self.eval_expr_comptime(arg, scope_id)?;
+                        let arg = self.eval_expr_comptime(arg, _scope_id)?;
                         let Some(arg) = self.static_values.get(arg).as_boolean() else {
                             self.ice_with_span("malformed bool negate", span)
                         };
@@ -4724,7 +4721,7 @@ impl TypedModule {
             Some(field_access.base),
             field_access.field_name,
             None,
-            &field_access.type_args,
+            field_access.type_args,
             ctx,
             span,
         )? {
@@ -5485,7 +5482,7 @@ impl TypedModule {
                     None,
                     anon_enum.variant_name,
                     anon_enum.payload,
-                    &[],
+                    SliceHandle::Empty,
                     enum_ctx,
                     span,
                 )?
@@ -5647,7 +5644,7 @@ impl TypedModule {
                 // This is just a de-reference
                 // Needs to become a global.
                 // Rely on the VM's code to load it, then make a K1 'global' to hold it?
-                let loaded_value = vm::load_value(vm, self, *type_id, *ptr, span).unwrap();
+                let _loaded_value = vm::load_value(vm, self, *type_id, *ptr, span).unwrap();
                 todo!("Introduce CompileTimeValue::Reference");
             }
             vm::Value::Struct { type_id, ptr } => {
@@ -5683,7 +5680,7 @@ impl TypedModule {
                         self.ice_with_span("Malformed compile-time 'string'", span)
                     };
                     unsafe {
-                        let slice = std::slice::from_raw_parts(ptr as *const u8, len as usize);
+                        let slice = std::slice::from_raw_parts(ptr, len as usize);
                         dbg!(slice);
                         let the_str = std::str::from_utf8(slice).unwrap();
                         let box_str = Box::from(the_str);
@@ -7870,26 +7867,24 @@ impl TypedModule {
     ) -> TyperResult<TypedExprId> {
         let new_fn_call = match self.ast.exprs.get(rhs) {
             ParsedExpression::Variable(var) => {
-                let args = vec![parse::FnCallArg { name: None, value: lhs }];
+                let args = self.ast.p_call_args.add_list([ParsedCallArg::unnamed(lhs)].into_iter());
                 ParsedCall {
                     name: var.name.clone(),
-                    type_args: vec![],
+                    type_args: SliceHandle::Empty,
                     args,
-                    explicit_context_args: vec![],
                     span,
                     is_method: false,
                     id: ParsedExprId::PENDING,
                 }
             }
             ParsedExpression::FnCall(fn_call) => {
-                let mut args = Vec::with_capacity(fn_call.args.len() + 1);
-                args.push(parse::FnCallArg { name: None, value: lhs });
-                args.extend(fn_call.args.clone());
+                let mut args: SV8<ParsedCallArg> = SmallVec::with_capacity(fn_call.args.len() + 1);
+                args.push(ParsedCallArg::unnamed(lhs));
+                args.extend(self.ast.p_call_args.get_list(fn_call.args).iter().copied());
                 ParsedCall {
                     name: fn_call.name.clone(),
-                    type_args: fn_call.type_args.clone(),
+                    type_args: fn_call.type_args,
                     args,
-                    explicit_context_args: vec![],
                     span,
                     is_method: false,
                     id: ParsedExprId::PENDING,
@@ -8209,12 +8204,11 @@ impl TypedModule {
 
         // Special cases of this syntax that aren't really method calls
         if let Some(base_arg) = fn_call.args.first() {
-            let type_args = fn_call.type_args.clone();
             if let Some(enum_constr) = self.handle_enum_constructor(
                 Some(base_arg.value),
                 fn_name,
                 second_arg.map(|param| param.value),
-                &type_args,
+                fn_call.type_args,
                 ctx,
                 fn_call.span,
             )? {
@@ -8604,7 +8598,7 @@ impl TypedModule {
         base_expr: Option<ParsedExprId>,
         variant_name: Identifier,
         payload_parsed_expr: Option<ParsedExprId>,
-        type_args: &[NamedTypeArg],
+        type_args: SliceHandle<NamedTypeArgId>,
         ctx: EvalExprContext,
         span: SpanId,
     ) -> TyperResult<Option<TypedExprId>> {
@@ -8765,8 +8759,10 @@ impl TypedModule {
                 }
             } else {
                 let mut passed_params = SmallVec::with_capacity(g_params.len());
+                let type_args_owned =
+                    self.ast.p_type_args.get_list_to_smallvec_copy::<4>(type_args);
                 for (generic_param, passed_type_expr) in
-                    g_params.clone().iter().zip(type_args.iter())
+                    g_params.clone().iter().zip(type_args_owned.iter())
                 {
                     let type_id = self.eval_type_expr(passed_type_expr.type_expr, ctx.scope_id)?;
                     passed_params.push(SimpleNamedType { name: generic_param.name, type_id });
@@ -9288,66 +9284,62 @@ impl TypedModule {
         let generic_type_params = generic_function.type_params.clone();
         let generic_function_params = generic_function_type.logical_params().to_vec();
         let generic_function_return_type = generic_function_type.return_type;
-        let passed_type_args = &fn_call.type_args;
-        let solved_type_params = match passed_type_args.is_empty() {
-            false => {
-                if passed_type_args.len() != generic_type_params.len() {
-                    return failf!(
-                        fn_call.span,
-                        "Expected {} type arguments but got {}",
-                        generic_type_params.len(),
-                        passed_type_args.len()
-                    );
-                }
-                let mut evaled_params = SmallVec::with_capacity(passed_type_args.len());
-                for (type_arg, param) in passed_type_args.iter().zip(generic_type_params.iter()) {
-                    let passed_type = self.eval_type_expr(type_arg.type_expr, ctx.scope_id)?;
-                    evaled_params.push(SimpleNamedType { name: param.name, type_id: passed_type });
-                }
-                evaled_params
+        let passed_type_args = fn_call.type_args;
+        let passed_type_args_count = passed_type_args.len();
+        let solved_type_params = if !passed_type_args.is_empty() {
+            if passed_type_args_count != generic_type_params.len() {
+                return failf!(
+                    fn_call.span,
+                    "Expected {} type arguments but got {}",
+                    generic_type_params.len(),
+                    passed_type_args_count
+                );
             }
-            true => {
-                let args_and_params = self.align_call_arguments_with_parameters(
-                    fn_call,
-                    &generic_function_params,
-                    None,
-                    ctx.scope_id,
-                    true,
-                )?;
-                let mut inference_pairs: SmallVec<[_; 8]> = match ctx.expected_type_id {
-                    None => SmallVec::with_capacity(args_and_params.len()),
-                    Some(expected) => {
-                        let mut v = SmallVec::with_capacity(args_and_params.len() + 1);
-                        v.push((
-                            TypeOrParsedExpr::Type(expected),
-                            generic_function_return_type,
-                            true,
-                        ));
-                        v
+            let mut evaled_params = SmallVec::with_capacity(passed_type_args_count);
+            let type_args_owned =
+                self.ast.p_type_args.get_list_to_smallvec_copy::<4>(passed_type_args);
+            for (type_param, type_arg) in generic_type_params.iter().zip(type_args_owned.iter()) {
+                let passed_type = self.eval_type_expr(type_arg.type_expr, ctx.scope_id)?;
+                evaled_params.push(SimpleNamedType { name: type_param.name, type_id: passed_type });
+            }
+            evaled_params
+        } else {
+            let args_and_params = self.align_call_arguments_with_parameters(
+                fn_call,
+                &generic_function_params,
+                None,
+                ctx.scope_id,
+                true,
+            )?;
+            let mut inference_pairs: SmallVec<[_; 8]> = match ctx.expected_type_id {
+                None => SmallVec::with_capacity(args_and_params.len()),
+                Some(expected) => {
+                    let mut v = SmallVec::with_capacity(args_and_params.len() + 1);
+                    v.push((TypeOrParsedExpr::Type(expected), generic_function_return_type, true));
+                    v
+                }
+            };
+            inference_pairs.extend(args_and_params.iter().map(|(expr, param)| {
+                let passed_type = match expr {
+                    MaybeTypedExpr::Parsed(expr_id) => TypeOrParsedExpr::Parsed(*expr_id),
+                    MaybeTypedExpr::Typed(expr) => {
+                        TypeOrParsedExpr::Type(self.exprs.get(*expr).get_type())
                     }
                 };
-                inference_pairs.extend(args_and_params.iter().map(|(expr, param)| {
-                    let passed_type = match expr {
-                        MaybeTypedExpr::Parsed(expr_id) => TypeOrParsedExpr::Parsed(*expr_id),
-                        MaybeTypedExpr::Typed(expr) => {
-                            TypeOrParsedExpr::Type(self.exprs.get(*expr).get_type())
-                        }
-                    };
-                    (passed_type, param.type_id, false)
-                }));
+                (passed_type, param.type_id, false)
+            }));
 
-                let solutions = self
-                    .infer_types(&generic_type_params, &inference_pairs, fn_call.span, ctx.scope_id)
-                    .map_err(|e| {
-                        errf!(
-                            e.span,
-                            "Invalid call to {}.\n\t{}",
-                            self.function_to_string(self.get_function(generic_function_id), false),
-                            e.message,
-                        )
-                    })?;
-                solutions
-            }
+            let solutions = self
+                .infer_types(&generic_type_params, &inference_pairs, fn_call.span, ctx.scope_id)
+                .map_err(|e| {
+                    errf!(
+                        e.span,
+                        "Invalid call to {}.\n\t{}",
+                        self.function_to_string(self.get_function(generic_function_id), false),
+                        e.message,
+                    )
+                })?;
+            solutions
         };
 
         // Enforce ability constraints
@@ -12673,12 +12665,13 @@ impl TypedModule {
     fn synth_parsed_function_call(
         &mut self,
         name: NamespacedIdentifier,
-        type_args: Vec<ParsedTypeExprId>,
+        type_args: &[ParsedTypeExprId],
         args: Vec<ParsedExprId>,
     ) -> ParsedExprId {
         let span = name.span;
-        let type_args = type_args.iter().map(|id| NamedTypeArg::unnamed(*id)).collect();
-        let args = args.iter().map(|id| parse::FnCallArg::unnamed(*id)).collect();
+        let type_args_iter = type_args.iter().map(|id| NamedTypeArg::unnamed(*id));
+        let type_args = self.ast.p_type_args.add_list(type_args_iter);
+        let args = args.iter().map(|id| parse::ParsedCallArg::unnamed(*id)).collect();
         self.ast.exprs.add_expression(ParsedExpression::FnCall(ParsedCall {
             name,
             type_args,
@@ -12697,7 +12690,7 @@ impl TypedModule {
         args: &[TypedExprId],
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
-        let call_id = self.synth_parsed_function_call(name, vec![], vec![]);
+        let call_id = self.synth_parsed_function_call(name, &[], vec![]);
         let call = self.ast.exprs.get(call_id).expect_call().clone();
         self.eval_function_call(&call, Some((type_args, args)), ctx)
     }
@@ -12734,11 +12727,7 @@ impl TypedModule {
 
     fn synth_parsed_bool_not(&mut self, base: ParsedExprId) -> ParsedExprId {
         let span = self.ast.exprs.get_span(base);
-        self.synth_parsed_function_call(
-            qident!(self, span, ["bool"], "negated"),
-            vec![],
-            vec![base],
-        )
+        self.synth_parsed_function_call(qident!(self, span, ["bool"], "negated"), &[], vec![base])
     }
 
     fn synth_show_ident_call(
@@ -12749,7 +12738,7 @@ impl TypedModule {
         let span = self.ast.exprs.get_span(caller);
         let call_id = self.synth_parsed_function_call(
             qident!(self, span, ["Show"], "show"),
-            vec![],
+            &[],
             vec![caller],
         );
         let call = self.ast.exprs.get(call_id).expect_call().clone();
