@@ -6,26 +6,22 @@ use smallvec::SmallVec;
 use std::{
     collections::{hash_map::Entry, HashMap, HashSet},
     fmt::Display,
+    num::NonZeroU32,
 };
 
 use crate::{
     errf,
     lex::SpanId,
+    nz_u32_id,
     parse::{Identifiers, NamespacedIdentifier, ParsedAbilityId, ParsedTypeDefnId},
+    pool::Pool,
     typer::{
         make_error, AbilityId, FunctionId, Identifier, LoopType, NamespaceId, Namespaces, TypeId,
         TypedExprId, TyperResult, VariableId,
     },
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ScopeId(u32);
-
-impl Display for ScopeId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
+nz_u32_id!(ScopeId);
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum ScopeType {
@@ -99,28 +95,34 @@ pub struct ScopeLoopInfo {
 }
 
 pub struct Scopes {
-    scopes: Vec<Scope>,
+    scopes: Pool<Scope, ScopeId>,
     lambda_info: HashMap<ScopeId, ScopeLambdaInfo>,
     loop_info: HashMap<ScopeId, ScopeLoopInfo>,
 }
 
 impl Scopes {
+    pub const ROOT_SCOPE_ID: ScopeId = ScopeId(NonZeroU32::new(1).unwrap());
     pub fn make() -> Self {
-        Scopes { scopes: Vec::new(), lambda_info: HashMap::new(), loop_info: HashMap::new() }
+        Scopes {
+            scopes: Pool::with_capacity("scopes", 8192),
+            lambda_info: HashMap::new(),
+            loop_info: HashMap::new(),
+        }
     }
 
     pub fn add_root_scope(&mut self, name: Option<Identifier>) -> ScopeId {
         debug_assert!(self.scopes.is_empty());
-        self.scopes.push(Scope::make(ScopeType::Namespace, None, name, 0));
-        ScopeId(0)
+        self.scopes.add(Scope::make(ScopeType::Namespace, None, name, 0));
+        Self::ROOT_SCOPE_ID
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (ScopeId, &Scope)> {
-        self.scopes.iter().enumerate().map(|(idx, s)| (ScopeId(idx as u32), s))
+        self.scopes.iter_ids().zip(self.scopes.iter())
     }
 
+    #[inline]
     pub fn get_root_scope_id(&self) -> ScopeId {
-        ScopeId(0)
+        Self::ROOT_SCOPE_ID
     }
 
     pub fn add_sibling_scope(
@@ -141,7 +143,7 @@ impl Scopes {
         scope_owner_id: Option<ScopeOwnerId>,
         name: Option<Identifier>,
     ) -> ScopeId {
-        let id = ScopeId(self.scopes.len() as u32);
+        let id = self.scopes.next_id();
         let parent_scope = self.get_scope_mut(parent_scope_id);
         parent_scope.children.push(id);
         let depth = parent_scope.depth + 1;
@@ -149,12 +151,12 @@ impl Scopes {
             parent: Some(parent_scope_id),
             ..Scope::make(scope_type, scope_owner_id, name, depth)
         };
-        self.scopes.push(scope);
+        self.scopes.add(scope);
         id
     }
 
     pub fn get_scope(&self, id: ScopeId) -> &Scope {
-        &self.scopes[id.0 as usize]
+        self.scopes.get(id)
     }
 
     pub fn get_root_scope(&self) -> &Scope {
@@ -162,7 +164,7 @@ impl Scopes {
     }
 
     pub fn get_scope_mut(&mut self, id: ScopeId) -> &mut Scope {
-        &mut self.scopes[id.0 as usize]
+        self.scopes.get_mut(id)
     }
 
     pub fn set_scope_owner_id(&mut self, id: ScopeId, owner_id: ScopeOwnerId) {
