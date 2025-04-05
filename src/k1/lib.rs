@@ -13,7 +13,7 @@ pub const KILOBYTE: usize = 1024 * 1024;
 pub const MEGABYTE: usize = KILOBYTE * 1024;
 
 pub type SV8<T> = SmallVec<[T; 8]>;
-pub type SV4<T> = SmallVec<[T; 8]>;
+pub type SV4<T> = SmallVec<[T; 4]>;
 
 fn nzu32_increment(n: u32) -> std::num::NonZeroU32 {
     // Safety: If you add one to a u32 it'll never be zero

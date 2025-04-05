@@ -5,7 +5,7 @@ pub mod types;
 
 use ecow::{eco_vec, EcoVec};
 use std::cmp::Ordering;
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::io::stderr;
@@ -35,7 +35,7 @@ use crate::parse::{
     Block, Identifier, Literal, ParsedCall, ParsedExpression, ParsedModule, ParsedStmt,
 };
 use crate::pool::{Pool, SliceHandle};
-use crate::{pool, static_assert_size, strings};
+use crate::{pool, static_assert_size, strings, SV4};
 use crate::{vm, SV8};
 
 #[cfg(test)]
@@ -451,11 +451,13 @@ impl From<&TypedAbilityParam> for SimpleNamedType {
 #[derive(Debug, Clone)]
 /// An ability signature encompasses an ability's entire 'type' story:
 /// - Base type, generic type params, and impl-provided type params
-///   Example: Add[Rhs = Int]
-///                      ^ impl argument
-///                ^ ability argument
-///            ^
-///            Ability Id
+///```norun
+///Example: Add[Rhs = Int]
+///                   ^ impl argument
+///             ^ ability argument
+///         ^
+///         Ability Id
+///```
 pub struct TypedAbilitySignature {
     ability_id: AbilityId,
     impl_arguments: SmallVec<[SimpleNamedType; 4]>,
@@ -2313,8 +2315,8 @@ impl TypedModule {
             None,
             Some(parsed_type_defn.name),
         );
-        let mut type_params: Vec<GenericTypeParam> =
-            Vec::with_capacity(parsed_type_defn.type_params.len());
+        let mut type_params: EcoVec<GenericTypeParam> =
+            EcoVec::with_capacity(parsed_type_defn.type_params.len());
         // let mut type_params: BVec<GenericTypeParam> =
         //     BVec::with_capacity_in(parsed_type_defn.type_params.len(), &self.bump);
         for type_param in parsed_type_defn.type_params.iter() {
@@ -2364,7 +2366,7 @@ impl TypedModule {
             let gen = GenericType {
                 params: type_params,
                 inner: resulting_type_id,
-                specializations: HashMap::new(),
+                specializations: FxHashMap::with_capacity(16),
             };
             Ok(self.types.add(Type::Generic(gen), Some(type_defn_info)))
         } else if parsed_type_defn.flags.is_alias() {
@@ -2522,7 +2524,8 @@ impl TypedModule {
             }
             ParsedTypeExpr::Struct(struct_defn) => {
                 let struct_defn = struct_defn.clone();
-                let mut fields: Vec<StructTypeField> = Vec::new();
+                let mut fields: EcoVec<StructTypeField> =
+                    EcoVec::with_capacity(struct_defn.fields.len());
                 let mut layout = Layout::ZERO;
                 for (index, ast_field) in struct_defn.fields.iter().enumerate() {
                     let ty = self.eval_type_expr_ext(
@@ -2570,7 +2573,8 @@ impl TypedModule {
             ParsedTypeExpr::Optional(opt) => {
                 let inner_ty =
                     self.eval_type_expr_ext(opt.base, scope_id, context.no_attach_defn_info())?;
-                let optional_type = self.instantiate_generic_type(OPTIONAL_TYPE_ID, vec![inner_ty]);
+                let optional_type =
+                    self.instantiate_generic_type(OPTIONAL_TYPE_ID, smallvec![inner_ty]);
                 Ok(optional_type)
             }
             ParsedTypeExpr::Reference(r) => {
@@ -2813,7 +2817,7 @@ impl TypedModule {
                 if ty_app.args.len() != 1 {
                     return failf!(ty_app.span, "Expected 1 type parameter for dyn");
                 }
-                let fn_type_expr_id = self.ast.p_type_args.get_list_elem(ty_app.args, 0).type_expr;
+                let fn_type_expr_id = self.ast.p_type_args.get_list_nth(ty_app.args, 0).type_expr;
                 let inner = self.eval_type_expr_ext(
                     fn_type_expr_id,
                     scope_id,
@@ -2859,7 +2863,7 @@ impl TypedModule {
                     .ok_or_else(|| errf!(ty_app.span, "Expected struct"))?;
 
                 let mut combined_fields =
-                    Vec::with_capacity(struct1.fields.len() + struct2.fields.len());
+                    EcoVec::with_capacity(struct1.fields.len() + struct2.fields.len());
                 combined_fields.extend(struct1.fields.clone());
                 for field in struct2.fields.iter() {
                     let collision = combined_fields.iter().find(|f| f.name == field.name);
@@ -2910,10 +2914,10 @@ impl TypedModule {
                     .ok_or_else(|| errf!(ty_app.span, "Expected struct"))?;
                 let mut new_fields = struct1.fields.clone();
                 new_fields.retain(|f| !struct2.fields.iter().any(|sf| sf.name == f.name));
-                let mut new_struct = StructType { fields: new_fields, generic_instance_info: None };
-                for (i, field) in new_struct.fields.iter_mut().enumerate() {
+                for (i, field) in new_fields.make_mut().iter_mut().enumerate() {
                     field.index = i as u32;
                 }
+                let new_struct = StructType { fields: new_fields, generic_instance_info: None };
                 let type_id =
                     self.types.add(Type::Struct(new_struct), context.attached_type_defn_info());
                 Ok(Some(type_id))
@@ -2951,9 +2955,10 @@ impl TypedModule {
                             ty_app.args.len()
                         );
                     }
-                    let mut type_arguments: Vec<TypeId> = Vec::with_capacity(ty_app.args.len());
+                    let mut type_arguments: SV4<TypeId> =
+                        SmallVec::with_capacity(ty_app.args.len());
                     for parsed_param in
-                        self.ast.p_type_args.get_list_to_smallvec_copy::<4>(ty_app.args)
+                        self.ast.p_type_args.get_list_to_smallvec_copy::<8>(ty_app.args)
                     {
                         let param_type_id = self.eval_type_expr_ext(
                             parsed_param.type_expr,
@@ -3032,7 +3037,7 @@ impl TypedModule {
     fn instantiate_generic_type(
         &mut self,
         generic_type: TypeId,
-        type_arguments: Vec<TypeId>,
+        type_arguments: SV4<TypeId>,
     ) -> TypeId {
         let gen = self.types.get(generic_type).expect_generic();
         match gen.specializations.get(&type_arguments) {
@@ -3054,7 +3059,7 @@ impl TypedModule {
                 let type_defn_info = self.types.get_defn_info(generic_type).unwrap();
                 // Note: This is where we'd check constraints on the pairs:
                 // that each passed params meets the constraints of the generic param
-                let substitution_pairs: Vec<TypeSubstitutionPair> = gen
+                let substitution_pairs: SV8<TypeSubstitutionPair> = gen
                     .params
                     .iter()
                     .zip(&type_arguments)
@@ -3134,13 +3139,11 @@ impl TypedModule {
             // int, bool, char
             // Opt[T] -> Opt[char]
             let generic_parent = spec_info.generic_parent;
-            let new_parameter_values: Vec<TypeId> = spec_info
+            let new_parameter_values: SV4<TypeId> = spec_info
                 .type_args
                 .clone()
                 .iter()
-                .map(|prev_type_id| {
-                    self.substitute_in_type_ext(*prev_type_id, substitution_pairs, None, None)
-                })
+                .map(|prev_type_id| self.substitute_in_type(*prev_type_id, substitution_pairs))
                 .collect();
             return self.instantiate_generic_type(generic_parent, new_parameter_values);
         };
@@ -3163,7 +3166,7 @@ impl TypedModule {
                 let mut any_change = false;
                 let original_defn_info = self.types.get_defn_info(type_id);
                 let original_instance_info = struc.generic_instance_info.clone();
-                for field in new_fields.iter_mut() {
+                for field in new_fields.make_mut().iter_mut() {
                     let new_field_type_id =
                         self.substitute_in_type_ext(field.type_id, substitution_pairs, None, None);
                     if new_field_type_id != field.type_id {
@@ -5717,7 +5720,7 @@ impl TypedModule {
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
         let mut field_values = Vec::new();
-        let mut field_defns = Vec::new();
+        let mut field_defns = EcoVec::new();
         let ParsedExpression::Struct(parsed_struct) = self.ast.exprs.get(expr_id) else {
             self.ice_with_span("expected struct", self.ast.get_expr_span(expr_id))
         };
@@ -5816,7 +5819,7 @@ impl TypedModule {
         }
 
         let mut field_values: Vec<StructField> = Vec::with_capacity(field_count);
-        let mut field_types: Vec<StructTypeField> = Vec::with_capacity(field_count);
+        let mut field_types: EcoVec<StructTypeField> = EcoVec::with_capacity(field_count);
         for ((passed_expr, passed_field, _), expected_field) in
             passed_fields_aligned.iter().zip(expected_struct.fields.iter())
         {
@@ -5824,7 +5827,7 @@ impl TypedModule {
                 self.eval_expr(*passed_expr, ctx.with_expected_type(Some(expected_field.type_id)))?;
             let expr_type = self.exprs.get(expr).get_type();
             if ctx.is_inference {
-                eprintln!(
+                debug!(
                     "[infer] Checking struct field {} against {}",
                     self.type_id_to_string(expr_type),
                     self.type_id_to_string(expected_field.type_id)
@@ -5870,7 +5873,8 @@ impl TypedModule {
                         );
                         debug_assert!(!matches!(res, TypeUnificationResult::NonMatching(_)))
                     }
-                    let mut type_args_to_use = Vec::with_capacity(generic_type.params.len());
+                    let mut type_args_to_use: SV4<TypeId> =
+                        SmallVec::with_capacity(generic_type.params.len());
                     for gp in generic_type.params.iter() {
                         let Some(matching) = substs.iter().find_map(|pair| {
                             if pair.from == gp.type_id {
@@ -7177,7 +7181,7 @@ impl TypedModule {
         let resulting_type = if is_do_block {
             UNIT_TYPE_ID
         } else {
-            self.instantiate_generic_type(LIST_TYPE_ID, vec![body_block_result_type])
+            self.instantiate_generic_type(LIST_TYPE_ID, smallvec![body_block_result_type])
         };
         let outer_for_expr_ctx = ctx.with_scope(outer_for_expr_scope).with_no_expected_type();
         let yielded_coll_variable = if !is_do_block {
@@ -7880,11 +7884,12 @@ impl TypedModule {
             ParsedExpression::FnCall(fn_call) => {
                 let mut args: SV8<ParsedCallArg> = SmallVec::with_capacity(fn_call.args.len() + 1);
                 args.push(ParsedCallArg::unnamed(lhs));
-                args.extend(self.ast.p_call_args.get_list(fn_call.args).iter().copied());
+                args.extend_from_slice(self.ast.p_call_args.get_list(fn_call.args));
+                let args_with_piped = self.ast.p_call_args.add_list_from_copy_slice(&args);
                 ParsedCall {
                     name: fn_call.name.clone(),
                     type_args: fn_call.type_args,
-                    args,
+                    args: args_with_piped,
                     span,
                     is_method: false,
                     id: ParsedExprId::PENDING,
@@ -7939,11 +7944,17 @@ impl TypedModule {
             return Ok(Either::Left(builtin_result));
         }
 
-        let first_arg_expr: Option<MaybeTypedExpr> = match known_args.as_ref() {
+        let self_arg_expr: Option<MaybeTypedExpr> = match known_args.as_ref() {
             Some((_, args)) if !args.is_empty() => {
                 Some(MaybeTypedExpr::Typed(*args.first().unwrap()))
             }
-            _ => match fn_call.args.first() {
+            _ => match self
+                .ast
+                .p_call_args
+                .get_list(fn_call.args)
+                .iter()
+                .find(|a| !a.is_explicit_context)
+            {
                 None => None,
                 Some(first) => Some(MaybeTypedExpr::Parsed(first.value)),
             },
@@ -7955,7 +7966,7 @@ impl TypedModule {
 
         match fn_call.is_method {
             true => self.resolve_parsed_function_call_method(
-                first_arg_expr.unwrap(),
+                self_arg_expr.unwrap(),
                 fn_call,
                 known_args,
                 ctx,
@@ -8107,7 +8118,8 @@ impl TypedModule {
                 if fn_call.args.len() != 1 {
                     return failf!(fn_call.span, "return(...) must have exactly one argument",);
                 }
-                Ok(Some(self.eval_return(fn_call.args[0].value, ctx, call_span)?))
+                let arg = self.ast.p_call_args.get_first(fn_call.args).unwrap();
+                Ok(Some(self.eval_return(arg.value, ctx, call_span)?))
             }
             "break" => {
                 if fn_call.args.len() > 1 {
@@ -8122,7 +8134,8 @@ impl TypedModule {
                 let expected_break_type: Option<TypeId> =
                     self.scopes.get_loop_info(enclosing_loop_scope_id).unwrap().break_type;
 
-                let break_value = match fn_call.args.first() {
+                let arg = self.ast.p_call_args.get_first(fn_call.args);
+                let break_value = match arg {
                     None => self.exprs.add(TypedExpr::Unit(call_span)),
                     Some(fn_call_arg) => {
                         // ALTERNATIVE: Allow break with value from `while` loops but require the type to implement the `Default` trait
@@ -8172,7 +8185,7 @@ impl TypedModule {
                 if fn_call.args.len() != 1 {
                     return failf!(call_span, "testCompile takes one argument");
                 }
-                let arg = &fn_call.args[0];
+                let arg = self.ast.p_call_args.get_first(fn_call.args).unwrap();
                 let result = self.eval_expr(arg.value, ctx.with_no_expected_type());
                 let expr = match result {
                     Err(typer_error) => {
@@ -8200,10 +8213,13 @@ impl TypedModule {
         debug_assert!(fn_call.name.namespaces.is_empty());
         let fn_name = fn_call.name.name;
         let call_span = fn_call.span;
-        let second_arg = fn_call.args.get(1).cloned();
+
+        let args = self.ast.p_call_args.get_list(fn_call.args);
+        let first_arg = args.first().copied();
+        let second_arg = args.get(1).copied();
 
         // Special cases of this syntax that aren't really method calls
-        if let Some(base_arg) = fn_call.args.first() {
+        if let Some(base_arg) = first_arg {
             if let Some(enum_constr) = self.handle_enum_constructor(
                 Some(base_arg.value),
                 fn_name,
@@ -8216,44 +8232,41 @@ impl TypedModule {
             }
 
             // TODO(perf): Remember the IDs of these special idents instead of comparing strings
-            match self.name_of(fn_name) {
-                "toRef" | "toDyn" => {
-                    // TODO: this isn't algebraically sound since you can _only_ use toRef and toDyn
-                    //       if you literally name the function on the lhs of the dot; you can't store
-                    //       it in a variable, because the function name on its own isn't a valid
-                    //       expression. So it's not the most satisfying, but it works for now. Easy to
-                    //       clean up by making function expressions a thing of their own, typed
-                    //       uniquely as the function's type, but having no physical representation;
-                    //       (consider it an abstract type)
-                    if let ParsedExpression::Variable(v) = self.ast.exprs.get(base_arg.value) {
-                        let function_name = &v.name;
-                        let function_id = self.scopes.find_function_namespaced(
-                            ctx.scope_id,
-                            function_name,
-                            &self.namespaces,
-                            &self.ast.idents,
-                        )?;
-                        if let Some(function_id) = function_id {
-                            let function = self.get_function(function_id);
-                            if function.is_generic() {
-                                return failf!(
-                                    call_span,
-                                    "Cannot do toDyn or toRef with a generic function"
-                                );
-                            }
-                            return match self.name_of(fn_name) {
-                                "toDyn" => self
-                                    .function_to_lambda_object(function_id, call_span)
-                                    .map(Either::Left),
-                                "toRef" => self
-                                    .function_to_reference(function_id, call_span)
-                                    .map(Either::Left),
-                                _ => self.ice_with_span("unreachable", call_span),
-                            };
+            let is_fn_convert = fn_name == self.ast.idents.builtins.to_ref
+                || fn_name == self.ast.idents.builtins.to_dyn;
+            if is_fn_convert {
+                // TODO: this isn't algebraically sound since you can _only_ use toRef and toDyn
+                //       if you literally name the function on the lhs of the dot; you can't store
+                //       it in a variable, because the function name on its own isn't a valid
+                //       expression. So it's not the most satisfying, but it works for now. Easy to
+                //       clean up by making function expressions a thing of their own, typed
+                //       uniquely as the function's type, but having no physical representation;
+                //       (consider it an abstract type)
+                if let ParsedExpression::Variable(v) = self.ast.exprs.get(base_arg.value) {
+                    let function_name = &v.name;
+                    let function_id = self.scopes.find_function_namespaced(
+                        ctx.scope_id,
+                        function_name,
+                        &self.namespaces,
+                        &self.ast.idents,
+                    )?;
+                    if let Some(function_id) = function_id {
+                        let function = self.get_function(function_id);
+                        if function.is_generic() {
+                            return failf!(
+                                call_span,
+                                "Cannot do toDyn or toRef with a generic function"
+                            );
                         }
+                        return if fn_name == self.ast.idents.builtins.to_dyn {
+                            self.function_to_lambda_object(function_id, call_span).map(Either::Left)
+                        } else if fn_name == self.ast.idents.builtins.to_ref {
+                            self.function_to_reference(function_id, call_span).map(Either::Left)
+                        } else {
+                            unreachable!()
+                        };
                     }
                 }
-                _ => {}
             }
         }
 
@@ -8452,7 +8465,10 @@ impl TypedModule {
 
         let passed_args: &mut dyn Iterator<Item = MaybeTypedExpr> = match known_args {
             Some(ka) => &mut ka.1.iter().map(|t| MaybeTypedExpr::Typed(*t)),
-            None => &mut fn_call.args.iter().map(|arg| MaybeTypedExpr::Parsed(arg.value)),
+            None => {
+                let args = self.ast.p_call_args.get_list(fn_call.args);
+                &mut args.iter().map(|arg| MaybeTypedExpr::Parsed(arg.value))
+            }
         };
         let mut args_and_params = Vec::with_capacity(passed_len);
         if let Some(expected_type) = ctx.expected_type_id {
@@ -8797,8 +8813,17 @@ impl TypedModule {
     ) -> TyperResult<ArgsAndParams<'params>> {
         let fn_name = fn_call.name.name;
         let span = fn_call.span;
-        let explicit_context_args = !fn_call.explicit_context_args.is_empty();
-        let named = fn_call.args.first().is_some_and(|arg| arg.name.is_some());
+        let args_slice = self.ast.p_call_args.get_list(fn_call.args);
+        //eprintln!(
+        //    "params_slice! {:?}",
+        //    params.iter().map(|p| (self.name_of(p.name), p.is_context)).collect::<Vec<_>>()
+        //);
+        //eprintln!(
+        //    "args_slice! {:?}",
+        //    args_slice.iter().map(|a| self.ast.expr_id_to_string(a.value)).collect::<Vec<_>>()
+        //);
+        let explicit_context_args = args_slice.iter().any(|a| a.is_explicit_context);
+        let named = args_slice.first().is_some_and(|arg| arg.name.is_some());
         let mut final_args: SmallVec<[MaybeTypedExpr; FUNC_PARAM_IDEAL_COUNT]> = SmallVec::new();
         let mut final_params: SmallVec<[&FnParamType; FUNC_PARAM_IDEAL_COUNT]> = SmallVec::new();
         if !explicit_context_args {
@@ -8839,17 +8864,18 @@ impl TypedModule {
             }
         }
 
+        let args_slice = self.ast.p_call_args.get_list(fn_call.args);
         let is_lambda =
             params.first().is_some_and(|p| p.name == get_ident!(self, LAMBDA_ENV_PARAM_NAME));
         let params = if is_lambda { &params[1..] } else { params };
         let explicit_param_count = params.iter().filter(|p| !p.is_context).count();
         let total_expected =
             if explicit_context_args { params.len() } else { explicit_param_count };
-        let actual_passed_args = fn_call.explicit_context_args.iter().chain(fn_call.args.iter());
-        let total_passed = pre_evaled_params
-            .as_ref()
-            .map(|v| v.len())
-            .unwrap_or(actual_passed_args.clone().count());
+        let actual_passed_args = args_slice;
+        let total_passed = match pre_evaled_params {
+            None => actual_passed_args.len(),
+            Some(pre_evaled_params) => pre_evaled_params.len(),
+        };
         if total_passed != total_expected {
             return failf!(
                 span,
@@ -8879,7 +8905,7 @@ impl TypedModule {
             for (param_index, fn_param) in expected_literal_params.enumerate() {
                 let matching_argument = if named {
                     let Some(name_match) =
-                        actual_passed_args.clone().find(|arg| arg.name == Some(fn_param.name))
+                        actual_passed_args.iter().find(|arg| arg.name == Some(fn_param.name))
                     else {
                         return failf!(
                             fn_call.span,
@@ -8895,7 +8921,7 @@ impl TypedModule {
                     };
                     Some(name_match)
                 } else {
-                    actual_passed_args.clone().nth(param_index)
+                    actual_passed_args.get(param_index)
                 };
                 let Some(param) = matching_argument else {
                     return failf!(
@@ -9392,7 +9418,7 @@ impl TypedModule {
             for function_type_param in original_function.function_params.clone().iter() {
                 let (corresponding_arg, corresponding_value_param) =
                     args_and_params.get(function_type_param.value_param_index as usize);
-                eprintln!(
+                debug!(
                     "The param for function_type_param {} {} is {} and passed: {:?}",
                     function_type_param.type_id,
                     self.name_of(function_type_param.name),
@@ -9471,7 +9497,7 @@ impl TypedModule {
             }
         }
         if !function_type_args.is_empty() {
-            eprintln!(
+            debug!(
                 "We're passing function_type_args! {}",
                 self.pretty_print_named_types(&function_type_args, ", ")
             );
@@ -11517,11 +11543,10 @@ impl TypedModule {
                     )
                 }
                 Some((pending_ability, ability_scope)) => {
-                    let (line, _) = self.ast.get_lines_for_span_id(ability_name.span).unwrap();
                     debug!(
                         "Recursing into pending ability {} from {}",
                         self.name_of(ability_name.name),
-                        line.content
+                        self.ast.get_lines_for_span_id(ability_name.span).unwrap().0.content
                     );
                     let ability_id = self.eval_ability(pending_ability, ability_scope)?;
                     Ok(ability_id)
@@ -11852,7 +11877,7 @@ impl TypedModule {
             _ => false,
         };
         if !is_fulfilled {
-            eprintln!(
+            debug!(
                 "Handling unfulfilled use {}",
                 self.namespaced_identifier_to_string(&parsed_use.target)
             );
@@ -12087,10 +12112,7 @@ impl TypedModule {
             if let Some(existing) = self.scopes.find_namespace(parent_scope, ast_namespace.name) {
                 // Map this separate namespace AST node to the same semantic namespace
                 self.namespace_ast_mappings.insert(parsed_namespace_id, existing);
-                eprintln!(
-                    "Inserting re-definition node for ns {}",
-                    self.name_of(ast_namespace.name)
-                );
+                debug!("Inserting re-definition node for ns {}", self.name_of(ast_namespace.name));
                 existing
             } else {
                 self.create_namespace(parsed_namespace_id, Some(parent_scope))?
@@ -12514,7 +12536,7 @@ impl TypedModule {
     }
 
     fn synth_optional_type(&mut self, inner_type: TypeId) -> TypeId {
-        self.instantiate_generic_type(OPTIONAL_TYPE_ID, vec![inner_type])
+        self.instantiate_generic_type(OPTIONAL_TYPE_ID, smallvec![inner_type])
     }
 
     fn synth_optional_some(&mut self, expression: TypedExpr) -> (TypedExprId, TypeId) {
@@ -12539,7 +12561,7 @@ impl TypedModule {
     }
 
     fn synth_optional_none(&mut self, type_id: TypeId, span: SpanId) -> TypedExprId {
-        let optional_type = self.instantiate_generic_type(OPTIONAL_TYPE_ID, vec![type_id]);
+        let optional_type = self.instantiate_generic_type(OPTIONAL_TYPE_ID, smallvec![type_id]);
         let none_variant = self
             .types
             .get(optional_type)
@@ -12666,17 +12688,17 @@ impl TypedModule {
         &mut self,
         name: NamespacedIdentifier,
         type_args: &[ParsedTypeExprId],
-        args: Vec<ParsedExprId>,
+        args: &[ParsedExprId],
     ) -> ParsedExprId {
         let span = name.span;
         let type_args_iter = type_args.iter().map(|id| NamedTypeArg::unnamed(*id));
         let type_args = self.ast.p_type_args.add_list(type_args_iter);
-        let args = args.iter().map(|id| parse::ParsedCallArg::unnamed(*id)).collect();
+        let args =
+            self.ast.p_call_args.add_list(args.iter().map(|id| parse::ParsedCallArg::unnamed(*id)));
         self.ast.exprs.add_expression(ParsedExpression::FnCall(ParsedCall {
             name,
             type_args,
             args,
-            explicit_context_args: vec![],
             span,
             is_method: false,
             id: ParsedExprId::PENDING,
@@ -12690,7 +12712,7 @@ impl TypedModule {
         args: &[TypedExprId],
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
-        let call_id = self.synth_parsed_function_call(name, &[], vec![]);
+        let call_id = self.synth_parsed_function_call(name, &[], &[]);
         let call = self.ast.exprs.get(call_id).expect_call().clone();
         self.eval_function_call(&call, Some((type_args, args)), ctx)
     }
@@ -12727,7 +12749,7 @@ impl TypedModule {
 
     fn synth_parsed_bool_not(&mut self, base: ParsedExprId) -> ParsedExprId {
         let span = self.ast.exprs.get_span(base);
-        self.synth_parsed_function_call(qident!(self, span, ["bool"], "negated"), &[], vec![base])
+        self.synth_parsed_function_call(qident!(self, span, ["bool"], "negated"), &[], &[base])
     }
 
     fn synth_show_ident_call(
@@ -12736,11 +12758,8 @@ impl TypedModule {
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
         let span = self.ast.exprs.get_span(caller);
-        let call_id = self.synth_parsed_function_call(
-            qident!(self, span, ["Show"], "show"),
-            &[],
-            vec![caller],
-        );
+        let call_id =
+            self.synth_parsed_function_call(qident!(self, span, ["Show"], "show"), &[], &[caller]);
         let call = self.ast.exprs.get(call_id).expect_call().clone();
         self.eval_function_call(&call, None, ctx)
     }

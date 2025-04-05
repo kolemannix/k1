@@ -36,6 +36,7 @@ New tagline? "C with typeclasses and tagged unions"
 - [x] *Specializing functions on their provided closures to allow inlining and static dispatch*
 - [x] Run in Linux x86-64
 - [x] `require` statements with matching and binding
+- [ ] String pool for string values, not just identifiers (will dedupe in LLVM too)
 - [ ] Support explicit type args in AnonEnumConstructor syntax 
 - [ ] Unit syntax of '()' makes no sense when we don't have tuples. What about `{}`
 - [ ] Adopt `ecow`'s EcoVec

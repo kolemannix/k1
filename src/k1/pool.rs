@@ -1,23 +1,23 @@
 use std::num::NonZeroU32;
 
-use smallvec::{Array, SmallVec};
+use smallvec::SmallVec;
 
-trait PoolIndex: Copy + Into<NonZeroU32> + From<NonZeroU32> {}
+pub trait PoolIndex: Copy + Into<NonZeroU32> + From<NonZeroU32> {}
 impl<T: Copy + Into<NonZeroU32> + From<NonZeroU32>> PoolIndex for T {}
 
 #[derive(Debug, Clone, Copy)]
-pub struct SliceHandleInner<T: Copy + Into<NonZeroU32> + From<NonZeroU32>> {
+pub struct SliceHandleInner<T: PoolIndex> {
     pub index: T,
     pub len: NonZeroU32,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum SliceHandle<T: Copy + Into<NonZeroU32> + From<NonZeroU32>> {
+pub enum SliceHandle<T: PoolIndex> {
     Empty,
     NonEmpty(SliceHandleInner<T>),
 }
 
-impl<T: Copy + Into<NonZeroU32> + From<NonZeroU32>> SliceHandle<T> {
+impl<T: PoolIndex> SliceHandle<T> {
     pub fn len(&self) -> usize {
         match self {
             SliceHandle::Empty => 0,
@@ -46,7 +46,7 @@ pub struct Pool<T, Index: Into<NonZeroU32> + From<NonZeroU32>> {
     _index: std::marker::PhantomData<Index>,
 }
 
-impl<T, Index: Copy + Into<NonZeroU32> + From<NonZeroU32>> Pool<T, Index> {
+impl<T, Index: PoolIndex> Pool<T, Index> {
     pub fn with_capacity(name: &'static str, capacity: usize) -> Pool<T, Index> {
         Pool { name, vec: Vec::with_capacity(capacity), _index: std::marker::PhantomData }
     }
@@ -62,6 +62,10 @@ impl<T, Index: Copy + Into<NonZeroU32> + From<NonZeroU32>> Pool<T, Index> {
 
     pub fn len(&self) -> usize {
         self.vec.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.vec.is_empty()
     }
 
     pub fn add(&mut self, t: T) -> Index {
@@ -134,7 +138,7 @@ impl<T, Index: Copy + Into<NonZeroU32> + From<NonZeroU32>> Pool<T, Index> {
         }
     }
 
-    pub fn get_list_elem(&self, handle: SliceHandle<Index>, index: usize) -> &T {
+    pub fn get_list_nth(&self, handle: SliceHandle<Index>, index: usize) -> &T {
         debug_assert!(index < handle.len());
         let SliceHandle::NonEmpty(handle) = handle else {
             panic!("get_list_elem called on empty list");
@@ -170,10 +174,16 @@ impl<T, Index: Copy + Into<NonZeroU32> + From<NonZeroU32>> Pool<T, Index> {
     pub fn iter_ids(&self) -> impl Iterator<Item = Index> {
         (0..self.vec.len()).map(|i| Self::physical_index_to_id(i))
     }
+
+    pub fn get_first(&self, handle: SliceHandle<Index>) -> Option<&T> {
+        let SliceHandle::NonEmpty(handle) = handle else { return None };
+        let list_start_index = Self::id_to_actual_index(handle.index);
+        self.vec.get(list_start_index)
+    }
 }
 
 /// WHEN T IS CLONE IMPL
-impl<T: Clone, Index: Copy + Into<NonZeroU32> + From<NonZeroU32>> Pool<T, Index> {
+impl<T: Clone, Index: PoolIndex> Pool<T, Index> {
     pub fn get_list_to_smallvec<const N: usize>(
         &self,
         handle: SliceHandle<Index>,
@@ -183,10 +193,22 @@ impl<T: Clone, Index: Copy + Into<NonZeroU32> + From<NonZeroU32>> Pool<T, Index>
     {
         smallvec::SmallVec::from(self.get_list(handle))
     }
+
+    pub fn add_list_from_slice(&mut self, items: &[T]) -> SliceHandle<Index> {
+        if let Some(len) = NonZeroU32::new(items.len() as u32) {
+            // This implementation is specialized for slice iterators, where it uses [`copy_from_slice`] to
+            // append the entire slice at once.
+            let index = self.next_id();
+            self.vec.extend_from_slice(items);
+            SliceHandle::NonEmpty(SliceHandleInner { index, len })
+        } else {
+            SliceHandle::Empty
+        }
+    }
 }
 
 /// WHEN T IS COPY IMPL
-impl<T: Copy, Index: Copy + Into<NonZeroU32> + From<NonZeroU32>> Pool<T, Index> {
+impl<T: Copy, Index: PoolIndex> Pool<T, Index> {
     pub fn get_list_to_smallvec_copy<const N: usize>(
         &self,
         handle: SliceHandle<Index>,
@@ -198,14 +220,14 @@ impl<T: Copy, Index: Copy + Into<NonZeroU32> + From<NonZeroU32>> Pool<T, Index> 
     }
 
     pub fn add_list_from_copy_slice(&mut self, items: &[T]) -> SliceHandle<Index> {
-        if items.is_empty() {
-            SliceHandle::Empty
-        } else {
+        if let Some(len) = NonZeroU32::new(items.len() as u32) {
             // This implementation is specialized for slice iterators, where it uses [`copy_from_slice`] to
             // append the entire slice at once.
             let index = self.next_id();
-            self.vec.extend(items.into_iter());
-            SliceHandle::NonEmpty(SliceHandleInner { index, len: items.len() })
+            self.vec.extend(items);
+            SliceHandle::NonEmpty(SliceHandleInner { index, len })
+        } else {
+            SliceHandle::Empty
         }
     }
 }

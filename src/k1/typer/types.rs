@@ -9,7 +9,7 @@ use crate::typer::scopes::*;
 use crate::parse::Identifier;
 use crate::parse::{ParsedId, ParsedTypeDefnId};
 
-use crate::{impl_copy_if_small, typer::*};
+use crate::{impl_copy_if_small, typer::*, SV4};
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
 pub struct TypeId(NonZeroU32);
@@ -50,7 +50,7 @@ pub struct StructTypeField {
 #[derive(Debug, Clone)]
 pub struct GenericInstanceInfo {
     pub generic_parent: TypeId,
-    pub type_args: Vec<TypeId>,
+    pub type_args: SV4<TypeId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -77,7 +77,7 @@ impl std::hash::Hash for TypeDefnInfo {
 
 #[derive(Debug, Clone)]
 pub struct StructType {
-    pub fields: Vec<StructTypeField>,
+    pub fields: EcoVec<StructTypeField>,
     pub generic_instance_info: Option<GenericInstanceInfo>,
 }
 
@@ -205,9 +205,9 @@ impl HasTypeId for GenericTypeParam {
 #[derive(Debug, Clone)]
 // TODO(perf): get specializations HashMap off of GenericType
 pub struct GenericType {
-    pub params: Vec<GenericTypeParam>,
+    pub params: EcoVec<GenericTypeParam>,
     pub inner: TypeId,
-    pub specializations: HashMap<Vec<TypeId>, TypeId>,
+    pub specializations: FxHashMap<SV4<TypeId>, TypeId>,
 }
 
 impl GenericType {}
@@ -349,7 +349,7 @@ pub struct FunctionValue {
 }
 
 // To shrink this, we'd
-// [ ] move TypeDefnInfo off,
+// [x] move TypeDefnInfo off,
 // [ ] convert Vecs to EcoVecs, or slice handles when we can
 static_assert_size!(Type, 80);
 #[derive(Debug, Clone)]
@@ -1074,7 +1074,7 @@ impl Types {
     }
 
     pub fn add_empty_struct(&mut self) -> TypeId {
-        self.add_anon(Type::Struct(StructType { fields: vec![], generic_instance_info: None }))
+        self.add_anon(Type::Struct(StructType { fields: eco_vec![], generic_instance_info: None }))
     }
 
     pub fn add_lambda_object(
@@ -1086,7 +1086,7 @@ impl Types {
         let fn_ptr_type = self.add_reference_type(function_type_id);
         let env_type = self.add_empty_struct();
         let env_ptr_type = self.add_reference_type(env_type);
-        let fields = vec![
+        let fields = eco_vec![
             StructTypeField {
                 name: identifiers.get("fn_ptr").unwrap(),
                 type_id: fn_ptr_type,
