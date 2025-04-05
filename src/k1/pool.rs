@@ -197,7 +197,17 @@ impl<T: Copy, Index: Copy + Into<NonZeroU32> + From<NonZeroU32>> Pool<T, Index> 
         SmallVec::from_slice(self.get_list(handle))
     }
 
-    pub fn add_list_from_copy_slice(&mut self, items: &[T]) -> SliceHandle<Index> {}
+    pub fn add_list_from_copy_slice(&mut self, items: &[T]) -> SliceHandle<Index> {
+        if items.is_empty() {
+            SliceHandle::Empty
+        } else {
+            // This implementation is specialized for slice iterators, where it uses [`copy_from_slice`] to
+            // append the entire slice at once.
+            let index = self.next_id();
+            self.vec.extend(items.into_iter());
+            SliceHandle::NonEmpty(SliceHandleInner { index, len: items.len() })
+        }
+    }
 }
 
 #[cfg(test)]
