@@ -1,25 +1,35 @@
 use std::num::NonZeroU32;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Id(NonZeroU32);
-impl Id {
-    pub const PENDING: Id = Id(NonZeroU32::MAX);
-}
-impl From<usize> for Id {
-    fn from(i: usize) -> Id {
-        Id(crate::nzu32_increment(i as u32))
-    }
+use smallvec::{Array, SmallVec};
+
+trait PoolIndex: Copy + Into<NonZeroU32> + From<NonZeroU32> {}
+impl<T: Copy + Into<NonZeroU32> + From<NonZeroU32>> PoolIndex for T {}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SliceHandleInner<T: Copy + Into<NonZeroU32> + From<NonZeroU32>> {
+    pub index: T,
+    pub len: NonZeroU32,
 }
 
-impl std::fmt::Display for Id {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
+#[derive(Debug, Clone, Copy)]
+pub enum SliceHandle<T: Copy + Into<NonZeroU32> + From<NonZeroU32>> {
+    Empty,
+    NonEmpty(SliceHandleInner<T>),
 }
 
-impl From<Id> for usize {
-    fn from(id: Id) -> usize {
-        id.0.get() as usize - 1
+impl<T: Copy + Into<NonZeroU32> + From<NonZeroU32>> SliceHandle<T> {
+    pub fn len(&self) -> usize {
+        match self {
+            SliceHandle::Empty => 0,
+            SliceHandle::NonEmpty(slice) => slice.len.get() as usize,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        match self {
+            SliceHandle::Empty => true,
+            SliceHandle::NonEmpty(_) => false,
+        }
     }
 }
 
@@ -36,7 +46,7 @@ pub struct Pool<T, Index: Into<NonZeroU32> + From<NonZeroU32>> {
     _index: std::marker::PhantomData<Index>,
 }
 
-impl<T, Index: Into<NonZeroU32> + From<NonZeroU32>> Pool<T, Index> {
+impl<T, Index: Copy + Into<NonZeroU32> + From<NonZeroU32>> Pool<T, Index> {
     pub fn with_capacity(name: &'static str, capacity: usize) -> Pool<T, Index> {
         Pool { name, vec: Vec::with_capacity(capacity), _index: std::marker::PhantomData }
     }
@@ -72,7 +82,7 @@ impl<T, Index: Into<NonZeroU32> + From<NonZeroU32>> Pool<T, Index> {
         index
     }
 
-    pub fn add_list(&mut self, items: impl Iterator<Item = T>) -> (Index, u32) {
+    pub fn add_list(&mut self, items: impl Iterator<Item = T>) -> SliceHandle<Index> {
         #[cfg(debug_assertions)]
         let cap = self.vec.capacity();
 
@@ -83,6 +93,8 @@ impl<T, Index: Into<NonZeroU32> + From<NonZeroU32>> Pool<T, Index> {
             count += 1;
         }
 
+        let Some(count) = NonZeroU32::new(count) else { return SliceHandle::Empty };
+
         #[cfg(debug_assertions)]
         {
             let new_cap = self.vec.capacity();
@@ -91,7 +103,7 @@ impl<T, Index: Into<NonZeroU32> + From<NonZeroU32>> Pool<T, Index> {
             }
         }
 
-        (index, count)
+        SliceHandle::NonEmpty(SliceHandleInner { index, len: count })
     }
 
     fn id_to_actual_index(index: Index) -> usize {
@@ -115,16 +127,40 @@ impl<T, Index: Into<NonZeroU32> + From<NonZeroU32>> Pool<T, Index> {
         &mut self.vec[index]
     }
 
-    pub fn get_list(&self, index: Index, count: u32) -> &[T] {
+    pub fn get_list(&self, handle: SliceHandle<Index>) -> &[T] {
+        match handle {
+            SliceHandle::Empty => &[],
+            SliceHandle::NonEmpty(handle) => self.get_many(handle.index, handle.len.get()),
+        }
+    }
+
+    pub fn get_list_elem(&self, handle: SliceHandle<Index>, index: usize) -> &T {
+        debug_assert!(index < handle.len());
+        let SliceHandle::NonEmpty(handle) = handle else {
+            panic!("get_list_elem called on empty list");
+        };
+        let list_start_index = Self::id_to_actual_index(handle.index);
+        let elem_index = list_start_index + index;
+        &self.vec[elem_index]
+    }
+
+    pub fn get_many(&self, index: Index, count: u32) -> &[T] {
         let index = Self::id_to_actual_index(index);
         let end = index + count as usize;
         &self.vec[index..end]
     }
 
-    pub fn get_list_mut(&mut self, index: Index, count: u32) -> &mut [T] {
+    pub fn get_many_mut(&mut self, index: Index, count: u32) -> &mut [T] {
         let index = Self::id_to_actual_index(index);
         let end = index + count as usize;
         &mut self.vec[index..end]
+    }
+
+    pub fn get_list_mut(&mut self, handle: SliceHandle<Index>) -> &mut [T] {
+        match handle {
+            SliceHandle::Empty => &mut [],
+            SliceHandle::NonEmpty(handle) => self.get_many_mut(handle.index, handle.len.get()),
+        }
     }
 
     pub fn iter(&self) -> std::slice::Iter<T> {
@@ -134,6 +170,34 @@ impl<T, Index: Into<NonZeroU32> + From<NonZeroU32>> Pool<T, Index> {
     pub fn iter_ids(&self) -> impl Iterator<Item = Index> {
         (0..self.vec.len()).map(|i| Self::physical_index_to_id(i))
     }
+}
+
+/// WHEN T IS CLONE IMPL
+impl<T: Clone, Index: Copy + Into<NonZeroU32> + From<NonZeroU32>> Pool<T, Index> {
+    pub fn get_list_to_smallvec<const N: usize>(
+        &self,
+        handle: SliceHandle<Index>,
+    ) -> SmallVec<[T; N]>
+    where
+        [T; N]: smallvec::Array<Item = T>,
+    {
+        smallvec::SmallVec::from(self.get_list(handle))
+    }
+}
+
+/// WHEN T IS COPY IMPL
+impl<T: Copy, Index: Copy + Into<NonZeroU32> + From<NonZeroU32>> Pool<T, Index> {
+    pub fn get_list_to_smallvec_copy<const N: usize>(
+        &self,
+        handle: SliceHandle<Index>,
+    ) -> SmallVec<[T; N]>
+    where
+        [T; N]: smallvec::Array<Item = T>,
+    {
+        SmallVec::from_slice(self.get_list(handle))
+    }
+
+    pub fn add_list_from_copy_slice(&mut self, items: &[T]) -> SliceHandle<Index> {}
 }
 
 #[cfg(test)]
@@ -151,15 +215,15 @@ mod test {
     #[test]
     fn list() {
         let mut pool: Pool<i32, NonZeroU32> = Pool::new("list");
-        let (id, count) = pool.add_list([1, 2, 3].iter().copied());
-        assert_eq!(pool.get_list(id, count), &[1, 2, 3]);
+        let handle = pool.add_list([1, 2, 3].iter().copied());
+        assert_eq!(pool.get_list(handle), &[1, 2, 3]);
     }
 
     #[test]
     fn mutate_list() {
         let mut pool: Pool<i32, NonZeroU32> = Pool::new("mutate_list");
-        let (id, count) = pool.add_list([1, 2, 3].iter().copied());
-        pool.get_list_mut(id, count)[1] = 42;
-        assert_eq!(pool.get_list(id, count), &[1, 42, 3]);
+        let handle = pool.add_list([1, 2, 3].iter().copied());
+        pool.get_list_mut(handle)[1] = 42;
+        assert_eq!(pool.get_list(handle), &[1, 42, 3]);
     }
 }
