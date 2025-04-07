@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use ahash::HashMapExt;
 use fxhash::FxHashMap;
 use log::debug;
-use smallvec::SmallVec;
+use smallvec::{smallvec, SmallVec};
 
 use crate::{
     failf,
@@ -304,13 +304,17 @@ fn execute_expr(vm: &mut Vm, m: &TypedModule, expr: TypedExprId) -> TyperResult<
         TypedExpr::Block(typed_block) => execute_block(vm, m, expr),
         TypedExpr::Call(call) => execute_call(vm, m, call),
         TypedExpr::Match(match_expr) => {
-            todo!("vm match")
+            for stmt in &match_expr.initial_let_statements {
+                execute_stmt(vm, m, *stmt)?;
+            }
+            todo!("match")
         }
         TypedExpr::WhileLoop(while_loop) => todo!(),
         TypedExpr::LoopExpr(loop_expr) => todo!(),
         TypedExpr::EnumConstructor(typed_enum_constructor) => todo!(),
         TypedExpr::EnumIsVariant(typed_enum_is_variant_expr) => todo!(),
         TypedExpr::EnumGetPayload(get_enum_payload) => todo!(),
+        TypedExpr::EnumGetTag(get_enum_tag) => todo!(),
         TypedExpr::Cast(typed_cast) => {
             let typed_cast = typed_cast.clone();
             let span = typed_cast.span;
@@ -401,14 +405,22 @@ pub fn static_value_to_vm_value(
         StaticValue::Integer(iv, _) => Ok(Value::Integer(*iv)),
         StaticValue::Float(fv, _) => Ok(Value::Float(*fv)),
         StaticValue::String(_box_str, _) => {
-            todo!("static str to vm value")
+            failf!(static_value.get_span(), "static str to vm value")
         }
         StaticValue::Pointer(value, _) => Ok(Value::Pointer(*value as usize)),
-        StaticValue::Struct(_compile_time_struct) => {
-            failf!(static_value.get_span(), "TODO: static struct to vm value")
+        StaticValue::Struct(static_struct) => {
+            let mut values: SmallVec<[Value; 8]> = smallvec![];
+            for f in static_struct.fields.iter() {
+                let static_value = m.static_values.get(*f);
+                let value = static_value_to_vm_value(vm, m, static_value)?;
+                values.push(value);
+            }
+            let struct_ptr =
+                vm.current_frame_mut().push_struct_values(&m.types, static_struct.type_id, &values);
+            Ok(Value::Struct { type_id: static_struct.type_id, ptr: struct_ptr })
         }
         StaticValue::Enum(_compile_time_enum) => {
-            todo!("static enum to vm value")
+            failf!(static_value.get_span(), "static enum to vm value")
         }
     }
 }

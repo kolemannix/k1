@@ -1133,35 +1133,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         payload_types.push(None)
                     }
                 }
-                let payload_max_alignment = payload_types
-                    .iter()
-                    .filter_map(|x| x.as_ref().map(|x| x.size_info().abi_align_bits))
-                    .max()
-                    .unwrap_or(0);
-                let word_size_int_type_id =
-                    if WORD_SIZE_BITS == 64 { U64_TYPE_ID } else { U32_TYPE_ID };
-                let tag_int_type_id = match enum_type.explicit_tag_type {
-                    Some(explicit_tag_type) => explicit_tag_type,
-                    None => {
-                        match payload_max_alignment {
-                            0 => U8_TYPE_ID, // No payloads case
-                            8 => U8_TYPE_ID,
-                            16 => U16_TYPE_ID,
-                            32 => U32_TYPE_ID,
-                            // If the payload(s) require to be aligned on a 64-bit or larger
-                            // boundary, there's no point in using a tag type smaller than the word
-                            // size
-                            64 => word_size_int_type_id,
-                            _ => word_size_int_type_id,
-                        }
-                    }
-                };
-                debug!(
-                    "Maximum payload alignment is {payload_max_alignment}, selected tag type {}",
-                    self.module.type_id_to_string(tag_int_type_id)
-                );
                 let tag_int_type =
-                    self.codegen_type(tag_int_type_id)?.rich_value_type().into_int_type();
+                    self.codegen_type(enum_type.tag_type)?.rich_value_type().into_int_type();
                 let tag_field_debug = self
                     .debug
                     .debug_builder
@@ -2042,9 +2015,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let enum_value = self
                     .codegen_expr_basic_value(enum_is_variant.target_expr)?
                     .into_pointer_value();
-                let target_expr_type_id =
-                    self.module.exprs.get(enum_is_variant.target_expr).get_type();
-                let enum_llvm = self.codegen_type(target_expr_type_id)?.expect_enum();
+                let enum_type_id = self.module.exprs.get(enum_is_variant.target_expr).get_type();
+                let enum_llvm = self.codegen_type(enum_type_id)?.expect_enum();
                 let variant = &enum_llvm.variants[enum_is_variant.variant_index as usize];
                 let is_variant_bool = self.codegen_enum_is_variant(
                     enum_value,
@@ -2053,12 +2025,20 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 );
                 Ok(is_variant_bool.as_basic_value_enum().into())
             }
+            TypedExpr::EnumGetTag(enum_get_tag) => {
+                let enum_value =
+                    self.codegen_expr_basic_value(enum_get_tag.enum_expr)?.into_pointer_value();
+                let enum_type_id = self.module.exprs.get(enum_get_tag.enum_expr).get_type();
+                let enum_llvm_type = self.codegen_type(enum_type_id)?.expect_enum();
+                let enum_tag_value = self.get_enum_tag(enum_llvm_type.tag_type, enum_value);
+                Ok(enum_tag_value.as_basic_value_enum().into())
+            }
             TypedExpr::EnumGetPayload(enum_get_payload) => {
                 let target_expr_type_id =
-                    self.module.exprs.get(enum_get_payload.target_expr).get_type();
+                    self.module.exprs.get(enum_get_payload.enum_expr).get_type();
                 let enum_type = self.module.types.get_type_id_dereferenced(target_expr_type_id);
                 let enum_type = self.codegen_type(enum_type)?.expect_enum();
-                let enum_value = self.codegen_expr_basic_value(enum_get_payload.target_expr)?;
+                let enum_value = self.codegen_expr_basic_value(enum_get_payload.enum_expr)?;
                 let variant_type = &enum_type.variants[enum_get_payload.variant_index as usize];
 
                 if enum_get_payload.is_referencing {
