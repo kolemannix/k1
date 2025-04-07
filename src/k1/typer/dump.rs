@@ -672,8 +672,13 @@ impl TypedModule {
                 write!(writ, " as({}) ", cast.cast_type)?;
                 self.display_type_id(cast.target_type_id, false, writ)
             }
+            TypedExpr::EnumGetTag(get_tag) => {
+                self.display_expr_id(get_tag.enum_expr, writ, indentation)?;
+                writ.write_str(".tag")?;
+                Ok(())
+            }
             TypedExpr::EnumGetPayload(as_variant_expr) => {
-                self.display_expr_id(as_variant_expr.target_expr, writ, indentation)?;
+                self.display_expr_id(as_variant_expr.enum_expr, writ, indentation)?;
                 writ.write_str(".payload[")?;
                 self.write_ident(writ, as_variant_expr.variant_name)?;
                 writ.write_char(']')?;

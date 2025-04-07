@@ -165,7 +165,7 @@ pub struct TypedEnum {
     /// Populated for specialized copies of generic enums, contains provenance info
     pub generic_instance_info: Option<GenericInstanceInfo>,
     pub ast_node: ParsedId,
-    pub explicit_tag_type: Option<TypeId>,
+    pub tag_type: TypeId,
 }
 
 impl TypedEnum {
@@ -1274,34 +1274,20 @@ impl Types {
                         v.payload.and_then(|p| self.compute_type_layout(p)).unwrap_or(Layout::ZERO)
                     })
                     .collect();
-                let payload_max_alignment =
-                    payload_layouts.iter().map(|l| l.align_bits).max().unwrap_or(0);
-                let word_size_int_type_id = match self.word_size_bits() {
-                    32 => U32_TYPE_ID,
-                    64 => U64_TYPE_ID,
-                    _ => unreachable!(),
-                };
-                let tag_int_type_id = match typed_enum.explicit_tag_type {
-                    Some(explicit_tag_type) => explicit_tag_type,
-                    None => {
-                        match payload_max_alignment {
-                            0 => U8_TYPE_ID, // No payloads case
-                            8 => U8_TYPE_ID,
-                            16 => U16_TYPE_ID,
-                            32 => U32_TYPE_ID,
-                            // If the payload(s) require to be aligned on a 64-bit or larger
-                            // boundary, there's no point in using a tag type smaller than the word
-                            // size
-                            64 => word_size_int_type_id,
-                            _ => word_size_int_type_id,
-                        }
-                    }
-                };
+                // nocommit compute tag type here
+                //let payload_max_alignment =
+                //    payload_layouts.iter().map(|l| l.align_bits).max().unwrap_or(0);
+                //let word_size_int_type_id = match self.word_size_bits() {
+                //    32 => U32_TYPE_ID,
+                //    64 => U64_TYPE_ID,
+                //    _ => unreachable!(),
+                //};
+
                 // Enum sizing and layout rules:
                 // - Alignment of the enum is the max(alignment) of the variants
                 // - Size of the enum is the size of the largest variant, not necessarily the same
                 //   variant, plus alignment end padding
-                let tag_layout = self.compute_type_layout(tag_int_type_id).unwrap();
+                let tag_layout = self.compute_type_layout(typed_enum.tag_type).unwrap();
                 let mut max_variant_align = 0;
                 let mut max_variant_size = 0;
                 for (_variant, payload_layout) in typed_enum.variants.iter().zip(payload_layouts) {
