@@ -1097,7 +1097,7 @@ pub struct StructField {
 }
 
 #[derive(Debug, Clone)]
-pub struct Struct {
+pub struct StructLiteral {
     pub fields: Vec<StructField>,
     pub type_id: TypeId,
     pub span: SpanId,
@@ -1132,11 +1132,18 @@ pub struct TypedEnumConstructor {
 
 #[derive(Debug, Clone)]
 pub struct GetEnumPayload {
-    pub target_expr: TypedExprId,
+    pub enum_expr: TypedExprId,
     pub result_type_id: TypeId,
     pub variant_name: Identifier,
     pub variant_index: u32,
     pub is_referencing: bool,
+    pub span: SpanId,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct GetEnumTag {
+    pub enum_expr: TypedExprId,
+    pub result_type_id: TypeId,
     pub span: SpanId,
 }
 
@@ -1453,7 +1460,7 @@ pub enum TypedExpr {
     Integer(TypedIntegerExpr),
     Float(TypedFloatExpr),
     String(Box<str>, SpanId),
-    Struct(Struct),
+    Struct(StructLiteral),
     StructFieldAccess(FieldAccess),
     Variable(VariableExpr),
     UnaryOp(UnaryOp),
@@ -1467,6 +1474,7 @@ pub enum TypedExpr {
     LoopExpr(LoopExpr),
     EnumConstructor(TypedEnumConstructor),
     EnumIsVariant(TypedEnumIsVariantExpr),
+    EnumGetTag(GetEnumTag),
     EnumGetPayload(GetEnumPayload),
     Cast(TypedCast),
     /// Explicit returns are syntactically like function calls, but are their own instruction type
@@ -1521,6 +1529,7 @@ impl TypedExpr {
             TypedExpr::EnumConstructor(enum_cons) => enum_cons.type_id,
             TypedExpr::EnumIsVariant(_is_variant) => BOOL_TYPE_ID,
             TypedExpr::EnumGetPayload(as_variant) => as_variant.result_type_id,
+            TypedExpr::EnumGetTag(get_tag) => get_tag.result_type_id,
             TypedExpr::Cast(c) => c.target_type_id,
             TypedExpr::Return(_ret) => NEVER_TYPE_ID,
             TypedExpr::Break(_break) => NEVER_TYPE_ID,
@@ -1553,6 +1562,7 @@ impl TypedExpr {
             TypedExpr::EnumConstructor(e) => e.span,
             TypedExpr::EnumIsVariant(is_variant) => is_variant.span,
             TypedExpr::EnumGetPayload(as_variant) => as_variant.span,
+            TypedExpr::EnumGetTag(get_tag) => get_tag.span,
             TypedExpr::Cast(c) => c.span,
             TypedExpr::Return(ret) => ret.span,
             TypedExpr::Break(brk) => brk.span,
@@ -2621,11 +2631,57 @@ impl TypedModule {
                     };
                     variants.push(variant);
                 }
+                let tag_type = match e.tag_type {
+                    None => {
+                        // nocommit: Move tag type selection algorithm here
+                        //let payload_max_alignment = payload_types
+                        //    .iter()
+                        //    .filter_map(|x| x.as_ref().map(|x| x.size_info().abi_align_bits))
+                        //    .max()
+                        //    .unwrap_or(0);
+                        //let word_size_int_type_id =
+                        //    if WORD_SIZE_BITS == 64 { U64_TYPE_ID } else { U32_TYPE_ID };
+                        //let tag_int_type_id = match enum_type.tag_type {
+                        //    Some(explicit_tag_type) => explicit_tag_type,
+                        //    None => {
+                        //        match payload_max_alignment {
+                        //            0 => U8_TYPE_ID, // No payloads case
+                        //            8 => U8_TYPE_ID,
+                        //            16 => U16_TYPE_ID,
+                        //            32 => U32_TYPE_ID,
+                        //            // If the payload(s) require to be aligned on a 64-bit or larger
+                        //            // boundary, there's no point in using a tag type smaller than the word
+                        //            // size
+                        //            64 => word_size_int_type_id,
+                        //            _ => word_size_int_type_id,
+                        //        }
+                        //    }
+                        //};
+                        //debug!(
+                        //    "Maximum payload alignment is {payload_max_alignment}, selected tag type {}",
+                        //    self.module.type_id_to_string(tag_int_type_id)
+                        //);
+                        U32_TYPE_ID
+                    }
+                    Some(tag_type_expr) => {
+                        let tag_type = self.eval_type_expr(tag_type_expr, scope_id)?;
+                        match tag_type {
+                            U8_TYPE_ID | U16_TYPE_ID | U32_TYPE_ID | U64_TYPE_ID => {}
+                            _ => {
+                                return failf!(
+                                    self.ast.get_type_expr_span(tag_type_expr),
+                                    "Unsupported tag type"
+                                )
+                            }
+                        };
+                        tag_type
+                    }
+                };
                 let enum_type = Type::Enum(TypedEnum {
                     variants,
                     generic_instance_info: None,
                     ast_node: type_expr_id.into(),
-                    explicit_tag_type: None,
+                    tag_type,
                 });
                 let enum_type_id = self.types.add(enum_type, context.attached_type_defn_info());
                 Ok(enum_type_id)
@@ -2734,7 +2790,7 @@ impl TypedModule {
 
                 for (index, param) in fun_type.params.iter().enumerate() {
                     let type_id = self.eval_type_expr(*param, scope_id)?;
-                    let span = self.ast.get_type_expression_span(*param);
+                    let span = self.ast.get_type_expr_span(*param);
 
                     let name = match index {
                         0 => self.ast.idents.builtins.param_0,
@@ -2823,7 +2879,7 @@ impl TypedModule {
                     scope_id,
                     context.no_attach_defn_info(),
                 )?;
-                let inner_span = self.ast.get_type_expression_span(fn_type_expr_id);
+                let inner_span = self.ast.get_type_expr_span(fn_type_expr_id);
                 if self.types.get(inner).as_function().is_none() {
                     return failf!(
                         ty_app.span,
@@ -3197,7 +3253,7 @@ impl TypedModule {
                 let original_ast_node = e.ast_node;
                 let original_defn_info = self.types.get_defn_info(type_id);
                 let original_instance_info = e.generic_instance_info.clone();
-                let original_explicit_tag_type = e.explicit_tag_type;
+                let original_explicit_tag_type = e.tag_type;
                 for variant in new_variants.iter_mut() {
                     let new_payload_id = variant.payload.map(|payload_type_id| {
                         self.substitute_in_type_ext(payload_type_id, substitution_pairs, None, None)
@@ -3221,7 +3277,7 @@ impl TypedModule {
                         variants: new_variants,
                         ast_node: original_ast_node,
                         generic_instance_info,
-                        explicit_tag_type: original_explicit_tag_type,
+                        tag_type: original_explicit_tag_type,
                     };
                     let new_enum_id = self
                         .types
@@ -4750,6 +4806,7 @@ impl TypedModule {
             return self.eval_unwrap_operator(field_access.base, ctx, field_access.span);
         }
 
+        // Bailout case: .try unwrap operation
         if field_access.field_name == self.ast.idents.builtins.try_ {
             if field_access.is_coalescing {
                 return failf!(field_access.span, "Cannot use ?. with try operator");
@@ -4766,18 +4823,26 @@ impl TypedModule {
         let mut base_expr = self.eval_expr(field_access.base, ctx.with_no_expected_type())?;
         let original_base_expr_type = self.exprs.get(base_expr).get_type();
 
+        // Optional fork case: .tag enum special accessor
+        if field_access.field_name == self.ast.idents.builtins.tag {
+            if field_access.is_coalescing {
+                return failf!(field_access.span, "TODO: tag access on nullish values");
+            }
+            if is_assignment_lhs {
+                return failf!(field_access.span, "Cannot assign to tag");
+            }
+            if let Some(get_tag) = self.handle_enum_get_tag(base_expr, field_access.span)? {
+                return Ok(get_tag);
+            }
+        }
+
         // Perform auto-dereference for accesses that are not 'lvalue'-style or 'referencing' style
         let (base_type, is_reference) = match self.get_expr_type(base_expr) {
             Type::Reference(reference_type) => {
                 let inner_type = reference_type.inner_type;
                 if !is_assignment_lhs && !field_access.is_referencing {
                     // Dereference the base expression
-                    base_expr = self.exprs.add(TypedExpr::UnaryOp(UnaryOp {
-                        kind: UnaryOpKind::Dereference,
-                        type_id: reference_type.inner_type,
-                        span: field_access.span,
-                        expr: base_expr,
-                    }));
+                    base_expr = self.synth_dereference(base_expr);
                 }
                 (inner_type, true)
             }
@@ -4940,7 +5005,7 @@ impl TypedModule {
                     payload_type_id
                 };
                 Ok(self.exprs.add(TypedExpr::EnumGetPayload(GetEnumPayload {
-                    target_expr: base_expr,
+                    enum_expr: base_expr,
                     result_type_id,
                     variant_name,
                     variant_index,
@@ -5755,7 +5820,7 @@ impl TypedModule {
         let struct_type = StructType { fields: field_defns, generic_instance_info: None };
         let struct_type_id = self.types.add_anon(Type::Struct(struct_type));
         let typed_struct =
-            Struct { fields: field_values, span: ast_struct.span, type_id: struct_type_id };
+            StructLiteral { fields: field_values, span: ast_struct.span, type_id: struct_type_id };
         Ok(self.exprs.add(TypedExpr::Struct(typed_struct)))
     }
 
@@ -5906,8 +5971,11 @@ impl TypedModule {
         let output_struct_type_id =
             self.types.add(Type::Struct(output_struct), expected_struct_defn_info);
 
-        let typed_struct =
-            Struct { fields: field_values, span: ast_struct.span, type_id: output_struct_type_id };
+        let typed_struct = StructLiteral {
+            fields: field_values,
+            span: ast_struct.span,
+            type_id: output_struct_type_id,
+        };
         let expr = TypedExpr::Struct(typed_struct);
         Ok(self.exprs.add(expr))
     }
@@ -6797,7 +6865,7 @@ impl TypedModule {
                     };
                     let get_payload_expr =
                         self.exprs.add(TypedExpr::EnumGetPayload(GetEnumPayload {
-                            target_expr,
+                            enum_expr: target_expr,
                             result_type_id,
                             variant_name,
                             variant_index,
@@ -8535,6 +8603,34 @@ impl TypedModule {
         Ok(impl_fn_id)
     }
 
+    fn handle_enum_get_tag(
+        &mut self,
+        base_expr_id: TypedExprId,
+        span: SpanId,
+    ) -> TyperResult<Option<TypedExprId>> {
+        let original_type = self.exprs.get(base_expr_id).get_type();
+        let (enum_type, is_reference) = match self.types.get(original_type) {
+            Type::Enum(e) => (e, false),
+            Type::EnumVariant(ev) => (self.types.get(ev.enum_type_id).expect_enum(), false),
+            Type::Reference(refer) => match self.types.get(refer.inner_type) {
+                Type::Enum(e) => (e, true),
+                Type::EnumVariant(ev) => (self.types.get(ev.enum_type_id).expect_enum(), true),
+                _ => return Ok(None),
+            },
+            _ => return Ok(None),
+        };
+
+        let tag_type = enum_type.tag_type;
+
+        let base_expr =
+            if is_reference { self.synth_dereference(base_expr_id) } else { base_expr_id };
+        Ok(Some(self.exprs.add(TypedExpr::EnumGetTag(GetEnumTag {
+            enum_expr: base_expr,
+            result_type_id: tag_type,
+            span,
+        }))))
+    }
+
     fn handle_enum_as(
         &mut self,
         base_expr: TypedExprId,
@@ -10214,9 +10310,8 @@ impl TypedModule {
                             let Type::Reference(expected_reference_type) =
                                 self.types.get(provided_type)
                             else {
-                                let expected_type_span = self
-                                    .ast
-                                    .get_type_expression_span(parsed_let.type_expr.unwrap());
+                                let expected_type_span =
+                                    self.ast.get_type_expr_span(parsed_let.type_expr.unwrap());
                                 return failf!(
                                     expected_type_span,
                                     "Expected type must be a reference type when using let*"
@@ -11357,8 +11452,7 @@ impl TypedModule {
                     self.type_id_to_string(block.expr_type)
                 );
                 if let Err(msg) = self.check_types(return_type, block.expr_type, fn_scope_id) {
-                    let return_type_span =
-                        self.ast.get_type_expression_span(parsed_function_ret_type);
+                    let return_type_span = self.ast.get_type_expr_span(parsed_function_ret_type);
                     return failf!(
                         return_type_span,
                         "Function {} return type mismatch: {}",
@@ -12785,14 +12879,14 @@ impl TypedModule {
             }
             fields.push(StructField { name: field.name, expr: field_expr });
         }
-        self.exprs.add(TypedExpr::Struct(Struct { fields, type_id: struct_type_id, span }))
+        self.exprs.add(TypedExpr::Struct(StructLiteral { fields, type_id: struct_type_id, span }))
     }
 
     fn synth_source_location(&mut self, span: SpanId) -> TypedExprId {
         let the_span = self.ast.spans.get(span);
         let source = self.ast.sources.get_source(the_span.file_id);
         let line = source.get_line_for_span_start(the_span).unwrap();
-        let struct_expr = TypedExpr::Struct(Struct {
+        let struct_expr = TypedExpr::Struct(StructLiteral {
             fields: vec![
                 StructField {
                     name: self.ast.idents.builtins.filename,

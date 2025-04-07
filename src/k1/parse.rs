@@ -367,6 +367,7 @@ pub struct BuiltinIdentifiers {
     pub filename: Identifier,
     pub line: Identifier,
     pub equals: Identifier,
+    pub tag: Identifier,
     pub param_0: Identifier,
     pub param_1: Identifier,
     pub param_2: Identifier,
@@ -441,6 +442,7 @@ impl Default for Identifiers {
         let filename = Identifier(pool.get_or_intern_static("filename"));
         let line = Identifier(pool.get_or_intern_static("line"));
         let equals = Identifier(pool.get_or_intern_static("equals"));
+        let tag = Identifier(pool.get_or_intern_static("tag"));
         let param_0 = Identifier(pool.get_or_intern_static("param_0"));
         let param_1 = Identifier(pool.get_or_intern_static("param_1"));
         let param_2 = Identifier(pool.get_or_intern_static("param_2"));
@@ -494,6 +496,7 @@ impl Default for Identifiers {
                 filename,
                 line,
                 equals,
+                tag,
                 param_0,
                 param_1,
                 param_2,
@@ -1103,6 +1106,7 @@ pub struct ParsedEnumVariant {
 #[derive(Debug, Clone)]
 pub struct ParsedEnumType {
     pub variants: Vec<ParsedEnumVariant>,
+    pub tag_type: Option<ParsedTypeExprId>,
     pub span: SpanId,
 }
 
@@ -1695,7 +1699,7 @@ impl ParsedModule {
         self.exprs.get_type_hint(id)
     }
 
-    pub fn get_type_expression_span(&self, type_expression_id: ParsedTypeExprId) -> SpanId {
+    pub fn get_type_expr_span(&self, type_expression_id: ParsedTypeExprId) -> SpanId {
         self.type_exprs.get(type_expression_id).get_span()
     }
 
@@ -1719,7 +1723,7 @@ impl ParsedModule {
             ParsedId::AbilityImpl(id) => self.get_ability_impl(id).span,
             ParsedId::TypeDefn(id) => self.get_type_defn(id).span,
             ParsedId::Expression(id) => self.exprs.get_span(id),
-            ParsedId::TypeExpression(id) => self.get_type_expression_span(id),
+            ParsedId::TypeExpression(id) => self.get_type_expr_span(id),
             ParsedId::Pattern(id) => self.get_pattern_span(id),
             ParsedId::Use(id) => self.uses.get_use(id).span,
         }
@@ -2425,10 +2429,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     self.advance();
                     let ident_token = self.expect_eat_token(K::Ident)?;
                     let ident = self.intern_ident_token(ident_token);
-                    let span = self.extend_span(
-                        self.module.get_type_expression_span(result),
-                        ident_token.span,
-                    );
+                    let span =
+                        self.extend_span(self.module.get_type_expr_span(result), ident_token.span);
                     let new = ParsedTypeExpr::DotMemberAccess(ParsedDotMemberAccess {
                         base: result,
                         member_name: ident,
@@ -2561,6 +2563,14 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn expect_enum_type_expression(&mut self) -> ParseResult<ParsedEnumType> {
         let keyword = self.expect_eat_token(K::KeywordEither)?;
+        let explicit_tag_type_expr =
+            if self.maybe_consume_next_no_whitespace(K::OpenParen).is_some() {
+                let tag_expr = self.expect_type_expression()?;
+                self.expect_eat_token(K::CloseParen)?;
+                Some(tag_expr)
+            } else {
+                None
+            };
         let mut variants = Vec::new();
         let mut first = true;
         loop {
@@ -2598,7 +2608,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let last_variant_span =
             variants.last().ok_or_else(|| error_expected("At least one variant", keyword))?.span;
         let span = self.extend_span(keyword.span, last_variant_span);
-        Ok(ParsedEnumType { variants, span })
+        Ok(ParsedEnumType { variants, tag_type: explicit_tag_type_expr, span })
     }
 
     fn expect_fn_arg(&mut self, is_explicit_context: bool) -> ParseResult<ParsedCallArg> {
@@ -2657,7 +2667,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let type_expr_id = self.expect_type_expression()?;
                 let span = self.extend_span(
                     self.get_expression_span(result),
-                    self.module.get_type_expression_span(type_expr_id),
+                    self.module.get_type_expr_span(type_expr_id),
                 );
                 Some(self.add_expression(ParsedExpression::AsCast(ParsedAsCast {
                     base_expr: result,
@@ -3829,8 +3839,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
         let equals = self.expect_eat_token(K::Equals)?;
         let type_expr = Parser::expect("Type expression", equals, self.parse_type_expression())?;
-        let span =
-            self.extend_span(keyword_type.span, self.module.get_type_expression_span(type_expr));
+        let span = self.extend_span(keyword_type.span, self.module.get_type_expr_span(type_expr));
         let name = self.intern_ident_token(name);
         let type_defn_id = self.module.add_typedefn(ParsedTypeDefn {
             name,

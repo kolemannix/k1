@@ -56,7 +56,9 @@ fn main(): int {
   };
   assertEquals(letRef, 10);
 
-  #static crash("");
+  #static assert(false);
+
+  // #static crash("");
 
   // let sSwitch = #static switch letRef {
   //   _ -> (),
