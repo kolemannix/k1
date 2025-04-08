@@ -56,9 +56,13 @@ fn eprintln(s: string): unit {
 
 ns sys {
 
-  extern(_k1_show_backtrace) fn _k1_show_backtrace(): unit
+  extern(_k1_show_backtrace) fn _k1_show_backtrace_libunwind(): unit
   fn printBacktrace(): unit {
-    _k1_show_backtrace();
+    if k1/IS_STATIC {
+      println("<todo: static backtrace intrinsic>");
+    } else {
+      _k1_show_backtrace_libunwind();
+    }
   }
 
   fn exit(code: i32): never {

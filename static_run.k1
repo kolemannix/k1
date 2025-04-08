@@ -56,6 +56,8 @@ fn main(): int {
   };
   assertEquals(letRef, 10);
 
+  assertEquals(k1/IS_STATIC, false);
+  #static assert(k1/IS_STATIC);
   #static assert(false);
 
   // #static crash("");

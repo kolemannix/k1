@@ -1919,7 +1919,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     "struc.{}",
                     self.module.ast.idents.get_name(field_access.target_field)
                 );
-                let field_index = field_access.target_field_index;
+                let field_index = field_access.field_index;
                 let struct_llvm_type = self.codegen_type(field_access.struct_type)?.expect_struct();
                 let struct_physical_type = struct_llvm_type.struct_type;
                 // Codegen the field's memory location
