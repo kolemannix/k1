@@ -35,7 +35,7 @@ use crate::parse::{
     Block, Identifier, Literal, ParsedCall, ParsedExpression, ParsedModule, ParsedStmt,
 };
 use crate::pool::{Pool, SliceHandle};
-use crate::{pool, static_assert_size, strings, SV4};
+use crate::{static_assert_size, strings, SV4};
 use crate::{vm, SV8};
 
 #[cfg(test)]
@@ -889,12 +889,14 @@ pub struct VariableExpr {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryOpKind {
-    // Integer operations
+    // Arith
     Add,
     Subtract,
     Multiply,
     Divide,
     Rem,
+
+    // Cmp
     Less,
     LessEqual,
     Greater,

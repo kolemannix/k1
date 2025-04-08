@@ -154,6 +154,7 @@ pub struct TypedEnumVariant {
     pub name: Identifier,
     pub index: u32,
     pub payload: Option<TypeId>,
+    pub tag_value: TypedIntegerValue,
     // Always matches the info of this variant's enum
     pub type_defn_info: Option<TypeDefnInfo>,
 }
@@ -168,6 +169,12 @@ pub struct TypedEnum {
 }
 
 impl TypedEnum {
+    pub fn is_no_payload(&self) -> bool {
+        !self.has_payloads()
+    }
+    pub fn has_payloads(&self) -> bool {
+        self.variants.iter().any(|v| v.payload.is_some())
+    }
     pub fn variant_by_name(&self, name: Identifier) -> Option<&TypedEnumVariant> {
         self.variants.iter().find(|v| v.name == name)
     }

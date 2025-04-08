@@ -348,6 +348,11 @@ fn execute_expr(vm: &mut Vm, m: &TypedModule, expr: TypedExprId) -> TyperResult<
                     let rhs = execute_expr(vm, m, bin_op.rhs)?;
                     binop::execute_arith_op(lhs, rhs, bin_op.kind, span)
                 }
+                K::Less | K::LessEqual | K::Greater | K::GreaterEqual => {
+                    let lhs = execute_expr(vm, m, bin_op.lhs)?;
+                    let rhs = execute_expr(vm, m, bin_op.rhs)?;
+                    binop::execute_cmp_op(lhs, rhs, bin_op.kind, span)
+                }
                 _ => {
                     failf!(bin_op.span, "Unsupported static binary op: {}", m.expr_to_string(expr))
                 }
@@ -358,7 +363,21 @@ fn execute_expr(vm: &mut Vm, m: &TypedModule, expr: TypedExprId) -> TyperResult<
         TypedExpr::Match(match_expr) => execute_match(vm, m, match_expr),
         TypedExpr::WhileLoop(_) => todo!(),
         TypedExpr::LoopExpr(_) => todo!(),
-        TypedExpr::EnumConstructor(_) => todo!(),
+        TypedExpr::EnumConstructor(e) => {
+            let frame = vm.current_frame();
+            let enum_type = m.types.get(e.type_id).expect_enum();
+            // TODO(vm): Represent no-payload enums as
+            // an int-based Value variant, not aggregates
+            if enum_type.is_no_payload() {
+                // Simple integer value
+                eprintln!("TODO: optimize for no payload enums")
+            }
+            let variant = &enum_type.variants[e.variant_index as usize];
+            if let Some(payload) = e.payload {}
+            //let tag_value = variant.tag_value
+
+            todo!()
+        }
         TypedExpr::EnumIsVariant(_) => todo!(),
         TypedExpr::EnumGetPayload(_) => todo!(),
         TypedExpr::EnumGetTag(_) => todo!(),

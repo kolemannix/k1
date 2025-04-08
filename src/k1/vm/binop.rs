@@ -102,7 +102,7 @@ pub fn execute_arith_op(
                 };
                 Ok(Value::Integer(TypedIntegerValue::I64(result)))
             }
-            _ => return failf!(span, "Invalid integer operation: {:?} {:?}", iv1, iv2),
+            _ => failf!(span, "Invalid integer operation: {:?} {:?}", iv1, iv2),
         },
         (Value::Float(fv1), Value::Float(fv2)) => match (fv1, fv2) {
             (TypedFloatValue::F32(v1), TypedFloatValue::F32(v2)) => {
@@ -129,6 +129,125 @@ pub fn execute_arith_op(
             }
             _ => unreachable!(),
         },
-        (a, b) => return failf!(span, "Malformed binop: {:?} {:?}", a, b),
+        (a, b) => failf!(span, "Malformed binop: {:?} {:?}", a, b),
+    }
+}
+
+pub fn execute_cmp_op(
+    lhs: Value,
+    rhs: Value,
+    op: BinaryOpKind,
+    span: SpanId,
+) -> TyperResult<Value> {
+    use BinaryOpKind as K;
+    debug_assert!(matches!(op, K::Less | K::LessEqual | K::Greater | K::GreaterEqual));
+    match (lhs, rhs) {
+        (Value::Integer(iv1), Value::Integer(iv2)) => match (iv1, iv2) {
+            (TypedIntegerValue::U8(v1), TypedIntegerValue::U8(v2)) => {
+                let result = match op {
+                    K::Less => v1 < v2,
+                    K::LessEqual => v1 <= v2,
+                    K::Greater => v1 > v2,
+                    K::GreaterEqual => v1 >= v2,
+                    _ => unreachable!(),
+                };
+                Ok(Value::Bool(result))
+            }
+            (TypedIntegerValue::U16(v1), TypedIntegerValue::U16(v2)) => {
+                let result = match op {
+                    K::Less => v1 < v2,
+                    K::LessEqual => v1 <= v2,
+                    K::Greater => v1 > v2,
+                    K::GreaterEqual => v1 >= v2,
+                    _ => unreachable!(),
+                };
+                Ok(Value::Bool(result))
+            }
+            (TypedIntegerValue::U32(v1), TypedIntegerValue::U32(v2)) => {
+                let result = match op {
+                    K::Less => v1 < v2,
+                    K::LessEqual => v1 <= v2,
+                    K::Greater => v1 > v2,
+                    K::GreaterEqual => v1 >= v2,
+                    _ => unreachable!(),
+                };
+                Ok(Value::Bool(result))
+            }
+            (TypedIntegerValue::U64(v1), TypedIntegerValue::U64(v2)) => {
+                let result = match op {
+                    K::Less => v1 < v2,
+                    K::LessEqual => v1 <= v2,
+                    K::Greater => v1 > v2,
+                    K::GreaterEqual => v1 >= v2,
+                    _ => unreachable!(),
+                };
+                Ok(Value::Bool(result))
+            }
+            (TypedIntegerValue::I8(v1), TypedIntegerValue::I8(v2)) => {
+                let result = match op {
+                    K::Less => v1 < v2,
+                    K::LessEqual => v1 <= v2,
+                    K::Greater => v1 > v2,
+                    K::GreaterEqual => v1 >= v2,
+                    _ => unreachable!(),
+                };
+                Ok(Value::Bool(result))
+            }
+            (TypedIntegerValue::I16(v1), TypedIntegerValue::I16(v2)) => {
+                let result = match op {
+                    K::Less => v1 < v2,
+                    K::LessEqual => v1 <= v2,
+                    K::Greater => v1 > v2,
+                    K::GreaterEqual => v1 >= v2,
+                    _ => unreachable!(),
+                };
+                Ok(Value::Bool(result))
+            }
+            (TypedIntegerValue::I32(v1), TypedIntegerValue::I32(v2)) => {
+                let result = match op {
+                    K::Less => v1 < v2,
+                    K::LessEqual => v1 <= v2,
+                    K::Greater => v1 > v2,
+                    K::GreaterEqual => v1 >= v2,
+                    _ => unreachable!(),
+                };
+                Ok(Value::Bool(result))
+            }
+            (TypedIntegerValue::I64(v1), TypedIntegerValue::I64(v2)) => {
+                let result = match op {
+                    K::Less => v1 < v2,
+                    K::LessEqual => v1 <= v2,
+                    K::Greater => v1 > v2,
+                    K::GreaterEqual => v1 >= v2,
+                    _ => unreachable!(),
+                };
+                Ok(Value::Bool(result))
+            }
+            _ => failf!(span, "Invalid integer operation: {:?} {:?}", iv1, iv2),
+        },
+        (Value::Float(fv1), Value::Float(fv2)) => match (fv1, fv2) {
+            (TypedFloatValue::F32(v1), TypedFloatValue::F32(v2)) => {
+                let result = match op {
+                    K::Less => v1 < v2,
+                    K::LessEqual => v1 <= v2,
+                    K::Greater => v1 > v2,
+                    K::GreaterEqual => v1 >= v2,
+                    _ => unreachable!(),
+                };
+                Ok(Value::Bool(result))
+            }
+            (TypedFloatValue::F64(v1), TypedFloatValue::F64(v2)) => {
+                let result = match op {
+                    K::Less => v1 < v2,
+                    K::LessEqual => v1 <= v2,
+                    K::Greater => v1 > v2,
+                    K::GreaterEqual => v1 >= v2,
+                    _ => unreachable!(),
+                };
+                Ok(Value::Bool(result))
+            }
+            _ => unreachable!(),
+        },
+        (a, b) => failf!(span, "Malformed binop: {:?} {:?}", a, b),
     }
 }

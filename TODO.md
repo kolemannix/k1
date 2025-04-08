@@ -36,10 +36,11 @@ New tagline? "C with typeclasses and tagged unions"
 - [x] *Specializing functions on their provided closures to allow inlining and static dispatch*
 - [x] Run in Linux x86-64
 - [x] `require` statements with matching and binding
+- [ ] Represent payload-less `either` types as ints not structs
 - [ ] String pool for string values, not just identifiers (will dedupe in LLVM too)
 - [ ] Support explicit type args in AnonEnumConstructor syntax 
 - [ ] Unit syntax of '()' makes no sense when we don't have tuples. What about `{}`
-- [ ] Adopt `ecow`'s EcoVec
+- [x] Adopt `ecow`'s EcoVec
 
 - [x] Runtime-branching Allocator system (v2 is comptime branching)
   - [x] comptime enhancement to support this global initializer: `let* a: Arena* = { .. };`
