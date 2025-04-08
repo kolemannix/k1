@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::hash::Hasher;
 
@@ -1274,14 +1273,6 @@ impl Types {
                         v.payload.and_then(|p| self.compute_type_layout(p)).unwrap_or(Layout::ZERO)
                     })
                     .collect();
-                // nocommit compute tag type here
-                //let payload_max_alignment =
-                //    payload_layouts.iter().map(|l| l.align_bits).max().unwrap_or(0);
-                //let word_size_int_type_id = match self.word_size_bits() {
-                //    32 => U32_TYPE_ID,
-                //    64 => U64_TYPE_ID,
-                //    _ => unreachable!(),
-                //};
 
                 // Enum sizing and layout rules:
                 // - Alignment of the enum is the max(alignment) of the variants

@@ -1,8 +1,8 @@
-use std::collections::VecDeque;
+use std::{collections::VecDeque, num::NonZeroU32};
 
 use ahash::HashMapExt;
 use fxhash::FxHashMap;
-use log::debug;
+use log::{debug, info};
 use smallvec::{smallvec, SmallVec};
 
 use crate::{
@@ -13,17 +13,20 @@ use crate::{
     typer::{
         self, make_fail_span,
         types::{
-            IntegerType, Type, TypeId, Types, BOOL_TYPE_ID, CHAR_TYPE_ID, POINTER_TYPE_ID,
-            STRING_TYPE_ID, UNIT_TYPE_ID,
+            IntegerType, StructTypeField, Type, TypeId, Types, BOOL_TYPE_ID, CHAR_TYPE_ID,
+            POINTER_TYPE_ID, STRING_TYPE_ID, UNIT_TYPE_ID,
         },
-        BinaryOpKind, Call, CastType, FunctionId, Layout, StaticValue, TypedExpr, TypedExprId,
-        TypedFloatValue, TypedGlobalId, TypedIntegerValue, TypedModule, TypedStmtId, TyperResult,
+        BinaryOpKind, Call, CastType, IntrinsicFunction, Layout, MatchingCondition,
+        MatchingConditionInstr, StaticValue, TypedExpr, TypedExprId, TypedFloatValue,
+        TypedGlobalId, TypedIntegerValue, TypedMatchExpr, TypedModule, TypedStmtId, TyperResult,
         VariableId,
     },
 };
 
 #[cfg(test)]
 mod vm_test;
+
+mod binop;
 
 pub struct Vm {
     /// Code may update globals; so we store this VM run's 'copy' of that global's
@@ -166,8 +169,23 @@ impl Value {
     }
 }
 
+const GLOBAL_ID_STATIC: TypedGlobalId = TypedGlobalId::from_nzu32(NonZeroU32::new(1).unwrap());
+
 pub fn execute_single_expr(m: &mut TypedModule, expr: TypedExprId) -> TyperResult<(Vm, Value)> {
     let mut vm = Vm::make();
+
+    // Tell the code we're about to execute that this is static
+    // Useful for conditional compilation to branch and do what makes sense
+    // in an interpreted context
+    if cfg!(debug_assertions) {
+        let k1_static_global = m.globals.get(GLOBAL_ID_STATIC);
+        debug_assert_eq!(
+            m.name_of(m.variables.get(k1_static_global.variable_id).name),
+            "IS_STATIC"
+        );
+    }
+    vm.globals.insert(GLOBAL_ID_STATIC, Value::Bool(true));
+
     vm.push_new_frame(format!("single_expr_{}", expr));
     let v = execute_expr(&mut vm, m, expr)?;
     Ok((vm, v))
@@ -225,7 +243,29 @@ fn execute_expr(vm: &mut Vm, m: &TypedModule, expr: TypedExprId) -> TyperResult<
             Ok(Value::Struct { type_id: s_type_id, ptr: struct_base })
         }
         TypedExpr::StructFieldAccess(field_access) => {
-            todo!()
+            let struct_value = execute_expr(vm, m, field_access.base)?;
+            let Some(struct_ptr) = struct_value.ptr_if_not_immediate() else {
+                m.ice_with_span("struct field access on immediate value", field_access.span)
+            };
+            if field_access.is_referencing {
+                let (field_ptr, _) = gep_struct_field(
+                    m,
+                    field_access.struct_type,
+                    struct_ptr,
+                    field_access.field_index as usize,
+                );
+                Ok(Value::Reference { type_id: field_access.result_type, ptr: field_ptr })
+            } else {
+                let field_value = load_struct_field(
+                    vm,
+                    m,
+                    field_access.struct_type,
+                    struct_ptr,
+                    field_access.field_index as usize,
+                    field_access.span,
+                )?;
+                Ok(field_value)
+            }
         }
         TypedExpr::Variable(variable_expr) => {
             let v_id = variable_expr.variable_id;
@@ -233,14 +273,16 @@ fn execute_expr(vm: &mut Vm, m: &TypedModule, expr: TypedExprId) -> TyperResult<
             if let Some(global_id) = variable.global_id {
                 // Handle global
                 // Case 1: It's in the VM because someone mutated it
+                //         OR we already evaluated it during this execution
                 // Case 2: Grab it from the module
                 match vm.globals.get(&global_id) {
                     Some(global_value) => Ok(*global_value),
                     None => {
                         let initial = m.globals.get(global_id).initial_value;
-                        // CompileTimeValueId to VmValue
                         let vm_value =
                             static_value_to_vm_value(vm, m, m.static_values.get(initial))?;
+
+                        vm.globals.insert(global_id, vm_value);
                         Ok(vm_value)
                     }
                 }
@@ -270,51 +312,56 @@ fn execute_expr(vm: &mut Vm, m: &TypedModule, expr: TypedExprId) -> TyperResult<
                 }
             }
         }
-        TypedExpr::BinaryOp(bin_op) => match bin_op.kind {
-            BinaryOpKind::Equals => {
-                let bin_op = bin_op.clone();
-                let lhs = execute_expr(vm, m, bin_op.lhs)?;
-                let rhs = execute_expr(vm, m, bin_op.rhs)?;
-                match (lhs, rhs) {
-                    (Value::Unit, Value::Unit) => Ok(Value::TRUE),
-                    (Value::Bool(b1), Value::Bool(b2)) => {
-                        eprintln!("{b1} == {b2}");
-                        Ok(Value::Bool(b1 == b2))
-                    }
-                    (Value::Char(c1), Value::Char(c2)) => Ok(Value::Bool(c1 == c2)),
-                    (Value::Integer(i1), Value::Integer(i2)) => Ok(Value::Bool(i1 == i2)),
-                    (Value::Float(f1), Value::Float(f2)) => Ok(Value::Bool(f1 == f2)),
-                    (lhs, rhs) => {
-                        failf!(
-                            bin_op.span,
-                            "static equality over {} and {} is unimplemented",
-                            lhs.kind_str(),
-                            rhs.kind_str()
-                        )
+        TypedExpr::BinaryOp(bin_op) => {
+            let span = bin_op.span;
+            use BinaryOpKind as K;
+            match bin_op.kind {
+                K::Equals => {
+                    let bin_op = bin_op.clone();
+                    let lhs = execute_expr(vm, m, bin_op.lhs)?;
+                    let rhs = execute_expr(vm, m, bin_op.rhs)?;
+                    match (lhs, rhs) {
+                        (Value::Unit, Value::Unit) => Ok(Value::TRUE),
+                        (Value::Bool(b1), Value::Bool(b2)) => {
+                            eprintln!("{b1} == {b2}");
+                            Ok(Value::Bool(b1 == b2))
+                        }
+                        (Value::Char(c1), Value::Char(c2)) => Ok(Value::Bool(c1 == c2)),
+                        (Value::Integer(i1), Value::Integer(i2)) => Ok(Value::Bool(i1 == i2)),
+                        (Value::Float(f1), Value::Float(f2)) => Ok(Value::Bool(f1 == f2)),
+                        (lhs, rhs) => {
+                            failf!(
+                                span,
+                                "static equality over {} and {} is unimplemented",
+                                lhs.kind_str(),
+                                rhs.kind_str()
+                            )
+                        }
                     }
                 }
+                K::NotEquals => {
+                    unreachable!("Do we even product NotEquals exprs? Or desugar")
+                }
+
+                K::Add | K::Subtract | K::Multiply | K::Divide | K::Rem => {
+                    let lhs = execute_expr(vm, m, bin_op.lhs)?;
+                    let rhs = execute_expr(vm, m, bin_op.rhs)?;
+                    binop::execute_arith_op(lhs, rhs, bin_op.kind, span)
+                }
+                _ => {
+                    failf!(bin_op.span, "Unsupported static binary op: {}", m.expr_to_string(expr))
+                }
             }
-            BinaryOpKind::NotEquals => {
-                unreachable!("Do we even product NotEquals exprs? Or desugar")
-            }
-            _ => {
-                failf!(bin_op.span, "Unsupported static binary op: {}", m.expr_to_string(expr))
-            }
-        },
-        TypedExpr::Block(typed_block) => execute_block(vm, m, expr),
-        TypedExpr::Call(call) => execute_call(vm, m, call),
-        TypedExpr::Match(match_expr) => {
-            for stmt in &match_expr.initial_let_statements {
-                execute_stmt(vm, m, *stmt)?;
-            }
-            todo!("match")
         }
-        TypedExpr::WhileLoop(while_loop) => todo!(),
-        TypedExpr::LoopExpr(loop_expr) => todo!(),
-        TypedExpr::EnumConstructor(typed_enum_constructor) => todo!(),
-        TypedExpr::EnumIsVariant(typed_enum_is_variant_expr) => todo!(),
-        TypedExpr::EnumGetPayload(get_enum_payload) => todo!(),
-        TypedExpr::EnumGetTag(get_enum_tag) => todo!(),
+        TypedExpr::Block(_) => execute_block(vm, m, expr),
+        TypedExpr::Call(call) => execute_call(vm, m, call),
+        TypedExpr::Match(match_expr) => execute_match(vm, m, match_expr),
+        TypedExpr::WhileLoop(_) => todo!(),
+        TypedExpr::LoopExpr(_) => todo!(),
+        TypedExpr::EnumConstructor(_) => todo!(),
+        TypedExpr::EnumIsVariant(_) => todo!(),
+        TypedExpr::EnumGetPayload(_) => todo!(),
+        TypedExpr::EnumGetTag(_) => todo!(),
         TypedExpr::Cast(typed_cast) => {
             let typed_cast = typed_cast.clone();
             let span = typed_cast.span;
@@ -322,7 +369,7 @@ fn execute_expr(vm: &mut Vm, m: &TypedModule, expr: TypedExprId) -> TyperResult<
             match typed_cast.cast_type {
                 CastType::IntegerExtend => {
                     let span = typed_cast.span;
-                    let Value::Integer(iv) = base_value else {
+                    let Value::Integer(_) = base_value else {
                         m.ice_with_span("malformed integer cast", span)
                     };
                     todo!()
@@ -380,11 +427,11 @@ fn execute_expr(vm: &mut Vm, m: &TypedModule, expr: TypedExprId) -> TyperResult<
             // of the last expr
             Ok(value)
         }
-        TypedExpr::Break(typed_break) => todo!(),
-        TypedExpr::Lambda(lambda_expr) => todo!(),
-        TypedExpr::FunctionReference(function_reference_expr) => todo!(),
-        TypedExpr::FunctionToLambdaObject(function_to_lambda_object_expr) => todo!(),
-        TypedExpr::PendingCapture(pending_capture_expr) => todo!(),
+        TypedExpr::Break(_) => todo!(),
+        TypedExpr::Lambda(_) => todo!(),
+        TypedExpr::FunctionReference(_) => todo!(),
+        TypedExpr::FunctionToLambdaObject(_) => todo!(),
+        TypedExpr::PendingCapture(_) => todo!(),
         TypedExpr::StaticValue(_, _, _) => {
             unreachable!("Already evaluated? Or do I need to support this if we reference a global in a static fn?")
         }
@@ -442,7 +489,7 @@ pub fn execute_stmt(vm: &mut Vm, m: &TypedModule, stmt_id: TypedStmtId) -> Typer
     //
     // Do we do a 'never' _Value_? It's a type, not a value. But LLVM does it as a value
     match m.stmts.get(stmt_id) {
-        typer::TypedStmt::Expr(typed_expr_id, type_id) => {
+        typer::TypedStmt::Expr(typed_expr_id, _) => {
             let v = execute_expr(vm, m, *typed_expr_id)?;
             Ok(v)
         }
@@ -482,7 +529,7 @@ pub fn execute_stmt(vm: &mut Vm, m: &TypedModule, stmt_id: TypedStmtId) -> Typer
                 }
                 typer::AssignmentKind::Reference => {
                     let lhs_value = execute_expr(vm, m, assgn.destination)?;
-                    let Value::Reference { type_id, ptr } = lhs_value else {
+                    let Value::Reference { ptr, .. } = lhs_value else {
                         m.ice(
                             format!(
                                 "Reference assignment lhs must be a Reference value: {:?}",
@@ -496,7 +543,7 @@ pub fn execute_stmt(vm: &mut Vm, m: &TypedModule, stmt_id: TypedStmtId) -> Typer
                 }
             }
         }
-        typer::TypedStmt::Require(typed_require_stmt) => {
+        typer::TypedStmt::Require(_) => {
             todo!("static require not yet implemented")
         }
     }
@@ -506,28 +553,83 @@ fn execute_call(vm: &mut Vm, m: &TypedModule, call: &Call) -> TyperResult<Value>
     let span = call.span;
     let function_id = match call.callee {
         typer::Callee::StaticFunction(function_id) => function_id,
-        typer::Callee::StaticLambda { function_id, environment_ptr, lambda_type_id } => {
+        typer::Callee::StaticLambda { function_id, .. } => {
             function_id
         }
-        typer::Callee::StaticAbstract { generic_function_id, function_type } => {
+        typer::Callee::StaticAbstract {..} => {
             m.ice_with_span("Abstract call attempt in VM", span)
         }
-        typer::Callee::DynamicLambda(typed_expr_id) => {
+        typer::Callee::DynamicLambda(_) => {
             return failf!(span, "Function pointers are not supported in static; one day I could JIT the functions and get pointers; oh my")
         }
-        typer::Callee::DynamicFunction(typed_expr_id) => {
+        typer::Callee::DynamicFunction(_) => {
             return failf!(span, "Function pointers are not supported in static")
         }
-        typer::Callee::DynamicAbstract { variable_id, function_type } => {
+        typer::Callee::DynamicAbstract {..} => {
             m.ice_with_span("Abstract call attempt in VM", span)
         }
     };
 
     let function = m.get_function(function_id);
 
+    if let Some(intrinsic_type) = function.intrinsic_type {
+        return match intrinsic_type {
+            IntrinsicFunction::SizeOf => {
+                let type_id = call.type_args[0].type_id;
+                let layout = m.types.get_layout(type_id);
+                let size_bytes = match layout {
+                    Some(l) => l.size_bytes(),
+                    None => 0,
+                };
+                // TODO: Should be a usize; but K1 doesn't have one
+                Ok(Value::Integer(TypedIntegerValue::U64(size_bytes as u64)))
+            }
+            IntrinsicFunction::SizeOfStride => {
+                let type_id = call.type_args[0].type_id;
+                let layout = m.types.get_layout(type_id);
+                let stride_bytes = match layout {
+                    Some(l) => l.stride_bytes(),
+                    None => 0,
+                };
+                // TODO: Should be a usize; but K1 doesn't have one
+                Ok(Value::Integer(TypedIntegerValue::U64(stride_bytes as u64)))
+            }
+            IntrinsicFunction::AlignOf => {
+                let type_id = call.type_args[0].type_id;
+                let layout = m.types.get_layout(type_id);
+                let align_bytes = match layout {
+                    Some(l) => l.align_bytes(),
+                    None => 0,
+                };
+                // TODO: Should be a usize; but K1 doesn't have one
+                Ok(Value::Integer(TypedIntegerValue::U64(align_bytes as u64)))
+            }
+            IntrinsicFunction::TypeId => {
+                let type_id = call.type_args[0].type_id;
+                Ok(Value::Integer(TypedIntegerValue::U64(type_id.to_u64())))
+            }
+            IntrinsicFunction::BoolNegate => {
+                let Value::Bool(b) = execute_expr(vm, m, call.args[0])? else { unreachable!() };
+                return Ok(Value::Bool(!b));
+            }
+            IntrinsicFunction::BitNot => todo!(),
+            IntrinsicFunction::BitAnd => todo!(),
+            IntrinsicFunction::BitOr => todo!(),
+            IntrinsicFunction::BitXor => todo!(),
+            IntrinsicFunction::BitShiftLeft => todo!(),
+            IntrinsicFunction::BitShiftRight => todo!(),
+            IntrinsicFunction::PointerIndex => todo!(),
+            IntrinsicFunction::CompilerSourceLocation => todo!(),
+        };
+    };
+
     let Some(body_block_expr) = function.body_block else {
         eprintln!("{}", m.function_id_to_string(function_id, true));
-        return failf!(span, "Cannot execute function: no body");
+        if let Some(result) = handle_special_call(vm, m, call)? {
+            return Ok(result);
+        } else {
+            return failf!(span, "Cannot execute function {}: no body", m.name_of(function.name));
+        }
     };
 
     let mut callee_frame = StackFrame::make(m.name_of(function.name).to_string());
@@ -552,12 +654,12 @@ fn execute_call(vm: &mut Vm, m: &TypedModule, call: &Call) -> TyperResult<Value>
     // If immediate, just 'Copy' the rust value; otherwise memcpy the data to the new stack
     let updated_value = match result_value.ptr_if_not_immediate() {
         None => result_value,
-        Some(ptr) => {
+        Some(_ptr) => {
             let caller_frame = vm.current_frame_mut();
             let stored_result = caller_frame.push_value(&m.types, result_value);
             let updated_value = match result_value {
-                Value::Struct { type_id, ptr } => Value::Struct { type_id, ptr: stored_result },
-                Value::Enum { type_id, ptr } => Value::Enum { type_id, ptr: stored_result },
+                Value::Struct { type_id, .. } => Value::Struct { type_id, ptr: stored_result },
+                Value::Enum { type_id, .. } => Value::Enum { type_id, ptr: stored_result },
                 _ => unreachable!(),
             };
             updated_value
@@ -760,6 +862,20 @@ fn build_struct(
 }
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub fn gep_struct_field(
+    m: &TypedModule,
+    struct_type: TypeId,
+    struct_ptr: *const u8,
+    field_index: usize,
+) -> (*const u8, &StructTypeField) {
+    let struct_type = m.types.get(struct_type).expect_struct();
+    let field = &struct_type.fields[field_index];
+
+    let field_ptr = unsafe { struct_ptr.byte_add(field.offset_bits as usize / 8) };
+    (field_ptr, field)
+}
+
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub fn load_struct_field(
     vm: &mut Vm,
     m: &TypedModule,
@@ -768,10 +884,7 @@ pub fn load_struct_field(
     field_index: usize,
     span: SpanId,
 ) -> TyperResult<Value> {
-    let struct_type = m.types.get(struct_type).expect_struct();
-    let field = &struct_type.fields[field_index];
-
-    let field_ptr = unsafe { struct_ptr.byte_add(field.offset_bits as usize / 8) };
+    let (field_ptr, field) = gep_struct_field(m, struct_type, struct_ptr, field_index);
     let value = load_value(vm, m, field.type_id, field_ptr, span)?;
     Ok(value)
 }
@@ -825,12 +938,7 @@ impl StackFrame {
     }
 
     fn align_to_bytes(&mut self, align_bytes: usize) {
-        let current_ptr_bytes = self.cursor;
-
-        let bytes_needed = current_ptr_bytes.align_offset(align_bytes);
-        unsafe {
-            self.cursor = self.cursor.byte_add(bytes_needed);
-        }
+        self.cursor = aligned_to(self.cursor, align_bytes)
     }
 
     pub fn push_struct_values(
@@ -853,9 +961,9 @@ impl StackFrame {
 
     // We may not want to align, in case we're pushing this value as part of a packed struct.
     pub fn push_value_no_align(&mut self, types: &Types, value: Value) -> *const u8 {
-        let dst = self.cursor_mut();
+        let dst: *mut u8 = self.cursor_mut();
 
-        let written = store_value(types, dst, value);
+        let written: usize = store_value(types, dst, value);
         self.advance_cursor(written);
         dst.cast_const()
     }
@@ -903,4 +1011,49 @@ impl StackFrame {
     pub fn to_bytes(&self) -> &[u8] {
         &self.buffer[0..self.current_offset_bytes()]
     }
+}
+
+fn execute_match(vm: &mut Vm, m: &TypedModule, match_expr: &TypedMatchExpr) -> TyperResult<Value> {
+    for stmt in &match_expr.initial_let_statements {
+        execute_stmt(vm, m, *stmt)?;
+    }
+    for arm in &match_expr.arms {
+        let Value::Bool(b) = execute_matching_condition(vm, m, &arm.condition)? else {
+            unreachable!()
+        };
+        if b {
+            info!("vm: arm true");
+            let r = execute_expr(vm, m, arm.consequent_expr)?;
+            return Ok(r);
+        } else {
+            info!("vm: next arm");
+            continue;
+        }
+    }
+    failf!(match_expr.span, "Malformed match: No match arms executed")
+}
+
+fn execute_matching_condition(
+    vm: &mut Vm,
+    m: &TypedModule,
+    cond: &MatchingCondition,
+) -> TyperResult<Value> {
+    for instr in cond.instrs.iter() {
+        match instr {
+            MatchingConditionInstr::Binding { let_stmt, .. } => {
+                execute_stmt(vm, m, *let_stmt)?;
+            }
+            MatchingConditionInstr::Cond { value } => {
+                let Value::Bool(cond_bool) = execute_expr(vm, m, *value)? else { unreachable!() };
+                if !cond_bool {
+                    return Ok(Value::Bool(false));
+                }
+            }
+        }
+    }
+    Ok(Value::Bool(true))
+}
+
+fn handle_special_call(vm: &mut Vm, m: &TypedModule, call: &Call) -> TyperResult<Option<Value>> {
+    Ok(None)
 }

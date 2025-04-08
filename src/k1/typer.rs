@@ -48,7 +48,7 @@ macro_rules! nz_u32_id {
         pub struct $name(std::num::NonZeroU32);
         impl From<std::num::NonZeroU32> for $name {
             fn from(value: std::num::NonZeroU32) -> Self {
-                $name(value)
+                Self::from_nzu32(value)
             }
         }
         impl From<$name> for std::num::NonZeroU32 {
@@ -59,6 +59,12 @@ macro_rules! nz_u32_id {
         impl std::fmt::Display for $name {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 self.0.fmt(f)
+            }
+        }
+
+        impl $name {
+            pub const fn from_nzu32(value: NonZeroU32) -> Self {
+                $name(value)
             }
         }
     };
@@ -338,6 +344,10 @@ impl Layout {
 
     pub fn size_bytes(&self) -> usize {
         self.size_bits as usize / 8
+    }
+
+    pub fn stride_bytes(&self) -> usize {
+        self.stride_bits as usize / 8
     }
 }
 
@@ -1114,7 +1124,7 @@ pub struct ListLiteral {
 pub struct FieldAccess {
     pub base: TypedExprId,
     pub target_field: Identifier,
-    pub target_field_index: u32,
+    pub field_index: u32,
     pub result_type: TypeId,
     pub struct_type: TypeId,
     pub is_referencing: bool,
@@ -2074,8 +2084,8 @@ pub struct TypedModule {
     pub variables: Pool<Variable, VariableId>,
     pub types: Types,
     pub globals: Pool<TypedGlobal, TypedGlobalId>,
-    pub exprs: pool::Pool<TypedExpr, TypedExprId>,
-    pub stmts: pool::Pool<TypedStmt, TypedStmtId>,
+    pub exprs: Pool<TypedExpr, TypedExprId>,
+    pub stmts: Pool<TypedStmt, TypedStmtId>,
     pub static_values: Pool<StaticValue, StaticValueId>,
     pub scopes: Scopes,
     pub errors: Vec<TyperError>,
@@ -2099,6 +2109,8 @@ pub struct TypedModule {
     pub debug_level_stack: Vec<log::LevelFilter>,
     pub functions_pending_body_specialization: Vec<FunctionId>,
     inference_context: InferenceContext,
+
+    // Buffers that we prefer to re-use to avoid thousands of allocations
     buffers: TypedModuleBuffers,
 }
 
@@ -2596,7 +2608,8 @@ impl TypedModule {
             }
             ParsedTypeExpr::Enum(e) => {
                 let e = e.clone();
-                let mut variants = Vec::with_capacity(e.variants.len());
+                let variant_count = e.variants.len();
+                let mut variants = Vec::with_capacity(variant_count);
                 for (index, v) in e.variants.iter().enumerate() {
                     let payload_type_id = match &v.payload_expression {
                         None => None,
@@ -2633,35 +2646,19 @@ impl TypedModule {
                 }
                 let tag_type = match e.tag_type {
                     None => {
-                        // nocommit: Move tag type selection algorithm here
-                        //let payload_max_alignment = payload_types
-                        //    .iter()
-                        //    .filter_map(|x| x.as_ref().map(|x| x.size_info().abi_align_bits))
-                        //    .max()
-                        //    .unwrap_or(0);
-                        //let word_size_int_type_id =
-                        //    if WORD_SIZE_BITS == 64 { U64_TYPE_ID } else { U32_TYPE_ID };
-                        //let tag_int_type_id = match enum_type.tag_type {
-                        //    Some(explicit_tag_type) => explicit_tag_type,
-                        //    None => {
-                        //        match payload_max_alignment {
-                        //            0 => U8_TYPE_ID, // No payloads case
-                        //            8 => U8_TYPE_ID,
-                        //            16 => U16_TYPE_ID,
-                        //            32 => U32_TYPE_ID,
-                        //            // If the payload(s) require to be aligned on a 64-bit or larger
-                        //            // boundary, there's no point in using a tag type smaller than the word
-                        //            // size
-                        //            64 => word_size_int_type_id,
-                        //            _ => word_size_int_type_id,
-                        //        }
-                        //    }
-                        //};
-                        //debug!(
-                        //    "Maximum payload alignment is {payload_max_alignment}, selected tag type {}",
-                        //    self.module.type_id_to_string(tag_int_type_id)
-                        //);
-                        U32_TYPE_ID
+                        const U8_MAX_VARIANTS: usize = u8::MAX as usize + 1;
+                        const MAX_VARIANTS: usize = u16::MAX as usize + 1;
+                        let min_viable = match variant_count {
+                            c if c <= U8_MAX_VARIANTS => U8_TYPE_ID,
+                            c if c <= MAX_VARIANTS => U16_TYPE_ID,
+                            _ => {
+                                return failf!(
+                                    e.span,
+                                    "Enum cannot have more than {MAX_VARIANTS} variants"
+                                )
+                            }
+                        };
+                        min_viable
                     }
                     Some(tag_type_expr) => {
                         let tag_type = self.eval_type_expr(tag_type_expr, scope_id)?;
@@ -4914,7 +4911,7 @@ impl TypedModule {
                         self.synth_optional_some(TypedExpr::StructFieldAccess(FieldAccess {
                             base: opt_unwrap,
                             target_field: field_name,
-                            target_field_index: field_index as u32,
+                            field_index: field_index as u32,
                             span,
                             is_referencing: false,
                             result_type: field_type,
@@ -4972,7 +4969,7 @@ impl TypedModule {
                 Ok(self.exprs.add(TypedExpr::StructFieldAccess(FieldAccess {
                     base: base_expr,
                     target_field: field_access.field_name,
-                    target_field_index: field_index as u32,
+                    field_index: field_index as u32,
                     result_type,
                     is_referencing: field_access.is_referencing,
                     struct_type: base_type,
@@ -5633,6 +5630,7 @@ impl TypedModule {
                         let debug = self.ast.config.debug;
                         Ok(self.exprs.add(TypedExpr::Bool(debug, *span)))
                     }
+                    "IS_STATIC" => Ok(self.exprs.add(TypedExpr::Bool(false, *span))),
                     s => failf!(*span, "Unknown builtin name: {s}"),
                 }
             }
@@ -6273,7 +6271,7 @@ impl TypedModule {
             let env_field_access = TypedExpr::StructFieldAccess(FieldAccess {
                 base: module.synth_dereference(env_variable_expr),
                 target_field: field_name,
-                target_field_index: field_index,
+                field_index,
                 result_type: variable_type,
                 struct_type: env_struct_type,
                 is_referencing: false,
@@ -6803,7 +6801,7 @@ impl TypedModule {
                         self.exprs.add(TypedExpr::StructFieldAccess(FieldAccess {
                             base: target_expr,
                             target_field: pattern_field.name,
-                            target_field_index: pattern_field.field_index,
+                            field_index: pattern_field.field_index,
                             result_type,
                             struct_type,
                             is_referencing,
@@ -7265,7 +7263,7 @@ impl TypedModule {
                 struct_type: size_hint_ret_type,
                 base: size_hint_call,
                 target_field: get_ident!(self, "atLeast"),
-                target_field_index: 0,
+                field_index: 0,
                 result_type: U64_TYPE_ID,
                 is_referencing: false,
                 span: iterable_span,

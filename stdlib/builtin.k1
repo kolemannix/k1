@@ -112,12 +112,16 @@ ability Iterable[impl Item, impl I: Iterator[Item = Item]] {
 /////////////////////////////////
 // Compile-time builtin constants
 ns k1 {
+  // IS_STATIC is set to 'true' when executing K1 code statically, at compile-time
+  let static IS_STATIC: bool = builtin;
+
   let static TEST: bool = builtin;
   let static NO_STD: bool = builtin;
   let static DEBUG: bool = builtin;
 
   let static OS: string = builtin; // Possible values: 'linux', 'macos', 'wasm'
   let static OS_MACOS: bool = OS == "macos";
+
 }
 
 /////////////////////////////////
