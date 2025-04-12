@@ -55,6 +55,10 @@ ns string {
     if self.nonEmpty() .Some(self.get(0)) else .None
   }
 
+  fn last(self: string): char? {
+    if self.nonEmpty() .Some(self.get(self.len() - 1)) else .None
+  }
+
 
   fn indexOf(self: string, c: char): i64 {
     let mut i: u64 = 0;
@@ -126,8 +130,14 @@ ns string {
     self.substring(0, other.len()) == other
   }
 
-  fn toCString(context alloc: mem/AllocMode)(self: string): Pointer {
-    self.appendChar('\0').buffer.dataPointer()
+  fn dataPointer(self: string): Pointer {
+    self.buffer.dataPointer()
+  }
+
+  fn toCString(context alloc: mem/AllocMode)(self: string): { ptr: Pointer, len: u64 } {
+    if self.isEmpty()                  { ptr: "\0".dataPointer(), len: 0 }
+    else if self.last() is .Some('\0') { ptr: self.dataPointer(), len: self.len() - 1 }
+    else                               { ptr: self.appendChar('\0').dataPointer(), len: self.len() }
   }
 
   fn fromCString(cString: Pointer): string {

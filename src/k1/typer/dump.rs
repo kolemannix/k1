@@ -374,7 +374,7 @@ impl TypedModule {
         struc: &StructType,
         expand: bool,
     ) -> std::fmt::Result {
-        writ.write_str("{")?;
+        writ.write_str("{ ")?;
         for (index, field) in struc.fields.iter().enumerate() {
             if index > 0 {
                 writ.write_str(", ")?;
@@ -383,7 +383,7 @@ impl TypedModule {
             writ.write_str(": ")?;
             self.display_type_id(field.type_id, expand, writ)?;
         }
-        writ.write_str("}")
+        writ.write_str(" }")
     }
 
     pub fn function_to_string(&self, function: &TypedFunction, display_block: bool) -> String {
@@ -638,7 +638,10 @@ impl TypedModule {
             }
             TypedExpr::LoopExpr(loop_expr) => {
                 writ.write_str("loop ")?;
-                self.display_block(&loop_expr.body, writ, indentation)
+                let TypedExpr::Block(body_block) = self.exprs.get(loop_expr.body_block) else {
+                    unreachable!()
+                };
+                self.display_block(body_block, writ, indentation)
             }
             TypedExpr::UnaryOp(unary_op) => match unary_op.kind {
                 UnaryOpKind::Dereference => {
@@ -662,7 +665,7 @@ impl TypedModule {
                 Ok(())
             }
             TypedExpr::EnumIsVariant(is_variant_expr) => {
-                self.display_expr_id(is_variant_expr.target_expr, writ, indentation)?;
+                self.display_expr_id(is_variant_expr.enum_expr, writ, indentation)?;
                 writ.write_str(".is[.")?;
                 self.write_ident(writ, is_variant_expr.variant_name)?;
                 writ.write_str("]()")

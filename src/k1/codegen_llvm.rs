@@ -1200,7 +1200,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         envelope_type: self.ctx.struct_type(&[], false),
                         variant_struct_type: variant_struct,
                         payload_type,
-                        tag_value: tag_int_type.const_int(variant.index as u64, false),
+                        tag_value: tag_int_type.const_int(variant.tag_value.to_u64(), false),
                         di_type: variant_struct_debug,
                         size: self.size_info(&variant_struct),
                     });
@@ -1954,6 +1954,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             value_ptr,
                             pointee_ty.canonical_repr_type().print_to_string()
                         );
+                        // nocommit: Dereference doesn't currently make a copy, can we write
+                        // a program that demonstrates this is a bug? Feels like it should copy
+                        // let* p = { x: 1};
+                        // let myP = p.*; // just a ptr to p?
+                        // p.x* <- 2;
+                        // println(myP.x);
                         let value = if pointee_ty.is_aggregate() {
                             value_ptr.as_basic_value_enum()
                         } else {
@@ -2012,10 +2018,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(enum_ptr.as_basic_value_enum().into())
             }
             TypedExpr::EnumIsVariant(enum_is_variant) => {
-                let enum_value = self
-                    .codegen_expr_basic_value(enum_is_variant.target_expr)?
-                    .into_pointer_value();
-                let enum_type_id = self.module.exprs.get(enum_is_variant.target_expr).get_type();
+                let enum_value =
+                    self.codegen_expr_basic_value(enum_is_variant.enum_expr)?.into_pointer_value();
+                let enum_type_id = self.module.exprs.get(enum_is_variant.enum_expr).get_type();
                 let enum_llvm = self.codegen_type(enum_type_id)?.expect_enum();
                 let variant = &enum_llvm.variants[enum_is_variant.variant_index as usize];
                 let is_variant_bool = self.codegen_enum_is_variant(
@@ -2897,8 +2902,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             IntrinsicFunction::TypeId => {
                 let type_param = &call.type_args[0];
-                let type_id_value = self
-                    .codegen_integer_value(TypedIntegerValue::U64(type_param.type_id.to_u64()))?;
+                let type_id_value =
+                    self.codegen_integer_value(TypedIntValue::U64(type_param.type_id.to_u64()))?;
                 Ok(type_id_value.into())
             }
             IntrinsicFunction::PointerIndex => {
@@ -3086,8 +3091,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let break_type = self.codegen_type(loop_expr.break_type)?;
         // TODO llvm ir Optimization: skip alloca if break is unit type
         let break_value_ptr = self.build_alloca(break_type.rich_value_type(), "break");
+        let TypedExpr::Block(body_block) = self.module.exprs.get(loop_expr.body_block) else {
+            unreachable!()
+        };
         self.loops.insert(
-            loop_expr.body.scope_id,
+            body_block.scope_id,
             LoopInfo { break_value_ptr: Some(break_value_ptr), end_block: loop_end_block },
         );
 
@@ -3095,7 +3103,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         self.builder.build_unconditional_branch(loop_body_block).unwrap();
 
         self.builder.position_at_end(loop_body_block);
-        let body_value = self.codegen_block(&loop_expr.body)?;
+        let body_value = self.codegen_block(body_block)?;
         match body_value.as_basic_value() {
             Either::Left(_instr) => {}
             Either::Right(_bv) => {
@@ -3355,17 +3363,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         count
     }
 
-    fn codegen_integer_value(
-        &self,
-        integer: TypedIntegerValue,
-    ) -> CodegenResult<BasicValueEnum<'ctx>> {
+    fn codegen_integer_value(&self, integer: TypedIntValue) -> CodegenResult<BasicValueEnum<'ctx>> {
         let llvm_ty = self.codegen_type(integer.get_type())?;
         let llvm_int_ty = llvm_ty.rich_value_type().into_int_type();
         let Type::Integer(int_type) = self.module.types.get(llvm_ty.type_id()) else { panic!() };
         let llvm_value = if int_type.is_signed() {
-            llvm_int_ty.const_int(integer.as_u64(), true)
+            llvm_int_ty.const_int(integer.to_u64(), true)
         } else {
-            llvm_int_ty.const_int(integer.as_u64(), false)
+            llvm_int_ty.const_int(integer.to_u64(), false)
         };
         Ok(llvm_value.as_basic_value_enum())
     }

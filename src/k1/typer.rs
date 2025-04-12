@@ -231,7 +231,7 @@ pub enum StaticValue {
     Unit(SpanId),
     Boolean(bool, SpanId),
     Char(u8, SpanId),
-    Integer(TypedIntegerValue, SpanId),
+    Integer(TypedIntValue, SpanId),
     Float(TypedFloatValue, SpanId),
     String(Box<str>, SpanId),
     // nocommit: Has to match target word size; but VM value has to match host!!!
@@ -325,10 +325,12 @@ impl Layout {
         debug_assert_ne!(layout.align_bits, 0);
         let offset = self.size_bits;
         let new_field_start = offset.next_multiple_of(layout.align_bits);
-        let padding = new_field_start - offset;
-        if padding != 0 {
-            eprintln!("Padding: {padding}");
-        }
+        if cfg!(debug_assertions) {
+            let padding = new_field_start - offset;
+            if padding != 0 {
+                eprintln!("Aggregate padding: {padding}");
+            }
+        };
         let new_end_unaligned = new_field_start + layout.size_bits;
         let new_align = std::cmp::max(self.align_bits, layout.align_bits);
         let new_end_aligned = new_end_unaligned.next_multiple_of(new_align);
@@ -569,7 +571,7 @@ pub struct TypedReferencePattern {
 pub enum TypedPattern {
     LiteralUnit(SpanId),
     LiteralChar(u8, SpanId),
-    LiteralInteger(TypedIntegerValue, SpanId),
+    LiteralInteger(TypedIntValue, SpanId),
     LiteralFloat(TypedFloatValue, SpanId),
     LiteralBool(bool, SpanId),
     LiteralString(Box<str>, SpanId),
@@ -1161,7 +1163,7 @@ pub struct GetEnumTag {
 
 #[derive(Debug, Clone)]
 pub struct TypedEnumIsVariantExpr {
-    pub target_expr: TypedExprId,
+    pub enum_expr: TypedExprId,
     pub variant_name: Identifier,
     pub variant_index: u32,
     pub span: SpanId,
@@ -1174,7 +1176,7 @@ pub struct TypedMatchArm {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TypedIntegerValue {
+pub enum TypedIntValue {
     U8(u8),
     U16(u16),
     U32(u32),
@@ -1185,17 +1187,17 @@ pub enum TypedIntegerValue {
     I64(i64),
 }
 
-impl TypedIntegerValue {
+impl TypedIntValue {
     pub fn kind_str(&self) -> &'static str {
         match self {
-            TypedIntegerValue::U8(_) => "u8",
-            TypedIntegerValue::U16(_) => "u16",
-            TypedIntegerValue::U32(_) => "u32",
-            TypedIntegerValue::U64(_) => "u64",
-            TypedIntegerValue::I8(_) => "i8",
-            TypedIntegerValue::I16(_) => "i16",
-            TypedIntegerValue::I32(_) => "i32",
-            TypedIntegerValue::I64(_) => "i64",
+            TypedIntValue::U8(_) => "u8",
+            TypedIntValue::U16(_) => "u16",
+            TypedIntValue::U32(_) => "u32",
+            TypedIntValue::U64(_) => "u64",
+            TypedIntValue::I8(_) => "i8",
+            TypedIntValue::I16(_) => "i16",
+            TypedIntValue::I32(_) => "i32",
+            TypedIntValue::I64(_) => "i64",
         }
     }
 
@@ -1203,51 +1205,58 @@ impl TypedIntegerValue {
         self.get_integer_type().type_id()
     }
 
-    pub fn as_u64(&self) -> u64 {
+    pub fn to_u64(&self) -> u64 {
         match self {
-            TypedIntegerValue::U8(v) => *v as u64,
-            TypedIntegerValue::U16(v) => *v as u64,
-            TypedIntegerValue::U32(v) => *v as u64,
-            TypedIntegerValue::U64(v) => *v,
-            TypedIntegerValue::I8(v) => *v as u64,
-            TypedIntegerValue::I16(v) => *v as u64,
-            TypedIntegerValue::I32(v) => *v as u64,
-            TypedIntegerValue::I64(v) => *v as u64,
+            TypedIntValue::U8(v) => *v as u64,
+            TypedIntValue::U16(v) => *v as u64,
+            TypedIntValue::U32(v) => *v as u64,
+            TypedIntValue::U64(v) => *v,
+            TypedIntValue::I8(v) => *v as u64,
+            TypedIntValue::I16(v) => *v as u64,
+            TypedIntValue::I32(v) => *v as u64,
+            TypedIntValue::I64(v) => *v as u64,
         }
     }
 
     pub fn get_integer_type(&self) -> IntegerType {
         match self {
-            TypedIntegerValue::U8(_) => IntegerType::U8,
-            TypedIntegerValue::U16(_) => IntegerType::U16,
-            TypedIntegerValue::U32(_) => IntegerType::U32,
-            TypedIntegerValue::U64(_) => IntegerType::U64,
-            TypedIntegerValue::I8(_) => IntegerType::I8,
-            TypedIntegerValue::I16(_) => IntegerType::I16,
-            TypedIntegerValue::I32(_) => IntegerType::I32,
-            TypedIntegerValue::I64(_) => IntegerType::I64,
+            TypedIntValue::U8(_) => IntegerType::U8,
+            TypedIntValue::U16(_) => IntegerType::U16,
+            TypedIntValue::U32(_) => IntegerType::U32,
+            TypedIntValue::U64(_) => IntegerType::U64,
+            TypedIntValue::I8(_) => IntegerType::I8,
+            TypedIntValue::I16(_) => IntegerType::I16,
+            TypedIntValue::I32(_) => IntegerType::I32,
+            TypedIntValue::I64(_) => IntegerType::I64,
+        }
+    }
+
+    pub fn expect_u64(&self) -> u64 {
+        match self {
+            TypedIntValue::U64(v) => *v,
+            _ => unreachable!(),
         }
     }
 }
 
-impl Display for TypedIntegerValue {
+impl Display for TypedIntValue {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            TypedIntegerValue::U8(v) => write!(f, "{}u8", v),
-            TypedIntegerValue::U16(v) => write!(f, "{}u16", v),
-            TypedIntegerValue::U32(v) => write!(f, "{}u32", v),
-            TypedIntegerValue::U64(v) => write!(f, "{}u64", v),
-            TypedIntegerValue::I8(v) => write!(f, "{}i8", v),
-            TypedIntegerValue::I16(v) => write!(f, "{}i16", v),
-            TypedIntegerValue::I32(v) => write!(f, "{}i32", v),
-            TypedIntegerValue::I64(v) => write!(f, "{}i64", v),
+            TypedIntValue::U8(v) => write!(f, "{}u8", v),
+            TypedIntValue::U16(v) => write!(f, "{}u16", v),
+            TypedIntValue::U32(v) => write!(f, "{}u32", v),
+            TypedIntValue::U64(v) => write!(f, "{}u64", v),
+            TypedIntValue::I8(v) => write!(f, "{}i8", v),
+            TypedIntValue::I16(v) => write!(f, "{}i16", v),
+            TypedIntValue::I32(v) => write!(f, "{}i32", v),
+            TypedIntValue::I64(v) => write!(f, "{}i64", v),
         }
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct TypedIntegerExpr {
-    pub value: TypedIntegerValue,
+    pub value: TypedIntValue,
     pub span: SpanId,
 }
 
@@ -1448,7 +1457,7 @@ pub struct WhileLoop {
 
 #[derive(Debug, Clone)]
 pub struct LoopExpr {
-    pub body: Box<TypedBlock>,
+    pub body_block: TypedExprId,
     pub break_type: TypeId,
     pub span: SpanId,
 }
@@ -2611,41 +2620,7 @@ impl TypedModule {
             ParsedTypeExpr::Enum(e) => {
                 let e = e.clone();
                 let variant_count = e.variants.len();
-                let mut variants = Vec::with_capacity(variant_count);
-                for (index, v) in e.variants.iter().enumerate() {
-                    let payload_type_id = match &v.payload_expression {
-                        None => None,
-                        Some(payload_type_expr) => {
-                            let type_id = self.eval_type_expr_ext(
-                                *payload_type_expr,
-                                scope_id,
-                                context.no_attach_defn_info(),
-                            )?;
-                            // TODO(infinite recursive types): This is kinda how we'd prevent infinite recursion
-                            // if let Type::RecursiveReference(rr) = self.types.get_no_follow(type_id)
-                            // {
-                            //     if Some(rr.parsed_id)
-                            //         == context.inner_type_defn_info.as_ref().map(|i| i.ast_id)
-                            //     {
-                            //         return make_fail_span(
-                            //             "Recursive references requires some indirection",
-                            //             self.ast.get_type_expression_span(*payload_type_expr),
-                            //         );
-                            //     }
-                            // }
-                            Some(type_id)
-                        }
-                    };
-                    let variant = TypedEnumVariant {
-                        enum_type_id: TypeId::PENDING,
-                        my_type_id: TypeId::PENDING,
-                        name: v.tag_name,
-                        index: index as u32,
-                        payload: payload_type_id,
-                        type_defn_info: context.attached_type_defn_info(),
-                    };
-                    variants.push(variant);
-                }
+
                 let tag_type = match e.tag_type {
                     None => {
                         const U8_MAX_VARIANTS: usize = u8::MAX as usize + 1;
@@ -2676,6 +2651,50 @@ impl TypedModule {
                         tag_type
                     }
                 };
+
+                let mut variants = Vec::with_capacity(variant_count);
+                for (index, v) in e.variants.iter().enumerate() {
+                    let payload_type_id = match &v.payload_expression {
+                        None => None,
+                        Some(payload_type_expr) => {
+                            let type_id = self.eval_type_expr_ext(
+                                *payload_type_expr,
+                                scope_id,
+                                context.no_attach_defn_info(),
+                            )?;
+                            // TODO(infinite recursive types): This is kinda how we'd prevent infinite recursion
+                            // if let Type::RecursiveReference(rr) = self.types.get_no_follow(type_id)
+                            // {
+                            //     if Some(rr.parsed_id)
+                            //         == context.inner_type_defn_info.as_ref().map(|i| i.ast_id)
+                            //     {
+                            //         return make_fail_span(
+                            //             "Recursive references requires some indirection",
+                            //             self.ast.get_type_expression_span(*payload_type_expr),
+                            //         );
+                            //     }
+                            // }
+                            Some(type_id)
+                        }
+                    };
+                    let tag_value = match tag_type {
+                        U8_TYPE_ID => TypedIntValue::U8(index as u8),
+                        U16_TYPE_ID => TypedIntValue::U16(index as u16),
+                        U32_TYPE_ID => TypedIntValue::U32(index as u32),
+                        U64_TYPE_ID => TypedIntValue::U64(index as u64),
+                        _ => unreachable!(),
+                    };
+                    let variant = TypedEnumVariant {
+                        enum_type_id: TypeId::PENDING,
+                        my_type_id: TypeId::PENDING,
+                        name: v.tag_name,
+                        index: index as u32,
+                        payload: payload_type_id,
+                        tag_value,
+                        type_defn_info: context.attached_type_defn_info(),
+                    };
+                    variants.push(variant);
+                }
                 let enum_type = Type::Enum(TypedEnum {
                     variants,
                     generic_instance_info: None,
@@ -3942,7 +3961,7 @@ impl TypedModule {
                     CastType::IntegerToFloat => todo!(),
                     CastType::IntegerToPointer => {
                         let span = typed_cast.span;
-                        let StaticValue::Integer(TypedIntegerValue::U64(u), _) =
+                        let StaticValue::Integer(TypedIntValue::U64(u), _) =
                             self.static_values.get(base_expr)
                         else {
                             self.ice_with_span("malformed integer cast", span)
@@ -4593,7 +4612,7 @@ impl TypedModule {
         parsed_text: &str,
         span: SpanId,
         ctx: EvalExprContext,
-    ) -> TyperResult<TypedIntegerValue> {
+    ) -> TyperResult<TypedIntValue> {
         //eprintln!(
         //    "eval_integer_value hint {}",
         //    self.type_id_option_to_string(ctx.expected_type_id)
@@ -4616,14 +4635,13 @@ impl TypedModule {
         macro_rules! parse_int {
             ($int_type:ident, $rust_int_type:ty, $base: expr, $offset: expr) => {{
                 let result = <$rust_int_type>::from_str_radix(&parsed_text[$offset..], $base);
-                result.map(|int| TypedIntegerValue::$int_type(int))
+                result.map(|int| TypedIntValue::$int_type(int))
             }};
         }
         if parsed_text.starts_with("0x") {
             let hex_base = 16;
             let offset = 2;
-            let value: Result<TypedIntegerValue, std::num::ParseIntError> = match expected_int_type
-            {
+            let value: Result<TypedIntValue, std::num::ParseIntError> = match expected_int_type {
                 IntegerType::U8 => parse_int!(U8, u8, hex_base, offset),
                 IntegerType::U16 => parse_int!(U16, u16, hex_base, offset),
                 IntegerType::U32 => parse_int!(U32, u32, hex_base, offset),
@@ -4639,8 +4657,7 @@ impl TypedModule {
         } else if parsed_text.starts_with("0b") {
             let bin_base = 2;
             let offset = 2;
-            let value: Result<TypedIntegerValue, std::num::ParseIntError> = match expected_int_type
-            {
+            let value: Result<TypedIntValue, std::num::ParseIntError> = match expected_int_type {
                 IntegerType::U8 => parse_int!(U8, u8, bin_base, offset),
                 IntegerType::U16 => parse_int!(U16, u16, bin_base, offset),
                 IntegerType::U32 => parse_int!(U32, u32, bin_base, offset),
@@ -4657,8 +4674,7 @@ impl TypedModule {
         } else {
             let dec_base = 10;
             let offset = 0;
-            let value: Result<TypedIntegerValue, std::num::ParseIntError> = match expected_int_type
-            {
+            let value: Result<TypedIntValue, std::num::ParseIntError> = match expected_int_type {
                 IntegerType::U8 => parse_int!(U8, u8, dec_base, offset),
                 IntegerType::U16 => parse_int!(U16, u16, dec_base, offset),
                 IntegerType::U32 => parse_int!(U32, u32, dec_base, offset),
@@ -5428,7 +5444,7 @@ impl TypedModule {
                 };
                 let list_lit_ctx = ctx.with_scope(list_lit_scope).with_no_expected_type();
                 let count_expr = self.exprs.add(TypedExpr::Integer(TypedIntegerExpr {
-                    value: TypedIntegerValue::U64(element_count as u64),
+                    value: TypedIntValue::U64(element_count as u64),
                     span,
                 }));
                 let list_new_fn_call = self.synth_typed_function_call(
@@ -5693,9 +5709,7 @@ impl TypedModule {
             vm::Value::Unit => StaticValue::Unit(span),
             vm::Value::Bool(b) => StaticValue::Boolean(*b, span),
             vm::Value::Char(c) => StaticValue::Char(*c, span),
-            vm::Value::Integer(typed_integer_value) => {
-                StaticValue::Integer(*typed_integer_value, span)
-            }
+            vm::Value::Int(typed_integer_value) => StaticValue::Integer(*typed_integer_value, span),
             vm::Value::Float(typed_float_value) => StaticValue::Float(*typed_float_value, span),
             vm::Value::Pointer(value) => {
                 if *value == 0 {
@@ -5707,31 +5721,32 @@ impl TypedModule {
                    )
                 }
             }
-            vm::Value::Reference { type_id, ptr } => {
+            vm::Value::Reference { .. } => {
                 // Now this, I can do. Load the value and bake it into the binary
                 // This is just a de-reference
                 // Needs to become a global.
                 // Rely on the VM's code to load it, then make a K1 'global' to hold it?
-                let _loaded_value = vm::load_value(vm, self, *type_id, *ptr, span).unwrap();
+
+                //let _loaded_value = vm::load_value(vm, self, *type_id, *ptr, true, span).unwrap();
                 todo!("Introduce CompileTimeValue::Reference");
             }
-            vm::Value::Struct { type_id, ptr } => {
+            vm::Value::Agg { type_id, ptr } => {
                 let type_id = *type_id;
                 if type_id == STRING_TYPE_ID {
                     let struct_value =
-                        vm::load_struct_field(vm, self, STRING_TYPE_ID, *ptr, 0, span).unwrap();
+                        vm::load_struct_field(vm, self, STRING_TYPE_ID, *ptr, 0, false).unwrap();
                     let char_buffer_type_id =
                         self.types.get(STRING_TYPE_ID).expect_struct().fields[0].type_id;
-                    let vm::Value::Struct { ptr: char_buffer_ptr, .. } = struct_value else {
+                    let vm::Value::Agg { ptr: char_buffer_ptr, .. } = struct_value else {
                         self.ice_with_span("Malformed compile-time 'string'", span)
                     };
-                    let vm::Value::Integer(TypedIntegerValue::U64(len)) = vm::load_struct_field(
+                    let vm::Value::Int(TypedIntValue::U64(len)) = vm::load_struct_field(
                         vm,
                         self,
                         char_buffer_type_id,
                         char_buffer_ptr,
                         0,
-                        span,
+                        false,
                     )
                     .unwrap() else {
                         self.ice_with_span("Malformed compile-time 'string'", span)
@@ -5742,7 +5757,7 @@ impl TypedModule {
                         char_buffer_type_id,
                         char_buffer_ptr,
                         1,
-                        span,
+                        false,
                     )
                     .unwrap() else {
                         self.ice_with_span("Malformed compile-time 'string'", span)
@@ -5763,7 +5778,7 @@ impl TypedModule {
                     let struct_fields = struct_type.fields.clone();
                     for (index, _) in struct_fields.iter().enumerate() {
                         let field_value =
-                            vm::load_struct_field(vm, self, type_id, *ptr, index, span).unwrap();
+                            vm::load_struct_field(vm, self, type_id, *ptr, index, false).unwrap();
                         let ctv = self.vm_value_to_static_value(vm, &field_value, span);
                         field_value_ids.push(ctv)
                     }
@@ -5774,7 +5789,6 @@ impl TypedModule {
                     })
                 }
             }
-            vm::Value::Enum { .. } => todo!(),
         };
         self.static_values.add(v)
     }
@@ -6043,8 +6057,9 @@ impl TypedModule {
 
         let loop_info = self.scopes.get_loop_info(body_scope).unwrap();
 
+        let body_block = self.exprs.add(TypedExpr::Block(block));
         Ok(self.exprs.add(TypedExpr::LoopExpr(LoopExpr {
-            body: Box::new(block),
+            body_block,
             break_type: loop_info.break_type.unwrap_or(UNIT_TYPE_ID),
             span: loop_expr.span,
         })))
@@ -6076,7 +6091,7 @@ impl TypedModule {
             let block_scope = block.scope_id;
             let block_ctx = ctx.with_scope(block_scope).with_no_expected_type();
             let part_count_expr = self.exprs.add(TypedExpr::Integer(TypedIntegerExpr {
-                value: TypedIntegerValue::U64(part_count as u64),
+                value: TypedIntValue::U64(part_count as u64),
                 span,
             }));
             if self.ast.config.no_std {
@@ -6840,7 +6855,7 @@ impl TypedModule {
                     if is_referencing { self.synth_dereference(target_expr) } else { target_expr };
                 let is_variant_condition =
                     self.exprs.add(TypedExpr::EnumIsVariant(TypedEnumIsVariantExpr {
-                        target_expr: is_variant_target,
+                        enum_expr: is_variant_target,
                         variant_name: enum_pattern.variant_tag_name,
                         variant_index: enum_pattern.variant_index,
                         span: enum_pattern.span,
@@ -6849,7 +6864,7 @@ impl TypedModule {
 
                 if let Some(payload_pattern) = enum_pattern.payload.as_ref() {
                     let enum_type = self.types.get(enum_pattern.enum_type_id).expect_enum();
-                    let variant = enum_type.variant_by_index(enum_pattern.variant_index).unwrap();
+                    let variant = enum_type.variant_by_index(enum_pattern.variant_index);
                     let variant_name = variant.name;
                     let variant_index = variant.index;
                     let Some(payload_type_id) = variant.payload else {
@@ -7178,7 +7193,7 @@ impl TypedModule {
             self.scopes.add_child_scope(ctx.scope_id, ScopeType::ForExpr, None, None);
 
         let zero_expr = self.exprs.add(TypedExpr::Integer(TypedIntegerExpr {
-            value: TypedIntegerValue::U64(0),
+            value: TypedIntValue::U64(0),
             span: for_expr.body_block.span,
         }));
         let index_variable = self.synth_variable_defn(
@@ -7339,7 +7354,7 @@ impl TypedModule {
 
         // Append the index increment to the body block
         let one_expr = self.exprs.add(TypedExpr::Integer(TypedIntegerExpr {
-            value: TypedIntegerValue::U64(1),
+            value: TypedIntValue::U64(1),
             span: iterable_span,
         }));
         let add_operation = self.exprs.add(TypedExpr::BinaryOp(BinaryOp {
@@ -7357,8 +7372,9 @@ impl TypedModule {
         });
         self.push_block_stmt(&mut loop_block, index_increment_statement);
 
+        let body_block = self.exprs.add(TypedExpr::Block(loop_block));
         let loop_expr = TypedExpr::LoopExpr(LoopExpr {
-            body: Box::new(loop_block),
+            body_block,
             break_type: UNIT_TYPE_ID,
             span: for_expr.span,
         });
@@ -8678,7 +8694,7 @@ impl TypedModule {
             let base_expr_dereferenced =
                 if is_reference { self.synth_dereference(base_expr) } else { base_expr };
             let condition = self.exprs.add(TypedExpr::EnumIsVariant(TypedEnumIsVariantExpr {
-                target_expr: base_expr_dereferenced,
+                enum_expr: base_expr_dereferenced,
                 variant_name,
                 variant_index,
                 span,
@@ -11254,6 +11270,8 @@ impl TypedModule {
         }
 
         let intrinsic_type = if parsed_function_linkage == Linkage::Intrinsic {
+            // TODO(perf): name_chain isn't efficient,
+            // but we don't have a lot of intrinsics
             let mut namespace_chain = self_.namespaces.name_chain(namespace_id);
             let resolved = self_
                 .resolve_intrinsic_function_type(
@@ -12897,7 +12915,7 @@ impl TypedModule {
                 StructField {
                     name: self.ast.idents.builtins.line,
                     expr: self.exprs.add(TypedExpr::Integer(TypedIntegerExpr {
-                        value: TypedIntegerValue::U64(line.line_number() as u64),
+                        value: TypedIntValue::U64(line.line_number() as u64),
                         span,
                     })),
                 },
