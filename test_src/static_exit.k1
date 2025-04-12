@@ -1,0 +1,5 @@
+fn main(): int {
+  let exitTest = #static { sys/exit(0) };
+  0
+}
+//errmsg: Static execution exited with code: 0

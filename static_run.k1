@@ -58,17 +58,47 @@ fn main(): int {
 
   assertEquals(k1/IS_STATIC, false);
   #static assert(k1/IS_STATIC);
-  #static assert(false);
+
+  let enum1 = #static {
+    let x = some(42);
+    let y = if x is .Some(x) x else crash("");
+    y
+  };
+  assertEquals(enum1, 42);
+
+  let fieldPtrTest = #static {
+    let* x = 21;
+    let s = { ptr: x };
+    s.ptr.*
+  };
+  assertEquals(fieldPtrTest, 21);
+
+
+  let ptrInStructs = #static {
+    let* b: u8* = 10;
+    let* f = { asdf: b };
+    f.asdf.*
+  };
+  assertEquals(ptrInStructs, 10);
+
+  let sb = #static {
+    let* sb = StringBuilder/new();
+    sb.putString("Hello");
+    sb.build()
+  };
+  assertEquals(sb, "Hello");
+
+  // We crash in `self.parts` of string builder pushString
+  // #static assert(false);
 
   // #static crash("");
 
-  // let sSwitch = #static switch letRef {
-  //   _ -> (),
-  // };
-
-  // #static {
-  //   let b: u8* = new(10);
-  // };
+  // Breaks
+  //loop {
+  //  switch 42 {
+  //    _ -> break(100)
+  //  }
+  //};
 
   0
 }

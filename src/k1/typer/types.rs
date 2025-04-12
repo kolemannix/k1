@@ -154,7 +154,7 @@ pub struct TypedEnumVariant {
     pub name: Identifier,
     pub index: u32,
     pub payload: Option<TypeId>,
-    pub tag_value: TypedIntegerValue,
+    pub tag_value: TypedIntValue,
     // Always matches the info of this variant's enum
     pub type_defn_info: Option<TypeDefnInfo>,
 }
@@ -178,8 +178,8 @@ impl TypedEnum {
     pub fn variant_by_name(&self, name: Identifier) -> Option<&TypedEnumVariant> {
         self.variants.iter().find(|v| v.name == name)
     }
-    pub fn variant_by_index(&self, index: u32) -> Option<&TypedEnumVariant> {
-        self.variants.iter().find(|v| v.index == index)
+    pub fn variant_by_index(&self, index: u32) -> &TypedEnumVariant {
+        self.variants.iter().find(|v| v.index == index).unwrap()
     }
 }
 
@@ -1322,6 +1322,14 @@ impl Types {
             Type::InferenceHole(_) => None,
             Type::RecursiveReference(_) => None,
         }
+    }
+
+    pub fn enum_variant_payload_offset(&self, ev: &TypedEnumVariant) -> usize {
+        let mut layout = Layout::ZERO;
+        layout.append_to_aggregate(self.get_layout(ev.tag_value.get_type()).unwrap());
+        let payload_start_bits = layout
+            .append_to_aggregate(self.get_layout(ev.payload.unwrap()).unwrap_or(Layout::ZERO));
+        payload_start_bits as usize / 8
     }
 
     pub fn get_layout(&self, type_id: TypeId) -> Option<Layout> {
