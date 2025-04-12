@@ -1,5 +1,9 @@
 #[cfg(test)]
 mod stack_frame_tests {
+    use ecow::eco_vec;
+
+    use crate::parse::Identifier;
+    use crate::typer::types::{StructType, U32_TYPE_ID, U8_TYPE_ID};
     use crate::typer::*;
     use crate::vm::*;
 
@@ -76,8 +80,8 @@ mod stack_frame_tests {
         frame.push_value_no_align(&types, Value::Char(b'A'));
         assert_eq!(frame.to_bytes()[2], b'A');
 
-        let int_ptr = frame.push_value_no_align(&types, Value::Integer(TypedIntegerValue::U32(42)))
-            as *const i32;
+        let int_ptr =
+            frame.push_value_no_align(&types, Value::Int(TypedIntValue::U32(42))) as *const i32;
         assert_eq!(frame.current_offset_bytes(), 7);
         unsafe {
             let read_back = int_ptr.read_unaligned();
@@ -123,15 +127,51 @@ mod stack_frame_tests {
         assert_eq!(frame.current_offset_bytes(), 4);
         assert_eq!(frame.to_bytes(), [1, 2, 3, 4]);
         unsafe {
-            let result_slice = std::slice::from_raw_parts(result_ptr as *const u8, 4);
+            let result_slice = std::slice::from_raw_parts(result_ptr, 4);
             assert_eq!(result_slice, [1, 2, 3, 4])
         }
     }
 
     #[test]
     fn test_push_struct() {
+        let mut types = Types::with_builtin_types();
         let mut vm = test_vm();
+        let struct_type = types.add_anon(Type::Struct(StructType {
+            fields: eco_vec![
+                StructTypeField {
+                    name: Identifier::forged(),
+                    type_id: U8_TYPE_ID,
+                    index: 0,
+                    private: false,
+                    offset_bits: 0
+                },
+                StructTypeField {
+                    name: Identifier::forged(),
+                    type_id: U32_TYPE_ID,
+                    index: 0,
+                    private: false,
+                    offset_bits: 32
+                }
+            ],
+            generic_instance_info: None,
+        }));
         let frame = vm.current_frame_mut();
-        //frame.push_struct_values
+        frame.advance_cursor(1);
+        let struct_ptr = frame.push_struct_values(
+            &types,
+            struct_type,
+            &[Value::Int(TypedIntValue::U8(42)), Value::Int(TypedIntValue::U32(1337))],
+        );
+        let struct_ptr_offset = struct_ptr.addr() - frame.base_ptr().addr();
+        assert_eq!(struct_ptr_offset, 4); // since this struct's alignment is 4
+        let v1_locn = gep_struct_field(&types, struct_type, struct_ptr, 0).0;
+        let v1_offset = v1_locn.addr() - frame.base_ptr().addr();
+        assert_eq!(v1_offset, 4);
+        assert_eq!(unsafe { (v1_locn as *const u8).read() }, 42);
+
+        let v2_locn = gep_struct_field(&types, struct_type, struct_ptr, 1).0;
+        let v2_offset = v2_locn.addr() - frame.base_ptr().addr();
+        assert_eq!(v2_offset, 8);
+        assert_eq!(unsafe { (v2_locn as *const u32).read() }, 1337);
     }
 }

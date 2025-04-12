@@ -38,7 +38,13 @@ ns Buffer {
   fn _growTo[T](context alloc: mem/AllocMode)(self: Buffer[T]*, newCount: u64): unit {
     if mem/resolveMode(alloc).supportsRealloc() {
       let newSize = bufferSizeBytes[T](newCount);
-      let newPtr = mem/reallocIn(context alloc)(self.dataPointer(), newSize, alignOf[T]());
+      let oldSize = bufferSizeBytes[T](self.len);
+      let newPtr = mem/reallocIn(context alloc)(
+        ptr = self.dataPointer(),
+        oldSize = oldSize,
+        align = alignOf[T](),
+        newSize = newSize, 
+      );
       self <- { len: newCount, data: newPtr as T* }
     } else {
       let newBuffer = _allocate[T](newCount);

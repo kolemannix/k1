@@ -287,8 +287,14 @@ impl Literal {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-// nocommit: Use nzu32 so that Option<Identifier> is free
 pub struct Identifier(string_interner::symbol::SymbolU32);
+
+#[cfg(test)]
+impl Identifier {
+    pub fn forged() -> Identifier {
+        Identifier(string_interner::symbol::SymbolU32::try_from_usize(1).unwrap())
+    }
+}
 
 impl Ord for Identifier {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
@@ -1073,7 +1079,7 @@ pub struct StructTypeField {
 
 #[derive(Debug, Clone)]
 pub struct StructType {
-    pub fields: Vec<StructTypeField>,
+    pub fields: EcoVec<StructTypeField>,
     pub span: SpanId,
 }
 
@@ -2517,11 +2523,17 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             }
         } else if first.kind == K::OpenBrace {
             let open_brace = self.expect_eat_token(K::OpenBrace)?;
-            let (fields, fields_span) =
-                self.eat_delimited("Struct fields", K::Comma, &[K::CloseBrace], |p| {
+            let mut fields = eco_vec![];
+            let (fields_span, _) = self.eat_delimited_ext(
+                "Struct fields",
+                &mut fields,
+                K::Comma,
+                &[K::CloseBrace],
+                |p| {
                     let field_res = Parser::parse_struct_type_field(p);
                     Parser::expect("Struct field", open_brace, field_res)
-                })?;
+                },
+            )?;
             let span = self.extend_span(first.span, fields_span);
             let struc = StructType { fields, span };
             Ok(Some(self.module.type_exprs.add(ParsedTypeExpr::Struct(struc))))

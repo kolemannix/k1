@@ -24,7 +24,7 @@ fn test(): unit {
   assert(
     testCompile(p2.sum())
     is
-    .Some("Method 'sum' does not exist on type: '{x: i64, y: i64}'")
+    .Some("Method 'sum' does not exist on type: '{ x: i64, y: i64 }'")
   );
 
   ()

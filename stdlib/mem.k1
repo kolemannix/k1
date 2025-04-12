@@ -16,12 +16,12 @@ ns mem {
     if p.isNull() { crash("systemZeroAlloc failed") };
     p
   }
-  fn systemRealloc(ptr: Pointer, size: u64, align: u64): Pointer {
-    let p = libc/realloc(ptr, size);
+  fn systemRealloc(ptr: Pointer, oldSize: u64, align: u64, newSize: u64): Pointer {
+    let p = libc/realloc(ptr, newSize);
     if p.isNull() { crash("systemRealloc failed") };
     p
   }
-  fn systemFree(ptr: Pointer): unit {
+  fn systemFree(ptr: Pointer, size: u64, align: u64): unit {
     libc/free(ptr);
     ()
   }
@@ -30,8 +30,8 @@ ns mem {
   deftype Allocator = {
     malloc:  (\(u64, u64) -> Pointer)*,
     zalloc:  (\(u64, u64) -> Pointer)*,
-    realloc: (\(Pointer, u64, u64) -> Pointer)*,
-    free:    (\(Pointer) -> unit)*,
+    realloc: (\(Pointer, u64, u64, u64) -> Pointer)*,
+    free:    (\(Pointer, u64, u64) -> unit)*,
   }
   
   deftype AllocMode = { 
@@ -113,23 +113,20 @@ ns mem {
   }
 
   fn newIn[T](mode: AllocMode, t: T): T* {
-    // Unclear whether we need sizeOfStride; main thing
-    // I'm thinking about is C ABI compat, if we want that,
-    // which I think I do, we should always allocate the stride size
-    let ptr = allocIn(mode, sizeOfStride[T](), alignOf[T]());
+    let ptr = allocIn(mode, sizeOf[T](), alignOf[T]());
     let ref = ptr as T*;
     ref <- t;
     ref
   }
 
-  fn reallocIn(mode: AllocMode, oldPtr: Pointer, newSize: u64, align: u64): Pointer {
+  fn reallocIn(mode: AllocMode, oldPtr: Pointer, oldSize: u64, align: u64, newSize: u64): Pointer {
     let mode = resolveMode(mode);
     switch mode.kind {
       .Current -> { crash("unreachable") },
-      .SystemHeap -> mem/systemRealloc(oldPtr, newSize, align),
+      .SystemHeap -> mem/systemRealloc(oldPtr, oldSize, align, newSize),
       .CustomHeap(alloc) -> { 
         let realloc = alloc.*.realloc;
-        realloc(oldPtr, newSize, align)
+        realloc(oldPtr, oldSize, align, newSize)
       },
       .Bump(bump) -> {
         crash("UnsupportedOperation: realloc")
@@ -139,6 +136,27 @@ ns mem {
       },
       .Gc -> {
         crash("UnsupportedOperation: realloc")
+      }
+    }
+  }
+
+  fn freeIn(mode: AllocMode, ptr: Pointer, size: u64, align: u64): unit {
+    let mode = resolveMode(mode);
+    switch mode.kind {
+      .Current -> { crash("unreachable") },
+      .SystemHeap -> mem/systemFree(ptr, size, align),
+      .CustomHeap(alloc) -> { 
+        let free = alloc.*.free;
+        free(ptr, size, align)
+      },
+      .Bump(bump) -> {
+        crash("UnsupportedOperation: free")
+      },
+      .TempBump -> {
+        crash("UnsupportedOperation: free")
+      },
+      .Gc -> {
+        crash("UnsupportedOperation: free")
       }
     }
   }

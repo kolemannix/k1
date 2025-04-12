@@ -25,10 +25,7 @@ impl Equals for Pointer {
 }
 
 fn new[T](value: T): T* {
-  let ptr = libc/malloc(sizeOf[T]());
-  let t = ptr as T*;
-  t <- value;
-  t
+  mem/newIn(context mem/AllocMode/CURRENT)(value)
 }
 
 fn identity[T](value: T): T { value }
@@ -124,7 +121,7 @@ ns files {
   fn readToString(context alloc: mem/AllocMode)(path: string): string {
     let filenameCString = path.toCString();
   
-    let file = files/unix/fopen(filenameCString, "r".toCString());
+    let file = files/unix/fopen(filenameCString.ptr, "r\0".toCString().ptr);
     files/unix/fseek(file, 0, unix/SEEK_END);
     let fileSizeBytes = files/unix/ftell(file);
     let buf = mem/allocIn(alloc, size = fileSizeBytes, align = 1);
@@ -134,7 +131,8 @@ ns files {
     let string = string/wrapBuffer(Buffer/fromRawParts(fileSizeBytes, buf));
     files/unix/fclose(file);
 
-    libc/free(filenameCString);
+    mem/freeIn(alloc, ptr = filenameCString.ptr, size = filenameCString.len + 1, align = 1);
+    //libc/free(filenameCString);
 
     string
   }

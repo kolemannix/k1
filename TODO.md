@@ -41,6 +41,10 @@ New tagline? "C with typeclasses and tagged unions"
 - [ ] Support explicit type args in AnonEnumConstructor syntax 
 - [ ] Unit syntax of '()' makes no sense when we don't have tuples. What about `{}`
 - [x] Adopt `ecow`'s EcoVec
+- [ ] Introduce uword/iword types
+- [ ] Change FieldAccess semantics to work on struct references, and copy only the field out
+      This saves copying the entire aggregate first with a Dereference instruction
+      
 
 - [x] Runtime-branching Allocator system (v2 is comptime branching)
   - [x] comptime enhancement to support this global initializer: `let* a: Arena* = { .. };`
@@ -60,16 +64,18 @@ New tagline? "C with typeclasses and tagged unions"
       data-oriented? Architecture and fundamental language complexity? Would k1 be any faster for 850K lines? Signs point to yes,
       but no idea
 
+- [ ] Switch VM stack to a single virtual allocation https://crates.io/crates/memmap2
 - [ ] Proper basic comptime
-  - [ ] Rename to 'static'
+  - [x] Rename to 'static'
+  - [x] Move to stack-based VM
   - [x] literals
   - [x] if/else
-  - [ ] Arith
+  - [x] Arith
   - [ ] Run comptime exprs before bodies but after all other phases, treat it
         like 'body' code SINCE it'll end up using the user's types, and even impls!
   - [x] Struct construction
   - [x] Struct field access
-  - [ ] Enum construction
+  - [x] Enum construction
 - [ ] Fix non-referencing match on `struct*`: just do the deref for the user
 - [ ] Fix referencing match not 'eliminating' patterns on `struct*` giving unhandled pattern `.CustomHeap({ zalloc }*) -> {`
 - [ ] Macro system built on comptime, both string #insert and parsed code #insert like Jai
