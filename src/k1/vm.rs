@@ -1,10 +1,12 @@
 use std::{
+    cmp::min,
     collections::VecDeque,
     num::NonZeroU32,
     sync::atomic::{AtomicU64, Ordering},
 };
 
 use ahash::HashMapExt;
+use colored::Colorize;
 use fxhash::FxHashMap;
 use log::debug;
 use smallvec::{smallvec, SmallVec};
@@ -18,7 +20,7 @@ use crate::{
         self, make_error, make_fail_span,
         types::{
             IntegerType, StructTypeField, Type, TypeId, TypedEnumVariant, Types, BOOL_TYPE_ID,
-            CHAR_TYPE_ID, POINTER_TYPE_ID, STRING_TYPE_ID, UNIT_TYPE_ID,
+            CHAR_TYPE_ID, POINTER_TYPE_ID, STRING_TYPE_ID, U64_TYPE_ID, UNIT_TYPE_ID,
         },
         BinaryOpKind, Call, CastType, IntrinsicFunction, Layout, MatchingCondition,
         MatchingConditionInstr, StaticValue, TypedExpr, TypedExprId, TypedFloatValue,
@@ -68,14 +70,12 @@ impl Vm {
     }
 
     fn push_frame(&mut self, frame: StackFrame) -> &mut StackFrame {
-        debug!("Pushing frame {} [depth={}]", frame.debug_name, self.call_stack.len() + 1);
         self.call_stack.push_back(frame);
         self.call_stack.back_mut().unwrap()
     }
 
     fn pop_frame(&mut self) -> StackFrame {
         let f = self.call_stack.pop_back().unwrap();
-        debug!("Popped frame {} [depth={}]", f.debug_name, self.call_stack.len());
         f
     }
 
@@ -128,20 +128,19 @@ impl Vm {
                 continue;
             }
             write!(w, "  {}: {} = ", m.name_of(v_name), m.type_id_to_string(v.get_type())).unwrap();
-            eprintln!("RENDERING LOCAL {}", m.name_of(v_name));
             render_debug_value(w, self, m, *v);
             writeln!(w).unwrap()
         }
         self.pop_frame();
 
-        write!(w, "\nDATA\n").unwrap();
-        let frame = &self.call_stack[frame_index];
-        frame.to_bytes().chunks(8).for_each(|bytes| {
-            for b in bytes {
-                write!(w, "{:02x} ", b).unwrap();
-            }
-            writeln!(w).unwrap();
-        });
+        //write!(w, "\nDATA\n").unwrap();
+        //let frame = &self.call_stack[frame_index];
+        //frame.to_bytes().chunks(8).for_each(|bytes| {
+        //    for b in bytes {
+        //        write!(w, "{:02x} ", b).unwrap();
+        //    }
+        //    writeln!(w).unwrap();
+        //});
         s
     }
 }
@@ -159,7 +158,23 @@ impl VmResult {
         match self {
             VmResult::Value(v) => Ok(*v),
             VmResult::Break(_) => Err(errf!(span, "Expected Value but got Break")),
-            VmResult::Exit(code) => Err(errf!(span, "Static execution exited with code: {code}")),
+            VmResult::Exit(_) => Err(errf!(span, "Expected Value but got Exit")),
+        }
+    }
+
+    fn is_terminating(&self) -> bool {
+        match self {
+            VmResult::Value(_) => false,
+            VmResult::Break(_) => true,
+            VmResult::Exit(_) => true,
+        }
+    }
+
+    fn is_exit(&self) -> bool {
+        match self {
+            VmResult::Value(_) => false,
+            VmResult::Break(_) => false,
+            VmResult::Exit(_) => true,
         }
     }
 }
@@ -286,6 +301,13 @@ impl Value {
             _ => unreachable!("expect_ptr on value {:?}", self),
         }
     }
+
+    pub fn expect_ref(&self) -> *const u8 {
+        match self {
+            Value::Reference { ptr, .. } => *ptr,
+            _ => unreachable!("expect_ref on value {:?}", self),
+        }
+    }
 }
 
 impl From<u64> for Value {
@@ -319,7 +341,11 @@ pub fn execute_single_expr(m: &TypedModule, expr: TypedExprId) -> TyperResult<(V
 
     vm.push_new_frame(format!("single_expr_{}", expr));
     let span = m.exprs.get(expr).get_span();
-    let v = execute_expr(&mut vm, m, expr)?.expect_value(span)?;
+    let v = match execute_expr(&mut vm, m, expr)? {
+        VmResult::Value(value) => Ok(value),
+        VmResult::Exit(code) => failf!(span, "Static execution exited with code: {code}"),
+        VmResult::Break(_) => unreachable!("Break result from top-level expression"),
+    }?;
     Ok((vm, v))
 }
 
@@ -341,11 +367,11 @@ fn execute_expr(vm: &mut Vm, m: &TypedModule, expr: TypedExprId) -> TyperResult<
     });
     let vm = &mut vm;
 
-    debug!(
-        "{}{}",
-        " ".repeat(vm.eval_depth.load(Ordering::Relaxed) as usize),
-        m.expr_to_string_with_type(expr)
-    );
+    eprintln!("{}", vm.dump_current_frame(m));
+    //eprint!("{}", " ".repeat(vm.eval_depth.load(Ordering::Relaxed) as usize));
+    // let mut s = String::new();
+    // std::io::stdin().read_line(&mut s).unwrap();
+
     let result: TyperResult<VmResult> = match m.exprs.get(expr) {
         TypedExpr::Unit(_) => Ok(Value::Unit.into()),
         TypedExpr::Char(byte, _) => Ok(Value::Char(*byte).into()),
@@ -547,20 +573,53 @@ fn execute_expr(vm: &mut Vm, m: &TypedModule, expr: TypedExprId) -> TyperResult<
         TypedExpr::Block(_) => execute_block(vm, m, expr),
         TypedExpr::Call(call) => execute_call(vm, m, call),
         TypedExpr::Match(match_expr) => execute_match(vm, m, match_expr),
-        TypedExpr::WhileLoop(_) => todo!(),
-        TypedExpr::LoopExpr(loop_expr) => {
-            let mut s = String::new();
+        TypedExpr::WhileLoop(while_expr) => {
+            let cond = execute_matching_condition(vm, m, &while_expr.condition_block)?;
+            if cond.is_terminating() {
+                return Ok(cond);
+            }
             let result = loop {
-                eprintln!("loop iter {}", vm.dump_current_frame(m));
-                let l = std::io::stdin().read_line(&mut s).unwrap();
-                match execute_block(vm, m, loop_expr.body_block)? {
-                    VmResult::Value(value) => continue,
-                    res @ VmResult::Break(value) => break res,
-                    res @ VmResult::Exit(_) => break res,
+                let body_result = execute_expr(vm, m, while_expr.body)?;
+                match body_result {
+                    VmResult::Value(_) => {
+                        let cond = execute_matching_condition(vm, m, &while_expr.condition_block)?;
+                        if cond.is_terminating() {
+                            return Ok(cond);
+                        }
+                        let cond_b = cond.expect_value(while_expr.span).unwrap().expect_bool();
+                        if cond_b {
+                            continue;
+                        } else {
+                            break VmResult::UNIT;
+                        }
+                    }
+                    VmResult::Break(_) => break VmResult::UNIT,
+                    VmResult::Exit(code) => break VmResult::Exit(code),
                 }
             };
             Ok(result)
         }
+        TypedExpr::LoopExpr(loop_expr) => {
+            let result = loop {
+                let block_result = execute_block(vm, m, loop_expr.body_block)?;
+                eprintln!(
+                    "loop iter {} {:?}",
+                    m.expr_to_string(loop_expr.body_block).blue(),
+                    block_result
+                );
+                match block_result {
+                    VmResult::Value(_) => continue,
+                    VmResult::Break(value) => break VmResult::Value(value),
+                    VmResult::Exit(code) => break VmResult::Exit(code),
+                }
+            };
+            Ok(result)
+        }
+        TypedExpr::Break(b) => match execute_expr(vm, m, b.value)? {
+            VmResult::Value(value) => Ok(VmResult::Break(value)),
+            VmResult::Break(_) => unreachable!("cant break inside a break"),
+            res @ VmResult::Exit(_) => Ok(res),
+        },
         TypedExpr::EnumConstructor(e) => {
             let payload_value = match e.payload {
                 None => None,
@@ -627,8 +686,29 @@ fn execute_expr(vm: &mut Vm, m: &TypedModule, expr: TypedExprId) -> TyperResult<
                     //    TypedIntegerValue::I64(_) => todo!(),
                     //}
                 }
-                CastType::IntegerTruncate => todo!(),
-                CastType::Integer8ToChar => todo!(),
+                CastType::IntegerTruncate => {
+                    let int_to_trunc = base_value.expect_int();
+                    let value: TypedIntValue = match m.types.get(typed_cast.target_type_id) {
+                        Type::Integer(IntegerType::U8) => int_to_trunc.to_u8().into(),
+                        Type::Integer(IntegerType::U16) => int_to_trunc.to_u16().into(),
+                        Type::Integer(IntegerType::U32) => int_to_trunc.to_u32().into(),
+                        Type::Integer(IntegerType::U64) => int_to_trunc.to_u64().into(),
+                        Type::Integer(IntegerType::I8) => (int_to_trunc.to_u8() as i8).into(),
+                        Type::Integer(IntegerType::I16) => (int_to_trunc.to_u16() as i16).into(),
+                        Type::Integer(IntegerType::I32) => (int_to_trunc.to_u32() as i32).into(),
+                        Type::Integer(IntegerType::I64) => (int_to_trunc.to_u64() as i64).into(),
+                        _ => unreachable!(),
+                    };
+                    Ok(Value::Int(value).into())
+                }
+                CastType::Integer8ToChar => {
+                    let byte = match base_value.expect_int() {
+                        TypedIntValue::U8(b) => b,
+                        TypedIntValue::I8(b) => b as u8,
+                        _ => unreachable!(),
+                    };
+                    Ok(Value::Char(byte).into())
+                }
                 CastType::IntegerExtendFromChar => todo!(),
                 CastType::IntegerToFloat => todo!(),
                 CastType::IntegerToPointer => {
@@ -667,9 +747,6 @@ fn execute_expr(vm: &mut Vm, m: &TypedModule, expr: TypedExprId) -> TyperResult<
             // vs 'values'; execute_block here in the VM just always uses the value
             // of the last expr
             Ok(value)
-        }
-        TypedExpr::Break(b) => {
-            let unit = execute_expr(vm, b.value)?;
         }
         TypedExpr::Lambda(_) => todo!(),
         TypedExpr::FunctionReference(_) => todo!(),
@@ -735,15 +812,14 @@ pub fn execute_block(
     let stmts = typed_block.statements.clone();
     for stmt in stmts.iter() {
         last_stmt_result = execute_stmt(vm, m, *stmt)?;
+        if last_stmt_result.is_terminating() {
+            return Ok(last_stmt_result);
+        }
     }
     Ok(last_stmt_result)
 }
 
 pub fn execute_stmt(vm: &mut Vm, m: &TypedModule, stmt_id: TypedStmtId) -> TyperResult<VmResult> {
-    // TODO: Handle divergence / never type. We should exit the VM gracefully and then just
-    // report a normal compilation error from `typer`!
-    //
-    // Do we do a 'never' _Value_? It's a type, not a value. But LLVM does it as a value
     match m.stmts.get(stmt_id) {
         typer::TypedStmt::Expr(typed_expr_id, _) => {
             let result = execute_expr(vm, m, *typed_expr_id)?;
@@ -759,9 +835,11 @@ pub fn execute_stmt(vm: &mut Vm, m: &TypedModule, stmt_id: TypedStmtId) -> Typer
                     m.types.get(reference_type).expect_reference().inner_type,
                     value_type
                 );
-                let stack_ptr = vm.current_frame_mut().push_ptr_uninit();
-                store_value(&m.types, stack_ptr, v);
-                Value::Reference { type_id: reference_type, ptr: stack_ptr }
+                let value_ptr = match v.ptr_if_not_immediate() {
+                    None => vm.current_frame_mut().push_value(&m.types, v),
+                    Some(ptr) => ptr,
+                };
+                Value::Reference { type_id: reference_type, ptr: value_ptr }
             } else {
                 debug_assert_eq!(let_stmt.variable_type, v.get_type());
                 v
@@ -876,11 +954,9 @@ fn execute_call(vm: &mut Vm, m: &TypedModule, call: &Call) -> TyperResult<VmResu
             IntrinsicFunction::PointerIndex => {
                 // intern fn refAtIndex[T](self: Pointer, index: u64): T*
                 let typ = call.type_args[0].type_id;
-                let layout = m.types.get_layout(typ).unwrap();
                 let ptr = execute_expr_ev(vm, m, call.args[0])?.expect_ptr();
                 let index = execute_expr_ev(vm, m, call.args[1])?.expect_int().expect_u64();
-                let result = ptr + (index as usize * layout.size_bytes());
-                eprintln!("GEP: {} {} {} {}", ptr, index, layout.size_bytes(), result);
+                let result = ptr + offset_at_index(&m.types, typ, index as usize);
                 Ok(Value::Reference { type_id: call.return_type, ptr: result as *const u8 }.into())
             }
             IntrinsicFunction::CompilerSourceLocation => todo!("CompilerSourceLocation"),
@@ -911,7 +987,11 @@ fn execute_call(vm: &mut Vm, m: &TypedModule, call: &Call) -> TyperResult<VmResu
     vm.push_frame(callee_frame);
     //eprintln!("{}", vm.dump_current_frame(m));
 
-    let result_value = execute_expr_ev(vm, m, body_block_expr)?;
+    let body_result = execute_expr(vm, m, body_block_expr)?;
+    if body_result.is_exit() {
+        return Ok(body_result);
+    }
+    let result_value = body_result.expect_value(call.span)?;
     // result_value lives in the stack frame we're about to nuke
     // It just to be copied onto the current stack frame...
     // TODO: Handle 'never'
@@ -923,6 +1003,11 @@ fn execute_call(vm: &mut Vm, m: &TypedModule, call: &Call) -> TyperResult<VmResu
         Some(_ptr) => {
             let caller_frame = vm.current_frame_mut();
             let stored_result = caller_frame.push_value(&m.types, result_value);
+            eprintln!(
+                "Copying a returned Aggregate to caller's stack {:?} -> {:?}",
+                caller_frame.base_ptr(),
+                stored_result
+            );
             let updated_value = match result_value {
                 Value::Agg { type_id, .. } => Value::Agg { type_id, ptr: stored_result },
                 _ => unreachable!(),
@@ -931,6 +1016,7 @@ fn execute_call(vm: &mut Vm, m: &TypedModule, call: &Call) -> TyperResult<VmResu
         }
     };
     drop(callee_frame);
+    eprintln!("RETURNED {:?}", updated_value);
     Ok(updated_value.into())
 }
 
@@ -1042,7 +1128,7 @@ pub fn load_value(
     let Some(layout) = m.types.get_layout(type_id) else {
         m.ice_with_span("Cannot dereference a type with no known layout", span)
     };
-    eprintln!("load of '{}' from {:?} {:?}", m.type_id_to_string(type_id), ptr, layout);
+    debug!("load of '{}' from {:?} {:?}", m.type_id_to_string(type_id), ptr, layout);
     match m.types.get(type_id) {
         Type::Unit => Ok(Value::UNIT),
         Type::Char => {
@@ -1084,7 +1170,7 @@ pub fn load_value(
             let value = unsafe { *(ptr as *const usize) };
             Ok(Value::Pointer(value))
         }
-        Type::Reference(reference_type) => {
+        Type::Reference(_reference_type) => {
             debug_assert_eq!(layout.size_bytes(), size_of::<usize>());
 
             // We're loading a reference, which means we are loading a usize
@@ -1183,6 +1269,11 @@ fn build_struct(
     (start_dst.cast_const(), struct_layout)
 }
 
+pub fn offset_at_index(types: &Types, type_id: TypeId, index: usize) -> usize {
+    let size_bytes = types.get_layout(type_id).map(|l| l.size_bytes()).unwrap_or(0);
+    index as usize * size_bytes
+}
+
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub fn gep_struct_field(
     types: &Types,
@@ -1209,7 +1300,7 @@ pub fn load_struct_field(
 ) -> TyperResult<Value> {
     let (field_ptr, field) = gep_struct_field(&m.types, struct_type, struct_ptr, field_index);
     let value = load_value(vm, m, field.type_id, field_ptr, copy)?;
-    eprintln!(
+    debug!(
         "load_struct_field {} of type {} is {:?}. Full struct: {:?}",
         m.name_of(field.name),
         m.type_id_to_string(struct_type),
@@ -1335,6 +1426,7 @@ impl StackFrame {
     }
 
     pub fn push_n<T: Copy>(&mut self, value: T) -> *const u8 {
+        self.align_to_bytes(align_of::<T>());
         let c = self.cursor;
         unsafe {
             (self.cursor_mut() as *mut T).write(value);
@@ -1361,7 +1453,7 @@ impl StackFrame {
     ) -> *const u8 {
         self.align_to_bytes(align_bytes);
         unsafe {
-            debug!("from raw parts: {:?} {}", src_ptr, size_bytes);
+            debug!("push_raw_copy {:?} {}", src_ptr, size_bytes);
             let src_slice = std::slice::from_raw_parts(src_ptr, size_bytes);
             self.push_slice(src_slice)
         }
@@ -1384,12 +1476,17 @@ fn execute_match(
     for stmt in &match_expr.initial_let_statements {
         execute_stmt(vm, m, *stmt)?;
     }
-    for arm in &match_expr.arms {
-        let Value::Bool(b) = execute_matching_condition(vm, m, &arm.condition)? else {
-            unreachable!()
-        };
+    for (arm_index, arm) in match_expr.arms.iter().enumerate() {
+        let condition_result = execute_matching_condition(vm, m, &arm.condition)?;
+        if condition_result.is_terminating() {
+            return Ok(condition_result);
+        }
+        let b = condition_result.expect_value(vm.eval_span).unwrap().expect_bool();
+        debug!("arm {arm_index} cond is {b}");
         if b {
-            return execute_expr(vm, m, arm.consequent_expr);
+            let res = execute_expr(vm, m, arm.consequent_expr)?;
+            debug!("match res is {:?}", res);
+            return Ok(res);
         } else {
             continue;
         }
@@ -1401,23 +1498,27 @@ fn execute_matching_condition(
     vm: &mut Vm,
     m: &TypedModule,
     cond: &MatchingCondition,
-) -> TyperResult<Value> {
+) -> TyperResult<VmResult> {
     for instr in cond.instrs.iter() {
         match instr {
             MatchingConditionInstr::Binding { let_stmt, .. } => {
                 execute_stmt(vm, m, *let_stmt)?;
             }
             MatchingConditionInstr::Cond { value } => {
+                let cond_result = execute_expr(vm, m, *value)?;
+                if cond_result.is_terminating() {
+                    return Ok(cond_result);
+                }
                 let Value::Bool(cond_bool) = execute_expr_ev(vm, m, *value)? else {
                     unreachable!()
                 };
                 if !cond_bool {
-                    return Ok(Value::Bool(false));
+                    return Ok(Value::FALSE.into());
                 }
             }
         }
     }
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE.into())
 }
 
 fn vm_intercept_call(vm: &mut Vm, m: &TypedModule, call: &Call) -> TyperResult<Option<VmResult>> {
@@ -1509,17 +1610,17 @@ fn vm_intercept_call(vm: &mut Vm, m: &TypedModule, call: &Call) -> TyperResult<O
 }
 
 fn render_debug_value(w: &mut impl std::fmt::Write, vm: &mut Vm, m: &TypedModule, value: Value) {
-    eprintln!("render debug of {:?} and {}", value, m.type_id_to_string(value.get_type()));
+    //eprintln!("render debug of {:?} and {}", value, m.type_id_to_string(value.get_type()));
     match value {
-        Value::Unit => write!(w, "()").unwrap(),
+        Value::Unit => w.write_str("()").unwrap(),
         Value::Bool(b) => {
             if b {
-                write!(w, "true").unwrap()
+                w.write_str("true").unwrap()
             } else {
-                write!(w, "false").unwrap()
+                w.write_str("false").unwrap()
             }
         }
-        Value::Char(c) => write!(w, "{}", c).unwrap(),
+        Value::Char(c) => write!(w, "{}", c as char).unwrap(),
         Value::Int(int) => write!(w, "{}", int).unwrap(),
         Value::Float(float) => write!(w, "{}", float).unwrap(),
         Value::Pointer(p) => write!(w, "{}", p).unwrap(),
@@ -1539,16 +1640,39 @@ fn render_debug_value(w: &mut impl std::fmt::Write, vm: &mut Vm, m: &TypedModule
             match m.types.get(type_id) {
                 st @ Type::Struct(struct_type) => {
                     if let Some(buffer) = st.as_buffer_instance() {
-                        write!(w, "<buffer>").unwrap()
+                        let len = load_struct_field(vm, m, type_id, ptr, 0, false)
+                            .unwrap()
+                            .expect_int()
+                            .expect_u64();
+                        let preview_count = min(len, 10);
+                        write!(w, "<buffer len={len} ");
+                        w.write_str("[").unwrap();
+                        let elem_type = buffer.type_args[0];
+                        let data_ptr =
+                            load_struct_field(vm, m, type_id, ptr, 1, false).unwrap().expect_ref();
+                        for i in 0..preview_count {
+                            let elem_offset = offset_at_index(&m.types, elem_type, i as usize);
+                            let elem_ptr = unsafe { data_ptr.byte_add(elem_offset) };
+                            match load_value(vm, m, elem_type, elem_ptr, true) {
+                                Err(e) => write!(w, "<ERROR {}>", e.message).unwrap(),
+                                Ok(loaded) => render_debug_value(w, vm, m, loaded),
+                            };
+                            if i < preview_count - 1 {
+                                w.write_str(", ").unwrap();
+                            }
+                        }
+                        w.write_str("]>").unwrap();
                     } else {
-                        write!(w, "{{ ").unwrap();
-                        for f in &struct_type.fields {
+                        w.write_str("{ ").unwrap();
+                        for (i, f) in struct_type.fields.iter().enumerate() {
                             write!(w, "{}: ", m.name_of(f.name)).unwrap();
                             match load_struct_field(vm, m, type_id, ptr, f.index as usize, true) {
                                 Err(e) => write!(w, "<ERROR {}>", e.message).unwrap(),
                                 Ok(loaded) => render_debug_value(w, vm, m, loaded),
                             };
-                            write!(w, ", ").unwrap();
+                            if i != struct_type.fields.len() - 1 {
+                                write!(w, ", ").unwrap();
+                            }
                         }
                         write!(w, " }}").unwrap();
                     }

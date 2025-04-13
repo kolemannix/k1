@@ -3055,8 +3055,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let loop_body_block = self.ctx.append_basic_block(current_fn, "while_body");
         let loop_end_block = self.ctx.append_basic_block(current_fn, "while_end");
 
+        let TypedExpr::Block(body_block) = self.module.exprs.get(while_loop.body) else {
+            unreachable!()
+        };
         self.loops.insert(
-            while_loop.body.scope_id,
+            body_block.scope_id,
             LoopInfo { break_value_ptr: None, end_block: loop_end_block },
         );
 
@@ -3070,7 +3073,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         )?;
 
         self.builder.position_at_end(loop_body_block);
-        let body_value = self.codegen_block(&while_loop.body)?;
+        let body_value = self.codegen_block(body_block)?;
         match body_value.as_basic_value() {
             Either::Left(_instr) => {}
             Either::Right(_bv) => {

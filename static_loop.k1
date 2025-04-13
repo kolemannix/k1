@@ -1,0 +1,37 @@
+fn main(): int {
+
+  #if false assertEquals(#static {
+    let mut i = 0;
+    loop {
+      if i >= 5 { break() };
+      i = i + 1
+    };
+    i
+  }, 5);
+
+  let* sb = StringBuilder/new();
+  let s = sb.build();
+  assertEquals(s.len(), 0);
+  assertEquals(s, "");
+
+  #static {
+    // []
+    let* l = List/withCapacity[unit](0);
+    l.len
+  };
+
+  let sb = #static {
+    //let* sb = StringBuilder/new();
+    //sb.putString("Hello");
+    //sb.build()
+  };
+  //assertEquals(sb, "Hello");
+
+  #if false assertEquals(#static {
+    let mut i = 0;
+    while i < 5 { i = i + 1 };
+    i
+  }, 5);
+
+  0
+}
