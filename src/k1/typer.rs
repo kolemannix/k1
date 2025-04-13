@@ -1218,6 +1218,45 @@ impl TypedIntValue {
         }
     }
 
+    pub fn to_u32(&self) -> u32 {
+        match self {
+            TypedIntValue::U8(v) => *v as u32,
+            TypedIntValue::U16(v) => *v as u32,
+            TypedIntValue::U32(v) => *v,
+            TypedIntValue::U64(v) => *v as u32,
+            TypedIntValue::I8(v) => *v as u32,
+            TypedIntValue::I16(v) => *v as u32,
+            TypedIntValue::I32(v) => *v as u32,
+            TypedIntValue::I64(v) => *v as u32,
+        }
+    }
+
+    pub fn to_u16(&self) -> u16 {
+        match self {
+            TypedIntValue::U8(v) => *v as u16,
+            TypedIntValue::U16(v) => *v,
+            TypedIntValue::U32(v) => *v as u16,
+            TypedIntValue::U64(v) => *v as u16,
+            TypedIntValue::I8(v) => *v as u16,
+            TypedIntValue::I16(v) => *v as u16,
+            TypedIntValue::I32(v) => *v as u16,
+            TypedIntValue::I64(v) => *v as u16,
+        }
+    }
+
+    pub fn to_u8(&self) -> u8 {
+        match self {
+            TypedIntValue::U8(v) => *v,
+            TypedIntValue::U16(v) => *v as u8,
+            TypedIntValue::U32(v) => *v as u8,
+            TypedIntValue::U64(v) => *v as u8,
+            TypedIntValue::I8(v) => *v as u8,
+            TypedIntValue::I16(v) => *v as u8,
+            TypedIntValue::I32(v) => *v as u8,
+            TypedIntValue::I64(v) => *v as u8,
+        }
+    }
+
     pub fn get_integer_type(&self) -> IntegerType {
         match self {
             TypedIntValue::U8(_) => IntegerType::U8,
@@ -1236,6 +1275,47 @@ impl TypedIntValue {
             TypedIntValue::U64(v) => *v,
             _ => unreachable!(),
         }
+    }
+}
+
+impl From<u64> for TypedIntValue {
+    fn from(value: u64) -> Self {
+        TypedIntValue::U64(value)
+    }
+}
+impl From<u32> for TypedIntValue {
+    fn from(value: u32) -> Self {
+        TypedIntValue::U32(value)
+    }
+}
+impl From<u16> for TypedIntValue {
+    fn from(value: u16) -> Self {
+        TypedIntValue::U16(value)
+    }
+}
+impl From<u8> for TypedIntValue {
+    fn from(value: u8) -> Self {
+        TypedIntValue::U8(value)
+    }
+}
+impl From<i64> for TypedIntValue {
+    fn from(value: i64) -> Self {
+        TypedIntValue::I64(value)
+    }
+}
+impl From<i32> for TypedIntValue {
+    fn from(value: i32) -> Self {
+        TypedIntValue::I32(value)
+    }
+}
+impl From<i16> for TypedIntValue {
+    fn from(value: i16) -> Self {
+        TypedIntValue::I16(value)
+    }
+}
+impl From<i8> for TypedIntValue {
+    fn from(value: i8) -> Self {
+        TypedIntValue::I8(value)
     }
 }
 
@@ -1450,7 +1530,7 @@ pub enum MatchingConditionInstr {
 #[derive(Debug, Clone)]
 pub struct WhileLoop {
     pub condition_block: MatchingCondition,
-    pub body: Box<TypedBlock>,
+    pub body: TypedExprId,
     pub type_id: TypeId,
     pub span: SpanId,
 }
@@ -5663,8 +5743,8 @@ impl TypedModule {
                 // For now, we ensure that any functions called by this static block
                 // have bodies. This is a strange workaround, and it may be better to
                 // create a work queue and re-visit these exprs instead.
-                self.specialize_pending_function_bodies(&mut std::io::stderr()).unwrap();
                 let expr = self.eval_expr(base_expr, ctx.with_static(true))?;
+                self.specialize_pending_function_bodies(&mut std::io::stderr()).unwrap();
                 eprintln!("fps after static: {}", self.functions_pending_body_specialization.len());
                 let type_id = self.exprs.get(expr).get_type();
                 let (mut vm, value) = vm::execute_single_expr(self, expr)?;
@@ -5764,7 +5844,6 @@ impl TypedModule {
                     };
                     unsafe {
                         let slice = std::slice::from_raw_parts(ptr, len as usize);
-                        dbg!(slice);
                         let the_str = std::str::from_utf8(slice).unwrap();
                         let box_str = Box::from(the_str);
                         StaticValue::String(box_str, span)
@@ -6029,9 +6108,10 @@ impl TypedModule {
         // break and return
         let loop_type = if condition.diverges { NEVER_TYPE_ID } else { UNIT_TYPE_ID };
 
+        let body_block = self.exprs.add(TypedExpr::Block(body_block));
         Ok(self.exprs.add(TypedExpr::WhileLoop(WhileLoop {
             condition_block: condition,
-            body: Box::new(body_block),
+            body: body_block,
             type_id: loop_type,
             span: while_expr.span,
         })))
@@ -8266,6 +8346,9 @@ impl TypedModule {
                 todo!("implement continue")
             }
             "testCompile" => {
+                if ctx.is_static {
+                    return failf!(call_span, "testCompile(...) cannot be used in static context");
+                }
                 if fn_call.args.len() != 1 {
                     return failf!(call_span, "testCompile takes one argument");
                 }
@@ -12403,9 +12486,8 @@ impl TypedModule {
         }
 
         eprintln!(">> Phase 6 specialize function bodies");
-        while !self.functions_pending_body_specialization.is_empty() {
-            self.specialize_pending_function_bodies(&mut err_writer)?;
-        }
+        self.specialize_pending_function_bodies(&mut err_writer)?;
+
         if !self.errors.is_empty() {
             bail!("{} failed specialize with {} errors", self.name(), self.errors.len())
         }
@@ -12417,17 +12499,15 @@ impl TypedModule {
         &mut self,
         err_writer: &mut impl std::io::Write,
     ) -> anyhow::Result<()> {
-        if self.functions_pending_body_specialization.is_empty() {
-            return Ok(());
-        }
-
-        let clone = self.functions_pending_body_specialization.clone();
-        self.functions_pending_body_specialization.clear();
-        for function_id in &clone {
-            let result = self.specialize_function_body(*function_id);
-            if let Err(e) = result {
-                self.write_error(err_writer, &e)?;
-                self.errors.push(e);
+        while !self.functions_pending_body_specialization.is_empty() {
+            let clone = self.functions_pending_body_specialization.clone();
+            self.functions_pending_body_specialization.clear();
+            for function_id in &clone {
+                let result = self.specialize_function_body(*function_id);
+                if let Err(e) = result {
+                    self.write_error(err_writer, &e)?;
+                    self.errors.push(e);
+                }
             }
         }
         Ok(())

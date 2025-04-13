@@ -81,17 +81,19 @@ fn main(): int {
   };
   assertEquals(ptrInStructs, 10);
 
-  let sb = #static {
+  assertEquals(#static {
     let* sb = StringBuilder/new();
     sb.putString("Hello");
     sb.build()
-  };
-  assertEquals(sb, "Hello");
+  }, "Hello");
 
-  // We crash in `self.parts` of string builder pushString
-  // #static assert(false);
+  let s = testCompile( #static assert(false) );
+  printIt(s);
 
-  // #static crash("");
+  let s2 = testCompile( #static testCompile(42) );
+  printIt(s2);
+
+  #static crash("");
 
   // Breaks
   //loop {

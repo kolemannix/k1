@@ -199,12 +199,21 @@ fn crash(context locn: compiler/SourceLocation)(msg: string): never {
       offset = 0
     );
     libc/exit(1)
+  } else if k1/IS_STATIC {
+    //let s = "exiting static\n\0";
+    //libc/write(
+    //  fileNo = 1, 
+    //  data = s.buffer.data as Pointer, 
+    //  count = s.buffer.len - 1, 
+    //  offset = 0
+    //);
+    sys/exit(111)
   } else {
     let filename = locn.filename;
     let line = locn.line;
     sys/printBacktrace();
     let s = "\{msg} at \{filename}:\{line}\n";
     eprint(s);
-    libc/exit(1)
+    sys/exit(1)
   }
 }
