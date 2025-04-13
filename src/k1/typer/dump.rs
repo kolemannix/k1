@@ -611,19 +611,20 @@ impl TypedModule {
             }
             TypedExpr::Block(block) => self.display_block(block, writ, indentation),
             TypedExpr::Match(typed_match) => {
-                writ.write_str("switch ")?;
                 for stmt in &typed_match.initial_let_statements {
                     self.display_stmt(*stmt, writ, indentation)?;
-                    writ.write_str("; ")?;
                 }
-                writ.write_str(" {\n")?;
+                writ.write_str("switch {\n")?;
                 for (idx, case) in typed_match.arms.iter().enumerate() {
+                    writ.write_str(&"  ".repeat(indentation + 1))?;
+                    writeln!(writ, "ARM {idx:02}").unwrap();
                     self.display_matching_condition(writ, &case.condition, indentation)?;
 
-                    writ.write_str(" -> ")?;
+                    writ.write_str(&"  ".repeat(indentation + 2))?;
+                    writ.write_str("-> ")?;
                     self.display_expr_id(case.consequent_expr, writ, indentation)?;
                     if idx < typed_match.arms.len() - 1 {
-                        writ.write_str(",\n")?;
+                        writ.write_str("\n")?;
                     }
                 }
                 writ.write_str("\n")?;
@@ -634,7 +635,7 @@ impl TypedModule {
                 writ.write_str("while ")?;
                 self.display_matching_condition(writ, &while_loop.condition_block, indentation)?;
                 writ.write_str(" ")?;
-                self.display_block(&while_loop.body, writ, indentation)
+                self.display_expr_id(while_loop.body, writ, indentation)
             }
             TypedExpr::LoopExpr(loop_expr) => {
                 writ.write_str("loop ")?;
@@ -795,13 +796,7 @@ impl TypedModule {
                 w.write_str(" and ")?;
             }
         }
-        w.write_str("\n")?;
 
-        if cond.instrs.is_empty() {
-            w.write_str("{}")?;
-            return Ok(());
-        }
-        w.write_str("{\n")?;
         for instr in &cond.instrs {
             match instr {
                 MatchingConditionInstr::Binding { let_stmt, .. } => {
@@ -811,12 +806,11 @@ impl TypedModule {
                     w.write_str(&"  ".repeat(indentation + 1))?;
                     w.write_str("cond(")?;
                     self.display_expr_id(*value, w, indentation + 1)?;
-                    w.write_str(") else goto next")?;
+                    w.write_str(")")?;
                 }
             }
             w.write_str("\n")?;
         }
-        w.write_str("}")?;
         Ok(())
     }
 
