@@ -195,16 +195,7 @@ impl TypedModule {
             Type::Unit => writ.write_str("unit"),
             Type::Char => writ.write_str("char"),
             Type::Integer(int_type) => {
-                match int_type {
-                    IntegerType::U8 => writ.write_str("u8")?,
-                    IntegerType::U16 => writ.write_str("u16")?,
-                    IntegerType::U32 => writ.write_str("u32")?,
-                    IntegerType::U64 => writ.write_str("u64")?,
-                    IntegerType::I8 => writ.write_str("i8")?,
-                    IntegerType::I16 => writ.write_str("i16")?,
-                    IntegerType::I32 => writ.write_str("i32")?,
-                    IntegerType::I64 => writ.write_str("i64")?,
-                }
+                write!(writ, "{}", int_type)?;
                 Ok(())
             }
             Type::Float(float_type) => match float_type.size {
@@ -780,7 +771,7 @@ impl TypedModule {
                 }
                 w.write_str(" }")
             }
-            StaticValue::Enum(compile_time_enum) => todo!(),
+            StaticValue::Enum(_compile_time_enum) => todo!(),
         }
     }
 

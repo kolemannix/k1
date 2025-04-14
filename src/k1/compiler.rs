@@ -5,8 +5,8 @@ use std::os::unix::prelude::ExitStatusExt;
 use std::path::Path;
 use std::time::Instant;
 
-use crate::parse::write_error_location;
 use crate::parse::{self, print_error};
+use crate::parse::{write_error_location, NumericWidth};
 use crate::typer::{ErrorLevel, TypedModule};
 use anyhow::{bail, Result};
 use inkwell::context::Context;
@@ -61,6 +61,21 @@ pub enum WordSize {
 }
 
 impl WordSize {
+    pub fn width(&self) -> NumericWidth {
+        match self {
+            WordSize::W32 => NumericWidth::B32,
+            WordSize::W64 => NumericWidth::B64,
+        }
+    }
+
+    pub fn from_width(w: NumericWidth) -> WordSize {
+        match w {
+            NumericWidth::B32 => WordSize::W32,
+            NumericWidth::B64 => WordSize::W64,
+            w => panic!("Invalid word size: {w:?}"),
+        }
+    }
+
     pub fn bits(&self) -> u32 {
         match self {
             WordSize::W32 => 32,
