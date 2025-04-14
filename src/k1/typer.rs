@@ -22,6 +22,7 @@ use smallvec::{smallvec, SmallVec};
 use scopes::*;
 use types::*;
 
+use crate::compiler::WordSize;
 use crate::lex::{SpanId, Spans, TokenKind};
 use crate::parse::{
     self, ForExpr, ForExprType, Identifiers, NamedTypeArg, NamedTypeArgId, NamespacedIdentifier,
@@ -328,7 +329,7 @@ impl Layout {
         if cfg!(debug_assertions) {
             let padding = new_field_start - offset;
             if padding != 0 {
-                eprintln!("Aggregate padding: {padding}");
+                debug!("Aggregate padding: {padding}");
             }
         };
         let new_end_unaligned = new_field_start + layout.size_bits;
@@ -2612,6 +2613,13 @@ impl TypedModule {
                         assert!(id == U64_TYPE_ID);
                         Ok(id)
                     }
+                    "uword" => {
+                        let word_size = self.ast.config.target.word_size();
+                        let id =
+                            self.types.add(Type::Integer(IntegerType::UWord(word_size)), defn_info);
+                        assert!(id == UWORD_TYPE_ID);
+                        Ok(id)
+                    }
                     "i8" => {
                         let id = self.types.add(Type::Integer(IntegerType::I8), defn_info);
                         assert!(id == I8_TYPE_ID);
@@ -2630,6 +2638,13 @@ impl TypedModule {
                     "i64" => {
                         let id = self.types.add(Type::Integer(IntegerType::I64), defn_info);
                         assert!(id == I64_TYPE_ID);
+                        Ok(id)
+                    }
+                    "iword" => {
+                        let word_size = self.ast.config.target.word_size();
+                        let id =
+                            self.types.add(Type::Integer(IntegerType::IWord(word_size)), defn_info);
+                        assert!(id == IWORD_TYPE_ID);
                         Ok(id)
                     }
                     _ => failf!(*span, "Unknown builtin type '{}'", name),
@@ -4682,8 +4697,7 @@ impl TypedModule {
             NumericWidth::B64 => parsed_text.parse::<f64>().map(TypedFloatValue::F64),
             _ => unreachable!("unreachable float width"),
         };
-        let value =
-            value.map_err(|e| errf!(span, "Invalid f{}: {e}", expected_width.bit_width()))?;
+        let value = value.map_err(|e| errf!(span, "Invalid f{}: {e}", expected_width.bits()))?;
         Ok(value)
     }
 
@@ -4724,12 +4738,20 @@ impl TypedModule {
             let value: Result<TypedIntValue, std::num::ParseIntError> = match expected_int_type {
                 IntegerType::U8 => parse_int!(U8, u8, hex_base, offset),
                 IntegerType::U16 => parse_int!(U16, u16, hex_base, offset),
-                IntegerType::U32 => parse_int!(U32, u32, hex_base, offset),
-                IntegerType::U64 => parse_int!(U64, u64, hex_base, offset),
+                IntegerType::U32 | IntegerType::UWord(WordSize::W32) => {
+                    parse_int!(U32, u32, hex_base, offset)
+                }
+                IntegerType::U64 | IntegerType::UWord(WordSize::W64) => {
+                    parse_int!(U64, u64, hex_base, offset)
+                }
                 IntegerType::I8 => parse_int!(I8, i8, hex_base, offset),
                 IntegerType::I16 => parse_int!(I16, i16, hex_base, offset),
-                IntegerType::I32 => parse_int!(I32, i32, hex_base, offset),
-                IntegerType::I64 => parse_int!(I64, i64, hex_base, offset),
+                IntegerType::I32 | IntegerType::IWord(WordSize::W32) => {
+                    parse_int!(I32, i32, hex_base, offset)
+                }
+                IntegerType::I64 | IntegerType::IWord(WordSize::W64) => {
+                    parse_int!(I64, i64, hex_base, offset)
+                }
             };
             let value = value
                 .map_err(|e| make_error(format!("Invalid hex {expected_int_type}: {e}"), span))?;
@@ -4740,12 +4762,20 @@ impl TypedModule {
             let value: Result<TypedIntValue, std::num::ParseIntError> = match expected_int_type {
                 IntegerType::U8 => parse_int!(U8, u8, bin_base, offset),
                 IntegerType::U16 => parse_int!(U16, u16, bin_base, offset),
-                IntegerType::U32 => parse_int!(U32, u32, bin_base, offset),
-                IntegerType::U64 => parse_int!(U64, u64, bin_base, offset),
+                IntegerType::U32 | IntegerType::UWord(WordSize::W32) => {
+                    parse_int!(U32, u32, bin_base, offset)
+                }
+                IntegerType::U64 | IntegerType::UWord(WordSize::W64) => {
+                    parse_int!(U64, u64, bin_base, offset)
+                }
                 IntegerType::I8 => parse_int!(I8, i8, bin_base, offset),
                 IntegerType::I16 => parse_int!(I16, i16, bin_base, offset),
-                IntegerType::I32 => parse_int!(I32, i32, bin_base, offset),
-                IntegerType::I64 => parse_int!(I64, i64, bin_base, offset),
+                IntegerType::I32 | IntegerType::IWord(WordSize::W32) => {
+                    parse_int!(I32, i32, bin_base, offset)
+                }
+                IntegerType::I64 | IntegerType::IWord(WordSize::W64) => {
+                    parse_int!(I64, i64, bin_base, offset)
+                }
             };
             let value = value.map_err(|e| {
                 make_error(format!("Invalid binary {expected_int_type}: {e}"), span)
@@ -4757,12 +4787,20 @@ impl TypedModule {
             let value: Result<TypedIntValue, std::num::ParseIntError> = match expected_int_type {
                 IntegerType::U8 => parse_int!(U8, u8, dec_base, offset),
                 IntegerType::U16 => parse_int!(U16, u16, dec_base, offset),
-                IntegerType::U32 => parse_int!(U32, u32, dec_base, offset),
-                IntegerType::U64 => parse_int!(U64, u64, dec_base, offset),
+                IntegerType::U32 | IntegerType::UWord(WordSize::W32) => {
+                    parse_int!(U32, u32, dec_base, offset)
+                }
+                IntegerType::U64 | IntegerType::UWord(WordSize::W64) => {
+                    parse_int!(U64, u64, dec_base, offset)
+                }
                 IntegerType::I8 => parse_int!(I8, i8, dec_base, offset),
                 IntegerType::I16 => parse_int!(I16, i16, dec_base, offset),
-                IntegerType::I32 => parse_int!(I32, i32, dec_base, offset),
-                IntegerType::I64 => parse_int!(I64, i64, dec_base, offset),
+                IntegerType::I32 | IntegerType::IWord(WordSize::W32) => {
+                    parse_int!(I32, i32, dec_base, offset)
+                }
+                IntegerType::I64 | IntegerType::IWord(WordSize::W64) => {
+                    parse_int!(I64, i64, dec_base, offset)
+                }
             };
             let value = value.map_err(|e| {
                 errf!(
