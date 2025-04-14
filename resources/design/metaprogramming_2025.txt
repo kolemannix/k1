@@ -1,0 +1,51 @@
+deftype Todo = {
+  title: string, createdAt: Instant, userId: u64, description: string, starred: bool
+}
+
+// template-style min
+fn min[T](t1: T, t2: T): T {
+  #static {
+    #insert if t1 <= t2 t1 else t2
+  }
+}
+
+fn debugPrinter[T](t: T): string {
+  #static {
+    let info = typeInfo(t.typeId);
+    require info is .Struct(s) else { crash("Only structs are supported") };
+    #insert let* sb = StringBuilder/new();
+    #insert sb.putString("** [");
+    #static for field in s.fields {
+      let fieldName = field.name;
+      switch typeInfo(field.typeId) {
+        .Struct(s) -> #insert sb.putString("\{fieldName}: {}"),
+        .Bool(b) -> #insert "sb.putString(t.\{fieldName}.show())",
+      }
+    };
+    #insert sb.putString("** ]");
+    #insert sb.build()
+  }
+
+  
+  let static info = typeInfo(t.typeId);
+  require info is .Struct(s) else { crash("Only structs are supported") };
+  #insert let* sb = StringBuilder/new();
+  #insert sb.putString("** [");
+  #static for field in s.fields {
+    let fieldName = field.name;
+    switch typeInfo(field.typeId) {
+      .String(s) -> #insert sb.putString("\"\{s}\""),
+      .Struct(s) -> #insert sb.putString("\{fieldName}: {}"),
+      .Bool(b) -> #insert "sb.putString(t.\{fieldName}.show())",
+    }
+  };
+  #insert sb.putString("** ]");
+  #insert sb.build()
+}
+
+fn main(): int {
+  let todo1 = {};
+  let print = debugPrinter[Todo]();
+  print(todo1);
+  0
+}
