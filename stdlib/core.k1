@@ -159,10 +159,10 @@ ns char {
   }
 }
 
-impl[T: WriteText] Show for T {
+impl[T: Print] Show for T {
   fn show(self: Self): string { 
-    let* buf = List/withCapacity[char](8);
-    self.writeText(buf);
+    let* buf = List/empty[char]();
+    self.printTo(buf);
     string/wrapList(buf)
   }
 }

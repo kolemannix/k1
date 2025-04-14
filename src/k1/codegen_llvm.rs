@@ -1954,12 +1954,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             value_ptr,
                             pointee_ty.canonical_repr_type().print_to_string()
                         );
-                        // nocommit: Dereference doesn't currently make a copy, can we write
-                        // a program that demonstrates this is a bug? Feels like it should copy
-                        // let* p = { x: 1};
-                        // let myP = p.*; // just a ptr to p?
-                        // p.x* <- 2;
-                        // println(myP.x);
                         let value = if pointee_ty.is_aggregate() {
                             value_ptr.as_basic_value_enum()
                         } else {
