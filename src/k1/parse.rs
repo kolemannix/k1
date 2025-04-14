@@ -1247,7 +1247,7 @@ pub struct ParsedTypeConstraint {
 pub struct ParsedFunction {
     pub name: Identifier,
     pub type_params: Vec<ParsedTypeParam>,
-    // nocommit: Migrate to a single SliceHandle
+    // TODO(perf, efficient ast): Migrate params and context_params to a single SliceHandle
     pub params: Vec<FnArgDef>,
     pub context_params: Vec<FnArgDef>,
     pub ret_type: ParsedTypeExprId,
@@ -3650,7 +3650,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let function_id = self.module.add_function(ParsedFunction {
             name: func_name_id,
             type_params: type_arguments,
-            // nocommit poolslice pls
+            // TODO(perf, efficient ast): Migrate params and context_params to a single SliceHandle
             params: params.clone().into_iter().filter(|a| !a.modifiers.is_context()).collect(),
             context_params: params
                 .clone()
