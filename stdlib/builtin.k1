@@ -56,8 +56,8 @@ ability Writer {
   fn writeBytes(self: Self*, buffer: Buffer[byte]): unit
 }
 
-ability WriteText {
-  fn writeText[W: Writer](self: Self, w: W*): unit
+ability Print {
+  fn printTo[W: Writer](self: Self, w: W*): unit
 }
 
 // Show must have ability id 4
