@@ -23,9 +23,9 @@ deftype Pointer = builtin
 deftype f32 = builtin
 deftype f64 = builtin
 
-deftype Buffer[T] = { len: u64, data: T* }
+deftype Buffer[T] = { len: uword, data: T* }
 
-deftype List[T] = { len: u64, private buffer: Buffer[T] }
+deftype List[T] = { len: uword, private buffer: Buffer[T] }
 deftype string = { buffer: Buffer[char] }
 
 deftype Opt[T] = either None, Some(T)
@@ -129,9 +129,9 @@ ns k1 {
 /////////////////////////////////
 // Core sizing intrinsics
 
-intern fn sizeOf[T](): u64
-intern fn sizeOfStride[T](): u64
-intern fn alignOf[T](): u64
+intern fn sizeOf[T](): uword
+intern fn sizeOfStride[T](): uword
+intern fn alignOf[T](): uword
 
 ns compiler {
   intern fn location(): SourceLocation

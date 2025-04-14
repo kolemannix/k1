@@ -61,14 +61,14 @@ pub enum WordSize {
 }
 
 impl WordSize {
-    pub fn width(&self) -> NumericWidth {
+    pub const fn width(&self) -> NumericWidth {
         match self {
             WordSize::W32 => NumericWidth::B32,
             WordSize::W64 => NumericWidth::B64,
         }
     }
 
-    pub fn from_width(w: NumericWidth) -> WordSize {
+    pub const fn from_width(w: NumericWidth) -> WordSize {
         match w {
             NumericWidth::B32 => WordSize::W32,
             NumericWidth::B64 => WordSize::W64,
@@ -76,7 +76,7 @@ impl WordSize {
         }
     }
 
-    pub fn bits(&self) -> u32 {
+    pub const fn bits(&self) -> u32 {
         match self {
             WordSize::W32 => 32,
             WordSize::W64 => 64,
