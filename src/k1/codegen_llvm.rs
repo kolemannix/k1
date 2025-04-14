@@ -31,6 +31,7 @@ use inkwell::values::{
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel};
 use log::{debug, info, trace};
 
+use crate::compiler::WordSize;
 use crate::lex::SpanId;
 use crate::parse::{FileId, Identifier, NumericWidth};
 use crate::typer::scopes::ScopeId;
@@ -47,9 +48,6 @@ use crate::typer::{
     TypedFunction, TypedGlobalId, TypedIntValue, TypedMatchExpr, TypedModule, TypedStmt,
     TypedStmtId, UnaryOpKind, VariableId, WhileLoop,
 };
-
-// TODO: Migrate off WORD_SIZE_BITS; Use the module's config
-const WORD_SIZE_BITS: u64 = 64;
 
 #[derive(Debug)]
 pub struct CodegenError {
@@ -182,6 +180,7 @@ impl<'ctx> From<BasicValueEnum<'ctx>> for LlvmValue<'ctx> {
     }
 }
 
+// TODO: Move off this SizeInfo to typer::Layout
 #[derive(Debug, Clone, Copy)]
 pub struct SizeInfo {
     size_bits: u32,
@@ -192,12 +191,14 @@ pub struct SizeInfo {
     abi_align_bits: u32,
 }
 impl SizeInfo {
-    pub const POINTER: SizeInfo = SizeInfo {
-        size_bits: WORD_SIZE_BITS as u32,
-        stride_bits: WORD_SIZE_BITS as u32,
-        pref_align_bits: WORD_SIZE_BITS as u32,
-        abi_align_bits: WORD_SIZE_BITS as u32,
-    };
+    pub const fn pointer(size: WordSize) -> SizeInfo {
+        SizeInfo {
+            size_bits: size.bits() as u32,
+            stride_bits: size.bits() as u32,
+            pref_align_bits: size.bits() as u32,
+            abi_align_bits: size.bits() as u32,
+        }
+    }
     pub const ZERO: SizeInfo =
         SizeInfo { size_bits: 0, stride_bits: 0, pref_align_bits: 0, abi_align_bits: 0 };
 
