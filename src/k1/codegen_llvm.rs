@@ -34,8 +34,19 @@ use log::{debug, info, trace};
 use crate::lex::SpanId;
 use crate::parse::{FileId, Identifier, NumericWidth};
 use crate::typer::scopes::ScopeId;
-use crate::typer::types::*;
-use crate::typer::{Linkage as TyperLinkage, *};
+use crate::typer::types::{
+    FnParamType, IntegerType, Type, TypeDefnInfo, TypeId, BOOL_TYPE_ID, BUFFER_DATA_FIELD_NAME,
+    CHAR_TYPE_ID, I16_TYPE_ID, I32_TYPE_ID, I64_TYPE_ID, I8_TYPE_ID, NEVER_TYPE_ID,
+    POINTER_TYPE_ID, STRING_TYPE_ID, U16_TYPE_ID, U32_TYPE_ID, U64_TYPE_ID, U8_TYPE_ID,
+    UNIT_TYPE_ID, UWORD_TYPE_ID,
+};
+use crate::typer::{
+    AssignmentKind, BinaryOp, BinaryOpKind, Call, Callee, CastType, FunctionId, IntrinsicFunction,
+    LetStmt, Linkage as TyperLinkage, LoopExpr, MatchingCondition, MatchingConditionInstr,
+    StaticValue, StaticValueId, TypedBlock, TypedCast, TypedExpr, TypedExprId, TypedFloatValue,
+    TypedFunction, TypedGlobalId, TypedIntValue, TypedMatchExpr, TypedModule, TypedStmt,
+    TypedStmtId, UnaryOpKind, VariableId, WhileLoop,
+};
 
 // TODO: Migrate off WORD_SIZE_BITS; Use the module's config
 const WORD_SIZE_BITS: u64 = 64;
@@ -464,7 +475,6 @@ impl<'ctx> K1LlvmType<'ctx> {
 }
 
 struct BuiltinTypes<'ctx> {
-    int: IntType<'ctx>,
     unit: IntType<'ctx>,
     unit_value: IntValue<'ctx>,
     boolean: IntType<'ctx>,
@@ -475,6 +485,12 @@ struct BuiltinTypes<'ctx> {
     ptr: PointerType<'ctx>,
     ptr_sized_int: IntType<'ctx>,
     dynamic_lambda_object: StructType<'ctx>,
+}
+
+impl<'ctx> BuiltinTypes<'ctx> {
+    pub fn uword(&self) -> IntType<'ctx> {
+        self.ptr_sized_int
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -673,7 +689,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
         let ptr = ctx.ptr_type(AddressSpace::default());
         let builtin_types = BuiltinTypes {
-            int: ctx.i64_type(),
             unit: ctx.i8_type(),
             unit_value: ctx.i8_type().const_int(crate::typer::UNIT_BYTE_VALUE as u64, false),
             // If we switch bools to i8, we need to cast to i1 for branches
@@ -964,6 +979,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.ctx.i64_type(),
                 dw_ate_unsigned,
             )),
+            Type::Integer(IntegerType::UWord(w) | IntegerType::IWord(w)) => {
+                let llvm_type = self.builtin_types.ptr_sized_int;
+                assert_eq!(llvm_type.get_bit_width(), w.width().bits());
+                Ok(make_value_integer_type("uword", UWORD_TYPE_ID, llvm_type, dw_ate_unsigned))
+            }
             Type::Integer(IntegerType::I8) => {
                 Ok(make_value_integer_type("i8", I8_TYPE_ID, self.ctx.i8_type(), dw_ate_signed))
             }
@@ -983,7 +1003,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     NumericWidth::B32 => self.ctx.f32_type(),
                     NumericWidth::B64 => self.ctx.f64_type(),
                 };
-                let size = SizeInfo::scalar_value(float_type.size.bit_width());
+                let size = SizeInfo::scalar_value(float_type.size.bits());
                 let float_name = self.module.type_id_to_string(type_id);
                 Ok(LlvmValueType {
                     type_id,
@@ -1807,7 +1827,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
         let global_str_value = string_wrapper_struct.const_named_struct(&[char_buffer_struct
             .const_named_struct(&[
-                self.builtin_types.int.const_int(string_value.len() as u64, true).into(),
+                self.builtin_types.uword().const_int(string_value.len() as u64, false).into(),
                 global_str_data.as_pointer_value().into(),
             ])
             .as_basic_value_enum()]);
@@ -2820,7 +2840,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     #[allow(unused)]
     fn const_string_ptr(&self, string: &str, name: &str) -> PointerValue<'ctx> {
         let char_data = self.ctx.const_string(string.as_bytes(), false);
-        let length_value = self.builtin_types.int.const_int(string.len() as u64, false);
+        let length_value = self.builtin_types.uword().const_int(string.len() as u64, false);
         let char_data_global =
             self.llvm_module.add_global(char_data.get_type(), None, &format!("{name}_data"));
         char_data_global.set_initializer(&char_data);
@@ -2854,7 +2874,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     _ => unreachable!(),
                 };
                 let num_bytes = num_bits / 8;
-                let size_value = self.builtin_types.int.const_int(num_bytes as u64, false);
+                let size_value =
+                    self.builtin_types.ptr_sized_int.const_int(num_bytes as u64, false);
                 Ok(size_value.as_basic_value_enum().into())
             }
             IntrinsicFunction::BoolNegate => {
@@ -3243,7 +3264,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         );
         self.llvm_function_to_k1.insert(function_value, function_id);
 
-        if matches!(function.linkage, Linkage::External(_)) {
+        if matches!(function.linkage, TyperLinkage::External(_)) {
             return Ok(function_value);
         }
 

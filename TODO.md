@@ -41,23 +41,26 @@ New tagline? "C with typeclasses and tagged unions"
 - [ ] Support explicit type args in AnonEnumConstructor syntax 
 - [ ] Unit syntax of '()' makes no sense when we don't have tuples. What about `{}`
 - [x] Adopt `ecow`'s EcoVec
-- [ ] Introduce uword/iword types
 - [ ] Change FieldAccess semantics to work on struct references, and copy only the field out
       This saves copying the entire aggregate first with a Dereference instruction
-      
+- [ ] ThreadLocal globals
 
 - [x] Runtime-branching Allocator system (v2 is comptime branching)
   - [x] comptime enhancement to support this global initializer: `let* a: Arena* = { .. };`
   - [x] Global pointers, to enable
   - [x] The problem with passing an allocator around is all code becomes generic, or casts a pointer.
   - [x] Comptime structs!
-  - [ ] ThreadLocal values, to enable
-  - [ ] temp allocator to power Show/Print and List and string by default
-        Who initializes it? I don't love putting stuff in main.
-        But otherwise the user has to do it.
-        How low-level do we want to be? #if k1/RUNTIME
   - [x] alloca in loops fix
   - [x] Parameterize stdlib over the current allocator ()
+
+- [ ] vm: static execution
+  - [ ] Introduce uword/iword types
+  - [ ] Switch to a single stack
+  - [ ] Move to intrinsic: system core memory functions
+  - [ ] Move to intrinsic: memcpy/memmove
+  - [ ] Move to intrinsic: `write`
+  - [ ] Move to intrinsic: `exit`
+  - [ ] Move to intrinsic: `crash` (?)
 
 - [ ] zackoverflow.dev "I really enjoy writing Zig code. I love it’s clean syntax, comptime, packed structs and arbitrary bit-width integers, the Allocator API, and useful data-oriented design abstractions in the standard library."
       What would it take to check those boxes in K1 with a faster compiler? Why is Zig's compiler slow if they're so ruthlessly

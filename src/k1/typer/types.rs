@@ -90,27 +90,29 @@ pub const U8_TYPE_ID: TypeId = TypeId(NonZeroU32::new(1).unwrap());
 pub const U16_TYPE_ID: TypeId = TypeId(NonZeroU32::new(2).unwrap());
 pub const U32_TYPE_ID: TypeId = TypeId(NonZeroU32::new(3).unwrap());
 pub const U64_TYPE_ID: TypeId = TypeId(NonZeroU32::new(4).unwrap());
-pub const I8_TYPE_ID: TypeId = TypeId(NonZeroU32::new(5).unwrap());
-pub const I16_TYPE_ID: TypeId = TypeId(NonZeroU32::new(6).unwrap());
-pub const I32_TYPE_ID: TypeId = TypeId(NonZeroU32::new(7).unwrap());
-pub const I64_TYPE_ID: TypeId = TypeId(NonZeroU32::new(8).unwrap());
+pub const UWORD_TYPE_ID: TypeId = TypeId(NonZeroU32::new(5).unwrap());
+pub const I8_TYPE_ID: TypeId = TypeId(NonZeroU32::new(6).unwrap());
+pub const I16_TYPE_ID: TypeId = TypeId(NonZeroU32::new(7).unwrap());
+pub const I32_TYPE_ID: TypeId = TypeId(NonZeroU32::new(8).unwrap());
+pub const I64_TYPE_ID: TypeId = TypeId(NonZeroU32::new(9).unwrap());
+pub const IWORD_TYPE_ID: TypeId = TypeId(NonZeroU32::new(10).unwrap());
 
-pub const UNIT_TYPE_ID: TypeId = TypeId(NonZeroU32::new(9).unwrap());
-pub const CHAR_TYPE_ID: TypeId = TypeId(NonZeroU32::new(10).unwrap());
-pub const BOOL_TYPE_ID: TypeId = TypeId(NonZeroU32::new(11).unwrap());
-pub const NEVER_TYPE_ID: TypeId = TypeId(NonZeroU32::new(12).unwrap());
-pub const POINTER_TYPE_ID: TypeId = TypeId(NonZeroU32::new(13).unwrap());
-pub const F32_TYPE_ID: TypeId = TypeId(NonZeroU32::new(14).unwrap());
-pub const F64_TYPE_ID: TypeId = TypeId(NonZeroU32::new(15).unwrap());
+pub const UNIT_TYPE_ID: TypeId = TypeId(NonZeroU32::new(11).unwrap());
+pub const CHAR_TYPE_ID: TypeId = TypeId(NonZeroU32::new(12).unwrap());
+pub const BOOL_TYPE_ID: TypeId = TypeId(NonZeroU32::new(13).unwrap());
+pub const NEVER_TYPE_ID: TypeId = TypeId(NonZeroU32::new(14).unwrap());
+pub const POINTER_TYPE_ID: TypeId = TypeId(NonZeroU32::new(15).unwrap());
+pub const F32_TYPE_ID: TypeId = TypeId(NonZeroU32::new(16).unwrap());
+pub const F64_TYPE_ID: TypeId = TypeId(NonZeroU32::new(17).unwrap());
 
 pub const BUFFER_DATA_FIELD_NAME: &str = "data";
-pub const BUFFER_TYPE_ID: TypeId = TypeId(NonZeroU32::new(19).unwrap());
+pub const BUFFER_TYPE_ID: TypeId = TypeId(NonZeroU32::new(21).unwrap());
 
-pub const LIST_TYPE_ID: TypeId = TypeId(NonZeroU32::new(24).unwrap());
-pub const STRING_TYPE_ID: TypeId = TypeId(NonZeroU32::new(27).unwrap());
-pub const OPTIONAL_TYPE_ID: TypeId = TypeId(NonZeroU32::new(32).unwrap());
-pub const COMPILER_SOURCE_LOC_TYPE_ID: TypeId = TypeId(NonZeroU32::new(33).unwrap());
-pub const ORDERING_TYPE_ID: TypeId = TypeId(NonZeroU32::new(37).unwrap());
+pub const LIST_TYPE_ID: TypeId = TypeId(NonZeroU32::new(26).unwrap());
+pub const STRING_TYPE_ID: TypeId = TypeId(NonZeroU32::new(29).unwrap());
+pub const OPTIONAL_TYPE_ID: TypeId = TypeId(NonZeroU32::new(34).unwrap());
+pub const COMPILER_SOURCE_LOC_TYPE_ID: TypeId = TypeId(NonZeroU32::new(35).unwrap());
+pub const ORDERING_TYPE_ID: TypeId = TypeId(NonZeroU32::new(39).unwrap());
 
 #[derive(Debug, Clone)]
 pub struct ListType {
@@ -224,28 +226,27 @@ pub enum IntegerType {
     U16,
     U32,
     U64,
+    UWord(WordSize),
     I8,
     I16,
     I32,
     I64,
-}
-
-#[derive(Debug, Clone)]
-pub struct FloatType {
-    pub size: NumericWidth,
+    IWord(WordSize),
 }
 
 impl Display for IntegerType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            IntegerType::U8 => write!(f, "u8"),
-            IntegerType::U16 => write!(f, "u16"),
-            IntegerType::U32 => write!(f, "u32"),
-            IntegerType::U64 => write!(f, "u64"),
-            IntegerType::I8 => write!(f, "i8"),
-            IntegerType::I16 => write!(f, "i16"),
-            IntegerType::I32 => write!(f, "i32"),
-            IntegerType::I64 => write!(f, "i64"),
+            Self::U8 => write!(f, "u8"),
+            Self::U16 => write!(f, "u16"),
+            Self::U32 => write!(f, "u32"),
+            Self::U64 => write!(f, "u64"),
+            Self::UWord(w) => write!(f, "uword{}", w.width().bits()),
+            Self::I8 => write!(f, "i8"),
+            Self::I16 => write!(f, "i16"),
+            Self::I32 => write!(f, "i32"),
+            Self::I64 => write!(f, "i64"),
+            Self::IWord(w) => write!(f, "iword{}", w.width().bits()),
         }
     }
 }
@@ -253,32 +254,40 @@ impl Display for IntegerType {
 impl IntegerType {
     pub fn type_id(&self) -> TypeId {
         match self {
-            IntegerType::U8 => U8_TYPE_ID,
-            IntegerType::U16 => U16_TYPE_ID,
-            IntegerType::U32 => U32_TYPE_ID,
-            IntegerType::U64 => U64_TYPE_ID,
-            IntegerType::I8 => I8_TYPE_ID,
-            IntegerType::I16 => I16_TYPE_ID,
-            IntegerType::I32 => I32_TYPE_ID,
-            IntegerType::I64 => I64_TYPE_ID,
+            Self::U8 => U8_TYPE_ID,
+            Self::U16 => U16_TYPE_ID,
+            Self::U32 => U32_TYPE_ID,
+            Self::U64 => U64_TYPE_ID,
+            Self::UWord(_) => UWORD_TYPE_ID,
+            Self::I8 => I8_TYPE_ID,
+            Self::I16 => I16_TYPE_ID,
+            Self::I32 => I32_TYPE_ID,
+            Self::I64 => I64_TYPE_ID,
+            Self::IWord(_) => IWORD_TYPE_ID,
         }
     }
 
     pub fn width(&self) -> NumericWidth {
         match self {
-            IntegerType::U8 | IntegerType::I8 => NumericWidth::B8,
-            IntegerType::U16 | IntegerType::I16 => NumericWidth::B16,
-            IntegerType::U32 | IntegerType::I32 => NumericWidth::B32,
-            IntegerType::U64 | IntegerType::I64 => NumericWidth::B64,
+            Self::U8 | Self::I8 => NumericWidth::B8,
+            Self::U16 | Self::I16 => NumericWidth::B16,
+            Self::U32 | Self::I32 => NumericWidth::B32,
+            Self::U64 | Self::I64 => NumericWidth::B64,
+            Self::UWord(word_size) | Self::IWord(word_size) => word_size.width(),
         }
     }
 
     pub fn is_signed(&self) -> bool {
         match self {
-            IntegerType::U8 | IntegerType::U16 | IntegerType::U32 | IntegerType::U64 => false,
-            IntegerType::I8 | IntegerType::I16 | IntegerType::I32 | IntegerType::I64 => true,
+            Self::U8 | Self::U16 | Self::U32 | Self::U64 | Self::UWord(_) => false,
+            Self::I8 | Self::I16 | Self::I32 | Self::I64 | Self::IWord(_) => true,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct FloatType {
+    pub size: NumericWidth,
 }
 
 // pub struct Spanned<T> {
@@ -512,10 +521,12 @@ impl std::hash::Hash for Type {
                 IntegerType::U16 => "u16".hash(state),
                 IntegerType::U32 => "u32".hash(state),
                 IntegerType::U64 => "u64".hash(state),
+                IntegerType::UWord(_) => "uword".hash(state),
                 IntegerType::I8 => "i8".hash(state),
                 IntegerType::I16 => "i16".hash(state),
                 IntegerType::I32 => "i32".hash(state),
                 IntegerType::I64 => "i64".hash(state),
+                IntegerType::IWord(_) => "iword".hash(state),
             },
             Type::Bool => "bool".hash(state),
             Type::Struct(s) => {
@@ -585,7 +596,7 @@ impl std::hash::Hash for Type {
             }
             Type::Float(ft) => {
                 "float".hash(state);
-                ft.size.bit_width().hash(state);
+                ft.size.bits().hash(state);
             }
             Type::Pointer => {
                 "ptr".hash(state);
@@ -1255,9 +1266,9 @@ impl Types {
             Type::Unit => Some(Layout::from_scalar_bits(8)),
             Type::Char => Some(Layout::from_scalar_bits(8)),
             Type::Integer(integer_type) => {
-                Some(Layout::from_scalar_bits(integer_type.width().bit_width()))
+                Some(Layout::from_scalar_bits(integer_type.width().bits()))
             }
-            Type::Float(float_type) => Some(Layout::from_scalar_bits(float_type.size.bit_width())),
+            Type::Float(float_type) => Some(Layout::from_scalar_bits(float_type.size.bits())),
             Type::Bool => Some(Layout::from_scalar_bits(8)),
             Type::Pointer => Some(Layout::from_scalar_bits(self.word_size_bits())),
             Type::Struct(struct_type) => {

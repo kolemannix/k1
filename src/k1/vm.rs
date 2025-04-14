@@ -12,6 +12,7 @@ use log::debug;
 use smallvec::{smallvec, SmallVec};
 
 use crate::{
+    compiler::WordSize,
     errf, failf,
     lex::SpanId,
     nz_u32_id,
@@ -20,7 +21,7 @@ use crate::{
         self, make_error, make_fail_span,
         types::{
             IntegerType, StructTypeField, Type, TypeId, TypedEnumVariant, Types, BOOL_TYPE_ID,
-            CHAR_TYPE_ID, POINTER_TYPE_ID, STRING_TYPE_ID, U64_TYPE_ID, UNIT_TYPE_ID,
+            CHAR_TYPE_ID, POINTER_TYPE_ID, STRING_TYPE_ID, UNIT_TYPE_ID,
         },
         BinaryOpKind, Call, CastType, IntrinsicFunction, Layout, MatchingCondition,
         MatchingConditionInstr, StaticValue, TypedExpr, TypedExprId, TypedFloatValue,
@@ -1140,12 +1141,20 @@ pub fn load_value(
                 match integer_type {
                     IntegerType::U8 => TypedIntValue::U8(ptr.read()),
                     IntegerType::U16 => TypedIntValue::U16((ptr as *const u16).read()),
-                    IntegerType::U32 => TypedIntValue::U32((ptr as *const u32).read()),
-                    IntegerType::U64 => TypedIntValue::U64((ptr as *const u64).read()),
+                    IntegerType::U32 | IntegerType::UWord(WordSize::W32) => {
+                        TypedIntValue::U32((ptr as *const u32).read())
+                    }
+                    IntegerType::U64 | IntegerType::UWord(WordSize::W64) => {
+                        TypedIntValue::U64((ptr as *const u64).read())
+                    }
                     IntegerType::I8 => TypedIntValue::I8((ptr as *const i8).read()),
                     IntegerType::I16 => TypedIntValue::I16((ptr as *const i16).read()),
-                    IntegerType::I32 => TypedIntValue::I32((ptr as *const i32).read()),
-                    IntegerType::I64 => TypedIntValue::I64((ptr as *const i64).read()),
+                    IntegerType::I32 | IntegerType::IWord(WordSize::W32) => {
+                        TypedIntValue::I32((ptr as *const i32).read())
+                    }
+                    IntegerType::I64 | IntegerType::IWord(WordSize::W64) => {
+                        TypedIntValue::I64((ptr as *const i64).read())
+                    }
                 }
             };
             Ok(Value::Int(int_value))
@@ -1271,7 +1280,7 @@ fn build_struct(
 
 pub fn offset_at_index(types: &Types, type_id: TypeId, index: usize) -> usize {
     let size_bytes = types.get_layout(type_id).map(|l| l.size_bytes()).unwrap_or(0);
-    index as usize * size_bytes
+    index * size_bytes
 }
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
@@ -1645,7 +1654,7 @@ fn render_debug_value(w: &mut impl std::fmt::Write, vm: &mut Vm, m: &TypedModule
                             .expect_int()
                             .expect_u64();
                         let preview_count = min(len, 10);
-                        write!(w, "<buffer len={len} ");
+                        write!(w, "<buffer len={len} ").unwrap();
                         w.write_str("[").unwrap();
                         let elem_type = buffer.type_args[0];
                         let data_ptr =

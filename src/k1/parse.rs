@@ -1139,7 +1139,7 @@ pub enum NumericWidth {
 }
 
 impl NumericWidth {
-    pub fn bit_width(&self) -> u32 {
+    pub fn bits(&self) -> u32 {
         match self {
             NumericWidth::B8 => 8,
             NumericWidth::B16 => 16,
@@ -1148,7 +1148,7 @@ impl NumericWidth {
         }
     }
 
-    pub fn byte_width(&self) -> usize {
+    pub fn bytes(&self) -> usize {
         match self {
             NumericWidth::B8 => 1,
             NumericWidth::B16 => 2,
