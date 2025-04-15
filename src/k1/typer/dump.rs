@@ -162,7 +162,7 @@ impl TypedModule {
 
     pub fn type_id_to_string_ext(&self, type_id: TypeId, expand: bool) -> String {
         let mut s = String::with_capacity(1028);
-        self.display_type_ext(type_id, expand, &mut s);
+        self.display_type_ext(type_id, expand, &mut s).unwrap();
         s
     }
 

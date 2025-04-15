@@ -241,12 +241,12 @@ impl Display for IntegerType {
             Self::U16 => write!(f, "u16"),
             Self::U32 => write!(f, "u32"),
             Self::U64 => write!(f, "u64"),
-            Self::UWord(w) => write!(f, "uword{}", w.width().bits()),
+            Self::UWord(_) => write!(f, "uword"),
             Self::I8 => write!(f, "i8"),
             Self::I16 => write!(f, "i16"),
             Self::I32 => write!(f, "i32"),
             Self::I64 => write!(f, "i64"),
-            Self::IWord(w) => write!(f, "iword{}", w.width().bits()),
+            Self::IWord(_) => write!(f, "iword"),
         }
     }
 }

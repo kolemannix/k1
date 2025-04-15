@@ -80,8 +80,8 @@ ns ability_generic {
     assert(added.x == (1 + 1) as i32);
     assert(added.y == (2 + 2) as i32);
   
-    assert((3: i32).to(): string == "3");
-    assert(From/from(3: i32): string == "3");
+    assertEquals((3: i32).to(): string, "3");
+    assertEquals(From/from(3: i32): string, "3");
   }
 
 }
