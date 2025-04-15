@@ -752,8 +752,8 @@ impl TypedModule {
             StaticValue::String(s, _) => {
                 write!(w, "\"{}\"", s)
             }
-            StaticValue::Pointer(p, _) => {
-                write!(w, "Pointer({})", p)
+            StaticValue::NullPointer(_) => {
+                write!(w, "NULL")
             }
             StaticValue::Struct(compile_time_struct) => {
                 w.write_str("{ ")?;
