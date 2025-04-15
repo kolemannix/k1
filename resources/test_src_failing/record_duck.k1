@@ -10,7 +10,7 @@ fn quack(d: { quack: int}): int {
   return d.quack;
 }
 
-fn main(): int {
+fn main(): i32 {
   let duck: Duck = {
     quack: 555
   };

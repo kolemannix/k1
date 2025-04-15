@@ -3,7 +3,7 @@ ns IntRange {
   fn make(start: int, end: int): IntRange { { start, end } }
   fn upTo(end: int): IntRange { { start: 0, end } }
 }
-deftype IntRangeIterator = { range: IntRange, offset: i64 }
+deftype IntRangeIterator = { range: IntRange, offset: int }
 
 ns IntRangeIterator {
   fn make(range: IntRange): IntRangeIterator { { range, offset: 0 } }

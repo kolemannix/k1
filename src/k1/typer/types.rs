@@ -1309,15 +1309,12 @@ impl Types {
                     if struct_repr.align_bits > max_variant_align {
                         max_variant_align = struct_repr.align_bits
                     };
-                    if struct_repr.stride_bits > max_variant_size {
-                        max_variant_size = struct_repr.stride_bits
+                    if struct_repr.size_bits > max_variant_size {
+                        max_variant_size = struct_repr.size_bits
                     };
                 }
-                let enum_size = Layout {
-                    size_bits: max_variant_size,
-                    stride_bits: max_variant_size,
-                    align_bits: max_variant_align,
-                };
+                let enum_size =
+                    Layout { size_bits: max_variant_size, align_bits: max_variant_align };
                 Some(enum_size)
             }
             Type::EnumVariant(variant) => self.compute_type_layout(variant.enum_type_id),

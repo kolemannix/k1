@@ -8,19 +8,19 @@
 // its fully populated
 ns Buffer {
 
-  fn bufferSizeBytes[T](count: u64): u64 { count * sizeOfStride[T]() }
+  fn bufferSizeBytes[T](count: uword): uword { count * sizeOfStride[T]() }
 
   fn dataPointer[T](self: Buffer[T]): Pointer { self.data as Pointer }
 
-  fn fromRawParts[T](len: u64, data: Pointer): Buffer[T] { 
+  fn fromRawParts[T](len: uword, data: Pointer): Buffer[T] { 
     { len: len, data: data as T* }
   }
 
-  fn fromBaseAndCount[T](len: u64, data: T*): Buffer[T] { 
+  fn fromBaseAndCount[T](len: uword, data: T*): Buffer[T] { 
     { len: len, data }
   }
 
-  fn _allocateIn[T](context alloc: mem/AllocMode)(count: u64): Buffer[T] {
+  fn _allocateIn[T](context alloc: mem/AllocMode)(count: uword): Buffer[T] {
     let ptr = if count == 0 {
       Pointer/NULL
     } else {
@@ -31,11 +31,11 @@ ns Buffer {
     { len: count, data }
   }
 
-  fn _allocate[T](count: u64): Buffer[T] {
+  fn _allocate[T](count: uword): Buffer[T] {
     _allocateIn[T](context mem/AllocMode/CURRENT)(count)
   }
 
-  fn _growTo[T](context alloc: mem/AllocMode)(self: Buffer[T]*, newCount: u64): unit {
+  fn _growTo[T](context alloc: mem/AllocMode)(self: Buffer[T]*, newCount: uword): unit {
     if mem/resolveMode(alloc).supportsRealloc() {
       let newSize = bufferSizeBytes[T](newCount);
       let oldSize = bufferSizeBytes[T](self.len);
@@ -53,13 +53,13 @@ ns Buffer {
     }
   }
 
-  fn _enlargedCloneIn[T](context alloc: mem/AllocMode)(self: Buffer[T], newCount: u64): Buffer[T] {
+  fn _enlargedCloneIn[T](context alloc: mem/AllocMode)(self: Buffer[T], newCount: uword): Buffer[T] {
     let newBuffer = _allocateIn[T](newCount);
     _copyFrom[T](self, newBuffer, self.len);
     newBuffer
   }
 
-  fn _enlargedClone[T](self: Buffer[T], newCount: u64): Buffer[T] {
+  fn _enlargedClone[T](self: Buffer[T], newCount: uword): Buffer[T] {
     _enlargedCloneIn[T](context mem/AllocMode/CURRENT)(self, newCount)
   }
 
@@ -67,7 +67,7 @@ ns Buffer {
     { len: 0, data: Pointer/NULL as T* }
   }
 
-  fn _copyFrom[T](source: Buffer[T], dest: Buffer[T], count: u64): unit {
+  fn _copyFrom[T](source: Buffer[T], dest: Buffer[T], count: uword): unit {
     if count > source.len {
       crash("Buffer copy source index out of bounds: \{count}")
     };
@@ -89,11 +89,11 @@ ns Buffer {
     clone
   }
 
-  fn sizeBytes[T](self: Buffer[T]): u64 { bufferSizeBytes[T](self.len) }
+  fn sizeBytes[T](self: Buffer[T]): uword { bufferSizeBytes[T](self.len) }
 
-  fn filledIn[T](context mode: mem/AllocMode)(size: u64, value: T): Buffer[T] {
+  fn filledIn[T](context mode: mem/AllocMode)(size: uword, value: T): Buffer[T] {
     let buf: Buffer[T] = _allocateIn[T](size);
-    let mut i = 0: u64;
+    let mut i = 0: uword;
     while i < size {
       buf.set(i, value);
       i = i + 1;
@@ -101,11 +101,11 @@ ns Buffer {
     buf
   }
 
-  fn filled[T](size: u64, value: T): Buffer[T] {
+  fn filled[T](size: uword, value: T): Buffer[T] {
     Buffer/filledIn[T](context mem/AllocMode/CURRENT)(size, value)
   }
 
-  fn slice[T](self: Buffer[T], start: u64, end: u64): Buffer[T] {
+  fn slice[T](self: Buffer[T], start: uword, end: uword): Buffer[T] {
     if end < start or self.len == 0 {
       return(empty[T]())
     };
@@ -118,22 +118,22 @@ ns Buffer {
     { len: newLen, data: newBase }
   }
 
-  fn take[T](self: Buffer[T], count: u64): Buffer[T] { self.slice(0,     count) }
-  fn drop[T](self: Buffer[T], count: u64): Buffer[T] { self.slice(count, self.len) }
+  fn take[T](self: Buffer[T], count: uword): Buffer[T] { self.slice(0,     count) }
+  fn drop[T](self: Buffer[T], count: uword): Buffer[T] { self.slice(count, self.len) }
 
-  fn getRef[T](self: Buffer[T], index: u64): T* {
+  fn getRef[T](self: Buffer[T], index: uword): T* {
     if index >= self.len {
       crash("Buffer index out of bounds")
     };
     self.dataPointer().refAtIndex[T](index)
   }
 
-  fn set[T](self: Buffer[T], index: u64, elem: T): unit {
+  fn set[T](self: Buffer[T], index: uword, elem: T): unit {
     let tRef = self.getRef(index);
     tRef <- elem;
   }
 
-  fn get[T](self: Buffer[T], index: u64): T {
+  fn get[T](self: Buffer[T], index: uword): T {
     let tRef = self.getRef(index);
     tRef.*
   }
@@ -186,7 +186,7 @@ ns Buffer {
     new
   }
 
-  fn swap[T](self: Buffer[T]*, indexA: u64, indexB: u64): unit {
+  fn swap[T](self: Buffer[T]*, indexA: uword, indexB: uword): unit {
     let aRef = self.*.getRef(indexA);
     let bRef = self.*.getRef(indexB);
     let bValue = bRef.*;
@@ -236,7 +236,7 @@ impl Equals for Buffer[int] {
 
 deftype BufferIterator[T] = {
   buf: Buffer[T],
-  pos: u64
+  pos: uword
 }
 ns BufferIterator {
   fn fromBuffer[T](buf: Buffer[T]): BufferIterator[T] { 
@@ -252,14 +252,14 @@ impl[T] Iterator[Item = T] for BufferIterator[T] {
       some(item)
     } else .None
   }
-  fn sizeHint(self: Self): { atLeast: u64, atMost: u64? } { 
+  fn sizeHint(self: Self): { atLeast: uword, atMost: uword? } { 
     let rem = self.buf.len - self.pos;
     { atLeast: rem, atMost: some(rem) }
   }
-  fn advanceBy(self: Self*, n: u64): unit {
+  fn advanceBy(self: Self*, n: uword): unit {
     self.pos* <- self.pos + n
   }
-  fn nth(self: Self*, n: u64): Item? {
+  fn nth(self: Self*, n: uword): Item? {
     self.advanceBy(n);
     self.next()
   }

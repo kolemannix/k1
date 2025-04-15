@@ -50,7 +50,7 @@ ns rt {
 
 }
 
-fn main(): int {
+fn main(): i32 {
    #if K1_RT rt/init();
    // Compiler Setting to inject a context value equal to the global constant rt/ALLOC_MODE_SYSTEM_DEFAULT
    // to opt out of worrying about allocation for that program. If enabled, how do we prevent users from accidentally using it?

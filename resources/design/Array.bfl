@@ -14,7 +14,7 @@ fn sort<T>(x: let mut Array<T>): () fails String {
 }
 
 
-fn main(): int {
+fn main(): i32 {
   let leet: Array<int> = [1, 3, 3, 7];
   leet[3]
 }

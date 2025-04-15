@@ -40,7 +40,7 @@ impl Show for Color {
   }
 }
 
-fn main(): int {
+fn main(): i32 {
 
   // File IO
   let input: string = Files::readToString("k1/dogfood/aoc/2023/2.txt");

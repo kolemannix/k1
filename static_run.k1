@@ -1,6 +1,6 @@
 // Has to appear before its static usage :'(
 fn id(i: int): int { i }
-fn main(): int {
+fn main(): i32 {
 
   // String creation (special case)
   #static "Hello, Static";

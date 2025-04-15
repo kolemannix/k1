@@ -10,7 +10,7 @@ impl Show for Color {
   }
 }
 
-fn main(): int {
+fn main(): i32 {
 
   let input: string = Files/readToString("/Users/knix/dev/k1/dogfood/aoc/2023/2.txt");
 

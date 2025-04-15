@@ -2,7 +2,7 @@ fn increment(x: int*): unit {
   x = (*x) + 1;
 }
 
-fn main(): int {
+fn main(): i32 {
   let i: int* = 0;
   increment(i);
   printIt(*i);

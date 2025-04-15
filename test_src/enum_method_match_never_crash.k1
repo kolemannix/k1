@@ -20,7 +20,7 @@ ns enum_method_match_never {
 
 }
 
-fn main(): int {
+fn main(): i32 {
     enum_method_match_never/isVariant();
 
     use enum_method_match_never/E;

@@ -12,7 +12,7 @@ fn test(): unit {
 
   // Move 8 bytes
   assert(sizeOf[int]() == 8);
-  let pointShifted = ((pointPtr as u64) + sizeOf[int]()) as Pointer;
+  let pointShifted = ((pointPtr as uword) + sizeOf[int]()) as Pointer;
   let point3 = pointShifted as Point3*;
 
   // x is now y, y is now z, z is now random bits

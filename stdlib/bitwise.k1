@@ -43,6 +43,15 @@ impl Bitwise for u64 {
   intern fn shiftRight(self: u64, other: u64): u64
 }
 
+impl Bitwise for uword {
+  intern fn bitNot(self: uword): uword
+  intern fn bitAnd(self: uword, other: uword): uword
+  intern fn bitOr(self: uword, other: uword): uword
+  intern fn xor(self: uword, other: uword): uword
+  intern fn shiftLeft(self: uword, other: uword): uword
+  intern fn shiftRight(self: uword, other: uword): uword
+}
+
 impl Bitwise for i8 {
   intern fn bitNot(self: i8): i8
   intern fn bitAnd(self: i8, other: i8): i8
@@ -77,4 +86,13 @@ impl Bitwise for i64 {
   intern fn xor(self: i64, other: i64): i64
   intern fn shiftLeft(self: i64, other: i64): i64
   intern fn shiftRight(self: i64, other: i64): i64
+}
+
+impl Bitwise for iword {
+  intern fn bitNot(self: iword): iword
+  intern fn bitAnd(self: iword, other: iword): iword
+  intern fn bitOr(self: iword, other: iword): iword
+  intern fn xor(self: iword, other: iword): iword
+  intern fn shiftLeft(self: iword, other: iword): iword
+  intern fn shiftRight(self: iword, other: iword): iword
 }

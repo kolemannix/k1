@@ -16,17 +16,17 @@ ns List {
     withCapacity[T](0)
   }
 
-  fn filled[T](size: u64, value: T): List[T] {
+  fn filled[T](size: uword, value: T): List[T] {
     let buffer = Buffer/filled(size, value);
     { len: size, buffer: buffer }
   }
 
-  fn withCapacity[T](cap: u64): List[T] {
+  fn withCapacity[T](cap: uword): List[T] {
     let buffer = Buffer/_allocate[T](cap);
     { len: 0, buffer: buffer }
   }
 
-  fn reserve[T](self: List[T]*, count: u64): unit {
+  fn reserve[T](self: List[T]*, count: uword): unit {
     if self.cap() >= count { return(()) };
     self.buffer*._growTo[T](context ALLOC_MODE)(count);
     assertdbg(self.buffer.len == count);
@@ -47,24 +47,24 @@ ns List {
 
   fn innerBuffer[T](self: List[T]): Buffer[T] { self.buffer }
 
-  fn cap[T](self: List[T]): u64 { self.buffer.len }
+  fn cap[T](self: List[T]): uword { self.buffer.len }
 
-  fn getRef[T](self: List[T], index: u64): T* {
+  fn getRef[T](self: List[T], index: uword): T* {
     self.buffer.getRef[T](index)
   }
 
-  fn set[T](self: List[T], index: u64, elem: T): unit {
+  fn set[T](self: List[T], index: uword, elem: T): unit {
     self.buffer.set(index, elem);
   }
 
-  fn get[T](self: List[T], index: u64): T {
+  fn get[T](self: List[T], index: uword): T {
     if index >= self.len {
       crash("List index out of bounds")
     };
     self.buffer.get(index)
   }
 
-  fn getOpt[T](self: List[T], index: u64): T? {
+  fn getOpt[T](self: List[T], index: uword): T? {
     if index >= self.len {
       .None
     } else .Some(self.buffer.get(index))
@@ -72,7 +72,7 @@ ns List {
 
   fn _grow[T](self: List[T]*): unit {
     let elemSize = sizeOf[T]();
-    let newCap: u64 = if self.buffer.isEmpty() {
+    let newCap: uword = if self.buffer.isEmpty() {
       // For large elements, just allocate what's needed - Rust's RawVec does this :)
       if elemSize >= 1024 1 else 8
     } else {
@@ -97,7 +97,7 @@ ns List {
     ()
   }
 
-  fn slice[T](self: List[T], start: u64, end: u64): Buffer[T] {
+  fn slice[T](self: List[T], start: uword, end: uword): Buffer[T] {
     if self.len == 0 return(Buffer/empty[T]());
     if end > self.len { crash("List slice end out of bounds: \{end}") };
     self.buffer.slice(start, end)
@@ -142,8 +142,8 @@ ns List {
   }
 
   fn reverse[T](self: List[T]*): unit {
-    let mut i = 0:u64;
-    while (i < (self.len / 2:u64)) {
+    let mut i = 0:uword;
+    while (i < (self.len / 2:uword)) {
       let j = self.len - i - 1;
       self.swap(i, j);
       i = i + 1;
@@ -171,7 +171,7 @@ ns List {
     self.appendBufferIn(context mem/AllocMode/CURRENT)(other)
   }
 
-  fn swap[T](self: List[T]*, indexA: u64, indexB: u64): unit {
+  fn swap[T](self: List[T]*, indexA: uword, indexB: uword): unit {
     let aRef = self.*.getRef(indexA);
     let bRef = self.*.getRef(indexB);
     let bValue = bRef.*;
@@ -201,7 +201,7 @@ ns List {
     left.sort();
     right.sort();
   
-    let mut i: u64 = 0;
+    let mut i: uword = 0;
     for item in left.* do {
       input.*.set(i, item);
       i = i + 1;
@@ -293,7 +293,7 @@ impl Equals for List[int] {
 impl[T: Equals] Equals for List[T] {
   fn equals(self: List[T], other: List[T]): bool {
     if self.len != other.len false else {
-      let mut i: u64 = 0;
+      let mut i: uword = 0;
       while i < self.len {
         if self.get(i) != other.get(i) {
           return(false);

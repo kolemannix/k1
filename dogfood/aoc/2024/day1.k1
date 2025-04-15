@@ -1,4 +1,4 @@
-fn main(): int {
+fn main(): i32 {
   let context alloc = Allocator/initDefault();
   let input = files/readToString("/Users/knix/dev/k1/dogfood/aoc/2024/day1.txt");
 

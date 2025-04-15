@@ -12,7 +12,7 @@ fn bothNever(b: bool): int {
   }
 }
 
-fn main(): int {
+fn main(): i32 {
   assert(singleNever(true) == 0);
   bothNever(false);
   0
