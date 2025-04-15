@@ -1710,10 +1710,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let string_struct = self.codegen_string_struct(boxed_str).unwrap();
                 string_struct.as_basic_value_enum()
             }
-            StaticValue::Pointer(ptr, span) => {
-                if *ptr != 0 {
-                    return failf!(*span, "comptime Pointer (raw address) that was not zero; I have no idea what to do with that. Maybe we enhance that type such that 'NULL' is not zero but a part of the type");
-                }
+            StaticValue::NullPointer(_span) => {
                 self.ctx.ptr_type(AddressSpace::default()).const_null().as_basic_value_enum()
             }
             StaticValue::Struct(s) => {

@@ -352,7 +352,7 @@ impl Print for bool {
   "#;
     let mut module = make_test_module();
     let mut parser = set_up(input, &mut module);
-    let ability_result = parser.parse_definition();
+    let ability_result = parser.parse_definition(K::Eof);
     eprintln!("{:?}", ability_result);
     assert!(ability_result.is_err());
     Ok(())

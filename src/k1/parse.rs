@@ -2000,7 +2000,12 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn extend_to_here(&mut self, span: SpanId) -> SpanId {
-        self.extend_span(span, self.peek_back().span)
+        let here = self.peek_back();
+        if here.kind == K::Eof {
+            span
+        } else {
+            self.extend_span(span, here.span)
+        }
     }
 
     fn extend_span(&mut self, span1: SpanId, span2: SpanId) -> SpanId {
@@ -3877,17 +3882,18 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             t => return Err(error_expected("{ or ;", t)),
         };
         let mut definitions = Vec::new();
-        while let Some(def) = self.parse_definition()? {
+        let terminator = if is_braced { K::CloseBrace } else { K::Eof };
+        while let Some(def) = self.parse_definition(terminator)? {
             definitions.push(def);
         }
-        if is_braced {
-            self.expect_eat_token(K::CloseBrace)?;
-        } else {
-            let is_end = self.peek().kind == K::Eof;
-            if !is_end {
-                return Err(error_expected("end of file", self.peek()));
-            }
-        }
+        // if is_braced {
+        //     self.expect_eat_token(K::CloseBrace)?;
+        // } else {
+        //     let is_end = self.peek().kind == K::Eof;
+        //     if !is_end {
+        //         return Err(error_expected("end of file", self.peek()));
+        //     }
+        // }
         let name = self.intern_ident_token(ident);
         let span = self.extend_to_here(keyword.span);
         let namespace_id = self.module.add_namespace(ParsedNamespace {
@@ -3918,7 +3924,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(Some(parsed_use_id))
     }
 
-    pub fn parse_definition(&mut self) -> ParseResult<Option<ParsedId>> {
+    pub fn parse_definition(&mut self, terminator: TokenKind) -> ParseResult<Option<ParsedId>> {
         let condition = if self.maybe_consume_next(K::Hash).is_some() {
             if self.maybe_consume_next(K::KeywordIf).is_some() {
                 let condition_expr = self.expect_expression()?;
@@ -3945,13 +3951,25 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         } else if let Some(ability_impl_id) = self.parse_ability_impl()? {
             Ok(Some(ParsedId::AbilityImpl(ability_impl_id)))
         } else {
+            // TODO: fix silent failure to parse any definitions
+            //       when there are tokens:
+            //       def type asdf = {}
+            //       need parse_definition_to_eof()
+            //       tell me the terminator?
             if condition.is_some() {
                 return Err(error_expected(
                     "Some definition following condition directive #if",
                     self.peek(),
                 ));
-            } else {
+            } else if self.peek().kind == terminator {
+                self.advance();
                 Ok(None)
+            } else {
+                let err = error_expected(
+                    format!("Definition (fn, deftype, or ns) or {terminator}"),
+                    self.peek(),
+                );
+                Err(err)
             }
         }
     }
@@ -3971,7 +3989,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
         let mut new_definitions: Vec<ParsedId> = vec![];
         loop {
-            match self.parse_definition() {
+            match self.parse_definition(K::Eof) {
                 Ok(Some(def)) => new_definitions.push(def),
                 Err(err) => {
                     print_error(self.module, &err);
@@ -3982,10 +4000,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 Ok(None) => break,
             }
         }
-        if self.tokens.peek().kind != K::Eof && self.module.errors.is_empty() {
-            let err = error_expected("End of file or start of new definition", self.tokens.peek());
-            self.module.errors.push(err.clone());
-        }
+
+        // if self.tokens.peek().kind != K::Eof && self.module.errors.is_empty() {
+        //     let err = error_expected("End of file or start of new definition", self.tokens.peek());
+        //     self.module.errors.push(err.clone());
+        // }
 
         self.module.get_namespace_mut(root_namespace_id).definitions.extend(new_definitions);
     }

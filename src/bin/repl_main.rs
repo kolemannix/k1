@@ -1,6 +1,7 @@
 use std::process::ExitCode;
 
 use k1::compiler::CompilerConfig;
+use k1::lex::TokenKind;
 use k1::parse::{ParsedModule, Source};
 use log::info;
 use mimalloc::MiMalloc;
@@ -59,7 +60,7 @@ fn main() -> anyhow::Result<ExitCode> {
         };
         let mut parser = k1::parse::Parser::make(&tokens, file_id, &mut parsed_module);
         match parser.parse_statement() {
-            Ok(None) => match parser.parse_definition() {
+            Ok(None) => match parser.parse_definition(TokenKind::Eof) {
                 Ok(Some(_defn)) => eprintln!("thanks for your definition"),
                 Ok(None) => eprintln!("neither a statement nor a definition but not an error hmm"),
                 Err(e) => {

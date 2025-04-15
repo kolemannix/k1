@@ -235,8 +235,7 @@ pub enum StaticValue {
     Integer(TypedIntValue, SpanId),
     Float(TypedFloatValue, SpanId),
     String(Box<str>, SpanId),
-    // nocommit: Has to match target word size; but VM value has to match host!!!
-    Pointer(u64, SpanId),
+    NullPointer(SpanId),
     Struct(CompileTimeStruct),
     Enum(CompileTimeEnum),
 }
@@ -250,7 +249,7 @@ impl StaticValue {
             StaticValue::Integer(i, _) => i.kind_str(),
             StaticValue::Float(_, _) => "float",
             StaticValue::String(_, _) => "string",
-            StaticValue::Pointer(_, _) => "pointer",
+            StaticValue::NullPointer(_) => "nullptr",
             StaticValue::Struct(_) => "struct",
             StaticValue::Enum(_) => "enum",
         }
@@ -264,7 +263,7 @@ impl StaticValue {
             StaticValue::Integer(typed_integer_value, _) => typed_integer_value.get_type(),
             StaticValue::Float(typed_float_value, _) => typed_float_value.get_type(),
             StaticValue::String(_, _) => STRING_TYPE_ID,
-            StaticValue::Pointer(_, _) => POINTER_TYPE_ID,
+            StaticValue::NullPointer(_) => POINTER_TYPE_ID,
             StaticValue::Struct(s) => s.type_id,
             StaticValue::Enum(e) => e.type_id,
         }
@@ -278,7 +277,7 @@ impl StaticValue {
             StaticValue::Integer(_, span) => *span,
             StaticValue::Float(_, span) => *span,
             StaticValue::String(_, span) => *span,
-            StaticValue::Pointer(_, span) => *span,
+            StaticValue::NullPointer(span) => *span,
             StaticValue::Struct(s) => s.span,
             StaticValue::Enum(e) => e.span,
         }
@@ -292,7 +291,7 @@ impl StaticValue {
             StaticValue::Integer(_, s) => *s = span,
             StaticValue::Float(_, s) => *s = span,
             StaticValue::String(_, s) => *s = span,
-            StaticValue::Pointer(_, s) => *s = span,
+            StaticValue::NullPointer(s) => *s = span,
             StaticValue::Struct(s) => s.span = span,
             StaticValue::Enum(e) => e.span = span,
         }
@@ -4103,7 +4102,11 @@ impl TypedModule {
                         else {
                             self.ice_with_span("malformed integer cast", span)
                         };
-                        Ok(self.static_values.add(StaticValue::Pointer(*u, span)))
+                        if *u == 0 {
+                            Ok(self.static_values.add(StaticValue::NullPointer(span)))
+                        } else {
+                            failf!(span, "Pointer cast from non-zero integer is not supported")
+                        }
                     }
                     CastType::KnownNoOp => todo!(),
                     CastType::PointerToReference => {
@@ -5857,7 +5860,7 @@ impl TypedModule {
             vm::Value::Float(typed_float_value) => StaticValue::Float(*typed_float_value, span),
             vm::Value::Pointer(value) => {
                 if *value == 0 {
-                    StaticValue::Pointer(0, span)
+                    StaticValue::NullPointer(span)
                 } else {
                     self.ice_with_span(
                        "the address won't be valid come runtime, and I don't know what it points to. Can do NULL aka 0 only",
