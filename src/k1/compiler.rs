@@ -68,7 +68,7 @@ impl WordSize {
         }
     }
 
-    pub const fn from_width(w: NumericWidth) -> WordSize {
+    pub fn from_width(w: NumericWidth) -> WordSize {
         match w {
             NumericWidth::B32 => WordSize::W32,
             NumericWidth::B64 => WordSize::W64,

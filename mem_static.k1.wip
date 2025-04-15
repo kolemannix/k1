@@ -57,7 +57,7 @@ ns mem {
 
 }
 
-fn main(): int {
+fn main(): i32 {
    // Compiler Setting to inject a context value equal to the global constant rt/ALLOC_MODE_GC
    // to opt out of worrying about allocation for that program. If enabled, how do we prevent users from accidentally using it?
    // Also to consider, push/pop and scopes

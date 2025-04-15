@@ -5,22 +5,22 @@ fn assertEquals[T: Show and Equals](context locn: compiler/SourceLocation)(a: T,
 }
 
 ns Pointer {
-  let static NULL: Pointer = 0:u64 as Pointer;
+  let static NULL: Pointer = 0: uword as Pointer;
 
   fn isNull(self: Pointer): bool {
-    self as u64 == 0
+    self as uword == 0
   }
 
   // This is an intrinsic so that we can codegen a getelementptr
   // instruction in LLVM rather than a pointer cast.
   // But we _could_ do it in userland using sizeOf and arithmetic which is neat!
-  intern fn refAtIndex[T](self: Pointer, index: u64): T*
+  intern fn refAtIndex[T](self: Pointer, index: uword): T*
 
 }
 
 impl Equals for Pointer {
   fn equals(self: Pointer, other: Pointer): bool {
-    self as u64 == other as u64
+    self as uword == other as uword
   }
 }
 
@@ -36,7 +36,7 @@ fn printIt[T: Show](value: T): unit  {
 }
 
 fn print(s: string): unit {
-  libc/write(fileNo = 1, data = s.buffer.data as Pointer, count = s.len(), offset = 0);
+  libc/write(fileNo = 1, data = s.buffer.data as Pointer, count = s.len());
   ()
 }
 fn println(s: string): unit {
@@ -44,7 +44,7 @@ fn println(s: string): unit {
 }
 
 fn eprint(s: string): unit {
-  libc/write(fileNo = 2, data = s.buffer.data as Pointer, count = s.len(), offset = 0);
+  libc/write(fileNo = 2, data = s.buffer.data as Pointer, count = s.len());
   ()
 }
 fn eprintln(s: string): unit {
@@ -76,24 +76,24 @@ ns sys {
   }
 
   fn parseMainArgs(argCount: u32, args: Pointer): Buffer[string] {
-    let mut i = 0: u32;
-    let buf = Buffer/fromRawParts[CString](argCount as u64, args);
-    let* strings = List/withCapacity[string](argCount as u64);
+    let mut i = 0: uword;
+    let buf = Buffer/fromRawParts[CString](argCount as uword, args);
+    let* strings = List/withCapacity[string](argCount as uword);
     let strings = for cstr in buf yield {
-      string/fromCString(buf.get(i as u64))
+      string/fromCString(cstr)
     };
     strings.toBuffer()
   }
 
-  fn readLine(maxLengthBytes: u64): Result[string, string] {
+  fn readLine(maxLengthBytes: uword): Result[string, string] {
     let* buffer = Buffer/_allocate[byte](maxLengthBytes);
-    let bytesRead = libc/read(0, buffer.data as Pointer, buffer.len, 0);
+    let bytesRead = libc/read(0, buffer.data as Pointer, buffer.len);
     
     if bytesRead < 0 {
       return(.Err("Failed to read line"));
     };
 
-    let length = bytesRead as u64 - 1;
+    let length = bytesRead as uword - 1;
     
     // Remove trailing newline if present
     if bytesRead > 0 and buffer.get(length) == ('\n' as u8) {
@@ -112,10 +112,10 @@ ns files {
     let static SEEK_END: i32 = 2;
     let static SEEK_SET: i32 = 0;
     extern(fopen)  fn fopen(pathCString: Pointer, modeCString: Pointer): Pointer
-    extern(fseek)  fn fseek(fileDesc: Pointer, offset: u64, whence: i32): i32
-    extern(fread)  fn fread(buffer: Pointer, size: u64, num: u64, stream: Pointer): u64
+    extern(fseek)  fn fseek(fileDesc: Pointer, offset: i64, whence: i32): i32
+    extern(fread)  fn fread(buffer: Pointer, size: uword, num: uword, stream: Pointer): u64
     extern(fclose) fn fclose(fileDesc: Pointer): i32
-    extern(ftell)  fn ftell(fileDesc: Pointer): u64
+    extern(ftell)  fn ftell(fileDesc: Pointer): i64
   }
 
   fn readToString(context alloc: mem/AllocMode)(path: string): string {
@@ -123,7 +123,7 @@ ns files {
   
     let file = files/unix/fopen(filenameCString.ptr, "r\0".toCString().ptr);
     files/unix/fseek(file, 0, unix/SEEK_END);
-    let fileSizeBytes = files/unix/ftell(file);
+    let fileSizeBytes = files/unix/ftell(file) as uword;
     let buf = mem/allocIn(alloc, size = fileSizeBytes, align = 1);
   
     files/unix/fseek(file, 0, unix/SEEK_SET);
@@ -132,7 +132,6 @@ ns files {
     files/unix/fclose(file);
 
     mem/freeIn(alloc, ptr = filenameCString.ptr, size = filenameCString.len + 1, align = 1);
-    //libc/free(filenameCString);
 
     string
   }
@@ -168,68 +167,24 @@ impl[T: Print] Show for T {
 }
 
 
+impl Print for bool { fn printTo[W: Writer](self: bool, w: W*): unit { w.writeString(if self "true" else "false") } }
+// Direct specialized 'show' impl to avoid going through a buffer
 impl Show for bool { fn show(self: bool): string { if self "true" else "false" } }
+impl Print for char { fn printTo[W: Writer](self: char, w: W*): unit { w.writeChar(self) } }
+// Direct specialized 'show' impl to avoid going through a buffer
 impl Show for char { fn show(self: char): string { self.toString() } }
 
-impl Show for i64 {
-  // We know this is super slow, relax, it'll be ok
-  fn show(self: i64): string {
-    if self == 0 return("0");
-    let neg = self < 0;
-    let mut remaining: i64 = if neg self * -1 else self;
-    let* buf = List/withCapacity[char](8);
-    while remaining > 0 {
-      let d = remaining % 10;
-      let c = (d + 48) as u8 as char;
-      buf.push(c);
-      remaining = remaining / 10;
-    };
-
-    if neg {
-      buf.push('-');
-    };
-
-    // Why did inference break here??
-    let rev = buf.*.reversed();
-    string/wrapList(rev)
-  }
-}
-
-impl Comparable for i64 {
-  fn compare(self: i64, other: i64): Ordering {
-    if self == other .Equal else if self > other .Greater else .Less
-  }
-}
-
-impl Comparable for u64 {
-  fn compare(self: u64, other: u64): Ordering {
-    if self == other .Equal else if self > other .Greater else .Less
-  }
-}
-
-impl Comparable for u8 {
-  fn compare(self: u8, other: u8): Ordering {
-    if self == other .Equal else if self > other .Greater else .Less
-  }
-}
-
-ns u8 {
-  fn toAsciiDigit(v: u8): char {
-    (v + 48) as char
-  }
-}
-
-fn formatUInt[W: Writer](context w: W*)(value: u64, base: u64): unit {
+fn formatUInt[W: Writer](context w: W*)(value: uword, base: uword): unit {
   if value == 0 { w.writeChar('0'); return(()) }
   else if value < (base * 2) {
-    let first: u64 = (value / base) * base;
-    let second: u64 = value % base;
+    let first: uword = (value / base) * base;
+    let second: uword = value % base;
     let firstDigit = u8/toAsciiDigit(first as u8);
     let secondDigit = u8/toAsciiDigit(second as u8);
     w.writeChar(firstDigit);
     w.writeChar(secondDigit);
   } else {
-    let mut remaining: u64 = value;
+    let mut remaining: uword = value;
     // TODO(stdlib slow): Try to use stack space for small ones.
     let* digits = List/withCapacity[char](8);
     while remaining > 0 {
@@ -247,54 +202,66 @@ fn formatUInt[W: Writer](context w: W*)(value: u64, base: u64): unit {
   }
 }
 
-impl Show for u64 {
-  fn show(self: u64): string {
-    if self == 0 return("0");
+impl Print for i64 {
+  fn printTo[W: Writer](self: i64, w: W*): unit {
+    (self as iword).printTo(w)
+  }
+}
 
-    let mut remaining: u64 = self;
-    // TODO(stdlib slow): Try to use stack space for small ones
-    let* buf = List/withCapacity[char](8);
-    while remaining > 0 {
-      let d = remaining % 10;
-      let c = (d + 48) as u8 as char;
-      buf.push(c);
-      remaining = remaining / 10;
+impl Print for u64 {
+  fn printTo[W: Writer](self: u64, w: W*): unit {
+    formatUInt(context w)(self as uword, 10);
+  }
+}
+
+impl Print for u8 {
+  fn printTo[W: Writer](self: u8, w: W*): unit {
+    (self as uword).printTo(w)
+  }
+}
+
+impl Print for u32 {
+  fn printTo[W: Writer](self: u32, w: W*): unit {
+    (self as uword).printTo(w)
+  }
+}
+
+impl Print for uword {
+  fn printTo[W: Writer](self: uword, w: W*): unit {
+    (self).printTo(w)
+  }
+}
+
+impl Print for i8 {
+  fn printTo[W: Writer](self: i8, w: W*): unit {
+    (self as iword).printTo(w)
+  }
+}
+
+impl Print for i16 {
+  fn printTo[W: Writer](self: i16, w: W*): unit {
+    (self as iword).printTo(w)
+  }
+}
+
+impl Print for i32 {
+  fn printTo[W: Writer](self: i32, w: W*): unit {
+    (self as iword).printTo(w)
+  }
+}
+
+impl Print for iword {
+  fn printTo[W: Writer](self: iword, w: W*): unit {
+    let neg = self < 0;
+    if neg {
+      w.writeChar('-');
     };
 
-    buf.reverse();
-    string/wrapList(buf)
+    let pos = if neg { (self * -1) } else self;
+    formatUInt(context w)(pos as uword, 10);
   }
 }
 
-impl Show for u32 {
-  fn show(self: u32): string {
-    (self as u64).show()
-  }
-}
-
-impl Show for u8 {
-  fn show(self: u8): string {
-    (self as u64).show()
-  }
-}
-
-impl Show for i32 {
-  fn show(self: i32): string {
-    (self as i64).show()
-  }
-}
-
-impl Show for i16 {
-  fn show(self: i16): string {
-    (self as i64).show()
-  }
-}
-
-impl Show for i8 {
-  fn show(self: i8): string {
-    (self as i64).show()
-  }
-}
 
 impl[S, F] Try[T = S, E = F] for Result[S, F] {
   fn makeError(e: E): Self   { .Err(e) }
@@ -311,3 +278,38 @@ impl[S, F] Unwrap[Inner = S] for Result[S, F] {
   fn make(inner: Inner): Self { Try/makeOk(inner) }
 }
 
+impl Comparable for i64 {
+  fn compare(self: i64, other: i64): Ordering {
+    if self == other .Equal else if self > other .Greater else .Less
+  }
+}
+
+impl Comparable for u64 {
+  fn compare(self: u64, other: u64): Ordering {
+    if self == other .Equal else if self > other .Greater else .Less
+  }
+}
+
+impl Comparable for uword {
+  fn compare(self: uword, other: uword): Ordering {
+    if self == other .Equal else if self > other .Greater else .Less
+  }
+}
+
+impl Comparable for iword {
+  fn compare(self: iword, other: iword): Ordering {
+    if self == other .Equal else if self > other .Greater else .Less
+  }
+}
+
+impl Comparable for u8 {
+  fn compare(self: u8, other: u8): Ordering {
+    if self == other .Equal else if self > other .Greater else .Less
+  }
+}
+
+ns u8 {
+  fn toAsciiDigit(v: u8): char {
+    (v + 48) as char
+  }
+}

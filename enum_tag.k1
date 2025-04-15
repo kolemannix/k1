@@ -1,6 +1,6 @@
 deftype E = either(u8) A, B, C
 
-fn main(): int {
+fn main(): i32 {
   let a: E = .A;
   let b: E = .B;
   let c: E = .C;

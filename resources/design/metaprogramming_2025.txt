@@ -43,7 +43,7 @@ fn debugPrinter[T](t: T): string {
   #insert sb.build()
 }
 
-fn main(): int {
+fn main(): i32 {
   let todo1 = {};
   let print = debugPrinter[Todo]();
   print(todo1);

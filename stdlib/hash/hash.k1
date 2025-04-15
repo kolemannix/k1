@@ -210,7 +210,7 @@ fn test(size: u64): unit {
   // myMap.dump();
 }
 
-fn main(): int {
+fn main(): i32 {
   test(100000);
   0
 }

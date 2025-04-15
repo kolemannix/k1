@@ -1,0 +1,1535 @@
++ set -e
++ export RUST_BACKTRACE=1
++ RUST_BACKTRACE=1
++ RUST_LOG=info
++ cargo run --features=llvm-sys/prefer-dynamic -- --write-llvm run static_run.k1
+warning: unused variable: `compile_time_enum`
+   --> src/k1/typer/dump.rs:779:31
+    |
+779 |             StaticValue::Enum(compile_time_enum) => todo!(),
+    |                               ^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_compile_time_enum`
+    |
+    = note: `#[warn(unused_variables)]` on by default
+
+warning: unused `Result` that must be used
+   --> src/k1/typer/dump.rs:165:9
+    |
+165 |         self.display_type_ext(type_id, expand, &mut s);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+    = note: `#[warn(unused_must_use)]` on by default
+help: use `let _ = ...` to ignore the resulting value
+    |
+165 |         let _ = self.display_type_ext(type_id, expand, &mut s);
+    |         +++++++
+
+warning: `k1` (lib) generated 2 warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.22s
+     Running `target/debug/compiler --write-llvm run static_run.k1`
+[INFO  compiler] Args {
+        no_std: false,
+        write_llvm: true,
+        no_llvm_opt: false,
+        dump_module: false,
+        debug: false,
+        llvm_counts: false,
+        target: None,
+        command: Run {
+            file: "static_run.k1",
+        },
+    }
+[INFO  compiler] k1 Compiler v0.1.0
+[INFO  k1::compiler] Parsing builtin.k1
+[INFO  k1::compiler] Parsing core.k1
+[INFO  k1::compiler] Parsing buffer.k1
+[INFO  k1::compiler] Parsing opt.k1
+[INFO  k1::compiler] Parsing list.k1
+[INFO  k1::compiler] Parsing string.k1
+[INFO  k1::compiler] Parsing types.k1
+[INFO  k1::compiler] Parsing string_builder.k1
+[INFO  k1::compiler] Parsing bitwise.k1
+[INFO  k1::compiler] Parsing mem.k1
+[INFO  k1::compiler] Parsing arena.k1
+[INFO  k1::compiler] Parsing range.k1
+[INFO  k1::compiler] Parsing static_run.k1
+[INFO  k1::compiler] parsing took 14ms
+>> Phase 1 declare namespaces
+>> Phase 2 declare types
+>> Phase 3 evaluate types
+Aggregate padding: 56
+Recursing into pending type defn Arena
+Aggregate padding: 56
+Aggregate padding: 56
+Aggregate padding: 56
+Aggregate padding: 56
+>> Phase 4 declare rest of definitions (functions, constants, abilities)
+Aggregate padding: 56
+Aggregate padding: 56
+Aggregate padding: 56
+Aggregate padding: 56
+Aggregate padding: 56
+Aggregate padding: 56
+Aggregate padding: 56
+Aggregate padding: 56
+Aggregate padding: 56
+>> Phase 5 evaluate rest of definitions (functions, constants, abilities)
+Aggregate padding: 56
+Aggregate padding: 56
+Aggregate padding: 56
+Aggregate padding: 56
+Aggregate padding: 56
+Aggregate padding: 56
+Aggregate padding: 56
+Aggregate padding: 56
+fps before static: 158
+fps after static: 66
+[DEBUG k1::vm]  "Hello, Static": string
+frame offset is 0
+[DEBUG k1::vm]  -> Ok(Agg { type_id: TypeId(27), ptr: 0x3c9ec910000 })
+Frame:  single_expr_6288
+Base :  0x3c9ec910000 - 0x3c9ec912000 (16)
+Locals
+
+DATA
+0d 00 00 00 00 00 00 00 
+20 54 07 ec c9 03 00 00 
+
+vm_to_static: Agg { type_id: TypeId(27), ptr: 0x3c9ec910000 }
+Layout for Buffer[char]: Layout { size_bits: 128, stride_bits: 128, align_bits: 64 }
+load_struct_field buffer of type Buffer[char] is Agg { type_id: TypeId(26), ptr: 0x3c9ec910000 }
+Layout for u64: Layout { size_bits: 64, stride_bits: 64, align_bits: 64 }
+load_struct_field len of type u64 is Int(U64(13))
+Layout for char*: Layout { size_bits: 64, stride_bits: 64, align_bits: 64 }
+load_struct_field data of type char* is Reference { type_id: TypeId(10), ptr: 0x3c9ec075420 }
+[src/k1/typer.rs:5770:25] slice = [
+    72,
+    101,
+    108,
+    108,
+    111,
+    44,
+    32,
+    83,
+    116,
+    97,
+    116,
+    105,
+    99,
+]
+static value: "Hello, Static"
+DROP StackFrame static Base 0x3c9ec618000
+DROP StackFrame single_expr_6288 Base 0x3c9ec910000
+fps before static: 66
+fps after static: 44
+[DEBUG k1::vm]  {
+      x: 1i64,
+      y: 2i64
+    }: { x: i64, y: i64 }
+[DEBUG k1::vm]   {
+      x: 1i64,
+      y: 2i64
+    }: { x: i64, y: i64 }
+[DEBUG k1::vm]    1i64: i64
+[DEBUG k1::vm]    -> Ok(Int(I64(1)))
+[DEBUG k1::vm]    2i64: i64
+[DEBUG k1::vm]    -> Ok(Int(I64(2)))
+frame offset is 0
+Frame:  single_expr_7341
+Base :  0x3c9ec910000 - 0x3c9ec912000 (16)
+Locals
+
+DATA
+01 00 00 00 00 00 00 00 
+02 00 00 00 00 00 00 00 
+
+vm_to_static: Agg { type_id: TypeId(1523), ptr: 0x3c9ec910000 }
+Layout for i64: Layout { size_bits: 64, stride_bits: 64, align_bits: 64 }
+load_struct_field x of type i64 is Int(I64(1))
+vm_to_static: Int(I64(1))
+Layout for i64: Layout { size_bits: 64, stride_bits: 64, align_bits: 64 }
+load_struct_field y of type i64 is Int(I64(2))
+vm_to_static: Int(I64(2))
+static value: { x: 1i64, y: 2i64 }
+DROP StackFrame static Base 0x3c9ec618000
+DROP StackFrame single_expr_7341 Base 0x3c9ec910000
+fps before static: 44
+fps after static: 17
+[DEBUG k1::vm]  true: bool
+[DEBUG k1::vm]  -> Ok(Bool(true))
+Frame:  single_expr_8102
+Base :  0x3c9ec910000 - 0x3c9ec912000 (0)
+Locals
+
+DATA
+
+vm_to_static: Bool(true)
+static value: true
+DROP StackFrame static Base 0x3c9ec618000
+DROP StackFrame single_expr_8102 Base 0x3c9ec910000
+fps before static: 17
+fps after static: 4
+[DEBUG k1::vm]  false: bool
+[DEBUG k1::vm]  -> Ok(Bool(false))
+Frame:  single_expr_8465
+Base :  0x3c9ec910000 - 0x3c9ec912000 (0)
+Locals
+
+DATA
+
+vm_to_static: Bool(false)
+static value: false
+DROP StackFrame static Base 0x3c9ec618000
+DROP StackFrame single_expr_8465 Base 0x3c9ec910000
+fps before static: 4
+fps after static: 0
+[DEBUG k1::vm]  true == false: bool
+[DEBUG k1::vm]   true: bool
+[DEBUG k1::vm]   -> Ok(Bool(true))
+[DEBUG k1::vm]   false: bool
+[DEBUG k1::vm]   -> Ok(Bool(false))
+true == false
+Frame:  single_expr_8656
+Base :  0x3c9ec130000 - 0x3c9ec132000 (0)
+Locals
+
+DATA
+
+vm_to_static: Bool(false)
+static value: false
+DROP StackFrame static Base 0x3c9ec618000
+DROP StackFrame single_expr_8656 Base 0x3c9ec130000
+fps before static: 0
+fps after static: 0
+[DEBUG k1::vm]  () == (): bool
+[DEBUG k1::vm]   (): unit
+[DEBUG k1::vm]   -> Ok(Unit)
+[DEBUG k1::vm]   (): unit
+[DEBUG k1::vm]   -> Ok(Unit)
+Frame:  single_expr_8665
+Base :  0x3c9ec760000 - 0x3c9ec762000 (0)
+Locals
+
+DATA
+
+vm_to_static: Bool(true)
+static value: true
+DROP StackFrame static Base 0x3c9ec618000
+DROP StackFrame single_expr_8665 Base 0x3c9ec760000
+fps before static: 0
+fps after static: 0
+[DEBUG k1::vm]  '97' == '97': bool
+[DEBUG k1::vm]   '97': char
+[DEBUG k1::vm]   -> Ok(Char(97))
+[DEBUG k1::vm]   '97': char
+[DEBUG k1::vm]   -> Ok(Char(97))
+Frame:  single_expr_8673
+Base :  0x3c9ec800000 - 0x3c9ec802000 (0)
+Locals
+
+DATA
+
+vm_to_static: Bool(true)
+static value: true
+DROP StackFrame static Base 0x3c9ec618000
+DROP StackFrame single_expr_8673 Base 0x3c9ec800000
+fps before static: 0
+fps after static: 0
+[DEBUG k1::vm]  '65' == '97': bool
+[DEBUG k1::vm]   '65': char
+[DEBUG k1::vm]   -> Ok(Char(65))
+[DEBUG k1::vm]   '97': char
+[DEBUG k1::vm]   -> Ok(Char(97))
+Frame:  single_expr_8681
+Base :  0x3c9ec800000 - 0x3c9ec802000 (0)
+Locals
+
+DATA
+
+vm_to_static: Bool(false)
+static value: false
+DROP StackFrame static Base 0x3c9ec618000
+DROP StackFrame single_expr_8681 Base 0x3c9ec800000
+fps before static: 0
+fps after static: 0
+[DEBUG k1::vm]  123i64 == -123i64: bool
+[DEBUG k1::vm]   123i64: i64
+[DEBUG k1::vm]   -> Ok(Int(I64(123)))
+[DEBUG k1::vm]   -123i64: i64
+[DEBUG k1::vm]   -> Ok(Int(I64(-123)))
+Frame:  single_expr_8690
+Base :  0x3c9ec760000 - 0x3c9ec762000 (0)
+Locals
+
+DATA
+
+vm_to_static: Bool(false)
+static value: false
+DROP StackFrame static Base 0x3c9ec618000
+DROP StackFrame single_expr_8690 Base 0x3c9ec760000
+fps before static: 0
+fps after static: 0
+[DEBUG k1::vm]  123f32 == 3.14f32: bool
+[DEBUG k1::vm]   123f32: f32
+[DEBUG k1::vm]   -> Ok(Float(F32(123.0)))
+[DEBUG k1::vm]   3.14f32: f32
+[DEBUG k1::vm]   -> Ok(Float(F32(3.14)))
+Frame:  single_expr_8699
+Base :  0x3c9ec760000 - 0x3c9ec762000 (0)
+Locals
+
+DATA
+
+vm_to_static: Bool(false)
+static value: false
+DROP StackFrame static Base 0x3c9ec618000
+DROP StackFrame single_expr_8699 Base 0x3c9ec760000
+fps before static: 0
+fps after static: 0
+[DEBUG k1::vm]  {
+      let mut msg: string = "Hello, World";
+      msg = "Goodbye, World!";
+      msg
+    }: string: string
+[DEBUG k1::vm]   "Hello, World": string
+frame offset is 0
+[DEBUG k1::vm]   -> Ok(Agg { type_id: TypeId(27), ptr: 0x3c9ec760000 })
+frame offset is 16
+[DEBUG k1::vm]   "Goodbye, World!": string
+frame offset is 16
+[DEBUG k1::vm]   -> Ok(Agg { type_id: TypeId(27), ptr: 0x3c9ec760010 })
+frame offset is 32
+[DEBUG k1::vm]   msg: string
+[DEBUG k1::vm]   -> Ok(Agg { type_id: TypeId(27), ptr: 0x3c9ec760010 })
+Frame:  single_expr_8707
+Base :  0x3c9ec760000 - 0x3c9ec762000 (32)
+Locals
+  msg: Agg { type_id: TypeId(27), ptr: 0x3c9ec760010 }
+
+DATA
+0c 00 00 00 00 00 00 00 
+70 61 07 ec c9 03 00 00 
+0f 00 00 00 00 00 00 00 
+90 61 07 ec c9 03 00 00 
+
+vm_to_static: Agg { type_id: TypeId(27), ptr: 0x3c9ec760010 }
+Layout for Buffer[char]: Layout { size_bits: 128, stride_bits: 128, align_bits: 64 }
+load_struct_field buffer of type Buffer[char] is Agg { type_id: TypeId(26), ptr: 0x3c9ec760010 }
+Layout for u64: Layout { size_bits: 64, stride_bits: 64, align_bits: 64 }
+load_struct_field len of type u64 is Int(U64(15))
+Layout for char*: Layout { size_bits: 64, stride_bits: 64, align_bits: 64 }
+load_struct_field data of type char* is Reference { type_id: TypeId(10), ptr: 0x3c9ec076190 }
+[src/k1/typer.rs:5770:25] slice = [
+    71,
+    111,
+    111,
+    100,
+    98,
+    121,
+    101,
+    44,
+    32,
+    87,
+    111,
+    114,
+    108,
+    100,
+    33,
+]
+static value: "Goodbye, World!"
+DROP StackFrame static Base 0x3c9ec618000
+DROP StackFrame single_expr_8707 Base 0x3c9ec760000
+fps before static: 0
+fps after static: 0
+[DEBUG k1::vm]  {
+      let mut i: i64 = 22i64;
+      i = 10i64;
+      i
+    }: i64: i64
+[DEBUG k1::vm]   22i64: i64
+[DEBUG k1::vm]   -> Ok(Int(I64(22)))
+frame offset is 0
+[DEBUG k1::vm]   10i64: i64
+[DEBUG k1::vm]   -> Ok(Int(I64(10)))
+frame offset is 0
+[DEBUG k1::vm]   i: i64
+[DEBUG k1::vm]   -> Ok(Int(I64(10)))
+Frame:  single_expr_8715
+Base :  0x3c9ec760000 - 0x3c9ec762000 (0)
+Locals
+  i: Int(I64(10))
+
+DATA
+
+vm_to_static: Int(I64(10))
+static value: 10i64
+DROP StackFrame static Base 0x3c9ec618000
+DROP StackFrame single_expr_8715 Base 0x3c9ec760000
+fps before static: 1
+Aggregate padding: 40
+Aggregate padding: 40
+fps after static: 0
+[DEBUG k1::vm]  {
+      let padded: { a: u8, b: u8, c: u8, d: u64, e: i64 } = {
+        a: 1u8,
+        b: 2u8,
+        c: 3u8,
+        d: 4u64,
+        e: 5i64
+      };
+      padded
+    }: { a: u8, b: u8, c: u8, d: u64, e: i64 }: { a: u8, b: u8, c: u8, d: u64, e: i64 }
+[DEBUG k1::vm]   {
+      a: 1u8,
+      b: 2u8,
+      c: 3u8,
+      d: 4u64,
+      e: 5i64
+    }: { a: u8, b: u8, c: u8, d: u64, e: i64 }
+[DEBUG k1::vm]    1u8: u8
+[DEBUG k1::vm]    -> Ok(Int(U8(1)))
+[DEBUG k1::vm]    2u8: u8
+[DEBUG k1::vm]    -> Ok(Int(U8(2)))
+[DEBUG k1::vm]    3u8: u8
+[DEBUG k1::vm]    -> Ok(Int(U8(3)))
+[DEBUG k1::vm]    4u64: u64
+[DEBUG k1::vm]    -> Ok(Int(U64(4)))
+[DEBUG k1::vm]    5i64: i64
+[DEBUG k1::vm]    -> Ok(Int(I64(5)))
+frame offset is 0
+frame offset is 24
+[DEBUG k1::vm]   padded: { a: u8, b: u8, c: u8, d: u64, e: i64 }
+[DEBUG k1::vm]   -> Ok(Agg { type_id: TypeId(1551), ptr: 0x3c9ec760000 })
+Frame:  single_expr_8766
+Base :  0x3c9ec760000 - 0x3c9ec762000 (24)
+Locals
+  padded: Agg { type_id: TypeId(1551), ptr: 0x3c9ec760000 }
+
+DATA
+01 02 03 00 00 00 00 00 
+04 00 00 00 00 00 00 00 
+05 00 00 00 00 00 00 00 
+
+vm_to_static: Agg { type_id: TypeId(1551), ptr: 0x3c9ec760000 }
+Layout for u8: Layout { size_bits: 8, stride_bits: 8, align_bits: 8 }
+load_struct_field a of type u8 is Int(U8(1))
+vm_to_static: Int(U8(1))
+Layout for u8: Layout { size_bits: 8, stride_bits: 8, align_bits: 8 }
+load_struct_field b of type u8 is Int(U8(2))
+vm_to_static: Int(U8(2))
+Layout for u8: Layout { size_bits: 8, stride_bits: 8, align_bits: 8 }
+load_struct_field c of type u8 is Int(U8(3))
+vm_to_static: Int(U8(3))
+Layout for u64: Layout { size_bits: 64, stride_bits: 64, align_bits: 64 }
+load_struct_field d of type u64 is Int(U64(4))
+vm_to_static: Int(U64(4))
+Layout for i64: Layout { size_bits: 64, stride_bits: 64, align_bits: 64 }
+load_struct_field e of type i64 is Int(I64(5))
+vm_to_static: Int(I64(5))
+static value: { a: 1u8, b: 2u8, c: 3u8, d: 4u64, e: 5i64 }
+DROP StackFrame static Base 0x3c9ec618000
+DROP StackFrame single_expr_8766 Base 0x3c9ec760000
+fps before static: 2
+fps after static: 0
+[DEBUG k1::vm]  {
+      let* i: i64* = 10i64;
+      i <- id(i.*);
+      i.*
+    }: i64: i64
+[DEBUG k1::vm]   10i64: i64
+[DEBUG k1::vm]   -> Ok(Int(I64(10)))
+frame offset is 0
+frame offset is 8
+[DEBUG k1::vm]   id(i.*): i64
+[DEBUG k1::vm]    i.*: i64
+[DEBUG k1::vm]     i: i64*
+[DEBUG k1::vm]     -> Ok(Reference { type_id: TypeId(438), ptr: 0x3c9ec760000 })
+Layout for i64: Layout { size_bits: 64, stride_bits: 64, align_bits: 64 }
+******************** NEW FRAME **********************
+Frame:  single_expr_8911
+Base :  0x3c9ec760000 - 0x3c9ec762000 (8)
+Locals
+  i: Reference { type_id: TypeId(438), ptr: 0x3c9ec760000 }
+
+DATA
+0a 00 00 00 00 00 00 00 
+
+Frame:  id
+Base :  0x3c9ec762000 - 0x3c9ec764000 (0)
+Locals
+  i: Int(I64(10))
+
+DATA
+
+[DEBUG k1::vm]    return(i): i64
+[DEBUG k1::vm]     return(i): never
+[DEBUG k1::vm]      i: i64
+[DEBUG k1::vm]      -> Ok(Int(I64(10)))
+DROP StackFrame id Base 0x3c9ec762000
+[DEBUG k1::vm]   i: i64*
+[DEBUG k1::vm]   -> Ok(Reference { type_id: TypeId(438), ptr: 0x3c9ec760000 })
+[DEBUG k1::vm]   i.*: i64
+[DEBUG k1::vm]    i: i64*
+[DEBUG k1::vm]    -> Ok(Reference { type_id: TypeId(438), ptr: 0x3c9ec760000 })
+Layout for i64: Layout { size_bits: 64, stride_bits: 64, align_bits: 64 }
+Frame:  single_expr_8911
+Base :  0x3c9ec760000 - 0x3c9ec762000 (8)
+Locals
+  i: Reference { type_id: TypeId(438), ptr: 0x3c9ec760000 }
+
+DATA
+0a 00 00 00 00 00 00 00 
+
+vm_to_static: Int(I64(10))
+static value: 10i64
+DROP StackFrame static Base 0x3c9ec618000
+DROP StackFrame single_expr_8911 Base 0x3c9ec760000
+fps before static: 1
+fps after static: 0
+[DEBUG k1::vm]  assert({
+      filename: "static_run.k1",
+      line: 60u64
+    }, IS_STATIC): unit
+[DEBUG k1::vm]   {
+      filename: "static_run.k1",
+      line: 60u64
+    }: SourceLocation
+[DEBUG k1::vm]    "static_run.k1": string
+frame offset is 0
+[DEBUG k1::vm]    -> Ok(Agg { type_id: TypeId(27), ptr: 0x3c9ec760000 })
+[DEBUG k1::vm]    60u64: u64
+[DEBUG k1::vm]    -> Ok(Int(U64(60)))
+frame offset is 16
+[DEBUG k1::vm]   IS_STATIC: bool
+[DEBUG k1::vm]   -> Ok(Bool(true))
+******************** NEW FRAME **********************
+Frame:  single_expr_8973
+Base :  0x3c9ec760000 - 0x3c9ec762000 (40)
+Locals
+
+DATA
+0d 00 00 00 00 00 00 00 
+f0 6c 07 ec c9 03 00 00 
+0d 00 00 00 00 00 00 00 
+f0 6c 07 ec c9 03 00 00 
+3c 00 00 00 00 00 00 00 
+
+Frame:  assert
+Base :  0x3c9ec762000 - 0x3c9ec764000 (0)
+Locals
+  locn: Agg { type_id: TypeId(33), ptr: 0x3c9ec760010 }
+  value: Bool(true)
+
+DATA
+
+[DEBUG k1::vm]   return(switch  {
+    
+    {
+      cond(negated(value)) else goto next
+    } -> crash(locn, "ASSERT FAILED"),
+    
+    {} -> ()
+    }): unit
+[DEBUG k1::vm]    return(switch  {
+    
+    {
+      cond(negated(value)) else goto next
+    } -> crash(locn, "ASSERT FAILED"),
+    
+    {} -> ()
+    }): never
+[DEBUG k1::vm]     switch  {
+    
+    {
+      cond(negated(value)) else goto next
+    } -> crash(locn, "ASSERT FAILED"),
+    
+    {} -> ()
+    }: unit
+[DEBUG k1::vm]      negated(value): bool
+[DEBUG k1::vm]       value: bool
+[DEBUG k1::vm]       -> Ok(Bool(true))
+[INFO  k1::vm] vm: next arm
+[INFO  k1::vm] vm: arm true
+[DEBUG k1::vm]      (): unit
+[DEBUG k1::vm]      -> Ok(Unit)
+DROP StackFrame assert Base 0x3c9ec762000
+Frame:  single_expr_8973
+Base :  0x3c9ec760000 - 0x3c9ec762000 (40)
+Locals
+
+DATA
+0d 00 00 00 00 00 00 00 
+f0 6c 07 ec c9 03 00 00 
+0d 00 00 00 00 00 00 00 
+f0 6c 07 ec c9 03 00 00 
+3c 00 00 00 00 00 00 00 
+
+vm_to_static: Unit
+static value: ()
+DROP StackFrame static Base 0x3c9ec618000
+DROP StackFrame single_expr_8973 Base 0x3c9ec760000
+fps before static: 0
+fps after static: 0
+[DEBUG k1::vm]  {
+      let x: Opt[i64] = some_spec_i64_2(42i64);
+      let y: i64 = switch  {
+    Some(x)
+    {
+        let __if_target_1559: Opt[i64] = x
+        cond(__if_target_1559.is[.Some]()) else goto next
+        let __payload_Some_1560: i64 = __if_target_1559.payload[Some]
+        let x: i64 = __payload_Some_1560
+    } -> x,
+    
+    {} -> crash({
+        filename: "static_run.k1",
+        line: 64u64
+      }, {
+        let __sb_1562: StringBuilder = withCapacity(0u64);
+        build(__sb_1562)
+      }: string)
+      };
+      y
+    }: i64: i64
+[DEBUG k1::vm]   some_spec_i64_2(42i64): Opt[i64]
+[DEBUG k1::vm]    42i64: i64
+[DEBUG k1::vm]    -> Ok(Int(I64(42)))
+******************** NEW FRAME **********************
+Frame:  single_expr_8996
+Base :  0x3c9ec760000 - 0x3c9ec762000 (0)
+Locals
+
+DATA
+
+Frame:  some_spec_i64_2
+Base :  0x3c9ec762000 - 0x3c9ec764000 (0)
+Locals
+  value: Int(I64(42))
+
+DATA
+
+[DEBUG k1::vm]    return(.Some(value)): Opt[i64]
+[DEBUG k1::vm]     return(.Some(value)): never
+[DEBUG k1::vm]      .Some(value): Opt[i64]
+[DEBUG k1::vm]       value: i64
+[DEBUG k1::vm]       -> Ok(Int(I64(42)))
+frame offset is 0
+Aggregate padding: 56
+frame offset is 16
+DROP StackFrame some_spec_i64_2 Base 0x3c9ec762000
+frame offset is 0
+[DEBUG k1::vm]   switch  {
+    Some(x)
+    {
+      let __if_target_1559: Opt[i64] = x
+      cond(__if_target_1559.is[.Some]()) else goto next
+      let __payload_Some_1560: i64 = __if_target_1559.payload[Some]
+      let x: i64 = __payload_Some_1560
+    } -> x,
+    
+    {} -> crash({
+      filename: "static_run.k1",
+      line: 64u64
+    }, {
+      let __sb_1562: StringBuilder = withCapacity(0u64);
+      build(__sb_1562)
+    }: string)
+    }: i64
+[DEBUG k1::vm]    x: Opt[i64]
+[DEBUG k1::vm]    -> Ok(Agg { type_id: TypeId(840), ptr: 0x3c9ec762010 })
+frame offset is 0
+[DEBUG k1::vm]    __if_target_1559.is[.Some](): bool
+[DEBUG k1::vm]     __if_target_1559: Opt[i64]
+[DEBUG k1::vm]     -> Ok(Agg { type_id: TypeId(840), ptr: 0x3c9ec762010 })
+Layout for u8: Layout { size_bits: 8, stride_bits: 8, align_bits: 8 }
+[DEBUG k1::vm]    __if_target_1559.payload[Some]: i64
+[DEBUG k1::vm]     __if_target_1559: Opt[i64]
+[DEBUG k1::vm]     -> Ok(Agg { type_id: TypeId(840), ptr: 0x3c9ec762010 })
+Aggregate padding: 56
+Layout for i64: Layout { size_bits: 64, stride_bits: 64, align_bits: 64 }
+frame offset is 0
+[DEBUG k1::vm]    __payload_Some_1560: i64
+[DEBUG k1::vm]    -> Ok(Int(I64(42)))
+frame offset is 0
+[INFO  k1::vm] vm: arm true
+[DEBUG k1::vm]    x: i64
+[DEBUG k1::vm]    -> Ok(Int(I64(42)))
+frame offset is 0
+[DEBUG k1::vm]   y: i64
+[DEBUG k1::vm]   -> Ok(Int(I64(42)))
+Frame:  single_expr_8996
+Base :  0x3c9ec760000 - 0x3c9ec762000 (0)
+Locals
+  __if_target_1559: Agg { type_id: TypeId(840), ptr: 0x3c9ec762010 }
+  x: Int(I64(42))
+  x: Agg { type_id: TypeId(840), ptr: 0x3c9ec762010 }
+  y: Int(I64(42))
+  __payload_Some_1560: Int(I64(42))
+
+DATA
+
+vm_to_static: Int(I64(42))
+static value: 42i64
+DROP StackFrame static Base 0x3c9ec618000
+DROP StackFrame single_expr_8996 Base 0x3c9ec760000
+fps before static: 0
+fps after static: 0
+[DEBUG k1::vm]  {
+      let* x: i64* = 21i64;
+      let s: { ptr: i64* } = {
+        ptr: x
+      };
+      s.ptr.*
+    }: i64: i64
+[DEBUG k1::vm]   21i64: i64
+[DEBUG k1::vm]   -> Ok(Int(I64(21)))
+frame offset is 0
+frame offset is 8
+[DEBUG k1::vm]   {
+      ptr: x
+    }: { ptr: i64* }
+[DEBUG k1::vm]    x: i64*
+[DEBUG k1::vm]    -> Ok(Reference { type_id: TypeId(438), ptr: 0x3c9ec760000 })
+frame offset is 8
+frame offset is 16
+[DEBUG k1::vm]   s.ptr.*: i64
+[DEBUG k1::vm]    s.ptr: i64*
+[DEBUG k1::vm]     s: { ptr: i64* }
+[DEBUG k1::vm]     -> Ok(Agg { type_id: TypeId(1555), ptr: 0x3c9ec760008 })
+Layout for i64*: Layout { size_bits: 64, stride_bits: 64, align_bits: 64 }
+load_struct_field ptr of type i64* is Reference { type_id: TypeId(8), ptr: 0x3c9ec760000 }
+Layout for i64: Layout { size_bits: 64, stride_bits: 64, align_bits: 64 }
+Frame:  single_expr_9018
+Base :  0x3c9ec760000 - 0x3c9ec762000 (16)
+Locals
+  x: Reference { type_id: TypeId(438), ptr: 0x3c9ec760000 }
+  s: Agg { type_id: TypeId(1555), ptr: 0x3c9ec760008 }
+
+DATA
+15 00 00 00 00 00 00 00 
+00 00 76 ec c9 03 00 00 
+
+vm_to_static: Int(I64(21))
+static value: 21i64
+DROP StackFrame static Base 0x3c9ec618000
+DROP StackFrame single_expr_9018 Base 0x3c9ec760000
+fps before static: 0
+fps after static: 0
+[DEBUG k1::vm]  {
+      let* sb: StringBuilder* = new();
+      putString(sb.*, "Hello")
+    }: unit: unit
+[DEBUG k1::vm]   new(): StringBuilder
+******************** NEW FRAME **********************
+Frame:  single_expr_9040
+Base :  0x3c9ec760000 - 0x3c9ec762000 (0)
+Locals
+
+DATA
+
+[DEBUG k1::vm] Pushing frame new [depth=2]
+Frame:  new
+Base :  0x3c9ec762000 - 0x3c9ec764000 (0)
+Locals
+
+DATA
+
+[DEBUG k1::vm]    return(withCapacity(0u64)): StringBuilder
+[DEBUG k1::vm]     return(withCapacity(0u64)): never
+[DEBUG k1::vm]      withCapacity(0u64): StringBuilder
+[DEBUG k1::vm]       0u64: u64
+[DEBUG k1::vm]       -> Ok(Int(U64(0)))
+******************** NEW FRAME **********************
+Frame:  new
+Base :  0x3c9ec762000 - 0x3c9ec764000 (0)
+Locals
+
+DATA
+
+Frame:  withCapacity
+Base :  0x3c9ec764000 - 0x3c9ec766000 (0)
+Locals
+  cap: Int(U64(0))
+
+DATA
+
+[DEBUG k1::vm]       {
+      let parts: List[enum Char(char) | String(string)]* = new_spec_List[enum Char(char) | String(string)]_1(withCapacity_spec_enum Char(char) | String(string)_3(cap));
+      return({
+        parts: parts
+      })
+    }: StringBuilder: StringBuilder
+[DEBUG k1::vm]        new_spec_List[enum Char(char) | String(string)]_1(withCapacity_spec_enum Char(char) | String(string)_3(cap)): List[enum Char(char) | String(string)]*
+[DEBUG k1::vm]         withCapacity_spec_enum Char(char) | String(string)_3(cap): List[enum Char(char) | String(string)]
+[DEBUG k1::vm]          cap: u64
+[DEBUG k1::vm]          -> Ok(Int(U64(0)))
+******************** NEW FRAME **********************
+Frame:  withCapacity
+Base :  0x3c9ec764000 - 0x3c9ec766000 (0)
+Locals
+  cap: Int(U64(0))
+
+DATA
+
+Frame:  withCapacity_spec_enum Char(char) | String(string)_3
+Base :  0x3c9ec768000 - 0x3c9ec76a000 (0)
+Locals
+  cap: Int(U64(0))
+
+DATA
+
+[DEBUG k1::vm]          {
+      let buffer: Buffer[enum Char(char) | String(string)] = _allocate_spec_enum Char(char) | String(string)_4(cap);
+      return({
+        len: 0u64,
+        buffer: buffer
+      })
+    }: List[enum Char(char) | String(string)]: List[enum Char(char) | String(string)]
+[DEBUG k1::vm]           _allocate_spec_enum Char(char) | String(string)_4(cap): Buffer[enum Char(char) | String(string)]
+[DEBUG k1::vm]            cap: u64
+[DEBUG k1::vm]            -> Ok(Int(U64(0)))
+******************** NEW FRAME **********************
+Frame:  withCapacity_spec_enum Char(char) | String(string)_3
+Base :  0x3c9ec768000 - 0x3c9ec76a000 (0)
+Locals
+  cap: Int(U64(0))
+
+DATA
+
+Frame:  _allocate_spec_enum Char(char) | String(string)_4
+Base :  0x3c9ec76a000 - 0x3c9ec76c000 (0)
+Locals
+  count: Int(U64(0))
+
+DATA
+
+[DEBUG k1::vm]            return(_allocateIn_spec_enum Char(char) | String(string)_4(CURRENT, count)): Buffer[enum Char(char) | String(string)]
+[DEBUG k1::vm]             return(_allocateIn_spec_enum Char(char) | String(string)_4(CURRENT, count)): never
+[DEBUG k1::vm]              _allocateIn_spec_enum Char(char) | String(string)_4(CURRENT, count): Buffer[enum Char(char) | String(string)]
+[DEBUG k1::vm]               CURRENT: AllocMode
+[DEBUG k1::vm]               -> Ok(Agg { type_id: TypeId(74), ptr: 0x3c9ec618010 })
+[DEBUG k1::vm]               count: u64
+[DEBUG k1::vm]               -> Ok(Int(U64(0)))
+******************** NEW FRAME **********************
+Frame:  _allocate_spec_enum Char(char) | String(string)_4
+Base :  0x3c9ec76a000 - 0x3c9ec76c000 (0)
+Locals
+  count: Int(U64(0))
+
+DATA
+
+Frame:  _allocateIn_spec_enum Char(char) | String(string)_4
+Base :  0x3c9ec76c000 - 0x3c9ec76e000 (0)
+Locals
+  alloc: Agg { type_id: TypeId(74), ptr: 0x3c9ec618010 }
+  count: Int(U64(0))
+
+DATA
+
+[DEBUG k1::vm]               {
+      let ptr: Pointer = switch  {
+    
+    {
+        cond(count == 0u64) else goto next
+    } -> NULL,
+    
+    {} -> {
+        let sizeBytes: u64 = bufferSizeBytes_spec_enum Char(char) | String(string)_9(count);
+        allocIn(alloc, sizeBytes, alignOf_spec_enum Char(char) | String(string)_9())
+      }: Pointer
+      };
+      let data: enum Char(char) | String(string)* = ptr as(ptrtoref) enum Char(char) | String(string)*;
+      return({
+        len: count,
+        data: data
+      })
+    }: Buffer[enum Char(char) | String(string)]: Buffer[enum Char(char) | String(string)]
+[DEBUG k1::vm]                switch  {
+    
+    {
+      cond(count == 0u64) else goto next
+    } -> NULL,
+    
+    {} -> {
+      let sizeBytes: u64 = bufferSizeBytes_spec_enum Char(char) | String(string)_9(count);
+      allocIn(alloc, sizeBytes, alignOf_spec_enum Char(char) | String(string)_9())
+    }: Pointer
+    }: Pointer
+[DEBUG k1::vm]                 count == 0u64: bool
+[DEBUG k1::vm]                  count: u64
+[DEBUG k1::vm]                  -> Ok(Int(U64(0)))
+[DEBUG k1::vm]                  0u64: u64
+[DEBUG k1::vm]                  -> Ok(Int(U64(0)))
+[INFO  k1::vm] vm: arm true
+[DEBUG k1::vm]                 NULL: Pointer
+[DEBUG k1::vm]                  NULL: Pointer
+[DEBUG k1::vm]                  -> Ok(Pointer(0))
+frame offset is 0
+[DEBUG k1::vm]                ptr as(ptrtoref) enum Char(char) | String(string)*: enum Char(char) | String(string)*
+[DEBUG k1::vm]                 ptr: Pointer
+[DEBUG k1::vm]                 -> Ok(Pointer(0))
+frame offset is 0
+[DEBUG k1::vm]                return({
+      len: count,
+      data: data
+    }): never
+[DEBUG k1::vm]                 {
+      len: count,
+      data: data
+    }: Buffer[enum Char(char) | String(string)]
+[DEBUG k1::vm]                  count: u64
+[DEBUG k1::vm]                  -> Ok(Int(U64(0)))
+[DEBUG k1::vm]                  data: enum Char(char) | String(string)*
+[DEBUG k1::vm]                  -> Ok(Reference { type_id: TypeId(52), ptr: 0x0 })
+frame offset is 0
+frame offset is 16
+DROP StackFrame _allocateIn_spec_enum Char(char) | String(string)_4 Base 0x3c9ec76c000
+frame offset is 0
+DROP StackFrame _allocate_spec_enum Char(char) | String(string)_4 Base 0x3c9ec76a000
+frame offset is 0
+[DEBUG k1::vm]           return({
+      len: 0u64,
+      buffer: buffer
+    }): never
+[DEBUG k1::vm]            {
+      len: 0u64,
+      buffer: buffer
+    }: List[enum Char(char) | String(string)]
+[DEBUG k1::vm]             0u64: u64
+[DEBUG k1::vm]             -> Ok(Int(U64(0)))
+[DEBUG k1::vm]             buffer: Buffer[enum Char(char) | String(string)]
+[DEBUG k1::vm]             -> Ok(Agg { type_id: TypeId(53), ptr: 0x3c9ec76a000 })
+frame offset is 0
+frame offset is 24
+DROP StackFrame withCapacity_spec_enum Char(char) | String(string)_3 Base 0x3c9ec768000
+******************** NEW FRAME **********************
+Frame:  withCapacity
+Base :  0x3c9ec764000 - 0x3c9ec766000 (0)
+Locals
+  cap: Int(U64(0))
+
+DATA
+
+Frame:  new_spec_List[enum Char(char) | String(string)]_1
+Base :  0x3c9ec766000 - 0x3c9ec768000 (0)
+Locals
+  value: Agg { type_id: TypeId(54), ptr: 0x3c9ec768018 }
+
+DATA
+
+[DEBUG k1::vm]         return(newIn_spec_List[enum Char(char) | String(string)]_1(CURRENT, value)): List[enum Char(char) | String(string)]*
+[DEBUG k1::vm]          return(newIn_spec_List[enum Char(char) | String(string)]_1(CURRENT, value)): never
+[DEBUG k1::vm]           newIn_spec_List[enum Char(char) | String(string)]_1(CURRENT, value): List[enum Char(char) | String(string)]*
+[DEBUG k1::vm]            CURRENT: AllocMode
+[DEBUG k1::vm]            -> Ok(Agg { type_id: TypeId(74), ptr: 0x3c9ec618010 })
+[DEBUG k1::vm]            value: List[enum Char(char) | String(string)]
+[DEBUG k1::vm]            -> Ok(Agg { type_id: TypeId(54), ptr: 0x3c9ec768018 })
+******************** NEW FRAME **********************
+Frame:  new_spec_List[enum Char(char) | String(string)]_1
+Base :  0x3c9ec766000 - 0x3c9ec768000 (0)
+Locals
+  value: Agg { type_id: TypeId(54), ptr: 0x3c9ec768018 }
+
+DATA
+
+Frame:  newIn_spec_List[enum Char(char) | String(string)]_1
+Base :  0x3c9ec76e000 - 0x3c9ec770000 (0)
+Locals
+  t: Agg { type_id: TypeId(54), ptr: 0x3c9ec768018 }
+  mode: Agg { type_id: TypeId(74), ptr: 0x3c9ec618010 }
+
+DATA
+
+[DEBUG k1::vm]            {
+      let ptr: Pointer = allocIn(mode, sizeOf_spec_List[enum Char(char) | String(string)]_8(), alignOf_spec_List[enum Char(char) | String(string)]_6());
+      let ref: List[enum Char(char) | String(string)]* = ptr as(ptrtoref) List[enum Char(char) | String(string)]*;
+      ref <- t;
+      return(ref)
+    }: List[enum Char(char) | String(string)]*: List[enum Char(char) | String(string)]*
+[DEBUG k1::vm]             allocIn(mode, sizeOf_spec_List[enum Char(char) | String(string)]_8(), alignOf_spec_List[enum Char(char) | String(string)]_6()): Pointer
+[DEBUG k1::vm]              mode: AllocMode
+[DEBUG k1::vm]              -> Ok(Agg { type_id: TypeId(74), ptr: 0x3c9ec618010 })
+[DEBUG k1::vm]              sizeOf_spec_List[enum Char(char) | String(string)]_8(): u64
+[DEBUG k1::vm]              -> Ok(Int(U64(24)))
+[DEBUG k1::vm]              alignOf_spec_List[enum Char(char) | String(string)]_6(): u64
+[DEBUG k1::vm]              -> Ok(Int(U64(8)))
+******************** NEW FRAME **********************
+Frame:  newIn_spec_List[enum Char(char) | String(string)]_1
+Base :  0x3c9ec76e000 - 0x3c9ec770000 (0)
+Locals
+  t: Agg { type_id: TypeId(54), ptr: 0x3c9ec768018 }
+  mode: Agg { type_id: TypeId(74), ptr: 0x3c9ec618010 }
+
+DATA
+
+Frame:  allocIn
+Base :  0x3c9ec768000 - 0x3c9ec76a000 (0)
+Locals
+  align: Int(U64(8))
+  mode: Agg { type_id: TypeId(74), ptr: 0x3c9ec618010 }
+  size: Int(U64(24))
+
+DATA
+
+[DEBUG k1::vm]              {
+      let mode: AllocMode = resolveMode(mode);
+      return(switch   let __match_subject_1065: enum Current | SystemHeap | CustomHeap(Allocator*) | TempBump | Bump(Arena*) | Gc = mode.kind;  {
+    Current
+    {
+        cond(__match_subject_1065.is[.Current]()) else goto next
+    } -> crash({
+        filename: "mem.k1",
+        line: 97u64
+      }, "unreachable"),
+    SystemHeap
+    {
+        cond(__match_subject_1065.is[.SystemHeap]()) else goto next
+    } -> systemZeroAlloc(size, align),
+    CustomHeap(alloc)
+    {
+        cond(__match_subject_1065.is[.CustomHeap]()) else goto next
+        let __payload_CustomHeap_1066: Allocator* = __match_subject_1065.payload[CustomHeap]
+        let alloc: Allocator* = __payload_CustomHeap_1066
+    } -> {
+        let zalloc: fn(u64, u64) -> Pointer* = alloc.*.zalloc;
+        zalloc(size, align)
+      }: Pointer,
+    Bump(bump)
+    {
+        cond(__match_subject_1065.is[.Bump]()) else goto next
+        let __payload_Bump_1069: Arena* = __match_subject_1065.payload[Bump]
+        let bump: Arena* = __payload_Bump_1069
+    } -> pushRaw(bump, size, align),
+    TempBump
+    {
+        cond(__match_subject_1065.is[.TempBump]()) else goto next
+    } -> pushRaw(getTempArena(), size, align),
+    Gc
+    {
+        cond(__match_subject_1065.is[.Gc]()) else goto next
+    } -> crash({
+        filename: "mem.k1",
+        line: 110u64
+      }, "Gc is unimplemented; plan to support w/ bdwgc"),
+    
+    {} -> crash({
+        filename: "mem.k1",
+        line: 96u64
+      }, "Match Error")
+      })
+    }: Pointer: Pointer
+[DEBUG k1::vm]               resolveMode(mode): AllocMode
+[DEBUG k1::vm]                mode: AllocMode
+[DEBUG k1::vm]                -> Ok(Agg { type_id: TypeId(74), ptr: 0x3c9ec618010 })
+******************** NEW FRAME **********************
+Frame:  allocIn
+Base :  0x3c9ec768000 - 0x3c9ec76a000 (0)
+Locals
+  align: Int(U64(8))
+  mode: Agg { type_id: TypeId(74), ptr: 0x3c9ec618010 }
+  size: Int(U64(24))
+
+DATA
+
+Frame:  resolveMode
+Base :  0x3c9ec76a000 - 0x3c9ec76c000 (0)
+Locals
+  mode: Agg { type_id: TypeId(74), ptr: 0x3c9ec618010 }
+
+DATA
+
+[DEBUG k1::vm]                return(switch let __match_subject_1061: enum Current | SystemHeap | CustomHeap(Allocator*) | TempBump | Bump(Arena*) | Gc = mode.kind;  {
+    Current
+    {
+      cond(__match_subject_1061.is[.Current]()) else goto next
+    } -> {
+      let mode: AllocMode = defaultAllocMode();
+      switch  {
+    Current
+    {
+        let __if_target_1063: enum Current | SystemHeap | CustomHeap(Allocator*) | TempBump | Bump(Arena*) | Gc = mode.kind
+        cond(__if_target_1063.is[.Current]()) else goto next
+    } -> crash({
+        filename: "mem.k1",
+        line: 84u64
+      }, "currentAllocMode.kind is Current; this will never resolve"),
+    
+    {} -> ()
+      };
+      mode
+    }: AllocMode,
+    _
+    {} -> mode,
+    
+    {} -> crash({
+      filename: "mem.k1",
+      line: 81u64
+    }, "Match Error")
+    }): AllocMode
+[DEBUG k1::vm]                 return(switch let __match_subject_1061: enum Current | SystemHeap | CustomHeap(Allocator*) | TempBump | Bump(Arena*) | Gc = mode.kind;  {
+    Current
+    {
+      cond(__match_subject_1061.is[.Current]()) else goto next
+    } -> {
+      let mode: AllocMode = defaultAllocMode();
+      switch  {
+    Current
+    {
+        let __if_target_1063: enum Current | SystemHeap | CustomHeap(Allocator*) | TempBump | Bump(Arena*) | Gc = mode.kind
+        cond(__if_target_1063.is[.Current]()) else goto next
+    } -> crash({
+        filename: "mem.k1",
+        line: 84u64
+      }, "currentAllocMode.kind is Current; this will never resolve"),
+    
+    {} -> ()
+      };
+      mode
+    }: AllocMode,
+    _
+    {} -> mode,
+    
+    {} -> crash({
+      filename: "mem.k1",
+      line: 81u64
+    }, "Match Error")
+    }): never
+[DEBUG k1::vm]                  switch let __match_subject_1061: enum Current | SystemHeap | CustomHeap(Allocator*) | TempBump | Bump(Arena*) | Gc = mode.kind;  {
+    Current
+    {
+      cond(__match_subject_1061.is[.Current]()) else goto next
+    } -> {
+      let mode: AllocMode = defaultAllocMode();
+      switch  {
+    Current
+    {
+        let __if_target_1063: enum Current | SystemHeap | CustomHeap(Allocator*) | TempBump | Bump(Arena*) | Gc = mode.kind
+        cond(__if_target_1063.is[.Current]()) else goto next
+    } -> crash({
+        filename: "mem.k1",
+        line: 84u64
+      }, "currentAllocMode.kind is Current; this will never resolve"),
+    
+    {} -> ()
+      };
+      mode
+    }: AllocMode,
+    _
+    {} -> mode,
+    
+    {} -> crash({
+      filename: "mem.k1",
+      line: 81u64
+    }, "Match Error")
+    }: AllocMode
+[DEBUG k1::vm]                   mode.kind: enum Current | SystemHeap | CustomHeap(Allocator*) | TempBump | Bump(Arena*) | Gc
+[DEBUG k1::vm]                    mode: AllocMode
+[DEBUG k1::vm]                    -> Ok(Agg { type_id: TypeId(74), ptr: 0x3c9ec618010 })
+Layout for enum Current | SystemHeap | CustomHeap(Allocator*) | TempBump | Bump(Arena*) | Gc: Layout { size_bits: 128, stride_bits: 128, align_bits: 64 }
+frame offset is 0
+from raw parts: 0x3c9ec618010 16
+copy_from_slice 0x3c9ec618010 0x3c9ec76a000
+load_struct_field kind of type enum Current | SystemHeap | CustomHeap(Allocator*) | TempBump | Bump(Arena*) | Gc is Agg { type_id: TypeId(73), ptr: 0x3c9ec76a000 }
+frame offset is 16
+[DEBUG k1::vm]                   __match_subject_1061.is[.Current](): bool
+[DEBUG k1::vm]                    __match_subject_1061: enum Current | SystemHeap | CustomHeap(Allocator*) | TempBump | Bump(Arena*) | Gc
+[DEBUG k1::vm]                    -> Ok(Agg { type_id: TypeId(73), ptr: 0x3c9ec76a000 })
+Layout for u8: Layout { size_bits: 8, stride_bits: 8, align_bits: 8 }
+[INFO  k1::vm] vm: arm true
+[DEBUG k1::vm]                   {
+      let mode: AllocMode = defaultAllocMode();
+      switch  {
+    Current
+    {
+        let __if_target_1063: enum Current | SystemHeap | CustomHeap(Allocator*) | TempBump | Bump(Arena*) | Gc = mode.kind
+        cond(__if_target_1063.is[.Current]()) else goto next
+    } -> crash({
+        filename: "mem.k1",
+        line: 84u64
+      }, "currentAllocMode.kind is Current; this will never resolve"),
+    
+    {} -> ()
+      };
+      mode
+    }: AllocMode: AllocMode
+[DEBUG k1::vm]                    defaultAllocMode(): AllocMode
+******************** NEW FRAME **********************
+Frame:  resolveMode
+Base :  0x3c9ec76a000 - 0x3c9ec76c000 (16)
+Locals
+  mode: Agg { type_id: TypeId(74), ptr: 0x3c9ec618010 }
+  __match_subject_1061: Agg { type_id: TypeId(73), ptr: 0x3c9ec76a000 }
+
+DATA
+00 00 00 00 00 00 00 00 
+00 00 00 00 00 00 00 00 
+
+[DEBUG k1::vm] Pushing frame defaultAllocMode [depth=8]
+Frame:  defaultAllocMode
+Base :  0x3c9ec76c000 - 0x3c9ec76e000 (0)
+Locals
+
+DATA
+
+[DEBUG k1::vm]                     return(_k1_currentAllocMode.*): AllocMode
+[DEBUG k1::vm]                      return(_k1_currentAllocMode.*): never
+[DEBUG k1::vm]                       _k1_currentAllocMode.*: AllocMode
+[DEBUG k1::vm]                        _k1_currentAllocMode: AllocMode*
+[DEBUG k1::vm]                        -> Ok(Reference { type_id: TypeId(981), ptr: 0x3c9ec618040 })
+Layout for AllocMode: Layout { size_bits: 128, stride_bits: 128, align_bits: 64 }
+frame offset is 0
+pushing struct w/ layout for load Layout { size_bits: 128, stride_bits: 128, align_bits: 64 }
+from raw parts: 0x3c9ec618040 16
+copy_from_slice 0x3c9ec618040 0x3c9ec76c000
+frame offset is 16
+DROP StackFrame defaultAllocMode Base 0x3c9ec76c000
+frame offset is 16
+[DEBUG k1::vm]                    switch  {
+    Current
+    {
+      let __if_target_1063: enum Current | SystemHeap | CustomHeap(Allocator*) | TempBump | Bump(Arena*) | Gc = mode.kind
+      cond(__if_target_1063.is[.Current]()) else goto next
+    } -> crash({
+      filename: "mem.k1",
+      line: 84u64
+    }, "currentAllocMode.kind is Current; this will never resolve"),
+    
+    {} -> ()
+    }: unit
+[DEBUG k1::vm]                     mode.kind: enum Current | SystemHeap | CustomHeap(Allocator*) | TempBump | Bump(Arena*) | Gc
+[DEBUG k1::vm]                      mode: AllocMode
+[DEBUG k1::vm]                      -> Ok(Agg { type_id: TypeId(74), ptr: 0x3c9ec76c010 })
+Layout for enum Current | SystemHeap | CustomHeap(Allocator*) | TempBump | Bump(Arena*) | Gc: Layout { size_bits: 128, stride_bits: 128, align_bits: 64 }
+frame offset is 16
+from raw parts: 0x3c9ec76c010 16
+copy_from_slice 0x3c9ec76c010 0x3c9ec76a010
+load_struct_field kind of type enum Current | SystemHeap | CustomHeap(Allocator*) | TempBump | Bump(Arena*) | Gc is Agg { type_id: TypeId(73), ptr: 0x3c9ec76a010 }
+frame offset is 32
+[DEBUG k1::vm]                     __if_target_1063.is[.Current](): bool
+[DEBUG k1::vm]                      __if_target_1063: enum Current | SystemHeap | CustomHeap(Allocator*) | TempBump | Bump(Arena*) | Gc
+[DEBUG k1::vm]                      -> Ok(Agg { type_id: TypeId(73), ptr: 0x3c9ec76a010 })
+Layout for u8: Layout { size_bits: 8, stride_bits: 8, align_bits: 8 }
+[INFO  k1::vm] vm: next arm
+[INFO  k1::vm] vm: arm true
+[DEBUG k1::vm]                     (): unit
+[DEBUG k1::vm]                     -> Ok(Unit)
+[DEBUG k1::vm]                    mode: AllocMode
+[DEBUG k1::vm]                    -> Ok(Agg { type_id: TypeId(74), ptr: 0x3c9ec76c010 })
+frame offset is 32
+DROP StackFrame resolveMode Base 0x3c9ec76a000
+frame offset is 0
+[DEBUG k1::vm]               return(switch let __match_subject_1065: enum Current | SystemHeap | CustomHeap(Allocator*) | TempBump | Bump(Arena*) | Gc = mode.kind;  {
+    Current
+    {
+      cond(__match_subject_1065.is[.Current]()) else goto next
+    } -> crash({
+      filename: "mem.k1",
+      line: 97u64
+    }, "unreachable"),
+    SystemHeap
+    {
+      cond(__match_subject_1065.is[.SystemHeap]()) else goto next
+    } -> systemZeroAlloc(size, align),
+    CustomHeap(alloc)
+    {
+      cond(__match_subject_1065.is[.CustomHeap]()) else goto next
+      let __payload_CustomHeap_1066: Allocator* = __match_subject_1065.payload[CustomHeap]
+      let alloc: Allocator* = __payload_CustomHeap_1066
+    } -> {
+      let zalloc: fn(u64, u64) -> Pointer* = alloc.*.zalloc;
+      zalloc(size, align)
+    }: Pointer,
+    Bump(bump)
+    {
+      cond(__match_subject_1065.is[.Bump]()) else goto next
+      let __payload_Bump_1069: Arena* = __match_subject_1065.payload[Bump]
+      let bump: Arena* = __payload_Bump_1069
+    } -> pushRaw(bump, size, align),
+    TempBump
+    {
+      cond(__match_subject_1065.is[.TempBump]()) else goto next
+    } -> pushRaw(getTempArena(), size, align),
+    Gc
+    {
+      cond(__match_subject_1065.is[.Gc]()) else goto next
+    } -> crash({
+      filename: "mem.k1",
+      line: 110u64
+    }, "Gc is unimplemented; plan to support w/ bdwgc"),
+    
+    {} -> crash({
+      filename: "mem.k1",
+      line: 96u64
+    }, "Match Error")
+    }): never
+[DEBUG k1::vm]                switch let __match_subject_1065: enum Current | SystemHeap | CustomHeap(Allocator*) | TempBump | Bump(Arena*) | Gc = mode.kind;  {
+    Current
+    {
+      cond(__match_subject_1065.is[.Current]()) else goto next
+    } -> crash({
+      filename: "mem.k1",
+      line: 97u64
+    }, "unreachable"),
+    SystemHeap
+    {
+      cond(__match_subject_1065.is[.SystemHeap]()) else goto next
+    } -> systemZeroAlloc(size, align),
+    CustomHeap(alloc)
+    {
+      cond(__match_subject_1065.is[.CustomHeap]()) else goto next
+      let __payload_CustomHeap_1066: Allocator* = __match_subject_1065.payload[CustomHeap]
+      let alloc: Allocator* = __payload_CustomHeap_1066
+    } -> {
+      let zalloc: fn(u64, u64) -> Pointer* = alloc.*.zalloc;
+      zalloc(size, align)
+    }: Pointer,
+    Bump(bump)
+    {
+      cond(__match_subject_1065.is[.Bump]()) else goto next
+      let __payload_Bump_1069: Arena* = __match_subject_1065.payload[Bump]
+      let bump: Arena* = __payload_Bump_1069
+    } -> pushRaw(bump, size, align),
+    TempBump
+    {
+      cond(__match_subject_1065.is[.TempBump]()) else goto next
+    } -> pushRaw(getTempArena(), size, align),
+    Gc
+    {
+      cond(__match_subject_1065.is[.Gc]()) else goto next
+    } -> crash({
+      filename: "mem.k1",
+      line: 110u64
+    }, "Gc is unimplemented; plan to support w/ bdwgc"),
+    
+    {} -> crash({
+      filename: "mem.k1",
+      line: 96u64
+    }, "Match Error")
+    }: Pointer
+[DEBUG k1::vm]                 mode.kind: enum Current | SystemHeap | CustomHeap(Allocator*) | TempBump | Bump(Arena*) | Gc
+[DEBUG k1::vm]                  mode: AllocMode
+[DEBUG k1::vm]                  -> Ok(Agg { type_id: TypeId(74), ptr: 0x3c9ec76a020 })
+Layout for enum Current | SystemHeap | CustomHeap(Allocator*) | TempBump | Bump(Arena*) | Gc: Layout { size_bits: 128, stride_bits: 128, align_bits: 64 }
+frame offset is 0
+from raw parts: 0x3c9ec76a020 16
+copy_from_slice 0x3c9ec76a020 0x3c9ec768000
+load_struct_field kind of type enum Current | SystemHeap | CustomHeap(Allocator*) | TempBump | Bump(Arena*) | Gc is Agg { type_id: TypeId(73), ptr: 0x3c9ec768000 }
+frame offset is 16
+[DEBUG k1::vm]                 __match_subject_1065.is[.Current](): bool
+[DEBUG k1::vm]                  __match_subject_1065: enum Current | SystemHeap | CustomHeap(Allocator*) | TempBump | Bump(Arena*) | Gc
+[DEBUG k1::vm]                  -> Ok(Agg { type_id: TypeId(73), ptr: 0x3c9ec768000 })
+Layout for u8: Layout { size_bits: 8, stride_bits: 8, align_bits: 8 }
+[INFO  k1::vm] vm: next arm
+[DEBUG k1::vm]                 __match_subject_1065.is[.SystemHeap](): bool
+[DEBUG k1::vm]                  __match_subject_1065: enum Current | SystemHeap | CustomHeap(Allocator*) | TempBump | Bump(Arena*) | Gc
+[DEBUG k1::vm]                  -> Ok(Agg { type_id: TypeId(73), ptr: 0x3c9ec768000 })
+Layout for u8: Layout { size_bits: 8, stride_bits: 8, align_bits: 8 }
+[INFO  k1::vm] vm: arm true
+[DEBUG k1::vm]                 systemZeroAlloc(size, align): Pointer
+[DEBUG k1::vm]                  size: u64
+[DEBUG k1::vm]                  -> Ok(Int(U64(24)))
+[DEBUG k1::vm]                  align: u64
+[DEBUG k1::vm]                  -> Ok(Int(U64(8)))
+DROP StackFrame allocIn Base 0x3c9ec768000
+frame offset is 0
+[DEBUG k1::vm]             ptr as(ptrtoref) List[enum Char(char) | String(string)]*: List[enum Char(char) | String(string)]*
+[DEBUG k1::vm]              ptr: Pointer
+[DEBUG k1::vm]              -> Ok(Pointer(4165789889408))
+frame offset is 0
+[DEBUG k1::vm]             t: List[enum Char(char) | String(string)]
+[DEBUG k1::vm]             -> Ok(Agg { type_id: TypeId(54), ptr: 0x3c9ec768018 })
+[DEBUG k1::vm]             ref: List[enum Char(char) | String(string)]*
+[DEBUG k1::vm]             -> Ok(Reference { type_id: TypeId(55), ptr: 0x3c9ec6d3380 })
+[DEBUG k1::vm]             return(ref): never
+[DEBUG k1::vm]              ref: List[enum Char(char) | String(string)]*
+[DEBUG k1::vm]              -> Ok(Reference { type_id: TypeId(55), ptr: 0x3c9ec6d3380 })
+DROP StackFrame newIn_spec_List[enum Char(char) | String(string)]_1 Base 0x3c9ec76e000
+DROP StackFrame new_spec_List[enum Char(char) | String(string)]_1 Base 0x3c9ec766000
+frame offset is 0
+[DEBUG k1::vm]        return({
+      parts: parts
+    }): never
+[DEBUG k1::vm]         {
+      parts: parts
+    }: StringBuilder
+[DEBUG k1::vm]          parts: List[enum Char(char) | String(string)]*
+[DEBUG k1::vm]          -> Ok(Reference { type_id: TypeId(55), ptr: 0x3c9ec6d3380 })
+frame offset is 0
+frame offset is 8
+DROP StackFrame withCapacity Base 0x3c9ec764000
+frame offset is 0
+DROP StackFrame new Base 0x3c9ec762000
+frame offset is 0
+frame offset is 8
+[DEBUG k1::vm]   putString(sb.*, "Hello"): unit
+[DEBUG k1::vm]    sb.*: StringBuilder
+[DEBUG k1::vm]     sb: StringBuilder*
+[DEBUG k1::vm]     -> Ok(Reference { type_id: TypeId(1556), ptr: 0x3c9ec760000 })
+Layout for StringBuilder: Layout { size_bits: 64, stride_bits: 64, align_bits: 64 }
+frame offset is 8
+pushing struct w/ layout for load Layout { size_bits: 64, stride_bits: 64, align_bits: 64 }
+from raw parts: 0x3c9ec760000 8
+copy_from_slice 0x3c9ec760000 0x3c9ec760008
+[DEBUG k1::vm]    "Hello": string
+frame offset is 16
+[DEBUG k1::vm]    -> Ok(Agg { type_id: TypeId(27), ptr: 0x3c9ec760010 })
+******************** NEW FRAME **********************
+Frame:  single_expr_9040
+Base :  0x3c9ec760000 - 0x3c9ec762000 (32)
+Locals
+  sb: Reference { type_id: TypeId(1556), ptr: 0x3c9ec760000 }
+
+DATA
+00 40 76 ec c9 03 00 00 
+00 40 76 ec c9 03 00 00 
+05 00 00 00 00 00 00 00 
+10 42 08 ec c9 03 00 00 
+
+Frame:  putString
+Base :  0x3c9ec762000 - 0x3c9ec764000 (0)
+Locals
+  s: Agg { type_id: TypeId(27), ptr: 0x3c9ec760010 }
+  self: Agg { type_id: TypeId(56), ptr: 0x3c9ec760008 }
+
+DATA
+
+[DEBUG k1::vm]    return(push_spec_enum Char(char) | String(string)_5(self.parts, .String(s))): unit
+[DEBUG k1::vm]     return(push_spec_enum Char(char) | String(string)_5(self.parts, .String(s))): never
+[DEBUG k1::vm]      push_spec_enum Char(char) | String(string)_5(self.parts, .String(s)): unit
+[DEBUG k1::vm]       self.parts: List[enum Char(char) | String(string)]*
+[DEBUG k1::vm]        self: StringBuilder
+[DEBUG k1::vm]        -> Ok(Agg { type_id: TypeId(56), ptr: 0x3c9ec760008 })
+Layout for List[enum Char(char) | String(string)]*: Layout { size_bits: 64, stride_bits: 64, align_bits: 64 }
+load_struct_field parts of type List[enum Char(char) | String(string)]* is Reference { type_id: TypeId(54), ptr: 0x3c9ec764000 }
+[DEBUG k1::vm]       .String(s): enum Char(char) | String(string)
+[DEBUG k1::vm]        s: string
+[DEBUG k1::vm]        -> Ok(Agg { type_id: TypeId(27), ptr: 0x3c9ec760010 })
+frame offset is 0
+Aggregate padding: 56
+******************** NEW FRAME **********************
+Frame:  putString
+Base :  0x3c9ec762000 - 0x3c9ec764000 (24)
+Locals
+  s: Agg { type_id: TypeId(27), ptr: 0x3c9ec760010 }
+  self: Agg { type_id: TypeId(56), ptr: 0x3c9ec760008 }
+
+DATA
+01 00 00 00 00 00 00 00 
+05 00 00 00 00 00 00 00 
+10 42 08 ec c9 03 00 00 
+
+Frame:  push_spec_enum Char(char) | String(string)_5
+Base :  0x3c9ec764000 - 0x3c9ec766000 (0)
+Locals
+  self: Reference { type_id: TypeId(54), ptr: 0x3c9ec764000 }
+  elem: Agg { type_id: TypeId(51), ptr: 0x3c9ec762000 }
+
+DATA
+
+[DEBUG k1::vm]       {
+      let startLength: u64 = self.*.len;
+      switch  {
+    
+    {
+        cond(startLength == cap_spec_enum Char(char) | String(string)_5(self.*)) else goto next
+    } -> _grow_spec_enum Char(char) | String(string)_5(self),
+    
+    {} -> ()
+      };
+      self.len <- startLength + 1u64;
+      set_spec_enum Char(char) | String(string)_5(self.*, startLength, elem);
+      return(())
+    }: unit: unit
+[DEBUG k1::vm]        self.*.len: u64
+[DEBUG k1::vm]         self.*: List[enum Char(char) | String(string)]
+[DEBUG k1::vm]          self: List[enum Char(char) | String(string)]*
+[DEBUG k1::vm]          -> Ok(Reference { type_id: TypeId(54), ptr: 0x3c9ec764000 })
+Layout for List[enum Char(char) | String(string)]: Layout { size_bits: 192, stride_bits: 192, align_bits: 64 }
+frame offset is 0
+pushing struct w/ layout for load Layout { size_bits: 192, stride_bits: 192, align_bits: 64 }
+from raw parts: 0x3c9ec764000 24
+copy_from_slice 0x3c9ec764000 0x3c9ec764000
+
+thread 'main' panicked at library/core/src/panicking.rs:218:5:
+unsafe precondition(s) violated: ptr::copy_nonoverlapping requires that both pointer arguments are aligned and non-null and the specified memory ranges do not overlap
+stack backtrace:
+   0: rust_begin_unwind
+             at /rustc/05f9846f893b09a1be1fc8560e33fc3c815cfecb/library/std/src/panicking.rs:695:5
+   1: core::panicking::panic_nounwind_fmt::runtime
+             at /rustc/05f9846f893b09a1be1fc8560e33fc3c815cfecb/library/core/src/panicking.rs:117:22
+   2: core::panicking::panic_nounwind_fmt
+             at /rustc/05f9846f893b09a1be1fc8560e33fc3c815cfecb/library/core/src/intrinsics/mod.rs:3886:9
+   3: core::panicking::panic_nounwind
+             at /rustc/05f9846f893b09a1be1fc8560e33fc3c815cfecb/library/core/src/panicking.rs:218:5
+   4: core::intrinsics::copy_nonoverlapping::precondition_check
+             at /Users/knix/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/ub_checks.rs:68:21
+   5: core::intrinsics::copy_nonoverlapping
+             at /Users/knix/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/ub_checks.rs:75:17
+   6: core::slice::<impl [T]>::copy_from_slice
+             at /Users/knix/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/slice/mod.rs:3746:13
+   7: k1::vm::StackFrame::push_slice
+             at ./src/k1/vm.rs:1163:13
+   8: k1::vm::StackFrame::push_raw_copy
+             at ./src/k1/vm.rs:1248:13
+   9: k1::vm::StackFrame::push_raw_copy_layout
+             at ./src/k1/vm.rs:1253:9
+  10: k1::vm::load_value
+             at ./src/k1/vm.rs:986:33
+  11: k1::vm::execute_expr
+             at ./src/k1/vm.rs:403:21
+  12: k1::vm::execute_expr
+             at ./src/k1/vm.rs:323:32
+  13: k1::vm::execute_stmt
+             at ./src/k1/vm.rs:651:21
+  14: k1::vm::execute_block
+             at ./src/k1/vm.rs:633:22
+  15: k1::vm::execute_expr
+             at ./src/k1/vm.rs:453:32
+  16: k1::vm::execute_call
+             at ./src/k1/vm.rs:802:24
+  17: k1::vm::execute_expr
+             at ./src/k1/vm.rs:454:34
+  18: k1::vm::execute_expr
+             at ./src/k1/vm.rs:566:25
+  19: k1::vm::execute_stmt
+             at ./src/k1/vm.rs:645:21
+  20: k1::vm::execute_block
+             at ./src/k1/vm.rs:633:22
+  21: k1::vm::execute_expr
+             at ./src/k1/vm.rs:453:32
+  22: k1::vm::execute_call
+             at ./src/k1/vm.rs:802:24
+  23: k1::vm::execute_expr
+             at ./src/k1/vm.rs:454:34
+  24: k1::vm::execute_stmt
+             at ./src/k1/vm.rs:645:21
+  25: k1::vm::execute_block
+             at ./src/k1/vm.rs:633:22
+  26: k1::vm::execute_expr
+             at ./src/k1/vm.rs:453:32
+  27: k1::vm::execute_single_expr
+             at ./src/k1/vm.rs:260:13
+  28: k1::typer::TypedModule::eval_expr_inner
+             at ./src/k1/typer.rs:5670:39
+  29: k1::typer::TypedModule::eval_expr
+             at ./src/k1/typer.rs:5322:27
+  30: k1::typer::TypedModule::eval_stmt
+             at ./src/k1/typer.rs:10346:21
+  31: k1::typer::TypedModule::eval_block
+             at ./src/k1/typer.rs:10507:33
+  32: k1::typer::TypedModule::eval_function_body
+             at ./src/k1/typer.rs:11464:29
+  33: k1::typer::TypedModule::eval_definition
+             at ./src/k1/typer.rs:11961:33
+  34: k1::typer::TypedModule::run
+             at ./src/k1/typer.rs:12387:13
+  35: k1::compiler::compile_module
+             at ./src/k1/compiler.rs:347:21
+  36: compiler::main
+             at ./src/bin/compiler_main.rs:32:22
+  37: core::ops::function::FnOnce::call_once
+             at /Users/knix/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+thread caused non-unwinding panic. aborting.
+./run.sh: line 7: 60900 Abort trap: 6           RUST_LOG=info cargo run --features=llvm-sys/prefer-dynamic -- --write-llvm run $@

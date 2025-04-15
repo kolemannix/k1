@@ -915,8 +915,7 @@ fn execute_call(vm: &mut Vm, m: &TypedModule, call: &Call) -> TyperResult<VmResu
                     Some(l) => l.size_bytes(),
                     None => 0,
                 };
-                // TODO: Should be a usize; but K1 doesn't have one
-                Ok(Value::from(size_bytes as u64).into())
+                Ok(Value::Int(TypedIntValue::UWord64(size_bytes as u64)).into())
             }
             IntrinsicFunction::SizeOfStride => {
                 let type_id = call.type_args[0].type_id;
@@ -925,8 +924,7 @@ fn execute_call(vm: &mut Vm, m: &TypedModule, call: &Call) -> TyperResult<VmResu
                     Some(l) => l.stride_bytes(),
                     None => 0,
                 };
-                // TODO: Should be a usize; but K1 doesn't have one
-                Ok(Value::from(stride_bytes as u64).into())
+                Ok(Value::Int(TypedIntValue::UWord64(stride_bytes as u64)).into())
             }
             IntrinsicFunction::AlignOf => {
                 let type_id = call.type_args[0].type_id;
@@ -935,8 +933,7 @@ fn execute_call(vm: &mut Vm, m: &TypedModule, call: &Call) -> TyperResult<VmResu
                     Some(l) => l.align_bytes(),
                     None => 0,
                 };
-                // TODO: Should be a usize; but K1 doesn't have one
-                Ok(Value::from(align_bytes as u64).into())
+                Ok(Value::Int(TypedIntValue::UWord64(align_bytes as u64)).into())
             }
             IntrinsicFunction::TypeId => {
                 let type_id = call.type_args[0].type_id;
@@ -953,10 +950,10 @@ fn execute_call(vm: &mut Vm, m: &TypedModule, call: &Call) -> TyperResult<VmResu
             IntrinsicFunction::BitShiftLeft => todo!(),
             IntrinsicFunction::BitShiftRight => todo!(),
             IntrinsicFunction::PointerIndex => {
-                // intern fn refAtIndex[T](self: Pointer, index: u64): T*
+                // intern fn refAtIndex[T](self: Pointer, index: uword): T*
                 let typ = call.type_args[0].type_id;
                 let ptr = execute_expr_ev(vm, m, call.args[0])?.expect_ptr();
-                let index = execute_expr_ev(vm, m, call.args[1])?.expect_int().expect_u64();
+                let index = execute_expr_ev(vm, m, call.args[1])?.expect_int().expect_uword();
                 let result = ptr + offset_at_index(&m.types, typ, index as usize);
                 Ok(Value::Reference { type_id: call.return_type, ptr: result as *const u8 }.into())
             }
@@ -1054,19 +1051,19 @@ pub fn store_value(types: &Types, dst: *mut u8, value: Value) -> usize {
                     (dst as *mut i16).write(v);
                     size_of::<i16>()
                 }
-                TypedIntValue::U32(v) => {
+                TypedIntValue::U32(v) | TypedIntValue::UWord32(v) => {
                     (dst as *mut u32).write(v);
                     size_of::<u32>()
                 }
-                TypedIntValue::I32(v) => {
+                TypedIntValue::I32(v) | TypedIntValue::IWord32(v) => {
                     (dst as *mut i32).write(v);
                     size_of::<i32>()
                 }
-                TypedIntValue::U64(v) => {
+                TypedIntValue::U64(v) | TypedIntValue::UWord64(v) => {
                     (dst as *mut u64).write(v);
                     size_of::<u64>()
                 }
-                TypedIntValue::I64(v) => {
+                TypedIntValue::I64(v) | TypedIntValue::IWord64(v) => {
                     (dst as *mut i64).write(v);
                     size_of::<i64>()
                 }
@@ -1562,10 +1559,9 @@ fn vm_intercept_call(vm: &mut Vm, m: &TypedModule, call: &Call) -> TyperResult<O
                 let zero = fn_name_str == "systemZeroAlloc";
                 let size_expr = call.args[0];
                 let align_expr = call.args[1];
-                let size = execute_expr_ev(vm, m, size_expr)?.expect_int().expect_u64();
-                let align = execute_expr_ev(vm, m, align_expr)?.expect_int().expect_u64();
-                let layout =
-                    std::alloc::Layout::from_size_align(size as usize, align as usize).unwrap();
+                let size = execute_expr_ev(vm, m, size_expr)?.expect_int().expect_uword();
+                let align = execute_expr_ev(vm, m, align_expr)?.expect_int().expect_uword();
+                let layout = std::alloc::Layout::from_size_align(size, align).unwrap();
                 let ptr = if zero {
                     unsafe { std::alloc::alloc_zeroed(layout) }
                 } else {
@@ -1579,13 +1575,11 @@ fn vm_intercept_call(vm: &mut Vm, m: &TypedModule, call: &Call) -> TyperResult<O
                 let old_align_expr = call.args[2];
                 let new_size_expr = call.args[3];
                 let old_ptr = execute_expr_ev(vm, m, old_ptr_expr)?.expect_ptr();
-                let old_size = execute_expr_ev(vm, m, old_size_expr)?.expect_int().expect_u64();
-                let align = execute_expr_ev(vm, m, old_align_expr)?.expect_int().expect_u64();
-                let new_size = execute_expr_ev(vm, m, new_size_expr)?.expect_int().expect_u64();
-                let layout =
-                    std::alloc::Layout::from_size_align(old_size as usize, align as usize).unwrap();
-                let ptr =
-                    unsafe { std::alloc::realloc(old_ptr as *mut u8, layout, new_size as usize) };
+                let old_size = execute_expr_ev(vm, m, old_size_expr)?.expect_int().expect_uword();
+                let align = execute_expr_ev(vm, m, old_align_expr)?.expect_int().expect_uword();
+                let new_size = execute_expr_ev(vm, m, new_size_expr)?.expect_int().expect_uword();
+                let layout = std::alloc::Layout::from_size_align(old_size, align).unwrap();
+                let ptr = unsafe { std::alloc::realloc(old_ptr as *mut u8, layout, new_size) };
                 Ok(Some(Value::Pointer(ptr.addr()).into()))
             }
             "systemFree" => {

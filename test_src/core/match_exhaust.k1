@@ -42,7 +42,7 @@ fn bothTrue(bb: { a: bool, b: bool }): bool {
   }
 }
 
-fn main(): int {
+fn main(): i32 {
   println("Hello, exhaustiveness!");
 
   switch 'x' {

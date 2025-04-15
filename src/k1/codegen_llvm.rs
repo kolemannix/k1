@@ -43,7 +43,7 @@ use crate::typer::types::{
 };
 use crate::typer::{
     AssignmentKind, BinaryOp, BinaryOpKind, Call, Callee, CastType, FunctionId, IntrinsicFunction,
-    LetStmt, Linkage as TyperLinkage, LoopExpr, MatchingCondition, MatchingConditionInstr,
+    Layout, LetStmt, Linkage as TyperLinkage, LoopExpr, MatchingCondition, MatchingConditionInstr,
     StaticValue, StaticValueId, TypedBlock, TypedCast, TypedExpr, TypedExprId, TypedFloatValue,
     TypedFunction, TypedGlobalId, TypedIntValue, TypedMatchExpr, TypedModule, TypedStmt,
     TypedStmtId, UnaryOpKind, VariableId, WhileLoop,
@@ -89,31 +89,8 @@ impl Display for CodegenError {
 
 impl Error for CodegenError {}
 
-fn size_info(td: &TargetData, typ: &dyn AnyType) -> SizeInfo {
-    let sz = SizeInfo {
-        stride_bits: td.get_abi_size(typ) as u32 * 8,
-        size_bits: td.get_bit_size(typ) as u32,
-        pref_align_bits: td.get_preferred_alignment(typ) * 8,
-        abi_align_bits: td.get_abi_alignment(typ) * 8,
-    };
-    // if sz.pref_align_bits != sz.abi_align_bits {
-    //     // For some reason, llvm defaults the preferred alignment of all structs to 64 bits
-    //     // "a:0:64" in the default datalayout string
-    //     let is_single_member_struct = if typ.as_any_type_enum().is_struct_type() {
-    //         typ.as_any_type_enum().into_struct_type().count_fields() == 1
-    //     } else {
-    //         false
-    //     };
-    //     if !is_single_member_struct {
-    //         info!(
-    //         "Type has different preferred and abi alignments, and is not a single-member struct. Thought you'd like to know.\n{}. pref={}, abi={}",
-    //         typ.print_to_string(),
-    //         sz.pref_align_bits,
-    //         sz.abi_align_bits
-    //     )
-    //     }
-    // };
-    sz
+fn size_info(td: &TargetData, typ: &dyn AnyType) -> Layout {
+    Layout { size_bits: td.get_bit_size(typ) as u32, align_bits: td.get_abi_alignment(typ) * 8 }
 }
 
 trait BuilderResultExt {
@@ -180,65 +157,6 @@ impl<'ctx> From<BasicValueEnum<'ctx>> for LlvmValue<'ctx> {
     }
 }
 
-// TODO: Move off this SizeInfo to typer::Layout
-#[derive(Debug, Clone, Copy)]
-pub struct SizeInfo {
-    size_bits: u32,
-    /// Stride represents the space between the start of 2 successive elements, it bumps to the
-    /// next aligned slot. This must be used by builtin Buffer functionality in order to be correct
-    stride_bits: u32,
-    pref_align_bits: u32,
-    abi_align_bits: u32,
-}
-impl SizeInfo {
-    pub const fn pointer(size: WordSize) -> SizeInfo {
-        SizeInfo {
-            size_bits: size.bits() as u32,
-            stride_bits: size.bits() as u32,
-            pref_align_bits: size.bits() as u32,
-            abi_align_bits: size.bits() as u32,
-        }
-    }
-    pub const ZERO: SizeInfo =
-        SizeInfo { size_bits: 0, stride_bits: 0, pref_align_bits: 0, abi_align_bits: 0 };
-
-    /// https://learn.microsoft.com/en-us/cpp/c-language/alignment-c?view=msvc-170
-    /// struct and union types have an alignment equal to the largest alignment of any member.
-    /// Padding bytes are added within a struct to ensure individual member alignment requirements are met.
-    ///
-    /// THIS FUNCTION DOESNT INSERT PADDING SO THE SIZE OF STRUCTS WILL NOT
-    /// MATCH LLVMS.
-    #[deprecated(
-        since = "0.1.0",
-        note = "This function does not insert padding, so the size of structs will not match LLVM's. Resurrect this if we do our own backend"
-    )]
-    pub fn compute_size_of_aggregate(sizes: &[SizeInfo]) -> SizeInfo {
-        let mut max_align = 0;
-        let mut total_size = 0;
-        for size in sizes {
-            total_size += size.size_bits;
-            if size.pref_align_bits > max_align {
-                max_align = size.pref_align_bits
-            }
-        }
-        SizeInfo {
-            size_bits: total_size,
-            stride_bits: total_size,
-            pref_align_bits: max_align,
-            abi_align_bits: max_align,
-        }
-    }
-
-    pub fn scalar_value(size_bits: u32) -> SizeInfo {
-        SizeInfo {
-            size_bits,
-            stride_bits: size_bits,
-            pref_align_bits: size_bits,
-            abi_align_bits: size_bits,
-        }
-    }
-}
-
 #[derive(Debug, Copy, Clone)]
 struct LlvmReferenceType<'ctx> {
     type_id: TypeId,
@@ -246,6 +164,7 @@ struct LlvmReferenceType<'ctx> {
     #[allow(unused)]
     pointee_type: AnyTypeEnum<'ctx>,
     di_type: DIType<'ctx>,
+    size: Layout,
 }
 
 #[derive(Debug, Clone)]
@@ -260,7 +179,7 @@ struct LlvmValueType<'ctx> {
     type_id: TypeId,
     basic_type: BasicTypeEnum<'ctx>,
     di_type: DIType<'ctx>,
-    size: SizeInfo,
+    size: Layout,
 }
 
 #[derive(Debug, Clone)]
@@ -271,7 +190,7 @@ struct EnumVariantType<'ctx> {
     payload_type: Option<K1LlvmType<'ctx>>,
     tag_value: IntValue<'ctx>,
     di_type: DIType<'ctx>,
-    size: SizeInfo,
+    size: Layout,
 }
 
 #[derive(Debug, Clone)]
@@ -282,7 +201,7 @@ struct LlvmEnumType<'ctx> {
     base_struct_type: StructType<'ctx>,
     variants: Vec<EnumVariantType<'ctx>>,
     di_type: DIType<'ctx>,
-    size: SizeInfo,
+    size: Layout,
 }
 
 #[derive(Debug, Clone)]
@@ -291,7 +210,7 @@ struct LlvmStructType<'ctx> {
     struct_type: StructType<'ctx>,
     fields: Vec<K1LlvmType<'ctx>>,
     di_type: DIType<'ctx>,
-    size: SizeInfo,
+    size: Layout,
 }
 
 // Can this just be 'struct'? :()
@@ -300,7 +219,7 @@ struct LlvmLambdaObjectType<'ctx> {
     type_id: TypeId,
     struct_type: StructType<'ctx>,
     di_type: DIType<'ctx>,
-    size: SizeInfo,
+    size: Layout,
 }
 
 #[derive(Debug, Clone)]
@@ -351,13 +270,13 @@ impl<'ctx> From<LlvmLambdaObjectType<'ctx>> for K1LlvmType<'ctx> {
 
 impl<'ctx> K1LlvmType<'ctx> {
     #[allow(unused)]
-    pub fn size_info(&self) -> SizeInfo {
+    pub fn size_info(&self) -> Layout {
         match self {
             K1LlvmType::Value(v) => v.size,
             K1LlvmType::EnumType(e) => e.size,
             K1LlvmType::StructType(s) => s.size,
-            K1LlvmType::Reference(_p) => SizeInfo::POINTER,
-            K1LlvmType::Void(_) => SizeInfo::ZERO,
+            K1LlvmType::Reference(r) => r.size,
+            K1LlvmType::Void(_) => Layout::ZERO,
             K1LlvmType::LambdaObject(c) => c.size,
         }
     }
@@ -533,6 +452,7 @@ struct DebugContext<'ctx> {
     #[allow(unused)]
     scopes: FxHashMap<ScopeId, DIScope<'ctx>>,
     strip_debug: bool,
+    word_size: WordSize,
 }
 
 impl<'ctx> DebugContext<'ctx> {
@@ -541,8 +461,8 @@ impl<'ctx> DebugContext<'ctx> {
             .create_pointer_type(
                 name,
                 pointee,
-                WORD_SIZE_BITS,
-                WORD_SIZE_BITS as u32,
+                self.word_size.bits() as u64,
+                self.word_size.bits(),
                 AddressSpace::default(),
             )
             .as_type()
@@ -662,6 +582,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             debug_stack: Vec::new(),
             scopes: FxHashMap::new(),
             strip_debug: !debug,
+            word_size: module.ast.config.target.word_size(),
         };
         debug.push_scope(SpanId::NONE, compile_unit.as_debug_info_scope(), compile_unit.get_file());
         debug
@@ -724,7 +645,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         }
     }
 
-    fn size_info(&self, typ: &dyn AnyType) -> SizeInfo {
+    fn size_info(&self, typ: &dyn AnyType) -> Layout {
         let td = self.llvm_machine.get_target_data();
         size_info(&td, typ)
     }
@@ -824,7 +745,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.debug.current_file(),
                 line_number,
                 size.size_bits as u64,
-                size.pref_align_bits,
+                size.align_bits,
                 0,
                 None,
                 fields,
@@ -916,7 +837,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         if let Some(result) = result {
             return Ok(result);
         };
-        let _dw_ate_address = 0x01;
+        let dw_ate_address = 0x01;
         let dw_ate_boolean = 0x02;
         let _dw_ate_complex_float = 0x03;
         let dw_ate_float = 0x04;
@@ -980,7 +901,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.ctx.i64_type(),
                 dw_ate_unsigned,
             )),
-            Type::Integer(IntegerType::UWord(w) | IntegerType::IWord(w)) => {
+            Type::Integer(IntegerType::UWord(w)) => {
                 let llvm_type = self.builtin_types.ptr_sized_int;
                 assert_eq!(llvm_type.get_bit_width(), w.width().bits());
                 Ok(make_value_integer_type("uword", UWORD_TYPE_ID, llvm_type, dw_ate_unsigned))
@@ -997,6 +918,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             Type::Integer(IntegerType::I64) => {
                 Ok(make_value_integer_type("i64", I64_TYPE_ID, self.ctx.i64_type(), dw_ate_signed))
             }
+            Type::Integer(IntegerType::IWord(w)) => {
+                let llvm_type = self.builtin_types.ptr_sized_int;
+                assert_eq!(llvm_type.get_bit_width(), w.width().bits());
+                Ok(make_value_integer_type("uword", UWORD_TYPE_ID, llvm_type, dw_ate_signed))
+            }
             Type::Float(float_type) => {
                 let llvm_type = match float_type.size {
                     NumericWidth::B8 => unreachable!("f8 is not a thing"),
@@ -1004,7 +930,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     NumericWidth::B32 => self.ctx.f32_type(),
                     NumericWidth::B64 => self.ctx.f64_type(),
                 };
-                let size = SizeInfo::scalar_value(float_type.size.bits());
+                let size = self.module.types.get_layout(type_id).unwrap();
                 let float_name = self.module.type_id_to_string(type_id);
                 Ok(LlvmValueType {
                     type_id,
@@ -1037,10 +963,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             .into()),
             Type::Pointer => {
-                // We don't know what it points to, so we just say 'bytes' for the best debugger
-                // experience
-                let placeholder_pointee = self.codegen_type(U8_TYPE_ID)?.debug_type();
-                Ok(self.make_pointer_type(placeholder_pointee).into())
+                let llvm_type = self.builtin_types.ptr_sized_int;
+                Ok(make_value_integer_type("Pointer", POINTER_TYPE_ID, llvm_type, dw_ate_address))
             }
             ts @ Type::Struct(struc) => {
                 let buffer_instance = ts.as_buffer_instance();
@@ -1113,6 +1037,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             &format!("fn_ptr_{}", type_id),
                             placeholder_pointee,
                         ),
+                        size: Layout::from_scalar_bits(self.word_size().bits()),
                     }
                     .into())
                 } else {
@@ -1126,6 +1051,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             &format!("reference_{}", type_id),
                             inner_debug_type,
                         ),
+                        size: Layout::from_scalar_bits(self.word_size().bits()),
                     }
                     .into())
                 }
@@ -1239,10 +1165,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 //     variant, and aligned to our own alignment
 
                 let largest_variant =
-                    variant_structs.iter().max_by_key(|v| v.size.stride_bits).unwrap();
+                    variant_structs.iter().max_by_key(|v| v.size.size_bits).unwrap();
                 let strictest_aligned_variant =
-                    variant_structs.iter().max_by_key(|v| v.size.abi_align_bits).unwrap();
-                let enum_alignment = strictest_aligned_variant.size.abi_align_bits;
+                    variant_structs.iter().max_by_key(|v| v.size.align_bits).unwrap();
+                let enum_alignment = strictest_aligned_variant.size.align_bits;
                 let largest_variant_size = largest_variant.size.size_bits;
 
                 // largest variant size rounded up to multiple of strictest_aligned_variant
@@ -1276,8 +1202,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     physical_type_size_info
                 );
                 debug_assert!(physical_type_size_info.size_bits == enum_size_bits);
-                debug_assert!(physical_type_size_info.stride_bits == enum_size_bits);
-                debug_assert!(physical_type_size_info.abi_align_bits == enum_alignment);
+                debug_assert!(physical_type_size_info.align_bits == enum_alignment);
 
                 // Now that we have the physical envelope representation, we add it to each variant
                 for variant_struct in variant_structs.iter_mut() {
@@ -1296,7 +1221,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                                 self.debug.current_file(),
                                 0,
                                 variant.size.size_bits as u64,
-                                variant.size.pref_align_bits,
+                                variant.size.align_bits,
                                 0,
                                 0,
                                 variant.di_type,
@@ -1374,7 +1299,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         struct_type: s,
                         fields: Vec::new(),
                         di_type: self.make_debug_struct_type(&name, &s, SpanId::NONE, &[]),
-                        size: SizeInfo::ZERO,
+                        size: Layout::ZERO,
                     }))
                 }
             }
@@ -1404,13 +1329,13 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         }
         let size_info = codegened_type.size_info();
         if let Some(k1_size) = self.module.types.layouts.get(type_id) {
-            if size_info.size_bits != k1_size.stride_bits {
+            if size_info.size_bits != k1_size.size_bits {
                 eprintln!("Size of '{}'", self.module.type_id_to_string(type_id));
-                eprintln!("DIFFERENT SIZES {} {}", size_info.size_bits, k1_size.stride_bits)
+                eprintln!("DIFFERENT SIZES {} {}", size_info.size_bits, k1_size.size_bits)
             }
-            if size_info.abi_align_bits != k1_size.align_bits {
+            if size_info.align_bits != k1_size.align_bits {
                 eprintln!("Size of '{}'", self.module.type_id_to_string(type_id));
-                eprintln!("DIFFERENT ALIGN {} {}", size_info.abi_align_bits, k1_size.align_bits)
+                eprintln!("DIFFERENT ALIGN {} {}", size_info.align_bits, k1_size.align_bits)
             }
         } else {
             eprintln!("No k1 size but yes llvm size: {}", self.module.type_id_to_string(type_id))
@@ -1535,14 +1460,15 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 variable_type.debug_type(),
                 true,
                 0,
-                WORD_SIZE_BITS as u32,
+                variable_type.size_info().align_bits,
             )),
             None,
             self.builder.get_current_debug_location().unwrap(),
             store_instr,
         );
         // }
-        // TODO: some 'lets' don't need to be pointers; if they are not re-assignable
+
+        // nocommit: some 'lets' don't need to be pointers; if they are not re-assignable
         // then the value representation is fine
         let pointer = VariableValue::Indirect { pointer_value: variable_ptr };
         self.variable_to_value.insert(let_stmt.variable_id, pointer);
@@ -1707,9 +1633,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         ty: BasicTypeEnum<'ctx>,
     ) -> InstructionValue<'ctx> {
         let size = self.ctx.ptr_sized_int_type(&self.llvm_machine.get_target_data(), None);
-        let size_info = self.size_info(&ty);
-        let bytes = size.const_int((size_info.stride_bits / 8) as u64, false);
-        let align_bytes = size_info.abi_align_bits / 8;
+        let layout = self.size_info(&ty);
+        let bytes = size.const_int((layout.size_bytes()) as u64, false);
+        let align_bytes = layout.align_bytes() as u32;
         self.builder
             .build_memcpy(dst, align_bytes, src, align_bytes, bytes)
             .unwrap()
@@ -2868,13 +2794,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let type_param = &call.type_args[0];
                 let llvm_type = self.codegen_type(type_param.type_id)?;
                 let size = self.size_info(&llvm_type.rich_value_type().as_any_type_enum());
-                let num_bits = match intrinsic_type {
-                    IntrinsicFunction::SizeOf => size.size_bits,
-                    IntrinsicFunction::SizeOfStride => size.stride_bits,
-                    IntrinsicFunction::AlignOf => size.pref_align_bits,
+                let num_bytes = match intrinsic_type {
+                    IntrinsicFunction::SizeOf => size.size_bytes(),
+                    IntrinsicFunction::SizeOfStride => size.stride_bytes(),
+                    IntrinsicFunction::AlignOf => size.align_bytes(),
                     _ => unreachable!(),
                 };
-                let num_bytes = num_bits / 8;
                 let size_value =
                     self.builtin_types.ptr_sized_int.const_int(num_bytes as u64, false);
                 Ok(size_value.as_basic_value_enum().into())
@@ -2896,7 +2821,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             | IntrinsicFunction::BitOr
             | IntrinsicFunction::BitShiftLeft
             | IntrinsicFunction::BitShiftRight => {
-                // We only support signed 64 bit integers for now
                 let is_operand_signed = true;
                 let sign_extend = is_operand_signed;
                 let lhs = self.codegen_expr_basic_value(call.args[0])?.into_int_value();
@@ -2924,7 +2848,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             IntrinsicFunction::PointerIndex => {
                 //  Reference:
-                //  intern fn refAtIndex[T](self: Pointer, index: u64): T*
+                //  intern fn refAtIndex[T](self: Pointer, index: uword): T*
                 let pointee_ty_arg = call.type_args[0];
                 let elem_type = self.codegen_type(pointee_ty_arg.type_id)?;
                 let ptr = self.codegen_expr_basic_value(call.args[0])?.into_pointer_value();
@@ -3557,5 +3481,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let return_value = unsafe { engine.run_function(llvm_function.function_value, &[]) };
         let res: u64 = return_value.as_int(true);
         Ok(res)
+    }
+
+    pub fn word_size(&self) -> WordSize {
+        self.module.ast.config.target.word_size()
     }
 }
