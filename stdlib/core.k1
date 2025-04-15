@@ -176,10 +176,13 @@ impl Show for char { fn show(self: char): string { self.toString() } }
 
 fn formatUInt[W: Writer](context w: W*)(value: uword, base: uword): unit {
   if value == 0 { w.writeChar('0'); return(()) }
-  else if value < (base * 2) {
+  else if value < base {
+    let digit = u8/toAsciiDigit(value as u8);
+    w.writeChar(digit);
+  } else if value < (base * 2) {
     let first: uword = (value / base) * base;
-    let second: uword = value % base;
     let firstDigit = u8/toAsciiDigit(first as u8);
+    let second: uword = value % base;
     let secondDigit = u8/toAsciiDigit(second as u8);
     w.writeChar(firstDigit);
     w.writeChar(secondDigit);
@@ -228,7 +231,7 @@ impl Print for u32 {
 
 impl Print for uword {
   fn printTo[W: Writer](self: uword, w: W*): unit {
-    (self).printTo(w)
+    formatUInt(context w)(value = self, base = 10)
   }
 }
 
