@@ -408,6 +408,9 @@ struct BuiltinTypes<'ctx> {
 }
 
 impl<'ctx> BuiltinTypes<'ctx> {
+    pub fn unit_basic(&self) -> BasicValueEnum<'ctx> {
+        self.unit_value.as_basic_value_enum()
+    }
     pub fn uword(&self) -> IntType<'ctx> {
         self.ptr_sized_int
     }
@@ -845,10 +848,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let dw_ate_char = 0x06;
         let dw_ate_unsigned = 0x07;
         let _dw_ate_unsigned_char = 0x08;
-        let make_value_integer_type =
+        let make_value_basic_type =
             |name: &str,
              type_id: TypeId,
-             int_type: IntType<'ctx>,
+             int_type: BasicTypeEnum<'ctx>,
              encoding: llvm_sys::debuginfo::LLVMDWARFTypeEncoding| {
                 let size = self.size_info(&int_type);
                 K1LlvmType::Value(LlvmValueType {
@@ -868,60 +871,85 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         // Might be better to switch to the debug context span, rather than the type's span
         let span = self.module.get_span_for_type_id(type_id).unwrap_or(SpanId::NONE);
         let codegened_type = match self.module.types.get_no_follow(type_id) {
-            Type::Unit => Ok(make_value_integer_type(
+            Type::Unit => Ok(make_value_basic_type(
                 "unit",
                 UNIT_TYPE_ID,
-                self.builtin_types.unit,
+                self.builtin_types.unit.as_basic_type_enum(),
                 dw_ate_boolean,
             )),
-            Type::Char => Ok(make_value_integer_type(
+            Type::Char => Ok(make_value_basic_type(
                 "char",
                 CHAR_TYPE_ID,
-                self.builtin_types.char,
+                self.builtin_types.char.as_basic_type_enum(),
                 dw_ate_char,
             )),
-            Type::Integer(IntegerType::U8) => {
-                Ok(make_value_integer_type("u8", U8_TYPE_ID, self.ctx.i8_type(), dw_ate_unsigned))
-            }
-            Type::Integer(IntegerType::U16) => Ok(make_value_integer_type(
+            Type::Integer(IntegerType::U8) => Ok(make_value_basic_type(
+                "u8",
+                U8_TYPE_ID,
+                self.ctx.i8_type().as_basic_type_enum(),
+                dw_ate_unsigned,
+            )),
+            Type::Integer(IntegerType::U16) => Ok(make_value_basic_type(
                 "u16",
                 U16_TYPE_ID,
-                self.ctx.i16_type(),
+                self.ctx.i16_type().as_basic_type_enum(),
                 dw_ate_unsigned,
             )),
-            Type::Integer(IntegerType::U32) => Ok(make_value_integer_type(
+            Type::Integer(IntegerType::U32) => Ok(make_value_basic_type(
                 "u32",
                 U32_TYPE_ID,
-                self.ctx.i32_type(),
+                self.ctx.i32_type().as_basic_type_enum(),
                 dw_ate_unsigned,
             )),
-            Type::Integer(IntegerType::U64) => Ok(make_value_integer_type(
+            Type::Integer(IntegerType::U64) => Ok(make_value_basic_type(
                 "u64",
                 U64_TYPE_ID,
-                self.ctx.i64_type(),
+                self.ctx.i64_type().as_basic_type_enum(),
                 dw_ate_unsigned,
             )),
             Type::Integer(IntegerType::UWord(w)) => {
                 let llvm_type = self.builtin_types.ptr_sized_int;
                 assert_eq!(llvm_type.get_bit_width(), w.width().bits());
-                Ok(make_value_integer_type("uword", UWORD_TYPE_ID, llvm_type, dw_ate_unsigned))
+                Ok(make_value_basic_type(
+                    "uword",
+                    UWORD_TYPE_ID,
+                    llvm_type.as_basic_type_enum(),
+                    dw_ate_unsigned,
+                ))
             }
-            Type::Integer(IntegerType::I8) => {
-                Ok(make_value_integer_type("i8", I8_TYPE_ID, self.ctx.i8_type(), dw_ate_signed))
-            }
-            Type::Integer(IntegerType::I16) => {
-                Ok(make_value_integer_type("i16", I16_TYPE_ID, self.ctx.i16_type(), dw_ate_signed))
-            }
-            Type::Integer(IntegerType::I32) => {
-                Ok(make_value_integer_type("i32", I32_TYPE_ID, self.ctx.i32_type(), dw_ate_signed))
-            }
-            Type::Integer(IntegerType::I64) => {
-                Ok(make_value_integer_type("i64", I64_TYPE_ID, self.ctx.i64_type(), dw_ate_signed))
-            }
+            Type::Integer(IntegerType::I8) => Ok(make_value_basic_type(
+                "i8",
+                I8_TYPE_ID,
+                self.ctx.i8_type().as_basic_type_enum(),
+                dw_ate_signed,
+            )),
+            Type::Integer(IntegerType::I16) => Ok(make_value_basic_type(
+                "i16",
+                I16_TYPE_ID,
+                self.ctx.i16_type().as_basic_type_enum(),
+                dw_ate_signed,
+            )),
+            Type::Integer(IntegerType::I32) => Ok(make_value_basic_type(
+                "i32",
+                I32_TYPE_ID,
+                self.ctx.i32_type().as_basic_type_enum(),
+                dw_ate_signed,
+            )),
+            Type::Integer(IntegerType::I64) => Ok(make_value_basic_type(
+                "i64",
+                I64_TYPE_ID,
+                self.ctx.i64_type().as_basic_type_enum(),
+                dw_ate_signed,
+            )),
             Type::Integer(IntegerType::IWord(w)) => {
                 let llvm_type = self.builtin_types.ptr_sized_int;
                 assert_eq!(llvm_type.get_bit_width(), w.width().bits());
-                Ok(make_value_integer_type("uword", UWORD_TYPE_ID, llvm_type, dw_ate_signed))
+                Ok(make_value_basic_type(
+                    "uword",
+                    UWORD_TYPE_ID,
+                    llvm_type.as_basic_type_enum(),
+                    dw_ate_signed,
+                ))
             }
             Type::Float(float_type) => {
                 let llvm_type = match float_type.size {
@@ -963,8 +991,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             .into()),
             Type::Pointer => {
-                let llvm_type = self.builtin_types.ptr_sized_int;
-                Ok(make_value_integer_type("Pointer", POINTER_TYPE_ID, llvm_type, dw_ate_address))
+                let llvm_type = self.builtin_types.ptr.as_basic_type_enum();
+                Ok(make_value_basic_type("Pointer", POINTER_TYPE_ID, llvm_type, dw_ate_address))
             }
             ts @ Type::Struct(struc) => {
                 let buffer_instance = ts.as_buffer_instance();
@@ -1413,7 +1441,16 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
         let variable_type = self.codegen_type(let_stmt.variable_type)?;
         let variable = self.module.variables.get(let_stmt.variable_id);
+        let mutable = variable.is_mutable;
         let name = self.get_ident_name(variable.name).to_string();
+
+        // Some 'lets' don't need an extra alloca; if they are not re-assignable
+        // and they are not 'referencing' then the value representation is fine
+        if !let_stmt.is_referencing && !mutable {
+            let variable_value = VariableValue::Direct { value };
+            self.variable_to_value.insert(let_stmt.variable_id, variable_value);
+            return Ok(self.builtin_types.unit_basic().into());
+        }
 
         let variable_ptr = self.build_alloca(variable_type.rich_value_type(), &name);
 
@@ -1468,8 +1505,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         );
         // }
 
-        // nocommit: some 'lets' don't need to be pointers; if they are not re-assignable
-        // then the value representation is fine
         let pointer = VariableValue::Indirect { pointer_value: variable_ptr };
         self.variable_to_value.insert(let_stmt.variable_id, pointer);
         Ok(self.builtin_types.unit_value.as_basic_value_enum().into())

@@ -185,6 +185,10 @@ impl Equals for string {
   }
 }
 
+impl Print for string {
+  fn printTo[W: Writer](self: string, w: W*): unit { w.writeString(self) }
+}
+
 impl Show for string {
   fn show(self: string): string { self }
 }

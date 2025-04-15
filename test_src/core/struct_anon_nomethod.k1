@@ -21,10 +21,9 @@ fn test(): unit {
 
   // Should not work because PointAlias is a type alias
   let p2: PointAlias = { x: 0, y: 0 };
-  assert(
-    testCompile(p2.sum())
-    is
-    .Some("Method 'sum' does not exist on type: '{ x: i64, y: i64 }'")
+  assertEquals(
+    testCompile(p2.sum()),
+    Opt.Some("Method 'sum' does not exist on type: '{ x: iword, y: iword }'")
   );
 
   ()
