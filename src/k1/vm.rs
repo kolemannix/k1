@@ -775,7 +775,7 @@ pub fn static_value_to_vm_value(
         StaticValue::String(_box_str, _) => {
             failf!(static_value.get_span(), "static str to vm value")
         }
-        StaticValue::Pointer(value, _) => Ok(Value::Pointer(*value as usize)),
+        StaticValue::NullPointer(_) => Ok(Value::Pointer(0)),
         StaticValue::Struct(static_struct) => {
             let mut values: SmallVec<[Value; 8]> = smallvec![];
             for f in static_struct.fields.iter() {
