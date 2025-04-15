@@ -39,8 +39,8 @@ impl[T] Unwrap[Inner = T] for Opt[T] {
   fn make(t: T): Self { Opt.Some(t) }
 }
 
-impl[T: Show] Show for Opt[T] {
-  fn show(self: Opt[T]): string {
-    if self is .Some(v) "Some(\{v})" else "None"
+impl[T: Print] Print for Opt[T] {
+  fn printTo[W: Writer](self: Opt[T], w: W*): unit {
+    if self is .Some(v) w.writeString("Some(\{v})") else w.writeString("None")
   }
 }

@@ -1,20 +1,20 @@
 // TODO: Move to <header> . <mem block> model vs separate struct
 deftype Arena = {
   basePtr: Pointer,
-  curAddr: u64,
-  maxAddr: u64
+  curAddr: uword,
+  maxAddr: uword
 }
 ns Arena {
-  let static mb: u64 = 0x100000;
-  let static gb: u64 = 0x40000000;
+  let static mb: uword = 0x100000;
+  let static gb: uword = 0x40000000;
 
-  fn regionSizeBytes(self: Arena): u64 {
-    self.maxAddr - (self.basePtr as u64)
+  fn regionSizeBytes(self: Arena): uword {
+    self.maxAddr - (self.basePtr as uword)
   }
 
   // Aligns 'base' to the next available value that is aligned with `align`
   // TODO(optimize): alignTo: Learn from Rust's 'align_offset' impl
-  fn alignTo(baseAddress: u64, alignBytes: u64): u64 {
+  fn alignTo(baseAddress: uword, alignBytes: uword): uword {
     let mask = alignBytes - 1;
     let sum = baseAddress + mask;
     let aligned = Bitwise/bitAnd(sum, Bitwise/bitNot(mask));
@@ -24,7 +24,7 @@ ns Arena {
     aligned
   }
 
-  fn new(initialMb: u64): Arena {
+  fn new(initialMb: uword): Arena {
     let capacity = initialMb * mb;
     // We zero the memory because we don't make arenas that often
     // so it's worth it
@@ -35,12 +35,12 @@ ns Arena {
     if basePtr.isNull() crash("calloc for Arena failed");
     {
       basePtr: basePtr,
-      curAddr: basePtr as u64,
-      maxAddr: basePtr as u64 + capacity
+      curAddr: basePtr as uword,
+      maxAddr: basePtr as uword + capacity
     }
   }
 
-  fn pushRaw(self: Arena*, size: u64, align: u64): Pointer {
+  fn pushRaw(self: Arena*, size: uword, align: uword): Pointer {
     let dataStart = alignTo(self.curAddr, align);
     let newEnd = dataStart + size;
     if newEnd > self.maxAddr {
@@ -62,7 +62,7 @@ ns Arena {
   fn freeAll(self: Arena*): unit {
     let size = self.regionSizeBytes();
     println("[arena] Freeing \{size}");
-    libc/memset(self.basePtr, 0 as u32, size);
-    self.curAddr* <- (self.basePtr as u64);
+    libc/memset(self.basePtr, 0: u32, size);
+    self.curAddr* <- (self.basePtr as uword);
   }
 }

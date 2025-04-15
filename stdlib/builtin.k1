@@ -38,8 +38,8 @@ deftype Ordering = either Less, Equal, Greater
 
 deftype Result[T, E] = either Ok(T), Err(E)
 
-deftype alias int = i64
-deftype alias uint = u64
+deftype alias int = iword
+deftype alias uint = uword
 deftype alias byte = u8
 
 ////////////////////////////////
@@ -51,6 +51,8 @@ ability Equals {
 }
 
 // TODO(dogfood): use writer ability for string interpolation
+// TODO(dogfood): Enhance with an `impl Error` type parameter
+// TODO(dogfood): Allow Error = never for infallible writes
 ability Writer {
   fn writeChar(self: Self*, value: char): unit
   fn writeByte(self: Self*, value: u8): unit
@@ -65,7 +67,6 @@ ability Print {
 // Show must have ability id 4
 // TODO: Show and Writer and friends do not belong in builtin long term
 ability Show {
-  // Will use the thread-local temporary allocator
   fn show(self: Self): string
 }
 
@@ -101,9 +102,9 @@ ability Try[impl T, impl E] {
 
 ability Iterator[impl Item] {
   fn next(self: Self*): Item?
-  fn sizeHint(self: Self): { atLeast: u64, atMost: u64? }
-  fn advanceBy(self: Self*, n: u64): unit
-  fn nth(self: Self*, n: u64): Item?
+  fn sizeHint(self: Self): { atLeast: uword, atMost: uword? }
+  fn advanceBy(self: Self*, n: uword): unit
+  fn nth(self: Self*, n: uword): Item?
 }
 
 ability Iterable[impl Item, impl I: Iterator[Item = Item]] {
@@ -149,15 +150,22 @@ impl Equals for bool {
   }
 }
 
+// TODO(vm): Great metaprogramming use-case!
 impl Equals for u8 {
   fn equals(self: u8, other: u8): bool { self == other }
 }
 impl Equals for u64 {
   fn equals(self: u64, other: u64): bool { self == other }
 }
+impl Equals for uword {
+  fn equals(self: Self, other: Self): bool { self == other }
+}
 
 impl Equals for i64 {
   fn equals(self: i64, other: i64): bool { self == other }
+}
+impl Equals for iword {
+  fn equals(self: Self, other: Self): bool { self == other }
 }
 
 
@@ -167,17 +175,17 @@ fn discard[T](t: T): unit { () }
 ns libc {
   extern(exit) fn exit(code: i32): never
 
-  extern(read) fn read(fileNo: i32, buffer: Pointer, count: u64, offset: u64): i64
-  extern(write) fn write(fileNo: i32, data: Pointer, count: u64, offset: u64): u64
-  extern(memcpy) fn memcpy(dst: Pointer, src: Pointer, count: u64): Pointer
-  extern(memset) fn memset(src: Pointer, value: u32, count: u64): Pointer
-  extern(memcmp) fn memcmp(s1: Pointer, s2: Pointer, size: u64): i32
-  extern(calloc) fn calloc(count: u64, size: u64): Pointer
+  extern(read) fn read(fileNo: i32, buffer: Pointer, count: uword): iword
+  extern(write) fn write(fileNo: i32, data: Pointer, count: uword): iword
+  extern(memcpy) fn memcpy(dst: Pointer, src: Pointer, count: uword): Pointer
+  extern(memset) fn memset(src: Pointer, value: u32, count: uword): Pointer
+  extern(memcmp) fn memcmp(s1: Pointer, s2: Pointer, size: uword): i32
+  extern(calloc) fn calloc(count: uword, size: uword): Pointer
 
-  extern(malloc) fn malloc(size: u64): Pointer
+  extern(malloc) fn malloc(size: uword): Pointer
   extern(free) fn free(ptr: Pointer): unit
 
-  extern(realloc) fn realloc(ptr: Pointer, size: u64): Pointer
+  extern(realloc) fn realloc(ptr: Pointer, size: uword): Pointer
 
   extern(abort) fn abort(): never
 }
@@ -197,8 +205,7 @@ fn crash(context locn: compiler/SourceLocation)(msg: string): never {
     libc/write(
       fileNo = 1, 
       data = s.buffer.data as Pointer, 
-      count = s.buffer.len - 1, 
-      offset = 0
+      count = s.buffer.len - 1,
     );
     libc/exit(1)
   } else if k1/IS_STATIC {

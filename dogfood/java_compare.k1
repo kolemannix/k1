@@ -15,7 +15,7 @@ ns List {
 }
 
 deftype alias Person = { name: string, age: int }
-fn main(): int {
+fn main(): i32 {
   let ints = [1];
   let ints2 = ints.map(\(i: int) i + 1);
   let people = [

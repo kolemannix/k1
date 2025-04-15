@@ -1,4 +1,4 @@
-fn main(): int {
+fn main(): i32 {
   // Steps to make coalescing accessor work and be ability-based
   // - Named type params for fn calls (to unify the syntax)
   // - (optional, but missing) A syntax for specifying ability Self type

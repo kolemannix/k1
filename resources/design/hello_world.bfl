@@ -5,7 +5,7 @@ type Point = {
   y: int,
 }
 
-fn main(): int {
+fn main(): i32 {
   print("Hello, World!");
   let x: int = 0;
   let mut y: int = 1;

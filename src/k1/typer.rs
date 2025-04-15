@@ -309,17 +309,22 @@ impl StaticValue {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Layout {
     pub size_bits: u32,
-    /// Stride represents the space between the start of 2 successive elements, it bumps to the
-    /// next aligned slot. This must be used by builtin Buffer functionality in order to be correct
-    pub stride_bits: u32,
     pub align_bits: u32,
 }
 
 impl Layout {
     pub fn from_scalar_bits(bits: u32) -> Layout {
-        Layout { size_bits: bits, stride_bits: bits, align_bits: bits }
+        Layout { size_bits: bits, align_bits: bits }
     }
-    pub const ZERO: Layout = Layout { size_bits: 0, stride_bits: 0, align_bits: 8 };
+    pub const ZERO: Layout = Layout { size_bits: 0, align_bits: 8 };
+
+    pub fn stride_bytes(&self) -> usize {
+        self.size_bytes().next_multiple_of(self.align_bytes())
+    }
+
+    pub fn stride_bits(&self) -> usize {
+        self.stride_bytes() * 8
+    }
 
     // Returns: the start, or offset, of the new field
     pub fn append_to_aggregate(&mut self, layout: Layout) -> u32 {
@@ -334,9 +339,7 @@ impl Layout {
         };
         let new_end_unaligned = new_field_start + layout.size_bits;
         let new_align = std::cmp::max(self.align_bits, layout.align_bits);
-        let new_end_aligned = new_end_unaligned.next_multiple_of(new_align);
         self.size_bits = new_end_unaligned;
-        self.stride_bits = new_end_aligned;
         self.align_bits = new_align;
         new_field_start
     }
@@ -347,10 +350,6 @@ impl Layout {
 
     pub fn size_bytes(&self) -> usize {
         self.size_bits as usize / 8
-    }
-
-    pub fn stride_bytes(&self) -> usize {
-        self.stride_bits as usize / 8
     }
 }
 
@@ -464,7 +463,7 @@ impl From<&TypedAbilityParam> for SimpleNamedType {
 #[derive(Debug, Clone)]
 /// An ability signature encompasses an ability's entire 'type' story:
 /// - Base type, generic type params, and impl-provided type params
-///```norun
+///```md
 ///Example: Add[Rhs = Int]
 ///                   ^ impl argument
 ///             ^ ability argument
@@ -1182,10 +1181,14 @@ pub enum TypedIntValue {
     U16(u16),
     U32(u32),
     U64(u64),
+    UWord32(u32),
+    UWord64(u64),
     I8(i8),
     I16(i16),
     I32(i32),
     I64(i64),
+    IWord32(i32),
+    IWord64(i64),
 }
 
 impl TypedIntValue {
@@ -1195,10 +1198,14 @@ impl TypedIntValue {
             TypedIntValue::U16(_) => "u16",
             TypedIntValue::U32(_) => "u32",
             TypedIntValue::U64(_) => "u64",
+            TypedIntValue::UWord32(_) => "uword",
+            TypedIntValue::UWord64(_) => "uword",
             TypedIntValue::I8(_) => "i8",
             TypedIntValue::I16(_) => "i16",
             TypedIntValue::I32(_) => "i32",
             TypedIntValue::I64(_) => "i64",
+            TypedIntValue::IWord32(_) => "iword",
+            TypedIntValue::IWord64(_) => "iword",
         }
     }
 
@@ -1212,49 +1219,68 @@ impl TypedIntValue {
             TypedIntValue::U16(v) => *v as u64,
             TypedIntValue::U32(v) => *v as u64,
             TypedIntValue::U64(v) => *v,
+            TypedIntValue::UWord32(v) => *v as u64,
+            TypedIntValue::UWord64(v) => *v,
             TypedIntValue::I8(v) => *v as u64,
             TypedIntValue::I16(v) => *v as u64,
             TypedIntValue::I32(v) => *v as u64,
             TypedIntValue::I64(v) => *v as u64,
+            TypedIntValue::IWord32(v) => *v as u64,
+            TypedIntValue::IWord64(v) => *v as u64,
         }
     }
 
+    // Used for truncation/extension in vm
     pub fn to_u32(&self) -> u32 {
         match self {
             TypedIntValue::U8(v) => *v as u32,
             TypedIntValue::U16(v) => *v as u32,
             TypedIntValue::U32(v) => *v,
             TypedIntValue::U64(v) => *v as u32,
+            TypedIntValue::UWord32(v) => *v,
+            TypedIntValue::UWord64(v) => *v as u32,
             TypedIntValue::I8(v) => *v as u32,
             TypedIntValue::I16(v) => *v as u32,
             TypedIntValue::I32(v) => *v as u32,
             TypedIntValue::I64(v) => *v as u32,
+            TypedIntValue::IWord32(v) => *v as u32,
+            TypedIntValue::IWord64(v) => *v as u32,
         }
     }
 
+    // Used for truncation/extension in vm
     pub fn to_u16(&self) -> u16 {
         match self {
             TypedIntValue::U8(v) => *v as u16,
             TypedIntValue::U16(v) => *v,
             TypedIntValue::U32(v) => *v as u16,
             TypedIntValue::U64(v) => *v as u16,
+            TypedIntValue::UWord32(v) => *v as u16,
+            TypedIntValue::UWord64(v) => *v as u16,
             TypedIntValue::I8(v) => *v as u16,
             TypedIntValue::I16(v) => *v as u16,
             TypedIntValue::I32(v) => *v as u16,
             TypedIntValue::I64(v) => *v as u16,
+            TypedIntValue::IWord32(v) => *v as u16,
+            TypedIntValue::IWord64(v) => *v as u16,
         }
     }
 
+    // Used for truncation/extension in vm
     pub fn to_u8(&self) -> u8 {
         match self {
             TypedIntValue::U8(v) => *v,
             TypedIntValue::U16(v) => *v as u8,
             TypedIntValue::U32(v) => *v as u8,
             TypedIntValue::U64(v) => *v as u8,
+            TypedIntValue::UWord32(v) => *v as u8,
+            TypedIntValue::UWord64(v) => *v as u8,
             TypedIntValue::I8(v) => *v as u8,
             TypedIntValue::I16(v) => *v as u8,
             TypedIntValue::I32(v) => *v as u8,
             TypedIntValue::I64(v) => *v as u8,
+            TypedIntValue::IWord32(v) => *v as u8,
+            TypedIntValue::IWord64(v) => *v as u8,
         }
     }
 
@@ -1264,10 +1290,22 @@ impl TypedIntValue {
             TypedIntValue::U16(_) => IntegerType::U16,
             TypedIntValue::U32(_) => IntegerType::U32,
             TypedIntValue::U64(_) => IntegerType::U64,
+            TypedIntValue::UWord32(_) => IntegerType::UWord(WordSize::W32),
+            TypedIntValue::UWord64(_) => IntegerType::UWord(WordSize::W64),
             TypedIntValue::I8(_) => IntegerType::I8,
             TypedIntValue::I16(_) => IntegerType::I16,
             TypedIntValue::I32(_) => IntegerType::I32,
             TypedIntValue::I64(_) => IntegerType::I64,
+            TypedIntValue::IWord32(_) => IntegerType::IWord(WordSize::W32),
+            TypedIntValue::IWord64(_) => IntegerType::IWord(WordSize::W64),
+        }
+    }
+
+    pub fn expect_uword(&self) -> usize {
+        match self {
+            TypedIntValue::UWord64(v) => *v as usize,
+            TypedIntValue::UWord32(v) => *v as usize,
+            _ => unreachable!(),
         }
     }
 
@@ -1327,10 +1365,14 @@ impl Display for TypedIntValue {
             TypedIntValue::U16(v) => write!(f, "{}u16", v),
             TypedIntValue::U32(v) => write!(f, "{}u32", v),
             TypedIntValue::U64(v) => write!(f, "{}u64", v),
+            TypedIntValue::UWord32(v) => write!(f, "{}uword", v),
+            TypedIntValue::UWord64(v) => write!(f, "{}uword", v),
             TypedIntValue::I8(v) => write!(f, "{}i8", v),
             TypedIntValue::I16(v) => write!(f, "{}i16", v),
             TypedIntValue::I32(v) => write!(f, "{}i32", v),
             TypedIntValue::I64(v) => write!(f, "{}i64", v),
+            TypedIntValue::IWord32(v) => write!(f, "{}iword", v),
+            TypedIntValue::IWord64(v) => write!(f, "{}iword", v),
         }
     }
 }
@@ -2963,8 +3005,8 @@ impl TypedModule {
         Ok(base)
     }
 
-    pub fn word_size_bits(&self) -> u32 {
-        self.ast.config.target.word_size().bits()
+    pub fn target_word_size(&self) -> WordSize {
+        self.ast.config.target.word_size()
     }
 
     /// Temporary home for our type operators until I decide on syntax
@@ -4056,7 +4098,7 @@ impl TypedModule {
                     CastType::IntegerToFloat => todo!(),
                     CastType::IntegerToPointer => {
                         let span = typed_cast.span;
-                        let StaticValue::Integer(TypedIntValue::U64(u), _) =
+                        let StaticValue::Integer(TypedIntValue::UWord64(u), _) =
                             self.static_values.get(base_expr)
                         else {
                             self.ice_with_span("malformed integer cast", span)
@@ -4707,23 +4749,22 @@ impl TypedModule {
         span: SpanId,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedIntValue> {
-        //eprintln!(
-        //    "eval_integer_value hint {}",
-        //    self.type_id_option_to_string(ctx.expected_type_id)
-        //);
+        let default = IntegerType::IWord(self.target_word_size());
         let expected_int_type = match ctx.expected_type_id {
-            None => IntegerType::I64,
+            None => default,
             Some(U8_TYPE_ID) => IntegerType::U8,
             Some(U16_TYPE_ID) => IntegerType::U16,
             Some(U32_TYPE_ID) => IntegerType::U32,
             Some(U64_TYPE_ID) => IntegerType::U64,
+            Some(UWORD_TYPE_ID) => IntegerType::UWord(self.target_word_size()),
             Some(I8_TYPE_ID) => IntegerType::I8,
             Some(I16_TYPE_ID) => IntegerType::I16,
             Some(I32_TYPE_ID) => IntegerType::I32,
             Some(I64_TYPE_ID) => IntegerType::I64,
+            Some(IWORD_TYPE_ID) => IntegerType::IWord(self.target_word_size()),
             Some(_other) => {
-                // Parse as i64 and let typechecking fail
-                IntegerType::I64
+                // Parse as default and let typechecking fail
+                default
             }
         };
         macro_rules! parse_int {
@@ -4738,20 +4779,16 @@ impl TypedModule {
             let value: Result<TypedIntValue, std::num::ParseIntError> = match expected_int_type {
                 IntegerType::U8 => parse_int!(U8, u8, hex_base, offset),
                 IntegerType::U16 => parse_int!(U16, u16, hex_base, offset),
-                IntegerType::U32 | IntegerType::UWord(WordSize::W32) => {
-                    parse_int!(U32, u32, hex_base, offset)
-                }
-                IntegerType::U64 | IntegerType::UWord(WordSize::W64) => {
-                    parse_int!(U64, u64, hex_base, offset)
-                }
+                IntegerType::U32 => parse_int!(U32, u32, hex_base, offset),
+                IntegerType::U64 => parse_int!(U64, u64, hex_base, offset),
+                IntegerType::UWord(WordSize::W32) => parse_int!(UWord32, u32, hex_base, offset),
+                IntegerType::UWord(WordSize::W64) => parse_int!(UWord64, u64, hex_base, offset),
                 IntegerType::I8 => parse_int!(I8, i8, hex_base, offset),
                 IntegerType::I16 => parse_int!(I16, i16, hex_base, offset),
-                IntegerType::I32 | IntegerType::IWord(WordSize::W32) => {
-                    parse_int!(I32, i32, hex_base, offset)
-                }
-                IntegerType::I64 | IntegerType::IWord(WordSize::W64) => {
-                    parse_int!(I64, i64, hex_base, offset)
-                }
+                IntegerType::I32 => parse_int!(I32, i32, hex_base, offset),
+                IntegerType::I64 => parse_int!(I64, i64, hex_base, offset),
+                IntegerType::IWord(WordSize::W32) => parse_int!(IWord32, i32, hex_base, offset),
+                IntegerType::IWord(WordSize::W64) => parse_int!(IWord64, i64, hex_base, offset),
             };
             let value = value
                 .map_err(|e| make_error(format!("Invalid hex {expected_int_type}: {e}"), span))?;
@@ -4762,20 +4799,16 @@ impl TypedModule {
             let value: Result<TypedIntValue, std::num::ParseIntError> = match expected_int_type {
                 IntegerType::U8 => parse_int!(U8, u8, bin_base, offset),
                 IntegerType::U16 => parse_int!(U16, u16, bin_base, offset),
-                IntegerType::U32 | IntegerType::UWord(WordSize::W32) => {
-                    parse_int!(U32, u32, bin_base, offset)
-                }
-                IntegerType::U64 | IntegerType::UWord(WordSize::W64) => {
-                    parse_int!(U64, u64, bin_base, offset)
-                }
+                IntegerType::U32 => parse_int!(U32, u32, bin_base, offset),
+                IntegerType::U64 => parse_int!(U64, u64, bin_base, offset),
+                IntegerType::UWord(WordSize::W32) => parse_int!(UWord32, u32, bin_base, offset),
+                IntegerType::UWord(WordSize::W64) => parse_int!(UWord64, u64, bin_base, offset),
                 IntegerType::I8 => parse_int!(I8, i8, bin_base, offset),
                 IntegerType::I16 => parse_int!(I16, i16, bin_base, offset),
-                IntegerType::I32 | IntegerType::IWord(WordSize::W32) => {
-                    parse_int!(I32, i32, bin_base, offset)
-                }
-                IntegerType::I64 | IntegerType::IWord(WordSize::W64) => {
-                    parse_int!(I64, i64, bin_base, offset)
-                }
+                IntegerType::I32 => parse_int!(I32, i32, bin_base, offset),
+                IntegerType::I64 => parse_int!(I64, i64, bin_base, offset),
+                IntegerType::IWord(WordSize::W32) => parse_int!(IWord32, i32, bin_base, offset),
+                IntegerType::IWord(WordSize::W64) => parse_int!(IWord64, i64, bin_base, offset),
             };
             let value = value.map_err(|e| {
                 make_error(format!("Invalid binary {expected_int_type}: {e}"), span)
@@ -4787,20 +4820,16 @@ impl TypedModule {
             let value: Result<TypedIntValue, std::num::ParseIntError> = match expected_int_type {
                 IntegerType::U8 => parse_int!(U8, u8, dec_base, offset),
                 IntegerType::U16 => parse_int!(U16, u16, dec_base, offset),
-                IntegerType::U32 | IntegerType::UWord(WordSize::W32) => {
-                    parse_int!(U32, u32, dec_base, offset)
-                }
-                IntegerType::U64 | IntegerType::UWord(WordSize::W64) => {
-                    parse_int!(U64, u64, dec_base, offset)
-                }
+                IntegerType::U32 => parse_int!(U32, u32, dec_base, offset),
+                IntegerType::U64 => parse_int!(U64, u64, dec_base, offset),
+                IntegerType::UWord(WordSize::W32) => parse_int!(UWord32, u32, dec_base, offset),
+                IntegerType::UWord(WordSize::W64) => parse_int!(UWord64, u64, dec_base, offset),
                 IntegerType::I8 => parse_int!(I8, i8, dec_base, offset),
                 IntegerType::I16 => parse_int!(I16, i16, dec_base, offset),
-                IntegerType::I32 | IntegerType::IWord(WordSize::W32) => {
-                    parse_int!(I32, i32, dec_base, offset)
-                }
-                IntegerType::I64 | IntegerType::IWord(WordSize::W64) => {
-                    parse_int!(I64, i64, dec_base, offset)
-                }
+                IntegerType::I32 => parse_int!(I32, i32, dec_base, offset),
+                IntegerType::I64 => parse_int!(I64, i64, dec_base, offset),
+                IntegerType::IWord(WordSize::W32) => parse_int!(IWord32, i32, dec_base, offset),
+                IntegerType::IWord(WordSize::W64) => parse_int!(IWord64, i64, dec_base, offset),
             };
             let value = value.map_err(|e| {
                 errf!(
@@ -5561,10 +5590,7 @@ impl TypedModule {
                     }
                 };
                 let list_lit_ctx = ctx.with_scope(list_lit_scope).with_no_expected_type();
-                let count_expr = self.exprs.add(TypedExpr::Integer(TypedIntegerExpr {
-                    value: TypedIntValue::U64(element_count as u64),
-                    span,
-                }));
+                let count_expr = self.synth_uword(element_count, span);
                 let list_new_fn_call = self.synth_typed_function_call(
                     qident!(self, span, ["List"], "withCapacity"),
                     &[element_type],
@@ -6208,10 +6234,7 @@ impl TypedModule {
             let mut block = self.synth_block(ctx.scope_id, span);
             let block_scope = block.scope_id;
             let block_ctx = ctx.with_scope(block_scope).with_no_expected_type();
-            let part_count_expr = self.exprs.add(TypedExpr::Integer(TypedIntegerExpr {
-                value: TypedIntValue::U64(part_count as u64),
-                span,
-            }));
+            let part_count_expr = self.synth_uword(part_count, span);
             if self.ast.config.no_std {
                 return failf!(span, "Interpolated strings are not supported in no_std mode");
             }
@@ -7181,12 +7204,12 @@ impl TypedModule {
                     }
                 }
                 Type::Pointer => {
-                    if *from_integer_type == IntegerType::U64 {
+                    if matches!(from_integer_type, IntegerType::UWord(_)) {
                         Ok((CastType::IntegerToPointer, target_type))
                     } else {
                         failf!(
                             cast.span,
-                            "Cannot cast integer '{}' to Pointer (must be u64; one day usize)",
+                            "Cannot cast integer '{}' to Pointer (must be uword)",
                             from_integer_type
                         )
                     }
@@ -7241,7 +7264,9 @@ impl TypedModule {
             },
             Type::Pointer => match self.types.get(target_type) {
                 Type::Reference(_refer) => Ok((CastType::PointerToReference, target_type)),
-                Type::Integer(IntegerType::U64) => Ok((CastType::PointerToInteger, target_type)),
+                Type::Integer(IntegerType::UWord(_)) => {
+                    Ok((CastType::PointerToInteger, target_type))
+                }
                 _ => failf!(
                     cast.span,
                     "Cannot cast Pointer to '{}'",
@@ -7310,10 +7335,7 @@ impl TypedModule {
         let outer_for_expr_scope =
             self.scopes.add_child_scope(ctx.scope_id, ScopeType::ForExpr, None, None);
 
-        let zero_expr = self.exprs.add(TypedExpr::Integer(TypedIntegerExpr {
-            value: TypedIntValue::U64(0),
-            span: for_expr.body_block.span,
-        }));
+        let zero_expr = self.synth_uword(0, for_expr.body_block.span);
         let index_variable = self.synth_variable_defn(
             self.ast.idents.builtins.it_index,
             zero_expr,
@@ -7399,7 +7421,7 @@ impl TypedModule {
                 base: size_hint_call,
                 target_field: get_ident!(self, "atLeast"),
                 field_index: 0,
-                result_type: U64_TYPE_ID,
+                result_type: UWORD_TYPE_ID,
                 is_referencing: false,
                 span: iterable_span,
             }));
@@ -7471,10 +7493,7 @@ impl TypedModule {
         self.add_expr_id_to_block(&mut loop_block, if_next_loop_else_break_expr);
 
         // Append the index increment to the body block
-        let one_expr = self.exprs.add(TypedExpr::Integer(TypedIntegerExpr {
-            value: TypedIntValue::U64(1),
-            span: iterable_span,
-        }));
+        let one_expr = self.synth_uword(1, iterable_span);
         let add_operation = self.exprs.add(TypedExpr::BinaryOp(BinaryOp {
             kind: BinaryOpKind::Add,
             ty: U64_TYPE_ID,
@@ -7817,7 +7836,7 @@ impl TypedModule {
             match type_id {
                 UNIT_TYPE_ID | CHAR_TYPE_ID | U8_TYPE_ID | U16_TYPE_ID | U32_TYPE_ID
                 | U64_TYPE_ID | I8_TYPE_ID | I16_TYPE_ID | I32_TYPE_ID | I64_TYPE_ID
-                | BOOL_TYPE_ID => true,
+                | UWORD_TYPE_ID | IWORD_TYPE_ID | BOOL_TYPE_ID => true,
                 F32_TYPE_ID | F64_TYPE_ID => true,
                 _other => false,
             }
@@ -8107,30 +8126,6 @@ impl TypedModule {
         let new_fn_call_id = self.ast.exprs.add_expression(ParsedExpression::FnCall(new_fn_call));
         let new_fn_call_clone = self.ast.exprs.get(new_fn_call_id).expect_call().clone();
         self.eval_function_call(&new_fn_call_clone, None, ctx)
-    }
-
-    fn synth_equals_call(
-        &mut self,
-        lhs: TypedExprId,
-        rhs: TypedExprId,
-        span: SpanId,
-    ) -> TyperResult<TypedExprId> {
-        let lhs_type = self.exprs.get(lhs).get_type();
-        let implementation =
-            self.expect_ability_implementation(lhs_type, EQUALS_ABILITY_ID, span)?;
-        let implementation = self.get_ability_impl(implementation.full_impl_id);
-        let ability = self.get_ability(EQUALS_ABILITY_ID);
-        let equals_index =
-            ability.find_function_by_name(self.ast.idents.builtins.equals).unwrap().0;
-        let equals_implementation_function_id = implementation.function_at_index(equals_index);
-        let call_expr = self.exprs.add(TypedExpr::Call(Call {
-            callee: Callee::make_static(equals_implementation_function_id),
-            args: smallvec![lhs, rhs],
-            type_args: smallvec![],
-            return_type: BOOL_TYPE_ID,
-            span,
-        }));
-        Ok(call_expr)
     }
 
     /// Can 'shortcircuit' with Left if the function call to resolve
@@ -11994,7 +11989,10 @@ impl TypedModule {
                 )?
                 .expect("an ability impl cannot be conditionally compiled");
 
-            let specialized = self.get_function(function_impl).type_id;
+            let specialized_fun = self.get_function(function_impl);
+            let specialized_fn_type = specialized_fun.type_id;
+
+            let spec_fn_scope = specialized_fun.scope;
 
             let generic_type = self.get_function(ability_function_ref.function_id).type_id;
 
@@ -12005,8 +12003,10 @@ impl TypedModule {
                 &[TypeSubstitutionPair { from: ability_self_type, to: impl_self_type }],
             );
 
-            if let Err(msg) = self.check_types(substituted_root_type, specialized, impl_scope_id) {
-                eprintln!("{}", self.scope_id_to_string(impl_scope_id));
+            if let Err(msg) =
+                self.check_types(substituted_root_type, specialized_fn_type, spec_fn_scope)
+            {
+                eprintln!("{}", self.scope_id_to_string(spec_fn_scope));
                 return failf!(
                     impl_function_span,
                     "Invalid implementation of {} in ability {}: {msg}",
@@ -12728,6 +12728,39 @@ impl TypedModule {
     /******************************
      ** Synthesis of Typed nodes **
      *****************************/
+
+    fn synth_uword(&mut self, value: usize, span: SpanId) -> TypedExprId {
+        let value = match self.target_word_size() {
+            WordSize::W32 => TypedIntValue::UWord32(value as u32),
+            WordSize::W64 => TypedIntValue::UWord64(value as u64),
+        };
+        let expr_id = self.exprs.add(TypedExpr::Integer(TypedIntegerExpr { value, span }));
+        expr_id
+    }
+
+    fn synth_equals_call(
+        &mut self,
+        lhs: TypedExprId,
+        rhs: TypedExprId,
+        span: SpanId,
+    ) -> TyperResult<TypedExprId> {
+        let lhs_type = self.exprs.get(lhs).get_type();
+        let implementation =
+            self.expect_ability_implementation(lhs_type, EQUALS_ABILITY_ID, span)?;
+        let implementation = self.get_ability_impl(implementation.full_impl_id);
+        let ability = self.get_ability(EQUALS_ABILITY_ID);
+        let equals_index =
+            ability.find_function_by_name(self.ast.idents.builtins.equals).unwrap().0;
+        let equals_implementation_function_id = implementation.function_at_index(equals_index);
+        let call_expr = self.exprs.add(TypedExpr::Call(Call {
+            callee: Callee::make_static(equals_implementation_function_id),
+            args: smallvec![lhs, rhs],
+            type_args: smallvec![],
+            return_type: BOOL_TYPE_ID,
+            span,
+        }));
+        Ok(call_expr)
+    }
 
     fn synth_if_else(
         &mut self,

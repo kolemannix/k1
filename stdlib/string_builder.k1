@@ -2,7 +2,7 @@ deftype StringBuilder = { parts: List[either Char(char), String(string)]* }
 ns StringBuilder {
   deftype alias Part = StringBuilder.parts.value.T
 
-  fn withCapacity(cap: u64): StringBuilder {
+  fn withCapacity(cap: uword): StringBuilder {
     let parts = _root/new(List/withCapacity[Part](cap));
     { parts: parts }
   }
@@ -20,10 +20,10 @@ ns StringBuilder {
   fn putByte(self: StringBuilder, b: byte): unit {
     self.parts.push(.Char(b as char))
   }
-  fn len(self: StringBuilder): u64 {
-    let mut len = 0: u64;
+  fn len(self: StringBuilder): uword {
+    let mut len = 0: uword;
     for part in self.parts.* do {
-      let partLen = switch part { .Char(_) -> 1: u64, .String(s) -> s.len() };
+      let partLen: uword = switch part { .Char(_) -> 1, .String(s) -> s.len() };
       len = len + partLen;
     };
     len

@@ -1,6 +1,6 @@
 // heaps have a 'strings' section because strings are hard/special/important?
 
-fn main(): int {
+fn main(): i32 {
   rt.createPool("people");
 
   context let pool = rt.getPool("people");

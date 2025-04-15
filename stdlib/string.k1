@@ -5,7 +5,7 @@ ns CString {
 
 ns string {
 
-  fn get(self: string, index: u64): char {
+  fn get(self: string, index: uword): char {
     self.buffer.get(index)
   }
 
@@ -46,7 +46,7 @@ ns string {
     { buffer: copied }
   }
 
-  fn len(self: string): u64 { self.buffer.len }
+  fn len(self: string): uword { self.buffer.len }
 
   fn isEmpty(self: string): bool { self.len() == 0 }
   fn nonEmpty(self: string): bool { self.len() != 0 }
@@ -61,7 +61,7 @@ ns string {
 
 
   fn indexOf(self: string, c: char): i64 {
-    let mut i: u64 = 0;
+    let mut i: uword = 0;
     while i < self.len() {
       if self.get(i) == c {
         return(i as i64);
@@ -106,8 +106,8 @@ ns string {
     }
   }
 
-  fn indexOfString(self: string, target: string): u64? {
-    let mut i: u64 = 0;
+  fn indexOfString(self: string, target: string): uword? {
+    let mut i: uword = 0;
     while i < self.len() {
       if i + target.len() >= self.len() {
         return(.None)
@@ -119,12 +119,12 @@ ns string {
     .None
   }
 
-  fn substring(self: string, start: u64, end: u64): string {
+  fn substring(self: string, start: uword, end: uword): string {
     { buffer: self.buffer.slice(start, end) }
   }
 
-  fn take(self: string, count: u64): string { self.substring(0,     count) }
-  fn drop(self: string, count: u64): string { self.substring(count, self.len()) }
+  fn take(self: string, count: uword): string { self.substring(0,     count) }
+  fn drop(self: string, count: uword): string { self.substring(count, self.len()) }
 
   fn startsWith(self: string, other: string): bool {
     self.substring(0, other.len()) == other
@@ -134,7 +134,7 @@ ns string {
     self.buffer.dataPointer()
   }
 
-  fn toCString(context alloc: mem/AllocMode)(self: string): { ptr: Pointer, len: u64 } {
+  fn toCString(context alloc: mem/AllocMode)(self: string): { ptr: Pointer, len: uword } {
     if self.isEmpty()                  { ptr: "\0".dataPointer(), len: 0 }
     else if self.last() is .Some('\0') { ptr: self.dataPointer(), len: self.len() - 1 }
     else                               { ptr: self.appendChar('\0').dataPointer(), len: self.len() }
@@ -142,7 +142,7 @@ ns string {
 
   fn fromCString(cString: Pointer): string {
     let* self = List/empty[char]();
-    let mut i = 0: u64;
+    let mut i = 0: uword;
     loop {
       let c = cString.refAtIndex[char](i);
       if c.* == '\0' {
@@ -159,13 +159,13 @@ ns string {
     if self.isEmpty() { return(.None) };
 
     let neg = self.get(0) == '-';
-    let mut i: u64 = if neg 1 else 0;
-    let mut total: u64 = 0;
+    let mut i: uword = if neg 1 else 0;
+    let mut total: uword = 0;
     while i < self.len() {
       let c = self.get(i);
       let digit = c.toDigitValue();
       if digit is .Some(digit) {
-        total = (total * 10) + digit as u64;
+        total = (total * 10) + digit as uword;
       } else {
         return(.None);
       };
@@ -173,7 +173,7 @@ ns string {
     };
 
     some(
-      if neg { (total as i64) * -1 } else { total as i64 }
+      if neg { (total as int) * -1 } else { total as int }
     )
   }
 

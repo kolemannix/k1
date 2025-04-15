@@ -24,7 +24,7 @@ fn solve(): int {
   0
 }
 
-fn main(): int {
+fn main(): i32 {
   let a = solve();
   println("Answer is \{a}");
   0
