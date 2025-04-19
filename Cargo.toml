@@ -77,9 +77,17 @@ path = "src/bin/repl_main.rs"
 panic = "abort"
 
 [lints.clippy]
+# Variable names can add value even if directly returned
 let_and_return = "allow"
+# This rule overfits for the current-state; single matches
+# are more easily evolved to select more cases than if lets
 match_like_matches_macro = "allow"
 too_many_arguments = "allow"
+# This rule overfits for the current-state and undervalues
+# ease of change
 collapsible_else_if = "allow"
 collapsible_if = "allow"
 manual_map = "allow"
+# This rule overfits for the current-state; single matches
+# are more easily evolved to select more cases than if lets
+single_match = "allow"

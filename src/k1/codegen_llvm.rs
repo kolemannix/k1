@@ -1730,7 +1730,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 }
                 let specialized_type = self.ctx.struct_type(&type_fields, false);
                 let struct_value = specialized_type.const_named_struct(&fields_basic_values);
-                eprintln!(
+                debug!(
                     "comptime struct for {} type {} is {}",
                     self.module.type_id_to_string(s.type_id),
                     specialized_type,
@@ -1955,9 +1955,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             TypedExpr::EnumConstructor(enum_constr) => {
                 let llvm_type = self.codegen_type(enum_constr.type_id)?;
                 let enum_type = llvm_type.expect_enum();
-                let variant_tag_name = enum_constr.variant_name;
 
                 let enum_variant = &enum_type.variants[enum_constr.variant_index as usize];
+                let variant_tag_name = enum_variant.name;
 
                 let enum_ptr = self.build_alloca(enum_variant.envelope_type, "enum_constr");
 
@@ -2897,18 +2897,140 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 };
                 Ok(result_pointer.as_basic_value_enum().into())
             }
+            IntrinsicFunction::EmitCompilerMessage => Ok(self.builtin_types.unit_basic().into()),
             IntrinsicFunction::CompilerSourceLocation => {
                 unreachable!("CompilerSourceLocation is handled in typechecking phase")
             }
+            _ => panic!("Unexpected inline intrinsic {:?}", intrinsic_type),
         }
+    }
+
+    fn load_function_argument(
+        &mut self,
+        function: &TypedFunction,
+        index: usize,
+    ) -> CodegenResult<BasicMetadataValueEnum<'ctx>> {
+        let variable_id = function.param_variables[index];
+        let fn_type = self.module.types.get(function.type_id).expect_function();
+        let param_type = &fn_type.physical_params[index];
+        let variable_value = self.variable_to_value.get(&variable_id).unwrap();
+        let basic_value =
+            self.load_variable_value(&self.codegen_type(param_type.type_id)?, *variable_value);
+        Ok(basic_value.into())
     }
 
     fn codegen_intrinsic_function_body(
         &mut self,
         intrinsic_type: IntrinsicFunction,
-        _function: &TypedFunction,
-    ) -> CodegenResult<BasicValueEnum<'ctx>> {
-        panic!("Unexpected non-inline intrinsic {:?}", intrinsic_type)
+        function: &TypedFunction,
+    ) -> CodegenResult<InstructionValue<'ctx>> {
+        let function_span = self
+            .module
+            .ast
+            .get_function(function.parsed_id.as_function_id().unwrap())
+            .signature_span;
+        self.set_debug_location_from_span(function_span);
+        let instr = match intrinsic_type {
+            IntrinsicFunction::Allocate => {
+                // intern fn alloc(size: uword, align: uword): Pointer
+                let size_arg = self.load_function_argument(function, 0)?;
+
+                let f = self.llvm_module.get_function("malloc").unwrap();
+                let call = self.builder.build_call(f, &[size_arg], "").unwrap();
+                let result = call.try_as_basic_value().unwrap_left();
+                self.builder.build_return(Some(&result)).unwrap()
+            }
+            IntrinsicFunction::AllocateZeroed => {
+                // intern fn allocZeroed(size: uword, align: uword): Pointer
+                let size_arg = self.load_function_argument(function, 0)?;
+                let count_one =
+                    self.builtin_types.ptr_sized_int.const_int(1, false).as_basic_value_enum();
+
+                let f = self.llvm_module.get_function("calloc").unwrap();
+                // libc/calloc(count = 1, size = size);
+                let call = self.builder.build_call(f, &[count_one.into(), size_arg], "").unwrap();
+                let result = call.try_as_basic_value().unwrap_left();
+                self.builder.build_return(Some(&result)).unwrap()
+            }
+            IntrinsicFunction::Reallocate => {
+                // intern fn realloc(ptr: Pointer, oldSize: uword, align: uword, newSize: uword): Pointer
+                let old_ptr_arg = self.load_function_argument(function, 0)?;
+                let new_size_arg = self.load_function_argument(function, 3)?;
+
+                let f = self.llvm_module.get_function("realloc").unwrap();
+                let call = self.builder.build_call(f, &[old_ptr_arg, new_size_arg], "").unwrap();
+                let result = call.try_as_basic_value().unwrap_left();
+                self.builder.build_return(Some(&result)).unwrap()
+            }
+            IntrinsicFunction::Free => {
+                let old_ptr_arg = self.load_function_argument(function, 0)?;
+
+                let f = self.llvm_module.get_function("free").unwrap();
+                let call = self.builder.build_call(f, &[old_ptr_arg], "").unwrap();
+                let result = call.try_as_basic_value().unwrap_left();
+                self.builder.build_return(Some(&result)).unwrap()
+            }
+            IntrinsicFunction::MemCopy => {
+                // intern fn copy(
+                //   dst: Pointer,
+                //   src: Pointer,
+                //   count: uword
+                // ): unit
+                let dst_ptr_arg = self.load_function_argument(function, 0)?.into_pointer_value();
+                let src_ptr_arg = self.load_function_argument(function, 1)?.into_pointer_value();
+                let size_arg = self.load_function_argument(function, 2)?.into_int_value();
+                let dst_align_bytes = 1;
+                let src_align_bytes = 1;
+                let not_actually_a_ret_ptr = self
+                    .builder
+                    .build_memcpy(
+                        dst_ptr_arg,
+                        dst_align_bytes,
+                        src_ptr_arg,
+                        src_align_bytes,
+                        size_arg,
+                    )
+                    .unwrap();
+                eprintln!("memcpy result {}", not_actually_a_ret_ptr);
+                let result = self.builtin_types.unit_basic();
+                self.builder.build_return(Some(&result)).unwrap()
+            }
+            IntrinsicFunction::MemSet => {
+                // intern fn set(
+                //   dst: Pointer,
+                //   value: u8,
+                //   count: uword
+                // ): unit
+                todo!()
+            }
+            IntrinsicFunction::MemEquals => {
+                // intern fn equals(p1: Pointer, p2: Pointer, size: uword): bool
+                let p1_arg = self.load_function_argument(function, 0)?;
+                let p2_arg = self.load_function_argument(function, 1)?;
+                let size_arg = self.load_function_argument(function, 2)?;
+
+                let f = self.llvm_module.get_function("memcmp").unwrap();
+                let call = self.builder.build_call(f, &[p1_arg, p2_arg, size_arg], "").unwrap();
+                let result = call.try_as_basic_value().unwrap_left().into_int_value();
+                let is_zero = self
+                    .builder
+                    .build_int_compare(IntPredicate::EQ, result, result.get_type().const_zero(), "")
+                    .unwrap();
+                let bool_equal = self.i1_to_bool(is_zero, "");
+                self.builder.build_return(Some(&bool_equal)).unwrap()
+            }
+            IntrinsicFunction::Exit => {
+                // intern fn exit(code: i32): never
+                let code_arg = self.load_function_argument(function, 0)?;
+
+                let f = self.llvm_module.get_function("exit").unwrap();
+                let call = self.builder.build_call(f, &[code_arg], "").unwrap();
+                let _result = call.try_as_basic_value().unwrap_right();
+                self.builder.build_unreachable().unwrap()
+            }
+            _ => unreachable!("Unexpected non-inline intrinsic function"),
+        };
+        Ok(instr)
     }
 
     fn codegen_block(&mut self, block: &TypedBlock) -> CodegenResult<LlvmValue<'ctx>> {
@@ -3292,14 +3414,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 //},
             );
         }
-        let _terminator_instr = match function.intrinsic_type {
+        match function.intrinsic_type {
             Some(intrinsic_type) => {
                 trace!("codegen intrinsic {:?} fn {:?}", intrinsic_type, function);
-                let value = self
-                    .codegen_intrinsic_function_body(intrinsic_type, function)?
-                    .as_basic_value_enum();
-                let ret = self.builder.build_return(Some(&value)).unwrap();
-                LlvmValue::Void(ret)
+                let _terminator_instr =
+                    self.codegen_intrinsic_function_body(intrinsic_type, function)?;
             }
             None => {
                 let function_block = function.body_block.unwrap_or_else(|| {
@@ -3308,7 +3427,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let TypedExpr::Block(function_block) = self.module.exprs.get(function_block) else {
                     panic!("Expected block")
                 };
-                self.codegen_block(function_block)?
+                self.codegen_block(function_block)?;
             }
         };
         if let Some(start_block) = maybe_starting_block {
@@ -3359,7 +3478,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     fn codegen_global(&mut self, global_id: TypedGlobalId) -> CodegenResult<()> {
         let global = self.module.globals.get(global_id);
-        let initialized_basic_value = self.codegen_compile_time_value(global.initial_value)?;
+        let initialized_basic_value =
+            self.codegen_compile_time_value(global.initial_value.unwrap())?;
         let variable = self.module.variables.get(global.variable_id);
         let name =
             self.module.make_qualified_name(variable.owner_scope, variable.name, "__", false);
@@ -3368,7 +3488,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             Some(AddressSpace::default()),
             &name,
         );
-        llvm_global.set_constant(global.is_comptime);
+        llvm_global.set_constant(global.is_static);
         llvm_global.set_initializer(&initialized_basic_value);
         let is_reference_type = self.module.types.get(global.ty).as_reference().is_some();
         let variable_value = if is_reference_type {
@@ -3396,6 +3516,19 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         //         self.codegen_function_or_get(id)?;
         //     }
         // }
+
+        // nocommit hack to guarantee extern declarations
+        for (id, function) in self.module.function_iter() {
+            if let TyperLinkage::External(Some(ident)) = function.linkage {
+                match self.module.name_of(ident) {
+                    "malloc" | "calloc" | "realloc" | "free" | "memcmp" | "exit" => {
+                        self.codegen_function_or_get(id)?;
+                    }
+                    _ => {}
+                };
+            }
+        }
+
         let Some(main_function_id) = self.module.get_main_function_id() else {
             return failf!(SpanId::NONE, "Module {} has no main function", self.module.name());
         };

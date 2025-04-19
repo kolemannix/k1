@@ -152,7 +152,7 @@ pub enum ParsedId {
     Namespace(ParsedNamespaceId),
     Ability(ParsedAbilityId),
     AbilityImpl(ParsedAbilityImplId),
-    Constant(ParsedGlobalId),
+    Global(ParsedGlobalId),
     Expression(ParsedExprId),
     TypeExpression(ParsedTypeExprId),
     Pattern(ParsedPatternId),
@@ -167,7 +167,7 @@ impl Display for ParsedId {
             ParsedId::Namespace(id) => write!(f, "ns#{}", id.0),
             ParsedId::Ability(id) => write!(f, "ability#{}", id.0),
             ParsedId::AbilityImpl(id) => write!(f, "ability_impl#{}", id.0),
-            ParsedId::Constant(id) => write!(f, "const#{}", id.0),
+            ParsedId::Global(id) => write!(f, "global#{}", id.0),
             ParsedId::Expression(id) => write!(f, "expr#{}", id.0),
             ParsedId::TypeExpression(id) => write!(f, "type_expr#{}", id.0),
             ParsedId::Pattern(id) => write!(f, "pattern#{}", id.0),
@@ -222,7 +222,7 @@ impl ParsedId {
             ParsedId::TypeDefn(_) => true,
             ParsedId::Ability(_) => true,
             ParsedId::AbilityImpl(_) => true,
-            ParsedId::Constant(_) => true,
+            ParsedId::Global(_) => true,
             ParsedId::Namespace(_) => true,
             ParsedId::Expression(_) => false,
             ParsedId::TypeExpression(_) => false,
@@ -1724,7 +1724,7 @@ impl ParsedModule {
         match parsed_id {
             ParsedId::Function(id) => self.get_function(id).span,
             ParsedId::Namespace(id) => self.get_namespace(id).span,
-            ParsedId::Constant(id) => self.get_global(id).span,
+            ParsedId::Global(id) => self.get_global(id).span,
             ParsedId::Ability(id) => self.get_ability(id).span,
             ParsedId::AbilityImpl(id) => self.get_ability_impl(id).span,
             ParsedId::TypeDefn(id) => self.get_type_defn(id).span,
@@ -3941,7 +3941,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             Ok(Some(ParsedId::Namespace(ns)))
         } else if let Some(global_id) = self.parse_global()? {
             self.expect_eat_token(K::Semicolon)?;
-            Ok(Some(ParsedId::Constant(global_id)))
+            Ok(Some(ParsedId::Global(global_id)))
         } else if let Some(function_id) = self.parse_function()? {
             Ok(Some(ParsedId::Function(function_id)))
         } else if let Some(type_defn_id) = self.parse_type_defn()? {
