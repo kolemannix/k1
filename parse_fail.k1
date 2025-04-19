@@ -1,2 +1,0 @@
-// nocommit
-def type E = either(u8) A, B, C;
