@@ -1,5 +1,6 @@
-// Has to appear before its static usage :'(
-fn id(i: int): int { i }
+fn getPoint(): { x: u8, y: u32, z: i64 } {
+  { x: 1, y: 300, z: -222 }
+}
 fn main(): i32 {
 
   // String creation (special case)
@@ -21,6 +22,11 @@ fn main(): i32 {
   assert(not #static 'A' == 'a');
   assert(not #static 123 == -123);
   assert(not #static 123.0 == 3.14);
+
+  // Return struct
+  assertEquals[u8](#static getPoint().x, 1);
+  assertEquals[u32](#static getPoint().y, 300);
+  assertEquals[i64](#static getPoint().z, -222);
 
   // Variable assign
   let goodbye: string = #static {
@@ -51,7 +57,7 @@ fn main(): i32 {
     let* i = 10;
 
     //assert(i.* == 10);
-    i <- id(i.*);
+    i <- identity(i.*);
     i.*
   };
   assertEquals(letRef, 10);
@@ -102,14 +108,16 @@ fn main(): i32 {
     l.len
   };
 
-  let list = #static {
-    for [1,2,3,4,5] yield {
+  // lists
+  let listLast = #static {
+    let inced = for [1,2,3,4,5] yield {
       it + 1
-    }
+    };
+    inced.last()
   };
-  assertEquals(list, [2,3,4,5,6]);
+  assertEquals(listLast, some(6));
 
-  assertEquals(#static loop {
+  assertEquals[int](#static loop {
     switch 42 {
       _ -> break(100)
     }
@@ -117,7 +125,7 @@ fn main(): i32 {
 
   // StringBuilder
 
-  assertEquals(#static {
+  assertEquals[string](#static {
     let* sb = StringBuilder/new();
     sb.putString("Hello");
     sb.build()
@@ -129,27 +137,29 @@ fn main(): i32 {
   let s2 = testCompile( #static testCompile(42) );
   printIt(s2);
 
-  #static crash("");
-
-  #static {
-    \(x: int) foo(5)
-  };
+  assertEquals(testCompile(#static crash("")).!, "");
 
   // Call order
   #static bar(5);
 
+  // Simple lambda
+  #static {
+    \(x: int) foo(5)
+  };
+
   0
 }
 
-fn foo(n: int): unit {
-  if n == 0 return(());
+fn getOne(): int { 1 }
+fn getThree(): int { getOne() + 2 }
 
-  bar(n - 1)
+fn foo(n: int): unit {
+  if n == 0 return(())
+  else bar(n - 1)
 }
 
 fn bar(n: int): unit {
-  if n == 0 return(());
-
-  foo(n - 1)
+  if n == 0 return(())
+  else foo(n - 1)
 }
 

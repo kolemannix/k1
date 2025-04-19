@@ -69,7 +69,7 @@ New tagline? "C with typeclasses and tagged unions"
   - [ ] Move to intrinsic: `write`
   - [x] Move to intrinsic: `exit`
   - [ ] Move to intrinsic: `crash` (?)
-  - [ ] Run global initializers before most bodies but after all other phases, treat it
+  - [x] Run global initializers before most bodies but after all other phases, treat it
         like 'body' code SINCE it'll end up using the user's types, and even impls!
 
 - [ ] zackoverflow.dev "I really enjoy writing Zig code. I love it’s clean syntax, comptime, packed structs and arbitrary bit-width integers, the Allocator API, and useful data-oriented design abstractions in the standard library."

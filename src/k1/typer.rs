@@ -185,10 +185,6 @@ impl EvalExprContext {
     fn with_scope(&self, scope_id: ScopeId) -> EvalExprContext {
         EvalExprContext { scope_id, ..*self }
     }
-
-    fn with_static(&self, arg: bool) -> EvalExprContext {
-        EvalExprContext { is_static: arg, ..*self }
-    }
 }
 
 enum CoerceResult {
@@ -237,6 +233,7 @@ pub enum StaticValue {
     NullPointer(SpanId),
     Struct(CompileTimeStruct),
     Enum(CompileTimeEnum),
+    // Buffer(Vec<StaticValueId>)
 }
 
 impl StaticValue {
@@ -311,6 +308,12 @@ pub struct Layout {
 }
 
 impl Layout {
+    pub fn from_rust_type<T>() -> Layout {
+        let size = std::mem::size_of::<T>() as u32;
+        let align = std::mem::align_of::<T>() as u32;
+        Layout { size_bits: size * 8, align_bits: align * 8 }
+    }
+
     pub fn from_scalar_bits(bits: u32) -> Layout {
         Layout { size_bits: bits, align_bits: bits }
     }
@@ -349,6 +352,10 @@ impl Layout {
     pub fn size_bytes(&self) -> usize {
         self.size_bits as usize / 8
     }
+}
+
+pub struct AggregateLayout {
+    pub offsets: SmallVec<[u32; 8]>,
 }
 
 /// Used for analyzing pattern matching
@@ -4037,7 +4044,13 @@ impl TypedModule {
         scope_id: ScopeId,
         global_name: Option<Identifier>,
         is_inference: bool,
-    ) -> TyperResult<StaticValueId> {
+    ) -> TyperResult<(TypeId, StaticValueId)> {
+        if is_inference {
+            return failf!(
+                self.ast.get_expr_span(parsed_expr),
+                "#static cannot be used directly in generic calls. Try supplying the types to the call, or moving the static block outside the call"
+            );
+        }
         let eval_ctx = EvalExprContext {
             scope_id,
             expected_type_id,
@@ -4045,10 +4058,12 @@ impl TypedModule {
             is_static: true,
             global_defn_name: global_name,
         };
+
         let expr = self.eval_expr(parsed_expr, eval_ctx)?;
         let type_id = self.exprs.get(expr).get_type();
+
         if let Some(shortcut) = self.eval_trivial_static_expr(expr, scope_id)? {
-            return Ok(shortcut);
+            return Ok((type_id, shortcut));
         }
 
         let (mut vm, value) = vm::execute_single_expr(self, expr)?;
@@ -4065,7 +4080,7 @@ impl TypedModule {
             }
         }
         let static_value_id = self.vm_value_to_static_value(&mut vm, value, span);
-        Ok(static_value_id)
+        Ok((type_id, static_value_id))
     }
 
     fn eval_global_declaration_phase(
@@ -4135,7 +4150,7 @@ impl TypedModule {
         let value_expr_id = parsed_global.value_expr;
 
         // Even if its mutable, the RHS has to be a static-supported expr
-        let static_value_id = self.execute_static_expr(
+        let (_, static_value_id) = self.execute_static_expr(
             value_expr_id,
             Some(type_to_check),
             scope_id,
@@ -5346,11 +5361,11 @@ impl TypedModule {
         let directives = self.ast.exprs.get_directives(expr_id);
         let debug_directive =
             directives.iter().find(|p| matches!(p, ParsedDirective::CompilerDebug { .. }));
+        let is_debug = debug_directive.is_some();
         let conditional_compile_expr = directives.iter().find_map(|p| match p {
             ParsedDirective::ConditionalCompile { condition, .. } => Some(*condition),
             _ => None,
         });
-        let is_debug = debug_directive.is_some();
         if is_debug {
             self.push_debug_level();
         }
@@ -5362,7 +5377,7 @@ impl TypedModule {
         let should_compile = match conditional_compile_expr {
             None => true,
             Some(condition) => {
-                let comptime_value = self_.execute_static_expr(
+                let (_, static_value) = self_.execute_static_expr(
                     condition,
                     Some(BOOL_TYPE_ID),
                     ctx.scope_id,
@@ -5370,7 +5385,7 @@ impl TypedModule {
                     ctx.is_inference,
                 )?;
                 let typed_condition =
-                    self_.static_values.get(comptime_value).as_boolean().ok_or_else(|| {
+                    self_.static_values.get(static_value).as_boolean().ok_or_else(|| {
                         errf!(
                             self_.ast.exprs.get_span(condition),
                             "Condition must be a compile-time-known boolean"
@@ -5728,23 +5743,15 @@ impl TypedModule {
                 let span = stat.span;
                 let base_expr = stat.base_expr;
 
-                let expr = self.eval_expr(base_expr, ctx.with_static(true))?;
-                let type_id = self.exprs.get(expr).get_type();
-                let (mut vm, value) = vm::execute_single_expr(self, expr)?;
-                if cfg!(debug_assertions) {
-                    if type_id != value.get_type() {
-                        return failf!(
-                            span,
-                            "static value type mismatch {}: {} vs {}",
-                            self.expr_to_string(expr),
-                            self.type_id_to_string(type_id),
-                            self.type_id_to_string(value.get_type())
-                        );
-                    }
-                }
-                let comptime_value_id = self.vm_value_to_static_value(&mut vm, value, span);
-                let e = self.exprs.add(TypedExpr::StaticValue(comptime_value_id, type_id, span));
-                Ok(e)
+                let expected_type_id = ctx.expected_type_id;
+                let (type_id, static_value_id) = self.execute_static_expr(
+                    base_expr,
+                    expected_type_id,
+                    ctx.scope_id,
+                    None,
+                    ctx.is_inference,
+                )?;
+                Ok(self.exprs.add(TypedExpr::StaticValue(static_value_id, type_id, span)))
             }
         }
     }
@@ -7550,7 +7557,7 @@ impl TypedModule {
         if_expr: &ParsedIfExpr,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
-        let condition_value = self.execute_static_expr(
+        let (_, condition_value) = self.execute_static_expr(
             if_expr.cond,
             Some(BOOL_TYPE_ID),
             ctx.scope_id,
@@ -11130,7 +11137,7 @@ impl TypedModule {
         // TODO(perf): clone of ParsedFunction
         let parsed_function = self.ast.get_function(parsed_function_id).clone();
         if let Some(condition_expr) = parsed_function.condition {
-            let condition_value = self.execute_static_expr(
+            let (_, condition_value) = self.execute_static_expr(
                 condition_expr,
                 Some(BOOL_TYPE_ID),
                 parent_scope_id,
@@ -13057,22 +13064,27 @@ impl TypedModule {
         self.exprs.add(TypedExpr::Struct(StructLiteral { fields, type_id: struct_type_id, span }))
     }
 
-    fn synth_source_location(&mut self, span: SpanId) -> TypedExprId {
+    pub fn get_span_location(&self, span: SpanId) -> (&parse::Source, &parse::Line) {
         let the_span = self.ast.spans.get(span);
         let source = self.ast.sources.get_source(the_span.file_id);
         let line = source.get_line_for_span_start(the_span).unwrap();
+        (source, line)
+    }
+
+    pub fn synth_source_location(&mut self, span: SpanId) -> TypedExprId {
+        let (source, line) = self.get_span_location(span);
+        let filename_boxed = source.filename.clone().into_boxed_str();
+        let line_number = line.line_number();
         let struct_expr = TypedExpr::Struct(StructLiteral {
             fields: vec![
                 StructField {
                     name: self.ast.idents.builtins.filename,
-                    expr: self
-                        .exprs
-                        .add(TypedExpr::String(source.filename.clone().into_boxed_str(), span)),
+                    expr: self.exprs.add(TypedExpr::String(filename_boxed, span)),
                 },
                 StructField {
                     name: self.ast.idents.builtins.line,
                     expr: self.exprs.add(TypedExpr::Integer(TypedIntegerExpr {
-                        value: TypedIntValue::U64(line.line_number() as u64),
+                        value: TypedIntValue::U64(line_number as u64),
                         span,
                     })),
                 },
