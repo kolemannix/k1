@@ -75,7 +75,7 @@ ns Buffer {
       crash("Buffer copy dest index out of bounds: \{count}")
     };
     let numBytes = bufferSizeBytes[T](count);
-    libc/memcpy(dst = dest.dataPointer(), src = source.dataPointer(), count = numBytes);
+    mem/copy(dst = dest.dataPointer(), src = source.dataPointer(), count = numBytes);
     ()
   }
 
@@ -210,7 +210,7 @@ ns Buffer {
 
   fn equalsBits[T](self: Buffer[T], other: Buffer[T]): bool {
     if self.len != other.len false else {
-      libc/memcmp(self.dataPointer(), other.dataPointer(), self.sizeBytes()) == 0
+      mem/equals(self.dataPointer(), other.dataPointer(), self.sizeBytes())
     }
   }
 

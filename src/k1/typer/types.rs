@@ -824,6 +824,13 @@ impl Type {
             _ => None,
         }
     }
+
+    pub(crate) fn expect_function(&self) -> &FunctionType {
+        match self {
+            Type::Function(f) => f,
+            _ => panic!("expect_function called on: {:?}", self),
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy)]

@@ -648,7 +648,12 @@ impl TypedModule {
             }
             TypedExpr::EnumConstructor(enum_constr) => {
                 writ.write_str(".")?;
-                writ.write_str(self.name_of(enum_constr.variant_name))?;
+                let variant = self
+                    .types
+                    .get(enum_constr.type_id)
+                    .expect_enum()
+                    .variant_by_index(enum_constr.variant_index);
+                writ.write_str(self.name_of(variant.name))?;
                 if let Some(payload) = &enum_constr.payload {
                     writ.write_str("(")?;
                     self.display_expr_id(*payload, writ, indentation)?;
@@ -659,7 +664,11 @@ impl TypedModule {
             TypedExpr::EnumIsVariant(is_variant_expr) => {
                 self.display_expr_id(is_variant_expr.enum_expr, writ, indentation)?;
                 writ.write_str(".is[.")?;
-                self.write_ident(writ, is_variant_expr.variant_name)?;
+                let variant = self
+                    .get_expr_type(is_variant_expr.enum_expr)
+                    .expect_enum()
+                    .variant_by_index(is_variant_expr.variant_index);
+                self.write_ident(writ, variant.name)?;
                 writ.write_str("]()")
             }
             TypedExpr::Cast(cast) => {
@@ -675,7 +684,11 @@ impl TypedModule {
             TypedExpr::EnumGetPayload(as_variant_expr) => {
                 self.display_expr_id(as_variant_expr.enum_expr, writ, indentation)?;
                 writ.write_str(".payload[")?;
-                self.write_ident(writ, as_variant_expr.variant_name)?;
+                let variant = self
+                    .get_expr_type(as_variant_expr.enum_expr)
+                    .expect_enum()
+                    .variant_by_index(as_variant_expr.variant_index);
+                self.write_ident(writ, variant.name)?;
                 writ.write_char(']')?;
                 Ok(())
             }

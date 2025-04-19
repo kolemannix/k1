@@ -51,6 +51,17 @@ pub fn execute_arith_op(lhs: Value, rhs: Value, op: BinaryOpKind) -> Value {
                 };
                 Value::Int(TypedIntValue::U64(result))
             }
+            (TypedIntValue::UWord64(v1), TypedIntValue::UWord64(v2)) => {
+                let result = match op {
+                    K::Add => v1 + v2,
+                    K::Subtract => v1 - v2,
+                    K::Multiply => v1 * v2,
+                    K::Divide => v1 / v2,
+                    K::Rem => v1 % v2,
+                    _ => unreachable!(),
+                };
+                Value::Int(TypedIntValue::UWord64(result))
+            }
             (TypedIntValue::I8(v1), TypedIntValue::I8(v2)) => {
                 let result = match op {
                     K::Add => v1 + v2,
@@ -94,6 +105,17 @@ pub fn execute_arith_op(lhs: Value, rhs: Value, op: BinaryOpKind) -> Value {
                     _ => unreachable!(),
                 };
                 Value::Int(TypedIntValue::I64(result))
+            }
+            (TypedIntValue::IWord64(v1), TypedIntValue::IWord64(v2)) => {
+                let result = match op {
+                    K::Add => v1 + v2,
+                    K::Subtract => v1 - v2,
+                    K::Multiply => v1 * v2,
+                    K::Divide => v1 / v2,
+                    K::Rem => v1 % v2,
+                    _ => unreachable!(),
+                };
+                Value::Int(TypedIntValue::IWord64(result))
             }
             _ => unreachable!("Invalid integer operation: {:?} {:?}", iv1, iv2),
         },
@@ -171,6 +193,16 @@ pub fn execute_cmp_op(lhs: Value, rhs: Value, op: BinaryOpKind) -> Value {
                 };
                 Value::Bool(result)
             }
+            (TypedIntValue::UWord64(v1), TypedIntValue::UWord64(v2)) => {
+                let result = match op {
+                    K::Less => v1 < v2,
+                    K::LessEqual => v1 <= v2,
+                    K::Greater => v1 > v2,
+                    K::GreaterEqual => v1 >= v2,
+                    _ => unreachable!(),
+                };
+                Value::Bool(result)
+            }
             (TypedIntValue::I8(v1), TypedIntValue::I8(v2)) => {
                 let result = match op {
                     K::Less => v1 < v2,
@@ -211,7 +243,17 @@ pub fn execute_cmp_op(lhs: Value, rhs: Value, op: BinaryOpKind) -> Value {
                 };
                 Value::Bool(result)
             }
-            _ => unreachable!("Invalid integer operation: {:?} {:?}", iv1, iv2),
+            (TypedIntValue::IWord64(v1), TypedIntValue::IWord64(v2)) => {
+                let result = match op {
+                    K::Less => v1 < v2,
+                    K::LessEqual => v1 <= v2,
+                    K::Greater => v1 > v2,
+                    K::GreaterEqual => v1 >= v2,
+                    _ => unreachable!(),
+                };
+                Value::Bool(result)
+            }
+            _ => unreachable!("Invalid integer cmp operation: {:?} {:?}", iv1, iv2),
         },
         (Value::Float(fv1), Value::Float(fv2)) => match (fv1, fv2) {
             (TypedFloatValue::F32(v1), TypedFloatValue::F32(v2)) => {

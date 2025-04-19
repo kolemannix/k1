@@ -40,7 +40,9 @@ fn print(s: string): unit {
   ()
 }
 fn println(s: string): unit {
-  print(s.appendChar('\n'));
+  // 2 calls to avoid allocating; 'write' is fast
+  print(s);
+  print("\n");
 }
 
 fn eprint(s: string): unit {
@@ -48,7 +50,9 @@ fn eprint(s: string): unit {
   ()
 }
 fn eprintln(s: string): unit {
-  eprint(s.appendChar('\n'));
+  // 2 calls to avoid allocating; 'write' is fast
+  eprint(s);
+  eprint("\n");
 }
 
 ns sys {
@@ -60,10 +64,6 @@ ns sys {
     } else {
       _k1_show_backtrace_libunwind();
     }
-  }
-
-  fn exit(code: i32): never {
-    libc/exit(code)
   }
 
   #if k1/OS_MACOS extern(arc4random_uniform) fn arc4random_uniform(upperBound: u32): u32

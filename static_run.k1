@@ -81,6 +81,42 @@ fn main(): i32 {
   };
   assertEquals(ptrInStructs, 10);
 
+  // Loops
+  #if false assertEquals(#static {
+    let mut i = 0;
+    loop {
+      if i >= 5 { break() };
+      i = i + 1
+    };
+    i
+  }, 5);
+
+  #if false assertEquals(#static {
+    let mut i = 0;
+    while i < 5 { i = i + 1 };
+    i
+  }, 5);
+
+  #static {
+    let* l = List/withCapacity[unit](0);
+    l.len
+  };
+
+  let list = #static {
+    for [1,2,3,4,5] yield {
+      it + 1
+    }
+  };
+  assertEquals(list, [2,3,4,5,6]);
+
+  assertEquals(#static loop {
+    switch 42 {
+      _ -> break(100)
+    }
+  }, 100);
+
+  // StringBuilder
+
   assertEquals(#static {
     let* sb = StringBuilder/new();
     sb.putString("Hello");
@@ -95,13 +131,25 @@ fn main(): i32 {
 
   #static crash("");
 
-  // Breaks
-  //loop {
-  //  switch 42 {
-  //    _ -> break(100)
-  //  }
-  //};
+  #static {
+    \(x: int) foo(5)
+  };
+
+  // Call order
+  #static bar(5);
 
   0
+}
+
+fn foo(n: int): unit {
+  if n == 0 return(());
+
+  bar(n - 1)
+}
+
+fn bar(n: int): unit {
+  if n == 0 return(());
+
+  foo(n - 1)
 }
 
