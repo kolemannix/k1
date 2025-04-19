@@ -7,7 +7,20 @@ use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
+const STACK_SIZE: usize = 1 * k1::MEGABYTE;
+
 fn main() -> anyhow::Result<()> {
+    let compiler_thread = std::thread::Builder::new()
+        .stack_size(STACK_SIZE)
+        .name("compiler".to_string())
+        .spawn(run)
+        .unwrap();
+
+    let result = compiler_thread.join().unwrap();
+    result
+}
+
+fn run() -> anyhow::Result<()> {
     let l = Box::leak(Box::new(
         env_logger::Builder::new()
             .format_timestamp(None)

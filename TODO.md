@@ -36,6 +36,22 @@ New tagline? "C with typeclasses and tagged unions"
 - [x] *Specializing functions on their provided closures to allow inlining and static dispatch*
 - [x] Run in Linux x86-64
 - [x] `require` statements with matching and binding
+- [x] Runtime-branching Allocator system (v2 is comptime branching)
+  - [x] comptime enhancement to support this global initializer: `let* a: Arena* = { .. };`
+  - [x] Global pointers, to enable
+  - [x] The problem with passing an allocator around is all code becomes generic, or casts a pointer.
+  - [x] Comptime structs!
+  - [x] alloca in loops fix
+  - [x] Parameterize stdlib over the current allocator ()
+- [x] Proper basic comptime
+  - [x] Rename to 'static'
+  - [x] Move to stack-based VM
+  - [x] literals
+  - [x] if/else
+  - [x] Arith
+  - [x] Struct construction
+  - [x] Struct field access
+  - [x] Enum construction
 - [ ] Represent payload-less `either` types as ints not structs
 - [ ] String pool for string values, not just identifiers (will dedupe in LLVM too)
 - [ ] Support explicit type args in AnonEnumConstructor syntax 
@@ -44,23 +60,17 @@ New tagline? "C with typeclasses and tagged unions"
 - [ ] Change FieldAccess semantics to work on struct references, and copy only the field out
       This saves copying the entire aggregate first with a Dereference instruction
 - [ ] ThreadLocal globals
-
-- [x] Runtime-branching Allocator system (v2 is comptime branching)
-  - [x] comptime enhancement to support this global initializer: `let* a: Arena* = { .. };`
-  - [x] Global pointers, to enable
-  - [x] The problem with passing an allocator around is all code becomes generic, or casts a pointer.
-  - [x] Comptime structs!
-  - [x] alloca in loops fix
-  - [x] Parameterize stdlib over the current allocator ()
-
+- [ ] LLVM Codegen callstack is too deep due to codegen_function_or_get
 - [ ] vm: static execution
-  - [ ] Introduce uword/iword types
+  - [x] Introduce uword/iword types
   - [ ] Switch to a single stack
-  - [ ] Move to intrinsic: system core memory functions
-  - [ ] Move to intrinsic: memcpy/memmove
+  - [x] Move to intrinsic: system core memory functions
+  - [x] Move to intrinsic: memcpy/memmove
   - [ ] Move to intrinsic: `write`
-  - [ ] Move to intrinsic: `exit`
+  - [x] Move to intrinsic: `exit`
   - [ ] Move to intrinsic: `crash` (?)
+  - [ ] Run global initializers before most bodies but after all other phases, treat it
+        like 'body' code SINCE it'll end up using the user's types, and even impls!
 
 - [ ] zackoverflow.dev "I really enjoy writing Zig code. I love it’s clean syntax, comptime, packed structs and arbitrary bit-width integers, the Allocator API, and useful data-oriented design abstractions in the standard library."
       What would it take to check those boxes in K1 with a faster compiler? Why is Zig's compiler slow if they're so ruthlessly
@@ -68,17 +78,6 @@ New tagline? "C with typeclasses and tagged unions"
       but no idea
 
 - [ ] Switch VM stack to a single virtual allocation https://crates.io/crates/memmap2
-- [ ] Proper basic comptime
-  - [x] Rename to 'static'
-  - [x] Move to stack-based VM
-  - [x] literals
-  - [x] if/else
-  - [x] Arith
-  - [ ] Run comptime exprs before bodies but after all other phases, treat it
-        like 'body' code SINCE it'll end up using the user's types, and even impls!
-  - [x] Struct construction
-  - [x] Struct field access
-  - [x] Enum construction
 - [ ] Fix non-referencing match on `struct*`: just do the deref for the user
 - [ ] Fix referencing match not 'eliminating' patterns on `struct*` giving unhandled pattern `.CustomHeap({ zalloc }*) -> {`
 - [ ] Macro system built on comptime, both string #insert and parsed code #insert like Jai

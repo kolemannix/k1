@@ -28,7 +28,7 @@ ns Arena {
     let capacity = initialMb * mb;
     // We zero the memory because we don't make arenas that often
     // so it's worth it
-    let basePtr = mem/systemZeroAlloc(
+    let basePtr = mem/allocZeroed(
       size = capacity, 
       align = 8
     );
@@ -62,7 +62,6 @@ ns Arena {
   fn freeAll(self: Arena*): unit {
     let size = self.regionSizeBytes();
     println("[arena] Freeing \{size}");
-    libc/memset(self.basePtr, 0: u32, size);
     self.curAddr* <- (self.basePtr as uword);
   }
 }

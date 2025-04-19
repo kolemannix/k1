@@ -5,7 +5,7 @@ fn combine3[T](a: T, b: T, c: { one: T, two: T }): T { a }
 fn getOrElse[T](a: Opt[T], b: T): T { if a is .Some(a) a else b }
 fn some[U](value: U): Opt[U].Some { Opt.Some[U](value) }
 
-fn get[UU](value: Opt[UU]): UU { if value is .Some(u) u else libc/exit(1) }
+fn get[UU](value: Opt[UU]): UU { if value is .Some(u) u else sys/exit(1) }
 fn identity[T](value: T): T { value }
 
 fn identityNested[T](t: T): T {
@@ -52,7 +52,7 @@ fn test(): unit {
   let* x = Opt.Some(42);
 
   let withNever = testCompile(
-    combine3(x, libc/exit(1), { one: some(-1), two: some(3), })
+    combine3(x, sys/exit(1), { one: some(-1), two: some(3), })
   );
   assert(withNever is .None);
   ()

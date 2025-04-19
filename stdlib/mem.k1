@@ -1,30 +1,22 @@
 ns mem {
 
-  // These definitions exist as a compile-time parameterization point
-  // It lets us customize the system allocator by doing conditional
-  // compilation inside, rather than having code directly call the
-  // linked libc 'malloc', for example
-  // #if MEM_DEBUG use a tracking_allocator, for example
-  fn systemMalloc(size: uword, align: uword): Pointer {
-    // #if NO_LIBC mmap() or something!
-    let p = libc/malloc(size);
-    if p.isNull() { crash("systemMalloc failed") };
-    p
-  }
-  fn systemZeroAlloc(size: uword, align: uword): Pointer {
-    let p = libc/calloc(count = 1, size = size);
-    if p.isNull() { crash("systemZeroAlloc failed") };
-    p
-  }
-  fn systemRealloc(ptr: Pointer, oldSize: uword, align: uword, newSize: uword): Pointer {
-    let p = libc/realloc(ptr, newSize);
-    if p.isNull() { crash("systemRealloc failed") };
-    p
-  }
-  fn systemFree(ptr: Pointer, size: uword, align: uword): unit {
-    libc/free(ptr);
-    ()
-  }
+  // nocommit: zero: bool and remove allocZeroed
+  intern fn alloc(size: uword, align: uword): Pointer
+  intern fn allocZeroed(size: uword, align: uword): Pointer
+  intern fn realloc(ptr: Pointer, oldSize: uword, align: uword, newSize: uword): Pointer
+  intern fn free(ptr: Pointer, size: uword, align: uword): unit
+
+  intern fn copy(
+    dst: Pointer, 
+    src: Pointer, 
+    count: uword
+  ): unit
+  intern fn set(
+    dst: Pointer, 
+    value: u8, 
+    count: uword
+  ): unit
+  intern fn equals(p1: Pointer, p2: Pointer, size: uword): bool
 
   // For now here's all I can do until I have dyn traits
   deftype Allocator = {
@@ -95,7 +87,7 @@ ns mem {
     let mode = resolveMode(mode);
     switch mode.kind {
       .Current -> { crash("unreachable") },
-      .SystemHeap -> mem/systemZeroAlloc(size, align),
+      .SystemHeap -> mem/allocZeroed(size, align),
       .CustomHeap(alloc) -> { 
         let zalloc = alloc.*.zalloc;
         zalloc(size, align)
@@ -123,7 +115,7 @@ ns mem {
     let mode = resolveMode(mode);
     switch mode.kind {
       .Current -> { crash("unreachable") },
-      .SystemHeap -> mem/systemRealloc(oldPtr, oldSize, align, newSize),
+      .SystemHeap -> mem/realloc(oldPtr, oldSize, align, newSize),
       .CustomHeap(alloc) -> { 
         let realloc = alloc.*.realloc;
         realloc(oldPtr, oldSize, align, newSize)
@@ -144,7 +136,7 @@ ns mem {
     let mode = resolveMode(mode);
     switch mode.kind {
       .Current -> { crash("unreachable") },
-      .SystemHeap -> mem/systemFree(ptr, size, align),
+      .SystemHeap -> mem/free(ptr, size, align),
       .CustomHeap(alloc) -> { 
         let free = alloc.*.free;
         free(ptr, size, align)

@@ -36,7 +36,7 @@ use crate::parse::{
     Block, Identifier, Literal, ParsedCall, ParsedExpression, ParsedModule, ParsedStmt,
 };
 use crate::pool::{Pool, SliceHandle};
-use crate::{static_assert_size, strings, SV4};
+use crate::{impl_copy_if_small, static_assert_size, strings, SV4};
 use crate::{vm, SV8};
 
 #[cfg(test)]
@@ -218,7 +218,6 @@ pub struct CompileTimeStruct {
 #[derive(Debug, Clone)]
 pub struct CompileTimeEnum {
     pub type_id: TypeId,
-    pub variant_name: Identifier,
     pub variant_index: u32,
     pub payload: Option<StaticValueId>,
     pub span: SpanId,
@@ -662,7 +661,7 @@ pub struct TypedLambda {
 pub struct TypedBlock {
     pub expr_type: TypeId,
     pub scope_id: ScopeId,
-    pub statements: Vec<TypedStmtId>,
+    pub statements: EcoVec<TypedStmtId>,
     pub span: SpanId,
 }
 
@@ -743,9 +742,9 @@ impl TypedFunctionKind {
 pub struct TypedFunction {
     pub name: Identifier,
     pub scope: ScopeId,
-    pub param_variables: Vec<VariableId>,
+    pub param_variables: EcoVec<VariableId>,
     pub type_params: SmallVec<[TypeParam; 8]>,
-    pub function_params: SmallVec<[FunctionTypeParam; 4]>,
+    pub function_type_params: SmallVec<[FunctionTypeParam; 4]>,
     pub body_block: Option<TypedExprId>,
     pub intrinsic_type: Option<IntrinsicFunction>,
     pub linkage: Linkage,
@@ -764,7 +763,7 @@ impl TypedFunction {
     fn is_generic(&self) -> bool {
         matches!(self.kind, TypedFunctionKind::AbilityDefn(_))
             || !self.type_params.is_empty()
-            || !self.function_params.is_empty()
+            || !self.function_type_params.is_empty()
     }
 }
 
@@ -1026,6 +1025,7 @@ pub struct BinaryOp {
     pub rhs: TypedExprId,
     pub span: SpanId,
 }
+impl_copy_if_small!(20, BinaryOp);
 
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub enum UnaryOpKind {
@@ -1074,6 +1074,7 @@ pub enum Callee {
         function_type: TypeId,
     },
 }
+impl_copy_if_small!(16, Callee);
 
 impl Callee {
     pub fn make_static(function_id: FunctionId) -> Callee {
@@ -1133,40 +1134,42 @@ pub struct FieldAccess {
     pub is_referencing: bool,
     pub span: SpanId,
 }
+impl_copy_if_small!(28, FieldAccess);
 
 #[derive(Debug, Clone)]
 pub struct TypedEnumConstructor {
     pub type_id: TypeId,
-    pub variant_name: Identifier,
     pub variant_index: u32,
     pub payload: Option<TypedExprId>,
     pub span: SpanId,
 }
+impl_copy_if_small!(16, TypedEnumConstructor);
 
 #[derive(Debug, Clone)]
 pub struct GetEnumPayload {
     pub enum_expr: TypedExprId,
     pub result_type_id: TypeId,
-    pub variant_name: Identifier,
     pub variant_index: u32,
     pub is_referencing: bool,
     pub span: SpanId,
 }
+impl_copy_if_small!(20, GetEnumPayload);
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct GetEnumTag {
     pub enum_expr: TypedExprId,
     pub result_type_id: TypeId,
     pub span: SpanId,
 }
+impl_copy_if_small!(12, GetEnumTag);
 
 #[derive(Debug, Clone)]
 pub struct TypedEnumIsVariantExpr {
     pub enum_expr: TypedExprId,
-    pub variant_name: Identifier,
     pub variant_index: u32,
     pub span: SpanId,
 }
+impl_copy_if_small!(16, TypedEnumIsVariantExpr);
 
 #[derive(Debug, Clone)]
 pub struct TypedMatchArm {
@@ -1557,7 +1560,7 @@ pub struct MatchingCondition {
     /// a single set of variables for all the bindings that each point to the unique variables from each
     /// pattern. We already check for exact number and name, so this is possible
     pub patterns: SmallVec<[TypedPattern; 1]>,
-    pub instrs: Vec<MatchingConditionInstr>,
+    pub instrs: EcoVec<MatchingConditionInstr>,
     #[allow(unused)]
     pub binding_eligible: bool,
     pub diverges: bool,
@@ -1568,6 +1571,7 @@ pub enum MatchingConditionInstr {
     Binding { let_stmt: TypedStmtId, variable_id: VariableId },
     Cond { value: TypedExprId },
 }
+impl_copy_if_small!(8, MatchingConditionInstr);
 
 #[derive(Debug, Clone)]
 pub struct WhileLoop {
@@ -1583,13 +1587,14 @@ pub struct LoopExpr {
     pub break_type: TypeId,
     pub span: SpanId,
 }
+impl_copy_if_small!(12, LoopExpr);
 
 #[derive(Debug, Clone)]
-/// The last arm's condition is guaranteed to always evaluate to 'true'
+/// Invariant: The last arm's condition must always evaluate to 'true'
 pub struct TypedMatchExpr {
-    pub initial_let_statements: Vec<TypedStmtId>,
+    pub initial_let_statements: EcoVec<TypedStmtId>,
     pub result_type: TypeId,
-    pub arms: Vec<TypedMatchArm>,
+    pub arms: EcoVec<TypedMatchArm>,
     pub span: SpanId,
 }
 
@@ -1725,6 +1730,14 @@ impl TypedExpr {
         }
     }
 
+    pub fn expect_call(&self) -> &Call {
+        if let Self::Call(c) = self {
+            c
+        } else {
+            panic!("Expected call expression")
+        }
+    }
+
     pub fn is_unit(&self) -> bool {
         matches!(self, TypedExpr::Unit(_))
     }
@@ -1845,11 +1858,12 @@ pub struct Variable {
 pub struct TypedGlobal {
     pub variable_id: VariableId,
     pub parsed_expr: ParsedExprId,
-    pub initial_value: StaticValueId,
+    pub initial_value: Option<StaticValueId>,
     pub ty: TypeId,
     pub span: SpanId,
-    pub is_comptime: bool,
+    pub is_static: bool,
     pub is_referencing: bool,
+    pub ast_id: ParsedGlobalId,
 }
 
 #[derive(Debug)]
@@ -1920,6 +1934,7 @@ impl Namespaces {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IntrinsicFunction {
+    // Inline 'operations'
     SizeOf,
     SizeOfStride,
     AlignOf,
@@ -1933,6 +1948,17 @@ pub enum IntrinsicFunction {
     BitShiftRight,
     PointerIndex,
     CompilerSourceLocation,
+    // Actual functions
+    Allocate,
+    AllocateZeroed,
+    Reallocate,
+    Free,
+    MemCopy,
+    MemSet,
+    MemEquals,
+    Exit,
+    // Static-only
+    EmitCompilerMessage,
 }
 
 impl IntrinsicFunction {
@@ -1951,6 +1977,16 @@ impl IntrinsicFunction {
             IntrinsicFunction::BitShiftRight => true,
             IntrinsicFunction::PointerIndex => true,
             IntrinsicFunction::CompilerSourceLocation => true,
+            IntrinsicFunction::EmitCompilerMessage => true,
+            // System-level
+            IntrinsicFunction::Allocate => false,
+            IntrinsicFunction::AllocateZeroed => false,
+            IntrinsicFunction::Reallocate => false,
+            IntrinsicFunction::Free => false,
+            IntrinsicFunction::MemCopy => false,
+            IntrinsicFunction::MemSet => false,
+            IntrinsicFunction::MemEquals => false,
+            IntrinsicFunction::Exit => false,
         }
     }
 }
@@ -2231,6 +2267,7 @@ pub struct TypedModule {
     pub blanket_impls: FxHashMap<AbilityId, Vec<AbilityImplId>>,
     pub namespace_ast_mappings: FxHashMap<ParsedNamespaceId, NamespaceId>,
     pub function_ast_mappings: FxHashMap<ParsedFunctionId, FunctionId>,
+    pub global_ast_mappings: FxHashMap<ParsedGlobalId, TypedGlobalId>,
     pub ability_impl_ast_mappings: FxHashMap<ParsedAbilityImplId, AbilityImplId>,
     /// We don't know about functions during the type discovery phase, so a 'use'
     /// that targets a function could miss. Rather than make the user
@@ -2244,6 +2281,7 @@ pub struct TypedModule {
     inference_context: InferenceContext,
 
     // Buffers that we prefer to re-use to avoid thousands of allocations
+    // Clear them after you use them, but leave the memory allocated
     buffers: TypedModuleBuffers,
 }
 
@@ -2280,6 +2318,7 @@ impl TypedModule {
             blanket_impls: FxHashMap::new(),
             namespace_ast_mappings: FxHashMap::with_capacity(parsed_module.namespaces.len() * 2),
             function_ast_mappings: FxHashMap::with_capacity(parsed_module.functions.len() * 2),
+            global_ast_mappings: FxHashMap::new(),
             ability_impl_ast_mappings: FxHashMap::new(),
             use_statuses: FxHashMap::new(),
             debug_level_stack: vec![log::max_level()],
@@ -3228,7 +3267,7 @@ impl TypedModule {
                                     )
                                 }
                                 Some((pending_defn_id, pending_defn_scope_id)) => {
-                                    eprintln!(
+                                    debug!(
                                         "Recursing into pending type defn {}",
                                         self.name_of(self.ast.get_type_defn(pending_defn_id).name)
                                     );
@@ -3768,34 +3807,6 @@ impl TypedModule {
         Ok(())
     }
 
-    /// This implements 'duck-typing' for structs, which is really cool
-    /// but I do not want to do this by default since the codegen involves
-    /// either v-tables or monomorphization of functions that accept structs
-    /// Maybe a <: syntax to opt-in to dynamic stuff like this, read as "conforms to"
-    /// input <: {quack: () -> ()} means that it has at least a quack function
-    /// fn takes_quacker = (input <: {quack: () -> ()}) -> ()
-    ///
-    /// "Conforms To" would mean that it has at least the same fields as the expected type, and
-    /// it has them at least as strongly. If an optional is expected, actual can optional or required
-    /// If a required is expected, actual must be required, etc. Basically TypeScripts structural typing
-    #[allow(unused)]
-    fn typecheck_struct_duck(
-        &self,
-        expected: &StructType,
-        actual: &StructType,
-        scope_id: ScopeId,
-    ) -> Result<(), String> {
-        for expected_field in &expected.fields {
-            trace!("typechecking struc field {:?}", expected_field);
-            let Some(matching_field) = actual.fields.iter().find(|f| f.name == expected_field.name)
-            else {
-                return Err(format!("expected field {}", expected_field.name));
-            };
-            self.check_types(expected_field.type_id, matching_field.type_id, scope_id)?;
-        }
-        Ok(())
-    }
-
     fn get_type_id_resolved(&self, type_id: TypeId, scope_id: ScopeId) -> TypeId {
         if let Type::TypeParameter(tvar) = self.types.get(type_id) {
             match self.scopes.find_type(scope_id, tvar.name) {
@@ -3965,31 +3976,35 @@ impl TypedModule {
             (_expected, Type::Never) => Ok(()),
             (_exp, _act) => Err(format!(
                 "Expected {} but got {}",
-                self.type_id_to_string_ext(expected, false),
-                self.type_id_to_string_ext(actual, false),
+                self.type_id_to_string_ext(expected, true),
+                self.type_id_to_string_ext(actual, true),
             )),
         }
     }
 
-    fn eval_expr_comptime(
+    fn eval_trivial_static_expr(
         &mut self,
         expr_id: TypedExprId,
         _scope_id: ScopeId,
-    ) -> TyperResult<StaticValueId> {
+    ) -> TyperResult<Option<StaticValueId>> {
         match self.exprs.get(expr_id) {
-            TypedExpr::Unit(span) => Ok(self.static_values.add(StaticValue::Unit(*span))),
+            TypedExpr::Unit(span) => Ok(Some(self.static_values.add(StaticValue::Unit(*span)))),
             TypedExpr::Char(byte, span) => {
-                Ok(self.static_values.add(StaticValue::Char(*byte, *span)))
+                Ok(Some(self.static_values.add(StaticValue::Char(*byte, *span))))
             }
-            TypedExpr::Bool(b, span) => Ok(self.static_values.add(StaticValue::Boolean(*b, *span))),
-            TypedExpr::Integer(typed_integer_expr) => Ok(self
-                .static_values
-                .add(StaticValue::Integer(typed_integer_expr.value, typed_integer_expr.span))),
-            TypedExpr::Float(typed_float_expr) => Ok(self
-                .static_values
-                .add(StaticValue::Float(typed_float_expr.value, typed_float_expr.span))),
+            TypedExpr::Bool(b, span) => {
+                Ok(Some(self.static_values.add(StaticValue::Boolean(*b, *span))))
+            }
+            TypedExpr::Integer(typed_integer_expr) => Ok(Some(
+                self.static_values
+                    .add(StaticValue::Integer(typed_integer_expr.value, typed_integer_expr.span)),
+            )),
+            TypedExpr::Float(typed_float_expr) => Ok(Some(
+                self.static_values
+                    .add(StaticValue::Float(typed_float_expr.value, typed_float_expr.span)),
+            )),
             TypedExpr::String(s, span) => {
-                Ok(self.static_values.add(StaticValue::String(s.clone(), *span)))
+                Ok(Some(self.static_values.add(StaticValue::String(s.clone(), *span))))
             }
             TypedExpr::Variable(v) => {
                 let typed_variable = self.variables.get(v.variable_id);
@@ -3997,180 +4012,63 @@ impl TypedModule {
                     return failf!(v.span, "Comptime only supports global variables for now");
                 };
                 let global = self.globals.get(global_id);
-                if !global.is_comptime {
+                if !global.is_static {
                     return failf!(
                         v.span,
                         "Variable cannot be evaluated at compile time: {}",
                         self.name_of(typed_variable.name)
                     );
                 }
-                let mut value = self.static_values.get(global.initial_value).clone();
+                let Some(value) = global.initial_value else {
+                    self.ice_with_span("global body is missing", v.span)
+                };
+                let mut value = self.static_values.get(value).clone();
                 value.set_span(v.span);
-                Ok(self.static_values.add(value))
+                Ok(Some(self.static_values.add(value)))
             }
-            TypedExpr::BinaryOp(bin_op) => match bin_op.kind {
-                BinaryOpKind::Equals => {
-                    let bin_op = bin_op.clone();
-                    let lhs = self.eval_expr_comptime(bin_op.lhs, _scope_id)?;
-                    let rhs = self.eval_expr_comptime(bin_op.rhs, _scope_id)?;
-                    match (self.static_values.get(lhs), self.static_values.get(rhs)) {
-                        (StaticValue::String(s1, _), StaticValue::String(s2, _)) => {
-                            let b = StaticValue::Boolean(*s1 == *s2, bin_op.span);
-                            Ok(self.static_values.add(b))
-                        }
-                        (lhs, rhs) => {
-                            failf!(
-                                bin_op.span,
-                                "const equality over {} and {} is unimplemented",
-                                lhs.kind(),
-                                rhs.kind()
-                            )
-                        }
-                    }
-                }
-                BinaryOpKind::NotEquals => {
-                    unreachable!("Do we even product NotEquals exprs? Or desugar")
-                }
-                _ => failf!(
-                    bin_op.span,
-                    "Unsupported comptime binary op: {}",
-                    self.expr_to_string(expr_id)
-                ),
-            },
-            TypedExpr::Struct(struct_expr) => {
-                let span = struct_expr.span;
-                let mut values = Vec::with_capacity(struct_expr.fields.len());
-                let type_id = struct_expr.type_id;
-                for field in &struct_expr.fields.clone() {
-                    let value = self.eval_expr_comptime(field.expr, _scope_id)?;
-                    values.push(value);
-                }
-                Ok(self.static_values.add(StaticValue::Struct(CompileTimeStruct {
-                    type_id,
-                    fields: values,
-                    span,
-                })))
-            }
-            TypedExpr::EnumConstructor(e) => {
-                let mut value = CompileTimeEnum {
-                    type_id: e.type_id,
-                    variant_name: e.variant_name,
-                    variant_index: e.variant_index,
-                    payload: None,
-                    span: e.span,
-                };
-                let payload = match e.payload {
-                    None => None,
-                    Some(payload) => {
-                        let id = self.eval_expr_comptime(payload, _scope_id)?;
-                        Some(id)
-                    }
-                };
-                value.payload = payload;
-                Ok(self.static_values.add(StaticValue::Enum(value)))
-            }
-            TypedExpr::Cast(typed_cast) => {
-                let typed_cast = typed_cast.clone();
-                let base_expr = self.eval_expr_comptime(typed_cast.base_expr, _scope_id)?;
-                match typed_cast.cast_type {
-                    CastType::IntegerExtend => {
-                        let span = typed_cast.span;
-                        let StaticValue::Integer(_i, _span) = self.static_values.get(base_expr)
-                        else {
-                            self.ice_with_span("malformed integer cast", span)
-                        };
-                        todo!()
-                        //match i {
-                        //    TypedIntegerValue::U8(_) => todo!(),
-                        //    TypedIntegerValue::U16(_) => todo!(),
-                        //    TypedIntegerValue::U32(_) => todo!(),
-                        //    TypedIntegerValue::U64(_) => todo!(),
-                        //    TypedIntegerValue::I8(_) => todo!(),
-                        //    TypedIntegerValue::I16(_) => todo!(),
-                        //    TypedIntegerValue::I32(_) => todo!(),
-                        //    TypedIntegerValue::I64(_) => todo!(),
-                        //}
-                    }
-                    CastType::IntegerTruncate => todo!(),
-                    CastType::Integer8ToChar => todo!(),
-                    CastType::IntegerExtendFromChar => todo!(),
-                    CastType::IntegerToFloat => todo!(),
-                    CastType::IntegerToPointer => {
-                        let span = typed_cast.span;
-                        let StaticValue::Integer(TypedIntValue::UWord64(u), _) =
-                            self.static_values.get(base_expr)
-                        else {
-                            self.ice_with_span("malformed integer cast", span)
-                        };
-                        if *u == 0 {
-                            Ok(self.static_values.add(StaticValue::NullPointer(span)))
-                        } else {
-                            failf!(span, "Pointer cast from non-zero integer is not supported")
-                        }
-                    }
-                    CastType::KnownNoOp => todo!(),
-                    CastType::PointerToReference => {
-                        todo!("We might need this one soon, but we dont have References in ComptimeValue yet")
-                    }
-                    CastType::ReferenceToPointer => todo!(),
-                    CastType::PointerToInteger => todo!(),
-                    CastType::FloatExtend => todo!(),
-                    CastType::FloatTruncate => todo!(),
-                    CastType::FloatToInteger => todo!(),
-                    CastType::LambdaToLambdaObject => todo!(),
-                }
-            }
-            TypedExpr::Call(call) => {
-                // Get callee, assert static
-                // Check if intrinsic, if so, implement at least 'negated'
-                let span = call.span;
-                let Some(callee_id) = call.callee.maybe_function_id() else {
-                    return failf!(span, "Only reguhler functions can be called at comptime");
-                };
-                let function = self.get_function(callee_id);
-                match function.intrinsic_type {
-                    Some(IntrinsicFunction::BoolNegate) => {
-                        let arg = call.args[0];
-                        let arg = self.eval_expr_comptime(arg, _scope_id)?;
-                        let Some(arg) = self.static_values.get(arg).as_boolean() else {
-                            self.ice_with_span("malformed bool negate", span)
-                        };
-                        let negated = !arg;
-                        Ok(self.static_values.add(StaticValue::Boolean(negated, span)))
-                    }
-                    Some(i) => {
-                        failf!(span, "Unimplemented comptime intrinsic: {:?}", i)
-                    }
-                    None => {
-                        failf!(span, "comptime function calls are not implemented yet")
-                    }
-                }
-            }
-            e => {
-                failf!(e.get_span(), "Unsupported comptime expr: {}", self.expr_to_string(expr_id))
-            }
+            _ => Ok(None),
         }
     }
 
-    fn eval_comptime_parsed_expr(
+    fn execute_static_expr(
         &mut self,
-        expr: ParsedExprId,
+        parsed_expr: ParsedExprId,
         expected_type_id: Option<TypeId>,
         scope_id: ScopeId,
         global_name: Option<Identifier>,
+        is_inference: bool,
     ) -> TyperResult<StaticValueId> {
         let eval_ctx = EvalExprContext {
             scope_id,
             expected_type_id,
-            is_inference: false,
+            is_inference,
             is_static: true,
             global_defn_name: global_name,
         };
-        let expr_result = self.eval_expr(expr, eval_ctx)?;
-        self.eval_expr_comptime(expr_result, scope_id)
+        let expr = self.eval_expr(parsed_expr, eval_ctx)?;
+        let type_id = self.exprs.get(expr).get_type();
+        if let Some(shortcut) = self.eval_trivial_static_expr(expr, scope_id)? {
+            return Ok(shortcut);
+        }
+
+        let (mut vm, value) = vm::execute_single_expr(self, expr)?;
+        let span = self.exprs.get(expr).get_span();
+        if cfg!(debug_assertions) {
+            if type_id != value.get_type() {
+                return failf!(
+                    span,
+                    "static value type mismatch {}: {} vs {}",
+                    self.expr_to_string(expr),
+                    self.type_id_to_string(type_id),
+                    self.type_id_to_string(value.get_type())
+                );
+            }
+        }
+        let static_value_id = self.vm_value_to_static_value(&mut vm, value, span);
+        Ok(static_value_id)
     }
 
-    fn eval_global(
+    fn eval_global_declaration_phase(
         &mut self,
         parsed_global_id: ParsedGlobalId,
         scope_id: ScopeId,
@@ -4179,37 +4077,10 @@ impl TypedModule {
         let type_id = self.eval_type_expr(parsed_global.ty, scope_id)?;
 
         let is_referencing = parsed_global.is_referencing;
-        let type_to_check = if is_referencing {
-            let Type::Reference(r) = self.types.get(type_id) else {
-                return failf!(parsed_global.span, "Global references must have a reference type");
-            };
-            r.inner_type
-        } else {
-            type_id
-        };
         let global_name = parsed_global.name;
         let global_span = parsed_global.span;
         let value_expr_id = parsed_global.value_expr;
         let is_comptime = parsed_global.is_comptime;
-
-        // Even if its const, the RHS has to be a const-supported expr
-        let expr = self.eval_comptime_parsed_expr(
-            value_expr_id,
-            Some(type_to_check),
-            scope_id,
-            Some(global_name),
-        )?;
-
-        if let Err(msg) =
-            self.check_types(type_to_check, self.static_values.get(expr).get_type(), scope_id)
-        {
-            return failf!(
-                global_span,
-                "Type mismatch for global {}: {}",
-                self.name_of(global_name),
-                msg
-            );
-        }
 
         let global_id = self.globals.next_id();
         let variable_id = self.variables.add(Variable {
@@ -4223,16 +4094,71 @@ impl TypedModule {
         });
         let actual_global_id = self.globals.add(TypedGlobal {
             variable_id,
-            initial_value: expr,
+            initial_value: None,
             parsed_expr: value_expr_id,
             ty: type_id,
             span: global_span,
             is_referencing,
-            is_comptime,
+            is_static: is_comptime,
+            ast_id: parsed_global_id,
         });
+
         debug_assert_eq!(actual_global_id, global_id);
+        self.global_ast_mappings.insert(parsed_global_id, global_id);
         self.scopes.add_variable(scope_id, global_name, variable_id);
         Ok(variable_id)
+    }
+
+    fn eval_global_body(
+        &mut self,
+        parsed_global_id: ParsedGlobalId,
+        scope_id: ScopeId,
+    ) -> TyperResult<()> {
+        let parsed_global = self.ast.get_global(parsed_global_id).clone();
+        let Some(global_id) = self.global_ast_mappings.get(&parsed_global_id).copied() else {
+            self.ice_with_span("ast mapping for global is missing", parsed_global.span)
+        };
+        let typed_global = self.globals.get(global_id);
+        let type_id = typed_global.ty;
+
+        let is_referencing = parsed_global.is_referencing;
+        let type_to_check = if is_referencing {
+            let Type::Reference(r) = self.types.get(type_id) else {
+                return failf!(parsed_global.span, "Global references must have a reference type");
+            };
+            r.inner_type
+        } else {
+            type_id
+        };
+        let global_name = parsed_global.name;
+        let global_span = parsed_global.span;
+        let value_expr_id = parsed_global.value_expr;
+
+        // Even if its mutable, the RHS has to be a static-supported expr
+        let static_value_id = self.execute_static_expr(
+            value_expr_id,
+            Some(type_to_check),
+            scope_id,
+            Some(global_name),
+            false,
+        )?;
+
+        if let Err(msg) = self.check_types(
+            type_to_check,
+            self.static_values.get(static_value_id).get_type(),
+            scope_id,
+        ) {
+            return failf!(
+                global_span,
+                "Type mismatch for global {}: {}",
+                self.name_of(global_name),
+                msg
+            );
+        }
+
+        self.globals.get_mut(global_id).initial_value = Some(static_value_id);
+
+        Ok(())
     }
 
     fn next_function_id(&self) -> FunctionId {
@@ -5162,7 +5088,6 @@ impl TypedModule {
                 if is_assignment_lhs && !is_reference {
                     return failf!(span, "Enum must be a reference to be assignable");
                 }
-                let variant_name = ev.name;
                 let variant_index = ev.index;
                 let result_type_id = if field_access.is_referencing {
                     self.types.add_reference_type(payload_type_id)
@@ -5172,7 +5097,6 @@ impl TypedModule {
                 Ok(self.exprs.add(TypedExpr::EnumGetPayload(GetEnumPayload {
                     enum_expr: base_expr,
                     result_type_id,
-                    variant_name,
                     variant_index,
                     is_referencing: field_access.is_referencing,
                     span,
@@ -5438,11 +5362,12 @@ impl TypedModule {
         let should_compile = match conditional_compile_expr {
             None => true,
             Some(condition) => {
-                let comptime_value = self_.eval_comptime_parsed_expr(
+                let comptime_value = self_.execute_static_expr(
                     condition,
                     Some(BOOL_TYPE_ID),
                     ctx.scope_id,
                     None,
+                    ctx.is_inference,
                 )?;
                 let typed_condition =
                     self_.static_values.get(comptime_value).as_boolean().ok_or_else(|| {
@@ -5547,7 +5472,7 @@ impl TypedModule {
                 let element_count = parsed_elements.len();
 
                 let mut list_lit_block = self.synth_block(ctx.scope_id, span);
-                list_lit_block.statements = Vec::with_capacity(2 + element_count);
+                list_lit_block.statements = EcoVec::with_capacity(2 + element_count);
                 let list_lit_scope = list_lit_block.scope_id;
                 let mut element_type = None;
                 let elements: Vec<TypedExprId> = {
@@ -5802,32 +5727,22 @@ impl TypedModule {
             ParsedExpression::Static(stat) => {
                 let span = stat.span;
                 let base_expr = stat.base_expr;
-                eprintln!(
-                    "fps before static: {}",
-                    self.functions_pending_body_specialization.len()
-                );
 
-                // For now, we ensure that any functions called by this static block
-                // have bodies. This is a strange workaround, and it may be better to
-                // create a work queue and re-visit these exprs instead.
                 let expr = self.eval_expr(base_expr, ctx.with_static(true))?;
-                self.specialize_pending_function_bodies(&mut std::io::stderr()).unwrap();
-                eprintln!("fps after static: {}", self.functions_pending_body_specialization.len());
                 let type_id = self.exprs.get(expr).get_type();
                 let (mut vm, value) = vm::execute_single_expr(self, expr)?;
                 if cfg!(debug_assertions) {
                     if type_id != value.get_type() {
                         return failf!(
                             span,
-                            "static value type mismatch: {} vs {}",
+                            "static value type mismatch {}: {} vs {}",
+                            self.expr_to_string(expr),
                             self.type_id_to_string(type_id),
                             self.type_id_to_string(value.get_type())
                         );
                     }
                 }
-                eprintln!("{}", vm.dump(self));
-                let comptime_value_id = self.vm_value_to_static_value(&mut vm, &value, span);
-                eprintln!("static value: {}", self.static_value_to_string(comptime_value_id));
+                let comptime_value_id = self.vm_value_to_static_value(&mut vm, value, span);
                 let e = self.exprs.add(TypedExpr::StaticValue(comptime_value_id, type_id, span));
                 Ok(e)
             }
@@ -5848,18 +5763,18 @@ impl TypedModule {
     fn vm_value_to_static_value(
         &mut self,
         vm: &mut vm::Vm,
-        vm_value: &vm::Value,
+        vm_value: vm::Value,
         span: SpanId,
     ) -> StaticValueId {
-        eprintln!("vm_to_static: {:?}", vm_value);
+        debug!("vm_to_static: {:?}", vm_value);
         let v = match vm_value {
             vm::Value::Unit => StaticValue::Unit(span),
-            vm::Value::Bool(b) => StaticValue::Boolean(*b, span),
-            vm::Value::Char(c) => StaticValue::Char(*c, span),
-            vm::Value::Int(typed_integer_value) => StaticValue::Integer(*typed_integer_value, span),
-            vm::Value::Float(typed_float_value) => StaticValue::Float(*typed_float_value, span),
+            vm::Value::Bool(b) => StaticValue::Boolean(b, span),
+            vm::Value::Char(c) => StaticValue::Char(c, span),
+            vm::Value::Int(typed_integer_value) => StaticValue::Integer(typed_integer_value, span),
+            vm::Value::Float(typed_float_value) => StaticValue::Float(typed_float_value, span),
             vm::Value::Pointer(value) => {
-                if *value == 0 {
+                if value == 0 {
                     StaticValue::NullPointer(span)
                 } else {
                     self.ice_with_span(
@@ -5878,61 +5793,64 @@ impl TypedModule {
                 todo!("Introduce CompileTimeValue::Reference");
             }
             vm::Value::Agg { type_id, ptr } => {
-                let type_id = *type_id;
                 if type_id == STRING_TYPE_ID {
-                    let struct_value =
-                        vm::load_struct_field(vm, self, STRING_TYPE_ID, *ptr, 0, false).unwrap();
-                    let char_buffer_type_id =
-                        self.types.get(STRING_TYPE_ID).expect_struct().fields[0].type_id;
-                    let vm::Value::Agg { ptr: char_buffer_ptr, .. } = struct_value else {
-                        self.ice_with_span("Malformed compile-time 'string'", span)
-                    };
-                    let vm::Value::Int(TypedIntValue::U64(len)) = vm::load_struct_field(
-                        vm,
-                        self,
-                        char_buffer_type_id,
-                        char_buffer_ptr,
-                        0,
-                        false,
-                    )
-                    .unwrap() else {
-                        self.ice_with_span("Malformed compile-time 'string'", span)
-                    };
-                    let vm::Value::Reference { ptr, .. } = vm::load_struct_field(
-                        vm,
-                        self,
-                        char_buffer_type_id,
-                        char_buffer_ptr,
-                        1,
-                        false,
-                    )
-                    .unwrap() else {
-                        self.ice_with_span("Malformed compile-time 'string'", span)
-                    };
-                    unsafe {
-                        let slice = std::slice::from_raw_parts(ptr, len as usize);
-                        let the_str = std::str::from_utf8(slice).unwrap();
-                        let box_str = Box::from(the_str);
-                        StaticValue::String(box_str, span)
-                    }
+                    let box_str = vm::value_to_rust_str(vm, self, vm_value);
+                    StaticValue::String(box_str, span)
                 } else if let Some(buffer) = self.types.get(type_id).as_buffer_instance() {
                     let elem_type = buffer.type_args[0];
                     todo!("VM reify a non-string buffer of {}", self.type_id_to_string(elem_type));
                 } else {
-                    let struct_type = self.types.get(type_id).expect_struct();
-                    let mut field_value_ids = Vec::with_capacity(struct_type.fields.len());
-                    let struct_fields = struct_type.fields.clone();
-                    for (index, _) in struct_fields.iter().enumerate() {
-                        let field_value =
-                            vm::load_struct_field(vm, self, type_id, *ptr, index, false).unwrap();
-                        let ctv = self.vm_value_to_static_value(vm, &field_value, span);
-                        field_value_ids.push(ctv)
+                    let typ = self.types.get(type_id);
+                    match typ {
+                        Type::Struct(struct_type) => {
+                            let mut field_value_ids = Vec::with_capacity(struct_type.fields.len());
+                            let struct_fields = struct_type.fields.clone();
+                            for (index, _) in struct_fields.iter().enumerate() {
+                                let field_value =
+                                    vm::load_struct_field(vm, self, type_id, ptr, index, false)
+                                        .unwrap();
+                                let ctv = self.vm_value_to_static_value(vm, field_value, span);
+                                field_value_ids.push(ctv)
+                            }
+                            StaticValue::Struct(CompileTimeStruct {
+                                type_id,
+                                fields: field_value_ids,
+                                span,
+                            })
+                        }
+                        Type::Enum(enum_type) => {
+                            let tag = vm::load_value(vm, self, enum_type.tag_type, ptr, false)
+                                .unwrap()
+                                .expect_int();
+                            let variant =
+                                enum_type.variants.iter().find(|v| v.tag_value == tag).unwrap();
+                            let variant_index = variant.index;
+
+                            let payload = match variant.payload {
+                                None => None,
+                                Some(payload_type) => {
+                                    let payload_ptr =
+                                        vm::gep_enum_payload(&self.types, variant, ptr);
+                                    let payload_value =
+                                        vm::load_value(vm, self, payload_type, payload_ptr, false)
+                                            .unwrap();
+                                    let static_value =
+                                        self.vm_value_to_static_value(vm, payload_value, span);
+                                    Some(static_value)
+                                }
+                            };
+                            StaticValue::Enum(CompileTimeEnum {
+                                type_id,
+                                variant_index,
+                                payload,
+                                span,
+                            })
+                        }
+                        Type::EnumVariant(enum_variant) => {
+                            todo!("enum variant vm -> static")
+                        }
+                        _ => unreachable!("aggregate should be struct or enum"),
                     }
-                    StaticValue::Struct(CompileTimeStruct {
-                        type_id,
-                        fields: field_value_ids,
-                        span,
-                    })
                 }
             }
         };
@@ -6287,121 +6205,181 @@ impl TypedModule {
         }
     }
 
-    //fn visit_inner_stmt_exprs_mut(
-    //    module: &mut TypedModule,
-    //    stmt_id: TypedStmtId,
-    //    action: &mut impl FnMut(&mut TypedModule, TypedExprId),
-    //) {
-    //    let stmt = module.stmts.get(stmt_id);
-    //    match stmt {
-    //        TypedStmt::Expr(e, _) => action(module, *e),
-    //        TypedStmt::Let(val_def) => action(module, val_def.initializer),
-    //        TypedStmt::Assignment(assgn) => {
-    //            let value = assgn.value;
-    //            action(module, assgn.destination);
-    //            action(module, value)
-    //        }
-    //    };
-    //}
+    #[allow(unused)]
+    fn visit_stmt_tree<S, R>(
+        &self,
+        stmt_id: TypedStmtId,
+        state: &mut S,
+        action: &mut impl FnMut(&TypedModule, TypedExprId, &mut S) -> Option<R>,
+    ) -> Option<R> {
+        let stmt = self.stmts.get(stmt_id);
+        match stmt {
+            TypedStmt::Expr(e, _) => self.visit_expr_tree(*e, state, action),
+            TypedStmt::Let(val_def) => self.visit_expr_tree(val_def.initializer, state, action),
+            TypedStmt::Assignment(assgn) => {
+                if let Some(r) = self.visit_expr_tree(assgn.destination, state, action) {
+                    return Some(r);
+                };
+                if let Some(r) = self.visit_expr_tree(assgn.value, state, action) {
+                    return Some(r);
+                };
+                None
+            }
+            TypedStmt::Require(typed_require_stmt) => {
+                if let Some(r) =
+                    self.visit_matching_condition(&typed_require_stmt.condition, state, action)
+                {
+                    return Some(r);
+                };
+                self.visit_expr_tree(typed_require_stmt.else_body, state, action)
+            }
+        }
+    }
 
-    //fn visit_inner_exprs_mut(
-    //    module: &mut TypedModule,
-    //    expr: TypedExprId,
-    //    mut action: impl FnMut(&mut TypedModule, TypedExprId),
-    //) {
-    //    // Try implementing a mutable iterator instead
-    //    match module.exprs.get(expr) {
-    //        TypedExpr::Unit(_) => (),
-    //        TypedExpr::Char(_, _) => (),
-    //        TypedExpr::Bool(_, _) => (),
-    //        TypedExpr::Integer(_) => (),
-    //        TypedExpr::Float(_) => (),
-    //        TypedExpr::Str(_, _) => (),
-    //        TypedExpr::Struct(s) => {
-    //            for f in s.fields.clone().iter() {
-    //                action(module, f.expr);
-    //            }
-    //        }
-    //        TypedExpr::Variable(_) => (),
-    //        TypedExpr::StructFieldAccess(field_access) => {
-    //            action(module, field_access.base);
-    //        }
-    //        TypedExpr::BinaryOp(binary_op) => {
-    //            let lhs = binary_op.lhs;
-    //            let rhs = binary_op.rhs;
-    //            action(module, lhs);
-    //            action(module, rhs);
-    //        }
-    //        TypedExpr::UnaryOp(unary_op) => {
-    //            action(module, unary_op.expr);
-    //        }
-    //        TypedExpr::Block(block) => {
-    //            for stmt in block.statements.clone().iter() {
-    //                TypedModule::visit_inner_stmt_exprs_mut(module, *stmt, &mut action);
-    //            }
-    //        }
-    //        TypedExpr::Call(call) => {
-    //            let args = call.args.clone();
-    //            match call.callee {
-    //                Callee::DynamicLambda(expr) => action(module, expr),
-    //                Callee::DynamicFunction(expr) => action(module, expr),
-    //                _ => {}
-    //            };
-    //            for arg in args.clone().iter() {
-    //                action(module, *arg)
-    //            }
-    //        }
-    //        TypedExpr::If(typed_if) => {
-    //            let condition = typed_if.condition;
-    //            let consequent = typed_if.consequent;
-    //            let alternate = typed_if.alternate;
-    //            action(module, condition);
-    //            action(module, consequent);
-    //            action(module, alternate);
-    //        }
-    //        TypedExpr::WhileLoop(while_loop) => {
-    //            let stmts = while_loop.body.statements.clone();
-    //            action(module, while_loop.cond);
-    //            for stmt in stmts.iter() {
-    //                TypedModule::visit_inner_stmt_exprs_mut(module, *stmt, &mut action);
-    //            }
-    //        }
-    //        TypedExpr::Match(typed_match) => {
-    //            let typed_match = typed_match.clone();
-    //            for let_stmt in &typed_match.initial_let_statements {
-    //                TypedModule::visit_inner_stmt_exprs_mut(module, *let_stmt, &mut action);
-    //            }
-    //            for arm in typed_match.arms.iter() {
-    //                action(module, arm.pattern_condition);
-    //                if let Some(guard_condition) = arm.guard_condition {
-    //                    action(module, guard_condition);
-    //                };
-    //                for binding_stmt in &arm.pattern_bindings {
-    //                    TypedModule::visit_inner_stmt_exprs_mut(module, *binding_stmt, &mut action);
-    //                }
-    //                action(module, arm.consequent_expr)
-    //            }
-    //        }
-    //        TypedExpr::LoopExpr(loop_expr) => {
-    //            for stmt in loop_expr.body.statements.clone().iter() {
-    //                TypedModule::visit_inner_stmt_exprs_mut(module, *stmt, &mut action);
-    //            }
-    //        }
-    //        TypedExpr::EnumConstructor(_) => (),
-    //        TypedExpr::EnumIsVariant(enum_is_variant) => {
-    //            action(module, enum_is_variant.target_expr)
-    //        }
-    //        TypedExpr::EnumGetPayload(enum_get_payload) => {
-    //            action(module, enum_get_payload.target_expr)
-    //        }
-    //        TypedExpr::Cast(cast) => action(module, cast.base_expr),
-    //        TypedExpr::Return(ret) => action(module, ret.value),
-    //        TypedExpr::Break(brk) => action(module, brk.value),
-    //        TypedExpr::Lambda(_) => (),
-    //        TypedExpr::FunctionName(_) => (),
-    //        TypedExpr::PendingCapture(_) => (),
-    //    }
-    //}
+    fn visit_matching_condition<S, R>(
+        &self,
+        cond: &MatchingCondition,
+        state: &mut S,
+        action: &mut impl FnMut(&TypedModule, TypedExprId, &mut S) -> Option<R>,
+    ) -> Option<R> {
+        for instr in &cond.instrs {
+            let result = match instr {
+                MatchingConditionInstr::Binding { let_stmt, .. } => {
+                    self.visit_stmt_tree(*let_stmt, state, action)
+                }
+                MatchingConditionInstr::Cond { value } => {
+                    self.visit_expr_tree(*value, state, action)
+                }
+            };
+            if let Some(r) = result {
+                return Some(r);
+            }
+        }
+        None
+    }
+
+    // The task of 'visiting' each expr involves 2 things
+    // - Call action on it(self)
+    // - Call visit on its children.
+    //
+    // It is not the job of actions to recurse to its children
+    fn visit_expr_tree<S, R>(
+        &self,
+        expr: TypedExprId,
+        state: &mut S,
+        action: &mut impl FnMut(&TypedModule, TypedExprId, &mut S) -> Option<R>,
+    ) -> Option<R> {
+        eprintln!("VISITING {}", self.expr_to_string(expr));
+        macro_rules! recurse {
+            ($expr_id:expr) => {
+                if let Some(r) = self.visit_expr_tree($expr_id, state, action) {
+                    return Some(r);
+                }
+            };
+        }
+        macro_rules! recurse_stmt {
+            ($stmt_id:expr) => {
+                if let Some(r) = self.visit_stmt_tree($stmt_id, state, action) {
+                    return Some(r);
+                }
+            };
+        }
+
+        if let Some(r) = action(self, expr, state) {
+            return Some(r);
+        }
+
+        match self.exprs.get(expr) {
+            TypedExpr::Unit(_) => (),
+            TypedExpr::Char(_, _) => (),
+            TypedExpr::Bool(_, _) => (),
+            TypedExpr::Integer(_) => (),
+            TypedExpr::Float(_) => (),
+            TypedExpr::String(_, _) => (),
+            TypedExpr::Struct(s) => {
+                for f in s.fields.clone().iter() {
+                    recurse!(f.expr);
+                }
+            }
+            TypedExpr::Variable(_) => (),
+            TypedExpr::StructFieldAccess(field_access) => {
+                recurse!(field_access.base);
+            }
+            TypedExpr::BinaryOp(binary_op) => {
+                let lhs = binary_op.lhs;
+                let rhs = binary_op.rhs;
+                recurse!(lhs);
+                recurse!(rhs);
+            }
+            TypedExpr::UnaryOp(unary_op) => {
+                recurse!(unary_op.expr);
+            }
+            TypedExpr::Block(block) => {
+                for stmt in block.statements.iter() {
+                    recurse_stmt!(*stmt);
+                }
+            }
+            TypedExpr::Call(call) => {
+                match call.callee {
+                    Callee::DynamicLambda(callee_expr) => recurse!(callee_expr),
+                    Callee::DynamicFunction(callee_expr) => recurse!(callee_expr),
+                    _ => {}
+                };
+                for arg in call.args.iter() {
+                    recurse!(*arg);
+                }
+            }
+            TypedExpr::Match(typed_match) => {
+                for stmt in &typed_match.initial_let_statements {
+                    recurse_stmt!(*stmt);
+                }
+                for arm in &typed_match.arms {
+                    if let Some(r) = self.visit_matching_condition(&arm.condition, state, action) {
+                        return Some(r);
+                    };
+                    recurse!(arm.consequent_expr);
+                }
+            }
+            TypedExpr::WhileLoop(while_loop) => {
+                if let Some(r) =
+                    self.visit_matching_condition(&while_loop.condition_block, state, action)
+                {
+                    return Some(r);
+                };
+                recurse!(while_loop.body);
+            }
+            TypedExpr::LoopExpr(loop_expr) => {
+                recurse!(loop_expr.body_block);
+            }
+            TypedExpr::EnumConstructor(constr) => {
+                if let Some(payload) = constr.payload {
+                    recurse!(payload)
+                }
+            }
+            TypedExpr::EnumIsVariant(enum_is_variant) => {
+                recurse!(enum_is_variant.enum_expr)
+            }
+            TypedExpr::EnumGetTag(get_enum_tag) => {
+                recurse!(get_enum_tag.enum_expr);
+            }
+            TypedExpr::EnumGetPayload(enum_get_payload) => {
+                recurse!(enum_get_payload.enum_expr);
+            }
+            TypedExpr::Cast(cast) => recurse!(cast.base_expr),
+            TypedExpr::Return(ret) => recurse!(ret.value),
+            TypedExpr::Break(brk) => recurse!(brk.value),
+            TypedExpr::Lambda(lam) => {
+                let lambda_type = self.types.get(lam.lambda_type).as_lambda().unwrap();
+                let function = self.get_function(lambda_type.body_function_id);
+                recurse!(function.body_block.expect("lambdas have bodies"));
+            }
+            TypedExpr::FunctionReference(_) => {}
+            TypedExpr::FunctionToLambdaObject(_) => {}
+            TypedExpr::PendingCapture(_) => {}
+            TypedExpr::StaticValue(_, _, _) => {}
+        };
+        None
+    }
 
     fn eval_lambda(
         &mut self,
@@ -6508,7 +6486,7 @@ impl TypedModule {
             });
         }
 
-        let mut param_variables = VecDeque::with_capacity(typed_params.len());
+        let mut param_variables = EcoVec::with_capacity(typed_params.len());
         let lambda_scope = self.scopes.get_scope_mut(lambda_scope_id);
         for typed_arg in typed_params.iter() {
             let name = typed_arg.name;
@@ -6522,7 +6500,7 @@ impl TypedModule {
                 user_hidden: false,
             });
             lambda_scope.add_variable(name, variable_id);
-            param_variables.push_back(variable_id)
+            param_variables.push(variable_id)
         }
 
         // Coerce parsed expr to block, call eval_block with needs_terminator = true
@@ -6615,7 +6593,7 @@ impl TypedModule {
             user_hidden: false,
         });
         typed_params.push_front(environment_param);
-        param_variables.push_front(environment_param_variable_id);
+        param_variables.insert(0, environment_param_variable_id);
 
         let environment_param_variable_id = param_variables[0];
         let body_expr_id = self.exprs.add(TypedExpr::Block(body));
@@ -6659,9 +6637,9 @@ impl TypedModule {
         let body_function_id = self.add_function(TypedFunction {
             name,
             scope: lambda_scope_id,
-            param_variables: param_variables.into(),
+            param_variables,
             type_params: smallvec![],
-            function_params: smallvec![],
+            function_type_params: smallvec![],
             body_block: Some(body_expr_id),
             intrinsic_type: None,
             linkage: Linkage::Standard,
@@ -6718,7 +6696,7 @@ impl TypedModule {
         let fallback_arm = TypedMatchArm {
             condition: MatchingCondition {
                 patterns: smallvec![],
-                instrs: vec![],
+                instrs: eco_vec![],
                 binding_eligible: true,
                 diverges: false,
             },
@@ -6748,7 +6726,7 @@ impl TypedModule {
             })
             .unwrap_or(NEVER_TYPE_ID);
         Ok(self.exprs.add(TypedExpr::Match(TypedMatchExpr {
-            initial_let_statements: vec![match_subject_variable.defn_stmt],
+            initial_let_statements: eco_vec![match_subject_variable.defn_stmt],
             result_type: match_result_type,
             arms,
             span: match_expr_span,
@@ -6762,8 +6740,8 @@ impl TypedModule {
         ctx: EvalExprContext,
         partial_match: bool,
         allow_bindings: bool,
-    ) -> TyperResult<Vec<TypedMatchArm>> {
-        let mut typed_arms: Vec<TypedMatchArm> = Vec::new();
+    ) -> TyperResult<EcoVec<TypedMatchArm>> {
+        let mut typed_arms: EcoVec<TypedMatchArm> = EcoVec::new();
 
         let mut expected_arm_type_id = ctx.expected_type_id;
         let match_scope_id = ctx.scope_id;
@@ -6829,7 +6807,7 @@ impl TypedModule {
                     self.scopes.add_child_scope(match_scope_id, ScopeType::MatchArm, None, None);
                 //let mut setup_statements = smallvec![];
                 //let mut binding_statements = smallvec![];
-                let mut instrs = vec![];
+                let mut instrs = eco_vec![];
                 self.compile_pattern_in_scope_new(
                     &pattern,
                     target_expr,
@@ -6941,7 +6919,7 @@ impl TypedModule {
         &mut self,
         pattern: &TypedPattern,
         target_expr: TypedExprId,
-        instrs: &mut Vec<MatchingConditionInstr>,
+        instrs: &mut EcoVec<MatchingConditionInstr>,
         is_immediately_inside_reference_pattern: bool,
         arm_scope_id: ScopeId,
     ) -> TyperResult<()> {
@@ -7000,7 +6978,6 @@ impl TypedModule {
                 let is_variant_condition =
                     self.exprs.add(TypedExpr::EnumIsVariant(TypedEnumIsVariantExpr {
                         enum_expr: is_variant_target,
-                        variant_name: enum_pattern.variant_tag_name,
                         variant_index: enum_pattern.variant_index,
                         span: enum_pattern.span,
                     }));
@@ -7026,7 +7003,6 @@ impl TypedModule {
                         self.exprs.add(TypedExpr::EnumGetPayload(GetEnumPayload {
                             enum_expr: target_expr,
                             result_type_id,
-                            variant_name,
                             variant_index,
                             is_referencing,
                             span: enum_pattern.span,
@@ -7499,7 +7475,7 @@ impl TypedModule {
         let one_expr = self.synth_uword(1, iterable_span);
         let add_operation = self.exprs.add(TypedExpr::BinaryOp(BinaryOp {
             kind: BinaryOpKind::Add,
-            ty: U64_TYPE_ID,
+            ty: UWORD_TYPE_ID,
             lhs: index_variable.variable_expr,
             rhs: one_expr,
             span: iterable_span,
@@ -7519,7 +7495,7 @@ impl TypedModule {
             span: for_expr.span,
         });
 
-        let mut for_expr_initial_statements = Vec::with_capacity(4);
+        let mut for_expr_initial_statements = EcoVec::with_capacity(4);
         for_expr_initial_statements.push(index_variable.defn_stmt);
         for_expr_initial_statements.push(iterator_variable.defn_stmt);
         if let Some(yielded_coll_variable) = &yielded_coll_variable {
@@ -7574,8 +7550,13 @@ impl TypedModule {
         if_expr: &ParsedIfExpr,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
-        let condition_value =
-            self.eval_comptime_parsed_expr(if_expr.cond, Some(BOOL_TYPE_ID), ctx.scope_id, None)?;
+        let condition_value = self.execute_static_expr(
+            if_expr.cond,
+            Some(BOOL_TYPE_ID),
+            ctx.scope_id,
+            None,
+            ctx.is_inference,
+        )?;
         let StaticValue::Boolean(condition_bool, _) = self.static_values.get(condition_value)
         else {
             let cond_span = self.ast.get_expr_span(if_expr.cond);
@@ -7662,16 +7643,16 @@ impl TypedModule {
         let alt_arm = TypedMatchArm {
             condition: MatchingCondition {
                 patterns: smallvec![],
-                instrs: vec![],
+                instrs: eco_vec![],
                 binding_eligible: true,
                 diverges: false,
             },
             consequent_expr: alternate,
         };
         Ok(self.exprs.add(TypedExpr::Match(TypedMatchExpr {
-            initial_let_statements: vec![],
+            initial_let_statements: eco_vec![],
             result_type: overall_type,
-            arms: vec![cons_arm, alt_arm],
+            arms: eco_vec![cons_arm, alt_arm],
             span: if_expr.span,
         })))
     }
@@ -7683,7 +7664,7 @@ impl TypedModule {
     ) -> TyperResult<MatchingCondition> {
         let mut all_patterns: SmallVec<[TypedPattern; 1]> = smallvec![];
         let mut allow_bindings: bool = true;
-        let mut instrs: Vec<MatchingConditionInstr> = Vec::new();
+        let mut instrs: EcoVec<MatchingConditionInstr> = EcoVec::new();
         self.handle_matching_condition_rec(
             condition,
             &mut allow_bindings,
@@ -7762,7 +7743,7 @@ impl TypedModule {
         parsed_expr_id: ParsedExprId,
         allow_bindings: &mut bool,
         all_patterns: &mut SmallVec<[TypedPattern; 1]>,
-        instrs: &mut Vec<MatchingConditionInstr>,
+        instrs: &mut EcoVec<MatchingConditionInstr>,
         ctx: EvalExprContext,
     ) -> TyperResult<()> {
         debug!("hmirec {allow_bindings}: {}", self.ast.expr_id_to_string(parsed_expr_id));
@@ -7848,27 +7829,24 @@ impl TypedModule {
             unreachable!()
         };
 
-        // TODO(comptime): Just a hack to get string equality working until we have a full-fledged
-        //                 interpreter going for comptime, which would just actually call the
-        //                 equals impl
-        if ctx.is_static {
-            if binary_op.op_kind == BinaryOpKind::Equals {
-                let lhs = self.eval_expr(binary_op.lhs, ctx.with_no_expected_type())?;
-                let lhs_type = self.exprs.get(lhs).get_type();
-                let rhs = self.eval_expr(binary_op.rhs, ctx.with_expected_type(Some(lhs_type)))?;
-                let rhs_type = self.exprs.get(rhs).get_type();
-                if let Err(msg) = self.check_types(lhs_type, rhs_type, ctx.scope_id) {
-                    return failf!(binary_op.span, "comptime equals type mismatch: {msg}");
-                }
-                return Ok(self.exprs.add(TypedExpr::BinaryOp(BinaryOp {
-                    kind: BinaryOpKind::Equals,
-                    ty: BOOL_TYPE_ID,
-                    lhs,
-                    rhs,
-                    span: binary_op.span,
-                })));
-            }
-        }
+        // if ctx.is_static {
+        //     if binary_op.op_kind == BinaryOpKind::Equals {
+        //         let lhs = self.eval_expr(binary_op.lhs, ctx.with_no_expected_type())?;
+        //         let lhs_type = self.exprs.get(lhs).get_type();
+        //         let rhs = self.eval_expr(binary_op.rhs, ctx.with_expected_type(Some(lhs_type)))?;
+        //         let rhs_type = self.exprs.get(rhs).get_type();
+        //         if let Err(msg) = self.check_types(lhs_type, rhs_type, ctx.scope_id) {
+        //             return failf!(binary_op.span, "comptime equals type mismatch: {msg}");
+        //         }
+        //         return Ok(self.exprs.add(TypedExpr::BinaryOp(BinaryOp {
+        //             kind: BinaryOpKind::Equals,
+        //             ty: BOOL_TYPE_ID,
+        //             lhs,
+        //             rhs,
+        //             span: binary_op.span,
+        //         })));
+        //     }
+        // }
 
         // Special cases: Equality, OptionalElse, and Pipe
         match binary_op.op_kind {
@@ -8803,7 +8781,6 @@ impl TypedModule {
                 );
             };
             let variant_type_id = variant.my_type_id;
-            let variant_name = variant.name;
             let variant_index = variant.index;
             let resulting_type_id = if is_reference {
                 self.types.add_reference_type(variant_type_id)
@@ -8814,7 +8791,6 @@ impl TypedModule {
                 if is_reference { self.synth_dereference(base_expr) } else { base_expr };
             let condition = self.exprs.add(TypedExpr::EnumIsVariant(TypedEnumIsVariantExpr {
                 enum_expr: base_expr_dereferenced,
-                variant_name,
                 variant_index,
                 span,
             }));
@@ -9645,8 +9621,8 @@ impl TypedModule {
             .zip(type_args.iter())
             .map(|(param, arg)| TypeSubstitutionPair { from: param.type_id, to: arg.type_id })
             .collect();
-        if !original_function.function_params.is_empty() {
-            for function_type_param in original_function.function_params.clone().iter() {
+        if !original_function.function_type_params.is_empty() {
+            for function_type_param in original_function.function_type_params.clone().iter() {
                 let (corresponding_arg, corresponding_value_param) =
                     args_and_params.get(function_type_param.value_param_index as usize);
                 debug!(
@@ -10163,11 +10139,11 @@ impl TypedModule {
         let generic_function = self.get_function(generic_function_id);
         let generic_function_type_id = generic_function.type_id;
         let mut subst_pairs: SmallVec<[TypeSubstitutionPair; 8]> = SmallVec::with_capacity(
-            generic_function.function_params.len() + generic_function.type_params.len(),
+            generic_function.function_type_params.len() + generic_function.type_params.len(),
         );
 
         for (function_type_param, function_type_arg) in
-            generic_function.function_params.iter().zip(function_type_arguments.iter())
+            generic_function.function_type_params.iter().zip(function_type_arguments.iter())
         {
             // What if we use substitution?
             subst_pairs.push(TypeSubstitutionPair {
@@ -10233,11 +10209,11 @@ impl TypedModule {
 
         let generic_function_type_id = generic_function.type_id;
         let mut subst_pairs: SmallVec<[TypeSubstitutionPair; 8]> = SmallVec::with_capacity(
-            generic_function.function_params.len() + generic_function.type_params.len(),
+            generic_function.function_type_params.len() + generic_function.type_params.len(),
         );
 
         for (function_type_param, function_type_arg) in
-            generic_function.function_params.iter().zip(function_type_arguments.iter())
+            generic_function.function_type_params.iter().zip(function_type_arguments.iter())
         {
             // What if we use substitution?
             subst_pairs.push(TypeSubstitutionPair {
@@ -10273,7 +10249,7 @@ impl TypedModule {
             let _ = self.scopes.add_type(spec_fn_scope, nt.name, nt.type_id);
         }
 
-        let param_variables: Vec<VariableId> = specialized_function_type
+        let param_variables: EcoVec<VariableId> = specialized_function_type
             .physical_params
             .iter()
             .zip(generic_function_param_variables.iter())
@@ -10320,7 +10296,7 @@ impl TypedModule {
             // Must be empty for correctness; a specialized function has no type parameters!
             type_params: smallvec![],
             // Must be empty for correctness; a specialized function has no function type parameters!
-            function_params: smallvec![],
+            function_type_params: smallvec![],
             body_block: None,
             intrinsic_type: generic_function.intrinsic_type,
             linkage: generic_function.linkage,
@@ -10608,7 +10584,7 @@ impl TypedModule {
         if block.stmts.is_empty() {
             return failf!(block.span, "Blocks must contain at least one statement or expression",);
         }
-        let mut statements: Vec<TypedStmtId> = Vec::with_capacity(block.stmts.len());
+        let mut statements: EcoVec<TypedStmtId> = EcoVec::with_capacity(block.stmts.len());
         let mut last_expr_type: TypeId = UNIT_TYPE_ID;
         let mut last_stmt_is_divergent = false;
         for (index, stmt) in block.stmts.iter().enumerate() {
@@ -10715,6 +10691,20 @@ impl TypedModule {
                     "alignOf" => Some(IntrinsicFunction::AlignOf),
                     _ => None,
                 },
+                Some("sys") => match fn_name_str {
+                    "exit" => Some(IntrinsicFunction::Exit),
+                    _ => None,
+                },
+                Some("mem") => match fn_name_str {
+                    "alloc" => Some(IntrinsicFunction::Allocate),
+                    "allocZeroed" => Some(IntrinsicFunction::AllocateZeroed),
+                    "realloc" => Some(IntrinsicFunction::Reallocate),
+                    "free" => Some(IntrinsicFunction::Free),
+                    "copy" => Some(IntrinsicFunction::MemCopy),
+                    "set" => Some(IntrinsicFunction::MemSet),
+                    "equals" => Some(IntrinsicFunction::MemEquals),
+                    _ => None,
+                },
                 Some("types") => match fn_name_str {
                     "typeId" => Some(IntrinsicFunction::TypeId),
                     _ => None,
@@ -10732,6 +10722,10 @@ impl TypedModule {
                 Some("char") => None,
                 Some("Pointer") => match fn_name_str {
                     "refAtIndex" => Some(IntrinsicFunction::PointerIndex),
+                    _ => None,
+                },
+                Some("k1") => match fn_name_str {
+                    "emitCompilerMessage" => Some(IntrinsicFunction::EmitCompilerMessage),
                     _ => None,
                 },
                 Some("Bits") => match fn_name_str {
@@ -10829,7 +10823,6 @@ impl TypedModule {
         };
         Ok(self.exprs.add(TypedExpr::EnumConstructor(TypedEnumConstructor {
             type_id: output_type,
-            variant_name,
             variant_index,
             payload,
             span,
@@ -11137,11 +11130,12 @@ impl TypedModule {
         // TODO(perf): clone of ParsedFunction
         let parsed_function = self.ast.get_function(parsed_function_id).clone();
         if let Some(condition_expr) = parsed_function.condition {
-            let condition_value = self.eval_comptime_parsed_expr(
+            let condition_value = self.execute_static_expr(
                 condition_expr,
                 Some(BOOL_TYPE_ID),
                 parent_scope_id,
                 None,
+                false,
             )?;
             let StaticValue::Boolean(condition_value, _) = self.static_values.get(condition_value)
             else {
@@ -11271,7 +11265,7 @@ impl TypedModule {
 
         // Process parameters
         let mut param_types: Vec<FnParamType> = Vec::with_capacity(parsed_function_params.len());
-        let mut param_variables = Vec::with_capacity(parsed_function_params.len());
+        let mut param_variables = EcoVec::with_capacity(parsed_function_params.len());
         for (idx, fn_param) in
             parsed_function_context_params.iter().chain(parsed_function_params.iter()).enumerate()
         {
@@ -11496,7 +11490,7 @@ impl TypedModule {
             scope: fn_scope_id,
             param_variables,
             type_params,
-            function_params,
+            function_type_params: function_params,
             body_block: None,
             intrinsic_type,
             linkage: parsed_function_linkage,
@@ -11541,8 +11535,11 @@ impl TypedModule {
         Ok(Some(function_id))
     }
 
-    fn eval_function_body(&mut self, declaration_id: FunctionId) -> TyperResult<()> {
+    pub fn eval_function_body(&mut self, declaration_id: FunctionId) -> TyperResult<()> {
         let function = self.get_function(declaration_id);
+        if function.body_block.is_some() {
+            return Ok(());
+        }
         let is_debug = function.compiler_debug;
         if is_debug {
             self.push_debug_level();
@@ -12060,7 +12057,7 @@ impl TypedModule {
         Ok(())
     }
 
-    fn eval_definition(&mut self, def: ParsedId, scope_id: ScopeId) {
+    fn eval_definition_body_phase(&mut self, def: ParsedId, scope_id: ScopeId) {
         match def {
             ParsedId::Use(parsed_use_id) => {
                 if let Err(e) = self.eval_use_definition(scope_id, parsed_use_id) {
@@ -12072,8 +12069,10 @@ impl TypedModule {
                     self.push_error(e);
                 };
             }
-            ParsedId::Constant(_const_val) => {
-                // Nothing to do in this phase for a const
+            ParsedId::Global(global_id) => {
+                if let Err(e) = self.eval_global_body(global_id, scope_id) {
+                    self.push_error(e)
+                };
             }
             ParsedId::Function(parsed_function_id) => {
                 let function_declaration_id = self
@@ -12227,7 +12226,7 @@ impl TypedModule {
         let namespace_id = *self.namespace_ast_mappings.get(&ast_namespace.id).unwrap();
         let ns_scope_id = self.namespaces.get(namespace_id).scope_id;
         for defn in &ast_namespace.definitions {
-            self.eval_definition(*defn, ns_scope_id);
+            self.eval_definition_body_phase(*defn, ns_scope_id);
         }
         Ok(namespace_id)
     }
@@ -12244,8 +12243,9 @@ impl TypedModule {
                 self.eval_namespace_declaration_phase(namespace_id)?;
                 Ok(())
             }
-            ParsedId::Constant(constant_id) => {
-                let _variable_id: VariableId = self.eval_global(constant_id, scope_id)?;
+            ParsedId::Global(constant_id) => {
+                let _variable_id: VariableId =
+                    self.eval_global_declaration_phase(constant_id, scope_id)?;
                 Ok(())
             }
             ParsedId::Function(parsed_function_id) => {
@@ -12506,7 +12506,7 @@ impl TypedModule {
         // Everything else evaluation phase
         eprintln!(">> Phase 5 evaluate rest of definitions (functions, constants, abilities)");
         for &parsed_definition_id in self.ast.get_root_namespace().definitions.clone().iter() {
-            self.eval_definition(parsed_definition_id, root_scope_id);
+            self.eval_definition_body_phase(parsed_definition_id, root_scope_id);
         }
         let unresolved_uses: Vec<_> =
             self.use_statuses.iter().filter(|use_status| !use_status.1.is_resolved()).collect();
@@ -12778,7 +12778,7 @@ impl TypedModule {
         let cons_arm = TypedMatchArm {
             condition: MatchingCondition {
                 patterns,
-                instrs: vec![MatchingConditionInstr::Cond { value: condition }],
+                instrs: eco_vec![MatchingConditionInstr::Cond { value: condition }],
                 binding_eligible: true,
                 diverges: condition_diverges,
             },
@@ -12787,16 +12787,16 @@ impl TypedModule {
         let alt_arm = TypedMatchArm {
             condition: MatchingCondition {
                 patterns: smallvec![],
-                instrs: vec![],
+                instrs: eco_vec![],
                 binding_eligible: true,
                 diverges: false,
             },
             consequent_expr: alternate,
         };
         self.exprs.add(TypedExpr::Match(TypedMatchExpr {
-            initial_let_statements: vec![],
+            initial_let_statements: eco_vec![],
             result_type,
-            arms: vec![cons_arm, alt_arm],
+            arms: eco_vec![cons_arm, alt_arm],
             span,
         }))
     }
@@ -12818,7 +12818,6 @@ impl TypedModule {
 
         let id = self.exprs.add(TypedExpr::EnumConstructor(TypedEnumConstructor {
             type_id: some_variant.enum_type_id,
-            variant_name: some_variant.name,
             variant_index: some_variant.index,
             span,
             payload: Some(expr_id),
@@ -12836,7 +12835,6 @@ impl TypedModule {
             .unwrap();
         self.exprs.add(TypedExpr::EnumConstructor(TypedEnumConstructor {
             type_id: none_variant.enum_type_id,
-            variant_name: none_variant.name,
             variant_index: none_variant.index,
             span,
             payload: None,
@@ -12873,7 +12871,12 @@ impl TypedModule {
     fn synth_block(&mut self, parent_scope: ScopeId, span: SpanId) -> TypedBlock {
         let block_scope_id =
             self.scopes.add_child_scope(parent_scope, ScopeType::LexicalBlock, None, None);
-        TypedBlock { expr_type: UNIT_TYPE_ID, statements: vec![], scope_id: block_scope_id, span }
+        TypedBlock {
+            expr_type: UNIT_TYPE_ID,
+            statements: eco_vec![],
+            scope_id: block_scope_id,
+            span,
+        }
     }
 
     /// Creates a non-mutable, mangled, non-referencing variable defn.
