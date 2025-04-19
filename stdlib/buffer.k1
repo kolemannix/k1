@@ -110,7 +110,8 @@ ns Buffer {
       return(empty[T]())
     };
     if start >= self.len or start < 0 {
-      crash("slice start index out of bounds: \{start}")
+      let len = self.len;
+      crash("slice start index out of bounds: \{start}. length is: \{len}")
     };
     let end = if end > self.len self.len else end;
     let newLen = end - start;

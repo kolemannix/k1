@@ -6,8 +6,8 @@ use std::{
 };
 
 use ahash::HashMapExt;
-use colored::Colorize;
 use fxhash::FxHashMap;
+use itertools::Itertools;
 use log::debug;
 use smallvec::{smallvec, SmallVec};
 
@@ -45,6 +45,7 @@ pub struct Vm {
     /// the same VM, currently we create one per static execution
     globals: FxHashMap<TypedGlobalId, Value>,
     static_space: StackFrame,
+    stack_space: Box<[u8; 1048576]>,
     call_stack: VecDeque<StackFrame>,
     eval_depth: AtomicU64,
     eval_span: SpanId,
@@ -52,13 +53,21 @@ pub struct Vm {
 
 impl Vm {
     pub fn make() -> Self {
+        // TODO(vm): Enforce upper bound so we don't overwrite; maybe we should just be using
+        //           a borrowed rust slice for each frame, that seems nice actually
         // TODO(vm): Re-use this memory, we really want zero-allocation VM invocations for very
         //           simple expressions
+        let static_space: Box<[u8; 8192]> = Box::new([0; 8192]);
+        let static_space = Box::leak(static_space);
+
+        let stack_space: Box<[u8; 1048576]> = Box::new([0; 1048576]);
+
         Self {
             globals: FxHashMap::new(),
             // TODO(vm): Re-use this memory, we really want zero-allocation
             // VM invocations for simple expressions
-            static_space: StackFrame::make("static".to_string()),
+            static_space: StackFrame::make("static".to_string(), static_space.as_ptr()),
+            stack_space,
             call_stack: VecDeque::with_capacity(8),
             eval_depth: AtomicU64::new(0),
             eval_span: SpanId::NONE,
@@ -66,7 +75,11 @@ impl Vm {
     }
 
     fn push_new_frame(&mut self, name: String) -> &mut StackFrame {
-        let frame = StackFrame::make(name);
+        let base_ptr = match self.call_stack.back() {
+            None => self.stack_space.as_ptr(),
+            Some(frame) => frame.cursor,
+        };
+        let frame = StackFrame::make(name, base_ptr);
         self.push_frame(frame)
     }
 
@@ -110,14 +123,7 @@ impl Vm {
         let w = &mut s;
         let frame = &self.call_stack[frame_index];
         writeln!(w, "Frame:  {}", frame.debug_name).unwrap();
-        writeln!(
-            w,
-            "Base :  {:?} - {:?} ({})",
-            frame.buffer.as_ptr(),
-            frame.buffer.as_ptr_range().end,
-            frame.current_offset_bytes()
-        )
-        .unwrap();
+        writeln!(w, "Base :  {:?} ({})", frame.base_ptr, frame.current_offset_bytes()).unwrap();
         writeln!(w, "Locals").unwrap();
         let locals = frame.locals.clone();
         let _debug_frame = self.push_new_frame("DEBUG_DUMP".to_string());
@@ -150,6 +156,7 @@ impl Vm {
 pub enum VmResult {
     Value(Value),
     Break(Value),
+    Return(Value),
     Exit(i32),
 }
 
@@ -160,6 +167,7 @@ impl VmResult {
         match self {
             VmResult::Value(_) => false,
             VmResult::Break(_) => true,
+            VmResult::Return(_) => true,
             VmResult::Exit(_) => true,
         }
     }
@@ -168,6 +176,7 @@ impl VmResult {
         match self {
             VmResult::Value(_) => false,
             VmResult::Break(_) => false,
+            VmResult::Return(_) => false,
             VmResult::Exit(_) => true,
         }
     }
@@ -221,7 +230,7 @@ impl Value {
         }
     }
 
-    pub fn ptr_if_not_immediate(&self) -> Option<*const u8> {
+    pub fn as_agg(&self) -> Option<*const u8> {
         match self {
             Value::Agg { ptr, .. } => Some(*ptr),
             _ => None,
@@ -350,6 +359,12 @@ pub fn execute_single_expr(m: &mut TypedModule, expr: TypedExprId) -> TyperResul
     let v = match execute_expr(&mut vm, m, expr)? {
         VmResult::Value(value) => Ok(value),
         VmResult::Exit(code) => failf!(span, "Static execution exited with code: {code}"),
+        VmResult::Return(value) => {
+            todo!(
+                "Return result from top-level expression. This might become the norm: {:?}",
+                value
+            )
+        }
         VmResult::Break(_) => unreachable!("Break result from top-level expression"),
     }?;
     Ok((vm, v))
@@ -360,6 +375,7 @@ macro_rules! return_exit {
         match $result {
             VmResult::Value(v) => v,
             VmResult::Break(_) => panic!("Expected Value but got Break"),
+            VmResult::Return(_) => return Ok($result),
             VmResult::Exit(_) => return Ok($result),
         }
     }};
@@ -373,18 +389,17 @@ macro_rules! execute_expr_return_exit {
             VmResult::Break(_) => {
                 Err(errf!($m.exprs.get($expr).get_span(), "Expected Value but got Break"))
             }
+            VmResult::Return(_) => return Ok(result),
             VmResult::Exit(_) => return Ok(result),
         }
     }};
 }
 
 fn execute_expr(vm: &mut Vm, m: &mut TypedModule, expr: TypedExprId) -> TyperResult<VmResult> {
-    log::set_max_level(log::LevelFilter::Debug);
     vm.eval_depth.fetch_add(1, Ordering::Relaxed);
     let prev = vm.eval_span;
     vm.eval_span = m.exprs.get(expr).get_span();
     let mut vm = scopeguard::guard(vm, |vm| {
-        log::set_max_level(log::LevelFilter::Info);
         vm.eval_depth.fetch_sub(1, Ordering::Relaxed);
         vm.eval_span = prev;
     });
@@ -401,29 +416,9 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedModule, expr: TypedExprId) -> TyperRes
         TypedExpr::Integer(typed_integer_expr) => Ok(Value::Int(typed_integer_expr.value).into()),
         TypedExpr::Float(typed_float_expr) => Ok(Value::Float(typed_float_expr.value).into()),
         TypedExpr::String(s, _) => {
-            // This needs to result in a string struct
-            let string_struct = m.types.get(STRING_TYPE_ID).expect_struct();
-            let char_buffer_type_id = string_struct.fields[0].type_id;
-
-            let len: Value = Value::Int(TypedIntValue::U64(s.len() as u64));
-
-            // Just point right at the TypedExpr's string; this is OK
-            // since we should never mutate TypedExprs
-            let base_ptr: *const u8 = s.as_ptr();
-            let char_data: Value = Value::Reference { type_id: CHAR_TYPE_ID, ptr: base_ptr };
-
             let frame = vm.current_frame_mut();
-            let char_buffer_addr =
-                frame.push_struct_values(&m.types, char_buffer_type_id, &[len, char_data]);
-            // String is just a wrapper around char_buffer
-            let string_addr = char_buffer_addr;
-            debug_assert_eq!(
-                m.types.get_layout(STRING_TYPE_ID),
-                m.types.get_layout(char_buffer_type_id)
-            );
-
-            let string_struct = Value::Agg { type_id: STRING_TYPE_ID, ptr: string_addr };
-            Ok(string_struct.into())
+            let string_value = rust_str_to_value(frame, m, s);
+            Ok(string_value.into())
         }
         TypedExpr::Struct(s) => {
             let mut values: SmallVec<[Value; 8]> = SmallVec::with_capacity(s.fields.len());
@@ -617,7 +612,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedModule, expr: TypedExprId) -> TyperRes
                 match body_result {
                     VmResult::Value(_) => continue,
                     VmResult::Break(_) => break VmResult::UNIT,
-                    VmResult::Exit(code) => break VmResult::Exit(code),
+                    VmResult::Return(_) | VmResult::Exit(_) => break body_result,
                 }
             };
             Ok(result)
@@ -626,11 +621,11 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedModule, expr: TypedExprId) -> TyperRes
             let body_block = loop_expr.body_block;
             let result = loop {
                 let block_result = execute_block(vm, m, body_block)?;
-                eprintln!("loop iter {} {:?}", m.expr_to_string(body_block).blue(), block_result);
+                //eprintln!("loop iter {} {:?}", m.expr_to_string(body_block).blue(), block_result);
                 match block_result {
                     VmResult::Value(_) => continue,
                     VmResult::Break(value) => break VmResult::Value(value),
-                    VmResult::Exit(code) => break VmResult::Exit(code),
+                    VmResult::Return(_) | VmResult::Exit(_) => break block_result,
                 }
             };
             Ok(result)
@@ -638,6 +633,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedModule, expr: TypedExprId) -> TyperRes
         TypedExpr::Break(b) => match execute_expr(vm, m, b.value)? {
             VmResult::Value(value) => Ok(VmResult::Break(value)),
             VmResult::Break(_) => unreachable!("cant break inside a break"),
+            VmResult::Return(_) => unreachable!("cant return inside a break"),
             res @ VmResult::Exit(_) => Ok(res),
         },
         TypedExpr::EnumConstructor(e) => {
@@ -830,6 +826,7 @@ pub fn static_value_to_vm_value(
     }
 }
 
+#[inline]
 pub fn execute_block(
     vm: &mut Vm,
     m: &mut TypedModule,
@@ -868,7 +865,7 @@ pub fn execute_stmt(
                     m.types.get(reference_type).expect_reference().inner_type,
                     value_type
                 );
-                let value_ptr = match v.ptr_if_not_immediate() {
+                let value_ptr = match v.as_agg() {
                     None => vm.current_frame_mut().push_value(&m.types, v),
                     Some(ptr) => ptr,
                 };
@@ -949,7 +946,10 @@ fn execute_call(vm: &mut Vm, m: &mut TypedModule, call_id: TypedExprId) -> Typer
         // let m_ptr = m as *const TypedModule;
         // let mut_m = m_ptr.cast_mut();
         // unsafe { (*mut_m).eval_function_body(function_id)? }
+        let prev_level = log::max_level();
+        log::set_max_level(log::LevelFilter::Info);
         m.eval_function_body(function_id)?;
+        log::set_max_level(prev_level);
     }
 
     let function = m.get_function(function_id);
@@ -958,10 +958,27 @@ fn execute_call(vm: &mut Vm, m: &mut TypedModule, call_id: TypedExprId) -> Typer
     };
 
     if vm.call_stack.len() == 128 {
+        eprintln!("{}", vm.call_stack.iter().map(|f| f.debug_name.clone()).join("\n"));
         return failf!(span, "VM call stack overflow");
     }
 
-    let mut callee_frame = StackFrame::make(m.name_of(function.name).to_string());
+    let return_type_id = m.types.get(function.type_id).expect_function().return_type;
+    let aggregate_return_layout = if m.types.is_aggregate_repr(return_type_id) {
+        Some(m.types.get_layout(return_type_id).unwrap())
+    } else {
+        None
+    };
+    let agg_ret_ptr = if let Some(return_type_layout) = aggregate_return_layout {
+        let caller_frame = vm.current_frame_mut();
+        let ptr = caller_frame.push_layout_uninit(return_type_layout);
+        Some(ptr)
+    } else {
+        None
+    };
+
+    let mut callee_locals = FxHashMap::new();
+    // nocommit: Get rid of the name allocation
+    let name = m.name_of(function.name).to_string();
 
     // Arguments!
     let param_variables = function.param_variables.clone();
@@ -970,8 +987,10 @@ fn execute_call(vm: &mut Vm, m: &mut TypedModule, call_id: TypedExprId) -> Typer
         let value = execute_expr_return_exit!(vm, m, *arg)?;
 
         // But bind the variables in the _callee_ frame
-        callee_frame.locals.insert(*param, value);
+        callee_locals.insert(*param, value);
     }
+    let mut callee_frame = StackFrame::make(name, vm.current_frame().cursor);
+    callee_frame.locals = callee_locals;
 
     // Push the callee frame for body execution
     //eprintln!("******************** NEW FRAME {} **********************", m.name_of(function.name));
@@ -983,22 +1002,25 @@ fn execute_call(vm: &mut Vm, m: &mut TypedModule, call_id: TypedExprId) -> Typer
     if body_result.is_exit() {
         return Ok(body_result);
     }
+    // WHAT ABOUT VmResult::Return
     let result_value = return_exit!(body_result);
 
-    // If result_value lives in the stack frame we're about to nuke
-    // It just to be copied onto the current stack frame...
-    //
-    // If immediate, just 'Copy' the rust value; otherwise memcpy the data to the new stack
+    // If immediate, just 'Copy' the rust value; otherwise memcpy the data to the old stack's
+    // 'sret' reserved space
     let callee_frame = vm.pop_frame();
-    let updated_value = match result_value.ptr_if_not_immediate() {
+    let updated_value = match result_value.as_agg() {
         None => result_value,
-        Some(_ptr) => {
-            let caller_frame = vm.current_frame_mut();
-            let stored_result = caller_frame.push_value(&m.types, result_value);
-            let updated_value = match result_value {
-                Value::Agg { type_id, .. } => Value::Agg { type_id, ptr: stored_result },
-                _ => unreachable!(),
-            };
+        Some(result_ptr) => {
+            let dst_ptr = agg_ret_ptr.unwrap().cast_mut();
+            // TODO(vm): When we evaluate a 'Return' expr, we could store results directly
+            //           into here, as long as we can look up this ptr somehow, and avoid
+            //           the full copy
+            let layout = aggregate_return_layout.unwrap();
+            unsafe {
+                copy_aggregate(dst_ptr, result_ptr, layout.size_bytes());
+            }
+            let updated_value =
+                Value::Agg { type_id: result_value.get_type(), ptr: dst_ptr.cast_const() };
             updated_value
         }
     };
@@ -1145,7 +1167,8 @@ fn execute_intrinsic(
         IntrinsicFunction::EmitCompilerMessage => {
             let message_arg = execute_expr_return_exit!(vm, m, args[1])?;
             let message = value_to_rust_str(vm, m, message_arg);
-            eprintln!("A MESSAGE FROM THE OTHER SIDE {}", message);
+            let (source, line) = m.get_span_location(vm.eval_span);
+            eprintln!("[MSG {}:{}] {}", source.filename, line.line_number(), message);
             Ok(VmResult::UNIT)
         }
     }
@@ -1223,16 +1246,22 @@ pub fn store_value(types: &Types, dst: *mut u8, value: Value) -> usize {
             }
             Value::Agg { type_id, ptr } => {
                 let struct_layout = types.get_layout(type_id).unwrap();
-                let count = struct_layout.size_bytes();
+                let size_bytes = struct_layout.size_bytes();
                 // Equivalent of memcpy
-                dst.copy_from_nonoverlapping(ptr.cast(), count);
-                count
+                debug!("copy_from {:?} -> {:?} {size_bytes}", dst, ptr);
+                copy_aggregate(dst, ptr, size_bytes);
+                size_bytes
             }
         }
     }
 }
 
-pub fn load_value_to_stack(
+#[inline]
+unsafe fn copy_aggregate(dst: *mut u8, src: *const u8, size: usize) {
+    dst.copy_from_nonoverlapping(src, size)
+}
+
+pub fn load_value_copying_aggs(
     vm: &mut Vm,
     m: &TypedModule,
     type_id: TypeId,
@@ -1247,7 +1276,7 @@ pub fn load_value(
     m: &TypedModule,
     type_id: TypeId,
     ptr: *const u8,
-    copy: bool,
+    copy_aggregates: bool,
 ) -> TyperResult<Value> {
     let span = vm.eval_span;
     if ptr.is_null() {
@@ -1322,7 +1351,7 @@ pub fn load_value(
             Ok(Value::Reference { type_id, ptr: loaded_ptr })
         }
         Type::Struct(_struct_type) => {
-            if copy {
+            if copy_aggregates {
                 let layout = m.types.get_layout(type_id).unwrap();
                 let frame = vm.current_frame_mut();
                 let frame_ptr = frame.push_raw_copy_layout(layout, ptr);
@@ -1473,7 +1502,7 @@ pub fn gep_enum_payload(
 nz_u32_id!(FrameIndex);
 
 pub struct StackFrame {
-    buffer: Box<[u8; 8192]>,
+    base_ptr: *const u8,
     pub cursor: *const u8,
     pub locals: FxHashMap<VariableId, Value>,
     debug_name: String,
@@ -1481,23 +1510,18 @@ pub struct StackFrame {
 
 impl Drop for StackFrame {
     fn drop(&mut self) {
-        debug!("DROP StackFrame {} Base {:?}", self.debug_name, self.buffer.as_ptr())
+        debug!("DROP StackFrame {} Base {:?}", self.debug_name, self.base_ptr)
     }
 }
 
 impl StackFrame {
-    pub fn make(name: String) -> Self {
-        let buffer = Box::new([0; 8192]);
-        let cursor = buffer.as_ptr();
-        Self { buffer, cursor, locals: FxHashMap::new(), debug_name: name }
-    }
-
-    pub fn base_ptr(&self) -> *const u8 {
-        self.buffer.as_ptr()
+    pub fn make(name: String, base_ptr: *const u8) -> Self {
+        let cursor = base_ptr;
+        Self { base_ptr, cursor, locals: FxHashMap::new(), debug_name: name }
     }
 
     pub fn current_offset_bytes(&self) -> usize {
-        self.cursor.addr() - self.base_ptr().addr()
+        self.cursor.addr() - self.base_ptr.addr()
     }
 
     fn cursor_mut(&self) -> *mut u8 {
@@ -1556,6 +1580,7 @@ impl StackFrame {
     }
 
     // We may not want to align, in case we're pushing this value as part of a packed struct.
+    // Or if our caller already aligned us
     pub fn push_value_no_align(&mut self, types: &Types, value: Value) -> *const u8 {
         let dst: *mut u8 = self.cursor_mut();
 
@@ -1568,18 +1593,23 @@ impl StackFrame {
         self.cursor = unsafe { self.cursor.byte_add(count) };
     }
 
-    pub fn push_n<T: Copy>(&mut self, value: T) -> *const u8 {
-        self.align_to_bytes(align_of::<T>());
-        let c = self.cursor;
+    pub fn push_t<T: Copy>(&mut self, value: T) -> *const u8 {
+        let c = self.push_layout_uninit(Layout::from_rust_type::<T>());
         unsafe {
-            (self.cursor_mut() as *mut T).write(value);
-            self.advance_cursor(size_of::<T>());
-            c
+            (c as *mut T).write(value);
         }
+        c
+    }
+
+    pub fn push_layout_uninit(&mut self, layout: Layout) -> *const u8 {
+        self.align_to_bytes(layout.align_bytes());
+        let c = self.cursor;
+        self.advance_cursor(layout.size_bytes());
+        c
     }
 
     pub fn push_usize(&mut self, value: usize) -> *const u8 {
-        self.push_n(value)
+        self.push_t(value)
     }
 
     pub fn push_ptr_uninit(&mut self) -> *mut u8 {
@@ -1607,7 +1637,7 @@ impl StackFrame {
     }
 
     pub fn to_bytes(&self) -> &[u8] {
-        &self.buffer[0..self.current_offset_bytes()]
+        unsafe { std::slice::from_raw_parts(self.base_ptr, self.current_offset_bytes()) }
     }
 }
 
@@ -1679,6 +1709,8 @@ pub fn value_to_rust_str(vm: &mut Vm, m: &TypedModule, value: Value) -> Box<str>
 pub fn rust_str_to_value(dst_frame: &mut StackFrame, m: &TypedModule, s: &str) -> Value {
     let char_buffer_type_id = m.types.get(STRING_TYPE_ID).expect_struct().fields[0].type_id;
     let char_reference_type_id = m.types.get(char_buffer_type_id).expect_struct().fields[1].type_id;
+    debug_assert_eq!(m.types.get_layout(STRING_TYPE_ID), m.types.get_layout(char_buffer_type_id));
+
     let len_usize = s.len();
     let data_ptr = s.as_ptr();
     let string_stack_addr = dst_frame.push_struct_values(

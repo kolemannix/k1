@@ -44,10 +44,10 @@ mod stack_frame_tests {
     fn test_push_byte() {
         let mut vm = test_vm();
         let frame = vm.current_frame_mut();
-        let ptr = frame.push_n(42u8);
+        let ptr = frame.push_t(42u8);
         assert_eq!(frame.current_offset_bytes(), 1);
         assert_eq!(frame.to_bytes()[0], 42);
-        assert_eq!(ptr.addr(), frame.base_ptr().addr());
+        assert_eq!(ptr.addr(), frame.base_ptr.addr());
     }
 
     #[test]
@@ -162,15 +162,15 @@ mod stack_frame_tests {
             struct_type,
             &[Value::Int(TypedIntValue::U8(42)), Value::Int(TypedIntValue::U32(1337))],
         );
-        let struct_ptr_offset = struct_ptr.addr() - frame.base_ptr().addr();
+        let struct_ptr_offset = struct_ptr.addr() - frame.base_ptr.addr();
         assert_eq!(struct_ptr_offset, 4); // since this struct's alignment is 4
         let v1_locn = gep_struct_field(&types, struct_type, struct_ptr, 0).0;
-        let v1_offset = v1_locn.addr() - frame.base_ptr().addr();
+        let v1_offset = v1_locn.addr() - frame.base_ptr.addr();
         assert_eq!(v1_offset, 4);
         assert_eq!(unsafe { (v1_locn as *const u8).read() }, 42);
 
         let v2_locn = gep_struct_field(&types, struct_type, struct_ptr, 1).0;
-        let v2_offset = v2_locn.addr() - frame.base_ptr().addr();
+        let v2_offset = v2_locn.addr() - frame.base_ptr.addr();
         assert_eq!(v2_offset, 8);
         assert_eq!(unsafe { (v2_locn as *const u32).read() }, 1337);
     }

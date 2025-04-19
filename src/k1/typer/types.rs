@@ -1360,4 +1360,28 @@ impl Types {
             _ => self.defn_infos.get(type_id).map(|info| info.ast_id),
         }
     }
+
+    pub fn is_aggregate_repr(&self, type_id: TypeId) -> bool {
+        match self.get(type_id) {
+            Type::Struct(_) => true,
+            Type::Enum(_) => true,
+            Type::EnumVariant(_) => true,
+            Type::Lambda(_) => true,
+            Type::LambdaObject(_) => true,
+            Type::Unit => false,
+            Type::Char => false,
+            Type::Integer(_) => false,
+            Type::Float(_) => false,
+            Type::Bool => false,
+            Type::Pointer => false,
+            Type::Reference(_) => false,
+            Type::Never => false,
+            Type::Function(_) => false,
+            Type::Generic(_) => false,
+            Type::TypeParameter(_) => false,
+            Type::FunctionTypeParameter(_) => false,
+            Type::InferenceHole(_) => false,
+            Type::RecursiveReference(_) => false,
+        }
+    }
 }
