@@ -1,0 +1,20 @@
+deftype MyResult[T, E] = either Ok(T), Err(E)
+ns MyResult {
+  fn unwrap[T, E](self: MyResult[T, E]): T {
+    self.asOk().!.value
+  }
+  fn show[T: Show, E: Show](self: MyResult[T, E]): string { 
+    switch self {
+      .Ok(v) -> { "Ok: \{v}\n" },
+      .Err(e) -> { "Error: \{e}\n" }
+    }
+  }
+}
+
+deftype E = either(u8) A, B, C
+
+fn main(): i32 {
+  let r: MyResult[int, string] = .Ok(42);
+  r.show();
+  0
+}

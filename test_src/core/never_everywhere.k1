@@ -14,12 +14,23 @@ fn getEnumPayload(): i64 {
 }
 fn castTarget(): i64 { crash(""): i64 }
 fn inReturn(): never { 
-  return(crash("what"))
+  #static assertEquals(
+    testCompile(
+      return(crash("what"))
+    ),
+    .Some("return is dead since returned expression is divergent; remove the return")
+  );
+
+  sys/exit(0)
 }
 fn inBreak(): never { 
-  loop {
-    break(crash("inBreak"))
-  }
+  #static assertEquals(
+    testCompile(
+      loop { break(crash("inBreak")) }
+    ),
+    .Some("break is dead since returned expression is divergent; consider removing the 'break'")
+  );
+  sys/exit(0)
 }
 
 fn test(): unit {
