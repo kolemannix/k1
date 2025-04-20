@@ -125,6 +125,7 @@ pub struct TypeParameter {
     pub scope_id: ScopeId,
     pub span: SpanId,
 }
+impl_copy_if_small!(12, TypeParameter);
 
 #[derive(Debug, Clone)]
 pub struct FunctionTypeParameter {

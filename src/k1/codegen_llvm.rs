@@ -1357,7 +1357,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         }
         let size_info = codegened_type.size_info();
         if let Some(k1_size) = self.module.types.layouts.get(type_id) {
-            if size_info.size_bits != k1_size.size_bits {
+            if size_info.size_bits as usize != k1_size.stride_bits() {
                 eprintln!("Size of '{}'", self.module.type_id_to_string(type_id));
                 eprintln!("DIFFERENT SIZES {} {}", size_info.size_bits, k1_size.size_bits)
             }
@@ -2039,7 +2039,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             TypedExpr::Cast(cast) => self.codegen_cast(cast),
             TypedExpr::Return(ret) => {
-                let return_value = self.codegen_expr_basic_value(ret.value)?;
+                let return_result = self.codegen_expr(ret.value)?;
+                let LlvmValue::BasicValue(return_value) = return_result else {
+                    return Ok(return_result);
+                };
                 let codegened_function = self.get_insert_function();
                 match codegened_function.sret_pointer {
                     None => {

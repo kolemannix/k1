@@ -360,9 +360,10 @@ pub fn execute_single_expr(m: &mut TypedModule, expr: TypedExprId) -> TyperResul
         VmResult::Value(value) => Ok(value),
         VmResult::Exit(code) => failf!(span, "Static execution exited with code: {code}"),
         VmResult::Return(value) => {
-            todo!(
-                "Return result from top-level expression. This might become the norm: {:?}",
-                value
+            return failf!(
+                span,
+                "Return result from top-level expression. This might become the norm: {}",
+                m.expr_to_string(expr)
             )
         }
         VmResult::Break(_) => unreachable!("Break result from top-level expression"),
@@ -760,14 +761,17 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedModule, expr: TypedExprId) -> TyperRes
             }
         }
         TypedExpr::Return(typed_return) => {
-            //
-            // nocommit: Early returns don't work
-            let value = execute_expr(vm, m, typed_return.value)?;
-            // Unlike in the LLVM backend, we return the value of the return
-            // expr here; we have the luxury of not worrying about 'instructions'
-            // vs 'values'; execute_block here in the VM just always uses the value
-            // of the last expr
-            Ok(value)
+            let span = typed_return.span;
+            match execute_expr(vm, m, typed_return.value)? {
+                VmResult::Value(value) => Ok(VmResult::Return(value)),
+                // Return inside return happens when the user
+                // has an early return in a terminating block
+                // We wrap the entire terminating block in a Return
+                // so that its, well, terminated.
+                VmResult::Return(value) => Ok(VmResult::Return(value)),
+                VmResult::Break(_) => failf!(span, "Break inside return"),
+                VmResult::Exit(code) => Ok(VmResult::Exit(code)),
+            }
         }
         TypedExpr::Lambda(_) => todo!(),
         TypedExpr::FunctionReference(_) => todo!(),
@@ -998,12 +1002,15 @@ fn execute_call(vm: &mut Vm, m: &mut TypedModule, call_id: TypedExprId) -> Typer
     vm.push_frame(callee_frame);
     //eprintln!("{}", vm.dump_current_frame(m));
 
-    let body_result = execute_expr(vm, m, body_block_expr)?;
-    if body_result.is_exit() {
-        return Ok(body_result);
-    }
-    // WHAT ABOUT VmResult::Return
-    let result_value = return_exit!(body_result);
+    let result_value = match execute_expr(vm, m, body_block_expr)? {
+        VmResult::Value(value) => value,
+        VmResult::Return(value) => value,
+        exit @ VmResult::Exit(_) => {
+            vm.pop_frame();
+            return Ok(exit);
+        }
+        VmResult::Break(_) => unreachable!("got break from function"),
+    };
 
     // If immediate, just 'Copy' the rust value; otherwise memcpy the data to the old stack's
     // 'sret' reserved space
