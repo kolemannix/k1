@@ -453,6 +453,17 @@ impl HasTypeId for &TypedAbilityParam {
     }
 }
 
+impl HasName for TypedAbilityParam {
+    fn name(&self) -> Identifier {
+        self.name
+    }
+}
+impl HasTypeId for TypedAbilityParam {
+    fn type_id(&self) -> TypeId {
+        self.type_variable_id
+    }
+}
+
 impl TypedAbilityParam {
     fn is_ability_side_param(&self) -> bool {
         !self.is_impl_param
@@ -3818,7 +3829,12 @@ impl TypedModule {
         if let Type::TypeParameter(tvar) = self.types.get(type_id) {
             match self.scopes.find_type(scope_id, tvar.name) {
                 None => {
-                    debug!("Unresolved type variable. {}", self.name_of(tvar.name));
+                    eprintln!("{}", self.scope_id_to_string(scope_id));
+                    eprintln!(
+                        "*********************\n\nUnresolved type variable. {}",
+                        self.name_of(tvar.name)
+                    );
+                    //panic!("Unresolved type variable. {}", self.name_of(tvar.name));
                     type_id
                 }
                 Some((resolved, _)) => {
@@ -4288,12 +4304,20 @@ impl TypedModule {
         value: TypeParameter,
         ability_impls: SmallVec<[TypedAbilitySignature; 4]>,
     ) -> TypeId {
-        let span = value.span;
-        let constrained_impl_scope =
-            self.scopes.add_child_scope(value.scope_id, ScopeType::AbilityImpl, None, None);
         let type_id = self.types.add_anon(Type::TypeParameter(value));
-        for ability_sig in ability_impls.into_iter() {
-            self.add_constrained_ability_impl(type_id, ability_sig, constrained_impl_scope, span);
+        if !ability_impls.is_empty() {
+            for ability_sig in ability_impls.into_iter() {
+                let constrained_impl_scope =
+                    self.scopes.add_child_scope(value.scope_id, ScopeType::AbilityImpl, None, None);
+                let _ =
+                    self.scopes.get_scope_mut(constrained_impl_scope).add_type(value.name, type_id);
+                self.add_constrained_ability_impl(
+                    type_id,
+                    ability_sig,
+                    constrained_impl_scope,
+                    value.span,
+                );
+            }
         }
         type_id
     }
@@ -4475,8 +4499,13 @@ impl TypedModule {
         //};
         let blanket_impl_type_params = self_.get_ability_impl(blanket_impl_id).type_params.clone();
         let root_scope_id = self_.scopes.get_root_scope_id();
-        let solutions =
-            self_.infer_types(&blanket_impl_type_params, &args_and_params, span, root_scope_id);
+        let solutions = self_.infer_types(
+            &blanket_impl_type_params,
+            &blanket_impl_type_params,
+            &args_and_params,
+            span,
+            root_scope_id,
+        );
         let solutions = match solutions {
             Err(e) => {
                 debug!("Could not solve all blanket impl params: {e}");
@@ -8285,6 +8314,12 @@ impl TypedModule {
         let return_value =
             self.eval_expr(parsed_expr, ctx.with_expected_type(Some(expected_return_type)))?;
         let return_value_type = self.exprs.get(return_value).get_type();
+        if return_value_type == NEVER_TYPE_ID {
+            return failf!(
+                span,
+                "return is dead since returned expression is divergent; remove the return"
+            );
+        }
         if let Err(msg) = self.check_types(expected_return_type, return_value_type, ctx.scope_id) {
             return failf!(span, "Returned wrong type: {msg}");
         }
@@ -8304,7 +8339,8 @@ impl TypedModule {
                     return failf!(fn_call.span, "return(...) must have exactly one argument",);
                 }
                 let arg = self.ast.p_call_args.get_first(fn_call.args).unwrap();
-                Ok(Some(self.eval_return(arg.value, ctx, call_span)?))
+                let return_result = self.eval_return(arg.value, ctx, call_span)?;
+                Ok(Some(return_result))
             }
             "break" => {
                 if fn_call.args.len() > 1 {
@@ -8339,6 +8375,12 @@ impl TypedModule {
                     }
                 };
                 let actual_break_type = self.exprs.get(break_value).get_type();
+                if actual_break_type == NEVER_TYPE_ID {
+                    return failf!(
+                        call_span,
+                        "break is dead since returned expression is divergent; consider removing the 'break'"
+                    );
+                }
 
                 // If we have an expected type already,
                 // - check it
@@ -8636,7 +8678,21 @@ impl TypedModule {
         //
         // Future TODO: Make sure we handle context params in ability functions correctly,
         // Probably by: skipping them if not passed explicitly, and utilizing them if passed explicitly
-        let type_params: SmallVec<[SimpleNamedType; 8]> = {
+
+        let all_type_params: SmallVec<[SimpleNamedType; 8]> = {
+            let mut type_params = SmallVec::with_capacity(ability_params.len() + 1);
+            type_params.push(SimpleNamedType {
+                name: self.ast.idents.builtins.self_cap,
+                type_id: ability_self_type_id,
+            });
+            type_params.extend(
+                ability_params
+                    .iter()
+                    .map(|p| SimpleNamedType { name: p.name, type_id: p.type_variable_id }),
+            );
+            type_params
+        };
+        let must_solve_type_params: SmallVec<[SimpleNamedType; 8]> = {
             let mut type_params = SmallVec::with_capacity(ability_params.len() + 1);
             type_params.push(SimpleNamedType {
                 name: self.ast.idents.builtins.self_cap,
@@ -8679,8 +8735,15 @@ impl TypedModule {
             args_and_params.push(arg_and_param);
         }
 
-        let solved_params =
-            self.infer_types(&type_params, &args_and_params, fn_call.span, ctx.scope_id)?;
+        debug!("all ability params: {}", self.pretty_print_named_types(&all_type_params, ", "));
+        debug!("to solve: {}", self.pretty_print_named_types(&must_solve_type_params, ", "));
+        let solved_params = self.infer_types(
+            &all_type_params,
+            &must_solve_type_params,
+            &args_and_params,
+            fn_call.span,
+            ctx.scope_id,
+        )?;
 
         let (solved_self, solved_rest) = solved_params.split_at(1);
         let solved_self = solved_self.first().unwrap();
@@ -8982,8 +9045,13 @@ impl TypedModule {
                             generic_variant_payload,
                             false,
                         ));
-                        let solutions =
-                            self.infer_types(&g_params, &args_and_params, span, ctx.scope_id)?;
+                        let solutions = self.infer_types(
+                            &g_params,
+                            &g_params,
+                            &args_and_params,
+                            span,
+                            ctx.scope_id,
+                        )?;
                         solutions
                     }
                 }
@@ -9375,7 +9443,15 @@ impl TypedModule {
     /// error message if we wait to report the mismatch until the end
     fn infer_types(
         &mut self,
-        unsolved_type_params: &[impl NamedType],
+        all_type_params: &[impl NamedType],
+        // Sometimes, we don't need to solve everything. An example is when resolving
+        // an ability call, we don't need to solve for the impl-side params, as they will come
+        // once we look up the impl.
+        //
+        // But in this case we still instantiate all the params as type holes, so that we can
+        // detect inconsistencies, and so that we don't have to bind type variables to themselves
+        // as a separate step
+        must_solve_params: &[impl NamedType],
         inference_pairs: &[(TypeOrParsedExpr, TypeId, bool)],
         span: SpanId,
         scope_id: ScopeId,
@@ -9403,12 +9479,12 @@ impl TypedModule {
         // Stores the mapping from the function (or type's) type parameters to their
         // corresponding instantiated type holes for this inference context
         let mut instantiation_set: SmallVec<[TypeSubstitutionPair; 8]> =
-            SmallVec::with_capacity(unsolved_type_params.len());
+            SmallVec::with_capacity(all_type_params.len());
         let mut solutions: SmallVec<[SimpleNamedType; 8]> =
-            SmallVec::with_capacity(unsolved_type_params.len());
+            SmallVec::with_capacity(must_solve_params.len());
 
         let inference_var_count = self_.inference_context.vars.len();
-        for (idx, param) in unsolved_type_params.iter().enumerate() {
+        for (idx, param) in all_type_params.iter().enumerate() {
             let hole_index = idx + inference_var_count;
 
             let type_hole = self_
@@ -9477,7 +9553,9 @@ impl TypedModule {
         let final_substitutions = &self_.inference_context.substitutions;
 
         let mut unsolved_params: Vec<&dyn NamedType> = vec![];
-        for (param_to_hole, param) in instantiation_set.iter().zip(unsolved_type_params.iter()) {
+        for param in must_solve_params {
+            let param_to_hole =
+                instantiation_set.iter().find(|p| p.from == param.type_id()).unwrap();
             let corresponding_hole = param_to_hole.to;
             if let Some(solution) = final_substitutions.get(&corresponding_hole) {
                 solutions.push(SimpleNamedType { name: param.name(), type_id: *solution });
@@ -9570,7 +9648,13 @@ impl TypedModule {
             }));
 
             let solutions = self
-                .infer_types(&generic_type_params, &inference_pairs, fn_call.span, ctx.scope_id)
+                .infer_types(
+                    &generic_type_params,
+                    &generic_type_params,
+                    &inference_pairs,
+                    fn_call.span,
+                    ctx.scope_id,
+                )
                 .map_err(|e| {
                     errf!(
                         e.span,
@@ -13162,11 +13246,19 @@ impl TypedModule {
     }
 
     pub fn write_location(&self, w: &mut impl std::io::Write, span: SpanId) -> std::io::Result<()> {
+        parse::write_error_location(w, &self.ast.spans, &self.ast.sources, span, ErrorLevel::Info)
+    }
+
+    pub fn write_location_error(
+        &self,
+        w: &mut impl std::io::Write,
+        span: SpanId,
+    ) -> std::io::Result<()> {
         parse::write_error_location(w, &self.ast.spans, &self.ast.sources, span, ErrorLevel::Error)
     }
 
     pub fn ice_with_span(&self, msg: impl AsRef<str>, span: SpanId) -> ! {
-        self.write_location(&mut std::io::stderr(), span).unwrap();
+        self.write_location_error(&mut std::io::stderr(), span).unwrap();
         panic!("Internal Compiler Error: {}", msg.as_ref())
     }
 
