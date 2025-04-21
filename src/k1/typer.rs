@@ -207,7 +207,7 @@ enum TypeOrParsedExpr {
 #[derive(Debug, Clone)]
 pub struct CompileTimeStruct {
     pub type_id: TypeId,
-    pub fields: Vec<StaticValueId>,
+    pub fields: EcoVec<StaticValueId>,
     pub span: SpanId,
 }
 
@@ -441,6 +441,7 @@ pub struct TypedAbilityParam {
     #[allow(unused)]
     span: SpanId,
 }
+impl_copy_if_small!(16, TypedAbilityParam);
 
 impl HasName for &TypedAbilityParam {
     fn name(&self) -> Identifier {
@@ -2301,6 +2302,9 @@ pub struct TypedModule {
     // Buffers that we prefer to re-use to avoid thousands of allocations
     // Clear them after you use them, but leave the memory allocated
     buffers: TypedModuleBuffers,
+
+    // Can execute code statically
+    pub vm: vm::Vm,
 }
 
 impl TypedModule {
@@ -2383,6 +2387,13 @@ impl TypedModule {
 
     pub fn name_of(&self, id: Identifier) -> &str {
         self.ast.idents.get_name(id)
+    }
+
+    pub fn name_of_opt(&self, id: Option<Identifier>) -> &str {
+        match id {
+            Some(id) => self.ast.idents.get_name(id),
+            None => "<no name>",
+        }
     }
 
     pub fn get_identifier(&self, name: &str) -> Option<Identifier> {
@@ -3829,13 +3840,12 @@ impl TypedModule {
         if let Type::TypeParameter(tvar) = self.types.get(type_id) {
             match self.scopes.find_type(scope_id, tvar.name) {
                 None => {
-                    eprintln!("{}", self.scope_id_to_string(scope_id));
                     eprintln!(
-                        "*********************\n\nUnresolved type variable. {}",
+                        "*********************\n\nUnresolved type parameter. {}",
                         self.name_of(tvar.name)
                     );
-                    //panic!("Unresolved type variable. {}", self.name_of(tvar.name));
-                    type_id
+                    eprintln!("{}", self.scope_id_to_string(scope_id));
+                    panic!("Unresolved type parameter. {}", self.name_of(tvar.name));
                 }
                 Some((resolved, _)) => {
                     if resolved == type_id {
@@ -4604,8 +4614,12 @@ impl TypedModule {
                 panic!("uh oh")
             };
         }
-        let concrete_ability_id =
-            self.specialize_ability(generic_parent, substituted_ability_args, blanket_impl.span)?;
+        let concrete_ability_id = self.specialize_ability(
+            generic_parent,
+            substituted_ability_args,
+            blanket_impl.span,
+            blanket_impl.scope_id,
+        )?;
 
         let mut substituted_impl_arguments =
             SmallVec::with_capacity(blanket_impl.impl_arguments.len());
@@ -5882,7 +5896,7 @@ impl TypedModule {
                                 span,
                             })
                         }
-                        Type::EnumVariant(enum_variant) => {
+                        Type::EnumVariant(_enum_variant) => {
                             todo!("enum variant vm -> static")
                         }
                         _ => unreachable!("aggregate should be struct or enum"),
@@ -8769,7 +8783,7 @@ impl TypedModule {
             )
         })?;
         let actual_ability_id =
-            self.specialize_ability(ability_id, solved_rest.to_vec(), call_span)?;
+            self.specialize_ability(ability_id, solved_rest.to_vec(), call_span, ctx.scope_id)?;
 
         // 2) Find impl based on solved Self + Params
         // 2a) Generate auto impl if that's what we find, cache it at low prio
@@ -11041,6 +11055,7 @@ impl TypedModule {
         ability_id: AbilityId,
         arguments: Vec<SimpleNamedType>,
         span: SpanId,
+        parent_scope_id: ScopeId,
     ) -> TyperResult<AbilityId> {
         let ability = self.get_ability(ability_id);
         if ability.kind.is_concrete() {
@@ -11048,7 +11063,6 @@ impl TypedModule {
         }
         let generic_ability_id = ability_id;
         let ability_ast_id = ability.ast_id;
-        let ability_scope_id = ability.scope_id;
         let ability_name = ability.name;
         let ability_parameters = ability.parameters.clone();
         let ability_namespace_id = ability.namespace_id;
@@ -11083,12 +11097,18 @@ impl TypedModule {
             self.ast.idents.intern(s)
         };
 
-        let specialized_ability_scope = self.scopes.add_sibling_scope(
-            ability_scope_id,
+        let specialized_ability_scope = self.scopes.add_child_scope(
+            parent_scope_id,
             ScopeType::AbilityDefn,
             None,
             Some(specialized_ability_name),
         );
+        //let specialized_ability_scope = self.scopes.add_sibling_scope(
+        //    ability_scope_id,
+        //    ScopeType::AbilityDefn,
+        //    None,
+        //    Some(specialized_ability_name),
+        //);
 
         for (arg_type, param) in arguments.iter().zip(ability_parameters.iter()) {
             let _ = self.scopes.add_type(specialized_ability_scope, param.name, arg_type.type_id);
@@ -11204,8 +11224,12 @@ impl TypedModule {
     ) -> TyperResult<TypedAbilitySignature> {
         let (base_ability_id, ability_arguments, impl_arguments) =
             self.check_ability_expr(ability_expr, scope_id, skip_impl_check)?;
-        let new_ability_id =
-            self.specialize_ability(base_ability_id, ability_arguments, ability_expr.span)?;
+        let new_ability_id = self.specialize_ability(
+            base_ability_id,
+            ability_arguments,
+            ability_expr.span,
+            scope_id,
+        )?;
         Ok(TypedAbilitySignature { ability_id: new_ability_id, impl_arguments })
     }
 
