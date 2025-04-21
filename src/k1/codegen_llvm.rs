@@ -3520,7 +3520,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         //     }
         // }
 
-        // nocommit hack to guarantee extern declarations
+        // Hack to guarantee presence of required extern declarations
         for (id, function) in self.module.function_iter() {
             if let TyperLinkage::External(Some(ident)) = function.linkage {
                 match self.module.name_of(ident) {
