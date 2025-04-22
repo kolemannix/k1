@@ -1865,8 +1865,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 } else {
                     Err(CodegenError {
                         message: format!(
-                            "No pointer or global found for variable {}",
-                            self.module.expr_to_string(expr_id)
+                            "No pointer or global found for variable {} id={}",
+                            self.module.expr_to_string(expr_id),
+                            ir_var.variable_id
                         ),
                         span,
                     })
@@ -3378,7 +3379,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 &function_type.physical_params[i - sret_offset]
             };
             let ty = self.codegen_type(typed_param.type_id)?;
-            let param_name = self.module.ast.idents.get_name(typed_param.name);
+            let param_name = self.module.name_of(typed_param.name);
             trace!(
                 "Got LLVM type for variable {}: {} (from {})",
                 param_name,
@@ -3386,6 +3387,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.module.type_id_to_string(typed_param.type_id)
             );
             param.set_name(param_name);
+            // nocommit: get debug info for args back? hah
             //self.set_debug_location_from_span(typed_param.span);
             //let pointer = self.builder.build_alloca(ty.rich_value_type(), param_name).unwrap();
             //let arg_debug_type = self.get_debug_type(typed_param.type_id)?;
@@ -3407,6 +3409,13 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             //    self.set_debug_location_from_span(typed_param.span),
             //    store_instr,
             //);
+            debug!(
+                "Inserting variable {i} for function {} id={} {} id={}",
+                self.module.name_of(function.name),
+                function_id.0,
+                param_name,
+                variable_id
+            );
             self.variable_to_value.insert(
                 variable_id,
                 VariableValue::Direct { value: param },

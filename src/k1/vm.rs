@@ -1,6 +1,5 @@
 use std::{
     cmp::min,
-    collections::VecDeque,
     num::NonZeroU32,
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -16,7 +15,7 @@ use crate::{
     errf, failf,
     lex::SpanId,
     nz_u32_id,
-    parse::NumericWidth,
+    parse::{Identifier, NumericWidth},
     typer::{
         self, make_error, make_fail_span,
         types::{
@@ -35,6 +34,12 @@ mod vm_test;
 
 mod binop;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StackSelection {
+    StaticSpace,
+    CallStackCurrent,
+}
+
 pub struct Vm {
     /// Code may update globals; so we store this VM run's 'copy' of that global's
     /// value here; these are (currently) reset on each invocation of #static code
@@ -44,101 +49,113 @@ pub struct Vm {
     /// If we need to preserve them for the entire compilation, we may need to re-use
     /// the same VM, currently we create one per static execution
     globals: FxHashMap<TypedGlobalId, Value>,
-    static_space: StackFrame,
-    stack_space: Box<[u8; 1048576]>,
-    call_stack: VecDeque<StackFrame>,
+    static_stack: Stack,
+    stack: Stack,
     eval_depth: AtomicU64,
     eval_span: SpanId,
 }
 
 impl Vm {
-    pub fn make() -> Self {
-        // TODO(vm): Enforce upper bound so we don't overwrite; maybe we should just be using
-        //           a borrowed rust slice for each frame, that seems nice actually
-        // TODO(vm): Re-use this memory, we really want zero-allocation VM invocations for very
-        //           simple expressions
-        let static_space: Box<[u8; 8192]> = Box::new([0; 8192]);
-        let static_space = Box::leak(static_space);
-
-        let stack_space: Box<[u8; 1048576]> = Box::new([0; 1048576]);
-
-        Self {
+    pub fn zero() -> Vm {
+        Vm {
             globals: FxHashMap::new(),
-            // TODO(vm): Re-use this memory, we really want zero-allocation
-            // VM invocations for simple expressions
-            static_space: StackFrame::make("static".to_string(), static_space.as_ptr()),
-            stack_space,
-            call_stack: VecDeque::with_capacity(8),
+            static_stack: Stack::make(0),
+            stack: Stack::make(0),
             eval_depth: AtomicU64::new(0),
             eval_span: SpanId::NONE,
         }
     }
+    pub fn reset(&mut self) {
+        // Note that we don't de-allocate anything
+        self.static_stack.reset();
+        self.stack.reset();
+        self.globals.clear();
 
-    fn push_new_frame(&mut self, name: String) -> &mut StackFrame {
-        let base_ptr = match self.call_stack.back() {
-            None => self.stack_space.as_ptr(),
-            Some(frame) => frame.cursor,
-        };
-        let frame = StackFrame::make(name, base_ptr);
-        self.push_frame(frame)
+        self.eval_depth.store(0, Ordering::Relaxed);
+        self.eval_span = SpanId::NONE;
     }
 
-    fn push_frame(&mut self, frame: StackFrame) -> &mut StackFrame {
-        self.call_stack.push_back(frame);
-        self.call_stack.back_mut().unwrap()
-    }
-
-    fn pop_frame(&mut self) -> StackFrame {
-        let f = self.call_stack.pop_back().unwrap();
-        f
-    }
-
-    fn current_frame(&self) -> &StackFrame {
-        self.call_stack.back().unwrap()
-    }
-
-    fn current_frame_mut(&mut self) -> &mut StackFrame {
-        let f = self.call_stack.back_mut().unwrap();
-        f
+    pub fn make(stack_size_bytes: usize, static_size_bytes: usize) -> Self {
+        let stack = Stack::make(stack_size_bytes);
+        let static_stack = Stack::make(static_size_bytes);
+        Self {
+            globals: FxHashMap::with_capacity(8192),
+            static_stack,
+            stack,
+            eval_depth: AtomicU64::new(0),
+            eval_span: SpanId::NONE,
+        }
     }
 
     pub fn dump(&mut self, m: &TypedModule) -> String {
         use std::fmt::Write;
         let mut s = String::new();
         let w = &mut s;
-        for index in 0..self.call_stack.len() {
+        for index in 0..self.stack.frames.len() {
             let frame_string = self.dump_frame(m, index);
             write!(w, "{}", frame_string).unwrap();
         }
         s
     }
 
+    pub fn get_destination_stack(&mut self, dst_stack: StackSelection) -> &mut Stack {
+        match dst_stack {
+            StackSelection::StaticSpace => &mut self.static_stack,
+            StackSelection::CallStackCurrent => &mut self.stack,
+        }
+    }
+
+    pub fn insert_local(&mut self, frame_index: u32, variable_id: VariableId, value: Value) {
+        let frame_locals = self.stack.locals.entry(frame_index).or_default();
+        frame_locals.insert(variable_id, value);
+    }
+
+    pub fn insert_current_local(&mut self, variable_id: VariableId, value: Value) {
+        self.insert_local(self.stack.current_frame(), variable_id, value)
+    }
+
+    pub fn get_current_local(&self, variable_id: VariableId) -> Option<Value> {
+        self.get_local(self.stack.current_frame(), variable_id)
+    }
+
+    pub fn get_local(&self, frame_index: u32, variable_id: VariableId) -> Option<Value> {
+        let frame_locals = self.stack.locals.get(&frame_index).unwrap();
+        frame_locals.get(&variable_id).copied()
+    }
+
     pub fn dump_current_frame(&mut self, m: &TypedModule) -> String {
-        self.dump_frame(m, self.call_stack.len() - 1)
+        self.dump_frame(m, self.stack.frames.len() - 1)
     }
 
     pub fn dump_frame(&mut self, m: &TypedModule, frame_index: usize) -> String {
         use std::fmt::Write;
         let mut s = String::new();
         let w = &mut s;
-        let frame = &self.call_stack[frame_index];
-        writeln!(w, "Frame:  {}", frame.debug_name).unwrap();
-        writeln!(w, "Base :  {:?} ({})", frame.base_ptr, frame.current_offset_bytes()).unwrap();
+        let frame = self.stack.frames[frame_index];
+        writeln!(w, "Frame:  {}", m.name_of_opt(frame.debug_name)).unwrap();
+        writeln!(w, "Base :  {:?})", frame.base_ptr).unwrap();
         writeln!(w, "Locals").unwrap();
-        let locals = frame.locals.clone();
-        let _debug_frame = self.push_new_frame("DEBUG_DUMP".to_string());
-        for (k, v) in &locals {
-            let var = m.variables.get(*k);
+        let locals = self
+            .stack
+            .locals
+            .get(&(frame_index as u32))
+            .unwrap()
+            .iter()
+            .map(|p| (*p.0, *p.1))
+            .collect_vec();
+        let _debug_frame = self.stack.push_new_frame(None);
+        for (k, v) in locals.into_iter() {
+            let var = m.variables.get(k);
             let v_name = var.name;
             let hidden = var.user_hidden;
             if hidden {
                 continue;
             }
             write!(w, "  {}: {} = ", m.name_of(v_name), m.type_id_to_string(v.get_type())).unwrap();
-            render_debug_value(w, self, m, *v);
+            render_debug_value(w, self, m, v);
             writeln!(w).unwrap()
         }
-        self.pop_frame();
+        self.stack.pop_frame();
 
         //write!(w, "\nDATA\n").unwrap();
         //let frame = &self.call_stack[frame_index];
@@ -334,8 +351,10 @@ impl From<bool> for Value {
 
 const GLOBAL_ID_STATIC: TypedGlobalId = TypedGlobalId::from_nzu32(NonZeroU32::new(1).unwrap());
 
-pub fn execute_single_expr(m: &mut TypedModule, expr: TypedExprId) -> TyperResult<(Vm, Value)> {
-    let mut vm = Vm::make();
+pub fn execute_single_expr(m: &mut TypedModule, expr: TypedExprId) -> TyperResult<Value> {
+    // DO NOT RETURN EARLY FROM THIS FUNCTION
+    // without replacing the vm
+    let mut vm = std::mem::take(&mut m.vm).unwrap();
 
     // Tell the code we're about to execute that this is static
     // Useful for conditional compilation to branch and do what makes sense
@@ -354,21 +373,23 @@ pub fn execute_single_expr(m: &mut TypedModule, expr: TypedExprId) -> TyperResul
         vm.globals.insert(GLOBAL_ID_STATIC, Value::Bool(true));
     }
 
-    vm.push_new_frame(format!("single_expr_{}", expr));
+    vm.stack.push_new_frame(None);
     let span = m.exprs.get(expr).get_span();
-    let v = match execute_expr(&mut vm, m, expr)? {
-        VmResult::Value(value) => Ok(value),
-        VmResult::Exit(code) => failf!(span, "Static execution exited with code: {code}"),
-        VmResult::Return(value) => {
-            return failf!(
+    let v = match execute_expr(&mut vm, m, expr) {
+        Err(e) => Err(e),
+        Ok(VmResult::Value(value)) => Ok(value),
+        Ok(VmResult::Exit(code)) => failf!(span, "Static execution exited with code: {code}"),
+        Ok(VmResult::Return(_value)) => {
+            failf!(
                 span,
                 "Return result from top-level expression. This might become the norm: {}",
                 m.expr_to_string(expr)
             )
         }
-        VmResult::Break(_) => unreachable!("Break result from top-level expression"),
-    }?;
-    Ok((vm, v))
+        Ok(VmResult::Break(_)) => unreachable!("Break result from top-level expression"),
+    };
+    *m.vm = Some(vm);
+    v
 }
 
 macro_rules! return_exit {
@@ -417,8 +438,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedModule, expr: TypedExprId) -> TyperRes
         TypedExpr::Integer(typed_integer_expr) => Ok(Value::Int(typed_integer_expr.value).into()),
         TypedExpr::Float(typed_float_expr) => Ok(Value::Float(typed_float_expr.value).into()),
         TypedExpr::String(s, _) => {
-            let frame = vm.current_frame_mut();
-            let string_value = rust_str_to_value(frame, m, s);
+            let string_value = rust_str_to_value(vm, StackSelection::CallStackCurrent, m, s);
             Ok(string_value.into())
         }
         TypedExpr::Struct(s) => {
@@ -430,8 +450,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedModule, expr: TypedExprId) -> TyperRes
                 values.push(value);
             }
 
-            let frame = vm.current_frame_mut();
-            let struct_base = frame.push_struct_values(&m.types, s_type_id, &values);
+            let struct_base = vm.stack.push_struct_values(&m.types, s_type_id, &values);
             Ok(Value::Agg { type_id: s_type_id, ptr: struct_base }.into())
         }
         TypedExpr::StructFieldAccess(field_access) => {
@@ -482,12 +501,13 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedModule, expr: TypedExprId) -> TyperRes
                             );
                         };
                         let vm_value = static_value_to_vm_value(
-                            &mut vm.static_space,
+                            vm,
+                            StackSelection::StaticSpace,
                             m,
                             m.static_values.get(global_value),
                         )?;
                         let final_value = if global.is_referencing {
-                            let ptr = vm.static_space.push_ptr_uninit();
+                            let ptr = vm.static_stack.push_ptr_uninit();
                             store_value(&m.types, ptr, vm_value);
                             Value::Reference { type_id: global.ty, ptr }
                         } else {
@@ -499,8 +519,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedModule, expr: TypedExprId) -> TyperRes
                     }
                 }
             } else {
-                let frame = vm.current_frame();
-                let Some(v) = frame.locals.get(&v_id) else {
+                let Some(v) = vm.get_current_local(v_id) else {
                     eprintln!("{}", vm.dump(m));
                     return failf!(
                         variable_expr.span,
@@ -643,9 +662,8 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedModule, expr: TypedExprId) -> TyperRes
                 None => None,
                 Some(payload_expr) => Some(execute_expr_return_exit!(vm, m, payload_expr)?),
             };
-            let frame = vm.current_frame_mut();
             let enum_ptr =
-                frame.push_enum(&m.types, e.type_id, e.variant_index as usize, payload_value);
+                vm.stack.push_enum(&m.types, e.type_id, e.variant_index as usize, payload_value);
             Ok(Value::Agg { type_id: e.type_id, ptr: enum_ptr }.into())
         }
         // EnumIsVariant could actually go away in favor of just an == on the getTag + a type-level
@@ -779,8 +797,8 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedModule, expr: TypedExprId) -> TyperRes
         TypedExpr::PendingCapture(_) => todo!(),
         TypedExpr::StaticValue(value_id, _, _) => {
             let static_value = m.static_values.get(*value_id);
-            let dst_frame = vm.current_frame_mut();
-            let vm_value = static_value_to_vm_value(dst_frame, m, static_value)?;
+            let vm_value =
+                static_value_to_vm_value(vm, StackSelection::CallStackCurrent, m, static_value)?;
             Ok(vm_value.into())
         }
     };
@@ -789,7 +807,8 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedModule, expr: TypedExprId) -> TyperRes
 }
 
 pub fn static_value_to_vm_value(
-    dst_frame: &mut StackFrame,
+    vm: &mut Vm,
+    dst_stack: StackSelection,
     m: &TypedModule,
     static_value: &StaticValue,
 ) -> TyperResult<Value> {
@@ -800,7 +819,7 @@ pub fn static_value_to_vm_value(
         StaticValue::Integer(iv, _) => Ok(Value::Int(*iv)),
         StaticValue::Float(fv, _) => Ok(Value::Float(*fv)),
         StaticValue::String(box_str, _) => {
-            let value = rust_str_to_value(dst_frame, m, box_str);
+            let value = rust_str_to_value(vm, dst_stack, m, box_str);
             Ok(value)
         }
         StaticValue::NullPointer(_) => Ok(Value::Pointer(0)),
@@ -808,10 +827,14 @@ pub fn static_value_to_vm_value(
             let mut values: SmallVec<[Value; 8]> = smallvec![];
             for f in static_struct.fields.iter() {
                 let static_value = m.static_values.get(*f);
-                let value = static_value_to_vm_value(dst_frame, m, static_value)?;
+                let value = static_value_to_vm_value(vm, dst_stack, m, static_value)?;
                 values.push(value);
             }
-            let struct_ptr = dst_frame.push_struct_values(&m.types, static_struct.type_id, &values);
+            let struct_ptr = vm.get_destination_stack(dst_stack).push_struct_values(
+                &m.types,
+                static_struct.type_id,
+                &values,
+            );
             Ok(Value::Agg { type_id: static_struct.type_id, ptr: struct_ptr })
         }
         StaticValue::Enum(e) => {
@@ -819,12 +842,16 @@ pub fn static_value_to_vm_value(
                 None => None,
                 Some(static_value_id) => {
                     let static_value = m.static_values.get(static_value_id);
-                    let value = static_value_to_vm_value(dst_frame, m, static_value)?;
+                    let value = static_value_to_vm_value(vm, dst_stack, m, static_value)?;
                     Some(value)
                 }
             };
-            let enum_ptr =
-                dst_frame.push_enum(&m.types, e.type_id, e.variant_index as usize, payload_value);
+            let enum_ptr = vm.get_destination_stack(dst_stack).push_enum(
+                &m.types,
+                e.type_id,
+                e.variant_index as usize,
+                payload_value,
+            );
             Ok(Value::Agg { type_id: e.type_id, ptr: enum_ptr })
         }
     }
@@ -870,7 +897,7 @@ pub fn execute_stmt(
                     value_type
                 );
                 let value_ptr = match v.as_agg() {
-                    None => vm.current_frame_mut().push_value(&m.types, v),
+                    None => vm.stack.push_value(&m.types, v),
                     Some(ptr) => ptr,
                 };
                 Value::Reference { type_id: reference_type, ptr: value_ptr }
@@ -878,7 +905,7 @@ pub fn execute_stmt(
                 debug_assert_eq!(let_stmt.variable_type, v.get_type());
                 v
             };
-            vm.current_frame_mut().locals.insert(let_stmt.variable_id, to_store);
+            vm.insert_current_local(let_stmt.variable_id, to_store);
             Ok(VmResult::Value(Value::UNIT))
         }
         typer::TypedStmt::Assignment(assgn) => {
@@ -891,7 +918,7 @@ pub fn execute_stmt(
                     else {
                         m.ice("Value assignment lhs was not a variable", None)
                     };
-                    vm.current_frame_mut().locals.insert(destination_var.variable_id, v);
+                    vm.insert_current_local(destination_var.variable_id, v);
                     Ok(VmResult::Value(Value::UNIT))
                 }
                 typer::AssignmentKind::Reference => {
@@ -961,8 +988,11 @@ fn execute_call(vm: &mut Vm, m: &mut TypedModule, call_id: TypedExprId) -> Typer
         return failf!(span, "Cannot execute function {}: no body", m.name_of(function.name));
     };
 
-    if vm.call_stack.len() == 128 {
-        eprintln!("{}", vm.call_stack.iter().map(|f| f.debug_name.clone()).join("\n"));
+    if vm.stack.frames.len() == 128 {
+        eprintln!(
+            "{}",
+            vm.stack.frames.iter().map(|f| m.name_of_opt(f.debug_name).clone()).join("\n")
+        );
         return failf!(span, "VM call stack overflow");
     }
 
@@ -973,40 +1003,40 @@ fn execute_call(vm: &mut Vm, m: &mut TypedModule, call_id: TypedExprId) -> Typer
         None
     };
     let agg_ret_ptr = if let Some(return_type_layout) = aggregate_return_layout {
-        let caller_frame = vm.current_frame_mut();
-        let ptr = caller_frame.push_layout_uninit(return_type_layout);
+        let ptr = vm.stack.push_layout_uninit(return_type_layout);
         Some(ptr)
     } else {
         None
     };
 
-    let mut callee_locals = FxHashMap::new();
-    // nocommit: Get rid of the name allocation
-    let name = m.name_of(function.name).to_string();
+    let name = function.name;
 
     // Arguments!
     let param_variables = function.param_variables.clone();
-    for (param, arg) in param_variables.iter().zip(call_args.iter()) {
+    let mut param_values: SmallVec<[(VariableId, Value); 8]> = smallvec![];
+    for (variable_id, arg) in param_variables.iter().zip(call_args.iter()) {
         // Execute this in _caller_ frame so the data outlives the callee
         let value = execute_expr_return_exit!(vm, m, *arg)?;
 
-        // But bind the variables in the _callee_ frame
-        callee_locals.insert(*param, value);
+        param_values.push((*variable_id, value));
     }
-    let mut callee_frame = StackFrame::make(name, vm.current_frame().cursor);
-    callee_frame.locals = callee_locals;
+
+    // But bind the variables in the _callee_ frame
+    vm.stack.push_new_frame(Some(name));
+    for (variable_id, value) in param_values.into_iter() {
+        vm.insert_current_local(variable_id, value);
+    }
 
     // Push the callee frame for body execution
     //eprintln!("******************** NEW FRAME {} **********************", m.name_of(function.name));
     //eprintln!("{}", vm.dump_current_frame(m));
-    vm.push_frame(callee_frame);
     //eprintln!("{}", vm.dump_current_frame(m));
 
     let result_value = match execute_expr(vm, m, body_block_expr)? {
         VmResult::Value(value) => value,
         VmResult::Return(value) => value,
         exit @ VmResult::Exit(_) => {
-            vm.pop_frame();
+            vm.stack.pop_frame();
             return Ok(exit);
         }
         VmResult::Break(_) => unreachable!("got break from function"),
@@ -1014,11 +1044,11 @@ fn execute_call(vm: &mut Vm, m: &mut TypedModule, call_id: TypedExprId) -> Typer
 
     // If immediate, just 'Copy' the rust value; otherwise memcpy the data to the old stack's
     // 'sret' reserved space
-    let callee_frame = vm.pop_frame();
+    let callee_frame = vm.stack.pop_frame();
     let updated_value = match result_value.as_agg() {
         None => result_value,
         Some(result_ptr) => {
-            let dst_ptr = agg_ret_ptr.unwrap().cast_mut();
+            let dst_ptr = agg_ret_ptr.unwrap();
             // TODO(vm): When we evaluate a 'Return' expr, we could store results directly
             //           into here, as long as we can look up this ptr somehow, and avoid
             //           the full copy
@@ -1173,6 +1203,7 @@ fn execute_intrinsic(
         }
         IntrinsicFunction::EmitCompilerMessage => {
             let message_arg = execute_expr_return_exit!(vm, m, args[1])?;
+            eprintln!("msg arg is {:?}", message_arg);
             let message = value_to_rust_str(vm, m, message_arg);
             let (source, line) = m.get_span_location(vm.eval_span);
             eprintln!("[MSG {}:{}] {}", source.filename, line.line_number(), message);
@@ -1183,6 +1214,7 @@ fn execute_intrinsic(
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub fn store_value(types: &Types, dst: *mut u8, value: Value) -> usize {
+    //eprintln!("store value to = {:?}", dst);
     unsafe {
         match value {
             Value::Unit => {
@@ -1357,27 +1389,14 @@ pub fn load_value(
             let loaded_ptr = value as *const u8;
             Ok(Value::Reference { type_id, ptr: loaded_ptr })
         }
-        Type::Struct(_struct_type) => {
+        Type::Struct(_) | Type::Enum(_) | Type::EnumVariant(_) => {
             if copy_aggregates {
                 let layout = m.types.get_layout(type_id).unwrap();
-                let frame = vm.current_frame_mut();
-                let frame_ptr = frame.push_raw_copy_layout(layout, ptr);
+                let frame_ptr = vm.stack.push_raw_copy_layout(layout, ptr);
                 Ok(Value::Agg { type_id, ptr: frame_ptr })
             } else {
                 Ok(Value::Agg { type_id, ptr })
             }
-        }
-        Type::Enum(_) => {
-            let layout = m.types.get_layout(type_id).unwrap();
-            let frame = vm.current_frame_mut();
-            let frame_ptr = frame.push_raw_copy_layout(layout, ptr);
-            Ok(Value::Agg { type_id, ptr: frame_ptr })
-        }
-        Type::EnumVariant(ev) => {
-            let layout = m.types.get_layout(ev.enum_type_id).unwrap();
-            let frame = vm.current_frame_mut();
-            let frame_ptr = frame.push_raw_copy_layout(layout, ptr);
-            Ok(Value::Agg { type_id, ptr: frame_ptr })
         }
         Type::Never => unreachable!("Not a value type"),
         Type::Function(_) => unreachable!("Not a value type"),
@@ -1429,23 +1448,14 @@ fn build_enum(
     (start_dst, enum_layout)
 }
 
-fn build_struct(
-    dst: *mut u8,
-    types: &Types,
-    struct_type_id: TypeId,
-    members: &[Value],
-) -> (*const u8, Layout) {
+fn build_struct_unaligned(dst: *mut u8, types: &Types, struct_type_id: TypeId, members: &[Value]) {
     let struct_fields = &types.get(struct_type_id).expect_struct().fields;
-    let struct_layout = types.get_layout(struct_type_id).unwrap();
-
-    let start_dst = aligned_to_mut(dst, struct_layout.align_bytes());
 
     for (value, field_type) in members.iter().zip(struct_fields.iter()) {
         // Go to offset
-        let field_dst = unsafe { start_dst.byte_add(field_type.offset_bits as usize / 8) };
+        let field_dst = unsafe { dst.byte_add(field_type.offset_bits as usize / 8) };
         store_value(types, field_dst, *value);
     }
-    (start_dst.cast_const(), struct_layout)
 }
 
 pub fn offset_at_index(types: &Types, type_id: TypeId, index: usize) -> usize {
@@ -1508,36 +1518,118 @@ pub fn gep_enum_payload(
 
 nz_u32_id!(FrameIndex);
 
-pub struct StackFrame {
-    base_ptr: *const u8,
-    pub cursor: *const u8,
-    pub locals: FxHashMap<VariableId, Value>,
-    debug_name: String,
+pub struct Stack {
+    allocation: Box<[u8]>,
+    frames: Vec<StackFrame>,
+    locals: FxHashMap<u32, FxHashMap<VariableId, Value>>,
+    cursor: *const u8,
 }
 
-impl Drop for StackFrame {
-    fn drop(&mut self) {
-        debug!("DROP StackFrame {} Base {:?}", self.debug_name, self.base_ptr)
-    }
+#[derive(Debug, Clone, Copy)]
+pub struct StackFrame {
+    index: u32,
+    base_ptr: *const u8,
+    debug_name: Option<Identifier>,
 }
 
 impl StackFrame {
-    pub fn make(name: String, base_ptr: *const u8) -> Self {
-        let cursor = base_ptr;
-        Self { base_ptr, cursor, locals: FxHashMap::new(), debug_name: name }
+    pub fn make(index: u32, base_ptr: *const u8, debug_name: Option<Identifier>) -> StackFrame {
+        StackFrame { index, base_ptr, debug_name }
+    }
+}
+
+impl Stack {
+    pub fn make(size: usize) -> Stack {
+        eprintln!("make stack {size}");
+        let allocation: Box<[u8]> = vec![0; size].into();
+        let base_ptr = allocation.as_ptr();
+        let frames_cap = if size == 0 { 0 } else { 512 };
+        Self {
+            allocation,
+            frames: Vec::with_capacity(frames_cap),
+            locals: FxHashMap::with_capacity(frames_cap),
+            cursor: base_ptr,
+        }
     }
 
+    pub fn reset(&mut self) {
+        self.cursor = self.base_ptr();
+        self.allocation.fill(0);
+        self.frames.clear();
+    }
+
+    fn push_new_frame(&mut self, name: Option<Identifier>) -> StackFrame {
+        let index = self.frames.len() as u32;
+        // TODO: Should I go ahead and align stack bases to like 8 bytes?
+        let base_ptr = self.cursor;
+        let frame = StackFrame::make(index, base_ptr, name);
+        self.push_frame(frame)
+    }
+
+    fn push_frame(&mut self, frame: StackFrame) -> StackFrame {
+        self.frames.push(frame);
+        *self.frames.last().unwrap()
+    }
+
+    fn pop_frame(&mut self) -> StackFrame {
+        let f = self.frames.pop().unwrap();
+        self.locals.entry(f.index).or_default().clear();
+        self.cursor = f.base_ptr;
+        f
+    }
+
+    fn current_frame(&self) -> u32 {
+        self.frames.len() as u32 - 1
+    }
+
+    #[inline]
+    pub fn base_ptr(&self) -> *const u8 {
+        self.allocation.as_ptr()
+    }
+
+    #[inline]
+    pub fn base_addr(&self) -> usize {
+        self.base_ptr().addr()
+    }
+
+    #[inline]
+    pub fn end_ptr(&self) -> *const u8 {
+        self.allocation.as_ptr_range().end
+    }
+
+    #[inline]
     pub fn current_offset_bytes(&self) -> usize {
-        self.cursor.addr() - self.base_ptr.addr()
+        self.cursor.addr() - self.base_addr()
     }
 
+    #[inline]
     fn cursor_mut(&self) -> *mut u8 {
         self.cursor as *mut u8
+    }
+
+    #[inline]
+    fn check_bounds(&self, ptr: *const u8) {
+        if self.allocation.len() == 0 {
+            panic!("check_bounds on a stack with no allocation")
+        }
+        let ptr_addr = ptr.addr();
+        let base_addr = self.base_addr();
+        let end_addr = self.end_ptr().addr();
+        let oob = ptr_addr < base_addr || ptr_addr >= end_addr;
+        if oob {
+            panic!(
+                "Out of bounds access to stack frame: {} < {} < {}",
+                base_addr, ptr_addr, end_addr
+            );
+        }
     }
 
     pub fn push_slice(&mut self, slice: &[u8]) -> *const u8 {
         let slice_stack_ptr = self.cursor_mut();
         let slice_len = slice.len();
+        if cfg!(debug_assertions) {
+            self.check_bounds(unsafe { slice_stack_ptr.byte_add(slice_len) })
+        }
 
         unsafe {
             let dst_slice = std::slice::from_raw_parts_mut(slice_stack_ptr, slice_len);
@@ -1560,8 +1652,9 @@ impl StackFrame {
         struct_type_id: TypeId,
         members: &[Value],
     ) -> *const u8 {
-        let (struct_base, struct_layout) =
-            build_struct(self.cursor_mut(), types, struct_type_id, members);
+        let struct_layout = types.get_layout(struct_type_id).unwrap();
+        let struct_base = self.push_layout_uninit(struct_layout);
+        build_struct_unaligned(struct_base, types, struct_type_id, members);
         self.advance_cursor(struct_layout.size_bytes());
         struct_base
     }
@@ -1608,23 +1701,29 @@ impl StackFrame {
         c
     }
 
-    pub fn push_layout_uninit(&mut self, layout: Layout) -> *const u8 {
+    pub fn push_layout_uninit(&mut self, layout: Layout) -> *mut u8 {
+        if cfg!(debug_assertions) {
+            self.check_bounds(unsafe { self.cursor.byte_add(layout.size_bytes()) })
+        }
         self.align_to_bytes(layout.align_bytes());
-        let c = self.cursor;
+        let c = self.cursor_mut();
         self.advance_cursor(layout.size_bytes());
         c
     }
 
+    #[inline]
     pub fn push_usize(&mut self, value: usize) -> *const u8 {
         self.push_t(value)
     }
 
+    #[inline]
     pub fn push_ptr_uninit(&mut self) -> *mut u8 {
         self.push_usize(0).cast_mut()
     }
 
     /// Push a raw copy of `size_bytes` from `src_ptr` into the frame buffer.
     /// The copy is aligned to `align_bytes`.
+    #[inline]
     fn push_raw_copy(
         &mut self,
         size_bytes: usize,
@@ -1644,7 +1743,7 @@ impl StackFrame {
     }
 
     pub fn to_bytes(&self) -> &[u8] {
-        unsafe { std::slice::from_raw_parts(self.base_ptr, self.current_offset_bytes()) }
+        unsafe { std::slice::from_raw_parts(self.base_ptr(), self.current_offset_bytes()) }
     }
 }
 
@@ -1705,6 +1804,7 @@ pub fn value_to_rust_str(vm: &mut Vm, m: &TypedModule, value: Value) -> Box<str>
     let data_ptr = load_struct_field(vm, m, char_buffer_type_id, char_buffer_ptr, 1, false)
         .unwrap()
         .expect_ref();
+    eprintln!("Loading to rust str: {} and {:?}", len_usize, data_ptr);
     unsafe {
         let slice = std::slice::from_raw_parts(data_ptr, len_usize);
         let the_str = std::str::from_utf8(slice).unwrap();
@@ -1713,14 +1813,26 @@ pub fn value_to_rust_str(vm: &mut Vm, m: &TypedModule, value: Value) -> Box<str>
     }
 }
 
-pub fn rust_str_to_value(dst_frame: &mut StackFrame, m: &TypedModule, s: &str) -> Value {
+pub fn rust_str_to_value(
+    vm: &mut Vm,
+    dst_stack: StackSelection,
+    m: &TypedModule,
+    s: &str,
+) -> Value {
     let char_buffer_type_id = m.types.get(STRING_TYPE_ID).expect_struct().fields[0].type_id;
     let char_reference_type_id = m.types.get(char_buffer_type_id).expect_struct().fields[1].type_id;
     debug_assert_eq!(m.types.get_layout(STRING_TYPE_ID), m.types.get_layout(char_buffer_type_id));
 
+    // nocommit: Use a Rust struct to map this memory; same for Buffers!
     let len_usize = s.len();
     let data_ptr = s.as_ptr();
-    let string_stack_addr = dst_frame.push_struct_values(
+    debug!(
+        "rust_str_to_value {:?} ptr is: {:?}",
+        dst_stack,
+        vm.get_destination_stack(dst_stack).cursor
+    );
+    debug!("static stack ptr: {:?}", &vm.static_stack.allocation.as_ptr_range());
+    let string_stack_addr = vm.get_destination_stack(dst_stack).push_struct_values(
         &m.types,
         char_buffer_type_id,
         &[

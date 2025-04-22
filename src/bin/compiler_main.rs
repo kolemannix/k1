@@ -7,7 +7,7 @@ use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
-const STACK_SIZE: usize = 1 * k1::MEGABYTE;
+const STACK_SIZE: usize = 10 * k1::MEGABYTE;
 
 fn main() -> anyhow::Result<()> {
     let compiler_thread = std::thread::Builder::new()

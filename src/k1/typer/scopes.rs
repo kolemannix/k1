@@ -4,7 +4,7 @@ use log::{debug, trace};
 use smallvec::SmallVec;
 
 use std::{
-    collections::{hash_map::Entry, HashMap, HashSet},
+    collections::{hash_map::Entry, HashSet},
     fmt::Display,
     num::NonZeroU32,
 };
@@ -96,8 +96,8 @@ pub struct ScopeLoopInfo {
 
 pub struct Scopes {
     scopes: Pool<Scope, ScopeId>,
-    lambda_info: HashMap<ScopeId, ScopeLambdaInfo>,
-    loop_info: HashMap<ScopeId, ScopeLoopInfo>,
+    lambda_info: FxHashMap<ScopeId, ScopeLambdaInfo>,
+    loop_info: FxHashMap<ScopeId, ScopeLoopInfo>,
 }
 
 impl Scopes {
@@ -105,8 +105,8 @@ impl Scopes {
     pub fn make() -> Self {
         Scopes {
             scopes: Pool::with_capacity("scopes", 8192),
-            lambda_info: HashMap::new(),
-            loop_info: HashMap::new(),
+            lambda_info: FxHashMap::new(),
+            loop_info: FxHashMap::new(),
         }
     }
 
