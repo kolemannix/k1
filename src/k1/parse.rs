@@ -2338,7 +2338,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 }
                 match mode {
                     Mode::Base => {
-                        if !buf.is_empty() {
+                        if parts.is_empty() || !buf.is_empty() {
                             parts.push(InterpolatedStringPart::String(buf.into_boxed_str()))
                         }
                     }

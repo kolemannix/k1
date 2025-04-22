@@ -2304,7 +2304,7 @@ pub struct TypedModule {
     buffers: TypedModuleBuffers,
 
     // Can execute code statically
-    pub vm: vm::Vm,
+    pub vm: Box<Option<vm::Vm>>,
 }
 
 impl TypedModule {
@@ -2354,6 +2354,7 @@ impl TypedModule {
                 substitutions_vec: Vec::with_capacity(256),
             },
             buffers: TypedModuleBuffers { name_builder: String::with_capacity(4096) },
+            vm: Box::new(Some(vm::Vm::make(10 * crate::MEGABYTE, crate::MEGABYTE))),
         }
     }
 
@@ -4092,7 +4093,7 @@ impl TypedModule {
             return Ok((type_id, shortcut));
         }
 
-        let (mut vm, value) = vm::execute_single_expr(self, expr)?;
+        let value = vm::execute_single_expr(self, expr)?;
         let span = self.exprs.get(expr).get_span();
         if cfg!(debug_assertions) {
             if type_id != value.get_type() {
@@ -4105,7 +4106,12 @@ impl TypedModule {
                 );
             }
         }
+
+        // Horrible borrow hack again; at least re-use vm::zero
+        let mut vm = std::mem::take(&mut self.vm).unwrap();
         let static_value_id = self.vm_value_to_static_value(&mut vm, value, span);
+        *self.vm = Some(vm);
+
         Ok((type_id, static_value_id))
     }
 
@@ -5853,7 +5859,8 @@ impl TypedModule {
                     let typ = self.types.get(type_id);
                     match typ {
                         Type::Struct(struct_type) => {
-                            let mut field_value_ids = Vec::with_capacity(struct_type.fields.len());
+                            let mut field_value_ids =
+                                EcoVec::with_capacity(struct_type.fields.len());
                             let struct_fields = struct_type.fields.clone();
                             for (index, _) in struct_fields.iter().enumerate() {
                                 let field_value =
@@ -10433,6 +10440,9 @@ impl TypedModule {
 
     fn specialize_function_body(&mut self, function_id: FunctionId) -> TyperResult<()> {
         let specialized_function = self.get_function(function_id);
+        if specialized_function.body_block.is_some() {
+            return Ok(());
+        }
         let specialized_return_type = self.get_function_type(function_id).return_type;
         let parent_function = specialized_function
             .specialization_info
@@ -10444,6 +10454,7 @@ impl TypedModule {
             );
         let parent_function = self.get_function(parent_function);
         debug_assert!(parent_function.body_block.is_some());
+        debug_assert!(specialized_function.body_block.is_none());
 
         // Approach 1: Re-run whole body w/ bound types
         // Downside: cloning, extra work, etc
@@ -11716,6 +11727,9 @@ impl TypedModule {
         // Add the body now
         if let Some(body_block) = body_block {
             self.get_function_mut(declaration_id).body_block = Some(body_block);
+        }
+        if self.name_of(function_name) == "slice_spec_enum Char(char) | String(string)_3" {
+            eprintln!("{}", self.scope_id_to_string(fn_scope_id));
         }
         if is_debug {
             eprintln!("DEBUG\n{}", self.function_id_to_string(declaration_id, true));

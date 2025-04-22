@@ -681,13 +681,13 @@ impl TypedModule {
                 writ.write_str(".tag")?;
                 Ok(())
             }
-            TypedExpr::EnumGetPayload(as_variant_expr) => {
-                self.display_expr_id(as_variant_expr.enum_expr, writ, indentation)?;
+            TypedExpr::EnumGetPayload(get_payload_expr) => {
+                self.display_expr_id(get_payload_expr.enum_expr, writ, indentation)?;
                 writ.write_str(".payload[")?;
                 let variant = self
-                    .get_expr_type(as_variant_expr.enum_expr)
+                    .get_expr_type(get_payload_expr.enum_expr)
                     .expect_enum()
-                    .variant_by_index(as_variant_expr.variant_index);
+                    .variant_by_index(get_payload_expr.variant_index);
                 self.write_ident(writ, variant.name)?;
                 writ.write_char(']')?;
                 Ok(())

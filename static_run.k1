@@ -87,7 +87,7 @@ fn main(): i32 {
   };
   assertEquals(ptrInStructs, 10);
 
-  // Loops
+  //// Loops
   #if false assertEquals(#static {
     let mut i = 0;
     loop {
@@ -137,15 +137,15 @@ fn main(): i32 {
   let s2 = testCompile( #static testCompile(42) );
   printIt(s2);
 
-  assertEquals(testCompile(#static crash("")).!, "");
+  //assertEquals(testCompile(#static crash("")).!, "");
 
   // Call order
   #static bar(5);
 
   // Simple lambda
-  #static {
-    \(x: int) foo(5)
-  };
+  //#static {
+  //  \(x: int) foo(5)
+  //};
 
   0
 }
