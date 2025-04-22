@@ -83,6 +83,10 @@ New tagline? "C with typeclasses and tagged unions"
 - [ ] Macro system built on comptime, both string #insert and parsed code #insert like Jai
 - [ ] @unlikely annotations
 
+- [ ] Level up perf skills
+  - [ ] Use `perf` to look at branch info, cache info
+  - [ ] learn bloom filters
+
 
 - [ ] Explicit coercion sites like Rust seems like a great idea? https://doc.rust-lang.org/reference/type-coercions.html#r-coerce.site.let
 - [ ] Optimize lambdas that don't capture to become function pointers instead

@@ -29,6 +29,8 @@ ns StringBuilder {
     len
   }
   fn build(self: StringBuilder): string {
+    if self.parts.len == 0 return("");
+
     let* bytes = List/withCapacity[char](self.len());
     for part in self.parts.* do {
       switch part {

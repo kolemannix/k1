@@ -79,7 +79,7 @@ impl<T, Index: PoolIndex> Pool<T, Index> {
         {
             let new_cap = self.vec.capacity();
             if new_cap != cap {
-                eprintln!("POOL {} RESIZED {cap} -> {new_cap}", self.name)
+                eprintln!("WARNING: POOL {} RESIZED {cap} -> {new_cap}", self.name);
             }
         }
 
