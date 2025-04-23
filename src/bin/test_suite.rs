@@ -287,7 +287,7 @@ pub fn main() -> Result<()> {
     let success = AtomicUsize::new(0);
     let failures = Mutex::new(Vec::with_capacity(total));
 
-    // TODO: grouping by n to bound threads created
+    // Note: This doesn't bound the number of spawned threads
     if parallel {
         std::thread::scope(|scope| {
             for test in all_tests.iter() {

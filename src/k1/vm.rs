@@ -757,7 +757,6 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedModule, expr: TypedExprId) -> TyperRes
                 CastType::IntegerExtendFromChar => todo!(),
                 CastType::IntegerToFloat => todo!(),
                 CastType::IntegerToPointer => {
-                    // TODO: If host platform is 32-bit, then we should require a u32 here
                     let u = base_value.expect_int().expect_uword();
                     Ok(Value::Pointer(u as usize).into())
                 }
@@ -872,7 +871,6 @@ pub fn execute_block(
 ) -> TyperResult<VmResult> {
     let mut last_stmt_result = VmResult::UNIT;
     let TypedExpr::Block(typed_block) = m.exprs.get(block_expr) else { unreachable!() };
-    // TODO(vm): clone of block statements vec
     let stmts = typed_block.statements.clone();
     for stmt in stmts.iter() {
         last_stmt_result = execute_stmt(vm, m, *stmt)?;
@@ -1053,7 +1051,7 @@ fn execute_call(vm: &mut Vm, m: &mut TypedModule, call_id: TypedExprId) -> Typer
         None => result_value,
         Some(result_ptr) => {
             let dst_ptr = agg_ret_ptr.unwrap();
-            // TODO(vm): When we evaluate a 'Return' expr, we could store results directly
+            // TODO(vm perf): When we evaluate a 'Return' expr, we could store results directly
             //           into here, as long as we can look up this ptr somehow, and avoid
             //           the full copy
             let layout = aggregate_return_layout.unwrap();
@@ -1563,7 +1561,6 @@ impl Stack {
 
     fn push_new_frame(&mut self, name: Option<Identifier>) -> StackFrame {
         let index = self.frames.len() as u32;
-        // TODO: Should I go ahead and align stack bases to like 8 bytes?
         let base_ptr = self.cursor;
         let frame = StackFrame::make(index, base_ptr, name);
         self.push_frame(frame)
