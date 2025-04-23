@@ -3294,24 +3294,19 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         if let Some(function) = self.llvm_functions.get(&function_id) {
             return Ok(function.function_value);
         }
-        eprintln!("\ncodegen function\n{}", self.module.function_id_to_string(function_id, false));
+        debug!("codegen function\n{}", self.module.function_id_to_string(function_id, false));
         let previous_debug_location = self.get_debug_location();
 
         let function = self.module.get_function(function_id);
         let function_type_id = function.type_id;
         let function_type = self.module.types.get(function.type_id).as_function().unwrap();
 
-        Breaks on a lambda!
+        let function_span = self.module.ast.get_span_for_id(function.parsed_id);
         let function_line_number = self
             .module
             .ast
-            .get_lines_for_span_id(
-                self.module
-                    .ast
-                    .get_function(function.parsed_id.as_function_id().unwrap())
-                    .signature_span,
-            )
-            .expect("line for span")
+            .get_lines_for_span_id(function_span)
+            .expect("line for function span")
             .0
             .line_number();
 
