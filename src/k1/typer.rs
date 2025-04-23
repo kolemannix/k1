@@ -71,10 +71,9 @@ macro_rules! nz_u32_id {
     };
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct FunctionId(pub u32);
+nz_u32_id!(FunctionId);
 impl FunctionId {
-    pub const PENDING: FunctionId = FunctionId(u32::MAX);
+    pub const PENDING: FunctionId = FunctionId(NonZeroU32::MAX);
 }
 
 nz_u32_id!(VariableId);
@@ -121,6 +120,7 @@ pub const ITERABLE_ABILITY_ID: AbilityId = AbilityId(9);
 pub const LAMBDA_ENV_PARAM_NAME: &str = "__lambda_env";
 
 pub const FUNC_PARAM_IDEAL_COUNT: usize = 8;
+pub const FUNC_TYPE_PARAM_IDEAL_COUNT: usize = 4;
 
 pub const UNIT_BYTE_VALUE: u8 = 0;
 
@@ -686,30 +686,6 @@ pub struct TypedBlock {
 
 impl TypedBlock {}
 
-#[derive(Debug, Clone)]
-pub struct FnArgDefn {
-    pub name: Identifier,
-    pub variable_id: VariableId,
-    // TODO: Consider dropping these explicit position fields
-    pub position: u32,
-    pub type_id: TypeId,
-    pub is_context: bool,
-    pub is_lambda_env: bool,
-    pub span: SpanId,
-}
-
-impl FnArgDefn {
-    pub fn to_fn_arg_type(&self) -> FnParamType {
-        FnParamType {
-            name: self.name,
-            type_id: self.type_id,
-            is_context: self.is_context,
-            is_lambda_env: self.is_lambda_env,
-            span: self.span,
-        }
-    }
-}
-
 #[derive(Debug)]
 pub struct SpecializationParams {
     pub fn_scope_id: ScopeId,
@@ -1118,7 +1094,7 @@ pub struct Call {
     /// type_args remain unerased for some intrinsics where we want codegen to see the types.
     /// Specifically sizeOf[T], there's no actual value to specialize on, kinda of a hack would be
     /// better to specialize anyway and inline? idk
-    pub type_args: SmallVec<[SimpleNamedType; FUNC_PARAM_IDEAL_COUNT]>,
+    pub type_args: SV4<SimpleNamedType>,
     pub return_type: TypeId,
     pub span: SpanId,
 }
@@ -1618,7 +1594,7 @@ pub struct TypedMatchExpr {
 }
 
 // TODO(perf): TypedExpr is very big
-static_assert_size!(TypedExpr, 152);
+static_assert_size!(TypedExpr, 120);
 #[derive(Debug, Clone)]
 pub enum TypedExpr {
     Unit(SpanId),
@@ -2268,7 +2244,7 @@ pub struct TypedModuleBuffers {
 
 pub struct TypedModule {
     pub ast: ParsedModule,
-    functions: Vec<TypedFunction>,
+    functions: Pool<TypedFunction, FunctionId>,
     pub variables: Pool<Variable, VariableId>,
     pub types: Types,
     pub globals: Pool<TypedGlobal, TypedGlobalId>,
@@ -2315,7 +2291,7 @@ impl TypedModule {
             defn_infos: Pool::with_capacity("type_defn_infos", 8192),
             existing_types_mapping: FxHashMap::new(),
             type_defn_mapping: FxHashMap::new(),
-            type_variable_counts: FxHashMap::new(),
+            type_variable_counts: Pool::with_capacity("type_variable_counts", 8192),
             ability_mapping: FxHashMap::new(),
             placeholder_mapping: FxHashMap::new(),
             config: TypesConfig { ptr_size_bits: parsed_module.config.target.word_size().bits() },
@@ -2324,7 +2300,10 @@ impl TypedModule {
         let scopes = Scopes::make();
         let namespaces = Namespaces { namespaces: Pool::with_capacity("namespaces", 256) };
         TypedModule {
-            functions: Vec::with_capacity(parsed_module.functions.len() * 4),
+            functions: Pool::with_capacity(
+                "typed_functions",
+                (parsed_module.functions.len() * 4).next_power_of_two(),
+            ),
             variables: Pool::with_capacity("typed_variables", 8192),
             types,
             globals: Pool::with_capacity("typed_globals", 4096),
@@ -2372,7 +2351,7 @@ impl TypedModule {
     }
 
     pub fn function_iter(&self) -> impl Iterator<Item = (FunctionId, &TypedFunction)> {
-        self.functions.iter().enumerate().map(|(idx, f)| (FunctionId(idx as u32), f))
+        self.functions.iter_with_ids()
     }
 
     pub fn name(&self) -> &str {
@@ -3388,11 +3367,10 @@ impl TypedModule {
         generic_parent_to_attach: Option<TypeId>,
         defn_info_to_attach: Option<TypeDefnInfo>,
     ) -> TypeId {
-        let all_holes = substitution_pairs.iter().all(|p| {
-            self.types.type_variable_counts.get(&p.from).unwrap().inference_variable_count > 0
-        });
-        let no_holes =
-            self.types.type_variable_counts.get(&type_id).unwrap().inference_variable_count == 0;
+        let all_holes = substitution_pairs
+            .iter()
+            .all(|p| self.types.type_variable_counts.get(p.from).inference_variable_count > 0);
+        let no_holes = self.types.type_variable_counts.get(type_id).inference_variable_count == 0;
         // Optimization: if every 'from' type is an inference hole, and the type
         // contains no inference holes, which we compute on creation, its a no-op
         // This prevents useless deep type traversals
@@ -4208,13 +4186,8 @@ impl TypedModule {
         Ok(())
     }
 
-    fn next_function_id(&self) -> FunctionId {
-        let id = self.functions.len();
-        FunctionId(id as u32)
-    }
-
     fn add_function(&mut self, mut function: TypedFunction) -> FunctionId {
-        let id = self.next_function_id();
+        let id = self.functions.next_id();
         if let Some(specialization_info) = &mut function.specialization_info {
             specialization_info.specialized_function_id = id;
             self.get_function_mut(specialization_info.parent_function)
@@ -4229,20 +4202,20 @@ impl TypedModule {
             );
         }
         function.is_concrete = is_concrete;
-        self.functions.push(function);
+        self.functions.add(function);
         id
     }
 
     pub fn get_function(&self, function_id: FunctionId) -> &TypedFunction {
-        &self.functions[function_id.0 as usize]
+        self.functions.get(function_id)
     }
 
     pub fn get_function_mut(&mut self, function_id: FunctionId) -> &mut TypedFunction {
-        &mut self.functions[function_id.0 as usize]
+        self.functions.get_mut(function_id)
     }
 
     pub fn get_function_type(&self, function_id: FunctionId) -> &FunctionType {
-        self.types.get(self.functions[function_id.0 as usize].type_id).as_function().unwrap()
+        self.types.get(self.get_function(function_id).type_id).as_function().unwrap()
     }
 
     pub fn add_ability_impl(&mut self, ability_impl: TypedAbilityImpl) -> AbilityImplId {
@@ -9013,9 +8986,7 @@ impl TypedModule {
                 },
             };
 
-            let solved_or_passed_type_params: SmallVec<[SimpleNamedType; 8]> = if type_args
-                .is_empty()
-            {
+            let solved_or_passed_type_params: SV4<SimpleNamedType> = if type_args.is_empty() {
                 match payload_if_needed {
                     None => {
                         match ctx
@@ -9053,7 +9024,8 @@ impl TypedModule {
                         }
                     }
                     Some((generic_variant_payload, payload)) => {
-                        let mut args_and_params = Vec::with_capacity(2);
+                        let mut args_and_params: SV4<(TypeOrParsedExpr, TypeId, bool)> =
+                            smallvec![];
 
                         // There are only ever up to 2 'cases' to power inference
                         // - The expected return type together with the type of the enum itself
@@ -9375,8 +9347,10 @@ impl TypedModule {
                     &function_type_args,
                     function_id,
                 );
-                let is_abstract =
-                    self.types.get_type_variable_info(specialized_function_type).is_abstract();
+                let is_abstract = self
+                    .types
+                    .get_contained_type_variable_counts(specialized_function_type)
+                    .is_abstract();
                 if is_abstract {
                     (
                         Callee::StaticAbstract {
@@ -9476,7 +9450,7 @@ impl TypedModule {
         inference_pairs: &[(TypeOrParsedExpr, TypeId, bool)],
         span: SpanId,
         scope_id: ScopeId,
-    ) -> TyperResult<SmallVec<[SimpleNamedType; 8]>> {
+    ) -> TyperResult<SmallVec<[SimpleNamedType; 4]>> {
         debug!("INFER LEVEL {}", self.inference_context.origin_stack.len());
 
         self.inference_context.origin_stack.push(span);
@@ -9499,10 +9473,9 @@ impl TypedModule {
 
         // Stores the mapping from the function (or type's) type parameters to their
         // corresponding instantiated type holes for this inference context
-        let mut instantiation_set: SmallVec<[TypeSubstitutionPair; 8]> =
+        let mut instantiation_set: SV8<TypeSubstitutionPair> =
             SmallVec::with_capacity(all_type_params.len());
-        let mut solutions: SmallVec<[SimpleNamedType; 8]> =
-            SmallVec::with_capacity(must_solve_params.len());
+        let mut solutions: SV4<SimpleNamedType> = SmallVec::with_capacity(must_solve_params.len());
 
         let inference_var_count = self_.inference_context.vars.len();
         for (idx, param) in all_type_params.iter().enumerate() {
@@ -9616,7 +9589,7 @@ impl TypedModule {
         fn_call: &ParsedCall,
         generic_function_id: FunctionId,
         ctx: EvalExprContext,
-    ) -> TyperResult<SmallVec<[SimpleNamedType; 8]>> {
+    ) -> TyperResult<SmallVec<[SimpleNamedType; 4]>> {
         let generic_function = self.get_function(generic_function_id);
         let generic_function_type = self.get_function_type(generic_function_id);
         debug_assert!(generic_function.is_generic());
@@ -9994,7 +9967,7 @@ impl TypedModule {
             self.type_id_to_string(passed_type).blue(),
             self.type_id_to_string(slot_type).blue()
         );
-        let counts = self.types.type_variable_counts.get(&slot_type).unwrap();
+        let counts = self.types.type_variable_counts.get(slot_type);
         if type_param_mode {
             if counts.type_parameter_count == 0 {
                 return TypeUnificationResult::NoHoles;
@@ -10488,7 +10461,7 @@ impl TypedModule {
         if function.is_generic() {
             return false;
         }
-        let info = self.types.get_type_variable_info(function.type_id);
+        let info = self.types.get_contained_type_variable_counts(function.type_id);
         let has_no_abstract_types_in_signature =
             info.type_parameter_count == 0 && info.inference_variable_count == 0;
         has_no_abstract_types_in_signature
@@ -11609,7 +11582,7 @@ impl TypedModule {
             }),
         );
 
-        let function_id = self_.next_function_id();
+        let function_id = self_.functions.next_id();
 
         let actual_function_id = self_.add_function(TypedFunction {
             name,

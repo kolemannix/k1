@@ -175,6 +175,10 @@ impl<T, Index: PoolIndex> Pool<T, Index> {
         (0..self.vec.len()).map(|i| Self::physical_index_to_id(i))
     }
 
+    pub fn iter_with_ids(&self) -> impl Iterator<Item = (Index, &T)> {
+        (0..self.vec.len()).map(|i| (Self::physical_index_to_id(i), &self.vec[i]))
+    }
+
     pub fn get_first(&self, handle: SliceHandle<Index>) -> Option<&T> {
         let SliceHandle::NonEmpty(handle) = handle else { return None };
         let list_start_index = Self::id_to_actual_index(handle.index);
