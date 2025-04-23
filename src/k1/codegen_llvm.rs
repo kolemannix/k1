@@ -13,8 +13,8 @@ use inkwell::basic_block::BasicBlock;
 use inkwell::builder::{Builder, BuilderError};
 use inkwell::context::Context;
 use inkwell::debug_info::{
-    AsDIScope, DICompileUnit, DIFile, DILocation, DIScope, DISubprogram, DIType, DWARFEmissionKind,
-    DWARFSourceLanguage, DebugInfoBuilder,
+    AsDIScope, DICompileUnit, DIExpression, DIFile, DILocalVariable, DILocation, DIScope,
+    DISubprogram, DIType, DWARFEmissionKind, DWARFSourceLanguage, DebugInfoBuilder,
 };
 use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::module::{Linkage as LlvmLinkage, Module as LlvmModule};
@@ -25,10 +25,11 @@ use inkwell::types::{
     FunctionType as LlvmFunctionType, IntType, PointerType, StructType, VoidType,
 };
 use inkwell::values::{
-    ArrayValue, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue,
+    ArrayValue, AsValueRef, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue,
     InstructionValue, IntValue, PointerValue, StructValue,
 };
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel};
+use llvm_sys::debuginfo::LLVMDIBuilderInsertDbgValueAtEnd;
 use log::{debug, info, trace};
 
 use crate::compiler::WordSize;
@@ -459,6 +460,29 @@ struct DebugContext<'ctx> {
 }
 
 impl<'ctx> DebugContext<'ctx> {
+    // Missing inkwell function
+    pub fn insert_dbg_value_at_end(
+        &self,
+        value: BasicValueEnum<'ctx>,
+        var_info: DILocalVariable<'ctx>,
+        expr: Option<DIExpression<'ctx>>,
+        debug_loc: DILocation<'ctx>,
+        block: BasicBlock<'ctx>,
+    ) -> InstructionValue<'ctx> {
+        let value_ref = unsafe {
+            LLVMDIBuilderInsertDbgValueAtEnd(
+                self.debug_builder.as_mut_ptr(),
+                value.as_value_ref(),
+                var_info.as_mut_ptr(),
+                expr.unwrap_or_else(|| self.debug_builder.create_expression(vec![])).as_mut_ptr(),
+                debug_loc.as_mut_ptr(),
+                block.as_mut_ptr(),
+            )
+        };
+
+        unsafe { InstructionValue::new(value_ref) }
+    }
+
     fn create_pointer_type(&self, name: &str, pointee: DIType<'ctx>) -> DIType<'ctx> {
         self.debug_builder
             .create_pointer_type(
@@ -1444,37 +1468,64 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let mutable = variable.is_mutable;
         let name = self.get_ident_name(variable.name).to_string();
 
+        let local_variable = self.debug.debug_builder.create_auto_variable(
+            self.debug.current_scope(),
+            &name,
+            self.debug.current_file(),
+            self.get_line_number(let_stmt.span),
+            variable_type.debug_type(),
+            true,
+            0,
+            variable_type.size_info().align_bits,
+        );
+
         // Some 'lets' don't need an extra alloca; if they are not re-assignable
         // and they are not 'referencing' then the value representation is fine
-        if !let_stmt.is_referencing && !mutable {
-            let variable_value = VariableValue::Direct { value };
-            self.variable_to_value.insert(let_stmt.variable_id, variable_value);
-            return Ok(self.builtin_types.unit_basic().into());
-        }
-
-        let variable_ptr = self.build_alloca(variable_type.rich_value_type(), &name);
-
-        let store_instr = if let_stmt.is_referencing {
-            // If this is a let*, then we put the rhs behind another alloca so that we end up
-            // with a pointer to the value
-            let Type::Reference(reference_type) = self.module.types.get(variable_type.type_id())
-            else {
-                panic!("Expected reference for referencing let");
-            };
-            let reference_inner_llvm_type = self.codegen_type(reference_type.inner_type)?;
-            if reference_inner_llvm_type.is_aggregate() {
-                debug_assert!(value.is_pointer_value());
-                self.builder.build_store(variable_ptr, value).unwrap()
-            } else {
-                // We need 2 allocas here because we need to store
-                // an address in an alloca, and the address needs to be
-                // a stack address.
-                let value_ptr = self.build_alloca(reference_inner_llvm_type.rich_value_type(), "");
-                self.builder.build_store(value_ptr, value).unwrap();
-                self.builder.build_store(variable_ptr, value_ptr).unwrap()
-            }
+        let no_alloca_needed = !let_stmt.is_referencing && !mutable;
+        let variable_value = if no_alloca_needed {
+            self.debug.insert_dbg_value_at_end(
+                value,
+                local_variable,
+                None,
+                self.builder.get_current_debug_location().unwrap(),
+                self.builder.get_insert_block().unwrap(),
+            );
+            VariableValue::Direct { value }
         } else {
-            self.store_k1_value(&variable_type, variable_ptr, value)
+            let variable_ptr = self.build_alloca(variable_type.rich_value_type(), &name);
+
+            let store_instr = if let_stmt.is_referencing {
+                // If this is a let*, then we put the rhs behind another alloca so that we end up
+                // with a pointer to the value
+                let Type::Reference(reference_type) =
+                    self.module.types.get(variable_type.type_id())
+                else {
+                    panic!("Expected reference for referencing let");
+                };
+                let reference_inner_llvm_type = self.codegen_type(reference_type.inner_type)?;
+                if reference_inner_llvm_type.is_aggregate() {
+                    debug_assert!(value.is_pointer_value());
+                    self.builder.build_store(variable_ptr, value).unwrap()
+                } else {
+                    // We need 2 allocas here because we need to store
+                    // an address in an alloca, and the address needs to be
+                    // a stack address.
+                    let value_ptr =
+                        self.build_alloca(reference_inner_llvm_type.rich_value_type(), "");
+                    self.builder.build_store(value_ptr, value).unwrap();
+                    self.builder.build_store(variable_ptr, value_ptr).unwrap()
+                }
+            } else {
+                self.store_k1_value(&variable_type, variable_ptr, value)
+            };
+            self.debug.debug_builder.insert_declare_before_instruction(
+                variable_ptr,
+                Some(local_variable),
+                None,
+                self.builder.get_current_debug_location().unwrap(),
+                store_instr,
+            );
+            VariableValue::Indirect { pointer_value: variable_ptr }
         };
 
         trace!(
@@ -1487,26 +1538,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         // It depends if we are debugging the user program or debugging the compiler
 
         // if !self.module.name_of(variable.name).starts_with("__") {
-        self.debug.debug_builder.insert_declare_before_instruction(
-            variable_ptr,
-            Some(self.debug.debug_builder.create_auto_variable(
-                self.debug.current_scope(),
-                &name,
-                self.debug.current_file(),
-                self.get_line_number(let_stmt.span),
-                variable_type.debug_type(),
-                true,
-                0,
-                variable_type.size_info().align_bits,
-            )),
-            None,
-            self.builder.get_current_debug_location().unwrap(),
-            store_instr,
-        );
         // }
 
-        let pointer = VariableValue::Indirect { pointer_value: variable_ptr };
-        self.variable_to_value.insert(let_stmt.variable_id, pointer);
+        self.variable_to_value.insert(let_stmt.variable_id, variable_value);
         Ok(self.builtin_types.unit_value.as_basic_value_enum().into())
     }
 
@@ -3267,13 +3301,18 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let function_type_id = function.type_id;
         let function_type = self.module.types.get(function.type_id).as_function().unwrap();
 
-        //let function_line_number = self
-        //    .module
-        //    .ast
-        //    .get_lines_for_span_id(self.module.ast.get_span_for_id(function.parsed_id))
-        //    .expect("line for span")
-        //    .1
-        //    .line_number();
+        let function_line_number = self
+            .module
+            .ast
+            .get_lines_for_span_id(
+                self.module
+                    .ast
+                    .get_function(function.parsed_id.as_function_id().unwrap())
+                    .signature_span,
+            )
+            .expect("line for span")
+            .0
+            .line_number();
 
         let maybe_starting_block = self.builder.get_insert_block();
 
@@ -3378,37 +3417,34 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             } else {
                 &function_type.physical_params[i - sret_offset]
             };
-            let ty = self.codegen_type(typed_param.type_id)?;
+            let param_type = self.codegen_type(typed_param.type_id)?;
             let param_name = self.module.name_of(typed_param.name);
             trace!(
                 "Got LLVM type for variable {}: {} (from {})",
                 param_name,
-                ty.rich_value_type(),
+                param_type.rich_value_type(),
                 self.module.type_id_to_string(typed_param.type_id)
             );
             param.set_name(param_name);
-            // nocommit: get debug info for args back? hah
-            //self.set_debug_location_from_span(typed_param.span);
-            //let pointer = self.builder.build_alloca(ty.rich_value_type(), param_name).unwrap();
-            //let arg_debug_type = self.get_debug_type(typed_param.type_id)?;
-            //let di_local_variable = self.debug.debug_builder.create_parameter_variable(
-            //    self.debug.current_scope(),
-            //    param_name,
-            //    i as u32,
-            //    self.debug.current_file(),
-            //    function_line_number,
-            //    arg_debug_type,
-            //    true,
-            //    0,
-            //);
-            //let store_instr = self.store_k1_value(&ty, pointer, param);
-            //self.debug.debug_builder.insert_declare_before_instruction(
-            //    pointer,
-            //    Some(di_local_variable),
-            //    None,
-            //    self.set_debug_location_from_span(typed_param.span),
-            //    store_instr,
-            //);
+
+            self.set_debug_location_from_span(typed_param.span);
+            let di_local_variable = self.debug.debug_builder.create_parameter_variable(
+                self.debug.current_scope(),
+                param_name,
+                i as u32,
+                self.debug.current_file(),
+                function_line_number,
+                param_type.debug_type(),
+                true,
+                0,
+            );
+            self.debug.insert_dbg_value_at_end(
+                param,
+                di_local_variable,
+                None,
+                self.get_debug_location(),
+                entry_block,
+            );
             debug!(
                 "Inserting variable {i} for function {} id={} {} id={}",
                 self.module.name_of(function.name),
@@ -3416,15 +3452,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 param_name,
                 variable_id
             );
-            self.variable_to_value.insert(
-                variable_id,
-                VariableValue::Direct { value: param },
-                //VariableValue::Indirect {
-                //    pointer_value: pointer,
-                //    pointee_type_id: typed_param.type_id,
-                //    pointee_llvm_type: ty.canonical_repr_type(),
-                //},
-            );
+            self.variable_to_value.insert(variable_id, VariableValue::Direct { value: param });
         }
         match function.intrinsic_type {
             Some(intrinsic_type) => {

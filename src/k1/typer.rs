@@ -5850,7 +5850,7 @@ impl TypedModule {
             }
             vm::Value::Agg { type_id, ptr } => {
                 if type_id == STRING_TYPE_ID {
-                    let box_str = vm::value_to_rust_str(vm, self, vm_value);
+                    let box_str = vm::value_to_rust_str(vm_value);
                     StaticValue::String(box_str, span)
                 } else if let Some(buffer) = self.types.get(type_id).as_buffer_instance() {
                     let elem_type = buffer.type_args[0];
