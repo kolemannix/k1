@@ -865,8 +865,7 @@ pub struct Types {
     pub types: Vec<Type>,
     pub layouts: Pool<Option<Layout>, TypeId>,
     pub defn_infos: Pool<Option<TypeDefnInfo>, TypeId>,
-    // TODO(perf): Convert type_variable_counts to Pool
-    pub type_variable_counts: FxHashMap<TypeId, TypeVariableInfo>,
+    pub type_variable_counts: Pool<TypeVariableInfo, TypeId>,
     /// We use this to efficiently check if we already have seen a type,
     /// and retrieve its ID if so. We used to iterate the pool but it
     /// got slow
@@ -883,7 +882,7 @@ impl Types {
             types: Vec::new(),
             layouts: Pool::new("layouts"),
             defn_infos: Pool::new("defn_infos"),
-            type_variable_counts: FxHashMap::default(),
+            type_variable_counts: Pool::new("type_variable_counts"),
             existing_types_mapping: FxHashMap::default(),
             type_defn_mapping: FxHashMap::default(),
             ability_mapping: FxHashMap::default(),
@@ -945,7 +944,7 @@ impl Types {
                     self.existing_types_mapping
                         .insert(TypeWithDefnInfo { typ: variant, defn_info }, variant_id);
                     let variant_variable_counts = self.count_type_variables(variant_id);
-                    self.type_variable_counts.insert(variant_id, variant_variable_counts);
+                    self.type_variable_counts.add(variant_variable_counts);
                     self.defn_infos.add(defn_info);
                 }
 
@@ -955,7 +954,7 @@ impl Types {
                 self.existing_types_mapping
                     .insert(TypeWithDefnInfo { typ: e, defn_info }, enum_type_id);
                 let variable_counts = self.count_type_variables(enum_type_id);
-                self.type_variable_counts.insert(enum_type_id, variable_counts);
+                self.type_variable_counts.add(variable_counts);
                 self.defn_infos.add(defn_info);
 
                 let layout = self.compute_type_layout(enum_type_id);
@@ -975,7 +974,7 @@ impl Types {
                 self.existing_types_mapping.insert(TypeWithDefnInfo { typ, defn_info }, type_id);
 
                 let variable_counts = self.count_type_variables(type_id);
-                self.type_variable_counts.insert(type_id, variable_counts);
+                self.type_variable_counts.add(variable_counts);
 
                 let layout = self.compute_type_layout(type_id);
                 self.layouts.add(layout);
@@ -1192,8 +1191,8 @@ impl Types {
         self.ability_mapping.get(&parsed_ability_id).copied()
     }
 
-    pub fn get_type_variable_info(&self, type_id: TypeId) -> TypeVariableInfo {
-        *self.type_variable_counts.get(&type_id).unwrap()
+    pub fn get_contained_type_variable_counts(&self, type_id: TypeId) -> TypeVariableInfo {
+        *self.type_variable_counts.get(type_id)
     }
 
     /// Recursively checks if given type contains any type variables

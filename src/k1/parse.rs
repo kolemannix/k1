@@ -3951,11 +3951,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         } else if let Some(ability_impl_id) = self.parse_ability_impl()? {
             Ok(Some(ParsedId::AbilityImpl(ability_impl_id)))
         } else {
-            // TODO: fix silent failure to parse any definitions
-            //       when there are tokens:
-            //       def type asdf = {}
-            //       need parse_definition_to_eof()
-            //       tell me the terminator?
             if condition.is_some() {
                 return Err(error_expected(
                     "Some definition following condition directive #if",

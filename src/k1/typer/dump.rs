@@ -12,7 +12,7 @@ impl Display for TypedModule {
         for (id, ty) in self.types.iter() {
             write!(f, "type {:02} {:10} ", id, ty.kind_name())?;
             self.display_type_ext(id, false, f)?;
-            let info = self.types.get_type_variable_info(id);
+            let info = self.types.get_contained_type_variable_counts(id);
             write!(
                 f,
                 "   [ tparams: {}, inference: {} ]",

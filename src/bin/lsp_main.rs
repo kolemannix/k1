@@ -156,7 +156,7 @@ impl Backend {
         }
 
         // Ensure we clear existing diagnostics by always publishing for every file we compiled
-        // TODO: inefficient
+        // TODO(lsp): inefficient
         let all_files = self.all_files();
         for url in all_files.into_iter() {
             errors_by_file.entry(url).or_insert(vec![]);
