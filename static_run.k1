@@ -131,13 +131,12 @@ fn main(): i32 {
     sb.build()
   }, "Hello");
 
-  let s = testCompile( #static assert(false) );
-  printIt(s);
+  assertEquals[string?](
+    testCompile( #static assert(false) ), 
+    some("Static execution exited with code: 111")
+  );
 
-  let s2 = testCompile( #static testCompile(42) );
-  printIt(s2);
-
-  //assertEquals(testCompile(#static crash("")).!, "");
+  assert(testCompile(#static crash("")).isSome());
 
   // Call order
   #static bar(5);

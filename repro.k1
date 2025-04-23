@@ -1,10 +1,9 @@
-fn alias[T](a: int): int {
-  let a = a * 2;
-  a
+fn add(x: int, y: int): int {
+  let res = x + y;
+  res
 }
 
 fn main(): i32 {
-  printIt[int](#static alias[unit](42));
-  printIt(alias[unit](10));
+  add(2, 3);
   0
 }
