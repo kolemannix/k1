@@ -33,3 +33,6 @@ impl Encode for Point {
     makeCodec[Point]()
   }
 }
+
+
+I don't think any of this is very good

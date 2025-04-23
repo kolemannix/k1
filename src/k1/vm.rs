@@ -1,5 +1,4 @@
 use std::{
-    cmp::min,
     num::NonZeroU32,
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -33,6 +32,23 @@ use crate::{
 mod vm_test;
 
 mod binop;
+
+/// Bit-for-bit mappings of K1 types
+mod k1_types {
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct K1Buffer {
+        pub len: usize,
+        pub data: *const u8,
+    }
+
+    impl K1Buffer {
+        pub unsafe fn to_slice<'a, T>(self) -> &'a [T] {
+            unsafe { std::slice::from_raw_parts(self.data as *const T, self.len) }
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StackSelection {
@@ -185,15 +201,6 @@ impl VmResult {
             VmResult::Value(_) => false,
             VmResult::Break(_) => true,
             VmResult::Return(_) => true,
-            VmResult::Exit(_) => true,
-        }
-    }
-
-    fn is_exit(&self) -> bool {
-        match self {
-            VmResult::Value(_) => false,
-            VmResult::Break(_) => false,
-            VmResult::Return(_) => false,
             VmResult::Exit(_) => true,
         }
     }
@@ -989,10 +996,7 @@ fn execute_call(vm: &mut Vm, m: &mut TypedModule, call_id: TypedExprId) -> Typer
     };
 
     if vm.stack.frames.len() == 128 {
-        eprintln!(
-            "{}",
-            vm.stack.frames.iter().map(|f| m.name_of_opt(f.debug_name).clone()).join("\n")
-        );
+        eprintln!("{}", vm.stack.frames.iter().map(|f| m.name_of_opt(f.debug_name)).join("\n"));
         return failf!(span, "VM call stack overflow");
     }
 
@@ -1044,7 +1048,7 @@ fn execute_call(vm: &mut Vm, m: &mut TypedModule, call_id: TypedExprId) -> Typer
 
     // If immediate, just 'Copy' the rust value; otherwise memcpy the data to the old stack's
     // 'sret' reserved space
-    let callee_frame = vm.stack.pop_frame();
+    vm.stack.pop_frame();
     let updated_value = match result_value.as_agg() {
         None => result_value,
         Some(result_ptr) => {
@@ -1061,7 +1065,6 @@ fn execute_call(vm: &mut Vm, m: &mut TypedModule, call_id: TypedExprId) -> Typer
             updated_value
         }
     };
-    drop(callee_frame);
     Ok(updated_value.into())
 }
 
@@ -1204,7 +1207,7 @@ fn execute_intrinsic(
         IntrinsicFunction::EmitCompilerMessage => {
             let message_arg = execute_expr_return_exit!(vm, m, args[1])?;
             eprintln!("msg arg is {:?}", message_arg);
-            let message = value_to_rust_str(vm, m, message_arg);
+            let message = value_to_rust_str(message_arg);
             let (source, line) = m.get_span_location(vm.eval_span);
             eprintln!("[MSG {}:{}] {}", source.filename, line.line_number(), message);
             Ok(VmResult::UNIT)
@@ -1609,7 +1612,7 @@ impl Stack {
 
     #[inline]
     fn check_bounds(&self, ptr: *const u8) {
-        if self.allocation.len() == 0 {
+        if self.allocation.is_empty() {
             panic!("check_bounds on a stack with no allocation")
         }
         let ptr_addr = ptr.addr();
@@ -1792,21 +1795,12 @@ fn execute_matching_condition(
     Ok(Value::TRUE.into())
 }
 
-pub fn value_to_rust_str(vm: &mut Vm, m: &TypedModule, value: Value) -> Box<str> {
+pub fn value_to_rust_str(value: Value) -> Box<str> {
     let ptr = value.expect_agg();
-    let struct_value = load_struct_field(vm, m, STRING_TYPE_ID, ptr, 0, false).unwrap();
-    let char_buffer_type_id = m.types.get(STRING_TYPE_ID).expect_struct().fields[0].type_id;
-    let char_buffer_ptr = struct_value.expect_agg();
-    let len_usize = load_struct_field(vm, m, char_buffer_type_id, char_buffer_ptr, 0, false)
-        .unwrap()
-        .expect_int()
-        .expect_uword();
-    let data_ptr = load_struct_field(vm, m, char_buffer_type_id, char_buffer_ptr, 1, false)
-        .unwrap()
-        .expect_ref();
-    eprintln!("Loading to rust str: {} and {:?}", len_usize, data_ptr);
+    let k1_string = unsafe { (ptr as *const k1_types::K1Buffer).read() };
+    eprintln!("Loading to rust str: {} and {:?}", k1_string.len, k1_string.data);
     unsafe {
-        let slice = std::slice::from_raw_parts(data_ptr, len_usize);
+        let slice = k1_string.to_slice::<u8>();
         let the_str = std::str::from_utf8(slice).unwrap();
         let box_str = Box::from(the_str);
         box_str
@@ -1820,26 +1814,13 @@ pub fn rust_str_to_value(
     s: &str,
 ) -> Value {
     let char_buffer_type_id = m.types.get(STRING_TYPE_ID).expect_struct().fields[0].type_id;
-    let char_reference_type_id = m.types.get(char_buffer_type_id).expect_struct().fields[1].type_id;
-    debug_assert_eq!(m.types.get_layout(STRING_TYPE_ID), m.types.get_layout(char_buffer_type_id));
+    let string_layout = m.types.get_layout(STRING_TYPE_ID).unwrap();
+    debug_assert_eq!(string_layout, m.types.get_layout(char_buffer_type_id).unwrap());
 
-    // nocommit: Use a Rust struct to map this memory; same for Buffers!
-    let len_usize = s.len();
-    let data_ptr = s.as_ptr();
-    debug!(
-        "rust_str_to_value {:?} ptr is: {:?}",
-        dst_stack,
-        vm.get_destination_stack(dst_stack).cursor
-    );
-    debug!("static stack ptr: {:?}", &vm.static_stack.allocation.as_ptr_range());
-    let string_stack_addr = vm.get_destination_stack(dst_stack).push_struct_values(
-        &m.types,
-        char_buffer_type_id,
-        &[
-            Value::Int(TypedIntValue::UWord64(len_usize as u64)),
-            Value::Reference { type_id: char_reference_type_id, ptr: data_ptr },
-        ],
-    );
+    let k1_string = k1_types::K1Buffer { len: s.len(), data: s.as_ptr() };
+    debug_assert_eq!(size_of_val(&k1_string), string_layout.size_bytes());
+
+    let string_stack_addr = vm.get_destination_stack(dst_stack).push_t(k1_string);
     Value::Agg { type_id: STRING_TYPE_ID, ptr: string_stack_addr }
 }
 
@@ -1873,17 +1854,16 @@ fn render_debug_value(w: &mut impl std::fmt::Write, vm: &mut Vm, m: &TypedModule
         Value::Agg { type_id, ptr } => {
             match m.types.get(type_id) {
                 st @ Type::Struct(struct_type) => {
-                    if let Some(buffer) = st.as_buffer_instance() {
-                        let len = load_struct_field(vm, m, type_id, ptr, 0, false)
-                            .unwrap()
-                            .expect_int()
-                            .expect_uword();
-                        let preview_count = min(len, 10);
+                    if let Some(buffer_type) = st.as_buffer_instance() {
+                        let buffer_ptr = ptr as *const k1_types::K1Buffer;
+                        let buffer = unsafe { buffer_ptr.read() };
+                        let len = buffer.len;
+                        let data_ptr = buffer.data;
                         write!(w, "<buffer len={len} ").unwrap();
+
+                        let preview_count = std::cmp::min(len, 10);
                         w.write_str("[").unwrap();
-                        let elem_type = buffer.type_args[0];
-                        let data_ptr =
-                            load_struct_field(vm, m, type_id, ptr, 1, false).unwrap().expect_ref();
+                        let elem_type = buffer_type.type_args[0];
                         for i in 0..preview_count {
                             let elem_offset = offset_at_index(&m.types, elem_type, i);
                             let elem_ptr = unsafe { data_ptr.byte_add(elem_offset) };

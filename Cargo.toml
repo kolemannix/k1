@@ -75,6 +75,7 @@ path = "src/bin/repl_main.rs"
 
 [profile.release]
 panic = "abort"
+lto = "thin"
 
 [lints.clippy]
 # Variable names can add value even if directly returned
