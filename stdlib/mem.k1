@@ -1,6 +1,6 @@
 ns mem {
 
-  // nocommit: zero: bool and remove allocZeroed
+  // TODO: Possibly reduce to a single alloc with a 'zero' option to reduce the number of builtins
   intern fn alloc(size: uword, align: uword): Pointer
   intern fn allocZeroed(size: uword, align: uword): Pointer
   intern fn realloc(ptr: Pointer, oldSize: uword, align: uword, newSize: uword): Pointer

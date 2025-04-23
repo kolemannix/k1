@@ -250,7 +250,7 @@ pub enum Literal {
     Char(u8, SpanId),
     Numeric(ParsedNumericLiteral),
     Bool(bool, SpanId),
-    String(Box<str>, SpanId),
+    String(StringId, SpanId),
 }
 
 impl Display for Literal {
@@ -267,7 +267,7 @@ impl Display for Literal {
             Literal::Bool(false, _) => f.write_str("false"),
             Literal::String(s, _) => {
                 f.write_char('"')?;
-                f.write_str(s)?;
+                write!(f, "{}", s).unwrap();
                 f.write_char('"')
             }
         }
@@ -283,6 +283,36 @@ impl Literal {
             Literal::Bool(_, span) => *span,
             Literal::String(_, span) => *span,
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub struct StringId(string_interner::symbol::SymbolU32);
+
+impl Display for StringId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0.to_usize())
+    }
+}
+
+pub struct StringPool {
+    intern_pool: string_interner::StringInterner<StringBackend>,
+}
+impl StringPool {
+    pub fn make() -> StringPool {
+        let pool = string_interner::StringInterner::with_capacity(65536);
+        StringPool { intern_pool: pool }
+    }
+
+    pub fn intern(&mut self, s: impl AsRef<str>) -> StringId {
+        let s = self.intern_pool.get_or_intern(&s);
+        StringId(s)
+    }
+    pub fn lookup(&self, s: impl AsRef<str>) -> Option<StringId> {
+        self.intern_pool.get(&s).map(StringId)
+    }
+    pub fn get_name(&self, id: StringId) -> &str {
+        self.intern_pool.resolve(id.0).expect("failed to resolve string id")
     }
 }
 
@@ -762,7 +792,7 @@ pub struct ParsedLambda {
 #[derive(Debug, Clone)]
 pub enum InterpolatedStringPart {
     // TODO: Put spans on each string part
-    String(Box<str>),
+    String(StringId),
     Identifier(Identifier),
 }
 
@@ -1556,6 +1586,7 @@ pub struct ParsedModule {
     pub ability_impls: Vec<ParsedAbilityImplementation>,
     pub sources: Sources,
     pub idents: Identifiers,
+    pub strings: StringPool,
     pub exprs: ParsedExpressionPool,
     pub type_exprs: ParsedTypeExpressionPool,
     pub patterns: ParsedPatternPool,
@@ -1584,6 +1615,7 @@ impl ParsedModule {
             ability_impls: Vec::new(),
             sources: Sources::default(),
             idents,
+            strings: StringPool::make(),
             exprs: ParsedExpressionPool::new(16384),
             type_exprs: ParsedTypeExpressionPool::new(8192),
             patterns: ParsedPatternPool::default(),
@@ -2317,8 +2349,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                                     return Err(error("String ended with '\\'", first));
                                 };
                                 if next == '{' {
-                                    let b = std::mem::take(&mut buf);
-                                    parts.push(InterpolatedStringPart::String(b.into_boxed_str()));
+                                    let string_id = self.module.strings.intern(&buf);
+                                    buf.clear();
+                                    parts.push(InterpolatedStringPart::String(string_id));
                                     mode = Mode::InterpIdent(String::with_capacity(16));
                                 } else if let Some(c) =
                                     STRING_ESCAPED_CHARS.iter().find(|c| c.sentinel == next)
@@ -2339,7 +2372,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 match mode {
                     Mode::Base => {
                         if parts.is_empty() || !buf.is_empty() {
-                            parts.push(InterpolatedStringPart::String(buf.into_boxed_str()))
+                            let string_id = self.module.strings.intern(&buf);
+                            parts.push(InterpolatedStringPart::String(string_id))
                         }
                     }
                     Mode::InterpIdent(s) => {
@@ -4007,6 +4041,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
 // Display
 impl ParsedModule {
+    fn get_string(&self, id: StringId) -> &str {
+        self.strings.get_name(id)
+    }
+
     pub fn expr_id_to_string(&self, expr: ParsedExprId) -> String {
         let mut buffer = String::new();
         self.display_expr_id(expr, &mut buffer).unwrap();
@@ -4032,7 +4070,7 @@ impl ParsedModule {
                 w.write_char('"')?;
                 for part in &is.parts {
                     match part {
-                        InterpolatedStringPart::String(s) => w.write_str(s)?,
+                        InterpolatedStringPart::String(s) => w.write_str(self.get_string(*s))?,
                         InterpolatedStringPart::Identifier(ident) => {
                             w.write_char('{')?;
                             w.write_str(self.idents.get_name(*ident))?;
