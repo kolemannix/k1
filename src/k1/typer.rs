@@ -30,7 +30,7 @@ use crate::parse::{
     ParsedExprId, ParsedFunctionId, ParsedGlobalId, ParsedId, ParsedIfExpr, ParsedLoopExpr,
     ParsedNamespaceId, ParsedPattern, ParsedPatternId, ParsedStmtId, ParsedTypeDefnId,
     ParsedTypeExpr, ParsedTypeExprId, ParsedUnaryOpKind, ParsedUseId, ParsedWhileExpr, Sources,
-    StructValueField,
+    StringId, StructValueField,
 };
 use crate::parse::{
     Block, Identifier, Literal, ParsedCall, ParsedExpression, ParsedModule, ParsedStmt,
@@ -229,7 +229,7 @@ pub enum StaticValue {
     Char(u8, SpanId),
     Integer(TypedIntValue, SpanId),
     Float(TypedFloatValue, SpanId),
-    String(Box<str>, SpanId),
+    String(StringId, SpanId),
     NullPointer(SpanId),
     Struct(CompileTimeStruct),
     Enum(CompileTimeEnum),
@@ -591,7 +591,7 @@ pub enum TypedPattern {
     LiteralInteger(TypedIntValue, SpanId),
     LiteralFloat(TypedFloatValue, SpanId),
     LiteralBool(bool, SpanId),
-    LiteralString(Box<str>, SpanId),
+    LiteralString(StringId, SpanId),
     Variable(VariablePattern),
     Enum(TypedEnumPattern),
     Struct(TypedStructPattern),
@@ -1602,7 +1602,7 @@ pub enum TypedExpr {
     Bool(bool, SpanId),
     Integer(TypedIntegerExpr),
     Float(TypedFloatExpr),
-    String(Box<str>, SpanId),
+    String(StringId, SpanId),
     Struct(StructLiteral),
     StructFieldAccess(FieldAccess),
     Variable(VariableExpr),
@@ -2356,6 +2356,10 @@ impl TypedModule {
 
     pub fn name(&self) -> &str {
         &self.ast.name
+    }
+
+    pub fn get_string(&self, string_id: StringId) -> &str {
+        self.ast.strings.get_name(string_id)
     }
 
     pub fn name_of_type(&self, type_id: TypeId) -> &str {
@@ -4016,7 +4020,7 @@ impl TypedModule {
                     .add(StaticValue::Float(typed_float_expr.value, typed_float_expr.span)),
             )),
             TypedExpr::String(s, span) => {
-                Ok(Some(self.static_values.add(StaticValue::String(s.clone(), *span))))
+                Ok(Some(self.static_values.add(StaticValue::String(*s, *span))))
             }
             TypedExpr::Variable(v) => {
                 let typed_variable = self.variables.get(v.variable_id);
@@ -5627,7 +5631,7 @@ impl TypedModule {
                 Ok(self.exprs.add(expr))
             }
             ParsedExpression::Literal(Literal::String(s, span)) => {
-                let expr = TypedExpr::String(s.clone(), *span);
+                let expr = TypedExpr::String(*s, *span);
                 Ok(self.exprs.add(expr))
             }
             ParsedExpression::Variable(_variable) => {
@@ -5747,7 +5751,8 @@ impl TypedModule {
                     "OS" => {
                         // TODO: Ideally this is an enum! But we don't support comptime enums yet
                         let os_str = self.ast.config.target.target_os().to_str();
-                        Ok(self.exprs.add(TypedExpr::String(Box::from(os_str), *span)))
+                        let string_id = self.ast.strings.intern(os_str);
+                        Ok(self.exprs.add(TypedExpr::String(string_id, *span)))
                     }
                     "NO_STD" => {
                         let no_std = self.ast.config.no_std;
@@ -5823,7 +5828,7 @@ impl TypedModule {
             }
             vm::Value::Agg { type_id, ptr } => {
                 if type_id == STRING_TYPE_ID {
-                    let box_str = vm::value_to_rust_str(vm_value);
+                    let box_str = vm::value_to_rust_str(self, vm_value);
                     StaticValue::String(box_str, span)
                 } else if let Some(buffer) = self.types.get(type_id).as_buffer_instance() {
                     let elem_type = buffer.type_args[0];

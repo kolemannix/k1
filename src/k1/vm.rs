@@ -14,7 +14,7 @@ use crate::{
     errf, failf,
     lex::SpanId,
     nz_u32_id,
-    parse::{Identifier, NumericWidth},
+    parse::{Identifier, NumericWidth, StringId},
     typer::{
         self, make_error, make_fail_span,
         types::{
@@ -445,7 +445,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedModule, expr: TypedExprId) -> TyperRes
         TypedExpr::Integer(typed_integer_expr) => Ok(Value::Int(typed_integer_expr.value).into()),
         TypedExpr::Float(typed_float_expr) => Ok(Value::Float(typed_float_expr.value).into()),
         TypedExpr::String(s, _) => {
-            let string_value = rust_str_to_value(vm, StackSelection::CallStackCurrent, m, s);
+            let string_value = k1_str_to_value(vm, StackSelection::CallStackCurrent, m, s);
             Ok(string_value.into())
         }
         TypedExpr::Struct(s) => {
@@ -825,7 +825,7 @@ pub fn static_value_to_vm_value(
         StaticValue::Integer(iv, _) => Ok(Value::Int(*iv)),
         StaticValue::Float(fv, _) => Ok(Value::Float(*fv)),
         StaticValue::String(box_str, _) => {
-            let value = rust_str_to_value(vm, dst_stack, m, box_str);
+            let value = k1_str_to_value(vm, dst_stack, m, box_str);
             Ok(value)
         }
         StaticValue::NullPointer(_) => Ok(Value::Pointer(0)),
@@ -1205,9 +1205,9 @@ fn execute_intrinsic(
         IntrinsicFunction::EmitCompilerMessage => {
             let message_arg = execute_expr_return_exit!(vm, m, args[1])?;
             eprintln!("msg arg is {:?}", message_arg);
-            let message = value_to_rust_str(message_arg);
+            let message = value_to_rust_str(m, message_arg);
             let (source, line) = m.get_span_location(vm.eval_span);
-            eprintln!("[MSG {}:{}] {}", source.filename, line.line_number(), message);
+            eprintln!("[MSG {}:{}] {}", source.filename, line.line_number(), m.get_string(message));
             Ok(VmResult::UNIT)
         }
     }
@@ -1792,28 +1792,28 @@ fn execute_matching_condition(
     Ok(Value::TRUE.into())
 }
 
-pub fn value_to_rust_str(value: Value) -> Box<str> {
+pub fn value_to_rust_str(m: &mut TypedModule, value: Value) -> StringId {
     let ptr = value.expect_agg();
     let k1_string = unsafe { (ptr as *const k1_types::K1Buffer).read() };
     eprintln!("Loading to rust str: {} and {:?}", k1_string.len, k1_string.data);
-    unsafe {
+    let string_slice = unsafe {
         let slice = k1_string.to_slice::<u8>();
-        let the_str = std::str::from_utf8(slice).unwrap();
-        let box_str = Box::from(the_str);
-        box_str
-    }
+        std::str::from_utf8(slice).unwrap()
+    };
+    m.ast.strings.intern(string_slice)
 }
 
-pub fn rust_str_to_value(
+pub fn k1_str_to_value(
     vm: &mut Vm,
     dst_stack: StackSelection,
     m: &TypedModule,
-    s: &str,
+    string_id: StringId,
 ) -> Value {
     let char_buffer_type_id = m.types.get(STRING_TYPE_ID).expect_struct().fields[0].type_id;
     let string_layout = m.types.get_layout(STRING_TYPE_ID).unwrap();
     debug_assert_eq!(string_layout, m.types.get_layout(char_buffer_type_id).unwrap());
 
+    let s = m.get_string(string_id);
     let k1_string = k1_types::K1Buffer { len: s.len(), data: s.as_ptr() };
     debug_assert_eq!(size_of_val(&k1_string), string_layout.size_bytes());
 
