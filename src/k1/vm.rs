@@ -445,7 +445,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedModule, expr: TypedExprId) -> TyperRes
         TypedExpr::Integer(typed_integer_expr) => Ok(Value::Int(typed_integer_expr.value).into()),
         TypedExpr::Float(typed_float_expr) => Ok(Value::Float(typed_float_expr.value).into()),
         TypedExpr::String(s, _) => {
-            let string_value = k1_str_to_value(vm, StackSelection::CallStackCurrent, m, s);
+            let string_value = k1_str_to_value(vm, StackSelection::CallStackCurrent, m, *s);
             Ok(string_value.into())
         }
         TypedExpr::Struct(s) => {
@@ -824,8 +824,8 @@ pub fn static_value_to_vm_value(
         StaticValue::Char(cb, _) => Ok(Value::Char(*cb)),
         StaticValue::Integer(iv, _) => Ok(Value::Int(*iv)),
         StaticValue::Float(fv, _) => Ok(Value::Float(*fv)),
-        StaticValue::String(box_str, _) => {
-            let value = k1_str_to_value(vm, dst_stack, m, box_str);
+        StaticValue::String(string_id, _) => {
+            let value = k1_str_to_value(vm, dst_stack, m, *string_id);
             Ok(value)
         }
         StaticValue::NullPointer(_) => Ok(Value::Pointer(0)),
