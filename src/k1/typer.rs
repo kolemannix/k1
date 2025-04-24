@@ -8418,11 +8418,8 @@ impl TypedModule {
                 let result = self.eval_expr(arg.value, ctx.with_no_expected_type());
                 let expr = match result {
                     Err(typer_error) => {
-                        self.synth_optional_some(TypedExpr::String(
-                            typer_error.message.into_boxed_str(),
-                            call_span,
-                        ))
-                        .0
+                        let string_id = self.ast.strings.intern(typer_error.message);
+                        self.synth_optional_some(TypedExpr::String(string_id, call_span)).0
                     }
                     Ok(_expr) => self.synth_optional_none(STRING_TYPE_ID, call_span),
                 };
@@ -13175,11 +13172,12 @@ impl TypedModule {
         let (source, line) = self.get_span_location(span);
         let filename_boxed = source.filename.clone().into_boxed_str();
         let line_number = line.line_number();
+        let filename_string_id = self.ast.strings.intern(filename_boxed);
         let struct_expr = TypedExpr::Struct(StructLiteral {
             fields: vec![
                 StructField {
                     name: self.ast.idents.builtins.filename,
-                    expr: self.exprs.add(TypedExpr::String(filename_boxed, span)),
+                    expr: self.exprs.add(TypedExpr::String(filename_string_id, span)),
                 },
                 StructField {
                     name: self.ast.idents.builtins.line,
@@ -13201,7 +13199,8 @@ impl TypedModule {
         span: SpanId,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
-        let message_expr = self.exprs.add(TypedExpr::String(message, span));
+        let message_string_id = self.ast.strings.intern(message);
+        let message_expr = self.exprs.add(TypedExpr::String(message_string_id, span));
         self.synth_typed_function_call(qident!(self, span, "crash"), &[], &[message_expr], ctx)
     }
 

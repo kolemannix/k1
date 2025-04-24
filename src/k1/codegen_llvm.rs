@@ -34,7 +34,7 @@ use log::{debug, info, trace};
 
 use crate::compiler::WordSize;
 use crate::lex::SpanId;
-use crate::parse::{FileId, Identifier, NumericWidth};
+use crate::parse::{FileId, Identifier, NumericWidth, StringId};
 use crate::typer::scopes::ScopeId;
 use crate::typer::types::{
     FnParamType, IntegerType, Type, TypeDefnInfo, TypeId, BOOL_TYPE_ID, BUFFER_DATA_FIELD_NAME,
@@ -444,6 +444,7 @@ pub struct Codegen<'ctx, 'module> {
     lambda_functions: FxHashMap<TypeId, FunctionValue<'ctx>>,
     loops: FxHashMap<ScopeId, LoopInfo<'ctx>>,
     builtin_types: BuiltinTypes<'ctx>,
+    strings: FxHashMap<StringId, StructValue<'ctx>>,
     debug: DebugContext<'ctx>,
 }
 
@@ -668,6 +669,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             llvm_function_to_k1: FxHashMap::new(),
             llvm_types: RefCell::new(FxHashMap::new()),
             builtin_types,
+            strings: FxHashMap::new(),
             debug: debug_context,
         }
     }
@@ -1726,7 +1728,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     }
 
     fn codegen_compile_time_value(
-        &self,
+        &mut self,
         comptime_value_id: StaticValueId,
     ) -> CodegenResult<BasicValueEnum<'ctx>> {
         let result = match self.module.static_values.get(comptime_value_id) {
@@ -1740,8 +1742,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             StaticValue::Integer(int_value, _) => self.codegen_integer_value(*int_value).unwrap(),
             StaticValue::Float(float_value, _) => self.codegen_float_value(*float_value).unwrap(),
-            StaticValue::String(boxed_str, _) => {
-                let string_struct = self.codegen_string_struct(boxed_str).unwrap();
+            StaticValue::String(string_id, _) => {
+                let string_struct = self.codegen_string_struct(*string_id).unwrap();
                 string_struct.as_basic_value_enum()
             }
             StaticValue::NullPointer(_span) => {
@@ -1794,7 +1796,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         Ok(result)
     }
 
-    fn codegen_string_struct(&self, string_value: &str) -> CodegenResult<StructValue<'ctx>> {
+    fn codegen_string_struct(&mut self, string_id: StringId) -> CodegenResult<StructValue<'ctx>> {
+        if let Some(cached_string) = self.strings.get(&string_id) {
+            return Ok(*cached_string);
+        }
         // Get a hold of the type for 'string' (its just a struct that we expect to exist!)
         let string_type = self.codegen_type(STRING_TYPE_ID)?;
         let string_wrapper_struct = string_type.rich_value_type().into_struct_type();
@@ -1810,6 +1815,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         debug_assert!(char_buffer_struct.get_field_type_at_index(1).unwrap().is_pointer_type());
         debug_assert!(char_buffer_struct.count_fields() == 2);
 
+        let string_value = self.module.get_string(string_id);
         let global_str_data = self.llvm_module.add_global(
             self.builtin_types.char.array_type(string_value.len() as u32),
             None,
@@ -1824,6 +1830,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 global_str_data.as_pointer_value().into(),
             ])
             .as_basic_value_enum()]);
+        self.strings.insert(string_id, global_str_value);
         Ok(global_str_value)
     }
 
@@ -1882,7 +1889,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             TypedExpr::Float(float) => Ok(self.codegen_float_value(float.value).unwrap().into()),
             TypedExpr::String(string_value, _) => {
-                let string_struct = self.codegen_string_struct(string_value)?;
+                let string_struct = self.codegen_string_struct(*string_value)?;
                 let string_ptr = self.build_alloca(string_struct.get_type(), "");
                 self.builder.build_store(string_ptr, string_struct).unwrap();
                 Ok(string_ptr.as_basic_value_enum().into())
