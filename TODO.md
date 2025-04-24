@@ -53,7 +53,7 @@ New tagline? "C with typeclasses and tagged unions"
   - [x] Struct field access
   - [x] Enum construction
 - [ ] Represent payload-less `either` types as ints not structs
-- [ ] String pool for string values, not just identifiers (will dedupe in LLVM too)
+- [x] String pool for string values, not just identifiers (will dedupe in LLVM too)
 - [ ] Support explicit type args in AnonEnumConstructor syntax 
 - [ ] Unit syntax of '()' makes no sense when we don't have tuples. What about `{}`
 - [x] Adopt `ecow`'s EcoVec
@@ -61,9 +61,12 @@ New tagline? "C with typeclasses and tagged unions"
       This saves copying the entire aggregate first with a Dereference instruction
 - [ ] ThreadLocal globals
 - [ ] LLVM Codegen callstack is too deep due to codegen_function_or_get
+- [ ] profiling notes: find_abilities_in_scope, infer_types, 
+- [x] reproduce shadow bug: only when statically run?!
+      buffer.slice: `let end = if end > self.len self.len else end;`
 - [ ] vm: static execution
   - [x] Introduce uword/iword types
-  - [ ] Switch to a single stack
+  - [x] Switch to a single stack
   - [x] Move to intrinsic: system core memory functions
   - [x] Move to intrinsic: memcpy/memmove
   - [ ] Move to intrinsic: `write`
@@ -132,7 +135,6 @@ New tagline? "C with typeclasses and tagged unions"
 - [ ] Runtime type info story, typeOf, typeInfo, and 'any' type
 - [x] Conditional compile directive
 - [x] Support boolean operators in compile time expressions
-- [ ] Separate out typechecking and lowering phase.
 - [ ] Mark types as trivially copyable or not
 ^ 'Buffer' would be NOT copyable so that you don't accidentally alias the data ptr
 - [ ] Ability constraints on generics

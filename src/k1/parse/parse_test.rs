@@ -69,7 +69,7 @@ fn string_literal() -> ParseResult<()> {
     let (module, result) = test_single_expr(r#""hello world""#)?;
     let ParsedExpression::Literal(Literal::String(s, span_id)) = result else { panic!() };
     let span = module.spans.get(span_id);
-    assert_eq!(&*s, "hello world");
+    assert_eq!(module.get_string(s), "hello world");
     assert_eq!(span.start, 1);
     assert_eq!(span.len, 11);
     assert_eq!(span.end(), 12);
