@@ -3648,8 +3648,8 @@ impl TypedModule {
                             self.type_id_to_string(target_type_id)
                         ),
                     },
-                    Literal::String(s, span) => match target_type_id {
-                        STRING_TYPE_ID => Ok(TypedPattern::LiteralString(s.clone(), *span)),
+                    Literal::String(string_id, span) => match target_type_id {
+                        STRING_TYPE_ID => Ok(TypedPattern::LiteralString(*string_id, *span)),
                         _ => failf!(
                             self.ast.get_pattern_span(pat_expr),
                             "string literal pattern will never match {}",
@@ -5211,7 +5211,7 @@ impl TypedModule {
             &[try_value_var.variable_expr],
             result_block_ctx,
         )?;
-        // FIXME: Consider alternatives for calling the block's makeError function
+        // FIXME: Consider alternatives for locating the block's makeError function
         //        in a less brittle way?
         let block_make_error_fn = self.get_ability_impl(block_try_impl.full_impl_id).functions[0];
         debug!(
@@ -6736,7 +6736,7 @@ impl TypedModule {
                 diverges: false,
             },
             consequent_expr: self.synth_crash_call(
-                Box::from("Match Error"),
+                "Match Error",
                 match_expr_span,
                 ctx.with_no_expected_type(),
             )?,
@@ -7168,9 +7168,8 @@ impl TypedModule {
                         instrs.push(MatchingConditionInstr::Cond { value: equals_pattern_bool });
                         Ok(())
                     }
-                    TypedPattern::LiteralString(string_value, span) => {
-                        let string_expr =
-                            self.exprs.add(TypedExpr::String(string_value.clone(), *span));
+                    TypedPattern::LiteralString(string_id, span) => {
+                        let string_expr = self.exprs.add(TypedExpr::String(*string_id, *span));
                         let condition = self.synth_equals_call(target_expr, string_expr, *span)?;
                         instrs.push(MatchingConditionInstr::Cond { value: condition });
                         Ok(())
@@ -13169,10 +13168,12 @@ impl TypedModule {
     }
 
     pub fn synth_source_location(&mut self, span: SpanId) -> TypedExprId {
-        let (source, line) = self.get_span_location(span);
-        let filename_boxed = source.filename.clone().into_boxed_str();
+        let (_, line) = self.get_span_location(span);
         let line_number = line.line_number();
-        let filename_string_id = self.ast.strings.intern(filename_boxed);
+
+        let source = self.ast.sources.source_by_span(self.ast.spans.get(span));
+        let filename_string_id = self.ast.strings.intern(&source.filename);
+
         let struct_expr = TypedExpr::Struct(StructLiteral {
             fields: vec![
                 StructField {
@@ -13195,7 +13196,7 @@ impl TypedModule {
 
     fn synth_crash_call(
         &mut self,
-        message: Box<str>,
+        message: &str,
         span: SpanId,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
