@@ -11,13 +11,13 @@ ns types {
   //   Boolean,
   //   Pointer,
   //   Struct({
-  //     fields: List[{ name: string, type: TypeInfo, offset: u64 }],
+  //     fields: List[{ name: string, type: TypeId, offset: u64 }],
   //   }),
   //   Either({
-  //     variants: List[{ name: string, payload: TypeInfo? }],
+  //     variants: List[{ name: string, payload: TypeId? }],
   //     payloadOffset: u64,
   //   }),
-  //   Reference({ inner: TypeInfo* })
+  //   Reference({ inner: TypeId* })
   //   Other(string)
 
   // deftype TypeInfo = {
@@ -26,7 +26,7 @@ ns types {
   // }
 
   // deftype Any = {
-  //   typeInfo: TypeInfo,
+  //   typeId: u64,
   //   value: Pointer
   // }
 
