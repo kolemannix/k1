@@ -384,7 +384,7 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
 pub fn write_executable(debug: bool, out_dir: &Path, module_name: &Path) -> Result<()> {
     let clang_time = std::time::Instant::now();
 
-    //opt/homebrew/opt/llvm@15/lib/libunwind.dylib
+    //opt/homebrew/opt/llvm@18/lib/libunwind.dylib
     let llvm_base = PathBuf::from(
         std::env::var("LLVM_SYS_180_PREFIX").expect("could not find llvm at $LLVM_SYS_180_PREFIX"),
     );
