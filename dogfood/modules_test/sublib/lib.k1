@@ -1,0 +1,11 @@
+mod subs_int {
+  fn sub(a: int, b: int): int {
+    a - b
+  }
+}
+
+mod subs_float {
+  fn sub(a: float, b: float): float {
+    a - b
+  }
+}
