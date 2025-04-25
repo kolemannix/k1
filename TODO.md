@@ -52,6 +52,8 @@ New tagline? "C with typeclasses and tagged unions"
   - [x] Struct construction
   - [x] Struct field access
   - [x] Enum construction
+
+## Cleanup/tidyness/punchlist
 - [ ] Represent payload-less `either` types as ints not structs
 - [x] String pool for string values, not just identifiers (will dedupe in LLVM too)
 - [ ] Support explicit type args in AnonEnumConstructor syntax 
@@ -64,51 +66,19 @@ New tagline? "C with typeclasses and tagged unions"
 - [ ] profiling notes: find_abilities_in_scope, infer_types, 
 - [x] reproduce shadow bug: only when statically run?!
       buffer.slice: `let end = if end > self.len self.len else end;`
-- [ ] vm: static execution
-  - [x] Introduce uword/iword types
-  - [x] Switch to a single stack
-  - [x] Move to intrinsic: system core memory functions
-  - [x] Move to intrinsic: memcpy/memmove
-  - [ ] Move to intrinsic: `write`
-  - [x] Move to intrinsic: `exit`
-  - [ ] Move to intrinsic: `crash` (?)
-  - [x] Run global initializers before most bodies but after all other phases, treat it
-        like 'body' code SINCE it'll end up using the user's types, and even impls!
-
-- [ ] zackoverflow.dev "I really enjoy writing Zig code. I love it’s clean syntax, comptime, packed structs and arbitrary bit-width integers, the Allocator API, and useful data-oriented design abstractions in the standard library."
-      What would it take to check those boxes in K1 with a faster compiler? Why is Zig's compiler slow if they're so ruthlessly
-      data-oriented? Architecture and fundamental language complexity? Would k1 be any faster for 850K lines? Signs point to yes,
-      but no idea
-
 - [ ] Switch VM stack to a single virtual allocation https://crates.io/crates/memmap2
 - [ ] Fix non-referencing match on `struct*`: just do the deref for the user
 - [ ] Fix referencing match not 'eliminating' patterns on `struct*` giving unhandled pattern `.CustomHeap({ zalloc }*) -> {`
 - [ ] Macro system built on comptime, both string #insert and parsed code #insert like Jai
-- [ ] @unlikely annotations
-
-- [ ] Level up perf skills
-  - [ ] Use `perf` to look at branch info, cache info
-  - [ ] learn bloom filters
-
-
-- [ ] Explicit coercion sites like Rust seems like a great idea? https://doc.rust-lang.org/reference/type-coercions.html#r-coerce.site.let
+- [ ] Use `perf` to look at branch info, cache info
 - [ ] Optimize lambdas that don't capture to become function pointers instead
 - [ ] Compile switches with no patterns or guards to LLVM switch
+- [ ] Implicit conversions: based on a special ability that integrates with 
+      type inference? (like Mojo's ImplicitlyIntable, etc)
 - [x] comptime #if needs to be a real node not a directive (can't parse if/else). More like `#const if` than `#if`
-- [ ] Implicit conversions based on a special ability that integrates with type inference? (like Mojo's ImplicitlyIntable, etc)
 - [ ] Private functions? Private anything? So hard to call, such a philosophical question about hiding, safety, skill-floor vs skill-ceiling
 - [x] string interp at end puts unnecessary empty string part: `putString(__sb_1001, "");`
-- [ ] Library vs Binary, clang passthrough options, when do we 'link', in IR or as object files, ...
-- [ ] `inline` functions (like Scala3's)
-- [ ] Add fixed length array types: `Array[<type expr> x <int literal>]`
 - [ ] Bug: Are parameter names part of a function type
-- [x] Improve LLVM opt pipeline https://www.reddit.com/r/Compilers/comments/1hqmd7x/recommended_llvm_passes/
-      https://llvm.org/docs/NewPassManager.html#just-tell-me-how-to-run-the-default-optimization-pipeline-with-the-new-pass-manager
-- [ ] More explicit companion ns via injecting `for` keyword `ns (for) type {`
-- [x] Stacktraces on crash (using libunwind and a little C program to call it: `rt/unwind.c`)
-- [ ] Operator 'overloading' story. I think the story is just abilities. The question is do we move the syntax to the source: 
-      ability Equals { syntax(2, "==") fn }
-      This means that these would affect the parser. We'd have to add a new pass to find all the syntax definitions
 - [x] Backend codegen cleanup
 -  [x] avoid uses of aggregate *values* where we can: so routine uses of 'struct's and 'enum's
 -  [x] Move allocas to entry block. "Doing this is actually quite easy as LLVM provides functions you can use to retrieve the entry block for a function and insert instructions into it."
@@ -119,20 +89,13 @@ New tagline? "C with typeclasses and tagged unions"
 - [x] 'never' needs to work in every expression position (got close enough, might add more if one comes up)
 - [x] accumulate test errors and support inline test comment assertions when a line should produce a compiler error.
       - Probably one test for failing compilation and one passing one for each major language area
-- [ ] b"" strings that are of type Buffer[u8]
-- [ ] Introduce Warnings
-  - [ ] Unused var
-  - [ ] Unused type bound
-  - [ ] Disallow naked variable patterns in 'is' OR Disallow capital variables, require capital enum variants...
-      - `if self.slots.get(probe_index) is None {`
+- [ ] b"" strings that are of type Buffer[u8] (what about interpolation?)
+- [ ] c"" strings that are of type Pointer (what about interpolation?)
 - [x] Add simple int range in stdlib
       `sealed abstract class Range(let start: Int, let end: Int, let step: Int)`
 - [ ] Make demo readme / site
 - [ ] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`
-- [ ] Define clear 'platform layer' (crash, assert, mem, other?).
-      Then we could do an LLVM interp platform and a rust interpreter platform
 - [x] Fix enum codegen, read Inko llvm backend (its inkwell + rust and does ABI compatible stuff https://yorickpeterse.com/articles/the-mess-that-is-handling-structure-arguments-and-returns-in-llvm/)
-- [ ] Runtime type info story, typeOf, typeInfo, and 'any' type
 - [x] Conditional compile directive
 - [x] Support boolean operators in compile time expressions
 - [ ] Mark types as trivially copyable or not
@@ -140,6 +103,46 @@ New tagline? "C with typeclasses and tagged unions"
 - [ ] Ability constraints on generics
 - [ ] Bug: ability impls kinda have to be provided in dependency order, since their constraints can depend on each other. I think I have to do a
            'skip and progress' style of pass for them
+
+## Project: Actual modules, library vs binary compile, allow linker options
+- [ ] Separate modules
+- [ ] Library vs Binary, clang passthrough options, when do we 'link', in IR or as object files, ...
+
+## Project: VM for `static` execution
+- [ ] vm: static execution
+  - [x] Introduce uword/iword types
+  - [x] Switch to a single stack
+  - [x] Move to intrinsic: system core memory functions
+  - [x] Move to intrinsic: memcpy/memmove
+  - [ ] Move to intrinsic: `write`
+  - [x] Move to intrinsic: `exit`
+  - [x] Run global initializers before most bodies but after all other phases, treat it
+        like 'body' code SINCE it'll end up using the user's types, and even impls!
+  - [x] Define clear 'platform layer' (crash, assert, mem, other?).
+      Then we could do an LLVM interp platform and a rust interpreter platform
+
+# Project: static reflection and metaprogramming story
+- [ ] Runtime type info story
+- [ ] typeOf, typeInfo, and 'any' type
+- [ ] 'Type predicate' functions as type bounds
+
+## Project: Array types
+- [ ] Add fixed length array types: `Array[<type expr> x <int literal>]`
+- [x] Improve LLVM opt pipeline https://www.reddit.com/r/Compilers/comments/1hqmd7x/recommended_llvm_passes/
+      https://llvm.org/docs/NewPassManager.html#just-tell-me-how-to-run-the-default-optimization-pipeline-with-the-new-pass-manager
+- [ ] More explicit companion ns via injecting `for` keyword `ns (for) type {`
+- [x] Stacktraces on crash (using libunwind and a little C program to call it: `rt/unwind.c`)
+
+## Project: Operator overloading story
+- [ ] Operator 'overloading' story. I think the story is just abilities. The question is do we move the syntax to the source: 
+      ability Equals { syntax(2, "==") fn }
+      This means that these would affect the parser. We'd have to add a new pass to find all the syntax definitions
+
+## Introduce Warnings
+- [ ] Unused var
+- [ ] Unused type bound
+- [ ] Disallow naked variable patterns in 'is' OR Disallow capital variables, require capital enum variants...
+    - `if self.slots.get(probe_index) is None {`
 
 ## Non-goals at least for now
 - Memory safety / solving the 'aliasing' problem, not because its unimportant but because I have other interests
