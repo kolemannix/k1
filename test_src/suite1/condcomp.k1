@@ -1,0 +1,22 @@
+ns condcomp;
+
+
+let static MY_VALUE: bool = true;
+let static MY_VALUE_NEG: bool = not MY_VALUE;
+
+fn test(): unit {
+  use core/k1;
+  assert(k1/OS == "macos");
+  assert(k1/TEST == false);
+
+  #if MY_VALUE_NEG {
+    crash("does not happen")
+  } else {
+    println("hello from MY_VALUE_NEG=\{MY_VALUE_NEG}")
+  };
+
+  let comptimeCheck = #if false "foo" else "bar";
+  assert(comptimeCheck == "bar");
+
+  ()
+}

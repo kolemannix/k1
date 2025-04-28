@@ -1,6 +1,6 @@
 use super::*;
 
-impl TypedModule {
+impl TypedProgram {
     pub fn derive_ability_impl(
         &mut self,
         _ability_id: AbilityId,

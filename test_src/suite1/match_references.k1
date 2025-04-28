@@ -1,0 +1,37 @@
+ns match_references;
+
+fn test(): unit {
+  let* x = some(42);
+  while x.* is .Some(xx) {
+    println("\{xx}");
+    if xx == 0 break()
+    else { 
+      x <- some(xx - 1);
+    }
+  };
+
+  let* point = { x: 5, y: 2 };
+  if point is { x, y: 2 }* {
+    println("x is \{x}")
+  };
+
+  x <- some(5);
+  while x is .Some(xx)* {
+    println("\{xx}");
+    if xx.* == 0 break()
+    else { 
+      xx <- xx.* - 1;
+    }
+  };
+
+  use core/mem/new;
+  let b: bool*** = new[bool**](new[bool*](new[bool](true)));
+  if not b is true*** { crash("b was false!") };
+  assert(b.*.*.* == true);
+
+  b.*.* <- false;
+  if b is true*** { crash("b was true!") };
+  assert(b.*.*.* == false);
+
+  ()
+}

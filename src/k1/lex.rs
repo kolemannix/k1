@@ -571,14 +571,13 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
         LexError { message, file_id: self.file_id, span }
     }
 
-    pub fn run(&mut self) -> LexResult<Vec<Token>> {
-        let mut tokens = Vec::with_capacity(8192);
+    pub fn run(&mut self, tokens: &mut Vec<Token>) -> LexResult<()> {
         let mut tok_buf = String::with_capacity(1024);
         while let Some(tok) = self.eat_token(&mut tok_buf)? {
             tokens.push(tok);
             tok_buf.clear();
         }
-        Ok(tokens)
+        Ok(())
     }
 
     fn add_span(&mut self, start: u32, len: u32) -> SpanId {
@@ -818,14 +817,16 @@ mod test {
 
     fn set_up(input: &str) -> anyhow::Result<(Spans, Vec<Token>)> {
         let mut spans = Spans::new();
-        let token_vec = Lexer::make(input, &mut spans, 0).run()?;
+        let mut token_vec = vec![];
+        Lexer::make(input, &mut spans, 0).run(&mut token_vec)?;
         Ok((spans, token_vec))
     }
 
     fn expect_token_kinds(input: &str, expected: Vec<TokenKind>) -> anyhow::Result<()> {
         let mut spans = Spans::new();
-        let result = Lexer::make(input, &mut spans, 0).run()?;
-        let kinds: Vec<TokenKind> = result.iter().map(|t| t.kind).collect();
+        let mut token_vec = vec![];
+        Lexer::make(input, &mut spans, 0).run(&mut token_vec)?;
+        let kinds: Vec<TokenKind> = token_vec.iter().map(|t| t.kind).collect();
         assert_eq!(kinds, expected);
         Ok(())
     }

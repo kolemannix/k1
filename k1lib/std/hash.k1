@@ -1,0 +1,234 @@
+// This table exercises:
+// - Generics
+// - References/pointers
+// - Structs and enums, optionals
+// - Pattern matching
+// - Loops and control flow
+// - Numeric operations
+// - String handling
+// - Builds on List which is implemented in k1
+
+let static MODULE_INFO: core/k1/ModuleManifest = {
+    kind: .Library,
+    deps: "",
+};
+
+deftype Entry[V] = { key: string, value: V, deleted: bool }?
+deftype HashMap[V] = {
+  size: uword,
+  // TODO: Switch to a 3-state enum for the deleted variant for a more efficient layout
+  entries: List[Entry[V]],
+}
+
+fn fnv1a_hash(key: string): uword {
+  let FNV_PRIME: uword = 1099511628211;
+  let FNV_OFFSET: uword = 14695981039346656037;
+  let mut hash_value = FNV_OFFSET;
+  for c in key do {
+    hash_value = Bitwise/xor(hash_value, c as u8 as uword);
+    hash_value = hash_value * FNV_PRIME;
+  };
+  hash_value
+}
+
+ns HashMap {
+
+  fn _make[V](cap: uword): HashMap[V] {
+    { size: 0, entries: List/filled(cap, .None) }
+  }
+
+  fn new[V](): HashMap[V] {
+    _make(0)
+  }
+
+  fn grow[V](self: HashMap[V]*): unit {
+    let origSize = self.size;
+    let oldEntries = self.entries;
+    let newCap = if oldEntries.cap() == 0 1: uword else oldEntries.cap() * 2;
+
+    let newMap = _make[V](newCap);
+    self <- newMap;
+
+    for v in oldEntries do {
+      if v is .Some(v) {
+        if not v.deleted self.insert(v.key, v.value)
+      }
+    };
+  }
+
+  fn _computeIndex[V](self: HashMap[V]*, key: string): uword {
+    let hash = fnv1a_hash(key);
+    let index = hash % self.entries.len;
+    index
+  }
+
+  // Super naive fully linear probing
+  fn _probe[V](self: HashMap[V], startIndex: uword): Entry[V]* {
+    let mut probeIndex = startIndex;
+    loop {
+      probeIndex = probeIndex + 1;
+      if probeIndex == self.entries.len { probeIndex = 0 };
+
+      let entryRef = self.entries.getRef(probeIndex);
+      // TODO: match on reference
+      if entryRef.* is .None {
+        return(entryRef)
+      }
+    }
+  }
+
+  fn fillFactor[V](self: HashMap[V]): f32 {
+    let fillDivisor = if self.entries.len == 0 1 as f32 else self.entries.len as f32;
+    let fillNumerator = if self.size == 0 1.0 else self.size as f32;
+    let fillFactor = fillNumerator / fillDivisor;
+    fillFactor
+  }
+
+  fn insert[V](self: HashMap[V]*, key: string, value: V): unit {
+    if self.*.fillFactor() > 0.7 {
+      self.grow();
+    };
+    let index = self._computeIndex(key);
+    let entryRef = self.entries.getRef(index);
+    let entry = { key: key, value: value, deleted: false };
+    switch entryRef.* {
+      .None -> {
+        entryRef <- .Some(entry);
+        self.size* <- self.size + 1;
+      },
+      .Some({ key: existingKey, value: _ }) -> {
+        if existingKey == key {
+          entryRef <- .Some(entry);
+        } else {
+          let nextAvailableEntry = self.*._probe(index);
+          nextAvailableEntry <- .Some(entry);
+          self.size* <- self.size + 1;
+        }
+      }
+    };
+  }
+
+  fn get[V](self: HashMap[V]*, key: string): V? {
+    let index = self._computeIndex(key);
+    let slot = self.entries.get(index);
+    switch slot {
+      .None -> .None,
+      .Some({ key: existingKey, value: v, deleted }) -> {
+        if existingKey == key {
+          if deleted .None else .Some(v)
+        } else {
+          let mut probe_index = index;
+          loop {
+            probe_index = probe_index + 1;
+            if probe_index == self.entries.len { probe_index = 0; };
+
+            switch self.entries.get(probe_index) {
+              .Some({ key: existingKey, value: value, deleted }) -> {
+                if key == existingKey {
+                  if deleted break(.None)
+                  else break(.Some(value))
+                }
+              },
+              .None -> { break(.None) },
+            }
+          }
+        }
+      }
+    };
+  }
+
+  fn remove[V](self: HashMap[V]*, key: string): bool {
+    let index = self._computeIndex(key);
+    let entryRef = self.entries.getRef(index);
+    switch entryRef.* {
+      .None -> false,
+      .Some({ key: existingKey, value: value, deleted }) -> {
+        if key == existingKey {
+          entryRef.asSome().!.value*.deleted* <- true;
+          not deleted
+        } else {
+          let mut probeIndex = index;
+          loop {
+            probeIndex = probeIndex + 1;
+            if probeIndex == self.entries.len { probeIndex = 0; };
+
+            let probedEntryRef = self.entries.getRef(probeIndex);
+            switch probedEntryRef.* {
+              .Some({ key: existingKey, value, deleted }) -> {
+                if key == existingKey {
+                  probedEntryRef.asSome().!.value*.deleted* <- true;
+                  break(not deleted)
+                }
+              },
+              .None -> { break(false) },
+            }
+          }
+        }
+      }
+    }
+
+  }
+
+  fn dump[V](self: HashMap[V]): unit where V: Show {
+    let capacity = self.entries.len;
+    let size = self.size;
+    println("Capacity: \{capacity}");
+    println("Size: \{size}");
+    println("");
+    for self.entries do {
+      printIt(itIndex);
+      print(" ");
+      switch it {
+        , .None -> println("empty")
+        , .Some({ key, value, deleted }) -> {
+            let v = Show/show(value);
+            println("\{key} -> \{value} (d=\{deleted})");
+        }
+      }
+    }
+  }
+
+}
+
+fn test(size: int): unit {
+  let* myMap = HashMap/new[int]();
+  let mut i = 0;
+  while i < size {
+    myMap.insert(i.show(), i);
+    if i % 5 == 0 {
+      myMap.remove(i.show());
+    };
+    i = i + 1;
+  };
+  i = 0;
+  // myMap.dump();
+  while i < size {
+    let result = myMap.get(i.show());
+    if i % 5 == 0 {
+      assertMsg("\{i} should be empty", result is .None);
+    } else {
+      if result is .Some(v) { assert (v == i) } else { crash("Missing value \{i}") }
+    };
+    i = i + 1;
+  };
+  // myMap.dump();
+}
+
+fn main(): i32 {
+  test(100000);
+  0
+}
+
+fn randByte(): u8 {
+  (core/sys/arc4random_uniform(26) + 65) as u8
+}
+
+fn randString(len: uint): string {
+  let* arr = List/withCapacity[char](len);
+  let mut i: uint = 0;
+  while i < len {
+    arr.push(randByte() as char);
+    i = i + 1;
+  };
+  string/fromBuffer(arr.toBuffer())
+}

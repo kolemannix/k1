@@ -2,7 +2,7 @@ use std::fmt::{Display, Formatter, Write};
 
 use super::*;
 
-impl Display for TypedModule {
+impl Display for TypedProgram {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let skip_variables = true;
         f.write_str("Module ")?;
@@ -61,7 +61,7 @@ impl Display for TypedModule {
 }
 
 /// Dumping impl
-impl TypedModule {
+impl TypedProgram {
     pub fn scope_id_to_string(&self, scope_id: ScopeId) -> String {
         let mut s = String::new();
         self.display_scope(self.scopes.get_scope(scope_id), &mut s).unwrap();
@@ -540,7 +540,10 @@ impl TypedModule {
             TypedExpr::Integer(int) => write!(writ, "{}", int.value),
             TypedExpr::Float(float) => write!(writ, "{}", float.value),
             TypedExpr::Bool(b, _) => write!(writ, "{}", b),
-            TypedExpr::String(s, _) => write!(writ, "\"{}\"", s),
+            TypedExpr::String(s, _) => {
+                write!(writ, "\"{}\"", self.get_string(*s))?;
+                Ok(())
+            }
             TypedExpr::Struct(struc) => {
                 writ.write_str("{\n")?;
                 for (idx, field) in struc.fields.iter().enumerate() {

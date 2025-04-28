@@ -1,0 +1,275 @@
+// Represents a contiguously allocated segment of memory that
+// is alleged to store values of type T. This is an inherently
+// unsafe type as all of the memory is not guaranteed to be populated
+// 
+// I'm going to introduce a safe wrapper around it that is meant to be used
+// as your 'slice' type, and we'll rename this, perhaps, to RawBuffer
+// It'll be the same thing except for a 'Promise' from the creator that
+// its fully populated
+ns Buffer {
+
+  fn bufferSizeBytes[T](count: uword): uword {
+    count * core/types/sizeOfStride[T]()
+  }
+
+  fn dataPointer[T](self: Buffer[T]): Pointer { self.data as Pointer }
+
+  fn fromRawParts[T](len: uword, data: Pointer): Buffer[T] { 
+    { len: len, data: data as T* }
+  }
+
+  fn fromBaseAndCount[T](len: uword, data: T*): Buffer[T] { 
+    { len: len, data }
+  }
+
+  fn _allocateIn[T](context alloc: mem/AllocMode)(count: uword): Buffer[T] {
+    let ptr = if count == 0 {
+      Pointer/NULL
+    } else {
+      let sizeBytes = bufferSizeBytes[T](count);
+      mem/allocIn(alloc, sizeBytes, core/types/alignOf[T]())
+    };
+    let data = ptr as T*;
+    { len: count, data }
+  }
+
+  fn _allocate[T](count: uword): Buffer[T] {
+    _allocateIn[T](context mem/AllocMode/CURRENT)(count)
+  }
+
+  fn _growTo[T](context alloc: mem/AllocMode)(self: Buffer[T]*, newCount: uword): unit {
+    if mem/resolveMode(alloc).supportsRealloc() {
+      let newSize = bufferSizeBytes[T](newCount);
+      let oldSize = bufferSizeBytes[T](self.len);
+      let newPtr = mem/reallocIn(context alloc)(
+        ptr = self.dataPointer(),
+        oldSize = oldSize,
+        align = core/types/alignOf[T](),
+        newSize = newSize, 
+      );
+      self <- { len: newCount, data: newPtr as T* }
+    } else {
+      let newBuffer = _allocate[T](newCount);
+      _copyFrom[T](self, newBuffer, self.len);
+      self <- newBuffer
+    }
+  }
+
+  fn _enlargedCloneIn[T](context alloc: mem/AllocMode)(self: Buffer[T], newCount: uword): Buffer[T] {
+    let newBuffer = _allocateIn[T](newCount);
+    _copyFrom[T](self, newBuffer, self.len);
+    newBuffer
+  }
+
+  fn _enlargedClone[T](self: Buffer[T], newCount: uword): Buffer[T] {
+    _enlargedCloneIn[T](context mem/AllocMode/CURRENT)(self, newCount)
+  }
+
+  fn empty[T](): Buffer[T] {
+    { len: 0, data: Pointer/NULL as T* }
+  }
+
+  fn _copyFrom[T](source: Buffer[T], dest: Buffer[T], count: uword): unit {
+    if count > source.len {
+      crash("Buffer copy source index out of bounds: \{count}")
+    };
+    if count > dest.len {
+      crash("Buffer copy dest index out of bounds: \{count}")
+    };
+    let numBytes = bufferSizeBytes[T](count);
+    mem/copy(dst = dest.dataPointer(), src = source.dataPointer(), count = numBytes);
+    ()
+  }
+
+  fn cloned[T](self: Buffer[T]): Buffer[T] {
+    let clone = self._enlargedClone(newCount = self.len);
+    clone
+  }
+
+  fn clonedIn[T](context mode: mem/AllocMode)(self: Buffer[T]): Buffer[T] {
+    let clone = self._enlargedCloneIn(newCount = self.len);
+    clone
+  }
+
+  fn sizeBytes[T](self: Buffer[T]): uword { bufferSizeBytes[T](self.len) }
+
+  fn filledIn[T](context mode: mem/AllocMode)(size: uword, value: T): Buffer[T] {
+    let buf: Buffer[T] = _allocateIn[T](size);
+    let mut i = 0: uword;
+    while i < size {
+      buf.set(i, value);
+      i = i + 1;
+    };
+    buf
+  }
+
+  fn filled[T](size: uword, value: T): Buffer[T] {
+    Buffer/filledIn[T](context mem/AllocMode/CURRENT)(size, value)
+  }
+
+  fn slice[T](self: Buffer[T], start: uword, end: uword): Buffer[T] {
+    if end < start or self.len == 0 {
+      return(empty[T]())
+    };
+    if start >= self.len or start < 0 {
+      let len = self.len;
+      crash("slice start index out of bounds: \{start}. length is: \{len}")
+    };
+    let end = if end > self.len self.len else end;
+    let newLen = end - start;
+    let newBase = self.getRef(start);
+    { len: newLen, data: newBase }
+  }
+
+  fn take[T](self: Buffer[T], count: uword): Buffer[T] { self.slice(0,     count) }
+  fn drop[T](self: Buffer[T], count: uword): Buffer[T] { self.slice(count, self.len) }
+
+  fn getRef[T](self: Buffer[T], index: uword): T* {
+    if index >= self.len {
+      crash("Buffer index out of bounds")
+    };
+    self.dataPointer().refAtIndex[T](index)
+  }
+
+  fn set[T](self: Buffer[T], index: uword, elem: T): unit {
+    let tRef = self.getRef(index);
+    tRef <- elem;
+  }
+
+  fn get[T](self: Buffer[T], index: uword): T {
+    let tRef = self.getRef(index);
+    tRef.*
+  }
+
+  fn isEmpty[T](self: Buffer[T]): bool {
+    self.len == 0
+  }
+
+  fn nonEmpty[T](self: Buffer[T]): bool {
+    self.len > 0
+  }
+
+  fn firstRef[T](self: Buffer[T]): T*? {
+    if not self.isEmpty() {
+      .Some(self.getRef(0))
+    } else {
+      .None
+    }
+  }
+
+  fn first[T](self: Buffer[T]): T? {
+    switch self.firstRef() {
+      .None -> .None,
+      .Some(firstRef) -> .Some(firstRef.*)
+    }
+  }
+
+  fn lastRef[T](self: Buffer[T]): T*? {
+    if not self.isEmpty() {
+      .Some(self.getRef(self.len - 1))
+    } else {
+      .None
+    }
+  }
+
+  fn last[T](self: Buffer[T]): T? {
+    switch self.lastRef() {
+      .None -> .None,
+      .Some(lastRef) -> .Some(lastRef.*)
+    }
+  }
+
+  fn concat[T](self: Buffer[T], other: Buffer[T]): Buffer[T] {
+    let new = self._enlargedClone[T](self.len + other.len);
+    _copyFrom(
+      source = other, 
+      dest = new.slice(self.len, self.len + other.len), 
+      count = other.len
+    );
+    new
+  }
+
+  fn swap[T](self: Buffer[T]*, indexA: uword, indexB: uword): unit {
+    let aRef = self.*.getRef(indexA);
+    let bRef = self.*.getRef(indexB);
+    let bValue = bRef.*;
+    bRef <- aRef.*;
+    aRef <- bValue;
+  }
+
+  fn sorted[T](self: Buffer[T]): Buffer[T] where T: Comparable {
+    let* list = List/wrapBuffer(self);
+    list.sort();
+    list.*.toBuffer()
+  }
+
+  fn toCharBuffer(self: Buffer[byte]): Buffer[char] {
+    Buffer/fromRawParts[char](self.len, self.dataPointer());
+  }
+
+  fn toByteBuffer(self: Buffer[char]): Buffer[byte] {
+    Buffer/fromRawParts[byte](self.len, self.dataPointer());
+  }
+
+  fn equalsBits[T](self: Buffer[T], other: Buffer[T]): bool {
+    if self.len != other.len false else {
+      mem/equals(self.dataPointer(), other.dataPointer(), self.sizeBytes())
+    }
+  }
+
+}
+
+impl Equals for Buffer[u8] {
+  fn equals(self: Buffer[u8], other: Buffer[u8]): bool {
+    self.equalsBits(other)
+  }
+}
+
+impl Equals for Buffer[char] {
+  fn equals(self: Buffer[char], other: Buffer[char]): bool {
+    self.equalsBits(other)
+  }
+}
+
+impl Equals for Buffer[int] {
+  fn equals(self: Buffer[int], other: Buffer[int]): bool {
+    self.equalsBits(other)
+  }
+}
+
+deftype BufferIterator[T] = {
+  buf: Buffer[T],
+  pos: uword
+}
+ns BufferIterator {
+  fn fromBuffer[T](buf: Buffer[T]): BufferIterator[T] { 
+    { buf, pos: 0 }
+  }
+}
+
+impl[T] Iterator[Item = T] for BufferIterator[T] {
+  fn next(self: BufferIterator[T]*): Item? { 
+    if self.pos < self.buf.len {
+      let item = self.buf.get(self.pos);
+      self.pos* <- self.pos + 1;
+      some(item)
+    } else .None
+  }
+  fn sizeHint(self: Self): { atLeast: uword, atMost: uword? } { 
+    let rem = self.buf.len - self.pos;
+    { atLeast: rem, atMost: some(rem) }
+  }
+  fn advanceBy(self: Self*, n: uword): unit {
+    self.pos* <- self.pos + n
+  }
+  fn nth(self: Self*, n: uword): Item? {
+    self.advanceBy(n);
+    self.next()
+  }
+}
+
+impl[T] Iterable[Item = T, I = BufferIterator[T]] for Buffer[T] {
+  fn iterator(self: Self): I {
+    BufferIterator/fromBuffer(self)
+  }
+}

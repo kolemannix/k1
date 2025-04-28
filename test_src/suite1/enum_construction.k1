@@ -1,0 +1,48 @@
+ns enum_construction;
+
+deftype State = either On(unit), Off(unit), Zilch
+deftype StateHard = either On(int?), Off(int?)
+deftype Contrived[A, B] = either Stuff({ a: A, b: B }), Empty
+
+fn test(): unit {
+
+  let State: unit = ();
+
+  let z0: State.Zilch = State.Zilch;
+  let z1: State = State.Zilch;
+  let z2: State.Zilch = State.Zilch: State.Zilch;
+
+  let s1 = enum_construction/State.On(());
+  let s2 = enum_construction/State.Off(());
+
+  let s3: enum_construction/State = enum_construction/State.Off(());
+  let s4: enum_construction/State.On = enum_construction/State.On(());
+
+  let s5 = StateHard.On(.Some(42));
+  let s6: StateHard = StateHard.On(.Some(42));
+  let s7: StateHard = StateHard.On(.None);
+
+  // A collision to make sure it works
+  let Opt: unit = ();
+
+  let bb: Opt[bool]      = .Some(true);
+  let bc: Opt[bool].Some = .Some(true);
+  let bc = _root/core/Opt.Some[bool](true);
+  assert(bc is .Some(true));
+  let bc2 = _root/core/Opt.Some(42);
+  assert(bc2 is .Some(42));
+
+  let b: Opt[bool].None = Opt.None;
+  let b: Opt[bool].None = .None;
+  let c: Opt[bool].None = Opt.None;
+
+  let i: Opt[i32] = Opt.None[i32];
+  let i: Opt[i32].None = Opt.None[i32];
+  let i: Opt[i32].None = Opt.None;
+
+  let x = Contrived.Stuff({ a: 42, b: "hello"});
+
+  let bbb = Opt.None[int];
+
+  ()
+}

@@ -1,5 +1,5 @@
 fn main(): i32 {
-  let exitTest = #static { sys/exit(0) };
+  let exitTest = #static { core/sys/exit(0) };
   0
 }
 //errmsg: Static execution exited with code: 0

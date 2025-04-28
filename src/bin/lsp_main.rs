@@ -5,7 +5,7 @@ use std::sync::{Mutex, RwLock};
 
 use k1::compiler::CompileModuleError;
 use k1::lex::SpanId;
-use k1::parse::ParsedModule;
+use k1::parse::ParsedProgram;
 use k1::typer::*;
 use tower_lsp::jsonrpc::{Error, Result};
 use tower_lsp::lsp_types::*;
@@ -19,7 +19,7 @@ use tracing::info;
 //
 //impl LspError for TyperError {}
 
-fn error_to_diagnostic(ast: &ParsedModule, span_id: SpanId, message: String) -> (Url, Diagnostic) {
+fn error_to_diagnostic(ast: &ParsedProgram, span_id: SpanId, message: String) -> (Url, Diagnostic) {
     let span = ast.spans.get(span_id);
     let (start_line, end_line) = ast.get_lines_for_span_id(span_id).unwrap();
     let source = ast.sources.get_source(span.file_id);
@@ -54,8 +54,8 @@ fn source_to_uri(directory: impl AsRef<Path>, file: impl AsRef<str>) -> Url {
 
 enum CompiledModule {
     Empty,
-    Parsed(Box<ParsedModule>),
-    Typed(Box<TypedModule>),
+    Parsed(Box<ParsedProgram>),
+    Typed(Box<TypedProgram>),
 }
 
 struct Backend {
@@ -75,7 +75,7 @@ impl Backend {
         }
     }
 
-    fn with_ast<T>(&self, f: impl Fn(&ParsedModule) -> T) -> Option<T> {
+    fn with_ast<T>(&self, f: impl Fn(&ParsedProgram) -> T) -> Option<T> {
         let m_lock = self.module.lock().unwrap();
         match &*m_lock {
             CompiledModule::Empty => None,

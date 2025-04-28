@@ -1,3 +1,5 @@
+ns static_test;
+
 fn getPoint(): { x: u8, y: u32, z: i64 } {
   { x: 1, y: 300, z: -222 }
 }
@@ -57,13 +59,13 @@ fn main(): i32 {
     let* i = 10;
 
     //assert(i.* == 10);
-    i <- identity(i.*);
+    i <- core/identity(i.*);
     i.*
   };
   assertEquals(letRef, 10);
 
-  assertEquals(k1/IS_STATIC, false);
-  #static assert(k1/IS_STATIC);
+  assertEquals(core/k1/IS_STATIC, false);
+  #static assert(core/k1/IS_STATIC);
 
   let enum1 = #static {
     let x = some(42);
@@ -126,7 +128,7 @@ fn main(): i32 {
   // StringBuilder
 
   assertEquals[string](#static {
-    let* sb = StringBuilder/new();
+    let* sb = core/StringBuilder/new();
     sb.putString("Hello");
     sb.build()
   }, "Hello");

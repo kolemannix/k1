@@ -1,8 +1,11 @@
-use crate::{compiler::detect_host_target, parse::*};
+use crate::{
+    compiler::detect_host_target,
+    parse::{self, *},
+};
 use std::fs;
 
-fn make_test_module() -> ParsedModule {
-    ParsedModule::make(
+fn make_test_module() -> ParsedProgram {
+    ParsedProgram::make(
         "unit_test".to_string(),
         CompilerConfig {
             is_test_build: false,
@@ -13,21 +16,25 @@ fn make_test_module() -> ParsedModule {
     )
 }
 
-fn set_up<'module>(input: &str, module: &'module mut ParsedModule) -> Parser<'static, 'module> {
+fn set_up<'ast>(input: &str, ast: &'ast mut ParsedProgram) -> Parser<'static, 'ast> {
     let source =
         Source::make(0, "unit_test".to_string(), "unit_test.k1".to_string(), input.to_string());
     let file_id = source.file_id;
-    let token_vec: &'static mut [Token] = lex_text(module, source).unwrap().leak();
+    let module_name = ast.idents.intern("unit_test");
+    let mut token_vec = vec![];
+    lex_text(ast, source, &mut token_vec).unwrap();
+    let token_vec = token_vec.leak();
     println!("{:#?}", token_vec);
-    let parser = Parser::make(token_vec, file_id, module);
+    let ns_id = parse::init_module(module_name, ast);
+    let parser = Parser::make(module_name, ns_id, ast, token_vec, file_id);
     parser
 }
 
-fn test_single_expr(input: &str) -> Result<(ParsedModule, ParsedExpression), ParseError> {
+fn test_single_expr(input: &str) -> Result<(ParsedProgram, ParsedExpression), ParseError> {
     test_single_expr_with_id(input).map(|(m, e, _)| (m, e))
 }
 
-fn test_single_type_expr(input: &str) -> Result<(ParsedModule, ParsedTypeExpr), ParseError> {
+fn test_single_type_expr(input: &str) -> Result<(ParsedProgram, ParsedTypeExpr), ParseError> {
     let mut module = make_test_module();
     let mut parser = set_up(input, &mut module);
     let type_expr_id = parser.expect_type_expression()?;
@@ -37,7 +44,7 @@ fn test_single_type_expr(input: &str) -> Result<(ParsedModule, ParsedTypeExpr), 
 
 fn test_single_expr_with_id(
     input: &str,
-) -> Result<(ParsedModule, ParsedExpression, ParsedExprId), ParseError> {
+) -> Result<(ParsedProgram, ParsedExpression, ParsedExprId), ParseError> {
     let mut module = make_test_module();
     let mut parser = set_up(input, &mut module);
     let expr_id = parser.expect_expression()?;
@@ -192,14 +199,14 @@ fn core_only() -> Result<(), ParseError> {
     env_logger::init();
     let core_source = Source::make(
         0,
-        "stdlib".to_string(),
+        "core".to_string(),
         "core.k1".to_string(),
-        fs::read_to_string("stdlib/core.k1").unwrap(),
+        fs::read_to_string("k1lib/core/core.k1").unwrap(),
     );
     let module = test_parse_module(core_source)?;
     assert_eq!(&module.name, "core");
     assert_eq!(&module.sources.get_main().filename, "core.k1");
-    assert_eq!(&module.sources.get_main().directory, "stdlib");
+    assert_eq!(&module.sources.get_main().directory, "core");
     assert!(!module.get_root_namespace().definitions.is_empty());
     Ok(())
 }

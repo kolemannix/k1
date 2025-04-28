@@ -1,0 +1,328 @@
+// A growable, ordered collection of elements.
+// Backed by an efficient, contiguously allocated buffer
+//
+// List stores a copy of its allocator, because it is intended
+// to be a convenient and easy workhorse for most use cases
+ns List {
+
+  // TODO: List will store its allocator,
+  // UnmanagedList will accept one at call sites
+  let static ALLOC_MODE: mem/AllocMode = { kind: .Current };
+
+  ///////////////////////////
+  // Construction functions
+
+  fn empty[T](): List[T] {
+    withCapacity[T](0)
+  }
+
+  fn filled[T](size: uword, value: T): List[T] {
+    let buffer = Buffer/filled(size, value);
+    { len: size, buffer: buffer }
+  }
+
+  fn withCapacity[T](cap: uword): List[T] {
+    let buffer = Buffer/_allocate[T](cap);
+    { len: 0, buffer: buffer }
+  }
+
+  fn reserve[T](self: List[T]*, count: uword): unit {
+    if self.cap() >= count { return(()) };
+    self.buffer*._growTo[T](context ALLOC_MODE)(count);
+    assertdbg(self.buffer.len == count);
+  }
+
+  fn single[T](value: T): List[T] {
+    filled[T](1, value)
+  }
+
+  fn wrapBuffer[T](buffer: Buffer[T]): List[T] {
+    { len: buffer.len, buffer: buffer }
+  }
+
+  // Return only the part of our buffer with Ts in it!!!
+  fn toBuffer[T](self: List[T]): Buffer[T] {
+    self.buffer.slice(0, self.len)
+  }
+
+  fn innerBuffer[T](self: List[T]): Buffer[T] { self.buffer }
+
+  fn cap[T](self: List[T]): uword { self.buffer.len }
+
+  fn getRef[T](self: List[T], index: uword): T* {
+    self.buffer.getRef[T](index)
+  }
+
+  fn set[T](self: List[T], index: uword, elem: T): unit {
+    self.buffer.set(index, elem);
+  }
+
+  fn get[T](self: List[T], index: uword): T {
+    if index >= self.len {
+      crash("List index out of bounds")
+    };
+    self.buffer.get(index)
+  }
+
+  fn getOpt[T](self: List[T], index: uword): T? {
+    if index >= self.len {
+      .None
+    } else .Some(self.buffer.get(index))
+  }
+
+  fn _grow[T](self: List[T]*): unit {
+    let elemSize = core/types/sizeOf[T]();
+    let newCap: uword = if self.buffer.isEmpty() {
+      // For large elements, just allocate what's needed - Rust's RawVec does this :)
+      if elemSize >= 1024 1 else 8
+    } else {
+      self.*.cap() * 2
+    };
+    self.reserve(newCap);
+    ()
+  }
+
+  fn cloned[T](self: List[T]): List[T] {
+    let newBuffer = self.buffer.cloned();
+    { len: self.len, buffer: newBuffer }
+  }
+
+  fn push[T](self: List[T]*, elem: T): unit {
+    let startLength = self.len;
+    if startLength == self.*.cap() {
+      self._grow();
+    };
+    self.len* <- startLength + 1;
+    self.*.set(startLength, elem);
+    ()
+  }
+
+  fn slice[T](self: List[T], start: uword, end: uword): Buffer[T] {
+    if self.len == 0 return(Buffer/empty[T]());
+    if end > self.len { crash("List slice end out of bounds: \{end}") };
+    self.buffer.slice(start, end)
+  }
+
+  fn isEmpty[T](self: List[T]): bool {
+    self.len == 0
+  }
+
+  fn nonEmpty[T](self: List[T]): bool {
+    self.len > 0
+  }
+
+  fn firstRef[T](self: List[T]): T*? {
+    if self.nonEmpty() {
+      .Some(self.getRef(0))
+    } else {
+      .None
+    }
+  }
+
+  fn first[T](self: List[T]): T? {
+    switch self.firstRef() {
+      .None -> .None,
+      .Some(firstRef) -> .Some(firstRef.*)
+    }
+  }
+
+  fn lastRef[T](self: List[T]): T*? {
+    if self.nonEmpty() {
+      .Some(self.getRef(self.len - 1))
+    } else {
+      .None
+    }
+  }
+
+  fn last[T](self: List[T]): T? {
+    switch self.lastRef() {
+      .None -> .None,
+      .Some(lastRef) -> .Some(lastRef.*)
+    }
+  }
+
+  fn reverse[T](self: List[T]*): unit {
+    let mut i = 0:uword;
+    while (i < (self.len / 2:uword)) {
+      let j = self.len - i - 1;
+      self.swap(i, j);
+      i = i + 1;
+    }
+  }
+
+  fn reversed[T](self: List[T]): List[T] {
+    let* clone = self.cloned();
+    clone.reverse[T]();
+    clone.*
+  }
+
+  fn concat[T](self: List[T]*, other: List[T]): unit {
+    self.appendBuffer(other.toBuffer())
+  }
+
+  fn appendBufferIn[T](context mode: mem/AllocMode)(self: List[T]*, other: Buffer[T]): unit {
+    self.reserve(self.len + other.len);
+    for e in other do {
+      self.push(e)
+    }
+  }
+
+  fn appendBuffer[T](self: List[T]*, other: Buffer[T]): unit {
+    self.appendBufferIn(context mem/AllocMode/CURRENT)(other)
+  }
+
+  fn swap[T](self: List[T]*, indexA: uword, indexB: uword): unit {
+    let aRef = self.*.getRef(indexA);
+    let bRef = self.*.getRef(indexB);
+    let bValue = bRef.*;
+    bRef <- aRef.*;
+    aRef <- bValue;
+  }
+
+  fn sort[T](input: List[T]*): unit where T: Comparable {
+  
+    if input.len <= 1 return(());
+  
+    let halfIndex = input.len / 2;
+    let pivot = input.*.get(halfIndex);
+  
+    let* left = List/withCapacity[T](halfIndex);
+    let* right = List/withCapacity[T](halfIndex);
+    let* equal = List/withCapacity[T](4);
+  
+    for item in input.* do {
+      switch item.compare(pivot) {
+        .Less -> left.push(item),
+        .Equal -> equal.push(item),
+        .Greater -> right.push(item)
+      }
+    };
+  
+    left.sort();
+    right.sort();
+  
+    let mut i: uword = 0;
+    for item in left.* do {
+      input.*.set(i, item);
+      i = i + 1;
+    };
+  
+    for item in equal.* do {
+      input.*.set(i, item);
+      i = i + 1;
+    };
+  
+    for item in right.* do {
+      input.*.set(i, item);
+      i = i + 1;
+    };
+  }
+
+  fn sorted[T](self: List[T]): List[T] where T: Comparable {
+    let* copy = self.cloned();
+    copy.sort();
+    copy.*
+  }
+
+  fn join[T: Show](self: List[T], sep: string): string {
+    let b = StringBuilder/new();
+    for s in self do {
+      b.putString(s.show());
+      let isLast = itIndex != self.len - 1;
+      if not isLast {
+        b.putChar('\n');
+      }
+    };
+    b.build()
+  }
+
+  fn map[T, U](self: List[T], f: some \T -> U): List[U] {
+    let* us = List/withCapacity[U](self.len);
+    for i in self do { us.push[U](f(i)) };
+    us.*
+  }
+  
+  fn flatMap[T, U](self: List[T], f: some \T -> List[U]): List[U] {
+    let* us = List/empty[U]();
+    for i in self do { us.concat[U](f(i)) };
+    us.*
+  }
+  
+  fn filter[T](self: List[T], f: some \T -> bool): List[T] {
+    let* keep = List/empty[T]();
+    for i in self do { if f(i) keep.push(i) };
+    keep
+  }
+
+}
+
+impl Writer for List[char] {
+  fn writeChar(self: Self*, value: char): unit { self.push(value) }
+  fn writeByte(self: Self*, value: u8): unit { self.push(value as char) }
+  fn writeString(self: Self*, value: string): unit {
+    // TODO(stdlib) This can be more specialized; we know we are a byte buffer
+    // So we should call memcpy, not generic append
+    self.appendBuffer(value.innerBuffer())
+  }
+  fn writeBytes(self: Self*, buffer: Buffer[byte]): unit {
+    // TODO(stdlib) This can be more specialized; we know we are a byte buffer
+    // So we should call memcpy, not generic append
+    self.appendBuffer(buffer.toCharBuffer())
+  }
+}
+
+impl Writer for List[u8] {
+  fn writeChar(self: Self*, value: char): unit { self.push(value as u8) }
+  fn writeByte(self: Self*, value: u8): unit { self.push(value) }
+  fn writeString(self: Self*, value: string): unit {
+    self.appendBuffer(value.innerBuffer().toByteBuffer())
+  }
+  fn writeBytes(self: Self*, buffer: Buffer[byte]): unit {
+    self.appendBuffer(buffer)
+  }
+}
+
+impl Equals for List[u8] {
+  fn equals(self: List[u8], other: List[u8]): bool { self.toBuffer() == other.toBuffer() }
+}
+
+impl Equals for List[int] {
+  fn equals(self: List[int], other: List[int]): bool { self.toBuffer() == other.toBuffer() }
+}
+
+impl[T: Equals] Equals for List[T] {
+  fn equals(self: List[T], other: List[T]): bool {
+    if self.len != other.len false else {
+      let mut i: uword = 0;
+      while i < self.len {
+        if self.get(i) != other.get(i) {
+          return(false);
+        };
+        i = i + 1;
+      };
+      true
+    }
+  }
+}
+
+impl[T: Show] Show for List[T] {
+  fn show(self: List[T]): string {
+    let b = StringBuilder/new();
+    b.putChar('[');
+    for s in self do {
+      b.putString(s.show());
+      let last = itIndex == self.len - 1;
+      if not last {
+        b.putString(",");
+      };
+    };
+    b.putChar(']');
+    b.build()
+  }
+}
+
+impl[T] Iterable[Item = T, I = BufferIterator[T]] for List[T] {
+  fn iterator(self: Self): I {
+    self.toBuffer().iterator()
+  }
+}

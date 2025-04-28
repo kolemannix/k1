@@ -1,0 +1,18 @@
+ns test_globals;
+
+let globalInt: int = 0;
+let* globalIntRef: int* = 10;
+let static staticInt: int = 2;
+
+fn test(): unit {
+
+   assert(globalInt == 0);
+   assert(staticInt == 2);
+
+   while globalIntRef.* > staticInt {
+     globalIntRef <- globalIntRef.* - 1;
+   };
+   assert(globalIntRef.* == 2);
+
+  ()
+}

@@ -1,6 +1,6 @@
 use ahash::HashMapExt;
 use fxhash::FxHashMap;
-use log::{debug, trace};
+use log::debug;
 use smallvec::SmallVec;
 
 use std::{
@@ -22,6 +22,9 @@ use crate::{
 };
 
 nz_u32_id!(ScopeId);
+impl ScopeId {
+    pub const PENDING: ScopeId = ScopeId(NonZeroU32::MAX);
+}
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum ScopeType {
@@ -98,22 +101,24 @@ pub struct Scopes {
     scopes: Pool<Scope, ScopeId>,
     lambda_info: FxHashMap<ScopeId, ScopeLambdaInfo>,
     loop_info: FxHashMap<ScopeId, ScopeLoopInfo>,
+    pub core_scope_id: ScopeId,
+    pub k1_scope_id: ScopeId,
 }
 
 impl Scopes {
     pub const ROOT_SCOPE_ID: ScopeId = ScopeId(NonZeroU32::new(1).unwrap());
-    pub fn make() -> Self {
-        Scopes {
+    pub fn make(root_ident: Identifier) -> Self {
+        let root_scope = Scope::make(ScopeType::Namespace, None, Some(root_ident), 0);
+        let mut scopes = Scopes {
             scopes: Pool::with_capacity("scopes", 8192),
             lambda_info: FxHashMap::new(),
             loop_info: FxHashMap::new(),
-        }
-    }
-
-    pub fn add_root_scope(&mut self, name: Option<Identifier>) -> ScopeId {
-        debug_assert!(self.scopes.is_empty());
-        self.scopes.add(Scope::make(ScopeType::Namespace, None, name, 0));
-        Self::ROOT_SCOPE_ID
+            core_scope_id: ScopeId::PENDING,
+            k1_scope_id: ScopeId::PENDING,
+        };
+        let id = scopes.scopes.add(root_scope);
+        debug_assert_eq!(id, Self::ROOT_SCOPE_ID);
+        scopes
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (ScopeId, &Scope)> {
@@ -312,7 +317,7 @@ impl Scopes {
 
     pub fn find_type(&self, scope_id: ScopeId, ident: Identifier) -> Option<(TypeId, ScopeId)> {
         let scope = self.get_scope(scope_id);
-        trace!("Find type {} in {:?}", ident, scope.types);
+        debug!("Find type {} in {:?}", ident, scope.types);
         if let v @ Some(_r) = scope.find_type(ident) {
             return v.map(|v| (v, scope_id));
         }
@@ -539,55 +544,6 @@ impl Scopes {
         }
     }
 
-    pub fn find_useable_symbol(
-        &self,
-        scope_id: ScopeId,
-        name: &NamespacedIdentifier,
-        namespaces: &Namespaces,
-        identifiers: &Identifiers,
-    ) -> TyperResult<Option<UseableSymbol>> {
-        let scope_id_to_search = self.traverse_namespace_chain(
-            scope_id,
-            &name.namespaces,
-            namespaces,
-            identifiers,
-            name.span,
-        )?;
-        let scope_to_search = self.get_scope(scope_id_to_search);
-
-        debug!(
-            "Searching scope for useable symbol: {}, Functions:\n{:?}",
-            self.make_scope_name(scope_to_search, identifiers),
-            scope_to_search.functions.iter().collect::<Vec<_>>()
-        );
-
-        if let Some(function_id) = scope_to_search.find_function(name.name) {
-            Ok(Some(UseableSymbol {
-                source_scope: scope_id_to_search,
-                id: UseableSymbolId::Function(function_id),
-            }))
-        } else if let Some(type_id) = scope_to_search.find_type(name.name) {
-            Ok(Some(UseableSymbol {
-                source_scope: scope_id_to_search,
-                id: UseableSymbolId::Type(type_id),
-            }))
-        } else if let Some(variable_id) =
-            scope_to_search.find_variable(name.name).and_then(|vis| vis.variable_id())
-        {
-            Ok(Some(UseableSymbol {
-                source_scope: scope_id_to_search,
-                id: UseableSymbolId::Constant(variable_id),
-            }))
-        } else if let Some(ns_id) = scope_to_search.find_namespace(name.name) {
-            Ok(Some(UseableSymbol {
-                source_scope: scope_id_to_search,
-                id: UseableSymbolId::Namespace(ns_id),
-            }))
-        } else {
-            Ok(None)
-        }
-    }
-
     pub fn add_use_binding(
         &mut self,
         scope_id: ScopeId,
@@ -602,14 +558,25 @@ impl Scopes {
             UseableSymbolId::Constant(variable_id) => {
                 self.add_variable(scope_id, name_to_use, variable_id);
             }
-            UseableSymbolId::Type(type_id) => {
+            UseableSymbolId::Type { type_id, companion_namespace } => {
                 // Discard because 'use's should shadow
                 let _ = self.add_type(scope_id, name_to_use, type_id);
+                if let Some(companion_namespace) = companion_namespace {
+                    let _ = self
+                        .get_scope_mut(scope_id)
+                        .add_namespace(name_to_use, companion_namespace);
+                }
             }
             UseableSymbolId::Namespace(ns_id) => {
-                // Discard because 'use's should shadow
                 let s = self.get_scope_mut(scope_id);
+                // Discard because 'use's should shadow
                 let _ = s.add_namespace(name_to_use, ns_id);
+            }
+            UseableSymbolId::Ability(ability_id, namespace_id) => {
+                let s = self.get_scope_mut(scope_id);
+                // Discard because 'use's should shadow
+                let _ = s.add_ability(name_to_use, ability_id);
+                let _ = s.add_namespace(name_to_use, namespace_id);
             }
         }
     }
@@ -700,17 +667,18 @@ impl ScopeOwnerId {
 
 #[derive(Debug, Clone, Copy)]
 pub struct UseableSymbol {
-    id: UseableSymbolId,
+    pub id: UseableSymbolId,
     #[allow(unused)]
-    source_scope: ScopeId,
+    pub source_scope: ScopeId,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub enum UseableSymbolId {
     Function(FunctionId),
     Constant(VariableId),
-    Type(TypeId),
+    Type { type_id: TypeId, companion_namespace: Option<NamespaceId> },
     Namespace(NamespaceId),
+    Ability(AbilityId, NamespaceId),
 }
 
 #[derive(Debug, Clone, Copy)]
