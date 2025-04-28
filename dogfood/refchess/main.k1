@@ -1,5 +1,10 @@
 // Copyright (C) 2025 Koleman Nix 
 // The efficient representation, a Bitboard encoding
+
+use core/IntRange
+use core/eprintln
+use core/sys
+
 deftype Color = either White, Black
 deftype alias Bitboard = u64
 

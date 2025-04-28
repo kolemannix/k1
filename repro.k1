@@ -1,9 +1,0 @@
-fn add(x: int, y: int): int {
-  let res = x + y;
-  res
-}
-
-fn main(): i32 {
-  add(2, 3);
-  0
-}

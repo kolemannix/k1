@@ -1,0 +1,36 @@
+ns use_test;
+
+// Use a function from top-level
+use core/types/typeId
+// Use a constant from top-level
+use core/files/unix/SEEK_END as SEEKEND
+
+ns foo {
+  fn getOne(): int { 1 }
+}
+
+fn test(): unit {
+  // Use a function from stmt w/ alias
+  use core/types/typeId as typeIdAlias;
+  assert(typeIdAlias[never]() == typeId[never]()); 
+
+  // Use a constant from stmt w/ alias
+  use core/files/unix/SEEK_END as S;
+  assert(S == core/files/unix/SEEK_END);
+  assert(SEEKEND == core/files/unix/SEEK_END);
+
+  // Use a basic type
+  use core/string as str;
+  let hello: str = "Hello";
+
+  // Use a generic type
+  use core/Opt as Optional;
+  let helloOpt: Optional[str] = some("Hello");
+  assert(hello == helloOpt.!);
+
+  // Use a namespace
+  use use_test/foo as fooAlias;
+  assert(fooAlias/getOne() == 1);
+
+  ()
+}

@@ -23,7 +23,7 @@ use crate::{
         },
         BinaryOpKind, CastType, IntrinsicFunction, Layout, MatchingCondition,
         MatchingConditionInstr, SimpleNamedType, StaticValue, TypedExpr, TypedExprId,
-        TypedFloatValue, TypedGlobalId, TypedIntValue, TypedMatchExpr, TypedModule, TypedStmtId,
+        TypedFloatValue, TypedGlobalId, TypedIntValue, TypedMatchExpr, TypedProgram, TypedStmtId,
         TyperResult, VariableId,
     },
 };
@@ -34,7 +34,7 @@ mod vm_test;
 mod binop;
 
 /// Bit-for-bit mappings of K1 types
-mod k1_types {
+pub mod k1_types {
 
     #[repr(C)]
     #[derive(Clone, Copy)]
@@ -103,7 +103,7 @@ impl Vm {
         }
     }
 
-    pub fn dump(&mut self, m: &TypedModule) -> String {
+    pub fn dump(&mut self, m: &TypedProgram) -> String {
         use std::fmt::Write;
         let mut s = String::new();
         let w = &mut s;
@@ -139,11 +139,11 @@ impl Vm {
         frame_locals.get(&variable_id).copied()
     }
 
-    pub fn dump_current_frame(&mut self, m: &TypedModule) -> String {
+    pub fn dump_current_frame(&mut self, m: &TypedProgram) -> String {
         self.dump_frame(m, self.stack.frames.len() - 1)
     }
 
-    pub fn dump_frame(&mut self, m: &TypedModule, frame_index: usize) -> String {
+    pub fn dump_frame(&mut self, m: &TypedProgram, frame_index: usize) -> String {
         use std::fmt::Write;
         let mut s = String::new();
         let w = &mut s;
@@ -358,7 +358,7 @@ impl From<bool> for Value {
 
 const GLOBAL_ID_STATIC: TypedGlobalId = TypedGlobalId::from_nzu32(NonZeroU32::new(1).unwrap());
 
-pub fn execute_single_expr(m: &mut TypedModule, expr: TypedExprId) -> TyperResult<Value> {
+pub fn execute_single_expr(m: &mut TypedProgram, expr: TypedExprId) -> TyperResult<Value> {
     // DO NOT RETURN EARLY FROM THIS FUNCTION
     // without replacing the vm
     let mut vm = std::mem::take(&mut m.vm).unwrap();
@@ -424,7 +424,7 @@ macro_rules! execute_expr_return_exit {
     }};
 }
 
-fn execute_expr(vm: &mut Vm, m: &mut TypedModule, expr: TypedExprId) -> TyperResult<VmResult> {
+fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperResult<VmResult> {
     vm.eval_depth.fetch_add(1, Ordering::Relaxed);
     let prev = vm.eval_span;
     vm.eval_span = m.exprs.get(expr).get_span();
@@ -815,7 +815,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedModule, expr: TypedExprId) -> TyperRes
 pub fn static_value_to_vm_value(
     vm: &mut Vm,
     dst_stack: StackSelection,
-    m: &TypedModule,
+    m: &TypedProgram,
     static_value: &StaticValue,
 ) -> TyperResult<Value> {
     match static_value {
@@ -866,7 +866,7 @@ pub fn static_value_to_vm_value(
 #[inline]
 pub fn execute_block(
     vm: &mut Vm,
-    m: &mut TypedModule,
+    m: &mut TypedProgram,
     block_expr: TypedExprId,
 ) -> TyperResult<VmResult> {
     let mut last_stmt_result = VmResult::UNIT;
@@ -883,7 +883,7 @@ pub fn execute_block(
 
 pub fn execute_stmt(
     vm: &mut Vm,
-    m: &mut TypedModule,
+    m: &mut TypedProgram,
     stmt_id: TypedStmtId,
 ) -> TyperResult<VmResult> {
     match m.stmts.get(stmt_id) {
@@ -948,7 +948,7 @@ pub fn execute_stmt(
     }
 }
 
-fn execute_call(vm: &mut Vm, m: &mut TypedModule, call_id: TypedExprId) -> TyperResult<VmResult> {
+fn execute_call(vm: &mut Vm, m: &mut TypedProgram, call_id: TypedExprId) -> TyperResult<VmResult> {
     let call = m.exprs.get(call_id).expect_call();
     let call_args = call.args.clone();
     let span = call.span;
@@ -1068,7 +1068,7 @@ fn execute_call(vm: &mut Vm, m: &mut TypedModule, call_id: TypedExprId) -> Typer
 
 fn execute_intrinsic(
     vm: &mut Vm,
-    m: &mut TypedModule,
+    m: &mut TypedProgram,
     type_args: &[SimpleNamedType],
     args: &[TypedExprId],
     return_type: TypeId,
@@ -1303,7 +1303,7 @@ unsafe fn copy_aggregate(dst: *mut u8, src: *const u8, size: usize) {
 
 pub fn load_value_copying_aggs(
     vm: &mut Vm,
-    m: &TypedModule,
+    m: &TypedProgram,
     type_id: TypeId,
     ptr: *const u8,
 ) -> TyperResult<Value> {
@@ -1313,7 +1313,7 @@ pub fn load_value_copying_aggs(
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub fn load_value(
     vm: &mut Vm,
-    m: &TypedModule,
+    m: &TypedProgram,
     type_id: TypeId,
     ptr: *const u8,
     copy_aggregates: bool,
@@ -1482,7 +1482,7 @@ pub fn gep_struct_field(
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub fn load_struct_field(
     vm: &mut Vm,
-    m: &TypedModule,
+    m: &TypedProgram,
     struct_type: TypeId,
     struct_ptr: *const u8,
     field_index: usize,
@@ -1749,7 +1749,7 @@ impl Stack {
 
 fn execute_match(
     vm: &mut Vm,
-    m: &mut TypedModule,
+    m: &mut TypedProgram,
     match_expr: &TypedMatchExpr,
 ) -> TyperResult<VmResult> {
     for stmt in &match_expr.initial_let_statements {
@@ -1772,7 +1772,7 @@ fn execute_match(
 
 fn execute_matching_condition(
     vm: &mut Vm,
-    m: &mut TypedModule,
+    m: &mut TypedProgram,
     cond: &MatchingCondition,
 ) -> TyperResult<VmResult> {
     for instr in cond.instrs.iter() {
@@ -1792,7 +1792,7 @@ fn execute_matching_condition(
     Ok(Value::TRUE.into())
 }
 
-pub fn value_to_rust_str(m: &mut TypedModule, value: Value) -> StringId {
+pub fn value_to_rust_str(m: &mut TypedProgram, value: Value) -> StringId {
     let ptr = value.expect_agg();
     let k1_string = unsafe { (ptr as *const k1_types::K1Buffer).read() };
     eprintln!("Loading to rust str: {} and {:?}", k1_string.len, k1_string.data);
@@ -1806,7 +1806,7 @@ pub fn value_to_rust_str(m: &mut TypedModule, value: Value) -> StringId {
 pub fn k1_str_to_value(
     vm: &mut Vm,
     dst_stack: StackSelection,
-    m: &TypedModule,
+    m: &TypedProgram,
     string_id: StringId,
 ) -> Value {
     let char_buffer_type_id = m.types.get(STRING_TYPE_ID).expect_struct().fields[0].type_id;
@@ -1821,7 +1821,7 @@ pub fn k1_str_to_value(
     Value::Agg { type_id: STRING_TYPE_ID, ptr: string_stack_addr }
 }
 
-fn render_debug_value(w: &mut impl std::fmt::Write, vm: &mut Vm, m: &TypedModule, value: Value) {
+fn render_debug_value(w: &mut impl std::fmt::Write, vm: &mut Vm, m: &TypedProgram, value: Value) {
     //eprintln!("render debug of {:?} and {}", value, m.type_id_to_string(value.get_type()));
     match value {
         Value::Unit => w.write_str("()").unwrap(),

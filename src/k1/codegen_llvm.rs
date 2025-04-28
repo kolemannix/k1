@@ -46,7 +46,7 @@ use crate::typer::{
     AssignmentKind, BinaryOp, BinaryOpKind, Call, Callee, CastType, FunctionId, IntrinsicFunction,
     Layout, LetStmt, Linkage as TyperLinkage, LoopExpr, MatchingCondition, MatchingConditionInstr,
     StaticValue, StaticValueId, TypedBlock, TypedCast, TypedExpr, TypedExprId, TypedFloatValue,
-    TypedFunction, TypedGlobalId, TypedIntValue, TypedMatchExpr, TypedModule, TypedStmt,
+    TypedFunction, TypedGlobalId, TypedIntValue, TypedMatchExpr, TypedProgram, TypedStmt,
     TypedStmtId, UnaryOpKind, VariableId, WhileLoop,
 };
 
@@ -431,9 +431,9 @@ pub struct CodegenedFunction<'ctx> {
     pub instruction_count: usize,
 }
 
-pub struct Codegen<'ctx, 'module> {
+pub struct Codegen<'ctx, 'k1> {
     ctx: &'ctx Context,
-    pub module: &'module TypedModule,
+    pub k1: &'k1 TypedProgram,
     llvm_module: LlvmModule<'ctx>,
     llvm_machine: TargetMachine,
     builder: Builder<'ctx>,
@@ -535,7 +535,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     fn init_debug(
         ctx: &'ctx Context,
         llvm_module: &LlvmModule<'ctx>,
-        module: &TypedModule,
+        module: &TypedProgram,
         optimize: bool,
         debug: bool,
     ) -> DebugContext<'ctx> {
@@ -618,7 +618,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     pub fn create(
         ctx: &'ctx Context,
-        module: &'module TypedModule,
+        module: &'module TypedProgram,
         debug: bool,
         optimize: bool,
     ) -> Self {
@@ -658,7 +658,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
         Codegen {
             ctx,
-            module,
+            k1: module,
             llvm_module,
             llvm_machine: machine,
             builder,
@@ -686,8 +686,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     }
 
     fn set_debug_location_from_span(&self, span: SpanId) -> DILocation<'ctx> {
-        let span = self.module.ast.spans.get(span);
-        let line = self.module.ast.sources.get_line_for_span_start(span).expect("No line for span");
+        let span = self.k1.ast.spans.get(span);
+        let line = self.k1.ast.sources.get_line_for_span_start(span).expect("No line for span");
         let column = span.start - line.start_char;
         let locn = self.debug.debug_builder.create_debug_location(
             self.ctx,
@@ -709,12 +709,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     }
 
     fn get_ident_name(&self, id: Identifier) -> &str {
-        self.module.ast.idents.get_name(id)
+        self.k1.ast.idents.get_name(id)
     }
 
     fn get_line_number(&self, span: SpanId) -> u32 {
-        let span = self.module.ast.spans.get(span);
-        let line = self.module.ast.sources.get_line_for_span_start(span).expect("No line for span");
+        let span = self.k1.ast.spans.get(span);
+        let line = self.k1.ast.sources.get_line_for_span_start(span).expect("No line for span");
         line.line_index + 1
     }
 
@@ -725,10 +725,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         defn_info: Option<TypeDefnInfo>,
     ) {
         // FIXME: We need to revisit the entire story around names in codegen
-        let name = self.module.type_id_to_string(type_id);
+        let name = self.k1.type_id_to_string(type_id);
         match defn_info {
             None => write!(w, "{}", name).unwrap(),
-            Some(info) => self.module.write_qualified_name(w, info.scope, &name, "/", true),
+            Some(info) => self.k1.write_qualified_name(w, info.scope, &name, "/", true),
         };
     }
 
@@ -892,11 +892,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         .as_type(),
                 })
             };
-        debug!("codegen for type {} depth {depth}", self.module.type_id_to_string(type_id));
+        debug!("codegen for type {} depth {depth}", self.k1.type_id_to_string(type_id));
         let mut no_cache = false;
         // Might be better to switch to the debug context span, rather than the type's span
-        let span = self.module.get_span_for_type_id(type_id).unwrap_or(SpanId::NONE);
-        let codegened_type = match self.module.types.get_no_follow(type_id) {
+        let span = self.k1.get_span_for_type_id(type_id).unwrap_or(SpanId::NONE);
+        let codegened_type = match self.k1.types.get_no_follow(type_id) {
             Type::Unit => Ok(make_value_basic_type(
                 "unit",
                 UNIT_TYPE_ID,
@@ -984,8 +984,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     NumericWidth::B32 => self.ctx.f32_type(),
                     NumericWidth::B64 => self.ctx.f64_type(),
                 };
-                let size = self.module.types.get_layout(type_id).unwrap();
-                let float_name = self.module.type_id_to_string(type_id);
+                let size = self.k1.types.get_layout(type_id).unwrap();
+                let float_name = self.k1.type_id_to_string(type_id);
                 Ok(LlvmValueType {
                     type_id,
                     basic_type: llvm_type.as_basic_type_enum(),
@@ -1027,12 +1027,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let mut field_types = Vec::with_capacity(field_count);
                 let mut field_basic_types = Vec::with_capacity(field_count);
                 let mut field_di_types: Vec<StructDebugMember> = Vec::with_capacity(field_count);
-                let name =
-                    self.codegen_type_name(type_id, self.module.types.get_defn_info(type_id));
+                let name = self.codegen_type_name(type_id, self.k1.types.get_defn_info(type_id));
                 for field in &struc.fields {
                     let field_llvm_type = self.codegen_type_inner(field.type_id, depth + 1)?;
                     let debug_type = if buffer_instance.is_some()
-                        && field.name == self.module.ast.idents.get(BUFFER_DATA_FIELD_NAME).unwrap()
+                        && field.name == self.k1.ast.idents.get(BUFFER_DATA_FIELD_NAME).unwrap()
                     {
                         let buffer_instance = buffer_instance.unwrap();
                         let buffer_type_argument = buffer_instance.type_args[0];
@@ -1044,7 +1043,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         field_llvm_type.debug_type()
                     };
                     field_di_types.push(StructDebugMember {
-                        name: self.module.ast.idents.get_name(field.name),
+                        name: self.k1.ast.idents.get_name(field.name),
                         di_type: debug_type,
                     });
                     field_basic_types.push(field_llvm_type.rich_value_type());
@@ -1079,8 +1078,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 failf!(span, "codegen was asked to codegen a type inference hole {:?}", h)
             }
             Type::Reference(reference) => {
-                if let Type::Function(_function_type) = self.module.types.get(reference.inner_type)
-                {
+                if let Type::Function(_function_type) = self.k1.types.get(reference.inner_type) {
                     let placeholder_pointee = self.codegen_type(I8_TYPE_ID)?.debug_type();
                     // TODO: Dwarf info for function pointers
                     Ok(LlvmReferenceType {
@@ -1114,7 +1112,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 // self.print_layout_info();
 
                 let enum_name = self
-                    .module
+                    .k1
                     .types
                     .get_defn_info(type_id)
                     .map(|info| self.codegen_type_name(type_id, Some(info)))
@@ -1232,7 +1230,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 debug_assert!(physical_type_padding_bits % 8 == 0);
                 debug!(
                     "type {} largest variant size={largest_variant_size}, align={enum_alignment}. Physical size: {}, end padding: {}",
-                    self.module.type_id_to_string(type_id), enum_size_bits, physical_type_padding_bits
+                    self.k1.type_id_to_string(type_id), enum_size_bits, physical_type_padding_bits
                 );
 
                 let physical_type_fields: &[BasicTypeEnum<'ctx>] =
@@ -1339,7 +1337,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     // For recursive references, we use an empty struct as the representation,
                     // and use LLVMs opaque struct type to represent it
                     let defn_info = self
-                        .module
+                        .k1
                         .types
                         .get_defn_info(rr.root_type_id.unwrap())
                         .expect("recursive type must have defn info");
@@ -1382,17 +1380,17 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             self.llvm_types.borrow_mut().insert(type_id, codegened_type.clone());
         }
         let size_info = codegened_type.size_info();
-        if let Some(k1_size) = self.module.types.layouts.get(type_id) {
+        if let Some(k1_size) = self.k1.types.layouts.get(type_id) {
             if size_info.size_bits as usize != k1_size.stride_bits() {
-                eprintln!("Size of '{}'", self.module.type_id_to_string(type_id));
+                eprintln!("Size of '{}'", self.k1.type_id_to_string(type_id));
                 eprintln!("DIFFERENT SIZES {} {}", size_info.size_bits, k1_size.size_bits)
             }
             if size_info.align_bits != k1_size.align_bits {
-                eprintln!("Size of '{}'", self.module.type_id_to_string(type_id));
+                eprintln!("Size of '{}'", self.k1.type_id_to_string(type_id));
                 eprintln!("DIFFERENT ALIGN {} {}", size_info.align_bits, k1_size.align_bits)
             }
         } else {
-            eprintln!("No k1 size but yes llvm size: {}", self.module.type_id_to_string(type_id))
+            eprintln!("No k1 size but yes llvm size: {}", self.k1.type_id_to_string(type_id))
         }
         Ok(codegened_type)
     }
@@ -1401,7 +1399,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         &self,
         function_type_id: TypeId,
     ) -> CodegenResult<K1LlvmFunctionType<'ctx>> {
-        let function_type = self.module.types.get(function_type_id).as_function().unwrap();
+        let function_type = self.k1.types.get(function_type_id).as_function().unwrap();
         let return_type = self.codegen_type(function_type.return_type)?;
         let is_sret = return_type.is_aggregate();
         let mut param_types: Vec<K1LlvmType<'ctx>> =
@@ -1466,7 +1464,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let value = value.expect_basic_value();
 
         let variable_type = self.codegen_type(let_stmt.variable_type)?;
-        let variable = self.module.variables.get(let_stmt.variable_id);
+        let variable = self.k1.variables.get(let_stmt.variable_id);
         let mutable = variable.is_mutable;
         let name = self.get_ident_name(variable.name).to_string();
 
@@ -1499,8 +1497,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             let store_instr = if let_stmt.is_referencing {
                 // If this is a let*, then we put the rhs behind another alloca so that we end up
                 // with a pointer to the value
-                let Type::Reference(reference_type) =
-                    self.module.types.get(variable_type.type_id())
+                let Type::Reference(reference_type) = self.k1.types.get(variable_type.type_id())
                 else {
                     panic!("Expected reference for referencing let");
                 };
@@ -1650,10 +1647,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     ) -> BasicValueEnum<'ctx> {
         if llvm_type.is_aggregate() {
             // No-op; we want to interact with these types as pointers
-            debug!(
-                "smart loading noop on type {}",
-                self.module.type_id_to_string(llvm_type.type_id())
-            );
+            debug!("smart loading noop on type {}", self.k1.type_id_to_string(llvm_type.type_id()));
             //if make_copy {
             //    self._alloca_copy_entire_value(
             //        source,
@@ -1731,7 +1725,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         &mut self,
         comptime_value_id: StaticValueId,
     ) -> CodegenResult<BasicValueEnum<'ctx>> {
-        let result = match self.module.static_values.get(comptime_value_id) {
+        let result = match self.k1.static_values.get(comptime_value_id) {
             StaticValue::Unit(_) => self.builtin_types.unit_value.as_basic_value_enum(),
             StaticValue::Boolean(b, _) => match b {
                 true => self.builtin_types.true_value.as_basic_value_enum(),
@@ -1768,7 +1762,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let struct_value = specialized_type.const_named_struct(&fields_basic_values);
                 debug!(
                     "comptime struct for {} type {} is {}",
-                    self.module.type_id_to_string(s.type_id),
+                    self.k1.type_id_to_string(s.type_id),
                     specialized_type,
                     struct_value
                 );
@@ -1815,7 +1809,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         debug_assert!(char_buffer_struct.get_field_type_at_index(1).unwrap().is_pointer_type());
         debug_assert!(char_buffer_struct.count_fields() == 2);
 
-        let string_value = self.module.get_string(string_id);
+        let string_value = self.k1.get_string(string_id);
         let global_str_data = self.llvm_module.add_global(
             self.builtin_types.char.array_type(string_value.len() as u32),
             None,
@@ -1849,7 +1843,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     }
 
     fn codegen_expr(&mut self, expr_id: TypedExprId) -> CodegenResult<LlvmValue<'ctx>> {
-        let expr = self.module.exprs.get(expr_id);
+        let expr = self.k1.exprs.get(expr_id);
         let span = expr.get_span();
 
         // TODO: push debug log level for debugged exprs in codegen as well
@@ -1871,7 +1865,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         // });
 
         self.set_debug_location_from_span(span);
-        debug!("codegen expr\n{}", self.module.expr_to_string_with_type(expr_id));
+        debug!("codegen expr\n{}", self.k1.expr_to_string_with_type(expr_id));
         match expr {
             TypedExpr::Unit(_) => Ok(self.builtin_types.unit_value.as_basic_value_enum().into()),
             TypedExpr::Char(byte, _) => Ok(self
@@ -1899,7 +1893,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     let llvm_type = self.codegen_type(ir_var.type_id)?;
                     debug!(
                         "codegen variable {} got pointee type {:?}",
-                        self.module.type_id_to_string(ir_var.type_id),
+                        self.k1.type_id_to_string(ir_var.type_id),
                         &llvm_type
                     );
                     Ok(self.load_variable_value(&llvm_type, *variable_value).into())
@@ -1907,7 +1901,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     Err(CodegenError {
                         message: format!(
                             "No pointer or global found for variable {} id={}",
-                            self.module.expr_to_string(expr_id),
+                            self.k1.expr_to_string(expr_id),
                             ir_var.variable_id
                         ),
                         span,
@@ -1915,7 +1909,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 }
             }
             TypedExpr::Struct(struc) => {
-                debug!("codegen struct {}", self.module.expr_to_string_with_type(expr_id));
+                debug!("codegen struct {}", self.k1.expr_to_string_with_type(expr_id));
                 let struct_k1_llvm_type = self.codegen_type(struc.type_id)?.expect_struct();
                 let struct_llvm_type = struct_k1_llvm_type.struct_type;
                 let struct_ptr = self.build_alloca(struct_llvm_type, "struct_literal");
@@ -1927,7 +1921,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             struct_llvm_type,
                             struct_ptr,
                             idx as u32,
-                            &format!("{}_store_addr", self.module.name_of(field.name)),
+                            &format!("{}_store_addr", self.k1.name_of(field.name)),
                         )
                         .unwrap();
                     let field_type = &struct_k1_llvm_type.fields[idx];
@@ -1936,10 +1930,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(struct_ptr.as_basic_value_enum().into())
             }
             TypedExpr::StructFieldAccess(field_access) => {
-                let name = &format!(
-                    "struc.{}",
-                    self.module.ast.idents.get_name(field_access.target_field)
-                );
+                let name =
+                    &format!("struc.{}", self.k1.ast.idents.get_name(field_access.target_field));
                 let field_index = field_access.field_index;
                 let struct_llvm_type = self.codegen_type(field_access.struct_type)?.expect_struct();
                 let struct_physical_type = struct_llvm_type.struct_type;
@@ -1971,7 +1963,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         let pointee_ty = self.codegen_type(unary_op.type_id)?;
                         debug!(
                             "Dereference: type {} w/ llvm value {} as llvm type {}",
-                            self.module.expr_to_string_with_type(unary_op.expr),
+                            self.k1.expr_to_string_with_type(unary_op.expr),
                             value_ptr,
                             pointee_ty.canonical_repr_type().print_to_string()
                         );
@@ -2035,28 +2027,27 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             TypedExpr::EnumIsVariant(enum_is_variant) => {
                 let enum_value =
                     self.codegen_expr_basic_value(enum_is_variant.enum_expr)?.into_pointer_value();
-                let enum_type_id = self.module.exprs.get(enum_is_variant.enum_expr).get_type();
+                let enum_type_id = self.k1.exprs.get(enum_is_variant.enum_expr).get_type();
                 let enum_llvm = self.codegen_type(enum_type_id)?.expect_enum();
                 let variant = &enum_llvm.variants[enum_is_variant.variant_index as usize];
                 let is_variant_bool = self.codegen_enum_is_variant(
                     enum_value,
                     variant.tag_value,
-                    self.module.name_of(variant.name),
+                    self.k1.name_of(variant.name),
                 );
                 Ok(is_variant_bool.as_basic_value_enum().into())
             }
             TypedExpr::EnumGetTag(enum_get_tag) => {
                 let enum_value =
                     self.codegen_expr_basic_value(enum_get_tag.enum_expr)?.into_pointer_value();
-                let enum_type_id = self.module.exprs.get(enum_get_tag.enum_expr).get_type();
+                let enum_type_id = self.k1.exprs.get(enum_get_tag.enum_expr).get_type();
                 let enum_llvm_type = self.codegen_type(enum_type_id)?.expect_enum();
                 let enum_tag_value = self.get_enum_tag(enum_llvm_type.tag_type, enum_value);
                 Ok(enum_tag_value.as_basic_value_enum().into())
             }
             TypedExpr::EnumGetPayload(enum_get_payload) => {
-                let target_expr_type_id =
-                    self.module.exprs.get(enum_get_payload.enum_expr).get_type();
-                let enum_type = self.module.types.get_type_id_dereferenced(target_expr_type_id);
+                let target_expr_type_id = self.k1.exprs.get(enum_get_payload.enum_expr).get_type();
+                let enum_type = self.k1.types.get_type_id_dereferenced(target_expr_type_id);
                 let enum_type = self.codegen_type(enum_type)?.expect_enum();
                 let enum_value = self.codegen_expr_basic_value(enum_get_payload.enum_expr)?;
                 let variant_type = &enum_type.variants[enum_get_payload.variant_index as usize];
@@ -2115,8 +2106,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             TypedExpr::Lambda(lambda_expr) => {
                 debug!("codegen lambda {:?}", lambda_expr);
-                let lambda_type =
-                    self.module.types.get(lambda_expr.lambda_type).as_lambda().unwrap();
+                let lambda_type = self.k1.types.get(lambda_expr.lambda_type).as_lambda().unwrap();
                 let llvm_fn = self.codegen_function_or_get(lambda_type.body_function_id)?;
                 let environment_struct_value = self
                     .codegen_expr_basic_value(lambda_type.environment_struct)?
@@ -2208,7 +2198,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let value = self.codegen_expr_basic_value(cast.base_expr)?;
                 let int_value = value.into_int_value();
                 let llvm_type = self.codegen_type(cast.target_type_id)?;
-                let integer_type = self.module.types.get(cast.target_type_id).expect_integer();
+                let integer_type = self.k1.types.get(cast.target_type_id).expect_integer();
                 let value: IntValue<'ctx> = if integer_type.is_signed() {
                     self.builder
                         .build_int_s_extend(
@@ -2262,7 +2252,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let from_value = self.codegen_expr_basic_value(cast.base_expr)?.into_float_value();
                 let int_dst_type = self.codegen_type(cast.target_type_id)?;
                 let int_dst_type_llvm = int_dst_type.rich_value_type().into_int_type();
-                let int_dest_k1_type = self.module.types.get(cast.target_type_id).expect_integer();
+                let int_dest_k1_type = self.k1.types.get(cast.target_type_id).expect_integer();
                 let casted_int_value = if int_dest_k1_type.is_signed() {
                     self.builder
                         .build_float_to_signed_int(from_value, int_dst_type_llvm, "")
@@ -2276,8 +2266,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             CastType::IntegerToFloat => {
                 let from_value = self.codegen_expr_basic_value(cast.base_expr)?.into_int_value();
-                let base_expr_type = self.module.exprs.get(cast.base_expr).get_type();
-                let from_int_k1_type = self.module.types.get(base_expr_type).expect_integer();
+                let base_expr_type = self.k1.exprs.get(cast.base_expr).get_type();
+                let from_int_k1_type = self.k1.types.get(base_expr_type).expect_integer();
                 let float_dst_type = self.codegen_type(cast.target_type_id)?;
                 let float_dst_type_llvm = float_dst_type.rich_value_type().into_float_type();
                 let casted_float_value = if from_int_k1_type.is_signed() {
@@ -2328,10 +2318,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let env_pointer = self.build_alloca(lambda_env_value.get_type(), "env_ptr");
                 self.builder.build_store(env_pointer, lambda_env_value).unwrap();
 
-                let fn_value = self
-                    .lambda_functions
-                    .get(&self.module.get_expr_type_id(cast.base_expr))
-                    .unwrap();
+                let fn_value =
+                    self.lambda_functions.get(&self.k1.get_expr_type_id(cast.base_expr)).unwrap();
                 let fn_ptr = fn_value.as_global_value().as_pointer_value();
 
                 let lam_obj = self.builtin_types.dynamic_lambda_object.get_undef();
@@ -2352,7 +2340,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     fn codegen_binop(&mut self, bin_op: &BinaryOp) -> CodegenResult<LlvmValue<'ctx>> {
         // This would be simpler if we first matched on lhs than on result type,
         // because we have to branch on int vs float now for each result type
-        match self.module.types.get(bin_op.ty) {
+        match self.k1.types.get(bin_op.ty) {
             Type::Integer(integer_type) => {
                 let signed = integer_type.is_signed();
                 let lhs_value = self.codegen_expr_basic_value(bin_op.lhs)?.into_int_value();
@@ -2478,7 +2466,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     Ok(op.as_basic_value_enum().into())
                 }
                 BinaryOpKind::Equals | BinaryOpKind::NotEquals => {
-                    match self.module.get_expr_type(bin_op.lhs) {
+                    match self.k1.get_expr_type(bin_op.lhs) {
                         Type::Float(_) => {
                             let lhs_float =
                                 self.codegen_expr_basic_value(bin_op.lhs)?.into_float_value();
@@ -2527,14 +2515,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         }
                         _ => unreachable!(
                             "unreachable Equals/NotEquals call on type: {}",
-                            self.module.expr_to_string_with_type(bin_op.lhs)
+                            self.k1.expr_to_string_with_type(bin_op.lhs)
                         ),
                     }
                 }
                 BinaryOpKind::Less
                 | BinaryOpKind::LessEqual
                 | BinaryOpKind::Greater
-                | BinaryOpKind::GreaterEqual => match self.module.get_expr_type(bin_op.lhs) {
+                | BinaryOpKind::GreaterEqual => match self.k1.get_expr_type(bin_op.lhs) {
                     Type::Integer(_) => {
                         let lhs_int = self.codegen_expr_basic_value(bin_op.lhs)?.into_int_value();
                         let rhs_int = self.codegen_expr_basic_value(bin_op.rhs)?.into_int_value();
@@ -2691,7 +2679,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     }
 
     fn codegen_function_call(&mut self, call: &Call) -> CodegenResult<LlvmValue<'ctx>> {
-        let typed_function = call.callee.maybe_function_id().map(|f| self.module.get_function(f));
+        let typed_function = call.callee.maybe_function_id().map(|f| self.k1.get_function(f));
         if let Some(intrinsic_type) = typed_function.and_then(|f| f.intrinsic_type) {
             if intrinsic_type.is_inlined() {
                 return self.codegen_intrinsic_inline(intrinsic_type, call);
@@ -2703,13 +2691,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         for arg_expr in call.args.iter() {
             let arg_value = self.codegen_expr(*arg_expr)?;
             let LlvmValue::BasicValue(basic_value) = arg_value else { return Ok(arg_value) };
-            trace!(
-                "codegen function call arg: {}",
-                self.module.expr_to_string_with_type(*arg_expr),
-            );
+            trace!("codegen function call arg: {}", self.k1.expr_to_string_with_type(*arg_expr),);
             args.push_back(basic_value.into())
         }
-        let function_type = self.module.get_callee_function_type(&call.callee);
+        let function_type = self.k1.get_callee_function_type(&call.callee);
         let llvm_function_type = self.make_llvm_function_type(function_type)?;
         let sret_alloca = if llvm_function_type.is_sret {
             let sret_alloca =
@@ -2721,9 +2706,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         };
         let env_arg_index = if llvm_function_type.is_sret { 1 } else { 0 };
         let callsite_value = match &call.callee {
-            Callee::StaticAbstract { .. } => self
-                .module
-                .ice_with_span("Cannot codegen a call to an abstract function", call.span),
+            Callee::StaticAbstract { .. } => {
+                self.k1.ice_with_span("Cannot codegen a call to an abstract function", call.span)
+            }
             Callee::StaticFunction(function_id) => {
                 let function_value = self.codegen_function_or_get(*function_id)?;
 
@@ -2734,7 +2719,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let lambda_env_variable = self.variable_to_value.get(environment_ptr).unwrap();
 
                 let env_ptr_type =
-                    self.codegen_type(self.module.variables.get(*environment_ptr).type_id)?;
+                    self.codegen_type(self.k1.variables.get(*environment_ptr).type_id)?;
                 let lambda_env_ptr = self.load_variable_value(&env_ptr_type, *lambda_env_variable);
 
                 args.insert(env_arg_index, lambda_env_ptr.into());
@@ -2796,7 +2781,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
                 debug!(
                     "The k1 fn type on the lambda object {}",
-                    self.module.type_id_to_string(function_type)
+                    self.k1.type_id_to_string(function_type)
                 );
                 debug!("Calling indirect with type {}", llvm_function_type.llvm_function_type);
                 self.builder
@@ -2956,7 +2941,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         index: usize,
     ) -> CodegenResult<BasicMetadataValueEnum<'ctx>> {
         let variable_id = function.param_variables[index];
-        let fn_type = self.module.types.get(function.type_id).expect_function();
+        let fn_type = self.k1.types.get(function.type_id).expect_function();
         let param_type = &fn_type.physical_params[index];
         let variable_value = self.variable_to_value.get(&variable_id).unwrap();
         let basic_value =
@@ -2969,11 +2954,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         intrinsic_type: IntrinsicFunction,
         function: &TypedFunction,
     ) -> CodegenResult<InstructionValue<'ctx>> {
-        let function_span = self
-            .module
-            .ast
-            .get_function(function.parsed_id.as_function_id().unwrap())
-            .signature_span;
+        let function_span =
+            self.k1.ast.get_function(function.parsed_id.as_function_id().unwrap()).signature_span;
         self.set_debug_location_from_span(function_span);
         let instr = match intrinsic_type {
             IntrinsicFunction::Allocate => {
@@ -3093,7 +3075,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     }
 
     fn codegen_statement(&mut self, statement: TypedStmtId) -> CodegenResult<LlvmValue<'ctx>> {
-        match self.module.stmts.get(statement) {
+        match self.k1.stmts.get(statement) {
             TypedStmt::Expr(expr, _) => self.codegen_expr(*expr),
             TypedStmt::Let(let_stmt) => self.codegen_let(let_stmt),
             TypedStmt::Assignment(assignment) => {
@@ -3103,7 +3085,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 };
                 let lhs_pointer = match assignment.kind {
                     AssignmentKind::Value => {
-                        match self.module.exprs.get(assignment.destination) {
+                        match self.k1.exprs.get(assignment.destination) {
                             // Value assignment is weird. We require an indirect
                             // variable, since it must be 'mut' for this to typecheck.
                             TypedExpr::Variable(v) => {
@@ -3122,7 +3104,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             _ => {
                                 panic!(
                                     "Invalid value assignment lhs: {}",
-                                    self.module.expr_to_string(assignment.destination)
+                                    self.k1.expr_to_string(assignment.destination)
                                 )
                             }
                         }
@@ -3133,7 +3115,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 };
 
                 let value_type =
-                    self.codegen_type(self.module.exprs.get(assignment.value).get_type())?;
+                    self.codegen_type(self.k1.exprs.get(assignment.value).get_type())?;
                 self.store_k1_value(&value_type, lhs_pointer, rhs);
                 Ok(self.builtin_types.unit_value.as_basic_value_enum().into())
             }
@@ -3194,7 +3176,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let loop_body_block = self.ctx.append_basic_block(current_fn, "while_body");
         let loop_end_block = self.ctx.append_basic_block(current_fn, "while_end");
 
-        let TypedExpr::Block(body_block) = self.module.exprs.get(while_loop.body) else {
+        let TypedExpr::Block(body_block) = self.k1.exprs.get(while_loop.body) else {
             unreachable!()
         };
         self.loops.insert(
@@ -3233,7 +3215,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let break_type = self.codegen_type(loop_expr.break_type)?;
         // TODO llvm ir Optimization: skip alloca if break is unit type
         let break_value_ptr = self.build_alloca(break_type.rich_value_type(), "break");
-        let TypedExpr::Block(body_block) = self.module.exprs.get(loop_expr.body_block) else {
+        let TypedExpr::Block(body_block) = self.k1.exprs.get(loop_expr.body_block) else {
             unreachable!()
         };
         self.loops.insert(
@@ -3266,9 +3248,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         param_debug_types: &[DIType<'ctx>],
     ) -> CodegenResult<(DISubprogram<'ctx>, DIFile<'ctx>)> {
         let span_id = function_span;
-        let function_file_id = self.module.ast.spans.get(span_id).file_id;
-        let (function_line, _) =
-            self.module.ast.get_lines_for_span_id(span_id).expect("line for span");
+        let function_file_id = self.k1.ast.spans.get(span_id).file_id;
+        let (function_line, _) = self.k1.ast.get_lines_for_span_id(span_id).expect("line for span");
         let function_line_number = function_line.line_number();
         let function_scope_start_line_number = function_line_number;
         let function_file = self.debug.files.get(&function_file_id).unwrap();
@@ -3301,16 +3282,16 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         if let Some(function) = self.llvm_functions.get(&function_id) {
             return Ok(function.function_value);
         }
-        debug!("codegen function\n{}", self.module.function_id_to_string(function_id, false));
+        debug!("codegen function\n{}", self.k1.function_id_to_string(function_id, false));
         let previous_debug_location = self.get_debug_location();
 
-        let function = self.module.get_function(function_id);
+        let function = self.k1.get_function(function_id);
         let function_type_id = function.type_id;
-        let function_type = self.module.types.get(function.type_id).as_function().unwrap();
+        let function_type = self.k1.types.get(function.type_id).as_function().unwrap();
 
-        let function_span = self.module.ast.get_span_for_id(function.parsed_id);
+        let function_span = self.k1.ast.get_span_for_id(function.parsed_id);
         let function_line_number = self
-            .module
+            .k1
             .ast
             .get_lines_for_span_id(function_span)
             .expect("line for function span")
@@ -3345,8 +3326,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         }
 
         let llvm_name = match function.linkage {
-            TyperLinkage::External(Some(name)) => self.module.name_of(name),
-            _ => &self.module.make_qualified_name(function.scope, function.name, ".", true),
+            TyperLinkage::External(Some(name)) => self.k1.name_of(name),
+            _ => &self.k1.make_qualified_name(function.scope, function.name, ".", true),
         };
         let llvm_linkage = match function.linkage {
             TyperLinkage::Standard => None,
@@ -3355,7 +3336,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         };
         if self.llvm_module.get_function(llvm_name).is_some() {
             return failf!(
-                self.module.ast.get_span_for_id(function.parsed_id),
+                self.k1.ast.get_span_for_id(function.parsed_id),
                 "Dupe function name: {}",
                 llvm_name
             );
@@ -3369,9 +3350,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             function_value.add_attribute(AttributeLoc::Param(0), attribute);
         }
 
-        let function_span = self.module.ast.get_span_for_id(function.parsed_id);
+        let function_span = self.k1.ast.get_span_for_id(function.parsed_id);
         let (di_subprogram, di_file) = self.make_function_debug_info(
-            self.module.name_of(function.name),
+            self.k1.name_of(function.name),
             function_span,
             llvm_function_type.return_type.debug_type(),
             &llvm_function_type.param_types.iter().map(|t| t.debug_type()).collect::<Vec<_>>(),
@@ -3411,22 +3392,22 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             let variable_id = function.param_variables[i - sret_offset];
             let typed_param = if is_sret_param {
                 &FnParamType {
-                    name: self.module.ast.idents.get("ret").unwrap(),
+                    name: self.k1.ast.idents.get("ret").unwrap(),
                     type_id: function_type.return_type,
                     is_context: false,
                     is_lambda_env: false,
-                    span: self.module.ast.get_span_for_id(function.parsed_id),
+                    span: self.k1.ast.get_span_for_id(function.parsed_id),
                 }
             } else {
                 &function_type.physical_params[i - sret_offset]
             };
             let param_type = self.codegen_type(typed_param.type_id)?;
-            let param_name = self.module.name_of(typed_param.name);
+            let param_name = self.k1.name_of(typed_param.name);
             trace!(
                 "Got LLVM type for variable {}: {} (from {})",
                 param_name,
                 param_type.rich_value_type(),
-                self.module.type_id_to_string(typed_param.type_id)
+                self.k1.type_id_to_string(typed_param.type_id)
             );
             param.set_name(param_name);
 
@@ -3450,7 +3431,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             );
             debug!(
                 "Inserting variable {i} for function {} id={} {} id={}",
-                self.module.name_of(function.name),
+                self.k1.name_of(function.name),
                 function_id,
                 param_name,
                 variable_id
@@ -3467,7 +3448,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let function_block = function.body_block.unwrap_or_else(|| {
                     panic!("Function has no block {}", self.get_ident_name(function.name))
                 });
-                let TypedExpr::Block(function_block) = self.module.exprs.get(function_block) else {
+                let TypedExpr::Block(function_block) = self.k1.exprs.get(function_block) else {
                     panic!("Expected block")
                 };
                 self.codegen_block(function_block)?;
@@ -3503,7 +3484,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     fn codegen_integer_value(&self, integer: TypedIntValue) -> CodegenResult<BasicValueEnum<'ctx>> {
         let llvm_ty = self.codegen_type(integer.get_type())?;
         let llvm_int_ty = llvm_ty.rich_value_type().into_int_type();
-        let Type::Integer(int_type) = self.module.types.get(llvm_ty.type_id()) else { panic!() };
+        let Type::Integer(int_type) = self.k1.types.get(llvm_ty.type_id()) else { panic!() };
         let llvm_value = if int_type.is_signed() {
             llvm_int_ty.const_int(integer.to_u64(), true)
         } else {
@@ -3520,12 +3501,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     }
 
     fn codegen_global(&mut self, global_id: TypedGlobalId) -> CodegenResult<()> {
-        let global = self.module.globals.get(global_id);
+        let global = self.k1.globals.get(global_id);
         let initialized_basic_value =
             self.codegen_compile_time_value(global.initial_value.unwrap())?;
-        let variable = self.module.variables.get(global.variable_id);
-        let name =
-            self.module.make_qualified_name(variable.owner_scope, variable.name, "__", false);
+        let variable = self.k1.variables.get(global.variable_id);
+        let name = self.k1.make_qualified_name(variable.owner_scope, variable.name, "__", false);
         let llvm_global = self.llvm_module.add_global(
             initialized_basic_value.get_type(),
             Some(AddressSpace::default()),
@@ -3533,7 +3513,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         );
         llvm_global.set_constant(global.is_static);
         llvm_global.set_initializer(&initialized_basic_value);
-        let is_reference_type = self.module.types.get(global.ty).as_reference().is_some();
+        let is_reference_type = self.k1.types.get(global.ty).as_reference().is_some();
         let variable_value = if is_reference_type {
             // Direct; global is a ptr, which is the correct type
             // This will not be 'loaded' by load_variable_value
@@ -3549,7 +3529,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     pub fn codegen_module(&mut self) -> CodegenResult<()> {
         let start = std::time::Instant::now();
-        let global_ids: Vec<TypedGlobalId> = self.module.globals.iter_ids().collect();
+        let global_ids: Vec<TypedGlobalId> = self.k1.globals.iter_ids().collect();
         for global_id in &global_ids {
             self.codegen_global(*global_id)?;
         }
@@ -3561,9 +3541,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         // }
 
         // Hack to guarantee presence of required extern declarations
-        for (id, function) in self.module.function_iter() {
+        for (id, function) in self.k1.function_iter() {
             if let TyperLinkage::External(Some(ident)) = function.linkage {
-                match self.module.name_of(ident) {
+                match self.k1.name_of(ident) {
                     "malloc" | "calloc" | "realloc" | "free" | "memcmp" | "exit" => {
                         self.codegen_function_or_get(id)?;
                     }
@@ -3572,16 +3552,40 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
         }
 
-        let Some(main_function_id) = self.module.get_main_function_id() else {
-            return failf!(SpanId::NONE, "Module {} has no main function", self.module.name());
+        let Some(main_function_id) = self.k1.get_main_function_id() else {
+            return failf!(SpanId::NONE, "Program {} has no main function", self.k1.name());
         };
-        self.codegen_function_or_get(main_function_id)?;
+        let function_value = self.codegen_function_or_get(main_function_id)?;
+
+        let entrypoint = self.llvm_module.add_function("main", function_value.get_type(), None);
+        self.builder.unset_current_debug_location();
+        let entry_block = self.ctx.append_basic_block(entrypoint, "entry");
+        self.builder.position_at_end(entry_block);
+        let params: Vec<BasicMetadataValueEnum<'ctx>> =
+            entrypoint.get_params().iter().map(|p| (*p).into()).collect();
+        let res = self
+            .builder
+            .build_call(function_value, &params, "")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_left();
+        //let (sub_prog, _) = self
+        //    .make_function_debug_info(
+        //        "main",
+        //        SpanId::NONE,
+        //        self.codegen_type(I32_TYPE_ID)?.debug_type(),
+        //        &[],
+        //    )
+        //    .unwrap();
+        //function_value.set_subprogram(sub_prog);
+        self.builder.build_return(Some(&res)).unwrap();
+
         info!("codegen phase 'ir' took {}ms", start.elapsed().as_millis());
         Ok(())
     }
 
     pub fn name(&self) -> &str {
-        self.module.name()
+        self.k1.name()
     }
 
     fn set_up_machine(module: &mut LlvmModule) -> TargetMachine {
@@ -3681,17 +3685,15 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             )
             .unwrap();
         self.llvm_module.link_in_module(base_lib_module).unwrap();
-        let Some(main_fn_id) = self.module.get_main_function_id() else {
-            bail!("No main function")
-        };
+        let Some(main_fn_id) = self.k1.get_main_function_id() else { bail!("No main function") };
         let llvm_function = self.llvm_functions.get(&main_fn_id).unwrap();
-        eprintln!("Interpreting {}", self.module.name());
+        eprintln!("Interpreting {}", self.k1.name());
         let return_value = unsafe { engine.run_function(llvm_function.function_value, &[]) };
         let res: u64 = return_value.as_int(true);
         Ok(res)
     }
 
     pub fn word_size(&self) -> WordSize {
-        self.module.ast.config.target.word_size()
+        self.k1.ast.config.target.word_size()
     }
 }

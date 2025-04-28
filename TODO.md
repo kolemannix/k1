@@ -24,7 +24,6 @@ New tagline? "C with typeclasses and tagged unions"
     - [x] Match to get reference to each struct field, for example, use * for a dereferencing match
     - [x] Match to get reference to enum payload
   - [x] ASSERT FAILED: true != true at core.k1:23
-- [ ] Write a 'validateTypedModule' procedure.
 - [x] Real type inference
   - [x] True inference variables, instantiate function types, unification and consistency checks, aka make it work
   - [x] Make 'crash' work in no-std
@@ -54,6 +53,7 @@ New tagline? "C with typeclasses and tagged unions"
   - [x] Enum construction
 
 ## Cleanup/tidyness/punchlist
+- [ ] Write a 'validateTypedModule' procedure.
 - [ ] Represent payload-less `either` types as ints not structs
 - [x] String pool for string values, not just identifiers (will dedupe in LLVM too)
 - [ ] Support explicit type args in AnonEnumConstructor syntax 
@@ -89,6 +89,7 @@ New tagline? "C with typeclasses and tagged unions"
 - [x] 'never' needs to work in every expression position (got close enough, might add more if one comes up)
 - [x] accumulate test errors and support inline test comment assertions when a line should produce a compiler error.
       - Probably one test for failing compilation and one passing one for each major language area
+- [ ] Rename 'Buffer'
 - [ ] b"" strings that are of type Buffer[u8] (what about interpolation?)
 - [ ] c"" strings that are of type Pointer (what about interpolation?)
 - [x] Add simple int range in stdlib
@@ -106,7 +107,13 @@ New tagline? "C with typeclasses and tagged unions"
 
 ## Project: Actual modules, library vs binary compile, allow linker options
 - [ ] Separate modules
-- [ ] Library vs Binary, clang passthrough options, when do we 'link', in IR or as object files, ...
+  - [x] Introduce 'module' w/ kind (lib/bin/core), deps, and namespace+scope
+  - [x] Add entire modules from TypedProgram
+  - [5] Module manifests somewhere
+  - [5] Library vs Binary
+  - [ ] Validate modules cannot use something from a module they dont depend on
+  - [ ] serialize typedprogram
+- [ ] clang passthrough options, when do we 'link', in IR or as object files, ...
 
 ## Project: VM for `static` execution
 - [ ] vm: static execution
@@ -120,6 +127,7 @@ New tagline? "C with typeclasses and tagged unions"
         like 'body' code SINCE it'll end up using the user's types, and even impls!
   - [x] Define clear 'platform layer' (crash, assert, mem, other?).
       Then we could do an LLVM interp platform and a rust interpreter platform
+  - [ ] materialize buffers
 
 # Project: static reflection and metaprogramming story
 - [ ] Runtime type info story

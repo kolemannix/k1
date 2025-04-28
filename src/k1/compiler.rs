@@ -3,17 +3,16 @@ use std::fs::File;
 use std::io::Write;
 use std::os::unix::prelude::ExitStatusExt;
 use std::path::Path;
-use std::time::Instant;
 
-use crate::parse::{self, print_error};
+use crate::parse::{self};
 use crate::parse::{write_error_location, NumericWidth};
-use crate::typer::{ErrorLevel, TypedModule};
+use crate::typer::{ErrorLevel, TypedProgram};
 use anyhow::{bail, Result};
 use inkwell::context::Context;
 use log::info;
 
 use crate::codegen_llvm::Codegen;
-use parse::{lex_text, ParsedModule, Source};
+use parse::ParsedProgram;
 
 use std::path::PathBuf;
 
@@ -238,8 +237,39 @@ macro_rules! static_assert_size {
 }
 
 pub enum CompileModuleError {
-    ParseFailure(Box<ParsedModule>),
-    TyperFailure(Box<TypedModule>),
+    ParseFailure(Box<ParsedProgram>),
+    TyperFailure(Box<TypedProgram>),
+}
+
+/// Requires a canonicalized src_path
+/// Returned pair is (parent_dir, source_files)
+pub fn discover_source_files(src_path: &Path) -> (PathBuf, Vec<PathBuf>) {
+    let is_dir = src_path.is_dir();
+    let src_dir = if is_dir {
+        let src_dir = src_path;
+        src_dir.to_path_buf()
+    } else {
+        let src_dir = src_path.parent().unwrap().to_path_buf();
+        src_dir
+    };
+
+    let src_filter: &dyn Fn(&Path) -> bool = if !is_dir {
+        &|p: &Path| *p == *src_path
+    } else {
+        &|p: &Path| p.extension().is_some_and(|ext| ext == "k1")
+    };
+
+    let dir_entries = {
+        let mut ents = fs::read_dir(&src_dir)
+            .unwrap()
+            .filter_map(|item| item.ok())
+            .map(|item| item.path())
+            .filter(|item| src_filter(item))
+            .collect::<Vec<_>>();
+        ents.sort_by_key(|ent| ent.file_name().unwrap().to_os_string());
+        ents
+    };
+    (src_dir, dir_entries)
 }
 
 /// If `args.file` points to a directory,
@@ -249,27 +279,11 @@ pub enum CompileModuleError {
 /// If `args.file` points to a file,
 /// - compile that file only.
 /// - module name is the name of the file.
-pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileModuleError> {
-    let start_parse = std::time::Instant::now();
+pub fn compile_module(args: &Args) -> std::result::Result<TypedProgram, CompileModuleError> {
     let src_path = &args
         .file()
         .canonicalize()
         .unwrap_or_else(|_| panic!("Failed to load source path: {:?}", args.file()));
-    let is_dir = src_path.is_dir();
-    let (src_dir, module_name) = if is_dir {
-        let src_dir = src_path.canonicalize().unwrap();
-        let outname = src_dir.file_name().unwrap().to_str().unwrap().to_string();
-        (src_dir, outname)
-    } else {
-        let src_dir = src_path.parent().unwrap().to_path_buf();
-        (src_dir, src_path.file_stem().unwrap().to_str().unwrap().to_string())
-    };
-
-    let src_filter: Box<dyn Fn(&Path) -> bool> = if !is_dir {
-        Box::new(|p: &Path| *p == *src_path)
-    } else {
-        Box::new(|p: &Path| p.extension().is_some_and(|ext| ext == "k1"))
-    };
 
     let use_std = !args.no_std;
 
@@ -283,105 +297,58 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedModule, CompileMo
         target,
         debug: args.debug,
     };
-    let mut parsed_module = ParsedModule::make(module_name.to_string(), config);
 
-    let dir_entries = {
-        let mut ents = fs::read_dir(src_dir)
-            .unwrap()
-            .filter_map(|item| item.ok())
-            .filter(|item| src_filter(&item.path()))
-            .collect::<Vec<_>>();
-        ents.sort_by_key(|ent1| ent1.file_name());
-        ents
+    let module_name = if src_path.is_dir() {
+        src_path.file_name().unwrap().to_str().unwrap().to_string()
+    } else {
+        src_path.file_stem().unwrap().to_str().unwrap().to_string()
     };
 
-    // TODO: Do the file IO in parallel
-    let mut parse_file = |path: &Path| {
-        let content = fs::read_to_string(path)
-            .unwrap_or_else(|_| panic!("Failed to open file to parse: {:?}", path));
-        let name = path.file_name().unwrap();
-        info!("Parsing {}", name.to_string_lossy());
-        let file_id = parsed_module.sources.next_file_id();
-        let directory_string =
-            path.canonicalize().unwrap().parent().unwrap().to_str().unwrap().to_string();
-        let source =
-            Source::make(file_id, directory_string, name.to_str().unwrap().to_string(), content);
-        let token_vec = match lex_text(&mut parsed_module, source) {
-            Ok(token_vec) => token_vec,
-            Err(e) => {
-                print_error(&parsed_module, &e);
-                parsed_module.errors.push(e);
-                return;
-            }
-        };
-        let mut parser = parse::Parser::make(&token_vec, file_id, &mut parsed_module);
+    let mut typed_program = TypedProgram::new(module_name, config);
 
-        parser.parse_module();
-    };
+    let lib_dir_string = std::env::var("K1_LIB_DIR").unwrap_or("k1lib".to_string());
+    let lib_dir = Path::new(&lib_dir_string);
+    let corelib_dir = lib_dir.join("core");
+    let stdlib_dir = lib_dir.join("std");
 
-    let stdlib_dir = std::env::var("K1_LIB_DIR").unwrap_or("stdlib".to_string());
-    let stdlib_dir = Path::new(&stdlib_dir);
-
-    let builtin_src = "builtin.k1";
-
-    parse_file(&stdlib_dir.join(Path::new(builtin_src)));
-
-    let stdlib_files = [
-        "core.k1",
-        "buffer.k1",
-        "opt.k1",
-        "list.k1",
-        "string.k1",
-        "types.k1",
-        "string_builder.k1",
-        "bitwise.k1",
-        "mem.k1",
-        "arena.k1",
-        "range.k1",
-    ];
-
-    if use_std {
-        for f in stdlib_files {
-            parse_file(&stdlib_dir.join(Path::new(f)));
-        }
-    }
-
-    for f in dir_entries.iter() {
-        parse_file(&f.path());
-    }
-
-    let type_start = Instant::now();
-    let parsing_elapsed = type_start.duration_since(start_parse);
-    info!("parsing took {}ms", parsing_elapsed.as_millis());
-
-    if !parsed_module.errors.is_empty() {
-        return Err(CompileModuleError::ParseFailure(Box::new(parsed_module)));
-    }
-
-    let mut typed_module = TypedModule::new(parsed_module);
-    if let Err(e) = typed_module.run() {
+    if let Err(e) = typed_program.add_module(&corelib_dir) {
         if args.dump_module {
-            println!("{}", typed_module);
+            eprintln!("{}", typed_program);
         }
         eprintln!("{}", e);
-        return Err(CompileModuleError::TyperFailure(Box::new(typed_module)));
+        return Err(CompileModuleError::TyperFailure(Box::new(typed_program)));
     };
-    let typing_elapsed = type_start.elapsed();
-    if args.dump_module {
-        println!("{}", typed_module);
-    }
-    info!(
-        "typing took {}ms (\n\t{} expressions,\n\t{} functions,\n\t{} types\n)",
-        typing_elapsed.as_millis(),
-        typed_module.exprs.len(),
-        typed_module.function_iter().count(),
-        typed_module.types.type_count()
-    );
 
-    Ok(typed_module)
+    if use_std {
+        if let Err(e) = typed_program.add_module(&stdlib_dir) {
+            if args.dump_module {
+                eprintln!("{}", typed_program);
+            }
+            eprintln!("{}", e);
+            return Err(CompileModuleError::TyperFailure(Box::new(typed_program)));
+        }
+    }
+
+    if let Err(e) = typed_program.add_module(src_path) {
+        if args.dump_module {
+            eprintln!("{}", typed_program);
+        }
+        eprintln!("{}", e);
+        return Err(CompileModuleError::TyperFailure(Box::new(typed_program)));
+    };
+
+    if args.dump_module {
+        println!("{}", typed_program);
+    }
+    Ok(typed_program)
 }
 
-pub fn write_executable(debug: bool, out_dir: &Path, module_name: &Path) -> Result<()> {
+pub fn write_executable(
+    debug: bool,
+    k1_lib_dir: &Path,
+    out_dir: &Path,
+    module_name: &Path,
+) -> Result<()> {
     let clang_time = std::time::Instant::now();
 
     //opt/homebrew/opt/llvm@18/lib/libunwind.dylib
@@ -395,6 +362,7 @@ pub fn write_executable(debug: bool, out_dir: &Path, module_name: &Path) -> Resu
     let ll_file = ll_name.to_str().unwrap();
     let out_name = out_dir.join(module_name);
     let out_file = out_name.to_str().unwrap();
+    let unwind_c_path = k1_lib_dir.join("k1_unwind.c");
     // Note: Could we do this a lot more efficiently by just feeding the in-memory LLVM IR to libclang or whatever the library version is called.
     build_cmd.args([
         // "-v",
@@ -407,7 +375,7 @@ pub fn write_executable(debug: bool, out_dir: &Path, module_name: &Path) -> Resu
         llvm_base.join("include").to_str().unwrap(),
         &format!("-mmacosx-version-min={}", MAC_SDK_VERSION),
         "-lunwind",
-        "rt/unwind.c",
+        unwind_c_path.to_str().unwrap(),
         ll_file,
         "-o",
         out_file,
@@ -428,7 +396,7 @@ pub fn write_executable(debug: bool, out_dir: &Path, module_name: &Path) -> Resu
 pub fn codegen_module<'ctx, 'module>(
     args: &Args,
     ctx: &'ctx Context,
-    typed_module: &'module TypedModule,
+    typed_module: &'module TypedProgram,
     out_dir: impl AsRef<str>,
     do_write_executable: bool,
 ) -> Result<Codegen<'ctx, 'module>> {
@@ -441,8 +409,8 @@ pub fn codegen_module<'ctx, 'module>(
     if let Err(e) = codegen.codegen_module() {
         write_error_location(
             &mut std::io::stderr(),
-            &codegen.module.ast.spans,
-            &codegen.module.ast.sources,
+            &codegen.k1.ast.spans,
+            &codegen.k1.ast.sources,
             e.span,
             ErrorLevel::Error,
         )
@@ -462,8 +430,11 @@ pub fn codegen_module<'ctx, 'module>(
         f.write_all(llvm_text.as_bytes()).unwrap();
     }
 
+    let k1_lib_dir_string = std::env::var("K1_LIB_DIR").unwrap_or("k1lib".to_string());
+    let k1_lib_dir = PathBuf::from(k1_lib_dir_string);
+
     if do_write_executable {
-        write_executable(args.debug, &out_dir, &module_name_path)?;
+        write_executable(args.debug, &k1_lib_dir, &out_dir, &module_name_path)?;
     }
 
     if args.llvm_counts {

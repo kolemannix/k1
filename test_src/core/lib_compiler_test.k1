@@ -1,8 +1,0 @@
-ns lib_compiler_test;
-
-fn test(): unit {
-  let x = compiler/location();
-  assert(x.filename == "lib_compiler_test.k1");
-  assert(x.line == 4);
-  assert(compiler/testCompile(2 + "asdf") is .Some(_));
-}
