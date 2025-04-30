@@ -123,9 +123,11 @@ ns k1 {
 
   let static OS: string = builtin; // Possible values: 'linux', 'macos', 'wasm'
   let static OS_MACOS: bool = OS == "macos";
+  let static OS_POSIX: bool = OS == "macos" or OS == "linux";
 
   intern fn emitCompilerMessage(
-    level: (either Info, Warn),
+    locn: compiler/SourceLocation,
+    level: (either(u8) Info, Warn, Error),
     msg: string
   ): unit
 
@@ -181,12 +183,15 @@ fn discard[T](t: T): unit { () }
 
 // TODO: #if(K1_LIBC?) ?
 ns libc {
+  let static STDIN: i32 = 0;
+  let static STDOUT: i32 = 1;
+  let static STDERR: i32 = 2;
+
   extern(exit) fn exit(code: i32): never
 
   extern(read) fn read(fileNo: i32, buffer: Pointer, count: uword): iword
   extern(write) fn write(fileNo: i32, data: Pointer, count: uword): iword
-  // extern(memcpy) fn memcpy(dst: Pointer, src: Pointer, count: uword): Pointer
-  // extern(memset) fn memset(src: Pointer, value: u32, count: uword): Pointer
+
   extern(memcmp) fn memcmp(s1: Pointer, s2: Pointer, size: uword): i32
 
   extern(malloc) fn malloc(size: uword): Pointer
@@ -223,7 +228,7 @@ fn crash(context locn: compiler/SourceLocation)(msg: string): never {
     //  count = s.buffer.len - 1, 
     //  offset = 0
     //);
-    k1/emitCompilerMessage(.Info, msg);
+    k1/emitCompilerMessage(locn, .Error, msg);
     sys/exit(111)
   } else {
     let filename = locn.filename;

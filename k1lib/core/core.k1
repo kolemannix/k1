@@ -26,29 +26,65 @@ impl Equals for Pointer {
 
 fn identity[T](value: T): T { value }
 
-fn printIt[T: Show](value: T): unit  {
+fn printIt[T: Show](value: T): unit {
   let s = value.show();
   print(s)
 }
 
 fn print(s: string): unit {
-  libc/write(fileNo = 1, data = s.buffer.data as Pointer, count = s.len());
+  if k1/IS_STATIC {
+    k1/emitCompilerMessage(compiler/location(), .Info, s)
+  } else {
+    io/STDOUT.writeString(s)
+  };
   ()
 }
 fn println(s: string): unit {
-  // 2 calls to avoid allocating; 'write' is fast
+  // 2 calls for now to avoid dependency on allocator
   print(s);
   print("\n");
 }
 
 fn eprint(s: string): unit {
-  libc/write(fileNo = 2, data = s.buffer.data as Pointer, count = s.len());
+  if k1/IS_STATIC {
+    k1/emitCompilerMessage(compiler/location(), .Info, s)
+  } else {
+    io/STDERR.writeString(s)
+  };
   ()
 }
 fn eprintln(s: string): unit {
-  // 2 calls to avoid allocating; 'write' is fast
+  // 2 calls for now to avoid dependency on allocator
   eprint(s);
   eprint("\n");
+}
+
+#if k1/OS_POSIX 
+ns io {
+  deftype OutStream = { fileNo: i32 }
+  let* static STDOUT: OutStream* = { fileNo: libc/STDOUT };
+  let* static STDERR: OutStream* = { fileNo: libc/STDERR };
+
+  impl Writer for OutStream {
+    fn writeChar(self: Self*, value: char): unit {
+      let* valueRef: char* = value;
+      libc/write(fileNo = self.fileNo, data = valueRef as Pointer, count = 1);
+      ()
+    }
+    fn writeByte(self: Self*, value: u8): unit {
+      let* valueRef: u8* = value;
+      libc/write(fileNo = self.fileNo, data = valueRef as Pointer, count = 1);
+      ()
+    }
+    fn writeString(self: Self*, s: string): unit {
+      libc/write(fileNo = self.fileNo, data = s.buffer.data as Pointer, count = s.len());
+      ()
+    }
+    fn writeBytes(self: Self*, buffer: Buffer[byte]): unit {
+      libc/write(fileNo = self.fileNo, data = buffer.data as Pointer, count = buffer.len);
+      ()
+    }
+  }
 }
 
 ns sys {
