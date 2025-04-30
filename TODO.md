@@ -109,27 +109,41 @@ New tagline? "C with typeclasses and tagged unions"
 - [ ] Separate modules
   - [x] Introduce 'module' w/ kind (lib/bin/core), deps, and namespace+scope
   - [x] Add entire modules from TypedProgram
-  - [5] Module manifests somewhere
-  - [5] Library vs Binary
+  - [x] Module manifests somewhere
+  - [x] Library vs Binary
+  - [ ] Dependencies: git url, 'local file', or 'package'
   - [ ] Validate modules cannot use something from a module they dont depend on
-  - [ ] serialize typedprogram
+  - [ ] serialize typedprogram (for incremental compilation)
 - [ ] clang passthrough options, when do we 'link', in IR or as object files, ...
 
 ## Project: VM for `static` execution
 - [ ] vm: static execution
+  - [ ] reference-to-reference casts
+  - [ ] Need static let to indicate that other static code can use them
+    - [ ] Cannot be a `let*`, or Pointer
+    - [ ] Cannot be `mut`
+  - [ ] Order-independence for globals used in static code
+  - [ ] Static Buffers (slices)
+    - [x] vm -> static
+    - [x] static -> vm
+    - [x] LLVM gen
+    - [ ] Allow upgrading them to fixed-length Arrays (so cool actually)
+  - [ ] reference to reference cast
   - [x] Introduce uword/iword types
   - [x] Switch to a single stack
   - [x] Move to intrinsic: system core memory functions
   - [x] Move to intrinsic: memcpy/memmove
-  - [ ] Move to intrinsic: `write`
+  - [x] Allow 'write's from static code
   - [x] Move to intrinsic: `exit`
   - [x] Run global initializers before most bodies but after all other phases, treat it
         like 'body' code SINCE it'll end up using the user's types, and even impls!
   - [x] Define clear 'platform layer' (crash, assert, mem, other?).
       Then we could do an LLVM interp platform and a rust interpreter platform
-  - [ ] materialize buffers
+  - [ ] VM "PermSpace" for caching converted static values in their VM representation
 
 # Project: static reflection and metaprogramming story
+- [ ] functions taking only a single type could be invoked with
+      a nice syntax like `type.sizeOf`
 - [ ] Runtime type info story
 - [ ] typeOf, typeInfo, and 'any' type
 - [ ] 'Type predicate' functions as type bounds

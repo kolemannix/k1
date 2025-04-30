@@ -1,11 +1,15 @@
 use std::{
+    io::stderr,
     num::NonZeroU32,
     sync::atomic::{AtomicU64, Ordering},
 };
 
 use ahash::HashMapExt;
+use colored::Colorize;
+use ecow::EcoVec;
 use fxhash::FxHashMap;
 use itertools::Itertools;
+use k1_types::{CompilerMessageLevel, K1Buffer, K1SourceLocation};
 use log::debug;
 use smallvec::{smallvec, SmallVec};
 
@@ -19,12 +23,13 @@ use crate::{
         self, make_error, make_fail_span,
         types::{
             IntegerType, StructTypeField, Type, TypeId, TypedEnumVariant, Types, BOOL_TYPE_ID,
-            CHAR_TYPE_ID, POINTER_TYPE_ID, STRING_TYPE_ID, UNIT_TYPE_ID,
+            CHAR_TYPE_ID, F32_TYPE_ID, F64_TYPE_ID, IWORD_TYPE_ID, POINTER_TYPE_ID, STRING_TYPE_ID,
+            UNIT_TYPE_ID, UWORD_TYPE_ID,
         },
         BinaryOpKind, CastType, IntrinsicFunction, Layout, MatchingCondition,
-        MatchingConditionInstr, SimpleNamedType, StaticValue, TypedExpr, TypedExprId,
-        TypedFloatValue, TypedGlobalId, TypedIntValue, TypedMatchExpr, TypedProgram, TypedStmtId,
-        TyperResult, VariableId,
+        MatchingConditionInstr, SimpleNamedType, StaticBuffer, StaticEnum, StaticStruct,
+        StaticValue, StaticValueId, TypedExpr, TypedExprId, TypedFloatValue, TypedGlobalId,
+        TypedIntValue, TypedMatchExpr, TypedProgram, TypedStmtId, TyperResult, VariableId,
     },
 };
 
@@ -38,14 +43,37 @@ pub mod k1_types {
 
     #[repr(C)]
     #[derive(Clone, Copy)]
+    pub struct K1SourceLocation {
+        pub filename: K1Buffer,
+        pub line: u64,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
     pub struct K1Buffer {
         pub len: usize,
         pub data: *const u8,
     }
 
+    #[repr(u8)]
+    pub enum CompilerMessageLevel {
+        Info = 0,
+        Warn = 1,
+        Error = 2,
+    }
+
     impl K1Buffer {
+        ///# Safety
+        /// None of this is safe
         pub unsafe fn to_slice<'a, T>(self) -> &'a [T] {
             unsafe { std::slice::from_raw_parts(self.data as *const T, self.len) }
+        }
+
+        ///# Safety
+        /// Really make sure its a char buffer
+        pub unsafe fn to_str<'a>(self) -> &'a str {
+            let slice = self.to_slice();
+            std::str::from_utf8(slice).unwrap()
         }
     }
 }
@@ -72,15 +100,6 @@ pub struct Vm {
 }
 
 impl Vm {
-    pub fn zero() -> Vm {
-        Vm {
-            globals: FxHashMap::new(),
-            static_stack: Stack::make(0),
-            stack: Stack::make(0),
-            eval_depth: AtomicU64::new(0),
-            eval_span: SpanId::NONE,
-        }
-    }
     pub fn reset(&mut self) {
         // Note that we don't de-allocate anything
         self.static_stack.reset();
@@ -109,7 +128,7 @@ impl Vm {
         let w = &mut s;
         for index in 0..self.stack.frames.len() {
             let frame_string = self.dump_frame(m, index);
-            write!(w, "{}", frame_string).unwrap();
+            write!(w, "FRAME {index:02} {}", frame_string).unwrap();
         }
         s
     }
@@ -154,8 +173,8 @@ impl Vm {
         let locals = self
             .stack
             .locals
-            .get(&(frame_index as u32))
-            .unwrap()
+            .entry(frame_index as u32)
+            .or_default()
             .iter()
             .map(|p| (*p.0, *p.1))
             .collect_vec();
@@ -186,11 +205,17 @@ impl Vm {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub struct VmExit {
+    span: SpanId,
+    code: i32,
+}
+
+#[derive(Debug, Clone, Copy)]
 pub enum VmResult {
     Value(Value),
     Break(Value),
     Return(Value),
-    Exit(i32),
+    Exit(VmExit),
 }
 
 impl VmResult {
@@ -383,9 +408,14 @@ pub fn execute_single_expr(m: &mut TypedProgram, expr: TypedExprId) -> TyperResu
     vm.stack.push_new_frame(None);
     let span = m.exprs.get(expr).get_span();
     let v = match execute_expr(&mut vm, m, expr) {
-        Err(e) => Err(e),
+        Err(e) => {
+            m.write_error(&mut stderr(), &e).unwrap();
+            failf!(span, "Static execution failed")
+        }
         Ok(VmResult::Value(value)) => Ok(value),
-        Ok(VmResult::Exit(code)) => failf!(span, "Static execution exited with code: {code}"),
+        Ok(VmResult::Exit(exit)) => {
+            failf!(span, "Static execution exited with code: {}", exit.code)
+        }
         Ok(VmResult::Return(_value)) => {
             failf!(
                 span,
@@ -445,7 +475,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
         TypedExpr::Integer(typed_integer_expr) => Ok(Value::Int(typed_integer_expr.value).into()),
         TypedExpr::Float(typed_float_expr) => Ok(Value::Float(typed_float_expr.value).into()),
         TypedExpr::String(s, _) => {
-            let string_value = k1_str_to_value(vm, StackSelection::CallStackCurrent, m, *s);
+            let string_value = string_id_to_value(vm, StackSelection::CallStackCurrent, m, *s);
             Ok(string_value.into())
         }
         TypedExpr::Struct(s) => {
@@ -483,6 +513,8 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                     field_access.struct_type,
                     struct_ptr,
                     field_access.field_index as usize,
+                    // nocommit: I feel like this has to be 'true' or we alias,
+                    //           try to repro it
                     false,
                 )?;
                 Ok(field_value.into())
@@ -527,7 +559,8 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                 }
             } else {
                 let Some(v) = vm.get_current_local(v_id) else {
-                    eprintln!("{}", vm.dump(m));
+                    // nocommit: Fix dump
+                    //eprintln!("{}", vm.dump(m));
                     return failf!(
                         variable_expr.span,
                         "Variable missing in vm: {}",
@@ -700,50 +733,46 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
             let tag_value = load_value(vm, m, enum_type.tag_type, ptr, true)?;
             Ok(tag_value.into())
         }
-        TypedExpr::EnumGetPayload(get_payload) => {
-            let get_payload = *get_payload;
-            let Value::Agg { ptr, .. } = execute_expr_return_exit!(vm, m, get_payload.enum_expr)?
-            else {
-                m.ice_with_span("malformed enum get_payload", get_payload.span)
+        TypedExpr::EnumGetPayload(get_variant_payload) => {
+            let get_payload = *get_variant_payload;
+            let base_value = execute_expr_return_exit!(vm, m, get_payload.enum_variant_expr)?;
+            let enum_ptr = match base_value {
+                Value::Agg { ptr: variant_ptr, .. } => variant_ptr,
+                Value::Reference { ptr, .. } => ptr,
+                _ => unreachable!("malformed get variant payload: not a agg or agg*"),
             };
-            let enum_type = m.get_expr_type(get_payload.enum_expr).expect_enum();
-            let variant = enum_type.variant_by_index(get_payload.variant_index);
-            let payload_ptr = gep_enum_payload(&m.types, variant, ptr);
-            let payload_value = load_value(vm, m, variant.payload.unwrap(), payload_ptr, false)?;
-            Ok(payload_value.into())
+            let variant_type = match m.get_expr_type(get_payload.enum_variant_expr) {
+                Type::EnumVariant(ev) => ev,
+                Type::Reference(r) => m.types.get(r.inner_type).expect_enum_variant(),
+                _ => unreachable!("malformed get variant payload"),
+            };
+            let payload_ptr = gep_enum_payload(&m.types, variant_type, enum_ptr);
+            if get_payload.is_referencing {
+                let payload_reference =
+                    Value::Reference { type_id: get_payload.result_type_id, ptr: payload_ptr };
+                Ok(payload_reference.into())
+            } else {
+                // nocommit: copy_aggregates = true if the base is a reference type to avoid
+                // aliasing; same for struct access
+                let payload_value =
+                    load_value(vm, m, variant_type.payload.unwrap(), payload_ptr, false)?;
+                Ok(payload_value.into())
+            }
         }
         TypedExpr::Cast(typed_cast) => {
             let typed_cast = typed_cast.clone();
             let span = typed_cast.span;
             let base_value = execute_expr_return_exit!(vm, m, typed_cast.base_expr)?;
             match typed_cast.cast_type {
-                CastType::IntegerExtend => {
-                    let _ = base_value.expect_int();
-                    todo!()
-                    //match i {
-                    //    TypedIntegerValue::U8(_) => todo!(),
-                    //    TypedIntegerValue::U16(_) => todo!(),
-                    //    TypedIntegerValue::U32(_) => todo!(),
-                    //    TypedIntegerValue::U64(_) => todo!(),
-                    //    TypedIntegerValue::I8(_) => todo!(),
-                    //    TypedIntegerValue::I16(_) => todo!(),
-                    //    TypedIntegerValue::I32(_) => todo!(),
-                    //    TypedIntegerValue::I64(_) => todo!(),
-                    //}
+                CastType::IntegerCast(_direction) => {
+                    let int_to_cast = base_value.expect_int();
+                    let value = integer_cast(&m.types, int_to_cast, typed_cast.target_type_id);
+                    Ok(Value::Int(value).into())
                 }
-                CastType::IntegerTruncate => {
-                    let int_to_trunc = base_value.expect_int();
-                    let value: TypedIntValue = match m.types.get(typed_cast.target_type_id) {
-                        Type::Integer(IntegerType::U8) => int_to_trunc.to_u8().into(),
-                        Type::Integer(IntegerType::U16) => int_to_trunc.to_u16().into(),
-                        Type::Integer(IntegerType::U32) => int_to_trunc.to_u32().into(),
-                        Type::Integer(IntegerType::U64) => int_to_trunc.to_u64().into(),
-                        Type::Integer(IntegerType::I8) => (int_to_trunc.to_u8() as i8).into(),
-                        Type::Integer(IntegerType::I16) => (int_to_trunc.to_u16() as i16).into(),
-                        Type::Integer(IntegerType::I32) => (int_to_trunc.to_u32() as i32).into(),
-                        Type::Integer(IntegerType::I64) => (int_to_trunc.to_u64() as i64).into(),
-                        _ => unreachable!(),
-                    };
+                CastType::IntegerExtendFromChar => {
+                    let Value::Char(c) = base_value else { unreachable!() };
+                    let int_to_cast = TypedIntValue::U8(c);
+                    let value = integer_cast(&m.types, int_to_cast, typed_cast.target_type_id);
                     Ok(Value::Int(value).into())
                 }
                 CastType::Integer8ToChar => {
@@ -754,13 +783,30 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                     };
                     Ok(Value::Char(byte).into())
                 }
-                CastType::IntegerExtendFromChar => todo!(),
-                CastType::IntegerToFloat => todo!(),
+                CastType::IntegerToFloat => {
+                    let int_to_cast = base_value.expect_int();
+                    let float_value = match typed_cast.target_type_id {
+                        F32_TYPE_ID => TypedFloatValue::F32(int_to_cast.to_u32() as f32),
+                        F64_TYPE_ID => TypedFloatValue::F64(int_to_cast.to_u64() as f64),
+                        _ => unreachable!(),
+                    };
+                    Ok(Value::Float(float_value).into())
+                }
                 CastType::IntegerToPointer => {
                     let u = base_value.expect_int().expect_uword();
                     Ok(Value::Pointer(u as usize).into())
                 }
-                CastType::KnownNoOp => Ok(base_value.into()),
+                CastType::EnumToVariant => {
+                    let new_value = match base_value {
+                        Value::Agg { ptr, .. } => {
+                            Value::Agg { ptr, type_id: typed_cast.target_type_id }
+                        }
+                        _ => {
+                            unreachable!("Malformed EnumToVariant cast: {}", m.expr_to_string(expr))
+                        }
+                    };
+                    Ok(VmResult::Value(new_value))
+                }
                 CastType::PointerToReference => {
                     let Value::Pointer(value) = base_value else {
                         m.ice_with_span("malformed pointer-to-reference cast", span)
@@ -777,7 +823,21 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                     };
                     Ok(Value::Pointer(ptr.addr()).into())
                 }
-                CastType::PointerToInteger => todo!(),
+                CastType::ReferenceToReference => {
+                    let Value::Reference { ptr, .. } = base_value else {
+                        m.ice_with_span("malformed reference-to-reference cast", span)
+                    };
+                    Ok(Value::Reference { type_id: typed_cast.target_type_id, ptr }.into())
+                }
+                CastType::PointerToWord => {
+                    let ptr_usize = base_value.expect_ptr();
+                    let int_value = match typed_cast.target_type_id {
+                        UWORD_TYPE_ID => TypedIntValue::UWord64(ptr_usize as u64),
+                        IWORD_TYPE_ID => TypedIntValue::IWord64(ptr_usize as i64),
+                        _ => m.ice_with_span("malformed PointerToWord", span),
+                    };
+                    Ok(Value::Int(int_value).into())
+                }
                 CastType::FloatExtend => todo!(),
                 CastType::FloatTruncate => todo!(),
                 CastType::FloatToInteger => todo!(),
@@ -797,7 +857,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                 VmResult::Exit(code) => Ok(VmResult::Exit(code)),
             }
         }
-        TypedExpr::Lambda(_) => todo!(),
+        TypedExpr::Lambda(_) => m.todo_with_span("vm lambda", vm.eval_span),
         TypedExpr::FunctionReference(_) => todo!(),
         TypedExpr::FunctionToLambdaObject(_) => todo!(),
         TypedExpr::PendingCapture(_) => todo!(),
@@ -808,6 +868,19 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
             Ok(vm_value.into())
         }
     };
+    if cfg!(debug_assertions) {
+        if let Ok(VmResult::Value(v)) = result {
+            if v.get_type() != m.exprs.get(expr).get_type() {
+                return failf!(
+                    vm.eval_span,
+                    "vm eval type mismatch {}: {} vs {}",
+                    m.expr_to_string(expr),
+                    m.type_id_to_string(m.exprs.get(expr).get_type()),
+                    m.type_id_to_string(v.get_type()),
+                );
+            }
+        }
+    }
     //debug!("{}-> {:?}", " ".repeat(vm.eval_depth.load(Ordering::Relaxed) as usize), result);
     result
 }
@@ -819,16 +892,16 @@ pub fn static_value_to_vm_value(
     static_value: &StaticValue,
 ) -> TyperResult<Value> {
     match static_value {
-        StaticValue::Unit(_) => Ok(Value::Unit),
-        StaticValue::Boolean(bv, _) => Ok(Value::Bool(*bv)),
-        StaticValue::Char(cb, _) => Ok(Value::Char(*cb)),
-        StaticValue::Integer(iv, _) => Ok(Value::Int(*iv)),
-        StaticValue::Float(fv, _) => Ok(Value::Float(*fv)),
-        StaticValue::String(string_id, _) => {
-            let value = k1_str_to_value(vm, dst_stack, m, *string_id);
+        StaticValue::Unit => Ok(Value::Unit),
+        StaticValue::Boolean(bv) => Ok(Value::Bool(*bv)),
+        StaticValue::Char(cb) => Ok(Value::Char(*cb)),
+        StaticValue::Integer(iv) => Ok(Value::Int(*iv)),
+        StaticValue::Float(fv) => Ok(Value::Float(*fv)),
+        StaticValue::String(string_id) => {
+            let value = string_id_to_value(vm, dst_stack, m, *string_id);
             Ok(value)
         }
-        StaticValue::NullPointer(_) => Ok(Value::Pointer(0)),
+        StaticValue::NullPointer => Ok(Value::Pointer(0)),
         StaticValue::Struct(static_struct) => {
             let mut values: SmallVec<[Value; 8]> = smallvec![];
             for f in static_struct.fields.iter() {
@@ -859,6 +932,25 @@ pub fn static_value_to_vm_value(
                 payload_value,
             );
             Ok(Value::Agg { type_id: e.type_id, ptr: enum_ptr })
+        }
+        StaticValue::Buffer(buf) => {
+            let elements = buf.elements.clone();
+            let element_type = m.types.get(buf.type_id).as_buffer_instance().unwrap().type_args[0];
+
+            let layout = m.types.get_layout(element_type).unwrap();
+
+            let base_mem = vm.static_stack.push_layout_uninit(layout);
+
+            for (index, elem_value_id) in elements.iter().enumerate() {
+                let elem_static_value = m.static_values.get(*elem_value_id);
+                let elem_value = static_value_to_vm_value(vm, dst_stack, m, elem_static_value)?;
+                let elem_dst_ptr = unsafe { base_mem.byte_add(index * layout.size_bytes()) };
+                store_value(&m.types, elem_dst_ptr, elem_value);
+            }
+            let buffer = K1Buffer { len: elements.len(), data: base_mem.cast_const() };
+            let buffer_struct_ptr = vm.get_destination_stack(dst_stack).push_t(buffer);
+
+            Ok(Value::Agg { type_id: buf.type_id, ptr: buffer_struct_ptr })
         }
     }
 }
@@ -1106,6 +1198,14 @@ fn execute_intrinsic(
             let type_id = type_args[0].type_id;
             Ok(Value::from(type_id.to_u64()).into())
         }
+        IntrinsicFunction::TypeName => {
+            let type_id = type_args[0].type_id;
+            let name = m.type_id_to_string(type_id);
+            let data_allocation = vm.static_stack.push_slice(name.as_bytes());
+            let k1_string = K1Buffer { len: name.len(), data: data_allocation };
+            let string_struct_on_stack = vm.stack.push_t(k1_string);
+            Ok(Value::Agg { type_id: STRING_TYPE_ID, ptr: string_struct_on_stack }.into())
+        }
         IntrinsicFunction::BoolNegate => {
             let b = execute_expr_return_exit!(vm, m, args[0])?.expect_bool();
             Ok(Value::Bool(!b).into())
@@ -1133,12 +1233,7 @@ fn execute_intrinsic(
             let align_expr = args[1];
             let size = execute_expr_return_exit!(vm, m, size_expr)?.expect_int().expect_uword();
             let align = execute_expr_return_exit!(vm, m, align_expr)?.expect_int().expect_uword();
-            let layout = std::alloc::Layout::from_size_align(size, align).unwrap();
-            let ptr = if zero {
-                unsafe { std::alloc::alloc_zeroed(layout) }
-            } else {
-                unsafe { std::alloc::alloc(layout) }
-            };
+            let ptr = allocate(size, align, zero);
             Ok(Value::Pointer(ptr.addr()).into())
         }
         IntrinsicFunction::Reallocate => {
@@ -1174,7 +1269,7 @@ fn execute_intrinsic(
             let [dst, src, count] = args[0..3] else { unreachable!() };
             let dst = execute_expr_return_exit!(vm, m, dst)?.expect_ptr();
             let src = execute_expr_return_exit!(vm, m, src)?.expect_ptr();
-            let count = execute_expr_return_exit!(vm, m, count)?.expect_int().expect_u64();
+            let count = execute_expr_return_exit!(vm, m, count)?.expect_int().expect_uword();
             unsafe {
                 std::ptr::copy_nonoverlapping(src as *const u8, dst as *mut u8, count as usize)
             };
@@ -1200,17 +1295,46 @@ fn execute_intrinsic(
             else {
                 unreachable!("malformed exit (code type)")
             };
-            Ok(VmResult::Exit(code))
+            Ok(VmResult::Exit(VmExit { span: vm.eval_span, code }))
         }
         IntrinsicFunction::EmitCompilerMessage => {
-            let message_arg = execute_expr_return_exit!(vm, m, args[1])?;
-            eprintln!("msg arg is {:?}", message_arg);
-            let message = value_to_rust_str(m, message_arg);
-            let (source, line) = m.get_span_location(vm.eval_span);
-            eprintln!("[MSG {}:{}] {}", source.filename, line.line_number(), m.get_string(message));
+            let location_arg = execute_expr_return_exit!(vm, m, args[0])?;
+            let level_arg = execute_expr_return_exit!(vm, m, args[1])?.expect_agg();
+            let message_arg = execute_expr_return_exit!(vm, m, args[2])?;
+            let location = unsafe { (location_arg.expect_agg() as *const K1SourceLocation).read() };
+            let level = unsafe { (level_arg as *const CompilerMessageLevel).read() };
+            let color = match level {
+                CompilerMessageLevel::Info => colored::Color::White,
+                CompilerMessageLevel::Warn => colored::Color::Yellow,
+                CompilerMessageLevel::Error => colored::Color::Red,
+            };
+            let level_str = match level {
+                CompilerMessageLevel::Info => "info",
+                CompilerMessageLevel::Warn => "warn",
+                CompilerMessageLevel::Error => "error",
+            };
+            let message = value_to_string_id(m, message_arg);
+            let filename = unsafe { location.filename.to_str() };
+            eprintln!(
+                "[{}:{} {}] {}",
+                filename,
+                location.line,
+                level_str,
+                m.get_string(message).color(color)
+            );
             Ok(VmResult::UNIT)
         }
     }
+}
+
+fn allocate(size: usize, align: usize, zero: bool) -> *mut u8 {
+    let layout = std::alloc::Layout::from_size_align(size, align).unwrap();
+    let ptr = if zero {
+        unsafe { std::alloc::alloc_zeroed(layout) }
+    } else {
+        unsafe { std::alloc::alloc(layout) }
+    };
+    ptr
 }
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
@@ -1434,7 +1558,7 @@ fn build_enum(
     // an int-based Value variant, not aggregates
     if enum_type.is_no_payload() {
         // Simple integer value
-        eprintln!("TODO: optimize for no payload enums")
+        debug!("TODO: optimize for no payload enums")
     }
     let variant = &enum_type.variants[variant_index];
 
@@ -1490,9 +1614,13 @@ pub fn load_struct_field(
 ) -> TyperResult<Value> {
     let (field_ptr, field) = gep_struct_field(&m.types, struct_type, struct_ptr, field_index);
     let value = load_value(vm, m, field.type_id, field_ptr, copy)?;
+    // load_struct_field x (offset=0) of type GenericPoint[i32] is Int(I32(4)). Full struct: [4, 0, 0, 0, 0, 0, 0, 0]
+    // load_struct_field y (offset=0) of type GenericPoint[i32] is Int(I32(4)). Full struct: [4, 0, 0, 0, 0, 0, 0, 0]
+
     debug!(
-        "load_struct_field {} of type {} is {:?}. Full struct: {:?}",
+        "load_struct_field {} (offset={}) of type {} is {:?}. Full struct: {:?}",
         m.name_of(field.name),
+        field.offset_bits / 8,
         m.type_id_to_string(struct_type),
         value,
         unsafe {
@@ -1632,9 +1760,9 @@ impl Stack {
         }
 
         unsafe {
-            let dst_slice = std::slice::from_raw_parts_mut(slice_stack_ptr, slice_len);
             // Copy bytes using memcpy:
-            debug!("copy_from_slice {:?} {:?}", slice.as_ptr(), slice_stack_ptr);
+            let dst_slice = std::slice::from_raw_parts_mut(slice_stack_ptr, slice_len);
+            // eprintln!("copy_from_slice {:?} {:?}", slice.as_ptr(), slice_stack_ptr);
             dst_slice.copy_from_slice(slice);
         }
         // Would be nice to re-use the 'end' of the slice ptr
@@ -1792,18 +1920,19 @@ fn execute_matching_condition(
     Ok(Value::TRUE.into())
 }
 
-pub fn value_to_rust_str(m: &mut TypedProgram, value: Value) -> StringId {
+/// Please don't hang on to this reference for very long
+pub fn value_to_rust_str(value: Value) -> &'static str {
     let ptr = value.expect_agg();
     let k1_string = unsafe { (ptr as *const k1_types::K1Buffer).read() };
-    eprintln!("Loading to rust str: {} and {:?}", k1_string.len, k1_string.data);
-    let string_slice = unsafe {
-        let slice = k1_string.to_slice::<u8>();
-        std::str::from_utf8(slice).unwrap()
-    };
-    m.ast.strings.intern(string_slice)
+    unsafe { k1_string.to_str() }
 }
 
-pub fn k1_str_to_value(
+pub fn value_to_string_id(m: &mut TypedProgram, value: Value) -> StringId {
+    let rust_str = value_to_rust_str(value);
+    m.ast.strings.intern(rust_str)
+}
+
+pub fn string_id_to_value(
     vm: &mut Vm,
     dst_stack: StackSelection,
     m: &TypedProgram,
@@ -1819,6 +1948,136 @@ pub fn k1_str_to_value(
 
     let string_stack_addr = vm.get_destination_stack(dst_stack).push_t(k1_string);
     Value::Agg { type_id: STRING_TYPE_ID, ptr: string_stack_addr }
+}
+
+/// VM values contain a lot of pointers to the VM's stack and heap
+/// (which is currently just the host's heap)
+/// We need to convert these into 'constants' so that we can embed
+/// them in a binary, for example LLVM. This function does that
+/// by recursively 'loading' all the values out of the VM value.
+///
+/// Obviously not all types are supported; only things you can reasonably
+/// embed in a binary; raw pointers for example are out.
+///
+/// For complex types (not a char array) like a big slice of structs, I think we may just have to use
+/// some sort of 'embed binary data' feature of the backend
+pub fn vm_value_to_static_value(
+    m: &mut TypedProgram,
+    vm: &mut Vm,
+    vm_value: Value,
+    span: SpanId,
+) -> StaticValueId {
+    debug!("vm_to_static: {:?}", vm_value);
+    let v = match vm_value {
+        Value::Unit => StaticValue::Unit,
+        Value::Bool(b) => StaticValue::Boolean(b),
+        Value::Char(c) => StaticValue::Char(c),
+        Value::Int(typed_integer_value) => StaticValue::Integer(typed_integer_value),
+        Value::Float(typed_float_value) => StaticValue::Float(typed_float_value),
+        Value::Pointer(value) => {
+            if value == 0 {
+                StaticValue::NullPointer
+            } else {
+                m.ice_with_span(
+                       "the address won't be valid come runtime, and I don't know what it points to. Can do NULL aka 0 only",
+                       span,
+                   )
+            }
+        }
+        Value::Reference { .. } => {
+            // Now this, I can do. Load the value and bake it into the binary
+            // This is just a de-reference
+            // Needs to become a global.
+            // Rely on the VM's code to load it, then make a K1 'global' to hold it?
+
+            //let _loaded_value = vm::load_value(vm, m, *type_id, *ptr, true, span).unwrap();
+            todo!("Introduce CompileTimeValue::Reference");
+        }
+        Value::Agg { type_id, ptr } => {
+            if type_id == STRING_TYPE_ID {
+                let box_str = value_to_string_id(m, vm_value);
+                StaticValue::String(box_str)
+            } else if m.types.get(type_id).as_buffer_instance().is_some() {
+                let (buffer, element_type) = value_as_buffer(m, vm_value);
+                let mut elements = EcoVec::with_capacity(buffer.len);
+                for index in 0..buffer.len {
+                    let elem_vm = get_buffer_element(vm, m, buffer, element_type, index)
+                        .unwrap_or_else(|e| {
+                            m.ice_with_span(
+                                format!("Failed to load buffer element {index}: {}", e),
+                                span,
+                            )
+                        });
+                    let elem_static = vm_value_to_static_value(m, vm, elem_vm, span);
+                    elements.push(elem_static);
+                }
+                StaticValue::Buffer(StaticBuffer { elements, type_id })
+            } else {
+                let typ = m.types.get(type_id);
+                match typ {
+                    Type::Struct(struct_type) => {
+                        let mut field_value_ids = EcoVec::with_capacity(struct_type.fields.len());
+                        let struct_fields = struct_type.fields.clone();
+                        for (index, _) in struct_fields.iter().enumerate() {
+                            let field_value =
+                                load_struct_field(vm, m, type_id, ptr, index, false).unwrap();
+                            let ctv = vm_value_to_static_value(m, vm, field_value, span);
+                            field_value_ids.push(ctv)
+                        }
+                        StaticValue::Struct(StaticStruct { type_id, fields: field_value_ids })
+                    }
+                    Type::Enum(enum_type) => {
+                        let tag =
+                            load_value(vm, m, enum_type.tag_type, ptr, false).unwrap().expect_int();
+                        let variant =
+                            enum_type.variants.iter().find(|v| v.tag_value == tag).unwrap();
+                        let variant_index = variant.index;
+
+                        let payload = match variant.payload {
+                            None => None,
+                            Some(payload_type) => {
+                                let payload_ptr = gep_enum_payload(&m.types, variant, ptr);
+                                let payload_value =
+                                    load_value(vm, m, payload_type, payload_ptr, false).unwrap();
+                                let static_value =
+                                    vm_value_to_static_value(m, vm, payload_value, span);
+                                Some(static_value)
+                            }
+                        };
+                        StaticValue::Enum(StaticEnum { type_id, variant_index, payload })
+                    }
+                    Type::EnumVariant(_enum_variant) => {
+                        todo!("enum variant vm -> static")
+                    }
+                    _ => unreachable!("aggregate should be struct or enum"),
+                }
+            }
+        }
+    };
+    m.static_values.add(v)
+}
+
+pub fn value_as_buffer(m: &TypedProgram, buffer_value: Value) -> (k1_types::K1Buffer, TypeId) {
+    let element_type =
+        m.types.get(buffer_value.get_type()).as_buffer_instance().unwrap().type_args[0];
+    let ptr = buffer_value.expect_agg();
+    let buffer_ptr = ptr as *const k1_types::K1Buffer;
+    let buffer = unsafe { buffer_ptr.read() };
+    (buffer, element_type)
+}
+
+pub fn get_buffer_element(
+    vm: &mut Vm,
+    m: &TypedProgram,
+    buffer: K1Buffer,
+    elem_type: TypeId,
+    index: usize,
+) -> TyperResult<Value> {
+    let data_ptr = buffer.data;
+
+    let elem_offset = offset_at_index(&m.types, elem_type, index);
+    let elem_ptr = unsafe { data_ptr.byte_add(elem_offset) };
+    load_value(vm, m, elem_type, elem_ptr, true)
 }
 
 fn render_debug_value(w: &mut impl std::fmt::Write, vm: &mut Vm, m: &TypedProgram, value: Value) {
@@ -1902,6 +2161,27 @@ fn render_debug_value(w: &mut impl std::fmt::Write, vm: &mut Vm, m: &TypedProgra
             };
         }
     };
+}
+
+fn integer_cast(
+    types: &Types,
+    int_to_cast: TypedIntValue,
+    target_type_id: TypeId,
+) -> TypedIntValue {
+    match types.get(target_type_id).expect_integer() {
+        IntegerType::U8 => int_to_cast.to_u8().into(),
+        IntegerType::U16 => int_to_cast.to_u16().into(),
+        IntegerType::U32 => int_to_cast.to_u32().into(),
+        IntegerType::U64 => int_to_cast.to_u64().into(),
+        IntegerType::I8 => (int_to_cast.to_u8() as i8).into(),
+        IntegerType::I16 => (int_to_cast.to_u16() as i16).into(),
+        IntegerType::I32 => (int_to_cast.to_u32() as i32).into(),
+        IntegerType::I64 => (int_to_cast.to_u64() as i64).into(),
+        IntegerType::UWord(WordSize::W32) => unreachable!(),
+        IntegerType::UWord(WordSize::W64) => TypedIntValue::UWord64(int_to_cast.to_u64()),
+        IntegerType::IWord(WordSize::W32) => unreachable!(),
+        IntegerType::IWord(WordSize::W64) => TypedIntValue::IWord64(int_to_cast.to_u64() as i64),
+    }
 }
 
 //mod c_mem {

@@ -1,6 +1,7 @@
 ns types {
 
   intern fn typeId[T](): u64
+  intern fn typeName[T](): string
   // intern fn typeInfo(typeId: u64): TypeInfo
 
   // deftype TypeKind = either

@@ -208,18 +208,29 @@ enum TypeOrParsedExpr {
 }
 
 #[derive(Debug, Clone)]
-pub struct CompileTimeStruct {
+pub struct StaticStruct {
     pub type_id: TypeId,
     pub fields: EcoVec<StaticValueId>,
-    pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
-pub struct CompileTimeEnum {
+pub struct StaticEnum {
     pub type_id: TypeId,
     pub variant_index: u32,
     pub payload: Option<StaticValueId>,
-    pub span: SpanId,
+}
+
+#[derive(Debug, Clone)]
+pub struct StaticBuffer {
+    pub elements: EcoVec<StaticValueId>,
+    pub type_id: TypeId,
+}
+
+impl StaticBuffer {
+    #[allow(clippy::len_without_is_empty)]
+    pub fn len(&self) -> usize {
+        self.elements.len()
+    }
 }
 
 nz_u32_id!(StaticValueId);
@@ -227,83 +238,57 @@ nz_u32_id!(StaticValueId);
 static_assert_size!(StaticValue, 32);
 #[derive(Debug, Clone)]
 pub enum StaticValue {
-    Unit(SpanId),
-    Boolean(bool, SpanId),
-    Char(u8, SpanId),
-    Integer(TypedIntValue, SpanId),
-    Float(TypedFloatValue, SpanId),
-    String(StringId, SpanId),
-    NullPointer(SpanId),
-    Struct(CompileTimeStruct),
-    Enum(CompileTimeEnum),
-    // Buffer(Vec<StaticValueId>)
+    Unit,
+    Boolean(bool),
+    Char(u8),
+    Integer(TypedIntValue),
+    Float(TypedFloatValue),
+    String(StringId),
+    NullPointer,
+    Struct(StaticStruct),
+    Enum(StaticEnum),
+    Buffer(StaticBuffer),
 }
 
 impl StaticValue {
     pub fn kind(&self) -> &'static str {
         match self {
-            StaticValue::Unit(_) => "unit",
-            StaticValue::Boolean(_, _) => "bool",
-            StaticValue::Char(_, _) => "char",
-            StaticValue::Integer(i, _) => i.kind_str(),
-            StaticValue::Float(_, _) => "float",
-            StaticValue::String(_, _) => "string",
-            StaticValue::NullPointer(_) => "nullptr",
+            StaticValue::Unit => "unit",
+            StaticValue::Boolean(_) => "bool",
+            StaticValue::Char(_) => "char",
+            StaticValue::Integer(i) => i.kind_str(),
+            StaticValue::Float(_) => "float",
+            StaticValue::String(_) => "string",
+            StaticValue::NullPointer => "nullptr",
             StaticValue::Struct(_) => "struct",
             StaticValue::Enum(_) => "enum",
+            StaticValue::Buffer(_) => "buffer",
         }
     }
 
     pub fn get_type(&self) -> TypeId {
         match self {
-            StaticValue::Unit(_) => UNIT_TYPE_ID,
-            StaticValue::Boolean(_, _) => BOOL_TYPE_ID,
-            StaticValue::Char(_, _) => CHAR_TYPE_ID,
-            StaticValue::Integer(typed_integer_value, _) => typed_integer_value.get_type(),
-            StaticValue::Float(typed_float_value, _) => typed_float_value.get_type(),
-            StaticValue::String(_, _) => STRING_TYPE_ID,
-            StaticValue::NullPointer(_) => POINTER_TYPE_ID,
+            StaticValue::Unit => UNIT_TYPE_ID,
+            StaticValue::Boolean(_) => BOOL_TYPE_ID,
+            StaticValue::Char(_) => CHAR_TYPE_ID,
+            StaticValue::Integer(typed_integer_value) => typed_integer_value.get_type(),
+            StaticValue::Float(typed_float_value) => typed_float_value.get_type(),
+            StaticValue::String(_) => STRING_TYPE_ID,
+            StaticValue::NullPointer => POINTER_TYPE_ID,
             StaticValue::Struct(s) => s.type_id,
             StaticValue::Enum(e) => e.type_id,
-        }
-    }
-
-    pub fn get_span(&self) -> SpanId {
-        match self {
-            StaticValue::Unit(span) => *span,
-            StaticValue::Boolean(_, span) => *span,
-            StaticValue::Char(_, span) => *span,
-            StaticValue::Integer(_, span) => *span,
-            StaticValue::Float(_, span) => *span,
-            StaticValue::String(_, span) => *span,
-            StaticValue::NullPointer(span) => *span,
-            StaticValue::Struct(s) => s.span,
-            StaticValue::Enum(e) => e.span,
-        }
-    }
-
-    pub fn set_span(&mut self, span: SpanId) {
-        match self {
-            StaticValue::Unit(s) => *s = span,
-            StaticValue::Boolean(_, s) => *s = span,
-            StaticValue::Char(_, s) => *s = span,
-            StaticValue::Integer(_, s) => *s = span,
-            StaticValue::Float(_, s) => *s = span,
-            StaticValue::String(_, s) => *s = span,
-            StaticValue::NullPointer(s) => *s = span,
-            StaticValue::Struct(s) => s.span = span,
-            StaticValue::Enum(e) => e.span = span,
+            StaticValue::Buffer(b) => b.type_id,
         }
     }
 
     pub fn as_boolean(&self) -> Option<bool> {
         match self {
-            StaticValue::Boolean(b, _) => Some(*b),
+            StaticValue::Boolean(b) => Some(*b),
             _ => None,
         }
     }
 
-    fn as_enum(&self) -> Option<&CompileTimeEnum> {
+    fn as_enum(&self) -> Option<&StaticEnum> {
         match self {
             StaticValue::Enum(e) => Some(e),
             _ => None,
@@ -1151,14 +1136,14 @@ pub struct TypedEnumConstructor {
 impl_copy_if_small!(16, TypedEnumConstructor);
 
 #[derive(Debug, Clone)]
-pub struct GetEnumPayload {
-    pub enum_expr: TypedExprId,
+pub struct GetEnumVariantPayload {
+    pub enum_variant_expr: TypedExprId,
     pub result_type_id: TypeId,
     pub variant_index: u32,
     pub is_referencing: bool,
     pub span: SpanId,
 }
-impl_copy_if_small!(20, GetEnumPayload);
+impl_copy_if_small!(20, GetEnumVariantPayload);
 
 #[derive(Debug, Clone)]
 pub struct GetEnumTag {
@@ -1447,15 +1432,23 @@ impl TypedFloatExpr {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub enum IntegerCastDirection {
+    Extend,
+    Truncate,
+    NoOp,
+}
+
+#[derive(Debug, Clone, Copy)]
 pub enum CastType {
-    IntegerExtend,
-    IntegerTruncate,
+    IntegerCast(IntegerCastDirection),
     Integer8ToChar,
     IntegerExtendFromChar,
-    KnownNoOp,
+    EnumToVariant,
+    ReferenceToReference,
     PointerToReference,
     ReferenceToPointer,
-    PointerToInteger,
+    /// Destination type can only be uword and iword
+    PointerToWord,
     IntegerToPointer,
     FloatExtend,
     FloatTruncate,
@@ -1464,38 +1457,17 @@ pub enum CastType {
     LambdaToLambdaObject,
 }
 
-impl CastType {
-    pub fn is_unsafe(&self) -> bool {
-        match self {
-            CastType::IntegerExtend => false,
-            CastType::IntegerTruncate => false,
-            CastType::Integer8ToChar => false,
-            CastType::IntegerExtendFromChar => false,
-            CastType::KnownNoOp => false,
-            CastType::PointerToReference => true,
-            CastType::ReferenceToPointer => true,
-            CastType::PointerToInteger => true,
-            CastType::IntegerToPointer => true,
-            CastType::FloatExtend => false,
-            CastType::FloatTruncate => false,
-            CastType::FloatToInteger => false,
-            CastType::IntegerToFloat => false,
-            CastType::LambdaToLambdaObject => false,
-        }
-    }
-}
-
 impl Display for CastType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            CastType::IntegerExtend => write!(f, "iext"),
-            CastType::IntegerTruncate => write!(f, "itrunc"),
+            CastType::IntegerCast(_dir) => write!(f, "intcast"),
             CastType::Integer8ToChar => write!(f, "i8tochar"),
             CastType::IntegerExtendFromChar => write!(f, "iextfromchar"),
-            CastType::KnownNoOp => write!(f, "noop"),
+            CastType::EnumToVariant => write!(f, "enum2variant"),
+            CastType::ReferenceToReference => write!(f, "reftoref"),
             CastType::PointerToReference => write!(f, "ptrtoref"),
             CastType::ReferenceToPointer => write!(f, "reftoptr"),
-            CastType::PointerToInteger => write!(f, "ptrtoint"),
+            CastType::PointerToWord => write!(f, "ptrtoword"),
             CastType::IntegerToPointer => write!(f, "inttoptr"),
             CastType::FloatExtend => write!(f, "fext"),
             CastType::FloatTruncate => write!(f, "ftrunc"),
@@ -1628,7 +1600,7 @@ pub enum TypedExpr {
     EnumConstructor(TypedEnumConstructor),
     EnumIsVariant(TypedEnumIsVariantExpr),
     EnumGetTag(GetEnumTag),
-    EnumGetPayload(GetEnumPayload),
+    EnumGetPayload(GetEnumVariantPayload),
     Cast(TypedCast),
     /// Explicit returns are syntactically like function calls, but are their own instruction type
     /// return(<expr>)
@@ -1945,6 +1917,7 @@ pub enum IntrinsicFunction {
     SizeOfStride,
     AlignOf,
     TypeId,
+    TypeName,
     BoolNegate,
     BitNot,
     BitAnd,
@@ -1974,6 +1947,7 @@ impl IntrinsicFunction {
             IntrinsicFunction::SizeOfStride => true,
             IntrinsicFunction::AlignOf => true,
             IntrinsicFunction::TypeId => true,
+            IntrinsicFunction::TypeName => true,
             IntrinsicFunction::BoolNegate => true,
             IntrinsicFunction::BitNot => true,
             IntrinsicFunction::BitAnd => true,
@@ -2090,7 +2064,7 @@ pub fn write_error(
     level: ErrorLevel,
     span: SpanId,
 ) -> std::io::Result<()> {
-    parse::write_error_location(w, spans, sources, span, level)?;
+    parse::write_source_location(w, spans, sources, span, level)?;
     writeln!(w, "\t{}\n", message.as_ref())?;
     Ok(())
 }
@@ -4236,24 +4210,16 @@ impl TypedProgram {
         _scope_id: ScopeId,
     ) -> TyperResult<Option<StaticValueId>> {
         match self.exprs.get(expr_id) {
-            TypedExpr::Unit(span) => Ok(Some(self.static_values.add(StaticValue::Unit(*span)))),
-            TypedExpr::Char(byte, span) => {
-                Ok(Some(self.static_values.add(StaticValue::Char(*byte, *span))))
+            TypedExpr::Unit(_) => Ok(Some(self.static_values.add(StaticValue::Unit))),
+            TypedExpr::Char(byte, _) => Ok(Some(self.static_values.add(StaticValue::Char(*byte)))),
+            TypedExpr::Bool(b, _) => Ok(Some(self.static_values.add(StaticValue::Boolean(*b)))),
+            TypedExpr::Integer(typed_integer_expr) => {
+                Ok(Some(self.static_values.add(StaticValue::Integer(typed_integer_expr.value))))
             }
-            TypedExpr::Bool(b, span) => {
-                Ok(Some(self.static_values.add(StaticValue::Boolean(*b, *span))))
+            TypedExpr::Float(typed_float_expr) => {
+                Ok(Some(self.static_values.add(StaticValue::Float(typed_float_expr.value))))
             }
-            TypedExpr::Integer(typed_integer_expr) => Ok(Some(
-                self.static_values
-                    .add(StaticValue::Integer(typed_integer_expr.value, typed_integer_expr.span)),
-            )),
-            TypedExpr::Float(typed_float_expr) => Ok(Some(
-                self.static_values
-                    .add(StaticValue::Float(typed_float_expr.value, typed_float_expr.span)),
-            )),
-            TypedExpr::String(s, span) => {
-                Ok(Some(self.static_values.add(StaticValue::String(*s, *span))))
-            }
+            TypedExpr::String(s, _) => Ok(Some(self.static_values.add(StaticValue::String(*s)))),
             TypedExpr::Variable(v) => {
                 let typed_variable = self.variables.get(v.variable_id);
                 let Some(global_id) = typed_variable.global_id else {
@@ -4270,8 +4236,7 @@ impl TypedProgram {
                 let Some(value) = global.initial_value else {
                     self.ice_with_span("global body is missing", v.span)
                 };
-                let mut value = self.static_values.get(value).clone();
-                value.set_span(v.span);
+                let value = self.static_values.get(value).clone();
                 Ok(Some(self.static_values.add(value)))
             }
             _ => Ok(None),
@@ -4323,7 +4288,8 @@ impl TypedProgram {
 
         // Horrible borrow hack again
         let mut vm = std::mem::take(&mut self.vm).unwrap();
-        let static_value_id = self.vm_value_to_static_value(&mut vm, value, span);
+        let static_value_id = vm::vm_value_to_static_value(self, &mut vm, value, span);
+        vm.reset();
         *self.vm = Some(vm);
 
         Ok((type_id, static_value_id))
@@ -5367,8 +5333,8 @@ impl TypedProgram {
                 } else {
                     payload_type_id
                 };
-                Ok(self.exprs.add(TypedExpr::EnumGetPayload(GetEnumPayload {
-                    enum_expr: base_expr,
+                Ok(self.exprs.add(TypedExpr::EnumGetPayload(GetEnumVariantPayload {
+                    enum_variant_expr: base_expr,
                     result_type_id,
                     variant_index,
                     is_referencing: field_access.is_referencing,
@@ -6020,115 +5986,6 @@ impl TypedProgram {
         }
     }
 
-    /// VM values contain a lot of pointers to the VM's stack and heap
-    /// (which is currently just the host's heap)
-    /// We need to convert these into 'constants' so that we can embed
-    /// them in a binary, for example LLVM. This function does that
-    /// by recursively 'loading' all the values out of the VM value.
-    ///
-    /// Obviously not all types are supported; only things you can reasonably
-    /// embed in a binary; raw pointers for example are out.
-    ///
-    /// For complex types (not a char array) like a big slice of structs, I think we may just have to use
-    /// some sort of 'embed binary data' feature of the backend
-    fn vm_value_to_static_value(
-        &mut self,
-        vm: &mut vm::Vm,
-        vm_value: vm::Value,
-        span: SpanId,
-    ) -> StaticValueId {
-        debug!("vm_to_static: {:?}", vm_value);
-        let v = match vm_value {
-            vm::Value::Unit => StaticValue::Unit(span),
-            vm::Value::Bool(b) => StaticValue::Boolean(b, span),
-            vm::Value::Char(c) => StaticValue::Char(c, span),
-            vm::Value::Int(typed_integer_value) => StaticValue::Integer(typed_integer_value, span),
-            vm::Value::Float(typed_float_value) => StaticValue::Float(typed_float_value, span),
-            vm::Value::Pointer(value) => {
-                if value == 0 {
-                    StaticValue::NullPointer(span)
-                } else {
-                    self.ice_with_span(
-                       "the address won't be valid come runtime, and I don't know what it points to. Can do NULL aka 0 only",
-                       span,
-                   )
-                }
-            }
-            vm::Value::Reference { .. } => {
-                // Now this, I can do. Load the value and bake it into the binary
-                // This is just a de-reference
-                // Needs to become a global.
-                // Rely on the VM's code to load it, then make a K1 'global' to hold it?
-
-                //let _loaded_value = vm::load_value(vm, self, *type_id, *ptr, true, span).unwrap();
-                todo!("Introduce CompileTimeValue::Reference");
-            }
-            vm::Value::Agg { type_id, ptr } => {
-                if type_id == STRING_TYPE_ID {
-                    let box_str = vm::value_to_rust_str(self, vm_value);
-                    StaticValue::String(box_str, span)
-                } else if let Some(buffer) = self.types.get(type_id).as_buffer_instance() {
-                    let elem_type = buffer.type_args[0];
-                    todo!("VM reify a non-string buffer of {}", self.type_id_to_string(elem_type));
-                } else {
-                    let typ = self.types.get(type_id);
-                    match typ {
-                        Type::Struct(struct_type) => {
-                            let mut field_value_ids =
-                                EcoVec::with_capacity(struct_type.fields.len());
-                            let struct_fields = struct_type.fields.clone();
-                            for (index, _) in struct_fields.iter().enumerate() {
-                                let field_value =
-                                    vm::load_struct_field(vm, self, type_id, ptr, index, false)
-                                        .unwrap();
-                                let ctv = self.vm_value_to_static_value(vm, field_value, span);
-                                field_value_ids.push(ctv)
-                            }
-                            StaticValue::Struct(CompileTimeStruct {
-                                type_id,
-                                fields: field_value_ids,
-                                span,
-                            })
-                        }
-                        Type::Enum(enum_type) => {
-                            let tag = vm::load_value(vm, self, enum_type.tag_type, ptr, false)
-                                .unwrap()
-                                .expect_int();
-                            let variant =
-                                enum_type.variants.iter().find(|v| v.tag_value == tag).unwrap();
-                            let variant_index = variant.index;
-
-                            let payload = match variant.payload {
-                                None => None,
-                                Some(payload_type) => {
-                                    let payload_ptr =
-                                        vm::gep_enum_payload(&self.types, variant, ptr);
-                                    let payload_value =
-                                        vm::load_value(vm, self, payload_type, payload_ptr, false)
-                                            .unwrap();
-                                    let static_value =
-                                        self.vm_value_to_static_value(vm, payload_value, span);
-                                    Some(static_value)
-                                }
-                            };
-                            StaticValue::Enum(CompileTimeEnum {
-                                type_id,
-                                variant_index,
-                                payload,
-                                span,
-                            })
-                        }
-                        Type::EnumVariant(_enum_variant) => {
-                            todo!("enum variant vm -> static")
-                        }
-                        _ => unreachable!("aggregate should be struct or enum"),
-                    }
-                }
-            }
-        };
-        self.static_values.add(v)
-    }
-
     fn eval_anonymous_struct(
         &mut self,
         expr_id: ParsedExprId,
@@ -6155,7 +6012,11 @@ impl TypedProgram {
             let field_layout = self.types.layouts.get(expr_type);
             let offset = match field_layout {
                 Some(field_layout) => struct_layout.append_to_aggregate(*field_layout),
-                None => struct_layout.size_bits,
+                None => {
+                    self.write_location(&mut stderr(), ast_struct.span);
+                    eprintln!("nocommit unsized field: {}", self.expr_to_string_with_type(expr));
+                    0
+                }
             };
             field_defns.push(StructTypeField {
                 name: ast_field.name,
@@ -6255,6 +6116,10 @@ impl TypedProgram {
                     self.name_of(passed_field.name)
                 );
             }
+            self.write_location(&mut stderr(), ast_struct.span);
+            eprintln!("nocommit unsized field: {}", self.expr_to_string_with_type(expr));
+            0;
+            GOTCHABITCH
             field_types.push(StructTypeField { type_id: expr_type, ..*expected_field });
             field_values.push(StructField { name: expected_field.name, expr });
         }
@@ -6635,7 +6500,7 @@ impl TypedProgram {
                 recurse!(get_enum_tag.enum_expr);
             }
             TypedExpr::EnumGetPayload(enum_get_payload) => {
-                recurse!(enum_get_payload.enum_expr);
+                recurse!(enum_get_payload.enum_variant_expr);
             }
             TypedExpr::Cast(cast) => recurse!(cast.base_expr),
             TypedExpr::Return(ret) => recurse!(ret.value),
@@ -7259,6 +7124,7 @@ impl TypedProgram {
                 if let Some(payload_pattern) = enum_pattern.payload.as_ref() {
                     let enum_type = self.types.get(enum_pattern.enum_type_id).expect_enum();
                     let variant = enum_type.variant_by_index(enum_pattern.variant_index);
+                    let variant_type_id = variant.my_type_id;
                     let variant_name = variant.name;
                     let variant_index = variant.index;
                     let Some(payload_type_id) = variant.payload else {
@@ -7272,9 +7138,15 @@ impl TypedProgram {
                     } else {
                         payload_type_id
                     };
+                    let enum_as_variant = self.exprs.add(TypedExpr::Cast(TypedCast {
+                        cast_type: CastType::EnumToVariant,
+                        target_type_id: variant_type_id,
+                        base_expr: target_expr,
+                        span: enum_pattern.span,
+                    }));
                     let get_payload_expr =
-                        self.exprs.add(TypedExpr::EnumGetPayload(GetEnumPayload {
-                            enum_expr: target_expr,
+                        self.exprs.add(TypedExpr::EnumGetPayload(GetEnumVariantPayload {
+                            enum_variant_expr: enum_as_variant,
                             result_type_id,
                             variant_index,
                             is_referencing,
@@ -7433,19 +7305,20 @@ impl TypedProgram {
         if base_expr_type == target_type {
             return failf!(cast.span, "Useless cast");
         }
-        let (cast_type, output_type) = match self.types.get(base_expr_type) {
+        let cast_type = match self.types.get(base_expr_type) {
             Type::Integer(from_integer_type) => match self.types.get(target_type) {
                 Type::Integer(to_integer_type) => {
                     let cast_type = match from_integer_type.width().cmp(&to_integer_type.width()) {
-                        Ordering::Less => CastType::IntegerExtend,
-                        Ordering::Greater => CastType::IntegerTruncate,
-                        Ordering::Equal => CastType::KnownNoOp,
+                        Ordering::Less => CastType::IntegerCast(IntegerCastDirection::Extend),
+                        Ordering::Greater => CastType::IntegerCast(IntegerCastDirection::Truncate),
+                        // Likely a sign change
+                        Ordering::Equal => CastType::IntegerCast(IntegerCastDirection::NoOp),
                     };
-                    Ok((cast_type, target_type))
+                    Ok(cast_type)
                 }
                 Type::Char => {
                     if from_integer_type.width() == NumericWidth::B8 {
-                        Ok((CastType::Integer8ToChar, target_type))
+                        Ok(CastType::Integer8ToChar)
                     } else {
                         failf!(
                             cast.span,
@@ -7456,7 +7329,7 @@ impl TypedProgram {
                 }
                 Type::Pointer => {
                     if matches!(from_integer_type, IntegerType::UWord(_)) {
-                        Ok((CastType::IntegerToPointer, target_type))
+                        Ok(CastType::IntegerToPointer)
                     } else {
                         failf!(
                             cast.span,
@@ -7468,7 +7341,7 @@ impl TypedProgram {
                 Type::Float(_to_float_type) => {
                     // We're just going to allow these casts and make it UB if it doesn't fit, the LLVM
                     // default. If I find a saturating version in LLVM I'll use that instead
-                    Ok((CastType::IntegerToFloat, target_type))
+                    Ok(CastType::IntegerToFloat)
                 }
                 _ => failf!(
                     cast.span,
@@ -7482,13 +7355,13 @@ impl TypedProgram {
                     let cast_type = match from_float_type.size.cmp(&to_float_type.size) {
                         Ordering::Less => CastType::FloatTruncate,
                         Ordering::Greater => CastType::FloatExtend,
-                        Ordering::Equal => CastType::KnownNoOp,
+                        Ordering::Equal => CastType::FloatExtend,
                     };
-                    Ok((cast_type, target_type))
+                    Ok(cast_type)
                 }
                 // We're just going to allow these casts and make it UB if it doesn't fit, the LLVM
                 // default. If I find a saturating version in LLVM I'll use that instead
-                Type::Integer(_to_int_type) => Ok((CastType::FloatToInteger, target_type)),
+                Type::Integer(_to_int_type) => Ok(CastType::FloatToInteger),
                 _ => failf!(
                     cast.span,
                     "Cannot cast float to '{}'",
@@ -7496,9 +7369,7 @@ impl TypedProgram {
                 ),
             },
             Type::Char => match self.types.get(target_type) {
-                Type::Integer(_to_integer_type) => {
-                    Ok((CastType::IntegerExtendFromChar, target_type))
-                }
+                Type::Integer(_to_integer_type) => Ok(CastType::IntegerExtendFromChar),
                 _ => failf!(
                     cast.span,
                     "Cannot cast char to '{}'",
@@ -7506,7 +7377,8 @@ impl TypedProgram {
                 ),
             },
             Type::Reference(_refer) => match self.types.get(target_type) {
-                Type::Pointer => Ok((CastType::ReferenceToPointer, POINTER_TYPE_ID)),
+                Type::Pointer => Ok(CastType::ReferenceToPointer),
+                Type::Reference(_) => Ok(CastType::ReferenceToReference),
                 _ => failf!(
                     cast.span,
                     "Cannot cast reference to '{}'",
@@ -7514,10 +7386,9 @@ impl TypedProgram {
                 ),
             },
             Type::Pointer => match self.types.get(target_type) {
-                Type::Reference(_refer) => Ok((CastType::PointerToReference, target_type)),
-                Type::Integer(IntegerType::UWord(_)) => {
-                    Ok((CastType::PointerToInteger, target_type))
-                }
+                Type::Reference(_refer) => Ok(CastType::PointerToReference),
+                Type::Integer(IntegerType::UWord(_)) => Ok(CastType::PointerToWord),
+                Type::Integer(IntegerType::IWord(_)) => Ok(CastType::PointerToWord),
                 _ => failf!(
                     cast.span,
                     "Cannot cast Pointer to '{}'",
@@ -7533,7 +7404,7 @@ impl TypedProgram {
         }?;
         Ok(self.exprs.add(TypedExpr::Cast(TypedCast {
             base_expr,
-            target_type_id: output_type,
+            target_type_id: target_type,
             cast_type,
             span: cast.span,
         })))
@@ -7829,8 +7700,7 @@ impl TypedProgram {
             None,
             ctx.is_inference,
         )?;
-        let StaticValue::Boolean(condition_bool, _) = self.static_values.get(condition_value)
-        else {
+        let StaticValue::Boolean(condition_bool) = self.static_values.get(condition_value) else {
             let cond_span = self.ast.get_expr_span(if_expr.cond);
             return failf!(cond_span, "Condition is not a boolean");
         };
@@ -9098,9 +8968,13 @@ impl TypedProgram {
                 variant_index,
                 span,
             }));
+            let cast_type =
+                if is_reference { CastType::ReferenceToReference } else { CastType::EnumToVariant };
             let (consequent, consequent_type_id) =
+                // base_expr is the enum type, or a reference to it
+                // resulting_type_id is the variant, or a reference to it
                 self.synth_optional_some(TypedExpr::Cast(TypedCast {
-                    cast_type: CastType::KnownNoOp,
+                    cast_type,
                     base_expr,
                     target_type_id: resulting_type_id,
                     span,
@@ -10737,7 +10611,7 @@ impl TypedProgram {
                     None => None,
                     Some(&type_expr) => Some(self.eval_type_expr(type_expr, ctx.scope_id)?),
                 };
-                let expected_type = match provided_type {
+                let expected_rhs_type = match provided_type {
                     Some(provided_type) => {
                         if parsed_let.is_referencing() {
                             let Type::Reference(expected_reference_type) =
@@ -10758,10 +10632,10 @@ impl TypedProgram {
                     None => None,
                 };
                 let value_expr =
-                    self.eval_expr(parsed_let.value, ctx.with_expected_type(expected_type))?;
+                    self.eval_expr(parsed_let.value, ctx.with_expected_type(expected_rhs_type))?;
                 let actual_type = self.exprs.get(value_expr).get_type();
 
-                if let Some(expected_type) = expected_type {
+                if let Some(expected_type) = expected_rhs_type {
                     if let Err(msg) = self.check_types(expected_type, actual_type, ctx.scope_id) {
                         return failf!(parsed_let.span, "Local variable type mismatch: {}", msg,);
                     }
@@ -11027,6 +10901,7 @@ impl TypedProgram {
                 },
                 Some("types") => match fn_name_str {
                     "typeId" => Some(IntrinsicFunction::TypeId),
+                    "typeName" => Some(IntrinsicFunction::TypeName),
                     "sizeOf" => Some(IntrinsicFunction::SizeOf),
                     "sizeOfStride" => Some(IntrinsicFunction::SizeOfStride),
                     "alignOf" => Some(IntrinsicFunction::AlignOf),
@@ -11475,7 +11350,7 @@ impl TypedProgram {
                 None,
                 false,
             )?;
-            let StaticValue::Boolean(condition_value, _) = self.static_values.get(condition_value)
+            let StaticValue::Boolean(condition_value) = self.static_values.get(condition_value)
             else {
                 return failf!(parsed_function.span, "Condition must be a constant boolean");
             };
@@ -12459,10 +12334,10 @@ impl TypedProgram {
                     parsed_use.alias.unwrap_or(parsed_use.target.name),
                 );
                 self.use_statuses.insert(parsed_use_id, UseStatus::Resolved(symbol));
-                eprintln!("Inserting resolved use of {:?}", symbol);
+                debug!("Inserting resolved use of {:?}", symbol);
             } else {
                 self.use_statuses.insert(parsed_use_id, UseStatus::Unresolved);
-                eprintln!("Inserting unresolved use");
+                debug!("Inserting unresolved use");
             }
         }
         Ok(())
@@ -12825,7 +12700,7 @@ impl TypedProgram {
         }
 
         // Everything else declaration phase
-        eprintln!(">> Phase 4 declare rest of definitions (functions, constants, abilities)");
+        eprintln!(">> Phase 4 declare rest of definitions (functions, globals, abilities)");
         for &parsed_definition_id in
             self.ast.get_namespace(module_namespace_id).definitions.clone().iter()
         {
@@ -12850,7 +12725,7 @@ impl TypedProgram {
         );
 
         // Everything else evaluation phase
-        eprintln!(">> Phase 5 evaluate rest of definitions (functions, constants, abilities)");
+        eprintln!(">> Phase 5 bodies (functions, globals, abilities)");
         for &parsed_definition_id in
             self.ast.get_namespace(module_namespace_id).definitions.clone().iter()
         {
@@ -13620,7 +13495,7 @@ impl TypedProgram {
     }
 
     pub fn write_location(&self, w: &mut impl std::io::Write, span: SpanId) -> std::io::Result<()> {
-        parse::write_error_location(w, &self.ast.spans, &self.ast.sources, span, ErrorLevel::Info)
+        parse::write_source_location(w, &self.ast.spans, &self.ast.sources, span, ErrorLevel::Info)
     }
 
     pub fn write_location_error(
@@ -13628,7 +13503,7 @@ impl TypedProgram {
         w: &mut impl std::io::Write,
         span: SpanId,
     ) -> std::io::Result<()> {
-        parse::write_error_location(w, &self.ast.spans, &self.ast.sources, span, ErrorLevel::Error)
+        parse::write_source_location(w, &self.ast.spans, &self.ast.sources, span, ErrorLevel::Error)
     }
 
     pub fn ice_with_span(&self, msg: impl AsRef<str>, span: SpanId) -> ! {
@@ -13641,5 +13516,10 @@ impl TypedProgram {
             self.write_error(&mut std::io::stderr(), error).unwrap();
         }
         panic!("Internal Compiler Error: {}", msg.as_ref())
+    }
+
+    pub fn todo_with_span(&self, msg: impl AsRef<str>, span: SpanId) -> ! {
+        self.write_location_error(&mut std::io::stderr(), span).unwrap();
+        panic!("not yet implemented: {}", msg.as_ref())
     }
 }

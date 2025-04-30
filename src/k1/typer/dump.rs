@@ -685,12 +685,10 @@ impl TypedProgram {
                 Ok(())
             }
             TypedExpr::EnumGetPayload(get_payload_expr) => {
-                self.display_expr_id(get_payload_expr.enum_expr, writ, indentation)?;
+                self.display_expr_id(get_payload_expr.enum_variant_expr, writ, indentation)?;
                 writ.write_str(".payload[")?;
-                let variant = self
-                    .get_expr_type(get_payload_expr.enum_expr)
-                    .expect_enum()
-                    .variant_by_index(get_payload_expr.variant_index);
+                let variant =
+                    self.get_expr_type(get_payload_expr.enum_variant_expr).expect_enum_variant();
                 self.write_ident(writ, variant.name)?;
                 writ.write_char(']')?;
                 Ok(())
@@ -756,19 +754,19 @@ impl TypedProgram {
 
     pub fn display_static_value(&self, w: &mut impl Write, id: StaticValueId) -> std::fmt::Result {
         match self.static_values.get(id) {
-            StaticValue::Unit(_) => w.write_str("()"),
-            StaticValue::Boolean(b, _) => write!(w, "{}", *b),
-            StaticValue::Char(c, _) => write!(w, "{}", *c),
-            StaticValue::Integer(typed_integer_value, _) => {
+            StaticValue::Unit => w.write_str("()"),
+            StaticValue::Boolean(b) => write!(w, "{}", *b),
+            StaticValue::Char(c) => write!(w, "{}", *c),
+            StaticValue::Integer(typed_integer_value) => {
                 write!(w, "{}", typed_integer_value)
             }
-            StaticValue::Float(typed_float_value, _) => {
+            StaticValue::Float(typed_float_value) => {
                 write!(w, "{}", typed_float_value)
             }
-            StaticValue::String(s, _) => {
+            StaticValue::String(s) => {
                 write!(w, "\"{}\"", s)
             }
-            StaticValue::NullPointer(_) => {
+            StaticValue::NullPointer => {
                 write!(w, "NULL")
             }
             StaticValue::Struct(compile_time_struct) => {
@@ -787,7 +785,13 @@ impl TypedProgram {
                 }
                 w.write_str(" }")
             }
-            StaticValue::Enum(_compile_time_enum) => todo!(),
+            StaticValue::Enum(_compile_time_enum) => todo!("dump static enum"),
+            StaticValue::Buffer(buf) => {
+                let element_type =
+                    self.types.get(buf.type_id).as_buffer_instance().unwrap().type_args[0];
+                write!(w, "< {} x {} >", self.type_id_to_string(element_type), buf.elements.len())?;
+                Ok(())
+            }
         }
     }
 

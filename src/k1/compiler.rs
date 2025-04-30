@@ -5,7 +5,7 @@ use std::os::unix::prelude::ExitStatusExt;
 use std::path::Path;
 
 use crate::parse::{self};
-use crate::parse::{write_error_location, NumericWidth};
+use crate::parse::{write_source_location, NumericWidth};
 use crate::typer::{ErrorLevel, TypedProgram};
 use anyhow::{bail, Result};
 use inkwell::context::Context;
@@ -407,7 +407,7 @@ pub fn codegen_module<'ctx, 'module>(
     let module_name = codegen.name().to_string();
     let module_name_path = PathBuf::from(&module_name);
     if let Err(e) = codegen.codegen_module() {
-        write_error_location(
+        write_source_location(
             &mut std::io::stderr(),
             &codegen.k1.ast.spans,
             &codegen.k1.ast.sources,

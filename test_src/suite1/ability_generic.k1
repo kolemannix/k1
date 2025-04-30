@@ -16,27 +16,32 @@ ns ability_generic {
     }
   }
   
-  impl[T: Add[Rhs = T, Output = T]] Add[Rhs = GenericPoint[T], Output = GenericPoint[T]] for GenericPoint[T] {
-    fn add(self: GenericPoint[T], other: GenericPoint[T]): GenericPoint[T] { 
-      let newX: T = self.x.add(other.x);
-      let newY: T = self.y.add(other.y);
-      { x: newX, y: newY }
-    }
-  }
-  
   deftype GenericPoint[T] = { x: T, y: T }
   ability Add[Rhs, impl Output] {
     fn add(self: Self, rhs: Rhs): Output
   }
-  impl[T: Add[Rhs = T, Output = T]]
+  impl[T: Add[Rhs = T, Output = T] and Show]
     Add[Rhs = GenericPoint[T], Output = GenericPoint[T]]
     for GenericPoint[T] {
       fn add(self: GenericPoint[T], other: GenericPoint[T]): GenericPoint[T] { 
         let newX: T = self.x.add(other.x);
+        let a = self.x; let b = other.x;
+        println("GenericPoint.add X \{a} + \{b} = \{newX}");
         let newY: T = self.y.add(other.y);
+        let a = self.y; let b = other.y;
+        println("GenericPoint.add Y \{a} + \{b} = \{newY}");
         { x: newX, y: newY }
       }
   }
+  // nocommit: duplicate impls?
+  //impl[T: Add[Rhs = T, Output = T]] Add[Rhs = GenericPoint[T], Output = GenericPoint[T]] for GenericPoint[T] {
+  //  fn add(self: GenericPoint[T], other: GenericPoint[T]): GenericPoint[T] { 
+  //    let newX: T = self.x.add(other.x);
+  //    let newY: T = self.y.add(other.y);
+  //    { x: newX, y: newY }
+  //  }
+  //}
+  
   
   ability From[F] { fn from(t: F): Self }
   ability To[To] { fn to(self: Self): To }
@@ -45,7 +50,7 @@ ns ability_generic {
     fn to(self: T): string { self.show() }
   }
   
-  // There's some sort of bug with scoping because
+  // nocommit There's some sort of bug with scoping because
   // if I use T instead of To for the name in To,
   // this impl does not compile. Does not sound fun to fix tbh
   impl[U, T: To[To = U]] From[F = T] for U {
@@ -75,10 +80,17 @@ ns ability_generic {
     assert(add64 == 16: i64);
   
     // Blanket Impls
-    let p: GenericPoint[i32] = { x: 1, y: 2 };
+    let p: GenericPoint[i32] = { x: 3, y: 4 };
+    let px = p.x;
+    let py = p.y;
+    let sz = core/types/sizeOf[typeOf(p)]();
+    println("size: \{sz}");
+    println("p.x: \{px}");
+    println("p.y: \{py}");
+
     let added: GenericPoint[i32] = p.add(p);
-    assert(added.x == (1 + 1) as i32);
-    assert(added.y == (2 + 2) as i32);
+    assertEquals(added.x, (1 + 1) as i32);
+    assertEquals(added.y, (2 + 2) as i32);
   
     assertEquals((3: i32).to(): string, "3");
     assertEquals(From/from(3: i32): string, "3");

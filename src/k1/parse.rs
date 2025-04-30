@@ -102,24 +102,7 @@ impl From<ParsedStmtId> for NonZeroU32 {
     }
 }
 
-#[derive(PartialEq, Eq, Debug, Copy, Clone, Hash)]
-pub struct ParsedTypeExprId(NonZeroU32);
-impl From<NonZeroU32> for ParsedTypeExprId {
-    fn from(value: NonZeroU32) -> Self {
-        ParsedTypeExprId(value)
-    }
-}
-impl From<ParsedTypeExprId> for NonZeroU32 {
-    fn from(val: ParsedTypeExprId) -> Self {
-        val.0
-    }
-}
-
-impl Display for ParsedTypeExprId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
+nz_u32_id!(ParsedTypeExprId);
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
 pub struct ParsedPatternId(u32);
@@ -1874,7 +1857,7 @@ pub fn print_error(module: &ParsedProgram, parse_error: &ParseError) {
 
     match parse_error {
         ParseError::Lex(lex_error) => {
-            write_error_location(
+            write_source_location(
                 &mut stderr,
                 &module.spans,
                 &module.sources,
@@ -1899,7 +1882,7 @@ pub fn print_error(module: &ParsedProgram, parse_error: &ParseError) {
             };
 
             eprintln!("{message} at '{}'\n", got_str);
-            write_error_location(
+            write_source_location(
                 &mut stderr,
                 &module.spans,
                 &module.sources,
@@ -1912,7 +1895,7 @@ pub fn print_error(module: &ParsedProgram, parse_error: &ParseError) {
     }
 }
 
-pub fn write_error_location(
+pub fn write_source_location(
     w: &mut impl std::io::Write,
     spans: &Spans,
     sources: &Sources,
@@ -1926,13 +1909,24 @@ pub fn write_error_location(
         return Ok(());
     };
     use colored::*;
+    const CONTEXT_LINES: usize = 4;
 
     // If the span is longer than the line, just highlight the whole line
     let highlight_length =
         if span.len as usize > line.content.len() { line.content.len() } else { span.len as usize };
     let thingies = "^".repeat(highlight_length);
     let spaces = " ".repeat((span.start - line.start_char) as usize);
-    let code = format!("  ->{}\n  ->{spaces}{thingies}", &line.content);
+    let mut code = String::new();
+    for i in 0..CONTEXT_LINES {
+        let lookback_lines = CONTEXT_LINES as i32 - i as i32;
+        let this_line_index = (line.line_index as i32) - lookback_lines;
+        if this_line_index >= 0 {
+            if let Some(this_line) = source.get_line(this_line_index as usize) {
+                writeln!(&mut code, "    {}", &this_line.content).unwrap();
+            }
+        }
+    }
+    write!(&mut code, "  ->{}\n  ->{spaces}{thingies}", &line.content).unwrap();
     writeln!(
         w,
         "  {} at {}/{}:{}\n\n{code}",

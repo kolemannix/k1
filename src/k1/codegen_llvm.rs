@@ -29,8 +29,10 @@ use inkwell::values::{
     InstructionValue, IntValue, PointerValue, StructValue,
 };
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel};
+use itertools::Itertools;
 use llvm_sys::debuginfo::LLVMDIBuilderInsertDbgValueAtEnd;
 use log::{debug, info, trace};
+use smallvec::smallvec;
 
 use crate::compiler::WordSize;
 use crate::lex::SpanId;
@@ -43,12 +45,13 @@ use crate::typer::types::{
     UNIT_TYPE_ID, UWORD_TYPE_ID,
 };
 use crate::typer::{
-    AssignmentKind, BinaryOp, BinaryOpKind, Call, Callee, CastType, FunctionId, IntrinsicFunction,
-    Layout, LetStmt, Linkage as TyperLinkage, LoopExpr, MatchingCondition, MatchingConditionInstr,
-    StaticValue, StaticValueId, TypedBlock, TypedCast, TypedExpr, TypedExprId, TypedFloatValue,
-    TypedFunction, TypedGlobalId, TypedIntValue, TypedMatchExpr, TypedProgram, TypedStmt,
-    TypedStmtId, UnaryOpKind, VariableId, WhileLoop,
+    AssignmentKind, BinaryOp, BinaryOpKind, Call, Callee, CastType, FunctionId,
+    IntegerCastDirection, IntrinsicFunction, Layout, LetStmt, Linkage as TyperLinkage, LoopExpr,
+    MatchingCondition, MatchingConditionInstr, StaticValue, StaticValueId, TypedBlock, TypedCast,
+    TypedExpr, TypedExprId, TypedFloatValue, TypedFunction, TypedGlobalId, TypedIntValue,
+    TypedMatchExpr, TypedProgram, TypedStmt, TypedStmtId, UnaryOpKind, VariableId, WhileLoop,
 };
+use crate::SV8;
 
 #[derive(Debug)]
 pub struct CodegenError {
@@ -1721,26 +1724,26 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         }
     }
 
-    fn codegen_compile_time_value(
+    fn codegen_static_value(
         &mut self,
-        comptime_value_id: StaticValueId,
+        static_value_id: StaticValueId,
     ) -> CodegenResult<BasicValueEnum<'ctx>> {
-        let result = match self.k1.static_values.get(comptime_value_id) {
-            StaticValue::Unit(_) => self.builtin_types.unit_value.as_basic_value_enum(),
-            StaticValue::Boolean(b, _) => match b {
+        let result = match self.k1.static_values.get(static_value_id) {
+            StaticValue::Unit => self.builtin_types.unit_value.as_basic_value_enum(),
+            StaticValue::Boolean(b) => match b {
                 true => self.builtin_types.true_value.as_basic_value_enum(),
                 false => self.builtin_types.false_value.as_basic_value_enum(),
             },
-            StaticValue::Char(byte, _) => {
+            StaticValue::Char(byte) => {
                 self.builtin_types.char.const_int(*byte as u64, false).as_basic_value_enum()
             }
-            StaticValue::Integer(int_value, _) => self.codegen_integer_value(*int_value).unwrap(),
-            StaticValue::Float(float_value, _) => self.codegen_float_value(*float_value).unwrap(),
-            StaticValue::String(string_id, _) => {
-                let string_struct = self.codegen_string_struct(*string_id).unwrap();
+            StaticValue::Integer(int_value) => self.codegen_integer_value(*int_value).unwrap(),
+            StaticValue::Float(float_value) => self.codegen_float_value(*float_value).unwrap(),
+            StaticValue::String(string_id) => {
+                let string_struct = self.codegen_string_id(*string_id).unwrap();
                 string_struct.as_basic_value_enum()
             }
-            StaticValue::NullPointer(_span) => {
+            StaticValue::NullPointer => {
                 self.ctx.ptr_type(AddressSpace::default()).const_null().as_basic_value_enum()
             }
             StaticValue::Struct(s) => {
@@ -1754,7 +1757,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 // it back to the struct type. Since we treat it as a ptr it should actually work
                 // perfectly
                 for field in s.fields.iter() {
-                    let value = self.codegen_compile_time_value(*field)?;
+                    let value = self.codegen_static_value(*field)?;
                     type_fields.push(value.get_type());
                     fields_basic_values.push(value);
                 }
@@ -1776,8 +1779,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     None => physical_struct
                         .const_named_struct(&[variant.tag_value.as_basic_value_enum()]),
                     Some(payload_comptime_value_id) => {
-                        let payload_value =
-                            self.codegen_compile_time_value(payload_comptime_value_id)?;
+                        let payload_value = self.codegen_static_value(payload_comptime_value_id)?;
                         physical_struct.const_named_struct(&[
                             variant.tag_value.as_basic_value_enum(),
                             payload_value,
@@ -1786,46 +1788,120 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 };
                 enum_value.as_basic_value_enum()
             }
+            StaticValue::Buffer(buf) => {
+                let buffer_type = self.k1.types.get(buf.type_id);
+                let element_type = buffer_type.as_buffer_instance().unwrap().type_args[0];
+                let element_backend_type = self.codegen_type(element_type)?;
+                let element_basic_type = element_backend_type.rich_value_type();
+                let mut values: SV8<BasicValueEnum<'ctx>> = smallvec![];
+                for elem in buf.elements.iter() {
+                    let elem_basic_value = self.codegen_static_value(*elem)?;
+                    values.push(elem_basic_value);
+                }
+                let array_value = match element_basic_type {
+                    BasicTypeEnum::ArrayType(array_type) => array_type.const_array(
+                        &values.into_iter().map(|v| v.into_array_value()).collect_vec(),
+                    ),
+                    BasicTypeEnum::FloatType(float_type) => float_type.const_array(
+                        &values.into_iter().map(|v| v.into_float_value()).collect_vec(),
+                    ),
+                    BasicTypeEnum::IntType(int_type) => int_type
+                        .const_array(&values.into_iter().map(|v| v.into_int_value()).collect_vec()),
+                    BasicTypeEnum::PointerType(pointer_type) => pointer_type.const_array(
+                        &values.into_iter().map(|v| v.into_pointer_value()).collect_vec(),
+                    ),
+                    BasicTypeEnum::StructType(struct_type) => struct_type.const_array(
+                        &values.into_iter().map(|v| v.into_struct_value()).collect_vec(),
+                    ),
+                    BasicTypeEnum::VectorType(_) => unreachable!(),
+                    BasicTypeEnum::ScalableVectorType(_) => unreachable!(),
+                };
+                let data_global = self.llvm_module.add_global(array_value.get_type(), None, "");
+                data_global.set_constant(true);
+                data_global.set_unnamed_addr(true);
+                data_global.set_initializer(&array_value);
+
+                let buffer_struct = self
+                    .make_buffer_struct(
+                        buf.type_id,
+                        buf.len() as u64,
+                        data_global.as_pointer_value(),
+                    )
+                    .unwrap();
+
+                buffer_struct.as_basic_value_enum()
+            }
         };
         Ok(result)
     }
 
-    fn codegen_string_struct(&mut self, string_id: StringId) -> CodegenResult<StructValue<'ctx>> {
-        if let Some(cached_string) = self.strings.get(&string_id) {
-            return Ok(*cached_string);
-        }
-        // Get a hold of the type for 'string' (its just a struct that we expect to exist!)
-        let string_type = self.codegen_type(STRING_TYPE_ID)?;
-        let string_wrapper_struct = string_type.rich_value_type().into_struct_type();
-        let char_buffer_struct =
-            string_wrapper_struct.get_field_type_at_index(0).unwrap().into_struct_type();
-
-        // Ensure the string layout is what we expect
-        // deftype string = { buffer: Buffer[char] }
-        debug_assert!(
-            char_buffer_struct.get_field_type_at_index(0).unwrap().into_int_type().get_bit_width()
-                == 64
-        );
-        debug_assert!(char_buffer_struct.get_field_type_at_index(1).unwrap().is_pointer_type());
-        debug_assert!(char_buffer_struct.count_fields() == 2);
-
-        let string_value = self.k1.get_string(string_id);
+    fn make_string_struct(&self, rust_str: &str) -> CodegenResult<StructValue<'ctx>> {
         let global_str_data = self.llvm_module.add_global(
-            self.builtin_types.char.array_type(string_value.len() as u32),
+            self.builtin_types.char.array_type(rust_str.len() as u32),
             None,
             "str_data",
         );
-        let str_data_array = i8_array_from_str(self.ctx, string_value);
+        let str_data_array = i8_array_from_str(self.ctx, rust_str);
         global_str_data.set_initializer(&str_data_array);
 
-        let global_str_value = string_wrapper_struct.const_named_struct(&[char_buffer_struct
-            .const_named_struct(&[
-                self.builtin_types.uword().const_int(string_value.len() as u64, false).into(),
-                global_str_data.as_pointer_value().into(),
-            ])
-            .as_basic_value_enum()]);
-        self.strings.insert(string_id, global_str_value);
-        Ok(global_str_value)
+        let char_buffer_type_id =
+            self.k1.types.get(STRING_TYPE_ID).expect_struct().fields[0].type_id;
+
+        let string_type = self.codegen_type(STRING_TYPE_ID)?.expect_struct();
+        let char_buffer_struct_type = (string_type.fields[0].clone()).expect_struct().struct_type;
+        let string_wrapper_struct = string_type.struct_type;
+        // Ensure the string layout is what we expect
+        // deftype string = { buffer: Buffer[char] }
+        debug_assert!(
+            char_buffer_struct_type
+                .get_field_type_at_index(0)
+                .unwrap()
+                .into_int_type()
+                .get_bit_width()
+                == 64
+        );
+        debug_assert!(char_buffer_struct_type
+            .get_field_type_at_index(1)
+            .unwrap()
+            .is_pointer_type());
+        debug_assert!(char_buffer_struct_type.count_fields() == 2);
+
+        let char_buffer_struct_value = self.make_buffer_struct(
+            char_buffer_type_id,
+            rust_str.len() as u64,
+            global_str_data.as_pointer_value(),
+        )?;
+        let string_struct = string_wrapper_struct
+            .const_named_struct(&[char_buffer_struct_value.as_basic_value_enum()]);
+        Ok(string_struct)
+    }
+
+    fn codegen_string_id(&mut self, string_id: StringId) -> CodegenResult<StructValue<'ctx>> {
+        if let Some(cached_string) = self.strings.get(&string_id) {
+            Ok(*cached_string)
+        } else {
+            // Get a hold of the type for 'string'
+            let string_value = self.k1.get_string(string_id);
+            let v = self.make_string_struct(string_value)?;
+
+            self.strings.insert(string_id, v);
+            Ok(v)
+        }
+    }
+
+    fn make_buffer_struct(
+        &self,
+        buffer_type_id: TypeId,
+        len: u64,
+        data: PointerValue<'ctx>,
+    ) -> CodegenResult<StructValue<'ctx>> {
+        let buffer_type = self.codegen_type(buffer_type_id)?.expect_struct();
+        let buffer_struct_type = buffer_type.struct_type;
+        let buffer_struct_value = buffer_struct_type.const_named_struct(&[
+            self.builtin_types.uword().const_int(len, false).as_basic_value_enum(),
+            data.as_basic_value_enum(),
+        ]);
+        Ok(buffer_struct_value)
     }
 
     fn get_insert_function(&self) -> &CodegenedFunction<'ctx> {
@@ -1883,7 +1959,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             TypedExpr::Float(float) => Ok(self.codegen_float_value(float.value).unwrap().into()),
             TypedExpr::String(string_value, _) => {
-                let string_struct = self.codegen_string_struct(*string_value)?;
+                let string_struct = self.codegen_string_id(*string_value)?;
                 let string_ptr = self.build_alloca(string_struct.get_type(), "");
                 self.builder.build_store(string_ptr, string_struct).unwrap();
                 Ok(string_ptr.as_basic_value_enum().into())
@@ -2046,10 +2122,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(enum_tag_value.as_basic_value_enum().into())
             }
             TypedExpr::EnumGetPayload(enum_get_payload) => {
-                let target_expr_type_id = self.k1.exprs.get(enum_get_payload.enum_expr).get_type();
+                let target_expr_type_id =
+                    self.k1.exprs.get(enum_get_payload.enum_variant_expr).get_type();
                 let enum_type = self.k1.types.get_type_id_dereferenced(target_expr_type_id);
                 let enum_type = self.codegen_type(enum_type)?.expect_enum();
-                let enum_value = self.codegen_expr_basic_value(enum_get_payload.enum_expr)?;
+                let enum_value =
+                    self.codegen_expr_basic_value(enum_get_payload.enum_variant_expr)?;
                 let variant_type = &enum_type.variants[enum_get_payload.variant_index as usize];
 
                 if enum_get_payload.is_referencing {
@@ -2165,7 +2243,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(LlvmValue::BasicValue(lambda_object_ptr.as_basic_value_enum()))
             }
             TypedExpr::StaticValue(value_id, type_id, _) => {
-                let static_value = self.codegen_compile_time_value(*value_id)?;
+                let static_value = self.codegen_static_value(*value_id)?;
                 // If its an aggregate, we need a ptr to it instead!
                 let llvm_type = self.codegen_type(*type_id)?;
                 let basic_value_canonical = if llvm_type.is_aggregate() {
@@ -2190,11 +2268,15 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     fn codegen_cast(&mut self, cast: &TypedCast) -> CodegenResult<LlvmValue<'ctx>> {
         match cast.cast_type {
-            CastType::KnownNoOp | CastType::Integer8ToChar => {
+            CastType::EnumToVariant
+            | CastType::ReferenceToReference
+            | CastType::IntegerCast(IntegerCastDirection::NoOp)
+            | CastType::Integer8ToChar => {
                 let value = self.codegen_expr_basic_value(cast.base_expr)?;
                 Ok(value.into())
             }
-            CastType::IntegerExtend | CastType::IntegerExtendFromChar => {
+            CastType::IntegerCast(IntegerCastDirection::Extend)
+            | CastType::IntegerExtendFromChar => {
                 let value = self.codegen_expr_basic_value(cast.base_expr)?;
                 let int_value = value.into_int_value();
                 let llvm_type = self.codegen_type(cast.target_type_id)?;
@@ -2204,7 +2286,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         .build_int_s_extend(
                             int_value,
                             llvm_type.rich_value_type().into_int_type(),
-                            "extend_cast",
+                            "extend_cast_sext",
                         )
                         .unwrap()
                 } else {
@@ -2212,13 +2294,13 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         .build_int_z_extend(
                             int_value,
                             llvm_type.rich_value_type().into_int_type(),
-                            "extend_cast",
+                            "extend_cast_zext",
                         )
                         .unwrap()
                 };
                 Ok(value.as_basic_value_enum().into())
             }
-            CastType::IntegerTruncate => {
+            CastType::IntegerCast(IntegerCastDirection::Truncate) => {
                 let value = self.codegen_expr_basic_value(cast.base_expr)?;
                 let int_value = value.into_int_value();
                 let int_type = self.codegen_type(cast.target_type_id)?;
@@ -2295,7 +2377,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let reference = self.codegen_expr_basic_value(cast.base_expr)?.into_pointer_value();
                 Ok(reference.as_basic_value_enum().into())
             }
-            CastType::PointerToInteger => {
+            CastType::PointerToWord => {
                 let ptr = self.codegen_expr_basic_value(cast.base_expr)?.into_pointer_value();
                 let as_int = self
                     .builder
@@ -2908,6 +2990,15 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     self.codegen_integer_value(TypedIntValue::U64(type_param.type_id.to_u64()))?;
                 Ok(type_id_value.into())
             }
+            IntrinsicFunction::TypeName => {
+                let type_param = &call.type_args[0];
+                // TODO: Eventually, move this to part of typeInfo, and cache them
+                let name = self.k1.type_id_to_string(type_param.type_id);
+                let name_struct = self.make_string_struct(&name)?;
+                let name_ptr = self.build_alloca(name_struct.get_type(), "");
+                self.builder.build_store(name_ptr, name_struct).unwrap();
+                Ok(name_ptr.as_basic_value_enum().into())
+            }
             IntrinsicFunction::PointerIndex => {
                 //  Reference:
                 //  intern fn refAtIndex[T](self: Pointer, index: uword): T*
@@ -3502,8 +3593,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     fn codegen_global(&mut self, global_id: TypedGlobalId) -> CodegenResult<()> {
         let global = self.k1.globals.get(global_id);
-        let initialized_basic_value =
-            self.codegen_compile_time_value(global.initial_value.unwrap())?;
+        let initialized_basic_value = self.codegen_static_value(global.initial_value.unwrap())?;
         let variable = self.k1.variables.get(global.variable_id);
         let name = self.k1.make_qualified_name(variable.owner_scope, variable.name, "__", false);
         let llvm_global = self.llvm_module.add_global(

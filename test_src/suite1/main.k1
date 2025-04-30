@@ -1,12 +1,12 @@
 fn main(): i32 {
   // Compiler Core coverage, ideally increasing complexity
   // Low
+  #static {
   arith/test();
   bool_test/test();
   char_test/test();
   global_int/test();
   assign/test();
-  try_test/test();
   pointer/test();
   ability_fail/test();
   ability_constraint/test();
@@ -30,6 +30,7 @@ fn main(): i32 {
   opaque_type_01/test();
   test_comptime/test();
   test_globals/test();
+  };
 
   // Moderate
   never_everywhere/test();
@@ -37,6 +38,7 @@ fn main(): i32 {
   optionals/test();
   type_info/test();
   all_out_of_order/test();
+  try_test/test();
   match_exhaust/main();
   match_references/test();
   generic_struct/test();
