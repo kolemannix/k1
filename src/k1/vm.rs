@@ -15,18 +15,18 @@ use smallvec::{smallvec, SmallVec};
 
 use crate::{
     compiler::WordSize,
-    errf, failf,
+    failf, int_binop,
     lex::SpanId,
     nz_u32_id,
     parse::{Identifier, NumericWidth, StringId},
     typer::{
-        self, make_error, make_fail_span,
+        self, make_fail_span,
         types::{
-            IntegerType, StructTypeField, Type, TypeId, TypedEnumVariant, Types, BOOL_TYPE_ID,
-            CHAR_TYPE_ID, F32_TYPE_ID, F64_TYPE_ID, IWORD_TYPE_ID, POINTER_TYPE_ID, STRING_TYPE_ID,
-            UNIT_TYPE_ID, UWORD_TYPE_ID,
+            IntegerType, Type, TypeId, TypedEnumVariant, Types, BOOL_TYPE_ID, CHAR_TYPE_ID,
+            F32_TYPE_ID, F64_TYPE_ID, I32_TYPE_ID, I64_TYPE_ID, IWORD_TYPE_ID, POINTER_TYPE_ID,
+            STRING_TYPE_ID, U32_TYPE_ID, U64_TYPE_ID, UNIT_TYPE_ID, UWORD_TYPE_ID,
         },
-        BinaryOpKind, CastType, IntrinsicFunction, Layout, MatchingCondition,
+        BinaryOpKind, CastType, IntrinsicOperation, Layout, MatchingCondition,
         MatchingConditionInstr, SimpleNamedType, StaticBuffer, StaticEnum, StaticStruct,
         StaticValue, StaticValueId, TypedExpr, TypedExprId, TypedFloatValue, TypedGlobalId,
         TypedIntValue, TypedMatchExpr, TypedProgram, TypedStmtId, TyperResult, VariableId,
@@ -367,6 +367,13 @@ impl Value {
             _ => unreachable!("expect_agg on value {:?}", self),
         }
     }
+
+    fn expect_float(&self) -> TypedFloatValue {
+        match self {
+            Value::Float(fv) => *fv,
+            _ => unreachable!("expect_float on value {:?}", self),
+        }
+    }
 }
 
 impl From<u64> for Value {
@@ -433,7 +440,7 @@ macro_rules! return_exit {
     ($result:expr) => {{
         match $result {
             VmResult::Value(v) => v,
-            VmResult::Break(_) => panic!("Expected Value but got Break"),
+            VmResult::Break(_) => return Ok($result),
             VmResult::Return(_) => return Ok($result),
             VmResult::Exit(_) => return Ok($result),
         }
@@ -445,9 +452,7 @@ macro_rules! execute_expr_return_exit {
         let result = execute_expr($vm, $m, $expr)?;
         match result {
             VmResult::Value(v) => Ok(v),
-            VmResult::Break(_) => {
-                Err(errf!($m.exprs.get($expr).get_span(), "Expected Value but got Break"))
-            }
+            VmResult::Break(_) => return Ok(result),
             VmResult::Return(_) => return Ok(result),
             VmResult::Exit(_) => return Ok(result),
         }
@@ -499,7 +504,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                 _ => unreachable!("malformed field access: not a struct or struct*"),
             };
             if field_access.is_referencing {
-                let (field_ptr, _) = gep_struct_field(
+                let field_ptr = gep_struct_field(
                     &m.types,
                     field_access.struct_type,
                     struct_ptr,
@@ -786,8 +791,20 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                 CastType::IntegerToFloat => {
                     let int_to_cast = base_value.expect_int();
                     let float_value = match typed_cast.target_type_id {
-                        F32_TYPE_ID => TypedFloatValue::F32(int_to_cast.to_u32() as f32),
-                        F64_TYPE_ID => TypedFloatValue::F64(int_to_cast.to_u64() as f64),
+                        F32_TYPE_ID => {
+                            if int_to_cast.is_signed() {
+                                TypedFloatValue::F32(int_to_cast.to_i32() as f32)
+                            } else {
+                                TypedFloatValue::F32(int_to_cast.to_u32() as f32)
+                            }
+                        }
+                        F64_TYPE_ID => {
+                            if int_to_cast.is_signed() {
+                                TypedFloatValue::F64(int_to_cast.to_i64() as f64)
+                            } else {
+                                TypedFloatValue::F64(int_to_cast.to_u64() as f64)
+                            }
+                        }
                         _ => unreachable!(),
                     };
                     Ok(Value::Float(float_value).into())
@@ -838,9 +855,37 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                     };
                     Ok(Value::Int(int_value).into())
                 }
-                CastType::FloatExtend => todo!(),
-                CastType::FloatTruncate => todo!(),
-                CastType::FloatToInteger => todo!(),
+                CastType::FloatExtend => {
+                    let float_value = base_value.expect_float();
+                    let extended = match (float_value, typed_cast.target_type_id) {
+                        (TypedFloatValue::F32(f32), F64_TYPE_ID) => {
+                            TypedFloatValue::F64(f32 as f64)
+                        }
+                        _ => m.ice_with_span("malformed float extend", vm.eval_span),
+                    };
+                    Ok(Value::Float(extended).into())
+                }
+                CastType::FloatTruncate => {
+                    let float_value = base_value.expect_float();
+                    let truncated = match (float_value, typed_cast.target_type_id) {
+                        (TypedFloatValue::F64(f64), F32_TYPE_ID) => {
+                            TypedFloatValue::F32(f64 as f32)
+                        }
+                        _ => m.ice_with_span("malformed float truncate", vm.eval_span),
+                    };
+                    Ok(Value::Float(truncated).into())
+                }
+                CastType::FloatToInteger => {
+                    let float_value = base_value.expect_float();
+                    let int_value = match (float_value, typed_cast.target_type_id) {
+                        (TypedFloatValue::F32(f32), U32_TYPE_ID) => TypedIntValue::U32(f32 as u32),
+                        (TypedFloatValue::F32(f32), I32_TYPE_ID) => TypedIntValue::I32(f32 as i32),
+                        (TypedFloatValue::F64(f64), U64_TYPE_ID) => TypedIntValue::U64(f64 as u64),
+                        (TypedFloatValue::F64(f64), I64_TYPE_ID) => TypedIntValue::I64(f64 as i64),
+                        _ => m.ice_with_span("malformed float to integer cast", vm.eval_span),
+                    };
+                    Ok(Value::Int(int_value).into())
+                }
                 CastType::LambdaToLambdaObject => todo!(),
             }
         }
@@ -858,9 +903,11 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
             }
         }
         TypedExpr::Lambda(_) => m.todo_with_span("vm lambda", vm.eval_span),
-        TypedExpr::FunctionReference(_) => todo!(),
-        TypedExpr::FunctionToLambdaObject(_) => todo!(),
-        TypedExpr::PendingCapture(_) => todo!(),
+        TypedExpr::FunctionReference(_) => m.todo_with_span("function reference", vm.eval_span),
+        TypedExpr::FunctionToLambdaObject(_) => {
+            m.todo_with_span("function to lambda object", vm.eval_span)
+        }
+        TypedExpr::PendingCapture(_) => m.ice_with_span("pending capture in vm", vm.eval_span),
         TypedExpr::StaticValue(value_id, _, _) => {
             let static_value = m.static_values.get(*value_id);
             let vm_value =
@@ -870,13 +917,19 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
     };
     if cfg!(debug_assertions) {
         if let Ok(VmResult::Value(v)) = result {
-            if v.get_type() != m.exprs.get(expr).get_type() {
+            // We use root scope because we don't expected to need to resolve any type
+            // variables in VM code; it should all be concrete, and that's all the
+            // scope is used for in check_types
+            if let Err(msg) = m.check_types(
+                m.exprs.get(expr).get_type(),
+                v.get_type(),
+                m.scopes.get_root_scope_id(),
+            ) {
                 return failf!(
                     vm.eval_span,
-                    "vm eval type mismatch {}: {} vs {}",
+                    "vm eval type mismatch after executing '{}'\n{}",
                     m.expr_to_string(expr),
-                    m.type_id_to_string(m.exprs.get(expr).get_type()),
-                    m.type_id_to_string(v.get_type()),
+                    msg,
                 );
             }
         }
@@ -1164,10 +1217,10 @@ fn execute_intrinsic(
     type_args: &[SimpleNamedType],
     args: &[TypedExprId],
     return_type: TypeId,
-    intrinsic_type: IntrinsicFunction,
+    intrinsic_type: IntrinsicOperation,
 ) -> TyperResult<VmResult> {
     match intrinsic_type {
-        IntrinsicFunction::SizeOf => {
+        IntrinsicOperation::SizeOf => {
             let type_id = type_args[0].type_id;
             let layout = m.types.get_layout(type_id);
             let size_bytes = match layout {
@@ -1176,7 +1229,7 @@ fn execute_intrinsic(
             };
             Ok(Value::Int(TypedIntValue::UWord64(size_bytes as u64)).into())
         }
-        IntrinsicFunction::SizeOfStride => {
+        IntrinsicOperation::SizeOfStride => {
             let type_id = type_args[0].type_id;
             let layout = m.types.get_layout(type_id);
             let stride_bytes = match layout {
@@ -1185,7 +1238,7 @@ fn execute_intrinsic(
             };
             Ok(Value::Int(TypedIntValue::UWord64(stride_bytes as u64)).into())
         }
-        IntrinsicFunction::AlignOf => {
+        IntrinsicOperation::AlignOf => {
             let type_id = type_args[0].type_id;
             let layout = m.types.get_layout(type_id);
             let align_bytes = match layout {
@@ -1194,11 +1247,11 @@ fn execute_intrinsic(
             };
             Ok(Value::Int(TypedIntValue::UWord64(align_bytes as u64)).into())
         }
-        IntrinsicFunction::TypeId => {
+        IntrinsicOperation::TypeId => {
             let type_id = type_args[0].type_id;
             Ok(Value::from(type_id.to_u64()).into())
         }
-        IntrinsicFunction::TypeName => {
+        IntrinsicOperation::TypeName => {
             let type_id = type_args[0].type_id;
             let name = m.type_id_to_string(type_id);
             let data_allocation = vm.static_stack.push_slice(name.as_bytes());
@@ -1206,17 +1259,28 @@ fn execute_intrinsic(
             let string_struct_on_stack = vm.stack.push_t(k1_string);
             Ok(Value::Agg { type_id: STRING_TYPE_ID, ptr: string_struct_on_stack }.into())
         }
-        IntrinsicFunction::BoolNegate => {
+        IntrinsicOperation::BoolNegate => {
             let b = execute_expr_return_exit!(vm, m, args[0])?.expect_bool();
             Ok(Value::Bool(!b).into())
         }
-        IntrinsicFunction::BitNot => todo!("BitNot"),
-        IntrinsicFunction::BitAnd => todo!(),
-        IntrinsicFunction::BitOr => todo!(),
-        IntrinsicFunction::BitXor => todo!(),
-        IntrinsicFunction::BitShiftLeft => todo!(),
-        IntrinsicFunction::BitShiftRight => todo!(),
-        IntrinsicFunction::PointerIndex => {
+        IntrinsicOperation::BitNot => {
+            let int = execute_expr_return_exit!(vm, m, args[0])?.expect_int();
+            Ok(Value::Int(int.bit_not()).into())
+        }
+        IntrinsicOperation::BitwiseBinop(kind) => {
+            let inta = execute_expr_return_exit!(vm, m, args[0])?.expect_int();
+            let intb = execute_expr_return_exit!(vm, m, args[1])?.expect_int();
+            use std::ops::{Shl, Shr};
+            let int_value = match kind {
+                typer::IntrinsicBitwiseBinopKind::And => inta.bit_and(&intb),
+                typer::IntrinsicBitwiseBinopKind::Or => inta.bit_or(&intb),
+                typer::IntrinsicBitwiseBinopKind::Xor => inta.bit_xor(&intb),
+                typer::IntrinsicBitwiseBinopKind::ShiftLeft => int_binop!(inta, &intb, shl),
+                typer::IntrinsicBitwiseBinopKind::ShiftRight => int_binop!(inta, &intb, shr),
+            };
+            Ok(Value::Int(int_value).into())
+        }
+        IntrinsicOperation::PointerIndex => {
             // intern fn refAtIndex[T](self: Pointer, index: uword): T*
             let typ = type_args[0].type_id;
             let ptr = execute_expr_return_exit!(vm, m, args[0])?.expect_ptr();
@@ -1224,11 +1288,11 @@ fn execute_intrinsic(
             let result = ptr + offset_at_index(&m.types, typ, index as usize);
             Ok(Value::Reference { type_id: return_type, ptr: result as *const u8 }.into())
         }
-        IntrinsicFunction::CompilerSourceLocation => {
+        IntrinsicOperation::CompilerSourceLocation => {
             unreachable!("CompilerSourceLocation is handled in typer")
         }
-        IntrinsicFunction::Allocate | IntrinsicFunction::AllocateZeroed => {
-            let zero = intrinsic_type == IntrinsicFunction::AllocateZeroed;
+        IntrinsicOperation::Allocate | IntrinsicOperation::AllocateZeroed => {
+            let zero = intrinsic_type == IntrinsicOperation::AllocateZeroed;
             let size_expr = args[0];
             let align_expr = args[1];
             let size = execute_expr_return_exit!(vm, m, size_expr)?.expect_int().expect_uword();
@@ -1236,7 +1300,7 @@ fn execute_intrinsic(
             let ptr = allocate(size, align, zero);
             Ok(Value::Pointer(ptr.addr()).into())
         }
-        IntrinsicFunction::Reallocate => {
+        IntrinsicOperation::Reallocate => {
             let old_ptr_expr = args[0];
             let old_size_expr = args[1];
             let old_align_expr = args[2];
@@ -1252,7 +1316,7 @@ fn execute_intrinsic(
             let ptr = unsafe { std::alloc::realloc(old_ptr as *mut u8, layout, new_size) };
             Ok(Value::Pointer(ptr.addr()).into())
         }
-        IntrinsicFunction::Free => {
+        IntrinsicOperation::Free => {
             let ptr_expr = args[0];
             let size_expr = args[1];
             let align_expr = args[2];
@@ -1265,7 +1329,7 @@ fn execute_intrinsic(
             unsafe { std::alloc::dealloc(ptr as *mut u8, layout) };
             Ok(VmResult::UNIT)
         }
-        IntrinsicFunction::MemCopy => {
+        IntrinsicOperation::MemCopy => {
             let [dst, src, count] = args[0..3] else { unreachable!() };
             let dst = execute_expr_return_exit!(vm, m, dst)?.expect_ptr();
             let src = execute_expr_return_exit!(vm, m, src)?.expect_ptr();
@@ -1275,8 +1339,8 @@ fn execute_intrinsic(
             };
             Ok(VmResult::UNIT)
         }
-        IntrinsicFunction::MemSet => todo!(),
-        IntrinsicFunction::MemEquals => {
+        IntrinsicOperation::MemSet => todo!(),
+        IntrinsicOperation::MemEquals => {
             //intern fn compare(p1: Pointer, p2: Pointer, size: uword): i32
             let [p1, p2, size] = args[0..3] else { unreachable!() };
             let p1 = execute_expr_return_exit!(vm, m, p1)?.expect_ptr();
@@ -1290,14 +1354,14 @@ fn execute_intrinsic(
             let eq = p1 == p2;
             Ok(Value::Bool(eq).into())
         }
-        IntrinsicFunction::Exit => {
+        IntrinsicOperation::Exit => {
             let TypedIntValue::I32(code) = execute_expr_return_exit!(vm, m, args[0])?.expect_int()
             else {
                 unreachable!("malformed exit (code type)")
             };
             Ok(VmResult::Exit(VmExit { span: vm.eval_span, code }))
         }
-        IntrinsicFunction::EmitCompilerMessage => {
+        IntrinsicOperation::EmitCompilerMessage => {
             let location_arg = execute_expr_return_exit!(vm, m, args[0])?;
             let level_arg = execute_expr_return_exit!(vm, m, args[1])?.expect_agg();
             let message_arg = execute_expr_return_exit!(vm, m, args[2])?;
@@ -1523,10 +1587,11 @@ pub fn load_value(
                 Ok(Value::Agg { type_id, ptr })
             }
         }
+        Type::Lambda(_) => m.todo_with_span("just a struct load of the env", vm.eval_span),
+        Type::LambdaObject(_) => m.todo_with_span("struct of the lambda obj", vm.eval_span),
+        //
         Type::Never => unreachable!("Not a value type"),
         Type::Function(_) => unreachable!("Not a value type"),
-        Type::Lambda(_) => todo!("just a struct load of the env"),
-        Type::LambdaObject(_) => todo!("struct of the lambda obj"),
         Type::Generic(_) => unreachable!("Not a value type"),
         Type::TypeParameter(_) => unreachable!("Not a value type"),
         Type::FunctionTypeParameter(_) => unreachable!("Not a value type"),
@@ -1574,11 +1639,11 @@ fn build_enum(
 }
 
 fn build_struct_unaligned(dst: *mut u8, types: &Types, struct_type_id: TypeId, members: &[Value]) {
-    let struct_fields = &types.get(struct_type_id).expect_struct().fields;
+    let struct_layout = &types.get_struct_layout(struct_type_id);
 
-    for (value, field_type) in members.iter().zip(struct_fields.iter()) {
+    for (value, field_offset) in members.iter().zip(struct_layout.field_offsets.iter()) {
         // Go to offset
-        let field_dst = unsafe { dst.byte_add(field_type.offset_bits as usize / 8) };
+        let field_dst = unsafe { dst.byte_add((field_offset / 8) as usize) };
         store_value(types, field_dst, *value);
     }
 }
@@ -1594,13 +1659,13 @@ pub fn gep_struct_field(
     struct_type: TypeId,
     struct_ptr: *const u8,
     field_index: usize,
-) -> (*const u8, &StructTypeField) {
-    let struct_type = types.get(struct_type).expect_struct();
-    let field = &struct_type.fields[field_index];
-    let offset_bytes = field.offset_bits as usize / 8;
+) -> *const u8 {
+    let struct_type = types.get_struct_layout(struct_type);
+    let field_offset_bits = struct_type.field_offsets[field_index];
+    let offset_bytes = field_offset_bits as usize / 8;
 
     let field_ptr = unsafe { struct_ptr.byte_add(offset_bytes) };
-    (field_ptr, field)
+    field_ptr
 }
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
@@ -1612,7 +1677,8 @@ pub fn load_struct_field(
     field_index: usize,
     copy: bool,
 ) -> TyperResult<Value> {
-    let (field_ptr, field) = gep_struct_field(&m.types, struct_type, struct_ptr, field_index);
+    let field_ptr = gep_struct_field(&m.types, struct_type, struct_ptr, field_index);
+    let field = &m.types.get(struct_type).expect_struct().fields[field_index];
     let value = load_value(vm, m, field.type_id, field_ptr, copy)?;
     // load_struct_field x (offset=0) of type GenericPoint[i32] is Int(I32(4)). Full struct: [4, 0, 0, 0, 0, 0, 0, 0]
     // load_struct_field y (offset=0) of type GenericPoint[i32] is Int(I32(4)). Full struct: [4, 0, 0, 0, 0, 0, 0, 0]
@@ -1620,7 +1686,7 @@ pub fn load_struct_field(
     debug!(
         "load_struct_field {} (offset={}) of type {} is {:?}. Full struct: {:?}",
         m.name_of(field.name),
-        field.offset_bits / 8,
+        field_ptr.addr() - struct_ptr.addr(),
         m.type_id_to_string(struct_type),
         value,
         unsafe {
@@ -2134,13 +2200,13 @@ fn render_debug_value(w: &mut impl std::fmt::Write, vm: &mut Vm, m: &TypedProgra
                         w.write_str("]>").unwrap();
                     } else {
                         w.write_str("{ ").unwrap();
-                        for (i, f) in struct_type.fields.iter().enumerate() {
+                        for (field_index, f) in struct_type.fields.iter().enumerate() {
                             write!(w, "{}: ", m.name_of(f.name)).unwrap();
-                            match load_struct_field(vm, m, type_id, ptr, f.index as usize, true) {
+                            match load_struct_field(vm, m, type_id, ptr, field_index, true) {
                                 Err(e) => write!(w, "<ERROR {}>", e.message).unwrap(),
                                 Ok(loaded) => render_debug_value(w, vm, m, loaded),
                             };
-                            if i != struct_type.fields.len() - 1 {
+                            if field_index != struct_type.fields.len() - 1 {
                                 write!(w, ", ").unwrap();
                             }
                         }

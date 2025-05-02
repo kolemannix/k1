@@ -1,12 +1,3 @@
-ns Bits {
-  intern fn bitNot(a: int): int
-  intern fn bitAnd(a: int, b: int): int
-  intern fn bitOr(a: int, b: int): int
-  intern fn xor(a: int, b: int): int
-  intern fn shiftLeft(a: int, b: int): int
-  intern fn shiftRight(a: int, b: int): int
-}
-
 impl Bitwise for u8 {
   intern fn bitNot(self: u8): u8
   intern fn bitAnd(self: u8, other: u8): u8

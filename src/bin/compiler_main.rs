@@ -16,8 +16,7 @@ fn main() -> anyhow::Result<()> {
         .spawn(run)
         .unwrap();
 
-    let result = compiler_thread.join().unwrap();
-    result
+    compiler_thread.join().unwrap()
 }
 
 fn run() -> anyhow::Result<()> {

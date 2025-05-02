@@ -1,7 +1,4 @@
-fn main(): i32 {
-  // Compiler Core coverage, ideally increasing complexity
-  // Low
-  #static {
+fn low(): unit {
   arith/test();
   bool_test/test();
   char_test/test();
@@ -30,7 +27,13 @@ fn main(): i32 {
   opaque_type_01/test();
   test_comptime/test();
   test_globals/test();
-  };
+}
+
+fn main(): i32 {
+  // Compiler Core coverage, ideally increasing complexity
+  // Low
+  low();
+  #static low();
 
   // Moderate
   never_everywhere/test();
