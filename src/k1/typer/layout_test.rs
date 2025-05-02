@@ -47,3 +47,17 @@ fn add_zero_no_change() {
     assert_eq!(l.align_bits, 64);
     assert_eq!(l.stride_bits(), 128);
 }
+
+#[test]
+fn array_me() {
+    let l = Layout::ZERO.array_me(10);
+    assert_eq!(l.size_bits, 0);
+    assert_eq!(l.align_bits, 8);
+    assert_eq!(l.stride_bits(), 0);
+    let l2 = Layout { size_bits: 40, align_bits: 32 };
+    assert_eq!(l2.stride_bits(), 64);
+    let l3 = l2.array_me(10);
+    assert_eq!(l3.size_bits, 640);
+    assert_eq!(l3.align_bits, 32);
+    assert_eq!(l3.stride_bits(), 640);
+}

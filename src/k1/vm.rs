@@ -548,7 +548,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                             vm,
                             StackSelection::StaticSpace,
                             m,
-                            m.static_values.get(global_value),
+                            global_value,
                         )?;
                         let final_value = if global.is_referencing {
                             let ptr = vm.static_stack.push_ptr_uninit();
@@ -903,15 +903,23 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
             }
         }
         TypedExpr::Lambda(_) => m.todo_with_span("vm lambda", vm.eval_span),
-        TypedExpr::FunctionReference(_) => m.todo_with_span("function reference", vm.eval_span),
+        TypedExpr::FunctionReference(fun_ref) => {
+            let function_id_u32 = fun_ref.function_id.as_u32();
+            eprintln!("Im stuffing function id {function_id_u32} into a Reference value, teehee!");
+            let function_id_as_ptr = function_id_u32 as usize as *const u8;
+            let value = Value::Reference {
+                type_id: fun_ref.function_reference_type,
+                ptr: function_id_as_ptr,
+            };
+            Ok(VmResult::Value(value))
+        }
         TypedExpr::FunctionToLambdaObject(_) => {
             m.todo_with_span("function to lambda object", vm.eval_span)
         }
         TypedExpr::PendingCapture(_) => m.ice_with_span("pending capture in vm", vm.eval_span),
         TypedExpr::StaticValue(value_id, _, _) => {
-            let static_value = m.static_values.get(*value_id);
             let vm_value =
-                static_value_to_vm_value(vm, StackSelection::CallStackCurrent, m, static_value)?;
+                static_value_to_vm_value(vm, StackSelection::CallStackCurrent, m, *value_id)?;
             Ok(vm_value.into())
         }
     };
@@ -942,9 +950,9 @@ pub fn static_value_to_vm_value(
     vm: &mut Vm,
     dst_stack: StackSelection,
     m: &TypedProgram,
-    static_value: &StaticValue,
+    static_value_id: StaticValueId,
 ) -> TyperResult<Value> {
-    match static_value {
+    match m.static_values.get(static_value_id) {
         StaticValue::Unit => Ok(Value::Unit),
         StaticValue::Boolean(bv) => Ok(Value::Bool(*bv)),
         StaticValue::Char(cb) => Ok(Value::Char(*cb)),
@@ -958,8 +966,7 @@ pub fn static_value_to_vm_value(
         StaticValue::Struct(static_struct) => {
             let mut values: SmallVec<[Value; 8]> = smallvec![];
             for f in static_struct.fields.iter() {
-                let static_value = m.static_values.get(*f);
-                let value = static_value_to_vm_value(vm, dst_stack, m, static_value)?;
+                let value = static_value_to_vm_value(vm, dst_stack, m, *f)?;
                 values.push(value);
             }
             let struct_ptr = vm.get_destination_stack(dst_stack).push_struct_values(
@@ -973,8 +980,7 @@ pub fn static_value_to_vm_value(
             let payload_value = match e.payload {
                 None => None,
                 Some(static_value_id) => {
-                    let static_value = m.static_values.get(static_value_id);
-                    let value = static_value_to_vm_value(vm, dst_stack, m, static_value)?;
+                    let value = static_value_to_vm_value(vm, dst_stack, m, static_value_id)?;
                     Some(value)
                 }
             };
@@ -991,12 +997,17 @@ pub fn static_value_to_vm_value(
             let element_type = m.types.get(buf.type_id).as_buffer_instance().unwrap().type_args[0];
 
             let layout = m.types.get_layout(element_type).unwrap();
+            let buffer_allocation_layout = layout.array_me(buf.len());
 
-            let base_mem = vm.static_stack.push_layout_uninit(layout);
+            debug!(
+                "Pushing {} bytes for Buffer {}",
+                buffer_allocation_layout.size_bytes(),
+                m.static_value_to_string(static_value_id)
+            );
+            let base_mem = vm.static_stack.push_layout_uninit(buffer_allocation_layout);
 
             for (index, elem_value_id) in elements.iter().enumerate() {
-                let elem_static_value = m.static_values.get(*elem_value_id);
-                let elem_value = static_value_to_vm_value(vm, dst_stack, m, elem_static_value)?;
+                let elem_value = static_value_to_vm_value(vm, dst_stack, m, *elem_value_id)?;
                 let elem_dst_ptr = unsafe { base_mem.byte_add(index * layout.size_bytes()) };
                 store_value(&m.types, elem_dst_ptr, elem_value);
             }

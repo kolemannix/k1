@@ -66,6 +66,10 @@ macro_rules! nz_u32_id {
         }
 
         impl $name {
+            pub const fn as_u32(self) -> u32 {
+                self.0.get()
+            }
+
             pub const fn from_nzu32(value: NonZeroU32) -> Self {
                 $name(value)
             }
@@ -346,6 +350,12 @@ impl Layout {
 
     pub fn size_bytes(&self) -> usize {
         self.size_bits as usize / 8
+    }
+
+    pub fn array_me(&self, len: usize) -> Layout {
+        let element_size_padded = self.stride_bits();
+        let array_size_bits = element_size_padded * len;
+        Layout { size_bits: array_size_bits as u32, align_bits: self.align_bits }
     }
 }
 
