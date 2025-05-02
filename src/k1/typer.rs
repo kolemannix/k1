@@ -685,7 +685,7 @@ impl TypedBlock {}
 pub struct SpecializationParams {
     pub fn_scope_id: ScopeId,
     pub new_name: Identifier,
-    pub known_intrinsic: Option<IntrinsicFunction>,
+    pub known_intrinsic: Option<IntrinsicOperation>,
     pub generic_parent_function: FunctionId,
     pub passed_type_ids: Vec<SimpleNamedType>,
 }
@@ -736,7 +736,7 @@ pub struct TypedFunction {
     pub type_params: SmallVec<[TypeParam; 8]>,
     pub function_type_params: SmallVec<[FunctionTypeParam; 4]>,
     pub body_block: Option<TypedExprId>,
-    pub intrinsic_type: Option<IntrinsicFunction>,
+    pub intrinsic_type: Option<IntrinsicOperation>,
     pub linkage: Linkage,
     pub child_specializations: Vec<SpecializationInfo>,
     pub specialization_info: Option<SpecializationInfo>,
@@ -1183,6 +1183,35 @@ pub enum TypedIntValue {
     IWord64(i64),
 }
 
+#[macro_export]
+macro_rules! int_binop {
+    ($self:expr, $other:expr, $method:ident) => {
+        match ($self, $other) {
+            (TypedIntValue::U8(a), TypedIntValue::U8(b)) => TypedIntValue::U8(a.$method(*b)),
+            (TypedIntValue::U16(a), TypedIntValue::U16(b)) => TypedIntValue::U16(a.$method(*b)),
+            (TypedIntValue::U32(a), TypedIntValue::U32(b)) => TypedIntValue::U32(a.$method(*b)),
+            (TypedIntValue::U64(a), TypedIntValue::U64(b)) => TypedIntValue::U64(a.$method(*b)),
+            (TypedIntValue::UWord32(a), TypedIntValue::UWord32(b)) => {
+                TypedIntValue::UWord32(a.$method(*b))
+            }
+            (TypedIntValue::UWord64(a), TypedIntValue::UWord64(b)) => {
+                TypedIntValue::UWord64(a.$method(*b))
+            }
+            (TypedIntValue::I8(a), TypedIntValue::I8(b)) => TypedIntValue::I8(a.$method(*b)),
+            (TypedIntValue::I16(a), TypedIntValue::I16(b)) => TypedIntValue::I16(a.$method(*b)),
+            (TypedIntValue::I32(a), TypedIntValue::I32(b)) => TypedIntValue::I32(a.$method(*b)),
+            (TypedIntValue::I64(a), TypedIntValue::I64(b)) => TypedIntValue::I64(a.$method(*b)),
+            (TypedIntValue::IWord32(a), TypedIntValue::IWord32(b)) => {
+                TypedIntValue::IWord32(a.$method(*b))
+            }
+            (TypedIntValue::IWord64(a), TypedIntValue::IWord64(b)) => {
+                TypedIntValue::IWord64(a.$method(*b))
+            }
+            _ => panic!("mismatched int binop types"),
+        }
+    };
+}
+
 impl TypedIntValue {
     pub fn kind_str(&self) -> &'static str {
         match self {
@@ -1203,6 +1232,40 @@ impl TypedIntValue {
 
     pub fn get_type(&self) -> TypeId {
         self.get_integer_type().type_id()
+    }
+
+    pub fn bit_not(&self) -> Self {
+        use std::ops::Not;
+
+        match *self {
+            TypedIntValue::U8(x) => TypedIntValue::U8(x.not()),
+            TypedIntValue::U16(x) => TypedIntValue::U16(x.not()),
+            TypedIntValue::U32(x) => TypedIntValue::U32(x.not()),
+            TypedIntValue::U64(x) => TypedIntValue::U64(x.not()),
+            TypedIntValue::UWord32(x) => TypedIntValue::UWord32(x.not()),
+            TypedIntValue::UWord64(x) => TypedIntValue::UWord64(x.not()),
+            TypedIntValue::I8(x) => TypedIntValue::I8(x.not()),
+            TypedIntValue::I16(x) => TypedIntValue::I16(x.not()),
+            TypedIntValue::I32(x) => TypedIntValue::I32(x.not()),
+            TypedIntValue::I64(x) => TypedIntValue::I64(x.not()),
+            TypedIntValue::IWord32(x) => TypedIntValue::IWord32(x.not()),
+            TypedIntValue::IWord64(x) => TypedIntValue::IWord64(x.not()),
+        }
+    }
+
+    pub fn bit_and(&self, other: &Self) -> Self {
+        use std::ops::BitAnd;
+        int_binop!(self, other, bitand)
+    }
+
+    pub fn bit_or(&self, other: &Self) -> Self {
+        use std::ops::BitOr;
+        int_binop!(self, other, bitor)
+    }
+
+    pub fn bit_xor(&self, other: &Self) -> Self {
+        use std::ops::BitXor;
+        int_binop!(self, other, bitxor)
     }
 
     pub fn to_u64(&self) -> u64 {
@@ -1276,6 +1339,40 @@ impl TypedIntValue {
         }
     }
 
+    pub fn to_i32(&self) -> i32 {
+        match self {
+            TypedIntValue::U8(v) => *v as i32,
+            TypedIntValue::U16(v) => *v as i32,
+            TypedIntValue::U32(v) => *v as i32,
+            TypedIntValue::U64(v) => *v as i32,
+            TypedIntValue::UWord32(v) => *v as i32,
+            TypedIntValue::UWord64(v) => *v as i32,
+            TypedIntValue::I8(v) => *v as i32,
+            TypedIntValue::I16(v) => *v as i32,
+            TypedIntValue::I32(v) => *v,
+            TypedIntValue::I64(v) => *v as i32,
+            TypedIntValue::IWord32(v) => *v,
+            TypedIntValue::IWord64(v) => *v as i32,
+        }
+    }
+
+    pub fn to_i64(&self) -> i64 {
+        match self {
+            TypedIntValue::U8(v) => *v as i64,
+            TypedIntValue::U16(v) => *v as i64,
+            TypedIntValue::U32(v) => *v as i64,
+            TypedIntValue::U64(v) => *v as i64,
+            TypedIntValue::UWord32(v) => *v as i64,
+            TypedIntValue::UWord64(v) => *v as i64,
+            TypedIntValue::I8(v) => *v as i64,
+            TypedIntValue::I16(v) => *v as i64,
+            TypedIntValue::I32(v) => *v as i64,
+            TypedIntValue::I64(v) => *v,
+            TypedIntValue::IWord32(v) => *v as i64,
+            TypedIntValue::IWord64(v) => *v,
+        }
+    }
+
     pub fn get_integer_type(&self) -> IntegerType {
         match self {
             TypedIntValue::U8(_) => IntegerType::U8,
@@ -1305,6 +1402,23 @@ impl TypedIntValue {
         match self {
             TypedIntValue::U64(v) => *v,
             _ => unreachable!(),
+        }
+    }
+
+    pub fn is_signed(&self) -> bool {
+        match self {
+            TypedIntValue::I8(_)
+            | TypedIntValue::I16(_)
+            | TypedIntValue::I32(_)
+            | TypedIntValue::I64(_)
+            | TypedIntValue::IWord32(_)
+            | TypedIntValue::IWord64(_) => true,
+            TypedIntValue::U8(_)
+            | TypedIntValue::U16(_)
+            | TypedIntValue::U32(_)
+            | TypedIntValue::U64(_)
+            | TypedIntValue::UWord32(_)
+            | TypedIntValue::UWord64(_) => false,
         }
     }
 }
@@ -1911,7 +2025,16 @@ impl Namespaces {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum IntrinsicFunction {
+pub enum IntrinsicBitwiseBinopKind {
+    And,
+    Or,
+    Xor,
+    ShiftLeft,
+    ShiftRight,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum IntrinsicOperation {
     // Inline 'operations'
     SizeOf,
     SizeOfStride,
@@ -1920,11 +2043,7 @@ pub enum IntrinsicFunction {
     TypeName,
     BoolNegate,
     BitNot,
-    BitAnd,
-    BitOr,
-    BitXor,
-    BitShiftLeft,
-    BitShiftRight,
+    BitwiseBinop(IntrinsicBitwiseBinopKind),
     PointerIndex,
     CompilerSourceLocation,
     // Actual functions
@@ -1940,33 +2059,29 @@ pub enum IntrinsicFunction {
     EmitCompilerMessage,
 }
 
-impl IntrinsicFunction {
+impl IntrinsicOperation {
     pub fn is_inlined(self) -> bool {
         match self {
-            IntrinsicFunction::SizeOf => true,
-            IntrinsicFunction::SizeOfStride => true,
-            IntrinsicFunction::AlignOf => true,
-            IntrinsicFunction::TypeId => true,
-            IntrinsicFunction::TypeName => true,
-            IntrinsicFunction::BoolNegate => true,
-            IntrinsicFunction::BitNot => true,
-            IntrinsicFunction::BitAnd => true,
-            IntrinsicFunction::BitOr => true,
-            IntrinsicFunction::BitXor => true,
-            IntrinsicFunction::BitShiftLeft => true,
-            IntrinsicFunction::BitShiftRight => true,
-            IntrinsicFunction::PointerIndex => true,
-            IntrinsicFunction::CompilerSourceLocation => true,
-            IntrinsicFunction::EmitCompilerMessage => true,
+            IntrinsicOperation::SizeOf => true,
+            IntrinsicOperation::SizeOfStride => true,
+            IntrinsicOperation::AlignOf => true,
+            IntrinsicOperation::TypeId => true,
+            IntrinsicOperation::TypeName => true,
+            IntrinsicOperation::BoolNegate => true,
+            IntrinsicOperation::BitNot => true,
+            IntrinsicOperation::BitwiseBinop(_) => true,
+            IntrinsicOperation::PointerIndex => true,
+            IntrinsicOperation::CompilerSourceLocation => true,
+            IntrinsicOperation::EmitCompilerMessage => true,
             // System-level
-            IntrinsicFunction::Allocate => false,
-            IntrinsicFunction::AllocateZeroed => false,
-            IntrinsicFunction::Reallocate => false,
-            IntrinsicFunction::Free => false,
-            IntrinsicFunction::MemCopy => false,
-            IntrinsicFunction::MemSet => false,
-            IntrinsicFunction::MemEquals => false,
-            IntrinsicFunction::Exit => false,
+            IntrinsicOperation::Allocate => false,
+            IntrinsicOperation::AllocateZeroed => false,
+            IntrinsicOperation::Reallocate => false,
+            IntrinsicOperation::Free => false,
+            IntrinsicOperation::MemCopy => false,
+            IntrinsicOperation::MemSet => false,
+            IntrinsicOperation::MemEquals => false,
+            IntrinsicOperation::Exit => false,
         }
     }
 }
@@ -2916,8 +3031,7 @@ impl TypedProgram {
                 let struct_defn = struct_defn.clone();
                 let mut fields: EcoVec<StructTypeField> =
                     EcoVec::with_capacity(struct_defn.fields.len());
-                let mut layout = Layout::ZERO;
-                for (index, ast_field) in struct_defn.fields.iter().enumerate() {
+                for ast_field in struct_defn.fields.iter() {
                     let ty = self.eval_type_expr_ext(
                         ast_field.ty,
                         scope_id,
@@ -2934,17 +3048,10 @@ impl TypedProgram {
                     //         );
                     //     }
                     // }
-                    let field_layout = self.types.layouts.get(ty);
-                    let offset = match field_layout {
-                        Some(field_layout) => layout.append_to_aggregate(*field_layout),
-                        None => layout.size_bits,
-                    };
                     fields.push(StructTypeField {
                         name: ast_field.name,
                         type_id: ty,
-                        index: index as u32,
                         private: ast_field.private,
-                        offset_bits: offset,
                     })
                 }
                 let struct_defn = StructType { fields, generic_instance_info: None };
@@ -3307,9 +3414,7 @@ impl TypedProgram {
                             );
                         }
                     }
-                    let mut field = field.clone();
-                    field.index = combined_fields.len() as u32;
-                    combined_fields.push(field);
+                    combined_fields.push(field.clone());
                 }
 
                 let new_struct = Type::Struct(StructType {
@@ -3345,9 +3450,6 @@ impl TypedProgram {
                     .ok_or_else(|| errf!(ty_app.span, "Expected struct"))?;
                 let mut new_fields = struct1.fields.clone();
                 new_fields.retain(|f| !struct2.fields.iter().any(|sf| sf.name == f.name));
-                for (i, field) in new_fields.make_mut().iter_mut().enumerate() {
-                    field.index = i as u32;
-                }
                 let new_struct = StructType { fields: new_fields, generic_instance_info: None };
                 let type_id =
                     self.types.add(Type::Struct(new_struct), context.attached_type_defn_info());
@@ -3937,16 +4039,14 @@ impl TypedProgram {
                 })?;
                 let mut fields = Vec::with_capacity(struct_pattern.fields.len());
                 for (field_name, field_parsed_pattern_id) in &struct_pattern.fields {
-                    let expected_field =
-                        expected_struct.fields.iter().find(|f| f.name == *field_name).ok_or_else(
-                            || {
-                                errf!(
-                                    self.ast.get_pattern_span(*field_parsed_pattern_id),
-                                    "Impossible pattern: Struct has no field named '{}'",
-                                    self.name_of(*field_name).blue()
-                                )
-                            },
-                        )?;
+                    let (expected_field_index, expected_field) =
+                        expected_struct.find_field(*field_name).ok_or_else(|| {
+                            errf!(
+                                self.ast.get_pattern_span(*field_parsed_pattern_id),
+                                "Impossible pattern: Struct has no field named '{}'",
+                                self.name_of(*field_name).blue()
+                            )
+                        })?;
                     let field_type_id = expected_field.type_id;
                     let field_pattern = self.compile_pattern(
                         *field_parsed_pattern_id,
@@ -3957,7 +4057,7 @@ impl TypedProgram {
                     fields.push(TypedStructPatternField {
                         name: *field_name,
                         pattern: field_pattern,
-                        field_index: expected_field.index,
+                        field_index: expected_field_index as u32,
                         field_type_id: expected_field.type_id,
                     });
                 }
@@ -4049,7 +4149,7 @@ impl TypedProgram {
         }
     }
 
-    fn check_types(
+    pub fn check_types(
         &self,
         expected: TypeId,
         actual: TypeId,
@@ -5997,8 +6097,7 @@ impl TypedProgram {
             self.ice_with_span("expected struct", self.ast.get_expr_span(expr_id))
         };
         let ast_struct = parsed_struct.clone();
-        let mut struct_layout = Layout::ZERO;
-        for (index, ast_field) in ast_struct.fields.iter().enumerate() {
+        for ast_field in ast_struct.fields.iter() {
             let parsed_expr = match ast_field.expr.as_ref() {
                 None => self.ast.exprs.add_expression(ParsedExpression::Variable(
                     parse::ParsedVariable {
@@ -6009,21 +6108,10 @@ impl TypedProgram {
             };
             let expr = self.eval_expr(parsed_expr, ctx.with_expected_type(None))?;
             let expr_type = self.exprs.get(expr).get_type();
-            let field_layout = self.types.layouts.get(expr_type);
-            let offset = match field_layout {
-                Some(field_layout) => struct_layout.append_to_aggregate(*field_layout),
-                None => {
-                    self.write_location(&mut stderr(), ast_struct.span);
-                    eprintln!("nocommit unsized field: {}", self.expr_to_string_with_type(expr));
-                    0
-                }
-            };
             field_defns.push(StructTypeField {
                 name: ast_field.name,
                 type_id: expr_type,
-                index: index as u32,
                 private: false,
-                offset_bits: offset,
             });
             field_values.push(StructField { name: ast_field.name, expr });
         }
@@ -6116,11 +6204,11 @@ impl TypedProgram {
                     self.name_of(passed_field.name)
                 );
             }
-            self.write_location(&mut stderr(), ast_struct.span);
-            eprintln!("nocommit unsized field: {}", self.expr_to_string_with_type(expr));
-            0;
-            GOTCHABITCH
-            field_types.push(StructTypeField { type_id: expr_type, ..*expected_field });
+            field_types.push(StructTypeField {
+                name: expected_field.name,
+                type_id: expr_type,
+                private: expected_field.private,
+            });
             field_values.push(StructField { name: expected_field.name, expr });
         }
 
@@ -6535,10 +6623,9 @@ impl TypedProgram {
             let env_struct_reference_type = module.types.add_reference_type(env_struct_type);
             // Note: Can't capture 2 variables of the same name in a lambda. Might not
             //       actually be a problem
-            let (_field_index, env_struct_field) =
+            let (field_index, env_struct_field) =
                 module.types.get(env_struct_type).expect_struct().find_field(v.name).unwrap();
             let field_name = env_struct_field.name;
-            let field_index = env_struct_field.index;
             let env_variable_expr = module.exprs.add(TypedExpr::Variable(VariableExpr {
                 variable_id: environment_param_variable_id,
                 type_id: env_struct_reference_type,
@@ -6547,7 +6634,7 @@ impl TypedProgram {
             let env_field_access = TypedExpr::StructFieldAccess(FieldAccess {
                 base: module.synth_dereference(env_variable_expr),
                 target_field: field_name,
-                field_index,
+                field_index: field_index as u32,
                 result_type: variable_type,
                 struct_type: env_struct_type,
                 is_referencing: false,
@@ -6671,24 +6758,12 @@ impl TypedProgram {
         };
 
         let lambda_info = self.scopes.get_lambda_info(lambda_scope_id);
-        let mut layout = Layout::ZERO;
         let env_fields = lambda_info
             .captured_variables
             .iter()
-            .enumerate()
-            .map(|(index, captured_variable_id)| {
+            .map(|captured_variable_id| {
                 let v = self.variables.get(*captured_variable_id);
-                let offset = match self.types.layouts.get(v.type_id) {
-                    Some(l) => layout.append_to_aggregate(*l),
-                    None => layout.size_bits,
-                };
-                StructTypeField {
-                    type_id: v.type_id,
-                    name: v.name,
-                    index: index as u32,
-                    private: false,
-                    offset_bits: offset,
-                }
+                StructTypeField { type_id: v.type_id, name: v.name, private: false }
             })
             .collect();
         let env_field_exprs = lambda_info
@@ -7351,17 +7426,22 @@ impl TypedProgram {
                 ),
             },
             Type::Float(from_float_type) => match self.types.get(target_type) {
-                Type::Float(to_float_type) => {
-                    let cast_type = match from_float_type.size.cmp(&to_float_type.size) {
-                        Ordering::Less => CastType::FloatTruncate,
-                        Ordering::Greater => CastType::FloatExtend,
-                        Ordering::Equal => CastType::FloatExtend,
-                    };
-                    Ok(cast_type)
-                }
-                // We're just going to allow these casts and make it UB if it doesn't fit, the LLVM
-                // default. If I find a saturating version in LLVM I'll use that instead
-                Type::Integer(_to_int_type) => Ok(CastType::FloatToInteger),
+                Type::Float(to_float_type) => match from_float_type.size.cmp(&to_float_type.size) {
+                    Ordering::Less => Ok(CastType::FloatExtend),
+                    Ordering::Greater => Ok(CastType::FloatTruncate),
+                    Ordering::Equal => failf!(cast.span, "Useless float cast"),
+                },
+                Type::Integer(to_int_type) => match to_int_type {
+                    IntegerType::U32 => Ok(CastType::FloatToInteger),
+                    IntegerType::U64 => Ok(CastType::FloatToInteger),
+                    IntegerType::I32 => Ok(CastType::FloatToInteger),
+                    IntegerType::I64 => Ok(CastType::FloatToInteger),
+                    _ => failf!(
+                        cast.span,
+                        "Cannot cast float to integer '{}'",
+                        self.type_id_to_string(target_type).blue()
+                    ),
+                },
                 _ => failf!(
                     cast.span,
                     "Cannot cast float to '{}'",
@@ -9535,7 +9615,7 @@ impl TypedProgram {
             call.callee.maybe_function_id().and_then(|id| self.get_function(id).intrinsic_type)
         {
             match intrinsic_type {
-                IntrinsicFunction::CompilerSourceLocation => {
+                IntrinsicOperation::CompilerSourceLocation => {
                     let source_location = self.synth_source_location(span);
                     Ok(source_location)
                 }
@@ -10853,7 +10933,7 @@ impl TypedProgram {
         fn_name: Identifier,
         namespace_chain: &[Identifier],
         ability_impl_info: Option<(AbilityId, TypeId)>,
-    ) -> Result<IntrinsicFunction, String> {
+    ) -> Result<IntrinsicOperation, String> {
         let fn_name_str = self.ast.idents.get_name(fn_name);
         let second = namespace_chain.get(2).map(|id| self.name_of(*id));
         let result = if let Some((ability_id, ability_impl_type_id)) = ability_impl_info {
@@ -10868,12 +10948,20 @@ impl TypedProgram {
                 //     }
                 // }
                 (BITWISE_ABILITY_ID, Type::Integer(_)) => match fn_name_str {
-                    "bitNot" => Some(IntrinsicFunction::BitNot),
-                    "bitAnd" => Some(IntrinsicFunction::BitAnd),
-                    "bitOr" => Some(IntrinsicFunction::BitOr),
-                    "xor" => Some(IntrinsicFunction::BitXor),
-                    "shiftLeft" => Some(IntrinsicFunction::BitShiftLeft),
-                    "shiftRight" => Some(IntrinsicFunction::BitShiftRight),
+                    "bitNot" => Some(IntrinsicOperation::BitNot),
+                    "bitAnd" => {
+                        Some(IntrinsicOperation::BitwiseBinop(IntrinsicBitwiseBinopKind::And))
+                    }
+                    "bitOr" => {
+                        Some(IntrinsicOperation::BitwiseBinop(IntrinsicBitwiseBinopKind::Or))
+                    }
+                    "xor" => Some(IntrinsicOperation::BitwiseBinop(IntrinsicBitwiseBinopKind::Xor)),
+                    "shiftLeft" => {
+                        Some(IntrinsicOperation::BitwiseBinop(IntrinsicBitwiseBinopKind::ShiftLeft))
+                    }
+                    "shiftRight" => Some(IntrinsicOperation::BitwiseBinop(
+                        IntrinsicBitwiseBinopKind::ShiftRight,
+                    )),
                     _ => None,
                 },
                 _ => None,
@@ -10886,53 +10974,44 @@ impl TypedProgram {
                     _ => None,
                 },
                 Some("sys") => match fn_name_str {
-                    "exit" => Some(IntrinsicFunction::Exit),
+                    "exit" => Some(IntrinsicOperation::Exit),
                     _ => None,
                 },
                 Some("mem") => match fn_name_str {
-                    "alloc" => Some(IntrinsicFunction::Allocate),
-                    "allocZeroed" => Some(IntrinsicFunction::AllocateZeroed),
-                    "realloc" => Some(IntrinsicFunction::Reallocate),
-                    "free" => Some(IntrinsicFunction::Free),
-                    "copy" => Some(IntrinsicFunction::MemCopy),
-                    "set" => Some(IntrinsicFunction::MemSet),
-                    "equals" => Some(IntrinsicFunction::MemEquals),
+                    "alloc" => Some(IntrinsicOperation::Allocate),
+                    "allocZeroed" => Some(IntrinsicOperation::AllocateZeroed),
+                    "realloc" => Some(IntrinsicOperation::Reallocate),
+                    "free" => Some(IntrinsicOperation::Free),
+                    "copy" => Some(IntrinsicOperation::MemCopy),
+                    "set" => Some(IntrinsicOperation::MemSet),
+                    "equals" => Some(IntrinsicOperation::MemEquals),
                     _ => None,
                 },
                 Some("types") => match fn_name_str {
-                    "typeId" => Some(IntrinsicFunction::TypeId),
-                    "typeName" => Some(IntrinsicFunction::TypeName),
-                    "sizeOf" => Some(IntrinsicFunction::SizeOf),
-                    "sizeOfStride" => Some(IntrinsicFunction::SizeOfStride),
-                    "alignOf" => Some(IntrinsicFunction::AlignOf),
+                    "typeId" => Some(IntrinsicOperation::TypeId),
+                    "typeName" => Some(IntrinsicOperation::TypeName),
+                    "sizeOf" => Some(IntrinsicOperation::SizeOf),
+                    "sizeOfStride" => Some(IntrinsicOperation::SizeOfStride),
+                    "alignOf" => Some(IntrinsicOperation::AlignOf),
                     _ => None,
                 },
                 Some("compiler") => match fn_name_str {
-                    "location" => Some(IntrinsicFunction::CompilerSourceLocation),
+                    "location" => Some(IntrinsicOperation::CompilerSourceLocation),
                     _ => None,
                 },
                 Some("bool") => match fn_name_str {
-                    "negated" => Some(IntrinsicFunction::BoolNegate),
+                    "negated" => Some(IntrinsicOperation::BoolNegate),
                     _ => None,
                 },
                 Some("string") => None,
                 Some("List") => None,
                 Some("char") => None,
                 Some("Pointer") => match fn_name_str {
-                    "refAtIndex" => Some(IntrinsicFunction::PointerIndex),
+                    "refAtIndex" => Some(IntrinsicOperation::PointerIndex),
                     _ => None,
                 },
                 Some("k1") => match fn_name_str {
-                    "emitCompilerMessage" => Some(IntrinsicFunction::EmitCompilerMessage),
-                    _ => None,
-                },
-                Some("Bits") => match fn_name_str {
-                    "bitNot" => Some(IntrinsicFunction::BitNot),
-                    "bitAnd" => Some(IntrinsicFunction::BitAnd),
-                    "bitOr" => Some(IntrinsicFunction::BitOr),
-                    "xor" => Some(IntrinsicFunction::BitXor),
-                    "shiftLeft" => Some(IntrinsicFunction::BitShiftLeft),
-                    "shiftRight" => Some(IntrinsicFunction::BitShiftRight),
+                    "emitCompilerMessage" => Some(IntrinsicOperation::EmitCompilerMessage),
                     _ => None,
                 },
                 Some(_) => None,

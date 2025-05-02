@@ -46,10 +46,11 @@ use crate::typer::types::{
 };
 use crate::typer::{
     AssignmentKind, BinaryOp, BinaryOpKind, Call, Callee, CastType, FunctionId,
-    IntegerCastDirection, IntrinsicFunction, Layout, LetStmt, Linkage as TyperLinkage, LoopExpr,
-    MatchingCondition, MatchingConditionInstr, StaticValue, StaticValueId, TypedBlock, TypedCast,
-    TypedExpr, TypedExprId, TypedFloatValue, TypedFunction, TypedGlobalId, TypedIntValue,
-    TypedMatchExpr, TypedProgram, TypedStmt, TypedStmtId, UnaryOpKind, VariableId, WhileLoop,
+    IntegerCastDirection, IntrinsicBitwiseBinopKind, IntrinsicOperation, Layout, LetStmt,
+    Linkage as TyperLinkage, LoopExpr, MatchingCondition, MatchingConditionInstr, StaticValue,
+    StaticValueId, TypedBlock, TypedCast, TypedExpr, TypedExprId, TypedFloatValue, TypedFunction,
+    TypedGlobalId, TypedIntValue, TypedMatchExpr, TypedProgram, TypedStmt, TypedStmtId,
+    UnaryOpKind, VariableId, WhileLoop,
 };
 use crate::SV8;
 
@@ -2928,69 +2929,64 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     fn codegen_intrinsic_inline(
         &mut self,
-        intrinsic_type: IntrinsicFunction,
+        intrinsic_type: IntrinsicOperation,
         call: &Call,
     ) -> CodegenResult<LlvmValue<'ctx>> {
         match intrinsic_type {
-            IntrinsicFunction::SizeOf
-            | IntrinsicFunction::SizeOfStride
-            | IntrinsicFunction::AlignOf => {
+            IntrinsicOperation::SizeOf
+            | IntrinsicOperation::SizeOfStride
+            | IntrinsicOperation::AlignOf => {
                 let type_param = &call.type_args[0];
                 let llvm_type = self.codegen_type(type_param.type_id)?;
                 let size = self.size_info(&llvm_type.rich_value_type().as_any_type_enum());
                 let num_bytes = match intrinsic_type {
-                    IntrinsicFunction::SizeOf => size.size_bytes(),
-                    IntrinsicFunction::SizeOfStride => size.stride_bytes(),
-                    IntrinsicFunction::AlignOf => size.align_bytes(),
+                    IntrinsicOperation::SizeOf => size.size_bytes(),
+                    IntrinsicOperation::SizeOfStride => size.stride_bytes(),
+                    IntrinsicOperation::AlignOf => size.align_bytes(),
                     _ => unreachable!(),
                 };
                 let size_value =
                     self.builtin_types.ptr_sized_int.const_int(num_bytes as u64, false);
                 Ok(size_value.as_basic_value_enum().into())
             }
-            IntrinsicFunction::BoolNegate => {
+            IntrinsicOperation::BoolNegate => {
                 let input_value = self.codegen_expr_basic_value(call.args[0])?.into_int_value();
                 let truncated = self.bool_to_i1(input_value, "");
                 let negated = self.builder.build_not(truncated, "").unwrap();
                 let promoted = self.i1_to_bool(negated, "");
                 Ok(promoted.as_basic_value_enum().into())
             }
-            IntrinsicFunction::BitNot => {
+            IntrinsicOperation::BitNot => {
                 let input_value = self.codegen_expr_basic_value(call.args[0])?.into_int_value();
                 let not_value = self.builder.build_not(input_value, "not").unwrap();
                 Ok(not_value.as_basic_value_enum().into())
             }
-            IntrinsicFunction::BitAnd
-            | IntrinsicFunction::BitXor
-            | IntrinsicFunction::BitOr
-            | IntrinsicFunction::BitShiftLeft
-            | IntrinsicFunction::BitShiftRight => {
+            IntrinsicOperation::BitwiseBinop(op_kind) => {
                 let is_operand_signed = true;
                 let sign_extend = is_operand_signed;
                 let lhs = self.codegen_expr_basic_value(call.args[0])?.into_int_value();
                 let rhs = self.codegen_expr_basic_value(call.args[1])?.into_int_value();
-                let result = match intrinsic_type {
-                    IntrinsicFunction::BitAnd => self.builder.build_and(lhs, rhs, "and"),
-                    IntrinsicFunction::BitXor => self.builder.build_xor(lhs, rhs, "xor"),
-                    IntrinsicFunction::BitOr => self.builder.build_or(lhs, rhs, "or"),
-                    IntrinsicFunction::BitShiftLeft => {
-                        self.builder.build_left_shift(lhs, rhs, "shl")
+                let result = match op_kind {
+                    IntrinsicBitwiseBinopKind::And => self.builder.build_and(lhs, rhs, ""),
+                    IntrinsicBitwiseBinopKind::Xor => self.builder.build_xor(lhs, rhs, ""),
+                    IntrinsicBitwiseBinopKind::Or => self.builder.build_or(lhs, rhs, ""),
+                    IntrinsicBitwiseBinopKind::ShiftLeft => {
+                        self.builder.build_left_shift(lhs, rhs, "")
                     }
-                    IntrinsicFunction::BitShiftRight => {
-                        self.builder.build_right_shift(lhs, rhs, sign_extend, "shr")
+                    IntrinsicBitwiseBinopKind::ShiftRight => {
+                        self.builder.build_right_shift(lhs, rhs, sign_extend, "")
                     }
-                    _ => unreachable!(),
                 };
                 let result = result.to_err(call.span)?;
                 Ok(result.as_basic_value_enum().into())
             }
-            IntrinsicFunction::TypeId => {
+            IntrinsicOperation::TypeId => {
                 let type_param = &call.type_args[0];
                 let type_id_value =
                     self.codegen_integer_value(TypedIntValue::U64(type_param.type_id.to_u64()))?;
                 Ok(type_id_value.into())
             }
-            IntrinsicFunction::TypeName => {
+            IntrinsicOperation::TypeName => {
                 let type_param = &call.type_args[0];
                 // TODO: Eventually, move this to part of typeInfo, and cache them
                 let name = self.k1.type_id_to_string(type_param.type_id);
@@ -2999,7 +2995,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.builder.build_store(name_ptr, name_struct).unwrap();
                 Ok(name_ptr.as_basic_value_enum().into())
             }
-            IntrinsicFunction::PointerIndex => {
+            IntrinsicOperation::PointerIndex => {
                 //  Reference:
                 //  intern fn refAtIndex[T](self: Pointer, index: uword): T*
                 let pointee_ty_arg = call.type_args[0];
@@ -3018,8 +3014,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 };
                 Ok(result_pointer.as_basic_value_enum().into())
             }
-            IntrinsicFunction::EmitCompilerMessage => Ok(self.builtin_types.unit_basic().into()),
-            IntrinsicFunction::CompilerSourceLocation => {
+            IntrinsicOperation::EmitCompilerMessage => Ok(self.builtin_types.unit_basic().into()),
+            IntrinsicOperation::CompilerSourceLocation => {
                 unreachable!("CompilerSourceLocation is handled in typechecking phase")
             }
             _ => panic!("Unexpected inline intrinsic {:?}", intrinsic_type),
@@ -3042,14 +3038,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     fn codegen_intrinsic_function_body(
         &mut self,
-        intrinsic_type: IntrinsicFunction,
+        intrinsic_type: IntrinsicOperation,
         function: &TypedFunction,
     ) -> CodegenResult<InstructionValue<'ctx>> {
         let function_span =
             self.k1.ast.get_function(function.parsed_id.as_function_id().unwrap()).signature_span;
         self.set_debug_location_from_span(function_span);
         let instr = match intrinsic_type {
-            IntrinsicFunction::Allocate => {
+            IntrinsicOperation::Allocate => {
                 // intern fn alloc(size: uword, align: uword): Pointer
                 let size_arg = self.load_function_argument(function, 0)?;
 
@@ -3058,7 +3054,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let result = call.try_as_basic_value().unwrap_left();
                 self.builder.build_return(Some(&result)).unwrap()
             }
-            IntrinsicFunction::AllocateZeroed => {
+            IntrinsicOperation::AllocateZeroed => {
                 // intern fn allocZeroed(size: uword, align: uword): Pointer
                 let size_arg = self.load_function_argument(function, 0)?;
                 let count_one =
@@ -3070,7 +3066,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let result = call.try_as_basic_value().unwrap_left();
                 self.builder.build_return(Some(&result)).unwrap()
             }
-            IntrinsicFunction::Reallocate => {
+            IntrinsicOperation::Reallocate => {
                 // intern fn realloc(ptr: Pointer, oldSize: uword, align: uword, newSize: uword): Pointer
                 let old_ptr_arg = self.load_function_argument(function, 0)?;
                 let new_size_arg = self.load_function_argument(function, 3)?;
@@ -3080,7 +3076,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let result = call.try_as_basic_value().unwrap_left();
                 self.builder.build_return(Some(&result)).unwrap()
             }
-            IntrinsicFunction::Free => {
+            IntrinsicOperation::Free => {
                 let old_ptr_arg = self.load_function_argument(function, 0)?;
 
                 let f = self.llvm_module.get_function("free").unwrap();
@@ -3088,7 +3084,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let result = call.try_as_basic_value().unwrap_left();
                 self.builder.build_return(Some(&result)).unwrap()
             }
-            IntrinsicFunction::MemCopy => {
+            IntrinsicOperation::MemCopy => {
                 // intern fn copy(
                 //   dst: Pointer,
                 //   src: Pointer,
@@ -3113,7 +3109,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let result = self.builtin_types.unit_basic();
                 self.builder.build_return(Some(&result)).unwrap()
             }
-            IntrinsicFunction::MemSet => {
+            IntrinsicOperation::MemSet => {
                 // intern fn set(
                 //   dst: Pointer,
                 //   value: u8,
@@ -3121,7 +3117,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 // ): unit
                 todo!()
             }
-            IntrinsicFunction::MemEquals => {
+            IntrinsicOperation::MemEquals => {
                 // intern fn equals(p1: Pointer, p2: Pointer, size: uword): bool
                 let p1_arg = self.load_function_argument(function, 0)?;
                 let p2_arg = self.load_function_argument(function, 1)?;
@@ -3137,7 +3133,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let bool_equal = self.i1_to_bool(is_zero, "");
                 self.builder.build_return(Some(&bool_equal)).unwrap()
             }
-            IntrinsicFunction::Exit => {
+            IntrinsicOperation::Exit => {
                 // intern fn exit(code: i32): never
                 let code_arg = self.load_function_argument(function, 0)?;
 

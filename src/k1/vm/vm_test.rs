@@ -3,7 +3,7 @@ mod stack_tests {
     use ecow::eco_vec;
 
     use crate::parse::Identifier;
-    use crate::typer::types::{StructType, U32_TYPE_ID, U8_TYPE_ID};
+    use crate::typer::types::{StructType, StructTypeField, U32_TYPE_ID, U8_TYPE_ID};
     use crate::typer::*;
     use crate::vm::*;
 
@@ -153,19 +153,11 @@ mod stack_tests {
         let mut stack = test_stack();
         let struct_type = types.add_anon(Type::Struct(StructType {
             fields: eco_vec![
-                StructTypeField {
-                    name: Identifier::forged(),
-                    type_id: U8_TYPE_ID,
-                    index: 0,
-                    private: false,
-                    offset_bits: 0
-                },
+                StructTypeField { name: Identifier::forged(), type_id: U8_TYPE_ID, private: false },
                 StructTypeField {
                     name: Identifier::forged(),
                     type_id: U32_TYPE_ID,
-                    index: 0,
                     private: false,
-                    offset_bits: 32
                 }
             ],
             generic_instance_info: None,
@@ -178,12 +170,12 @@ mod stack_tests {
         );
         let struct_ptr_offset = struct_ptr.addr() - stack.base_addr();
         assert_eq!(struct_ptr_offset, 4); // since this struct's alignment is 4
-        let v1_locn = gep_struct_field(&types, struct_type, struct_ptr, 0).0;
+        let v1_locn = gep_struct_field(&types, struct_type, struct_ptr, 0);
         let v1_offset = v1_locn.addr() - stack.base_addr();
         assert_eq!(v1_offset, 4);
         assert_eq!(unsafe { (v1_locn as *const u8).read() }, 42);
 
-        let v2_locn = gep_struct_field(&types, struct_type, struct_ptr, 1).0;
+        let v2_locn = gep_struct_field(&types, struct_type, struct_ptr, 1);
         let v2_offset = v2_locn.addr() - stack.base_addr();
         assert_eq!(v2_offset, 8);
         assert_eq!(unsafe { (v2_locn as *const u32).read() }, 1337);

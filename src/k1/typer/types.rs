@@ -41,9 +41,13 @@ impl Display for TypeId {
 pub struct StructTypeField {
     pub name: Identifier,
     pub type_id: TypeId,
-    pub index: u32,
     pub private: bool,
-    pub offset_bits: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct StructLayout {
+    pub layout: Layout,
+    pub field_offsets: SV8<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -1114,16 +1118,12 @@ impl Types {
             StructTypeField {
                 name: identifiers.get("fn_ptr").unwrap(),
                 type_id: fn_ptr_type,
-                index: 0,
                 private: false,
-                offset_bits: 0,
             },
             StructTypeField {
                 name: identifiers.get("env_ptr").unwrap(),
                 type_id: env_ptr_type,
-                index: 1,
                 private: false,
-                offset_bits: self.config.ptr_size_bits,
             },
         ];
         let struct_representation =
@@ -1266,6 +1266,18 @@ impl Types {
 
     pub fn word_size_bits(&self) -> u32 {
         self.config.ptr_size_bits
+    }
+
+    pub fn get_struct_layout(&self, struct_type_id: TypeId) -> StructLayout {
+        let struct_type = self.get(struct_type_id).expect_struct();
+        let mut layout = Layout::ZERO;
+        let mut field_offsets: SV8<u32> = smallvec![];
+        for field in &struct_type.fields {
+            let field_layout = self.get_layout(field.type_id).unwrap_or(Layout::ZERO);
+            let field_offset = layout.append_to_aggregate(field_layout);
+            field_offsets.push(field_offset)
+        }
+        StructLayout { layout, field_offsets }
     }
 
     pub fn compute_type_layout(&self, type_id: TypeId) -> Option<Layout> {
