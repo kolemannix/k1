@@ -156,7 +156,7 @@ fn main(): i32 {
     assertEquals(l.last(), some(9));
   };
 
-  #static crash("hehhhhhhhhhh");
+  // #static crash("hehhhhhhhhhh");
   
   // TODO: Buffer of buffers!
 
