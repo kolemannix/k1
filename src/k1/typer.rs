@@ -219,6 +219,9 @@ pub struct StaticStruct {
 pub struct StaticEnum {
     pub variant_type_id: TypeId,
     pub variant_index: u32,
+    /// Whether or not this thing is typed as the variant itself
+    /// or as its enum
+    pub typed_as_enum: bool,
     pub payload: Option<StaticValueId>,
 }
 
@@ -6788,8 +6791,6 @@ impl TypedProgram {
 
         // NO CAPTURES! Optimize to a regular function
         if lambda_info.captured_variables.is_empty() {
-            self.write_location(&mut stderr(), span);
-
             let function_type = self.types.add_anon(Type::Function(FunctionType {
                 physical_params: typed_params.into(),
                 return_type,

@@ -1,0 +1,10 @@
+fn main(): i32 {
+  let foo = { x: 1, y: some(2) };
+  require foo is { y } and y is .Some(2) and 1 == 2 else {
+    crash("bad")
+  };
+  require foo is { y } and y is .Some(3) else {
+    crash("bad")
+  };
+  0
+}
