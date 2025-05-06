@@ -43,4 +43,21 @@ fn test(): unit {
 
   assert(1 != 2);
   assert(2 == 2);
+
+  assertEquals(0.show(), "0");
+  assertEquals(1.show(), "1");
+  assertEquals(2.show(), "2");
+  assertEquals(3.show(), "3");
+  assertEquals(4.show(), "4");
+  assertEquals(5.show(), "5");
+  assertEquals(15.show(), "15");
+  assertEquals(16.show(), "16");
+  assertEquals(99.show(), "99");
+  assertEquals(101.show(), "101");
+  assertEquals(-101.show(), "-101");
+  assertEquals(-99.show(), "-99");
+  assertEquals(-11.show(), "-11");
+
+  ()
+
 }

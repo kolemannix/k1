@@ -35,7 +35,7 @@ use crate::parse::{
     ParsedWhileExpr, Sources, StringId, StructValueField,
 };
 use crate::parse::{
-    Identifier, Literal, ParsedBlock, ParsedCall, ParsedExpression, ParsedProgram, ParsedStmt,
+    Identifier, Literal, ParsedBlock, ParsedCall, ParsedExpr, ParsedProgram, ParsedStmt,
 };
 use crate::pool::{Pool, SliceHandle};
 use crate::{impl_copy_if_small, static_assert_size, strings, SV4};
@@ -219,7 +219,7 @@ pub struct StaticStruct {
 
 #[derive(Debug, Clone)]
 pub struct StaticEnum {
-    pub type_id: TypeId,
+    pub variant_type_id: TypeId,
     pub variant_index: u32,
     pub payload: Option<StaticValueId>,
 }
@@ -280,7 +280,7 @@ impl StaticValue {
             StaticValue::String(_) => STRING_TYPE_ID,
             StaticValue::NullPointer => POINTER_TYPE_ID,
             StaticValue::Struct(s) => s.type_id,
-            StaticValue::Enum(e) => e.type_id,
+            StaticValue::Enum(e) => e.variant_type_id,
             StaticValue::Buffer(b) => b.type_id,
         }
     }
@@ -886,6 +886,7 @@ pub struct VariableExpr {
     pub type_id: TypeId,
     pub span: SpanId,
 }
+impl_copy_if_small!(12, VariableExpr);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryOpKind {
@@ -1054,7 +1055,7 @@ pub enum Callee {
     StaticFunction(FunctionId),
     StaticLambda {
         function_id: FunctionId,
-        environment_ptr: VariableId,
+        lambda_value_expr: TypedExprId,
         lambda_type_id: TypeId,
     },
     /// When we're doing generic code that is never going to physically need to exist
@@ -1067,7 +1068,9 @@ pub enum Callee {
     /// Must contain a LambdaObject
     DynamicLambda(TypedExprId),
     /// Must contain a Function reference
-    DynamicFunction(TypedExprId),
+    DynamicFunction {
+        function_reference_expr: TypedExprId,
+    },
     /// Used by function type parameters
     DynamicAbstract {
         variable_id: VariableId,
@@ -1086,7 +1089,7 @@ impl Callee {
             Callee::StaticLambda { function_id, .. } => Some(*function_id),
             Callee::StaticAbstract { .. } => None,
             Callee::DynamicLambda(_) => None,
-            Callee::DynamicFunction(_) => None,
+            Callee::DynamicFunction { .. } => None,
             Callee::DynamicAbstract { .. } => None,
         }
     }
@@ -1138,7 +1141,7 @@ impl_copy_if_small!(28, FieldAccess);
 
 #[derive(Debug, Clone)]
 pub struct TypedEnumConstructor {
-    pub type_id: TypeId,
+    pub variant_type_id: TypeId,
     pub variant_index: u32,
     pub payload: Option<TypedExprId>,
     pub span: SpanId,
@@ -1568,6 +1571,7 @@ pub enum CastType {
     Integer8ToChar,
     IntegerExtendFromChar,
     EnumToVariant,
+    VariantToEnum,
     ReferenceToReference,
     PointerToReference,
     ReferenceToPointer,
@@ -1588,6 +1592,7 @@ impl Display for CastType {
             CastType::Integer8ToChar => write!(f, "i8tochar"),
             CastType::IntegerExtendFromChar => write!(f, "iextfromchar"),
             CastType::EnumToVariant => write!(f, "enum2variant"),
+            CastType::VariantToEnum => write!(f, "variant2enum"),
             CastType::ReferenceToReference => write!(f, "reftoref"),
             CastType::PointerToReference => write!(f, "ptrtoref"),
             CastType::ReferenceToPointer => write!(f, "reftoptr"),
@@ -1743,6 +1748,12 @@ pub enum TypedExpr {
     Lambda(LambdaExpr),
     /// Calling .toDyn() on a function by name
     FunctionReference(FunctionReferenceExpr),
+    /// # Evaluation
+    /// To evaluate a FunctionToLambdaObject,
+    /// you must create an empty struct of the specified type
+    /// and then construct a lambda object struct using
+    /// - the address function pointed at by function_id as the function ptr
+    /// - the (empty) environment struct; it will not be accessed
     FunctionToLambdaObject(FunctionToLambdaObjectExpr),
     /// These get re-written into struct access expressions once we know all captures and have
     /// generated the lambda's capture struct
@@ -1775,7 +1786,7 @@ impl TypedExpr {
             TypedExpr::Match(match_) => match_.result_type,
             TypedExpr::WhileLoop(while_loop) => while_loop.type_id,
             TypedExpr::LoopExpr(loop_expr) => loop_expr.break_type,
-            TypedExpr::EnumConstructor(enum_cons) => enum_cons.type_id,
+            TypedExpr::EnumConstructor(enum_cons) => enum_cons.variant_type_id,
             TypedExpr::EnumIsVariant(_is_variant) => BOOL_TYPE_ID,
             TypedExpr::EnumGetPayload(as_variant) => as_variant.result_type_id,
             TypedExpr::EnumGetTag(get_tag) => get_tag.result_type_id,
@@ -5126,9 +5137,7 @@ impl TypedProgram {
         scope_id: ScopeId,
         is_assignment_lhs: bool,
     ) -> TyperResult<TypedExprId> {
-        let ParsedExpression::Variable(variable) = self.ast.exprs.get(variable_expr_id) else {
-            panic!()
-        };
+        let ParsedExpr::Variable(variable) = self.ast.exprs.get(variable_expr_id) else { panic!() };
         let variable_name_span = variable.name.span;
         let variable_id = self.scopes.find_variable_namespaced(
             scope_id,
@@ -5808,7 +5817,7 @@ impl TypedProgram {
         );
         let expr = self.ast.exprs.get(expr_id);
         match expr {
-            ParsedExpression::ListLiteral(list_expr) => {
+            ParsedExpr::ListLiteral(list_expr) => {
                 let expected_element_type: Option<TypeId> = match &ctx.expected_type_id {
                     Some(type_id) => match self.types.get(*type_id).as_list_instance() {
                         Some(arr) => Ok(Some(arr.element_type)),
@@ -5900,7 +5909,7 @@ impl TypedProgram {
                 self.add_expr_id_to_block(&mut list_lit_block, dereference_list_literal);
                 Ok(self.exprs.add(TypedExpr::Block(list_lit_block)))
             }
-            ParsedExpression::Struct(_ast_struct) => {
+            ParsedExpr::Struct(_ast_struct) => {
                 if let Some(expected_type) = ctx.expected_type_id {
                     if let Type::Struct(_s) = self.types.get(expected_type) {
                         self.eval_expected_struct(expr_id, ctx)
@@ -5911,11 +5920,11 @@ impl TypedProgram {
                     self.eval_anonymous_struct(expr_id, ctx)
                 }
             }
-            ParsedExpression::If(if_expr) => self.eval_if_expr(&if_expr.clone(), ctx),
-            ParsedExpression::While(while_expr) => self.eval_while_loop(&while_expr.clone(), ctx),
-            ParsedExpression::Loop(loop_expr) => self.eval_loop_expr(&loop_expr.clone(), ctx),
-            ParsedExpression::BinaryOp(_binary_op) => self.eval_binary_op(expr_id, ctx),
-            ParsedExpression::UnaryOp(op) => {
+            ParsedExpr::If(if_expr) => self.eval_if_expr(&if_expr.clone(), ctx),
+            ParsedExpr::While(while_expr) => self.eval_while_loop(&while_expr.clone(), ctx),
+            ParsedExpr::Loop(loop_expr) => self.eval_loop_expr(&loop_expr.clone(), ctx),
+            ParsedExpr::BinaryOp(_binary_op) => self.eval_binary_op(expr_id, ctx),
+            ParsedExpr::UnaryOp(op) => {
                 let op = op.clone();
                 match op.op_kind {
                     ParsedUnaryOpKind::BooleanNegation => {
@@ -5924,32 +5933,28 @@ impl TypedProgram {
                     }
                 }
             }
-            ParsedExpression::Literal(Literal::Unit(span)) => {
-                Ok(self.exprs.add(TypedExpr::Unit(*span)))
-            }
-            ParsedExpression::Literal(Literal::Char(byte, span)) => {
+            ParsedExpr::Literal(Literal::Unit(span)) => Ok(self.exprs.add(TypedExpr::Unit(*span))),
+            ParsedExpr::Literal(Literal::Char(byte, span)) => {
                 Ok(self.exprs.add(TypedExpr::Char(*byte, *span)))
             }
-            ParsedExpression::Literal(Literal::Numeric(int)) => {
+            ParsedExpr::Literal(Literal::Numeric(int)) => {
                 let numeric_expr = self.eval_numeric_value(&int.text, int.span, ctx)?;
                 Ok(self.exprs.add(numeric_expr))
             }
-            ParsedExpression::Literal(Literal::Bool(b, span)) => {
+            ParsedExpr::Literal(Literal::Bool(b, span)) => {
                 let expr = TypedExpr::Bool(*b, *span);
                 Ok(self.exprs.add(expr))
             }
-            ParsedExpression::Literal(Literal::String(s, span)) => {
+            ParsedExpr::Literal(Literal::String(s, span)) => {
                 let expr = TypedExpr::String(*s, *span);
                 Ok(self.exprs.add(expr))
             }
-            ParsedExpression::Variable(_variable) => {
-                self.eval_variable(expr_id, ctx.scope_id, false)
-            }
-            ParsedExpression::FieldAccess(field_access) => {
+            ParsedExpr::Variable(_variable) => self.eval_variable(expr_id, ctx.scope_id, false),
+            ParsedExpr::FieldAccess(field_access) => {
                 let field_access = field_access.clone();
                 self.eval_field_access(&field_access, ctx, false)
             }
-            ParsedExpression::Block(block) => {
+            ParsedExpr::Block(block) => {
                 // TODO(clone big) This clone is actually sad because Block is still big. We need to intern blocks
                 let block = block.clone();
                 let block_scope =
@@ -5963,11 +5968,9 @@ impl TypedProgram {
                 let block = self.eval_block(&block, block_ctx, needs_terminator)?;
                 Ok(self.exprs.add(TypedExpr::Block(block)))
             }
-            ParsedExpression::FnCall(fn_call) => {
-                self.eval_function_call(&fn_call.clone(), None, ctx)
-            }
-            ParsedExpression::For(for_expr) => self.eval_for_expr(&for_expr.clone(), ctx),
-            ParsedExpression::AnonEnumConstructor(anon_enum) => {
+            ParsedExpr::FnCall(fn_call) => self.eval_function_call(&fn_call.clone(), None, ctx),
+            ParsedExpr::For(for_expr) => self.eval_for_expr(&for_expr.clone(), ctx),
+            ParsedExpr::AnonEnumConstructor(anon_enum) => {
                 let span = anon_enum.span;
                 let expected_type = ctx.expected_type_id.ok_or_else(|| {
                     make_error(
@@ -6000,17 +6003,17 @@ impl TypedProgram {
                 };
                 Ok(result)
             }
-            ParsedExpression::Is(is_expr) => {
+            ParsedExpr::Is(is_expr) => {
                 let is_expr = is_expr.clone();
                 // If the 'is' is attached to an if/else, that is handled by if/else
                 // This is just the case of the detached 'is' where we want to return a boolean
                 // indicating whether or not the pattern matched only
-                let true_expression = self.ast.exprs.add_expression(
-                    parse::ParsedExpression::Literal(parse::Literal::Bool(true, is_expr.span)),
-                );
-                let false_expression = self.ast.exprs.add_expression(
-                    parse::ParsedExpression::Literal(parse::Literal::Bool(false, is_expr.span)),
-                );
+                let true_expression = self.ast.exprs.add_expression(parse::ParsedExpr::Literal(
+                    parse::Literal::Bool(true, is_expr.span),
+                ));
+                let false_expression = self.ast.exprs.add_expression(parse::ParsedExpr::Literal(
+                    parse::Literal::Bool(false, is_expr.span),
+                ));
                 let true_case = parse::ParsedMatchCase {
                     patterns: smallvec![is_expr.pattern],
                     guard_condition_expr: None,
@@ -6029,24 +6032,24 @@ impl TypedProgram {
                     span: is_expr.span,
                 };
                 let match_expr_id =
-                    self.ast.exprs.add_expression(parse::ParsedExpression::Match(as_match_expr));
+                    self.ast.exprs.add_expression(parse::ParsedExpr::Match(as_match_expr));
                 let partial_match = true;
                 // For standalone 'is', we don't allow binding to patterns since they won't work
                 let allow_bindings = false;
                 self.eval_match_expr(match_expr_id, ctx, partial_match, allow_bindings)
             }
-            ParsedExpression::Match(_match_expr) => {
+            ParsedExpr::Match(_match_expr) => {
                 let partial_match = false;
                 let allow_bindings = true;
                 self.eval_match_expr(expr_id, ctx, partial_match, allow_bindings)
             }
-            ParsedExpression::AsCast(_cast) => self.eval_cast(expr_id, ctx),
-            ParsedExpression::Lambda(_lambda) => self.eval_lambda(expr_id, ctx),
-            ParsedExpression::InterpolatedString(_is) => {
+            ParsedExpr::AsCast(_cast) => self.eval_cast(expr_id, ctx),
+            ParsedExpr::Lambda(_lambda) => self.eval_lambda(expr_id, ctx),
+            ParsedExpr::InterpolatedString(_is) => {
                 let res = self.eval_interpolated_string(expr_id, ctx)?;
                 Ok(res)
             }
-            ParsedExpression::Builtin(span) => {
+            ParsedExpr::Builtin(span) => {
                 if !ctx.is_static {
                     return failf!(*span, "All the builtins should currently be comptime");
                 }
@@ -6079,7 +6082,7 @@ impl TypedProgram {
                     s => failf!(*span, "Unknown builtin name: {s}"),
                 }
             }
-            ParsedExpression::Static(stat) => {
+            ParsedExpr::Static(stat) => {
                 let span = stat.span;
                 let base_expr = stat.base_expr;
 
@@ -6103,17 +6106,17 @@ impl TypedProgram {
     ) -> TyperResult<TypedExprId> {
         let mut field_values = Vec::new();
         let mut field_defns = EcoVec::new();
-        let ParsedExpression::Struct(parsed_struct) = self.ast.exprs.get(expr_id) else {
+        let ParsedExpr::Struct(parsed_struct) = self.ast.exprs.get(expr_id) else {
             self.ice_with_span("expected struct", self.ast.get_expr_span(expr_id))
         };
         let ast_struct = parsed_struct.clone();
         for ast_field in ast_struct.fields.iter() {
             let parsed_expr = match ast_field.expr.as_ref() {
-                None => self.ast.exprs.add_expression(ParsedExpression::Variable(
-                    parse::ParsedVariable {
+                None => {
+                    self.ast.exprs.add_expression(ParsedExpr::Variable(parse::ParsedVariable {
                         name: NamespacedIdentifier::naked(ast_field.name, ast_field.span),
-                    },
-                )),
+                    }))
+                }
                 Some(expr) => *expr,
             };
             let expr = self.eval_expr(parsed_expr, ctx.with_expected_type(None))?;
@@ -6138,7 +6141,7 @@ impl TypedProgram {
         expr_id: ParsedExprId,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
-        let ParsedExpression::Struct(parsed_struct) = self.ast.exprs.get(expr_id) else {
+        let ParsedExpr::Struct(parsed_struct) = self.ast.exprs.get(expr_id) else {
             self.ice_with_span("expected struct", self.ast.get_expr_span(expr_id))
         };
         let original_expected_struct_id = ctx.expected_type_id.unwrap();
@@ -6170,11 +6173,11 @@ impl TypedProgram {
                 );
             };
             let parsed_expr = match passed_field.expr.as_ref() {
-                None => self.ast.exprs.add_expression(ParsedExpression::Variable(
-                    parse::ParsedVariable {
+                None => {
+                    self.ast.exprs.add_expression(ParsedExpr::Variable(parse::ParsedVariable {
                         name: NamespacedIdentifier::naked(passed_field.name, passed_field.span),
-                    },
-                )),
+                    }))
+                }
                 Some(expr) => *expr,
             };
             passed_fields_aligned.push((parsed_expr, passed_field, expected_field))
@@ -6298,8 +6301,7 @@ impl TypedProgram {
         while_expr: &ParsedWhileExpr,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
-        let ParsedExpression::Block(parsed_block) = self.ast.exprs.get(while_expr.body).clone()
-        else {
+        let ParsedExpr::Block(parsed_block) = self.ast.exprs.get(while_expr.body).clone() else {
             return failf!(while_expr.span, "'while' body must be a block");
         };
 
@@ -6371,7 +6373,7 @@ impl TypedProgram {
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
         let span = self.ast.exprs.get_span(expr_id);
-        let ParsedExpression::InterpolatedString(interpolated_string) = self.ast.exprs.get(expr_id)
+        let ParsedExpr::InterpolatedString(interpolated_string) = self.ast.exprs.get(expr_id)
         else {
             panic!()
         };
@@ -6412,11 +6414,11 @@ impl TypedProgram {
                         self.exprs.add(TypedExpr::String(s, span))
                     }
                     parse::InterpolatedStringPart::Identifier(ident) => {
-                        let variable_expr_id = self.ast.exprs.add_expression(
-                            ParsedExpression::Variable(parse::ParsedVariable {
+                        let variable_expr_id = self.ast.exprs.add_expression(ParsedExpr::Variable(
+                            parse::ParsedVariable {
                                 name: NamespacedIdentifier::naked(ident, span),
-                            }),
-                        );
+                            },
+                        ));
                         self.synth_show_ident_call(variable_expr_id, block_ctx)?
                     }
                 };
@@ -6557,7 +6559,9 @@ impl TypedProgram {
             TypedExpr::Call(call) => {
                 match call.callee {
                     Callee::DynamicLambda(callee_expr) => recurse!(callee_expr),
-                    Callee::DynamicFunction(callee_expr) => recurse!(callee_expr),
+                    Callee::DynamicFunction { function_reference_expr } => {
+                        recurse!(function_reference_expr)
+                    }
                     _ => {}
                 };
                 for arg in call.args.iter() {
@@ -6739,7 +6743,7 @@ impl TypedProgram {
 
         // Coerce parsed expr to block, call eval_block with needs_terminator = true
         let ast_body_block = match self.ast.exprs.get(lambda_body) {
-            ParsedExpression::Block(b) => b.clone(),
+            ParsedExpr::Block(b) => b.clone(),
             other_expr => {
                 let block = parse::ParsedBlock {
                     span: other_expr.get_span(),
@@ -6760,14 +6764,16 @@ impl TypedProgram {
             }
         }
 
-        // Note: NEVER hardcoded stuff that would probably prefer to be some
-        // sort of principled call to 'unify_types'
         let return_type = match body.expr_type {
             NEVER_TYPE_ID => expected_return_type.unwrap_or(NEVER_TYPE_ID),
             _ => body.expr_type,
         };
 
         let lambda_info = self.scopes.get_lambda_info(lambda_scope_id);
+        if lambda_info.captured_variables.is_empty() {
+            self.write_location(&mut stderr(), span);
+            eprintln!("TODO convert this captureless lambda into a regular function")
+        }
         let env_fields = lambda_info
             .captured_variables
             .iter()
@@ -7981,7 +7987,7 @@ impl TypedProgram {
     ) -> TyperResult<()> {
         debug!("hmirec {allow_bindings}: {}", self.ast.expr_id_to_string(parsed_expr_id));
         match self.ast.exprs.get(parsed_expr_id) {
-            ParsedExpression::Is(is_expr) => {
+            ParsedExpr::Is(is_expr) => {
                 let target_expr = is_expr.target_expression;
                 let pattern = is_expr.pattern;
                 let target = self.eval_expr(target_expr, ctx)?;
@@ -8008,7 +8014,7 @@ impl TypedProgram {
 
                 Ok(())
             }
-            ParsedExpression::BinaryOp(binary_op) if binary_op.op_kind == BinaryOpKind::And => {
+            ParsedExpr::BinaryOp(binary_op) if binary_op.op_kind == BinaryOpKind::And => {
                 let rhs = binary_op.rhs;
                 // It's important that the lhs comes first
                 // because expressions to the right can see bindings from
@@ -8026,7 +8032,7 @@ impl TypedProgram {
             }
             other => {
                 let is_or_binop =
-                    matches!(other, ParsedExpression::BinaryOp(b) if b.op_kind == BinaryOpKind::Or);
+                    matches!(other, ParsedExpr::BinaryOp(b) if b.op_kind == BinaryOpKind::Or);
                 // At the top-level of the 'if', if there are any 'or's, we cannot allow patterns
                 if is_or_binop {
                     *allow_bindings = false;
@@ -8058,7 +8064,7 @@ impl TypedProgram {
                 _other => false,
             }
         }
-        let ParsedExpression::BinaryOp(binary_op) = self.ast.exprs.get(binary_op_id).clone() else {
+        let ParsedExpr::BinaryOp(binary_op) = self.ast.exprs.get(binary_op_id).clone() else {
             unreachable!()
         };
 
@@ -8262,7 +8268,7 @@ impl TypedProgram {
         lhs: TypedExprId,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
-        let ParsedExpression::BinaryOp(binary_op) = self.ast.exprs.get(binary_op_id).clone() else {
+        let ParsedExpr::BinaryOp(binary_op) = self.ast.exprs.get(binary_op_id).clone() else {
             unreachable!()
         };
 
@@ -8305,7 +8311,7 @@ impl TypedProgram {
         span: SpanId,
     ) -> TyperResult<TypedExprId> {
         let new_fn_call = match self.ast.exprs.get(rhs) {
-            ParsedExpression::Variable(var) => {
+            ParsedExpr::Variable(var) => {
                 let args = self.ast.p_call_args.add_list([ParsedCallArg::unnamed(lhs)].into_iter());
                 ParsedCall {
                     name: var.name.clone(),
@@ -8316,7 +8322,7 @@ impl TypedProgram {
                     id: ParsedExprId::PENDING,
                 }
             }
-            ParsedExpression::FnCall(fn_call) => {
+            ParsedExpr::FnCall(fn_call) => {
                 let mut args: SV8<ParsedCallArg> = SmallVec::with_capacity(fn_call.args.len() + 1);
                 args.push(ParsedCallArg::unnamed(lhs));
                 args.extend_from_slice(self.ast.p_call_args.get_list(fn_call.args));
@@ -8337,7 +8343,7 @@ impl TypedProgram {
                 )
             }
         };
-        let new_fn_call_id = self.ast.exprs.add_expression(ParsedExpression::FnCall(new_fn_call));
+        let new_fn_call_id = self.ast.exprs.add_expression(ParsedExpr::FnCall(new_fn_call));
         let new_fn_call_clone = self.ast.exprs.get(new_fn_call_id).expect_call().clone();
         self.eval_function_call(&new_fn_call_clone, None, ctx)
     }
@@ -8434,10 +8440,13 @@ impl TypedProgram {
                         match self.types.get(function_variable.type_id) {
                             Type::Lambda(lambda_type) => Ok(Either::Right(Callee::StaticLambda {
                                 function_id: lambda_type.body_function_id,
-                                // Does this need to be 'load environment struct'?
-                                // There's really only one pointer to the environment
-                                // It needs to live on the lambda's type in addition to
-                                environment_ptr: variable_id,
+                                lambda_value_expr: self.exprs.add(TypedExpr::Variable(
+                                    VariableExpr {
+                                        variable_id,
+                                        type_id: function_variable.type_id,
+                                        span: fn_call.span,
+                                    },
+                                )),
                                 lambda_type_id: function_variable.type_id,
                             })),
                             Type::LambdaObject(_lambda_object) => {
@@ -8463,13 +8472,15 @@ impl TypedProgram {
                                     .as_function()
                                     .is_some()
                                 {
-                                    Ok(Either::Right(Callee::DynamicFunction(self.exprs.add(
-                                        TypedExpr::Variable(VariableExpr {
+                                    let function_reference_expr =
+                                        self.exprs.add(TypedExpr::Variable(VariableExpr {
                                             variable_id,
                                             type_id: function_variable.type_id,
                                             span: fn_call.name.span,
-                                        }),
-                                    ))))
+                                        }));
+                                    Ok(Either::Right(Callee::DynamicFunction {
+                                        function_reference_expr,
+                                    }))
                                 } else {
                                     fn_not_found()
                                 }
@@ -8666,7 +8677,7 @@ impl TypedProgram {
                 //       clean up by making function expressions a thing of their own, typed
                 //       uniquely as the function's type, but having no physical representation;
                 //       (consider it an abstract type)
-                if let ParsedExpression::Variable(v) = self.ast.exprs.get(base_arg.value) {
+                if let ParsedExpr::Variable(v) = self.ast.exprs.get(base_arg.value) {
                     let function_name = &v.name;
                     let function_id = self.scopes.find_function_namespaced(
                         ctx.scope_id,
@@ -9095,7 +9106,7 @@ impl TypedProgram {
     ) -> TyperResult<Option<TypedExprId>> {
         let base_type_id = match base_expr {
             Some(base_expr) => {
-                let ParsedExpression::Variable(v) = self.ast.exprs.get(base_expr) else {
+                let ParsedExpr::Variable(v) = self.ast.exprs.get(base_expr) else {
                     return Ok(None);
                 };
                 let Some((base_type_in_scope, _)) = self.scopes.find_type_namespaced(
@@ -9443,7 +9454,7 @@ impl TypedProgram {
                 self.get_function(*function_id).type_id
             }
             Callee::StaticAbstract { function_type, .. } => *function_type,
-            Callee::DynamicFunction(function_reference_expr) => {
+            Callee::DynamicFunction { function_reference_expr } => {
                 let function_reference_type =
                     self.get_expr_type(*function_reference_expr).expect_reference().inner_type;
                 function_reference_type
@@ -9932,8 +9943,8 @@ impl TypedProgram {
                         unreachable!("Synthesizing calls with function type params is unsupported")
                     }
                     MaybeTypedExpr::Parsed(p) => match self.ast.exprs.get(*p) {
-                        ParsedExpression::Lambda(_lam) => {
-                            debug!("substituting type for ftp closure inference",);
+                        ParsedExpr::Lambda(_lam) => {
+                            debug!("substituting type for an ftp lambda so that it can infer");
                             let substituted_param_type = self.substitute_in_type_ext(
                                 function_type_param.type_id,
                                 &subst_pairs,
@@ -9945,6 +9956,10 @@ impl TypedProgram {
                                 ctx.with_expected_type(Some(substituted_param_type)),
                             )?;
                             let lambda_type = self.exprs.get(the_lambda).get_type();
+                            eprintln!(
+                                "Using a Lambda as an ftp: {}",
+                                self.type_id_to_string(lambda_type)
+                            );
                             PhysicalPassedFunction::Lambda(lambda_type)
                         }
                         _other => {
@@ -9953,9 +9968,13 @@ impl TypedProgram {
                             match self.types.get(type_id) {
                                 Type::Lambda(_) => PhysicalPassedFunction::Lambda(type_id),
                                 Type::LambdaObject(_) => {
+                                    debug!("Using a LambdaObject as an ftp");
                                     PhysicalPassedFunction::LambdaObject(type_id)
                                 }
-                                Type::Reference(_) => PhysicalPassedFunction::FunctionReference,
+                                Type::Reference(_) => {
+                                    debug!("Using a LambdaObject as an ftp");
+                                    PhysicalPassedFunction::FunctionReference
+                                }
                                 _ => {
                                     unreachable!("Unsupported type for abstract function parameter")
                                 }
@@ -9965,7 +9984,7 @@ impl TypedProgram {
                 };
                 let final_parameter_type = match physical_passed_function {
                     PhysicalPassedFunction::Lambda(lambda) => {
-                        // Can use as-is
+                        // Can use as-is since we rebuilt this lambda already
                         lambda
                     }
                     PhysicalPassedFunction::FunctionReference => {
@@ -10000,40 +10019,6 @@ impl TypedProgram {
         }
         Ok(function_type_args)
     }
-
-    // tl;dr: we need a type resolution phase and an actual lowering phase
-    // One major issue I'm seeing is that we're going to specialize functions on types like '?1'
-    // and '?2' all over the place. Is this necessary during inference, or can we finally do
-    // a different sort of pass just focused on learning and inferring types. We still have
-    // to resolve functions, and we still have to evaluate (untyped) blocks.
-    // For anything annotated we can skip evaluation!!!
-    //
-    // We can save the types in some tree or lookup table for the lowering pass
-    // I think we should hold off on this until we are interning expressions and blocks
-    //fn get_type_of_expr(&mut self, expr: ParsedExpressionId, scope_id: ScopeId) -> Option<TypeId> {
-    //    match self.ast.expressions.get(expr) {
-    //        ParsedExpression::BinaryOp(binary_op) => todo!(),
-    //        ParsedExpression::UnaryOp(unary_op) => todo!(),
-    //        ParsedExpression::Literal(literal) => todo!(),
-    //        ParsedExpression::InterpolatedString(parsed_interpolated_string) => todo!(),
-    //        ParsedExpression::FnCall(fn_call) => todo!(),
-    //        ParsedExpression::Variable(variable) => todo!(),
-    //        ParsedExpression::FieldAccess(field_access) => todo!(),
-    //        ParsedExpression::Block(block) => todo!(),
-    //        ParsedExpression::If(if_expr) => todo!(),
-    //        ParsedExpression::While(parsed_while_expr) => todo!(),
-    //        ParsedExpression::Loop(parsed_loop_expr) => todo!(),
-    //        ParsedExpression::Struct(_) => todo!(),
-    //        ParsedExpression::ListLiteral(list_expr) => todo!(),
-    //        ParsedExpression::For(for_expr) => todo!(),
-    //        ParsedExpression::AnonEnumConstructor(anon_enum_constructor) => todo!(),
-    //        ParsedExpression::Is(parsed_is_expression) => todo!(),
-    //        ParsedExpression::Match(parsed_match_expression) => todo!(),
-    //        ParsedExpression::AsCast(parsed_as_cast) => todo!(),
-    //        ParsedExpression::lambda(parsed_lambda) => todo!(),
-    //        ParsedExpression::Builtin(span_id) => todo!(),
-    //    }
-    //}
 
     fn add_substitution(&self, set: &mut Vec<TypeSubstitutionPair>, pair: TypeSubstitutionPair) {
         debug!(
@@ -10434,7 +10419,6 @@ impl TypedProgram {
         for (function_type_param, function_type_arg) in
             generic_function.function_type_params.iter().zip(function_type_arguments.iter())
         {
-            // What if we use substitution?
             subst_pairs.push(TypeSubstitutionPair {
                 from: function_type_param.type_id,
                 to: function_type_arg.type_id,
@@ -10805,7 +10789,7 @@ impl TypedProgram {
             ParsedStmt::Assignment(assignment) => {
                 static_assert_size!(parse::Assignment, 12);
                 let assignment = assignment.clone();
-                let ParsedExpression::Variable(_) = self.ast.exprs.get(assignment.lhs) else {
+                let ParsedExpr::Variable(_) = self.ast.exprs.get(assignment.lhs) else {
                     return failf!(
                         self.ast.exprs.get_span(assignment.lhs),
                         "Value assignment destination must be a variable"
@@ -11093,32 +11077,37 @@ impl TypedProgram {
             }
         }?;
         let never_payload = payload.is_some_and(|p| self.exprs.get(p).get_type() == NEVER_TYPE_ID);
-        let output_type = if never_payload {
-            NEVER_TYPE_ID
-        } else {
-            match ctx.expected_type_id.map(|t| self.types.get(t)) {
-                Some(Type::EnumVariant(ev)) if ev.my_type_id == variant_type_id => {
-                    debug!(
-                        "enum constructor output type is the variant type: {}",
-                        self.type_id_to_string(variant_type_id)
-                    );
-                    variant_type_id
-                }
-                _ => {
-                    debug!(
-                        "enum constructor output type is the enum_type that was passed in: {}",
-                        self.type_id_to_string(variant_type_id)
-                    );
-                    concrete_enum_type
-                }
-            }
-        };
-        Ok(self.exprs.add(TypedExpr::EnumConstructor(TypedEnumConstructor {
-            type_id: output_type,
+        let output_type = if never_payload { NEVER_TYPE_ID } else { variant_type_id };
+
+        let enum_constructor = self.exprs.add(TypedExpr::EnumConstructor(TypedEnumConstructor {
+            variant_type_id: output_type,
             variant_index,
             payload,
             span,
-        })))
+        }));
+        let casted_expr = match ctx.expected_type_id.map(|t| self.types.get(t)) {
+            Some(Type::EnumVariant(ev)) if ev.my_type_id == variant_type_id => {
+                debug!(
+                    "enum constructor output type is the variant type: {}",
+                    self.type_id_to_string(variant_type_id)
+                );
+                enum_constructor
+            }
+            _ => {
+                if never_payload {
+                    // No need to cast it anyway
+                    enum_constructor
+                } else {
+                    debug!(
+                        "casted enum constructor to its enum type: {}",
+                        self.type_id_to_string(concrete_enum_type)
+                    );
+                    self.synth_cast(enum_constructor, concrete_enum_type, CastType::VariantToEnum)
+                }
+            }
+        };
+
+        Ok(casted_expr)
     }
 
     fn check_type_constraint(
@@ -13226,6 +13215,21 @@ impl TypedProgram {
         }))
     }
 
+    fn synth_cast(
+        &mut self,
+        expr: TypedExprId,
+        target_type: TypeId,
+        cast_type: CastType,
+    ) -> TypedExprId {
+        let span = self.exprs.get(expr).get_span();
+        self.exprs.add(TypedExpr::Cast(TypedCast {
+            cast_type,
+            base_expr: expr,
+            target_type_id: target_type,
+            span,
+        }))
+    }
+
     fn synth_optional_type(&mut self, inner_type: TypeId) -> TypeId {
         self.instantiate_generic_type(OPTIONAL_TYPE_ID, smallvec![inner_type])
     }
@@ -13241,13 +13245,14 @@ impl TypedProgram {
             .variant_by_name(get_ident!(self, "Some"))
             .unwrap();
 
-        let id = self.exprs.add(TypedExpr::EnumConstructor(TypedEnumConstructor {
-            type_id: some_variant.enum_type_id,
+        let some_expr = self.exprs.add(TypedExpr::EnumConstructor(TypedEnumConstructor {
+            variant_type_id: some_variant.my_type_id,
             variant_index: some_variant.index,
             span,
             payload: Some(expr_id),
         }));
-        (id, optional_type)
+        let casted = self.synth_cast(some_expr, some_variant.enum_type_id, CastType::VariantToEnum);
+        (casted, optional_type)
     }
 
     fn synth_optional_none(&mut self, type_id: TypeId, span: SpanId) -> TypedExprId {
@@ -13258,12 +13263,14 @@ impl TypedProgram {
             .expect_enum()
             .variant_by_name(get_ident!(self, "None"))
             .unwrap();
-        self.exprs.add(TypedExpr::EnumConstructor(TypedEnumConstructor {
-            type_id: none_variant.enum_type_id,
+        let none_expr = self.exprs.add(TypedExpr::EnumConstructor(TypedEnumConstructor {
+            variant_type_id: none_variant.my_type_id,
             variant_index: none_variant.index,
             span,
             payload: None,
-        }))
+        }));
+        let casted = self.synth_cast(none_expr, none_variant.enum_type_id, CastType::VariantToEnum);
+        casted
     }
 
     fn synth_equals_binop(
@@ -13371,7 +13378,7 @@ impl TypedProgram {
             span,
         }));
         let parsed_expr =
-            self.ast.exprs.add_expression(ParsedExpression::Variable(parse::ParsedVariable {
+            self.ast.exprs.add_expression(ParsedExpr::Variable(parse::ParsedVariable {
                 name: NamespacedIdentifier::naked(name, span),
             }));
         self.scopes.add_variable(owner_scope, new_ident, variable_id);
@@ -13389,7 +13396,7 @@ impl TypedProgram {
         let type_args = self.ast.p_type_args.add_list(type_args_iter);
         let args =
             self.ast.p_call_args.add_list(args.iter().map(|id| parse::ParsedCallArg::unnamed(*id)));
-        self.ast.exprs.add_expression(ParsedExpression::FnCall(ParsedCall {
+        self.ast.exprs.add_expression(ParsedExpr::FnCall(ParsedCall {
             name,
             type_args,
             args,

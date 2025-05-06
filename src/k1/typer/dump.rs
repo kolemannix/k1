@@ -343,7 +343,7 @@ impl TypedProgram {
             }
             Type::LambdaObject(lambda_object) => {
                 writ.write_str("lambda_object(")?;
-                self.display_type_id(lambda_object.function_type, expand, writ)?;
+                self.display_type_id(lambda_object.struct_representation, expand, writ)?;
                 writ.write_str(")")?;
                 Ok(())
             }
@@ -583,8 +583,8 @@ impl TypedProgram {
                         let name = self.get_function(*generic_function_id).name;
                         self.write_ident(writ, name)?;
                     }
-                    Callee::DynamicFunction(callee_expr) => {
-                        self.display_expr_id(*callee_expr, writ, indentation)?;
+                    Callee::DynamicFunction { function_reference_expr } => {
+                        self.display_expr_id(*function_reference_expr, writ, indentation)?;
                     }
                     Callee::DynamicLambda(callee_expr) => {
                         self.display_expr_id(*callee_expr, writ, indentation)?;
@@ -651,11 +651,7 @@ impl TypedProgram {
             }
             TypedExpr::EnumConstructor(enum_constr) => {
                 writ.write_str(".")?;
-                let variant = self
-                    .types
-                    .get(enum_constr.type_id)
-                    .expect_enum()
-                    .variant_by_index(enum_constr.variant_index);
+                let variant = self.types.get(enum_constr.variant_type_id).expect_enum_variant();
                 writ.write_str(self.name_of(variant.name))?;
                 if let Some(payload) = &enum_constr.payload {
                     writ.write_str("(")?;

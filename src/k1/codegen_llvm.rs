@@ -1773,7 +1773,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 struct_value.as_basic_value_enum()
             }
             StaticValue::Enum(e) => {
-                let llvm_type = self.codegen_type(e.type_id)?.expect_enum();
+                let llvm_type = self.codegen_type(e.variant_type_id)?.expect_enum();
                 let variant = &llvm_type.variants[e.variant_index as usize];
                 let physical_struct = variant.variant_struct_type;
                 let enum_value = match e.payload {
@@ -2064,7 +2064,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             TypedExpr::Call(call) => self.codegen_function_call(call),
             TypedExpr::EnumConstructor(enum_constr) => {
-                let llvm_type = self.codegen_type(enum_constr.type_id)?;
+                let llvm_type = self.codegen_type(enum_constr.variant_type_id)?;
                 let enum_type = llvm_type.expect_enum();
 
                 let enum_variant = &enum_type.variants[enum_constr.variant_index as usize];
@@ -2270,6 +2270,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     fn codegen_cast(&mut self, cast: &TypedCast) -> CodegenResult<LlvmValue<'ctx>> {
         match cast.cast_type {
             CastType::EnumToVariant
+            | CastType::VariantToEnum
             | CastType::ReferenceToReference
             | CastType::IntegerCast(IntegerCastDirection::NoOp)
             | CastType::Integer8ToChar => {
@@ -2798,21 +2799,19 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.set_debug_location_from_span(call.span);
                 self.builder.build_call(function_value, args.make_contiguous(), "").unwrap()
             }
-            Callee::StaticLambda { function_id, environment_ptr, .. } => {
-                let lambda_env_variable = self.variable_to_value.get(environment_ptr).unwrap();
+            Callee::StaticLambda { function_id, lambda_value_expr, .. } => {
+                let lambda_env_struct = self.codegen_expr(*lambda_value_expr)?;
 
-                let env_ptr_type =
-                    self.codegen_type(self.k1.variables.get(*environment_ptr).type_id)?;
-                let lambda_env_ptr = self.load_variable_value(&env_ptr_type, *lambda_env_variable);
-
-                args.insert(env_arg_index, lambda_env_ptr.into());
+                // I think we need to turn this into a pointer to the env
+                // before calling
+                args.insert(env_arg_index, lambda_env_struct.expect_basic_value().into());
 
                 let function_value = self.codegen_function_or_get(*function_id)?;
 
                 self.set_debug_location_from_span(call.span);
                 self.builder.build_call(function_value, args.make_contiguous(), "").unwrap()
             }
-            Callee::DynamicFunction(function_reference_expr) => {
+            Callee::DynamicFunction { function_reference_expr } => {
                 let function_ptr =
                     self.codegen_expr_basic_value(*function_reference_expr)?.into_pointer_value();
 
