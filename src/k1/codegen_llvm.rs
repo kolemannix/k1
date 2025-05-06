@@ -1643,27 +1643,28 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     /// changes the type in the source lang, so corresponds to a real deref instruction. Deref
     /// should not skip pointers... otherwise what are we doing
     fn load_k1_value(
-        &self,
+        &mut self,
         llvm_type: &K1LlvmType<'ctx>,
         source: PointerValue<'ctx>,
         name: &str,
-        _make_copy: bool,
+        make_copy: bool,
     ) -> BasicValueEnum<'ctx> {
         if llvm_type.is_aggregate() {
-            // No-op; we want to interact with these types as pointers
-            debug!("smart loading noop on type {}", self.k1.type_id_to_string(llvm_type.type_id()));
-            //if make_copy {
-            //    self._alloca_copy_entire_value(
-            //        source,
-            //        llvm_type.rich_value_type(),
-            //        &format!("{name}_copy"),
-            //    )
-            //    .as_basic_value_enum()
-            //} else {
-            //    source.as_basic_value_enum()
-            //}
-            //
-            source.as_basic_value_enum()
+            if make_copy {
+                self.alloca_copy_entire_value(
+                    source,
+                    llvm_type.rich_value_type(),
+                    &format!("{name}_copy"),
+                )
+                .as_basic_value_enum()
+            } else {
+                // No-op; we want to interact with these types as pointers
+                debug!(
+                    "smart loading noop on type {}",
+                    self.k1.type_id_to_string(llvm_type.type_id())
+                );
+                source.as_basic_value_enum()
+            }
         } else {
             // Scalars must be truly loaded
             self.builder.build_load(llvm_type.rich_value_type(), source, name).unwrap()
@@ -1684,7 +1685,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         }
     }
 
-    fn _alloca_copy_entire_value(
+    fn alloca_copy_entire_value(
         &mut self,
         src: PointerValue<'ctx>,
         ty: BasicTypeEnum<'ctx>,
@@ -1713,7 +1714,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     }
 
     fn load_variable_value(
-        &self,
+        &mut self,
         k1_llvm_type: &K1LlvmType<'ctx>,
         variable_value: VariableValue<'ctx>,
     ) -> BasicValueEnum<'ctx> {
@@ -2007,8 +2008,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(struct_ptr.as_basic_value_enum().into())
             }
             TypedExpr::StructFieldAccess(field_access) => {
-                let name =
-                    &format!("struc.{}", self.k1.ast.idents.get_name(field_access.target_field));
+                let name = if cfg!(debug_assertions) {
+                    &format!("struc.{}", self.k1.ast.idents.get_name(field_access.target_field))
+                } else {
+                    ""
+                };
                 let field_index = field_access.field_index;
                 let struct_llvm_type = self.codegen_type(field_access.struct_type)?.expect_struct();
                 let struct_physical_type = struct_llvm_type.struct_type;
@@ -2024,7 +2028,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     Ok(field_pointer.as_basic_value_enum().into())
                 } else {
                     let field_type = &struct_llvm_type.fields[field_index as usize];
-                    let field_value = self.load_k1_value(field_type, field_pointer, name, false);
+                    // We copy the field whether or not the base struct is a reference, because it
+                    // could be inside a reference, we can't assume this isn't mutable memory just
+                    // because our immediate base struct isn't a reference
+                    let field_value = self.load_k1_value(field_type, field_pointer, name, true);
                     Ok(field_value.into())
                 }
             }

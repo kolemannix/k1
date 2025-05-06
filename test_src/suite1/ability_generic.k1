@@ -33,15 +33,6 @@ ns ability_generic {
         { x: newX, y: newY }
       }
   }
-  // nocommit: duplicate impls?
-  //impl[T: Add[Rhs = T, Output = T]] Add[Rhs = GenericPoint[T], Output = GenericPoint[T]] for GenericPoint[T] {
-  //  fn add(self: GenericPoint[T], other: GenericPoint[T]): GenericPoint[T] { 
-  //    let newX: T = self.x.add(other.x);
-  //    let newY: T = self.y.add(other.y);
-  //    { x: newX, y: newY }
-  //  }
-  //}
-  
   
   ability From[F] { fn from(t: F): Self }
   ability To[To] { fn to(self: Self): To }
@@ -50,9 +41,6 @@ ns ability_generic {
     fn to(self: T): string { self.show() }
   }
   
-  // nocommit There's some sort of bug with scoping because
-  // if I use T instead of To for the name in To,
-  // this impl does not compile. Does not sound fun to fix tbh
   impl[U, T: To[To = U]] From[F = T] for U {
     fn from(t: T): U { t.to() }
   }

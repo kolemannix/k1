@@ -1116,17 +1116,15 @@ impl Types {
         parsed_id: ParsedId,
     ) -> TypeId {
         let fn_ptr_type = self.add_reference_type(function_type_id);
-        let env_type = self.add_empty_struct();
-        let env_ptr_type = self.add_reference_type(env_type);
         let fields = eco_vec![
             StructTypeField {
-                name: identifiers.get("fn_ptr").unwrap(),
+                name: identifiers.builtins.fn_ptr,
                 type_id: fn_ptr_type,
                 private: false,
             },
             StructTypeField {
-                name: identifiers.get("env_ptr").unwrap(),
-                type_id: env_ptr_type,
+                name: identifiers.builtins.env_ptr,
+                type_id: POINTER_TYPE_ID,
                 private: false,
             },
         ];
