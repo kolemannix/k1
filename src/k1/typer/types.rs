@@ -352,6 +352,7 @@ pub struct LambdaType {
     // This kinda crosses the streams; its a value expression in a type, but
     // that's because a lambda's environment is basically values baked into a function
     // Its almost like a comptime-known value, aka the type 5
+    // This expression must be run from the spot the lambda is defined
     pub environment_struct: TypedExprId,
 }
 
@@ -1105,6 +1106,9 @@ impl Types {
         self.add_anon(Type::Struct(StructType { fields: eco_vec![], generic_instance_info: None }))
     }
 
+    pub const LAMBDA_OBJECT_FN_PTR_INDEX: usize = 0;
+    pub const LAMBDA_OBJECT_ENV_PTR_INDEX: usize = 1;
+
     pub fn add_lambda_object(
         &mut self,
         identifiers: &Identifiers,
@@ -1351,7 +1355,7 @@ impl Types {
         }
     }
 
-    pub fn enum_variant_payload_offset(&self, ev: &TypedEnumVariant) -> usize {
+    pub fn enum_variant_payload_offset_bytes(&self, ev: &TypedEnumVariant) -> usize {
         let mut layout = Layout::ZERO;
         layout.append_to_aggregate(self.get_layout(ev.tag_value.get_type()).unwrap());
         let payload_start_bits = layout

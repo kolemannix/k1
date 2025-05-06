@@ -163,11 +163,13 @@ mod stack_tests {
             generic_instance_info: None,
         }));
         stack.advance_cursor(1);
-        let struct_ptr = stack.push_struct_values(
-            &types,
-            struct_type,
-            &[Value::Int(TypedIntValue::U8(42)), Value::Int(TypedIntValue::U32(1337))],
-        );
+        let struct_ptr = stack
+            .push_struct_values(
+                &types,
+                struct_type,
+                &[Value::Int(TypedIntValue::U8(42)), Value::Int(TypedIntValue::U32(1337))],
+            )
+            .expect_agg();
         let struct_ptr_offset = struct_ptr.addr() - stack.base_addr();
         assert_eq!(struct_ptr_offset, 4); // since this struct's alignment is 4
         let v1_locn = gep_struct_field(&types, struct_type, struct_ptr, 0);

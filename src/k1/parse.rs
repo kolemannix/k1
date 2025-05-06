@@ -812,10 +812,9 @@ pub struct ParsedStaticExpr {
     pub span: SpanId,
 }
 
-// TODO(perf): ParsedExpression is huge; goal: 64 bytes
-static_assert_size!(ParsedExpression, 56);
+static_assert_size!(ParsedExpr, 56);
 #[derive(Debug, Clone)]
-pub enum ParsedExpression {
+pub enum ParsedExpr {
     /// ```md
     /// <lhs: expr> == <rhs: expr>
     /// ```
@@ -897,13 +896,13 @@ pub enum ParsedExpression {
     Static(ParsedStaticExpr),
 }
 
-impl ParsedExpression {
-    pub fn is_literal(e: &ParsedExpression) -> bool {
-        matches!(e, ParsedExpression::Literal(_))
+impl ParsedExpr {
+    pub fn is_literal(e: &ParsedExpr) -> bool {
+        matches!(e, ParsedExpr::Literal(_))
     }
     pub fn expect_literal(&self) -> &Literal {
         match self {
-            ParsedExpression::Literal(lit) => lit,
+            ParsedExpr::Literal(lit) => lit,
             _ => panic!("expected literal"),
         }
     }
@@ -944,21 +943,21 @@ impl ParsedExpression {
 
     pub fn expect_cast(&self) -> &ParsedAsCast {
         match self {
-            ParsedExpression::AsCast(as_cast) => as_cast,
+            ParsedExpr::AsCast(as_cast) => as_cast,
             _ => panic!("expected cast expression"),
         }
     }
 
     pub fn expect_call(&self) -> &ParsedCall {
         match self {
-            ParsedExpression::FnCall(call) => call,
+            ParsedExpr::FnCall(call) => call,
             _ => panic!("expected fn call"),
         }
     }
 
     pub fn expect_lambda(&self) -> &ParsedLambda {
         match self {
-            ParsedExpression::Lambda(c) => c,
+            ParsedExpr::Lambda(c) => c,
             _ => panic!("expected lambda"),
         }
     }
@@ -1438,7 +1437,7 @@ pub struct ParsedNamespace {
 
 pub struct ParsedExpressionPool {
     // `expressions` and `type_hints` form a Struct-of-Arrays relationship
-    expressions: Pool<ParsedExpression, ParsedExprId>,
+    expressions: Pool<ParsedExpr, ParsedExprId>,
     type_hints: Pool<Option<ParsedTypeExprId>, ParsedExprId>,
     directives: FxHashMap<ParsedExprId, Vec<ParsedDirective>>,
 }
@@ -1467,9 +1466,9 @@ impl ParsedExpressionPool {
         self.directives.get(&id).map(|v| &v[..]).unwrap_or(&[])
     }
 
-    pub fn add_expression(&mut self, mut expression: ParsedExpression) -> ParsedExprId {
+    pub fn add_expression(&mut self, mut expression: ParsedExpr) -> ParsedExprId {
         let id: ParsedExprId = self.expressions.next_id();
-        if let ParsedExpression::FnCall(call) = &mut expression {
+        if let ParsedExpr::FnCall(call) = &mut expression {
             call.id = id;
         }
         self.expressions.add(expression);
@@ -1477,7 +1476,7 @@ impl ParsedExpressionPool {
         id
     }
 
-    pub fn get(&self, id: ParsedExprId) -> &ParsedExpression {
+    pub fn get(&self, id: ParsedExprId) -> &ParsedExpr {
         self.expressions.get(id)
     }
 
@@ -2362,13 +2361,13 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         self.ast.idents.intern(tok_chars)
     }
 
-    pub fn add_expression(&mut self, expression: ParsedExpression) -> ParsedExprId {
+    pub fn add_expression(&mut self, expression: ParsedExpr) -> ParsedExprId {
         self.ast.exprs.add_expression(expression)
     }
 
     pub fn add_expression_with_directives(
         &mut self,
-        expression: ParsedExpression,
+        expression: ParsedExpr,
         directives: Vec<ParsedDirective>,
     ) -> ParsedExprId {
         let id = self.ast.exprs.add_expression(expression);
@@ -2376,7 +2375,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         id
     }
 
-    pub fn get_expression(&self, id: ParsedExprId) -> &ParsedExpression {
+    pub fn get_expression(&self, id: ParsedExprId) -> &ParsedExpr {
         self.ast.exprs.get(id)
     }
 
@@ -2394,14 +2393,14 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         match (first.kind, second.kind) {
             (K::KeywordBuiltin, _) => {
                 self.advance();
-                Ok(Some(self.add_expression(ParsedExpression::Builtin(first.span))))
+                Ok(Some(self.add_expression(ParsedExpr::Builtin(first.span))))
             }
             (K::OpenParen, K::CloseParen) => {
                 trace!("parse_literal unit");
                 self.advance();
                 self.advance();
                 let span = self.extend_token_span(first, second);
-                Ok(Some(self.add_expression(ParsedExpression::Literal(Literal::Unit(span)))))
+                Ok(Some(self.add_expression(ParsedExpr::Literal(Literal::Unit(span)))))
             }
             (K::Char, _) => {
                 trace!("parse_literal char");
@@ -2424,13 +2423,13 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                                 first,
                             )),
                         }?;
-                    Ok(Some(self.add_expression(ParsedExpression::Literal(literal))))
+                    Ok(Some(self.add_expression(ParsedExpr::Literal(literal))))
                 } else {
                     debug_assert_eq!(bytes.len(), 3);
                     let byte = bytes[1];
-                    Ok(Some(self.add_expression(ParsedExpression::Literal(Literal::Char(
-                        byte, first.span,
-                    )))))
+                    Ok(Some(
+                        self.add_expression(ParsedExpr::Literal(Literal::Char(byte, first.span))),
+                    ))
                 }
             }
             (K::String, _) => {
@@ -2513,12 +2512,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                         panic!()
                     };
                     let literal = Literal::String(s, first.span);
-                    Ok(Some(self.add_expression(ParsedExpression::Literal(literal))))
+                    Ok(Some(self.add_expression(ParsedExpr::Literal(literal))))
                 } else {
                     let string_interp = ParsedInterpolatedString { parts, span: first.span };
-                    Ok(Some(
-                        self.add_expression(ParsedExpression::InterpolatedString(string_interp)),
-                    ))
+                    Ok(Some(self.add_expression(ParsedExpr::InterpolatedString(string_interp))))
                 }
             }
             (K::Minus, K::Ident) if !second.is_whitespace_preceeded() => {
@@ -2530,7 +2527,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     self.advance();
                     let span = self.extend_token_span(first, second);
                     let numeric = Literal::Numeric(ParsedNumericLiteral { text: s, span });
-                    Ok(Some(self.add_expression(ParsedExpression::Literal(numeric))))
+                    Ok(Some(self.add_expression(ParsedExpr::Literal(numeric))))
                 } else {
                     Err(error_expected("number following '-'", second))
                 }
@@ -2539,25 +2536,22 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let text = self.token_chars(first);
                 if text == "true" {
                     self.advance();
-                    Ok(Some(self.add_expression(ParsedExpression::Literal(Literal::Bool(
-                        true, first.span,
-                    )))))
+                    Ok(Some(
+                        self.add_expression(ParsedExpr::Literal(Literal::Bool(true, first.span))),
+                    ))
                 } else if text == "false" {
                     self.advance();
-                    Ok(Some(self.add_expression(ParsedExpression::Literal(Literal::Bool(
-                        false, first.span,
-                    )))))
+                    Ok(Some(
+                        self.add_expression(ParsedExpr::Literal(Literal::Bool(false, first.span))),
+                    ))
                 } else {
                     match text.chars().next() {
                         Some(c) if c.is_numeric() => {
                             let s = text.to_string();
                             self.advance();
-                            Ok(Some(self.add_expression(ParsedExpression::Literal(
-                                Literal::Numeric(ParsedNumericLiteral {
-                                    text: s,
-                                    span: first.span,
-                                }),
-                            ))))
+                            Ok(Some(self.add_expression(ParsedExpr::Literal(Literal::Numeric(
+                                ParsedNumericLiteral { text: s, span: first.span },
+                            )))))
                         }
                         _ => Ok(None),
                     }
@@ -2843,7 +2837,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     self.get_expression_span(result),
                     self.ast.get_type_expr_span(type_expr_id),
                 );
-                Some(self.add_expression(ParsedExpression::AsCast(ParsedAsCast {
+                Some(self.add_expression(ParsedExpr::AsCast(ParsedAsCast {
                     base_expr: result,
                     dest_type: type_expr_id,
                     span,
@@ -2854,7 +2848,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
                 let original_span = self.get_expression_span(result);
                 let span = self.extend_to_here(original_span);
-                let is_expression_id = self.add_expression(ParsedExpression::Is(ParsedIsExpr {
+                let is_expression_id = self.add_expression(ParsedExpr::Is(ParsedIsExpr {
                     target_expression: result,
                     pattern,
                     span,
@@ -2904,7 +2898,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     );
                     let args_handle = self.ast.p_call_args.add_list(args.into_iter());
 
-                    Some(self.add_expression(ParsedExpression::FnCall(ParsedCall {
+                    Some(self.add_expression(ParsedExpr::FnCall(ParsedCall {
                         name: NamespacedIdentifier::naked(name, target.span),
                         type_args,
                         args: args_handle,
@@ -2917,7 +2911,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     let trailing_asterisk = self.maybe_consume_next_no_whitespace(K::Asterisk);
                     let target = self.intern_ident_token(target);
                     let span = self.extend_to_here(self.get_expression_span(result));
-                    Some(self.add_expression(ParsedExpression::FieldAccess(FieldAccess {
+                    Some(self.add_expression(ParsedExpr::FieldAccess(FieldAccess {
                         base: result,
                         field_name: target,
                         type_args,
@@ -2990,7 +2984,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                         panic!("expected expr on stack")
                     };
                     let span = self.extend_expr_span(lhs, rhs);
-                    let bin_op = self.add_expression(ParsedExpression::BinaryOp(BinaryOp {
+                    let bin_op = self.add_expression(ParsedExpr::BinaryOp(BinaryOp {
                         op_kind,
                         lhs,
                         rhs,
@@ -3016,7 +3010,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     panic!("expected expr")
                 };
                 let new_span = self.extend_expr_span(lhs, rhs);
-                let bin_op = self.add_expression(ParsedExpression::BinaryOp(BinaryOp {
+                let bin_op = self.add_expression(ParsedExpr::BinaryOp(BinaryOp {
                     op_kind,
                     lhs,
                     rhs,
@@ -3094,7 +3088,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             if self.peek().kind == K::CloseParen {
                 let end = self.tokens.next();
                 let span = self.extend_token_span(first, end);
-                Ok(Some(self.add_expression(ParsedExpression::Literal(Literal::Unit(span)))))
+                Ok(Some(self.add_expression(ParsedExpr::Literal(Literal::Unit(span)))))
             } else {
                 // Note: Here would be where we would support tuples
                 let expr = self.expect_expression()?;
@@ -3105,12 +3099,12 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             Ok(Some(self.expect_lambda()?))
         } else if first.kind == K::KeywordWhile {
             let while_result = Parser::expect("while loop", first, self.parse_while_loop())?;
-            Ok(Some(self.add_expression(ParsedExpression::While(while_result))))
+            Ok(Some(self.add_expression(ParsedExpr::While(while_result))))
         } else if first.kind == K::KeywordLoop {
             self.advance();
             let body = self.expect_block(ParsedBlockKind::LoopBody)?;
             let span = self.extend_span(first.span, body.span);
-            Ok(Some(self.add_expression(ParsedExpression::Loop(ParsedLoopExpr { body, span }))))
+            Ok(Some(self.add_expression(ParsedExpr::Loop(ParsedLoopExpr { body, span }))))
         } else if first.kind == K::KeywordSwitch {
             let when_keyword = self.tokens.next();
             let target_expression = self.expect_expression()?;
@@ -3157,7 +3151,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             let span = self.extend_token_span(when_keyword, close);
             let match_expr =
                 ParsedMatchExpression { match_subject: target_expression, cases, span };
-            Ok(Some(self.add_expression(ParsedExpression::Match(match_expr))))
+            Ok(Some(self.add_expression(ParsedExpr::Match(match_expr))))
         } else if first.kind == K::KeywordFor {
             self.advance();
             let binding = if third.kind == K::KeywordIn {
@@ -3183,7 +3177,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             self.advance();
             let body_expr = self.expect_block(ParsedBlockKind::LoopBody)?;
             let span = self.extend_span(first.span, body_expr.span);
-            Ok(Some(self.add_expression(ParsedExpression::For(ForExpr {
+            Ok(Some(self.add_expression(ParsedExpr::For(ForExpr {
                 iterable_expr,
                 binding,
                 body_block: body_expr,
@@ -3197,11 +3191,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             self.advance();
             let expr = self.expect_expression()?;
             let span = self.extend_span(first.span, self.get_expression_span(expr));
-            Ok(Some(self.add_expression(ParsedExpression::UnaryOp(UnaryOp {
-                expr,
-                op_kind,
-                span,
-            }))))
+            Ok(Some(self.add_expression(ParsedExpr::UnaryOp(UnaryOp { expr, op_kind, span }))))
         } else if first.kind == K::Dot && second.kind == K::Ident {
             // <dot> <ident> for example .Red
             self.advance();
@@ -3218,13 +3208,13 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let payload = self.expect_expression()?;
                 let close_paren = self.expect_eat_token(K::CloseParen)?;
                 let span = self.extend_token_span(first, close_paren);
-                Ok(Some(self.add_expression(ParsedExpression::AnonEnumConstructor(
+                Ok(Some(self.add_expression(ParsedExpr::AnonEnumConstructor(
                     AnonEnumConstructor { variant_name, payload: Some(payload), span },
                 ))))
             } else {
                 // Tag Literal
                 let span = self.extend_token_span(first, second);
-                Ok(Some(self.add_expression(ParsedExpression::AnonEnumConstructor(
+                Ok(Some(self.add_expression(ParsedExpr::AnonEnumConstructor(
                     AnonEnumConstructor { variant_name, payload: None, span },
                 ))))
             }
@@ -3239,7 +3229,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let (args, args_span) = self.expect_fn_call_args()?;
                 let args_handle = self.ast.p_call_args.add_list(args.into_iter());
                 let span = self.extend_span(namespaced_ident.span, args_span);
-                Ok(Some(self.add_expression(ParsedExpression::FnCall(ParsedCall {
+                Ok(Some(self.add_expression(ParsedExpr::FnCall(ParsedCall {
                     name: namespaced_ident,
                     type_args,
                     args: args_handle,
@@ -3249,7 +3239,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 }))))
             } else {
                 // The last thing it can be is a simple variable reference expression
-                Ok(Some(self.add_expression(ParsedExpression::Variable(ParsedVariable {
+                Ok(Some(self.add_expression(ParsedExpr::Variable(ParsedVariable {
                     name: namespaced_ident,
                 }))))
             }
@@ -3258,16 +3248,16 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             // If you want an block, use a unit block { () }
             trace!("parse_expr {:?} {:?} {:?}", first, second, third);
             if let Some(struct_value) = self.parse_struct_value()? {
-                Ok(Some(self.add_expression(ParsedExpression::Struct(struct_value))))
+                Ok(Some(self.add_expression(ParsedExpr::Struct(struct_value))))
             } else {
                 match self.parse_block(ParsedBlockKind::LexicalBlock)? {
                     None => Err(error_expected("block", self.peek())),
-                    Some(block) => Ok(Some(self.add_expression(ParsedExpression::Block(block)))),
+                    Some(block) => Ok(Some(self.add_expression(ParsedExpr::Block(block)))),
                 }
             }
         } else if first.kind == K::KeywordIf {
             let if_expr = Parser::expect("If Expression", first, self.parse_if_expr())?;
-            Ok(Some(self.add_expression(ParsedExpression::If(if_expr))))
+            Ok(Some(self.add_expression(ParsedExpr::If(if_expr))))
         } else if first.kind == K::OpenBracket {
             // list
             let start = self.expect_eat_token(K::OpenBracket)?;
@@ -3280,9 +3270,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 |p| Parser::expect("expression", start, p.parse_expression()),
             )?;
             let span = self.extend_span(start.span, elements_span);
-            Ok(Some(
-                self.add_expression(ParsedExpression::ListLiteral(ListExpr { elements, span })),
-            ))
+            Ok(Some(self.add_expression(ParsedExpr::ListLiteral(ListExpr { elements, span }))))
         } else if first.kind == K::Hash {
             self.advance();
 
@@ -3291,15 +3279,17 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     self.advance();
                     let base_expr = self.expect_expression()?;
                     let span = self.get_expression_span(base_expr);
-                    Ok(Some(self.add_expression(ParsedExpression::Static(ParsedStaticExpr {
-                        base_expr,
-                        span,
-                    }))))
+                    Ok(Some(
+                        self.add_expression(ParsedExpr::Static(ParsedStaticExpr {
+                            base_expr,
+                            span,
+                        })),
+                    ))
                 }
                 K::KeywordIf => {
                     let mut if_expr = Parser::expect("If Expression", first, self.parse_if_expr())?;
                     if_expr.is_condition_compile_time = true;
-                    Ok(Some(self.add_expression(ParsedExpression::If(if_expr))))
+                    Ok(Some(self.add_expression(ParsedExpr::If(if_expr))))
                 }
                 _ => Err(error_expected("static, or if, following #", self.peek())),
             }
@@ -3357,7 +3347,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let body = self.expect_expression()?;
         let span = self.extend_span(start.span, self.get_expression_span(body));
         let lambda = ParsedLambda { arguments, return_type, body, span };
-        Ok(self.add_expression(ParsedExpression::Lambda(lambda)))
+        Ok(self.add_expression(ParsedExpr::Lambda(lambda)))
     }
 
     fn expect_fn_call_args(&mut self) -> ParseResult<(SmallVec<[ParsedCallArg; 8]>, SpanId)> {
@@ -3810,7 +3800,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let end_span = block.as_ref().map(|b| b.span).unwrap_or(params_span);
         let block = match block {
             None => None,
-            Some(block) => Some(self.add_expression(ParsedExpression::Block(block))),
+            Some(block) => Some(self.add_expression(ParsedExpr::Block(block))),
         };
         let span = self.extend_span(fn_keyword.span, end_span);
         let function_id = self.ast.add_function(ParsedFunction {
@@ -4090,20 +4080,20 @@ impl ParsedProgram {
 
     pub fn display_expr_id(&self, expr: ParsedExprId, w: &mut impl Write) -> std::fmt::Result {
         match self.exprs.get(expr) {
-            ParsedExpression::Builtin(_span) => w.write_str("builtin"),
-            ParsedExpression::BinaryOp(op) => {
+            ParsedExpr::Builtin(_span) => w.write_str("builtin"),
+            ParsedExpr::BinaryOp(op) => {
                 w.write_str("(")?;
                 self.display_expr_id(op.lhs, w)?;
                 write!(w, " {} ", op.op_kind)?;
                 self.display_expr_id(op.rhs, w)?;
                 w.write_str(")")
             }
-            ParsedExpression::UnaryOp(op) => {
+            ParsedExpr::UnaryOp(op) => {
                 write!(w, "{}", op.op_kind)?;
                 self.display_expr_id(op.expr, w)
             }
-            ParsedExpression::Literal(lit) => w.write_fmt(format_args!("{}", lit)),
-            ParsedExpression::InterpolatedString(is) => {
+            ParsedExpr::Literal(lit) => w.write_fmt(format_args!("{}", lit)),
+            ParsedExpr::InterpolatedString(is) => {
                 w.write_char('"')?;
                 for part in &is.parts {
                     match part {
@@ -4118,41 +4108,39 @@ impl ParsedProgram {
                 w.write_char('"')?;
                 Ok(())
             }
-            ParsedExpression::FnCall(call) => {
+            ParsedExpr::FnCall(call) => {
                 w.write_str(self.idents.get_name(call.name.name))?;
                 w.write_str("(...)")?;
                 Ok(())
             }
-            ParsedExpression::Variable(var) => {
+            ParsedExpr::Variable(var) => {
                 w.write_str("var#")?;
                 w.write_str(self.idents.get_name(var.name.name))?;
                 Ok(())
             }
-            ParsedExpression::FieldAccess(acc) => {
+            ParsedExpr::FieldAccess(acc) => {
                 self.display_expr_id(acc.base, w)?;
                 w.write_str(".")?;
                 w.write_str(self.idents.get_name(acc.field_name))?;
                 Ok(())
             }
-            ParsedExpression::Block(block) => w.write_fmt(format_args!("{:?}", block)),
-            ParsedExpression::If(if_expr) => w.write_fmt(format_args!("{:?}", if_expr)),
-            ParsedExpression::While(while_expr) => {
+            ParsedExpr::Block(block) => w.write_fmt(format_args!("{:?}", block)),
+            ParsedExpr::If(if_expr) => w.write_fmt(format_args!("{:?}", if_expr)),
+            ParsedExpr::While(while_expr) => {
                 w.write_str("while ")?;
                 self.display_expr_id(while_expr.cond, w)?;
                 self.display_expr_id(while_expr.body, w)?;
                 Ok(())
             }
-            ParsedExpression::Loop(loop_expr) => {
+            ParsedExpr::Loop(loop_expr) => {
                 w.write_str("loop ")?;
                 write!(w, "{:?}", loop_expr.body)?;
                 Ok(())
             }
-            ParsedExpression::Struct(struc) => w.write_fmt(format_args!("{:?}", struc)),
-            ParsedExpression::ListLiteral(list_expr) => {
-                w.write_fmt(format_args!("{:?}", list_expr))
-            }
-            ParsedExpression::For(for_expr) => w.write_fmt(format_args!("{:?}", for_expr)),
-            ParsedExpression::AnonEnumConstructor(anon_enum) => {
+            ParsedExpr::Struct(struc) => w.write_fmt(format_args!("{:?}", struc)),
+            ParsedExpr::ListLiteral(list_expr) => w.write_fmt(format_args!("{:?}", list_expr)),
+            ParsedExpr::For(for_expr) => w.write_fmt(format_args!("{:?}", for_expr)),
+            ParsedExpr::AnonEnumConstructor(anon_enum) => {
                 w.write_char('.')?;
                 w.write_str(self.idents.get_name(anon_enum.variant_name))?;
                 if let Some(payload) = anon_enum.payload.as_ref() {
@@ -4162,12 +4150,12 @@ impl ParsedProgram {
                 }
                 Ok(())
             }
-            ParsedExpression::Is(is_expr) => {
+            ParsedExpr::Is(is_expr) => {
                 self.display_expr_id(is_expr.target_expression, w)?;
                 w.write_str(" is ")?;
                 self.display_pattern_expression_id(is_expr.pattern, w)
             }
-            ParsedExpression::Match(match_expr) => {
+            ParsedExpr::Match(match_expr) => {
                 w.write_str("switch ")?;
                 self.display_expr_id(match_expr.match_subject, w)?;
                 w.write_str(" {")?;
@@ -4192,12 +4180,12 @@ impl ParsedProgram {
                 }
                 w.write_str(" }")
             }
-            ParsedExpression::AsCast(cast) => {
+            ParsedExpr::AsCast(cast) => {
                 self.display_expr_id(cast.base_expr, w)?;
                 w.write_str(" as ")?;
                 self.display_type_expr_id(cast.dest_type, w)
             }
-            ParsedExpression::Lambda(lambda) => {
+            ParsedExpr::Lambda(lambda) => {
                 w.write_char('\\')?;
                 for (index, arg) in lambda.arguments.iter().enumerate() {
                     w.write_str(self.idents.get_name(arg.binding))?;
@@ -4214,7 +4202,7 @@ impl ParsedProgram {
                 self.display_expr_id(lambda.body, w)?;
                 Ok(())
             }
-            ParsedExpression::Static(stat) => {
+            ParsedExpr::Static(stat) => {
                 w.write_str("#static ")?;
                 self.display_expr_id(stat.base_expr, w)?;
                 Ok(())

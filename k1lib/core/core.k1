@@ -212,7 +212,7 @@ fn formatUInt[W: Writer](context w: W*)(value: uword, base: uword): unit {
     let digit = u8/toAsciiDigit(value as u8);
     w.writeChar(digit);
   } else if value < (base * 2) {
-    let first: uword = (value / base) * base;
+    let first: uword = (value / base);
     let firstDigit = u8/toAsciiDigit(first as u8);
     let second: uword = value % base;
     let secondDigit = u8/toAsciiDigit(second as u8);

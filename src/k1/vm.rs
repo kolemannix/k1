@@ -26,10 +26,11 @@ use crate::{
             F32_TYPE_ID, F64_TYPE_ID, I32_TYPE_ID, I64_TYPE_ID, IWORD_TYPE_ID, POINTER_TYPE_ID,
             STRING_TYPE_ID, U32_TYPE_ID, U64_TYPE_ID, UNIT_TYPE_ID, UWORD_TYPE_ID,
         },
-        BinaryOpKind, CastType, IntrinsicOperation, Layout, MatchingCondition,
+        BinaryOpKind, CastType, FunctionId, IntrinsicOperation, Layout, MatchingCondition,
         MatchingConditionInstr, SimpleNamedType, StaticBuffer, StaticEnum, StaticStruct,
         StaticValue, StaticValueId, TypedExpr, TypedExprId, TypedFloatValue, TypedGlobalId,
-        TypedIntValue, TypedMatchExpr, TypedProgram, TypedStmtId, TyperResult, VariableId,
+        TypedIntValue, TypedMatchExpr, TypedProgram, TypedStmtId, TyperResult, VariableExpr,
+        VariableId,
     },
 };
 
@@ -168,7 +169,7 @@ impl Vm {
         let w = &mut s;
         let frame = self.stack.frames[frame_index];
         writeln!(w, "Frame:  {}", m.name_of_opt(frame.debug_name)).unwrap();
-        writeln!(w, "Base :  {:?})", frame.base_ptr).unwrap();
+        writeln!(w, "Base :  {:?}", frame.base_ptr).unwrap();
         writeln!(w, "Locals").unwrap();
         let locals = self
             .stack
@@ -220,6 +221,15 @@ pub enum VmResult {
 
 impl VmResult {
     pub const UNIT: VmResult = VmResult::Value(Value::Unit);
+
+    pub fn expect_value(&self) -> Value {
+        match self {
+            VmResult::Value(v) => *v,
+            VmResult::Break(_) => unreachable!("expect_value on break"),
+            VmResult::Return(_) => unreachable!("expect_value on return"),
+            VmResult::Exit(_) => unreachable!("expect_value on exit"),
+        }
+    }
 
     fn is_terminating(&self) -> bool {
         match self {
@@ -296,6 +306,19 @@ impl Value {
             Value::Pointer(_) => POINTER_TYPE_ID,
             Value::Reference { type_id, .. } => *type_id,
             Value::Agg { type_id, .. } => *type_id,
+        }
+    }
+
+    pub fn set_type_id(&mut self, new_type_id: TypeId) {
+        match self {
+            Value::Unit => panic!("Cannot set type_id on a scalar"),
+            Value::Bool(_) => panic!("Cannot set type_id on a scalar"),
+            Value::Char(_) => panic!("Cannot set type_id on a scalar"),
+            Value::Int(_) => panic!("Cannot set type_id on a scalar"),
+            Value::Float(_) => panic!("Cannot set type_id on a scalar"),
+            Value::Pointer(_) => panic!("Cannot set type_id on a scalar"),
+            Value::Reference { type_id, .. } => *type_id = new_type_id,
+            Value::Agg { type_id, .. } => *type_id = new_type_id,
         }
     }
 
@@ -492,8 +515,8 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                 values.push(value);
             }
 
-            let struct_base = vm.stack.push_struct_values(&m.types, s_type_id, &values);
-            Ok(Value::Agg { type_id: s_type_id, ptr: struct_base }.into())
+            let struct_value = vm.stack.push_struct_values(&m.types, s_type_id, &values);
+            Ok(struct_value.into())
         }
         TypedExpr::StructFieldAccess(field_access) => {
             let field_access = *field_access;
@@ -525,56 +548,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                 Ok(field_value.into())
             }
         }
-        TypedExpr::Variable(variable_expr) => {
-            let v_id = variable_expr.variable_id;
-            let variable = m.variables.get(v_id);
-            if let Some(global_id) = variable.global_id {
-                // Handle global
-                // Case 1: It's in the VM because someone mutated it
-                //         OR we already evaluated it during this execution
-                // Case 2: Grab it from the module
-                match vm.globals.get(&global_id) {
-                    Some(global_value) => Ok(global_value.into()),
-                    None => {
-                        let global = m.globals.get(global_id);
-                        let Some(global_value) = global.initial_value else {
-                            return failf!(
-                                variable_expr.span,
-                                "Global {} not initialized",
-                                m.name_of(variable.name)
-                            );
-                        };
-                        let vm_value = static_value_to_vm_value(
-                            vm,
-                            StackSelection::StaticSpace,
-                            m,
-                            global_value,
-                        )?;
-                        let final_value = if global.is_referencing {
-                            let ptr = vm.static_stack.push_ptr_uninit();
-                            store_value(&m.types, ptr, vm_value);
-                            Value::Reference { type_id: global.ty, ptr }
-                        } else {
-                            vm_value
-                        };
-
-                        vm.globals.insert(global_id, final_value);
-                        Ok(final_value.into())
-                    }
-                }
-            } else {
-                let Some(v) = vm.get_current_local(v_id) else {
-                    // nocommit: Fix dump
-                    //eprintln!("{}", vm.dump(m));
-                    return failf!(
-                        variable_expr.span,
-                        "Variable missing in vm: {}",
-                        m.name_of(m.variables.get(v_id).name)
-                    );
-                };
-                Ok(v.into())
-            }
-        }
+        TypedExpr::Variable(variable_expr) => execute_variable_expr(vm, m, *variable_expr),
         TypedExpr::UnaryOp(unary_op) => {
             let span = unary_op.span;
             let target_type = unary_op.type_id;
@@ -707,9 +681,8 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                 None => None,
                 Some(payload_expr) => Some(execute_expr_return_exit!(vm, m, payload_expr)?),
             };
-            let enum_ptr =
-                vm.stack.push_enum(&m.types, e.type_id, e.variant_index as usize, payload_value);
-            Ok(Value::Agg { type_id: e.type_id, ptr: enum_ptr }.into())
+            let enum_ptr = vm.stack.push_enum(&m.types, e.variant_type_id, payload_value);
+            Ok(Value::Agg { type_id: e.variant_type_id, ptr: enum_ptr }.into())
         }
         // EnumIsVariant could actually go away in favor of just an == on the getTag + a type-level
         // get tag expr on rhs
@@ -765,19 +738,19 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
             }
         }
         TypedExpr::Cast(typed_cast) => {
-            let typed_cast = typed_cast.clone();
-            let span = typed_cast.span;
-            let base_value = execute_expr_return_exit!(vm, m, typed_cast.base_expr)?;
-            match typed_cast.cast_type {
+            let cast = typed_cast.clone();
+            let span = cast.span;
+            let base_value = execute_expr_return_exit!(vm, m, cast.base_expr)?;
+            match cast.cast_type {
                 CastType::IntegerCast(_direction) => {
                     let int_to_cast = base_value.expect_int();
-                    let value = integer_cast(&m.types, int_to_cast, typed_cast.target_type_id);
+                    let value = integer_cast(&m.types, int_to_cast, cast.target_type_id);
                     Ok(Value::Int(value).into())
                 }
                 CastType::IntegerExtendFromChar => {
                     let Value::Char(c) = base_value else { unreachable!() };
                     let int_to_cast = TypedIntValue::U8(c);
-                    let value = integer_cast(&m.types, int_to_cast, typed_cast.target_type_id);
+                    let value = integer_cast(&m.types, int_to_cast, cast.target_type_id);
                     Ok(Value::Int(value).into())
                 }
                 CastType::Integer8ToChar => {
@@ -790,7 +763,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                 }
                 CastType::IntegerToFloat => {
                     let int_to_cast = base_value.expect_int();
-                    let float_value = match typed_cast.target_type_id {
+                    let float_value = match cast.target_type_id {
                         F32_TYPE_ID => {
                             if int_to_cast.is_signed() {
                                 TypedFloatValue::F32(int_to_cast.to_i32() as f32)
@@ -813,11 +786,9 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                     let u = base_value.expect_int().expect_uword();
                     Ok(Value::Pointer(u as usize).into())
                 }
-                CastType::EnumToVariant => {
+                CastType::EnumToVariant | CastType::VariantToEnum => {
                     let new_value = match base_value {
-                        Value::Agg { ptr, .. } => {
-                            Value::Agg { ptr, type_id: typed_cast.target_type_id }
-                        }
+                        Value::Agg { ptr, .. } => Value::Agg { ptr, type_id: cast.target_type_id },
                         _ => {
                             unreachable!("Malformed EnumToVariant cast: {}", m.expr_to_string(expr))
                         }
@@ -828,11 +799,8 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                     let Value::Pointer(value) = base_value else {
                         m.ice_with_span("malformed pointer-to-reference cast", span)
                     };
-                    Ok(Value::Reference {
-                        type_id: typed_cast.target_type_id,
-                        ptr: value as *const u8,
-                    }
-                    .into())
+                    Ok(Value::Reference { type_id: cast.target_type_id, ptr: value as *const u8 }
+                        .into())
                 }
                 CastType::ReferenceToPointer => {
                     let Value::Reference { ptr, .. } = base_value else {
@@ -844,11 +812,11 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                     let Value::Reference { ptr, .. } = base_value else {
                         m.ice_with_span("malformed reference-to-reference cast", span)
                     };
-                    Ok(Value::Reference { type_id: typed_cast.target_type_id, ptr }.into())
+                    Ok(Value::Reference { type_id: cast.target_type_id, ptr }.into())
                 }
                 CastType::PointerToWord => {
                     let ptr_usize = base_value.expect_ptr();
-                    let int_value = match typed_cast.target_type_id {
+                    let int_value = match cast.target_type_id {
                         UWORD_TYPE_ID => TypedIntValue::UWord64(ptr_usize as u64),
                         IWORD_TYPE_ID => TypedIntValue::IWord64(ptr_usize as i64),
                         _ => m.ice_with_span("malformed PointerToWord", span),
@@ -857,7 +825,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                 }
                 CastType::FloatExtend => {
                     let float_value = base_value.expect_float();
-                    let extended = match (float_value, typed_cast.target_type_id) {
+                    let extended = match (float_value, cast.target_type_id) {
                         (TypedFloatValue::F32(f32), F64_TYPE_ID) => {
                             TypedFloatValue::F64(f32 as f64)
                         }
@@ -867,7 +835,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                 }
                 CastType::FloatTruncate => {
                     let float_value = base_value.expect_float();
-                    let truncated = match (float_value, typed_cast.target_type_id) {
+                    let truncated = match (float_value, cast.target_type_id) {
                         (TypedFloatValue::F64(f64), F32_TYPE_ID) => {
                             TypedFloatValue::F32(f64 as f32)
                         }
@@ -877,7 +845,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                 }
                 CastType::FloatToInteger => {
                     let float_value = base_value.expect_float();
-                    let int_value = match (float_value, typed_cast.target_type_id) {
+                    let int_value = match (float_value, cast.target_type_id) {
                         (TypedFloatValue::F32(f32), U32_TYPE_ID) => TypedIntValue::U32(f32 as u32),
                         (TypedFloatValue::F32(f32), I32_TYPE_ID) => TypedIntValue::I32(f32 as i32),
                         (TypedFloatValue::F64(f64), U64_TYPE_ID) => TypedIntValue::U64(f64 as u64),
@@ -886,7 +854,45 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                     };
                     Ok(Value::Int(int_value).into())
                 }
-                CastType::LambdaToLambdaObject => todo!(),
+                CastType::LambdaToLambdaObject => {
+                    // Lambda = the struct
+                    // So we need a pointer to the struct, ideally on _our own_ stack, then
+                    // a pointer to the function, which is an encoded function id
+                    let lambda_object_type = cast.target_type_id;
+                    let lambda_type = m.get_expr_type(cast.base_expr).as_lambda().unwrap();
+                    let obj_type = m.types.get(lambda_object_type).as_lambda_object().unwrap();
+                    if cfg!(debug_assertions) {
+                        let struct_layout =
+                            m.types.get_layout(obj_type.struct_representation).unwrap();
+                        debug_assert_eq!(struct_layout.size_bytes(), 16);
+                    }
+
+                    let lambda_obj_struct_type =
+                        m.types.get(obj_type.struct_representation).expect_struct();
+                    let function_reference_type = lambda_obj_struct_type.fields
+                        [crate::typer::types::Types::LAMBDA_OBJECT_FN_PTR_INDEX]
+                        .type_id;
+                    let environment_ref_type = lambda_obj_struct_type.fields
+                        [crate::typer::types::Types::LAMBDA_OBJECT_ENV_PTR_INDEX]
+                        .type_id;
+                    let environment_struct = base_value.expect_agg();
+
+                    // We just 'cast' the environment struct's base ptr to a reference value
+                    // since structs are represented as pointers.
+                    let env_reference =
+                        Value::Reference { type_id: environment_ref_type, ptr: environment_struct };
+                    let function_ref_value = function_id_to_ref_value(
+                        lambda_type.body_function_id,
+                        function_reference_type,
+                    );
+                    let mut lambda_object = vm.stack.push_struct_values(
+                        &m.types,
+                        obj_type.struct_representation,
+                        &[function_ref_value, env_reference],
+                    );
+                    lambda_object.set_type_id(lambda_object_type);
+                    Ok(lambda_object.into())
+                }
             }
         }
         TypedExpr::Return(typed_return) => {
@@ -902,19 +908,46 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                 VmResult::Exit(code) => Ok(VmResult::Exit(code)),
             }
         }
-        TypedExpr::Lambda(_) => m.todo_with_span("vm lambda", vm.eval_span),
-        TypedExpr::FunctionReference(fun_ref) => {
-            let function_id_u32 = fun_ref.function_id.as_u32();
-            eprintln!("Im stuffing function id {function_id_u32} into a Reference value, teehee!");
-            let function_id_as_ptr = function_id_u32 as usize as *const u8;
-            let value = Value::Reference {
-                type_id: fun_ref.function_reference_type,
-                ptr: function_id_as_ptr,
-            };
-            Ok(VmResult::Value(value))
+        TypedExpr::Lambda(l) => {
+            // Lambdas are physically represented as simply their environment structs
+            // Since we know the function id from the type still
+            let lambda_type_id = l.lambda_type;
+            let lambda_type = m.types.get(lambda_type_id).as_lambda().unwrap();
+            let mut env_struct = execute_expr_return_exit!(vm, m, lambda_type.environment_struct)?;
+            env_struct.set_type_id(lambda_type_id);
+            Ok(VmResult::Value(env_struct))
         }
-        TypedExpr::FunctionToLambdaObject(_) => {
-            m.todo_with_span("function to lambda object", vm.eval_span)
+        TypedExpr::FunctionReference(fun_ref) => {
+            let function_ref_value =
+                function_id_to_ref_value(fun_ref.function_id, fun_ref.function_reference_type);
+            Ok(VmResult::Value(function_ref_value))
+        }
+        TypedExpr::FunctionToLambdaObject(f_to_lam) => {
+            let obj_type = m.types.get(f_to_lam.lambda_object_type_id).as_lambda_object().unwrap();
+            if cfg!(debug_assertions) {
+                let struct_layout = m.types.get_layout(obj_type.struct_representation).unwrap();
+                debug_assert_eq!(struct_layout.size_bytes(), 16);
+            }
+
+            let lambda_obj_struct_type =
+                m.types.get(obj_type.struct_representation).expect_struct();
+            let function_reference_type = lambda_obj_struct_type.fields
+                [crate::typer::types::Types::LAMBDA_OBJECT_FN_PTR_INDEX]
+                .type_id;
+            let environment_ref_type = lambda_obj_struct_type.fields
+                [crate::typer::types::Types::LAMBDA_OBJECT_ENV_PTR_INDEX]
+                .type_id;
+            let empty_env_ref =
+                Value::Reference { type_id: environment_ref_type, ptr: vm.stack.cursor };
+            let function_ref_value =
+                function_id_to_ref_value(f_to_lam.function_id, function_reference_type);
+            let mut lambda_object = vm.stack.push_struct_values(
+                &m.types,
+                obj_type.struct_representation,
+                &[function_ref_value, empty_env_ref],
+            );
+            lambda_object.set_type_id(f_to_lam.lambda_object_type_id);
+            Ok(lambda_object.into())
         }
         TypedExpr::PendingCapture(_) => m.ice_with_span("pending capture in vm", vm.eval_span),
         TypedExpr::StaticValue(value_id, _, _) => {
@@ -933,10 +966,11 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                 v.get_type(),
                 m.scopes.get_root_scope_id(),
             ) {
+                eprintln!("{}", vm.dump_current_frame(m));
                 return failf!(
                     vm.eval_span,
                     "vm eval type mismatch after executing '{}'\n{}",
-                    m.expr_to_string(expr),
+                    m.expr_to_string_with_type(expr),
                     msg,
                 );
             }
@@ -944,6 +978,68 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
     }
     //debug!("{}-> {:?}", " ".repeat(vm.eval_depth.load(Ordering::Relaxed) as usize), result);
     result
+}
+
+fn execute_variable_expr(
+    vm: &mut Vm,
+    m: &TypedProgram,
+    variable_expr: VariableExpr,
+) -> TyperResult<VmResult> {
+    let v_id = variable_expr.variable_id;
+    let variable = m.variables.get(v_id);
+    if let Some(global_id) = variable.global_id {
+        // Handle global
+        // Case 1: It's in the VM because someone mutated it
+        //         OR we already evaluated it during this execution
+        // Case 2: Grab it from the module
+        return match vm.globals.get(&global_id) {
+            Some(global_value) => Ok(global_value.into()),
+            None => {
+                let global = m.globals.get(global_id);
+                let Some(global_value) = global.initial_value else {
+                    return failf!(
+                        variable_expr.span,
+                        "Global {} not initialized",
+                        m.name_of(variable.name)
+                    );
+                };
+                let vm_value =
+                    static_value_to_vm_value(vm, StackSelection::StaticSpace, m, global_value)?;
+                let final_value = if global.is_referencing {
+                    let ptr = vm.static_stack.push_ptr_uninit();
+                    store_value(&m.types, ptr, vm_value);
+                    Value::Reference { type_id: global.ty, ptr }
+                } else {
+                    vm_value
+                };
+
+                vm.globals.insert(global_id, final_value);
+                Ok(final_value.into())
+            }
+        };
+    }
+
+    let Some(v) = vm.get_current_local(v_id) else {
+        // nocommit: Fix dump
+        //eprintln!("{}", vm.dump(m));
+        return failf!(
+            variable_expr.span,
+            "Variable missing in vm: {}",
+            m.name_of(m.variables.get(v_id).name)
+        );
+    };
+    Ok(v.into())
+}
+
+fn function_id_to_ref_value(function_id: FunctionId, function_reference_type_id: TypeId) -> Value {
+    let function_id_u32 = function_id.as_u32();
+    let function_id_as_ptr = function_id_u32 as usize as *const u8;
+    eprintln!(
+        "Im stuffing function id {function_id_u32} into a Reference value {:?}, teehee!",
+        function_id_as_ptr
+    );
+    let value = Value::Reference { type_id: function_reference_type_id, ptr: function_id_as_ptr };
+    value
 }
 
 pub fn static_value_to_vm_value(
@@ -969,12 +1065,12 @@ pub fn static_value_to_vm_value(
                 let value = static_value_to_vm_value(vm, dst_stack, m, *f)?;
                 values.push(value);
             }
-            let struct_ptr = vm.get_destination_stack(dst_stack).push_struct_values(
+            let struct_value = vm.get_destination_stack(dst_stack).push_struct_values(
                 &m.types,
                 static_struct.type_id,
                 &values,
             );
-            Ok(Value::Agg { type_id: static_struct.type_id, ptr: struct_ptr })
+            Ok(struct_value)
         }
         StaticValue::Enum(e) => {
             let payload_value = match e.payload {
@@ -986,11 +1082,10 @@ pub fn static_value_to_vm_value(
             };
             let enum_ptr = vm.get_destination_stack(dst_stack).push_enum(
                 &m.types,
-                e.type_id,
-                e.variant_index as usize,
+                e.variant_type_id,
                 payload_value,
             );
-            Ok(Value::Agg { type_id: e.type_id, ptr: enum_ptr })
+            Ok(Value::Agg { type_id: e.variant_type_id, ptr: enum_ptr })
         }
         StaticValue::Buffer(buf) => {
             let elements = buf.elements.clone();
@@ -1105,31 +1200,79 @@ pub fn execute_stmt(
 }
 
 fn execute_call(vm: &mut Vm, m: &mut TypedProgram, call_id: TypedExprId) -> TyperResult<VmResult> {
+    eprintln!("Executing call: {}", m.expr_to_string(call_id));
     let call = m.exprs.get(call_id).expect_call();
     let call_args = call.args.clone();
     let span = call.span;
-    let function_id = match call.callee {
-        typer::Callee::StaticFunction(function_id) => function_id,
-        typer::Callee::StaticLambda { function_id, .. } => {
-            function_id
+    let (function_id, maybe_lambda_env_ptr) = match call.callee {
+        typer::Callee::StaticFunction(function_id) => (function_id, None),
+        typer::Callee::StaticLambda {
+            function_id,
+            lambda_value_expr: environment_value,
+            lambda_type_id,
+        } => {
+            // This is the lambda's physical form, so its the environment struct
+            let lambda_value = execute_expr(vm, m, environment_value)?.expect_value();
+            // We need a pointer to the environment for dispatch, so just use the aggregate's ptr
+            let lambda_type = m.types.get(lambda_type_id).as_lambda().unwrap();
+            let env_ref_type = m.types.add_reference_type(lambda_type.env_type);
+            let lambda_env_ptr =
+                Value::Reference { type_id: env_ref_type, ptr: lambda_value.expect_agg() };
+            (function_id, Some(lambda_env_ptr))
         }
-        typer::Callee::StaticAbstract {..} => {
+        typer::Callee::StaticAbstract { .. } => {
             m.ice_with_span("Abstract call attempt in VM", span)
         }
-        typer::Callee::DynamicLambda(_) => {
-            return failf!(span, "Function pointers are not supported in static; one day I could JIT the functions and get pointers; oh my")
+        typer::Callee::DynamicLambda(lambda_object_expr) => {
+            let lambda_object_struct = execute_expr_return_exit!(vm, m, lambda_object_expr)?;
+            eprintln!("the lamobj: {}", debug_value_to_string(vm, m, lambda_object_struct));
+            let lambda_object_struct_ptr =
+                execute_expr_return_exit!(vm, m, lambda_object_expr)?.expect_agg();
+            let struct_type = m
+                .get_expr_type(lambda_object_expr)
+                .as_lambda_object()
+                .unwrap()
+                .struct_representation;
+            eprintln!("the struct type: {}", m.type_id_to_string(struct_type));
+            let function_ptr = load_struct_field(
+                vm,
+                m,
+                struct_type,
+                lambda_object_struct_ptr,
+                Types::LAMBDA_OBJECT_FN_PTR_INDEX,
+                true,
+            )?
+            .expect_ref();
+            let env_ref_value = load_struct_field(
+                vm,
+                m,
+                struct_type,
+                lambda_object_struct_ptr,
+                Types::LAMBDA_OBJECT_ENV_PTR_INDEX,
+                true,
+            )?;
+            let function_id = NonZeroU32::new(function_ptr.addr() as u32).unwrap();
+            let function_id = FunctionId::from_nzu32(function_id);
+            (function_id, Some(env_ref_value))
         }
-        typer::Callee::DynamicFunction(_) => {
-            return failf!(span, "Function pointers are not supported in static")
+        typer::Callee::DynamicFunction { function_reference_expr } => {
+            let callee_ref =
+                execute_expr_return_exit!(vm, m, function_reference_expr)?.expect_ref();
+            // We stuff function ids into the pointers for dynamic dispatch in the VM
+            let function_id = NonZeroU32::new(callee_ref.addr() as u32).unwrap();
+            let function_id = FunctionId::from_nzu32(function_id);
+            (function_id, None)
         }
-        typer::Callee::DynamicAbstract {..} => {
+        typer::Callee::DynamicAbstract { .. } => {
             m.ice_with_span("Abstract call attempt in VM", span)
         }
     };
 
     let function = m.get_function(function_id);
 
+    // nocommit: What happens if you toRef on an intrinsic that isn't a real function?
     if let Some(intrinsic_type) = function.intrinsic_type {
+        let call = m.exprs.get(call_id).expect_call();
         let type_args = call.type_args.clone();
         return execute_intrinsic(vm, m, &type_args, &call_args, call.return_type, intrinsic_type);
     };
@@ -1172,11 +1315,24 @@ fn execute_call(vm: &mut Vm, m: &mut TypedProgram, call_id: TypedExprId) -> Type
     // Arguments!
     let param_variables = function.param_variables.clone();
     let mut param_values: SmallVec<[(VariableId, Value); 8]> = smallvec![];
-    for (variable_id, arg) in param_variables.iter().zip(call_args.iter()) {
-        // Execute this in _caller_ frame so the data outlives the callee
-        let value = execute_expr_return_exit!(vm, m, *arg)?;
+    let is_lambda = maybe_lambda_env_ptr.is_some();
+    let arg_offset = if is_lambda { 1 } else { 0 };
+    for (index, variable_id) in param_variables.iter().enumerate() {
+        if index == 0 && is_lambda {
+            param_values.push((*variable_id, maybe_lambda_env_ptr.unwrap()));
+        } else {
+            let arg_offset = index - arg_offset;
+            let arg = call_args[arg_offset];
+            // Execute this in _caller_ frame so the data outlives the callee
+            let value = execute_expr_return_exit!(vm, m, arg)?;
+            eprintln!(
+                "argument {}: {}",
+                m.name_of(m.variables.get(*variable_id).name),
+                debug_value_to_string(vm, m, value)
+            );
 
-        param_values.push((*variable_id, value));
+            param_values.push((*variable_id, value));
+        }
     }
 
     // But bind the variables in the _callee_ frame
@@ -1525,7 +1681,7 @@ pub fn load_value(
         return failf!(span, "Attempt to dereference likely value pointer {}", ptr.addr());
     }
     let Some(layout) = m.types.get_layout(type_id) else {
-        m.ice_with_span("Cannot dereference a type with no known layout", span)
+        return failf!(span, "Cannot load a type with no known layout");
     };
     debug!("load of '{}' from {:?} {:?}", m.type_id_to_string(type_id), ptr, layout);
     match m.types.get(type_id) {
@@ -1599,15 +1755,15 @@ pub fn load_value(
             }
         }
         Type::Lambda(_) => m.todo_with_span("just a struct load of the env", vm.eval_span),
-        Type::LambdaObject(_) => m.todo_with_span("struct of the lambda obj", vm.eval_span),
+        Type::LambdaObject(lam_obj_type) => here,
         //
-        Type::Never => unreachable!("Not a value type"),
-        Type::Function(_) => unreachable!("Not a value type"),
-        Type::Generic(_) => unreachable!("Not a value type"),
-        Type::TypeParameter(_) => unreachable!("Not a value type"),
-        Type::FunctionTypeParameter(_) => unreachable!("Not a value type"),
-        Type::InferenceHole(_) => unreachable!("Not a value type"),
-        Type::RecursiveReference(_) => unreachable!("Not a value type"),
+        Type::Never
+        | Type::Function(_)
+        | Type::Generic(_)
+        | Type::TypeParameter(_)
+        | Type::FunctionTypeParameter(_)
+        | Type::InferenceHole(_)
+        | Type::RecursiveReference(_) => unreachable!("Not a value type"),
     }
 }
 
@@ -1621,28 +1777,26 @@ fn aligned_to_mut(ptr: *mut u8, align_bytes: usize) -> *mut u8 {
     unsafe { ptr.byte_add(bytes_needed) }
 }
 
-fn build_enum(
+fn build_enum_at_location(
     dst: *mut u8,
     types: &Types,
-    enum_type_id: TypeId,
-    variant_index: usize,
+    variant_type_id: TypeId,
     payload_value: Option<Value>,
 ) -> (*const u8, Layout) {
-    let enum_type = types.get(enum_type_id).expect_enum();
-    let enum_layout = types.get_layout(enum_type_id).unwrap();
+    let variant_type = types.get(variant_type_id).expect_enum_variant();
+    let enum_layout = types.get_layout(variant_type_id).unwrap();
     // TODO(vm): Represent no-payload enums as
     // an int-based Value variant, not aggregates
-    if enum_type.is_no_payload() {
-        // Simple integer value
-        debug!("TODO: optimize for no payload enums")
-    }
-    let variant = &enum_type.variants[variant_index];
+    // if enum_type.is_no_payload() {
+    //     // Simple integer value
+    //     debug!("TODO: optimize for no payload enums")
+    // }
 
     let start_dst = aligned_to_mut(dst, enum_layout.align_bytes());
 
-    let _tag_written = store_value(types, start_dst, Value::Int(variant.tag_value));
+    let _tag_written = store_value(types, start_dst, Value::Int(variant_type.tag_value));
     if let Some(payload_value) = payload_value {
-        let payload_offset_bytes = types.enum_variant_payload_offset(variant);
+        let payload_offset_bytes = types.enum_variant_payload_offset_bytes(variant_type);
         let payload_base_aligned = unsafe { start_dst.byte_add(payload_offset_bytes) };
         store_value(types, payload_base_aligned, payload_value);
     }
@@ -1716,7 +1870,7 @@ pub fn gep_enum_payload(
     variant_type: &TypedEnumVariant,
     enum_ptr: *const u8,
 ) -> *const u8 {
-    let payload_offset_bytes = types.enum_variant_payload_offset(variant_type);
+    let payload_offset_bytes = types.enum_variant_payload_offset_bytes(variant_type);
 
     let payload_ptr = unsafe { enum_ptr.byte_add(payload_offset_bytes) };
     payload_ptr
@@ -1856,24 +2010,23 @@ impl Stack {
         types: &Types,
         struct_type_id: TypeId,
         members: &[Value],
-    ) -> *const u8 {
+    ) -> Value {
         let struct_layout = types.get_layout(struct_type_id).unwrap();
         let struct_base = self.push_layout_uninit(struct_layout);
         build_struct_unaligned(struct_base, types, struct_type_id, members);
         self.advance_cursor(struct_layout.size_bytes());
-        struct_base
+        Value::Agg { type_id: struct_type_id, ptr: struct_base }
     }
 
     pub fn push_enum(
         &mut self,
         types: &Types,
-        enum_type_id: TypeId,
-        variant_index: usize,
+        variant_type_id: TypeId,
         payload_value: Option<Value>,
     ) -> *const u8 {
         let dst = self.cursor_mut();
         let (enum_base, layout) =
-            build_enum(dst, types, enum_type_id, variant_index, payload_value);
+            build_enum_at_location(dst, types, variant_type_id, payload_value);
         self.advance_cursor(layout.size_bytes());
         enum_base
     }
@@ -2108,6 +2261,7 @@ pub fn vm_value_to_static_value(
                             load_value(vm, m, enum_type.tag_type, ptr, false).unwrap().expect_int();
                         let variant =
                             enum_type.variants.iter().find(|v| v.tag_value == tag).unwrap();
+                        let variant_type_id = variant.my_type_id;
                         let variant_index = variant.index;
 
                         let payload = match variant.payload {
@@ -2121,7 +2275,7 @@ pub fn vm_value_to_static_value(
                                 Some(static_value)
                             }
                         };
-                        StaticValue::Enum(StaticEnum { type_id, variant_index, payload })
+                        StaticValue::Enum(StaticEnum { variant_type_id, variant_index, payload })
                     }
                     Type::EnumVariant(_enum_variant) => {
                         todo!("enum variant vm -> static")
@@ -2174,14 +2328,12 @@ fn render_debug_value(w: &mut impl std::fmt::Write, vm: &mut Vm, m: &TypedProgra
         Value::Pointer(p) => write!(w, "{}", p).unwrap(),
         Value::Reference { type_id, ptr } => {
             let type_to_load = m.types.get_type_id_dereferenced(type_id);
-            //eprintln!(
-            //    "render debug of reference and inner type {}",
-            //    m.type_id_to_string(type_to_load)
-            //);
-            //write!(w, "{}", ptr.addr()).unwrap();
-            match load_value(vm, m, type_to_load, ptr, true) {
-                Err(e) => write!(w, "<ERROR {}>", e.message).unwrap(),
-                Ok(loaded) => render_debug_value(w, vm, m, loaded),
+            match m.types.get(type_to_load) {
+                Type::Function(_) => write!(w, "<FN PTR: {}>", ptr.addr()).unwrap(),
+                _ => match load_value(vm, m, type_to_load, ptr, true) {
+                    Err(e) => write!(w, "<ERROR {}>", e.message).unwrap(),
+                    Ok(loaded) => render_debug_value(w, vm, m, loaded),
+                },
             };
         }
         Value::Agg { type_id, ptr } => {
@@ -2234,10 +2386,16 @@ fn render_debug_value(w: &mut impl std::fmt::Write, vm: &mut Vm, m: &TypedProgra
                         }
                     }
                 },
-                _ => write!(w, "?").unwrap(),
+                _ => write!(w, "<cannot render {}", m.type_id_to_string(type_id)).unwrap(),
             };
         }
     };
+}
+
+fn debug_value_to_string(vm: &mut Vm, m: &TypedProgram, value: Value) -> String {
+    let mut w = String::new();
+    render_debug_value(&mut w, vm, m, value);
+    w
 }
 
 fn integer_cast(
