@@ -124,8 +124,6 @@ pub const TRY_ABILITY_ID: AbilityId = AbilityId(7);
 pub const ITERATOR_ABILITY_ID: AbilityId = AbilityId(8);
 pub const ITERABLE_ABILITY_ID: AbilityId = AbilityId(9);
 
-pub const LAMBDA_ENV_PARAM_NAME: &str = "__lambda_env";
-
 pub const FUNC_PARAM_IDEAL_COUNT: usize = 8;
 pub const FUNC_TYPE_PARAM_IDEAL_COUNT: usize = 4;
 
@@ -5269,8 +5267,8 @@ impl TypedProgram {
             return self.eval_try_operator(field_access.base, ctx, field_access.span);
         }
 
-        let mut base_expr = self.eval_expr(field_access.base, ctx.with_no_expected_type())?;
-        let original_base_expr_type = self.exprs.get(base_expr).get_type();
+        let base_expr = self.eval_expr(field_access.base, ctx.with_no_expected_type())?;
+        let base_expr_type = self.exprs.get(base_expr).get_type();
 
         // Optional fork case: .tag enum special accessor
         if field_access.field_name == self.ast.idents.builtins.tag {
@@ -5286,13 +5284,9 @@ impl TypedProgram {
         }
 
         // Perform auto-dereference for accesses that are not 'lvalue'-style or 'referencing' style
-        let (base_type, is_reference) = match self.get_expr_type(base_expr) {
+        let (struct_type_id, is_reference) = match self.get_expr_type(base_expr) {
             Type::Reference(reference_type) => {
                 let inner_type = reference_type.inner_type;
-                if !is_assignment_lhs && !field_access.is_referencing {
-                    // Dereference the base expression
-                    base_expr = self.synth_dereference(base_expr);
-                }
                 (inner_type, true)
             }
             _other => {
@@ -5301,11 +5295,82 @@ impl TypedProgram {
                 } else if field_access.is_referencing && !field_access.is_coalescing {
                     return failf!(base_span, "Field access target is not a pointer, so referencing access with * cannot be used");
                 } else {
-                    (original_base_expr_type, false)
+                    (base_expr_type, false)
                 }
             }
         };
-        match self.types.get(base_type) {
+        match self.types.get(struct_type_id) {
+            Type::Struct(struct_type) => {
+                if is_assignment_lhs && !is_reference {
+                    return failf!(span, "Struct must be a reference to be assignable");
+                }
+                let (field_index, target_field) =
+                    struct_type.find_field(field_access.field_name).ok_or_else(|| {
+                        errf!(
+                            span,
+                            "Field {} not found on struct {}",
+                            self.ast.idents.get_name(field_access.field_name),
+                            self.type_id_to_string(struct_type_id)
+                        )
+                    })?;
+                if target_field.private {
+                    let companion_namespace = self.types.get_companion_namespace(struct_type_id);
+
+                    if !self.is_inside_companion_scope(companion_namespace, ctx.scope_id) {
+                        return failf!(
+                            span,
+                            "Field {} is inaccessible from here",
+                            self.name_of(target_field.name)
+                        );
+                    }
+                }
+                let result_type = if field_access.is_referencing {
+                    self.types.add_reference_type(target_field.type_id)
+                } else {
+                    target_field.type_id
+                };
+                Ok(self.exprs.add(TypedExpr::StructFieldAccess(FieldAccess {
+                    base: base_expr,
+                    target_field: field_access.field_name,
+                    field_index: field_index as u32,
+                    result_type,
+                    is_referencing: field_access.is_referencing,
+                    struct_type: struct_type_id,
+                    span,
+                })))
+            }
+            Type::EnumVariant(ev) => {
+                if self.ast.idents.get_name(field_access.field_name) != "value" {
+                    return failf!(
+                        span,
+                        "Field {} does not exist; try .value",
+                        self.ast.idents.get_name(field_access.field_name)
+                    );
+                }
+                let Some(payload_type_id) = ev.payload else {
+                    return failf!(
+                        span,
+                        "Variant {} has no payload value",
+                        self.ast.idents.get_name(ev.name)
+                    );
+                };
+                if is_assignment_lhs && !is_reference {
+                    return failf!(span, "Enum must be a reference to be assignable");
+                }
+                let variant_index = ev.index;
+                let result_type_id = if field_access.is_referencing {
+                    self.types.add_reference_type(payload_type_id)
+                } else {
+                    payload_type_id
+                };
+                Ok(self.exprs.add(TypedExpr::EnumGetPayload(GetEnumVariantPayload {
+                    enum_variant_expr: base_expr,
+                    result_type_id,
+                    variant_index,
+                    is_referencing: field_access.is_referencing,
+                    span,
+                })))
+            }
             t @ Type::Enum(_opt_type) => {
                 if let Some(opt) = t.as_optional() {
                     if !field_access.is_coalescing {
@@ -5339,7 +5404,7 @@ impl TypedProgram {
                         return failf!(
                             span,
                             "?. must be used on optional structs, got {}",
-                            self.type_id_to_string(original_base_expr_type)
+                            self.type_id_to_string(base_expr_type)
                         );
                     };
                     let (field_index, target_field) =
@@ -5389,82 +5454,11 @@ impl TypedProgram {
                     )
                 }
             }
-            Type::Struct(struct_type) => {
-                if is_assignment_lhs && !is_reference {
-                    return failf!(span, "Struct must be a reference to be assignable");
-                }
-                let (field_index, target_field) =
-                    struct_type.find_field(field_access.field_name).ok_or_else(|| {
-                        errf!(
-                            span,
-                            "Field {} not found on struct {}",
-                            self.ast.idents.get_name(field_access.field_name),
-                            self.type_id_to_string(base_type)
-                        )
-                    })?;
-                if target_field.private {
-                    let companion_namespace = self.types.get_companion_namespace(base_type);
-
-                    if !self.is_inside_companion_scope(companion_namespace, ctx.scope_id) {
-                        return failf!(
-                            span,
-                            "Field {} is inaccessible from here",
-                            self.name_of(target_field.name)
-                        );
-                    }
-                }
-                let result_type = if field_access.is_referencing {
-                    self.types.add_reference_type(target_field.type_id)
-                } else {
-                    target_field.type_id
-                };
-                Ok(self.exprs.add(TypedExpr::StructFieldAccess(FieldAccess {
-                    base: base_expr,
-                    target_field: field_access.field_name,
-                    field_index: field_index as u32,
-                    result_type,
-                    is_referencing: field_access.is_referencing,
-                    struct_type: base_type,
-                    span,
-                })))
-            }
-            Type::EnumVariant(ev) => {
-                if self.ast.idents.get_name(field_access.field_name) != "value" {
-                    return failf!(
-                        span,
-                        "Field {} does not exist; try .value",
-                        self.ast.idents.get_name(field_access.field_name)
-                    );
-                }
-                let Some(payload_type_id) = ev.payload else {
-                    return failf!(
-                        span,
-                        "Variant {} has no payload value",
-                        self.ast.idents.get_name(ev.name)
-                    );
-                };
-                if is_assignment_lhs && !is_reference {
-                    return failf!(span, "Enum must be a reference to be assignable");
-                }
-                let variant_index = ev.index;
-                let result_type_id = if field_access.is_referencing {
-                    self.types.add_reference_type(payload_type_id)
-                } else {
-                    payload_type_id
-                };
-                Ok(self.exprs.add(TypedExpr::EnumGetPayload(GetEnumVariantPayload {
-                    enum_variant_expr: base_expr,
-                    result_type_id,
-                    variant_index,
-                    is_referencing: field_access.is_referencing,
-                    span,
-                })))
-            }
             _ => failf!(
                 span,
                 "Field {} does not exist on type {}",
                 self.ast.idents.get_name(field_access.field_name),
-                self.type_id_to_string(original_base_expr_type)
+                self.type_id_to_string(base_expr_type)
             ),
         }
     }
@@ -5511,7 +5505,7 @@ impl TypedProgram {
             .unwrap();
         let mut result_block = self.synth_block(scope_id, span);
         let try_value_var = self.synth_variable_defn_simple(
-            get_ident!(self, "try_value"),
+            self.ast.idents.builtins.try_value,
             try_value_original_expr,
             result_block.scope_id,
         );
@@ -5628,6 +5622,36 @@ impl TypedProgram {
         scope_id: ScopeId,
         _parsed_id: ParsedId,
     ) -> CoerceResult {
+        // If we expect a lambda object and you pass a lambda
+        if let Type::LambdaObject(_lam_obj_type) = self.types.get(expected_type_id) {
+            if let Type::Lambda(lambda_type) = self.get_expr_type(expression) {
+                let span = self.exprs.get(expression).get_span();
+                let lambda_object_type = self.types.add_lambda_object(
+                    &self.ast.idents,
+                    lambda_type.function_type,
+                    lambda_type.parsed_id,
+                );
+                return CoerceResult::Coerced(
+                    "lam->lamobj",
+                    self.exprs.add(TypedExpr::Cast(TypedCast {
+                        cast_type: CastType::LambdaToLambdaObject,
+                        base_expr: expression,
+                        target_type_id: lambda_object_type,
+                        span,
+                    })),
+                );
+            }
+        }
+
+        // If we expect a lambda object and you pass a function reference... (optimized lambda)
+        if let Type::LambdaObject(_lam_obj_type) = self.types.get(expected_type_id) {
+            if let TypedExpr::FunctionReference(fun_ref) = self.exprs.get(expression) {
+                let lambda_object =
+                    self.function_to_lambda_object(fun_ref.function_id, fun_ref.span);
+                return CoerceResult::Coerced("funref->lamobj", lambda_object);
+            }
+        }
+
         // If we don't expect a reference
         let expected = self.types.get(self.get_type_id_resolved(expected_type_id, scope_id));
         if expected.as_reference().is_none() {
@@ -5654,27 +5678,6 @@ impl TypedProgram {
                 );
             }
         };
-
-        // If we expect a lambda object and you pass a lambda
-        if let Type::LambdaObject(_lam_obj_type) = self.types.get(expected_type_id) {
-            if let Type::Lambda(lambda_type) = self.get_expr_type(expression) {
-                let span = self.exprs.get(expression).get_span();
-                let lambda_object_type = self.types.add_lambda_object(
-                    &self.ast.idents,
-                    lambda_type.function_type,
-                    lambda_type.parsed_id,
-                );
-                return CoerceResult::Coerced(
-                    "lambda2dyn",
-                    self.exprs.add(TypedExpr::Cast(TypedCast {
-                        cast_type: CastType::LambdaToLambdaObject,
-                        base_expr: expression,
-                        target_type_id: lambda_object_type,
-                        span,
-                    })),
-                );
-            }
-        }
 
         CoerceResult::Fail(expression)
     }
@@ -6646,7 +6649,7 @@ impl TypedProgram {
                 span,
             }));
             let env_field_access = TypedExpr::StructFieldAccess(FieldAccess {
-                base: module.synth_dereference(env_variable_expr),
+                base: env_variable_expr,
                 target_field: field_name,
                 field_index: field_index as u32,
                 result_type: variable_type,
@@ -6674,13 +6677,8 @@ impl TypedProgram {
 
         let expected_function_type = ctx
             .expected_type_id
-            .and_then(|et| match self.types.get(et) {
-                Type::FunctionTypeParameter(ftp) => Some(self.types.get(ftp.function_type)),
-                Type::LambdaObject(lam_obj) => Some(self.types.get(lam_obj.function_type)),
-                Type::Lambda(lam) => Some(self.types.get(lam.function_type)),
-                _ => None,
-            })
-            .map(|ft| ft.as_function().unwrap().clone());
+            .and_then(|et| self.extract_function_type_from_functionlike(self.types.get(et)))
+            .map(|ft| self.types.get(ft).as_function().unwrap().clone());
         let declared_expected_return_type = match lambda.return_type {
             None => None,
             Some(return_type_expr) => Some(self.eval_type_expr(return_type_expr, ctx.scope_id)?),
@@ -6769,11 +6767,63 @@ impl TypedProgram {
             _ => body.expr_type,
         };
 
+        let encl_fn_name = self
+            .get_function(
+                self.scopes
+                    .nearest_parent_function(ctx.scope_id)
+                    .expect("lambda to be inside a function"),
+            )
+            .name;
+        let name = self.ast.idents.intern(format!(
+            "{}_{{lambda}}_{}",
+            self.name_of(encl_fn_name),
+            lambda_scope_id,
+        ));
+        let name_string = self.make_qualified_name(ctx.scope_id, name, "__", true);
+        let name = self.ast.idents.intern(name_string);
+
+        let body_expr_id = self.exprs.add(TypedExpr::Block(body));
+
         let lambda_info = self.scopes.get_lambda_info(lambda_scope_id);
+
+        // NO CAPTURES! Optimize to a regular function
         if lambda_info.captured_variables.is_empty() {
             self.write_location(&mut stderr(), span);
-            eprintln!("TODO convert this captureless lambda into a regular function")
+
+            let function_type = self.types.add_anon(Type::Function(FunctionType {
+                physical_params: typed_params.into(),
+                return_type,
+            }));
+
+            self.scopes.get_scope_mut(lambda_scope_id).scope_type = ScopeType::FunctionScope;
+            let body_function_id = self.add_function(TypedFunction {
+                name,
+                scope: lambda_scope_id,
+                param_variables,
+                type_params: smallvec![],
+                function_type_params: smallvec![],
+                body_block: Some(body_expr_id),
+                intrinsic_type: None,
+                linkage: Linkage::Standard,
+                child_specializations: vec![],
+                specialization_info: None,
+                parsed_id: expr_id.into(),
+                type_id: function_type,
+                compiler_debug: false,
+                kind: TypedFunctionKind::Lambda,
+                is_concrete: false,
+                dyn_fn_id: None,
+            });
+            // What type of expression to return? A function reference seems perfect.
+            let function_reference_type = self.types.add_reference_type(function_type);
+            let expr_id = self.exprs.add(TypedExpr::FunctionReference(FunctionReferenceExpr {
+                function_id: body_function_id,
+                function_reference_type,
+                span,
+            }));
+            return Ok(expr_id);
         }
+
         let env_fields = lambda_info
             .captured_variables
             .iter()
@@ -6806,15 +6856,15 @@ impl TypedProgram {
         let environment_struct_reference_type =
             self.types.add_reference_type(environment_struct_type);
         let environment_param = FnParamType {
-            name: get_ident!(self, LAMBDA_ENV_PARAM_NAME),
-            type_id: environment_struct_reference_type,
+            name: self.ast.idents.builtins.lambda_env_var_name,
+            type_id: POINTER_TYPE_ID,
             is_context: false,
             is_lambda_env: true,
             span: body_span,
         };
         let environment_param_variable_id = self.variables.add(Variable {
             name: environment_param.name,
-            type_id: environment_struct_reference_type,
+            type_id: POINTER_TYPE_ID,
             is_mutable: false,
             owner_scope: lambda_scope_id,
             is_context: false,
@@ -6824,8 +6874,29 @@ impl TypedProgram {
         typed_params.push_front(environment_param);
         param_variables.insert(0, environment_param_variable_id);
 
-        let environment_param_variable_id = param_variables[0];
-        let body_expr_id = self.exprs.add(TypedExpr::Block(body));
+        let environment_param_access_expr = self.exprs.add(TypedExpr::Variable(VariableExpr {
+            variable_id: param_variables[0],
+            type_id: POINTER_TYPE_ID,
+            span: body_span,
+        }));
+        let cast_env_param = self.synth_cast(
+            environment_param_access_expr,
+            environment_struct_reference_type,
+            CastType::PointerToReference,
+        );
+        let environment_casted_variable = self.synth_variable_defn(
+            self.ast.idents.builtins.env,
+            cast_env_param,
+            false,
+            false,
+            false,
+            lambda_scope_id,
+        );
+        if let TypedExpr::Block(body) = self.exprs.get_mut(body_expr_id) {
+            body.statements.insert(0, environment_casted_variable.defn_stmt);
+        } else {
+            panic!()
+        }
 
         let pending_fixups =
             self.scopes.get_lambda_info(lambda_scope_id).capture_exprs_for_fixup.clone();
@@ -6836,7 +6907,7 @@ impl TypedProgram {
             };
             let field_access_expr = fixup_capture_expr_new(
                 self,
-                environment_param_variable_id,
+                environment_casted_variable.variable_id,
                 pc.captured_variable_id,
                 environment_struct_type,
                 pc.span,
@@ -6848,20 +6919,6 @@ impl TypedProgram {
             physical_params: typed_params.into(),
             return_type,
         }));
-        let encl_fn_name = self
-            .get_function(
-                self.scopes
-                    .nearest_parent_function(ctx.scope_id)
-                    .expect("lambda to be inside a function"),
-            )
-            .name;
-        let name = self.ast.idents.intern(format!(
-            "{}_{{lambda}}_{}",
-            self.name_of(encl_fn_name),
-            lambda_scope_id,
-        ));
-        let name_string = self.make_qualified_name(ctx.scope_id, name, "__", true);
-        let name = self.ast.idents.intern(name_string);
 
         let body_function_id = self.add_function(TypedFunction {
             name,
@@ -8666,7 +8723,6 @@ impl TypedProgram {
                 return Ok(Either::Left(enum_constr));
             }
 
-            // TODO(perf): Remember the IDs of these special idents instead of comparing strings
             let is_fn_convert = fn_name == self.ast.idents.builtins.to_ref
                 || fn_name == self.ast.idents.builtins.to_dyn;
             if is_fn_convert {
@@ -8693,10 +8749,16 @@ impl TypedProgram {
                                 "Cannot do toDyn or toRef with a generic function"
                             );
                         }
+                        if function.intrinsic_type.is_some_and(|t| t.is_inlined()) {
+                            return failf!(
+                                call_span,
+                                "Cannot do toDyn or toRef with an intrinsic operation"
+                            );
+                        }
                         return if fn_name == self.ast.idents.builtins.to_dyn {
-                            self.function_to_lambda_object(function_id, call_span).map(Either::Left)
+                            Ok(Either::Left(self.function_to_lambda_object(function_id, call_span)))
                         } else if fn_name == self.ast.idents.builtins.to_ref {
-                            self.function_to_reference(function_id, call_span).map(Either::Left)
+                            Ok(Either::Left(self.function_to_reference(function_id, call_span)))
                         } else {
                             unreachable!()
                         };
@@ -8774,34 +8836,30 @@ impl TypedProgram {
         &mut self,
         function_id: FunctionId,
         call_span: SpanId,
-    ) -> TyperResult<TypedExprId> {
+    ) -> TypedExprId {
         let function = self.get_function(function_id);
         let function_reference_type = self.types.add_reference_type(function.type_id);
-        Ok(self.exprs.add(TypedExpr::FunctionReference(FunctionReferenceExpr {
+        self.exprs.add(TypedExpr::FunctionReference(FunctionReferenceExpr {
             function_id,
             function_reference_type,
             span: call_span,
-        })))
+        }))
     }
 
     pub fn function_to_lambda_object(
         &mut self,
         function_id: FunctionId,
         call_span: SpanId,
-    ) -> TyperResult<TypedExprId> {
+    ) -> TypedExprId {
         let function = self.get_function(function_id);
         let dyn_function_id = if let Some(dyn_fn_id) = function.dyn_fn_id {
             dyn_fn_id
         } else {
-            let function_signature_span =
-                self.ast.get_function(function.parsed_id.as_function_id().unwrap()).signature_span;
+            let function_defn_span = self.ast.get_span_for_id(function.parsed_id);
             let mut new_function = function.clone();
-            let empty_env_struct_type = self.types.add_empty_struct();
-            let empty_env_struct_ref = self.types.add_reference_type(empty_env_struct_type);
-            let name = get_ident!(self, "__lambda_env");
             let empty_env_variable = self.variables.add(Variable {
-                name,
-                type_id: empty_env_struct_ref,
+                name: self.ast.idents.builtins.lambda_env_var_name,
+                type_id: POINTER_TYPE_ID,
                 is_mutable: false,
                 // Wrong scope, and its not actually added, but we know its not used
                 owner_scope: new_function.scope,
@@ -8811,7 +8869,7 @@ impl TypedProgram {
             });
             new_function.param_variables.insert(0, empty_env_variable);
             let new_function_type =
-                self.add_lambda_env_to_function_type(new_function.type_id, function_signature_span);
+                self.add_lambda_env_to_function_type(new_function.type_id, function_defn_span);
             new_function.type_id = new_function_type;
             let old_name = self.name_of(new_function.name);
             new_function.name = self.ast.idents.intern(format!("{}__dyn", old_name));
@@ -8831,7 +8889,7 @@ impl TypedProgram {
                 span: call_span,
                 lambda_object_type_id,
             }));
-        Ok(function_to_lam_obj_id)
+        function_to_lam_obj_id
     }
 
     fn add_lambda_env_to_function_type(
@@ -8842,11 +8900,10 @@ impl TypedProgram {
         let mut function_type = self.types.get(function_type_id).as_function().unwrap().clone();
         let empty_env_struct_type = self.types.add_empty_struct();
         let empty_env_struct_ref = self.types.add_reference_type(empty_env_struct_type);
-        let name = get_ident!(self, "__lambda_env");
         function_type.physical_params.insert(
             0,
             FnParamType {
-                name,
+                name: self.ast.idents.builtins.lambda_env_var_name,
                 type_id: empty_env_struct_ref,
                 is_context: false,
                 is_lambda_env: true,
@@ -9356,7 +9413,7 @@ impl TypedProgram {
 
         let args_slice = self.ast.p_call_args.get_list(fn_call.args);
         let is_lambda =
-            params.first().is_some_and(|p| p.name == get_ident!(self, LAMBDA_ENV_PARAM_NAME));
+            params.first().is_some_and(|p| p.name == self.ast.idents.builtins.lambda_env_var_name);
         let params = if is_lambda { &params[1..] } else { params };
         let explicit_param_count = params.iter().filter(|p| !p.is_context).count();
         let total_expected =
@@ -10378,6 +10435,7 @@ impl TypedProgram {
         // A Function reference: fn_name.pointer()
         // A lambda: \x -> x + 1
         // A lambda-object: dyn[A -> B]
+        // A function-type-parameter, written 'some \A -> B'
         match typ {
             Type::Reference(r) => {
                 if self.types.get(r.inner_type).as_function().is_some() {
@@ -10388,6 +10446,7 @@ impl TypedProgram {
             }
             Type::Lambda(lam) => Some(lam.function_type),
             Type::LambdaObject(lambda_object) => Some(lambda_object.function_type),
+            Type::FunctionTypeParameter(ftp) => Some(ftp.function_type),
             _ => None,
         }
     }
@@ -12441,7 +12500,7 @@ impl TypedProgram {
             scope_to_search.functions.iter().collect::<Vec<_>>()
         );
 
-        // nocommit: Validate modules cannot use something from a module they don't depend on
+        // TODO(MODULES): Validate modules cannot use something from a module they don't depend on
         // even if its in the program
 
         if let Some(function_id) = scope_to_search.find_function(name.name) {
@@ -13590,20 +13649,18 @@ impl TypedProgram {
         write_error(w, &self.ast.spans, &self.ast.sources, &error.message, error.level, error.span)
     }
 
-    pub fn write_location(&self, w: &mut impl std::io::Write, span: SpanId) -> std::io::Result<()> {
+    pub fn write_location(&self, w: &mut impl std::io::Write, span: SpanId) {
         parse::write_source_location(w, &self.ast.spans, &self.ast.sources, span, ErrorLevel::Info)
+            .unwrap()
     }
 
-    pub fn write_location_error(
-        &self,
-        w: &mut impl std::io::Write,
-        span: SpanId,
-    ) -> std::io::Result<()> {
+    pub fn write_location_error(&self, w: &mut impl std::io::Write, span: SpanId) {
         parse::write_source_location(w, &self.ast.spans, &self.ast.sources, span, ErrorLevel::Error)
+            .unwrap()
     }
 
     pub fn ice_with_span(&self, msg: impl AsRef<str>, span: SpanId) -> ! {
-        self.write_location_error(&mut std::io::stderr(), span).unwrap();
+        self.write_location_error(&mut std::io::stderr(), span);
         panic!("Internal Compiler Error: {}", msg.as_ref())
     }
 
@@ -13615,7 +13672,7 @@ impl TypedProgram {
     }
 
     pub fn todo_with_span(&self, msg: impl AsRef<str>, span: SpanId) -> ! {
-        self.write_location_error(&mut std::io::stderr(), span).unwrap();
+        self.write_location_error(&mut std::io::stderr(), span);
         panic!("not yet implemented: {}", msg.as_ref())
     }
 }

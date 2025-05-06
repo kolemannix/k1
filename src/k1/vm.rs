@@ -541,9 +541,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                     field_access.struct_type,
                     struct_ptr,
                     field_access.field_index as usize,
-                    // nocommit: I feel like this has to be 'true' or we alias,
-                    //           try to repro it
-                    false,
+                    true,
                 )?;
                 Ok(field_value.into())
             }
@@ -730,10 +728,8 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                     Value::Reference { type_id: get_payload.result_type_id, ptr: payload_ptr };
                 Ok(payload_reference.into())
             } else {
-                // nocommit: copy_aggregates = true if the base is a reference type to avoid
-                // aliasing; same for struct access
                 let payload_value =
-                    load_value(vm, m, variant_type.payload.unwrap(), payload_ptr, false)?;
+                    load_value(vm, m, variant_type.payload.unwrap(), payload_ptr, true)?;
                 Ok(payload_value.into())
             }
         }
@@ -934,17 +930,16 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
             let function_reference_type = lambda_obj_struct_type.fields
                 [crate::typer::types::Types::LAMBDA_OBJECT_FN_PTR_INDEX]
                 .type_id;
-            let environment_ref_type = lambda_obj_struct_type.fields
-                [crate::typer::types::Types::LAMBDA_OBJECT_ENV_PTR_INDEX]
-                .type_id;
-            let empty_env_ref =
-                Value::Reference { type_id: environment_ref_type, ptr: vm.stack.cursor };
+
+            // This is a pointer to a zero-sized environment struct since this is a function
+            // not a lambda
+            let env_ptr = Value::Reference { type_id: POINTER_TYPE_ID, ptr: vm.stack.cursor };
             let function_ref_value =
                 function_id_to_ref_value(f_to_lam.function_id, function_reference_type);
             let mut lambda_object = vm.stack.push_struct_values(
                 &m.types,
                 obj_type.struct_representation,
-                &[function_ref_value, empty_env_ref],
+                &[function_ref_value, env_ptr],
             );
             lambda_object.set_type_id(f_to_lam.lambda_object_type_id);
             Ok(lambda_object.into())
@@ -1020,8 +1015,6 @@ fn execute_variable_expr(
     }
 
     let Some(v) = vm.get_current_local(v_id) else {
-        // nocommit: Fix dump
-        //eprintln!("{}", vm.dump(m));
         return failf!(
             variable_expr.span,
             "Variable missing in vm: {}",
@@ -1200,32 +1193,25 @@ pub fn execute_stmt(
 }
 
 fn execute_call(vm: &mut Vm, m: &mut TypedProgram, call_id: TypedExprId) -> TyperResult<VmResult> {
-    eprintln!("Executing call: {}", m.expr_to_string(call_id));
+    debug!("Executing call: {}", m.expr_to_string(call_id));
     let call = m.exprs.get(call_id).expect_call();
     let call_args = call.args.clone();
     let span = call.span;
     let (function_id, maybe_lambda_env_ptr) = match call.callee {
         typer::Callee::StaticFunction(function_id) => (function_id, None),
         typer::Callee::StaticLambda {
-            function_id,
-            lambda_value_expr: environment_value,
-            lambda_type_id,
+            function_id, lambda_value_expr: environment_value, ..
         } => {
             // This is the lambda's physical form, so its the environment struct
             let lambda_value = execute_expr(vm, m, environment_value)?.expect_value();
             // We need a pointer to the environment for dispatch, so just use the aggregate's ptr
-            let lambda_type = m.types.get(lambda_type_id).as_lambda().unwrap();
-            let env_ref_type = m.types.add_reference_type(lambda_type.env_type);
-            let lambda_env_ptr =
-                Value::Reference { type_id: env_ref_type, ptr: lambda_value.expect_agg() };
+            let lambda_env_ptr = Value::Pointer(lambda_value.expect_agg().addr());
             (function_id, Some(lambda_env_ptr))
         }
         typer::Callee::StaticAbstract { .. } => {
             m.ice_with_span("Abstract call attempt in VM", span)
         }
         typer::Callee::DynamicLambda(lambda_object_expr) => {
-            let lambda_object_struct = execute_expr_return_exit!(vm, m, lambda_object_expr)?;
-            eprintln!("the lamobj: {}", debug_value_to_string(vm, m, lambda_object_struct));
             let lambda_object_struct_ptr =
                 execute_expr_return_exit!(vm, m, lambda_object_expr)?.expect_agg();
             let struct_type = m
@@ -1233,7 +1219,6 @@ fn execute_call(vm: &mut Vm, m: &mut TypedProgram, call_id: TypedExprId) -> Type
                 .as_lambda_object()
                 .unwrap()
                 .struct_representation;
-            eprintln!("the struct type: {}", m.type_id_to_string(struct_type));
             let function_ptr = load_struct_field(
                 vm,
                 m,
@@ -1270,7 +1255,6 @@ fn execute_call(vm: &mut Vm, m: &mut TypedProgram, call_id: TypedExprId) -> Type
 
     let function = m.get_function(function_id);
 
-    // nocommit: What happens if you toRef on an intrinsic that isn't a real function?
     if let Some(intrinsic_type) = function.intrinsic_type {
         let call = m.exprs.get(call_id).expect_call();
         let type_args = call.type_args.clone();
@@ -1278,9 +1262,6 @@ fn execute_call(vm: &mut Vm, m: &mut TypedProgram, call_id: TypedExprId) -> Type
     };
 
     if function.body_block.is_none() {
-        // let m_ptr = m as *const TypedModule;
-        // let mut_m = m_ptr.cast_mut();
-        // unsafe { (*mut_m).eval_function_body(function_id)? }
         let prev_level = log::max_level();
         log::set_max_level(log::LevelFilter::Info);
         m.eval_function_body(function_id)?;
@@ -1325,7 +1306,7 @@ fn execute_call(vm: &mut Vm, m: &mut TypedProgram, call_id: TypedExprId) -> Type
             let arg = call_args[arg_offset];
             // Execute this in _caller_ frame so the data outlives the callee
             let value = execute_expr_return_exit!(vm, m, arg)?;
-            eprintln!(
+            debug!(
                 "argument {}: {}",
                 m.name_of(m.variables.get(*variable_id).name),
                 debug_value_to_string(vm, m, value)
@@ -1745,7 +1726,12 @@ pub fn load_value(
             let loaded_ptr = value as *const u8;
             Ok(Value::Reference { type_id, ptr: loaded_ptr })
         }
-        Type::Struct(_) | Type::Enum(_) | Type::EnumVariant(_) => {
+        Type::Struct(_)
+        | Type::Enum(_)
+        | Type::EnumVariant(_)
+        | Type::Lambda(_)
+        | Type::LambdaObject(_) => {
+            debug_assert!(m.types.is_aggregate_repr(type_id));
             if copy_aggregates {
                 let layout = m.types.get_layout(type_id).unwrap();
                 let frame_ptr = vm.stack.push_raw_copy_layout(layout, ptr);
@@ -1754,8 +1740,6 @@ pub fn load_value(
                 Ok(Value::Agg { type_id, ptr })
             }
         }
-        Type::Lambda(_) => m.todo_with_span("just a struct load of the env", vm.eval_span),
-        Type::LambdaObject(lam_obj_type) => here,
         //
         Type::Never
         | Type::Function(_)

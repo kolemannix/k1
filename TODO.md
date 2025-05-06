@@ -6,10 +6,12 @@ New tagline? "C with typeclasses and tagged unions"
 	Match arm has wrong type. Expected T but got bool
 
 - [ ] Bug: technically I should require that the blanket impl params appear in the Self type expression
+- [ ] Related: Detect duplicate blanket impls?
 - [ ] Bug: Fix returning Result from main
 - [ ] Typecheck 'main'
 - [ ] Dogfood idea: try to write a 'niched' integer abstraction (-1 as 'not found' but safely, vs using option and wasting space + adding more code)
       `impl Unwrap<Inner = u32> for i64`
+
 - [x] Matching push
   - [x] boolean chains w/ binding ifs
   - [x] Don't codegen conditions for arms that don't run

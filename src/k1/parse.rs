@@ -378,6 +378,7 @@ pub struct BuiltinIdentifiers {
     pub list_literal: Identifier,
     pub source_location_typename: Identifier,
     pub lambda_env_var_name: Identifier,
+    pub env: Identifier,
     pub fn_ptr: Identifier,
     pub env_ptr: Identifier,
     pub amp: Identifier,
@@ -458,6 +459,7 @@ impl Default for Identifiers {
         let list_literal = Identifier(pool.get_or_intern_static("list_literal"));
         let source_location_typename = Identifier(pool.get_or_intern_static("SourceLocation"));
         let lambda_env_var_name = Identifier(pool.get_or_intern_static("__lambda_env"));
+        let env = Identifier(pool.get_or_intern_static("env"));
         let fn_ptr = Identifier(pool.get_or_intern_static("fn_ptr"));
         let env_ptr = Identifier(pool.get_or_intern_static("env_ptr"));
         let amp = Identifier(pool.get_or_intern_static("&"));
@@ -516,6 +518,7 @@ impl Default for Identifiers {
                 list_literal,
                 source_location_typename,
                 lambda_env_var_name,
+                env,
                 fn_ptr,
                 env_ptr,
                 amp,
