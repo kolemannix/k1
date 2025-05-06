@@ -437,7 +437,7 @@ pub fn execute_single_expr(m: &mut TypedProgram, expr: TypedExprId) -> TyperResu
 
     vm.stack.push_new_frame(None);
     let span = m.exprs.get(expr).get_span();
-    let v = match execute_expr(&mut vm, m, expr) {
+    let res = match execute_expr(&mut vm, m, expr) {
         Err(e) => {
             m.write_error(&mut stderr(), &e).unwrap();
             failf!(span, "Static execution failed")
@@ -455,8 +455,17 @@ pub fn execute_single_expr(m: &mut TypedProgram, expr: TypedExprId) -> TyperResu
         }
         Ok(VmResult::Break(_)) => unreachable!("Break result from top-level expression"),
     };
+    if cfg!(debug_assertions) {
+        if let Ok(r) = res {
+            debug!(
+                "VM Invocation result for {}: {}",
+                m.expr_to_string(expr),
+                debug_value_to_string(&mut vm, m, r),
+            );
+        }
+    }
     *m.vm = Some(vm);
-    v
+    res
 }
 
 macro_rules! return_exit {
@@ -1078,7 +1087,12 @@ pub fn static_value_to_vm_value(
                 e.variant_type_id,
                 payload_value,
             );
-            Ok(Value::Agg { type_id: e.variant_type_id, ptr: enum_ptr })
+            let type_id = if e.typed_as_enum {
+                m.types.get(e.variant_type_id).expect_enum_variant().enum_type_id
+            } else {
+                e.variant_type_id
+            };
+            Ok(Value::Agg { type_id, ptr: enum_ptr })
         }
         StaticValue::Buffer(buf) => {
             let elements = buf.elements.clone();
@@ -1151,7 +1165,16 @@ pub fn execute_stmt(
                 };
                 Value::Reference { type_id: reference_type, ptr: value_ptr }
             } else {
-                debug_assert_eq!(let_stmt.variable_type, v.get_type());
+                if let_stmt.variable_type != v.get_type() {
+                    m.ice_with_span(
+                        format!(
+                            "VM let type mismatch: expected {} got {}",
+                            m.type_id_to_string(let_stmt.variable_type),
+                            m.type_id_to_string(v.get_type())
+                        ),
+                        let_stmt.span,
+                    );
+                }
                 v
             };
             vm.insert_current_local(let_stmt.variable_id, to_store);
@@ -2259,7 +2282,12 @@ pub fn vm_value_to_static_value(
                                 Some(static_value)
                             }
                         };
-                        StaticValue::Enum(StaticEnum { variant_type_id, variant_index, payload })
+                        StaticValue::Enum(StaticEnum {
+                            variant_type_id,
+                            variant_index,
+                            typed_as_enum: true,
+                            payload,
+                        })
                     }
                     Type::EnumVariant(_enum_variant) => {
                         todo!("enum variant vm -> static")

@@ -33,7 +33,7 @@ fn main(): i32 {
   // Compiler Core coverage, ideally increasing complexity
   // Low
   low();
-  //#static low();
+  #static low();
 
   // Moderate
   never_everywhere/test();
