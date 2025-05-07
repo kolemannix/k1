@@ -1,3 +1,4 @@
+ns static_run;
 let static INT_BUFFER: Buffer[int] = [1,2,3,4,5].toBuffer();
 
 fn getPoint(): { x: u8, y: u32, z: i64 } {

@@ -1211,8 +1211,9 @@ pub fn execute_stmt(
                 }
             }
         }
-        typer::TypedStmt::Require(_) => {
-            todo!("static require not yet implemented")
+        typer::TypedStmt::Require(require) => {
+            // execute_matching_condition(vm, m, &require.condition);
+            m.todo_with_span("Require statement not implemented in VM", require.span);
         }
     }
 }
@@ -1923,7 +1924,9 @@ impl Stack {
 
     pub fn reset(&mut self) {
         self.cursor = self.base_ptr();
-        self.allocation.fill(0);
+        unsafe {
+            core::ptr::write_bytes(self.allocation.as_mut_ptr(), 0, self.allocation.len());
+        }
         self.frames.clear();
     }
 

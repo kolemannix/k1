@@ -70,17 +70,17 @@ New tagline? "C with typeclasses and tagged unions"
       buffer.slice: `let end = if end > self.len self.len else end;`
 - [ ] Switch VM stack to a single virtual allocation https://crates.io/crates/memmap2
 - [ ] Fix non-referencing match on `struct*`: just do the deref for the user
-- [ ] Fix referencing match not 'eliminating' patterns on `struct*` giving unhandled pattern `.CustomHeap({ zalloc }*) -> {`
+- [x] Fix referencing match not 'eliminating' patterns on `struct*` giving unhandled pattern `.CustomHeap({ zalloc }*) -> {`
 - [ ] Macro system built on comptime, both string #insert and parsed code #insert like Jai
 - [ ] Use `perf` to look at branch info, cache info
-- [ ] Optimize lambdas that don't capture to become function pointers instead
+- [x] Optimize lambdas that don't capture to become function pointers instead
 - [ ] Compile switches with no patterns or guards to LLVM switch
 - [ ] Implicit conversions: based on a special ability that integrates with 
       type inference? (like Mojo's ImplicitlyIntable, etc)
 - [x] comptime #if needs to be a real node not a directive (can't parse if/else). More like `#const if` than `#if`
-- [ ] Private functions? Private anything? So hard to call, such a philosophical question about hiding, safety, skill-floor vs skill-ceiling
+- [ ] Private stuff?
 - [x] string interp at end puts unnecessary empty string part: `putString(__sb_1001, "");`
-- [ ] Bug: Are parameter names part of a function type
+- [ ] Bug: Are parameter names part of a function type. (for now they are to avoid bugs but it explodes the type count..)
 - [x] Backend codegen cleanup
 -  [x] avoid uses of aggregate *values* where we can: so routine uses of 'struct's and 'enum's
 -  [x] Move allocas to entry block. "Doing this is actually quite easy as LLVM provides functions you can use to retrieve the entry block for a function and insert instructions into it."
@@ -94,6 +94,7 @@ New tagline? "C with typeclasses and tagged unions"
 - [ ] Rename 'Buffer'
 - [ ] b"" strings that are of type Buffer[u8] (what about interpolation?)
 - [ ] c"" strings that are of type Pointer (what about interpolation?)
+- [ ] A clone ability
 - [x] Add simple int range in stdlib
       `sealed abstract class Range(let start: Int, let end: Int, let step: Int)`
 - [ ] Make demo readme / site
@@ -102,7 +103,7 @@ New tagline? "C with typeclasses and tagged unions"
 - [x] Conditional compile directive
 - [x] Support boolean operators in compile time expressions
 - [ ] Mark types as trivially copyable or not
-^ 'Buffer' would be NOT copyable so that you don't accidentally alias the data ptr
+^ 'Buffer' would be NOT copyable since it contains a Reference
 - [ ] Ability constraints on generics
 - [ ] Bug: ability impls kinda have to be provided in dependency order, since their constraints can depend on each other. I think I have to do a
            'skip and progress' style of pass for them
@@ -114,9 +115,11 @@ New tagline? "C with typeclasses and tagged unions"
   - [x] Module manifests somewhere
   - [x] Library vs Binary
   - [ ] Dependencies: git url, 'local file', or 'package'
-  - [ ] Validate modules cannot use something from a module they dont depend on
+  - [ ] Prevent modules using definitions from modules they dont depend on
   - [ ] serialize typedprogram (for incremental compilation)
-- [ ] clang passthrough options, when do we 'link', in IR or as object files, ...
+- [x] clang passthrough options, when do we 'link', in IR or as object files, ...
+  - [x] we 'link' with k1 in the typer's modules system
+  - [x] we link with other deps w/ the linker
 
 ## Project: VM for `static` execution
 - [ ] vm: static execution

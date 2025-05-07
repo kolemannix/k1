@@ -1,0 +1,41 @@
+ns raylib {
+  deftype Color = {
+    r: u8, g: u8, b: u8, a: u8
+  }
+
+  deftype Rectangle = {
+    x: f32, y: f32, width: f32, height: f32
+  }
+  extern(InitWindow) fn InitWindow(width: i32, height: i32, name: Pointer): unit
+  extern(CloseWindow) fn CloseWindow(): unit
+  extern(WindowShouldClose) fn WindowShouldClose(): bool
+
+  extern(BeginDrawing) fn BeginDrawing(): unit
+  extern(EndDrawing) fn EndDrawing(): unit
+  extern(ClearBackground) fn ClearBackground(color: Color): unit
+  extern(DrawText) fn DrawText(text: Pointer, posX: i32, posY: i32, color: Color): unit
+
+}
+// TODO: We need a good 'void' return because if you try to access the unit
+//       I think it won't be a unit since there's no return value at all
+
+let static RED: raylib/Color = { r: 255, g: 0, b: 0, a: 255 };
+let static GRAY: raylib/Color = { r: 200, g: 200, b: 200, a: 255 };
+fn main(): i32 {
+    let context allocMode = core/mem/AllocMode/TEMP;
+    raylib/InitWindow(800, 450, "raylib [core] example - basic window".toCString().ptr);
+
+    use raylib/ClearBackground;
+    use raylib/DrawText;
+
+    while not raylib/WindowShouldClose() {
+      raylib/BeginDrawing();
+      ClearBackground({ r: 250, g: 250, b: 250, a: 255 });
+      DrawText("Congrats!".toCString().ptr, 190, 200, GRAY);
+      raylib/EndDrawing();
+    };
+
+    raylib/CloseWindow();
+
+    0
+}
