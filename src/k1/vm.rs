@@ -413,11 +413,11 @@ impl From<bool> for Value {
 
 const GLOBAL_ID_STATIC: TypedGlobalId = TypedGlobalId::from_nzu32(NonZeroU32::new(1).unwrap());
 
-pub fn execute_single_expr(m: &mut TypedProgram, expr: TypedExprId) -> TyperResult<Value> {
-    // DO NOT RETURN EARLY FROM THIS FUNCTION
-    // without replacing the vm
-    let mut vm = std::mem::take(&mut m.vm).unwrap();
-
+pub fn execute_single_expr_with_vm(
+    m: &mut TypedProgram,
+    expr: TypedExprId,
+    vm: &mut Vm,
+) -> TyperResult<Value> {
     // Tell the code we're about to execute that this is static
     // Useful for conditional compilation to branch and do what makes sense
     // in an interpreted context
@@ -437,7 +437,7 @@ pub fn execute_single_expr(m: &mut TypedProgram, expr: TypedExprId) -> TyperResu
 
     vm.stack.push_new_frame(None);
     let span = m.exprs.get(expr).get_span();
-    let res = match execute_expr(&mut vm, m, expr) {
+    let res = match execute_expr(vm, m, expr) {
         Err(e) => {
             m.write_error(&mut stderr(), &e).unwrap();
             failf!(span, "Static execution failed")
@@ -460,11 +460,10 @@ pub fn execute_single_expr(m: &mut TypedProgram, expr: TypedExprId) -> TyperResu
             debug!(
                 "VM Invocation result for {}: {}",
                 m.expr_to_string(expr),
-                debug_value_to_string(&mut vm, m, r),
+                debug_value_to_string(vm, m, r),
             );
         }
     }
-    *m.vm = Some(vm);
     res
 }
 
@@ -794,9 +793,10 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                 CastType::EnumToVariant | CastType::VariantToEnum => {
                     let new_value = match base_value {
                         Value::Agg { ptr, .. } => Value::Agg { ptr, type_id: cast.target_type_id },
-                        _ => {
-                            unreachable!("Malformed EnumToVariant cast: {}", m.expr_to_string(expr))
-                        }
+                        _ => m.ice_with_span(
+                            format!("Malformed EnumToVariant cast: {}", m.expr_to_string(expr)),
+                            vm.eval_span,
+                        ),
                     };
                     Ok(VmResult::Value(new_value))
                 }
@@ -986,7 +986,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
 
 fn execute_variable_expr(
     vm: &mut Vm,
-    m: &TypedProgram,
+    m: &mut TypedProgram,
     variable_expr: VariableExpr,
 ) -> TyperResult<VmResult> {
     let v_id = variable_expr.variable_id;
@@ -1000,19 +1000,21 @@ fn execute_variable_expr(
             Some(global_value) => Ok(global_value.into()),
             None => {
                 let global = m.globals.get(global_id);
-                let Some(global_value) = global.initial_value else {
-                    return failf!(
-                        variable_expr.span,
-                        "Global {} not initialized",
-                        m.name_of(variable.name)
-                    );
+                let type_id = global.ty;
+                let is_referencing = global.is_referencing;
+                let global_value = match global.initial_value {
+                    None => {
+                        m.eval_global_body(global.ast_id, Some(vm))?;
+                        m.globals.get(global_id).initial_value.unwrap()
+                    }
+                    Some(value_id) => value_id,
                 };
                 let vm_value =
                     static_value_to_vm_value(vm, StackSelection::StaticSpace, m, global_value)?;
-                let final_value = if global.is_referencing {
+                let final_value = if is_referencing {
                     let ptr = vm.static_stack.push_ptr_uninit();
                     store_value(&m.types, ptr, vm_value);
-                    Value::Reference { type_id: global.ty, ptr }
+                    Value::Reference { type_id, ptr }
                 } else {
                     vm_value
                 };

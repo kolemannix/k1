@@ -190,6 +190,10 @@ impl EvalExprContext {
     fn with_scope(&self, scope_id: ScopeId) -> EvalExprContext {
         EvalExprContext { scope_id, ..*self }
     }
+
+    fn with_static(&self, arg: bool) -> EvalExprContext {
+        EvalExprContext { is_static: arg, ..*self }
+    }
 }
 
 enum CoerceResult {
@@ -1977,6 +1981,7 @@ pub struct TypedGlobal {
     pub is_static: bool,
     pub is_referencing: bool,
     pub ast_id: ParsedGlobalId,
+    pub parent_scope: ScopeId,
 }
 
 #[derive(Debug)]
@@ -3894,6 +3899,7 @@ impl TypedProgram {
             Scopes::ROOT_SCOPE_ID,
             None,
             false,
+            false,
         )?;
 
         let StaticValue::Struct(value) = self.static_values.get(manifest_value_id) else {
@@ -4365,13 +4371,15 @@ impl TypedProgram {
         }
     }
 
-    fn execute_static_expr(
+    fn execute_static_expr_with_vm(
         &mut self,
+        vm: &mut vm::Vm,
         parsed_expr: ParsedExprId,
         expected_type_id: Option<TypeId>,
         scope_id: ScopeId,
         global_name: Option<Identifier>,
         is_inference: bool,
+        no_reset: bool,
     ) -> TyperResult<(TypeId, StaticValueId)> {
         if is_inference {
             return failf!(
@@ -4394,7 +4402,8 @@ impl TypedProgram {
             return Ok((type_id, shortcut));
         }
 
-        let value = vm::execute_single_expr(self, expr)?;
+        let value = vm::execute_single_expr_with_vm(self, expr, vm)?;
+
         let span = self.exprs.get(expr).get_span();
         if cfg!(debug_assertions) {
             if type_id != value.get_type() {
@@ -4409,12 +4418,55 @@ impl TypedProgram {
         }
 
         // Horrible borrow hack again
-        let mut vm = std::mem::take(&mut self.vm).unwrap();
-        let static_value_id = vm::vm_value_to_static_value(self, &mut vm, value, span);
-        vm.reset();
-        *self.vm = Some(vm);
+        let static_value_id = vm::vm_value_to_static_value(self, vm, value, span);
 
+        if !no_reset {
+            vm.reset();
+        }
         Ok((type_id, static_value_id))
+    }
+
+    fn execute_static_expr(
+        &mut self,
+        parsed_expr: ParsedExprId,
+        expected_type_id: Option<TypeId>,
+        scope_id: ScopeId,
+        global_name: Option<Identifier>,
+        is_inference: bool,
+        no_reset: bool,
+    ) -> TyperResult<(TypeId, StaticValueId)> {
+        let mut vm = std::mem::take(&mut self.vm).unwrap();
+        let res = self.execute_static_expr_with_vm(
+            &mut vm,
+            parsed_expr,
+            expected_type_id,
+            scope_id,
+            global_name,
+            is_inference,
+            no_reset,
+        );
+        *self.vm = Some(vm);
+        res
+    }
+
+    fn execute_static_bool(
+        &mut self,
+        cond: ParsedExprId,
+        ctx: EvalExprContext,
+    ) -> TyperResult<bool> {
+        let (_, condition_value) = self.execute_static_expr(
+            cond,
+            Some(BOOL_TYPE_ID),
+            ctx.scope_id,
+            None,
+            ctx.is_inference,
+            false,
+        )?;
+        let StaticValue::Boolean(condition_bool) = self.static_values.get(condition_value) else {
+            let cond_span = self.ast.get_expr_span(cond);
+            return failf!(cond_span, "Condition is not a boolean");
+        };
+        Ok(*condition_bool)
     }
 
     fn eval_global_declaration_phase(
@@ -4450,6 +4502,7 @@ impl TypedProgram {
             is_referencing,
             is_static: is_comptime,
             ast_id: parsed_global_id,
+            parent_scope: scope_id,
         });
 
         debug_assert_eq!(actual_global_id, global_id);
@@ -4458,16 +4511,19 @@ impl TypedProgram {
         Ok(variable_id)
     }
 
-    fn eval_global_body(
+    /// no_vm_reset: Do not wipe the VM on completion; this is passed when the global is evaluated
+    /// from an existing static execution already
+    pub fn eval_global_body(
         &mut self,
         parsed_global_id: ParsedGlobalId,
-        scope_id: ScopeId,
+        vm_to_use: Option<&mut vm::Vm>,
     ) -> TyperResult<()> {
         let parsed_global = self.ast.get_global(parsed_global_id).clone();
         let Some(global_id) = self.global_ast_mappings.get(&parsed_global_id).copied() else {
             self.ice_with_span("ast mapping for global is missing", parsed_global.span)
         };
         let typed_global = self.globals.get(global_id);
+        let scope_id = typed_global.parent_scope;
         let type_id = typed_global.ty;
 
         let is_referencing = parsed_global.is_referencing;
@@ -4483,14 +4539,25 @@ impl TypedProgram {
         let global_span = parsed_global.span;
         let value_expr_id = parsed_global.value_expr;
 
-        // Even if its mutable, the RHS has to be a static-supported expr
-        let (_, static_value_id) = self.execute_static_expr(
-            value_expr_id,
-            Some(type_to_check),
-            scope_id,
-            Some(global_name),
-            false,
-        )?;
+        let (_, static_value_id) = match vm_to_use {
+            None => self.execute_static_expr(
+                value_expr_id,
+                Some(type_to_check),
+                scope_id,
+                Some(global_name),
+                false,
+                false,
+            ),
+            Some(vm) => self.execute_static_expr_with_vm(
+                vm,
+                value_expr_id,
+                Some(type_to_check),
+                scope_id,
+                Some(global_name),
+                false,
+                true,
+            ),
+        }?;
 
         if let Err(msg) = self.check_types(
             type_to_check,
@@ -5543,7 +5610,7 @@ impl TypedProgram {
             callee: Callee::StaticFunction(block_make_error_fn),
             args: smallvec![get_error_call],
             type_args: smallvec![],
-            return_type: block_error_type,
+            return_type: block_return_type,
             span,
         }));
         let return_error_expr =
@@ -5732,6 +5799,7 @@ impl TypedProgram {
                     ctx.scope_id,
                     None,
                     ctx.is_inference,
+                    false,
                 )?;
                 let typed_condition =
                     self_.static_values.get(static_value).as_boolean().ok_or_else(|| {
@@ -6099,6 +6167,7 @@ impl TypedProgram {
                     ctx.scope_id,
                     None,
                     ctx.is_inference,
+                    false,
                 )?;
                 Ok(self.exprs.add(TypedExpr::StaticValue(static_value_id, type_id, span)))
             }
@@ -7847,18 +7916,8 @@ impl TypedProgram {
         if_expr: &ParsedIfExpr,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
-        let (_, condition_value) = self.execute_static_expr(
-            if_expr.cond,
-            Some(BOOL_TYPE_ID),
-            ctx.scope_id,
-            None,
-            ctx.is_inference,
-        )?;
-        let StaticValue::Boolean(condition_bool) = self.static_values.get(condition_value) else {
-            let cond_span = self.ast.get_expr_span(if_expr.cond);
-            return failf!(cond_span, "Condition is not a boolean");
-        };
-        let expr = if *condition_bool {
+        let condition_bool = self.execute_static_bool(if_expr.cond, ctx)?;
+        let expr = if condition_bool {
             self.eval_expr(if_expr.cons, ctx)?
         } else {
             if let Some(alt) = if_expr.alt {
@@ -10014,7 +10073,7 @@ impl TypedProgram {
                                 ctx.with_expected_type(Some(substituted_param_type)),
                             )?;
                             let lambda_type = self.exprs.get(the_lambda).get_type();
-                            eprintln!(
+                            debug!(
                                 "Using a Lambda as an ftp: {}",
                                 self.type_id_to_string(lambda_type)
                             );
@@ -11481,17 +11540,10 @@ impl TypedProgram {
         // TODO(perf): clone of ParsedFunction
         let parsed_function = self.ast.get_function(parsed_function_id).clone();
         if let Some(condition_expr) = parsed_function.condition {
-            let (_, condition_value) = self.execute_static_expr(
+            let condition_value = self.execute_static_bool(
                 condition_expr,
-                Some(BOOL_TYPE_ID),
-                parent_scope_id,
-                None,
-                false,
+                EvalExprContext::make(parent_scope_id).with_static(true),
             )?;
-            let StaticValue::Boolean(condition_value) = self.static_values.get(condition_value)
-            else {
-                return failf!(parsed_function.span, "Condition must be a constant boolean");
-            };
             if !condition_value {
                 return Ok(None);
             }
@@ -12414,12 +12466,12 @@ impl TypedProgram {
                 }
             }
             ParsedId::Namespace(namespace) => {
-                if let Err(e) = self.eval_namespace(namespace) {
+                if let Err(e) = self.eval_namespace_body_phase(namespace) {
                     self.push_error(e);
                 };
             }
             ParsedId::Global(global_id) => {
-                if let Err(e) = self.eval_global_body(global_id, scope_id) {
+                if let Err(e) = self.eval_global_body(global_id, None) {
                     self.push_error(e)
                 };
             }
@@ -12622,7 +12674,10 @@ impl TypedProgram {
         Ok(())
     }
 
-    fn eval_namespace(&mut self, ast_namespace_id: ParsedNamespaceId) -> TyperResult<NamespaceId> {
+    fn eval_namespace_body_phase(
+        &mut self,
+        ast_namespace_id: ParsedNamespaceId,
+    ) -> TyperResult<NamespaceId> {
         let ast_namespace = self.ast.get_namespace(ast_namespace_id).clone();
         let namespace_id = *self.namespace_ast_mappings.get(&ast_namespace.id).unwrap();
         let ns_scope_id = self.namespaces.get(namespace_id).scope_id;
