@@ -3916,7 +3916,7 @@ impl TypedProgram {
         Ok(Some(ModuleManifest { kind, deps }))
     }
 
-    fn compile_pattern(
+    fn eval_pattern(
         &self,
         pat_expr: ParsedPatternId,
         target_type_id: TypeId,
@@ -4031,7 +4031,7 @@ impl TypedProgram {
                                 enum_pattern.span,
                             )
                         })?;
-                        let payload_pattern = self.compile_pattern(
+                        let payload_pattern = self.eval_pattern(
                             *payload_expr,
                             payload_type_id,
                             scope_id,
@@ -4076,7 +4076,7 @@ impl TypedProgram {
                             )
                         })?;
                     let field_type_id = expected_field.type_id;
-                    let field_pattern = self.compile_pattern(
+                    let field_pattern = self.eval_pattern(
                         *field_parsed_pattern_id,
                         field_type_id,
                         scope_id,
@@ -4104,7 +4104,7 @@ impl TypedProgram {
                         self.type_id_to_string(target_type_id)
                     );
                 };
-                let inner_pattern = self.compile_pattern(
+                let inner_pattern = self.eval_pattern(
                     reference_pattern.inner,
                     r.inner_type,
                     scope_id,
@@ -7110,7 +7110,7 @@ impl TypedProgram {
             let multi_pattern = parsed_case.patterns.len() > 1;
             let mut expected_bindings: Option<SmallVec<[VariablePattern; 8]>> = None;
             for pattern_id in parsed_case.patterns.iter() {
-                let pattern = self.compile_pattern(
+                let pattern = self.eval_pattern(
                     *pattern_id,
                     target_expr_type,
                     match_scope_id,
@@ -7164,7 +7164,7 @@ impl TypedProgram {
                 //let mut setup_statements = smallvec![];
                 //let mut binding_statements = smallvec![];
                 let mut instrs = eco_vec![];
-                self.compile_pattern_in_scope_new(
+                self.compile_pattern_into_values(
                     &pattern,
                     target_expr,
                     &mut instrs,
@@ -7271,7 +7271,7 @@ impl TypedProgram {
     /// Basically, every part of a pattern match boils down to either
     /// - A boolean condition to be evaluated
     /// - A new variable binding
-    fn compile_pattern_in_scope_new(
+    fn compile_pattern_into_values(
         &mut self,
         pattern: &TypedPattern,
         target_expr: TypedExprId,
@@ -7312,7 +7312,7 @@ impl TypedProgram {
                         let_stmt: struct_field_variable.defn_stmt,
                         variable_id: struct_field_variable.variable_id,
                     });
-                    self.compile_pattern_in_scope_new(
+                    self.compile_pattern_into_values(
                         &pattern_field.pattern,
                         struct_field_variable.variable_expr,
                         instrs,
@@ -7357,7 +7357,11 @@ impl TypedProgram {
                         payload_type_id
                     };
                     let enum_as_variant = self.exprs.add(TypedExpr::Cast(TypedCast {
-                        cast_type: CastType::EnumToVariant,
+                        cast_type: if is_referencing {
+                            CastType::ReferenceToReference
+                        } else {
+                            CastType::EnumToVariant
+                        },
                         target_type_id: variant_type_id,
                         base_expr: target_expr,
                         span: enum_pattern.span,
@@ -7379,7 +7383,7 @@ impl TypedProgram {
                         variable_id: payload_variable.variable_id,
                     });
                     //setup_statements.push(payload_variable.defn_stmt);
-                    self.compile_pattern_in_scope_new(
+                    self.compile_pattern_into_values(
                         payload_pattern,
                         payload_variable.variable_expr,
                         instrs,
@@ -7420,7 +7424,7 @@ impl TypedProgram {
                 } else {
                     target_expr
                 };
-                self.compile_pattern_in_scope_new(
+                self.compile_pattern_into_values(
                     &reference_pattern.inner_pattern,
                     target_expr,
                     instrs,
@@ -8115,12 +8119,12 @@ impl TypedProgram {
                     ctx.scope_id,
                 );
                 let pattern =
-                    self.compile_pattern(pattern, target_type, ctx.scope_id, *allow_bindings)?;
+                    self.eval_pattern(pattern, target_type, ctx.scope_id, *allow_bindings)?;
                 instrs.push(MatchingConditionInstr::Binding {
                     let_stmt: target_var.defn_stmt,
                     variable_id: target_var.variable_id,
                 });
-                self.compile_pattern_in_scope_new(
+                self.compile_pattern_into_values(
                     &pattern,
                     target_var.variable_expr,
                     instrs,

@@ -132,6 +132,7 @@ impl Backend {
             command: k1::compiler::Command::Check {
                 file: root_uri.as_ref().unwrap().path().into(),
             },
+            clang_options: vec![],
         });
         let compiled_module = match compile_result {
             Ok(module) => CompiledModule::Typed(Box::new(module)),

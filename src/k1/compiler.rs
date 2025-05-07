@@ -209,6 +209,9 @@ pub struct Args {
     /// Target platform
     pub target: Option<Target>,
 
+    #[arg(long = "clang-option", short = 'c', allow_hyphen_values = true)]
+    pub clang_options: Vec<String>,
+
     #[command(subcommand)]
     pub command: Command,
 }
@@ -348,6 +351,7 @@ pub fn write_executable(
     k1_lib_dir: &Path,
     out_dir: &Path,
     module_name: &Path,
+    extra_options: &[String],
 ) -> Result<()> {
     let clang_time = std::time::Instant::now();
 
@@ -380,6 +384,7 @@ pub fn write_executable(
         "-o",
         out_file,
     ]);
+    build_cmd.args(extra_options);
     log::info!("Build Command: {:?}", build_cmd);
     let build_status = build_cmd.status()?;
 
@@ -434,7 +439,13 @@ pub fn codegen_module<'ctx, 'module>(
     let k1_lib_dir = PathBuf::from(k1_lib_dir_string);
 
     if do_write_executable {
-        write_executable(args.debug, &k1_lib_dir, &out_dir, &module_name_path)?;
+        write_executable(
+            args.debug,
+            &k1_lib_dir,
+            &out_dir,
+            &module_name_path,
+            &args.clang_options,
+        )?;
     }
 
     if args.llvm_counts {
