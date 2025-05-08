@@ -4,7 +4,7 @@ let static INT_BUFFER: Buffer[int] = [1,2,3,4,5].toBuffer();
 fn getPoint(): { x: u8, y: u32, z: i64 } {
   { x: 1, y: 300, z: -222 }
 }
-fn main(): i32 {
+fn test(): unit {
 
   // String creation (special case)
   #static "Hello, Static";
@@ -151,22 +151,22 @@ fn main(): i32 {
   };
   assert(buf == [1,2,3,4,5].toBuffer());
   let bufFromStatic = #static {
-    let* l = List/wrapBuffer(INT_BUFFER);
+    let* l = List/wrapBuffer(INT_BUFFER.cloned());
     l.push(9);
     assertEquals(l.len, 6);
     assertEquals(l.last(), some(9));
   };
-
-  // #static crash("hehhhhhhhhhh");
   
-  // TODO: Buffer of buffers!
 
   // Simple lambda
-  //#static {
-  //  \(x: int) foo(5)
-  //};
+  assertEquals[int](#static {
+    let lam = \(x: int) x * 2;
+    lam(1)
+  }, 2);
 
-  0
+  // TODO: Buffer of buffers!
+
+  ()
 }
 
 fn getOne(): int { 1 }

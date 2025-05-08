@@ -1,10 +1,15 @@
 fn low(): unit {
+  println("testing 'low'");
   arith/test();
   bool_test/test();
   char_test/test();
   global_int/test();
   assign/test();
   pointer/test();
+  fib/test();
+  float_test/test();
+  pipe/test();
+  lexical_scope/test();
   ability_fail/test();
   ability_constraint/test();
   ability_generic/test();
@@ -14,9 +19,6 @@ fn low(): unit {
   bits_test/test();
   control_flow/test();
   enum_basic/test();
-  fib/test();
-  float_test/test();
-  pipe/test();
   function_pointer/test();
   ns_collision/test();
   enum_construction/test();
@@ -30,6 +32,7 @@ fn low(): unit {
 }
 
 fn moderate(): unit {
+  println("testing 'moderate'");
   never_everywhere/test();
   ns_extend/test();
   optionals/test();
@@ -53,6 +56,20 @@ fn moderate(): unit {
   struct_composition/test();
 }
 
+fn coreLib(): unit {
+  println("testing 'core'");
+  // core lib coverage
+  for_yield_test/test();
+  allocator_test/test();
+  buffer_test/test();
+  string_test/test();
+  list_test/test();
+  range_test/test();
+  string_interp_test/test();
+  json_test/test();
+  lib_compiler_test/test();
+}
+
 fn main(): i32 {
   // Compiler Core coverage, ideally increasing complexity
   // Low
@@ -63,20 +80,10 @@ fn main(): i32 {
   moderate();
   #static moderate();
 
-  // Compilation
-  lexical_scope/test();
+  static_run/test();
 
-  println("Stdlib coverage");
-  // Stdlib coverage
-  for_yield_test/test();
-  allocator_test/test();
-  buffer_test/test();
-  string_test/test();
-  list_test/test();
-  range_test/test();
-  string_interp_test/test();
-  json_test/test();
-  lib_compiler_test/test();
+  coreLib();
+  // #static coreLib();
 
   println("All tests passed!");
 

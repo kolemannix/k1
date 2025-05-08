@@ -1,0 +1,4 @@
+fn main(): i32 {
+  require crash("booo") else { crash("") };
+}
+//exitcode: 1

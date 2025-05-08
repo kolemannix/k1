@@ -1,6 +1,6 @@
-fn test_require(): i32 {
+fn tests(): unit {
   let foo = { x: 1, y: some(2) };
-  require foo is { y } and y is .Some(2) and 2 == (1 + (1 + 1)) else {
+  require foo is { y } and y is .Some(2) and 2 == (1 + 1) else {
     crash("")
   };
 
@@ -8,9 +8,20 @@ fn test_require(): i32 {
     crash("")
   };
 
+  let* myInt = 4;
+  require myInt is 4* else {
+    crash("")
+  };
+
   let* myEntity = { id: "abc123", health: 99, opacity: 0.5, alive: true };
   require myEntity is { health, opacity, alive: true }* and health.* > 50 and opacity.* > 0.0 else {
     crash("")
   };
+}
+
+fn main(): i32 {
+  tests();
+  #static tests();
+
   0
 }

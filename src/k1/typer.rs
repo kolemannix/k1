@@ -1868,6 +1868,7 @@ pub struct LetStmt {
     pub is_referencing: bool,
     pub span: SpanId,
 }
+impl_copy_if_small!(20, LetStmt);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AssignmentKind {
@@ -1882,6 +1883,7 @@ pub struct AssignmentStmt {
     pub span: SpanId,
     pub kind: AssignmentKind,
 }
+impl_copy_if_small!(16, AssignmentStmt);
 
 #[derive(Debug, Clone)]
 pub struct TypedRequireStmt {
@@ -4436,6 +4438,20 @@ impl TypedProgram {
         no_reset: bool,
     ) -> TyperResult<(TypeId, StaticValueId)> {
         let mut vm = std::mem::take(&mut self.vm).unwrap();
+        // let mut vm = match *std::mem::take(&mut self.vm) {
+        //     None => {
+        //         let span = self.ast.get_expr_span(parsed_expr);
+        //         let (source, location) = self.get_span_location(span);
+        //         eprintln!(
+        //             "Had to make a static-in-static VM at {}:{}. Should we have a pool of them? We should make them fast to make anyway",
+        //             source.filename,
+        //             location.line_number()
+        //         );
+        //         let new_vm = vm::Vm::make(10 * crate::MEGABYTE, crate::MEGABYTE);
+        //         new_vm
+        //     }
+        //     Some(vm) => vm,
+        // };
         let res = self.execute_static_expr_with_vm(
             &mut vm,
             parsed_expr,
@@ -10876,7 +10892,8 @@ impl TypedProgram {
             ParsedStmt::Require(require) => {
                 static_assert_size!(parse::ParsedRequire, 12);
                 let require = require.clone();
-                let condition = self.eval_matching_condition(require.condition_expr, ctx)?;
+                let condition = self
+                    .eval_matching_condition(require.condition_expr, ctx.with_no_expected_type())?;
 
                 let else_scope =
                     self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, None, None);

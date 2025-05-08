@@ -1,3 +1,5 @@
+use std::process::ExitCode;
+
 use clap::Parser;
 use k1::compiler;
 use k1::compiler::{Args, Command};
@@ -7,11 +9,9 @@ use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
-const STACK_SIZE: usize = 10 * k1::MEGABYTE;
-
-fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<ExitCode> {
     let compiler_thread = std::thread::Builder::new()
-        .stack_size(STACK_SIZE)
+        .stack_size(k1::STACK_SIZE)
         .name("compiler".to_string())
         .spawn(run)
         .unwrap();
@@ -19,7 +19,7 @@ fn main() -> anyhow::Result<()> {
     compiler_thread.join().unwrap()
 }
 
-fn run() -> anyhow::Result<()> {
+fn run() -> anyhow::Result<ExitCode> {
     let l = Box::leak(Box::new(
         env_logger::Builder::new()
             .format_timestamp(None)
@@ -41,26 +41,28 @@ fn run() -> anyhow::Result<()> {
     //     compiler::compile_module(&args);
     //     i += 1;
     // }
-    let Ok(module) = compiler::compile_module(&args) else {
-        std::process::exit(1);
-    };
+    let Ok(module) = compiler::compile_module(&args) else { return Ok(ExitCode::FAILURE) };
     let module_name = module.name();
     info!("done waiting on compile thread");
     if matches!(args.command, Command::Check { .. }) {
-        std::process::exit(0)
+        // nocommit: I wouldn't mind switching back to exit for the faster
+        // exit, but this was hiding a memory bug that causes the lsp
+        // and test suite to crash when we try to drop the TypedModule.
+        return Ok(ExitCode::SUCCESS);
     };
     let llvm_ctx = inkwell::context::Context::create();
-    match compiler::codegen_module(&args, &llvm_ctx, &module, out_dir, true) {
+    return match compiler::codegen_module(&args, &llvm_ctx, &module, out_dir, true) {
         Ok(_codegen) => {
             if matches!(args.command, Command::Build { .. }) {
-                std::process::exit(0)
-            };
-            compiler::run_compiled_program(out_dir, module_name);
-            std::process::exit(0);
+                Ok(ExitCode::SUCCESS)
+            } else {
+                compiler::run_compiled_program(out_dir, module_name);
+                Ok(ExitCode::SUCCESS)
+            }
         }
         Err(err) => {
             eprintln!("Codegen error: {err}");
-            std::process::exit(1);
+            Ok(ExitCode::FAILURE)
         }
     };
 }

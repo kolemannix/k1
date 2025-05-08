@@ -3111,7 +3111,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         size_arg,
                     )
                     .unwrap();
-                eprintln!("memcpy result {}", not_actually_a_ret_ptr);
                 let result = self.builtin_types.unit_basic();
                 self.builder.build_return(Some(&result)).unwrap()
             }
@@ -3213,18 +3212,25 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(self.builtin_types.unit_value.as_basic_value_enum().into())
             }
             TypedStmt::Require(require_stmt) => {
-                let require_continue_block = self.append_basic_block("");
+                let start_block = self.builder.get_insert_block().unwrap();
+                let require_continue_block = self.append_basic_block("require_continue");
                 let require_else_block = self.append_basic_block("require_else");
+
                 self.codegen_matching_condition(
                     &require_stmt.condition,
                     require_continue_block,
                     require_else_block,
                 )?;
-                self.builder.position_at_end(require_else_block);
 
+                self.builder.position_at_end(require_else_block);
                 self.codegen_expr(require_stmt.else_body)?;
 
-                self.builder.position_at_end(require_continue_block);
+                if require_stmt.condition.diverges {
+                    require_continue_block.remove_from_function().unwrap();
+                    self.builder.position_at_end(start_block);
+                } else {
+                    self.builder.position_at_end(require_continue_block);
+                }
 
                 Ok(self.builtin_types.unit_value.as_basic_value_enum().into())
             }
