@@ -12,6 +12,8 @@ pub mod vm;
 pub const KILOBYTE: usize = 1024;
 pub const MEGABYTE: usize = KILOBYTE * 1024;
 
+pub const STACK_SIZE: usize = 10 * MEGABYTE;
+
 pub type SV8<T> = SmallVec<[T; 8]>;
 pub type SV4<T> = SmallVec<[T; 4]>;
 

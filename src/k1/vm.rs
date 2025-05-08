@@ -583,10 +583,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                     let not_equals = bin_op.kind == K::NotEquals;
                     let bool_value_pre = match (lhs, rhs) {
                         (Value::Unit, Value::Unit) => Ok(true),
-                        (Value::Bool(b1), Value::Bool(b2)) => {
-                            eprintln!("{b1} == {b2}");
-                            Ok(b1 == b2)
-                        }
+                        (Value::Bool(b1), Value::Bool(b2)) => Ok(b1 == b2),
                         (Value::Char(c1), Value::Char(c2)) => Ok(c1 == c2),
                         (Value::Int(i1), Value::Int(i2)) => Ok(i1 == i2),
                         (Value::Float(f1), Value::Float(f2)) => Ok(f1 == f2),
@@ -1038,8 +1035,8 @@ fn execute_variable_expr(
 fn function_id_to_ref_value(function_id: FunctionId, function_reference_type_id: TypeId) -> Value {
     let function_id_u32 = function_id.as_u32();
     let function_id_as_ptr = function_id_u32 as usize as *const u8;
-    eprintln!(
-        "Im stuffing function id {function_id_u32} into a Reference value {:?}, teehee!",
+    debug!(
+        "Encoding function id {function_id_u32} into the pointer address of a Reference value {:?}",
         function_id_as_ptr
     );
     let value = Value::Reference { type_id: function_reference_type_id, ptr: function_id_as_ptr };
@@ -1180,7 +1177,7 @@ pub fn execute_stmt(
                 v
             };
             vm.insert_current_local(let_stmt.variable_id, to_store);
-            Ok(VmResult::Value(Value::UNIT))
+            Ok(VmResult::UNIT)
         }
         typer::TypedStmt::Assignment(assgn) => {
             let assgn = assgn.clone();
@@ -1193,7 +1190,7 @@ pub fn execute_stmt(
                         m.ice("Value assignment lhs was not a variable", None)
                     };
                     vm.insert_current_local(destination_var.variable_id, v);
-                    Ok(VmResult::Value(Value::UNIT))
+                    Ok(VmResult::UNIT)
                 }
                 typer::AssignmentKind::Reference => {
                     let lhs_value = execute_expr_return_exit!(vm, m, assgn.destination)?;
@@ -1207,13 +1204,23 @@ pub fn execute_stmt(
                         )
                     };
                     store_value(&m.types, ptr.cast_mut(), v);
-                    Ok(VmResult::Value(Value::UNIT))
+                    Ok(VmResult::UNIT)
                 }
             }
         }
         typer::TypedStmt::Require(require) => {
-            // execute_matching_condition(vm, m, &require.condition);
-            m.todo_with_span("Require statement not implemented in VM", require.span);
+            // TODO(vm perf): We are cloning MatchingConditions all over the VM
+            let require = require.clone();
+            let span = require.span;
+            let else_body = require.else_body;
+            let condition =
+                return_exit!(execute_matching_condition(vm, m, &require.condition)?).expect_bool();
+            if !condition {
+                let _else_result = execute_expr_return_exit!(vm, m, else_body)?;
+                m.ice_with_span("Else block should have exited or returned", span)
+            }
+
+            Ok(VmResult::UNIT)
         }
     }
 }
@@ -1500,6 +1507,7 @@ fn execute_intrinsic(
 
             let layout =
                 std::alloc::Layout::from_size_align(size as usize, align as usize).unwrap();
+            eprintln!("FREEING SOMETHING: {:?}", ptr);
             unsafe { std::alloc::dealloc(ptr as *mut u8, layout) };
             Ok(VmResult::UNIT)
         }

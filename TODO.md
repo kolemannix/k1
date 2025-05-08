@@ -55,32 +55,14 @@ New tagline? "C with typeclasses and tagged unions"
   - [x] Enum construction
 
 ## Cleanup/tidyness/punchlist
-- [ ] Write a 'validateTypedModule' procedure.
-- [ ] Represent payload-less `either` types as ints not structs
 - [x] String pool for string values, not just identifiers (will dedupe in LLVM too)
-- [ ] Support explicit type args in AnonEnumConstructor syntax 
-- [ ] Unit syntax of '()' makes no sense when we don't have tuples. What about `{}`
 - [x] Adopt `ecow`'s EcoVec
-- [ ] Change FieldAccess semantics to work on struct references, and copy only the field out
-      This saves copying the entire aggregate first with a Dereference instruction
-- [ ] ThreadLocal globals
-- [ ] LLVM Codegen callstack is too deep due to codegen_function_or_get
-- [ ] profiling notes: find_abilities_in_scope, infer_types, 
 - [x] reproduce shadow bug: only when statically run?!
       buffer.slice: `let end = if end > self.len self.len else end;`
-- [ ] Switch VM stack to a single virtual allocation https://crates.io/crates/memmap2
-- [ ] Fix non-referencing match on `struct*`: just do the deref for the user
 - [x] Fix referencing match not 'eliminating' patterns on `struct*` giving unhandled pattern `.CustomHeap({ zalloc }*) -> {`
-- [ ] Macro system built on comptime, both string #insert and parsed code #insert like Jai
-- [ ] Use `perf` to look at branch info, cache info
 - [x] Optimize lambdas that don't capture to become function pointers instead
-- [ ] Compile switches with no patterns or guards to LLVM switch
-- [ ] Implicit conversions: based on a special ability that integrates with 
-      type inference? (like Mojo's ImplicitlyIntable, etc)
 - [x] comptime #if needs to be a real node not a directive (can't parse if/else). More like `#const if` than `#if`
-- [ ] Private stuff?
 - [x] string interp at end puts unnecessary empty string part: `putString(__sb_1001, "");`
-- [ ] Bug: Are parameter names part of a function type. (for now they are to avoid bugs but it explodes the type count..)
 - [x] Backend codegen cleanup
 -  [x] avoid uses of aggregate *values* where we can: so routine uses of 'struct's and 'enum's
 -  [x] Move allocas to entry block. "Doing this is actually quite easy as LLVM provides functions you can use to retrieve the entry block for a function and insert instructions into it."
@@ -91,17 +73,33 @@ New tagline? "C with typeclasses and tagged unions"
 - [x] 'never' needs to work in every expression position (got close enough, might add more if one comes up)
 - [x] accumulate test errors and support inline test comment assertions when a line should produce a compiler error.
       - Probably one test for failing compilation and one passing one for each major language area
-- [ ] Rename 'Buffer'
-- [ ] b"" strings that are of type Buffer[u8] (what about interpolation?)
-- [ ] c"" strings that are of type Pointer (what about interpolation?)
-- [ ] A clone ability
 - [x] Add simple int range in stdlib
-      `sealed abstract class Range(let start: Int, let end: Int, let step: Int)`
-- [ ] Make demo readme / site
-- [ ] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`
 - [x] Fix enum codegen, read Inko llvm backend (its inkwell + rust and does ABI compatible stuff https://yorickpeterse.com/articles/the-mess-that-is-handling-structure-arguments-and-returns-in-llvm/)
 - [x] Conditional compile directive
 - [x] Support boolean operators in compile time expressions
+- [x] Change FieldAccess semantics to work on struct references, and copy only the field out
+      This saves copying the entire aggregate first with a Dereference instruction
+- [ ] Write a 'validateTypedModule' procedure. This need is lessened by the VM which in a way typechecks the TAST
+- [ ] Represent payload-less `either` types as ints not structs
+- [ ] Support explicit type args in AnonEnumConstructor syntax 
+- [ ] Unit syntax of '()' makes no sense when we don't have tuples. What about `{}`
+- [ ] ThreadLocal globals
+- [ ] LLVM Codegen callstack is too deep due to codegen_function_or_get
+- [ ] profiling notes: find_abilities_in_scope, infer_types, 
+- [ ] Switch VM stack to a single virtual allocation https://crates.io/crates/memmap2
+- [ ] Use `perf` to look at branch info, cache info
+- [ ] Compile switches with no patterns or guards to LLVM switch
+- [ ] Implicit conversions: based on a special ability that integrates with 
+      type inference? (like Mojo's ImplicitlyIntable, etc)
+- [ ] Private functions?
+- [ ] Bug: Are parameter names part of a function type. (for now they are to avoid bugs but it explodes the type count..)
+- [ ] Rename 'Buffer' to ... Slice?
+- [ ] b"" strings that are of type Buffer[u8] (what about interpolation?)
+- [ ] c"" strings that are of type Pointer (what about interpolation?)
+- [ ] A clone ability
+      `sealed abstract class Range(let start: Int, let end: Int, let step: Int)`
+- [ ] Make demo readme / site
+- [ ] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`
 - [ ] Mark types as trivially copyable or not
 ^ 'Buffer' would be NOT copyable since it contains a Reference
 - [ ] Ability constraints on generics
@@ -146,7 +144,9 @@ New tagline? "C with typeclasses and tagged unions"
       Then we could do an LLVM interp platform and a rust interpreter platform
   - [ ] VM "PermSpace" for caching converted static values in their VM representation
 
-# Project: static reflection and metaprogramming story
+## Project: Macro system built on 'static': both string #insert and parsed code #insert, like Jai
+
+## Project: static reflection and metaprogramming story
 - [ ] functions taking only a single type could be invoked with
       a nice syntax like `type.sizeOf`
 - [ ] Runtime type info story

@@ -108,6 +108,7 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
         llvm_counts: false,
         target: None,
         command: Command::Build { file: path.as_ref().to_owned() },
+        clang_options: vec![],
     };
     let compile_result = compiler::compile_module(&args);
     let expectation = get_test_expectation(path.as_ref());
@@ -293,6 +294,7 @@ pub fn main() -> Result<()> {
             for test in all_tests.iter() {
                 let filename = test.as_path().file_name().unwrap().to_str().unwrap();
                 std::thread::Builder::new()
+                    .stack_size(k1::STACK_SIZE)
                     .name(filename.to_string())
                     .spawn_scoped(scope, || {
                         let ctx = Context::create();
