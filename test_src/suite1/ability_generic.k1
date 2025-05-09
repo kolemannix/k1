@@ -25,11 +25,11 @@ ns ability_generic {
     for GenericPoint[T] {
       fn add(self: GenericPoint[T], other: GenericPoint[T]): GenericPoint[T] { 
         let newX: T = self.x.add(other.x);
-        let a = self.x; let b = other.x;
-        println("GenericPoint.add X \{a} + \{b} = \{newX}");
+        //let a = self.x; let b = other.x;
+        //println("GenericPoint.add X \{a} + \{b} = \{newX}");
         let newY: T = self.y.add(other.y);
-        let a = self.y; let b = other.y;
-        println("GenericPoint.add Y \{a} + \{b} = \{newY}");
+        //let a = self.y; let b = other.y;
+        //println("GenericPoint.add Y \{a} + \{b} = \{newY}");
         { x: newX, y: newY }
       }
   }

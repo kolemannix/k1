@@ -9,6 +9,11 @@ deftype Json = either
   JsObject(List[{ key: string, value: Json }])
 
 fn test(): unit {
+  let size = core/types/sizeOf[Json]();
+  let align = core/types/alignOf[Json]();
+  println("Size of Json: \{size}");
+  println("Align of Json: \{align}");
+
   let obj: Json = .JsStr("hello");
   let null: Json = .JsNull;
   assert(obj is .JsStr("hello"));

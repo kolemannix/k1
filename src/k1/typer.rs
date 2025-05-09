@@ -2466,7 +2466,7 @@ impl TypedProgram {
             type_defn_mapping: FxHashMap::new(),
             type_variable_counts: Pool::with_capacity("type_variable_counts", 8192),
             ability_mapping: FxHashMap::new(),
-            placeholder_mapping: FxHashMap::new(),
+            recursive_placeholder_mapping: FxHashMap::new(),
             config: TypesConfig { ptr_size_bits: config.target.word_size().bits() },
         };
 
@@ -2877,9 +2877,10 @@ impl TypedProgram {
             self.eval_type_expr_ext(parsed_type_defn.value_expr, defn_scope_id, type_eval_context)?;
 
         // If this was a recursive definition, do a replacement
-        if let Some(placeholder_id) = self.types.placeholder_mapping.get(&parsed_type_defn_id) {
-            self.types.get_mut(*placeholder_id).as_recursive_reference().root_type_id =
-                Some(resulting_type_id);
+        if let Some(recursive_ref_id) =
+            self.types.recursive_placeholder_mapping.get(&parsed_type_defn_id)
+        {
+            self.types.fulfill_recursive_reference_hole(*recursive_ref_id, resulting_type_id)
         }
 
         let type_id = if has_type_params {
@@ -3550,7 +3551,7 @@ impl TypedProgram {
                             let type_defn_info = context.inner_type_defn_info.as_ref().unwrap();
                             let type_defn_id = type_defn_info.ast_id.expect_type_defn();
                             let placeholder_type_id =
-                                match self.types.placeholder_mapping.get(&type_defn_id) {
+                                match self.types.recursive_placeholder_mapping.get(&type_defn_id) {
                                     None => {
                                         eprintln!(
                                             "Inserting recursive reference for {}",
@@ -3563,7 +3564,7 @@ impl TypedProgram {
                                             }),
                                         );
                                         self.types
-                                            .placeholder_mapping
+                                            .recursive_placeholder_mapping
                                             .insert(type_defn_id, type_id);
                                         type_id
                                     }

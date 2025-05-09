@@ -179,7 +179,7 @@ impl Vm {
             .iter()
             .map(|p| (*p.0, *p.1))
             .collect_vec();
-        let _debug_frame = self.stack.push_new_frame(None);
+        let _debug_frame = self.stack.push_new_frame(None, None);
         for (k, v) in locals.into_iter() {
             let var = m.variables.get(k);
             let v_name = var.name;
@@ -207,6 +207,7 @@ impl Vm {
 
 #[derive(Debug, Clone, Copy)]
 pub struct VmExit {
+    #[allow(unused)]
     span: SpanId,
     code: i32,
 }
@@ -435,8 +436,8 @@ pub fn execute_single_expr_with_vm(
         vm.globals.insert(GLOBAL_ID_STATIC, Value::Bool(true));
     }
 
-    vm.stack.push_new_frame(None);
     let span = m.exprs.get(expr).get_span();
+    vm.stack.push_new_frame(None, Some(span));
     let res = match execute_expr(vm, m, expr) {
         Err(e) => {
             m.write_error(&mut stderr(), &e).unwrap();
@@ -864,8 +865,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                     let lambda_type = m.get_expr_type(cast.base_expr).as_lambda().unwrap();
                     let obj_type = m.types.get(lambda_object_type).as_lambda_object().unwrap();
                     if cfg!(debug_assertions) {
-                        let struct_layout =
-                            m.types.get_layout(obj_type.struct_representation).unwrap();
+                        let struct_layout = m.types.get_layout(obj_type.struct_representation);
                         debug_assert_eq!(struct_layout.size_bytes(), 16);
                     }
 
@@ -927,7 +927,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
         TypedExpr::FunctionToLambdaObject(f_to_lam) => {
             let obj_type = m.types.get(f_to_lam.lambda_object_type_id).as_lambda_object().unwrap();
             if cfg!(debug_assertions) {
-                let struct_layout = m.types.get_layout(obj_type.struct_representation).unwrap();
+                let struct_layout = m.types.get_layout(obj_type.struct_representation);
                 debug_assert_eq!(struct_layout.size_bytes(), 16);
             }
 
@@ -1097,7 +1097,7 @@ pub fn static_value_to_vm_value(
             let elements = buf.elements.clone();
             let element_type = m.types.get(buf.type_id).as_buffer_instance().unwrap().type_args[0];
 
-            let layout = m.types.get_layout(element_type).unwrap();
+            let layout = m.types.get_layout(element_type);
             let buffer_allocation_layout = layout.array_me(buf.len());
 
             debug!(
@@ -1149,7 +1149,7 @@ pub fn execute_stmt(
             Ok(result)
         }
         typer::TypedStmt::Let(let_stmt) => {
-            let let_stmt = let_stmt.clone();
+            let let_stmt = *let_stmt;
             let v = execute_expr_return_exit!(vm, m, let_stmt.initializer)?;
             let to_store = if let_stmt.is_referencing {
                 let reference_type = let_stmt.variable_type;
@@ -1180,7 +1180,7 @@ pub fn execute_stmt(
             Ok(VmResult::UNIT)
         }
         typer::TypedStmt::Assignment(assgn) => {
-            let assgn = assgn.clone();
+            let assgn = *assgn;
             let v = execute_expr_return_exit!(vm, m, assgn.value)?;
 
             match assgn.kind {
@@ -1307,13 +1307,14 @@ fn execute_call(vm: &mut Vm, m: &mut TypedProgram, call_id: TypedExprId) -> Type
     };
 
     if vm.stack.frames.len() == 128 {
-        eprintln!("{}", vm.stack.frames.iter().map(|f| m.name_of_opt(f.debug_name)).join("\n"));
+        let frame_names = make_stack_trace(m, &vm.stack);
+        eprintln!("{}", frame_names);
         return failf!(span, "VM call stack overflow");
     }
 
     let return_type_id = m.types.get(function.type_id).expect_function().return_type;
     let aggregate_return_layout = if m.types.is_aggregate_repr(return_type_id) {
-        Some(m.types.get_layout(return_type_id).unwrap())
+        Some(m.types.get_layout(return_type_id))
     } else {
         None
     };
@@ -1350,7 +1351,7 @@ fn execute_call(vm: &mut Vm, m: &mut TypedProgram, call_id: TypedExprId) -> Type
     }
 
     // But bind the variables in the _callee_ frame
-    vm.stack.push_new_frame(Some(name));
+    vm.stack.push_new_frame(Some(name), Some(span));
     for (variable_id, value) in param_values.into_iter() {
         vm.insert_current_local(variable_id, value);
     }
@@ -1404,29 +1405,20 @@ fn execute_intrinsic(
         IntrinsicOperation::SizeOf => {
             let type_id = type_args[0].type_id;
             let layout = m.types.get_layout(type_id);
-            let size_bytes = match layout {
-                Some(l) => l.size_bytes(),
-                None => 0,
-            };
-            Ok(Value::Int(TypedIntValue::UWord64(size_bytes as u64)).into())
+            let size_bytes = layout.size_bytes() as u64;
+            Ok(Value::Int(TypedIntValue::UWord64(size_bytes)).into())
         }
         IntrinsicOperation::SizeOfStride => {
             let type_id = type_args[0].type_id;
             let layout = m.types.get_layout(type_id);
-            let stride_bytes = match layout {
-                Some(l) => l.stride_bytes(),
-                None => 0,
-            };
-            Ok(Value::Int(TypedIntValue::UWord64(stride_bytes as u64)).into())
+            let stride_bytes = layout.stride_bytes() as u64;
+            Ok(Value::Int(TypedIntValue::UWord64(stride_bytes)).into())
         }
         IntrinsicOperation::AlignOf => {
             let type_id = type_args[0].type_id;
             let layout = m.types.get_layout(type_id);
-            let align_bytes = match layout {
-                Some(l) => l.align_bytes(),
-                None => 0,
-            };
-            Ok(Value::Int(TypedIntValue::UWord64(align_bytes as u64)).into())
+            let align_bytes = layout.align_bytes() as u64;
+            Ok(Value::Int(TypedIntValue::UWord64(align_bytes)).into())
         }
         IntrinsicOperation::TypeId => {
             let type_id = type_args[0].type_id;
@@ -1478,7 +1470,11 @@ fn execute_intrinsic(
             let align_expr = args[1];
             let size = execute_expr_return_exit!(vm, m, size_expr)?.expect_int().expect_uword();
             let align = execute_expr_return_exit!(vm, m, align_expr)?.expect_int().expect_uword();
-            let ptr = allocate(size, align, zero);
+            let Ok(layout) = std::alloc::Layout::from_size_align(size, align) else {
+                vm_crash(m, vm, format!("Rust didn't like this layout: size={size}, align={align}"))
+            };
+            let ptr = allocate(layout, zero);
+
             Ok(Value::Pointer(ptr.addr()).into())
         }
         IntrinsicOperation::Reallocate => {
@@ -1525,15 +1521,17 @@ fn execute_intrinsic(
         IntrinsicOperation::MemEquals => {
             //intern fn compare(p1: Pointer, p2: Pointer, size: uword): i32
             let [p1, p2, size] = args[0..3] else { unreachable!() };
-            let p1 = execute_expr_return_exit!(vm, m, p1)?.expect_ptr();
-            let p2 = execute_expr_return_exit!(vm, m, p2)?.expect_ptr();
+            let p1_usize = execute_expr_return_exit!(vm, m, p1)?.expect_ptr();
+            let p2_usize = execute_expr_return_exit!(vm, m, p2)?.expect_ptr();
             let size = execute_expr_return_exit!(vm, m, size)?.expect_int().expect_uword();
-            let p1 = p1 as *const u8;
-            let p2 = p2 as *const u8;
-            let p1 = unsafe { std::slice::from_raw_parts(p1, size as usize) };
-            let p2 = unsafe { std::slice::from_raw_parts(p2, size as usize) };
-            // Run rust's memcmp equivalent
+            let p1 = p1_usize as *const u8;
+            let p2 = p2_usize as *const u8;
+            let p1 = unsafe { slice_from_raw_parts_checked(vm, m, p1, size as usize) };
+            let p2 = unsafe { slice_from_raw_parts_checked(vm, m, p2, size as usize) };
+
+            // Slice equality on [u8] results in memcmp
             let eq = p1 == p2;
+
             Ok(Value::Bool(eq).into())
         }
         IntrinsicOperation::Exit => {
@@ -1573,8 +1571,7 @@ fn execute_intrinsic(
     }
 }
 
-fn allocate(size: usize, align: usize, zero: bool) -> *mut u8 {
-    let layout = std::alloc::Layout::from_size_align(size, align).unwrap();
+fn allocate(layout: std::alloc::Layout, zero: bool) -> *mut u8 {
     let ptr = if zero {
         unsafe { std::alloc::alloc_zeroed(layout) }
     } else {
@@ -1655,7 +1652,7 @@ pub fn store_value(types: &Types, dst: *mut u8, value: Value) -> usize {
                 size_of::<usize>()
             }
             Value::Agg { type_id, ptr } => {
-                let struct_layout = types.get_layout(type_id).unwrap();
+                let struct_layout = types.get_layout(type_id);
                 let size_bytes = struct_layout.size_bytes();
                 // Equivalent of memcpy
                 debug!("copy_from {:?} -> {:?} {size_bytes}", dst, ptr);
@@ -1695,8 +1692,13 @@ pub fn load_value(
     if ptr.addr() < 256 {
         return failf!(span, "Attempt to dereference likely value pointer {}", ptr.addr());
     }
-    let Some(layout) = m.types.get_layout(type_id) else {
-        return failf!(span, "Cannot load a type with no known layout");
+    let layout = m.types.get_layout(type_id);
+    if layout.size_bytes() == 0 {
+        return failf!(
+            span,
+            "For now, cannot load a type with no known layout: {}",
+            m.type_id_to_string(type_id)
+        );
     };
     debug!("load of '{}' from {:?} {:?}", m.type_id_to_string(type_id), ptr, layout);
     match m.types.get(type_id) {
@@ -1767,7 +1769,7 @@ pub fn load_value(
         | Type::LambdaObject(_) => {
             debug_assert!(m.types.is_aggregate_repr(type_id));
             if copy_aggregates {
-                let layout = m.types.get_layout(type_id).unwrap();
+                let layout = m.types.get_layout(type_id);
                 let frame_ptr = vm.stack.push_raw_copy_layout(layout, ptr);
                 Ok(Value::Agg { type_id, ptr: frame_ptr })
             } else {
@@ -1802,7 +1804,7 @@ fn build_enum_at_location(
     payload_value: Option<Value>,
 ) -> (*const u8, Layout) {
     let variant_type = types.get(variant_type_id).expect_enum_variant();
-    let enum_layout = types.get_layout(variant_type_id).unwrap();
+    let enum_layout = types.get_layout(variant_type_id);
     // TODO(vm): Represent no-payload enums as
     // an int-based Value variant, not aggregates
     // if enum_type.is_no_payload() {
@@ -1832,7 +1834,7 @@ fn build_struct_unaligned(dst: *mut u8, types: &Types, struct_type_id: TypeId, m
 }
 
 pub fn offset_at_index(types: &Types, type_id: TypeId, index: usize) -> usize {
-    let size_bytes = types.get_layout(type_id).map(|l| l.size_bytes()).unwrap_or(0);
+    let size_bytes = types.get_layout(type_id).size_bytes();
     index * size_bytes
 }
 
@@ -1873,10 +1875,7 @@ pub fn load_struct_field(
         m.type_id_to_string(struct_type),
         value,
         unsafe {
-            std::slice::from_raw_parts(
-                struct_ptr,
-                m.types.get_layout(struct_type).unwrap().size_bytes(),
-            )
+            std::slice::from_raw_parts(struct_ptr, m.types.get_layout(struct_type).size_bytes())
         }
     );
     Ok(value)
@@ -1908,11 +1907,17 @@ pub struct StackFrame {
     index: u32,
     base_ptr: *const u8,
     debug_name: Option<Identifier>,
+    call_span: Option<SpanId>,
 }
 
 impl StackFrame {
-    pub fn make(index: u32, base_ptr: *const u8, debug_name: Option<Identifier>) -> StackFrame {
-        StackFrame { index, base_ptr, debug_name }
+    pub fn make(
+        index: u32,
+        base_ptr: *const u8,
+        debug_name: Option<Identifier>,
+        call_span: Option<SpanId>,
+    ) -> StackFrame {
+        StackFrame { index, base_ptr, debug_name, call_span }
     }
 }
 
@@ -1938,10 +1943,14 @@ impl Stack {
         self.frames.clear();
     }
 
-    fn push_new_frame(&mut self, name: Option<Identifier>) -> StackFrame {
+    fn push_new_frame(
+        &mut self,
+        name: Option<Identifier>,
+        call_span: Option<SpanId>,
+    ) -> StackFrame {
         let index = self.frames.len() as u32;
         let base_ptr = self.cursor;
-        let frame = StackFrame::make(index, base_ptr, name);
+        let frame = StackFrame::make(index, base_ptr, name, call_span);
         self.push_frame(frame)
     }
 
@@ -2031,7 +2040,7 @@ impl Stack {
         struct_type_id: TypeId,
         members: &[Value],
     ) -> Value {
-        let struct_layout = types.get_layout(struct_type_id).unwrap();
+        let struct_layout = types.get_layout(struct_type_id);
         let struct_base = self.push_layout_uninit(struct_layout);
         build_struct_unaligned(struct_base, types, struct_type_id, members);
         self.advance_cursor(struct_layout.size_bytes());
@@ -2052,7 +2061,7 @@ impl Stack {
     }
 
     pub fn push_value(&mut self, types: &Types, value: Value) -> *const u8 {
-        let layout = types.get_layout(value.get_type()).unwrap();
+        let layout = types.get_layout(value.get_type());
         self.align_to_bytes(layout.align_bytes());
         self.push_value_no_align(types, value)
     }
@@ -2189,8 +2198,8 @@ pub fn string_id_to_value(
     string_id: StringId,
 ) -> Value {
     let char_buffer_type_id = m.types.get(STRING_TYPE_ID).expect_struct().fields[0].type_id;
-    let string_layout = m.types.get_layout(STRING_TYPE_ID).unwrap();
-    debug_assert_eq!(string_layout, m.types.get_layout(char_buffer_type_id).unwrap());
+    let string_layout = m.types.get_layout(STRING_TYPE_ID);
+    debug_assert_eq!(string_layout, m.types.get_layout(char_buffer_type_id));
 
     let s = m.get_string(string_id);
     let k1_string = k1_types::K1Buffer { len: s.len(), data: s.as_ptr() };
@@ -2442,6 +2451,63 @@ fn integer_cast(
         IntegerType::IWord(WordSize::W32) => unreachable!(),
         IntegerType::IWord(WordSize::W64) => TypedIntValue::IWord64(int_to_cast.to_u64() as i64),
     }
+}
+
+unsafe fn slice_from_raw_parts_checked<'a, T>(
+    vm: &Vm,
+    m: &TypedProgram,
+    data: *const T,
+    len: usize,
+) -> &'a [T] {
+    let null_ok = data.is_null() && len == 0;
+    if cfg!(debug_assertions) {
+        if !data.is_aligned() {
+            m.ice_with_span(
+                format!("slice_from_raw_parts: ptr is unaligned: {:?}", data),
+                vm.eval_span,
+            );
+        }
+        let is_null = data.is_null();
+        let is_zst = std::mem::size_of::<T>() == 0;
+        if !null_ok {
+            if !is_zst && is_null {
+                let frame_names = make_stack_trace(m, &vm.stack);
+                eprintln!("STACK TRACE\n{}", frame_names);
+                m.ice_with_span(
+                    format!(
+                        "slice_from_raw_parts: data={:?} len={len} size={}",
+                        data,
+                        std::mem::size_of::<T>()
+                    ),
+                    vm.eval_span,
+                );
+            }
+        }
+    }
+    let data = if null_ok { core::ptr::dangling() } else { data };
+    unsafe { std::slice::from_raw_parts(data, len) }
+}
+
+fn make_stack_trace(m: &TypedProgram, stack: &Stack) -> String {
+    use std::fmt::Write;
+    let mut s = String::new();
+    stack.frames.iter().for_each(|f| {
+        write!(&mut s, "{}", m.name_of_opt(f.debug_name)).unwrap();
+        match f.call_span {
+            None => {}
+            Some(span) => {
+                let (source, line) = m.get_span_location(span);
+                write!(&mut s, " {}:{}", source.filename, line.line_number()).unwrap()
+            }
+        };
+        writeln!(&mut s).unwrap();
+    });
+    s
+}
+
+fn vm_crash(m: &TypedProgram, vm: &Vm, msg: impl AsRef<str>) -> ! {
+    eprintln!("{}", make_stack_trace(m, &vm.stack));
+    m.ice_with_span(msg, vm.eval_span)
 }
 
 //mod c_mem {

@@ -13,12 +13,8 @@ fn testSizeOf(): unit {
   assertEquals(sizeOf[string](), 16);
   assertEquals(sizeOfStride[string](), 16);
   assertEquals(alignOf[string](), 8);
-  // nocommit Resolve this difference
-  if core/k1/IS_STATIC {
-    assertEquals(sizeOf[{ x: u64, c: u8 }](), 9);
-  } else {
-    assertEquals(sizeOf[{ x: u64, c: u8 }](), 16);
-  }
+  assertEquals(sizeOf[{ x: u64, c: u8 }](), 9);
+  assertEquals(sizeOfStride[{ x: u64, c: u8 }](), 16);
 }
 
 fn testFnTypeInfo(): unit {
