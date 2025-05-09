@@ -95,7 +95,7 @@ impl Display for CodegenError {
 impl Error for CodegenError {}
 
 fn size_info(td: &TargetData, typ: &dyn AnyType) -> Layout {
-    Layout { size_bits: td.get_bit_size(typ) as u32, align_bits: td.get_abi_alignment(typ) * 8 }
+    Layout { size: td.get_bit_size(typ) as u32 / 8, align: td.get_abi_alignment(typ) }
 }
 
 trait BuilderResultExt {
@@ -777,8 +777,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 name,
                 self.debug.current_file(),
                 line_number,
-                layout.size_bits as u64,
-                layout.align_bits,
+                layout.size as u64,
+                layout.align,
                 0,
                 None,
                 fields,
@@ -891,7 +891,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     di_type: self
                         .debug
                         .debug_builder
-                        .create_basic_type(name, size.size_bits as u64, encoding, 0)
+                        .create_basic_type(name, size.size as u64, encoding, 0)
                         .unwrap()
                         .as_type(),
                 })
@@ -997,7 +997,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     di_type: self
                         .debug
                         .debug_builder
-                        .create_basic_type(&float_name, layout.size_bits as u64, dw_ate_float, 0)
+                        .create_basic_type(&float_name, layout.size as u64, dw_ate_float, 0)
                         .unwrap()
                         .as_type(),
                 }
@@ -1220,17 +1220,16 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 //   - Second, padding bytes such that we're at least as large as the largest
                 //     variant, and aligned to our own alignment
 
-                let largest_variant =
-                    variant_structs.iter().max_by_key(|v| v.size.size_bits).unwrap();
+                let largest_variant = variant_structs.iter().max_by_key(|v| v.size.size).unwrap();
                 let strictest_aligned_variant =
-                    variant_structs.iter().max_by_key(|v| v.size.align_bits).unwrap();
-                let enum_alignment = strictest_aligned_variant.size.align_bits;
-                let largest_variant_size = largest_variant.size.size_bits;
+                    variant_structs.iter().max_by_key(|v| v.size.align).unwrap();
+                let enum_alignment = strictest_aligned_variant.size.align_bits();
+                let largest_variant_size = largest_variant.size.size_bits();
 
                 // largest variant size rounded up to multiple of strictest_aligned_variant
                 let enum_size_bits = largest_variant_size.next_multiple_of(enum_alignment);
                 let physical_type_padding_bits =
-                    enum_size_bits - strictest_aligned_variant.size.size_bits;
+                    enum_size_bits - strictest_aligned_variant.size.size_bits();
                 debug_assert_eq!(physical_type_padding_bits % 8, 0);
                 debug!(
                     "type {} largest variant size={largest_variant_size}, align={enum_alignment}. Physical size: {}, end padding: {}",
@@ -1257,8 +1256,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     physical_type.print_to_string(),
                     physical_type_size_info
                 );
-                debug_assert!(physical_type_size_info.size_bits == enum_size_bits);
-                debug_assert!(physical_type_size_info.align_bits == enum_alignment);
+                debug_assert_eq!(physical_type_size_info.size_bits(), enum_size_bits);
+                debug_assert_eq!(physical_type_size_info.align_bits(), enum_alignment);
 
                 // Now that we have the physical envelope representation, we add it to each variant
                 for variant_struct in variant_structs.iter_mut() {
@@ -1276,8 +1275,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                                 &name,
                                 self.debug.current_file(),
                                 0,
-                                variant.size.size_bits as u64,
-                                variant.size.align_bits,
+                                variant.size.size as u64,
+                                variant.size.align,
                                 0,
                                 0,
                                 variant.di_type,
@@ -1388,25 +1387,25 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         if !is_recursive_reference {
             let llvm_layout = codegened_type.size_info();
             let k1_layout = self.k1.types.layouts.get(type_id);
-            if llvm_layout.size_bits as usize != k1_layout.stride_bits() {
+            if llvm_layout.size != k1_layout.stride() {
                 self.k1.ice(
                     format!(
                         "DIFFERENT SIZES for {} {} llvm={} k1={}",
                         self.k1.types.get(type_id).kind_name(),
                         self.k1.type_id_to_string(type_id),
-                        llvm_layout.size_bits,
-                        k1_layout.size_bits
+                        llvm_layout.size,
+                        k1_layout.size
                     ),
                     None,
                 )
             }
-            if llvm_layout.align_bits != k1_layout.align_bits {
+            if llvm_layout.align != k1_layout.align {
                 self.k1.ice(
                     format!(
                         "DIFFERENT ALIGN for {} llvm={} k1={}",
                         self.k1.type_id_to_string(type_id),
-                        llvm_layout.align_bits,
-                        k1_layout.align_bits
+                        llvm_layout.align,
+                        k1_layout.align
                     ),
                     None,
                 )
@@ -1496,7 +1495,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             variable_type.debug_type(),
             true,
             0,
-            variable_type.size_info().align_bits,
+            variable_type.size_info().align,
         );
 
         // Some 'lets' don't need an extra alloca; if they are not re-assignable
@@ -1720,8 +1719,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     ) -> InstructionValue<'ctx> {
         let size = self.ctx.ptr_sized_int_type(&self.llvm_machine.get_target_data(), None);
         let layout = self.size_info(&ty);
-        let bytes = size.const_int((layout.size_bytes()) as u64, false);
-        let align_bytes = layout.align_bytes() as u32;
+        let bytes = size.const_int(layout.size as u64, false);
+        let align_bytes = layout.align;
         self.builder
             .build_memcpy(dst, align_bytes, src, align_bytes, bytes)
             .unwrap()
@@ -2961,9 +2960,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let type_param = &call.type_args[0];
                 let layout = self.k1.types.get_layout(type_param.type_id);
                 let num_bytes = match intrinsic_type {
-                    IntrinsicOperation::SizeOf => layout.size_bytes(),
-                    IntrinsicOperation::SizeOfStride => layout.stride_bytes(),
-                    IntrinsicOperation::AlignOf => layout.align_bytes(),
+                    IntrinsicOperation::SizeOf => layout.size,
+                    IntrinsicOperation::SizeOfStride => layout.stride(),
+                    IntrinsicOperation::AlignOf => layout.align,
                     _ => unreachable!(),
                 };
                 let size_value =

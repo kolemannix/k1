@@ -307,60 +307,60 @@ impl StaticValue {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Layout {
-    pub size_bits: u32,
-    pub align_bits: u32,
+    pub size: u32,
+    pub align: u32,
 }
 
 impl Layout {
     pub fn from_rust_type<T>() -> Layout {
         let size = std::mem::size_of::<T>() as u32;
         let align = std::mem::align_of::<T>() as u32;
-        Layout { size_bits: size * 8, align_bits: align * 8 }
+        Layout { size, align }
+    }
+
+    pub fn from_scalar_bytes(bytes: u32) -> Layout {
+        Layout { size: bytes, align: bytes }
     }
 
     pub fn from_scalar_bits(bits: u32) -> Layout {
-        Layout { size_bits: bits, align_bits: bits }
+        Layout { size: bits / 8, align: bits / 8 }
     }
-    pub const ZERO: Layout = Layout { size_bits: 0, align_bits: 8 };
+    pub const ZERO: Layout = Layout { size: 0, align: 1 };
 
-    pub fn stride_bytes(&self) -> usize {
-        self.size_bytes().next_multiple_of(self.align_bytes())
-    }
-
-    pub fn stride_bits(&self) -> usize {
-        self.stride_bytes() * 8
+    pub fn stride(&self) -> u32 {
+        self.size.next_multiple_of(self.align)
     }
 
     // Returns: the start, or offset, of the new field
     pub fn append_to_aggregate(&mut self, layout: Layout) -> u32 {
-        debug_assert_ne!(layout.align_bits, 0);
-        let offset = self.size_bits;
-        let new_field_start = offset.next_multiple_of(layout.align_bits);
+        debug_assert_ne!(layout.align, 0);
+        let offset = self.size;
+        let new_field_start = offset.next_multiple_of(layout.align);
         if cfg!(debug_assertions) {
             let padding = new_field_start - offset;
             if padding != 0 {
                 debug!("Aggregate padding: {padding}");
             }
         };
-        let new_end_unaligned = new_field_start + layout.size_bits;
-        let new_align = std::cmp::max(self.align_bits, layout.align_bits);
-        self.size_bits = new_end_unaligned;
-        self.align_bits = new_align;
+        let new_end_unaligned = new_field_start + layout.size;
+        let new_align = std::cmp::max(self.align, layout.align);
+        self.size = new_end_unaligned;
+        self.align = new_align;
         new_field_start
     }
 
-    pub fn align_bytes(&self) -> usize {
-        self.align_bits as usize / 8
+    pub fn size_bits(&self) -> u32 {
+        self.size * 8
     }
 
-    pub fn size_bytes(&self) -> usize {
-        self.size_bits as usize / 8
+    pub fn align_bits(&self) -> u32 {
+        self.align * 8
     }
 
     pub fn array_me(&self, len: usize) -> Layout {
-        let element_size_padded = self.stride_bits();
-        let array_size_bits = element_size_padded * len;
-        Layout { size_bits: array_size_bits as u32, align_bits: self.align_bits }
+        let element_size_padded = self.stride();
+        let array_size = element_size_padded * (len as u32);
+        Layout { size: array_size, align: self.align }
     }
 }
 

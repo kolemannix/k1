@@ -1296,11 +1296,11 @@ impl Types {
     pub fn compute_type_layout(&self, type_id: TypeId) -> Layout {
         const Z: Layout = Layout::ZERO;
         match self.get_no_follow(type_id) {
-            Type::Unit => Layout::from_scalar_bits(8),
-            Type::Char => Layout::from_scalar_bits(8),
+            Type::Unit => Layout::from_scalar_bytes(1),
+            Type::Char => Layout::from_scalar_bytes(1),
             Type::Integer(integer_type) => Layout::from_scalar_bits(integer_type.width().bits()),
             Type::Float(float_type) => Layout::from_scalar_bits(float_type.size.bits()),
-            Type::Bool => Layout::from_scalar_bits(8),
+            Type::Bool => Layout::from_scalar_bytes(1),
             Type::Pointer => Layout::from_scalar_bits(self.word_size_bits()),
             Type::Struct(struct_type) => {
                 let mut layout = Layout::ZERO;
@@ -1334,15 +1334,14 @@ impl Types {
                         }
                         l
                     };
-                    if struct_repr.align_bits > max_variant_align {
-                        max_variant_align = struct_repr.align_bits
+                    if struct_repr.align > max_variant_align {
+                        max_variant_align = struct_repr.align
                     };
-                    if struct_repr.size_bits > max_variant_size {
-                        max_variant_size = struct_repr.size_bits
+                    if struct_repr.size > max_variant_size {
+                        max_variant_size = struct_repr.size
                     };
                 }
-                let enum_size =
-                    Layout { size_bits: max_variant_size, align_bits: max_variant_align };
+                let enum_size = Layout { size: max_variant_size, align: max_variant_align };
                 enum_size
             }
             Type::EnumVariant(variant) => self.compute_type_layout(variant.enum_type_id),
@@ -1366,8 +1365,8 @@ impl Types {
     pub fn enum_variant_payload_offset_bytes(&self, ev: &TypedEnumVariant) -> usize {
         let mut layout = Layout::ZERO;
         layout.append_to_aggregate(self.get_layout(ev.tag_value.get_type()));
-        let payload_start_bits = layout.append_to_aggregate(self.get_layout(ev.payload.unwrap()));
-        payload_start_bits as usize / 8
+        let payload_start = layout.append_to_aggregate(self.get_layout(ev.payload.unwrap()));
+        payload_start as usize
     }
 
     pub fn get_layout(&self, type_id: TypeId) -> Layout {

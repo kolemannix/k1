@@ -866,7 +866,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                     let obj_type = m.types.get(lambda_object_type).as_lambda_object().unwrap();
                     if cfg!(debug_assertions) {
                         let struct_layout = m.types.get_layout(obj_type.struct_representation);
-                        debug_assert_eq!(struct_layout.size_bytes(), 16);
+                        debug_assert_eq!(struct_layout.size, 16);
                     }
 
                     let lambda_obj_struct_type =
@@ -928,7 +928,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
             let obj_type = m.types.get(f_to_lam.lambda_object_type_id).as_lambda_object().unwrap();
             if cfg!(debug_assertions) {
                 let struct_layout = m.types.get_layout(obj_type.struct_representation);
-                debug_assert_eq!(struct_layout.size_bytes(), 16);
+                debug_assert_eq!(struct_layout.size, 16);
             }
 
             let lambda_obj_struct_type =
@@ -1102,14 +1102,14 @@ pub fn static_value_to_vm_value(
 
             debug!(
                 "Pushing {} bytes for Buffer {}",
-                buffer_allocation_layout.size_bytes(),
+                buffer_allocation_layout.size,
                 m.static_value_to_string(static_value_id)
             );
             let base_mem = vm.static_stack.push_layout_uninit(buffer_allocation_layout);
 
             for (index, elem_value_id) in elements.iter().enumerate() {
                 let elem_value = static_value_to_vm_value(vm, dst_stack, m, *elem_value_id)?;
-                let elem_dst_ptr = unsafe { base_mem.byte_add(index * layout.size_bytes()) };
+                let elem_dst_ptr = unsafe { base_mem.byte_add(index * layout.size as usize) };
                 store_value(&m.types, elem_dst_ptr, elem_value);
             }
             let buffer = K1Buffer { len: elements.len(), data: base_mem.cast_const() };
@@ -1383,7 +1383,7 @@ fn execute_call(vm: &mut Vm, m: &mut TypedProgram, call_id: TypedExprId) -> Type
             //           the full copy
             let layout = aggregate_return_layout.unwrap();
             unsafe {
-                copy_aggregate(dst_ptr, result_ptr, layout.size_bytes());
+                copy_aggregate(dst_ptr, result_ptr, layout.size as usize);
             }
             let updated_value =
                 Value::Agg { type_id: result_value.get_type(), ptr: dst_ptr.cast_const() };
@@ -1405,19 +1405,19 @@ fn execute_intrinsic(
         IntrinsicOperation::SizeOf => {
             let type_id = type_args[0].type_id;
             let layout = m.types.get_layout(type_id);
-            let size_bytes = layout.size_bytes() as u64;
+            let size_bytes = layout.size as u64;
             Ok(Value::Int(TypedIntValue::UWord64(size_bytes)).into())
         }
         IntrinsicOperation::SizeOfStride => {
             let type_id = type_args[0].type_id;
             let layout = m.types.get_layout(type_id);
-            let stride_bytes = layout.stride_bytes() as u64;
+            let stride_bytes = layout.stride() as u64;
             Ok(Value::Int(TypedIntValue::UWord64(stride_bytes)).into())
         }
         IntrinsicOperation::AlignOf => {
             let type_id = type_args[0].type_id;
             let layout = m.types.get_layout(type_id);
-            let align_bytes = layout.align_bytes() as u64;
+            let align_bytes = layout.align as u64;
             Ok(Value::Int(TypedIntValue::UWord64(align_bytes)).into())
         }
         IntrinsicOperation::TypeId => {
@@ -1653,7 +1653,7 @@ pub fn store_value(types: &Types, dst: *mut u8, value: Value) -> usize {
             }
             Value::Agg { type_id, ptr } => {
                 let struct_layout = types.get_layout(type_id);
-                let size_bytes = struct_layout.size_bytes();
+                let size_bytes = struct_layout.size as usize;
                 // Equivalent of memcpy
                 debug!("copy_from {:?} -> {:?} {size_bytes}", dst, ptr);
                 copy_aggregate(dst, ptr, size_bytes);
@@ -1693,7 +1693,7 @@ pub fn load_value(
         return failf!(span, "Attempt to dereference likely value pointer {}", ptr.addr());
     }
     let layout = m.types.get_layout(type_id);
-    if layout.size_bytes() == 0 {
+    if layout.size == 0 {
         return failf!(
             span,
             "For now, cannot load a type with no known layout: {}",
@@ -1745,17 +1745,17 @@ pub fn load_value(
             Ok(Value::Float(float_value))
         }
         Type::Bool => {
-            debug_assert_eq!(layout.size_bits, 8);
+            debug_assert_eq!(layout.size, 1);
             let byte = unsafe { *ptr };
             Ok(Value::Bool(byte != 0))
         }
         Type::Pointer => {
-            debug_assert_eq!(layout.size_bytes(), size_of::<usize>());
+            debug_assert_eq!(layout.size as usize, size_of::<usize>());
             let value = unsafe { *(ptr as *const usize) };
             Ok(Value::Pointer(value))
         }
         Type::Reference(_reference_type) => {
-            debug_assert_eq!(layout.size_bytes(), size_of::<usize>());
+            debug_assert_eq!(layout.size as usize, size_of::<usize>());
 
             // We're loading a reference, which means we are loading a usize
             let value: usize = unsafe { (ptr as *const usize).read() };
@@ -1812,7 +1812,7 @@ fn build_enum_at_location(
     //     debug!("TODO: optimize for no payload enums")
     // }
 
-    let start_dst = aligned_to_mut(dst, enum_layout.align_bytes());
+    let start_dst = aligned_to_mut(dst, enum_layout.align as usize);
 
     let _tag_written = store_value(types, start_dst, Value::Int(variant_type.tag_value));
     if let Some(payload_value) = payload_value {
@@ -1828,13 +1828,13 @@ fn build_struct_unaligned(dst: *mut u8, types: &Types, struct_type_id: TypeId, m
 
     for (value, field_offset) in members.iter().zip(struct_layout.field_offsets.iter()) {
         // Go to offset
-        let field_dst = unsafe { dst.byte_add((field_offset / 8) as usize) };
+        let field_dst = unsafe { dst.byte_add(*field_offset as usize) };
         store_value(types, field_dst, *value);
     }
 }
 
 pub fn offset_at_index(types: &Types, type_id: TypeId, index: usize) -> usize {
-    let size_bytes = types.get_layout(type_id).size_bytes();
+    let size_bytes = types.get_layout(type_id).size as usize;
     index * size_bytes
 }
 
@@ -1846,10 +1846,9 @@ pub fn gep_struct_field(
     field_index: usize,
 ) -> *const u8 {
     let struct_type = types.get_struct_layout(struct_type);
-    let field_offset_bits = struct_type.field_offsets[field_index];
-    let offset_bytes = field_offset_bits as usize / 8;
+    let field_offset_bytes = struct_type.field_offsets[field_index];
 
-    let field_ptr = unsafe { struct_ptr.byte_add(offset_bytes) };
+    let field_ptr = unsafe { struct_ptr.byte_add(field_offset_bytes as usize) };
     field_ptr
 }
 
@@ -1875,7 +1874,7 @@ pub fn load_struct_field(
         m.type_id_to_string(struct_type),
         value,
         unsafe {
-            std::slice::from_raw_parts(struct_ptr, m.types.get_layout(struct_type).size_bytes())
+            std::slice::from_raw_parts(struct_ptr, m.types.get_layout(struct_type).size as usize)
         }
     );
     Ok(value)
@@ -2043,7 +2042,7 @@ impl Stack {
         let struct_layout = types.get_layout(struct_type_id);
         let struct_base = self.push_layout_uninit(struct_layout);
         build_struct_unaligned(struct_base, types, struct_type_id, members);
-        self.advance_cursor(struct_layout.size_bytes());
+        self.advance_cursor(struct_layout.size as usize);
         Value::Agg { type_id: struct_type_id, ptr: struct_base }
     }
 
@@ -2056,13 +2055,13 @@ impl Stack {
         let dst = self.cursor_mut();
         let (enum_base, layout) =
             build_enum_at_location(dst, types, variant_type_id, payload_value);
-        self.advance_cursor(layout.size_bytes());
+        self.advance_cursor(layout.size as usize);
         enum_base
     }
 
     pub fn push_value(&mut self, types: &Types, value: Value) -> *const u8 {
         let layout = types.get_layout(value.get_type());
-        self.align_to_bytes(layout.align_bytes());
+        self.align_to_bytes(layout.align as usize);
         self.push_value_no_align(types, value)
     }
 
@@ -2090,11 +2089,11 @@ impl Stack {
 
     pub fn push_layout_uninit(&mut self, layout: Layout) -> *mut u8 {
         if cfg!(debug_assertions) {
-            self.check_bounds(unsafe { self.cursor.byte_add(layout.size_bytes()) })
+            self.check_bounds(unsafe { self.cursor.byte_add(layout.size as usize) })
         }
-        self.align_to_bytes(layout.align_bytes());
+        self.align_to_bytes(layout.align as usize);
         let c = self.cursor_mut();
-        self.advance_cursor(layout.size_bytes());
+        self.advance_cursor(layout.size as usize);
         c
     }
 
@@ -2126,7 +2125,7 @@ impl Stack {
     }
 
     fn push_raw_copy_layout(&mut self, layout: Layout, src_ptr: *const u8) -> *const u8 {
-        self.push_raw_copy(layout.size_bytes(), layout.align_bytes(), src_ptr)
+        self.push_raw_copy(layout.size as usize, layout.align as usize, src_ptr)
     }
 
     pub fn to_bytes(&self) -> &[u8] {
@@ -2203,7 +2202,7 @@ pub fn string_id_to_value(
 
     let s = m.get_string(string_id);
     let k1_string = k1_types::K1Buffer { len: s.len(), data: s.as_ptr() };
-    debug_assert_eq!(size_of_val(&k1_string), string_layout.size_bytes());
+    debug_assert_eq!(size_of_val(&k1_string), string_layout.size as usize);
 
     let string_stack_addr = vm.get_destination_stack(dst_stack).push_t(k1_string);
     Value::Agg { type_id: STRING_TYPE_ID, ptr: string_stack_addr }
