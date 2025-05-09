@@ -184,7 +184,7 @@ struct LlvmValueType<'ctx> {
     type_id: TypeId,
     basic_type: BasicTypeEnum<'ctx>,
     di_type: DIType<'ctx>,
-    size: Layout,
+    layout: Layout,
 }
 
 #[derive(Debug, Clone)]
@@ -277,7 +277,7 @@ impl<'ctx> K1LlvmType<'ctx> {
     #[allow(unused)]
     pub fn size_info(&self) -> Layout {
         match self {
-            K1LlvmType::Value(v) => v.size,
+            K1LlvmType::Value(v) => v.layout,
             K1LlvmType::EnumType(e) => e.size,
             K1LlvmType::StructType(s) => s.size,
             K1LlvmType::Reference(r) => r.size,
@@ -750,7 +750,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         field_types: &[StructDebugMember<'ctx, 'names>],
     ) -> DIType<'ctx> {
         let line_number = self.get_line_number(span);
-        let size = self.size_info(struct_type);
+        let layout = self.size_info(struct_type);
         let fields = &field_types
             .iter()
             .enumerate()
@@ -777,8 +777,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 name,
                 self.debug.current_file(),
                 line_number,
-                size.size_bits as u64,
-                size.align_bits,
+                layout.size_bits as u64,
+                layout.align_bits,
                 0,
                 None,
                 fields,
@@ -793,7 +793,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         LlvmValueType {
             type_id: POINTER_TYPE_ID,
             basic_type: self.builtin_types.ptr.as_basic_type_enum(),
-            size: self.size_info(&self.builtin_types.ptr),
+            layout: self.size_info(&self.builtin_types.ptr),
             di_type: self
                 .debug
                 .debug_builder
@@ -887,7 +887,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 K1LlvmType::Value(LlvmValueType {
                     type_id,
                     basic_type: int_type.as_basic_type_enum(),
-                    size,
+                    layout: size,
                     di_type: self
                         .debug
                         .debug_builder
@@ -896,7 +896,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         .as_type(),
                 })
             };
-        debug!("codegen for type {} depth {depth}", self.k1.type_id_to_string(type_id));
+        eprintln!("codegen for type {} depth {depth}", self.k1.type_id_to_string(type_id));
         let mut no_cache = false;
         // Might be better to switch to the debug context span, rather than the type's span
         let span = self.k1.get_span_for_type_id(type_id).unwrap_or(SpanId::NONE);
@@ -988,16 +988,16 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     NumericWidth::B32 => self.ctx.f32_type(),
                     NumericWidth::B64 => self.ctx.f64_type(),
                 };
-                let size = self.k1.types.get_layout(type_id).unwrap();
+                let layout = self.k1.types.get_layout(type_id);
                 let float_name = self.k1.type_id_to_string(type_id);
                 Ok(LlvmValueType {
                     type_id,
                     basic_type: llvm_type.as_basic_type_enum(),
-                    size,
+                    layout,
                     di_type: self
                         .debug
                         .debug_builder
-                        .create_basic_type(&float_name, size.size_bits as u64, dw_ate_float, 0)
+                        .create_basic_type(&float_name, layout.size_bits as u64, dw_ate_float, 0)
                         .unwrap()
                         .as_type(),
                 }
@@ -1006,7 +1006,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             Type::Bool => Ok(LlvmValueType {
                 type_id: BOOL_TYPE_ID,
                 basic_type: self.builtin_types.boolean.as_basic_type_enum(),
-                size: self.size_info(&self.builtin_types.boolean),
+                layout: self.size_info(&self.builtin_types.boolean),
                 di_type: self
                     .debug
                     .debug_builder
@@ -1056,14 +1056,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
                 let llvm_struct_type = self.ctx.struct_type(&field_basic_types, false);
 
-                let size = self.size_info(&llvm_struct_type);
+                let layout = self.size_info(&llvm_struct_type);
                 let di_type =
                     self.make_debug_struct_type(&name, &llvm_struct_type, span, &field_di_types);
                 Ok(LlvmStructType {
                     type_id,
                     struct_type: llvm_struct_type,
                     fields: field_types,
-                    size,
+                    size: layout,
                     di_type,
                 }
                 .into())
@@ -1228,10 +1228,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let largest_variant_size = largest_variant.size.size_bits;
 
                 // largest variant size rounded up to multiple of strictest_aligned_variant
-                let enum_size_bits = largest_variant_size.div_ceil(enum_alignment) * enum_alignment;
+                let enum_size_bits = largest_variant_size.next_multiple_of(enum_alignment);
                 let physical_type_padding_bits =
                     enum_size_bits - strictest_aligned_variant.size.size_bits;
-                debug_assert!(physical_type_padding_bits % 8 == 0);
+                debug_assert_eq!(physical_type_padding_bits % 8, 0);
                 debug!(
                     "type {} largest variant size={largest_variant_size}, align={enum_alignment}. Physical size: {}, end padding: {}",
                     self.k1.type_id_to_string(type_id), enum_size_bits, physical_type_padding_bits
@@ -1383,18 +1383,34 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         if !no_cache {
             self.llvm_types.borrow_mut().insert(type_id, codegened_type.clone());
         }
-        let size_info = codegened_type.size_info();
-        if let Some(k1_size) = self.k1.types.layouts.get(type_id) {
-            if size_info.size_bits as usize != k1_size.stride_bits() {
-                eprintln!("Size of '{}'", self.k1.type_id_to_string(type_id));
-                eprintln!("DIFFERENT SIZES {} {}", size_info.size_bits, k1_size.size_bits)
+        let is_recursive_reference =
+            matches!(self.k1.types.get_no_follow(type_id), Type::RecursiveReference(_));
+        if !is_recursive_reference {
+            let llvm_layout = codegened_type.size_info();
+            let k1_layout = self.k1.types.layouts.get(type_id);
+            if llvm_layout.size_bits as usize != k1_layout.stride_bits() {
+                self.k1.ice(
+                    format!(
+                        "DIFFERENT SIZES for {} {} llvm={} k1={}",
+                        self.k1.types.get(type_id).kind_name(),
+                        self.k1.type_id_to_string(type_id),
+                        llvm_layout.size_bits,
+                        k1_layout.size_bits
+                    ),
+                    None,
+                )
             }
-            if size_info.align_bits != k1_size.align_bits {
-                eprintln!("Size of '{}'", self.k1.type_id_to_string(type_id));
-                eprintln!("DIFFERENT ALIGN {} {}", size_info.align_bits, k1_size.align_bits)
+            if llvm_layout.align_bits != k1_layout.align_bits {
+                self.k1.ice(
+                    format!(
+                        "DIFFERENT ALIGN for {} llvm={} k1={}",
+                        self.k1.type_id_to_string(type_id),
+                        llvm_layout.align_bits,
+                        k1_layout.align_bits
+                    ),
+                    None,
+                )
             }
-        } else {
-            eprintln!("No k1 size but yes llvm size: {}", self.k1.type_id_to_string(type_id))
         }
         Ok(codegened_type)
     }
@@ -2943,12 +2959,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             | IntrinsicOperation::SizeOfStride
             | IntrinsicOperation::AlignOf => {
                 let type_param = &call.type_args[0];
-                let llvm_type = self.codegen_type(type_param.type_id)?;
-                let size = self.size_info(&llvm_type.rich_value_type().as_any_type_enum());
+                let layout = self.k1.types.get_layout(type_param.type_id);
                 let num_bytes = match intrinsic_type {
-                    IntrinsicOperation::SizeOf => size.size_bytes(),
-                    IntrinsicOperation::SizeOfStride => size.stride_bytes(),
-                    IntrinsicOperation::AlignOf => size.align_bytes(),
+                    IntrinsicOperation::SizeOf => layout.size_bytes(),
+                    IntrinsicOperation::SizeOfStride => layout.stride_bytes(),
+                    IntrinsicOperation::AlignOf => layout.align_bytes(),
                     _ => unreachable!(),
                 };
                 let size_value =
@@ -3101,7 +3116,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let size_arg = self.load_function_argument(function, 2)?.into_int_value();
                 let dst_align_bytes = 1;
                 let src_align_bytes = 1;
-                let not_actually_a_ret_ptr = self
+                let _not_actually_a_ret_ptr = self
                     .builder
                     .build_memcpy(
                         dst_ptr_arg,
@@ -3186,10 +3201,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                                     .get(&v.variable_id)
                                     .expect("Missing variable")
                                 else {
-                                    return failf!(
+                                    self.k1.ice_with_span(
+                                        "Expect an indirect variable for value assignment",
                                         v.span,
-                                        "ICE: Expect an indirect variable for value assignment"
-                                    );
+                                    )
                                 };
                                 pointer_value
                             }

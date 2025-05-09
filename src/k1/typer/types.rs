@@ -783,7 +783,7 @@ impl Type {
         }
     }
 
-    pub fn as_recursive_reference(&mut self) -> &mut RecursiveReference {
+    pub fn expect_recursive_reference(&mut self) -> &mut RecursiveReference {
         match self {
             Type::RecursiveReference(r) => r,
             _ => panic!("expected recursive reference"),
@@ -868,7 +868,7 @@ pub struct TypesConfig {
 
 pub struct Types {
     pub types: Vec<Type>,
-    pub layouts: Pool<Option<Layout>, TypeId>,
+    pub layouts: Pool<Layout, TypeId>,
     pub defn_infos: Pool<Option<TypeDefnInfo>, TypeId>,
     pub type_variable_counts: Pool<TypeVariableInfo, TypeId>,
     /// We use this to efficiently check if we already have seen a type,
@@ -877,7 +877,7 @@ pub struct Types {
     pub existing_types_mapping: FxHashMap<TypeWithDefnInfo, TypeId>,
     pub type_defn_mapping: FxHashMap<ParsedTypeDefnId, TypeId>,
     pub ability_mapping: FxHashMap<ParsedAbilityId, AbilityId>,
-    pub placeholder_mapping: FxHashMap<ParsedTypeDefnId, TypeId>,
+    pub recursive_placeholder_mapping: FxHashMap<ParsedTypeDefnId, TypeId>,
     pub config: TypesConfig,
 }
 
@@ -891,7 +891,7 @@ impl Types {
             existing_types_mapping: FxHashMap::default(),
             type_defn_mapping: FxHashMap::default(),
             ability_mapping: FxHashMap::default(),
-            placeholder_mapping: FxHashMap::default(),
+            recursive_placeholder_mapping: FxHashMap::default(),
             config: TypesConfig { ptr_size_bits: 64 },
         }
     }
@@ -1002,6 +1002,17 @@ impl Types {
 
     pub fn add_reference_type(&mut self, inner_type: TypeId) -> TypeId {
         self.add_anon(Type::Reference(ReferenceType { inner_type }))
+    }
+
+    pub fn fulfill_recursive_reference_hole(
+        &mut self,
+        recursive_ref_id: TypeId,
+        root_type_id: TypeId,
+    ) {
+        self.get_mut(recursive_ref_id).expect_recursive_reference().root_type_id =
+            Some(root_type_id);
+        let root_layout = self.layouts.get(root_type_id);
+        *self.layouts.get_mut(recursive_ref_id) = *root_layout;
     }
 
     pub fn add(&mut self, typ: Type, defn_info: Option<TypeDefnInfo>) -> TypeId {
@@ -1275,56 +1286,52 @@ impl Types {
         let mut layout = Layout::ZERO;
         let mut field_offsets: SV8<u32> = smallvec![];
         for field in &struct_type.fields {
-            let field_layout = self.get_layout(field.type_id).unwrap_or(Layout::ZERO);
+            let field_layout = self.get_layout(field.type_id);
             let field_offset = layout.append_to_aggregate(field_layout);
             field_offsets.push(field_offset)
         }
         StructLayout { layout, field_offsets }
     }
 
-    pub fn compute_type_layout(&self, type_id: TypeId) -> Option<Layout> {
+    pub fn compute_type_layout(&self, type_id: TypeId) -> Layout {
+        const Z: Layout = Layout::ZERO;
         match self.get_no_follow(type_id) {
-            Type::Unit => Some(Layout::from_scalar_bits(8)),
-            Type::Char => Some(Layout::from_scalar_bits(8)),
-            Type::Integer(integer_type) => {
-                Some(Layout::from_scalar_bits(integer_type.width().bits()))
-            }
-            Type::Float(float_type) => Some(Layout::from_scalar_bits(float_type.size.bits())),
-            Type::Bool => Some(Layout::from_scalar_bits(8)),
-            Type::Pointer => Some(Layout::from_scalar_bits(self.word_size_bits())),
+            Type::Unit => Layout::from_scalar_bits(8),
+            Type::Char => Layout::from_scalar_bits(8),
+            Type::Integer(integer_type) => Layout::from_scalar_bits(integer_type.width().bits()),
+            Type::Float(float_type) => Layout::from_scalar_bits(float_type.size.bits()),
+            Type::Bool => Layout::from_scalar_bits(8),
+            Type::Pointer => Layout::from_scalar_bits(self.word_size_bits()),
             Type::Struct(struct_type) => {
                 let mut layout = Layout::ZERO;
                 for field in &struct_type.fields {
-                    if let Some(field_layout) = self.compute_type_layout(field.type_id) {
-                        layout.append_to_aggregate(field_layout);
-                    }
+                    let field_layout = self.compute_type_layout(field.type_id);
+                    layout.append_to_aggregate(field_layout);
                 }
-                Some(layout)
+                layout
             }
-            Type::Reference(_reference_type) => {
-                Some(Layout::from_scalar_bits(self.word_size_bits()))
-            }
+            Type::Reference(_reference_type) => Layout::from_scalar_bits(self.word_size_bits()),
             Type::Enum(typed_enum) => {
-                let payload_layouts: Vec<Layout> = typed_enum
+                let payload_layouts: Vec<Option<Layout>> = typed_enum
                     .variants
                     .iter()
-                    .map(|v| {
-                        v.payload.and_then(|p| self.compute_type_layout(p)).unwrap_or(Layout::ZERO)
-                    })
+                    .map(|v| v.payload.map(|p| self.compute_type_layout(p)))
                     .collect();
 
                 // Enum sizing and layout rules:
                 // - Alignment of the enum is the max(alignment) of the variants
                 // - Size of the enum is the size of the largest variant, not necessarily the same
                 //   variant, plus alignment end padding
-                let tag_layout = self.compute_type_layout(typed_enum.tag_type).unwrap();
+                let tag_layout = self.compute_type_layout(typed_enum.tag_type);
                 let mut max_variant_align = 0;
                 let mut max_variant_size = 0;
                 for (_variant, payload_layout) in typed_enum.variants.iter().zip(payload_layouts) {
                     let struct_repr = {
                         let mut l = Layout::ZERO;
                         l.append_to_aggregate(tag_layout);
-                        l.append_to_aggregate(payload_layout);
+                        if let Some(payload_layout) = payload_layout {
+                            l.append_to_aggregate(payload_layout);
+                        }
                         l
                     };
                     if struct_repr.align_bits > max_variant_align {
@@ -1336,32 +1343,34 @@ impl Types {
                 }
                 let enum_size =
                     Layout { size_bits: max_variant_size, align_bits: max_variant_align };
-                Some(enum_size)
+                enum_size
             }
             Type::EnumVariant(variant) => self.compute_type_layout(variant.enum_type_id),
-            Type::Never => Some(Layout::ZERO),
-            Type::Function(_) => None,
+            Type::Never => Z,
+            Type::Function(_) => Z,
             Type::Lambda(lambda_type) => self.compute_type_layout(lambda_type.env_type),
             Type::LambdaObject(lambda_object_type) => {
                 self.compute_type_layout(lambda_object_type.struct_representation)
             }
-            Type::Generic(_) => None,
-            Type::TypeParameter(_) => None,
-            Type::FunctionTypeParameter(_) => None,
-            Type::InferenceHole(_) => None,
-            Type::RecursiveReference(_) => None,
+            Type::Generic(_) => Z,
+            Type::TypeParameter(_) => Z,
+            Type::FunctionTypeParameter(_) => Z,
+            Type::InferenceHole(_) => Z,
+            Type::RecursiveReference(r) => match r.root_type_id {
+                None => Z,
+                Some(t) => self.compute_type_layout(t),
+            },
         }
     }
 
     pub fn enum_variant_payload_offset_bytes(&self, ev: &TypedEnumVariant) -> usize {
         let mut layout = Layout::ZERO;
-        layout.append_to_aggregate(self.get_layout(ev.tag_value.get_type()).unwrap());
-        let payload_start_bits = layout
-            .append_to_aggregate(self.get_layout(ev.payload.unwrap()).unwrap_or(Layout::ZERO));
+        layout.append_to_aggregate(self.get_layout(ev.tag_value.get_type()));
+        let payload_start_bits = layout.append_to_aggregate(self.get_layout(ev.payload.unwrap()));
         payload_start_bits as usize / 8
     }
 
-    pub fn get_layout(&self, type_id: TypeId) -> Option<Layout> {
+    pub fn get_layout(&self, type_id: TypeId) -> Layout {
         *self.layouts.get(type_id)
     }
 

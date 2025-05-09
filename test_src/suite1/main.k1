@@ -70,8 +70,8 @@ fn coreLib(): unit {
   lib_compiler_test/test();
 }
 
+// Compiler Core test coverage, ideally increasing complexity
 fn main(): i32 {
-  // Compiler Core coverage, ideally increasing complexity
   // Low
   low();
   #static low();
@@ -83,7 +83,7 @@ fn main(): i32 {
   static_run/test();
 
   coreLib();
-  // #static coreLib();
+  #static coreLib();
 
   println("All tests passed!");
 

@@ -16,7 +16,10 @@ fn main() -> anyhow::Result<ExitCode> {
         .spawn(run)
         .unwrap();
 
-    compiler_thread.join().unwrap()
+    match compiler_thread.join() {
+        Ok(result) => result,
+        Err(e) => Ok(ExitCode::FAILURE),
+    }
 }
 
 fn run() -> anyhow::Result<ExitCode> {
@@ -45,7 +48,7 @@ fn run() -> anyhow::Result<ExitCode> {
     let module_name = module.name();
     info!("done waiting on compile thread");
     if matches!(args.command, Command::Check { .. }) {
-        // nocommit: I wouldn't mind switching back to exit for the faster
+        // Note: I wouldn't mind switching back to exit for the faster
         // exit, but this was hiding a memory bug that causes the lsp
         // and test suite to crash when we try to drop the TypedModule.
         return Ok(ExitCode::SUCCESS);

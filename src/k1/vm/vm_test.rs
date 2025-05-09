@@ -9,7 +9,7 @@ mod stack_tests {
 
     fn test_stack() -> Stack {
         let mut s = Stack::make(1024 * 1024);
-        s.push_new_frame(None);
+        s.push_new_frame(None, None);
         s
     }
 
@@ -66,7 +66,7 @@ mod stack_tests {
         let mut stack = test_stack();
         let _ = stack.push_t(10u64);
         let _ = stack.push_t(10u64);
-        let f = stack.push_new_frame(None);
+        let f = stack.push_new_frame(None, None);
         assert_eq!(stack.current_offset_bytes(), 16);
         assert_eq!(f.index, 1);
         assert_eq!(f.base_ptr, unsafe { stack.base_ptr().byte_add(16) });
