@@ -2224,7 +2224,7 @@ pub fn vm_value_to_static_value(
     vm: &mut Vm,
     vm_value: Value,
     span: SpanId,
-) -> StaticValueId {
+) -> TyperResult<StaticValueId> {
     debug!("vm_to_static: {:?}", vm_value);
     let v = match vm_value {
         Value::Unit => StaticValue::Unit,
@@ -2236,10 +2236,7 @@ pub fn vm_value_to_static_value(
             if value == 0 {
                 StaticValue::NullPointer
             } else {
-                m.ice_with_span(
-                       "the address won't be valid come runtime, and I don't know what it points to. Can do NULL aka 0 only",
-                       span,
-                   )
+                return failf!(span, "Raw pointer ({:0x}) cannot be converted to a static value; use a Reference or a plain value type instead.", value);
             }
         }
         Value::Reference { .. } => {
@@ -2266,7 +2263,7 @@ pub fn vm_value_to_static_value(
                                 span,
                             )
                         });
-                    let elem_static = vm_value_to_static_value(m, vm, elem_vm, span);
+                    let elem_static = vm_value_to_static_value(m, vm, elem_vm, span)?;
                     elements.push(elem_static);
                 }
                 StaticValue::Buffer(StaticBuffer { elements, type_id })
@@ -2279,8 +2276,9 @@ pub fn vm_value_to_static_value(
                         for (index, _) in struct_fields.iter().enumerate() {
                             let field_value =
                                 load_struct_field(vm, m, type_id, ptr, index, false).unwrap();
-                            let ctv = vm_value_to_static_value(m, vm, field_value, span);
-                            field_value_ids.push(ctv)
+                            let field_static_value_id =
+                                vm_value_to_static_value(m, vm, field_value, span)?;
+                            field_value_ids.push(field_static_value_id)
                         }
                         StaticValue::Struct(StaticStruct { type_id, fields: field_value_ids })
                     }
@@ -2298,9 +2296,9 @@ pub fn vm_value_to_static_value(
                                 let payload_ptr = gep_enum_payload(&m.types, variant, ptr);
                                 let payload_value =
                                     load_value(vm, m, payload_type, payload_ptr, false).unwrap();
-                                let static_value =
-                                    vm_value_to_static_value(m, vm, payload_value, span);
-                                Some(static_value)
+                                let static_value_id =
+                                    vm_value_to_static_value(m, vm, payload_value, span)?;
+                                Some(static_value_id)
                             }
                         };
                         StaticValue::Enum(StaticEnum {
@@ -2318,7 +2316,8 @@ pub fn vm_value_to_static_value(
             }
         }
     };
-    m.static_values.add(v)
+    let id = m.static_values.add(v);
+    Ok(id)
 }
 
 pub fn value_as_buffer(m: &TypedProgram, buffer_value: Value) -> (k1_types::K1Buffer, TypeId) {
