@@ -22,9 +22,6 @@ use crate::{
 };
 
 nz_u32_id!(ScopeId);
-impl ScopeId {
-    pub const PENDING: ScopeId = ScopeId(NonZeroU32::MAX);
-}
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum ScopeType {

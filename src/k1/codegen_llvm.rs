@@ -3002,8 +3002,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             IntrinsicOperation::TypeId => {
                 let type_param = &call.type_args[0];
-                let type_id_value =
-                    self.codegen_integer_value(TypedIntValue::U64(type_param.type_id.to_u64()))?;
+                let type_id_value = self.codegen_integer_value(TypedIntValue::U64(
+                    type_param.type_id.as_u32() as u64,
+                ))?;
                 Ok(type_id_value.into())
             }
             IntrinsicOperation::TypeName => {
