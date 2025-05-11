@@ -130,7 +130,7 @@ fn fn_args_literal() -> Result<(), ParseError> {
     let input = "f(myarg = 42,42,\"abc\")";
     let (module, result) = test_single_expr(input)?;
     if let ParsedExpr::FnCall(fn_call) = result {
-        let args = module.p_call_args.get_list(fn_call.args);
+        let args = module.p_call_args.get_slice(fn_call.args);
         let idents = &module.idents;
         assert_eq!(idents.get_name(fn_call.name.name), "f");
         assert_eq!(idents.get_name(args[0].name.unwrap()), "myarg");
@@ -181,12 +181,12 @@ fn type_parameter_multi() -> ParseResult<()> {
         panic!("Expected type application")
     };
     assert_eq!(app.args.len(), 2);
-    let args = module.p_type_args.get_list(app.args);
+    let args = module.p_type_args.get_slice(app.args);
     let ParsedTypeExpr::TypeApplication(inner_app) = module.type_exprs.get(args[1].type_expr)
     else {
         panic!("Expected second param to be a type application");
     };
-    let inner_args = module.p_type_args.get_list(inner_app.args);
+    let inner_args = module.p_type_args.get_slice(inner_app.args);
     assert!(matches!(
         module.type_exprs.get(inner_args[0].type_expr),
         ParsedTypeExpr::TypeApplication(_)
@@ -271,11 +271,11 @@ fn generic_method_call_lhs_expr() -> Result<(), ParseError> {
     let input = "getFn().baz[u64](42)";
     let (mut parser, result) = test_single_expr(input)?;
     let ParsedExpr::FnCall(call) = result else { panic!() };
-    let args = parser.p_call_args.get_list(call.args);
+    let args = parser.p_call_args.get_slice(call.args);
     let ParsedExpr::FnCall(fn_call) = parser.exprs.get(args[0].value).clone() else { panic!() };
     assert_eq!(fn_call.name.name, parser.idents.intern("getFn"));
     assert_eq!(call.name.name, parser.idents.intern("baz"));
-    let type_args = parser.p_type_args.get_list(call.type_args);
+    let type_args = parser.p_type_args.get_slice(call.type_args);
     let type_arg = parser.type_exprs.get(type_args[0].type_expr);
     assert!(matches!(type_arg, ParsedTypeExpr::TypeApplication(_)));
     assert!(matches!(parser.exprs.get(args[1].value), ParsedExpr::Literal(_)));

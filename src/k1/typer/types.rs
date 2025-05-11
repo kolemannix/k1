@@ -843,16 +843,21 @@ pub struct TypesConfig {
 
 pub struct Types {
     pub types: Vec<Type>,
-    pub layouts: Pool<Layout, TypeId>,
-    pub defn_infos: Pool<Option<TypeDefnInfo>, TypeId>,
-    pub type_variable_counts: Pool<TypeVariableInfo, TypeId>,
     /// We use this to efficiently check if we already have seen a type,
     /// and retrieve its ID if so. We used to iterate the pool but it
     /// got slow
     pub existing_types_mapping: FxHashMap<TypeWithDefnInfo, TypeId>,
+
+    /// AoS-style info associated with each type id
+    pub layouts: Pool<Layout, TypeId>,
+    pub defn_infos: Pool<Option<TypeDefnInfo>, TypeId>,
+    pub type_variable_counts: Pool<TypeVariableInfo, TypeId>,
+
+    /// Lookup mappings for parsed -> typed ids
     pub type_defn_mapping: FxHashMap<ParsedTypeDefnId, TypeId>,
     pub ability_mapping: FxHashMap<ParsedAbilityId, AbilityId>,
     pub recursive_placeholder_mapping: FxHashMap<ParsedTypeDefnId, TypeId>,
+
     pub config: TypesConfig,
 }
 

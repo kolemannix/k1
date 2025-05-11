@@ -19,6 +19,7 @@ use crate::{
     lex::SpanId,
     nz_u32_id,
     parse::{Identifier, NumericWidth, StringId},
+    pool::SliceHandle,
     typer::{
         self, make_fail_span,
         types::{
@@ -27,10 +28,9 @@ use crate::{
             STRING_TYPE_ID, U32_TYPE_ID, U64_TYPE_ID, UNIT_TYPE_ID, UWORD_TYPE_ID,
         },
         BinaryOpKind, CastType, FunctionId, IntrinsicOperation, Layout, MatchingCondition,
-        MatchingConditionInstr, SimpleNamedType, StaticBuffer, StaticEnum, StaticStruct,
-        StaticValue, StaticValueId, TypedExpr, TypedExprId, TypedFloatValue, TypedGlobalId,
-        TypedIntValue, TypedMatchExpr, TypedProgram, TypedStmtId, TyperResult, VariableExpr,
-        VariableId,
+        MatchingConditionInstr, NameAndTypeId, StaticBuffer, StaticEnum, StaticStruct, StaticValue,
+        StaticValueId, TypedExpr, TypedExprId, TypedFloatValue, TypedGlobalId, TypedIntValue,
+        TypedMatchExpr, TypedProgram, TypedStmtId, TyperResult, VariableExpr, VariableId,
     },
 };
 
@@ -1290,8 +1290,14 @@ fn execute_call(vm: &mut Vm, m: &mut TypedProgram, call_id: TypedExprId) -> Type
 
     if let Some(intrinsic_type) = function.intrinsic_type {
         let call = m.exprs.get(call_id).expect_call();
-        let type_args = call.type_args.clone();
-        return execute_intrinsic(vm, m, &type_args, &call_args, call.return_type, intrinsic_type);
+        return execute_intrinsic(
+            vm,
+            m,
+            call.type_args,
+            &call_args,
+            call.return_type,
+            intrinsic_type,
+        );
     };
 
     if function.body_block.is_none() {
@@ -1396,36 +1402,36 @@ fn execute_call(vm: &mut Vm, m: &mut TypedProgram, call_id: TypedExprId) -> Type
 fn execute_intrinsic(
     vm: &mut Vm,
     m: &mut TypedProgram,
-    type_args: &[SimpleNamedType],
+    type_args: SliceHandle<NameAndTypeId>,
     args: &[TypedExprId],
     return_type: TypeId,
     intrinsic_type: IntrinsicOperation,
 ) -> TyperResult<VmResult> {
     match intrinsic_type {
         IntrinsicOperation::SizeOf => {
-            let type_id = type_args[0].type_id;
+            let type_id = m.named_types.get_nth(type_args, 0).type_id;
             let layout = m.types.get_layout(type_id);
             let size_bytes = layout.size as u64;
             Ok(Value::Int(TypedIntValue::UWord64(size_bytes)).into())
         }
         IntrinsicOperation::SizeOfStride => {
-            let type_id = type_args[0].type_id;
+            let type_id = m.named_types.get_nth(type_args, 0).type_id;
             let layout = m.types.get_layout(type_id);
             let stride_bytes = layout.stride() as u64;
             Ok(Value::Int(TypedIntValue::UWord64(stride_bytes)).into())
         }
         IntrinsicOperation::AlignOf => {
-            let type_id = type_args[0].type_id;
+            let type_id = m.named_types.get_nth(type_args, 0).type_id;
             let layout = m.types.get_layout(type_id);
             let align_bytes = layout.align as u64;
             Ok(Value::Int(TypedIntValue::UWord64(align_bytes)).into())
         }
         IntrinsicOperation::TypeId => {
-            let type_id = type_args[0].type_id;
-            Ok(Value::from(type_id.to_u64()).into())
+            let type_id = m.named_types.get_nth(type_args, 0).type_id;
+            Ok(Value::from(type_id.as_u32() as u64).into())
         }
         IntrinsicOperation::TypeName => {
-            let type_id = type_args[0].type_id;
+            let type_id = m.named_types.get_nth(type_args, 0).type_id;
             let name = m.type_id_to_string(type_id);
             let data_allocation = vm.static_stack.push_slice(name.as_bytes());
             let k1_string = K1Buffer { len: name.len(), data: data_allocation };
@@ -1455,7 +1461,7 @@ fn execute_intrinsic(
         }
         IntrinsicOperation::PointerIndex => {
             // intern fn refAtIndex[T](self: Pointer, index: uword): T*
-            let typ = type_args[0].type_id;
+            let typ = m.named_types.get_nth(type_args, 0).type_id;
             let ptr = execute_expr_return_exit!(vm, m, args[0])?.expect_ptr();
             let index = execute_expr_return_exit!(vm, m, args[1])?.expect_int().expect_uword();
             let result = ptr + offset_at_index(&m.types, typ, index as usize);

@@ -11,13 +11,13 @@ impl<T: Copy + Into<NonZeroU32> + From<NonZeroU32> + Eq + Add<Self, Output = Sel
 {
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 pub struct SliceHandleInner<Index: PoolIndex> {
     pub index: Index,
     pub len: NonZeroU32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 pub enum SliceHandle<Index: PoolIndex> {
     Empty,
     NonEmpty(SliceHandleInner<Index>),
@@ -161,21 +161,21 @@ impl<T, Index: PoolIndex> Pool<T, Index> {
         &mut self.vec[index]
     }
 
-    pub fn get_list(&self, handle: SliceHandle<Index>) -> &[T] {
+    pub fn get_slice(&self, handle: SliceHandle<Index>) -> &[T] {
         match handle {
             SliceHandle::Empty => &[],
             SliceHandle::NonEmpty(handle) => self.get_n(handle.index, handle.len.get()),
         }
     }
 
-    pub fn get_list_mut(&mut self, handle: SliceHandle<Index>) -> &mut [T] {
+    pub fn get_slice_mut(&mut self, handle: SliceHandle<Index>) -> &mut [T] {
         match handle {
             SliceHandle::Empty => &mut [],
             SliceHandle::NonEmpty(handle) => self.get_n_mut(handle.index, handle.len.get()),
         }
     }
 
-    pub fn get_list_nth(&self, handle: SliceHandle<Index>, index: usize) -> &T {
+    pub fn get_nth(&self, handle: SliceHandle<Index>, index: usize) -> &T {
         debug_assert!(index < handle.len());
         let SliceHandle::NonEmpty(handle) = handle else {
             panic!("get_list_elem called on empty list");
@@ -225,7 +225,7 @@ impl<T: Clone, Index: PoolIndex> Pool<T, Index> {
     where
         [T; N]: smallvec::Array<Item = T>,
     {
-        smallvec::SmallVec::from(self.get_list(handle))
+        smallvec::SmallVec::from(self.get_slice(handle))
     }
 
     pub fn add_list_from_slice(&mut self, items: &[T]) -> SliceHandle<Index> {
@@ -250,7 +250,7 @@ impl<T: Copy, Index: PoolIndex> Pool<T, Index> {
     where
         [T; N]: smallvec::Array<Item = T>,
     {
-        SmallVec::from_slice(self.get_list(handle))
+        SmallVec::from_slice(self.get_slice(handle))
     }
 
     pub fn add_list_from_copy_slice(&mut self, items: &[T]) -> SliceHandle<Index> {
@@ -263,6 +263,24 @@ impl<T: Copy, Index: PoolIndex> Pool<T, Index> {
         } else {
             SliceHandle::Empty
         }
+    }
+}
+
+/// WHEN T IS COPY AND EQ
+impl<T: Copy + PartialEq + Eq, Index: PoolIndex> Pool<T, Index> {
+    pub fn slices_equal_copy(
+        &self,
+        handle1: SliceHandle<Index>,
+        handle2: SliceHandle<Index>,
+    ) -> bool {
+        if handle1.len() != handle2.len() {
+            return false;
+        }
+        let slice1 = self.get_slice(handle1);
+        let slice2 = self.get_slice(handle2);
+        // nocommit find a way to ensure we get the bitwise comparison without
+        // using unsafe ideally and maybe without requiring partialeq+eq
+        slice1 == slice2
     }
 }
 
@@ -286,15 +304,15 @@ mod test {
     fn list() {
         let mut pool: Pool<i32, MyIndex> = Pool::new("list");
         let handle = pool.add_list([1, 2, 3].iter().copied());
-        assert_eq!(pool.get_list(handle), &[1, 2, 3]);
+        assert_eq!(pool.get_slice(handle), &[1, 2, 3]);
     }
 
     #[test]
     fn mutate_list() {
         let mut pool: Pool<i32, MyIndex> = Pool::new("mutate_list");
         let handle = pool.add_list([1, 2, 3].iter().copied());
-        pool.get_list_mut(handle)[1] = 42;
-        assert_eq!(pool.get_list(handle), &[1, 42, 3]);
+        pool.get_slice_mut(handle)[1] = 42;
+        assert_eq!(pool.get_slice(handle), &[1, 42, 3]);
     }
 
     #[test]
@@ -303,15 +321,15 @@ mod test {
         let handle = pool.add_list([1, 2].iter().copied());
         assert_eq!(handle.len(), 2);
         let handle = handle.skip(1);
-        assert_eq!(pool.get_list(handle), &[2]);
+        assert_eq!(pool.get_slice(handle), &[2]);
         assert_eq!(handle.len(), 1);
 
         let handle = handle.skip(1);
-        assert!(pool.get_list(handle).is_empty());
+        assert!(pool.get_slice(handle).is_empty());
         assert_eq!(handle.len(), 0);
 
         let handle = handle.skip(1);
-        assert_eq!(pool.get_list(handle).is_empty());
+        assert!(pool.get_slice(handle).is_empty());
         assert_eq!(handle.len(), 0);
     }
 }

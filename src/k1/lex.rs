@@ -1,9 +1,11 @@
 use std::fmt;
 use std::fmt::{Display, Formatter};
+use std::num::NonZeroU32;
 use std::str::Chars;
 
 use crate::nz_u32_id;
 use crate::parse::FileId;
+use crate::pool::Pool;
 use crate::typer::BinaryOpKind;
 use log::trace;
 use TokenKind as K;
@@ -25,28 +27,23 @@ impl SpanId {
     pub const NONE: SpanId = Self::ONE;
 }
 
-#[derive(Debug, Clone)]
 pub struct Spans {
-    spans: Vec<Span>,
+    pub span_pool: Pool<Span, SpanId>,
 }
 
 impl Spans {
     pub fn new() -> Spans {
-        Spans { spans: vec![Span::NONE] }
-    }
-
-    pub fn default_span_id(&self) -> SpanId {
-        SpanId::NONE
+        let mut pool = Pool::with_capacity("spans", 32678 * 2);
+        pool.add(Span::NONE);
+        Spans { span_pool: pool }
     }
 
     pub fn add(&mut self, span: Span) -> SpanId {
-        let id = self.spans.len();
-        self.spans.push(span);
-        SpanId(id as u32)
+        self.span_pool.add(span)
     }
 
     pub fn get(&self, id: SpanId) -> Span {
-        self.spans[id.0 as usize]
+        *self.span_pool.get(id)
     }
 
     pub fn extend(&mut self, span1: SpanId, span2: SpanId) -> SpanId {

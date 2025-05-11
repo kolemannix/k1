@@ -45,21 +45,7 @@ nz_u32_id!(CallArgId);
 pub struct ParsedTypeDefnId(u32);
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
 pub struct ParsedFunctionId(u32);
-#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
-pub struct ParsedGlobalId(NonZeroU32);
-impl ParsedGlobalId {
-    const PENDING: ParsedGlobalId = ParsedGlobalId(NonZeroU32::MAX);
-}
-impl From<NonZeroU32> for ParsedGlobalId {
-    fn from(value: NonZeroU32) -> Self {
-        ParsedGlobalId(value)
-    }
-}
-impl From<ParsedGlobalId> for NonZeroU32 {
-    fn from(val: ParsedGlobalId) -> Self {
-        val.0
-    }
-}
+nz_u32_id!(ParsedGlobalId);
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
 pub struct ParsedAbilityId(u32);
@@ -4217,7 +4203,7 @@ impl ParsedProgram {
                 display_namespaced_identifier(f, &self.idents, &tapp.name, "::")?;
                 if !tapp.args.is_empty() {
                     f.write_str("[")?;
-                    for tparam in self.p_type_args.get_list(tapp.args) {
+                    for tparam in self.p_type_args.get_slice(tapp.args) {
                         self.display_type_expr_id(tparam.type_expr, f)?;
                         f.write_str(", ")?;
                     }
