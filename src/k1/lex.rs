@@ -2,6 +2,7 @@ use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::str::Chars;
 
+use crate::nz_u32_id;
 use crate::parse::FileId;
 use crate::typer::BinaryOpKind;
 use log::trace;
@@ -19,10 +20,9 @@ pub struct LexError {
 
 pub type LexResult<A> = anyhow::Result<A, LexError>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct SpanId(u32);
+nz_u32_id!(SpanId);
 impl SpanId {
-    pub const NONE: SpanId = SpanId(0);
+    pub const NONE: SpanId = Self::ONE;
 }
 
 #[derive(Debug, Clone)]

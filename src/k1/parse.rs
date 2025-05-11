@@ -67,40 +67,10 @@ pub struct ParsedAbilityId(u32);
 pub struct ParsedAbilityImplId(u32);
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
 pub struct ParsedNamespaceId(u32);
-#[derive(PartialEq, Eq, Debug, Copy, Clone, Hash)]
-pub struct ParsedExprId(NonZeroU32);
-impl ParsedExprId {
-    pub const PENDING: ParsedExprId = ParsedExprId(NonZeroU32::MAX);
-}
-impl From<NonZeroU32> for ParsedExprId {
-    fn from(value: NonZeroU32) -> Self {
-        ParsedExprId(value)
-    }
-}
-impl From<ParsedExprId> for NonZeroU32 {
-    fn from(val: ParsedExprId) -> Self {
-        val.0
-    }
-}
-impl Display for ParsedExprId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
 
-#[derive(PartialEq, Eq, Debug, Copy, Clone, Hash)]
-pub struct ParsedStmtId(NonZeroU32);
-impl From<NonZeroU32> for ParsedStmtId {
-    fn from(value: NonZeroU32) -> Self {
-        ParsedStmtId(value)
-    }
-}
+nz_u32_id!(ParsedExprId);
 
-impl From<ParsedStmtId> for NonZeroU32 {
-    fn from(val: ParsedStmtId) -> Self {
-        val.0
-    }
-}
+nz_u32_id!(ParsedStmtId);
 
 nz_u32_id!(ParsedTypeExprId);
 

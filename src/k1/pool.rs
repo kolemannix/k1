@@ -1,23 +1,29 @@
-use std::num::NonZeroU32;
+use std::{num::NonZeroU32, ops::Add};
 
 use smallvec::SmallVec;
 
-pub trait PoolIndex: Copy + Into<NonZeroU32> + From<NonZeroU32> {}
-impl<T: Copy + Into<NonZeroU32> + From<NonZeroU32>> PoolIndex for T {}
+pub trait PoolIndex:
+    Copy + Into<NonZeroU32> + From<NonZeroU32> + Eq + Add<Self, Output = Self>
+{
+}
+impl<T: Copy + Into<NonZeroU32> + From<NonZeroU32> + Eq + Add<Self, Output = Self>> PoolIndex
+    for T
+{
+}
 
-#[derive(Debug, Clone, Copy)]
-pub struct SliceHandleInner<T: PoolIndex> {
-    pub index: T,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SliceHandleInner<Index: PoolIndex> {
+    pub index: Index,
     pub len: NonZeroU32,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum SliceHandle<T: PoolIndex> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SliceHandle<Index: PoolIndex> {
     Empty,
-    NonEmpty(SliceHandleInner<T>),
+    NonEmpty(SliceHandleInner<Index>),
 }
 
-impl<T: PoolIndex> SliceHandle<T> {
+impl<Index: PoolIndex> SliceHandle<Index> {
     pub fn len(&self) -> usize {
         match self {
             SliceHandle::Empty => 0,
@@ -29,6 +35,30 @@ impl<T: PoolIndex> SliceHandle<T> {
         match self {
             SliceHandle::Empty => true,
             SliceHandle::NonEmpty(_) => false,
+        }
+    }
+
+    /// Skip this entry, resulting in a handle with a length
+    /// decreased by n, and pointing n elements ahead of where it was.
+    /// Returns an empty handle on an already empty handle
+    pub fn skip(&self, n: usize) -> Self {
+        let Some(skip_count_nzu32) = NonZeroU32::new(n as u32) else {
+            return *self;
+        };
+        match self {
+            SliceHandle::Empty => SliceHandle::Empty,
+            SliceHandle::NonEmpty(inner) => {
+                let new_len = (inner.len.get() as usize).saturating_sub(n);
+                if new_len == 0 {
+                    SliceHandle::Empty
+                } else {
+                    let new_index = inner.index + Index::from(skip_count_nzu32);
+                    SliceHandle::NonEmpty(SliceHandleInner {
+                        index: new_index,
+                        len: NonZeroU32::new(new_len as u32).unwrap(),
+                    })
+                }
+            }
         }
     }
 }
@@ -134,7 +164,14 @@ impl<T, Index: PoolIndex> Pool<T, Index> {
     pub fn get_list(&self, handle: SliceHandle<Index>) -> &[T] {
         match handle {
             SliceHandle::Empty => &[],
-            SliceHandle::NonEmpty(handle) => self.get_many(handle.index, handle.len.get()),
+            SliceHandle::NonEmpty(handle) => self.get_n(handle.index, handle.len.get()),
+        }
+    }
+
+    pub fn get_list_mut(&mut self, handle: SliceHandle<Index>) -> &mut [T] {
+        match handle {
+            SliceHandle::Empty => &mut [],
+            SliceHandle::NonEmpty(handle) => self.get_n_mut(handle.index, handle.len.get()),
         }
     }
 
@@ -148,23 +185,16 @@ impl<T, Index: PoolIndex> Pool<T, Index> {
         &self.vec[elem_index]
     }
 
-    pub fn get_many(&self, index: Index, count: u32) -> &[T] {
+    pub fn get_n(&self, index: Index, count: u32) -> &[T] {
         let index = Self::id_to_actual_index(index);
         let end = index + count as usize;
         &self.vec[index..end]
     }
 
-    pub fn get_many_mut(&mut self, index: Index, count: u32) -> &mut [T] {
+    pub fn get_n_mut(&mut self, index: Index, count: u32) -> &mut [T] {
         let index = Self::id_to_actual_index(index);
         let end = index + count as usize;
         &mut self.vec[index..end]
-    }
-
-    pub fn get_list_mut(&mut self, handle: SliceHandle<Index>) -> &mut [T] {
-        match handle {
-            SliceHandle::Empty => &mut [],
-            SliceHandle::NonEmpty(handle) => self.get_many_mut(handle.index, handle.len.get()),
-        }
     }
 
     pub fn iter(&self) -> std::slice::Iter<T> {
@@ -240,26 +270,48 @@ impl<T: Copy, Index: PoolIndex> Pool<T, Index> {
 mod test {
     use std::num::NonZeroU32;
 
+    use crate::nz_u32_id;
+
+    nz_u32_id!(MyIndex);
+
     use super::Pool;
     #[test]
     fn single() {
-        let mut pool: Pool<i32, NonZeroU32> = Pool::new("single");
-        let handle: NonZeroU32 = pool.add(42);
+        let mut pool: Pool<i32, MyIndex> = Pool::new("single");
+        let handle = pool.add(42);
         assert_eq!(*pool.get(handle), 42);
     }
 
     #[test]
     fn list() {
-        let mut pool: Pool<i32, NonZeroU32> = Pool::new("list");
+        let mut pool: Pool<i32, MyIndex> = Pool::new("list");
         let handle = pool.add_list([1, 2, 3].iter().copied());
         assert_eq!(pool.get_list(handle), &[1, 2, 3]);
     }
 
     #[test]
     fn mutate_list() {
-        let mut pool: Pool<i32, NonZeroU32> = Pool::new("mutate_list");
+        let mut pool: Pool<i32, MyIndex> = Pool::new("mutate_list");
         let handle = pool.add_list([1, 2, 3].iter().copied());
         pool.get_list_mut(handle)[1] = 42;
         assert_eq!(pool.get_list(handle), &[1, 42, 3]);
+    }
+
+    #[test]
+    fn skip_slice_handle() {
+        let mut pool: Pool<i32, MyIndex> = Pool::new("mutate_list");
+        let handle = pool.add_list([1, 2].iter().copied());
+        assert_eq!(handle.len(), 2);
+        let handle = handle.skip(1);
+        assert_eq!(pool.get_list(handle), &[2]);
+        assert_eq!(handle.len(), 1);
+
+        let handle = handle.skip(1);
+        assert!(pool.get_list(handle).is_empty());
+        assert_eq!(handle.len(), 0);
+
+        let handle = handle.skip(1);
+        assert_eq!(pool.get_list(handle).is_empty());
+        assert_eq!(handle.len(), 0);
     }
 }

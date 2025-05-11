@@ -8,34 +8,9 @@ use crate::typer::scopes::*;
 use crate::parse::Identifier;
 use crate::parse::{ParsedId, ParsedTypeDefnId};
 
-use crate::{impl_copy_if_small, typer::*, SV4};
+use crate::{impl_copy_if_small, nz_u32_id, typer::*, SV4};
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
-pub struct TypeId(NonZeroU32);
-impl From<NonZeroU32> for TypeId {
-    fn from(value: NonZeroU32) -> Self {
-        Self(value)
-    }
-}
-impl From<TypeId> for NonZeroU32 {
-    fn from(val: TypeId) -> Self {
-        val.0
-    }
-}
-
-impl TypeId {
-    pub const PENDING: TypeId = TypeId(NonZeroU32::MAX);
-
-    pub fn to_u64(&self) -> u64 {
-        self.0.get() as u64
-    }
-}
-
-impl Display for TypeId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
+nz_u32_id!(TypeId);
 
 #[derive(Debug, Clone)]
 pub struct StructTypeField {

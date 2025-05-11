@@ -1036,6 +1036,14 @@ impl TypedProgram {
         s
     }
 
+    pub fn pretty_print_named_type_slice(
+        &self,
+        types: SliceHandle<SimpleNamedTypeId>,
+        sep: &str,
+    ) -> String {
+        self.pretty_print_named_types(self.named_types.get_list(types), sep)
+    }
+
     pub fn pretty_print_named_types(&self, types: &[impl NamedType], sep: &str) -> String {
         let mut s = String::new();
         let mut first = true;
