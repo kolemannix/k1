@@ -2957,7 +2957,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             IntrinsicOperation::SizeOf
             | IntrinsicOperation::SizeOfStride
             | IntrinsicOperation::AlignOf => {
-                let type_param = &call.type_args[0];
+                let type_param = self.k1.named_types.get_nth(call.type_args, 0);
                 let layout = self.k1.types.get_layout(type_param.type_id);
                 let num_bytes = match intrinsic_type {
                     IntrinsicOperation::SizeOf => layout.size,
@@ -3001,14 +3001,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(result.as_basic_value_enum().into())
             }
             IntrinsicOperation::TypeId => {
-                let type_param = &call.type_args[0];
+                let type_param = self.k1.named_types.get_nth(call.type_args, 0);
                 let type_id_value = self.codegen_integer_value(TypedIntValue::U64(
                     type_param.type_id.as_u32() as u64,
                 ))?;
                 Ok(type_id_value.into())
             }
             IntrinsicOperation::TypeName => {
-                let type_param = &call.type_args[0];
+                let type_param = self.k1.named_types.get_nth(call.type_args, 0);
                 // TODO: Eventually, move this to part of typeInfo, and cache them
                 let name = self.k1.type_id_to_string(type_param.type_id);
                 let name_struct = self.make_string_struct(&name)?;
@@ -3019,7 +3019,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             IntrinsicOperation::PointerIndex => {
                 //  Reference:
                 //  intern fn refAtIndex[T](self: Pointer, index: uword): T*
-                let pointee_ty_arg = call.type_args[0];
+                let pointee_ty_arg = self.k1.named_types.get_nth(call.type_args, 0);
                 let elem_type = self.codegen_type(pointee_ty_arg.type_id)?;
                 let ptr = self.codegen_expr_basic_value(call.args[0])?.into_pointer_value();
                 let index = self.codegen_expr_basic_value(call.args[1])?.into_int_value();

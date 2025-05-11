@@ -943,7 +943,7 @@ impl TypedProgram {
         &self,
         w: &mut impl Write,
         ability_id: AbilityId,
-        impl_arguments: &[SimpleNamedType],
+        impl_arguments: &[NameAndType],
     ) -> std::fmt::Result {
         self.write_ident(w, self.get_ability(ability_id).name)?;
         if !impl_arguments.is_empty() {
@@ -959,7 +959,7 @@ impl TypedProgram {
     pub fn ability_signature_to_string(
         &self,
         ability_id: AbilityId,
-        impl_arguments: &[SimpleNamedType],
+        impl_arguments: &[NameAndType],
     ) -> String {
         let mut s = String::new();
         self.display_ability_signature(&mut s, ability_id, impl_arguments).unwrap();
@@ -1038,10 +1038,10 @@ impl TypedProgram {
 
     pub fn pretty_print_named_type_slice(
         &self,
-        types: SliceHandle<SimpleNamedTypeId>,
+        types: SliceHandle<NameAndTypeId>,
         sep: &str,
     ) -> String {
-        self.pretty_print_named_types(self.named_types.get_list(types), sep)
+        self.pretty_print_named_types(self.named_types.get_slice(types), sep)
     }
 
     pub fn pretty_print_named_types(&self, types: &[impl NamedType], sep: &str) -> String {
