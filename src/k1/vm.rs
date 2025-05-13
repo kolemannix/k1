@@ -1241,9 +1241,7 @@ fn execute_call(vm: &mut Vm, m: &mut TypedProgram, call_id: TypedExprId) -> Type
             let lambda_env_ptr = Value::Pointer(lambda_value.expect_agg().addr());
             (function_id, Some(lambda_env_ptr))
         }
-        typer::Callee::StaticAbstract { .. } => {
-            m.ice_with_span("Abstract call attempt in VM", span)
-        }
+        typer::Callee::Abstract { .. } => m.ice_with_span("Abstract call attempt in VM", span),
         typer::Callee::DynamicLambda(lambda_object_expr) => {
             let lambda_object_struct_ptr =
                 execute_expr_return_exit!(vm, m, lambda_object_expr)?.expect_agg();

@@ -44,8 +44,8 @@ fn run() -> anyhow::Result<ExitCode> {
     //     compiler::compile_module(&args);
     //     i += 1;
     // }
-    let Ok(module) = compiler::compile_module(&args) else { return Ok(ExitCode::FAILURE) };
-    let module_name = module.name();
+    let Ok(program) = compiler::compile_module(&args) else { return Ok(ExitCode::FAILURE) };
+    let program_name = program.program_name();
     info!("done waiting on compile thread");
     if matches!(args.command, Command::Check { .. }) {
         // Note: I wouldn't mind switching back to exit for the faster
@@ -54,12 +54,12 @@ fn run() -> anyhow::Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     };
     let llvm_ctx = inkwell::context::Context::create();
-    return match compiler::codegen_module(&args, &llvm_ctx, &module, out_dir, true) {
+    return match compiler::codegen_module(&args, &llvm_ctx, &program, out_dir, true) {
         Ok(_codegen) => {
             if matches!(args.command, Command::Build { .. }) {
                 Ok(ExitCode::SUCCESS)
             } else {
-                compiler::run_compiled_program(out_dir, module_name);
+                compiler::run_compiled_program(out_dir, program_name);
                 Ok(ExitCode::SUCCESS)
             }
         }
