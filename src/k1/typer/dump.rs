@@ -304,7 +304,7 @@ impl TypedProgram {
                 let defn_info = defn_info.unwrap();
                 writ.write_str(self.name_of(defn_info.name))?;
                 writ.write_str("[")?;
-                for (idx, param) in gen.params.iter().enumerate() {
+                for (idx, param) in self.named_types.get_slice(gen.params).iter().enumerate() {
                     writ.write_str(self.name_of(param.name))?;
                     let last = idx == gen.params.len() - 1;
                     if !last {
@@ -400,7 +400,7 @@ impl TypedProgram {
         w.write_str(self.name_of(function.name))?;
         if !function.type_params.is_empty() {
             w.write_char('[')?;
-            for (idx, tp) in function.type_params.iter().enumerate() {
+            for (idx, tp) in self.named_types.get_slice(function.type_params).iter().enumerate() {
                 if idx > 0 {
                     w.write_str(", ")?;
                 }
@@ -579,9 +579,8 @@ impl TypedProgram {
                         let name = self.get_function(*function_id).name;
                         self.write_ident(writ, name)?;
                     }
-                    Callee::StaticAbstract { generic_function_id, .. } => {
-                        let name = self.get_function(*generic_function_id).name;
-                        self.write_ident(writ, name)?;
+                    Callee::Abstract { .. } => {
+                        writ.write_str("<abstract>")?;
                     }
                     Callee::DynamicFunction { function_reference_expr } => {
                         self.display_expr_id(*function_reference_expr, writ, indentation)?;
@@ -959,10 +958,15 @@ impl TypedProgram {
     pub fn ability_signature_to_string(
         &self,
         ability_id: AbilityId,
-        impl_arguments: &[NameAndType],
+        impl_arguments: NamedTypeSlice,
     ) -> String {
         let mut s = String::new();
-        self.display_ability_signature(&mut s, ability_id, impl_arguments).unwrap();
+        self.display_ability_signature(
+            &mut s,
+            ability_id,
+            self.named_types.get_slice(impl_arguments),
+        )
+        .unwrap();
         s
     }
 
@@ -980,14 +984,18 @@ impl TypedProgram {
             AbilityImplKind::VariableConstraint => "constraint",
         };
         write!(w, "{kind_str:10} ")?;
-        self.display_ability_signature(w, i.ability_id, &i.impl_arguments)?;
+        self.display_ability_signature(
+            w,
+            i.ability_id,
+            self.named_types.get_slice(i.impl_arguments),
+        )?;
         write!(w, " for ")?;
         self.display_type_id(i.self_type_id, false, w)?;
         if display_functions {
             w.write_str(" {\n")?;
-            for fn_id in &i.functions {
+            for ability_impl_fn in &i.functions {
                 w.write_str("\t\t")?;
-                self.display_function(self.get_function(*fn_id), w, true)?;
+                self.display_function(self.get_function(*ability_impl_fn), w, false)?;
                 writeln!(w)?;
             }
         }

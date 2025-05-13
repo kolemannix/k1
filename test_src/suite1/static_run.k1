@@ -5,7 +5,6 @@ fn getPoint(): { x: u8, y: u32, z: i64 } {
   { x: 1, y: 300, z: -222 }
 }
 fn test(): unit {
-
   // String creation (special case)
   #static "Hello, Static";
 
@@ -142,7 +141,7 @@ fn test(): unit {
   assert(testCompile(#static crash("")).isSome());
 
   // Call order
-  #static bar(5);
+  #static bar(2);
 
   // Buffer
   let buf: Buffer[int] = #static {

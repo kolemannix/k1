@@ -2812,7 +2812,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         };
         let env_arg_index = if llvm_function_type.is_sret { 1 } else { 0 };
         let callsite_value = match &call.callee {
-            Callee::StaticAbstract { .. } => {
+            Callee::Abstract { .. } => {
                 self.k1.ice_with_span("Cannot codegen a call to an abstract function", call.span)
             }
             Callee::StaticFunction(function_id) => {
@@ -3666,7 +3666,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         }
 
         let Some(main_function_id) = self.k1.get_main_function_id() else {
-            return failf!(SpanId::NONE, "Program {} has no main function", self.k1.name());
+            return failf!(SpanId::NONE, "Program {} has no main function", self.k1.program_name());
         };
         let function_value = self.codegen_function_or_get(main_function_id)?;
 
@@ -3698,7 +3698,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     }
 
     pub fn name(&self) -> &str {
-        self.k1.name()
+        self.k1.program_name()
     }
 
     fn set_up_machine(module: &mut LlvmModule) -> TargetMachine {
@@ -3800,7 +3800,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         self.llvm_module.link_in_module(base_lib_module).unwrap();
         let Some(main_fn_id) = self.k1.get_main_function_id() else { bail!("No main function") };
         let llvm_function = self.llvm_functions.get(&main_fn_id).unwrap();
-        eprintln!("Interpreting {}", self.k1.name());
+        eprintln!("Interpreting {}", self.k1.program_name());
         let return_value = unsafe { engine.run_function(llvm_function.function_value, &[]) };
         let res: u64 = return_value.as_int(true);
         Ok(res)

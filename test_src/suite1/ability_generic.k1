@@ -68,7 +68,7 @@ ns ability_generic {
     assert(add64 == 16: i64);
   
     // Blanket Impls
-    let p: GenericPoint[i32] = @debug { x: 1, y: 2 };
+    let p: GenericPoint[i32] = { x: 1, y: 2 };
 
     let added: GenericPoint[i32] = p.add(p);
     assertEquals(added.x, (1 + 1) as i32);

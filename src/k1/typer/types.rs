@@ -173,28 +173,10 @@ pub struct OpaqueTypeAlias {
 }
 
 #[derive(Debug, Clone)]
-pub struct GenericTypeParam {
-    pub name: Identifier,
-    pub type_id: TypeId,
-    pub span: SpanId,
-}
-
-impl HasName for GenericTypeParam {
-    fn name(&self) -> Identifier {
-        self.name
-    }
-}
-impl HasTypeId for GenericTypeParam {
-    fn type_id(&self) -> TypeId {
-        self.type_id
-    }
-}
-
-#[derive(Debug, Clone)]
-// TODO(perf): get specializations HashMap off of GenericType
 pub struct GenericType {
-    pub params: EcoVec<GenericTypeParam>,
+    pub params: SliceHandle<NameAndTypeId>,
     pub inner: TypeId,
+    // TODO(perf): get specializations HashMap off of GenericType
     pub specializations: FxHashMap<SV4<TypeId>, TypeId>,
 }
 
@@ -552,13 +534,12 @@ impl std::hash::Hash for Type {
                 variant.name.hash(state);
                 variant.payload.hash(state);
             }
+            // Inherently unique as well
             Type::Generic(gen) => {
                 "gen".hash(state);
                 gen.inner.hash(state);
-                for p in &gen.params {
-                    p.name.hash(state);
-                    p.type_id.hash(state);
-                }
+                gen.params.index().hash(state);
+                gen.params.len().hash(state);
             }
             Type::Function(fun) => {
                 "fun".hash(state);

@@ -24,6 +24,13 @@ pub enum SliceHandle<Index: PoolIndex> {
 }
 
 impl<Index: PoolIndex> SliceHandle<Index> {
+    pub fn index(&self) -> Option<Index> {
+        match self {
+            SliceHandle::Empty => None,
+            SliceHandle::NonEmpty(inner) => Some(inner.index),
+        }
+    }
+
     pub fn len(&self) -> usize {
         match self {
             SliceHandle::Empty => 0,
@@ -116,7 +123,7 @@ impl<T, Index: PoolIndex> Pool<T, Index> {
         index
     }
 
-    pub fn add_list(&mut self, items: impl Iterator<Item = T>) -> SliceHandle<Index> {
+    pub fn add_slice_from_iter(&mut self, items: impl Iterator<Item = T>) -> SliceHandle<Index> {
         #[cfg(debug_assertions)]
         let cap = self.vec.capacity();
 
@@ -178,10 +185,10 @@ impl<T, Index: PoolIndex> Pool<T, Index> {
     pub fn get_nth(&self, handle: SliceHandle<Index>, index: usize) -> &T {
         debug_assert!(index < handle.len());
         let SliceHandle::NonEmpty(handle) = handle else {
-            panic!("get_list_elem called on empty list");
+            panic!("get_nth called on empty handle");
         };
-        let list_start_index = Self::id_to_actual_index(handle.index);
-        let elem_index = list_start_index + index;
+        let slice_start_index = Self::id_to_actual_index(handle.index);
+        let elem_index = slice_start_index + index;
         &self.vec[elem_index]
     }
 
@@ -211,14 +218,14 @@ impl<T, Index: PoolIndex> Pool<T, Index> {
 
     pub fn get_first(&self, handle: SliceHandle<Index>) -> Option<&T> {
         let SliceHandle::NonEmpty(handle) = handle else { return None };
-        let list_start_index = Self::id_to_actual_index(handle.index);
-        self.vec.get(list_start_index)
+        let slice_start_index = Self::id_to_actual_index(handle.index);
+        self.vec.get(slice_start_index)
     }
 }
 
 /// WHEN T IS CLONE IMPL
 impl<T: Clone, Index: PoolIndex> Pool<T, Index> {
-    pub fn get_list_to_smallvec<const N: usize>(
+    pub fn get_slice_to_smallvec<const N: usize>(
         &self,
         handle: SliceHandle<Index>,
     ) -> SmallVec<[T; N]>
@@ -228,7 +235,7 @@ impl<T: Clone, Index: PoolIndex> Pool<T, Index> {
         smallvec::SmallVec::from(self.get_slice(handle))
     }
 
-    pub fn add_list_from_slice(&mut self, items: &[T]) -> SliceHandle<Index> {
+    pub fn add_slice_from_slice(&mut self, items: &[T]) -> SliceHandle<Index> {
         if let Some(len) = NonZeroU32::new(items.len() as u32) {
             // This implementation is specialized for slice iterators, where it uses [`copy_from_slice`] to
             // append the entire slice at once.
@@ -243,7 +250,7 @@ impl<T: Clone, Index: PoolIndex> Pool<T, Index> {
 
 /// WHEN T IS COPY IMPL
 impl<T: Copy, Index: PoolIndex> Pool<T, Index> {
-    pub fn get_list_to_smallvec_copy<const N: usize>(
+    pub fn get_slice_to_smallvec_copy<const N: usize>(
         &self,
         handle: SliceHandle<Index>,
     ) -> SmallVec<[T; N]>
@@ -253,7 +260,7 @@ impl<T: Copy, Index: PoolIndex> Pool<T, Index> {
         SmallVec::from_slice(self.get_slice(handle))
     }
 
-    pub fn add_list_from_copy_slice(&mut self, items: &[T]) -> SliceHandle<Index> {
+    pub fn add_slice_from_copy_slice(&mut self, items: &[T]) -> SliceHandle<Index> {
         if let Some(len) = NonZeroU32::new(items.len() as u32) {
             // This implementation is specialized for slice iterators, where it uses [`copy_from_slice`] to
             // append the entire slice at once.
@@ -278,8 +285,6 @@ impl<T: Copy + PartialEq + Eq, Index: PoolIndex> Pool<T, Index> {
         }
         let slice1 = self.get_slice(handle1);
         let slice2 = self.get_slice(handle2);
-        // nocommit find a way to ensure we get the bitwise comparison without
-        // using unsafe ideally and maybe without requiring partialeq+eq
         slice1 == slice2
     }
 }
@@ -301,24 +306,24 @@ mod test {
     }
 
     #[test]
-    fn list() {
-        let mut pool: Pool<i32, MyIndex> = Pool::new("list");
-        let handle = pool.add_list([1, 2, 3].iter().copied());
+    fn slice() {
+        let mut pool: Pool<i32, MyIndex> = Pool::new("slice");
+        let handle = pool.add_slice_from_iter([1, 2, 3].iter().copied());
         assert_eq!(pool.get_slice(handle), &[1, 2, 3]);
     }
 
     #[test]
-    fn mutate_list() {
-        let mut pool: Pool<i32, MyIndex> = Pool::new("mutate_list");
-        let handle = pool.add_list([1, 2, 3].iter().copied());
+    fn mutate_slice() {
+        let mut pool: Pool<i32, MyIndex> = Pool::new("mutate_slice");
+        let handle = pool.add_slice_from_iter([1, 2, 3].iter().copied());
         pool.get_slice_mut(handle)[1] = 42;
         assert_eq!(pool.get_slice(handle), &[1, 42, 3]);
     }
 
     #[test]
     fn skip_slice_handle() {
-        let mut pool: Pool<i32, MyIndex> = Pool::new("mutate_list");
-        let handle = pool.add_list([1, 2].iter().copied());
+        let mut pool: Pool<i32, MyIndex> = Pool::new("mutate_slice");
+        let handle = pool.add_slice_from_iter([1, 2].iter().copied());
         assert_eq!(handle.len(), 2);
         let handle = handle.skip(1);
         assert_eq!(pool.get_slice(handle), &[2]);

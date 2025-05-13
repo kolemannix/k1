@@ -2855,7 +2855,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                         index_of_first_explicit_arg,
                         ParsedCallArg { name: None, value: self_arg, is_explicit_context: false },
                     );
-                    let args_handle = self.ast.p_call_args.add_list(args.into_iter());
+                    let args_handle = self.ast.p_call_args.add_slice_from_iter(args.into_iter());
 
                     Some(self.add_expression(ParsedExpr::FnCall(ParsedCall {
                         name: NamespacedIdentifier::naked(name, target.span),
@@ -3002,7 +3002,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             &[K::CloseBracket],
             |p| p.expect_type_expression().map(|e| NamedTypeArg { name: None, type_expr: e }),
         )?;
-        let slice = self.ast.p_type_args.add_list(type_args.into_iter());
+        let slice = self.ast.p_type_args.add_slice_from_iter(type_args.into_iter());
         let span = self.extend_span(open_bracket.span, args_span);
         Ok((slice, span))
     }
@@ -3186,7 +3186,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             if second.kind == K::OpenBracket || second.kind == K::OpenParen {
                 let (type_args, _) = self.parse_bracketed_type_args_new()?;
                 let (args, args_span) = self.expect_fn_call_args()?;
-                let args_handle = self.ast.p_call_args.add_list(args.into_iter());
+                let args_handle = self.ast.p_call_args.add_slice_from_iter(args.into_iter());
                 let span = self.extend_span(namespaced_ident.span, args_span);
                 Ok(Some(self.add_expression(ParsedExpr::FnCall(ParsedCall {
                     name: namespaced_ident,
