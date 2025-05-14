@@ -356,6 +356,8 @@ pub struct BuiltinIdentifiers {
     pub root_module_name: Identifier,
     pub core: Identifier,
     pub k1: Identifier,
+    pub types: Identifier,
+    pub TypeSchema: Identifier,
     pub param_0: Identifier,
     pub param_1: Identifier,
     pub param_2: Identifier,
@@ -437,6 +439,9 @@ impl Default for Identifiers {
         let root_module_name = Identifier(pool.get_or_intern_static("_root"));
         let core = Identifier(pool.get_or_intern_static("core"));
         let k1 = Identifier(pool.get_or_intern_static("k1"));
+        let types = Identifier(pool.get_or_intern_static("types"));
+        let TypeSchema = Identifier(pool.get_or_intern_static("TypeSchema"));
+
         let param_0 = Identifier(pool.get_or_intern_static("param_0"));
         let param_1 = Identifier(pool.get_or_intern_static("param_1"));
         let param_2 = Identifier(pool.get_or_intern_static("param_2"));
@@ -496,6 +501,8 @@ impl Default for Identifiers {
                 root_module_name,
                 core,
                 k1,
+                types,
+                TypeSchema,
                 param_0,
                 param_1,
                 param_2,

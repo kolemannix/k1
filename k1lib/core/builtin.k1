@@ -42,6 +42,56 @@ deftype alias int = iword
 deftype alias uint = uword
 deftype alias byte = u8
 
+ns types {
+  intern fn typeId[T](): u64
+  intern fn typeName[T](): string
+  intern fn typeSchema[T](): TypeSchema
+
+  deftype IntKind = either U8, U16, U32, U64, I8, I16, I32, I64
+
+  deftype Layout = { size: uword, align: uword }
+
+  deftype TypeInfo = {
+    id: u64,
+    layout: Layout,
+    schema: TypeSchema,
+  }
+
+  deftype TypeSchema = (either
+    Unit,
+    Char,
+    Int(IntKind),
+    Word(either UWord, IWord),
+    Float(either F32, F64),
+    Boolean,
+    Pointer,
+    Struct({
+      fields: Buffer[{ 
+        name: string, 
+        type: TypeInfo, 
+        offset: u64
+      }],
+    }),
+    Either({
+      tagType: IntKind,
+      variants: Buffer[{
+        name: string,
+        payloadType: TypeInfo,
+        payloadOffset: u64
+      }],
+      payloadOffset: u64,
+    }),
+    Reference({ inner_type: TypeInfo* }),
+    Other(string)
+  )
+
+  deftype Any = {
+    typeId: u64,
+    value: Pointer
+  }
+
+}
+
 ////////////////////////////////
 // Builtin Abilities
 
