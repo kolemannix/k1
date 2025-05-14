@@ -121,17 +121,14 @@ New tagline? "C with typeclasses and tagged unions"
 
 ## Project: VM for `static` execution
 - [ ] vm: static execution
-  - [ ] reference-to-reference casts
-  - [ ] Need static let to indicate that other static code can use them
-    - [ ] Cannot be a `let*`, or Pointer
-    - [ ] Cannot be `mut`
-  - [ ] Order-independence for globals used in static code
+  - [x] Order-independence for globals used in static code
   - [ ] Static Buffers (slices)
     - [x] vm -> static
     - [x] static -> vm
     - [x] LLVM gen
     - [ ] Allow upgrading them to fixed-length Arrays (so cool actually)
-  - [ ] reference to reference cast
+  - [ ] static #for, special-case like IF. Can unroll the loop at comptime but the body is runtime
+  - [x] reference to reference cast
   - [x] Introduce uword/iword types
   - [x] Switch to a single stack
   - [x] Move to intrinsic: system core memory functions
@@ -142,6 +139,7 @@ New tagline? "C with typeclasses and tagged unions"
         like 'body' code SINCE it'll end up using the user's types, and even impls!
   - [x] Define clear 'platform layer' (crash, assert, mem, other?).
       Then we could do an LLVM interp platform and a rust interpreter platform
+  - [x] All tests passing in #static mode
   - [ ] VM "PermSpace" for caching converted static values in their VM representation
 
 ## Project: Macro system built on 'static': both string #insert and parsed code #insert, like Jai

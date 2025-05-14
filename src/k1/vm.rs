@@ -15,7 +15,7 @@ use smallvec::{smallvec, SmallVec};
 
 use crate::{
     compiler::WordSize,
-    failf, int_binop,
+    failf, get_ident, int_binop,
     lex::SpanId,
     nz_u32_id,
     parse::{Identifier, NumericWidth, StringId},
@@ -1407,34 +1407,57 @@ fn execute_intrinsic(
 ) -> TyperResult<VmResult> {
     match intrinsic_type {
         IntrinsicOperation::SizeOf => {
+            //nocommit move to typer
             let type_id = m.named_types.get_nth(type_args, 0).type_id;
             let layout = m.types.get_layout(type_id);
             let size_bytes = layout.size as u64;
             Ok(Value::Int(TypedIntValue::UWord64(size_bytes)).into())
         }
         IntrinsicOperation::SizeOfStride => {
+            //nocommit move to typer
             let type_id = m.named_types.get_nth(type_args, 0).type_id;
             let layout = m.types.get_layout(type_id);
             let stride_bytes = layout.stride() as u64;
             Ok(Value::Int(TypedIntValue::UWord64(stride_bytes)).into())
         }
         IntrinsicOperation::AlignOf => {
+            //nocommit move to typer
             let type_id = m.named_types.get_nth(type_args, 0).type_id;
             let layout = m.types.get_layout(type_id);
             let align_bytes = layout.align as u64;
             Ok(Value::Int(TypedIntValue::UWord64(align_bytes)).into())
         }
         IntrinsicOperation::TypeId => {
+            //nocommit move to typer
             let type_id = m.named_types.get_nth(type_args, 0).type_id;
             Ok(Value::from(type_id.as_u32() as u64).into())
         }
         IntrinsicOperation::TypeName => {
+            //nocommit move to typer
             let type_id = m.named_types.get_nth(type_args, 0).type_id;
             let name = m.type_id_to_string(type_id);
             let data_allocation = vm.static_stack.push_slice(name.as_bytes());
             let k1_string = K1Buffer { len: name.len(), data: data_allocation };
             let string_struct_on_stack = vm.stack.push_t(k1_string);
             Ok(Value::Agg { type_id: STRING_TYPE_ID, ptr: string_struct_on_stack }.into())
+        }
+        IntrinsicOperation::TypeSchema => {
+            // Synthesize a TypeSchema enum.
+            let TypedIntValue::U64(type_id_int) =
+                execute_expr_return_exit!(vm, m, args[0])?.expect_int()
+            else {
+                m.ice_with_span("Malformed typeSchema call", vm.eval_span)
+            };
+            let Some(type_id_nzu32) = NonZeroU32::new(type_id_int as u32) else {
+                return failf!(vm.eval_span, "TypeId cannot be zero");
+            };
+            let type_id = TypeId::from(type_id_nzu32);
+            let schema_value = synth_typeschema(m, vm, type_id);
+            eprintln!("Schema is: {:?}", schema_value);
+            Ok(VmResult::Value(schema_value))
+        }
+        IntrinsicOperation::CompilerSourceLocation => {
+            unreachable!("Operation CompilerSourceLocation is handled in typer")
         }
         IntrinsicOperation::BoolNegate => {
             let b = execute_expr_return_exit!(vm, m, args[0])?.expect_bool();
@@ -1464,9 +1487,6 @@ fn execute_intrinsic(
             let index = execute_expr_return_exit!(vm, m, args[1])?.expect_int().expect_uword();
             let result = ptr + offset_at_index(&m.types, typ, index as usize);
             Ok(Value::Reference { type_id: return_type, ptr: result as *const u8 }.into())
-        }
-        IntrinsicOperation::CompilerSourceLocation => {
-            unreachable!("CompilerSourceLocation is handled in typer")
         }
         IntrinsicOperation::Allocate | IntrinsicOperation::AllocateZeroed => {
             let zero = intrinsic_type == IntrinsicOperation::AllocateZeroed;
@@ -2510,6 +2530,20 @@ fn make_stack_trace(m: &TypedProgram, stack: &Stack) -> String {
 fn vm_crash(m: &TypedProgram, vm: &Vm, msg: impl AsRef<str>) -> ! {
     eprintln!("{}", make_stack_trace(m, &vm.stack));
     m.ice_with_span(msg, vm.eval_span)
+}
+
+fn synth_typeschema(m: &TypedProgram, vm: &mut Vm, type_id: TypeId) -> Value {
+    eprintln!("synth typeschema for type id {}", type_id.as_u32());
+    let schema_type_id = m.types.builtins.type_schema.unwrap();
+    let schema_enum = m.types.get(schema_type_id).expect_enum();
+    let enum_base_ptr = match m.types.get(type_id) {
+        Type::Unit => {
+            let unit_variant = schema_enum.variant_by_name(get_ident!(m, "Unit")).unwrap();
+            vm.stack.push_enum(&m.types, unit_variant.my_type_id, None)
+        }
+        t => m.todo_with_span(format!("typeschema for {}", t.kind_name()), vm.eval_span),
+    };
+    Value::Agg { type_id: schema_type_id, ptr: enum_base_ptr }
 }
 
 //mod c_mem {

@@ -1,0 +1,50 @@
+deftype Point3[T] = {
+  // nocommit reject dupe field name in struct definition
+  // z: T, y: T, z: T
+  x: T, y: T, z: T
+}
+
+use core/types/typeSchema
+use core/types/typeId
+use core/types/typeName
+use core/types/getSchema
+
+fn printStructShape[T](): string {
+  let type_id = typeId[T]();
+  // How do we restrict that calls to typeSchema only happen statically?
+  require typeSchema(type_id) is .Struct(s) else { return("") };
+  let* sb = core/StringBuilder/new();
+  for field in s.fields do {
+    sb.putString(field.name);
+    sb.putString(": ");
+    let schema = typeSchema(field.type_id);
+    // Should use 'Writer' ability
+    sb.putString(field.type_id.show());
+  };
+  sb.build()
+}
+
+fn test(): unit {
+
+  let unitSchema = getSchema[unit]();
+  // TODO: Parsing bug
+  // assert(unitSchema is TypeSchema.Unit);
+  assert(unitSchema is .Unit);
+
+  #if true {
+  let p1: Point3[f32] = { x: 1.0, y: 2.0, z: 3.0 };
+  let schema = getSchema[Point3[f32]]();
+  let structSchema = schema.asStruct().!.value;
+  let name = typeName[Point3[f32]]();
+  let len = structSchema.fields.len;
+  printIt("Point3 Name: \{name}");
+  printIt("Point3 Fields: \{len}");
+  };
+
+  ()
+}
+
+fn main(): i32 {
+  #static test();
+  0
+}

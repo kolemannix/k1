@@ -92,6 +92,7 @@ pub const STRING_TYPE_ID: TypeId = TypeId(NonZeroU32::new(29).unwrap());
 pub const OPTIONAL_TYPE_ID: TypeId = TypeId(NonZeroU32::new(34).unwrap());
 pub const COMPILER_SOURCE_LOC_TYPE_ID: TypeId = TypeId(NonZeroU32::new(35).unwrap());
 pub const ORDERING_TYPE_ID: TypeId = TypeId(NonZeroU32::new(39).unwrap());
+//pub const TYPE_SCHEMA_TYPE_ID: TypeId = TypeId(NonZeroU32::new(39).unwrap());
 
 #[derive(Debug, Clone)]
 pub struct ListType {
@@ -818,6 +819,12 @@ impl TypeVariableInfo {
     }
 }
 
+pub struct BuiltinTypes {
+    pub string: Option<TypeId>,
+    pub buffer: Option<TypeId>,
+    pub type_schema: Option<TypeId>,
+}
+
 pub struct TypesConfig {
     pub ptr_size_bits: u32,
 }
@@ -839,6 +846,8 @@ pub struct Types {
     pub ability_mapping: FxHashMap<ParsedAbilityId, AbilityId>,
     pub recursive_placeholder_mapping: FxHashMap<ParsedTypeDefnId, TypeId>,
 
+    pub builtins: BuiltinTypes,
+
     pub config: TypesConfig,
 }
 
@@ -853,6 +862,7 @@ impl Types {
             type_defn_mapping: FxHashMap::default(),
             ability_mapping: FxHashMap::default(),
             recursive_placeholder_mapping: FxHashMap::default(),
+            builtins: BuiltinTypes { type_schema: None, string: None, buffer: None },
             config: TypesConfig { ptr_size_bits: 64 },
         }
     }

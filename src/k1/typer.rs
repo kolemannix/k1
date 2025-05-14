@@ -2049,16 +2049,18 @@ pub enum IntrinsicBitwiseBinopKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IntrinsicOperation {
     // Inline 'operations'
+    // Static, nocommit owned by typer phase
     SizeOf,
     SizeOfStride,
     AlignOf,
     TypeId,
     TypeName,
+    CompilerSourceLocation,
+
     BoolNegate,
     BitNot,
     BitwiseBinop(IntrinsicBitwiseBinopKind),
     PointerIndex,
-    CompilerSourceLocation,
     // Actual functions
     Allocate,
     AllocateZeroed,
@@ -2070,6 +2072,7 @@ pub enum IntrinsicOperation {
     Exit,
     // Static-only
     EmitCompilerMessage,
+    TypeSchema,
 }
 
 impl IntrinsicOperation {
@@ -2080,6 +2083,7 @@ impl IntrinsicOperation {
             IntrinsicOperation::AlignOf => true,
             IntrinsicOperation::TypeId => true,
             IntrinsicOperation::TypeName => true,
+            IntrinsicOperation::TypeSchema => true,
             IntrinsicOperation::BoolNegate => true,
             IntrinsicOperation::BitNot => true,
             IntrinsicOperation::BitwiseBinop(_) => true,
@@ -2153,6 +2157,7 @@ macro_rules! format_ident {
     }
 }
 
+#[macro_export]
 macro_rules! get_ident {
     ($self:ident, $name:expr) => {
         $self
@@ -2442,6 +2447,7 @@ impl TypedProgram {
             type_variable_counts: Pool::with_capacity("type_variable_counts", 8192),
             ability_mapping: FxHashMap::new(),
             recursive_placeholder_mapping: FxHashMap::new(),
+            builtins: BuiltinTypes { string: None, buffer: None, type_schema: None },
             config: TypesConfig { ptr_size_bits: config.target.word_size().bits() },
         };
 
@@ -2784,6 +2790,7 @@ impl TypedProgram {
         parsed_type_defn_id: ParsedTypeDefnId,
         scope_id: ScopeId,
     ) -> TyperResult<TypeId> {
+        // TODO(perf): clone of ParsedTypeDefn clones a Vec which contains a Vec!
         let parsed_type_defn = self.ast.get_type_defn(parsed_type_defn_id).clone();
         // TODO: ident lookup
         if self.name_of(parsed_type_defn.name) == "some" {
@@ -2863,6 +2870,8 @@ impl TypedProgram {
             self.types.fulfill_recursive_reference_hole(*recursive_ref_id, resulting_type_id)
         }
 
+        // nocommit: Do generic recursive types work? We fill the hole with the inner type id,
+        // which is interesting and may actually be correct
         let type_id = if has_type_params {
             let gen = GenericType {
                 params: type_params_handle,
@@ -2879,6 +2888,7 @@ impl TypedProgram {
                 _ => Ok(resulting_type_id),
             }
         } else {
+            // Not a generic and not an alias
             // 'New type' territory; must be a named struct/enum OR a builtin
             match self.types.get(resulting_type_id) {
                 Type::Unit
@@ -2895,6 +2905,7 @@ impl TypedProgram {
                 }
             }
         }?;
+
         self.types.add_type_defn_mapping(parsed_type_defn_id, type_id);
 
         let type_added = self.scopes.add_type(scope_id, parsed_type_defn.name, type_id);
@@ -2912,6 +2923,12 @@ impl TypedProgram {
         let removed = self.scopes.remove_pending_type_defn(scope_id, parsed_type_defn.name);
         if !removed {
             panic_at_disco!("Failed to remove pending type defn");
+        }
+
+        if scope_id == self.scopes.types_scope_id {
+            if parsed_type_defn.name == self.ast.idents.builtins.TypeSchema {
+                self.types.builtins.type_schema = Some(type_id);
+            }
         }
 
         Ok(type_id)
@@ -4621,8 +4638,6 @@ impl TypedProgram {
         id
     }
 
-    // nocommit: Make constrained ability impls a more lightweight thing;
-    // we just need the function types not full-blown functions
     fn add_constrained_ability_impl(
         &mut self,
         type_variable_id: TypeId,
@@ -9811,6 +9826,7 @@ impl TypedProgram {
                     let source_location = self.synth_source_location(span);
                     Ok(source_location)
                 }
+                // Bring it back here, keep a TypeId -> StaticValueId cache, and profit!
                 _ => Ok(self.exprs.add(TypedExpr::Call(call))),
             }
         } else {
@@ -11210,6 +11226,7 @@ impl TypedProgram {
                 Some("types") => match fn_name_str {
                     "typeId" => Some(IntrinsicOperation::TypeId),
                     "typeName" => Some(IntrinsicOperation::TypeName),
+                    "typeSchema" => Some(IntrinsicOperation::TypeSchema),
                     "sizeOf" => Some(IntrinsicOperation::SizeOf),
                     "sizeOfStride" => Some(IntrinsicOperation::SizeOfStride),
                     "alignOf" => Some(IntrinsicOperation::AlignOf),
@@ -12595,13 +12612,13 @@ impl TypedProgram {
                 };
             }
             ParsedId::Function(parsed_function_id) => {
-                let function_declaration_id = self
-                    .function_ast_mappings
-                    .get(&parsed_function_id)
-                    .expect("function predecl lookup failed");
-                if let Err(e) = self.eval_function_body(*function_declaration_id) {
-                    self.push_error(e);
-                };
+                if let Some(function_declaration_id) =
+                    self.function_ast_mappings.get(&parsed_function_id)
+                {
+                    if let Err(e) = self.eval_function_body(*function_declaration_id) {
+                        self.push_error(e);
+                    };
+                }
             }
             ParsedId::TypeDefn(_type_defn_id) => {
                 // Done in prior phase
@@ -12871,6 +12888,11 @@ impl TypedProgram {
         if is_k1 {
             self.scopes.k1_scope_id = ns_scope_id;
         }
+        let is_types =
+            parent_scope_id == self.scopes.core_scope_id && name == self.ast.idents.builtins.types;
+        if is_types {
+            self.scopes.types_scope_id = ns_scope_id;
+        }
 
         let namespace = Namespace {
             name,
@@ -13035,8 +13057,9 @@ impl TypedProgram {
             }
         }
         if !self.errors.is_empty() {
-            bail!(
-                "{} failed declaration phase with {} errors",
+            // nocommit test this
+            eprintln!(
+                "{} failed declaration phase with {} errors, but I will soldier on.",
                 self.program_name(),
                 self.errors.len()
             )

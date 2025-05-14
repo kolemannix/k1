@@ -896,7 +896,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         .as_type(),
                 })
             };
-        eprintln!("codegen for type {} depth {depth}", self.k1.type_id_to_string(type_id));
+        debug!("codegen for type {} depth {depth}", self.k1.type_id_to_string(type_id));
         let mut no_cache = false;
         // Might be better to switch to the debug context span, rather than the type's span
         let span = self.k1.get_span_for_type_id(type_id).unwrap_or(SpanId::NONE);
@@ -3036,6 +3036,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(result_pointer.as_basic_value_enum().into())
             }
             IntrinsicOperation::EmitCompilerMessage => Ok(self.builtin_types.unit_basic().into()),
+            IntrinsicOperation::TypeSchema => {
+                // nocommit: Prevent calls to TypeSchema from making into
+                // codegen'd code
+                Ok(LlvmValue::Void(self.builder.build_unreachable().unwrap()))
+            }
             IntrinsicOperation::CompilerSourceLocation => {
                 unreachable!("CompilerSourceLocation is handled in typechecking phase")
             }
