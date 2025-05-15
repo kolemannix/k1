@@ -1807,6 +1807,7 @@ pub fn load_value(
         | Type::TypeParameter(_)
         | Type::FunctionTypeParameter(_)
         | Type::InferenceHole(_)
+        | Type::Unresolved(_)
         | Type::RecursiveReference(_) => unreachable!("Not a value type"),
     }
 }

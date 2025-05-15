@@ -2801,24 +2801,9 @@ impl TypedProgram {
             return Ok(existing_defn);
         }
 
-        // Find companion namespace if exists and update type_defn_info
-        let companion_namespace_id =
-            self.scopes.get_scope(scope_id).find_namespace(parsed_type_defn.name);
-
-        // The type defn info is about a lot more than just definition site.
-        // It differentiates between simple names for shapes of structs and
-        // structs with an actual named-based identity that can have methods, implement traits, etc.
-        let type_defn_info = TypeDefnInfo {
-            name: parsed_type_defn.name,
-            scope: scope_id,
-            companion_namespace: companion_namespace_id,
-            ast_id: parsed_type_defn_id.into(),
-        };
-
         let has_type_params = !parsed_type_defn.type_params.is_empty();
 
-        let should_not_attach_defn_info = has_type_params
-            || (parsed_type_defn.flags.is_alias() && !parsed_type_defn.flags.is_opaque());
+        let should_not_attach_defn_info = has_type_params || (parsed_type_defn.flags.is_alias());
         let should_attach_defn_info = !should_not_attach_defn_info;
 
         let defn_scope_id = self.scopes.add_child_scope(
@@ -3580,7 +3565,7 @@ impl TypedProgram {
                                     )
                                 }
                                 Some((pending_defn_id, pending_defn_scope_id)) => {
-                                    debug!(
+                                    eprintln!(
                                         "Recursing into pending type defn {}",
                                         self.name_of(self.ast.get_type_defn(pending_defn_id).name)
                                     );
@@ -3874,6 +3859,9 @@ impl TypedProgram {
             }
             Type::Never => {
                 unreachable!("substitute_in_type is not expected to be called on never")
+            }
+            Type::Unresolved(_) => {
+                unreachable!("substitute_in_type is not expected to be called on Unresolved")
             }
             Type::RecursiveReference(_) => unreachable!(
                 "substitute_in_type is not expected to be called on RecursiveReference"
@@ -12745,12 +12733,19 @@ impl TypedProgram {
             }
             if let ParsedId::TypeDefn(type_defn_id) = parsed_definition_id {
                 let parsed_type_defn = self.ast.get_type_defn(type_defn_id);
+                // Find companion namespace if exists and update type_defn_info
+                let companion_namespace_id =
+                    self.scopes.get_scope(namespace_scope_id).find_namespace(parsed_type_defn.name);
+                let defn_info = TypeDefnInfo {
+                    name: parsed_type_defn.name,
+                    scope: namespace_scope_id,
+                    companion_namespace: companion_namespace_id,
+                    ast_id: ParsedId::TypeDefn(type_defn_id),
+                };
+                let type_id = self.types.add(Type::Unresolved(type_defn_id), Some(defn_info));
                 let name = parsed_type_defn.name;
                 let span = parsed_type_defn.span;
-                let added = self
-                    .scopes
-                    .get_scope_mut(namespace_scope_id)
-                    .add_pending_type_defn(name, type_defn_id);
+                let added = self.scopes.get_scope_mut(namespace_scope_id).add_type(name, type_id);
                 if !added {
                     self.push_error(errf!(span, "Type {} exists", self.name_of(name)));
                 }

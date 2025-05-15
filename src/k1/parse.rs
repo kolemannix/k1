@@ -1314,13 +1314,10 @@ pub struct ParsedGlobal {
 #[derive(Debug, Clone)]
 pub struct ParsedTypeDefnFlags(u32);
 impl ParsedTypeDefnFlags {
-    pub fn new(alias: bool, opaque: bool) -> Self {
+    pub fn new(alias: bool) -> Self {
         let mut s = Self(0);
         if alias {
             s.set_alias();
-        }
-        if opaque {
-            s.set_opaque();
         }
         s
     }
@@ -1329,16 +1326,8 @@ impl ParsedTypeDefnFlags {
         self.0 |= 1;
     }
 
-    pub fn set_opaque(&mut self) {
-        self.0 |= 2;
-    }
-
     pub fn is_alias(&self) -> bool {
         self.0 & 1 != 0
-    }
-
-    pub fn is_opaque(&self) -> bool {
-        self.0 & 2 != 0
     }
 }
 
@@ -3942,7 +3931,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         };
 
         // Parse modifiers
-        let mut flags = ParsedTypeDefnFlags::new(false, false);
+        let mut flags = ParsedTypeDefnFlags::new(false);
         loop {
             let name_or_modifier = self.peek();
 
