@@ -362,6 +362,7 @@ pub enum Type {
     TypeParameter(TypeParameter),
     FunctionTypeParameter(FunctionTypeParameter),
     InferenceHole(InferenceHoleType),
+    Unresolved(ParsedTypeDefnId),
     RecursiveReference(RecursiveReference),
 }
 
@@ -570,6 +571,10 @@ impl std::hash::Hash for Type {
                 co.function_type.hash(state);
                 co.struct_representation.hash(state);
             }
+            Type::Unresolved(id) => {
+                "unresolved".hash(state);
+                id.hash(state);
+            }
             Type::RecursiveReference(rr) => {
                 "recurse".hash(state);
                 rr.root_type_id.hash(state);
@@ -599,6 +604,7 @@ impl Type {
             Type::Function(_) => "function",
             Type::Lambda(_) => "lambda",
             Type::LambdaObject(_) => "lambdaobj",
+            Type::Unresolved(_) => "unresolved",
             Type::RecursiveReference(_) => "recurse",
         }
     }
@@ -1054,6 +1060,7 @@ impl Types {
             Type::Function(_) => None,
             Type::Lambda(_) => None,
             Type::LambdaObject(_) => None,
+            Type::Unresolved(_) => None,
             Type::RecursiveReference(_) => None,
         }
     }
@@ -1244,6 +1251,7 @@ impl Types {
                 .add(self.count_type_variables(lambda.env_type)),
             // But a lambda object is generic if its function is generic
             Type::LambdaObject(co) => self.count_type_variables(co.function_type),
+            Type::Unresolved(_) => EMPTY,
             Type::RecursiveReference(_rr) => EMPTY,
         }
     }
@@ -1326,6 +1334,7 @@ impl Types {
             Type::TypeParameter(_) => Z,
             Type::FunctionTypeParameter(_) => Z,
             Type::InferenceHole(_) => Z,
+            Type::Unresolved(_) => Z,
             Type::RecursiveReference(r) => match r.root_type_id {
                 None => Z,
                 Some(t) => self.compute_type_layout(t),
@@ -1374,6 +1383,7 @@ impl Types {
             Type::TypeParameter(_) => false,
             Type::FunctionTypeParameter(_) => false,
             Type::InferenceHole(_) => false,
+            Type::Unresolved(_) => false,
             Type::RecursiveReference(_) => false,
         }
     }

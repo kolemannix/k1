@@ -1375,6 +1375,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             Type::Function(_function_type) => {
                 panic!("Cannot codegen a naked Function type")
             }
+            Type::Unresolved(_) => {
+                panic!("Cannot codegen a Unresolved; something went wrong in typecheck")
+            }
             Type::Generic(_) => {
                 panic!("Cannot codegen a Generic; something went wrong in typecheck")
             }

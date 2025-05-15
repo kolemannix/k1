@@ -347,6 +347,7 @@ impl TypedProgram {
                 writ.write_str(")")?;
                 Ok(())
             }
+            Type::Unresolved(_u) => writ.write_str("<unresolved>"),
             Type::RecursiveReference(rr) => {
                 if rr.is_pending() {
                     writ.write_str("<pending recursive ref>")
