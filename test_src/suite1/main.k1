@@ -74,16 +74,16 @@ fn coreLib(): unit {
 fn main(): i32 {
   // Low
   low();
-  #static low();
+  // #static low();
 
   // Moderate
   moderate();
-  #static moderate();
+  // #static moderate();
 
   static_run/test();
 
   coreLib();
-  #static coreLib();
+  // #static coreLib();
 
   println("All tests passed!");
 

@@ -1332,7 +1332,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     // If this is not a recursive call, we already built this type
                     // and should 'follow the redirect' so that calling code
                     // gets the actual type
-                    self.codegen_type(rr.root_type_id.unwrap())
+                    self.codegen_type(rr.root_type_id)
                 } else {
                     // If this is a recursive call (depth > 0), we are in the process of
                     // building the type, and should return a placeholder for the 'recursive
@@ -1342,7 +1342,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     let defn_info = self
                         .k1
                         .types
-                        .get_defn_info(rr.root_type_id.unwrap())
+                        .get_defn_info(rr.root_type_id)
                         .expect("recursive type must have defn info");
 
                     let name = self.codegen_type_name(type_id, Some(defn_info));

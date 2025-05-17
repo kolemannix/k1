@@ -9,8 +9,8 @@ ns PointNamed {
 
 deftype alias PointAlias = { x: int, y: int }
 ns PointAlias {
-  fn sum(self: PointAlias): int {
-    self.x + self.y
+  fn sum(me: PointAlias): int {
+    me.x + me.y
   }
 }
 

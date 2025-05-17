@@ -160,6 +160,7 @@ mod stack_tests {
                     private: false,
                 }
             ],
+            defn_id: None,
             generic_instance_info: None,
         }));
         stack.advance_cursor(1);
