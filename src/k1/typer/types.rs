@@ -37,7 +37,9 @@ pub enum LoopType {
     While,
 }
 
-#[derive(Debug, Clone)]
+nz_u32_id!(TypeDefnId);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeDefnInfo {
     pub name: Identifier,
     pub scope: ScopeId,
@@ -57,9 +59,16 @@ impl std::hash::Hash for TypeDefnInfo {
 pub struct StructType {
     pub fields: EcoVec<StructTypeField>,
     pub generic_instance_info: Option<GenericInstanceInfo>,
+    pub defn_id: Option<TypeDefnId>,
 }
 
 impl StructType {
+    pub fn is_named(&self) -> bool {
+        self.defn_id.is_some()
+    }
+    pub fn is_anon(&self) -> bool {
+        self.defn_id.is_none()
+    }
     pub fn find_field(&self, field_name: Identifier) -> Option<(usize, &StructTypeField)> {
         self.fields.iter().enumerate().find(|(_, field)| field.name == field_name)
     }
@@ -85,13 +94,13 @@ pub const F32_TYPE_ID: TypeId = TypeId(NonZeroU32::new(16).unwrap());
 pub const F64_TYPE_ID: TypeId = TypeId(NonZeroU32::new(17).unwrap());
 
 pub const BUFFER_DATA_FIELD_NAME: &str = "data";
-pub const BUFFER_TYPE_ID: TypeId = TypeId(NonZeroU32::new(21).unwrap());
+pub const BUFFER_TYPE_ID: TypeId = TypeId(NonZeroU32::new(18).unwrap());
 
-pub const LIST_TYPE_ID: TypeId = TypeId(NonZeroU32::new(26).unwrap());
-pub const STRING_TYPE_ID: TypeId = TypeId(NonZeroU32::new(29).unwrap());
-pub const OPTIONAL_TYPE_ID: TypeId = TypeId(NonZeroU32::new(34).unwrap());
-pub const COMPILER_SOURCE_LOC_TYPE_ID: TypeId = TypeId(NonZeroU32::new(35).unwrap());
-pub const ORDERING_TYPE_ID: TypeId = TypeId(NonZeroU32::new(39).unwrap());
+pub const LIST_TYPE_ID: TypeId = TypeId(NonZeroU32::new(19).unwrap());
+pub const STRING_TYPE_ID: TypeId = TypeId(NonZeroU32::new(20).unwrap());
+pub const OPTIONAL_TYPE_ID: TypeId = TypeId(NonZeroU32::new(21).unwrap());
+pub const COMPILER_SOURCE_LOC_TYPE_ID: TypeId = TypeId(NonZeroU32::new(22).unwrap());
+pub const ORDERING_TYPE_ID: TypeId = TypeId(NonZeroU32::new(23).unwrap());
 //pub const TYPE_SCHEMA_TYPE_ID: TypeId = TypeId(NonZeroU32::new(39).unwrap());
 
 #[derive(Debug, Clone)]
@@ -138,13 +147,12 @@ pub struct TypedEnumVariant {
     pub index: u32,
     pub payload: Option<TypeId>,
     pub tag_value: TypedIntValue,
-    // Always matches the info of this variant's enum
-    pub type_defn_info: Option<TypeDefnInfo>,
 }
 
 #[derive(Debug, Clone)]
 pub struct TypedEnum {
     pub variants: Vec<TypedEnumVariant>,
+    pub defn_id: Option<TypeDefnId>,
     /// Populated for specialized copies of generic enums, contains provenance info
     pub generic_instance_info: Option<GenericInstanceInfo>,
     pub ast_node: ParsedId,
@@ -291,14 +299,7 @@ impl FunctionType {
 
 #[derive(Debug, Clone)]
 pub struct RecursiveReference {
-    pub parsed_id: ParsedTypeDefnId,
-    pub root_type_id: Option<TypeId>,
-}
-
-impl RecursiveReference {
-    pub fn is_pending(&self) -> bool {
-        self.root_type_id.is_none()
-    }
+    pub root_type_id: TypeId,
 }
 
 #[derive(Debug, Clone)]
@@ -366,26 +367,9 @@ pub enum Type {
     RecursiveReference(RecursiveReference),
 }
 
-pub struct TypeWithDefnInfo {
-    typ: Type,
-    defn_info: Option<TypeDefnInfo>,
-}
-
-impl std::hash::Hash for TypeWithDefnInfo {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        if let Some(defn_info) = &self.defn_info {
-            defn_info.hash(state);
-        } else {
-            self.typ.hash(state);
-        }
-    }
-}
-
-impl Eq for TypeWithDefnInfo {}
-
-impl PartialEq for TypeWithDefnInfo {
-    fn eq(&self, other: &TypeWithDefnInfo) -> bool {
-        match (&self.typ, &other.typ) {
+impl PartialEq for Type {
+    fn eq(&self, other: &Type) -> bool {
+        match (&self, &other) {
             (Type::Unit, Type::Unit) => true,
             (Type::Char, Type::Char) => true,
             (Type::Integer(int1), Type::Integer(int2)) => int1 == int2,
@@ -393,14 +377,8 @@ impl PartialEq for TypeWithDefnInfo {
             (Type::Bool, Type::Bool) => true,
             (Type::Pointer, Type::Pointer) => true,
             (Type::Struct(s1), Type::Struct(s2)) => {
-                if let Some(s1_info) = self.defn_info {
-                    if let Some(s2_info) = other.defn_info {
-                        if s1_info.ast_id != s2_info.ast_id {
-                            return false;
-                        }
-                    } else {
-                        return false;
-                    }
+                if s1.defn_id != s2.defn_id {
+                    return false;
                 }
                 if s1.fields.len() != s2.fields.len() {
                     return false;
@@ -425,7 +403,7 @@ impl PartialEq for TypeWithDefnInfo {
             }
             (Type::InferenceHole(h1), Type::InferenceHole(h2)) => h1.index == h2.index,
             (Type::Enum(e1), Type::Enum(e2)) => {
-                if self.defn_info.is_some() || other.defn_info.is_some() {
+                if e1.defn_id != e2.defn_id {
                     return false;
                 }
                 if e1.variants.len() != e2.variants.len() {
@@ -466,6 +444,7 @@ impl PartialEq for TypeWithDefnInfo {
             (Type::RecursiveReference(rr1), Type::RecursiveReference(rr2)) => {
                 rr1.root_type_id == rr2.root_type_id
             }
+            (Type::Unresolved(ur1), Type::Unresolved(ur2)) => ur1 == ur2,
             (t1, t2) => {
                 if t1.kind_name() == t2.kind_name() {
                     panic!("Missing handling for kind in type_eq: {}", t1.kind_name())
@@ -475,6 +454,8 @@ impl PartialEq for TypeWithDefnInfo {
         }
     }
 }
+
+impl Eq for Type {}
 
 impl std::hash::Hash for Type {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -496,6 +477,7 @@ impl std::hash::Hash for Type {
             Type::Bool => "bool".hash(state),
             Type::Struct(s) => {
                 "struct".hash(state);
+                s.defn_id.hash(state);
                 s.fields.len().hash(state);
                 for f in &s.fields {
                     f.name.hash(state);
@@ -523,6 +505,7 @@ impl std::hash::Hash for Type {
             }
             Type::Enum(e) => {
                 "enum".hash(state);
+                e.defn_id.hash(state);
                 e.variants.len().hash(state);
                 for v in e.variants.iter() {
                     v.name.hash(state);
@@ -794,10 +777,17 @@ impl Type {
         }
     }
 
-    pub(crate) fn expect_function(&self) -> &FunctionType {
+    pub fn expect_function(&self) -> &FunctionType {
         match self {
             Type::Function(f) => f,
             _ => panic!("expect_function called on: {:?}", self),
+        }
+    }
+
+    pub fn as_unresolved(&self) -> Option<ParsedTypeDefnId> {
+        match self {
+            Type::Unresolved(id) => Some(*id),
+            _ => None,
         }
     }
 }
@@ -840,16 +830,23 @@ pub struct Types {
     /// We use this to efficiently check if we already have seen a type,
     /// and retrieve its ID if so. We used to iterate the pool but it
     /// got slow
-    pub existing_types_mapping: FxHashMap<TypeWithDefnInfo, TypeId>,
+    pub existing_types_mapping: FxHashMap<Type, TypeId>,
 
     /// AoS-style info associated with each type id
     pub layouts: Pool<Layout, TypeId>,
-    pub defn_infos: Pool<Option<TypeDefnInfo>, TypeId>,
     pub type_variable_counts: Pool<TypeVariableInfo, TypeId>,
 
+    /// Definition info for named types
+    pub types_to_defns: FxHashMap<TypeId, TypeDefnId>,
+
+    /// De-duped pool of type definitions
+    pub existing_defns: FxHashMap<TypeDefnInfo, TypeDefnId>,
+    pub defns: Pool<TypeDefnInfo, TypeDefnId>,
+
     /// Lookup mappings for parsed -> typed ids
-    pub type_defn_mapping: FxHashMap<ParsedTypeDefnId, TypeId>,
-    pub ability_mapping: FxHashMap<ParsedAbilityId, AbilityId>,
+    pub ast_type_defn_mapping: FxHashMap<ParsedTypeDefnId, TypeId>,
+    pub ast_ability_mapping: FxHashMap<ParsedAbilityId, AbilityId>,
+    // nocommit can remove recursive_placeholder_mapping
     pub recursive_placeholder_mapping: FxHashMap<ParsedTypeDefnId, TypeId>,
 
     pub builtins: BuiltinTypes,
@@ -862,11 +859,13 @@ impl Types {
         Types {
             types: Vec::new(),
             layouts: Pool::new("layouts"),
-            defn_infos: Pool::new("defn_infos"),
+            types_to_defns: FxHashMap::default(),
+            existing_defns: FxHashMap::default(),
+            defns: Pool::new("type_defns"),
             type_variable_counts: Pool::new("type_variable_counts"),
             existing_types_mapping: FxHashMap::default(),
-            type_defn_mapping: FxHashMap::default(),
-            ability_mapping: FxHashMap::default(),
+            ast_type_defn_mapping: FxHashMap::default(),
+            ast_ability_mapping: FxHashMap::default(),
             recursive_placeholder_mapping: FxHashMap::default(),
             builtins: BuiltinTypes { type_schema: None, string: None, buffer: None },
             config: TypesConfig { ptr_size_bits: 64 },
@@ -896,54 +895,16 @@ impl Types {
         this
     }
 
-    pub fn add_type_ext(
-        &mut self,
-        typ: Type,
-        defn_info: Option<TypeDefnInfo>,
-        dedupe: bool,
-    ) -> TypeId {
-        let type_with_info = TypeWithDefnInfo { typ, defn_info };
-        if dedupe {
-            if let Some(&existing_type_id) = self.existing_types_mapping.get(&type_with_info) {
-                return existing_type_id;
-            }
+    pub fn add_type(&mut self, typ: Type) -> TypeId {
+        if let Some(&existing_type_id) = self.existing_types_mapping.get(&typ) {
+            return existing_type_id;
         }
-        let typ = type_with_info.typ;
 
         let t = match typ {
-            Type::Enum(mut e) => {
+            Type::Enum(e) => {
+                let enum_type_id = self.add_or_resolve_enum(e, None, None);
                 // Enums and variants are self-referential
                 // so we handle them specially
-                let next_type_id = self.next_type_id();
-                let enum_type_id = TypeId(next_type_id.0.saturating_add(e.variants.len() as u32));
-
-                for v in e.variants.iter_mut() {
-                    let variant_id = TypeId(next_type_id.0.saturating_add(v.index));
-                    v.my_type_id = variant_id;
-                    v.enum_type_id = enum_type_id;
-                    let variant = Type::EnumVariant(v.clone());
-                    self.types.push(variant.clone());
-                    self.existing_types_mapping
-                        .insert(TypeWithDefnInfo { typ: variant, defn_info }, variant_id);
-                    let variant_variable_counts = self.count_type_variables(variant_id);
-                    self.type_variable_counts.add(variant_variable_counts);
-                    self.defn_infos.add(defn_info);
-                }
-
-                let variant_count = e.variants.len();
-                let e = Type::Enum(e);
-                self.types.push(e.clone());
-                self.existing_types_mapping
-                    .insert(TypeWithDefnInfo { typ: e, defn_info }, enum_type_id);
-                let variable_counts = self.count_type_variables(enum_type_id);
-                self.type_variable_counts.add(variable_counts);
-                self.defn_infos.add(defn_info);
-
-                let layout = self.compute_type_layout(enum_type_id);
-                for _ in 0..variant_count {
-                    self.layouts.add(layout);
-                }
-                self.layouts.add(layout);
 
                 enum_type_id
             }
@@ -953,15 +914,13 @@ impl Types {
             _ => {
                 let type_id = self.next_type_id();
                 self.types.push(typ.clone());
-                self.existing_types_mapping.insert(TypeWithDefnInfo { typ, defn_info }, type_id);
+                self.existing_types_mapping.insert(typ, type_id);
 
                 let variable_counts = self.count_type_variables(type_id);
                 self.type_variable_counts.add(variable_counts);
 
                 let layout = self.compute_type_layout(type_id);
                 self.layouts.add(layout);
-
-                self.defn_infos.add(defn_info);
 
                 type_id
             }
@@ -970,6 +929,91 @@ impl Types {
         debug_assert_eq!(self.type_variable_counts.len(), self.types.len());
 
         t
+    }
+
+    fn add_or_resolve_enum(
+        &mut self,
+        mut e: TypedEnum,
+        type_id_to_use: Option<TypeId>,
+        defn_info: Option<TypeDefnInfo>,
+    ) -> TypeId {
+        // Enums and variants are self-referential
+        // so we handle them specially
+        let next_type_id = self.next_type_id();
+        let variant_count = e.variants.len();
+        let enum_type_id = match type_id_to_use {
+            None => TypeId(next_type_id.0.saturating_add(variant_count as u32)),
+            Some(type_id) => type_id,
+        };
+
+        for v in e.variants.iter_mut() {
+            let variant_id = TypeId(next_type_id.0.saturating_add(v.index));
+            v.my_type_id = variant_id;
+            v.enum_type_id = enum_type_id;
+            let variant = Type::EnumVariant(v.clone());
+            self.types.push(variant.clone());
+            self.existing_types_mapping.insert(variant, variant_id);
+            let variant_variable_counts = self.count_type_variables(variant_id);
+            self.type_variable_counts.add(variant_variable_counts);
+        }
+
+        let e = Type::Enum(e);
+        self.existing_types_mapping.insert(e.clone(), enum_type_id);
+        match type_id_to_use {
+            None => {
+                // Inserting a new type
+                self.types.push(e);
+                // nocommit Figure out if we need to do variable counts here or not
+                let variable_counts = self.count_type_variables(enum_type_id);
+                self.type_variable_counts.add(variable_counts);
+                // nocommit Dry up or remove enum layouts
+                let layout = self.compute_type_layout(enum_type_id);
+                for _ in 0..variant_count {
+                    self.layouts.add(layout);
+                }
+                self.layouts.add(layout);
+            }
+            Some(_existing) => {
+                // Updating an existing type
+                *self.get_mut(enum_type_id) = e;
+                let variable_counts = self.count_type_variables(enum_type_id);
+                *self.type_variable_counts.get_mut(enum_type_id) = variable_counts;
+                let layout = self.compute_type_layout(enum_type_id);
+                for _ in 0..variant_count {
+                    self.layouts.add(layout);
+                }
+                *self.layouts.get_mut(enum_type_id) = layout
+            }
+        };
+
+        enum_type_id
+    }
+
+    pub fn add_unresolved_type_defn(
+        &mut self,
+        parsed_id: ParsedTypeDefnId,
+        info: TypeDefnInfo,
+    ) -> TypeId {
+        let defn_id = self.add_defn(info);
+        let type_id = self.add_type(Type::Unresolved(parsed_id));
+        self.ast_type_defn_mapping.insert(parsed_id, type_id);
+        self.types_to_defns.insert(type_id, defn_id);
+        type_id
+    }
+
+    pub fn resolve_unresolved(&mut self, unresolved_type_id: TypeId, type_value: Type) {
+        let typ = self.get_mut(unresolved_type_id);
+        if typ.as_unresolved().is_none() {
+            panic!("Tried to resolve a type that was not unresolved: {:?}", typ);
+        }
+        match type_value {
+            Type::Enum(e) => {
+                self.add_or_resolve_enum(e, Some(unresolved_type_id), None);
+            }
+            _ => *typ = type_value,
+        };
+        let variable_counts = self.count_type_variables(unresolved_type_id);
+        *self.type_variable_counts.get_mut(unresolved_type_id) = variable_counts;
     }
 
     pub fn next_type_id(&self) -> TypeId {
@@ -981,23 +1025,23 @@ impl Types {
         self.add_anon(Type::Reference(ReferenceType { inner_type }))
     }
 
-    pub fn fulfill_recursive_reference_hole(
-        &mut self,
-        recursive_ref_id: TypeId,
-        root_type_id: TypeId,
-    ) {
-        self.get_mut(recursive_ref_id).expect_recursive_reference().root_type_id =
-            Some(root_type_id);
-        let root_layout = self.layouts.get(root_type_id);
-        *self.layouts.get_mut(recursive_ref_id) = *root_layout;
-    }
-
-    pub fn add(&mut self, typ: Type, defn_info: Option<TypeDefnInfo>) -> TypeId {
-        self.add_type_ext(typ, defn_info, true)
+    pub fn add(&mut self, typ: Type, defn_id: Option<TypeDefnId>) -> TypeId {
+        let type_id = self.add_type(typ);
+        if let Some(defn_id) = defn_id {
+            self.types_to_defns.insert(type_id, defn_id);
+        };
+        type_id
     }
 
     pub fn add_anon(&mut self, typ: Type) -> TypeId {
-        self.add_type_ext(typ, None, true)
+        self.add_type(typ)
+    }
+
+    pub fn add_defn(&mut self, info: TypeDefnInfo) -> TypeDefnId {
+        if let Some(existing) = self.existing_defns.get(&info) {
+            return *existing;
+        }
+        self.defns.add(info)
     }
 
     #[inline]
@@ -1008,10 +1052,7 @@ impl Types {
     #[inline]
     pub fn get(&self, type_id: TypeId) -> &Type {
         match self.get_no_follow(type_id) {
-            Type::RecursiveReference(rr) => match rr.root_type_id {
-                None => panic!("Tried to follow a pending recursive reference; {:?}", rr),
-                Some(t) => self.get(t),
-            },
+            Type::RecursiveReference(rr) => self.get(rr.root_type_id),
             t => t,
         }
     }
@@ -1065,8 +1106,15 @@ impl Types {
         }
     }
 
+    pub fn get_defn_id(&self, type_id: TypeId) -> Option<TypeDefnId> {
+        self.types_to_defns.get(&type_id).copied()
+    }
+
     pub fn get_defn_info(&self, type_id: TypeId) -> Option<TypeDefnInfo> {
-        *self.defn_infos.get(type_id)
+        match self.types_to_defns.get(&type_id) {
+            Some(info_id) => Some(*self.defns.get(*info_id)),
+            None => None,
+        }
     }
 
     pub fn get_companion_namespace(&self, type_id: TypeId) -> Option<NamespaceId> {
@@ -1092,7 +1140,11 @@ impl Types {
     }
 
     pub fn add_empty_struct(&mut self) -> TypeId {
-        self.add_anon(Type::Struct(StructType { fields: eco_vec![], generic_instance_info: None }))
+        self.add_anon(Type::Struct(StructType {
+            fields: eco_vec![],
+            defn_id: None,
+            generic_instance_info: None,
+        }))
     }
 
     pub const LAMBDA_OBJECT_FN_PTR_INDEX: usize = 0;
@@ -1117,8 +1169,11 @@ impl Types {
                 private: false,
             },
         ];
-        let struct_representation =
-            self.add_anon(Type::Struct(StructType { fields, generic_instance_info: None }));
+        let struct_representation = self.add_anon(Type::Struct(StructType {
+            fields,
+            defn_id: None,
+            generic_instance_info: None,
+        }));
         self.add_anon(Type::LambdaObject(LambdaObjectType {
             function_type: function_type_id,
             parsed_id,
@@ -1128,6 +1183,14 @@ impl Types {
 
     pub fn get_mut(&mut self, type_id: TypeId) -> &mut Type {
         &mut self.types[type_id.0.get() as usize - 1]
+    }
+
+    pub fn swap(&mut self, type1: TypeId, type2: TypeId) {
+        self.types.swap(type1.0.get() as usize - 1, type2.0.get() as usize - 1);
+    }
+
+    pub fn iter_ids(&self) -> impl Iterator<Item = TypeId> {
+        (0..self.types.len()).map(|i| TypeId(NonZeroU32::new(i as u32 + 1).unwrap()))
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (TypeId, &Type)> {
@@ -1155,16 +1218,8 @@ impl Types {
         self.types.len()
     }
 
-    pub fn add_type_defn_mapping(
-        &mut self,
-        type_defn_id: ParsedTypeDefnId,
-        type_id: TypeId,
-    ) -> bool {
-        self.type_defn_mapping.insert(type_defn_id, type_id).is_none()
-    }
-
     pub fn find_type_defn_mapping(&mut self, type_defn_id: ParsedTypeDefnId) -> Option<TypeId> {
-        self.type_defn_mapping.get(&type_defn_id).copied()
+        self.ast_type_defn_mapping.get(&type_defn_id).copied()
     }
 
     pub fn add_ability_mapping(
@@ -1172,14 +1227,14 @@ impl Types {
         parsed_ability_id: ParsedAbilityId,
         ability_id: AbilityId,
     ) -> bool {
-        self.ability_mapping.insert(parsed_ability_id, ability_id).is_none()
+        self.ast_ability_mapping.insert(parsed_ability_id, ability_id).is_none()
     }
 
     pub fn find_ability_mapping(
         &mut self,
         parsed_ability_id: ParsedAbilityId,
     ) -> Option<AbilityId> {
-        self.ability_mapping.get(&parsed_ability_id).copied()
+        self.ast_ability_mapping.get(&parsed_ability_id).copied()
     }
 
     pub fn get_contained_type_variable_counts(&self, type_id: TypeId) -> TypeVariableInfo {
@@ -1191,6 +1246,7 @@ impl Types {
     ///       But types are not immutable so this could be a dangerous idea!
     pub fn count_type_variables(&self, type_id: TypeId) -> TypeVariableInfo {
         const EMPTY: TypeVariableInfo = TypeVariableInfo::EMPTY;
+        debug!("count_type_variables of {} {}", type_id, self.get_no_follow(type_id).kind_name());
         match self.get_no_follow(type_id) {
             Type::TypeParameter(_tp) => {
                 TypeVariableInfo { type_parameter_count: 1, inference_variable_count: 0 }
@@ -1335,10 +1391,7 @@ impl Types {
             Type::FunctionTypeParameter(_) => Z,
             Type::InferenceHole(_) => Z,
             Type::Unresolved(_) => Z,
-            Type::RecursiveReference(r) => match r.root_type_id {
-                None => Z,
-                Some(t) => self.compute_type_layout(t),
-            },
+            Type::RecursiveReference(_) => Z,
         }
     }
 
@@ -1354,12 +1407,11 @@ impl Types {
     }
 
     pub fn get_ast_node(&self, type_id: TypeId) -> Option<ParsedId> {
-        match self.get_no_follow(type_id) {
+        match self.get(type_id) {
             Type::Enum(e) => Some(e.ast_node),
             Type::Lambda(clos) => Some(clos.parsed_id),
             Type::LambdaObject(clos_obj) => Some(clos_obj.parsed_id),
-            Type::RecursiveReference(r) => Some(ParsedId::TypeDefn(r.parsed_id)),
-            _ => self.defn_infos.get(type_id).map(|info| info.ast_id),
+            _ => self.get_defn_info(type_id).map(|info| info.ast_id),
         }
     }
 

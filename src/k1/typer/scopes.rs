@@ -365,6 +365,7 @@ impl Scopes {
         }
     }
 
+    // nocommit: do we kill pending_type_defn now
     pub fn remove_pending_type_defn(&mut self, scope_id: ScopeId, ident: Identifier) -> bool {
         let scope = self.get_scope_mut(scope_id);
         if scope.remove_pending_type_defn(ident) {
@@ -702,6 +703,7 @@ pub struct Scope {
     pub namespaces: FxHashMap<Identifier, NamespaceId>,
     pub types: FxHashMap<Identifier, TypeId>,
     pub abilities: FxHashMap<Identifier, AbilityId>,
+    // nocommit eliminate pending_type_defns
     pub pending_type_defns: FxHashMap<Identifier, ParsedTypeDefnId>,
     pub pending_ability_defns: FxHashMap<Identifier, ParsedAbilityId>,
     pub parent: Option<ScopeId>,

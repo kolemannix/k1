@@ -323,7 +323,7 @@ impl Value {
         }
     }
 
-    pub fn kind_str(&self) -> &'static str {
+    pub fn kind_name(&self) -> &'static str {
         match self {
             Value::Unit => "unit",
             Value::Bool(_) => "bool",
@@ -592,8 +592,8 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                             failf!(
                                 bin_op.span,
                                 "static equality over {} and {} is unimplemented",
-                                lhs.kind_str(),
-                                rhs.kind_str()
+                                lhs.kind_name(),
+                                rhs.kind_name()
                             )
                         }
                     }?;
@@ -1443,15 +1443,7 @@ fn execute_intrinsic(
         }
         IntrinsicOperation::TypeSchema => {
             // Synthesize a TypeSchema enum.
-            let TypedIntValue::U64(type_id_int) =
-                execute_expr_return_exit!(vm, m, args[0])?.expect_int()
-            else {
-                m.ice_with_span("Malformed typeSchema call", vm.eval_span)
-            };
-            let Some(type_id_nzu32) = NonZeroU32::new(type_id_int as u32) else {
-                return failf!(vm.eval_span, "TypeId cannot be zero");
-            };
-            let type_id = TypeId::from(type_id_nzu32);
+            let type_id = m.named_types.get_nth(type_args, 0).type_id;
             let schema_value = synth_typeschema(m, vm, type_id);
             eprintln!("Schema is: {:?}", schema_value);
             Ok(VmResult::Value(schema_value))

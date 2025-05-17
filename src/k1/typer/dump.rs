@@ -8,18 +8,7 @@ impl Display for TypedProgram {
         f.write_str("Module ")?;
         f.write_str(&self.ast.name)?;
         f.write_str("\n")?;
-        f.write_str("--- TYPES ---\n")?;
-        for (id, ty) in self.types.iter() {
-            write!(f, "type {:02} {:10} ", id, ty.kind_name())?;
-            self.display_type_ext(id, false, f)?;
-            let info = self.types.get_contained_type_variable_counts(id);
-            write!(
-                f,
-                "   [ tparams: {}, inference: {} ]",
-                info.type_parameter_count, info.inference_variable_count
-            )?;
-            f.write_str("\n")?;
-        }
+        self.dump_types(f)?;
         f.write_str("--- Namespaces ---\n")?;
         for (id, namespace) in self.namespaces.iter().enumerate() {
             write!(f, "ns {:02} ", id)?;
@@ -119,8 +108,8 @@ impl TypedProgram {
         if !scope.namespaces.is_empty() {
             writ.write_str("\tNAMESPACES\n")?;
         }
-        for (id, namespace_id) in scope.namespaces.iter() {
-            write!(writ, "{} -> ", id)?;
+        for (_name, namespace_id) in scope.namespaces.iter() {
+            write!(writ, "{} -> ", namespace_id)?;
             let namespace = self.namespaces.get(*namespace_id);
             writ.write_str(self.name_of(namespace.name))?;
             writ.write_str("\n")?;
@@ -349,13 +338,9 @@ impl TypedProgram {
             }
             Type::Unresolved(_u) => writ.write_str("<unresolved>"),
             Type::RecursiveReference(rr) => {
-                if rr.is_pending() {
-                    writ.write_str("<pending recursive ref>")
-                } else {
-                    let info = self.types.get_defn_info(rr.root_type_id.unwrap()).unwrap();
-                    writ.write_str(self.name_of(info.name))?;
-                    Ok(())
-                }
+                let info = self.types.get_defn_info(rr.root_type_id).unwrap();
+                writ.write_str(self.name_of(info.name))?;
+                Ok(())
             }
         }
     }
@@ -1087,5 +1072,21 @@ impl TypedProgram {
         let mut s = String::with_capacity(32);
         self.display_namespaced_identifier(&mut s, ident).unwrap();
         s
+    }
+
+    pub fn dump_types(&self, w: &mut impl Write) -> std::fmt::Result {
+        w.write_str("--- TYPES ---\n")?;
+        for (id, ty) in self.types.iter() {
+            write!(w, "type {:02} {:10} ", id, ty.kind_name())?;
+            self.display_type_ext(id, false, w)?;
+            let info = self.types.get_contained_type_variable_counts(id);
+            write!(
+                w,
+                "   [ tparams: {}, inference: {} ]",
+                info.type_parameter_count, info.inference_variable_count
+            )?;
+            w.write_str("\n")?;
+        }
+        Ok(())
     }
 }
