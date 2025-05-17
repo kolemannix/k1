@@ -365,6 +365,30 @@ impl Scopes {
         }
     }
 
+    pub fn find_pending_type_defn_namespaced(
+        &self,
+        scope_id: ScopeId,
+        type_name: &NamespacedIdentifier,
+        namespaces: &Namespaces,
+        identifiers: &Identifiers,
+    ) -> TyperResult<Option<(ParsedTypeDefnId, ScopeId)>> {
+        if type_name.namespaces.is_empty() {
+            Ok(self.find_pending_type_defn(scope_id, type_name.name))
+        } else {
+            let scope_to_search = self.traverse_namespace_chain(
+                scope_id,
+                &type_name.namespaces,
+                namespaces,
+                identifiers,
+                type_name.span,
+            )?;
+            Ok(self
+                .get_scope(scope_to_search)
+                .find_pending_type_defn(type_name.name)
+                .map(|t| (t, scope_to_search)))
+        }
+    }
+
     pub fn remove_pending_type_defn(&mut self, scope_id: ScopeId, ident: Identifier) -> bool {
         let scope = self.get_scope_mut(scope_id);
         if scope.remove_pending_type_defn(ident) {

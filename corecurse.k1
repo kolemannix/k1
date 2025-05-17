@@ -1,0 +1,11 @@
+ns a {}
+ns c {
+  deftype Tree = { a: a/Tree*, b: a/Tree* }
+}
+ 
+fn main(): i32 {
+  printIt(core/types/sizeOf[c/Tree]());
+  println("");
+  printIt(core/types/alignOf[c/Tree]());
+  0
+}

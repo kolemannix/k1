@@ -3571,6 +3571,11 @@ impl TypedProgram {
                                 };
                             Ok(placeholder_type_id)
                         } else {
+                            // To clean things up a bit, we could be more incremental
+                            // - Intern defn_info first and clean it up (why is it on functions,
+                            // remove from enum variant)
+                            // - Then make this work with namespaces
+                            // - Then corecursion
                             match self.scopes.find_pending_type_defn(scope_id, name) {
                                 None => {
                                     failf!(
