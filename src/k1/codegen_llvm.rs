@@ -1071,8 +1071,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             Type::TypeParameter(tp) => {
                 failf!(
                     self.debug.current_entry().span,
-                    "codegen was asked to codegen a type parameter {:?}",
-                    tp
+                    "codegen was asked to codegen a type parameter {}",
+                    self.k1.dump_type_id_to_string(type_id)
                 )
             }
             Type::FunctionTypeParameter(ftp) => {

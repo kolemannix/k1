@@ -1022,8 +1022,8 @@ impl TypedProgram {
             write!(
                 s,
                 "{} -> {}",
-                self.type_id_to_string_ext(pair.from, true),
-                self.type_id_to_string_ext(pair.to, true)
+                self.type_id_to_string_ext(pair.from, false),
+                self.type_id_to_string_ext(pair.to, false)
             )
             .unwrap();
             first = false;
@@ -1093,7 +1093,7 @@ impl TypedProgram {
             tvar_info.type_parameter_count, tvar_info.inference_variable_count
         )?;
         writeln!(w)?;
-        self.display_type_ext(id, false, w)?;
+        self.display_type_ext(id, true, w)?;
         Ok(())
     }
 

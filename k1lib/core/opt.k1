@@ -21,8 +21,8 @@ ns Opt {
 }
 
 // Convenience constructors in the global scope for Opt instances
-fn none[T](): Opt[T].None { Opt.None[T] }
-fn some[T](value: T): Opt[T].Some { Opt.Some[T](value) }
+fn none[T](): Opt[T] { Opt.None[T] }
+fn some[T](value: T): Opt[T] { Opt.Some[T](value) }
 
 
 impl[T: Equals] Equals for Opt[T] {
