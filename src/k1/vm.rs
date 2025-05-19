@@ -1712,7 +1712,7 @@ pub fn load_value(
     if layout.size == 0 {
         return failf!(
             span,
-            "For now, cannot load a type with no known layout: {}",
+            "For now, cannot load a zero-sized type: {}",
             m.type_id_to_string(type_id)
         );
     };

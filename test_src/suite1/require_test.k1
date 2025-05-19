@@ -1,4 +1,6 @@
-fn tests(): unit {
+ns require_test;
+
+fn test(): unit {
   let foo = { x: 1, y: some(2) };
   require foo is { y } and y is .Some(2) and 2 == (1 + 1) else {
     crash("")
@@ -17,11 +19,6 @@ fn tests(): unit {
   require myEntity is { health, opacity, alive: true }* and health.* > 50 and opacity.* > 0.0 else {
     crash("")
   };
-}
 
-fn main(): i32 {
-  tests();
-  #static tests();
-
-  0
+  ()
 }

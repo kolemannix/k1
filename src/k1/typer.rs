@@ -2302,9 +2302,6 @@ struct EvalTypeExprContext {
     /// If this is a type definition, this is its type id (probably a Type::Unresolved)
     /// If set, we're supposed to store our result in this type_id
     unresolved_target_type: Option<TypeId>,
-    /// Used to detect recursion. Needs to be independent so that we can
-    /// detect recursion for generic types
-    defn_root_type_id: Option<TypeId>,
     /// We allow the construct `some <type expr>` only in this position
     is_direct_function_parameter: bool,
 }
@@ -2317,11 +2314,8 @@ impl EvalTypeExprContext {
         s
     }
 
-    pub const EMPTY: Self = EvalTypeExprContext {
-        unresolved_target_type: None,
-        defn_root_type_id: None,
-        is_direct_function_parameter: false,
-    };
+    pub const EMPTY: Self =
+        EvalTypeExprContext { unresolved_target_type: None, is_direct_function_parameter: false };
 }
 
 // Not using this yet but probably need to be
@@ -2419,6 +2413,7 @@ pub struct TypedProgram {
     pub functions_pending_body_specialization: Vec<FunctionId>,
     module_in_progress: Option<ModuleId>,
     inference_context: InferenceContext,
+    type_defn_stack: Vec<TypeId>,
 
     // Buffers that we prefer to re-use to avoid thousands of allocations
     // Clear them after you use them, but leave the memory allocated
@@ -2443,7 +2438,6 @@ impl TypedProgram {
             defns: Pool::with_capacity("type_defns", 4096),
             ast_type_defn_mapping: FxHashMap::new(),
             ast_ability_mapping: FxHashMap::new(),
-            recursive_placeholder_mapping: FxHashMap::new(),
             builtins: BuiltinTypes { string: None, buffer: None, type_schema: None },
             config: TypesConfig { ptr_size_bits: config.target.word_size().bits() },
         };
@@ -2502,6 +2496,7 @@ impl TypedProgram {
                 substitutions: FxHashMap::with_capacity(256),
                 substitutions_vec: Vec::with_capacity(256),
             },
+            type_defn_stack: Vec::with_capacity(8),
             buffers: TypedModuleBuffers { name_builder: String::with_capacity(4096) },
             named_types: Pool::with_capacity("named_types", 8192),
             function_type_params: Pool::with_capacity("function_type_params", 4096),
@@ -2787,8 +2782,7 @@ impl TypedProgram {
         parsed_type_defn_id: ParsedTypeDefnId,
         scope_id: ScopeId,
     ) -> TyperResult<TypeId> {
-        // TODO(perf): clone of ParsedTypeDefn clones a Vec which contains a Vec!
-        let parsed_type_defn = self.ast.get_type_defn(parsed_type_defn_id).clone();
+        let parsed_type_defn = self.ast.get_type_defn(parsed_type_defn_id);
         let is_generic_defn = !parsed_type_defn.type_params.is_empty();
 
         if parsed_type_defn.flags.is_alias() {
@@ -2799,6 +2793,7 @@ impl TypedProgram {
                     self.name_of(parsed_type_defn.name)
                 );
             }
+            let parsed_type_defn = self.ast.get_type_defn(parsed_type_defn_id).clone();
             let rhs = self.eval_type_expr(parsed_type_defn.value_expr, scope_id)?;
             if !self.scopes.add_type(scope_id, parsed_type_defn.name, rhs) {
                 return failf!(
@@ -2810,6 +2805,7 @@ impl TypedProgram {
             return Ok(rhs);
         }
 
+        // TODO(perf): clone of ParsedTypeDefn clones a Vec which contains a Vec!
         let parsed_type_defn = self.ast.get_type_defn(parsed_type_defn_id).clone();
         debug_assert!(!parsed_type_defn.flags.is_alias());
 
@@ -2818,20 +2814,13 @@ impl TypedProgram {
             return failf!(parsed_type_defn.span, "'some' is not a valid type name");
         }
         let my_type_id = self.types.find_type_defn_mapping(parsed_type_defn_id).unwrap();
+        self.type_defn_stack.push(my_type_id);
 
-        // nocommit remove if not invoked?
         if self.types.get(my_type_id).as_unresolved().is_none() {
-            eprintln!(
-                "Shortcut eval_type_defn already done triggered: {}",
-                self.type_id_to_string(my_type_id)
-            );
             return Ok(my_type_id);
         }
 
         let is_generic_defn = !parsed_type_defn.type_params.is_empty();
-
-        //let should_not_attach_defn_info = is_generic_defn || (parsed_type_defn.flags.is_alias());
-        //let should_attach_defn_info = !should_not_attach_defn_info;
 
         let defn_scope_id = self.scopes.add_child_scope(
             scope_id,
@@ -2869,9 +2858,6 @@ impl TypedProgram {
             // For generics, we want the RHS to be its own type, then we make a Generic wrapper
             // that points to it, so we pass None
             unresolved_target_type: if is_generic_defn { None } else { Some(my_type_id) },
-            // But in either case, we need to at least know the type under eval
-            // so we don't recurse forever
-            defn_root_type_id: Some(my_type_id),
             is_direct_function_parameter: false,
         };
 
@@ -2917,6 +2903,9 @@ impl TypedProgram {
             my_type_id
         };
 
+        // nocommit: Clear this on fail too
+        let t = self.type_defn_stack.pop();
+        debug_assert_eq!(t, Some(my_type_id));
         Ok(final_type_id)
     }
 
@@ -2967,7 +2956,7 @@ impl TypedProgram {
                     }
                     _ => return failf!(*span, "Unknown builtin type id '{}'", defn_type_id),
                 };
-                *self.types.get_mut(defn_type_id) = type_value;
+                self.types.resolve_unresolved(defn_type_id, type_value);
                 Ok(defn_type_id)
             }
             ParsedTypeExpr::Struct(struct_defn) => {
@@ -3473,37 +3462,45 @@ impl TypedProgram {
             &self.ast.idents,
         )? {
             Some((type_id, _)) => {
-                if Some(type_id) == context.defn_root_type_id {
-                    let recursive_reference =
-                        self.types.add_anon(Type::RecursiveReference(RecursiveReference {
-                            root_type_id: type_id,
-                        }));
-                    Ok(recursive_reference)
-                } else if let Type::Generic(g) = self.types.get(type_id) {
-                    if ty_app.args.len() != g.params.len() {
-                        return failf!(
-                            ty_app.span,
-                            "Type {} expects {} type arguments, got {}",
-                            self.namespaced_identifier_to_string(&ty_app.name),
-                            g.params.len(),
-                            ty_app.args.len()
-                        );
+                match self.types.get(type_id) {
+                    Type::Unresolved(parsed_type_defn_id) => {
+                        // We recurse into unresolved types, so that we can detect corecursion,
+                        // but only if we're doing a type definition
+                        if self.type_defn_stack.contains(&type_id) {
+                            let recursive_reference =
+                                self.types.add_anon(Type::RecursiveReference(RecursiveReference {
+                                    root_type_id: type_id,
+                                }));
+                            Ok(recursive_reference)
+                        } else {
+                            self.eval_type_defn(*parsed_type_defn_id, scope_id)
+                        }
                     }
-                    let mut type_arguments: SV4<TypeId> =
-                        SmallVec::with_capacity(ty_app.args.len());
-                    for parsed_param in
-                        self.ast.p_type_args.get_slice_to_smallvec_copy::<8>(ty_app.args)
-                    {
-                        let param_type_id = self.eval_type_expr_ext(
-                            parsed_param.type_expr,
-                            scope_id,
-                            context.no_unresolved_target_type(),
-                        )?;
-                        type_arguments.push(param_type_id);
+                    Type::Generic(g) => {
+                        if ty_app.args.len() != g.params.len() {
+                            return failf!(
+                                ty_app.span,
+                                "Type {} expects {} type arguments, got {}",
+                                self.namespaced_identifier_to_string(&ty_app.name),
+                                g.params.len(),
+                                ty_app.args.len()
+                            );
+                        }
+                        let mut type_arguments: SV4<TypeId> =
+                            SmallVec::with_capacity(ty_app.args.len());
+                        for parsed_param in
+                            self.ast.p_type_args.get_slice_to_smallvec_copy::<8>(ty_app.args)
+                        {
+                            let param_type_id = self.eval_type_expr_ext(
+                                parsed_param.type_expr,
+                                scope_id,
+                                context.no_unresolved_target_type(),
+                            )?;
+                            type_arguments.push(param_type_id);
+                        }
+                        Ok(self.instantiate_generic_type(type_id, type_arguments))
                     }
-                    Ok(self.instantiate_generic_type(type_id, type_arguments))
-                } else {
-                    Ok(self.get_type_id_resolved(type_id, scope_id))
+                    _other => Ok(self.get_type_id_resolved(type_id, scope_id)),
                 }
             }
             None => {
@@ -3601,32 +3598,72 @@ impl TypedProgram {
         substitution_pairs: &[TypeSubstitutionPair],
         generic_parent_to_attach: Option<TypeId>,
         defn_info_to_attach: Option<TypeDefnId>,
+        // TODO: full support
+        // breadcrumbs: &mut Vec<TypeId>,
     ) -> TypeId {
-        debug!("substitute in type on {}", self.type_id_to_string(type_id));
+        eprintln!(
+            "substitute in type on {}.\npairs: {}",
+            self.type_id_to_string(type_id),
+            self.pretty_print_type_substitutions(substitution_pairs, ", ")
+        );
+        // TODO: New strategy to support co-recursive types aka recursive families
+        // 1. Remember all visited type ids in this substitute (re-use a buf of TypeId)
+        // 2. When you encounter a RecursiveReference, check if its in the visited set
+        // 3. If it is, no-op
+        // 4. If it is not, visit it
+        // That should be all we need, don't even need to know the whole set in the family,
+        // we get that for 'free' by 'tagging' with RR everywhere vs just inferring from structure
+        //
+        // We have to work this way everywhere that we visit types. So
+        // - substitute_in_type
+        // - count_type_variables
+        // - Layout (?) although due to indirection requirements, less critical
+        // - Other places I am sure
         let all_holes = substitution_pairs
             .iter()
             .all(|p| self.types.type_variable_counts.get(p.from).inference_variable_count > 0);
-        let no_holes = self.types.type_variable_counts.get(type_id).inference_variable_count == 0;
-        // Optimization: if every 'from' type is an inference hole, and the type
-        // contains no inference holes, which we compute on creation, its a no-op
-        // This prevents useless deep type traversals
-        if all_holes && no_holes {
-            debug!(
-                "detected substitution noop for {} {}",
-                self.pretty_print_type_substitutions(substitution_pairs, ", "),
-                self.type_id_to_string(type_id)
-            );
-            return type_id;
+        if all_holes {
+            let no_holes =
+                self.types.type_variable_counts.get(type_id).inference_variable_count == 0;
+            // Optimization: if every 'from' type is an inference hole, and the type
+            // contains no inference holes, which we compute on creation, its a no-op
+            // This prevents useless deep type traversals
+            if all_holes && no_holes {
+                debug!(
+                    "detected substitution noop for {} {}",
+                    self.pretty_print_type_substitutions(substitution_pairs, ", "),
+                    self.type_id_to_string(type_id)
+                );
+                return type_id;
+            }
+        }
+        let all_params = substitution_pairs
+            .iter()
+            .all(|p| self.types.type_variable_counts.get(p.from).type_parameter_count > 0);
+        if all_params {
+            let no_params = self.types.type_variable_counts.get(type_id).type_parameter_count == 0;
+            // Optimization: if every 'from' type is a type param, and the type
+            // contains no type params, which we compute on creation, its a no-op
+            // This prevents useless deep type traversals
+            if all_params && no_params {
+                debug!(
+                    "detected substitution noop for {} {}",
+                    self.pretty_print_type_substitutions(substitution_pairs, ", "),
+                    self.type_id_to_string(type_id)
+                );
+                return type_id;
+            }
         }
 
+        // nocommit: I think this can go
         let force_new = defn_info_to_attach.is_some();
+
         // If this type is already a generic instance of something, just
         // re-specialize it on the right inputs. So find out what the new value
         // of each type param should be and call instantiate_generic_type
         //
         // This happens when specializing a type that contains an Opt[T], for example.
         // This lets us hit our cache as well
-
         if let Some(spec_info) = self.types.get_generic_instance_info(type_id) {
             // A,   B,    T
             // int, bool, char
@@ -3646,7 +3683,7 @@ impl TypedProgram {
             return matching_pair.to;
         }
 
-        match self.types.get(type_id) {
+        match self.types.get_no_follow(type_id) {
             Type::InferenceHole(_) => type_id,
             Type::Unit
             | Type::Char
@@ -3772,10 +3809,7 @@ impl TypedProgram {
                     param.type_id = new_param_type;
                 }
                 if force_new || any_new {
-                    let original_info = self.types.get_defn_id(type_id);
-                    let new_function_type_id = self
-                        .types
-                        .add(Type::Function(new_fun_type), defn_info_to_attach.or(original_info));
+                    let new_function_type_id = self.types.add_anon(Type::Function(new_fun_type));
                     new_function_type_id
                 } else {
                     type_id
@@ -3800,7 +3834,7 @@ impl TypedProgram {
             Type::Unresolved(_) => {
                 unreachable!("substitute_in_type is not expected to be called on Unresolved")
             }
-            Type::RecursiveReference(_) => unreachable!(
+            Type::RecursiveReference(rr) => unreachable!(
                 "substitute_in_type is not expected to be called on RecursiveReference"
             ),
         }
@@ -4683,7 +4717,7 @@ impl TypedProgram {
             .ability_impl_table
             .get(&self_type_id)
             .and_then(|impl_handles| {
-                eprintln!(
+                debug!(
                     "Ability dump for {} {:02} in search of {} {:02}\n{}",
                     self.type_id_to_string(self_type_id),
                     self_type_id,
@@ -6537,7 +6571,7 @@ impl TypedProgram {
     // - Call action on it(self)
     // - Call visit on its children.
     //
-    // It is not the job of actions to recurse to its children
+    // It is not the job of action to recurse to its children
     fn visit_expr_tree<S, R>(
         &self,
         expr: TypedExprId,
@@ -9085,15 +9119,11 @@ impl TypedProgram {
             actual_ability_id,
             call_span,
         ) else {
-            let mut s = String::new();
-            self.dump_types(&mut s).unwrap();
-            eprintln!("{s}");
             return failf!(
                 call_span,
-                "Call to {} with type Self = {} {:02} does not work, since it does not implement ability {}",
+                "Call to {} with type Self = {} does not work, since it does not implement ability {}",
                 self.name_of(self.get_function(function_id).name),
                 self.type_id_to_string(solved_self.type_id),
-                solved_self.type_id,
                 self.ability_signature_to_string(ability_id, SliceHandle::Empty),
             );
         };
@@ -9162,7 +9192,7 @@ impl TypedProgram {
                 let base_expr_type = self.exprs.get(base_expr).get_type();
                 return failf!(
                     span,
-                    "Method '{}' does not exist on type {}",
+                    "Method '{}' does not exist on type '{}'",
                     fn_name,
                     self.type_id_to_string(base_expr_type)
                 );
@@ -11743,7 +11773,6 @@ impl TypedProgram {
                 fn_scope_id,
                 EvalTypeExprContext {
                     unresolved_target_type: None,
-                    defn_root_type_id: None,
                     is_direct_function_parameter: true,
                 },
             )?;
@@ -11942,16 +11971,9 @@ impl TypedProgram {
             },
         };
 
-        // nocommit: Why did function types have defn info?
-        let function_type_id = self_.types.add(
-            Type::Function(FunctionType { physical_params: param_types, return_type }),
-            None, // Some(TypeDefnInfo {
-                  //     name,
-                  //     scope: parent_scope_id,
-                  //     companion_namespace: None,
-                  //     ast_id: parsed_function_id.into(),
-                  // }),
-        );
+        let function_type_id = self_
+            .types
+            .add_anon(Type::Function(FunctionType { physical_params: param_types, return_type }));
 
         let function_id = self_.functions.next_id();
 
@@ -12681,7 +12703,7 @@ impl TypedProgram {
             if let ParsedId::TypeDefn(type_defn_id) = parsed_definition_id {
                 let parsed_type_defn = self.ast.get_type_defn(type_defn_id);
                 if parsed_type_defn.flags.is_alias() {
-                    ()
+                    // Do nothing for aliases in the decl phase
                 } else {
                     // Find companion namespace if exists and update type_defn_info
                     let companion_namespace_id = self
@@ -12989,27 +13011,17 @@ impl TypedProgram {
                 self.errors.len()
             )
         }
-        let pendings = self.scopes.all_pending_type_defns_below(namespace_scope_id);
-        if !pendings.is_empty() {
-            for pending in pendings.iter() {
-                let defn = self.ast.get_type_defn(*pending);
-                dbg!(self.name_of(defn.name));
-            }
-            panic!("Unevaluated type defns!!!")
-        }
 
-        // let mut s = String::new();
-        // self.dump_types(&mut s).unwrap();
-        // eprintln!("{s}");
+        debug_assert_eq!(self.types.types.len(), self.types.layouts.len());
+        debug_assert_eq!(self.types.types.len(), self.types.type_variable_counts.len());
 
-        // Fulfill layouts
+        // eprintln!("{}", self.dump_types_to_string());
+
         for type_id in self.types.iter_ids().collect_vec() {
             if let Type::Unresolved(ast_id) = self.types.get(type_id) {
                 let span = self.ast.get_span_for_id(ParsedId::TypeDefn(*ast_id));
-                self.ice_with_span("Unresolved type", span)
+                self.ice_with_span("Unresolved type definition", span)
             }
-            let layout = self.types.compute_type_layout(type_id);
-            *self.types.layouts.get_mut(type_id) = layout;
         }
 
         if module_id == MODULE_ID_CORE {

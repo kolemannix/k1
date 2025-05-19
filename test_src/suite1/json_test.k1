@@ -5,7 +5,7 @@ deftype Json = either
   JsNumber(string),
   JsBool(bool),
   JsNull,
-  JsArray(List[Json]),
+  JsArray(List[json_test/Json]),
   JsObject(List[{ key: string, value: Json }])
 
 fn test(): unit {
