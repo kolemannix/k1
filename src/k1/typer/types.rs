@@ -431,13 +431,13 @@ impl PartialEq for Type {
                 if f1.return_type == f2.return_type
                     && f1.physical_params.len() == f2.physical_params.len()
                 {
-                    return f1
-                        .physical_params
+                    f1.physical_params
                         .iter()
                         .zip(f2.physical_params.iter())
-                        .all(|(p1, p2)| p1.type_id == p2.type_id);
-                };
-                false
+                        .all(|(p1, p2)| p1.type_id == p2.type_id)
+                } else {
+                    false
+                }
             }
             (Type::Lambda(c1), Type::Lambda(c2)) => {
                 // The function type is key here so that we _dont_ equate 'inference artifact' lambdas

@@ -3601,11 +3601,6 @@ impl TypedProgram {
         // TODO: full support
         // breadcrumbs: &mut Vec<TypeId>,
     ) -> TypeId {
-        eprintln!(
-            "substitute in type on {}.\npairs: {}",
-            self.type_id_to_string(type_id),
-            self.pretty_print_type_substitutions(substitution_pairs, ", ")
-        );
         // TODO: New strategy to support co-recursive types aka recursive families
         // 1. Remember all visited type ids in this substitute (re-use a buf of TypeId)
         // 2. When you encounter a RecursiveReference, check if its in the visited set
@@ -3683,7 +3678,7 @@ impl TypedProgram {
             return matching_pair.to;
         }
 
-        match self.types.get_no_follow(type_id) {
+        let res = match self.types.get_no_follow(type_id) {
             Type::InferenceHole(_) => type_id,
             Type::Unit
             | Type::Char
@@ -3837,7 +3832,14 @@ impl TypedProgram {
             Type::RecursiveReference(rr) => unreachable!(
                 "substitute_in_type is not expected to be called on RecursiveReference"
             ),
-        }
+        };
+        debug!(
+            "substitute in type on {}.\npairs: {}.\nGot: {}",
+            self.type_id_to_string(type_id),
+            self.pretty_print_type_substitutions(substitution_pairs, ", "),
+            self.dump_type_id_to_string(res)
+        );
+        res
     }
 
     fn get_module_manifest(

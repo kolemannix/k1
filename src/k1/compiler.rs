@@ -418,6 +418,7 @@ pub fn codegen_module<'ctx, 'module>(
             ErrorLevel::Error,
         )
         .unwrap();
+        write_program_dump(codegen.k1);
         eprintln!("Codegen error: {}", e.message);
         anyhow::bail!(e)
     }
