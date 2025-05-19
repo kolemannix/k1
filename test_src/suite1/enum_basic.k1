@@ -34,7 +34,7 @@ fn enumPayload(): unit {
 
 deftype MyResult[T, E] = either Ok(T), Err(E)
 ns MyResult {
-  fn unwrap[T, E](self: MyResult[T, E]): T {
+  fn myUnwrap[T, E](self: MyResult[T, E]): T {
     self.asOk().!.value
   }
   fn show[T: Show, E: Show](self: MyResult[T, E]): string { 
@@ -52,9 +52,9 @@ fn genericEnum(): unit {
     let x1Ok = x1.asOk().!;
 
     // This tests type inference for enums
-    assert(MyResult/unwrap(x1) == -3);
-    assert(x1.unwrap() == -3);
-    assert(x1Ok.unwrap() == -3);
+    assert(MyResult/myUnwrap(x1) == -3);
+    assert(x1.myUnwrap() == -3);
+    assert(x1Ok.myUnwrap() == -3);
 
     // Shows that we can talk about the payload type
     let b: MyResult[int, string].Ok.value = 42;

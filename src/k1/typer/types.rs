@@ -364,6 +364,10 @@ pub enum Type {
     FunctionTypeParameter(FunctionTypeParameter),
     InferenceHole(InferenceHoleType),
     Unresolved(ParsedTypeDefnId),
+    /// A recursive reference to the type in which it appears
+    /// Also used for Co-recursive references, e.g.:
+    /// deftype Red = { b: Black* }
+    /// deftype Black = { r: Red* }
     RecursiveReference(RecursiveReference),
 }
 
@@ -846,8 +850,6 @@ pub struct Types {
     /// Lookup mappings for parsed -> typed ids
     pub ast_type_defn_mapping: FxHashMap<ParsedTypeDefnId, TypeId>,
     pub ast_ability_mapping: FxHashMap<ParsedAbilityId, AbilityId>,
-    // nocommit can remove recursive_placeholder_mapping
-    pub recursive_placeholder_mapping: FxHashMap<ParsedTypeDefnId, TypeId>,
 
     pub builtins: BuiltinTypes,
 
@@ -866,7 +868,6 @@ impl Types {
             existing_types_mapping: FxHashMap::default(),
             ast_type_defn_mapping: FxHashMap::default(),
             ast_ability_mapping: FxHashMap::default(),
-            recursive_placeholder_mapping: FxHashMap::default(),
             builtins: BuiltinTypes { type_schema: None, string: None, buffer: None },
             config: TypesConfig { ptr_size_bits: 64 },
         }
@@ -902,10 +903,9 @@ impl Types {
 
         let t = match typ {
             Type::Enum(e) => {
-                let enum_type_id = self.add_or_resolve_enum(e, None, None);
                 // Enums and variants are self-referential
                 // so we handle them specially
-
+                let enum_type_id = self.add_or_resolve_enum(e, None);
                 enum_type_id
             }
             Type::EnumVariant(_ev) => {
@@ -931,12 +931,7 @@ impl Types {
         t
     }
 
-    fn add_or_resolve_enum(
-        &mut self,
-        mut e: TypedEnum,
-        type_id_to_use: Option<TypeId>,
-        defn_info: Option<TypeDefnInfo>,
-    ) -> TypeId {
+    fn add_or_resolve_enum(&mut self, mut e: TypedEnum, type_id_to_use: Option<TypeId>) -> TypeId {
         // Enums and variants are self-referential
         // so we handle them specially
         let next_type_id = self.next_type_id();
@@ -945,6 +940,8 @@ impl Types {
             None => TypeId(next_type_id.0.saturating_add(variant_count as u32)),
             Some(type_id) => type_id,
         };
+
+        let defn_id = e.defn_id;
 
         for v in e.variants.iter_mut() {
             let variant_id = TypeId(next_type_id.0.saturating_add(v.index));
@@ -955,36 +952,44 @@ impl Types {
             self.existing_types_mapping.insert(variant, variant_id);
             let variant_variable_counts = self.count_type_variables(variant_id);
             self.type_variable_counts.add(variant_variable_counts);
+
+            if let Some(defn_id) = defn_id {
+                self.types_to_defns.insert(v.my_type_id, defn_id);
+            }
         }
 
-        let e = Type::Enum(e);
-        self.existing_types_mapping.insert(e.clone(), enum_type_id);
+        self.existing_types_mapping.insert(Type::Enum(e.clone()), enum_type_id);
         match type_id_to_use {
             None => {
                 // Inserting a new type
-                self.types.push(e);
-                // nocommit Figure out if we need to do variable counts here or not
+                self.types.push(Type::Enum(e));
+
                 let variable_counts = self.count_type_variables(enum_type_id);
                 self.type_variable_counts.add(variable_counts);
-                // nocommit Dry up or remove enum layouts
-                let layout = self.compute_type_layout(enum_type_id);
-                for _ in 0..variant_count {
-                    self.layouts.add(layout);
-                }
-                self.layouts.add(layout);
             }
-            Some(_existing) => {
-                // Updating an existing type
-                *self.get_mut(enum_type_id) = e;
+            Some(_unresolved_type_id) => {
+                // We're updating unresolved_type_id to point to the enum.
+                *self.get_mut(enum_type_id) = Type::Enum(e);
+
                 let variable_counts = self.count_type_variables(enum_type_id);
                 *self.type_variable_counts.get_mut(enum_type_id) = variable_counts;
-                let layout = self.compute_type_layout(enum_type_id);
-                for _ in 0..variant_count {
-                    self.layouts.add(layout);
-                }
-                *self.layouts.get_mut(enum_type_id) = layout
             }
         };
+
+        // Set the layout for the enum, then insert for each variant
+        let layout = self.compute_type_layout(enum_type_id);
+        match type_id_to_use {
+            None => {
+                self.layouts.add(layout);
+            }
+            Some(_) => *self.layouts.get_mut(enum_type_id) = layout,
+        };
+        for _ in 0..variant_count {
+            self.layouts.add(layout);
+        }
+
+        debug_assert_eq!(self.types.len(), self.layouts.len());
+        debug_assert_eq!(self.types.len(), self.type_variable_counts.len());
 
         enum_type_id
     }
@@ -1008,12 +1013,21 @@ impl Types {
         }
         match type_value {
             Type::Enum(e) => {
-                self.add_or_resolve_enum(e, Some(unresolved_type_id), None);
+                self.add_or_resolve_enum(e, Some(unresolved_type_id));
             }
-            _ => *typ = type_value,
+            _ => {
+                *typ = type_value.clone();
+                // nocommit: I forgot to insert this. Can we have a
+                // single place for 'set type'? Ugh
+                self.existing_types_mapping.insert(type_value, unresolved_type_id);
+
+                let variable_counts = self.count_type_variables(unresolved_type_id);
+                *self.type_variable_counts.get_mut(unresolved_type_id) = variable_counts;
+
+                let layout = self.compute_type_layout(unresolved_type_id);
+                *self.layouts.get_mut(unresolved_type_id) = layout;
+            }
         };
-        let variable_counts = self.count_type_variables(unresolved_type_id);
-        *self.type_variable_counts.get_mut(unresolved_type_id) = variable_counts;
     }
 
     pub fn next_type_id(&self) -> TypeId {

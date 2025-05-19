@@ -50,6 +50,7 @@ fn moderate(): unit {
   struct_test/test();
   enum_fail/inner/test();
   match_fails/test();
+  require_test/test();
   matching_if/test();
   lambdas/test();
   condcomp/test();

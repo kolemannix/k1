@@ -3040,9 +3040,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             IntrinsicOperation::EmitCompilerMessage => Ok(self.builtin_types.unit_basic().into()),
             IntrinsicOperation::TypeSchema => {
-                // nocommit: Prevent calls to TypeSchema from making into
-                // codegen'd code
-                Ok(LlvmValue::Void(self.builder.build_unreachable().unwrap()))
+                unreachable!("TypeSchema is handled in typechecking phase")
             }
             IntrinsicOperation::CompilerSourceLocation => {
                 unreachable!("CompilerSourceLocation is handled in typechecking phase")

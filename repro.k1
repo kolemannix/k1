@@ -1,0 +1,11 @@
+deftype Red = { i: int, b: Black* }
+deftype Black = {  i: int, r: Red* }
+
+fn test(): i32 {
+  let rNull: Red* = core/Pointer/NULL as Red*;
+  let b: Black* = core/mem/new({ i: 2, r: rNull });
+  let r: Red = { i: 1, b: b };
+  printIt(r.i);
+  0
+}
+

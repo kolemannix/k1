@@ -13,7 +13,7 @@ use crate::{
     errf,
     lex::SpanId,
     nz_u32_id,
-    parse::{Identifiers, NamespacedIdentifier, ParsedAbilityId, ParsedTypeDefnId},
+    parse::{Identifiers, NamespacedIdentifier, ParsedAbilityId},
     pool::Pool,
     typer::{
         make_error, AbilityId, FunctionId, Identifier, LoopType, NamespaceId, Namespaces, TypeId,
@@ -350,34 +350,6 @@ impl Scopes {
         }
     }
 
-    pub fn find_pending_type_defn(
-        &self,
-        scope_id: ScopeId,
-        ident: Identifier,
-    ) -> Option<(ParsedTypeDefnId, ScopeId)> {
-        let scope = self.get_scope(scope_id);
-        if let Some(defn) = scope.find_pending_type_defn(ident) {
-            return Some((defn, scope_id));
-        }
-        match scope.parent {
-            Some(parent) => self.find_pending_type_defn(parent, ident),
-            None => None,
-        }
-    }
-
-    // nocommit: do we kill pending_type_defn now
-    pub fn remove_pending_type_defn(&mut self, scope_id: ScopeId, ident: Identifier) -> bool {
-        let scope = self.get_scope_mut(scope_id);
-        if scope.remove_pending_type_defn(ident) {
-            true
-        } else {
-            match scope.parent {
-                Some(parent) => self.remove_pending_type_defn(parent, ident),
-                None => false,
-            }
-        }
-    }
-
     pub fn find_pending_ability(
         &self,
         scope_id: ScopeId,
@@ -405,17 +377,6 @@ impl Scopes {
             }
             None => false,
         }
-    }
-
-    pub fn all_pending_type_defns_below(&self, scope_id: ScopeId) -> Vec<ParsedTypeDefnId> {
-        let scope = self.get_scope(scope_id);
-        let mut pendings: Vec<ParsedTypeDefnId> =
-            scope.pending_type_defns.values().copied().collect();
-        for child in &scope.children {
-            let child_pendings = self.all_pending_type_defns_below(*child);
-            pendings.extend(child_pendings);
-        }
-        pendings
     }
 
     pub fn nearest_parent_namespace(&self, scope_id: ScopeId) -> NamespaceId {
@@ -703,8 +664,6 @@ pub struct Scope {
     pub namespaces: FxHashMap<Identifier, NamespaceId>,
     pub types: FxHashMap<Identifier, TypeId>,
     pub abilities: FxHashMap<Identifier, AbilityId>,
-    // nocommit eliminate pending_type_defns
-    pub pending_type_defns: FxHashMap<Identifier, ParsedTypeDefnId>,
     pub pending_ability_defns: FxHashMap<Identifier, ParsedAbilityId>,
     pub parent: Option<ScopeId>,
     pub children: SmallVec<[ScopeId; 4]>,
@@ -729,7 +688,6 @@ impl Scope {
             namespaces: FxHashMap::new(),
             types: FxHashMap::new(),
             abilities: FxHashMap::new(),
-            pending_type_defns: FxHashMap::new(),
             pending_ability_defns: FxHashMap::new(),
             parent: None,
             children: SmallVec::new(),
@@ -841,28 +799,6 @@ impl Scope {
 
     pub fn find_ability(&self, ident: Identifier) -> Option<AbilityId> {
         self.abilities.get(&ident).copied()
-    }
-
-    #[must_use]
-    pub fn add_pending_type_defn(
-        &mut self,
-        ident: Identifier,
-        parsed_defn_id: ParsedTypeDefnId,
-    ) -> bool {
-        if let std::collections::hash_map::Entry::Vacant(e) = self.pending_type_defns.entry(ident) {
-            e.insert(parsed_defn_id);
-            true
-        } else {
-            false
-        }
-    }
-
-    pub fn find_pending_type_defn(&self, ident: Identifier) -> Option<ParsedTypeDefnId> {
-        self.pending_type_defns.get(&ident).copied()
-    }
-
-    pub fn remove_pending_type_defn(&mut self, ident: Identifier) -> bool {
-        self.pending_type_defns.remove(&ident).is_some()
     }
 
     #[must_use]

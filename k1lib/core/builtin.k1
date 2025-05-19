@@ -68,7 +68,7 @@ ns types {
     Struct({
       fields: Buffer[{ 
         name: string, 
-        type: unit, 
+        type: TypeInfo, 
         offset: u64
       }],
     }),
@@ -76,12 +76,12 @@ ns types {
       tagType: IntKind,
       variants: Buffer[{
         name: string,
-        payloadType: unit,
+        payloadType: TypeInfo,
         payloadOffset: u64
       }],
       payloadOffset: u64,
     }),
-    Reference({ inner_type: unit* }),
+    Reference({ inner_type: TypeInfo* }),
     Other(string)
   )
 

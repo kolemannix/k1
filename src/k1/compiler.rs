@@ -275,6 +275,10 @@ pub fn discover_source_files(src_path: &Path) -> (PathBuf, Vec<PathBuf>) {
     (src_dir, dir_entries)
 }
 
+fn write_program_dump(p: &TypedProgram) {
+    let _ = std::fs::write(format!("{}_module_dump.txt", p.program_name()), format!("{}", p));
+}
+
 /// If `args.file` points to a directory,
 /// - compile all files in the directory.
 /// - module name is the name of the directory.
@@ -307,43 +311,37 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedProgram, CompileM
         src_path.file_stem().unwrap().to_str().unwrap().to_string()
     };
 
-    let mut typed_program = TypedProgram::new(module_name, config);
+    let mut p = TypedProgram::new(module_name, config);
 
     let lib_dir_string = std::env::var("K1_LIB_DIR").unwrap_or("k1lib".to_string());
     let lib_dir = Path::new(&lib_dir_string);
     let corelib_dir = lib_dir.join("core");
     let stdlib_dir = lib_dir.join("std");
 
-    if let Err(e) = typed_program.add_module(&corelib_dir) {
-        if args.dump_module {
-            eprintln!("{}", typed_program);
-        }
+    if let Err(e) = p.add_module(&corelib_dir) {
+        write_program_dump(&p);
         eprintln!("{}", e);
-        return Err(CompileModuleError::TyperFailure(Box::new(typed_program)));
+        return Err(CompileModuleError::TyperFailure(Box::new(p)));
     };
 
     if use_std {
-        if let Err(e) = typed_program.add_module(&stdlib_dir) {
-            if args.dump_module {
-                eprintln!("{}", typed_program);
-            }
+        if let Err(e) = p.add_module(&stdlib_dir) {
+            write_program_dump(&p);
             eprintln!("{}", e);
-            return Err(CompileModuleError::TyperFailure(Box::new(typed_program)));
+            return Err(CompileModuleError::TyperFailure(Box::new(p)));
         }
     }
 
-    if let Err(e) = typed_program.add_module(src_path) {
-        if args.dump_module {
-            eprintln!("{}", typed_program);
-        }
+    if let Err(e) = p.add_module(src_path) {
+        write_program_dump(&p);
         eprintln!("{}", e);
-        return Err(CompileModuleError::TyperFailure(Box::new(typed_program)));
+        return Err(CompileModuleError::TyperFailure(Box::new(p)));
     };
 
     if args.dump_module {
-        println!("{}", typed_program);
+        write_program_dump(&p);
     }
-    Ok(typed_program)
+    Ok(p)
 }
 
 pub fn write_executable(
