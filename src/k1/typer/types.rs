@@ -336,15 +336,15 @@ static_assert_size!(Type, 80);
 pub enum Type {
     Unit,
     Char,
-    Integer(IntegerType),
-    Float(FloatType),
     Bool,
     /// Our Pointer is a raw untyped pointer; we mostly have this type for expressing intent
     /// and because it allows us to treat it as a ptr in LLVM which
     /// allows for pointer-reasoning based optimizations
     Pointer,
-    Struct(StructType),
+    Integer(IntegerType),
+    Float(FloatType),
     Reference(ReferenceType),
+    Struct(StructType),
     Enum(TypedEnum),
 
     /// Enum variants are proper types of their own, for lots
@@ -819,10 +819,13 @@ impl TypeVariableInfo {
     }
 }
 
+#[derive(Default)]
 pub struct BuiltinTypes {
     pub string: Option<TypeId>,
     pub buffer: Option<TypeId>,
-    pub type_schema: Option<TypeId>,
+    pub types_layout: Option<TypeId>,
+    pub types_type_schema: Option<TypeId>,
+    pub types_int_kind: Option<TypeId>,
 }
 
 pub struct TypesConfig {
@@ -868,7 +871,7 @@ impl Types {
             existing_types_mapping: FxHashMap::default(),
             ast_type_defn_mapping: FxHashMap::default(),
             ast_ability_mapping: FxHashMap::default(),
-            builtins: BuiltinTypes { type_schema: None, string: None, buffer: None },
+            builtins: BuiltinTypes::default(),
             config: TypesConfig { ptr_size_bits: 64 },
         }
     }

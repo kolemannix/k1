@@ -5,45 +5,54 @@ ns type_refl {
     x: T, y: T, z: T
   }
   
+  use core/types/TypeSchema
   use core/types/typeSchema
   use core/types/typeId
   use core/types/typeName
+
+  fn getTypeSchema[T](): TypeSchema { typeSchema(typeId[T]()) }
   
   fn printStructShape[T](): string {
-    // How do we restrict that calls to typeSchema only happen statically?
-    require typeSchema[T]() is .Struct(s) else { return("") };
+    require getTypeSchema[T]() is .Struct({ fields }) else { return("") };
     let* sb = core/StringBuilder/new();
-    for field in s.fields do {
+    let name = typeName[T]();
+    sb.putString("--- Struct \{name} ---\n");
+    for field in fields do {
       sb.putString(field.name);
-      sb.putString(": ");
+      sb.putString(": TypeId(");
       // Should use 'Writer' ability
-      sb.putString(field.type.id.show());
+      sb.putString(field.typeId.show());
+      sb.putString(")\n");
     };
     sb.build()
   }
   
   fn test(): unit {
   
-    let unitSchema = typeSchema[unit]();
-    // TODO: Parsing bug
+    // nocommit: Parsing bug
     // assert(unitSchema is TypeSchema.Unit);
-    assert(unitSchema is .Unit);
-  
-    #if true {
-      let p1: Point3[f32] = { x: 1.0, y: 2.0, z: 3.0 };
-      let schema = typeSchema[Point3[f32]]();
-      let structSchema = schema.asStruct().!.value;
-      let name = typeName[Point3[f32]]();
-      let len = structSchema.fields.len;
-      printIt("Point3 Name: \{name}");
-      printIt("Point3 Fields: \{len}");
-    };
+    assert(getTypeSchema[unit]() is .Unit);
+    assert(getTypeSchema[u8]()   is .Int(.U8));
+    assert(getTypeSchema[u16]()  is .Int(.U16));
+    assert(getTypeSchema[u32]()  is .Int(.U32));
+    assert(getTypeSchema[u64]()  is .Int(.U64));
+    assert(getTypeSchema[i8]()   is .Int(.I8));
+    assert(getTypeSchema[i16]()  is .Int(.I16));
+    assert(getTypeSchema[i32]()  is .Int(.I32));
+    assert(getTypeSchema[i64]()  is .Int(.I64));
+    let pointByteSchema = getTypeSchema[Point3[u8]]();
+    require pointByteSchema is .Struct({ fields }) else { crash("") };
+    assertEquals(fields.len, 3);
+    println(printStructShape[Point3[u8]]());
+    println(printStructShape[TypeSchema.Struct.value]());
+    println(printStructShape[TypeSchema.Either]());
+    //assert(getTypeSchema[either Yes, No, MaybeSo(string)]()  is .Int(.I64));
   
     ()
   }
 }
 
 fn main(): i32 {
-  #static test();
+  test();
   0
 }

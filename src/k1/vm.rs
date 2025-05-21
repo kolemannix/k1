@@ -168,7 +168,7 @@ impl Vm {
         let mut s = String::new();
         let w = &mut s;
         let frame = self.stack.frames[frame_index];
-        writeln!(w, "Frame:  {}", m.name_of_opt(frame.debug_name)).unwrap();
+        writeln!(w, "Frame:  {}", m.ident_str_opt(frame.debug_name)).unwrap();
         writeln!(w, "Base :  {:?}", frame.base_ptr).unwrap();
         writeln!(w, "Locals").unwrap();
         let locals = self
@@ -187,7 +187,8 @@ impl Vm {
             if hidden {
                 continue;
             }
-            write!(w, "  {}: {} = ", m.name_of(v_name), m.type_id_to_string(v.get_type())).unwrap();
+            write!(w, "  {}: {} = ", m.ident_str(v_name), m.type_id_to_string(v.get_type()))
+                .unwrap();
             render_debug_value(w, self, m, v);
             writeln!(w).unwrap()
         }
@@ -427,7 +428,7 @@ pub fn execute_single_expr_with_vm(
         if !m.globals.is_empty() {
             let k1_static_global = m.globals.get(GLOBAL_ID_STATIC);
             debug_assert_eq!(
-                m.name_of(m.variables.get(k1_static_global.variable_id).name),
+                m.ident_str(m.variables.get(k1_static_global.variable_id).name),
                 "IS_STATIC"
             );
         }
@@ -1026,7 +1027,7 @@ fn execute_variable_expr(
         return failf!(
             variable_expr.span,
             "Variable missing in vm: {}",
-            m.name_of(m.variables.get(v_id).name)
+            m.ident_str(m.variables.get(v_id).name)
         );
     };
     Ok(v.into())
@@ -1307,7 +1308,7 @@ fn execute_call(vm: &mut Vm, m: &mut TypedProgram, call_id: TypedExprId) -> Type
 
     let function = m.get_function(function_id);
     let Some(body_block_expr) = function.body_block else {
-        return failf!(span, "Cannot execute function {}: no body", m.name_of(function.name));
+        return failf!(span, "Cannot execute function {}: no body", m.ident_str(function.name));
     };
 
     if vm.stack.frames.len() == 128 {
@@ -1346,7 +1347,7 @@ fn execute_call(vm: &mut Vm, m: &mut TypedProgram, call_id: TypedExprId) -> Type
             let value = execute_expr_return_exit!(vm, m, arg)?;
             debug!(
                 "argument {}: {}",
-                m.name_of(m.variables.get(*variable_id).name),
+                m.ident_str(m.variables.get(*variable_id).name),
                 debug_value_to_string(vm, m, value)
             );
 
@@ -1442,11 +1443,7 @@ fn execute_intrinsic(
             Ok(Value::Agg { type_id: STRING_TYPE_ID, ptr: string_struct_on_stack }.into())
         }
         IntrinsicOperation::TypeSchema => {
-            // Synthesize a TypeSchema enum.
-            let type_id = m.named_types.get_nth(type_args, 0).type_id;
-            let schema_value = synth_typeschema(m, vm, type_id);
-            eprintln!("Schema is: {:?}", schema_value);
-            Ok(VmResult::Value(schema_value))
+            unreachable!("Operation TypeSchema is handled in typer")
         }
         IntrinsicOperation::CompilerSourceLocation => {
             unreachable!("Operation CompilerSourceLocation is handled in typer")
@@ -1886,7 +1883,7 @@ pub fn load_struct_field(
 
     debug!(
         "load_struct_field {} (offset={}) of type {} is {:?}. Full struct: {:?}",
-        m.name_of(field.name),
+        m.ident_str(field.name),
         field_ptr.addr() - struct_ptr.addr(),
         m.type_id_to_string(struct_type),
         value,
@@ -2413,7 +2410,7 @@ fn render_debug_value(w: &mut impl std::fmt::Write, vm: &mut Vm, m: &TypedProgra
                     } else {
                         w.write_str("{ ").unwrap();
                         for (field_index, f) in struct_type.fields.iter().enumerate() {
-                            write!(w, "{}: ", m.name_of(f.name)).unwrap();
+                            write!(w, "{}: ", m.ident_str(f.name)).unwrap();
                             match load_struct_field(vm, m, type_id, ptr, field_index, true) {
                                 Err(e) => write!(w, "<ERROR {}>", e.message).unwrap(),
                                 Ok(loaded) => render_debug_value(w, vm, m, loaded),
@@ -2431,7 +2428,7 @@ fn render_debug_value(w: &mut impl std::fmt::Write, vm: &mut Vm, m: &TypedProgra
                         let tag = tag.expect_int();
                         match enum_type.variants.iter().find(|v| v.tag_value == tag) {
                             None => write!(w, "<ERROR Bad Enum Tag>").unwrap(),
-                            Some(variant) => write!(w, "{}", m.name_of(variant.name)).unwrap(),
+                            Some(variant) => write!(w, "{}", m.ident_str(variant.name)).unwrap(),
                         }
                     }
                 },
@@ -2507,7 +2504,7 @@ fn make_stack_trace(m: &TypedProgram, stack: &Stack) -> String {
     use std::fmt::Write;
     let mut s = String::new();
     stack.frames.iter().for_each(|f| {
-        write!(&mut s, "{}", m.name_of_opt(f.debug_name)).unwrap();
+        write!(&mut s, "{}", m.ident_str_opt(f.debug_name)).unwrap();
         match f.call_span {
             None => {}
             Some(span) => {
@@ -2523,20 +2520,6 @@ fn make_stack_trace(m: &TypedProgram, stack: &Stack) -> String {
 fn vm_crash(m: &TypedProgram, vm: &Vm, msg: impl AsRef<str>) -> ! {
     eprintln!("{}", make_stack_trace(m, &vm.stack));
     m.ice_with_span(msg, vm.eval_span)
-}
-
-fn synth_typeschema(m: &TypedProgram, vm: &mut Vm, type_id: TypeId) -> Value {
-    eprintln!("synth typeschema for type id {}", type_id.as_u32());
-    let schema_type_id = m.types.builtins.type_schema.unwrap();
-    let schema_enum = m.types.get(schema_type_id).expect_enum();
-    let enum_base_ptr = match m.types.get(type_id) {
-        Type::Unit => {
-            let unit_variant = schema_enum.variant_by_name(get_ident!(m, "Unit")).unwrap();
-            vm.stack.push_enum(&m.types, unit_variant.my_type_id, None)
-        }
-        t => m.todo_with_span(format!("typeschema for {}", t.kind_name()), vm.eval_span),
-    };
-    Value::Agg { type_id: schema_type_id, ptr: enum_base_ptr }
 }
 
 //mod c_mem {

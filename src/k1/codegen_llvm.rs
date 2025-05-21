@@ -1068,7 +1068,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 }
                 .into())
             }
-            Type::TypeParameter(tp) => {
+            Type::TypeParameter(_tp) => {
                 failf!(
                     self.debug.current_entry().span,
                     "codegen was asked to codegen a type parameter {}",
@@ -1800,7 +1800,19 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         .const_named_struct(&[variant.tag_value.as_basic_value_enum()]),
                     Some(payload_comptime_value_id) => {
                         let payload_value = self.codegen_static_value(payload_comptime_value_id)?;
-                        physical_struct.const_named_struct(&[
+                        // We have to construct a unique type for this value because
+                        // if we use the variant struct, the payload will come back with
+                        // a more specific type than it, since everything is represented as its
+                        // most specific, concrete types in this static world (specifically enum values)
+                        let unique_struct_type = self.ctx.struct_type(
+                            &[llvm_type.tag_type.as_basic_type_enum(), payload_value.get_type()],
+                            false,
+                        );
+                        debug_assert_eq!(
+                            self.size_info(&unique_struct_type),
+                            self.size_info(&variant.variant_struct_type)
+                        );
+                        unique_struct_type.const_named_struct(&[
                             variant.tag_value.as_basic_value_enum(),
                             payload_value,
                         ])
@@ -2017,7 +2029,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             struct_llvm_type,
                             struct_ptr,
                             idx as u32,
-                            &format!("{}_store_addr", self.k1.name_of(field.name)),
+                            &format!("{}_store_addr", self.k1.ident_str(field.name)),
                         )
                         .unwrap();
                     let field_type = &struct_k1_llvm_type.fields[idx];
@@ -2135,7 +2147,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let is_variant_bool = self.codegen_enum_is_variant(
                     enum_value,
                     variant.tag_value,
-                    self.k1.name_of(variant.name),
+                    self.k1.ident_str(variant.name),
                 );
                 Ok(is_variant_bool.as_basic_value_enum().into())
             }
@@ -3004,11 +3016,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(result.as_basic_value_enum().into())
             }
             IntrinsicOperation::TypeId => {
-                let type_param = self.k1.named_types.get_nth(call.type_args, 0);
-                let type_id_value = self.codegen_integer_value(TypedIntValue::U64(
-                    type_param.type_id.as_u32() as u64,
-                ))?;
-                Ok(type_id_value.into())
+                unreachable!("TypeId is handled in typer phase")
             }
             IntrinsicOperation::TypeName => {
                 let type_param = self.k1.named_types.get_nth(call.type_args, 0);
@@ -3039,9 +3047,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(result_pointer.as_basic_value_enum().into())
             }
             IntrinsicOperation::EmitCompilerMessage => Ok(self.builtin_types.unit_basic().into()),
-            IntrinsicOperation::TypeSchema => {
-                unreachable!("TypeSchema is handled in typechecking phase")
-            }
             IntrinsicOperation::CompilerSourceLocation => {
                 unreachable!("CompilerSourceLocation is handled in typechecking phase")
             }
@@ -3066,6 +3071,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     fn codegen_intrinsic_function_body(
         &mut self,
         intrinsic_type: IntrinsicOperation,
+        function_id: FunctionId,
         function: &TypedFunction,
     ) -> CodegenResult<InstructionValue<'ctx>> {
         let function_span =
@@ -3167,6 +3173,44 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let call = self.builder.build_call(f, &[code_arg], "").unwrap();
                 let _result = call.try_as_basic_value().unwrap_right();
                 self.builder.build_unreachable().unwrap()
+            }
+            IntrinsicOperation::TypeSchema => {
+                // intern fn typeSchema(id: u64): TypeSchema
+                let type_id_arg = self.load_function_argument(function, 0)?.into_int_value();
+                // let type_schema_type = self.codegen_type(self.k1.types.builtins.types_type_schema.unwrap())?;
+                let entry_block = self.builder.get_insert_block().unwrap();
+
+                // typeSchema returns a struct, so we have to do sret shenanigans
+                let sret_ptr = self.llvm_functions.get(&function_id).unwrap().sret_pointer.unwrap();
+
+                let else_block = self.append_basic_block("miss");
+                self.builder.position_at_end(else_block);
+                // TODO: Proper crash
+                self.builder.build_unreachable().unwrap();
+
+                let finish_block = self.append_basic_block("finish");
+
+                let mut cases: Vec<(IntValue<'ctx>, BasicBlock<'ctx>)> =
+                    Vec::with_capacity(self.k1.type_schemas.len());
+                // TODO: sort the schemas so codegen more predictably
+                for (type_id, schema_value_id) in self.k1.type_schemas.iter() {
+                    let my_block =
+                        self.append_basic_block(&format!("arm_type_{}", type_id.as_u32()));
+                    self.builder.position_at_end(my_block);
+                    let type_id_int_value =
+                        self.ctx.i64_type().const_int(type_id.as_u32() as u64, false);
+                    let schema_value = self.codegen_static_value(*schema_value_id)?;
+                    // eprintln!("Schema Value ty: {}", schema_value.get_type());
+                    // eprintln!("Schema Value: {}", schema_value);
+                    self.builder.build_store(sret_ptr, schema_value).unwrap();
+                    self.builder.build_unconditional_branch(finish_block).unwrap();
+                    cases.push((type_id_int_value, my_block));
+                }
+                self.builder.position_at_end(entry_block);
+                let _switch = self.builder.build_switch(type_id_arg, else_block, &cases).unwrap();
+
+                self.builder.position_at_end(finish_block);
+                self.builder.build_return(None).unwrap()
             }
             _ => unreachable!("Unexpected non-inline intrinsic function"),
         };
@@ -3446,7 +3490,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         }
 
         let llvm_name = match function.linkage {
-            TyperLinkage::External(Some(name)) => self.k1.name_of(name),
+            TyperLinkage::External(Some(name)) => self.k1.ident_str(name),
             _ => &self.k1.make_qualified_name(function.scope, function.name, ".", true),
         };
         let llvm_linkage = match function.linkage {
@@ -3472,7 +3516,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
         let function_span = self.k1.ast.get_span_for_id(function.parsed_id);
         let (di_subprogram, di_file) = self.make_function_debug_info(
-            self.k1.name_of(function.name),
+            self.k1.ident_str(function.name),
             function_span,
             llvm_function_type.return_type.debug_type(),
             &llvm_function_type.param_types.iter().map(|t| t.debug_type()).collect::<Vec<_>>(),
@@ -3522,7 +3566,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 &function_type.physical_params[i - sret_offset]
             };
             let param_type = self.codegen_type(typed_param.type_id)?;
-            let param_name = self.k1.name_of(typed_param.name);
+            let param_name = self.k1.ident_str(typed_param.name);
             trace!(
                 "Got LLVM type for variable {}: {} (from {})",
                 param_name,
@@ -3551,7 +3595,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             );
             debug!(
                 "Inserting variable {i} for function {} id={} {} id={}",
-                self.k1.name_of(function.name),
+                self.k1.ident_str(function.name),
                 function_id,
                 param_name,
                 variable_id
@@ -3562,7 +3606,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             Some(intrinsic_type) => {
                 trace!("codegen intrinsic {:?} fn {:?}", intrinsic_type, function);
                 let _terminator_instr =
-                    self.codegen_intrinsic_function_body(intrinsic_type, function)?;
+                    self.codegen_intrinsic_function_body(intrinsic_type, function_id, function)?;
             }
             None => {
                 let function_block = function.body_block.unwrap_or_else(|| {
@@ -3646,12 +3690,13 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         Ok(())
     }
 
-    pub fn codegen_module(&mut self) -> CodegenResult<()> {
+    pub fn codegen_program(&mut self) -> CodegenResult<()> {
         let start = std::time::Instant::now();
         let global_ids: Vec<TypedGlobalId> = self.k1.globals.iter_ids().collect();
         for global_id in &global_ids {
             self.codegen_global(*global_id)?;
         }
+
         // TODO: Codegen the exported functions as well as the called ones
         // for (id, function) in self.module.function_iter() {
         //     if function.linkage.is_exported() {
@@ -3662,7 +3707,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         // Hack to guarantee presence of required extern declarations
         for (id, function) in self.k1.function_iter() {
             if let TyperLinkage::External(Some(ident)) = function.linkage {
-                match self.k1.name_of(ident) {
+                match self.k1.ident_str(ident) {
                     "malloc" | "calloc" | "realloc" | "free" | "memcmp" | "exit" => {
                         self.codegen_function_or_get(id)?;
                     }
